@@ -103,6 +103,15 @@ priv struct Resolver {
   // `"use strict"` prologue stops being legal in a function with a
   // non-simple parameter list (TS1346 / TS1347).
   mut target_reaches_es2016 : Bool
+  // Top-level `var`/`let` names declared with NO initializer whose
+  // annotation is `any` (written or absent). The type of such a binding
+  // is `any` in the real compiler too, which is what separates it from
+  // the far larger population of names this checker merely FAILED to
+  // type — `const C = foo()` comes out `Any` here and is a generic
+  // class in tsc. TS2347 is the consumer; nothing else may read this as
+  // "is any", since it says nothing about annotated or initialized
+  // bindings.
+  any_uninitialized_values : Map[String, Bool]
 }
 
 ///|
@@ -180,6 +189,7 @@ fn Resolver::empty() -> Resolver {
     namespace_exports: {},
     namespace_instantiated: {},
     template_tag_funcs: {},
+    any_uninitialized_values: {},
     no_implicit_any: false,
     lib_lacks_es2017: false,
     lib_lacks_es2024: false,
@@ -17040,6 +17050,7 @@ fn check_call_args_in_expr(
     // arguments are still checked.
     TypeArgs(targs, inner) => {
       check_explicit_type_args(env, ctx, targs, inner)
+      check_untyped_call_type_args(ctx, inner)
       check_call_args_in_expr(env, inner, ctx)
     }
     Call(name, args) => {
@@ -24585,6 +24596,58 @@ fn check_use_strict_with_non_simple_params(
 }
 
 ///|
+/// TS2347 ("Untyped function calls may not accept type arguments"): a
+/// call or `new` written with explicit type arguments whose callee is
+/// `any`. `new x<any>(x)` is the same error, which is why both the call
+/// and the construct spellings are read here — the corpus has one file
+/// of each (`functionCalls`, `anyAsConstructor`).
+///
+/// The callee must be a NAME the module declares as a value whose type
+/// comes out `Any`. Two guards keep that from being the checker's own
+/// "I could not resolve this": `declared_value_names` is empty for a
+/// name we never saw declared, and a LIB global is excluded outright,
+/// since an `Any` entry in the lib model means the member is unmodelled
+/// rather than genuinely untyped. Both lose findings rather than invent
+/// them.
+///
+/// What that leaves is narrower than tsc. A value whose annotation is
+/// literally `any` fires, ambient or not; so does one whose initializer
+/// this checker infers as `any`. A value whose type we simply failed to
+/// compute fires too — measured at FP 0 over the conformance corpus,
+/// which is the only evidence available for that population.
+fn check_untyped_call_type_args(ctx : CheckCtx, inner : @ast.TsExpr) -> Unit {
+  let name = match inner {
+    Call(n, _) | New(n, _) => n
+    CallExpr(Var(n), _) | NewExpr(Var(n), _) => n
+    _ => return
+  }
+  // A lib global is excluded whatever our model says its type is: the
+  // lib surface is where an `Any` entry means "we did not model this
+  // member", and reporting there would be a false positive on code that
+  // is fully typed in the real compiler. Losing a finding is the
+  // affordable direction.
+  if is_lib_global_value(name) {
+    return
+  }
+  guard ctx.resolver.declared_value_names.get(name) is Some(_) else { return }
+  // Two sources, and only these two, for "this callee really is `any`":
+  // an AMBIENT declaration whose annotation we recorded (`declare var
+  // anyVar: any` — `module_.values` is the ambient half, so its `Any`
+  // entry is a written annotation), and a top-level initializer-less
+  // binding (see `collect_any_uninitialized_values`). Everything else
+  // that comes out `Any` here may be a type this checker failed to
+  // compute rather than a genuine `any`.
+  let declared_any = ctx.resolver.globals.get(name) is Some(Any) ||
+    ctx.resolver.any_uninitialized_values.get(name) is Some(_)
+  guard declared_any else { return }
+  record_unfiltered(
+    ctx,
+    "call `\{name}`",
+    "untyped function calls may not accept type arguments",
+  )
+}
+
+///|
 /// True for the primitive type KINDS, matched exactly: `string`,
 /// `number`, `boolean`, `symbol`, `bigint` and their literal forms.
 ///
@@ -27136,6 +27199,35 @@ fn lib_global_ctor_type_name(name : String) -> String? {
 }
 
 ///|
+/// Collect top-level `var x;` / `let x: any;` names — a declaration with
+/// no `=` initializer (the parser's `Var("__ts_no_init__")` sentinel)
+/// whose annotation is `any` or absent.
+///
+/// The point of the pair of conditions is to name a population whose
+/// type is `any` in the REAL compiler, not one this checker failed to
+/// compute. With an initializer the type comes from inference, and ours
+/// falls back to `Any` wherever it gives up (`const C = foo()` where
+/// `foo` returns a class expression is `Any` here and a generic class in
+/// tsc — staticIndexSignature6, which is TS7-ACCEPTED). With an
+/// annotation other than `any` the binding is not `any` at all. Only the
+/// remaining corner is decidable without inference.
+///
+/// Nested scopes are deliberately not walked: a local binding is not in
+/// this map, so its consumer abstains, which costs a finding rather than
+/// inventing one.
+fn collect_any_uninitialized_values(
+  module_ : @ast.TsModule,
+  out : Map[String, Bool],
+) -> Unit {
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), Any, Var("__ts_no_init__")) => out[n] = true
+      _ => ()
+    }
+  }
+}
+
+///|
 /// TS2403 against the LIB declaration: a script-level initializer-less
 /// `var` that redeclares a runtime-provided global merges with the lib's
 /// declaration, so its annotation must be the matching constructor
@@ -27758,6 +27850,7 @@ fn check_module_function_bodies_layered(
   if outer_modules.length() == 0 {
     Resolver::ingest_module(resolver, module_, "")
     collect_module_value_names(module_, resolver.declared_value_names)
+    collect_any_uninitialized_values(module_, resolver.any_uninitialized_values)
   } else {
     for o in outer_modules {
       Resolver::ingest_module(resolver, o, "")
@@ -27770,6 +27863,10 @@ fn check_module_function_bodies_layered(
     // positive. The top-level branch above applies the same collection to its
     // current module.
     collect_module_value_names(outer_modules[0], resolver.declared_value_names)
+    collect_any_uninitialized_values(
+      outer_modules[0],
+      resolver.any_uninitialized_values,
+    )
   }
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own

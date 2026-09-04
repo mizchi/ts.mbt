@@ -16602,3 +16602,59 @@ test "expr_check: unary coercion, symbol inference, instanceof and for-in operan
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CT: TS2347 ("untyped function calls may not accept type
+/// arguments").
+///
+/// The whole risk in this rule is telling a genuine `any` from a type
+/// this checker failed to compute, and the silent list below is where
+/// that line is drawn — every entry there comes out `Any` in our model
+/// and has a real type in tsc. `staticIndexSignature6` is the corpus
+/// file that made the loose version a false positive.
+test "ts2347 untyped call type arguments" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // An ambient annotation (`functionCalls`), a plain annotated
+      // declaration with no initializer, and an unannotated one — all
+      // three are `any` in tsc, so all three are errors.
+      "declare var anyVar: any;\nanyVar<string>('hello');", "var x: any;\nx<number>(1);",
+      "var y;\ny<number>(1);",
+      // `new` is the same error, which is the whole of
+      // `anyAsConstructor`.
+       "var x: any;\nvar d = new x<any>(x);", "declare var anyVar: any;\nnew anyVar<string>();",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A call or `new` with type arguments against a callee that HAS a
+      // signature is the ordinary legal spelling — probed against tsc,
+      // which accepts every one of these.
+      "declare function f<T>(x: T): T;\nf<number>(1);", "declare class K<T> { constructor(v: T) }\nnew K<number>(1);",
+      "declare const o: { m<T>(x: T): T };\no.m<number>(1);", "const g = <T,>(v: T) => v;\ng<number>(1);",
+      // `any` callee with NO type arguments is legal, both spellings.
+       "declare var anyVar: any;\nanyVar(1);", "declare var anyVar: any;\nnew anyVar(1);",
+      // The line the rule has to hold: a binding whose type this
+      // checker could not compute. `foo()` returns a class expression,
+      // which comes out `Any` here and is a generic class in tsc, so
+      // `new C<number>()` is legal — this is `staticIndexSignature6`,
+      // and the loose form of the rule reported it.
+       "function foo() { return class<T> { m(v: T) { return v } } }\nconst C = foo()\nconst c = new C<number>();",
+      // Same shape through an ordinary call and through a lib global
+      // whose members our model leaves `Any`.
+       "declare function mk(): { <T>(x: T): T };\nconst h = mk();\nh<number>(1);",
+      "const p = JSON.parse('{}');\np<number>(1);",
+      // A declaration WITH an initializer is excluded whatever the
+      // initializer is: inference is what the exclusion is about, not
+      // the value.
+       "var z: any = 1;\nz<number>(1);",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
