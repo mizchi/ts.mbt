@@ -1818,6 +1818,65 @@ fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError 
 }
 
 ///|
+/// True when a decorator expression mentions `super` (which this parser
+/// spells `Var("super")`).
+///
+/// TS2660: a decorator expression is evaluated where the CLASS is
+/// defined, not inside a member body, so `super` has no meaning there
+/// even when the class does extend something --
+/// `class C extends S { @(super.m) method() {} }` is an error
+/// (decoratorOnClassMethod12).
+///
+/// The arms are the shapes a decorator expression can take. Anything
+/// else returns false, which costs a MISS rather than a finding: the
+/// checker's `expr_mentions_super` is the complete walker and it cannot
+/// be used here, because member decorator expressions never reach the
+/// AST.
+fn decorator_mentions_super(d : @ast.TsExpr) -> Bool {
+  match d {
+    Var("super") => true
+    PropAccess(recv, _) => decorator_mentions_super(recv)
+    IndexAccess(recv, idx) =>
+      decorator_mentions_super(recv) || decorator_mentions_super(idx)
+    MethodCall(recv, _, args) => {
+      if decorator_mentions_super(recv) {
+        return true
+      }
+      for a in args {
+        if decorator_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    Call(n, args) => {
+      if n == "super" {
+        return true
+      }
+      for a in args {
+        if decorator_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) => {
+      if decorator_mentions_super(callee) {
+        return true
+      }
+      for a in args {
+        if decorator_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    TypeArgs(_, inner) | PureCall(inner) => decorator_mentions_super(inner)
+    _ => false
+  }
+}
+
+///|
 /// The head NAME of a decorator expression, plus whether it was written
 /// as a call. `@dec` -> `("bare", "dec")`, `@dec(1)` -> `("called",
 /// "dec")`. `None` for every other shape (an inline arrow, a member
@@ -2563,6 +2622,18 @@ fn Parser::parse_class_body(
       }
       let mut di = deco_before
       while di < self.pending_decorators.length() {
+        // TS2660: `super` in a decorator expression. Gated on NOT being
+        // inside a function, because a class nested in a member body of
+        // a derived class is a different question -- there the decorator
+        // expression really does evaluate where `super` is bound, and
+        // tsc accepts it (probed). `decoratorOnClassMethod12`'s class is
+        // at namespace level, so `in_function` is false for it.
+        if not(self.in_function) &&
+          decorator_mentions_super(self.pending_decorators[di]) {
+          self.grammar_misuses.push(
+            "`super` can only be referenced in members of derived classes or object literal expressions",
+          )
+        }
         match decorator_head_name(self.pending_decorators[di]) {
           Some((called, dname)) =>
             self.invalid_decorator_uses.push(

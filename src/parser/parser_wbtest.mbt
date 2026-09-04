@@ -8011,3 +8011,65 @@ test "parser: unterminated tuple type and misplaced member decorator" {
     @test.assert_eq(has(src, "decorators must precede the name"), false)
   }
 }
+
+///|
+/// Batch DE: TS2660 for `super` in a member decorator expression.
+///
+/// A decorator expression is evaluated where the CLASS is defined, not
+/// inside a member body, so `super` has no meaning there even when the
+/// class does extend something. The gate is NOT being inside a function,
+/// because a class nested in a member body of a derived class is a
+/// different question -- there the decorator really does evaluate where
+/// `super` is bound, and tsc accepts it (probed).
+test "parser: super in a member decorator expression" {
+  // Looks in the namespaces' lists too: a misuse inside
+  // `namespace M { … }` is recorded on M's own module, which is the
+  // corpus file's shape.
+  let has = fn(src : String, needle : String) -> Bool raise {
+    let mut found = false
+    let m0 = Parser::from_source(src).parse_module()
+    for m in m0.grammar_misuses {
+      if m.contains(needle) {
+        found = true
+      }
+    }
+    for ns in m0.namespaces {
+      for m in ns.module_.grammar_misuses {
+        if m.contains(needle) {
+          found = true
+        }
+      }
+    }
+    found
+  }
+  let sup = "`super` can only be referenced in members of derived classes"
+  // --- fires: at top level and at namespace level (the corpus file's
+  // shape), and through each expression form the decorator can take.
+  assert_true(
+    has(
+      "class S { m(t: any, k: string): void {} }\nclass C extends S { @(super.m)\n method() {} }",
+      sup,
+    ),
+  )
+  assert_true(
+    has(
+      "namespace M { class S { m(t: any, k: string): void {} }\nclass C extends S { @(super.m)\n method() {} } }",
+      sup,
+    ),
+  )
+  assert_true(has("class C { @(super.m()) method() {} }", sup))
+  assert_true(has("class C { @(super[\"m\"]) method() {} }", sup))
+  // --- stays silent
+  for
+    src in [
+      // An ordinary decorator, and `super` in a member BODY, which is
+      // where it belongs.
+      "declare var dec: any;\nclass C { @dec method() {} }", "class S { m(): void {} }\nclass C extends S { method() { super.m() } }",
+      "class S { static m(t: any, k: string): void {} }\nclass C extends S { @(C.m) method() {} }",
+      // Inside a function the decorator expression really can see a
+      // `super`, so the rule abstains there.
+       "class S { m(t: any, k: string): void {} }\nclass D extends S { outer() { class C { @(super.m) method() {} } } }",
+    ] {
+    @test.assert_eq(has(src, sup), false)
+  }
+}
