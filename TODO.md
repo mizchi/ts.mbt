@@ -2155,14 +2155,67 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-03 — TypeScript 7)
 
-State: whole-corpus **TP 2515 / MISS 219 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2518 / MISS 216 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
 Twenty-one batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
 CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3,
-CL +11, CM +11, CN +1, CO +4, CP/CQ +28, CR +3, for **+178 TP at FP 0**.
-The MISS <= 250 target was met at CO; the current goal is MISS <= 200,
-which needs **19 more files**.
+CL +11, CM +11, CN +1, CO +4, CP/CQ +28, CR +3, CS +3, for
+**+181 TP at FP 0**. MISS <= 250 was met at CO. The goal is now
+MISS <= 150, which needs **66 more files** — see batch CS for why that
+is not a rule-writing problem any more.
+
+### Batch CS (2026-09-03): three negative results, and an invisible FP
+
++3 files (TP 2515 -> 2518, MISS 219 -> 216, FP 0, PFLEGAL 0),
+checker whitebox 642/642.
+
+**Three mechanisms tested and rejected, which is the useful part.**
+Looking for something worth many files rather than one:
+
+1. *Position coverage is not the bottleneck.* A matrix putting a known
+   type error in each of 28 syntactic positions (variable declaration,
+   call argument, return, property assignment, object-literal field,
+   array element, default parameter, later assignment, for-of binding,
+   ternary, class field, constructor argument, method return, arrow
+   return, index write, spread, template, compound assignment, `as`,
+   `satisfies`, `await`, `yield`, destructuring default, object-method
+   return, nested object, union context, readonly write, optional call)
+   finds **24 already checked**. Only 4 gaps, all small.
+2. *A NAME is not a feature cluster.* The 21 `Symbol`-ish miss files
+   need 21 unrelated things. Same mistake as the decorator bucket, one
+   axis over.
+3. *The lib model is largely present.* 8 of 13 common global return
+   types infer correctly.
+
+Conclusion: no single mechanism is worth ~66 files, and the measured
+rate is ~1.7 rules per file gained.
+
+**The systemic gap that WAS real:** `Symbol()` had no model in
+`infer_expr`, so every rule keyed on a symbol operand was silent.
+`iterator_class_element_type`'s own comment states it and works around
+it locally — another stated abstention naming its own blocker.
+
+**Rules:** TS2358 extended from a syntactic literal LHS to the inferred
+type; TS2359 for the right operand; TS2407 for a `for...in` right-hand
+side (where `unknown` IS an error, the opposite of the instanceof LHS —
+both probed); TS2731 for a symbol in a template substitution (zero
+corpus files, kept because `${sym}` throws at runtime); TS18046 for an
+unnarrowed `catch (e)`, decided by a token scan where any of five
+narrowing spellings withdraws the report for the block.
+
+**The false positive.** `+`, `-` and `~` apply ToNumeric, so the only
+type TypeScript refuses is `symbol` (TS2469). `~aString`, `-aString`,
+`~aBoolean`, `-aBoolean` and `-anObject` are all legal and were all
+reported. Only operator-by-operator probing finds this, because the
+BINARY operators DO require a number (`s - 1` is TS2362) and so do
+`++` / `--` (TS2356) — the wrong rule looked exactly like its
+neighbours. Two tests asserted it by name, the 6th and 7th in this repo
+found pinning a bug. And removing it COST a true positive:
+`typeArgumentsWithStringLiteralTypes01` was flagged only for
+`args[+randBool()]`, idiomatic bool-to-0/1 coercion, while its real
+errors are five TS2345s elsewhere. **A conformance file counts as a TP
+if we flag it at all, so +1 TP is not evidence that a rule is right.**
 
 ### Batch CR (2026-09-03): one fact, recorded at some of its sites
 

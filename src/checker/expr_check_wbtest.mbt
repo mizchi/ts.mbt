@@ -5708,8 +5708,13 @@ test "expr_check: comparing different string literals with === is flagged" {
 }
 
 ///|
-test "expr_check: unary minus on string is flagged" {
-  // `-"str"` — negation requires a numeric operand.
+test "expr_check: unary minus on a string is NOT an error" {
+  // `-s` on a string is LEGAL: unary `-` applies ToNumeric, so the
+  // operand coerces (`-"str"` is `NaN`) and tsc accepts it. This test
+  // asserted the opposite until batch CS, and it was pinning a false
+  // positive — the sixth test in this repo found doing that. The only
+  // type the operator refuses is `symbol` (TS2469), which the CS test
+  // covers.
   let src =
     #|function f(s: string): number {
     #|  return -s;
@@ -5719,8 +5724,8 @@ test "expr_check: unary minus on string is flagged" {
       let issues = check_function_body(f)
       let found = issues
         .iter()
-        .any(fn(i) { i.message.contains("not a valid number type") })
-      assert_true(found)
+        .any(fn(i) { i.message.contains("cannot be applied") })
+      assert_false(found)
     }
     None => fail("function not found")
   }
@@ -6477,16 +6482,37 @@ test "expr_check: unary plus accepts a string operand" {
 }
 
 ///|
-test "expr_check: unary minus still rejects a string operand" {
-  // Unlike `+`, unary `-` requires a numeric operand.
-  let src =
-    #|function f(s: string): number {
-    #|  return -s;
-    #|}
-  let module_ = parse_module_or_empty(src)
-  let issues = check_module_function_bodies(module_)
-  let unary = issues.filter(fn(i) { i.message.contains("valid number type") })
-  @test.assert_eq(unary.length(), 1)
+test "expr_check: unary minus accepts a string operand, and refuses a symbol" {
+  // `-` and `+` behave the SAME way here, contrary to what this test
+  // asserted before batch CS: both apply ToNumeric, so a string operand
+  // is legal. `symbol` is the one type either refuses (TS2469), and
+  // asserting both halves in one test is what keeps the rule from
+  // drifting back to "must be a number".
+  let ok = parse_module_or_empty(
+    (
+      #|function f(s: string): number {
+      #|  return -s;
+      #|}
+    ),
+  )
+  @test.assert_eq(
+    check_module_function_bodies(ok)
+    .filter(fn(i) { i.message.contains("cannot be applied") })
+    .length(),
+    0,
+  )
+  let bad = parse_module_or_empty(
+    (
+      #|declare const sy: symbol;
+      #|const q = -sy;
+    ),
+  )
+  @test.assert_eq(
+    check_module_function_bodies(bad)
+    .filter(fn(i) { i.message.contains("cannot be applied") })
+    .length(),
+    1,
+  )
 }
 
 ///|
@@ -16490,6 +16516,88 @@ test "expr_check: re-export specifiers, import types, unused privates (batch CR)
       // A get/set pair is TWO declarations of one member, so the count
       // comparison has to allow for it: read once, it is used.
        "// @noUnusedLocals: true\n// @target: es2015\nclass C { get #p() { return 1 } set #p(v: number) { } m() { return this.#p } }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CS: operand-type rules, and a false positive the conformance
+/// gate could not see. The unary rule here REPLACES one that required a
+/// number: `+`, `-` and `~` all coerce, and the only type TypeScript
+/// refuses is `symbol` — so `~aString` and `-aBoolean` had been reported
+/// on legal code. Every boundary below was probed operator by operator.
+test "expr_check: unary coercion, symbol inference, instanceof and for-in operands (batch CS)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2469: symbol is the one type `+` / `-` / `~` reject.
+      "declare const sy: symbol;\nvar a = ~sy;", "declare const sy: symbol;\nvar a = -sy;",
+      "declare const sy: symbol;\nvar a = +sy;",
+      // `Symbol()` now infers as `symbol`, which is what makes the
+      // operand rules reachable at all — the call had no model in
+      // `infer_expr`, so every symbol rule was silent.
+       "var s = Symbol();\nvar bad: number = s;", "var s = Symbol();\n+s;",
+      // TS2358 / TS2359: an `instanceof` operand that is a definite
+      // primitive, on either side.
+       "declare const s: string;\ns instanceof Object;", "declare const sy: symbol;\nsy instanceof Object;",
+      "declare const o: object;\ndeclare const n: number;\no instanceof n;",
+      // TS2407: a `for...in` right-hand side that is a definite
+      // primitive, or `unknown`.
+       "for (const k in 1) { }", "for (const k in \"str\") { }", "declare const sy: symbol;\nfor (const k in sy) { }",
+      "declare const u: unknown;\nfor (const k in u) { }",
+      // TS2731: a symbol in a template substitution throws at runtime.
+       "declare const sy: symbol;\nconst t = `${sy}`;",
+      // TS18046: an unannotated catch binding is `unknown`.
+       "try { } catch (e) { console.log(e.message); }", "try { } catch (e) { e.foo(); }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // The four false-positive shapes the old unary rule produced.
+      // `+`, `-` and `~` apply ToNumeric, so a string and a boolean are
+      // both legal operands — `args[+randBool()]` is idiomatic, and
+      // flagging it made `typeArgumentsWithStringLiteralTypes01` a true
+      // positive for the WRONG reason.
+      "declare const s: string;\nvar a = ~s;", "declare const s: string;\nvar a = -s;",
+      "declare const b: boolean;\nvar a = ~b;", "declare const b: boolean;\nvar a = -b;",
+      // An object and an array coerce too (to NaN); tsc accepts both.
+       "declare const o: object;\nvar a = -o;",
+      // The BINARY operators are genuinely different and untouched:
+      // `s - 1` IS an error, so this file must still report exactly one
+      // thing rather than nothing — asserted in the fires list of the
+      // binary tests elsewhere. Here: `++` / `--` still require a
+      // number, which is a different code (TS2356) and still fires, so
+      // it is not in this silent list either.
+      //
+      // A user-declared `Symbol` wins over the lib model, so nothing is
+      // claimed about its return type.
+       "declare function Symbol(): string;\nvar s2 = Symbol();\nvar ok: string = s2;",
+      // TS2358 abstains for everything that is not a definite
+      // primitive: `unknown` is a LEGAL instanceof left operand (probed
+      // — and the opposite of the for-in answer), and so are `any`, an
+      // object type and a union.
+       "declare const u: unknown;\nu instanceof Object;", "declare const a: any;\na instanceof Object;",
+      "declare const o: object;\no instanceof Object;", "declare const t: string | object;\nt instanceof Object;",
+      // TS2407 accepts an object type and `any`.
+       "declare const o: object;\nfor (const k in o) { }", "declare const a: any;\nfor (const k in a) { }",
+      // TS2731 is only about symbol; a string and a number stringify.
+       "declare const s: string;\nconst t = `${s}`;", "declare const n: number;\nconst t = `${n}`;",
+      // TS18046: an annotation opts out, any narrowing spelling
+      // withdraws the report for the block, and a bare use or a
+      // re-throw touches nothing.
+       "try { } catch (e: any) { console.log(e.message); }", "try { } catch (e: unknown) { if (e instanceof Error) console.log(e.message); }",
+      "try { } catch (e) { if (e instanceof Error) console.log(e.message); }", "try { } catch (e) { if (typeof e === \"string\") console.log(e.length); }",
+      "try { } catch (e) { console.log(e); }", "try { } catch (e) { throw e; }",
+      // `@useUnknownInCatchVariables: false` turns it off, and so does
+      // `@strict: false`, which the flag follows.
+       "// @useUnknownInCatchVariables: false\ntry { } catch (e) { console.log(e.message); }",
+      "// @strict: false\ntry { } catch (e) { console.log(e.message); }",
     ] {
     @test.assert_eq(issues(src), 0)
   }

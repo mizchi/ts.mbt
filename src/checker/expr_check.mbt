@@ -6820,6 +6820,28 @@ fn infer_expr(
       @ast.TsType::Array(elem)
     }
     Call(name, args) => {
+      // `Symbol()` returns `symbol`. The lib global is not a function
+      // VALUE in `resolver.globals`, so without this the call infers
+      // `Any` and every rule that keys on a symbol operand goes quiet —
+      // `iterator_class_element_type` says exactly that in its own
+      // comment and worked around it locally, which is the stated
+      // abstention this removes.
+      //
+      // Guarded the way the computed-key rule above guards the same
+      // shortcut: a user-declared `Symbol` value, class or
+      // `SymbolConstructor` interface can return anything, so the stock
+      // lib surface is the only thing trusted here. `env.lookup` comes
+      // first regardless, so a local binding named `Symbol` still wins.
+      if name == "Symbol" &&
+        env.lookup(name) is None &&
+        resolver.declared_value_names.get(name) is None &&
+        resolver.classes.get(name) is None &&
+        resolver.interfaces.get("SymbolConstructor") is None {
+        for a in args {
+          let _ = infer_expr(env, resolver, a)
+        }
+        return @ast.TsType::Symbol
+      }
       let callee_ty = match env.lookup(name) {
         Some(t) => t
         None =>
@@ -13440,6 +13462,11 @@ fn type_display(ty : @ast.TsType) -> String {
     Null => "null"
     Undefined => "undefined"
     Any => "any"
+    // Without this arm `unknown` fell through to the catch-all and
+    // printed as `type`, so the TS2407 message read "here has type
+    // `type`" — a diagnostic nobody can act on, the same defect as
+    // naming a private-field brand instead of `#u`.
+    Unknown => "unknown"
     NonPrimitiveObject => "object"
     Never => "never"
     // Show literal types as `"s" (string)` so messages remain searchable
@@ -16199,6 +16226,19 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // `for (key in obj)` — `key` is always `string` in JS/TS.
       // A declared type that doesn't accept `string` is an error.
       check_call_args_in_expr(env, iter, ctx)
+      // TS2407: the right-hand side must be `any`, an object type or a
+      // type parameter. A definite primitive is none of those, and
+      // unlike the `instanceof` LHS above, `unknown` IS an error here —
+      // both directions probed, which is why this asks for it
+      // explicitly rather than reusing that call's answer.
+      let iter_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, iter))
+      if is_definite_primitive_type(iter_ty) || iter_ty is Unknown {
+        record_unfiltered(
+          ctx,
+          "for-in",
+          "the right-hand side of a `for...in` statement must be of type `any`, an object type or a type parameter, but here has type `\{type_display(iter_ty)}`",
+        )
+      }
       if is_checkable(declared) &&
         !is_assignable_to(@ast.TsType::String_, ctx.resolver.unwrap(declared)) {
         record(
@@ -17857,6 +17897,16 @@ fn check_call_args_in_expr(
       // (or `any`). A syntactic literal LHS -- string / template / number /
       // boolean / bigint -- is a primitive, never an object, so it is a
       // definite error with no inference involved.
+      //
+      // The INFERRED case is checked too, which is what makes
+      // `Symbol() instanceof Symbol` reachable now that `infer_expr`
+      // models `Symbol()`. `is_definite_primitive_type` is an exact
+      // match on the primitive kinds, so `any`, a union, an interface
+      // and a type parameter all fall through — and `unknown` is
+      // deliberately NOT a primitive there, because tsc ACCEPTS
+      // `unknownValue instanceof Object` (probed; the for-in rule below
+      // is the opposite, which is why they do not share a predicate
+      // decision).
       if op is Instanceof {
         let literal_primitive_lhs = match l {
           StringLit(_)
@@ -17867,9 +17917,22 @@ fn check_call_args_in_expr(
           | BoolLit(_) => true
           _ => false
         }
-        if literal_primitive_lhs {
+        if literal_primitive_lhs ||
+          is_definite_primitive_type(
+            ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l)),
+          ) {
           record_unfiltered(
             ctx, "instanceof", "the left-hand side of an `instanceof` expression must be of type `any`, an object type or a type parameter",
+          )
+        }
+        // TS2359: the RIGHT operand must be callable — a class, a
+        // function, or an object with `[Symbol.hasInstance]`. A definite
+        // primitive is none of those.
+        if is_definite_primitive_type(
+            ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r)),
+          ) {
+          record_unfiltered(
+            ctx, "instanceof", "the right-hand side of an `instanceof` expression must be of type `any`, a class, a function, or an object with a `[Symbol.hasInstance]` method",
           )
         }
       }
@@ -17953,37 +18016,30 @@ fn check_call_args_in_expr(
               )
             None => ()
           }
-        Neg | BitwiseNot => {
+        // TS2469: `+`, `-` and `~` all apply ToNumeric to their operand,
+        // and the ONLY type TypeScript refuses there is `symbol`. That
+        // was probed operator by operator and type by type, because
+        // requiring a number here is wrong and had been for as long as
+        // this arm existed: `~s` / `-s` on a string, and `~b` / `-b` on
+        // a boolean, are legal and were reported — four false-positive
+        // shapes on legal code, invisible to the conformance gate
+        // because no TS7-accepted corpus file has them. An `object` and
+        // an array coerce too (to `NaN`), and tsc accepts both.
+        //
+        // Same mistake this repo records for the minifier's `~~x` and
+        // `-(-x)` rewrites: assuming a type where the operator coerces.
+        // The BINARY operators are genuinely different — `s - 1` IS
+        // TS2362 — so `check_binop_operands` is untouched, and so are
+        // `++` / `--`, which are TS2356 and do require a number.
+        Neg | BitwiseNot | Plus => {
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
           )
-          if is_checkable(inner_ty) && is_definitely_not_arithmetic(inner_ty) {
+          if inner_ty is Symbol {
             record(
               ctx,
               "unary op",
-              "operand `\{type_display(inner_ty)}` is not a valid number type",
-            )
-          }
-        }
-        // Unary `+` is the explicit numeric-coercion operator, so TypeScript
-        // accepts string operands (`+"5"`, `+templateString`, `+forInKey`)
-        // as well as number / bigint / any. Only operands that cannot
-        // coerce at all (objects, arrays, …) are flagged.
-        Plus => {
-          let inner_ty = ctx.resolver.unwrap(
-            infer_expr(env, ctx.resolver, inner),
-          )
-          let is_stringish = match inner_ty {
-            String_ | Literal(_) => true
-            _ => false
-          }
-          if is_checkable(inner_ty) &&
-            is_definitely_not_arithmetic(inner_ty) &&
-            !is_stringish {
-            record(
-              ctx,
-              "unary op",
-              "operand `\{type_display(inner_ty)}` is not a valid number type",
+              "the `\{unary_op_display(op)}` operator cannot be applied to type `symbol`",
             )
           }
         }
@@ -19027,6 +19083,17 @@ fn check_call_args_in_expr(
     TemplateLiteral(_, exprs) =>
       for e in exprs {
         check_call_args_in_expr(env, e, ctx)
+        // TS2731: a template substitution stringifies its expression,
+        // and a `symbol` THROWS when implicitly converted — it is the
+        // one type where `${x}` fails at runtime rather than producing
+        // something. Probed: `${aString}` and `${aNumber}` are fine, so
+        // only the symbol case is reported, and only when the type is
+        // exactly `symbol` (a union or an unresolved type abstains).
+        if ctx.resolver.unwrap(infer_expr(env, ctx.resolver, e)) is Symbol {
+          record_unfiltered(
+            ctx, "template", "implicit conversion of a `symbol` to a `string` will fail at runtime — wrap it in `String(...)`",
+          )
+        }
       }
     Yield(operand_opt) =>
       match operand_opt {
@@ -24515,6 +24582,49 @@ fn check_use_strict_with_non_simple_params(
 
   walk_module(module_)
   issues
+}
+
+///|
+/// True for the primitive type KINDS, matched exactly: `string`,
+/// `number`, `boolean`, `symbol`, `bigint` and their literal forms.
+///
+/// Exact matching is what makes this safe to use for definite-error
+/// rules: `Any`, `Unknown`, `Named`, `Object`, `Union`, `Intersection`
+/// and a type parameter all fall through to `false`, so a type this
+/// checker could not resolve never produces a finding. `Unknown` is
+/// excluded on purpose — the operators disagree about it (an
+/// `instanceof` LHS accepts it, a `for...in` right-hand side does not),
+/// so each caller states its own answer.
+fn is_definite_primitive_type(t : @ast.TsType) -> Bool {
+  match t {
+    String_
+    | Number
+    | Boolean
+    | Symbol
+    | BigInt
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_)
+    | BigIntLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Source spelling of the unary operators TS2469 names in its message.
+fn unary_op_display(op : @ast.TsUnaryOp) -> String {
+  match op {
+    Neg => "-"
+    Plus => "+"
+    BitwiseNot => "~"
+    Not => "!"
+    Typeof => "typeof"
+    Void => "void"
+    Delete => "delete"
+    PreInc => "++"
+    PreDec => "--"
+    _ => "unary"
+  }
 }
 
 ///|

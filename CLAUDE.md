@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2515 / MISS 219 / FP 0 /
+  is a soundness bug, and there are none (TP 2518 / MISS 216 / FP 0 /
   PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -56,8 +56,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Twenty-three batches have taken
-  **+178 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Twenty-four batches have taken
+  **+181 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -638,6 +638,47 @@ product surfaces now.
   reads — and a `#x in v` brand check IS a read to tsc, which is exactly
   why `privateNameInInExpressionUnused` reports its `#unused` and not
   its `#brand`.
+  Batch CS is +3 and its most valuable output is a FALSE POSITIVE the
+  conformance gate structurally cannot see. Hunting for a mechanism worth
+  many files, three plausible ones were tested and all three came back
+  negative, which is worth as much as the rules: **position coverage is
+  not the bottleneck** (a matrix of a known type error in each of 28
+  syntactic positions — return, property assignment, array element,
+  for-of head, default parameter, template, index write, satisfies, … —
+  finds 24 already checked); a NAME is not a feature cluster (the 21
+  `Symbol`-ish miss files need 21 unrelated things — instanceof operands,
+  for-in operands, interface extends conflicts, `delete` on readonly,
+  index types, the async-iterator protocol); and the lib model is
+  largely present (8 of 13 common global return types infer correctly).
+  So there is no single mechanism worth ~66 files, and the measured rate
+  is about 1.7 rules per file gained.
+  The one real systemic gap found was `Symbol()` having no model in
+  `infer_expr` — `iterator_class_element_type`'s own comment says so and
+  worked around it locally, another stated abstention naming its blocker
+  — and giving it one is what makes every symbol-operand rule reachable.
+  On top of that: TS2358 extended from a syntactic literal LHS to the
+  inferred type, TS2359 for the right operand, TS2407 for a `for...in`
+  right-hand side, TS2731 for a symbol in a template substitution (zero
+  corpus files, kept because `${sym}` THROWS at runtime), and TS18046
+  for an unnarrowed `catch (e)` — the single most common thing a
+  codebase hits when it turns `strict` on, decided by a token scan of
+  the catch block where any of five narrowing spellings withdraws the
+  report.
+  The false positive is the lesson. `+`, `-` and `~` all apply
+  ToNumeric, so the ONLY type TypeScript refuses is `symbol` (TS2469) —
+  `~aString`, `-aString`, `~aBoolean` and `-aBoolean` are legal and were
+  all being reported, and an object coerces too. Probing operator by
+  operator was the only way to find it, because the BINARY operators
+  really do require a number (`s - 1` is TS2362) and `++` / `--` really
+  do too (TS2356), so the wrong rule looked like its neighbours. Two
+  TESTS asserted the bug by name ("unary minus on string is flagged",
+  "unary minus still rejects a string operand") — the sixth and seventh
+  in this repo found doing that. And the gate paid for the wrong rule
+  with a right-looking number: removing it COST a true positive, because
+  `typeArgumentsWithStringLiteralTypes01` was flagged only for
+  `args[+randBool()]` — idiomatic bool-to-0/1 coercion — while its real
+  errors are five TS2345s elsewhere. A conformance file counts as a TP
+  if we flag it AT ALL, so +1 TP is not evidence that a rule is right.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

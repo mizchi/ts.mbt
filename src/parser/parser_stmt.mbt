@@ -986,9 +986,12 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
   let try_block = self.parse_block()
   let mut catch_binding : @ast.TsBinding? = None
   let mut catch_block : @ast.TsBlock? = None
+  let mut catch_name = ""
+  let mut had_annotation = false
   if self.match_(Catch) {
     if self.match_(LParen) {
       let binding = self.parse_binding_pattern()
+      had_annotation = self.check(Colon)
       if self.check(Colon) {
         let _ = self.advance()
         let catch_type = self.parse_type()
@@ -1008,8 +1011,14 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
       }
       let _ = self.expect(RParen)
       catch_binding = Some(binding)
+      catch_name = match binding {
+        @ast.TsBinding::Ident(n) => n
+        _ => ""
+      }
     }
+    let catch_body_start = self.pos
     catch_block = Some(self.parse_block())
+    self.record_unknown_catch_use(catch_name, had_annotation, catch_body_start)
   }
   let mut finally_block : @ast.TsBlock? = None
   if self.match_(Finally) {
@@ -1020,6 +1029,66 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
     _ => ()
   }
   Try(try_block, catch_binding, catch_block, finally_block)
+}
+
+///|
+/// TS18046 ("'e' is of type 'unknown'"): an unannotated `catch (e)`
+/// binding is `unknown` under `useUnknownInCatchVariables`, so touching
+/// it without narrowing first is an error — the single most common thing
+/// a codebase hits when it turns `strict` on.
+///
+/// Decided over the catch block's TOKEN range, for the reason the
+/// private-member rules give: every mention of the binding must spell
+/// its name, so a scan is complete by construction where an expression
+/// walker missing one arm would lose findings silently.
+///
+/// A USE is the name followed by `.`, `[` or `(` — the three ways to
+/// touch a value of unknown type. Any of five NARROWING or reassignment
+/// spellings anywhere in the block withdraws the report for the whole
+/// block: `typeof e`, `e instanceof`, `e as`, `e!`, and an assignment to
+/// `e`. That is deliberately coarse — narrowing is flow-sensitive and
+/// this is not a flow analysis — so a block that narrows in one branch
+/// and not another abstains entirely, costing a MISS rather than
+/// inventing a finding. `controlFlowAliasingCatchVariables` is exactly
+/// that shape and stays a MISS; the aliased form
+/// (`const isE = typeof e === "string"`) is caught by the `typeof e`
+/// token, which is why the alias needs no special case.
+fn Parser::record_unknown_catch_use(
+  self : Parser,
+  name : String,
+  had_annotation : Bool,
+  body_start : Int,
+) -> Unit {
+  if name == "" || had_annotation || not(self.unknown_catch_variables) {
+    return
+  }
+  let mut used = false
+  for i in body_start..<self.pos {
+    guard self.tokens[i].kind is Ident(n) else { continue }
+    if n != name {
+      continue
+    }
+    let prev = if i > 0 { self.tokens[i - 1].kind } else { Eof }
+    let next = if i + 1 < self.tokens.length() {
+      self.tokens[i + 1].kind
+    } else {
+      Eof
+    }
+    if prev is Typeof {
+      return
+    }
+    match next {
+      Instanceof | As | Eq | Bang => return
+      Ident("as") => return
+      Dot | LBracket | LParen => used = true
+      _ => ()
+    }
+  }
+  if used {
+    self.grammar_misuses.push(
+      "`\{name}` is of type `unknown` — narrow it before use",
+    )
+  }
 }
 
 ///|

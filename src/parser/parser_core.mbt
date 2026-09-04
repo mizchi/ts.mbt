@@ -145,6 +145,11 @@ pub struct Parser {
   // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
   // opts back in over `@strict: false`.
   no_implicit_any : Bool
+  // `useUnknownInCatchVariables`: an unannotated `catch (e)` binding is
+  // `unknown` rather than `any`, so using it without narrowing is
+  // TS18046. Follows `strict`, which the conformance baselines treat as
+  // ON for a directive-less file (same convention as noImplicitAny).
+  unknown_catch_variables : Bool
   // True when the test header carries `@experimentaldecorators: true`
   // (legacy decorators). Parameter decorators are only legal in that
   // mode — under standard (ES) decorators they are TS1206.
@@ -331,6 +336,7 @@ pub fn Parser::new_with_strict_and_jsx(
     no_bound_inline: false,
     target_es6_plus: false,
     no_implicit_any: false,
+    unknown_catch_variables: false,
     experimental_decorators: true,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
@@ -576,6 +582,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(head_lower),
     no_implicit_any: detect_no_implicit_any(head),
+    unknown_catch_variables: detect_unknown_catch_variables(head),
     experimental_decorators,
     template_invalid_escape_positions: lexer.template_invalid_escape_positions,
     record_implicit_any_params: false,
@@ -1057,6 +1064,29 @@ fn detect_no_property_access_from_index_signature(head : String) -> Bool {
 /// the case-preserved leading window.
 fn detect_import_helpers(head : String) -> Bool {
   head.contains("@importHelpers: true") || head.contains("@importHelpers:true")
+}
+
+///|
+/// True when an unannotated `catch (e)` binding is `unknown` rather than
+/// `any` (TS18046). Follows `strict`: ON unless explicitly disabled.
+///
+/// A multi-valued directive (`@useUnknownInCatchVariables: true,false`)
+/// counts as ON, because the harness runs each variant and the file has
+/// errors if ANY run does — `controlFlowAliasingCatchVariables` is
+/// exactly that spelling.
+fn detect_unknown_catch_variables(head : String) -> Bool {
+  if head.contains("@useUnknownInCatchVariables: true") ||
+    head.contains("@useUnknownInCatchVariables:true") {
+    return true
+  }
+  if head.contains("@useUnknownInCatchVariables: false") ||
+    head.contains("@useUnknownInCatchVariables:false") {
+    return false
+  }
+  if head.contains("@strict: false") || head.contains("@strict:false") {
+    return false
+  }
+  true
 }
 
 ///|
