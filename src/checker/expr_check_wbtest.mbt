@@ -16922,3 +16922,85 @@ test "batch CX rules" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CY: TS2351, TS2532 and TS2661.
+///
+/// TS2532's silent list carries the false positive the first version
+/// shipped: our flow model narrows an `any`-typed binding to `Undefined`
+/// when its initializer is `undefined`, so `Undefined` had to come OUT
+/// of the arm. `Void` cannot be produced by narrowing, which is what
+/// makes the remaining half sound.
+test "batch CY rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2351: the value of an arithmetic expression has no construct
+      // signature (exponentiationOperatorWithNew).
+      "declare var a: any;\ndeclare var b: any;\nnew (a ** b);", "declare var a: any;\nnew (a + 1);",
+      "new (1);", "declare var a: any;\nnew (a < 1);",
+      // TS2532: destructuring reads properties off the source, so a
+      // `void` one is possibly-undefined
+      // (destructuringVoidStrictNullChecks).
+       "// @strictNullChecks: true\ndeclare const v: void;\nconst {} = v;", "// @strictNullChecks: true\ndeclare const v: void;\nconst { a } = v;",
+      // TS2661: only a local declaration can be exported
+      // (exportNonLocalDeclarations).
+       "export { nonexistentThing };", "export type { alsoMissing };",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // `new a ** b` parses as `(new a) ** b`, so the arithmetic is not
+      // the callee -- the same file's legal half. An identifier, a call
+      // and a property access all abstain.
+      "declare var a: any;\ndeclare var b: any;\nnew a ** b;", "declare var a: any;\nnew a();",
+      "declare var a: any;\nnew (a);", "class K {}\nnew K();", "declare var ns: any;\nnew ns.Thing();",
+      // TS2532 abstains when strictNullChecks is explicitly OFF, and for
+      // an ordinary object source. (The flag's DEFAULT in this checker is
+      // on, matching the conformance harness rather than tsc's own
+      // default, so the no-directive spelling is not the abstention.)
+       "// @strictNullChecks: false\ndeclare const v: void;\nconst {} = v;", "// @strict: false\ndeclare const v: void;\nconst {} = v;",
+      "// @strictNullChecks: true\nconst o = { x: 1 };\nconst { x } = o;",
+      // The false positive: `undefined` reaches the source type through
+      // NARROWING, not through a declaration, and tsc accepts it.
+       "// @strictNullChecks: true\nconst q: any = undefined;\nconst { y }: any = q;",
+      "// @strictNullChecks: true\nconst q: any = undefined;\nconst { y } = q;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // A RE-EXPORT names another module's declaration, so it must not be
+  // checked against this one's. Asserted on the MESSAGE rather than the
+  // count, because an unresolvable specifier is a TS2307 of its own and
+  // a count would be measuring that instead.
+  let non_local = fn(src : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains("only local declarations") {
+        n += 1
+      }
+    }
+    n
+  }
+  for
+    src in [
+      "export { whatever } from './other';", "export type { whatever } from './other';",
+      "import { thing } from './other';\nexport { thing };", "import thing from './other';\nexport { thing };",
+      "import * as ns from './other';\nexport { ns };",
+      // Every kind of local declaration is exportable, a type-only one
+      // included.
+       "type T = 1;\nconst v1 = 1;\nclass C1 {}\ninterface I1 {}\nenum E1 { A }\nfunction f1() {}\nexport { T, v1, C1, I1, E1, f1 };",
+      "type T = 1;\nexport type { T };", "declare const dv: number;\nexport { dv };",
+      "namespace N { export const k = 1 }\nexport { N };",
+    ] {
+    @test.assert_eq(non_local(src), 0)
+  }
+  assert_true(non_local("export { nonexistentThing };") > 0)
+}

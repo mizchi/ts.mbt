@@ -143,6 +143,31 @@ fn Parser::parse_named_imports_with_type_flags(
 }
 
 ///|
+/// Record the LOCAL names of an `export { … }` clause that has no
+/// `from` specifier, plus whether the clause was `export type { … }`.
+///
+/// The one place that writes these markers, called from each of the
+/// three export parsers once they know there is no specifier -- a
+/// re-export (`export { a } from './x'`) names something in ANOTHER
+/// module and must not be checked against this one's declarations. The
+/// `spec` argument is what makes that distinction impossible to forget:
+/// `parse_named_exports` itself stops at the `}` and cannot see whether
+/// a `from` follows.
+fn Parser::record_local_export_names(
+  self : Parser,
+  items : Array[(String, String)],
+  spec : String?,
+) -> Unit {
+  if spec is Some(_) {
+    return
+  }
+  for item in items {
+    let (local_name, _) = item
+    self.grammar_misuses.push("<export-local>" + local_name)
+  }
+}
+
+///|
 fn Parser::parse_named_exports(
   self : Parser,
 ) -> Array[(String, String)] raise ParseError {
@@ -2648,7 +2673,9 @@ fn Parser::parse_export_decl_for_module(
     if self.match_(LBrace) {
       let items = self.parse_named_exports()
       let _ = self.expect(RBrace)
-      if self.try_from_spec() is Some(module_spec) {
+      let spec = self.try_from_spec()
+      self.record_local_export_names(items, spec)
+      if spec is Some(module_spec) {
         reexports.push({
           module_spec,
           kind: @ast.TsReExportKind::Named(items),
@@ -2788,7 +2815,9 @@ fn Parser::parse_export_decl_for_module(
   if self.match_(LBrace) {
     let items = self.parse_named_exports()
     let _ = self.expect(RBrace)
-    if self.try_from_spec() is Some(module_spec) {
+    let spec = self.try_from_spec()
+    self.record_local_export_names(items, spec)
+    if spec is Some(module_spec) {
       reexports.push({
         module_spec,
         kind: @ast.TsReExportKind::Named(items),
@@ -3230,9 +3259,10 @@ fn Parser::parse_export_stmt(
       return
     }
     if self.match_(LBrace) {
-      let _ = self.parse_named_exports()
+      let items = self.parse_named_exports()
       let _ = self.expect(RBrace)
-      let _ = self.try_from_spec()
+      let spec = self.try_from_spec()
+      self.record_local_export_names(items, spec)
       self.consume_semicolon()
       return
     }
@@ -3461,9 +3491,29 @@ fn Parser::parse_export_stmt(
     // Marker, not an error: even an empty `export {}` makes the file a
     // module. Consumed by the TS1262 top-level `await`-name check.
     self.grammar_misuses.push("<module-syntax>")
-    self.parse_import_specifiers()
+    // This is the FOURTH site that parses an `export { … }` clause, and
+    // the only one that reached for `parse_import_specifiers` instead of
+    // `parse_named_exports`. That is why the TS2661 recorder written at
+    // the other three did not cover the plainest spelling there is --
+    // and it also meant a no-`from` clause's names landed in
+    // `imported_binding_names`, which is a list of LOCAL BINDINGS an
+    // import introduces. `export { x }` introduces none: it names
+    // something already declared. So the names go there only for a
+    // re-export, where the clause really does name another module's
+    // binding, and the recorder sees the rest.
+    let items = self.parse_named_exports()
     let _ = self.expect(RBrace)
-    let _ = self.try_from_spec()
+    let spec = self.try_from_spec()
+    self.record_local_export_names(items, spec)
+    if spec is Some(_) {
+      for item in items {
+        let (local_name, export_name) = item
+        self.imported_binding_names.push(local_name)
+        if export_name != local_name {
+          self.imported_binding_names.push(export_name)
+        }
+      }
+    }
     self.consume_semicolon()
     return
   }

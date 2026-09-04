@@ -15734,6 +15734,32 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       } else {
         infer_expr(env, ctx.resolver, init)
       }
+      // TS2532: destructuring reads properties off the initializer, so a
+      // `void` or `undefined` source is possibly-undefined at the read
+      // (`declare const v: void; const {} = v` --
+      // destructuringVoidStrictNullChecks). Only under
+      // strictNullChecks, where those types are not assignable
+      // everywhere; and only for an UNANNOTATED declaration, since an
+      // annotation retypes the source and tsc checks the initializer
+      // against it instead.
+      //
+      // `Undefined` is deliberately NOT in the arm, and a probe is why:
+      // our flow model narrows an `any`-typed binding to `Undefined`
+      // when its initializer is `undefined`, so
+      // `const q: any = undefined; const { y }: any = q` -- which tsc
+      // ACCEPTS -- was reported. That is the same trap the
+      // computed-key check documents twenty lines into
+      // `check_computed_key_type`. `Void` cannot be produced by
+      // narrowing: it comes only from an annotation or from a function
+      // that returns nothing, and destructuring either really is the
+      // error.
+      if ctx.strict_null_checks && not(is_checkable(declared)) {
+        if ctx.resolver.unwrap(source_ty) is Void {
+          record_unfiltered(
+            ctx, "destructuring init", "object is possibly `undefined`",
+          )
+        }
+      }
       bind_object_pattern(env, ctx, ob, source_ty)
     }
     Var(@ast.TsBinding::Target(_), _, init)
@@ -17848,6 +17874,20 @@ fn check_call_args_in_expr(
       match new_callee_class_name(callee) {
         Some(name) => check_abstract_instantiation(ctx, name)
         None => ()
+      }
+      // TS2351: `new (a ** b)` -- the value of an arithmetic or bitwise
+      // expression is a number (or, for `+`, a string), and neither has a
+      // construct signature, so no inference is needed to know the callee
+      // is not constructable (exponentiationOperatorWithNew).
+      //
+      // The reason this reads the CALLEE's syntax rather than its type is
+      // that `new a ** b` -- the same file's other spelling -- is LEGAL:
+      // it parses as `(new a) ** b`, so the arithmetic is not the callee
+      // at all and never reaches this arm. Only the parenthesized form
+      // does, and our parser strips the parens, which is precisely why
+      // the distinction has to come from the tree shape.
+      if callee_is_definitely_not_constructable(callee) {
+        record_unfiltered(ctx, "new", "this expression is not constructable")
       }
       check_call_args_in_expr(env, callee, ctx)
       for a in args {
@@ -22929,6 +22969,99 @@ fn check_member_accessibility_mismatch(
     for m in cls.methods {
       consider(m.name, m.is_static)
     }
+  }
+  issues
+}
+
+///|
+/// True for a `new` callee whose value cannot possibly carry a construct
+/// signature, decided from the SYNTAX alone.
+///
+/// An arithmetic or bitwise operator yields a number, `+` a number or a
+/// string, a comparison or logical-not a boolean, and a scalar literal
+/// itself -- none of those is constructable. Everything else returns
+/// false, including every identifier, call and property access, so the
+/// answer is only ever "definitely not" and never a guess.
+fn callee_is_definitely_not_constructable(callee : @ast.TsExpr) -> Bool {
+  match callee {
+    IntLit(_) | NumberLit(_) | BoolLit(_) | StringLit(_) | BigIntLit(_) => true
+    UnaryOp(Not, _) => true
+    BinOp(op, _, _) =>
+      match op {
+        Add
+        | Sub
+        | Mul
+        | Div
+        | Mod
+        | Pow
+        | Shl
+        | Shr
+        | UShr
+        | BitAnd
+        | BitOr
+        | BitXor
+        | BinLt
+        | BinGt
+        | BinLe
+        | BinGe
+        | BinEq
+        | BinNe
+        | AbstractEq
+        | AbstractNe
+        | In
+        | Instanceof => true
+        _ => false
+      }
+    _ => false
+  }
+}
+
+///|
+/// TS2661: `export { name }` with no `from` clause, where `name` is not
+/// declared anywhere in this module. Only a LOCAL declaration can be
+/// exported, so `export { string }` -- the global type's name, which
+/// declares nothing here -- is an error (exportNonLocalDeclarations).
+///
+/// Both halves of the lookup matter: the name may be declared as a
+/// VALUE or purely as a TYPE (`type T = 1; export { T }` is legal, and
+/// so is the `export type { T }` spelling), so the check consults both
+/// tables and reports only when neither has it.
+///
+/// A lib global is excluded, and that costs a MISS rather than buying
+/// anything: `export { Object }` is TS2661 too, probed, because a lib
+/// declaration is not a declaration of THIS module. The exclusion stays
+/// because the lib registries are the one place a name can be present
+/// for reasons this checker did not model, and a wrong answer there
+/// would be a false positive on ordinary code.
+fn check_non_local_exports(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let reported : Map[String, Unit] = {}
+  for gm in module_.grammar_misuses {
+    if !gm.has_prefix("<export-local>") {
+      continue
+    }
+    let name = gm["<export-local>".length():].to_owned()
+    if name == "" || reported.contains(name) {
+      continue
+    }
+    if resolver.declared_value_names.get(name) is Some(_) ||
+      resolver.interfaces.get(name) is Some(_) ||
+      resolver.type_aliases.get(name) is Some(_) ||
+      resolver.classes.get(name) is Some(_) ||
+      resolver.enums.get(name) is Some(_) ||
+      module_.imported_binding_names.contains(name) ||
+      is_lib_global_value(name) ||
+      is_lib_global_type(name) {
+      continue
+    }
+    reported[name] = ()
+    issues.push({
+      path: "export `\{name}`",
+      message: "cannot export `\{name}`: only local declarations can be exported from a module",
+    })
   }
   issues
 }
@@ -28758,6 +28891,9 @@ fn check_module_function_bodies_layered(
     for issue in check_implicit_any_this(module_, outer_modules.length() > 0) {
       all.push(issue)
     }
+  }
+  for issue in check_non_local_exports(module_, resolver) {
+    all.push(issue)
   }
   for issue in check_member_accessibility_mismatch(module_, resolver) {
     all.push(issue)
