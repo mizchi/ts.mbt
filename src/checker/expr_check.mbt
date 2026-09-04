@@ -4741,6 +4741,57 @@ fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
 /// with a `void` annotation or a call whose signature returns `void`
 /// (`function foo() { }` infers `void` too). Other expression shapes
 /// abstain even if inference says `void`.
+/// TS2774: a FUNCTION tested for truthiness. A function reference is
+/// never nullish, so the test is always true -- the author meant to call
+/// it (`myRandBool ? "foo" : "bar"` --
+/// stringLiteralTypesAndParenthesizedExpressions01, and the commonest
+/// spelling of this mistake in real code).
+///
+/// Three conditions, each of which the probe showed to matter:
+///  - the tested expression is a bare NAME, so `f()` and `o.m` are out;
+///  - the name is declared as a value in THIS module and its type comes
+///    out a plain `Func`, so a union with `undefined`
+///    (`declare var g: (() => void) | undefined; if (g)`) is legal and
+///    abstains;
+///  - `!f` is NOT reported by tsc, so the negated form is excluded at
+///    the call sites rather than here.
+///
+/// It is one helper called from every condition position for the reason
+/// this repo keeps recording: a rule written at the `if` is a rule
+/// missing from the ternary, the `while`, and the logical operands.
+fn tested_condition_is_always_defined_function(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  expr : @ast.TsExpr,
+) -> Bool {
+  match expr {
+    Var(name) => {
+      if ctx.resolver.declared_value_names.get(name) is None {
+        return false
+      }
+      match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr)) {
+        Func(_, _) | GenericFunc(_, _, _) => true
+        _ => false
+      }
+    }
+    _ => false
+  }
+}
+
+///|
+fn record_function_as_condition(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  expr : @ast.TsExpr,
+) -> Unit {
+  if tested_condition_is_always_defined_function(env, ctx, expr) {
+    record_unfiltered(
+      ctx, "condition", "this condition will always return true since this function is always defined: did you mean to call it instead?",
+    )
+  }
+}
+
+///|
 fn tested_condition_is_void(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -15973,6 +16024,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     Throw(e) => check_call_args_in_expr(env, e, ctx)
     If(cond, then_block, else_block) => {
       check_call_args_in_expr(env, cond, ctx)
+      record_function_as_condition(env, ctx, cond)
       let pre_map : Map[String, @ast.TsType] = {}
       for e in env.full_snapshot() {
         pre_map[e.0] = e.1
@@ -16052,6 +16104,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
     }
     While(cond, body) => {
+      record_function_as_condition(env, ctx, cond)
       check_call_args_in_expr(env, cond, ctx)
       // The body only runs when the condition holds, so its then-narrowing
       // applies at the top of the body (`while (x !== undefined) { x.foo }`).
@@ -16075,6 +16128,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       env.restore_from(pre)
     }
     DoWhile(cond, body) => {
+      record_function_as_condition(env, ctx, cond)
       // `do { … } while (cond)`: the body runs once *before* the condition is
       // ever evaluated, so the condition's narrowing must NOT apply to it.
       // (Back-edge widening is deliberately not applied here: this arm's
@@ -17917,6 +17971,8 @@ fn check_call_args_in_expr(
           record_unfiltered(
             ctx, "logical operand", "an expression of type `void` cannot be tested for truthiness",
           )
+        } else {
+          record_function_as_condition(env, ctx, l)
         }
       }
       // TS2322 (via the `in` operator's operand constraints): the left
@@ -18271,12 +18327,14 @@ fn check_call_args_in_expr(
           record_unfiltered(
             ctx, "cond", "this kind of expression is always falsy",
           )
-        None =>
+        None => {
           if tested_condition_is_void(env, ctx, c) {
             record_unfiltered(
               ctx, "cond", "an expression of type `void` cannot be tested for truthiness",
             )
           }
+          record_function_as_condition(env, ctx, c)
+        }
       }
       // Walk each branch under the condition's flow narrowing (the consequent
       // sees the truthy effect, the alternative the falsy one), so

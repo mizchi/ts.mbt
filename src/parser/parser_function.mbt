@@ -396,6 +396,25 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
       params.push(self.parse_param())
     }
   }
+  // TS2488: an ARRAY binding pattern's default must be iterable, so
+  // `function f([...r] = null) {}` -- and `= undefined`, and `= {}` --
+  // cannot destructure (restElementWithNullInitializer, whose fourth
+  // function, `= []`, is the legal one). Only the three definitely-
+  // non-iterable syntactic defaults are read; anything else, an
+  // identifier included, abstains.
+  for p in params {
+    match (p.binding, p.default) {
+      (Some(@ast.TsBinding::Array(_)), Some(d)) =>
+        match d {
+          NullLit | Var("undefined") | ObjectLit(_) =>
+            self.record_suppressible_grammar_misuse(
+              "an array destructuring pattern's default value must be iterable",
+            )
+          _ => ()
+        }
+      _ => ()
+    }
+  }
   // Parameter-list grammar rules, recorded here because this is the ONE
   // site every parameter list goes through — a method, a plain function, a
   // constructor and an arrow all land in it, so the rules cannot come to

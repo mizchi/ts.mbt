@@ -17180,3 +17180,66 @@ test "batch DB rules" {
     )
   }
 }
+
+///|
+/// Batch DC: TS2774 (a function tested for truthiness) and TS2488 (an
+/// array pattern whose default is not iterable).
+///
+/// TS2774's three conditions were each probed. `!f` is NOT reported by
+/// tsc, an optional function type is legal because it really can be
+/// nullish, and the check must see a bare NAME -- which is why the
+/// negated form is excluded at the call sites and the union at the type.
+test "batch DC rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires, at every condition position (one helper, so they cannot
+  // come to hold for the `if` and not the `while`)
+  for
+    src in [
+      "declare function f(): boolean;\nif (f) { }", "declare function f(): boolean;\nlet c = f ? 1 : 2;",
+      "declare function f(): boolean;\nwhile (f) { break }", "declare function f(): boolean;\ndo { break } while (f);",
+      "declare function f(): boolean;\nlet c = f && 1;", "function f(): boolean { return true }\nif (f) { }",
+    ] {
+    assert_true(only(src, "did you mean to call it instead") > 0)
+  }
+  // --- fires: a non-iterable default for an array pattern
+  for
+    src in [
+      "function foo1([...r] = null) {}", "function foo2([...r] = undefined) {}",
+      "function foo3([...r] = {}) {}", "function foo5([a] = null) {}",
+    ] {
+    assert_true(only(src, "must be iterable") > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // Called, a real boolean, an optional function (which CAN be
+      // nullish), the negated form tsc does not report, and a property
+      // access rather than a name.
+      "declare function f(): boolean;\nif (f()) { }", "declare const b: boolean;\nif (b) { }",
+      "declare var g: (() => void) | undefined;\nif (g) { }", "declare function f(): boolean;\nif (!f) { }",
+      "declare const o: { m(): void };\nif (o.m()) { }",
+      // An array literal default is iterable; so is an identifier, which
+      // abstains either way.
+       "function ok1([...r] = []) {}", "function ok2([...r] = [1]) {}", "declare const src: number[];\nfunction ok4([...r] = src) {}",
+      // An OBJECT pattern with an object default is the ordinary
+      // spelling and must not be caught by the array rule.
+       "function ok3({ a } = {}) {}",
+    ] {
+    @test.assert_eq(
+      only(src, "did you mean to call it instead") +
+      only(src, "must be iterable"),
+      0,
+    )
+  }
+}
