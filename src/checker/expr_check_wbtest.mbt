@@ -16658,3 +16658,68 @@ test "ts2347 untyped call type arguments" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CU: TS1240 / TS1241 / TS1329 for a legacy MEMBER decorator's
+/// arity. The class-level rule has existed for a long time
+/// (`check_class_decorator_signatures`); the member positions had
+/// nothing.
+///
+/// The arity table is probed rather than reasoned about, because "fewer
+/// parameters is fine" is NOT the rule: a property decorator must accept
+/// exactly 2 arguments and a method or accessor decorator 2 or 3. Every
+/// silent case below is a shape tsc accepts, including the `accessor`
+/// field — an auto-accessor's decorator gets a descriptor like a
+/// method's, which is the corpus false positive
+/// (`decoratorOnClassProperty13`) the first version shipped.
+test "member decorator arity" {
+  let issues = fn(src : String) -> Int {
+    let head = "// @experimentalDecorators: true\n// @strict: false\n"
+    check_module_function_bodies_permissive(parse_module_or_empty(head + src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // A property decorator's runtime arity is 2, so 1 and 3 are both
+      // wrong (decoratorOnClassProperty6 / 7).
+      "declare function dec(a: string): void;\nclass C { @dec prop; }", "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec prop; }",
+      // A method or accessor decorator's is 3, so 1 and 4 are wrong.
+       "declare function dec(a: string): void;\nclass C { @dec m() {} }", "declare function dec(a: string, b: string, c: string, d: string): void;\nclass C { @dec m() {} }",
+      "declare function dec(a: string): void;\nclass C { @dec get g() { return 1 } }",
+      // Zero-argument-callable gets tsc's factory wording instead
+      // (decoratorOnClassProperty11, decoratorOnClassMethod6).
+       "declare function dec(): void;\nclass C { @dec prop; }", "declare function dec(): void;\nclass C { @dec m() {} }",
+      "declare function dec(a?: string): void;\nclass C { @dec prop; }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // Exactly the runtime arity, on each member kind.
+      "declare function dec(a: string, b: string): void;\nclass C { @dec prop; }",
+      "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec m() {} }",
+      "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec get g() { return 1 } }",
+      "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec static sm() {} }",
+      // A method decorator may also take 2 — probed; tsc accepts it.
+       "declare function dec(a: string, b: string): void;\nclass C { @dec m() {} }",
+      // An `accessor` FIELD is decorated like a method, not like a
+      // property: `decoratorOnClassProperty13` is TS7-ACCEPTED with a
+      // 3-parameter decorator, and reading it as a property was the
+      // corpus false positive.
+       "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec accessor prop; }",
+      // Optionality and rest widen the accepted range.
+       "declare function dec(a: string, b?: string): void;\nclass C { @dec prop; }",
+      "declare function dec(a: string, b: string, c?: string): void;\nclass C { @dec prop; }",
+      "declare function dec(...a: string[]): void;\nclass C { @dec prop; }", "declare function dec(a: string, b: string, ...r: string[]): void;\nclass C { @dec prop; }",
+      "declare function dec(a?: string, b?: string): void;\nclass C { @dec prop; }",
+      // A decorator whose signature is not in hand abstains: an
+      // undeclared name, and a CALLED factory (whose result type carries
+      // no optionality information, so the arity range would be a guess).
+       "class C { @unknownDec prop; }", "declare function dec(): (a: string) => void;\nclass C { @dec() prop; }",
+      // An inline expression form is not read at all.
+       "class C { @((a: string) => {}) prop; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

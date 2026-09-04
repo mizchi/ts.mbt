@@ -27431,6 +27431,168 @@ fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int {
 }
 
 ///|
+/// Inclusive arity RANGE of a callable type: `(min, max)`, with `max`
+/// set to -1 for an unbounded list (a rest parameter). `None` when the
+/// type isn't a plain function shape.
+///
+/// Separate from `callable_required_arity` because the decorator rules
+/// need both ends: a decorator declared with FEWER parameters than the
+/// runtime passes is as much an error as one declared with more, and
+/// only `max` can say so.
+fn callable_arity_range(resolver : Resolver, t : @ast.TsType) -> (Int, Int)? {
+  match resolver.unwrap(t) {
+    GenericFunc(_, _, inner) => callable_arity_range(resolver, inner)
+    Func(ps, _) => {
+      let mut required = 0
+      let mut total = 0
+      let mut has_rest = false
+      for p in ps {
+        match p {
+          Rest(_) => has_rest = true
+          other => {
+            total += 1
+            if !type_accepts_undefined(other) {
+              required += 1
+            }
+          }
+        }
+      }
+      Some((required, if has_rest { -1 } else { total }))
+    }
+    _ => None
+  }
+}
+
+///|
+/// TS1240 / TS1241 / TS1329: a legacy (`experimentalDecorators`) MEMBER
+/// decorator whose declared arity cannot match the runtime invocation.
+/// The class-level version of this is `check_class_decorator_signatures`
+/// above; this is the same rule at the member positions, which had none —
+/// the twenty-something-th instance in this repo of one rule written for
+/// some of the places that produce it.
+///
+/// The arity table is probed against tsc rather than reasoned about,
+/// because the answer is not "fewer parameters is always fine":
+///
+///   declared arity   property   method / accessor
+///   0                TS1329     TS1329
+///   1                TS1240     TS1241
+///   2                ok         ok
+///   3                TS1240     ok
+///   4                TS1240     TS1241
+///
+/// So a property decorator must accept exactly 2 arguments and a method
+/// decorator 2 or 3, where "accept N" means N falls in the signature's
+/// `[min, max]` range — `(a, b?)`, `(a, b, ...r)` and `(...r)` are all
+/// legal property decorators and `(a)` is not. TS1329 is the wording tsc
+/// uses when the signature could be called with NO arguments, which is
+/// what a factory used without its `()` looks like; the other codes are
+/// for a genuine mismatch.
+///
+/// Only the `@dec` and `@dec(...)` spellings are read (see
+/// `decorator_head_name`), and only in legacy mode: standard ES
+/// decorators take `(value, context)` and accept any signature with at
+/// most 2 required parameters, which is a different and much quieter
+/// rule. Both restrictions cost MISSes rather than findings.
+fn check_member_decorator_signatures(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut legacy = false
+  for gm in module_.grammar_misuses {
+    if gm == "<experimental-decorators>" {
+      legacy = true
+    }
+  }
+  if !legacy {
+    return issues
+  }
+  for entry in module_.invalid_decorator_uses {
+    if !entry.has_prefix("<sig:") {
+      continue
+    }
+    let body = entry[5:entry.length() - 1].to_owned()
+    let parts = body.split(":").collect()
+    if parts.length() != 3 {
+      continue
+    }
+    let kind = parts[0].to_string()
+    let called = parts[1].to_string()
+    let dname = parts[2].to_string()
+    // `@dec(...)` is skipped: the signature the runtime invokes is the
+    // FACTORY's return type, which reaches us as a bare `Func(types)`
+    // with no optionality information -- and a parameter's optionality is
+    // exactly what this rule turns on, so guessing it would invent
+    // findings. `resolver.signatures` carries the real
+    // `is_optional` / `is_rest` / default flags and covers `@dec`, which
+    // is every corpus file and the spelling the rule is about.
+    if called != "bare" {
+      continue
+    }
+    guard resolver.signatures.get(dname) is Some(params) else { continue }
+    let mut lo = 0
+    let mut total = 0
+    let mut has_rest = false
+    for prm in params {
+      if prm.is_rest {
+        has_rest = true
+      } else {
+        total += 1
+        // `is_optional` is authoritative for a `function` declaration and
+        // always FALSE for an ambient `declare function`, whose
+        // synthesized parameter list carries names and types only
+        // (`TsImport` has a `param_is_rest` array and no optional one).
+        // So the TYPE is consulted as well, which over-counts optionals:
+        // `a: any` accepts undefined and reads as optional here, exactly
+        // like `a?: any`. That widens the accepted range, so it costs
+        // MISSes and never a finding — `@dec` with
+        // `(target, key?, desc?)`, which is how a universal decorator is
+        // written, must stay silent, and reading its two optionals as
+        // required is what the first version did.
+        if !prm.is_optional &&
+          prm.default is None &&
+          !type_accepts_undefined(prm.type_) {
+          lo += 1
+        }
+      }
+    }
+    let hi = if has_rest { -1 } else { total }
+    fn accepts(n : Int) -> Bool {
+      lo <= n && (hi < 0 || n <= hi)
+    }
+
+    let ok = if kind == "property" {
+      accepts(2)
+    } else {
+      accepts(2) || accepts(3)
+    }
+    if ok {
+      continue
+    }
+    if lo == 0 {
+      // tsc's factory wording. The two codes are chosen by whether the
+      // signature could be called with no arguments, and `a: any` versus
+      // `a?: any` is not a distinction this AST keeps -- so a
+      // one-`any`-parameter decorator gets this wording where tsc says
+      // TS1240. Both are errors at the same position; only the sentence
+      // differs.
+      issues.push({
+        path: "decorator `\{dname}`",
+        message: "`\{dname}` accepts too few arguments to be used as a decorator here: did you mean to call it first and write `@\{dname}()`?",
+      })
+    } else {
+      let runtime_arity = if kind == "property" { 2 } else { 3 }
+      issues.push({
+        path: "decorator `\{dname}`",
+        message: "unable to resolve signature of \{kind} decorator when called as an expression: the runtime will invoke the decorator with \{runtime_arity} arguments, but the decorator expects \{lo}",
+      })
+    }
+  }
+  issues
+}
+
+///|
 /// TS1238: a class decorator whose signature cannot match the runtime
 /// invocation. The runtime passes 1 argument under legacy
 /// `experimentalDecorators` and 2 under standard ES decorators, so a
@@ -27770,6 +27932,14 @@ fn parser_channel_issues(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // entry per orphaned group; the position is never valid TS, so it is
   // false-positive-free.
   for dpos in module_.invalid_decorator_uses {
+    // `<sig:...>` entries are member-decorator ARITY records, not TS1206
+    // positions -- see `check_member_decorator_signatures`. Every other
+    // entry in this channel becomes a diagnostic verbatim, so a marker
+    // riding in it needs an explicit skip or it IS a finding (the same
+    // mistake TS4111's flag marker made).
+    if dpos.has_prefix("<sig:") {
+      continue
+    }
     all.push({
       path: "decorator (\{dpos})",
       message: "decorators are not valid here",
@@ -28301,6 +28471,9 @@ fn check_module_function_bodies_layered(
     }
     // TS2318 from lib-set directives (@noLib / restricted @lib).
     for issue in check_lib_directive_globals(module_) {
+      all.push(issue)
+    }
+    for issue in check_member_decorator_signatures(module_, resolver) {
       all.push(issue)
     }
     // TS1238 class-decorator signature mismatches.

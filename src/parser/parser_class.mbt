@@ -1818,6 +1818,27 @@ fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError 
 }
 
 ///|
+/// The head NAME of a decorator expression, plus whether it was written
+/// as a call. `@dec` -> `("bare", "dec")`, `@dec(1)` -> `("called",
+/// "dec")`. `None` for every other shape (an inline arrow, a member
+/// access, a parenthesized expression), which is what keeps the arity
+/// check to the two forms whose signature the checker can look up by
+/// name.
+fn decorator_head_name(d : @ast.TsExpr) -> (String, String)? {
+  match d {
+    Var(n) => if n.has_prefix("<") { None } else { Some(("bare", n)) }
+    Call(n, _) => if n.has_prefix("<") { None } else { Some(("called", n)) }
+    CallExpr(Var(n), _) =>
+      if n.has_prefix("<") {
+        None
+      } else {
+        Some(("called", n))
+      }
+    _ => None
+  }
+}
+
+///|
 /// Drain any decorators accumulated via `skip_decorator` since the
 /// last drain. Class parsers call this just before constructing the
 /// `TsClassDecl` so the decorators end up on the right declaration.
@@ -2193,6 +2214,12 @@ fn Parser::parse_class_body(
     let mut has_modifier = true
     let mut parsed_static_block = false
     let mut has_declare = false
+    // The stage-3 `accessor` field modifier. A decorator on one is
+    // invoked with a DESCRIPTOR like a method's, not with the two
+    // arguments a plain field's gets (decoratorOnClassProperty13 --
+    // TS7-ACCEPTED with a 3-parameter decorator), so the arity record
+    // below has to classify it as a method.
+    let mut is_auto_accessor = false
     let mut visibility = "public"
     // Whether an explicit accessibility modifier (`public` / `private` /
     // `protected`) was written on this member. Used to flag TS1071 -- such a
@@ -2317,6 +2344,9 @@ fn Parser::parse_class_body(
           if self.can_consume_class_modifier() {
             let _ = self.advance()
             has_modifier = true
+            if n == "accessor" {
+              is_auto_accessor = true
+            }
             if n == "public" || n == "private" || n == "protected" {
               // TS1028: a second accessibility modifier on one member
               // (`public public Foo()`, `private protected x`).
@@ -2490,6 +2520,40 @@ fn Parser::parse_class_body(
             (if is_static { "s:" } else { "i:" }) + kind + ":" + method_name,
           )
         None => ()
+      }
+    }
+    // TS1240 / TS1241 / TS1329 support: record each of THIS member's
+    // decorators as a `<sig:...>` entry so the checker can compare the
+    // decorator's declared arity against the arity the runtime invokes it
+    // with. The runtime arity differs by member kind (a property
+    // decorator gets 2 arguments, a method or accessor decorator 3), which
+    // is why the kind is captured here rather than at the `@`: this is the
+    // first point where the key has been parsed, so `LParen` / `Lt` tells
+    // a method from a property.
+    //
+    // Rides in `invalid_decorator_uses` because that channel is already
+    // plumbed through every `TsModule` construction site; the `<sig:`
+    // prefix is skipped by the TS1206 consumer, which otherwise turns
+    // every entry into a diagnostic verbatim.
+    if member_decorated {
+      let kind = if accessor_kind is Some(_) ||
+        is_auto_accessor ||
+        self.check(LParen) ||
+        self.check(Lt) {
+        "method"
+      } else {
+        "property"
+      }
+      let mut di = deco_before
+      while di < self.pending_decorators.length() {
+        match decorator_head_name(self.pending_decorators[di]) {
+          Some((called, dname)) =>
+            self.invalid_decorator_uses.push(
+              "<sig:" + kind + ":" + called + ":" + dname + ">",
+            )
+          None => ()
+        }
+        di += 1
       }
     }
     // TS2803 / TS2806 support: classify this member if it is a private
