@@ -14464,8 +14464,25 @@ test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (ba
   // can't provide an assign-form head's binding (for-of6).
   assert_true(issues("v;\nfor (let v of [0]) { }") > 0)
   assert_true(issues("for (v of [0]) { let v; }") > 0)
-  // `var` head / body still hoist — no error.
-  @test.assert_eq(issues("for (var w of [0]) { }\nw;"), 0)
+  // `var` head / body still hoist — no "cannot find name". Asserted on
+  // the MESSAGE, not the count: `for (var w of [0]) {} w;` IS a real
+  // TS2454 under strictNullChecks (probed -- the loop may not run, so
+  // the binding is possibly-unassigned), and the count form of this
+  // assertion was measuring the absence of that diagnostic rather than
+  // the hoisting it is named for.
+  let cannot_find = fn(src : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains("cannot find name") {
+        n += 1
+      }
+    }
+    n
+  }
+  @test.assert_eq(cannot_find("for (var w of [0]) { }\nw;"), 0)
   @test.assert_eq(issues("for (u of [0]) { var u; }"), 0)
   // Loop-head lets stay visible to closures inside the loop.
   @test.assert_eq(issues("for (let v of [0]) { const g = () => v; g(); }"), 0)
@@ -17095,5 +17112,71 @@ test "batches CZ+DA rules" {
       "interface I { bogus: number }\ndeclare var c: I;\n[...c] = [\"\", 0];", "var a: string = \"\";\nvar c: string[] = [];\n[a, ...c] = [\"\", \"\"];",
     ] {
     @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch DB: TS2717 (merged interfaces disagreeing on a member) and
+/// TS2454 for a `var` bound by a `for...of` head.
+///
+/// The second rule is a SET-membership test rather than an ordering one,
+/// and the probe is why: tsc reports the read before the loop and the
+/// read after it alike, because an empty iterable assigns nothing. A
+/// `var` whose only assignment is a loop head is unassigned everywhere
+/// outside the body, full stop.
+test "batch DB rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(
+    only(
+      "interface A { x: string }\ninterface A { x: number }", "subsequent property declarations",
+    ) >
+    0,
+  )
+  assert_true(
+    only("v;\nfor (var v of [0]) { }", "used before being assigned") > 0,
+  )
+  // The read AFTER the loop is the same error -- the loop may not run.
+  assert_true(
+    only("for (var v of [0]) { }\nv;", "used before being assigned") > 0,
+  )
+  assert_true(
+    only("k;\nfor (var k in {}) { }", "used before being assigned") > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // Merged interfaces that agree, that declare different members,
+      // and one whose disagreement is with a type PARAMETER, which can
+      // be instantiated with anything.
+      "interface A { x: string }\ninterface A { x: string }", "interface A { x: string }\ninterface A { y: number }",
+      "interface A<T> { x: T }\ninterface A<T> { x: number }",
+      // A repeated `type` alias is a different diagnostic, and the
+      // synthesized interface must not make it look like a merge.
+       "type A = { x: string }", "type A = { x: string }\ntype B = { x: number }",
+      // `let` / `const` heads are block-scoped and assigned per
+      // iteration; an ASSIGNMENT head declares nothing; and a name the
+      // list assigns elsewhere is assigned.
+       "let v = 0;\nv;\nfor (v of [0]) { }", "var v = 1;\nv;\nfor (v of [0]) { }",
+      "for (let v of [0]) { }", "var v: number;\nv = 1;\nv;\nfor (v of [0]) { }",
+      // A read of an unrelated name.
+       "var w = 1;\nw;\nfor (var v of [0]) { }",
+    ] {
+    @test.assert_eq(
+      only(src, "subsequent property declarations") +
+      only(src, "used before being assigned"),
+      0,
+    )
   }
 }

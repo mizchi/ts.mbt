@@ -23343,6 +23343,131 @@ fn check_merged_export_modifiers(
 }
 
 ///|
+/// TS2717: two declarations of one interface that declare the same
+/// member with provably different types
+/// (`mergedInterfacesWithConflictingPropertyNames`). Interface
+/// declarations MERGE, so a member declared twice must have the same
+/// type in both halves.
+///
+/// Uses `types_definitely_differ`, which is what keeps the rest of that
+/// corpus file quiet: its `interface A<T> { x: T }` beside
+/// `{ x: number }` compares a type PARAMETER against `number`, and a
+/// type parameter can be instantiated with anything, so it abstains.
+/// Names that also have a `type` alias are skipped entirely --
+/// `type_alias_to_interface` synthesizes an interface for every alias,
+/// so a repeated alias would look like a merged interface here when it
+/// is really TS2300 / TS2395.
+fn check_merged_interface_member_conflicts(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let alias_names : Map[String, Unit] = {}
+  for ta in module_.type_aliases {
+    alias_names[ta.name] = ()
+  }
+  let reported : Map[String, Unit] = {}
+  for i in 0..<module_.interfaces.length() {
+    let a = module_.interfaces[i]
+    if alias_names.contains(a.name) || reported.contains(a.name) {
+      continue
+    }
+    for j in (i + 1)..<module_.interfaces.length() {
+      let b = module_.interfaces[j]
+      if b.name != a.name || reported.contains(a.name) {
+        continue
+      }
+      for la in a.fields {
+        let (lname, lty) = la
+        if lname.has_prefix("<") {
+          continue
+        }
+        for ra in b.fields {
+          let (rname, rty) = ra
+          if rname == lname && types_definitely_differ(resolver, lty, rty) {
+            reported[a.name] = ()
+            issues.push({
+              path: "interface \{a.name}",
+              message: "subsequent property declarations must have the same type: property `\{lname}` must be of type `\{type_display(lty)}` but here has type `\{type_display(rty)}`",
+            })
+            break
+          }
+        }
+        if reported.contains(a.name) {
+          break
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// TS2454 for a `var` bound by a `for...of` / `for...in` HEAD: the loop
+/// may not execute, so the binding is possibly-unassigned at every read
+/// OUTSIDE the loop body (for-of8, for-of22).
+///
+/// Probed, and the answer is why this is a set membership test rather
+/// than an ordering one: tsc reports the read BEFORE the loop and the
+/// read AFTER it alike, because an empty iterable assigns nothing. So
+/// there is no "declared later" to model -- a `var` whose only
+/// assignment is a loop head is unassigned everywhere else, full stop.
+///
+/// Only a bare `name;` expression STATEMENT counts as the read, which is
+/// narrower than tsc (`typeof v` and `console.log(v)` are reports too).
+/// Widening it needs a walk that skips DEFERRED positions -- a read
+/// inside a nested function body is legal, since the function may run
+/// after the loop -- and a walk that misses one of those inverts the
+/// fail direction. The bare form needs no walk at all.
+///
+/// A name the statement list also assigns outside the loop, or declares
+/// with an initializer, is excluded: then something else assigns it.
+fn check_for_of_head_var_reads(
+  module_ : @ast.TsModule,
+  strict : Bool,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if !strict {
+    return issues
+  }
+  let head_vars : Map[String, Unit] = {}
+  let assigned : Map[String, Unit] = {}
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      ForOf(@ast.TsForOfKind::Var, @ast.TsBinding::Ident(n), _, _, _)
+      | ForIn(@ast.TsForOfKind::Var, @ast.TsBinding::Ident(n), _, _, _) =>
+        head_vars[n] = ()
+      Var(@ast.TsBinding::Ident(n), _, init) =>
+        if !(init is Var("__ts_no_init__")) {
+          assigned[n] = ()
+        }
+      Assign(n, _) | CompoundAssign(n, _, _) => assigned[n] = ()
+      Expr(@ast.TsExpr::AssignExpr(n, _)) => assigned[n] = ()
+      Expr(@ast.TsExpr::CompoundAssignExpr(@ast.TsExpr::Var(n), _, _)) =>
+        assigned[n] = ()
+      _ => ()
+    }
+  }
+  let reported : Map[String, Unit] = {}
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Expr(@ast.TsExpr::Var(n)) =>
+        if head_vars.contains(n) &&
+          !assigned.contains(n) &&
+          !reported.contains(n) {
+          reported[n] = ()
+          issues.push({
+            path: "var `\{n}`",
+            message: "variable `\{n}` is used before being assigned",
+          })
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // TS2725: under `module: commonjs` the emitted `exports.Object = Object`
@@ -29189,6 +29314,12 @@ fn check_module_function_bodies_layered(
     for issue in check_implicit_any_this(module_, outer_modules.length() > 0) {
       all.push(issue)
     }
+  }
+  for issue in check_merged_interface_member_conflicts(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_for_of_head_var_reads(module_, strict_property_init) {
+    all.push(issue)
   }
   for issue in check_interface_conflicting_bases(module_, resolver) {
     all.push(issue)
