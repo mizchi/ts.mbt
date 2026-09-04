@@ -18725,6 +18725,25 @@ fn check_call_args_in_expr(
     IndexAccess(recv, idx) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
+      // TS2538: a CLASS used as an index type (`super[Bar]()` --
+      // superSymbolIndexedAccess3). A class's static side is an object,
+      // and an object is not `string | number | symbol`, so no
+      // inference is needed once the name resolves to a class this
+      // module declares. A name that is ALSO a value binding of some
+      // other kind abstains, since the class table is keyed by name and
+      // a local could shadow it.
+      match idx {
+        Var(idx_name) =>
+          if ctx.resolver.classes.get(idx_name) is Some(_) &&
+            env.lookup(idx_name) is None {
+            record_unfiltered(
+              ctx,
+              "index access",
+              "type `typeof \{idx_name}` cannot be used as an index type",
+            )
+          }
+        _ => ()
+      }
       let recv_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv))
       // `x["charAt"]` / `n["toExponential"]` reaches a prototype member by
       // name — valid even on primitives — so a string-literal key is never
@@ -23520,6 +23539,54 @@ fn check_for_of_head_var_reads(
           })
         }
       _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// TS2767: the `return` member of an ITERATOR must be a method. A class
+/// that declares `[Symbol.iterator]` is an iterator, and the iteration
+/// protocol calls `return()` when a loop exits early -- so a `return`
+/// declared as a data property of a non-function type can never satisfy
+/// it (for-of30).
+///
+/// The iterator test is the `@@iterator` key the class parser resolves a
+/// well-known symbol to, so a class that merely happens to have a
+/// `return` field is untouched. The property's type must be a definite
+/// primitive: anything else, `Any` and a `Named` included, abstains --
+/// and that abstention is why `for-of30` itself stays a MISS. Its
+/// member is written `return = 0`, unannotated, and the class parser
+/// records the type as `Any` because it does not infer from a field
+/// initializer. Firing on `Any` would flag `return = () => ({…})`,
+/// which is the LEGAL spelling of the same member, so the rule waits
+/// for an annotation (`return: number`) it can read.
+fn check_iterator_return_property(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let mut is_iterator = false
+    for m in cls.methods {
+      if m.name == "@@iterator" {
+        is_iterator = true
+      }
+    }
+    if !is_iterator {
+      continue
+    }
+    for p in cls.properties {
+      if p.name != "return" || p.is_static {
+        continue
+      }
+      let ty = resolver.unwrap(p.type_)
+      if is_definite_primitive_type(ty) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "the `return` property of an iterator must be a method",
+        })
+      }
     }
   }
   issues
@@ -29372,6 +29439,9 @@ fn check_module_function_bodies_layered(
     for issue in check_implicit_any_this(module_, outer_modules.length() > 0) {
       all.push(issue)
     }
+  }
+  for issue in check_iterator_return_property(module_, resolver) {
+    all.push(issue)
   }
   for issue in check_merged_interface_member_conflicts(module_, resolver) {
     all.push(issue)

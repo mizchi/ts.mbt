@@ -17243,3 +17243,71 @@ test "batch DC rules" {
     )
   }
 }
+
+///|
+/// Batch DF: TS2393 (duplicate method implementations), TS2538 (a class
+/// used as an index type) and TS2767 (an iterator's `return` property).
+///
+/// TS2393's test is on the BODY, not the name, because overloads legally
+/// repeat a name -- and it had to be recorded in the PARSER, since
+/// `TsClassMethodDecl.body` is `None` for an EMPTY body as well as for a
+/// bodiless signature, so `m() {}` and `m();` are indistinguishable
+/// downstream.
+test "batch DF rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(only("class C { m() {} m() {} }", "duplicate function") > 0)
+  assert_true(
+    only("class C { public() {} public public() {} }", "duplicate function") > 0,
+  )
+  assert_true(
+    only(
+      "class Bar { m() { return 0 } }\nclass Foo extends Bar { m() { return super[Bar]() } }",
+      "cannot be used as an index type",
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      "class I { next() { return { done: false, value: \"\" } }\n  return: number = 0;\n  [Symbol.iterator]() { return this } }",
+      "must be a method",
+    ) >
+    0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // An overload plus its implementation, an instance/static pair and
+      // a get/set pair are all one member declared legally.
+      "class C { m(): void; m(a?: number): void { } }", "class C { m() {} static m() {} }",
+      "class C { get m() { return 1 } set m(v: number) {} }", "class C { m() {} n() {} }",
+      // An index type that is a symbol, a string or a number.
+       "declare const s: symbol;\nclass Bar { m() { return 0 } }\nclass Foo extends Bar { m() { return super[s] } }",
+      "declare const o: { [k: string]: number };\nconst k = \"a\";\nconst v = o[k];",
+      // A `return` METHOD is the legal spelling, and a `return` field on
+      // a class that is not an iterator is nobody's business. The
+      // unannotated `return = 0` abstains, which is why for-of30 itself
+      // is still a MISS -- firing on `Any` would flag
+      // `return = () => …`, the legal form of the same member.
+       "class I { next() { return { done: false, value: \"\" } }\n  return() { return { done: true, value: undefined } }\n  [Symbol.iterator]() { return this } }",
+      "class P { return: number = 0 }", "class I { return = 0;\n  [Symbol.iterator]() { return this } }",
+    ] {
+    @test.assert_eq(
+      only(src, "duplicate function") +
+      only(src, "cannot be used as an index type") +
+      only(src, "must be a method"),
+      0,
+    )
+  }
+}

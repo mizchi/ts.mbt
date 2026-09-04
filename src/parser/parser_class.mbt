@@ -2185,6 +2185,18 @@ fn Parser::parse_class_body(
   // is the one place a class's members are parsed, so there is no second
   // site to forget) and decided at the end.
   let decorated_accessors : Array[String] = []
+  // TS2393 support: the keys of methods that carried a real `{ … }` body
+  // in THIS class body. Keyed by staticness + accessor kind + name,
+  // because an instance and a static member of one name are different
+  // members and a `get`/`set` pair is two of them.
+  //
+  // Recorded here rather than derived from `cls.methods` afterwards
+  // because `TsClassMethodDecl.body` is `None` for an EMPTY body as
+  // well as for a bodiless overload signature -- so `m() {}` and `m();`
+  // are indistinguishable downstream, which is the class-shaped face of
+  // the `TsFunc.body` blocker this repo records for TS2393 / TS2394.
+  // The parser has `has_body_block` and does not need to guess.
+  let bodied_method_keys : Map[String, Bool] = {}
   let mut ctor : @ast.TsFunc? = None
   // Count constructor *implementations* (a `constructor(...) { ... }` with a
   // real body). Two or more is TS2392 ("Multiple constructor implementations
@@ -2922,6 +2934,28 @@ fn Parser::parse_class_body(
       // overload signature). Used below to count constructor implementations
       // for TS2392.
       let has_body_block = not(consumed_semi) && self.check(LBrace)
+      // TS2393 ("Duplicate function implementation"): two methods of one
+      // name in one class body, both with a body
+      // (parserMemberFunctionDeclarationAmbiguities1, whose `public()`
+      // and `public public()` are the same member spelled twice).
+      // Overloads legally repeat a name, which is exactly why the test is
+      // on the BODY rather than the name.
+      if has_body_block && method_name != "<computed>" {
+        let mkey = (if is_static { "s:" } else { "i:" }) +
+          (match accessor_kind {
+            Some(k) => k
+            None => "m"
+          }) +
+          ":" +
+          method_name
+        if bodied_method_keys.get(mkey) is Some(_) {
+          self.grammar_misuses.push(
+            "duplicate function implementation: `" + method_name + "`",
+          )
+        } else {
+          bodied_method_keys[mkey] = true
+        }
+      }
       // TS1249: a decorator can only decorate a method IMPLEMENTATION,
       // not an overload signature. A bodiless method in an ambient
       // (`declare class`) or abstract position is not an overload — it is
