@@ -17380,3 +17380,107 @@ test "batch DG rules" {
     )
   }
 }
+
+///|
+/// `merge_interface_group` replaced a left FOLD of `merge_interfaces`, so
+/// what has to be proven is that the two agree -- not that the group
+/// version looks reasonable. Every field the merge touches is exercised
+/// with a shape that could tell the two apart:
+///
+///  - a member REDECLARED by a later half (`shared`), which must end up
+///    with the last half's type at the FIRST half's position;
+///  - a member declared twice inside ONE body (`dup` in half 1), which
+///    the pairwise version does not deduplicate and whose seen-index is
+///    the LAST of the two;
+///  - `readonly_fields` with a repeat across halves (deduplicated) and
+///    `internal_members` with one inside the first half (kept verbatim,
+///    because the pairwise merge only filters its `b` side);
+///  - `extends_*` and `index_signatures`, which concatenate in order.
+///
+/// A group of four, so an error that only shows up after two merges --
+/// the whole reason the fold was quadratic -- cannot hide.
+fn merge_group_iface(
+  name : String,
+  fields : Array[(String, @ast.TsType)],
+  readonly_fields : Array[String],
+  extends_names : Array[String],
+  internal_members : Array[String],
+) -> @ast.TsInterface {
+  {
+    name,
+    type_params: [],
+    type_param_bounds: [],
+    extends_names,
+    extends_args: extends_names.map(fn(_x) { [] }),
+    fields,
+    readonly_fields,
+    index_signatures: [],
+    method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members,
+    deprecated_members: [],
+  }
+}
+
+///|
+test "merge_interface_group matches pairwise fold" {
+  let halves = [
+    merge_group_iface(
+      "W",
+      [
+        ("a", @ast.TsType::Number),
+        ("dup", @ast.TsType::String_),
+        ("shared", @ast.TsType::Number),
+        ("dup", @ast.TsType::Boolean),
+      ],
+      ["ro1", "ro1"],
+      ["BaseA"],
+      ["int1", "int1"],
+    ),
+    merge_group_iface(
+      "W",
+      [("b", @ast.TsType::String_), ("shared", @ast.TsType::String_)],
+      ["ro2", "ro1"],
+      ["BaseB"],
+      ["int1", "int2"],
+    ),
+    merge_group_iface("W", [("dup", @ast.TsType::Number)], [], [], [
+      "int2", "int3",
+    ]),
+    merge_group_iface(
+      "W",
+      [("shared", @ast.TsType::Boolean), ("c", @ast.TsType::Number)],
+      ["ro3"],
+      ["BaseC"],
+      [],
+    ),
+  ]
+  // The fold the call site used to run.
+  let mut folded = halves[0]
+  for i in 1..<halves.length() {
+    folded = merge_interfaces(folded, halves[i])
+  }
+  let grouped = merge_interface_group(halves)
+  // Members: same names, same order, same types.
+  @test.assert_eq(grouped.fields.length(), folded.fields.length())
+  for i in 0..<folded.fields.length() {
+    @test.assert_eq(grouped.fields[i].0, folded.fields[i].0)
+    @test.assert_eq(
+      type_display(grouped.fields[i].1),
+      type_display(folded.fields[i].1),
+    )
+  }
+  // The redeclared member takes the LAST half's type, at the first
+  // half's position -- the property that makes the merge order-sensitive.
+  @test.assert_eq(grouped.fields[2].0, "shared")
+  @test.assert_eq(type_display(grouped.fields[2].1), "boolean")
+  @test.assert_eq(grouped.readonly_fields, folded.readonly_fields)
+  @test.assert_eq(grouped.extends_names, folded.extends_names)
+  @test.assert_eq(grouped.extends_args.length(), folded.extends_args.length())
+  @test.assert_eq(grouped.internal_members, folded.internal_members)
+  @test.assert_eq(grouped.deprecated_members, folded.deprecated_members)
+  @test.assert_eq(grouped.name, folded.name)
+  // A one-element group is the identity, which is the arm the call site
+  // takes for all but a handful of names in any real file.
+  @test.assert_eq(merge_interface_group([halves[0]]).fields.length(), 4)
+}

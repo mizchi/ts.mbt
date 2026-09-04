@@ -139,8 +139,32 @@ verify-checker-soundness:
     moon build --target native
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0
 
+# Is any checker rule superlinear in the size of a module-wide list?
+#
+# `verify-checker-soundness` asks whether the answer is RIGHT, over 4,484
+# conformance files that are a few dozen lines each — so a rule quadratic
+# in the number of interfaces, classes or exports in ONE file is invisible
+# to it, and to the test suite. Two such rules have shipped: batch CP's
+# TS5076 span scan (a 9 MB file went from seconds to 180+, at 100% CPU for
+# 36 minutes before anyone looked), and three nested scans added at once
+# in batches CY-DB, which cost 6.5x at 4,000 interfaces while the oracle
+# stayed at FP 0 and every test stayed green.
+#
+# So this asks by GROWTH rather than by stopwatch: a size ladder per axis,
+# with an exponent fitted from the endpoints. Linear is ~1.0, quadratic
+# ~2.0, and anything over the budget fails and names the axis. On its
+# first run it found a quadratic the fix above had missed and a second one
+# that predated the whole batch series.
+#
+#   just verify-checker-scaling
+#   just verify-checker-scaling --axis interfaces
+#   just verify-checker-scaling --baseline path/to/old/tscheck.exe
+verify-checker-scaling *ARGS:
+    moon build --target native --release
+    node scripts/verify_checker_scaling.mjs {{ ARGS }}
+
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
 
 # Update dependencies
 update:

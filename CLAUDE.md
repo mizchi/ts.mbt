@@ -772,6 +772,66 @@ product surfaces now.
   whose annotation is `any` or absent, which loses `const p =
   JSON.parse('{}'); p<number>(1)` — a real TS2347 — and that MISS is
   what buys FP 0.
+  Every gate above asks whether the answer is RIGHT, and none of them can
+  see a rule's COST: the oracle's 4,484 files are a few dozen lines each,
+  so a rule quadratic in the number of interfaces or exports in ONE file
+  is invisible to it and to the 2,966 tests alike. `just
+  verify-checker-scaling` asks the missing question the only way a cost
+  model can be asked — by GROWTH rather than by stopwatch. It runs a size
+  ladder along each axis a check loops over (interfaces, merged
+  interfaces, classes, exports, aliases, enums, vars) and fits an
+  exponent from the endpoints: linear is ~1.0, quadratic ~2.0, and an
+  axis over budget fails the run and NAMES the axis, which is the part a
+  wall-clock reading cannot tell you. Its `same-bytes` control is what
+  separates the two diagnoses: bytes grow with the rung and the
+  declaration count does not, so "the big file is slow" and "the long
+  list is slow" stop looking alike — and that is what proved the
+  regression below was about the COUNT rather than the 527 KB.
+  It was written because batches CY–DB were **6.5x slower at 4,000
+  interfaces** than the batch before them, at FP 0, with every test
+  green. Three nested scans over module-wide lists, all landing at once:
+  `check_merged_interface_member_conflicts` compared every (i, j) pair of
+  interfaces in the module to find the same-NAMED ones (72M iterations on
+  a 12,000-interface file, for a rule that can only act on same-named
+  pairs); `check_merged_export_modifiers` rescanned both declaration
+  lists per exported name; and both joined member lists as fields x
+  fields. Each is the same fix — an index where a nested scan was — and
+  the ladder went from 998 ms to 166 ms at the top rung, back to 0.99x of
+  the pre-batch code. Two of the batch's own doc comments had described
+  these loops accurately; what neither said was what they cost.
+  The harness then earned itself back on its FIRST run, twice. It found a
+  quadratic the fix had missed — grouping by name killed the module-wide
+  n² and left a pair loop INSIDE each group, which is exactly what an
+  `interface Window` spread over many halves is (5.0 s at N=4,000).
+  Accumulating the first-seen type per member is one pass, and it is also
+  what tsc's message describes ("must be of type `T`", where `T` is the
+  FIRST declaration's), so the faster rule is the more faithful one; it
+  can only lose a finding where `types_definitely_differ` abstains on
+  (first, later) but would have proven (later, later'), which is the
+  affordable direction. And it found a SECOND quadratic that predated the
+  whole batch series: `merge_interfaces` is pairwise and the upsert loop
+  filling `r.interfaces` used it as a left FOLD, copying the accumulated
+  arrays once per declaration. That one is worth recording for the
+  measurement rather than the fix — the largest same-name group in
+  `lib.dom.d.ts` is **2**, and 11 across the entire lib set concatenated,
+  so it had never cost anything and never would. It was fixed anyway
+  because it is the honest reason the axis reported a 2.0 exponent, and a
+  known quadratic left in place is one the next person has to
+  re-diagnose; `merge_interface_group` is a single pass whose equivalence
+  to the fold is asserted field by field against the fold itself, on a
+  four-declaration group carrying every shape that could tell them apart
+  (a member redeclared by a later half, a member declared twice in one
+  body, a dedup list and an append-only one). 5,053 ms -> 29.6 ms, and
+  42x faster than the code that predates the batches.
+  What the round did NOT find is worth as much: the parser is untouched
+  by 40 batches of new markers (0.94–1.05x, including the 9 MB
+  `typescript.js`), and the residual on real files is 0.92–1.02x — so
+  fifty new rules cost nothing measurable on a real `.d.ts`. The per-axis
+  differential says why there is nothing left to chase: interfaces +11%,
+  aliases +20%, exports +5%, classes −5%, enums −8%, vars −1%. The cost
+  is spread proportionately across fifty rules with no single one to
+  attribute, which is the shape a linear checker should have, and the
+  20% on a 3.8 MB concatenation of every lib file is the whole price.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

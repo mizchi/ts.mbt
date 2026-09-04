@@ -205,6 +205,116 @@ fn Resolver::empty() -> Resolver {
 /// override earlier ones (TS itself rejects conflicting overrides at
 /// declaration time, but the checker doesn't enforce that — last writer
 /// wins for the lookup).
+/// Merge a whole group of same-named declarations in ONE pass.
+///
+/// `merge_interfaces` is pairwise, and the upsert loop that fills
+/// `r.interfaces` used it as a left fold -- so merging k declarations of
+/// one name copied the accumulated arrays k times, O(k^2) in the group's
+/// total members. Real code keeps k small (the largest group in
+/// `lib.dom.d.ts` is 2, and 11 across the entire lib set concatenated),
+/// so this was never a live cost; it is fixed because it is the honest
+/// reason the scaling harness reports a 2.0 exponent on that axis, and a
+/// known quadratic left in place is one the next person has to
+/// re-diagnose.
+///
+/// Equivalent to `decls.fold(merge_interfaces)` field by field, which is
+/// what `merge_interface_group_matches_pairwise_fold` asserts:
+///  - `fields` -- first declaration's order, a later half REPLACING the
+///    entry at the position the name already occupies (and, for a name
+///    declared twice in one body, the LAST such position, because that
+///    is the index the seen-map ends up holding);
+///  - `readonly_fields` -- deduplicated across every half;
+///  - `internal_members` / `deprecated_members` -- the first half
+///    verbatim (duplicates inside it kept, as the pairwise version keeps
+///    them) plus each later name not already present;
+///  - `extends_*`, `index_signatures`, `method_type_param*` -- appended
+///    in declaration order;
+///  - `name` / `type_params` / `type_param_bounds` -- the first half's,
+///    since TS requires the parameter lists to agree.
+fn merge_interface_group(decls : Array[@ast.TsInterface]) -> @ast.TsInterface {
+  let first = decls[0]
+  if decls.length() == 1 {
+    return first
+  }
+  let fields : Array[(String, @ast.TsType)] = []
+  let seen : Map[String, Int] = {}
+  let readonly_fields : Array[String] = []
+  let ro_seen : Map[String, Bool] = {}
+  let extends_names : Array[String] = []
+  let extends_args : Array[Array[@ast.TsType]] = []
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let method_type_params : Array[(String, Array[String])] = []
+  let method_type_param_bounds : Array[(String, Array[(String, @ast.TsType)])] = []
+  let internal_members : Array[String] = []
+  let deprecated_members : Array[String] = []
+  for di in 0..<decls.length() {
+    let d = decls[di]
+    for f in d.fields {
+      // The first half seeds every position; a later half replaces the
+      // entry in place, so member ORDER is the first declaration's.
+      if di == 0 {
+        seen[f.0] = fields.length()
+        fields.push(f)
+      } else {
+        match seen.get(f.0) {
+          Some(idx) => fields[idx] = f
+          None => {
+            seen[f.0] = fields.length()
+            fields.push(f)
+          }
+        }
+      }
+    }
+    for n in d.readonly_fields {
+      if !(ro_seen.get(n) is Some(_)) {
+        ro_seen[n] = true
+        readonly_fields.push(n)
+      }
+    }
+    for i in 0..<d.extends_names.length() {
+      extends_names.push(d.extends_names[i])
+      extends_args.push(d.extends_args[i])
+    }
+    for sig in d.index_signatures {
+      index_signatures.push(sig)
+    }
+    for mtp in d.method_type_params {
+      method_type_params.push(mtp)
+    }
+    for mtb in d.method_type_param_bounds {
+      method_type_param_bounds.push(mtb)
+    }
+    // The first half's list goes in verbatim -- duplicates inside one
+    // body included -- and only later halves are filtered, which is
+    // exactly what the pairwise merge does to its `a` side.
+    for n in d.internal_members {
+      if di == 0 || !internal_members.contains(n) {
+        internal_members.push(n)
+      }
+    }
+    for n in d.deprecated_members {
+      if di == 0 || !deprecated_members.contains(n) {
+        deprecated_members.push(n)
+      }
+    }
+  }
+  {
+    name: first.name,
+    type_params: first.type_params,
+    type_param_bounds: first.type_param_bounds,
+    extends_names,
+    extends_args,
+    fields,
+    readonly_fields,
+    index_signatures,
+    method_type_params,
+    method_type_param_bounds,
+    internal_members,
+    deprecated_members,
+  }
+}
+
+///|
 fn merge_interfaces(
   a : @ast.TsInterface,
   b : @ast.TsInterface,
@@ -685,14 +795,37 @@ fn Resolver::ingest_module(
   module_ : @ast.TsModule,
   prefix : String,
 ) -> Unit {
+  // TS declaration merging: `interface Foo { a }` + `interface Foo { b }`
+  // produces a single `Foo` whose members are the union of both bodies.
+  // Field-key collisions take the later declaration.
+  //
+  // Grouped first so a name declared k times is merged ONCE over k
+  // declarations, rather than folded pairwise with a full copy of the
+  // accumulator at each step. The group order is declaration order,
+  // which is what the merge semantics above are defined in terms of.
+  let iface_groups : Map[String, Array[@ast.TsInterface]] = {}
+  let iface_order : Array[String] = []
   for i in module_.interfaces {
     let key = prefix + i.name
+    match iface_groups.get(key) {
+      Some(group) => group.push(i)
+      None => {
+        iface_groups[key] = [i]
+        iface_order.push(key)
+      }
+    }
+  }
+  for key in iface_order {
+    let group = match iface_groups.get(key) {
+      Some(g) => g
+      None => continue
+    }
+    let merged = merge_interface_group(group)
     match r.interfaces.get(key) {
-      // TS declaration merging: `interface Foo { a }` + `interface Foo
-      // { b }` produces a single `Foo` whose members are the union of
-      // both bodies. Field-key collisions take the later declaration.
-      Some(existing) => r.interfaces[key] = merge_interfaces(existing, i)
-      None => r.interfaces[key] = i
+      // An entry already in the table (an earlier module, or a prefix
+      // collision) still merges pairwise: that is one merge, not a fold.
+      Some(existing) => r.interfaces[key] = merge_interfaces(existing, merged)
+      None => r.interfaces[key] = merged
     }
   }
   for c in module_.classes {
@@ -23239,6 +23372,13 @@ fn check_non_local_exports(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let reported : Map[String, Unit] = {}
+  // `imported_binding_names` is an Array, so `.contains` is a scan; a
+  // barrel module re-exporting what it imports has many of both, and the
+  // product is the one superlinear term in an otherwise linear check.
+  let imported : Map[String, Unit] = {}
+  for n in module_.imported_binding_names {
+    imported[n] = ()
+  }
   for gm in module_.grammar_misuses {
     if !gm.has_prefix("<export-local>") {
       continue
@@ -23252,7 +23392,7 @@ fn check_non_local_exports(
       resolver.type_aliases.get(name) is Some(_) ||
       resolver.classes.get(name) is Some(_) ||
       resolver.enums.get(name) is Some(_) ||
-      module_.imported_binding_names.contains(name) ||
+      imported.contains(name) ||
       is_lib_global_value(name) ||
       is_lib_global_type(name) {
       continue
@@ -23393,22 +23533,37 @@ fn check_interface_conflicting_bases(
       if done {
         break
       }
+      // Hoisted out of the `j` loop: it does not depend on `j`, and a
+      // base with many members is exactly where this check is expensive.
+      let left = resolver.interfaces.get(iface.extends_names[i])
+      guard left is Some(li) else { continue }
       for j in (i + 1)..<iface.extends_names.length() {
         if done {
           break
         }
-        let left = resolver.interfaces.get(iface.extends_names[i])
-        let right = resolver.interfaces.get(iface.extends_names[j])
-        match (left, right) {
-          (Some(li), Some(ri)) =>
-            for la in li.fields {
-              let (lname, lty) = la
-              if lname.has_prefix("<") {
-                continue
-              }
-              for ra in ri.fields {
-                let (rname, rty) = ra
-                if rname == lname && types_definitely_differ(resolver, lty, rty) {
+        guard resolver.interfaces.get(iface.extends_names[j]) is Some(ri) else {
+          continue
+        }
+        // One pass over the right base's members instead of a
+        // fields x fields scan. Two DOM-sized bases are ~1M comparisons
+        // per pair as a nested scan and ~2K as an indexed join.
+        let rfields : Map[String, Array[@ast.TsType]] = {}
+        for ra in ri.fields {
+          let (rname, rty) = ra
+          match rfields.get(rname) {
+            Some(tys) => tys.push(rty)
+            None => rfields[rname] = [rty]
+          }
+        }
+        for la in li.fields {
+          let (lname, lty) = la
+          if lname.has_prefix("<") {
+            continue
+          }
+          match rfields.get(lname) {
+            Some(tys) =>
+              for rty in tys {
+                if types_definitely_differ(resolver, lty, rty) {
                   issues.push({
                     path: "interface \{iface.name}",
                     message: "interface `\{iface.name}` cannot simultaneously extend types `\{iface.extends_names[i]}` and `\{iface.extends_names[j]}`: named property `\{lname}` of types `\{type_display(lty)}` and `\{type_display(rty)}` are not identical",
@@ -23417,11 +23572,11 @@ fn check_interface_conflicting_bases(
                   break
                 }
               }
-              if done {
-                break
-              }
-            }
-          _ => ()
+            None => ()
+          }
+          if done {
+            break
+          }
         }
       }
     }
@@ -23460,18 +23615,36 @@ fn check_merged_export_modifiers(
       1
   }
   let _ = resolver
+  // Count declarations per NAME in one pass each, rather than rescanning
+  // both lists per exported name. The loop below used to be
+  // O(exported x (aliases + interfaces)), which on a 4,000-interface
+  // `.d.ts` is 16M string comparisons -- 3.3x the whole old check time,
+  // measured. Nothing about the rule changes: these are the same two
+  // counts, read from an index.
+  let alias_counts : Map[String, Int] = {}
+  for ta in module_.type_aliases {
+    alias_counts[ta.name] = (match alias_counts.get(ta.name) {
+        Some(v) => v
+        None => 0
+      }) +
+      1
+  }
+  let iface_counts : Map[String, Int] = {}
+  for iface in module_.interfaces {
+    iface_counts[iface.name] = (match iface_counts.get(iface.name) {
+        Some(v) => v
+        None => 0
+      }) +
+      1
+  }
   for name, n_exported in exported {
-    let mut n_alias = 0
-    for ta in module_.type_aliases {
-      if ta.name == name {
-        n_alias += 1
-      }
+    let n_alias = match alias_counts.get(name) {
+      Some(v) => v
+      None => 0
     }
-    let mut n_iface = 0
-    for iface in module_.interfaces {
-      if iface.name == name {
-        n_iface += 1
-      }
+    let n_iface = match iface_counts.get(name) {
+      Some(v) => v
+      None => 0
     }
     let total = if n_alias > 0 { n_alias } else { n_iface }
     if n_exported > 0 && n_exported < total {
@@ -23508,35 +23681,79 @@ fn check_merged_interface_member_conflicts(
   for ta in module_.type_aliases {
     alias_names[ta.name] = ()
   }
-  let reported : Map[String, Unit] = {}
+  // Only two declarations of the SAME name can conflict, so group the
+  // indices by name in one pass and compare within a group. The pair
+  // loop this replaces ran over every (i, j) with i < j across the whole
+  // module -- 72M iterations on a 12,000-interface file, each one a
+  // string compare and a map lookup, for a rule that could only ever act
+  // on same-named pairs. Measured at 6.5x the old check time.
+  //
+  // The (i, j) ORDER is preserved: group indices ascend, and groups are
+  // visited in first-appearance order, so the pairs this examines and
+  // the order it reports them in are exactly what the pair loop produced
+  // once the `b.name != a.name` arm is taken out.
+  let by_name : Map[String, Array[Int]] = {}
+  let order : Array[String] = []
   for i in 0..<module_.interfaces.length() {
-    let a = module_.interfaces[i]
-    if alias_names.contains(a.name) || reported.contains(a.name) {
+    let name = module_.interfaces[i].name
+    match by_name.get(name) {
+      Some(idxs) => idxs.push(i)
+      None => {
+        by_name[name] = [i]
+        order.push(name)
+      }
+    }
+  }
+  let reported : Map[String, Unit] = {}
+  for name in order {
+    if alias_names.contains(name) {
       continue
     }
-    for j in (i + 1)..<module_.interfaces.length() {
-      let b = module_.interfaces[j]
-      if b.name != a.name || reported.contains(a.name) {
-        continue
+    let idxs = match by_name.get(name) {
+      Some(v) => v
+      None => continue
+    }
+    if idxs.length() < 2 {
+      continue
+    }
+    // Walk the group's declarations in order, remembering the type each
+    // member was FIRST declared with, and compare every later
+    // declaration against that. One pass over the group's total members
+    // rather than a pair loop over the group: a name declared in k halves
+    // was k^2/2 pairs, each allocating a map, which is 8M maps for a
+    // 4,000-half group and was 3.8 s of a 5.0 s check.
+    //
+    // Comparing against the FIRST declaration rather than against every
+    // other one is not a shortcut, it is what tsc reports: "property `x`
+    // must be of type `T` but here has type `U`", where `T` is the first
+    // declaration's. It can only lose a finding relative to the pair
+    // loop -- where `types_definitely_differ` abstains on (first, later)
+    // but would have proven (later, later') -- and losing a finding is
+    // the affordable direction.
+    let first_ty : Map[String, @ast.TsType] = {}
+    for gi in 0..<idxs.length() {
+      if reported.contains(name) {
+        break
       }
-      for la in a.fields {
-        let (lname, lty) = la
-        if lname.has_prefix("<") {
+      for f in module_.interfaces[idxs[gi]].fields {
+        let (fname, fty) = f
+        if fname.has_prefix("<") {
           continue
         }
-        for ra in b.fields {
-          let (rname, rty) = ra
-          if rname == lname && types_definitely_differ(resolver, lty, rty) {
-            reported[a.name] = ()
-            issues.push({
-              path: "interface \{a.name}",
-              message: "subsequent property declarations must have the same type: property `\{lname}` must be of type `\{type_display(lty)}` but here has type `\{type_display(rty)}`",
-            })
-            break
-          }
-        }
-        if reported.contains(a.name) {
-          break
+        match first_ty.get(fname) {
+          Some(prev) =>
+            if types_definitely_differ(resolver, prev, fty) {
+              reported[name] = ()
+              issues.push({
+                path: "interface \{name}",
+                message: "subsequent property declarations must have the same type: property `\{fname}` must be of type `\{type_display(prev)}` but here has type `\{type_display(fty)}`",
+              })
+              break
+            }
+          // A member the group has not shown yet: record the type this
+          // declaration gives it, which every later half is measured
+          // against.
+          None => first_ty[fname] = fty
         }
       }
     }
