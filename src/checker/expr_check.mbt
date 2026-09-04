@@ -18960,6 +18960,64 @@ fn check_call_args_in_expr(
               }
             _ => ()
           }
+          // TS2741: the TARGET of a rest element receives an array, so a
+          // target whose type is an inline object type can never hold it
+          // (`var c = { bogus: 0 }; [...c] = ["", 0]` --
+          // nonIterableRestElement3, where tsc names the missing member
+          // as `[Symbol.iterator]`).
+          //
+          // Only an inline `Object` / `Struct` type is judged. A `Named`
+          // one abstains even though an interface is not an array
+          // either: the name may resolve to an alias for an array or a
+          // tuple, and this is not the place to decide that. `Any`, a
+          // type parameter and every array-ish shape fall through the
+          // same way, so the answer is only ever "definitely not an
+          // array".
+          match ab2.rest {
+            Some(@ast.TsBinding::Target(@ast.TsExpr::Var(rname)))
+            | Some(@ast.TsBinding::Ident(rname)) => {
+              let rest_target_ty = ctx.resolver.unwrap(
+                infer_expr(env, ctx.resolver, @ast.TsExpr::Var(rname)),
+              )
+              // The object type must have at least one REQUIRED member.
+              // `{}` is TS7-ACCEPTED here (nonIterableRestElement1 / 2,
+              // which cost two false positives before this condition
+              // existed) because an array IS assignable to the empty
+              // object type; and `{ a?: number }` is a different code
+              // (TS2559), so an all-optional shape is excluded too.
+              let has_required = match rest_target_ty {
+                Object(fields) => {
+                  let mut any_required = false
+                  for entry in fields {
+                    let (_, vty) = entry
+                    if !type_accepts_undefined(vty) {
+                      any_required = true
+                    }
+                  }
+                  any_required
+                }
+                Struct(_, fields) => {
+                  let mut any_required = false
+                  for entry in fields {
+                    let (_, vty) = entry
+                    if !type_accepts_undefined(vty) {
+                      any_required = true
+                    }
+                  }
+                  any_required
+                }
+                _ => false
+              }
+              if has_required {
+                record_unfiltered(
+                  ctx,
+                  "rest element `\{rname}`",
+                  "type `\{type_display(rest_target_ty)}` is missing the `[Symbol.iterator]()` method required to receive a rest element",
+                )
+              }
+            }
+            _ => ()
+          }
           // TS2339: an object sub-pattern under a rest element must draw
           // its keys from the ARRAY surface
           // (`[...{ 0: a = "", b }] = tuple` —
@@ -23062,6 +23120,224 @@ fn check_non_local_exports(
       path: "export `\{name}`",
       message: "cannot export `\{name}`: only local declarations can be exported from a module",
     })
+  }
+  issues
+}
+
+///|
+/// True only when two types can be PROVEN to be different types.
+///
+/// TypeScript's TS2403 / TS2320 both turn on type IDENTITY, which is
+/// structural: two differently-named interfaces with the same members
+/// ARE identical, `string[]` and `Array<string>` are identical, and a
+/// union is identical to the same union in any order. So a name
+/// comparison is the wrong test, and "not obviously equal" is the wrong
+/// answer -- this returns false wherever it cannot align the two shapes,
+/// which costs MISSes and never a finding.
+///
+/// Three things it can prove:
+///  - a multi-member UNION against a non-union: no single type is
+///    identical to a union of two or more members (`var x: C` beside
+///    `var x: C | D` -- unionTypeEquivalence, whose next two lines are
+///    the LEGAL `string | number` / `number | string` pair, which stays
+///    silent because both sides are unions);
+///  - an ENUM type against anything that is not that same enum, since an
+///    enum is nominal;
+///  - two definite PRIMITIVES of different kinds, reached through
+///    matching structure -- a function's return, an object type's
+///    same-named member, an array's element (`(): { x: string }` versus
+///    `(): { x: number }` -- symbolProperty35).
+///
+/// Everything else abstains: a `Named` pair, an `Any` on either side,
+/// object types whose member sets differ (a missing member is not proof,
+/// since an optional one may be absent), differing parameter counts.
+fn types_definitely_differ(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> Bool {
+  let ua = resolver.unwrap(a)
+  let ub = resolver.unwrap(b)
+  // A union of >= 2 members is identical only to a union.
+  let a_multi_union = match ua {
+    Union(ms) => ms.length() > 1
+    _ => false
+  }
+  let b_multi_union = match ub {
+    Union(ms) => ms.length() > 1
+    _ => false
+  }
+  if a_multi_union != b_multi_union {
+    return true
+  }
+  // An enum type is nominal.
+  let enum_name = fn(t : @ast.TsType) -> String? {
+    match t {
+      Named(n) => if resolver.enums.get(n) is Some(_) { Some(n) } else { None }
+      _ => None
+    }
+  }
+  match (enum_name(ua), enum_name(ub)) {
+    (Some(na), Some(nb)) => return na != nb
+    (Some(_), None) | (None, Some(_)) => return true
+    _ => ()
+  }
+  // Two definite primitives of different kinds.
+  if is_definite_primitive_type(ua) && is_definite_primitive_type(ub) {
+    return type_display(ua) != type_display(ub)
+  }
+  // Structure that can be aligned: descend. Anything that cannot be
+  // aligned falls through to `false`.
+  match (ua, ub) {
+    (Func(pa, ra), Func(pb, rb)) => {
+      if pa.length() != pb.length() {
+        return false
+      }
+      if types_definitely_differ(resolver, ra, rb) {
+        return true
+      }
+      for i in 0..<pa.length() {
+        if types_definitely_differ(resolver, pa[i], pb[i]) {
+          return true
+        }
+      }
+      false
+    }
+    (Array(ea), Array(eb)) => types_definitely_differ(resolver, ea, eb)
+    (Object(fa), Object(fb)) => {
+      // An object type's entries are `(key, value)` where the KEY is
+      // itself a type -- a `Literal` for a property name -- so members
+      // are aligned by comparing rendered keys rather than strings.
+      for entry in fa {
+        let (ka, ta) = entry
+        let ka_s = type_display(ka)
+        if ka_s.contains("<") {
+          continue
+        }
+        for other in fb {
+          let (kb, tb) = other
+          if type_display(kb) == ka_s &&
+            types_definitely_differ(resolver, ta, tb) {
+            return true
+          }
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// TS2320: an interface cannot simultaneously extend two bases that
+/// declare the same member with provably different types -- nothing can
+/// satisfy both (`interface I3 extends I1, I2` where the two disagree on
+/// `[Symbol.toStringTag]`'s return -- symbolProperty35).
+///
+/// Only bases that resolve to interfaces of this module are compared, and
+/// only pairs of them, so a class base, an unresolved name or a type
+/// parameter abstains.
+fn check_interface_conflicting_bases(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for iface in module_.interfaces {
+    if iface.extends_names.length() < 2 {
+      continue
+    }
+    let mut done = false
+    for i in 0..<iface.extends_names.length() {
+      if done {
+        break
+      }
+      for j in (i + 1)..<iface.extends_names.length() {
+        if done {
+          break
+        }
+        let left = resolver.interfaces.get(iface.extends_names[i])
+        let right = resolver.interfaces.get(iface.extends_names[j])
+        match (left, right) {
+          (Some(li), Some(ri)) =>
+            for la in li.fields {
+              let (lname, lty) = la
+              if lname.has_prefix("<") {
+                continue
+              }
+              for ra in ri.fields {
+                let (rname, rty) = ra
+                if rname == lname && types_definitely_differ(resolver, lty, rty) {
+                  issues.push({
+                    path: "interface \{iface.name}",
+                    message: "interface `\{iface.name}` cannot simultaneously extend types `\{iface.extends_names[i]}` and `\{iface.extends_names[j]}`: named property `\{lname}` of types `\{type_display(lty)}` and `\{type_display(rty)}` are not identical",
+                  })
+                  done = true
+                  break
+                }
+              }
+              if done {
+                break
+              }
+            }
+          _ => ()
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// TS2395: a merged declaration whose halves disagree about being
+/// exported (`export type A = {}` beside `type A = {}` --
+/// typeAliasesDoNotMerge; the same error for two `interface` halves).
+///
+/// The count of declarations comes from `type_aliases` when the name has
+/// any, and from `interfaces` otherwise, because
+/// `type_alias_to_interface` synthesizes an interface for every type
+/// alias -- adding the two lists would double-count an alias and report
+/// a lone `export type A = {}`. The exported count comes from the
+/// parser's `<export-type>` markers, one per exported declaration; a
+/// marker this misses lowers that count and silences the check, which is
+/// the affordable direction.
+fn check_merged_export_modifiers(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let exported : Map[String, Int] = {}
+  for gm in module_.grammar_misuses {
+    if !gm.has_prefix("<export-type>") {
+      continue
+    }
+    let name = gm["<export-type>".length():].to_owned()
+    exported[name] = (match exported.get(name) {
+        Some(v) => v
+        None => 0
+      }) +
+      1
+  }
+  let _ = resolver
+  for name, n_exported in exported {
+    let mut n_alias = 0
+    for ta in module_.type_aliases {
+      if ta.name == name {
+        n_alias += 1
+      }
+    }
+    let mut n_iface = 0
+    for iface in module_.interfaces {
+      if iface.name == name {
+        n_iface += 1
+      }
+    }
+    let total = if n_alias > 0 { n_alias } else { n_iface }
+    if n_exported > 0 && n_exported < total {
+      issues.push({
+        path: "declaration `\{name}`",
+        message: "individual declarations in merged declaration `\{name}` must be all exported or all local",
+      })
+    }
   }
   issues
 }
@@ -27512,25 +27788,47 @@ fn check_var_redeclaration_types(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let first_key : Map[String, String] = {}
+  // The first declaration's TYPE as well as its key, because
+  // `identity_key` abstains for shapes it cannot normalize and the
+  // fallback below can still decide some of them.
+  let first_type : Map[String, @ast.TsType] = {}
   let reported : Map[String, Unit] = {}
   fn consider(name : String, ty : @ast.TsType) -> Unit {
     if !is_checkable(ty) {
       return
     }
-    match identity_key(ty, resolver, 0) {
-      None => ()
-      Some(key) =>
-        match first_key.get(name) {
-          None => first_key[name] = key
-          Some(prev) =>
-            if !(reported.get(name) is Some(_)) && prev != key {
-              reported[name] = ()
-              issues.push({
-                path: "var \{name}",
-                message: "subsequent variable declaration must have the same type",
-              })
-            }
+    let key = identity_key(ty, resolver, 0)
+    let prev_type = first_type.get(name)
+    // Two ways to decide. The identity KEY is the precise one and
+    // handles the primitives, literals, enums and normalizable shapes.
+    // When either side has no key, fall back to
+    // `types_definitely_differ`, which proves rather than normalizes --
+    // that is what flips `unionTypeEquivalence`, where `var x: C` beside
+    // `var x: C | D` had no key at all (`D extends C` is a shape
+    // `structural_named_key` declines) while "a multi-member union is
+    // not identical to a non-union" settles it without one.
+    let differ = match (first_key.get(name), key) {
+      (Some(prev), Some(cur)) => prev != cur
+      _ =>
+        match prev_type {
+          Some(pt) => types_definitely_differ(resolver, pt, ty)
+          None => false
         }
+    }
+    if differ && !(reported.get(name) is Some(_)) {
+      reported[name] = ()
+      issues.push({
+        path: "var \{name}",
+        message: "subsequent variable declaration must have the same type",
+      })
+      return
+    }
+    if prev_type is None {
+      first_type[name] = ty
+      match key {
+        Some(k) => first_key[name] = k
+        None => ()
+      }
     }
   }
 
@@ -28891,6 +29189,12 @@ fn check_module_function_bodies_layered(
     for issue in check_implicit_any_this(module_, outer_modules.length() > 0) {
       all.push(issue)
     }
+  }
+  for issue in check_interface_conflicting_bases(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_merged_export_modifiers(module_, resolver) {
+    all.push(issue)
   }
   for issue in check_non_local_exports(module_, resolver) {
     all.push(issue)

@@ -679,6 +679,99 @@ product surfaces now.
   `args[+randBool()]` — idiomatic bool-to-0/1 coercion — while its real
   errors are five TS2345s elsewhere. A conformance file counts as a TP
   if we flag it AT ALL, so +1 TP is not evidence that a rule is right.
+  Batches CT-CZ are **+23 files** (MISS 250 -> 193) and the ranking
+  behind them was made by running every remaining MISS file through the
+  local compiler and grouping the codes it actually produced. That
+  ranking is also the answer to "what would a big win look like": 132 of
+  208 files have exactly ONE error code, 103 codes have exactly one file,
+  and the four largest — TS2322 (14 solo), TS2345 (10), TS2339 (7),
+  TS2403 (5) — are variadic tuples, template-literal types, conditional
+  types and contextual typing, fourteen unrelated causes when the files
+  are opened. There is no mechanism left worth many files; the rate is
+  three to five files per probed batch.
+  What DOES still pay is the applied-in-some-places family, and CU is the
+  clearest instance yet because the rule was not merely similar to an
+  existing one, it WAS one. `check_class_decorator_signatures` has
+  compared a CLASS decorator's declared arity against the runtime's for
+  years and the member positions had nothing, so `@dec prop` with a
+  one-parameter `dec` was silent. Its arity table had to be PROBED,
+  because "a signature with fewer parameters is assignable" is not what
+  tsc does: a property decorator must ACCEPT exactly 2 arguments and a
+  method or accessor decorator 2 or 3, where accept means N falls in the
+  signature's `[min, max]` range. Two things nearly cost false
+  positives. An `accessor` FIELD is decorated like a METHOD — its
+  decorator gets a descriptor — so `decoratorOnClassProperty13` was
+  reported until the stage-3 modifier reached the classification point,
+  which is the OPPOSITE conclusion from batch CK, where gating on
+  `accessor` was the wrong reading of a two-feature file. And
+  `is_optional` is accurate for a `function` declaration and always
+  FALSE for an ambient `declare function`, whose synthesized parameter
+  list carries names and types only, so reading it alone made `@dec`
+  with `(target, key?, desc?)` — how a universal decorator is written,
+  and an existing test's assertion — report "expects 3". Consulting the
+  parameter TYPE as well over-counts optionals and therefore only ever
+  WIDENS the accepted range.
+  CV is one parser defect with TWO faces, and the second is a false
+  positive the gate structurally cannot see. `parse_declare_class`
+  upserted a `declare class`'s `get x(): T` into `properties` and pushed
+  no `methods` entry carrying the `get` tag, so every consumer asking
+  "is this base member an accessor or a data property" got the wrong
+  answer for an ambient base: `declare class A { get x(): string }`
+  beside `class B extends A { x = 1 }` is TS2610 and was SILENT, while
+  the LEGAL accessor-over-accessor form was reported TWICE. The corpus
+  has no file of the second shape, which is why FP 0 never caught it —
+  the fix is to mirror what the runtime class parser already does (both
+  records, not one) so the two paths cannot disagree again.
+  CW's TS2678 is the family with the two spellings inside one check.
+  The switch case-comparability test has flagged
+  `switch ("a") { case "b": }` for as long as it existed and
+  `switch (12) { case 5: }` was silent, because `infer_expr` keeps
+  `Literal("a")` for a string literal expression and WIDENS a numeric one
+  to `number` and a boolean one to `boolean`. Reading the two literals
+  off the SYNTAX needs no inference and cannot be defeated by widening;
+  a `const` scrutinee stays a MISS, since its literal type is exactly
+  what widening removes.
+  CX's TS2415 / TS2417 is where probing earned itself back outright. The
+  message says "different accessibility modifiers", which reads as "they
+  must match", and the 3x3 table on both the static and instance sides
+  says otherwise: widening `protected` to `public` is LEGAL, and an
+  identical `private` redeclaration is an ERROR, because a base private
+  member is nominal and nothing outside the declaring class can satisfy
+  it. Those are the two cells a rule written from the message text gets
+  wrong in opposite directions.
+  CY is the family in the TREE rather than in a check, and it is the
+  reason "record the fact in one place" is not by itself enough.
+  `export { … }` is parsed at FOUR sites; a recorder deliberately written
+  at three of them still left a top-level `export { x };` silent, because
+  that site reached for `parse_import_specifiers` instead of
+  `parse_named_exports` — two functions parsing one clause. Fixing it
+  corrected something smaller underneath: that site pushed the clause's
+  names into `imported_binding_names`, which is a list of LOCAL BINDINGS
+  an import introduces, and `export { x }` introduces none. The
+  mislabelling is what made the check quiet, since the undeclared name
+  looked declared. CY's TS2532 also shipped a false positive first, and
+  the trap was already written down: `Undefined` looked like it belonged
+  in the arm next to `Void`, and our flow model narrows an `any`-typed
+  binding to `Undefined` when its initializer is `undefined`, so
+  `const q: any = undefined; const { y }: any = q` — which tsc ACCEPTS —
+  was reported. `check_computed_key_type` documents that exact hazard
+  twenty lines in, for the same reason, which is why one of them should
+  have warned about the other. `Void` cannot be produced by narrowing.
+  Two rules were REJECTED with their conditions recorded rather than
+  their verdicts. TS2464 for a bare `Symbol` as a computed key is
+  correct and buys zero corpus files, because `symbolProperty3` writes
+  `var s = Symbol; ({ [s]: 0 })` and `s` infers as `Any` — catching it
+  needs the constructor modelled as a value type, and neither spelling
+  is code anyone writes. And TS2347's first form asked whether the
+  callee's type comes out `Any`, which is true both for a genuine `any`
+  and for every type this checker FAILED to compute: `const C = foo()`
+  where `foo` returns a class expression is `Any` here and a generic
+  class in tsc (`staticIndexSignature6`), so that version was +6 TP and
+  1 FP, four of the six flagged for a reason that does not hold. What is
+  decidable without inference is a declaration with no `=` initializer
+  whose annotation is `any` or absent, which loses `const p =
+  JSON.parse('{}'); p<number>(1)` — a real TS2347 — and that MISS is
+  what buys FP 0.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

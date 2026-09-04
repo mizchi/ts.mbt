@@ -17004,3 +17004,96 @@ test "batch CY rules" {
   }
   assert_true(non_local("export { nonexistentThing };") > 0)
 }
+
+///|
+/// Batches CZ and DA: TS2403, TS2320, TS2395, TS2741.
+///
+/// The first three all read one `types_definitely_differ`, which exists
+/// because TS2403 and TS2320 turn on type IDENTITY and identity is
+/// STRUCTURAL: two differently-named interfaces with the same members
+/// are identical, and a union is identical to the same union in any
+/// order. `unionTypeEquivalence` puts both halves in one file --
+/// `var x: C` beside `var x: C | D` is the error, and the very next
+/// lines, `var y: string | number` beside `var y: number | string`, are
+/// legal. A rule that compared spellings would fail the second.
+test "batches CZ+DA rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  // TS2403: a multi-member union is identical only to a union, and an
+  // enum type is nominal.
+  assert_true(
+    only(
+      "class C {}\nclass D extends C { foo() {} }\nvar x: C;\nvar x: C | D;", "same type",
+    ) >
+    0,
+  )
+  assert_true(only("enum E { A }\nvar r: E;\nvar r: string;", "same type") > 0)
+  // TS2320: two bases that disagree on a member's type.
+  assert_true(
+    only(
+      "interface I1 { m(): { x: string } }\ninterface I2 { m(): { x: number } }\ninterface I3 extends I1, I2 { }",
+      "simultaneously extend",
+    ) >
+    0,
+  )
+  // TS2395: a merged declaration whose halves disagree about `export`.
+  assert_true(
+    only("export type A = {}\ntype A = {}", "all exported or all local") > 0,
+  )
+  assert_true(
+    only("interface I {}\nexport interface I {}", "all exported or all local") >
+    0,
+  )
+  // TS2741: a rest element's target receives an array.
+  assert_true(
+    only("var c = { bogus: 0 };\n[...c] = [\"\", 0];", "rest element") > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // The legal half of unionTypeEquivalence: a union is identical to
+      // the same union in any order, so BOTH sides being unions is the
+      // abstention that keeps this quiet.
+      "var y: string | number;\nvar y: number | string;", "class C {}\nvar x: C;\nvar x: C;",
+      // Two differently-named interfaces with the same members ARE
+      // identical, so a Named pair abstains -- and so does an inferred
+      // declaration, which is where the corpus's other TS2403 files live.
+       "interface A { x: number }\ninterface B { x: number }\nvar q: A;\nvar q: B;",
+      "var z = 1;\nvar z = \"\";",
+      // TS2320 abstains for one base, for a base that is not an
+      // interface of this module, and when the two agree.
+       "interface I1 { m(): string }\ninterface I3 extends I1 { }", "interface I1 { m(): { x: string } }\nclass K2 { m(): { x: number } { return { x: 1 } } }\ninterface I3 extends I1, K2 { }",
+      "interface I1 { m(): { x: string } }\ninterface I2 { m(): { x: string } }\ninterface I3 extends I1, I2 { }",
+      "interface I1 { a: string }\ninterface I2 { b: number }\ninterface I3 extends I1, I2 { }",
+      // TS2395: all-exported and all-local are both fine, and a lone
+      // exported alias must not be double-counted through the interface
+      // the parser synthesizes for it.
+       "export type A = {}\nexport type B = {}", "export type A = {}", "type A = {}\ntype A2 = {}",
+      "export interface I {}\nexport interface I {}",
+      // TS2741 abstains for an array or tuple target, for `any`, and for
+      // a Named one (an alias could be an array). The EMPTY object type
+      // is the one tsc ACCEPTS -- an array is assignable to `{}` -- and
+      // it cost two corpus false positives (nonIterableRestElement1 / 2)
+      // before the required-member condition existed; an all-optional
+      // shape is a different code (TS2559), so it is out too.
+       "var c: string[] = [];\n[...c] = [\"\", \"\"];", "var c: any;\n[...c] = [\"\", 0];",
+      "var c = {};\n[...c] = [\"\", 0];", "var c: { a?: number } = {};\n[...c] = [\"\", 0];",
+      "interface I { bogus: number }\ndeclare var c: I;\n[...c] = [\"\", 0];", "var a: string = \"\";\nvar c: string[] = [];\n[a, ...c] = [\"\", \"\"];",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

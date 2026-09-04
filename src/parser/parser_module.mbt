@@ -153,6 +153,18 @@ fn Parser::parse_named_imports_with_type_flags(
 /// `spec` argument is what makes that distinction impossible to forget:
 /// `parse_named_exports` itself stops at the `}` and cannot see whether
 /// a `from` follows.
+/// Record one `<export-type>NAME` marker per EXPORTED type declaration
+/// (a `type` alias or an `interface`). Read by TS2395, which needs to
+/// know how many of a merged declaration's halves carried `export`.
+///
+/// One function so the fact is written in one place; it is called from
+/// each of the three export parsers, which is where batch CF's
+/// `<module-syntax>` marker had to go for the same reason.
+fn Parser::record_exported_type_name(self : Parser, name : String) -> Unit {
+  self.grammar_misuses.push("<export-type>" + name)
+}
+
+///|
 fn Parser::record_local_export_names(
   self : Parser,
   items : Array[(String, String)],
@@ -2918,12 +2930,14 @@ fn Parser::parse_export_decl_for_module(
       }
       Interface => {
         let iface = self.parse_interface()
+        self.record_exported_type_name(iface.name)
         self.collected_interfaces.push(iface)
         exports.push({ local_name: iface.name, export_name: iface.name })
         return (stmts, exports, reexports)
       }
       Type => {
         let type_alias = self.parse_type_alias()
+        self.record_exported_type_name(type_alias.name)
         self.collected_type_aliases.push(type_alias)
         exports.push({
           local_name: type_alias.name,
@@ -3267,6 +3281,7 @@ fn Parser::parse_export_stmt(
       return
     }
     let type_alias = self.parse_type_alias_after_type_keyword()
+    self.record_exported_type_name(type_alias.name)
     type_aliases.push(type_alias)
     match type_alias_to_interface(type_alias) {
       Some(iface) => interfaces.push(iface)
@@ -3383,7 +3398,9 @@ fn Parser::parse_export_stmt(
     _ => ()
   }
   if self.check(Interface) {
-    interfaces.push(self.parse_interface())
+    let iface = self.parse_interface()
+    self.record_exported_type_name(iface.name)
+    interfaces.push(iface)
     return
   }
   if self.is_const_enum_decl_start() {
