@@ -6482,6 +6482,43 @@ fn check_binop_operands(
   ctx : CheckCtx,
 ) -> Unit {
   match op {
+    // TS2365: `+` is the one arithmetic operator that also concatenates,
+    // so it cannot join the list below -- but a BOOLEAN operand is an
+    // error unless the other side is a string (which makes it
+    // concatenation) or `any` (additionOperatorWithInvalidOperands).
+    // Probed: `a + "s"` is legal for a boolean `a`, `a + b` is TS2365
+    // for a boolean and a number, and so is boolean + boolean.
+    Add => {
+      let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+      let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      let is_bool = fn(t : @ast.TsType) -> Bool {
+        match t {
+          Boolean | BooleanLiteral(_) => true
+          _ => false
+        }
+      }
+      let is_string_kind = fn(t : @ast.TsType) -> Bool {
+        match t {
+          String_ | Literal(_) => true
+          _ => false
+        }
+      }
+      // Both sides must be definite primitives: that excludes `any`,
+      // `unknown`, an object type, a union, a type parameter and
+      // everything this checker could not resolve, all of which tsc
+      // either accepts or reports under a different code.
+      if is_definite_primitive_type(lt) &&
+        is_definite_primitive_type(rt) &&
+        (is_bool(lt) || is_bool(rt)) &&
+        not(is_string_kind(lt)) &&
+        not(is_string_kind(rt)) {
+        record(
+          ctx,
+          "`+` operands",
+          "operator `+` cannot be applied to types `\{type_display(lt)}` and `\{type_display(rt)}`",
+        )
+      }
+    }
     Sub | Mul | Div | Mod | Pow | Shl | Shr | UShr | BitAnd | BitOr | BitXor => {
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
@@ -17176,6 +17213,34 @@ fn check_call_args_in_expr(
       check_explicit_type_args(env, ctx, targs, inner)
       check_untyped_call_type_args(ctx, inner)
       check_call_args_in_expr(env, inner, ctx)
+    }
+    // `import(spec)` had NO arm here at all, so the specifier expression
+    // was never walked by this check -- another wrapper node whose
+    // absence failed open. Walking it is the first half; the second is
+    // TS7036.
+    DynamicImport(spec, opts) => {
+      check_call_args_in_expr(env, spec, ctx)
+      match opts {
+        Some(o) => check_call_args_in_expr(env, o, ctx)
+        None => ()
+      }
+      // TS7036: a dynamic import's specifier must be a string. A
+      // definite non-string PRIMITIVE can never be one
+      // (importCallExpressionSpecifierNotStringTypeError); `any`,
+      // `unknown`, a union and every unresolved shape abstain, which is
+      // what `is_definite_primitive_type` does by construction.
+      let spec_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, spec))
+      let is_string_kind = match spec_ty {
+        String_ | Literal(_) => true
+        _ => false
+      }
+      if is_definite_primitive_type(spec_ty) && !is_string_kind {
+        record_unfiltered(
+          ctx,
+          "dynamic import",
+          "dynamic import's specifier must be of type `string`, but here has type `\{type_display(spec_ty)}`",
+        )
+      }
     }
     Call(name, args) => {
       // TS2304: calling a name declared nowhere and not a standard global.

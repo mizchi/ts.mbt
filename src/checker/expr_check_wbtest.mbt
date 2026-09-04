@@ -17311,3 +17311,72 @@ test "batch DF rules" {
     )
   }
 }
+
+///|
+/// Batch DG: TS7036 (a dynamic import's specifier) and TS2365 (`+` with
+/// a boolean operand).
+///
+/// `import(spec)` had NO arm in `check_call_args_in_expr` at all, so the
+/// specifier expression was never walked by that check -- another
+/// wrapper node whose absence failed open. And `+` cannot join the
+/// arithmetic list, because it also concatenates: a boolean operand is
+/// only an error when the other side is not a string.
+test "batch DG rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  for
+    src in [
+      "declare function g(): boolean;\nvar p = import(g());", "declare function g(): number;\nvar p = import(g());",
+      "declare var b: boolean;\nconst q = import(b);",
+    ] {
+    assert_true(only(src, "specifier must be of type") > 0)
+  }
+  // A bare `import(spec);` STATEMENT is not reached: at statement start
+  // the import parser claims it, so it never becomes an expression
+  // statement this walk sees. The corpus file carries both spellings, so
+  // it flips anyway; recorded here because the asymmetry is real.
+  @test.assert_eq(
+    only(
+      "declare function g(): boolean;\nimport(g());", "specifier must be of type",
+    ),
+    0,
+  )
+  for
+    src in [
+      "declare var a: boolean;\ndeclare var b: number;\nvar r = a + b;", "declare var a: boolean;\ndeclare var b: boolean;\nvar r = a + b;",
+      "declare var b: number;\nvar r = true + b;",
+    ] {
+    assert_true(only(src, "cannot be applied to types") > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A string specifier, and the two shapes that abstain.
+      "var p = import(\"./x\");", "declare function g(): string;\nvar p = import(g());",
+      "declare function g(): any;\nvar p = import(g());", "declare function g(): unknown;\nvar p = import(g());",
+      // `boolean + string` is CONCATENATION and legal; `any` on either
+      // side abstains; number + number is ordinary arithmetic.
+       "declare var a: boolean;\nvar r = a + \"s\";", "declare var a: boolean;\ndeclare var s: string;\nvar r = s + a;",
+      "declare var a: boolean;\ndeclare var x: any;\nvar r = a + x;", "declare var b: number;\nvar r = b + 1;",
+      "declare var s: string;\nvar r = s + 1;",
+      // An object type is a different code, and a union abstains.
+       "declare var o: object;\ndeclare var a: boolean;\nvar r = a + o;", "declare var u: string | number;\ndeclare var a: boolean;\nvar r = a + u;",
+    ] {
+    @test.assert_eq(
+      only(src, "specifier must be of type") +
+      only(src, "cannot be applied to types"),
+      0,
+    )
+  }
+}
