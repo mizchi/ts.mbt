@@ -7961,3 +7961,53 @@ test "parser: an enum member is expected after a comma" {
     }
   }
 }
+
+///|
+/// Batch DD: TS1005 for an unterminated tuple type, and TS1436 for a
+/// decorator written after the member name.
+///
+/// TS1436's whole rule is the SAME-LINE test: with a line terminator
+/// between the name and the `@`, ASI ends the property and the `@` opens
+/// the next member's decorator list, which is the ordinary legal
+/// spelling. Both halves are probed against tsc.
+test "parser: unterminated tuple type and misplaced member decorator" {
+  let has = fn(src : String, needle : String) -> Bool raise {
+    let mut found = false
+    for m in Parser::from_source(src).parse_module().grammar_misuses {
+      if m.contains(needle) {
+        found = true
+      }
+    }
+    found
+  }
+  // --- fires
+  assert_true(has("var v: [", "`]` expected"))
+  assert_true(has("type T = [string,", "`]` expected"))
+  assert_true(
+    has(
+      "declare var decorator: any;\nclass Foo { private prop @decorator\n foo() { return 0 } }",
+      "decorators must precede the name",
+    ),
+  )
+  assert_true(
+    has(
+      "declare var decorator: any;\nclass Foo { prop @decorator\n foo() { return 0 } }",
+      "decorators must precede the name",
+    ),
+  )
+  // --- stays silent
+  for
+    src in [
+      "var v: [string];", "var v: [string, number];", "var v: [string?];", "var v: [...number[]];",
+      "type T = [a: string, b?: number];",
+      // A newline before the `@` is the legal spelling, with and without
+      // a type annotation on the preceding property.
+       "declare var decorator: any;\nclass Foo { prop: number\n@decorator\nfoo() { return 0 } }",
+      "declare var decorator: any;\nclass Foo { prop\n@decorator\nfoo() { return 0 } }",
+      // A decorator that precedes the name is what the rule is FOR.
+       "declare var decorator: any;\nclass Foo { @decorator prop: number; }", "declare var decorator: any;\nclass Foo { @decorator foo() { return 0 } }",
+    ] {
+    @test.assert_eq(has(src, "`]` expected"), false)
+    @test.assert_eq(has(src, "decorators must precede the name"), false)
+  }
+}

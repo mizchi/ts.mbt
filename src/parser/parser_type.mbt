@@ -254,7 +254,17 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
   // the element loop and surfaced once per offending tuple.
   let mut seen_optional = false
   let mut required_after_optional = false
-  while !self.check(Eof) {
+  while true {
+    // TS1005 ("`]` expected"): the element loop used to be
+    // `while !self.check(Eof)`, which EXITED SILENTLY at end of file --
+    // so `var v: [` parsed clean (TupleType4). A mismatched closer
+    // already raises through `expect(RBracket)` below; end of input was
+    // the one path with no diagnostic, and an unterminated tuple type is
+    // never legal, so the test cannot fire on good input.
+    if self.check(Eof) {
+      self.record_suppressible_grammar_misuse("`]` expected")
+      break
+    }
     let is_rest = self.match_ellipsis()
     // Labels like `[name: T]` strip the label tokens; `[name?: T]` is
     // additionally an optional element (equivalent to a trailing `?`

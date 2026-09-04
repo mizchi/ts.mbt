@@ -2478,6 +2478,23 @@ fn Parser::parse_class_body(
     }
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
+    // TS1436 ("Decorators must precede the name and all keywords of
+    // property declarations"): an `@` immediately after the member NAME,
+    // on the same line (`private prop @decorator` --
+    // decoratorOnClassMethod17).
+    //
+    // The same-line test is the whole rule. With a line terminator
+    // between them, ASI ends the property and the `@` opens the NEXT
+    // member's decorator list, which is the ordinary legal spelling and
+    // is what tsc accepts. And the check sits here, right after the key,
+    // because at this point a method still has `(` ahead and a property
+    // `:` / `=` / `;` -- an `@` in that slot is a misplaced decorator
+    // under every reading.
+    if self.check(At) && not(self.has_line_terminator_before()) {
+      self.grammar_misuses.push(
+        "decorators must precede the name and all keywords of property declarations",
+      )
+    }
     // TS1206: decorators are not valid on a constructor
     // (decoratorOnClassConstructor1), nor on `abstract` or ambient
     // (`declare`) members (esDecorators-classDeclaration-*-nonStatic
