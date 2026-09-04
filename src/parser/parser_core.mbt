@@ -528,6 +528,14 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if experimental_decorators {
     grammar_misuses.push("<experimental-decorators>")
   }
+  // TS2725 evidence: under `module: commonjs` a class may not be named
+  // `Object`, because the emitted `exports.Object = Object` shadows the
+  // global the helpers use. Probed: the error does not depend on the
+  // class being exported, nor on it being at top level, and it applies
+  // to `Object` alone -- `Function` and `Array` are accepted.
+  if detect_commonjs_module(head_lower) {
+    grammar_misuses.push("<module-commonjs>")
+  }
   // TS2354 evidence: `@importHelpers: true` makes an emit helper an
   // IMPORT from `tslib`, which the single-file checker can never resolve.
   // Only the conformance header spelling sets this, so real-world code
@@ -1255,6 +1263,29 @@ fn target_list_has_below_es2017(targets : String) -> Bool {
 
 ///|
 /// `@experimentalDecorators: true` from the pre-lowered leading window.
+/// True when the conformance header names `commonjs` in its `@module:`
+/// list. Only that directive spelling sets it, so real-world code (where
+/// the option lives in a tsconfig) never reaches the rules that read it.
+fn detect_commonjs_module(head_lower : String) -> Bool {
+  match head_lower.find("@module:") {
+    Some(idx) => {
+      let after = head_lower[idx + "@module:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      for raw in line.split(",") {
+        if raw.trim().to_owned() == "commonjs" {
+          return true
+        }
+      }
+      false
+    }
+    None => false
+  }
+}
+
+///|
 fn detect_experimental_decorators(head : String) -> Bool {
   match head.find("@experimentaldecorators:") {
     Some(idx) => {

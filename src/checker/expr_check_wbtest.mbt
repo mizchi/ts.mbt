@@ -16723,3 +16723,202 @@ test "member decorator arity" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CV: an AMBIENT class's accessors are recorded as accessors.
+///
+/// `parse_declare_class` upserted a `declare class`'s `get x(): T` into
+/// `properties` and pushed no `methods` entry carrying the `get` tag, so
+/// every consumer asking "is this base member an accessor or a data
+/// property" got the wrong answer for an ambient base. One defect, two
+/// faces — and the second one was a FALSE POSITIVE the corpus could not
+/// see, because it has no file of that shape.
+test "ambient class accessors" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2610: a base accessor overridden by a derived data property.
+  // `propertyOverridesAccessors4` is this with a get/set pair.
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: true\ndeclare class A { get x(): string }\nclass B extends A { x = 1 }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: true\ndeclare class A { get x(): string; set x(v: string) }\nclass B extends A { x = 1 }",
+    ) >
+    0,
+  )
+  // The static form, and a derived METHOD over a base ambient accessor
+  // (TS2423 / TS2426), which reads the same record.
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: true\ndeclare class A { static get x(): string }\nclass B extends A { static x = 1 }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare class A { get x(): string }\nclass B extends A { x() { return 1 } }",
+    ) >
+    0,
+  )
+  // The FALSE POSITIVE half: accessor over accessor is legal, and was
+  // reported TWICE while the ambient getter looked like a data property.
+  @test.assert_eq(
+    issues(
+      "declare class A { get x(): string; set x(v: string) }\nclass B extends A { get x() { return \"\" } set x(v: string) {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare class A { get x(): string }\nclass B extends A { get x() { return \"\" } }",
+    ),
+    0,
+  )
+  // An ambient accessor is still readable as a property from the outside
+  // (the upsert next to the new record is what does that), and it must
+  // not be mistaken for an uninitialized field under
+  // strictPropertyInitialization.
+  @test.assert_eq(
+    issues(
+      "// @strict: true\ndeclare class A { get x(): string }\nvar s: string = new A().x;",
+    ),
+    0,
+  )
+  // A plain ambient METHOD over a base accessor and vice versa are
+  // unaffected, and so is an ambient data property.
+  @test.assert_eq(
+    issues("declare class A { x: string }\nclass B extends A { x = \"a\" }"),
+    0,
+  )
+}
+
+///|
+/// Batch CW: four rules, each one an existing check that had been written
+/// for some of the spellings that produce it.
+test "batch CW rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2678: a literal case that cannot equal a literal scrutinee. The
+      // string spelling already worked; `infer_expr` widens a numeric
+      // literal to `number` and a boolean one to `boolean`, so those two
+      // were silent (invalidSwitchBreakStatement).
+      "switch (12) { case 5: break; }", "switch (true) { case false: break; }", "switch (1.5) { case 2.5: break; }",
+      "switch (\"a\") { case \"b\": break; }",
+      // TS2499: an interface `extends` takes a type reference, so `?.` is
+      // not a qualified name (interfaceExtendingOptionalChain).
+       "namespace Foo { export class Bar {} }\ninterface C1 extends Foo?.Bar {}",
+      // TS2725: under `module: commonjs` a class may not be named
+      // `Object`. Probed: not gated on export, nor on top level.
+       "// @module: commonjs\nexport class Object {}", "// @module: commonjs\nclass Object {}",
+      "// @module: commonjs\nexport default class Object {}",
+      // TS2430: an interface extending a class may not redeclare a member
+      // the class declares private or protected
+      // (interfaceWithPropertyThatIsPrivateInBaseType2).
+       "class Base { private x() {} }\ninterface Foo extends Base { x(): any; }",
+      "class Base { protected x() {} }\ninterface Foo extends Base { x(): any; }",
+      "class Base<T> { private x() {} }\ninterface Foo<T> extends Base<T> { x(): any; }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // The matching case, `default:`, and a non-literal scrutinee, which
+      // is every real-world switch.
+      "switch (12) { case 12: break; }", "switch (12) { case 12.0: break; }", "switch (true) { case true: break; }",
+      "switch (12) { default: break; }", "declare const n: number;\nswitch (n) { case 5: break; }",
+      "declare const s: string;\nswitch (s) { case \"a\": break; }",
+      // A `let` scrutinee widens in tsc too, so a mismatching case is
+      // legal there -- and this rule reads the SYNTAX, so it abstains for
+      // any name.
+       "let k = 12;\nswitch (k) { case 5: break; }",
+      // A qualified interface base with no `?.`, and a CLASS `extends`
+      // with one -- `class C extends A?.B {}` is LEGAL, since an extends
+      // clause on a class takes an expression.
+       "namespace Foo { export class Bar {} }\ninterface C1 extends Foo.Bar {}",
+      "declare var A: any;\nclass C extends A?.B {}",
+      // `Object` is only reserved under commonjs, and only that name.
+       "// @module: esnext\nexport class Object {}", "export class Object {}", "// @module: commonjs\nexport class Function {}",
+      "// @module: commonjs\nexport class Array {}",
+      // A PUBLIC base member may be redeclared, an unrelated name is
+      // fine, and an interface base (rather than a class) abstains.
+       "class Base { x() {} }\ninterface Foo extends Base { x(): void; }", "class Base { private x() {} }\ninterface Foo extends Base { y(): any; }",
+      "class Base { private x() {} }\ninterface Foo extends Base { }", "interface Base { x(): void }\ninterface Foo extends Base { x(): void; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CX: TS1013 (a rest parameter's trailing comma) and
+/// TS2415 / TS2417 (a derived member's accessibility).
+///
+/// The accessibility table was PROBED, all nine cells on both sides, and
+/// it is not "the modifiers must match": widening `protected` to `public`
+/// is legal, and an identical `private` redeclaration is an ERROR because
+/// a private member is nominal. Both of those cells are ones a rule
+/// written from the message text would get wrong.
+test "batch CX rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS1013, at each of the sites `parse_params` serves. Every
+      // parameter is ANNOTATED: an unannotated one is a noImplicitAny
+      // diagnostic of its own on this path, which would make the
+      // assertion pass without the rule.
+      "function f(...args: any[],) {}", "const g = (...args: any[],) => {};", "class X { constructor(...args: any[],) {} }",
+      "class Y { m(...args: any[],) {} }",
+      // TS2417 (static) and TS2415 (instance): narrowing, and anything
+      // over a private base member
+      // (derivedClassWithPrivateStaticShadowingProtectedStatic).
+      // Spelled with METHODS rather than fields throughout: an
+      // uninitialized field is a TS2564 of its own, which would make
+      // every one of these cases pass for the wrong reason and every
+      // silent case below fail.
+       "class B { protected static m(): void {} }\nclass D extends B { private static m(): void {} }",
+      "class B { protected m(): void {} }\nclass D extends B { private m(): void {} }",
+      "class B { static m(): void {} }\nclass D extends B { protected static m(): void {} }",
+      "class B { private static m(): void {} }\nclass D extends B { private static m(): void {} }",
+      "class B { private m(): void {} }\nclass D extends B { public m(): void {} }",
+      "class B { protected static x: string = \"\" }\nclass D extends B { private static x: string = \"\" }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A trailing comma after an ORDINARY parameter is legal, and an
+      // AMBIENT signature is exempt even after a rest -- both probed.
+      "function f(x: number,) {}", "const g = (x: number,) => {};", "declare function f25(...args: any[],): void;",
+      "declare class A { m(...args: any[],): void }", "function f(...args: any[]) {}",
+      "function f(a: number, ...args: any[]) {}",
+      // The three legal accessibility cells: identical public, identical
+      // protected, and WIDENING protected to public.
+       "class B { static m(): void {} }\nclass D extends B { static m(): void {} }",
+      "class B { protected static m(): void {} }\nclass D extends B { protected static m(): void {} }",
+      "class B { protected static m(): void {} }\nclass D extends B { public static m(): void {} }",
+      "class B { protected m(): void {} }\nclass D extends B { m(): void {} }",
+      // A name the base does not declare at all is a fresh member, not an
+      // override, whatever its accessibility.
+       "class B { protected static m(): void {} }\nclass D extends B { private static q(): void {} }",
+      // Staticness is part of the identity: a private INSTANCE member
+      // does not clash with a protected STATIC one of the same name.
+       "class B { protected static m(): void {} }\nclass D extends B { private m(): void {} }",
+      // An unresolvable base abstains.
+       "declare const Mix: any;\nclass D extends Mix { private static m(): void {} }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

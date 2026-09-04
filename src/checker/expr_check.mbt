@@ -6374,6 +6374,24 @@ fn pure_number_literal_set(ty : @ast.TsType) -> Array[String]? {
 /// Both sides must be pure literal sets, so a `string` / `number` / `Named` /
 /// residue member on either side returns `false` (no conclusion), keeping it
 /// false-positive-free. This is the discriminated-union comparison case.
+/// `(kind, canonical value)` for an expression that is SYNTACTICALLY a
+/// number or boolean literal. `None` for everything else, strings
+/// included -- the string spelling is already covered by the type-driven
+/// comparability test, and returning it here would double-report.
+///
+/// Numbers are canonicalized through `Double` so `12`, `12.0` and `0xC`
+/// compare equal; `IntLit` and `NumberLit` are separate AST nodes for the
+/// same literal grammar, which is why both arms are here.
+fn scalar_literal_key(e : @ast.TsExpr) -> (String, String)? {
+  match e {
+    IntLit(n) => Some(("num", n.to_double().to_string()))
+    NumberLit(d) => Some(("num", d.to_string()))
+    BoolLit(b) => Some(("bool", if b { "true" } else { "false" }))
+    _ => None
+  }
+}
+
+///|
 fn literal_union_disjoint(a : @ast.TsType, b : @ast.TsType) -> Bool {
   match (pure_string_literal_set(a), pure_string_literal_set(b)) {
     (Some(sa), Some(sb)) => {
@@ -16293,6 +16311,32 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         match case_.test_expr {
           Some(e) => {
             check_call_args_in_expr(env, e, ctx)
+            // TS2678 for the two spellings the type-driven test below
+            // cannot see. `infer_expr` keeps `Literal("a")` for a string
+            // literal expression and WIDENS a numeric one to `number`
+            // and a boolean one to `boolean`, so
+            // `switch ("a") { case "b": }` was reported and
+            // `switch (12) { case 5: }` -- invalidSwitchBreakStatement --
+            // was silent. Reading the two literals off the SYNTAX needs
+            // no inference at all and cannot be defeated by widening.
+            //
+            // Restricted to a matching kind on both sides so it can never
+            // double-report with the type-driven test, which already
+            // handles every cross-kind pair (`switch (12) { case "a": }`).
+            // A `const` scrutinee is NOT covered: its literal type is
+            // what widening takes away, and recovering it is the
+            // inference change this deliberately avoids.
+            match (scalar_literal_key(scrutinee), scalar_literal_key(e)) {
+              (Some((sk, sv)), Some((ck, cv))) =>
+                if sk == ck && sv != cv {
+                  record(
+                    ctx,
+                    "switch case",
+                    "case value `\{cv}` can never match scrutinee `\{sv}`",
+                  )
+                }
+              _ => ()
+            }
             // Validate that the case test value could plausibly equal the
             // scrutinee — catch `switch(n: number) { case "hello": }`.
             let case_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, e))
@@ -22712,13 +22756,212 @@ fn is_predefined_type_name(name : String) -> Bool {
 }
 
 ///|
+/// TS2430: an interface that extends a CLASS may not declare a member the
+/// class declares `private` or `protected`. Such a member is nominal --
+/// only the declaring class and its subclasses can satisfy it -- so an
+/// interface redeclaring the name can never be assignable to its own base
+/// (`interfaceWithPropertyThatIsPrivateInBaseType2`).
+///
+/// Decidable with no assignability work at all: the parser already
+/// records a class's `private_members` / `protected_members`, and the
+/// interface's own member names are in hand. The check only looks at
+/// bases that resolve to a CLASS in this module -- an interface base, an
+/// unresolved name or a type parameter abstains, which costs MISSes and
+/// never a finding. Probed: the generic form
+/// (`interface Foo<T> extends Base2<T>`) is the same error, and a member
+/// the base declares PUBLIC is perfectly legal to redeclare.
+fn check_interface_extends_class_private(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for iface in module_.interfaces {
+    for base_name in iface.extends_names {
+      // A qualified or generic spelling reaches us as the bare head name;
+      // anything that is not a class of this module abstains.
+      guard resolver.classes.get(base_name) is Some(base) else { continue }
+      for field in iface.fields {
+        let (fname, _) = field
+        if fname.has_prefix("<") || fname.has_prefix("#") {
+          continue
+        }
+        if base.private_members.contains(fname) {
+          issues.push({
+            path: "interface \{iface.name}",
+            message: "interface `\{iface.name}` incorrectly extends class `\{base_name}`: property `\{fname}` is private in `\{base_name}` but not in `\{iface.name}`",
+          })
+        } else if base.protected_members.contains(fname) {
+          issues.push({
+            path: "interface \{iface.name}",
+            message: "interface `\{iface.name}` incorrectly extends class `\{base_name}`: property `\{fname}` is protected in `\{base_name}` but not in `\{iface.name}`",
+          })
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// Accessibility rank for the TS2415 / TS2417 comparison: `public` is 0,
+/// `protected` is 1. `private` has no rank -- it is nominal rather than a
+/// point on the visibility scale, so its callers test for it separately.
+fn accessibility_rank(name : String, cls : @ast.TsClassDecl) -> Int {
+  if cls.protected_members.contains(name) {
+    1
+  } else {
+    0
+  }
+}
+
+///|
+/// TS2415 / TS2417: a derived class member whose accessibility does not
+/// match the base declaration's. The full table was probed against tsc
+/// (3 base x 3 derived, static and instance), and it is not the "must be
+/// identical" rule it first looks like:
+///
+///   base       derived     verdict
+///   public     public      ok
+///   public     protected   ERROR
+///   public     private     ERROR
+///   protected  public      ok        (widening is allowed)
+///   protected  protected   ok
+///   protected  private     ERROR
+///   private    anything    ERROR     (including private over private)
+///
+/// So: an error iff either side is `private`, or the derived member
+/// NARROWS visibility. A base `private` member is nominal -- nothing
+/// outside the declaring class can satisfy it -- which is why even an
+/// identical `private` redeclaration is an error, the one cell a
+/// hand-written rule would have got wrong.
+///
+/// TS2417 is the static side and TS2415 the instance side, which is the
+/// whole reason this reads `is_static` off the member: the parser's
+/// `private_members` / `protected_members` lists are keyed by NAME alone.
+/// That also forces the abstention below -- a class declaring the same
+/// name both statically and non-statically cannot be resolved through
+/// those lists, so it is skipped rather than guessed.
+fn check_member_accessibility_mismatch(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn declares_both_staticness(cls : @ast.TsClassDecl, name : String) -> Bool {
+    let mut saw_static = false
+    let mut saw_instance = false
+    for p in cls.properties {
+      if p.name == name {
+        if p.is_static {
+          saw_static = true
+        } else {
+          saw_instance = true
+        }
+      }
+    }
+    for m in cls.methods {
+      if m.name == name {
+        if m.is_static {
+          saw_static = true
+        } else {
+          saw_instance = true
+        }
+      }
+    }
+    saw_static && saw_instance
+  }
+
+  fn declares(cls : @ast.TsClassDecl, name : String, is_static : Bool) -> Bool {
+    for p in cls.properties {
+      if p.name == name && p.is_static == is_static {
+        return true
+      }
+    }
+    for m in cls.methods {
+      if m.name == name && m.is_static == is_static {
+        return true
+      }
+    }
+    false
+  }
+
+  for cls in module_.classes {
+    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+      continue
+    }
+    let base_name = cls.base_names[0]
+    guard resolver.classes.get(base_name) is Some(base) else { continue }
+    let reported : Map[String, Unit] = {}
+    fn consider(name : String, is_static : Bool) -> Unit {
+      if name.has_prefix("<") || name.has_prefix("#") || name == "constructor" {
+        return
+      }
+      if reported.contains(name) {
+        return
+      }
+      // The name must exist on BOTH sides at the same staticness, and
+      // neither side may be ambiguous through the name-keyed
+      // accessibility lists.
+      if !declares(base, name, is_static) {
+        return
+      }
+      if declares_both_staticness(cls, name) ||
+        declares_both_staticness(base, name) {
+        return
+      }
+      let base_private = base.private_members.contains(name)
+      let derived_private = cls.private_members.contains(name)
+      let bad = base_private ||
+        derived_private ||
+        accessibility_rank(name, cls) > accessibility_rank(name, base)
+      if bad {
+        reported[name] = ()
+        let side = if is_static { "static side of class" } else { "class" }
+        issues.push({
+          path: "\{side} \{cls.name}",
+          message: "\{side} `\{cls.name}` incorrectly extends base \{side} `\{base_name}`: property `\{name}` has different accessibility modifiers",
+        })
+      }
+    }
+
+    for p in cls.properties {
+      consider(p.name, p.is_static)
+    }
+    for m in cls.methods {
+      consider(m.name, m.is_static)
+    }
+  }
+  issues
+}
+
+///|
 fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // TS2725: under `module: commonjs` the emitted `exports.Object = Object`
+  // shadows the global, so a class named `Object` is an error whatever
+  // its target. Probed against tsc for all three things it does NOT
+  // depend on: the class need not be exported, need not be at top level,
+  // and no other global name (`Function`, `Array`) is affected.
+  //
+  // An AMBIENT class IS exempt, and that was a corpus false positive
+  // rather than a guess: `export declare class Object {}` emits nothing,
+  // so there is no `exports.Object` to shadow the global with
+  // (exportAmbientClassNameWithObject, TS7-ACCEPTED).
+  let mut commonjs = false
+  for gm in module_.grammar_misuses {
+    if gm == "<module-commonjs>" {
+      commonjs = true
+    }
+  }
   for cls in module_.classes {
     if is_predefined_type_name(cls.name) {
       issues.push({
         path: "class \{cls.name}",
         message: "class name cannot be `\{cls.name}`",
+      })
+    } else if commonjs && cls.name == "Object" && not(cls.is_declare) {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "class name cannot be `Object` when targeting ES5 and above with module CommonJS",
       })
     }
   }
@@ -28516,6 +28759,12 @@ fn check_module_function_bodies_layered(
       all.push(issue)
     }
   }
+  for issue in check_member_accessibility_mismatch(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_interface_extends_class_private(module_, resolver) {
+    all.push(issue)
+  }
   for issue in check_reserved_class_names(module_) {
     all.push(issue)
   }
@@ -29021,6 +29270,17 @@ fn check_module_function_bodies_layered(
             message: gm["<noimplicitany>".length():].to_string(),
           })
         }
+      } else if gm.has_prefix("<") {
+        // Any remaining `<...>` entry is a MARKER whose consumer lives
+        // elsewhere, and this arm is where an unclaimed one would become
+        // a diagnostic reading `<module-commonjs>`. That is not a
+        // hypothetical: the skip above is a hand-maintained list of
+        // literal names, so a marker added without touching it leaks --
+        // TS4111's flag marker did it once, and `<module-commonjs>` did
+        // it again for 50 false positives. Skipping the SHAPE rather
+        // than the names closes the class: a real grammar message is a
+        // human-readable sentence and never begins with `<`.
+        continue
       } else {
         all.push({ path: "grammar", message: gm })
       }
