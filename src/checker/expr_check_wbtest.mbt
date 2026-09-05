@@ -17696,3 +17696,84 @@ test "expr_check: infer-binding utility types decide through reduce_conditional"
     0,
   )
 }
+
+///|
+/// `InstanceType` / `ConstructorParameters`, and the correction of a
+/// wrong diagnosis worth keeping.
+///
+/// The obvious suspect was `typeof C`: `Resolver::unwrap`'s `TypeOf` arm
+/// resolves through `self.globals` and a class lives in `self.classes`,
+/// so `typeof C` really does arrive unresolved. That was NOT the cause.
+/// `InstanceType<new () => C>`, with no `typeof` anywhere, was equally
+/// silent — which is what pointed at the real defect:
+/// `contains_infer_marker` descended into `Func` and had no
+/// `Constructor` arm, so it answered "no markers here" and the infer
+/// path never ran at all. `match_infer_pattern` and
+/// `substitute_inferred_type` both already handled `Constructor`; two of
+/// the trio were right and the gate was wrong.
+///
+/// Both fixes are needed, and the inline case is the one that proves the
+/// gate was the problem rather than the class lookup.
+test "expr_check: InstanceType / ConstructorParameters through a construct signature" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // No `typeof`: this is the case that isolates `contains_infer_marker`.
+  assert_true(
+    n(
+      "class C {}\nfunction f() { const x: InstanceType<new () => C> = \"s\"; return x }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "class C {}\nfunction f() { const x: InstanceType<new () => C> = new C(); return x }",
+    ),
+    0,
+  )
+  // Through `typeof C`, which needs `class_construct_signature`.
+  let c = "class C { m(): void {} }\n"
+  assert_true(
+    n(c + "function f() { const x: InstanceType<typeof C> = \"s\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      c + "function f() { const x: InstanceType<typeof C> = new C(); return x }",
+    ),
+    0,
+  )
+  let ca = "class C { constructor(a: string) {} }\n"
+  assert_true(
+    n(
+      ca +
+      "function f() { const x: ConstructorParameters<typeof C> = [1]; return x }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      ca +
+      "function f() { const x: ConstructorParameters<typeof C> = [\"s\"]; return x }",
+    ),
+    0,
+  )
+  // The construct signature is supplied for the DECISION only. A class's
+  // constructor side also carries its statics, which this checker does
+  // not model, so resolving `typeof C` everywhere would make every
+  // static access through such a binding a missing property.
+  @test.assert_eq(
+    n(
+      "class C { static s(): number { return 1 } }\ndeclare const k: typeof C;\nfunction f() { const q: number = k.s(); return q }",
+    ),
+    0,
+  )
+  // Abstains where the real signature is somewhere the helper cannot
+  // see: a derived class with no constructor INHERITS the base's.
+  @test.assert_eq(
+    n(
+      "class B { constructor(a: string) {} }\nclass D extends B { }\nfunction f() { const x: ConstructorParameters<typeof D> = [1]; return x }",
+    ),
+    0,
+  )
+}

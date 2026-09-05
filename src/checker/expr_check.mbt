@@ -1799,6 +1799,61 @@ fn Resolver::unwrap_element(
 }
 
 ///|
+/// The CONSTRUCT signature of `typeof ClassName`, or `None` when it
+/// cannot be known.
+///
+/// `Resolver::unwrap`'s `TypeOf` arm resolves a name through
+/// `self.globals`, and a class is recorded in `self.classes`, so
+/// `typeof C` resolves to nothing at all — which is why
+/// `InstanceType<typeof C>` and `ConstructorParameters<typeof C>` both
+/// abstained however well the `infer` matcher worked.
+///
+/// This deliberately answers ONLY the construct question, and is called
+/// only from the conditional decision. The constructor side of a class
+/// also carries its STATIC members, and `resolver_class_method_signature`
+/// says in its own comment that those are not modelled — so resolving
+/// `typeof C` to a bare `Constructor(...)` everywhere would make every
+/// static access through such a binding look like a missing property.
+/// Supplying it where a construct signature is what the pattern asked
+/// for cannot do that.
+///
+/// Two shapes abstain rather than guess, both for the same reason — the
+/// real signature is somewhere this function cannot see:
+///  - `extends mixin(Base)`, where `<expr-base>` marks a base whose
+///    constructor is the result of a call (the guard
+///    `class_constructor_signature` already applies for `new`);
+///  - a class with no constructor of its own but with a base, which
+///    INHERITS the base's constructor.
+/// A class with no constructor and no base is `new () => C`, which is
+/// what TypeScript gives it.
+fn Resolver::class_construct_signature(
+  self : Resolver,
+  name : String,
+) -> @ast.TsType? {
+  guard self.classes.get(name) is Some(cls) else { return None }
+  if cls.base_names.contains("<expr-base>") {
+    return None
+  }
+  match cls.constructor_params {
+    Some(params) => {
+      let types : Array[@ast.TsType] = []
+      for p in params {
+        types.push(p.1)
+      }
+      Some(Constructor(types, Named(name), cls.is_abstract))
+    }
+    // No constructor of its own: implicit `new () => C` only when there
+    // is no base to inherit one from.
+    None =>
+      if cls.base_names.length() == 0 {
+        Some(Constructor([], Named(name), cls.is_abstract))
+      } else {
+        None
+      }
+  }
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = {}
   let mut cur = ty
@@ -2060,8 +2115,23 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
         // pattern exists to align with. Only the check side is resolved
         // when a marker is present.
         let has_infer = contains_infer_marker(ext)
+        // `unwrap` leaves a `TypeOf` untouched when the name is not a
+        // global, and a CLASS is not one — so `typeof C` arrives here
+        // unresolved, which is why `InstanceType<typeof C>` and
+        // `ConstructorParameters<typeof C>` abstained however well the
+        // `infer` matcher worked. Its construct signature is supplied
+        // for the DECISION only; see `class_construct_signature` for why
+        // it is not supplied everywhere.
+        let resolved_check = match self.unwrap(check) {
+          TypeOf(n) =>
+            match self.class_construct_signature(n) {
+              Some(ctor) => ctor
+              None => TypeOf(n)
+            }
+          other => other
+        }
         let probe = @ast.TsType::Conditional(
-          self.unwrap(check),
+          resolved_check,
           if has_infer {
             ext
           } else {

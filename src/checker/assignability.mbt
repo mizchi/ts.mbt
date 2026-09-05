@@ -1139,7 +1139,17 @@ fn contains_infer_marker(t : @ast.TsType) -> Bool {
       }
       false
     }
-    Func(params, ret) => {
+    // `Func` and `Constructor` are the two callable shapes, and for a
+    // long time this walk descended into one of them. The other two
+    // functions of the infer trio both handle `Constructor` already —
+    // `match_infer_pattern` has an arm that even reuses the `Func`
+    // rest-tuple path, and `substitute_inferred_type` rebuilds one — so
+    // a `new (...args: any[]) => infer R` pattern matched and
+    // substituted correctly and was never REACHED, because this
+    // predicate is the gate that decides whether the infer path runs at
+    // all. `InstanceType` and `ConstructorParameters` were inert for
+    // that one missing arm.
+    Func(params, ret) | Constructor(params, ret, _) => {
       for p in params {
         if contains_infer_marker(p) {
           return true

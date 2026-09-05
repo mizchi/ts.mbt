@@ -4465,10 +4465,25 @@ inside a function body:
   FP 0**. The extends side is deliberately NOT resolved through the
   resolver when a marker is present — that would rewrite the shape the
   pattern exists to align with.
-  STILL BLIND: `InstanceType<typeof C>` (needs `typeof C`'s
-  constructor side resolved — a different gap), and
-  `ThisParameterType` / `OmitThisParameter` /
-  `ConstructorParameters`, untested so far.
+  DONE too (batch DK): `InstanceType` and `ConstructorParameters`.
+  The obvious suspect was `typeof C` — `unwrap`'s `TypeOf` arm reads
+  `globals` and a class lives in `classes`, so `typeof C` really does
+  arrive unresolved — and that was NOT the cause.
+  `InstanceType<new () => C>`, with no `typeof` anywhere, was equally
+  silent, which is what found the real defect: `contains_infer_marker`
+  descended into `Func` and had NO `Constructor` arm, so it answered
+  "no markers here" and the infer path never ran.
+  `match_infer_pattern` and `substitute_inferred_type` both already
+  handled `Constructor` — two of the trio right, the GATE wrong. Both
+  fixes are needed (`class_construct_signature` for the `typeof`
+  spelling), and the inline case is what proves which one mattered.
+  The construct signature is supplied for the conditional DECISION
+  only: a class's constructor side also carries its statics, which the
+  checker states it does not model, so resolving `typeof C` everywhere
+  would turn every static access through such a binding into a missing
+  property. A derived class with no constructor of its own abstains —
+  it inherits the base's.
+  Buys 0 corpus files again; the capability is the point.
   Two things measured rather than assumed, both worth keeping:
   the whole change bought **ZERO corpus files** (predicted — take it
   for the capability), and wiring the FULL table was wrong: the
