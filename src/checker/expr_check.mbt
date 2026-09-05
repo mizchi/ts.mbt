@@ -11471,6 +11471,130 @@ fn single_call_signature_params(
 }
 
 ///|
+/// TS2769 ("No overload matches this call") for a callee that is a union
+/// of call signatures — which is how an overload set ingests.
+///
+/// `check_union_callee_arity` is the complementary rule and is
+/// deliberately kept off overload sets: it requires EVERY member to
+/// accept, which is right for a union-typed VALUE and wrong for an
+/// overload set, where one match is enough. That exclusion was correct
+/// and left a hole, because nothing took over — an overloaded call had
+/// its arguments checked by nothing at all, so `g(true)` against
+/// `g(a: string)` / `g(a: number)` was silent while the identical call
+/// to a single-signature `h(a: string)` was reported. Most of the
+/// standard library is overloaded, so that hole is wide on real input.
+///
+/// This reports only when EVERY member is PROVEN unable to accept the
+/// call, which makes it sound for a union-typed value too: if no
+/// constituent can accept, the call is wrong under either reading, so
+/// the two rules need not be told apart.
+///
+/// A member is proven unacceptable only by:
+///  - arity — fewer arguments than its required count, or more than its
+///    parameter count when it has no rest parameter;
+///  - a definite PRIMITIVE argument against a definite primitive
+///    parameter that it is not assignable to.
+///
+/// Everything else abstains, and abstention is per-MEMBER with an early
+/// return: one member that merely MIGHT accept silences the whole call.
+/// That is what keeps a generic overload (`f<T>(x: T): T`, whose
+/// parameter is a bare `Named`), an object-typed parameter, a rest
+/// parameter, a spread argument and an unreadable member from ever
+/// producing a finding.
+fn check_overload_set_no_match(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  callee_ty : @ast.TsType,
+  args : Array[@ast.TsExpr],
+  call_path : String,
+) -> Unit {
+  guard ctx.resolver.unwrap(callee_ty) is Union(members) else { return }
+  if members.length() < 2 {
+    return
+  }
+  // A spread hides the argument count entirely.
+  for a in args {
+    if a is Spread(_) {
+      return
+    }
+  }
+  // Every member has to be a call signature this can read; one that is
+  // not might accept anything.
+  let sigs : Array[(Array[@ast.TsType], Array[Bool])] = []
+  for m in members {
+    match callable_source_params(m, ctx.resolver) {
+      Some(pair) => sigs.push(pair)
+      None => return
+    }
+  }
+  let n = args.length()
+  let arg_tys : Array[@ast.TsType] = []
+  for a in args {
+    arg_tys.push(ctx.resolver.unwrap(infer_expr(env, ctx.resolver, a)))
+  }
+  for sig in sigs {
+    let (ps, optional_params) = sig
+    let mut has_rest = false
+    for p in ps {
+      if p is Rest(_) {
+        has_rest = true
+      }
+    }
+    // Proven by arity. The minimum is computed here rather than through
+    // `required_arity_from_callable_source` because a `declare function`
+    // overload arrives with its optionality WIDENED into the parameter
+    // type (`a?: string` becomes `string | undefined`) and an empty
+    // `optional_params` — which is the hazard
+    // `check_union_callee_arity`'s own comment records ("two callables
+    // can have identical widened parameter types while differing in
+    // whether that parameter was written with `?`"), and it cost a false
+    // positive here: `t()` against `t(a?: string)` was reported.
+    //
+    // A parameter that ACCEPTS undefined is treated as omittable. That
+    // over-counts optionals — a genuinely required `a: string |
+    // undefined` is counted omittable too — and over-counting only ever
+    // makes this proof weaker, so it costs a MISS and never a finding.
+    // Batch CU's decorator arity took the same trade for the same reason.
+    let mut min_arity = 0
+    for i in 0..<ps.length() {
+      let declared_optional = i < optional_params.length() && optional_params[i]
+      if !(ps[i] is Rest(_)) &&
+        !declared_optional &&
+        !(ps[i] is Void) &&
+        !type_accepts_undefined(ctx.resolver.unwrap(ps[i])) {
+        min_arity = i + 1
+      }
+    }
+    if n < min_arity {
+      continue
+    }
+    if !has_rest && n > ps.length() {
+      continue
+    }
+    // Proven by a primitive-to-primitive mismatch.
+    let mut proven_bad = false
+    for i in 0..<n {
+      if i >= ps.length() {
+        break
+      }
+      let pt = ctx.resolver.unwrap(ps[i])
+      if is_definite_primitive_type(pt) &&
+        is_definite_primitive_type(arg_tys[i]) &&
+        !is_assignable_to(arg_tys[i], pt) {
+        proven_bad = true
+        break
+      }
+    }
+    if proven_bad {
+      continue
+    }
+    // This member might accept — the call stands.
+    return
+  }
+  record_unfiltered(ctx, call_path, "no overload matches this call")
+}
+
+///|
 /// TS2554 for a union-of-functions callee whose members have *different*
 /// signatures. TypeScript first reduces same-arity union signatures to the
 /// narrowest parameter domain: `(x: "a" | undefined)` beats
@@ -17778,6 +17902,18 @@ fn check_call_args_in_expr(
               if ctx.resolver.signatures.get(name) is None {
                 check_union_callee_arity(ctx, other, args, "call `\{name}`")
               }
+              // Unlike the every-member arity rule above, this one is
+              // sound for an overload set AND for a union-typed value,
+              // so it is not gated on `signatures`: it fires only when
+              // NO member can accept, which is wrong under either
+              // reading.
+              check_overload_set_no_match(
+                env,
+                ctx,
+                other,
+                args,
+                "call `\{name}`",
+              )
               if is_construct_only_callee(other) {
                 record_unfiltered(
                   ctx,
@@ -17888,6 +18024,7 @@ fn check_call_args_in_expr(
           // can have identical widened parameter types while differing in
           // whether that parameter was written with `?`.
           check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          check_overload_set_no_match(env, ctx, raw_callee_ty, args, "call")
           match union_common_call_params(callee_ty, ctx.resolver) {
             Some(params) => check_arguments(env, params, args, ctx, "call")
             None => ()

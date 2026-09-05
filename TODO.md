@@ -4545,9 +4545,48 @@ inside a function body:
   175 -> 174.** Worth more than its one file: `interface Config {
   [k: string]: string; port: number }` is a mistake people actually make,
   and index signatures appear in 102 of 3,000 real `.d.ts` files.
-- [ ] **Overload resolution** — select the right signature (2 solo files,
-  contributes to TS2345 / TS2769). Overloads are the reason `.d.ts`
-  files exist, and 566 of the 3,000 sampled carry repeated signatures.
+- [x] **Overload resolution — DONE (batch DM), as TS2769.** The finding
+  is bigger than the rule: an overloaded call had its arguments checked
+  by NOTHING AT ALL. `g(true)` against `g(a: string)` / `g(a: number)`
+  was silent, as were wrong arity and zero arguments, while the
+  identical call to a single-signature `h(a: string)` was reported.
+  Most of the standard library is overloaded, so the hole is wide on
+  real input.
+  Why it existed is worth keeping: overload sets ingest as a `Union` of
+  call signatures, and `check_union_callee_arity` is DELIBERATELY not
+  applied to them — its rule is that EVERY member must accept, right
+  for a union-typed value and wrong for an overload set where one match
+  is enough. That exclusion is correct and its comment says so; what
+  was missing is that nothing took over.
+  `check_overload_set_no_match` reports only when EVERY member is
+  PROVEN unable to accept (arity, or a definite-primitive argument
+  against a definite-primitive parameter it is not assignable to).
+  That makes it sound for a union-typed VALUE too — if no constituent
+  can accept, the call is wrong under either reading — so it is not
+  gated on `resolver.signatures` and the two rules need not be told
+  apart. Abstention is per-member with an early return: one member that
+  merely MIGHT accept silences the call, which is what keeps a generic
+  overload, an object-typed parameter, a rest parameter, a spread
+  argument and an unreadable member silent.
+  Cost one FALSE POSITIVE first, and the hazard was already written
+  down: `check_union_callee_arity`'s comment records that "two callables
+  can have identical widened parameter types while differing in whether
+  that parameter was written with `?`", and a `declare function`
+  overload arrives with its optionality widened into the type
+  (`a?: string` becomes `string | undefined`) and an empty
+  `optional_params` — so `t()` against `t(a?: string)` was reported. A
+  parameter that ACCEPTS undefined is now treated as omittable, which
+  over-counts optionals and therefore only ever weakens the proof
+  (batch CU's decorator arity took the same trade).
+  0 corpus files (the one TS2769 miss is a generic-inference case), but
+  it CLOSES a known-gap fixture: `fixtures/mtsc/known-gaps/overload-resolution.ts`
+  moves from "records what we miss" to a regression pin.
+  KNOWN LIMIT, silence not a finding: an overload set declared as real
+  `function` declarations WITH an implementation does not reach this
+  check on the strict path — the `resolver.signatures` branch claims the
+  callee first. It works on the permissive path (which is what the
+  fixture exercises). Filed rather than fixed: the fix means touching
+  the single-signature argument checker.
 
 ### Tier 2 — SUPPORT (cheap, mechanical, ~25 files)
 

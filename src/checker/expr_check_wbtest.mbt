@@ -17846,3 +17846,86 @@ test "expr_check: index-signature conflicts across merged interface halves" {
     1,
   )
 }
+
+///|
+/// TS2769: no overload matches this call.
+///
+/// Overload sets ingest as a `Union` of call signatures, and
+/// `check_union_callee_arity` is deliberately kept off them — its rule is
+/// that EVERY member must accept, which is right for a union-typed value
+/// and wrong for an overload set where one match is enough. That
+/// exclusion was correct and nothing took over, so an overloaded call had
+/// its arguments checked by nothing at all: `g(true)` against
+/// `g(a: string)` / `g(a: number)` was silent while the identical call to
+/// a single-signature `h(a: string)` was reported. Most of the standard
+/// library is overloaded, so the hole is wide on real input.
+///
+/// The rule reports only when EVERY member is PROVEN unable to accept,
+/// which makes it sound for a union-typed value too. Abstention is
+/// per-member with an early return, so one member that merely MIGHT
+/// accept silences the call — that is what the five abstention cases pin.
+test "expr_check: TS2769 when no overload can accept the call" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let g = "declare function g(a: string): void;\ndeclare function g(a: number): void;\n"
+  // Proven unacceptable by type, and by arity in both directions.
+  assert_true(n(g + "function f() { g(true) }") > 0)
+  assert_true(n(g + "function f() { g(\"s\", 1) }") > 0)
+  assert_true(n(g + "function f() { g() }") > 0)
+  // A call that does match either overload must stay silent.
+  @test.assert_eq(n(g + "function f() { g(\"s\") }"), 0)
+  @test.assert_eq(n(g + "function f() { g(1) }"), 0)
+  // Abstentions. Each is a member this cannot prove unacceptable, and one
+  // such member silences the whole call.
+  //  - a generic overload's parameter is a bare `Named`;
+  @test.assert_eq(
+    n(
+      "declare function p(a: string): void;\ndeclare function p(a: number): void;\ndeclare function p<T>(a: T): void;\nfunction f() { p(true) }",
+    ),
+    0,
+  )
+  //  - an object-typed parameter is not a definite primitive;
+  @test.assert_eq(
+    n(
+      "interface X { k: number }\ndeclare function q(a: string): void;\ndeclare function q(a: X): void;\nfunction f() { q({ k: 1 }) }",
+    ),
+    0,
+  )
+  //  - a rest parameter lifts the arity bound;
+  @test.assert_eq(
+    n(
+      "declare function s(a: string): void;\ndeclare function s(...xs: number[]): void;\nfunction f() { s(true) }",
+    ),
+    0,
+  )
+  //  - a spread argument hides the count;
+  @test.assert_eq(n(g + "function f(xs: any[]) { g(...xs) }"), 0)
+  //  - and the false positive this cost first: a `declare function`
+  //    overload arrives with its optionality WIDENED into the parameter
+  //    type (`a?: string` becomes `string | undefined`) and an empty
+  //    `optional_params`, so the shared arity helper called `t()` one
+  //    argument short. A parameter that accepts undefined is treated as
+  //    omittable here, which over-counts optionals and therefore only
+  //    ever weakens the proof.
+  @test.assert_eq(
+    n(
+      "declare function t(a?: string): void;\ndeclare function t(a: number, b: number): void;\nfunction f() { t() }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare function v(a: string | undefined): void;\ndeclare function v(a: number, b: number): void;\nfunction f() { v() }",
+    ),
+    0,
+  )
+  // Sound for a union-typed VALUE as well, which is why the rule is not
+  // gated on `resolver.signatures`.
+  assert_true(
+    n(
+      "declare const u: ((a: string) => void) | ((a: number) => void);\nfunction f() { u(true) }",
+    ) >
+    0,
+  )
+}
