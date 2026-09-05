@@ -4448,14 +4448,27 @@ inside a function body:
   reachable ONLY through `module_alias_resolver`, a `pub fn` with no
   caller outside its own file and its tests. Live now in both
   directions: `Exclude`, `Extract`, `NonNullable`.
-  STILL BLIND: `ReturnType`, `Awaited`, `Parameters`,
-  `ThisParameterType`, `OmitThisParameter`, `ConstructorParameters`,
-  `InstanceType` — every one of them binds an `infer`, and
-  `extends_decision` cannot, so `simplify_type` abstains. The infer
-  matcher exists (`infer.mbt`, `substitute_inferred_type`) and is
-  wired into `is_assignable_to_with_generics`, NOT into this path —
-  the same disconnection this batch just fixed one layer up. That is
-  the next step and it is the same shape of work.
+  DONE too (batch DJ): the `infer`-binding half. `simplify_type`
+  decides through the three-valued `extends_decision`, which cannot
+  bind an `infer`, so `ReturnType` / `Parameters` / `Awaited` still
+  abstained even with the `Conditional` arm in place.
+  `reduce_conditional` (assignability.mbt) is the reducer that CAN —
+  it runs `match_infer_pattern` and substitutes the captures — and it
+  was reachable from `is_assignable_to` and from three return-type
+  sites, but not from alias resolution. It is now tried from the
+  `Conditional` arm, and ONLY when the extends type carries a marker:
+  its non-infer path is `is_assignable_to`, which is two-valued, so as
+  a general fallback it would take the FALSE branch on an undecidable
+  `extends` and answer confidently exactly where `extends_decision`
+  correctly says "don't know". `ReturnType`, `Parameters`, `Awaited`
+  now decide in both directions; **TP 2558 -> 2559, MISS 176 -> 175,
+  FP 0**. The extends side is deliberately NOT resolved through the
+  resolver when a marker is present — that would rewrite the shape the
+  pattern exists to align with.
+  STILL BLIND: `InstanceType<typeof C>` (needs `typeof C`'s
+  constructor side resolved — a different gap), and
+  `ThisParameterType` / `OmitThisParameter` /
+  `ConstructorParameters`, untested so far.
   Two things measured rather than assumed, both worth keeping:
   the whole change bought **ZERO corpus files** (predicted — take it
   for the capability), and wiring the FULL table was wrong: the

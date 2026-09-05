@@ -2055,11 +2055,49 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // re-entering it) and what keeps an undecidable conditional a MISS
       // instead of a wrong answer.
       Conditional(check, ext, t_branch, f_branch) => {
-        let simplified = simplify_type(
-          Conditional(self.unwrap(check), self.unwrap(ext), t_branch, f_branch),
+        // An `infer` pattern is matched against the EXTENDS type as
+        // WRITTEN: resolving that side could rewrite the very shape the
+        // pattern exists to align with. Only the check side is resolved
+        // when a marker is present.
+        let has_infer = contains_infer_marker(ext)
+        let probe = @ast.TsType::Conditional(
+          self.unwrap(check),
+          if has_infer {
+            ext
+          } else {
+            self.unwrap(ext)
+          },
+          t_branch,
+          f_branch,
         )
+        let simplified = simplify_type(probe)
         match simplified {
-          Conditional(_, _, _, _) => keep_going = false
+          Conditional(_, _, _, _) =>
+            // `simplify_type` decides through the three-valued
+            // `extends_decision`, which cannot bind an `infer` — so
+            // every infer-shaped utility (`ReturnType`, `Parameters`,
+            // `Awaited`, `InstanceType`, …) abstained here.
+            // `reduce_conditional` is the reducer that can: it runs
+            // `match_infer_pattern` and substitutes the captures into
+            // the true branch.
+            //
+            // It is tried ONLY for the infer case, and deliberately not
+            // as a general fallback. Its non-infer path is
+            // `is_assignable_to`, which is two-valued: an undecidable
+            // `extends` would take the FALSE branch and answer
+            // confidently exactly where `extends_decision` correctly
+            // says "don't know". Keeping it behind `has_infer` is what
+            // stops this arm from turning an abstention into a wrong
+            // answer.
+            if has_infer {
+              let reduced = reduce_conditional(probe)
+              match reduced {
+                Conditional(_, _, _, _) => keep_going = false
+                _ => cur = reduced
+              }
+            } else {
+              keep_going = false
+            }
           _ => cur = simplified
         }
       }

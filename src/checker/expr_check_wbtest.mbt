@@ -17628,3 +17628,71 @@ test "expr_check: ThisType is an empty marker, not the identity" {
     0,
   )
 }
+
+///|
+/// The `infer`-binding utility types: `ReturnType`, `Parameters`,
+/// `Awaited` and friends.
+///
+/// `simplify_type` decides a conditional through the three-valued
+/// `extends_decision`, which cannot bind an `infer`, so every one of
+/// these abstained even after the `Conditional` arm existed.
+/// `reduce_conditional` is the reducer that can — it runs
+/// `match_infer_pattern` and substitutes the captures — and it is tried
+/// ONLY when the extends type actually carries a marker.
+///
+/// That restriction is the whole safety argument, so it is worth stating
+/// where a test can see it: `reduce_conditional`'s non-infer path is
+/// `is_assignable_to`, which is two-valued, so used as a general
+/// fallback it would take the FALSE branch on an undecidable `extends`
+/// and answer confidently exactly where `extends_decision` correctly
+/// says "don't know". The `unresolved` case below is the one that would
+/// regress if the gate were dropped.
+test "expr_check: infer-binding utility types decide through reduce_conditional" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let g = "declare function g(): number;\n"
+  assert_true(
+    n(g + "function f() { const x: ReturnType<typeof g> = \"s\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n(g + "function f() { const x: ReturnType<typeof g> = 1; return x }"),
+    0,
+  )
+  assert_true(
+    n("function f() { const x: Awaited<Promise<number>> = \"s\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Awaited<Promise<number>> = 1; return x }"),
+    0,
+  )
+  let ga = "declare function ga(a: string): void;\n"
+  assert_true(
+    n(ga + "function f() { const x: Parameters<typeof ga> = [1]; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      ga + "function f() { const x: Parameters<typeof ga> = [\"s\"]; return x }",
+    ),
+    0,
+  )
+  // Abstains when the check type is an unbound type parameter. This is
+  // the case that pins the `has_infer` gate: a two-valued reducer would
+  // take the false branch here and report.
+  @test.assert_eq(
+    n("function f<U>(u: U) { const x: ReturnType<U> = 1; return x }"),
+    0,
+  )
+  // The non-infer conditional path is untouched by the fallback.
+  assert_true(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"a\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"b\"; return x }"),
+    0,
+  )
+}
