@@ -17484,3 +17484,147 @@ test "merge_interface_group matches pairwise fold" {
   // takes for all but a handful of names in any real file.
   @test.assert_eq(merge_interface_group([halves[0]]).fields.length(), 4)
 }
+
+///|
+/// Tier 1: a CONDITIONAL reached through a generic alias, and the
+/// standard utility types that unlocks.
+///
+/// `Resolver::unwrap` reduces `Keyof`, `TypeOf`, `MappedType`,
+/// `IndexedAccess` and `TemplateLiteralType` and had no `Conditional`
+/// arm, so it fell to the catch-all. The evaluator itself was never the
+/// problem — an inline conditional and a NON-generic alias for one both
+/// resolved already, because neither needs anything substituted first.
+/// Only the composition with a generic alias abstained.
+///
+/// Every case is paired with its LEGAL neighbour, because "flags the
+/// wrong assignment" and "stays silent on the right one" are separate
+/// claims and only the second keeps the gate at FP 0. That is not
+/// hypothetical here: wiring the whole utility table in flagged
+/// `thisTypeInObjectLiterals2` (see the `ThisType` case below) and broke
+/// `Record` / `Partial` field lookup.
+test "expr_check: conditional via generic alias + the conditional utility types" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // The gap itself: substitution happens, then the conditional has to
+  // reduce. Both branches of the decision, each with its neighbour.
+  let cond = "type E<T> = T extends string ? number : boolean;\n"
+  assert_true(
+    n(cond + "function f() { const x: E<string> = true; return x }") > 0,
+  )
+  @test.assert_eq(
+    n(cond + "function f() { const x: E<string> = 1; return x }"),
+    0,
+  )
+  assert_true(n(cond + "function f() { const x: E<number> = 1; return x }") > 0)
+  @test.assert_eq(
+    n(cond + "function f() { const x: E<number> = true; return x }"),
+    0,
+  )
+  // The shapes that already worked, kept here so a future change cannot
+  // "fix" the arm by breaking them.
+  assert_true(
+    n(
+      "function f() { const x: (string extends string ? number : boolean) = true; return x }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      "type E2 = string extends string ? number : boolean;\nfunction f() { const x: E2 = true; return x }",
+    ) >
+    0,
+  )
+  // The conditional-bodied utility types, which were inert because the
+  // table they live in is only reachable through `module_alias_resolver`
+  // — a `pub fn` with no caller outside its own file and its tests.
+  assert_true(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"a\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"b\"; return x }"),
+    0,
+  )
+  assert_true(
+    n("function f() { const x: Extract<\"a\"|\"b\",\"a\"> = \"b\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Extract<\"a\"|\"b\",\"a\"> = \"a\"; return x }"),
+    0,
+  )
+  assert_true(
+    n("function f() { const x: NonNullable<string|null> = null; return x }") > 0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: NonNullable<string|null> = \"s\"; return x }"),
+    0,
+  )
+  // A module's own alias SHADOWS the standard table, which is what lets
+  // a module override a stdlib utility shape.
+  @test.assert_eq(
+    n(
+      "type Exclude<T,U> = string;\nfunction f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"anything\"; return x }",
+    ),
+    0,
+  )
+  // Still abstains where the conditional cannot be DECIDED: an
+  // unresolved generic name, and a type parameter as the check type.
+  @test.assert_eq(
+    n("function f() { const x: Bogus<number> = \"s\"; return x }"),
+    0,
+  )
+  @test.assert_eq(
+    n(cond + "function f<U>(u: U) { const x: E<U> = true; return x }"),
+    0,
+  )
+  // A self-referential conditional alias must not spin: `simplify_type`
+  // returns the `Conditional` unchanged when it cannot decide, which is
+  // what terminates the arm.
+  @test.assert_eq(
+    n(
+      "type R<T> = T extends [] ? never : R<T>;\nfunction f() { const x: R<[]> = 1; return x }",
+    ),
+    0,
+  )
+}
+
+///|
+/// `ThisType<T>` is `interface ThisType<T> {}` in `lib.es5.d.ts` — an
+/// EMPTY marker that only sets the contextual `this` of an object
+/// literal's methods. The standard-utility table encodes it as the
+/// identity, and says why in its own comment: without contextual
+/// inference that is the useful answer to "what is `this` here".
+///
+/// That is a different question from "what members does this type have",
+/// and taking the identity answer for the structural one makes
+/// `PropDesc<U> & ThisType<T>` demand every member of `T`. The
+/// conformance gate caught exactly that on `thisTypeInObjectLiterals2`
+/// the moment the resolver started reading the table, so the marker is
+/// resolved to `{}` ahead of the generic `Applied` arm and the shared
+/// table is left alone for the consumer it was written for.
+test "expr_check: ThisType is an empty marker, not the identity" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    n(
+      "interface PD<U> { value?: U }\ndeclare function dp<T,U>(o: T, d: PD<U> & ThisType<T>): void;\nfunction f() { dp({ x: 1 }, { value: 2 }) }",
+    ),
+    0,
+  )
+  // The property-shape utilities keep their existing dedicated handling
+  // in `lookup_field`; resolving them through the table instead moved
+  // the shape out from under those arms. Measured, not predicted — these
+  // two are the regressions that produced the body-shape gate.
+  assert_true(
+    n("function f(r: Record<string, number>): string { return r.foo }") > 0,
+  )
+  assert_true(
+    n(
+      "interface C { name: string }\nfunction f(p: Partial<C>): string { return p.name }",
+    ) >
+    0,
+  )
+}

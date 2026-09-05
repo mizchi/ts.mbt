@@ -27,6 +27,19 @@ priv struct Resolver {
   interfaces : Map[String, @ast.TsInterface]
   classes : Map[String, @ast.TsClassDecl]
   type_aliases : Map[String, @ast.TsTypeAlias]
+  // The standard TypeScript utility types (`Exclude`, `ReturnType`,
+  // `Partial`, …) as alias bindings, consulted only when
+  // `type_aliases` has no entry for a name — so a module that declares
+  // its own `Exclude` still shadows the standard one.
+  //
+  // Held on the resolver rather than looked up through a helper because
+  // `standard_utility_types()` allocates an 18-entry map and
+  // `Resolver::unwrap` runs on every assignability diagnostic: this is
+  // one allocation per resolver instead of one per unwrap. Keeping the
+  // whole table (rather than a hand-written list of the names that
+  // happen to matter) is deliberate — a second copy of those names is
+  // the "one rule written in two places" defect this repo keeps finding.
+  standard_aliases : Map[String, AliasBinding]
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -177,6 +190,7 @@ fn Resolver::empty() -> Resolver {
     interfaces: {},
     classes: {},
     type_aliases: {},
+    standard_aliases: standard_utility_types(),
     globals: {},
     signatures: {},
     func_type_params: {},
@@ -1819,27 +1833,84 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // shadows the name with its own alias, handled below).
       Applied("NoInfer", [inner]) if !self.type_aliases.contains("NoInfer") =>
         cur = inner
+      // `ThisType<T>` is declared in `lib.es5.d.ts` as
+      // `interface ThisType<T> {}` — an EMPTY marker whose only job is to
+      // set the contextual `this` type of an object literal's methods. It
+      // contributes no members, so structurally it is `{}` and
+      // `PropDesc<U> & ThisType<T>` is satisfied by a `PropDesc<U>`.
+      //
+      // The standard-utility table encodes it as the IDENTITY (`Named(T)`)
+      // and says in its own comment why: without a contextual-inference
+      // engine that is the useful answer to "what is `this` in here".
+      // That is a different question from "what members does this type
+      // have", and taking the identity answer for the structural one
+      // makes an intersection demand every member of `T` — which is
+      // exactly the false positive the conformance gate caught on
+      // `thisTypeInObjectLiterals2` the moment the resolver started
+      // consulting that table. So the marker is resolved here, ahead of
+      // the generic `Applied` arm, and the shared table is left alone for
+      // the consumer it was written for.
+      Applied("ThisType", _) if !self.type_aliases.contains("ThisType") =>
+        cur = Object([])
       Applied(n, args) =>
         if seen.contains(n) {
           keep_going = false
         } else {
-          match self.type_aliases.get(n) {
-            Some(aliased) if aliased.type_params.length() > 0 => {
+          // A module's own alias first, then the standard utility table.
+          // Both arrive here as (type_params, body); the module side
+          // wins on a name conflict, which is what lets a module
+          // override a stdlib utility shape.
+          let binding : (Array[String], @ast.TsType)? = match
+            self.type_aliases.get(n) {
+            Some(aliased) if aliased.type_params.length() > 0 =>
+              Some((aliased.type_params, aliased.type_))
+            Some(_) => None
+            None =>
+              // Only the CONDITIONAL-bodied entries of the standard
+              // table are taken here, and the gate is the body's SHAPE
+              // rather than a list of names — a second copy of those
+              // names is the defect this whole change exists to remove.
+              //
+              // The split is not arbitrary, it is the line between the
+              // entries that were inert and the ones that already work.
+              // A conditional body reduces to a concrete type by
+              // DECIDING, which nothing on this path did, so
+              // `Exclude` / `Extract` / `NonNullable` / `ReturnType` /
+              // `Parameters` / `Awaited` were all silent. The
+              // property-shape entries (`Partial`, `Required`,
+              // `Readonly`, `Pick`, `Record`, `Omit`) are mapped types
+              // over `keyof`, and `lookup_field` already has dedicated
+              // arms for them — resolving those here instead moves the
+              // shape out from under those arms and breaks them. That is
+              // measured, not predicted: wiring the whole table failed
+              // three tests (`Record<string, number>` losing `r.foo`,
+              // `Partial<Config>` losing `p.name`'s `| undefined`, and a
+              // `Record`-typed `satisfies` target), all of them real
+              // regressions rather than tests pinning old behaviour.
+              match self.standard_aliases.get(n) {
+                Some(std) if std.type_params.length() > 0 &&
+                  std.body is Conditional(_, _, _, _) =>
+                  Some((std.type_params, std.body))
+                _ => None
+              }
+          }
+          match binding {
+            Some((type_params, body)) => {
               seen[n] = true
               let bindings : Map[String, @ast.TsType] = {}
-              let limit = if args.length() < aliased.type_params.length() {
+              let limit = if args.length() < type_params.length() {
                 args.length()
               } else {
-                aliased.type_params.length()
+                type_params.length()
               }
               let mut i = 0
               while i < limit {
-                bindings[aliased.type_params[i]] = args[i]
+                bindings[type_params[i]] = args[i]
                 i = i + 1
               }
-              cur = substitute_params(aliased.type_, bindings)
+              cur = substitute_params(body, bindings)
             }
-            _ => keep_going = false
+            None => keep_going = false
           }
         }
       // `typeof varName` in type position — resolve the variable's current type.
@@ -1949,6 +2020,46 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
         let simplified = simplify_type(cur)
         match simplified {
           TemplateLiteralType(_, _) => keep_going = false
+          _ => cur = simplified
+        }
+      }
+      // A CONDITIONAL is the sixth computed-type form this loop reduces,
+      // and the only one that was missing: `Keyof`, `TypeOf`,
+      // `MappedType`, `IndexedAccess` and `TemplateLiteralType` all
+      // reduce above, and `Conditional` fell through to the catch-all.
+      //
+      // What that cost was NOT the conditional evaluator, which works:
+      // an inline `string extends string ? number : boolean` and a
+      // non-generic alias for one both resolve already, because neither
+      // needs anything substituted first. It was the COMPOSITION with a
+      // generic alias -- `type E<T> = T extends string ? … ` applied as
+      // `E<string>` substitutes correctly in the `Applied` arm above and
+      // then arrived here unreduced. That matters far beyond conditional
+      // types themselves: every standard utility type is a generic alias
+      // over a conditional body, so `ReturnType`, `Exclude`,
+      // `NonNullable`, `Parameters` and `Awaited` were all inert, and a
+      // `.d.ts` using them type-checked by ABSTAINING.
+      //
+      // The two operands are resolved through the resolver BEFORE
+      // simplifying, for the reason the `IndexedAccess` arm below
+      // records in its own comment: `simplify_type` carries no resolver,
+      // so a `Named` operand hits its catch-all and `extends_decision`
+      // comes back `None`. Only the operands are resolved, not the
+      // branches -- a branch is the RESULT and the caller unwraps it in
+      // turn, while resolving both eagerly would expand types the
+      // decision is about to discard.
+      //
+      // `simplify_type` returns the `Conditional` unchanged whenever
+      // `extends_decision` cannot decide. That is what makes this arm
+      // terminate (an undecided conditional stops the loop rather than
+      // re-entering it) and what keeps an undecidable conditional a MISS
+      // instead of a wrong answer.
+      Conditional(check, ext, t_branch, f_branch) => {
+        let simplified = simplify_type(
+          Conditional(self.unwrap(check), self.unwrap(ext), t_branch, f_branch),
+        )
+        match simplified {
+          Conditional(_, _, _, _) => keep_going = false
           _ => cur = simplified
         }
       }
