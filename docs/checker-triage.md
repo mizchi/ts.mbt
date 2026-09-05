@@ -16,7 +16,10 @@ number is a judgement rather than a measurement, it says so.
 The headline recommendation is at the bottom and it is not a rule: it is
 to **stop reporting one MISS number**, because a single figure that mixes
 declared-out-of-scope with real backlog is the thing that made this
-document necessary.
+document necessary. It is implemented — the gate reports `MISS in scope`
+157 beside `OUT OF SCOPE` 17 and gates the first — and §5 records what
+that cost, including the two places this document's own family classifier
+was wrong about which files belong in the second column.
 
 ## 1. The 176, by machinery
 
@@ -196,46 +199,83 @@ went wrong.
 caveat, not a measurement: this corpus samples no decorator-heavy
 framework. Promote it if a bridge target uses Angular/NestJS/TypeORM.
 
-### Tier 4 — WON'T SUPPORT (~24 files, declared out of scope)
+### Tier 4 — WON'T SUPPORT (17 files, declared out of scope)
 
-Each with the reason written down so it is not re-litigated:
+Checked in as `scripts/checker_out_of_scope.txt`, one path per line with
+its reason, so none of it is re-litigated from memory.
 
-- **`legacy` / broken syntax — 12 of the 15.** `parser/ecmascript5/*` is
-  deliberately malformed input (`parserErrorRecovery_ParameterList6`) and
-  removed language features (`import x = module("m")`, `/// <reference>`
-  path resolution). CLAUDE.md already records that taking this cluster for
-  its size is fitting the corpus: it is the largest and cheapest cluster
-  and the wrong one to take. **Three of the fifteen are not legacy at all**
-  — `parserParameterList16`/`17` and `parserClassDeclaration12` are the
-  TS2371/TS2394 overload rules, and they belong in Tier 2.
-- **`resource-mgmt` (`using`) — 6.** Zero occurrences in 5,697 real files.
-  The strongest out-of-scope case on the list. Revisit if a real
-  dependency adopts explicit resource management.
+**The estimate above this line said ~24 and the answer is 17**, because
+the estimate came from the family classifier and the 17 came from opening
+every file. Both corrections are the same mistake this document warns
+about in §1 — a label standing in for the objective:
+
+- **`legacy` / broken syntax — 6 of the 15, not 12.** The classifier keyed
+  on the DIRECTORY, and `parser/ecmascript5/` holds ordinary current
+  TypeScript as well as the error-recovery corpus.
+  `parserErrorRecovery_ParameterList6` (`x: break`), `parser553699`
+  (`x: public`), `parserIndexSignature2` (`[public a]`), `parser519458`
+  (`import x = module("m")`), `parserRealSource3` (`///<reference>` path
+  resolution) and `parseRegularExpressionMixedWithComments` are out.
+  `parserExportAssignment6` is `declare module "M" { export = A }` — an
+  undefined-name check — and `parserES5SymbolProperty4` is
+  `[Symbol.isRegExp]`, a lib member lookup; both are ordinary backlog.
+  `parserCastVersusArrowFunction1` and `parserConstructorAmbiguity3` have
+  parse-ambiguity PURPOSES and ordinary DIAGNOSTICS (TS2403 on nine
+  conflicting `var v`, TS2558 type-argument arity), which is not the same
+  thing. **Three more are not legacy at all** — `parserParameterList16`/`17`
+  and `parserClassDeclaration12` are the TS2371/TS2394 overload rules, and
+  they belong in Tier 2.
+- **`resource-mgmt` (`using`) — 5 of the 6.** Zero occurrences in 5,697
+  real files, which is the strongest out-of-scope case on the list; revisit
+  if a real dependency adopts explicit resource management. But a file
+  NAMED for `using` can carry an error `using` has nothing to do with:
+  `usingDeclarationsWithObjectLiterals2` is TS7018 on `value: null`, which
+  a plain `const` reproduces under the same two flags (probed), so it is
+  Tier 2's implicit-any family and stays in scope.
 - **`locally-accepted` — 6.** TS7 errors on these and the local compiler
   6.0.3 accepts them, so there is no oracle to develop against and no way
-  to write the legal-neighbour test this repo requires of every rule.
+  to write the legal-neighbour test this repo requires of every rule. This
+  is the one out-of-scope reason that is a HARNESS limit rather than a
+  judgement about the language — revisit when the local compiler moves.
 
-## 5. The recommendation that is not a rule
+## 5. The recommendation that is not a rule — DONE
 
-**Stop reporting a single MISS number.** It currently sums Tier 1 (worth
-doing now) with Tier 4 (declared never), so it cannot answer "are we
-done?" or "what next?" — and a metric that answers neither is what
+**Stop reporting a single MISS number.** It summed Tier 1 (worth doing
+now) with Tier 4 (declared never), so it could answer neither "are we
+done?" nor "what next?" — and a metric that answers neither is what
 produced a retired strategy document.
 
-Concretely:
+That is now what the gate does:
 
-1. Check in the Tier 4 list as a scope file (`scripts/checker_out_of_scope.txt`),
-   one path per line, each with its reason.
-2. Have `checker_conformance_oracle.sh` read it and report **two** numbers:
-   `MISS (in scope)` — the real backlog, ~152 today — and
-   `OUT OF SCOPE` — declared, ~24.
-3. Keep the FP budget exactly where it is. Out-of-scope means "we will not
-   add a rule for it", never "we may flag it wrongly": a false positive on
-   one of these files is still a soundness bug.
-4. Gate on the in-scope number. It can then legitimately reach zero, which
-   the current number never can.
+```
+TP  err+flag  : 2560   (of which via parse rejection: 390)
+MISS in scope : 157   (the backlog — this one can reach zero)
+OUT OF SCOPE  : 17     (declared in scripts/checker_out_of_scope.txt)
+FP  ok +flag  : 0     (soundness bugs — TS7 accepts these)
+PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)
+```
 
-The one thing to preserve from the old regime: the asymmetry. A MISS is
-expected because we model a subset of TypeScript; an FP never is. Nothing
-in this triage weakens that, and the scope file must not become a place to
-hide files we flag incorrectly.
+1. `scripts/checker_out_of_scope.txt` holds the Tier 4 paths, one per line
+   with its reason and its kind (`removed-feature`, `malformed`,
+   `lexer-adversarial`, `resource-mgmt`, `no-local-oracle`).
+2. `checker_conformance_oracle.sh` reads it and splits the MISS bucket.
+   Nothing else consults it, so a listed file can still be a TP, an FP or
+   a PFLEGAL exactly as before — being out of scope withholds a rule, it
+   does not excuse a wrong answer. `--scope-file /dev/null` reproduces the
+   old single number.
+3. The FP budget is untouched at 0.
+4. `just verify-checker-soundness` gates the in-scope number with
+   `--max-miss 157`. That also closes a direction nothing watched: a rule
+   that STOPS firing moves a file from TP to MISS, and every other number
+   in the report absorbs that silently. Lower it whenever a batch improves
+   it, the way the FP budget only ever tightened.
+
+Two properties the scope file needs in order not to rot, both implemented
+rather than asserted. Every entry was decided by opening the file, which
+is what took the count from ~24 to 17. And the oracle reports **STALE**
+entries — listed paths that are no longer a MISS, because a rule landed or
+the file left the corpus — since an entry nobody re-checks is exactly how
+a scope file turns into a suppression list.
+
+The one thing preserved from the old regime is the asymmetry. A MISS is
+expected because we model a subset of TypeScript; an FP never is.

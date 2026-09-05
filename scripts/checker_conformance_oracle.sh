@@ -26,14 +26,28 @@
 # TP (reported separately); on a TS7-accepted file it is a parser soundness
 # bug — reported as PFLEGAL and gated by --max-legal-parsefail.
 #
+# The MISS bucket is reported as TWO numbers, because one could rank
+# nothing: it summed work worth doing now with files nobody should ever
+# fix, so it answered neither "are we done?" nor "what next?" — the defect
+# that retired docs/checker-priority.md. scripts/checker_out_of_scope.txt
+# declares the second half, one path per line with its reason;
+# docs/checker-triage.md is the argument. `MISS (in scope)` is the real
+# backlog and can legitimately reach zero.
+#
+# The scope file is NOT a suppression list and cannot hide a soundness bug:
+# it only ever moves a file between the two MISS columns, so an FP on a
+# listed file is still an FP and still counts against --max-fp. Entries
+# that have stopped being MISSes are reported as STALE.
+#
 # Usage:
 #   scripts/checker_conformance_oracle.sh                 # summary + FP list
 #   scripts/checker_conformance_oracle.sh --max-fp 0      # gate on FPs
+#   scripts/checker_conformance_oracle.sh --max-miss 157  # gate the backlog
 #   scripts/checker_conformance_oracle.sh --dir types     # restrict subtree
 #
 # Exit codes:
 #   0  ran (or budgets respected)
-#   1  FP / PFLEGAL budget exceeded, or no corpus / binary found
+#   1  FP / PFLEGAL / in-scope MISS budget exceeded, or no corpus / binary
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -69,20 +83,31 @@ fi
 CONFORMANCE="typescript/tests/cases/conformance"
 RAN_SET="scripts/ts7_baselines/tsgo_ran_set.txt"
 ERRORS_SET="scripts/ts7_baselines/tsgo_errors_set.txt"
+SCOPE_FILE="scripts/checker_out_of_scope.txt"
 SUBDIR=""
 MAX_FP=-1
 MAX_LEGAL_PARSEFAIL=-1
+MAX_MISS=-1
 MISS_LIST=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --max-fp) MAX_FP="$2"; shift 2 ;;
     --max-legal-parsefail) MAX_LEGAL_PARSEFAIL="$2"; shift 2 ;;
+    # Gate the IN-SCOPE backlog. A budget here catches the regression
+    # nothing else can see: a rule that stops firing takes a file from TP
+    # to MISS, which every other number in this report absorbs silently.
+    --max-miss) MAX_MISS="$2"; shift 2 ;;
+    # Declared out of scope, one path per line (see the header). `--scope-file
+    # /dev/null` reports the old single MISS number.
+    --scope-file) SCOPE_FILE="$2"; shift 2 ;;
     --dir)    SUBDIR="$2"; shift 2 ;;
-    # Write every MISS file's path to FILE. The counts alone say how many
-    # we miss and nothing about WHICH, so ranking the remaining work means
-    # having the list; taking it from this loop rather than a second script
-    # is what keeps the two from disagreeing about what a MISS is.
+    # Write every IN-SCOPE MISS file's path to FILE. The counts alone say
+    # how many we miss and nothing about WHICH, so ranking the remaining
+    # work means having the list; taking it from this loop rather than a
+    # second script is what keeps the two from disagreeing about what a
+    # MISS is. Declared-out-of-scope paths are excluded, because a ranking
+    # that includes them ranks work nobody intends to do.
     --miss-list) MISS_LIST="$2"; shift 2 ;;
     *)        echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -96,7 +121,23 @@ if [ ! -d "$ROOT" ] || [ ! -f "$RAN_SET" ] || [ ! -f "$ERRORS_SET" ]; then
   exit 0
 fi
 
-declare -i tp=0 miss=0 fp=0 tn=0 tp_parse=0 pflegal=0 notrun=0
+# The declared out-of-scope set. `oos_seen` records which entries were
+# actually observed as a MISS this run, so an entry that has stopped being
+# one is reported rather than left to rot — the reason a path is here can
+# go away (a rule lands, the local compiler moves), and a scope file whose
+# entries are never re-checked is how a suppression list starts.
+declare -A oos_reason=()
+declare -A oos_seen=()
+if [ -f "$SCOPE_FILE" ]; then
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    p="${line%%[[:space:]]*}"
+    [ -z "$p" ] && continue
+    oos_reason["$p"]="${line#"$p"}"
+  done < "$SCOPE_FILE"
+fi
+
+declare -i tp=0 miss=0 oos=0 fp=0 tn=0 tp_parse=0 pflegal=0 notrun=0
 fp_files=()
 pflegal_files=()
 [ -n "$MISS_LIST" ] && : > "$MISS_LIST"
@@ -129,20 +170,30 @@ while IFS= read -r f; do
   iss=$(echo "$out" | grep -oP '\d+ issues' | grep -oP '\d+' || echo 0)
   if [ "${iss:-0}" -gt 0 ]; then flag=1; else flag=0; fi
   if   [ "$has" = 1 ] && [ "$flag" = 1 ]; then tp+=1
-  elif [ "$has" = 1 ];                    then miss+=1
-    [ -n "$MISS_LIST" ] && echo "$f" >> "$MISS_LIST"
+  elif [ "$has" = 1 ]; then
+    # Only the MISS bucket splits. Nothing above this point consults the
+    # scope file, so a listed file can still be a TP, an FP or a PFLEGAL
+    # exactly as before — being out of scope withholds a rule, it does not
+    # excuse a wrong answer.
+    if [ -n "${oos_reason[$f]+x}" ]; then
+      oos+=1; oos_seen["$f"]=1
+    else
+      miss+=1
+      [ -n "$MISS_LIST" ] && echo "$f" >> "$MISS_LIST"
+    fi
   elif [ "$flag" = 1 ];                   then fp+=1; fp_files+=("$f")
   else                                         tn+=1
   fi
 done < <(find "$ROOT" -name "*.ts")
 
-total=$((tp + miss + fp + tn + pflegal))
+total=$((tp + miss + oos + fp + tn + pflegal))
 echo "=== Checker vs TypeScript 7 conformance results ==="
 echo "Corpus root   : $ROOT"
 echo "Binary        : $TSCHECK"
 echo "Classified    : $total   (NOTRUN excluded: $notrun)"
 echo "TP  err+flag  : $tp   (of which via parse rejection: $tp_parse)"
-echo "MISS err+quiet: $miss   (expected — checker models a subset of TS)"
+echo "MISS in scope : $miss   (the backlog — this one can reach zero)"
+echo "OUT OF SCOPE  : $oos     (declared in $SCOPE_FILE)"
 echo "FP  ok +flag  : $fp     (soundness bugs — TS7 accepts these)"
 echo "PFLEGAL       : $pflegal     (parser rejects TS7-legal files — parser bugs)"
 echo "TN  ok +quiet : $tn"
@@ -155,12 +206,34 @@ if [ "$pflegal" -gt 0 ]; then
   for f in "${pflegal_files[@]}"; do echo "  $f"; done
 fi
 
+# An entry whose reason has expired. Only meaningful over the whole
+# corpus — with --dir most entries are simply outside the subtree.
+if [ -z "$SUBDIR" ] && [ "${#oos_reason[@]}" -gt 0 ]; then
+  stale=()
+  for p in "${!oos_reason[@]}"; do
+    [ -n "${oos_seen[$p]+x}" ] || stale+=("$p")
+  done
+  if [ "${#stale[@]}" -gt 0 ]; then
+    echo "--- STALE scope entries (listed, but no longer a MISS) ---"
+    echo "    Each is now a TP, an FP, out of the corpus, or NOTRUN. Remove"
+    echo "    it from $SCOPE_FILE — an entry nobody re-checks is how a scope"
+    echo "    file turns into a suppression list."
+    for p in $(printf '%s\n' "${stale[@]}" | sort); do echo "  $p"; done
+  fi
+fi
+
 if [ "$MAX_FP" -ge 0 ] && [ "$fp" -gt "$MAX_FP" ]; then
   echo "FAIL: false-positive count $fp exceeds budget $MAX_FP" >&2
   exit 1
 fi
 if [ "$MAX_LEGAL_PARSEFAIL" -ge 0 ] && [ "$pflegal" -gt "$MAX_LEGAL_PARSEFAIL" ]; then
   echo "FAIL: legal-parse-failure count $pflegal exceeds budget $MAX_LEGAL_PARSEFAIL" >&2
+  exit 1
+fi
+if [ "$MAX_MISS" -ge 0 ] && [ "$miss" -gt "$MAX_MISS" ]; then
+  echo "FAIL: in-scope MISS count $miss exceeds budget $MAX_MISS" >&2
+  echo "      A rule that used to fire has gone quiet, or a file moved out" >&2
+  echo "      of the declared scope. Lower the budget when it improves." >&2
   exit 1
 fi
 exit 0

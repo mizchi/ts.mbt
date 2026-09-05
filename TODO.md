@@ -4618,29 +4618,57 @@ a real bridge input or `mtsc` target demands it, and record which one did.
 measurement: this corpus samples no Angular / NestJS / TypeORM. Promote
 if a bridge target uses them.
 
-### Tier 4 — WON'T SUPPORT (~24 files, declared out of scope)
+### Tier 4 — WON'T SUPPORT (17 files, declared out of scope) — DONE
 
-- [ ] Record the reasons in a scope file so they are not re-litigated:
-  - **legacy / broken syntax, 12 of 15.** Deliberately malformed input
-    (`parserErrorRecovery_ParameterList6`) and removed language features
-    (`import x = module("m")`, `/// <reference>` resolution). CLAUDE.md
-    already records that taking this cluster for its size is fitting the
-    corpus.
-  - **`using` declarations, 6.** ZERO occurrences in 5,697 real files.
-    The strongest out-of-scope case here. Revisit if a real dependency
-    adopts explicit resource management.
+- [x] `scripts/checker_out_of_scope.txt`, one path per line with its kind
+  and reason. The estimate was ~24 and the answer is **17**, because the
+  estimate came from the family classifier and the 17 came from OPENING
+  every file. Both corrections are the label-standing-in-for-the-objective
+  substitution CLAUDE.md records five times, and the file itself is the
+  only defence:
+  - **legacy / broken syntax, 6 of 15 — not 12.** The classifier keyed on
+    the DIRECTORY, and `parser/ecmascript5/` holds ordinary current
+    TypeScript beside the error-recovery corpus. OUT: `x: break`,
+    `x: public`, `interface I { [public a] }`,
+    `import x = module("m")`, `///<reference>` path resolution (TS6053 is
+    program construction, and the checker has no notion of a program), and
+    the regex-versus-comment torture file. IN: `parserExportAssignment6`
+    is `declare module "M" { export = A }`, an undefined-name check;
+    `parserES5SymbolProperty4` is `[Symbol.isRegExp]`, a lib member
+    lookup; `parserCastVersusArrowFunction1` and
+    `parserConstructorAmbiguity3` have parse-ambiguity PURPOSES and
+    ordinary DIAGNOSTICS (TS2403 on nine conflicting `var v`, TS2558
+    type-argument arity), which is not the same thing. Plus the three
+    already known not to be legacy (`parserParameterList16`/`17`,
+    `parserClassDeclaration12` — the TS2371/TS2394 overload rules, Tier 2).
+  - **`using` declarations, 5 of 6.** ZERO occurrences in 5,697 real
+    files, the strongest out-of-scope case here; revisit if a real
+    dependency adopts explicit resource management. But a file NAMED for
+    `using` can carry an error `using` has nothing to do with:
+    `usingDeclarationsWithObjectLiterals2` is TS7018 on `value: null`,
+    which a plain `const` reproduces under the same two flags (probed), so
+    it is Tier 2's implicit-any family and stays in scope.
   - **locally accepted, 6.** TS7 errors and local tsc 6.0.3 accepts, so
     there is no oracle to develop against and no way to write the
-    legal-neighbour test this repo requires of every rule.
+    legal-neighbour test this repo requires of every rule. The only
+    out-of-scope reason here that is a HARNESS limit rather than a
+    judgement about the language — revisit when the local compiler moves.
+  - The one thing that keeps this from rotting into a suppression list:
+    the oracle reports **STALE** entries — a listed path that is no longer
+    a MISS, because a rule landed or the file left the corpus. Proven by
+    adding a bogus path and seeing it named.
 
-### The recommendation that is not a rule
+### The recommendation that is not a rule — DONE
 
-- [ ] **Stop reporting one MISS number.** Check the Tier 4 list in as
-  `scripts/checker_out_of_scope.txt` (one path per line + reason), have
-  `checker_conformance_oracle.sh` read it, and report TWO numbers:
-  `MISS (in scope)` ~152 — the real backlog, which can reach zero — and
-  `OUT OF SCOPE` ~24. Gate on the former.
-  The FP budget is explicitly UNCHANGED: out-of-scope means "we will not
-  add a rule for it", never "we may flag it wrongly". A false positive on
-  one of these files is still a soundness bug, and the scope file must not
-  become a place to hide files we flag incorrectly.
+- [x] **Two MISS numbers.** `MISS in scope 157` (the backlog, which can
+  reach zero) beside `OUT OF SCOPE 17` (declared). `--scope-file /dev/null`
+  reproduces the old single 174 — verified, not asserted.
+  Nothing but the MISS branch consults the scope file, so a listed file can
+  still be a TP, an FP or a PFLEGAL exactly as before: being out of scope
+  withholds a rule, it does not excuse a wrong answer. The FP budget is
+  untouched at 0.
+- [x] `just verify-checker-soundness` gains `--max-miss 157`, which closes
+  a direction NOTHING watched: a rule that stops firing moves a file from
+  TP to MISS, and every other number in the report absorbs that silently.
+  Lower the budget whenever a batch improves it, the way the FP budget only
+  ever tightened.

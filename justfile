@@ -135,9 +135,16 @@ checker-miss-buckets *ARGS:
 # script skips cleanly when the `typescript` submodule isn't populated, so
 # this is safe to run anywhere. The budget is 0: the checker reports no
 # false positives on the conformance corpus.
+#
+# `--max-miss` gates the OTHER direction, which nothing used to watch: a
+# rule that stops firing moves a file from TP to MISS, and every other
+# number here absorbs that silently. The budget is the current in-scope
+# MISS count (`scripts/checker_out_of_scope.txt` holds the declared
+# remainder, `docs/checker-triage.md` the argument) — lower it whenever a
+# batch improves it, the same way the FP budget only ever tightened.
 verify-checker-soundness:
     moon build --target native
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 157
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

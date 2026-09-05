@@ -930,6 +930,34 @@ product surfaces now.
   unrelated thing each — so the one genuinely cheap file turned out not
   to be a symbol rule at all. Recorded in TODO.md so the 16 are not
   re-attacked as a group.
+  The triage's own headline is now the gate rather than a
+  recommendation, and implementing it corrected the triage twice.
+  `scripts/checker_out_of_scope.txt` declares the Tier 4 paths with a
+  kind and a reason each, the oracle splits the MISS bucket into
+  **`MISS in scope` 157** (the backlog, which can reach zero) beside
+  **`OUT OF SCOPE` 17** (declared), and `verify-checker-soundness` gates
+  the first with `--max-miss` — which closes a direction NOTHING
+  watched, since a rule that stops firing moves a file from TP to MISS
+  and every other number in the report absorbs that silently. The FP
+  budget is untouched: only the MISS branch consults the file, so a
+  listed file can still be a TP, an FP or a PFLEGAL, and
+  `--scope-file /dev/null` reproduces the old single 174 (verified, not
+  asserted). The estimate was ~24 files and the answer is 17, because
+  the estimate came from the family classifier and the 17 came from
+  OPENING each file: `parser/ecmascript5/` holds ordinary current
+  TypeScript beside the error-recovery corpus, so twelve "legacy" files
+  are six (`parserExportAssignment6` is an undefined-name check inside
+  `declare module`, `parserES5SymbolProperty4` is a lib member lookup,
+  and two more have parse-ambiguity PURPOSES with ordinary
+  DIAGNOSTICS — a distinction the directory cannot make); and a file
+  NAMED for `using` can carry an error `using` has nothing to do with,
+  since `usingDeclarationsWithObjectLiterals2` is TS7018 on
+  `value: null`, which a plain `const` reproduces under the same two
+  flags. Sixth and seventh instances of the label-for-objective
+  substitution, this time in a document written to warn about it. The
+  one mechanism that keeps a scope file from decaying into a suppression
+  list is a report of STALE entries — a listed path that is no longer a
+  MISS, proven by adding a bogus path and seeing it named.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

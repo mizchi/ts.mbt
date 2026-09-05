@@ -1,0 +1,84 @@
+# Conformance files the checker will NOT be taught to flag.
+#
+# `checker_conformance_oracle.sh` reads this and reports the MISS bucket as
+# two numbers instead of one: `MISS (in scope)`, which is the real backlog
+# and can legitimately reach zero, and `OUT OF SCOPE`, which is declared.
+# `docs/checker-triage.md` explains why one number could rank nothing —
+# it summed work worth doing now with files nobody should ever fix, so it
+# answered neither "are we done?" nor "what next?".
+#
+# Format: <path> <kind>: <reason>.  Blank lines and `#` lines are ignored;
+# only the first whitespace-separated field is read as a path.
+#
+# THIS IS NOT A SUPPRESSION LIST. Out of scope means "we will not add a
+# rule to flag this file", never "we may flag it wrongly". A false positive
+# on a listed file is still a soundness bug and still counts against the FP
+# budget, which this file does not touch. The oracle also reports any entry
+# that has stopped being a MISS, so a path cannot sit here after the reason
+# for it is gone.
+#
+# Every entry below was decided by OPENING the file. The triage's first
+# pass keyed on the directory name and the count came out twice too large:
+# `parser/ecmascript5/` holds ordinary current TypeScript as well as the
+# error-recovery corpus (`parserExportAssignment6` is `declare module "M"
+# { export = A }`, an undefined-name check; `parserES5SymbolProperty4` is
+# `[Symbol.isRegExp]`, a lib member lookup), and a file NAMED for `using`
+# can carry an error `using` has nothing to do with
+# (`usingDeclarationsWithObjectLiterals2` is TS7018 on `value: null`,
+# which a plain `const` reproduces under the same two flags — measured).
+# Twelve legacy files became six; six `using` files became five. That is
+# the label-standing-in-for-the-objective substitution CLAUDE.md records
+# five times, and the only defence is the file itself.
+
+# ---------------------------------------------------------------------
+# removed-feature — the construct is no longer part of the language, so a
+# rule for it could never fire on an input anyone can still write.
+# ---------------------------------------------------------------------
+typescript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser519458.ts removed-feature: `import rect = module("rect")`, the pre-1.0 external-module import form.
+typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource3.ts removed-feature: the error is TS6053 "File 'typescript.ts' not found" from a `///<reference path=...>`, which is triple-slash path RESOLUTION — program construction rather than type checking, and the checker has no notion of a program.
+
+# ---------------------------------------------------------------------
+# malformed — deliberately broken input from the parser's error-recovery
+# corpus. A rule would fire only on syntax nobody writes; CLAUDE.md
+# records that taking this cluster for its size is fitting the corpus.
+# ---------------------------------------------------------------------
+typescript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ParameterLists/parserErrorRecovery_ParameterList6.ts malformed: `public banana (x: break) { }` — a keyword where a type annotation belongs.
+typescript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser553699.ts malformed: `public banana (x: public) { }` — a modifier keyword where a type annotation belongs.
+typescript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature2.ts malformed: `interface I { [public a] }` — an accessibility modifier inside an index signature, with no type.
+
+# ---------------------------------------------------------------------
+# lexer-adversarial — the file exists to test regex-versus-comment
+# disambiguation on input written to be ambiguous.
+# ---------------------------------------------------------------------
+typescript/tests/cases/conformance/parser/ecmascript5/RegularExpressions/parseRegularExpressionMixedWithComments.ts lexer-adversarial: `/**// asdf /` and `/**///**/ asdf /`. Ordinary regex-after-comment lexing is correct here (both `var r = /**/ / asdf /` and `var r = /**// asdf /` scan and check clean — measured), so the gap is only that tsc resolves these particular no-space forms to DIVISION where we resolve them to a regex, which is why its diagnostics are ordinary TS2362/TS2363 arithmetic-operand errors. Flipping the file means reproducing tsc's resolution on input written to defeat it.
+
+# ---------------------------------------------------------------------
+# resource-mgmt — explicit resource management (`using` / `await using`).
+# Measured at ZERO occurrences across 3,000 real `.d.ts` files and 2,697
+# real `.ts` sources, which is the strongest out-of-scope case on the
+# list. Revisit if a real dependency adopts it. Only files whose
+# DIAGNOSTIC needs the feature are here.
+# ---------------------------------------------------------------------
+typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsInForOf.2.ts resource-mgmt: `for (using of of [])` — the `using` binding grammar inside a for-of head.
+typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForAwaitOf.2.ts resource-mgmt: `for await (await using of of of)` — the `await using` binding grammar inside a for-await-of head.
+typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithAsyncIteratorObject.ts resource-mgmt: TS2851, the `[Symbol.asyncDispose]()` disposal protocol.
+typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsWithIteratorObject.ts resource-mgmt: TS2850, the `[Symbol.dispose]()` disposal protocol.
+typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithIteratorObject.ts resource-mgmt: TS2851, the `[Symbol.asyncDispose]()` disposal protocol.
+
+# ---------------------------------------------------------------------
+# no-local-oracle — TS7 errors on these and the locally installed
+# compiler (6.0.3) ACCEPTS them, so there is nothing to develop against:
+# the vendored TS7 manifests are NAME lists, so they say a file errored
+# and not what the error was, and this repo requires every rule to be
+# paired with a probed LEGAL neighbour, which needs a compiler that
+# agrees the illegal one is illegal. This is a HARNESS limit rather than
+# a judgement about the language — revisit when the local compiler moves.
+# CLAUDE.md already records `symbolProperty37` as exactly this case, and
+# it is why `member_name_duplicates` was left alone.
+# ---------------------------------------------------------------------
+typescript/tests/cases/conformance/types/specifyingTypes/typeQueries/typeofThisWithImplicitThis.ts no-local-oracle: `let x: typeof this.no = 1` under `noImplicitThis: false`.
+typescript/tests/cases/conformance/es6/Symbols/symbolProperty37.ts no-local-oracle: duplicate well-known-symbol interface members.
+typescript/tests/cases/conformance/override/override20.ts no-local-oracle: `noImplicitOverride` against a base that is a class expression typed as an intersection of two construct signatures.
+typescript/tests/cases/conformance/override/override2.ts no-local-oracle: `noImplicitOverride` against abstract members, including an abstract redeclaration and an abstract-to-concrete narrowing.
+typescript/tests/cases/conformance/statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash2.ts no-local-oracle: `foo: var y;` inside a `for...of` body that also closes over the loop binding.
+typescript/tests/cases/conformance/async/es5/asyncQualifiedReturnType_es5.ts no-local-oracle: an `async` function whose declared return type is a namespace-qualified `Promise` subclass.
