@@ -199,7 +199,7 @@ went wrong.
 caveat, not a measurement: this corpus samples no decorator-heavy
 framework. Promote it if a bridge target uses Angular/NestJS/TypeORM.
 
-### Tier 4 — WON'T SUPPORT (17 files, declared out of scope)
+### Tier 4 — WON'T SUPPORT (19 files, declared out of scope)
 
 Checked in as `scripts/checker_out_of_scope.txt`, one path per line with
 its reason, so none of it is re-litigated from memory.
@@ -248,9 +248,9 @@ produced a retired strategy document.
 That is now what the gate does:
 
 ```
-TP  err+flag  : 2563   (of which via parse rejection: 390)
-MISS in scope : 154   (the backlog — this one can reach zero)
-OUT OF SCOPE  : 17     (declared in scripts/checker_out_of_scope.txt)
+TP  err+flag  : 2565   (of which via parse rejection: 390)
+MISS in scope : 150   (the backlog — this one can reach zero)
+OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0     (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)
 ```
@@ -265,7 +265,7 @@ PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)
    old single number.
 3. The FP budget is untouched at 0.
 4. `just verify-checker-soundness` gates the in-scope number with
-   `--max-miss 154`. That also closes a direction nothing watched: a rule
+   `--max-miss`. That also closes a direction nothing watched: a rule
    that STOPS firing moves a file from TP to MISS, and every other number
    in the report absorbs that silently. Lower it whenever a batch improves
    it, the way the FP budget only ever tightened.

@@ -985,6 +985,59 @@ product surfaces now.
   mode as TS2415/TS2417, where "different accessibility modifiers"
   reads as "they must match" and two cells go wrong in opposite
   directions.
+  Batch DO is +4 for three findings, two of them about code already
+  present, and its most useful output is what the FIRST version cost.
+  TS7009 is TS2350's rule with one exclusion removed, and the FLAG
+  decides which of the two applies: with `noImplicitAny` off `new f()`
+  errors iff `f`'s return is not `void`, and with it on there is no
+  exemption at all — tsc reports even `function Point(x) { this.x = x };
+  new Point(1)`, which is the case CLAUDE.md had recorded as the reason
+  for the exclusion. That `resolver.signatures` early return excluded
+  every top-level function DECLARATION **by name, before any type was
+  consulted**, which was REDUNDANT for TS2350 (an old-style
+  constructor's return is `void`, which the return-type predicate
+  abstains on anyway) and was the only thing blocking TS7009. Removed
+  unrestricted it is +2 corpus files and **5 false positives**, because
+  the parser lowers a class declared INSIDE a function to a function —
+  so `function outer() { class A { x = 1 } return new A() }` arrives as
+  a `Func` and is a legal `new`. TS7009 therefore needs POSITIVE
+  evidence where TS2350 could lean on abstention (a top-level function
+  declaration, or a WRITTEN call-signature object type), which is +1 at
+  FP 0: the file given up was flagged for the unsound reason. Probing
+  that also measured a defect this file had only assumed — every
+  CHECKER-level class rule is blind to a class declared inside a
+  function (TS2420, TS2415 and TS2564 all fire at top level and none
+  nested), while batch DN's parser-level TS2394 fires in both, because
+  `record_runtime_class_decl`'s stash is taken only by the module-level
+  dispatcher.
+  The second rule is one arm of `infer_expr` that answered for fifteen
+  operators: a compound assignment's value is its RIGHT-HAND SIDE for
+  the twelve arithmetic and bitwise ones and NOT for `&&=`, since
+  `a &&= b` is `a && (a = b)` and the result is `a` when `a` is falsy.
+  So `(results &&= []).push(100)` stays possibly `undefined` (TS2532)
+  while the same line spelled `||=` or `??=` is legal — the operator has
+  already removed the nullish part there, so widening those would report
+  the legal spellings. It needed a second change, and the abstention it
+  relaxes states its own reason: the strictNullChecks member-access
+  checks are gated to a bare `Var` receiver because those are the
+  bindings the narrowing engine rewrites precisely. A `&&=` receiver
+  qualifies for the OPPOSITE reason — there is no narrowing to get
+  wrong, and the target is inferred through the same `env`, so a guard
+  that narrowed it is already in the union.
+  The third finding came from probing a LEGAL neighbour for that rule
+  and is a pre-existing false positive no gate could see: `+=`'s
+  string-concatenation exemption tested for `String_` EXACTLY, so
+  `let t = ""` — whose type here is the literal `""`, because tsc widens
+  it and we do not — demanded a numeric target and reported ordinary
+  string building. Asking assignability widens the EXEMPTION and can
+  only lose a finding. Removing it COST two TPs, which is batch CS's
+  lesson with the sign flipped: `parserRealSource1`/`2` were flagged for
+  `result += "\t"` and nothing else, while their real TS7 error is the
+  TS6053 that already put `parserRealSource3` out of scope. A conformance
+  file counts as a TP if we flag it AT ALL, so −2 TP is not evidence a
+  fix is wrong; they are declared out of scope now, and `--max-miss`,
+  added one batch earlier, is what surfaced them — the gate earning
+  itself back on its first real use.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -6331,22 +6331,120 @@ fn call_only_new_return(ty : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
-/// TS2350 for `new` over a call-signature-only BINDING. Split from the
-/// predicate because the guards are about the name rather than the type:
-/// a top-level function DECLARATION is excluded, since an old-style
+/// The receiver shapes the strictNullChecks member-access checks trust.
+///
+/// A bare `Var` is trusted because those are the bindings the narrowing
+/// engine rewrites precisely (`if (x)`, `if (x != null)`, an
+/// `x === undefined` early return, …), so a residual nullish union at the
+/// access site means no guard removed it. A `PropAccess` chain is NOT:
+/// that was tried, gained no conformance recall, and exposed
+/// correlated-union narrowing gaps (intersectionOfUnionNarrowing).
+///
+/// `a &&= b` is trusted for the opposite reason — there is no narrowing to
+/// get wrong. Its type is COMPUTED by `infer_expr` from the operator's own
+/// semantics (`a && (a = b)`, so the result is `a` when `a` is falsy), and
+/// the target is inferred through the same `env`, so a guard that narrowed
+/// the target is already reflected in the union. Only `&&=` qualifies:
+/// `||=` and `??=` have had the nullish part of the target removed by the
+/// operator, so their result is never possibly-nullish on that account.
+fn nullish_checkable_receiver(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var(_) => true
+    CompoundAssignExpr(_, AndAssign, _) => true
+    _ => false
+  }
+}
+
+///|
+
+///|
+/// True when the type is PROVABLY a plain function — one call signature and
+/// no construct signature — which is what `noImplicitAny`'s TS7009 turns on
+/// (see `check_new_over_call_signature`).
+///
+/// The provenance argument is `call_only_new_return`'s: `Func` and the
+/// `<call>` sentinel come from a written signature, so the permissive
+/// filter's premise (an inference we may have got wrong) does not apply.
+/// Everything else answers false, which is what keeps `new Map()`,
+/// `new Promise(…)` and any imported or unresolved name — all `Any` or
+/// `Constructor` here — out of it.
+fn is_call_only_without_construct(ty : @ast.TsType) -> Bool {
+  match ty {
+    Func(_, _) => true
+    Object(fields) => {
+      for f in fields {
+        if f.0 is Literal("<new>") {
+          return false
+        }
+      }
+      for f in fields {
+        if f.0 is Literal("<call>") {
+          return f.1 is Func(_, _)
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// `new` over a call-signature-only BINDING. Split from the predicates
+/// because the flag, not the type, decides which of two diagnostics
+/// applies — probed both ways:
+///
+///   noImplicitAny OFF   `function f(): number {}; new f()`   TS2350
+///                       `function f(): void {}; new f()`      legal
+///   noImplicitAny ON    both of those                         TS7009
+///
+/// So with the flag off the rule is about the RETURN type (only a void
+/// function may be `new`ed, because the constructed object is the result
+/// anyway), and with it on there is no exemption at all: a plain function
+/// has no construct signature, so the result is implicitly `any`.
+///
+/// This used to return early for any name in `resolver.signatures` — a
+/// top-level function DECLARATION — on the argument that an old-style
 /// JavaScript constructor (`function Point(x) { this.x = x }`) is exactly
-/// that shape and `new Point(1)` is how such code is meant to be used —
-/// its inferred return is `void` and would abstain anyway, but the
-/// exclusion says so rather than relying on the inference.
+/// that shape and `new Point(1)` is how such code is meant to be used.
+/// The exclusion was REDUNDANT for TS2350 and was the only thing blocking
+/// TS7009: `Point`'s inferred return is `void`, which `call_only_new_return`
+/// already abstains on, so dropping the guard leaves the old-style
+/// constructor silent with the flag off and reports it — as tsc does —
+/// with the flag on. What it gains with the flag off is the far commoner
+/// spelling, a declared function with a non-void return annotation, which
+/// was excluded by NAME before any type was consulted.
 fn check_new_over_call_signature(
   env : ExprEnv,
   ctx : CheckCtx,
   name : String,
 ) -> Unit {
-  if ctx.resolver.signatures.get(name) is Some(_) {
+  let ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, Var(name)))
+  if ctx.resolver.no_implicit_any {
+    // TS7009 needs POSITIVE evidence, where TS2350 could lean on the
+    // return type abstaining. A bare `Func` reached through local scope
+    // is not evidence, because the parser lowers a class declared INSIDE
+    // a function to a function — so `function outer() { class A { x = 1 }
+    // return new A() }` arrives here as a `Func` and is a perfectly legal
+    // `new`. (The unit suite caught that as a false positive; the whole
+    // population of classes nested in functions is invisible to
+    // `resolver.classes` for the same reason.) So either the name is a
+    // top-level function DECLARATION, which can never carry a construct
+    // signature — declaration merging with an interface does not add one,
+    // probed — or the type is a WRITTEN call-signature-only object type.
+    let provable = if ctx.resolver.signatures.get(name) is Some(_) {
+      is_call_only_without_construct(ty)
+    } else {
+      ty is Object(_) && is_call_only_without_construct(ty)
+    }
+    if provable {
+      record_unfiltered(
+        ctx,
+        "new `\{name}`",
+        "`new` expression whose target lacks a construct signature implicitly has an `any` type",
+      )
+    }
     return
   }
-  let ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, Var(name)))
   match call_only_new_return(ty) {
     Some(ret) =>
       record_unfiltered(
@@ -7621,7 +7719,37 @@ fn infer_expr(
     }
     AssignExpr(_, value) | AssignPattern(_, value) =>
       infer_expr(env, resolver, value)
-    CompoundAssignExpr(_, _, value) => infer_expr(env, resolver, value)
+    // The VALUE of a compound assignment is the right-hand side for the
+    // twelve arithmetic and bitwise operators, and that answer was
+    // returned for all fifteen. It is wrong for `&&=`: `a &&= b` is
+    // `a && (a = b)`, so when `a` is FALSY the result is `a` and `b` never
+    // runs — which is exactly why `(results &&= [])` stays possibly
+    // `undefined` and `.push` on it is TS2532, while the same line spelled
+    // `||=` or `??=` is legal (probed: the three `logicalAssignment6/7/8`
+    // files error on their `&&=` function and nothing else).
+    //
+    // Only `&&=` widens. For `||=` the result is `truthy(a) | b` and for
+    // `??=` it is `NonNullable(a) | b`, both of which have had the
+    // nullish part of `a` removed by the operator itself — unioning `a`
+    // in there would report the legal spellings. The union used here is
+    // `a | b`, a superset of `falsy(a) | b`, which can only widen the
+    // answer for a target whose truthy part carries a member the RHS
+    // lacks; that costs a report tsc also makes, never one it does not.
+    CompoundAssignExpr(target, op, value) => {
+      let rhs = infer_expr(env, resolver, value)
+      match op {
+        AndAssign => {
+          let lhs = infer_expr(env, resolver, target)
+          let members = simplify_union([lhs, rhs])
+          if members.length() == 1 {
+            members[0]
+          } else {
+            @ast.TsType::Union(members)
+          }
+        }
+        _ => rhs
+      }
+    }
     PropAssignExpr(_, _, value) | IndexAssignExpr(_, _, value) =>
       infer_expr(env, resolver, value)
     Seq(_, second) => infer_expr(env, resolver, second)
@@ -14415,13 +14543,20 @@ fn check_compound_assign(
 ) -> Unit {
   // For arithmetic / bitwise compound ops, the target must be numeric and
   // the rhs must be assignable to `number`. `+=` is special-cased: if the
-  // target is `string`, then concat semantics apply and any value is allowed.
+  // target is a string, then concat semantics apply and any value is
+  // allowed.
+  //
+  // That exemption used to test for `String_` EXACTLY, which misses the
+  // commonest spelling there is: `let t = ""` infers the LITERAL type
+  // `""` here (tsc widens it to `string`, we do not), so
+  // `t += suffix` — ordinary string building — was reported as
+  // "requires a number target". A pre-existing false positive, found by
+  // probing a legal neighbour for an unrelated rule; the conformance
+  // corpus never exercises it, which is why FP 0 did not catch it.
+  // Asking assignability instead covers the literal types and widens the
+  // EXEMPTION, so it can only lose a finding, never invent one.
   let needs_numeric = match op {
-    AddAssign =>
-      match target {
-        String_ => false
-        _ => true
-      }
+    AddAssign => not(is_assignable_to(target, @ast.TsType::String_))
     SubAssign
     | MulAssign
     | DivAssign
@@ -18150,7 +18285,7 @@ fn check_call_args_in_expr(
               "cannot call `.\{meth}()` — receiver may be null or undefined",
             )
           } else if ctx.strict_null_checks &&
-            receiver is Var(_) &&
+            nullish_checkable_receiver(receiver) &&
             union_possibly_nullish(ctx.resolver.unwrap(recv_ty)) is Some(kind) &&
             ctx.resolver.lookup_method_sig(
               prune_nullish(ctx.resolver, recv_ty),
@@ -18159,9 +18294,10 @@ fn check_call_args_in_expr(
             is Some(_) {
             // TS18048 / TS2722: calling a method on a value whose narrowed type
             // still includes `undefined` / `null` is an error under
-            // strictNullChecks. Same `Var`-receiver gating as the PropAccess
-            // case — the method must resolve on the pruned receiver, otherwise
-            // the "method does not exist" branch below is the right diagnostic.
+            // strictNullChecks. Same receiver gating as the PropAccess case
+            // (`nullish_checkable_receiver`) — the method must resolve on the
+            // pruned receiver, otherwise the "method does not exist" branch
+            // below is the right diagnostic.
             record(
               ctx,
               "call `\{meth}`",
@@ -19190,7 +19326,7 @@ fn check_call_args_in_expr(
           "cannot access `.\{prop}` — receiver may be null or undefined",
         )
       } else if ctx.strict_null_checks &&
-        recv is Var(_) &&
+        nullish_checkable_receiver(recv) &&
         union_possibly_nullish(ctx.resolver.unwrap(recv_ty)) is Some(kind) &&
         ctx.resolver.lookup_field(prune_nullish(ctx.resolver, recv_ty), prop)
         is Some(_) {
@@ -19199,11 +19335,11 @@ fn check_call_args_in_expr(
         // purely nullish) is an error. Gated to a simple `Var` receiver — those
         // are the bindings the narrowing engine rewrites precisely (`if (x)`,
         // `if (x != null)`, `x === undefined` early returns, …), so a residual
-        // nullish union at the access site means no guard removed it.
-        // (`PropAccess`-chain receivers were tried but gain no conformance
-        // recall and expose correlated-union narrowing gaps — see
-        // intersectionOfUnionNarrowing.) The property must exist on the pruned
-        // receiver, otherwise the "does not exist" branch below is right.
+        // nullish union at the access site means no guard removed it. See
+        // `nullish_checkable_receiver` for which shapes qualify and why a
+        // `PropAccess` chain does not. The property must exist on the
+        // pruned receiver, otherwise the "does not exist" branch below is
+        // right.
         record(
           ctx,
           "PropAccess `.\{prop}`",

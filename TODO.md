@@ -4615,11 +4615,71 @@ inside a function body:
     flag. A TYPE mismatch raises the same code and is abstained on.
 - [ ] Remaining grammar / declaration rules: TS2386, TS2448, TS1308,
   TS2842, TS2708, TS1166, TS2300.
-- [ ] implicit-any / strict family (10): TS7009/7010/7018/7022/7023/7031/
+- [x] **Batch DO: TS7009 and `&&=`, +4 files at FP 0** (TP 2563 -> 2565,
+  in-scope MISS 153 -> 150 after two accidental TPs moved to Tier 4).
+  Three findings, and two of them are about code that was already there.
+  - **TS7009** is TS2350's rule with its exclusion removed, and the FLAG
+    decides which of the two applies — probed both ways. With
+    `noImplicitAny` off, `new f()` errors iff `f`'s return is not `void`
+    (TS2350); with it on there is no exemption at all, and tsc reports
+    even `function Point(x) { this.x = x }; new Point(1)`. The old
+    `resolver.signatures` early return excluded every top-level function
+    DECLARATION by name, which was REDUNDANT for TS2350 (an old-style
+    constructor's return is `void`, which the return-type predicate
+    already abstains on) and was the only thing blocking TS7009. It also
+    lost the commoner spelling with the flag off — a declared function
+    with a non-void return annotation, excluded before any type was
+    consulted.
+    TS7009 needs POSITIVE evidence where TS2350 could lean on abstention,
+    and the unit suite proved it: the unrestricted version was +2 corpus
+    files and **5 false positives** (`localTypes2/3/5`,
+    `classExpression4`, `privateNameMethodAsync`), because the parser
+    lowers a class declared INSIDE a function to a function — so
+    `function outer() { class A { x = 1 } return new A() }` arrives as a
+    `Func` and is a legal `new`. Gated to a top-level function
+    declaration or a WRITTEN call-signature object type: +1 at FP 0. The
+    file it gave up was flagged for the unsound reason.
+  - **`a &&= b`** is `a && (a = b)`, so when `a` is falsy the result is
+    `a` and `b` never runs. `infer_expr`'s compound-assign arm returned
+    the RIGHT-HAND SIDE for all fifteen operators — right for the twelve
+    arithmetic and bitwise ones, wrong for this one — which is why
+    `(results &&= []).push(100)` was silent while tsc reports TS2532.
+    `||=` and `??=` do NOT widen: the operator has already removed the
+    nullish part of the target, so unioning it back in would report the
+    legal spellings (probed: `logicalAssignment6/7/8` error on their
+    `&&=` function and nothing else). Needed a second change, and the
+    abstention it relaxes states its own reason: the strictNullChecks
+    member-access checks are gated to a bare `Var` receiver because
+    those are the bindings the narrowing engine rewrites precisely. A
+    `&&=` receiver qualifies for the OPPOSITE reason — there is no
+    narrowing to get wrong, its type is computed from the operator's
+    semantics, and the target is inferred through the same `env`.
+    `nullish_checkable_receiver` is the one predicate both sites now ask.
+  - **A pre-existing false positive**, found by probing a legal
+    neighbour for the rule above rather than by any gate: `+=`'s
+    string-concatenation exemption tested for `String_` EXACTLY, so
+    `let t = ""` — whose type here is the literal `""`, since tsc widens
+    it and we do not — demanded a numeric target and reported ordinary
+    string building. Asking assignability widens the EXEMPTION, so it can
+    only lose a finding. Removing it cost **two TPs**, and that is the
+    batch's own lesson repeated from CS with the sign flipped:
+    `parserRealSource1`/`2` were flagged for `result += "\\t"` and
+    nothing else, while their real TS7 error is the TS6053 that already
+    puts `parserRealSource3` in Tier 4. They are declared there now, and
+    `--max-miss` — added one batch earlier — is what surfaced them.
+- [ ] implicit-any / strict family (7 left): TS7010/7018/7022/7023/7031/
   7053, TS2564/2565/2729. Small corpus count, highest USER-facing value
   in this tier — it is what a real codebase hits the day it turns
-  `strict` on.
-- [ ] strict-null / narrowing (8).
+  `strict` on. NOTE `localTypes1`'s seven TS2564s are ALL classes
+  declared inside a function, and every CHECKER-level class rule is blind
+  there (probed: TS2420, TS2415 and TS2564 all fire at top level and none
+  nested, while batch DN's parser-level TS2394 fires in both). The
+  parser's `record_runtime_class_decl` stash is taken only by the
+  module-level dispatcher, and a class nested in a function is lowered
+  away entirely below es6 — so the fix is not a one-liner and it moves
+  what the bridge sees.
+- [x] strict-null / narrowing: 3 of 8 in batch DO (the `logicalAssignment`
+  files). Five left.
 
 ### Tier 3 — DEFER (~93 files, real but expensive)
 
@@ -4677,8 +4737,8 @@ if a bridge target uses them.
 
 ### The recommendation that is not a rule — DONE
 
-- [x] **Two MISS numbers.** `MISS in scope 154` (the backlog, which can
-  reach zero) beside `OUT OF SCOPE 17` (declared). `--scope-file /dev/null`
+- [x] **Two MISS numbers.** `MISS in scope 150` (the backlog, which can
+  reach zero) beside `OUT OF SCOPE 19` (declared). `--scope-file /dev/null`
   reproduces the old single 174 — verified, not asserted.
   Nothing but the MISS branch consults the scope file, so a listed file can
   still be a TP, an FP or a PFLEGAL exactly as before: being out of scope

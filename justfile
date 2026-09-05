@@ -144,7 +144,7 @@ checker-miss-buckets *ARGS:
 # batch improves it, the same way the FP budget only ever tightened.
 verify-checker-soundness:
     moon build --target native
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 154
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 150
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

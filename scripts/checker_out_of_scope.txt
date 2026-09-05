@@ -36,6 +36,8 @@
 # ---------------------------------------------------------------------
 typescript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser519458.ts removed-feature: `import rect = module("rect")`, the pre-1.0 external-module import form.
 typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource3.ts removed-feature: the error is TS6053 "File 'typescript.ts' not found" from a `///<reference path=...>`, which is triple-slash path RESOLUTION — program construction rather than type checking, and the checker has no notion of a program.
+typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource1.ts removed-feature: same as parserRealSource3 — TS6053 on `///<reference path='typescript.ts'>` and nothing else (probed). It was a TP by ACCIDENT until batch DO: the only thing we flagged in it was `result += "\\t"`, ordinary string building, through the `+=` exemption bug fixed in that batch. `--max-miss` is what surfaced it.
+typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource2.ts removed-feature: same as parserRealSource1, same accidental-TP history.
 
 # ---------------------------------------------------------------------
 # malformed — deliberately broken input from the parser's error-recovery

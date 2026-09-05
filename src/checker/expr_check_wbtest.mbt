@@ -16117,12 +16117,19 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
       "namespace M { export interface Point { x: number } }\nclass M { }\nvar m = M;",
       // A local binding shadowing a type-only namespace name.
        "namespace M { export interface P { x: number } }\nfunction f() { const M = 1; return M; }",
-      // TS2350: a construct signature, a void-returning call signature
-      // (tsc reports TS7009 there, not this), and an ordinary class.
-       "declare var cf: { (): string; new(): string };\nvar r = new cf();", "declare var vf: { (): void };\nvar r = new vf();",
-      "class C { }\nvar c = new C();",
-      // An old-style JavaScript constructor is a function declaration and
-      // is excluded by name, not by inference.
+      // TS2350: a construct signature and an ordinary class.
+       "declare var cf: { (): string; new(): string };\nvar r = new cf();", "class C { }\nvar c = new C();",
+      // A void-returning call signature is the case TS2350's message
+      // exempts, and ONLY with `noImplicitAny` off — this case used to
+      // sit here unguarded with a comment saying tsc reports TS7009
+      // instead, which was a MISS recorded as an assertion. The rule
+      // exists now, so the flag has to be off for the exemption to hold.
+       "// @noImplicitAny: false\ndeclare var vf: { (): void };\nvar r = new vf();",
+      // An old-style JavaScript constructor is a function declaration
+      // whose inferred return is `void`, so with the flag off the
+      // return-type predicate abstains on its own. It used to be
+      // excluded by NAME as well, which was redundant here and was the
+      // only thing blocking TS7009.
        "// @strict: false\nfunction Point(x: number) { }\nvar p = new Point(1);",
       // A user-declared `Symbol` is not the lib function.
        "declare var Symbol: any;\nvar s = new Symbol();",
@@ -17928,4 +17935,166 @@ test "expr_check: TS2769 when no overload can accept the call" {
     ) >
     0,
   )
+}
+
+///|
+/// `new` over a plain function: TS2350 with `noImplicitAny` off, TS7009
+/// with it on. The flag, not the type, decides which applies — probed
+/// both ways against the real compiler:
+///
+///   flag off   `function f(): number {}; new f()`   TS2350
+///              `function f(): void {}; new f()`      legal
+///   flag on    both of those                         TS7009
+///
+/// The rule used to return early for any name in `resolver.signatures` —
+/// a top-level function DECLARATION — which was redundant for TS2350 (an
+/// old-style constructor's inferred return is `void`, which the return-type
+/// predicate already abstains on) and was the only thing blocking TS7009.
+test "checker: new over a function with no construct signature" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let off = "//@noImplicitAny: false\n"
+
+  // --- flag OFF: only the RETURN type matters.
+  assert_true(
+    n(off + "function g(): number { return 1 }\nfunction f() { new g() }") > 0,
+  )
+  // A void return is exactly the case the message exempts, and an
+  // old-style JavaScript constructor is that shape — which is why
+  // dropping the name guard did not start reporting it.
+  @test.assert_eq(n(off + "function g(): void {}\nfunction f() { new g() }"), 0)
+  @test.assert_eq(
+    n(
+      off +
+      "function Point(x: number) { this.x = x }\nfunction f() { new Point(1) }",
+    ),
+    0,
+  )
+
+  // --- flag ON (the default): a plain function has no construct
+  // signature at all, whatever it returns.
+  assert_true(
+    n("function g(): number { return 1 }\nfunction f() { new g() }") > 0,
+  )
+  assert_true(n("function g(): void {}\nfunction f() { new g() }") > 0)
+  assert_true(n("declare function g(): void;\nfunction f() { new g() }") > 0)
+  // A call-signature-only object type is the same fact written as a type.
+  assert_true(
+    n("declare const g: { (): number };\nfunction f() { new g() }") > 0,
+  )
+
+  // --- abstentions, under both flag settings. Each is a type this cannot
+  // prove lacks a construct signature, and the whole population of names
+  // we merely FAILED to type lands here.
+  for prefix in ["", off] {
+    // A class, and a construct signature written as one.
+    @test.assert_eq(n(prefix + "class C {}\nfunction f() { new C() }"), 0)
+    @test.assert_eq(
+      n(
+        prefix +
+        "declare const C: { new (): number };\nfunction f() { new C() }",
+      ),
+      0,
+    )
+    // A construct signature wins over a call signature on the same type.
+    @test.assert_eq(
+      n(
+        prefix +
+        "declare const C: { (): number, new (): number };\nfunction f() { new C() }",
+      ),
+      0,
+    )
+    // Lib globals: their construct signatures are not modelled here, so
+    // the predicates must answer "no verdict" rather than "no
+    // constructor".
+    @test.assert_eq(n(prefix + "function f() { const m = new Map() }"), 0)
+    @test.assert_eq(n(prefix + "function f() { const d = new Date() }"), 0)
+    @test.assert_eq(
+      n(prefix + "function f() { const e = new Error(\"x\") }"),
+      0,
+    )
+    // An `any`-typed binding.
+    @test.assert_eq(
+      n(prefix + "declare const q: any;\nfunction f() { new q() }"),
+      0,
+    )
+  }
+}
+
+///|
+/// `a &&= b` is possibly nullish when `a` is, and the two sibling
+/// operators are not.
+///
+/// `infer_expr`'s compound-assign arm returned the RIGHT-HAND SIDE's type
+/// for all fifteen operators, which is correct for the twelve arithmetic
+/// and bitwise ones and wrong for `&&=`: `a &&= b` is `a && (a = b)`, so
+/// when `a` is FALSY the result is `a` and `b` never runs. That is why
+/// `(results &&= []).push(100)` is TS2532 while the same line spelled
+/// `||=` or `??=` is legal — probed, and it is exactly what
+/// `logicalAssignment6/7/8` error on and nothing else.
+///
+/// Only `&&=` widens. `||=` yields `truthy(a) | b` and `??=` yields
+/// `NonNullable(a) | b`, both with the nullish part of `a` already removed
+/// by the operator, so unioning `a` in there would report the legal
+/// spellings.
+test "checker: (a &&= b) keeps the target's nullish part" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let u = "function f(r: number[] | undefined) { "
+  let o = "function f(r: { a: number } | undefined) { "
+
+  // --- fires: the result can still be `undefined`.
+  assert_true(n(u + "(r &&= []).push(1) }") > 0)
+  assert_true(n(o + "return (r &&= { a: 1 }).a }") > 0)
+
+  // --- stays silent.
+  for
+    src in [
+      // `||=` and `??=` remove the nullish part themselves.
+      u + "(r ||= []).push(1) }",
+      u + "(r ??= []).push(1) }",
+      // A non-nullable target has no nullish part to keep.
+      "function f(r: number[]) { (r &&= []).push(1) }",
+      // A guard that narrowed the target is reflected in the union,
+      // because the target is inferred through the same `env` — which is
+      // why trusting this receiver shape needs no narrowing model.
+      u + "if (r) { (r &&= []).push(1) } }",
+      // The twelve arithmetic and bitwise operators are unaffected: their
+      // value really is the right-hand side.
+      "function f(m: number, k: number) { let t = m; (t += k).toFixed(1) }",
+      "function f(m: number, k: number) { let t = m; (t -= k).toFixed(1) }",
+    ] {
+    @test.assert_eq(n(src), 0)
+  }
+}
+
+///|
+/// `+=` on a string target is concatenation, and the exemption used to
+/// test for `String_` EXACTLY — so `let t = ""`, whose type here is the
+/// LITERAL `""` (tsc widens it to `string`; we do not), demanded a numeric
+/// target and reported ordinary string building as an error. A
+/// pre-existing false positive, found by probing a legal neighbour for the
+/// `&&=` rule above; no conformance file exercises it, which is why FP 0
+/// never caught it.
+test "checker: += on a string-literal-typed target is concatenation" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // --- stays silent: every spelling of a string target.
+  for
+    src in [
+      "function f(s: string) { let t = \"\"; t += s; return t }", "function f() { let t = \"a\"; t += 1; return t }",
+      "function f() { let t: string = \"a\"; t += \"b\"; return t }", "function f(s: string) { let t = \"x\"; t += s + s; return t }",
+      // and a numeric target, which was never in question.
+       "function f() { let m = 0; m += 1; return m }", "function f() { let m = 0; m -= 1; return m }",
+    ] {
+    @test.assert_eq(n(src), 0)
+  }
+  // --- still fires: the exemption is for `+=` and for a STRING target,
+  // and widening it to assignability did not reach either axis.
+  assert_true(n("function f() { let b = true; b += 1; return b }") > 0)
+  assert_true(n("function f() { let b = true; b -= 1; return b }") > 0)
+  assert_true(n("function f() { let t = \"\"; t -= 1; return t }") > 0)
 }
