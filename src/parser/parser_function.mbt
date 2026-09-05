@@ -164,6 +164,45 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// TS2371: "A parameter initializer is only allowed in a function or
+/// constructor implementation."
+///
+/// The rule is about the BODY and nothing else, which is what makes it
+/// decidable at parse time — every bodiless position was probed and all of
+/// them report: a class-method or constructor overload signature, an
+/// `abstract` member, a `declare class` member, an `interface` method, an
+/// object-type member, a function TYPE (`type F = (a = 1) => void`), and a
+/// bodiless `declare function` / overload signature. The legal spellings
+/// are the two the message names — a function, method or constructor
+/// IMPLEMENTATION — plus an arrow, whose body is the thing after the `=>`.
+///
+/// It lived at the two bodiless exits of `parse_function_decl` as a local
+/// function, so the CLASS member path had nothing: `class C { foo(a = 4);
+/// foo(a, b) {} }` parsed clean. Hoisted here so there is one recorder and
+/// no site left to forget. The `interface` path (`parse_interface_body`)
+/// deliberately still emits its own: it reports per PARAMETER through
+/// `interface_member_modifier_misuses` with a `<param-init>` sentinel, so
+/// its message can name the member and the parameter, and merging the two
+/// would trade that message for a shared channel it does not need.
+///
+/// One message per signature, not per parameter — `f(a = 1, b = 2);` is
+/// one mistake, and tsc reports each occurrence but the conformance
+/// verdict is per file either way.
+fn Parser::record_bodiless_param_initializers(
+  self : Parser,
+  params : Array[@ast.TsParam],
+) -> Unit {
+  for param in params {
+    if param.default is Some(_) {
+      self.grammar_misuses.push(
+        "a parameter initializer is only allowed in a function or constructor implementation",
+      )
+      break
+    }
+  }
+}
+
+///|
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
@@ -551,22 +590,6 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     }
   }
 
-  // TS2371: a parameter initializer on a *bodiless* signature (overload /
-  // stray declaration) -- initializers belong to implementations only.
-  fn record_signature_param_initializer(
-    p : Parser,
-    ps : Array[@ast.TsParam],
-  ) -> Unit {
-    for param in ps {
-      if param.default is Some(_) {
-        p.grammar_misuses.push(
-          "a parameter initializer is only allowed in a function or constructor implementation",
-        )
-        break
-      }
-    }
-  }
-
   // TS1221 / overload-signature rule: a bodiless `function*` is always an
   // error — generators are not allowed in ambient contexts, and an
   // overload signature cannot be declared as a generator. Only the
@@ -581,7 +604,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
 
   if self.check(Semicolon) {
     record_implicit_any_return(self, name)
-    record_signature_param_initializer(self, params)
+    self.record_bodiless_param_initializers(params)
     record_bodiless_generator(self, name)
     // No body: an overload signature or an ambient declaration. Both
     // are type-only, and the caller drops the statement.
@@ -601,7 +624,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   }
   if !self.check(LBrace) {
     record_implicit_any_return(self, name)
-    record_signature_param_initializer(self, params)
+    self.record_bodiless_param_initializers(params)
     record_bodiless_generator(self, name)
     self.last_function_bodiless = true
     return {

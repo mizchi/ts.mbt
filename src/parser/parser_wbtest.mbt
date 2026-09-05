@@ -8073,3 +8073,108 @@ test "parser: super in a member decorator expression" {
     @test.assert_eq(has(src, sup), false)
   }
 }
+
+///|
+/// TS2371 ("A parameter initializer is only allowed in a function or
+/// constructor implementation") at the CLASS member position.
+///
+/// The rule already existed for a bodiless `function` declaration and,
+/// through a separate channel, for interface members — and had nothing
+/// for class members, so `class C { foo(a = 4); foo(a, b) {} }` parsed
+/// clean. The test is on the BODY and not on the modifiers, which is why
+/// an `abstract` member and an overload signature are one case.
+test "parser: a parameter initializer needs an implementation body" {
+  let needle = "a parameter initializer is only allowed"
+  let has = fn(src : String) -> Bool raise {
+    let m = Parser::from_source(src).parse_module()
+    m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length() > 0
+  }
+
+  // --- fires: every bodiless class-member spelling.
+  assert_true(has("class C { foo(a = 4); foo(a: number, b: number) {} }"))
+  assert_true(
+    has("class C { constructor(a = 4); constructor(a: any, b: any) {} }"),
+  )
+  assert_true(has("abstract class E { abstract m(a = 1): void; }"))
+  assert_true(has("class C { static s(a = 1); static s(a: any, b: any) {} }"))
+  // A bodiless member with no implementation at all is the same error
+  // (plus TS2391, which another rule reports).
+  assert_true(has("class F { m(a = 1) }"))
+  // --- and the ones that already worked, so consolidating the recorder
+  // did not lose them.
+  assert_true(has("function h(a = 1): void;\nfunction h(a?: any) {}"))
+
+  // --- stays silent: an initializer where a body follows.
+  for
+    src in [
+      "class C { foo(a = 4) { } }", "class C { constructor(a = 4) { } }",
+      // The body may be on the next line (ASI does not apply before `{`).
+       "class C { long(a = 1)\n{ return a }\n}",
+      // An arrow's body is what follows `=>`, so its defaults are legal —
+      // in a field initializer and inside a method alike.
+       "class C { f = (a = 1) => a }", "class C { g() { const h = (b = 2) => b; return h() } }",
+      // `?` with no initializer is not an initializer.
+       "class C { bar(a?: number);\nbar(a?: number) { } }", "class C { set x(v) { } }",
+      "declare class D { baz(a: number): void; }",
+    ] {
+    @test.assert_eq(has(src), false)
+  }
+}
+
+///|
+/// TS2394 ("This overload signature is not compatible with its
+/// implementation signature") — the ARITY half.
+///
+/// One-directional, and the message text does not say which direction:
+/// an implementation that requires MORE arguments than a signature can
+/// supply is the error, while a SHORTER implementation is legal (a
+/// function with fewer parameters is assignable to one with more). Four of
+/// the silent cases below are what a rule written from the message alone
+/// would flag.
+test "parser: an overload signature must be able to reach its implementation" {
+  let needle = "not compatible with its implementation signature"
+  let has = fn(src : String) -> Bool raise {
+    let m = Parser::from_source(src).parse_module()
+    m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length() > 0
+  }
+
+  // --- fires: the implementation needs an argument no call to the
+  // signature can supply.
+  assert_true(has("class C { m(); m(a: number): void {} }"))
+  assert_true(has("class C { constructor(); constructor(a: number) {} }"))
+  assert_true(
+    has("class C { constructor(); constructor(private a: number) {} }"),
+  )
+  assert_true(has("class C { static m(); static m(a: number): void {} }"))
+  assert_true(
+    has("abstract class C { abstract m(): void; m(a: number): void {} }"),
+  )
+  // A `this` parameter is a type annotation, not an argument, so it is
+  // excluded from both counts and the `a` is what is missing.
+  assert_true(
+    has("class C { m(this: C): void; m(this: C, a: number): void {} }"),
+  )
+
+  // --- stays silent.
+  for
+    src in [
+      // A shorter implementation is assignable to a longer signature.
+      "class C { m(a: number); m(): void {} }", "class C { m(a: number, b: number); m(a: number): void {} }",
+      // Every way the implementation can do without the argument.
+       "class C { m(); m(a?: number): void {} }", "class C { m(); m(a: number = 1): void {} }",
+      "class C { m(); m(...a: any[]): void {} }", "class C { m(a: number, b: number); m(a: number, b?: number): void {} }",
+      // Equal arity, and no overloads at all.
+       "class C { m(a: number); m(a: number): void {} }", "class C { m(a: number): void {} }",
+      // A signature with a rest parameter can supply any number, so no
+      // implementation arity is out of its reach.
+       "class C { m(...a: any[]); m(a: number, b: number): void {} }",
+      // Different members of the same name: an instance and a static
+      // method are two overload sets, and neither constrains the other.
+       "class C { m(): void {} static m(a: number): void {} }",
+      // A TYPE mismatch is TS2394 too and is deliberately abstained on —
+      // it needs assignability, so it stays a MISS rather than a guess.
+       "class C { m(a: string); m(a: number): void {} }",
+    ] {
+    @test.assert_eq(has(src), false)
+  }
+}

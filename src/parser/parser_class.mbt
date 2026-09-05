@@ -5,6 +5,74 @@ priv enum ClassKey {
 }
 
 ///|
+/// TS2394 ("This overload signature is not compatible with its
+/// implementation signature") — the ARITY half, which needs no
+/// assignability and so is decidable in the parser.
+///
+/// The rule is one-directional, and the message text does not say which
+/// direction. Probed against the real compiler, cell by cell:
+///
+///   m(); m(a) {}                  TS2394   impl needs an argument the
+///                                          signature can never supply
+///   m(a); m() {}                  legal    a shorter implementation is
+///   m(a, b); m(a) {}              legal    assignable to a longer signature
+///   m(); m(a?) {}                 legal
+///   m(); m(a = 1) {}              legal
+///   m(); m(...a: any[]) {}        legal
+///   m(a, b); m(a, b?) {}          legal
+///   m(a: string); m(a: number) {} TS2394   (a TYPE mismatch — abstained
+///                                          on here, so a MISS)
+///
+/// So the only decidable error is `signature_max_args < impl_required_arity`.
+/// Reading the message as "the two must agree" would flag four of those
+/// legal rows.
+///
+/// The largest number of arguments a bodiless overload SIGNATURE can
+/// supply, or `-1` for unbounded (it has a rest parameter, so no
+/// implementation arity can be out of its reach). A `this` parameter is a
+/// type annotation, not an argument, and is excluded from both counts —
+/// `m(this: C): void; m(this: C, a: number) {}` is TS2394 for the `a`.
+fn signature_max_args(params : Array[@ast.TsParam]) -> Int {
+  let mut n = 0
+  for p in params {
+    if p.is_rest {
+      return -1
+    }
+    if p.name == "this" {
+      continue
+    }
+    n = n + 1
+  }
+  n
+}
+
+///|
+/// The number of arguments an IMPLEMENTATION cannot do without: the
+/// leading parameters that are neither optional (`x?`), defaulted
+/// (`x = e`) nor rest. A required parameter cannot legally follow an
+/// optional one (TS1016), so stopping at the first omittable one is
+/// equivalent to counting them all and is the conservative reading if
+/// that rule is ever violated — a LOWER required count only ever silences
+/// the check. A parameter property (`constructor(private a: number)`) is
+/// an ordinary required parameter and is counted.
+fn impl_required_arity(params : Array[@ast.TsParam]) -> Int {
+  let mut n = 0
+  for p in params {
+    if p.is_rest {
+      break
+    }
+    if p.name == "this" {
+      continue
+    }
+    if p.is_optional || p.default is Some(_) {
+      break
+    }
+    n = n + 1
+  }
+  n
+}
+
+///|
 priv enum ClassElement {
   Method(Bool, ClassKey, String?, @ast.TsFunc)
   // `Field(is_static, key, type, init, is_readonly, has_definite_assertion)`
@@ -2197,6 +2265,13 @@ fn Parser::parse_class_body(
   // the `TsFunc.body` blocker this repo records for TS2393 / TS2394.
   // The parser has `has_body_block` and does not need to guess.
   let bodied_method_keys : Map[String, Bool] = {}
+  // TS2394 support: for each member key, the largest argument count each
+  // BODILESS overload signature of it can supply (`-1` = unbounded, i.e.
+  // the signature has a rest parameter). Compared against the
+  // IMPLEMENTATION's required arity when that arrives — see
+  // `signature_max_args` / `impl_required_arity` for why only that one
+  // direction is an error.
+  let sig_max_args : Map[String, Array[Int]] = {}
   let mut ctor : @ast.TsFunc? = None
   // Count constructor *implementations* (a `constructor(...) { ... }` with a
   // real body). Two or more is TS2392 ("Multiple constructor implementations
@@ -2934,13 +3009,25 @@ fn Parser::parse_class_body(
       // overload signature). Used below to count constructor implementations
       // for TS2392.
       let has_body_block = not(consumed_semi) && self.check(LBrace)
+      // TS2371: a parameter initializer belongs to an IMPLEMENTATION, so a
+      // bodiless class member cannot carry one — an overload signature
+      // (`foo(a = 4);`), an `abstract` member, and a `declare class`
+      // member are all the same error, which is why the test is
+      // `has_body_block` and not the modifiers. The rule already existed
+      // for bodiless FUNCTION declarations and for interface members and
+      // had nothing here, so `class C { foo(a = 4); foo(a, b) {} }` parsed
+      // clean; `record_bodiless_param_initializers` is now the one
+      // recorder for both.
+      if not(has_body_block) {
+        self.record_bodiless_param_initializers(params)
+      }
       // TS2393 ("Duplicate function implementation"): two methods of one
       // name in one class body, both with a body
       // (parserMemberFunctionDeclarationAmbiguities1, whose `public()`
       // and `public public()` are the same member spelled twice).
       // Overloads legally repeat a name, which is exactly why the test is
       // on the BODY rather than the name.
-      if has_body_block && method_name != "<computed>" {
+      if method_name != "<computed>" {
         let mkey = (if is_static { "s:" } else { "i:" }) +
           (match accessor_kind {
             Some(k) => k
@@ -2948,12 +3035,40 @@ fn Parser::parse_class_body(
           }) +
           ":" +
           method_name
-        if bodied_method_keys.get(mkey) is Some(_) {
-          self.grammar_misuses.push(
-            "duplicate function implementation: `" + method_name + "`",
-          )
+        if has_body_block {
+          // TS2393 ("Duplicate function implementation").
+          if bodied_method_keys.get(mkey) is Some(_) {
+            self.grammar_misuses.push(
+              "duplicate function implementation: `" + method_name + "`",
+            )
+          } else {
+            bodied_method_keys[mkey] = true
+          }
+          // TS2394: an overload signature that cannot reach its own
+          // implementation. Signatures precede the implementation in
+          // every legal spelling, so by the time the body arrives every
+          // signature of this member has been recorded; an
+          // implementation written FIRST records nothing and costs a
+          // MISS rather than a wrong answer.
+          if sig_max_args.get(mkey) is Some(maxes) {
+            let need = impl_required_arity(params)
+            for m in maxes {
+              if m >= 0 && m < need {
+                self.grammar_misuses.push(
+                  "this overload signature is not compatible with its implementation signature: `" +
+                  method_name +
+                  "`",
+                )
+                break
+              }
+            }
+          }
         } else {
-          bodied_method_keys[mkey] = true
+          let m = signature_max_args(params)
+          match sig_max_args.get(mkey) {
+            Some(arr) => arr.push(m)
+            None => sig_max_args[mkey] = [m]
+          }
         }
       }
       // TS1249: a decorator can only decorate a method IMPLEMENTATION,

@@ -4660,14 +4660,14 @@ if a bridge target uses them.
 
 ### The recommendation that is not a rule — DONE
 
-- [x] **Two MISS numbers.** `MISS in scope 157` (the backlog, which can
+- [x] **Two MISS numbers.** `MISS in scope 154` (the backlog, which can
   reach zero) beside `OUT OF SCOPE 17` (declared). `--scope-file /dev/null`
   reproduces the old single 174 — verified, not asserted.
   Nothing but the MISS branch consults the scope file, so a listed file can
   still be a TP, an FP or a PFLEGAL exactly as before: being out of scope
   withholds a rule, it does not excuse a wrong answer. The FP budget is
   untouched at 0.
-- [x] `just verify-checker-soundness` gains `--max-miss 157`, which closes
+- [x] `just verify-checker-soundness` gains `--max-miss`, which closes
   a direction NOTHING watched: a rule that stops firing moves a file from
   TP to MISS, and every other number in the report absorbs that silently.
   Lower the budget whenever a batch improves it, the way the FP budget only
