@@ -63,6 +63,117 @@ fn Parser::record_suppressible_grammar_misuse(
 }
 
 ///|
+/// TS2378 ("A 'get' accessor must return a value") for an OBJECT-LITERAL
+/// getter with an empty body — `var v = { get Foo() { } }`.
+///
+/// `check_getter_returns_value` in the checker already answers this for
+/// CLASS getters, with a careful set of abstentions (a `throw`, a loop, a
+/// bare `return;`, a return annotation that accepts `undefined`). It reads
+/// `module_.classes` and nothing else, so the object-literal spelling was
+/// never covered — and its own doc comment names the `parserAccessors`
+/// cluster, two of whose files (`parserAccessors3`, `parserES3Accessors3`)
+/// are exactly `var v = { get Foo() { } }`.
+///
+/// Restricted here to the EMPTY body, which is why none of those
+/// abstentions need repeating: a body with no statements has no `throw`, no
+/// loop and no `return` of either kind. A non-empty object-literal getter
+/// abstains rather than duplicating the checker's flow logic — that
+/// duplication is the mistake this batch keeps finding. The two accessor
+/// parse paths share this helper for the same reason: TS1054 / TS1049 are
+/// written out at both of them.
+///
+/// `had_annotation` is required because the parser stores a MISSING return
+/// annotation as `Any`, which is indistinguishable from an explicit
+/// `: any` once in the AST — and an explicit `: any` / `: void` /
+/// `: undefined` / `: unknown` makes falling off the end well-typed, so tsc
+/// raises nothing there.
+/// TS1117 ("An object literal cannot have multiple properties with the same
+/// name"). Placed where `fields` is complete, which is the one site an
+/// object literal is finished at.
+///
+/// Three shapes deliberately do NOT count as duplicates, and each is legal
+/// TypeScript rather than an abstention:
+///   - a `get x` / `set x` PAIR, which the parser keys as `@@get:x` and
+///     `@@set:x`. Two getters of one name is a duplicate, and comparing the
+///     prefixed keys gives that for free;
+///   - a SPREAD entry, whose key is a sentinel rather than a name, and
+///     which may legally supply a key another entry also writes
+///     (`{ ...o, a: 1 }` is the standard override idiom);
+///   - a COMPUTED key whose expression we cannot spell, stored as
+///     `@@computed:<index>`. Those can never compare equal to each other
+///     because the index differs per entry, so they cost nothing here.
+/// Any key beginning with `<` or `@@` other than the accessor prefixes is
+/// therefore skipped, which is the same sentinel convention
+/// `parse_var_like`'s TS2850 check already reads.
+///
+/// A WELL-KNOWN-SYMBOL computed key is the exception, and it is the one
+/// this comment used to record as a deliberate MISS: `{
+/// [Symbol.isConcatSpreadable]: 0, [Symbol.isConcatSpreadable]: 1 }`
+/// (`symbolProperty36`) IS a duplicate, because `Symbol.isConcatSpreadable`
+/// names one specific symbol. The blocker written down here was that only
+/// the CLASS key path resolves such a key to a stable `@@<name>`, and
+/// renaming the object-literal key would move keys the mangler and the
+/// dead-property pass read. That was true of the approach and beside the
+/// point: the parser wraps a computed entry's VALUE as
+/// `ComputedProp(key_expr, value)`, so the key expression is already here
+/// and nothing has to be renamed to compare it. Arbitrary key expressions
+/// stay opaque — two calls to the same function may well produce two
+/// different symbols — so only the `Symbol.<wk>` shape gets a name.
+fn Parser::record_objlit_duplicate_keys(
+  self : Parser,
+  fields : Array[(String, @ast.TsExpr)],
+) -> Unit {
+  let seen : Map[String, Unit] = {}
+  let reported : Map[String, Unit] = {}
+  for f in fields {
+    let k = match (f.0.has_prefix("@@computed:"), f.1) {
+      (true, ComputedProp(PropAccess(Var("Symbol"), wk), _)) => "@@wk:" + wk
+      _ => f.0
+    }
+    // Sentinel keys (spread, computed, and anything else the parser cannot
+    // spell) are not comparable names. The accessor prefixes ARE, and they
+    // distinguish a getter from a setter of the same name, which is why
+    // they are compared as-is rather than stripped.
+    if k.has_prefix("<") ||
+      (
+        k.has_prefix("@@") &&
+        not(k.has_prefix("@@get:")) &&
+        not(k.has_prefix("@@set:")) &&
+        not(k.has_prefix("@@wk:"))
+      ) {
+      continue
+    }
+    if seen.contains(k) && not(reported.contains(k)) {
+      reported[k] = ()
+      self.grammar_misuses.push(
+        "an object literal cannot have multiple properties with the same name",
+      )
+    }
+    seen[k] = ()
+  }
+}
+
+///|
+fn Parser::record_objlit_getter_returns(
+  self : Parser,
+  is_getter : Bool,
+  had_annotation : Bool,
+  return_type : @ast.TsType,
+  body : @ast.TsBlock,
+) -> Unit {
+  if not(is_getter) || body.stmts.length() > 0 {
+    return
+  }
+  if had_annotation {
+    match return_type {
+      Any | Unknown | Void | Undefined | Null => return
+      _ => ()
+    }
+  }
+  self.grammar_misuses.push("a `get` accessor must return a value")
+}
+
+///|
 /// Push a label onto the active-label stack, recording TS1114 ("Duplicate
 /// label") when one of that name is already active.
 ///
@@ -80,10 +191,124 @@ fn Parser::record_suppressible_grammar_misuse(
 /// rule written at one of two spellings is how `eval++` went unchecked for
 /// as long as it did.
 fn Parser::enter_label(self : Parser, name : String) -> Unit {
-  if self.labels.contains(name) {
+  if self.has_label(name) {
     self.record_suppressible_grammar_misuse("duplicate label `\{name}`")
   }
-  self.labels.push(name)
+  // `break` may target ANY label; `continue` only an ITERATION one
+  // (TS1115), so the stack has to carry which kind each entry is. It is
+  // encoded in the entry rather than kept in a second array on purpose:
+  // fourteen sites in three files save, clear and restore `self.labels`
+  // around a function body, and a parallel field would have to be threaded
+  // through every one of them — which is precisely the "written in several
+  // places, updated in some" shape this file keeps recording. A prefix
+  // rides along through an opaque copy for free.
+  self.labels.push(
+    (if self.label_targets_iteration() { "i:" } else { "n:" }) + name,
+  )
+}
+
+///|
+/// Is the cursor — positioned just after a label's `:` — at an ITERATION
+/// statement?
+///
+/// A label chain counts: in `outer: inner: while (c) …` both labels label
+/// the `while`, so `continue outer` is legal. The chain is skipped by
+/// lookahead rather than by recursion because `enter_label` runs before the
+/// labelled statement is parsed, which is the only point where the
+/// distinction is still cheap.
+fn Parser::label_targets_iteration(self : Parser) -> Bool {
+  let mut i = 0
+  // `Yield` as well as `Ident`: the non-strict `yield:` spelling is a
+  // second way to write a label, and a chain may mix them.
+  while self.peek_at(i).kind is (Ident(_) | Yield) &&
+        self.peek_at(i + 1).kind is Colon {
+    i += 2
+  }
+  match self.peek_at(i).kind {
+    For | While | Do => true
+    _ => false
+  }
+}
+
+///|
+/// Is `name` an active label of any kind? Answers `break`'s question.
+fn Parser::has_label(self : Parser, name : String) -> Bool {
+  self.labels.contains("i:" + name) || self.labels.contains("n:" + name)
+}
+
+///|
+/// Is `name` an active label on an ITERATION statement? Answers
+/// `continue`'s narrower question (TS1115): `target: continue target;`
+/// names a live label and still cannot be continued to, because a labelled
+/// expression statement is not a loop (`parser_continueTarget1`).
+fn Parser::has_iteration_label(self : Parser, name : String) -> Bool {
+  self.labels.contains("i:" + name)
+}
+
+///|
+/// TS2391 ("Function implementation is missing or not immediately following
+/// the declaration").
+///
+/// Called for every function declaration the statement stream produces,
+/// with whether it had a body. Several overload signatures may stack above
+/// ONE implementation and they must all name the same function, so what
+/// has to be true after a bodyless declaration is simply that the NEXT
+/// declaration is a function of the same name — either another signature
+/// or the implementation.
+///
+/// That is answered by LOOKAHEAD rather than by carrying a pending-run
+/// across statements, and the difference is not stylistic. The first
+/// version kept the run on the parser and flushed it whenever
+/// `parse_stmt` saw something that was not a function declaration — which
+/// fires for the statements INSIDE a nested function body too, because
+/// `parse_function` parses the body through the same funnel. So a
+/// perfectly legal three-signature set inside another function
+/// (`recursiveTypesUsedAsFunctionParameters`, TS7-ACCEPTED) reported the
+/// run the moment the implementation's own `return null;` was parsed. A
+/// scope-saved field would have had to be threaded through every
+/// save/restore site around a function body — the shape this file keeps
+/// recording — and the lookahead needs no scope model at all.
+///
+/// Silent in an ambient context, where a bodyless declaration asserts an
+/// implementation exists elsewhere and is the normal spelling — that is
+/// the whole content of a `.d.ts`. Silent, too, when the follower is
+/// `export` or `declare`: an exported overload set is parsed elsewhere, so
+/// the name is not visible from here and abstaining costs a MISS rather
+/// than risking a false positive.
+fn Parser::note_function_declaration(
+  self : Parser,
+  name : String,
+  bodiless : Bool,
+) -> Unit {
+  if not(bodiless) || self.in_ambient_module {
+    return
+  }
+  // Offset of the follower's NAME token, or `None` when the follower is
+  // not a function declaration at all (`}`, `var`, end of file).
+  let name_at = match self.peek().kind {
+    Export | Declare => return
+    Function => if self.peek_at(1).kind is Star { Some(2) } else { Some(1) }
+    Ident("async") =>
+      if self.peek_at(1).kind is Function {
+        if self.peek_at(2).kind is Star {
+          Some(3)
+        } else {
+          Some(2)
+        }
+      } else {
+        None
+      }
+    _ => None
+  }
+  let follows = match name_at {
+    Some(i) => self.peek_at(i).kind is Ident(n) && n == name
+    None => false
+  }
+  if not(follows) {
+    self.record_suppressible_grammar_misuse(
+      "function implementation is missing or not immediately following the declaration for `\{name}`",
+    )
+  }
 }
 
 ///|
@@ -243,9 +468,17 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     Ident("async") if self.peek_at(1).kind == Function &&
       !self.has_line_terminator_after() => {
       let _ = self.advance()
+      // `parse_function` reads `in_async` to learn whether the function it
+      // is about to parse is async, and saves / restores it around the
+      // BODY itself — so this site only has to hand it the answer and put
+      // back whatever was there. Clearing it to `false` unconditionally
+      // (which is what this did) turned the rest of an enclosing async
+      // body non-async the moment it declared a nested `async function`.
+      let prev_async = self.in_async
       self.in_async = true
       let func = self.parse_function()
-      self.in_async = false
+      self.in_async = prev_async
+      self.note_function_declaration(func.name, self.last_function_bodiless)
       if self.last_function_bodiless {
         Empty
       } else {
@@ -256,6 +489,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // internalfunctiondefine: function name() { ... }
       // Let(name, Any, FuncExpr(func))
       let func = self.parse_function()
+      self.note_function_declaration(func.name, self.last_function_bodiless)
       // A bodyless declaration is an overload signature or an ambient
       // `declare function`: type-only, and there can be several of them
       // above the one real implementation. Emitting each as
@@ -291,7 +525,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
           }
         Some(name) =>
           // Check if label exists
-          if !self.labels.contains(name) {
+          if !self.has_label(name) {
             raise ParseError("Undefined label '\{name}'")
           }
       }
@@ -320,9 +554,16 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
             raise ParseError("Illegal continue statement")
           }
         Some(name) =>
-          // Check if label exists (should be an iteration label for continue)
-          if !self.labels.contains(name) {
+          // TS1115: the label must exist AND must label an iteration
+          // statement. An undefined label is a hard parse error (tsc
+          // recovers, we reject); a label that exists but is not on a loop
+          // is a recorded diagnostic, so the rest of the file still parses.
+          if !self.has_label(name) {
             raise ParseError("Undefined label '\{name}'")
+          } else if !self.has_iteration_label(name) {
+            self.record_suppressible_grammar_misuse(
+              "a `continue` statement can only jump to a label of an enclosing iteration statement",
+            )
           }
       }
       self.consume_semicolon()
@@ -330,6 +571,20 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     Semicolon => {
       let _ = self.advance()
+      // TS1036 evidence: a bare `;` is an EMPTY STATEMENT, and a statement
+      // of any kind is illegal in an ambient (`.d.ts`) file — at top level
+      // and inside a `declare namespace` body alike. The `;` that
+      // separates interface or class members is not a statement and never
+      // reaches here.
+      //
+      // Recorded as a marker rather than added to the statement-kind list
+      // in `check_dts_top_level_modifiers`, because the `Empty` this arm
+      // returns is indistinguishable there from the `Empty` that an
+      // `interface`, a `type` alias, a bodiless `declare function` and a
+      // skipped namespace all lower to — putting `Empty` in that list
+      // would fire on nearly every real `.d.ts`. Only the `.d.ts` channel
+      // consumes the marker, so it is inert in a `.ts` file.
+      self.grammar_misuses.push("<empty-stmt>")
       Empty
     }
     LBrace => {
@@ -390,6 +645,51 @@ fn Parser::parse_var(self : Parser) -> @ast.TsStmt raise ParseError {
 }
 
 ///|
+/// Where an `await using` declaration is allowed, and the evidence for
+/// the rules that need more than the parser knows.
+///
+/// A no-op for a plain `using`, which has none of these constraints.
+///
+/// One function rather than a copy at each declaration site, because the
+/// TS2854 marker was written at ONE of the two and that is exactly the
+/// shape this repo keeps recording: `parse_var_like` handles a top-level
+/// `using`, and the block-statement path below handles one inside a
+/// block — which is how `awaitUsingDeclarations.2` / `.3` are written, so
+/// the marker could never fire for them.
+///
+/// The three contexts are disjoint and each has its own answer. A static
+/// block is checked FIRST because it is neither a function nor module top
+/// level, and neither `in_function` nor `in_async` can say so: a
+/// top-level class's static block leaves `in_function` false, and a class
+/// declared inside an `async` function leaves `in_async` true.
+fn Parser::record_await_using_context(self : Parser, using_kw : String) -> Unit {
+  if using_kw != "await using" {
+    return
+  }
+  // TS18054.
+  if self.in_static_block {
+    self.grammar_misuses.push(
+      "`await using` statements cannot be used inside a class static block",
+    )
+    return
+  }
+  if self.in_function {
+    // TS2852.
+    if not(self.in_async) {
+      self.grammar_misuses.push(
+        "`await using` statements are only allowed within async functions and at the top levels of modules",
+      )
+    }
+    return
+  }
+  // Top level. Evidence for TS2854 (requires `target` >= es2017) and
+  // TS2853 (requires the file to BE a module); both need a directive or a
+  // whole-file fact the parser does not have here, so they are decided in
+  // the checker.
+  self.grammar_misuses.push("<top-level-await-using>")
+}
+
+///|
 fn Parser::parse_var_like(
   self : Parser,
   kind : VarKind,
@@ -422,11 +722,7 @@ fn Parser::parse_var_like(
     // Marker for the lib-directive TS2318 rule: a `using` declaration
     // requires the `Disposable` global type (usingDeclarations.9).
     self.grammar_misuses.push("<has-using>")
-    // TS2854 evidence: a TOP-LEVEL `await using` requires target >=
-    // es2017 (awaitUsingDeclarations.1-3 run pre-es2017 variants).
-    if using_kw == "await using" && !self.in_function {
-      self.grammar_misuses.push("<top-level-await-using>")
-    }
+    self.record_await_using_context(using_kw)
     for st in stmts {
       match st {
         Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
@@ -438,6 +734,16 @@ fn Parser::parse_var_like(
             _ => ()
           }
           match init {
+            // TS1155: "'using' declarations must be initialized." There is
+            // nothing to dispose without an initializer, so unlike `let`
+            // the declarator is not optional. `parse_var_decl_list_from`
+            // substitutes the `__ts_no_init__` sentinel for a declarator
+            // the source left bare, which is how the absence is visible
+            // here at all — `Var(b, _, init)` has no `None` case.
+            Var("__ts_no_init__") =>
+              self.grammar_misuses.push(
+                "'\{using_kw}' declarations must be initialized",
+              )
             ObjectLit(entries) => {
               let mut keys_plain = true
               for e in entries {
@@ -680,17 +986,39 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
   let try_block = self.parse_block()
   let mut catch_binding : @ast.TsBinding? = None
   let mut catch_block : @ast.TsBlock? = None
+  let mut catch_name = ""
+  let mut had_annotation = false
   if self.match_(Catch) {
     if self.match_(LParen) {
       let binding = self.parse_binding_pattern()
+      had_annotation = self.check(Colon)
       if self.check(Colon) {
         let _ = self.advance()
-        let _ = self.parse_type()
+        let catch_type = self.parse_type()
+        // TS1196: "Catch clause variable type annotation must be 'any' or
+        // 'unknown' if specified." A `throw` can carry any value, so
+        // narrowing the caught binding would be a claim TypeScript will not
+        // let you make (`catch (e: Error)` —
+        // parserCatchClauseWithTypeAnnotation1). The annotation was parsed
+        // and discarded here already; only the check was missing.
+        match catch_type {
+          Any | Unknown => ()
+          _ =>
+            self.grammar_misuses.push(
+              "catch clause variable type annotation must be `any` or `unknown` if specified",
+            )
+        }
       }
       let _ = self.expect(RParen)
       catch_binding = Some(binding)
+      catch_name = match binding {
+        @ast.TsBinding::Ident(n) => n
+        _ => ""
+      }
     }
+    let catch_body_start = self.pos
     catch_block = Some(self.parse_block())
+    self.record_unknown_catch_use(catch_name, had_annotation, catch_body_start)
   }
   let mut finally_block : @ast.TsBlock? = None
   if self.match_(Finally) {
@@ -701,6 +1029,66 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
     _ => ()
   }
   Try(try_block, catch_binding, catch_block, finally_block)
+}
+
+///|
+/// TS18046 ("'e' is of type 'unknown'"): an unannotated `catch (e)`
+/// binding is `unknown` under `useUnknownInCatchVariables`, so touching
+/// it without narrowing first is an error — the single most common thing
+/// a codebase hits when it turns `strict` on.
+///
+/// Decided over the catch block's TOKEN range, for the reason the
+/// private-member rules give: every mention of the binding must spell
+/// its name, so a scan is complete by construction where an expression
+/// walker missing one arm would lose findings silently.
+///
+/// A USE is the name followed by `.`, `[` or `(` — the three ways to
+/// touch a value of unknown type. Any of five NARROWING or reassignment
+/// spellings anywhere in the block withdraws the report for the whole
+/// block: `typeof e`, `e instanceof`, `e as`, `e!`, and an assignment to
+/// `e`. That is deliberately coarse — narrowing is flow-sensitive and
+/// this is not a flow analysis — so a block that narrows in one branch
+/// and not another abstains entirely, costing a MISS rather than
+/// inventing a finding. `controlFlowAliasingCatchVariables` is exactly
+/// that shape and stays a MISS; the aliased form
+/// (`const isE = typeof e === "string"`) is caught by the `typeof e`
+/// token, which is why the alias needs no special case.
+fn Parser::record_unknown_catch_use(
+  self : Parser,
+  name : String,
+  had_annotation : Bool,
+  body_start : Int,
+) -> Unit {
+  if name == "" || had_annotation || not(self.unknown_catch_variables) {
+    return
+  }
+  let mut used = false
+  for i in body_start..<self.pos {
+    guard self.tokens[i].kind is Ident(n) else { continue }
+    if n != name {
+      continue
+    }
+    let prev = if i > 0 { self.tokens[i - 1].kind } else { Eof }
+    let next = if i + 1 < self.tokens.length() {
+      self.tokens[i + 1].kind
+    } else {
+      Eof
+    }
+    if prev is Typeof {
+      return
+    }
+    match next {
+      Instanceof | As | Eq | Bang => return
+      Ident("as") => return
+      Dot | LBracket | LParen => used = true
+      _ => ()
+    }
+  }
+  if used {
+    self.grammar_misuses.push(
+      "`\{name}` is of type `unknown` — narrow it before use",
+    )
+  }
 }
 
 ///|
@@ -772,6 +1160,24 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
     let case_stmt_positions : Array[Int] = []
     while !self.check(Case) && !self.check(Default) && !self.check(RBrace) {
       case_stmt_positions.push(self.peek().pos)
+      // TS1547 / TS1548: "'using' / 'await using' declarations are not
+      // allowed in 'case' or 'default' clauses unless contained within a
+      // block." The clause bodies of one `switch` share a scope, so a
+      // disposable bound in one clause would outlive it. Checked by
+      // peeking at the statement about to be parsed rather than by
+      // carrying a flag: a clause body is a statement LIST, so the
+      // enclosing-block question is answered by where we are standing,
+      // and `case 1: { using x = d; }` reaches `parse_block` instead and
+      // is correctly untouched.
+      if self.is_using_declaration_start() {
+        self.grammar_misuses.push(
+          "`using` declarations are not allowed in `case` or `default` clauses unless contained within a block",
+        )
+      } else if self.is_await_using_declaration_start() {
+        self.grammar_misuses.push(
+          "`await using` declarations are not allowed in `case` or `default` clauses unless contained within a block",
+        )
+      }
       stmts.push(self.parse_stmt())
     }
     cases.push({
@@ -845,6 +1251,16 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   if self.check(Ident("await")) {
     let _ = self.advance()
     is_await = true
+    // TS18038 ("'for await' loops cannot be used inside a class static
+    // block"): a static block is not an async context, and unlike the
+    // TS2852 / TS18054 `using` family this one needs no other condition —
+    // `classStaticBlock23` puts the same loop inside an `async function`
+    // to show that the enclosing function does not rescue it.
+    if self.in_static_block {
+      self.grammar_misuses.push(
+        "`for await` loops cannot be used inside a class static block",
+      )
+    }
   }
   let _ = self.expect(LParen)
 
@@ -881,6 +1297,11 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       }
     }
     let binding = self.parse_binding_pattern()
+    // The THIRD `using` declaration site, after `parse_var_like` and the
+    // block-statement path — a for-head. `for await (await using x of y)`
+    // is the shape `awaitUsingDeclarationsInForOf` / `InForAwaitOf` test,
+    // and it needs the same context answer as the other two.
+    self.record_await_using_context(using_kw)
     // TS1492: `for (using [a] of ...)` / `for (await using {} of ...)` —
     // a `using` head never takes a binding pattern.
     if using_declaration && binding is (Array(_) | Object(_)) {
@@ -888,6 +1309,13 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         "'\{using_kw}' declarations may not have binding patterns",
       )
     }
+    // TS2451 for a duplicate name inside a for-head destructuring pattern
+    // (`for (let [v, v] of …)`). A `var` head merges and is exempt, the
+    // same distinction the declaration site makes.
+    self.record_pattern_duplicate_bindings(
+      binding,
+      kind is (@ast.TsForOfKind::Let | @ast.TsForOfKind::Const),
+    )
     // TS2480: `for (let let of ...)` / `for (const let in ...)`.
     match (kind, binding) {
       (
@@ -906,6 +1334,18 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       if is_await && is_in {
         raise ParseError("for-await-of requires 'of'")
       }
+      // TS1493 / TS1494: "The left-hand side of a 'for...in' statement
+      // cannot be a 'using' / 'await using' declaration." A disposable
+      // binding needs a scope that ends deterministically, and `for...in`
+      // does not give one — `for (using x of …)`, twenty lines below in
+      // the same branch, IS legal, which is why this keys on `is_in` and
+      // not on the `using` head alone. The sibling TS1492 (a binding
+      // pattern in a `using` head) was already recorded above.
+      if is_in && using_declaration {
+        self.grammar_misuses.push(
+          "the left-hand side of a `for...in` statement cannot be a `\{using_kw}` declaration",
+        )
+      }
       let _ = self.advance() // of/in
       let iterable = self.parse_expr()
       let _ = self.expect(RParen)
@@ -914,6 +1354,9 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       self.in_iteration = true
       let body = self.parse_block_or_stmt_no_lexical()
       self.in_iteration = prev_iteration
+      self.record_for_head_binding_misuses(
+        kind, binding, var_type, iterable, body,
+      )
       // Preserve the explicit type annotation on the loop binding when
       // present; `parse_var_decl_type` returns `Any` otherwise.
       if is_in {
@@ -923,6 +1366,19 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         return ForAwaitOf(kind, binding, var_type, iterable, body)
       }
       return ForOf(kind, binding, var_type, iterable, body)
+    }
+    // TS1155: a `using` declaration must be initialized. The rule exists
+    // at the statement site (`parse_var_like`) and this C-style for-head
+    // is a second declaration site it never reached. Note what is LEGAL
+    // here, from the baseline rather than from reasoning:
+    // `for (using of = null;;)` and `for (using of: null = null;;)` are
+    // both fine — a `using` in a C-style for head is allowed, and only
+    // the missing initializer is the error (`usingDeclarationsInForOf.4`
+    // errors on its third line alone).
+    if using_declaration && not(self.check(Eq)) {
+      self.grammar_misuses.push(
+        "'\{using_kw}' declarations must be initialized",
+      )
     }
     let var_kind = match kind {
       @ast.TsForOfKind::Var => VarKind::Var
@@ -942,11 +1398,41 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     None
   } else {
     if self.is_for_of_head() {
+      // Whether the left-hand side was written in parentheses. The AST
+      // cannot answer: `parse_assignment_binding_pattern` strips them, so
+      // `(async)` and `async` both arrive as `Ident("async")` — and they
+      // differ (see TS1106 below).
+      let lhs_parenthesized = self.check(LParen)
       let binding = self.parse_assignment_binding_pattern()
       if self.check(Of) || self.check(In) {
         let is_in = self.check(In)
         if is_await && is_in {
           raise ParseError("for-await-of requires 'of'")
+        }
+        // TS1106: the left-hand side of a `for...of` may not be `async`.
+        // It is a lookahead restriction rather than a semantic rule — it
+        // exists so `for (async of …)` cannot be read as the start of
+        // `for await (… of …)` — so even a file where `async` is an
+        // ordinary declared variable is an error (`var async; for (async
+        // of [1, 2]) {}`, parserForOfStatement22).
+        //
+        // All three exemptions are cases where that ambiguity cannot
+        // arise, and each was a corpus FALSE POSITIVE before it was
+        // added, not a case reasoned out in advance:
+        //   `for (async in x)`      — a different statement form;
+        //   `for await (async of x)` — `await` is already written, so
+        //                              there is nothing to confuse it
+        //                              with (parserForOfStatement23);
+        //   `for ((async) of x)`     — a parenthesized LHS is not the bare
+        //                              token the restriction names
+        //                              (parserForOfStatement24).
+        if not(is_in) &&
+          not(is_await) &&
+          not(lhs_parenthesized) &&
+          binding is @ast.TsBinding::Ident("async") {
+          self.grammar_misuses.push(
+            "the left-hand side of a `for...of` statement may not be `async`",
+          )
         }
         let _ = self.advance()
         let iterable = self.parse_expr()
@@ -1355,6 +1841,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       // usingDeclarations.9's block-scoped form lowers here, not through
       // `parse_var_like`).
       self.grammar_misuses.push("<has-using>")
+      self.record_await_using_context(using_kw)
       // Later declarators of a multi-declarator `using` land inside the
       // init as a comma chain (`using a = null, [b] = null, c = null`
       // parses `null, ([b] = null), (c = null)`). A destructuring
@@ -1572,6 +2059,21 @@ fn Parser::is_disallowed_lexical_stmt_start(
   match self.peek().kind {
     Let => !self.is_let_identifier_expr_start()
     Const | Class => true
+    // TS1156: "'using' / 'await using' declarations can only be declared
+    // inside a block." A `using` declaration is lexical exactly like
+    // `let` / `const`, so `if (c) using x = d;` is not legal TypeScript.
+    // The arm was missing because `using` was added to the parser after
+    // this check was written — the same omission shape as the `let` /
+    // `const` arms above, which is why it lives here rather than in a
+    // second predicate.
+    //
+    // Both spellings are gated on the same look-ahead the statement
+    // parser uses, so a plain identifier REFERENCE named `using`
+    // (`if (c) using;`, `while (c) using.foo();`) is untouched — that is
+    // legal JavaScript and the reason this cannot be a bare token test.
+    Ident("using") => self.is_using_declaration_start()
+    Ident("await") if self.peek_at(1).kind is Ident("using") =>
+      self.is_await_using_declaration_start()
     Function =>
       if self.peek_at(1).kind == Star {
         true
@@ -1591,8 +2093,16 @@ fn Parser::parse_var_decl_type(self : Parser) -> @ast.TsType raise ParseError {
   }
   if self.check(Colon) {
     let _ = self.advance()
+    // Whether the declarator carried an ANNOTATION, which the returned
+    // type cannot say: a missing annotation and an explicit `: any` are
+    // both `Any`. TS2493 needs the difference — `var [i]: any = []` is
+    // legal and `var [c] = []` is not. A "result of the last call" field
+    // in the shape of `last_function_bodiless`, read at the top of
+    // `parse_var_decl_item`, which is always the next thing to run.
+    self.last_var_decl_annotated = true
     self.parse_type()
   } else {
+    self.last_var_decl_annotated = false
     Any
   }
 }
@@ -1636,6 +2146,19 @@ fn Parser::parse_var_decl_item(
   type_ : @ast.TsType,
   kind : VarKind,
 ) -> @ast.TsStmt raise ParseError {
+  // TS2451 for a duplicate name inside ONE destructuring pattern. Placed
+  // here rather than at `parse_var_like`'s first declarator because every
+  // declarator of a group — `let { a, a } = x, [b, b] = y` — passes through
+  // this one function with its `kind`, so no declarator can be missed.
+  self.record_pattern_duplicate_bindings(
+    binding,
+    kind is (VarKind::Let | VarKind::Const),
+  )
+  // Read BEFORE the initializer is parsed: an initializer can contain a
+  // function body with its own declarations, whose `parse_var_decl_type`
+  // would overwrite the flag. Reading it here means a nested declaration
+  // cannot make this one look annotated.
+  let annotated = self.last_var_decl_annotated
   let init_opt = if self.match_(Eq) {
     Some(self.parse_assignment())
   } else {
@@ -1664,10 +2187,74 @@ fn Parser::parse_var_decl_item(
       }
     }
   }
+  if not(annotated) {
+    self.record_tuple_index_out_of_range(binding, init)
+  }
   match kind {
     Var => @ast.TsStmt::Var(binding, type_, init)
     Let => @ast.TsStmt::Let(binding, type_, init)
     Const => @ast.TsStmt::Const(binding, type_, init)
+  }
+}
+
+///|
+/// TS2493 ("Tuple type '[]' of length '0' has no element at index '0'"):
+/// an array binding pattern destructuring more positions than the array
+/// LITERAL it is initialized from actually has.
+///
+/// Decidable with no inference because both sides are written out. Every
+/// boundary was probed:
+///
+///   - a position with a DEFAULT is legal (`var [a = 1] = []`), so those
+///     are skipped;
+///   - a rest element does NOT save the positions before it
+///     (`var [d, ...r] = []` still reports index 0), but contributes no
+///     position of its own (`var [...r] = []` is legal);
+///   - an ELISION counts as a position (`var [, h] = [1]` reports
+///     index 1);
+///   - a SPREAD in the literal makes its length unknown, so
+///     `var [g] = [...xs]` abstains;
+///   - `as const` still errors, and our parser drops that wrapper, so the
+///     literal is seen and the answer comes out right; `[] as any[]`
+///     wraps in `As(...)`, which is not an `ArrayLit`, so it abstains;
+///   - nesting is real (`var [[b]] = [[]]` reports at the inner level),
+///     so the walk recurses through matching positions.
+///
+/// The annotation case is handled by the caller: `var [i]: any = []` is
+/// legal, and the annotation is the only thing that distinguishes it.
+/// Anything other than an array literal on the right abstains, which
+/// costs a MISS rather than inventing a finding.
+fn Parser::record_tuple_index_out_of_range(
+  self : Parser,
+  binding : @ast.TsBinding,
+  init : @ast.TsExpr,
+) -> Unit {
+  guard binding is Array(ab) else { return }
+  guard init is ArrayLit(items) else { return }
+  for it in items {
+    if it is Spread(_) {
+      return
+    }
+  }
+  for i, elem in ab.items {
+    if i >= items.length() {
+      // A default supplies the missing element; without one the index
+      // does not exist in the tuple.
+      let has_default = match elem {
+        Some(e) => e.default is Some(_)
+        None => false
+      }
+      if not(has_default) {
+        self.grammar_misuses.push(
+          "tuple type of length \{items.length()} has no element at index \{i}",
+        )
+      }
+      continue
+    }
+    match elem {
+      Some(e) => self.record_tuple_index_out_of_range(e.binding, items[i])
+      None => ()
+    }
   }
 }
 

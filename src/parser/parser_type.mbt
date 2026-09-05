@@ -254,7 +254,17 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
   // the element loop and surfaced once per offending tuple.
   let mut seen_optional = false
   let mut required_after_optional = false
-  while !self.check(Eof) {
+  while true {
+    // TS1005 ("`]` expected"): the element loop used to be
+    // `while !self.check(Eof)`, which EXITED SILENTLY at end of file --
+    // so `var v: [` parsed clean (TupleType4). A mismatched closer
+    // already raises through `expect(RBracket)` below; end of input was
+    // the one path with no diagnostic, and an unterminated tuple type is
+    // never legal, so the test cannot fire on good input.
+    if self.check(Eof) {
+      self.record_suppressible_grammar_misuse("`]` expected")
+      break
+    }
     let is_rest = self.match_ellipsis()
     // Labels like `[name: T]` strip the label tokens; `[name?: T]` is
     // additionally an optional element (equivalent to a trailing `?`
@@ -1427,6 +1437,20 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       if self.check(LParen) {
         let _ = self.advance()
+        // TS2307 evidence: an import TYPE names a module the same way an
+        // import statement does, so its specifier belongs in the list
+        // that check reads. This arm consumed and DISCARDED it, which is
+        // why `const x: import("fo") = …` — a typo next to a real
+        // `declare module "foo"` — was silent. The ambient-module
+        // exemption in the check is what keeps a correctly spelled
+        // `import("foo")` quiet.
+        match self.peek().kind {
+          Str(spec) =>
+            if not(self.multi_file_source) {
+              self.import_module_specs.push(spec)
+            }
+          _ => ()
+        }
         if self.check(Str("")) {
           let _ = self.advance()
         } else if self.peek().kind is Str(_) {

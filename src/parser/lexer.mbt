@@ -160,6 +160,11 @@ pub struct Lexer {
   mut unicode_escape_overflow_count : Int
   // TS1121: a legacy octal integer literal (`01`) — banned in TS.
   mut legacy_octal_literal_count : Int
+  // TS1489: a leading-zero literal that is NOT a legacy octal because an
+  // `8` or `9` appears in it (`09`, `019`). The two are the same branch
+  // below and only the octal half was recorded; this is the other exit.
+  // Target-independent — probed at es5 and esnext alike.
+  mut leading_zero_decimal_count : Int
   // Absolute source positions of invalid `\u` / `\x` escapes inside
   // TEMPLATE literals. Tagged templates accept invalid escapes (ES2018)
   // and taggedness is a parse-time fact, so the lexer only records —
@@ -167,6 +172,33 @@ pub struct Lexer {
   template_invalid_escape_positions : Array[Int]
   // TS1160: a template literal ran to EOF without its closing backtick.
   mut unterminated_template : Bool
+  // TS1010: a `/*` block comment ran to EOF without its closing `*/`
+  // (`scannerS7.4_A2_T2`, whose whole point is that `/*CHECK#1/` does not
+  // close one).
+  mut unterminated_block_comment : Bool
+  // TS1161: a regular-expression literal ran to end of LINE without its
+  // closing `/`. Distinct from `invalid_radix_digit_count` and friends
+  // because a regex cannot span a line at all.
+  mut unterminated_regex : Bool
+  // TS1002: a string literal that reaches a raw line terminator or the end
+  // of the file before its closing quote. The scanner's catch-all arm
+  // consumed ANY character including `\n`, so an unterminated string
+  // swallowed the rest of the file silently — the same shape as the
+  // unterminated-regex case below.
+  mut unterminated_string : Bool
+  // TS1125: a radix prefix with no digits after it — `0x`, `0b`, `0o`.
+  // The existing `invalid_radix_digit_count` answers a different
+  // question ("a digit outside this radix"), so `0x` alone slipped
+  // between them (`scannerS7.8.3_A6.1_T1`).
+  mut empty_radix_literal_count : Int
+  // TS1260: a keyword spelled with a unicode escape (`\u0076ar x = 1`).
+  // The escape decodes to a legal identifier, so the identifier scanner
+  // has no reason to object — but a KEYWORD may not be written that way.
+  mut escaped_keyword_count : Int
+  // TS1005: a regular-expression literal whose groups do not balance
+  // (`/fo(o/` — parser579071). Counted outside a character class only,
+  // where `(` is a literal (`/[(]/` is a perfectly good regex).
+  mut unbalanced_regex_group_count : Int
   src : String
   mut pos : Int
   mut allow_regex : Bool
@@ -194,6 +226,21 @@ pub struct Lexer {
   // through `Parser.jsdoc_at_pos`.
   jsdoc_at_pos : Map[Int, JsdocBlock]
 } derive(Debug)
+
+///|
+/// Latin-1 Supplement code points that are symbols or punctuation rather
+/// than identifier characters. See the TS1127 site in `next_token`.
+fn is_latin1_non_identifier_char(c : Char) -> Bool {
+  let b = c.to_int()
+  // `ª` (00AA), `µ` (00B5) and `º` (00BA) are ID_Start letters; `\u00A0`
+  // is a non-breaking SPACE, which is whitespace rather than an invalid
+  // character, and `\u00AD` is a soft hyphen (a format character). None
+  // of the four is an error.
+  if b == 0xAA || b == 0xB5 || b == 0xBA || b == 0xA0 || b == 0xAD {
+    return false
+  }
+  (b >= 0xA1 && b <= 0xBF) || b == 0xD7 || b == 0xF7
+}
 
 ///|
 fn is_word_like_char(c : Char) -> Bool {
@@ -234,8 +281,15 @@ pub fn Lexer::new(src : String) -> Lexer {
     invalid_unicode_escape_count: 0,
     unicode_escape_overflow_count: 0,
     legacy_octal_literal_count: 0,
+    leading_zero_decimal_count: 0,
     template_invalid_escape_positions: [],
     unterminated_template: false,
+    unterminated_block_comment: false,
+    unterminated_regex: false,
+    unterminated_string: false,
+    empty_radix_literal_count: 0,
+    escaped_keyword_count: 0,
+    unbalanced_regex_group_count: 0,
     src,
     // Skip a UTF-8/UTF-16 byte-order mark. Without this the BOM reaches
     // the identifier scanner as an unknown character and error recovery
@@ -396,7 +450,11 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             let _ = self.advance()
             while true {
               match self.peek() {
-                None => break
+                None => {
+                  // TS1010: end of file inside a block comment.
+                  self.unterminated_block_comment = true
+                  break
+                }
                 Some('*') =>
                   match self.peek_next() {
                     Some('/') => {
@@ -498,6 +556,10 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           }
         }
         if !has_digit {
+          // TS1125: a radix prefix with no digits after it (`0x`, `0b`,
+          // `0o`). Three arms — hex, binary, octal — each of which
+          // silently substituted 0, so the rule existed in none of them.
+          self.empty_radix_literal_count += 1
           value = 0.0
         }
         let mut is_bigint = false
@@ -555,6 +617,10 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           _ => ()
         }
         if !has_digit {
+          // TS1125: a radix prefix with no digits after it (`0x`, `0b`,
+          // `0o`). Three arms — hex, binary, octal — each of which
+          // silently substituted 0, so the rule existed in none of them.
+          self.empty_radix_literal_count += 1
           value = 0
         }
         let mut is_bigint = false
@@ -627,6 +693,10 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           _ => ()
         }
         if !has_digit {
+          // TS1125: a radix prefix with no digits after it (`0x`, `0b`,
+          // `0o`). Three arms — hex, binary, octal — each of which
+          // silently substituted 0, so the rule existed in none of them.
+          self.empty_radix_literal_count += 1
           value = 0
         }
         let mut is_bigint = false
@@ -675,6 +745,12 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           }
           return LegacyOctal(octal_value)
         } else {
+          // TS1489: the same leading zero, but an `8` or `9` makes it a
+          // DECIMAL rather than a legacy octal (`09`, `019`), which
+          // TypeScript rejects at every target. This branch already
+          // computed which of the two it is for the value; only the octal
+          // half recorded anything.
+          self.leading_zero_decimal_count = self.leading_zero_decimal_count + 1
           return Int(value)
         }
       }
@@ -880,7 +956,21 @@ fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
       None => break
     }
   }
-  classify_ident_or_keyword(buf.to_string())
+  // TS1260: "Keywords cannot contain escape characters." Only this path
+  // can produce one — the fast path in `scan_ident` never sees a
+  // backslash — and the escape decodes to a perfectly good identifier, so
+  // nothing downstream has a reason to object. `\u0076ar x = 1`
+  // (scannerUnicodeEscapeInKeyword1) scanned as the `var` KEYWORD and
+  // parsed clean.
+  //
+  // Keyed on the classification rather than on a name list: whatever
+  // `classify_ident_or_keyword` calls a keyword is one, so the two cannot
+  // drift apart.
+  let kind = classify_ident_or_keyword(buf.to_string())
+  if not(kind is Ident(_)) {
+    self.escaped_keyword_count += 1
+  }
+  kind
 }
 
 ///|
@@ -1189,7 +1279,27 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
   buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
-      None => break // (errorsimplehandle)
+      None => {
+        // TS1002: end of file before the closing quote.
+        self.unterminated_string = true
+        break
+      }
+      // TS1002: a RAW line terminator ends a string literal
+      // unterminated. An escaped one (`\` then a newline) is a line
+      // continuation and is handled in the escape arm below, so this only
+      // sees the illegal form.
+      //
+      // U+2028 / U+2029 are deliberately NOT here. They are line
+      // terminators for the grammar and were once illegal in a string
+      // literal, but ES2019 made them legal — and the corpus says so by
+      // name: `allowUnescapedParagraphAndLineSeparatorsInStringLiteral`
+      // is TS7-ACCEPTED and was the one PFLEGAL this rule shipped before
+      // measurement. (`scan_regex`'s line-terminator break DOES include
+      // them, because a regex literal still may not cross one.)
+      Some('\n') | Some('\r') => {
+        self.unterminated_string = true
+        break
+      }
       Some(c) =>
         if c == quote {
           let _ = self.advance()
@@ -2148,9 +2258,20 @@ fn Lexer::scan_regex(self : Lexer) -> TokenKind {
   let buf = StringBuilder::new()
   let mut in_class = false
   let mut escaped = false
+  // TS1005 evidence: unescaped group parens OUTSIDE a character class.
+  // Inside one `(` is an ordinary literal character, so `/[(]/` balances.
+  let mut group_depth = 0
+  let mut closed = false
   while true {
     match self.peek() {
+      // TS1161: end of input with no closing `/`.
       None => break
+      // TS1161: a regular-expression literal may not span a line, so a
+      // line terminator ends it unterminated rather than continuing the
+      // scan. Without this `/ b;` swallowed the rest of the file
+      // (`parserMissingToken2`), and the newline is deliberately NOT
+      // consumed so the following statements still tokenize.
+      Some('\n') | Some('\r') | Some('\u2028') | Some('\u2029') => break
       Some(c) => {
         let _ = self.advance()
         if escaped {
@@ -2169,11 +2290,24 @@ fn Lexer::scan_regex(self : Lexer) -> TokenKind {
           in_class = false
         }
         if c == '/' && !in_class {
+          closed = true
           break
+        }
+        if !in_class {
+          if c == '(' {
+            group_depth += 1
+          } else if c == ')' && group_depth > 0 {
+            group_depth -= 1
+          }
         }
         buf.write_char(c)
       }
     }
+  }
+  if not(closed) {
+    self.unterminated_regex = true
+  } else if group_depth > 0 {
+    self.unbalanced_regex_group_count += 1
   }
   let flags = StringBuilder::new()
   while true {
@@ -2634,6 +2768,23 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           // would fragment `var café = 1` into pieces. ASCII characters that
           // reach here are genuinely unknown and keep the legacy fallback.
           if c.to_int() >= 0x80 {
+            // TS1127 for the Latin-1 SYMBOLS and PUNCTUATION. Non-ASCII
+            // normally goes to the identifier scanner, which
+            // over-approximates ID_Continue as "any code unit >= 0x80" so
+            // that `変数` and `π` scan as one token — correct, and the
+            // reason `¬` (U+00AC, category Sm) parsed clean
+            // (parserErrorRecovery_Block2).
+            //
+            // Narrowed to one block rather than generalised, because
+            // without a Unicode table "not an identifier character" is
+            // exactly what cannot be decided here: U+00A1..U+00BF plus
+            // `×` and `÷` are symbols and punctuation in every language,
+            // with three exceptions that ARE ID_Start and are excluded —
+            // `ª` (U+00AA), `µ` (U+00B5) and `º` (U+00BA). Everything at
+            // U+00C0 and above keeps the permissive treatment.
+            if is_latin1_non_identifier_char(c) {
+              self.invalid_char_count += 1
+            }
             self.pos -= 1
             self.scan_ident()
           } else {

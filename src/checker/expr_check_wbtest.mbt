@@ -5708,8 +5708,13 @@ test "expr_check: comparing different string literals with === is flagged" {
 }
 
 ///|
-test "expr_check: unary minus on string is flagged" {
-  // `-"str"` — negation requires a numeric operand.
+test "expr_check: unary minus on a string is NOT an error" {
+  // `-s` on a string is LEGAL: unary `-` applies ToNumeric, so the
+  // operand coerces (`-"str"` is `NaN`) and tsc accepts it. This test
+  // asserted the opposite until batch CS, and it was pinning a false
+  // positive — the sixth test in this repo found doing that. The only
+  // type the operator refuses is `symbol` (TS2469), which the CS test
+  // covers.
   let src =
     #|function f(s: string): number {
     #|  return -s;
@@ -5719,8 +5724,8 @@ test "expr_check: unary minus on string is flagged" {
       let issues = check_function_body(f)
       let found = issues
         .iter()
-        .any(fn(i) { i.message.contains("not a valid number type") })
-      assert_true(found)
+        .any(fn(i) { i.message.contains("cannot be applied") })
+      assert_false(found)
     }
     None => fail("function not found")
   }
@@ -6477,16 +6482,37 @@ test "expr_check: unary plus accepts a string operand" {
 }
 
 ///|
-test "expr_check: unary minus still rejects a string operand" {
-  // Unlike `+`, unary `-` requires a numeric operand.
-  let src =
-    #|function f(s: string): number {
-    #|  return -s;
-    #|}
-  let module_ = parse_module_or_empty(src)
-  let issues = check_module_function_bodies(module_)
-  let unary = issues.filter(fn(i) { i.message.contains("valid number type") })
-  @test.assert_eq(unary.length(), 1)
+test "expr_check: unary minus accepts a string operand, and refuses a symbol" {
+  // `-` and `+` behave the SAME way here, contrary to what this test
+  // asserted before batch CS: both apply ToNumeric, so a string operand
+  // is legal. `symbol` is the one type either refuses (TS2469), and
+  // asserting both halves in one test is what keeps the rule from
+  // drifting back to "must be a number".
+  let ok = parse_module_or_empty(
+    (
+      #|function f(s: string): number {
+      #|  return -s;
+      #|}
+    ),
+  )
+  @test.assert_eq(
+    check_module_function_bodies(ok)
+    .filter(fn(i) { i.message.contains("cannot be applied") })
+    .length(),
+    0,
+  )
+  let bad = parse_module_or_empty(
+    (
+      #|declare const sy: symbol;
+      #|const q = -sy;
+    ),
+  )
+  @test.assert_eq(
+    check_module_function_bodies(bad)
+    .filter(fn(i) { i.message.contains("cannot be applied") })
+    .length(),
+    1,
+  )
 }
 
 ///|
@@ -10037,17 +10063,36 @@ test "expr_check: base accessor overridden by derived property (TS2610)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
-  // Under useDefineForClassFields, a base accessor overridden by a data
-  // property is an error.
+  // A base accessor overridden by a data property is an error, and it is
+  // an error with `useDefineForClassFields` either way.
+  //
+  // This test used to assert the opposite for the flag-off case, with the
+  // reason written in: "the property flows through the setter --
+  // allowed". That is a statement about how the field is EMITTED, and it
+  // is not what decides legality — probed against the real compiler with
+  // the flag explicitly `false`, which still reports TS2610. The check's
+  // gate on the flag is gone, and removing it was measured on its own:
+  // TP 2480 / MISS 254 / FP 0, identical to keeping it.
   assert_true(
     issues(
       "// @useDefineForClassFields: true\nclass A { get x() { return 1 } } class B extends A { x = 2; }",
     ) >
     0,
   )
-  // Without the flag the property flows through the setter -- allowed.
+  assert_true(
+    issues("class A { get x() { return 1 } } class B extends A { x = 2; }") > 0,
+  )
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: false\nclass A { get x() { return 1 } } class B extends A { x = 2; }",
+    ) >
+    0,
+  )
+  // An accessor overriding an accessor is legal in both settings.
   @test.assert_eq(
-    issues("class A { get x() { return 1 } } class B extends A { x = 2; }"),
+    issues(
+      "class A { get x() { return 1 } set x(v: number) { } } class B extends A { get x() { return 2 } set x(v: number) { } }",
+    ),
     0,
   )
 }
@@ -10342,9 +10387,16 @@ test "expr_check: statement in class body (TS1128)" {
   // ASI: a keyword on its own line is a standalone member (`var` then `public`
   // are two fields), which TS accepts -> silent (the parserClassDeclaration26
   // regression).
+  //
+  // `@noImplicitAny: false` is what makes this test about TS1128 alone.
+  // Two fields with neither an annotation nor an initializer ARE TS7008
+  // under the flag — tsc reports both — and the flag defaults to ON for
+  // a directive-less file, so without this the assertion was measuring
+  // the implicit-any gap rather than the ASI behaviour it is named for.
   @test.assert_eq(
     issues(
       (
+        #|// @noImplicitAny: false
         #|class C {
         #|  var
         #|  public
@@ -11228,9 +11280,13 @@ test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS10
   // TS1029: modifier order on class members.
   assert_true(issues("class C { static public x: number; }") > 0)
   assert_true(issues("class C { override static m() {} }") > 0)
+  // The base is declared FIRST: a class binding is block-scoped and its
+  // heritage clause runs at declaration time, so `class D extends B` above
+  // `class B` is TS2449 for a reason that has nothing to do with modifier
+  // order. This case is about the order of `public static override`.
   @test.assert_eq(
     issues(
-      "class D extends B { public static override m() {} }\nclass B { static m() {} }",
+      "class B { static m() {} }\nclass D extends B { public static override m() {} }",
     ),
     0,
   )
@@ -14223,10 +14279,14 @@ test "expr_check: TS7 lexical clusters (batch BF)" {
   // TS1121: legacy octal integer literals; modern radix forms stay
   // legal.
   assert_true(issues("var o = 01;") > 0)
-  @test.assert_eq(
-    issues("var a = 0o777;\nvar b = 0;\nvar c = 0.5;\nvar d = 08.5;"),
-    0,
-  )
+  @test.assert_eq(issues("var a = 0o777;\nvar b = 0;\nvar c = 0.5;"), 0)
+  // `08.5` was in the silent list above until batch CP added TS1489, and
+  // it belongs here: tsc reports "decimals with leading zeros are not
+  // allowed" for it, exactly as for `08`. Node ACCEPTS `08.5` as `8.5`,
+  // so this is TypeScript being stricter than JavaScript — the same way
+  // it is for the legacy octal on the line above — and the old
+  // assertion was pinning the gap rather than the behaviour.
+  assert_true(issues("var d = 08.5;") > 0)
 }
 
 ///|
@@ -14404,8 +14464,25 @@ test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (ba
   // can't provide an assign-form head's binding (for-of6).
   assert_true(issues("v;\nfor (let v of [0]) { }") > 0)
   assert_true(issues("for (v of [0]) { let v; }") > 0)
-  // `var` head / body still hoist — no error.
-  @test.assert_eq(issues("for (var w of [0]) { }\nw;"), 0)
+  // `var` head / body still hoist — no "cannot find name". Asserted on
+  // the MESSAGE, not the count: `for (var w of [0]) {} w;` IS a real
+  // TS2454 under strictNullChecks (probed -- the loop may not run, so
+  // the binding is possibly-unassigned), and the count form of this
+  // assertion was measuring the absence of that diagnostic rather than
+  // the hoisting it is named for.
+  let cannot_find = fn(src : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains("cannot find name") {
+        n += 1
+      }
+    }
+    n
+  }
+  @test.assert_eq(cannot_find("for (var w of [0]) { }\nw;"), 0)
   @test.assert_eq(issues("for (u of [0]) { var u; }"), 0)
   // Loop-head lets stay visible to closures inside the loop.
   @test.assert_eq(issues("for (let v of [0]) { const g = () => v; g(); }"), 0)
@@ -14591,9 +14668,13 @@ test "expr_check: for-in patterns, lib eras, import-eq roots (batch BO)" {
     ) >
     0,
   )
+  // `export {}` makes the file a module, which is what a top-level
+  // `await using` requires (TS2853). Without it this case is an error for
+  // a SECOND reason, and the assertion here is about the target check
+  // alone: an esnext target must not trigger TS2854.
   @test.assert_eq(
     issues(
-      "// @target: esnext\n// @lib: esnext\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
+      "// @target: esnext\n// @lib: esnext\nexport {};\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
     ),
     0,
   )
@@ -14863,4 +14944,2543 @@ test "expr_check: a defaulted parameter is omittable on every callable form" {
   for i in issues {
     assert_true(!i.message.contains("argument(s), got 0"))
   }
+}
+
+///|
+/// TS2335 / TS2337 — the `super` reference rules, at every place a class
+/// body can hold code. The check existed and read ONLY
+/// `constructor_body`, so `super.foo()` in an ordinary method of a
+/// heritage-free class parsed clean while the identical reference in the
+/// constructor was flagged. Each firing case is paired with the legal
+/// neighbour that must stay silent, because "fires on the bad shape" and
+/// "silent on the good one" are separate claims and only the second keeps
+/// the conformance gate at FP 0.
+test "expr_check: super outside a derived class (TS2335 / TS2337)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("`super` can only be referenced") ||
+        i.message.contains("super calls are not permitted") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- TS2335: no base, `super` anywhere in the class's own body.
+  assert_true(issues("class C { private foo() { super.foo(); } }") > 0)
+  assert_true(issues("class C { private foo() { super.foo = 1 } }") > 0)
+  assert_true(issues("class C { static { super.x; } }") > 0)
+  assert_true(issues("class C { y = super.x; }") > 0)
+  assert_true(issues("class C { static y = super.x; }") > 0)
+  assert_true(issues("class C { constructor() { super(); } }") > 0)
+  // A computed-key method body (`superSymbolIndexedAccess4`), and the
+  // `super[k]()` spelling rather than `super.k()`.
+  assert_true(
+    issues("var s = Symbol(); class B { [s]() { return super[s](); } }") > 0,
+  )
+  // `implements` is not heritage: it brings no base constructor, so
+  // `super` is still an error. This is why the rule reads `base_names` /
+  // `base_expr` and not the parser's `class_decl_no_heritage`.
+  assert_true(
+    issues("interface I {} class C implements I { m() { super.x } }") > 0,
+  )
+  // An explicitly-instantiated `super<T>(0)` is wrapped in a `TypeArgs`
+  // node. Without an arm for it the reference reached the walker's
+  // `_ => false` catch-all and vanished — the third time a wrapper node's
+  // fail-open default has hidden a finding in this repo.
+  assert_true(issues("class C { M() { super<number>(0); } }") > 0)
+  // --- TS2337: derived class, base-constructor call outside the ctor.
+  assert_true(issues("class B {} class D extends B { m() { super(); } }") > 0)
+  assert_true(
+    issues("class B { static f = 1 } class D extends B { static c = super(); }") >
+    0,
+  )
+  // --- Legal neighbours. Each of these is valid TypeScript.
+  @test.assert_eq(
+    issues("class B { m(){} } class D extends B { m() { super.m(); } }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("class B {} class D extends B { constructor() { super(); } }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("class B { f = 1 } class D extends B { y = super.f; }"),
+    0,
+  )
+  // A nested class that DOES extend, inside a method of one that does not.
+  // The walker's `_ => false` on a class statement is load-bearing here.
+  @test.assert_eq(
+    issues(
+      "class B { m(){} } class C { k() { class I extends B { m() { super.m(); } } } }",
+    ),
+    0,
+  )
+  // An object-literal method reaches `super` through its own home object.
+  // 11 files TypeScript 7 ACCEPTS use this shape, so the walker must not
+  // descend into an object literal.
+  @test.assert_eq(
+    issues(
+      "class C { m() { const o = { toString() { return super.toString(); } }; return o; } }",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("class C { m() { return 1 } }"), 0)
+}
+
+///|
+/// Parser diagnostic channels are facts about the MODULE, not the file, so
+/// a nested namespace body's entries must surface too. Five of them used to
+/// sit inside the `outer_modules.length() == 0` guard, which is correct for
+/// exactly one thing it wrapped (the compiler-option file header) and was
+/// inherited by everything else in the same `if`. Each case below is
+/// asserted at top level AND inside a namespace: the top-level half is what
+/// makes the namespace half meaningful, since a rule that never fires would
+/// pass the namespace assertion trivially.
+test "expr_check: parser channels survive a namespace body" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Each pair is (top level, same code inside a namespace). Both halves are
+  // asserted: without the top-level one, a rule that stopped firing
+  // altogether would still satisfy the namespace assertion vacuously.
+  let pairs = [
+    // strict_mode_misuses (TS1100)
+    ("eval = 1;", "namespace N { eval = 1; }"),
+    ("eval++;", "namespace N { eval++; }"),
+    // invalid_decorator_uses (TS1206)
+    (
+      "declare function d<T>(t:T):T; @d var z=1;", "declare function d<T>(t:T):T; namespace N { @d var z=1; }",
+    ),
+    // parameter_property_misuses (TS2369)
+    (
+      "function f(public x: number) {}", "namespace N { function f(public x: number) {} }",
+    ),
+    // param_optional_initializer_misuses (TS1015)
+    (
+      "function f(a?: number = 1) {}", "namespace N { function f(a?: number = 1) {} }",
+    ),
+    // interface_member_modifier_misuses (TS1070)
+    (
+      "interface I { private x: number }", "namespace N { interface I { private x: number } }",
+    ),
+  ]
+  for pair in pairs {
+    assert_true(count(pair.0) > 0)
+    assert_true(count(pair.1) > 0)
+  }
+}
+
+///|
+/// TS1206 at two positions that carried no check: a decorator on a static
+/// initialization block, and one on an `import X = M.Y` alias inside a
+/// namespace. Both were probed against the whole TS7-accepted corpus first
+/// — zero files TypeScript 7 accepts decorate either — which is why neither
+/// needs a decorator-mode gate.
+///
+/// A decorator on a `#private` member is deliberately NOT checked. It is an
+/// error only under legacy `experimentalDecorators`; under standard ES
+/// decorators it is legal, and seven files TS7 accepts rely on that. The
+/// parser does know the mode, so the rule is cheap — but it would apply
+/// only to a corpus directive, since real code sets the flag in tsconfig,
+/// which the parser does not read.
+test "expr_check: decorators are not valid on a static block or import=" {
+  let decos = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("decorators are not valid here") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(
+    decos("declare function d<T>(t:T):T; class C { @d static { } }") > 0,
+  )
+  assert_true(
+    decos(
+      "declare function d<T>(t:T):T; namespace M1 { export var X: number; } namespace M2 { @d import X = M1.X; }",
+    ) >
+    0,
+  )
+  // Legal neighbours: an undecorated static block, and a decorator in a
+  // position that does take one.
+  @test.assert_eq(decos("class C { static { } }"), 0)
+  @test.assert_eq(
+    decos("declare function d<T>(t:T):T; class C { @d m() {} }"),
+    0,
+  )
+}
+
+///|
+/// TS2466 shares the `super` walker now instead of keeping a second,
+/// hand-written copy that was a strict subset of it — no arm for `Spread`,
+/// `PureCall`, `TypeArgs`, `Await`, `As`, `Cond`, any assignment form,
+/// `New`, or `Call(_, args)`. That last one is the reachable gap: `super`
+/// in the argument of an ordinary named call inside a computed key.
+test "expr_check: super in a computed key, through the shared walker" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("super") {
+        n += 1
+      }
+    }
+    n
+  }
+  // The shape the old subset walker already caught.
+  assert_true(
+    issues("class B { m(){} } class D extends B { [super.m()]() {} }") > 0,
+  )
+  // The shape it could not: `super` inside a named call's argument.
+  assert_true(
+    issues(
+      "declare function f(x: any): string; class B { m(){} } class D extends B { [f(super.m())]() {} }",
+    ) >
+    0,
+  )
+}
+
+///|
+/// TS2420's missing-member arm. `check_class_implements` used to abstain on
+/// a member the class does not declare, with the stated reason that it might
+/// come from a base class the pass did not thread — a documented abstention
+/// rather than an oversight. `resolve_base_chain_members` threads it, so the
+/// abstention is now narrowed to the cases that earn it.
+///
+/// The FIRE cases are one class of thing; the SILENT cases are the whole
+/// point. Every route by which a member can legally arrive gets a case,
+/// because a route this pass cannot see is a false positive on correct code
+/// — and unlike a MISS, an FP has a zero budget.
+test "expr_check: class implements — a required member must be present" {
+  let missing = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("is missing") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(missing("interface I { a: number } class C implements I { }") > 0)
+  assert_true(missing("interface I { m(): void } class C implements I { }") > 0)
+  // A resolvable base that does not supply it.
+  assert_true(
+    missing(
+      "class B { b: number = 1 } interface I { a: number } class C extends B implements I { }",
+    ) >
+    0,
+  )
+  // A STATIC member does not satisfy an instance requirement.
+  assert_true(
+    missing(
+      "interface I { a: number } class C implements I { static a: number = 1 }",
+    ) >
+    0,
+  )
+  // --- silent: every legal route the member can arrive by
+  let cases = [
+    // declared directly
+    "interface I { a: number } class C implements I { a: number = 1 }",
+    // a method
+     "interface I { m(): void } class C implements I { m() {} }",
+    // an accessor pair
+     "interface I { a: number } class C implements I { get a(): number { return 1 } }",
+    // a parameter property
+     "interface I { a: number } class C implements I { constructor(public a: number) {} }",
+    // the immediate base supplies it
+     "class B { a: number = 1 } interface I { a: number } class C extends B implements I { }",
+    // a GRANDPARENT supplies it — the walk has to be transitive
+     "class A { a: number = 1 } class B extends A { } interface I { a: number } class C extends B implements I { }",
+    // a base METHOD supplies it
+     "class B { m() {} } interface I { m(): void } class C extends B implements I { }",
+    // optional interface member
+     "interface I { a?: number } class C implements I { }",
+    // abstract class — a subclass may supply it, and no baseline in the
+    // TypeScript corpus raises TS2420 on an abstract class
+     "interface I { a: number } abstract class C implements I { }",
+    // an instance index signature on the class
+     "interface I { a: number } class C implements I { [k: string]: number }",
+    // an unresolvable base chain: generic base
+     "class B<T> { x: T? } interface I { a: number } class C extends B<number> implements I { }",
+    // an unresolvable base chain: base not declared in this module
+     "interface I { a: number } class C extends Missing implements I { }",
+    // a generic interface abstains
+     "interface I<T> { a: T } class C implements I<number> { }",
+    // an interface that is not declared here at all
+     "class C implements NotDeclared { }",
+    // class / interface declaration merging supplies it — legal TypeScript,
+    // and the shape `.d.ts` files use routinely
+     "interface I { a: number } class C implements I { } interface C { a: number }",
+    // --- The four remaining shapes below are not invented: they are the
+    // TS7-ACCEPTED conformance files that carry `class … implements`, found
+    // by scanning the accepted corpus rather than by imagining cases. Two of
+    // them were absent from the list above until that scan ran.
+    //
+    // symbolProperty23: a well-known-symbol key, which the class and the
+    // interface must agree on the spelling of (`@@toPrimitive`).
+     "interface I { [Symbol.toPrimitive]: () => boolean } class C implements I { [Symbol.toPrimitive]() { return true } }",
+    // ExportClassWhichExtendsInterfaceWithInaccessibleType: parameter
+    // properties supplying two members, inside a namespace.
+     "namespace A { interface P { x: number; y: number; f(p: P): number } export class P2 implements P { constructor(public x: number, public y: number) {} f(p: P) { return 1 } } }",
+    // assignmentCompatWithObjectMembers3: required member present, optional
+    // member absent, in one interface.
+     "class S implements S2 { foo: string = \"\" } interface S2 { foo: string; bar?: string }",
+    // everyTypeWithInitializer / throwStatements: the plain declared case
+    // under `@strict: false`.
+     "// @strict: false\ninterface I { id: number } class C implements I { id: number }",
+  ]
+  for src in cases {
+    @test.assert_eq(missing(src), 0)
+  }
+}
+
+///|
+/// TS2451 / TS2300 — duplicate top-level declarations. The
+/// function-vs-binding pair was already flagged; the binding-vs-binding
+/// pair, which is the shape a person actually writes, was not, and the
+/// check's own comment justified excluding `var`+`var` and overloads while
+/// excluding `let`+`let` silently.
+///
+/// The silent half of this test is where the risk is. The check reads only
+/// the flat `Ident` binding forms of `module_.top_level_stmts`, with no
+/// scope walk, so each case below documents a shape that must NOT reach it.
+test "expr_check: duplicate top-level declarations (TS2451 / TS2300)" {
+  let dups = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("duplicate identifier") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(dups("let x: number; let x: number;") > 0)
+  assert_true(dups("const x = 1; const x = 2;") > 0)
+  assert_true(dups("let x = 1; const x = 2;") > 0)
+  // A `var` paired with a block-scoped binding, in both orders.
+  assert_true(dups("let x = 1; var x = 2;") > 0)
+  assert_true(dups("var x = 1; let x = 2;") > 0)
+  // Two class declarations.
+  assert_true(dups("class C {} class C {}") > 0)
+  // The pair that already worked, kept so a refactor cannot lose it.
+  assert_true(dups("let x = 1; function x() {}") > 0)
+  // --- silent
+  let legal = [
+    // `var` + `var` merges.
+    "var x: number; var x: number;",
+    // Disjoint blocks. An inner `let` lives inside a `Block` statement the
+    // match does not descend into, which is what makes the scope-walk-free
+    // design safe rather than lucky.
+     "{ let x = 1; } { let x = 2; }",
+    // A function body's binding is a different scope, and the layered
+    // walker calls this per namespace body for the same reason.
+     "let x = 1; function g() { let x = 2; }", "let x = 1; namespace N { export const x = 2; }",
+    // A class merges with a same-named interface and with a same-named
+    // namespace; both live in their own module lists.
+     "class C {} interface C { a: number }", "class C {} namespace C { export const z = 1 }",
+    "interface X { a: number } let X = 1;", "function q() {} namespace q { export const z = 1 }",
+    // Function overloads legally repeat a name, and TS2393 is not attempted.
+     "function f(a: string): void; function f(a: number): void; function f(a: any): void {}",
+    // A destructuring pattern is not an `Ident` binding and falls through.
+     "const { a } = { a: 1 }; const { a: b } = { a: 2 };",
+    // Distinct names.
+     "let x = 1; let y = 2;",
+  ]
+  for src in legal {
+    @test.assert_eq(dups(src), 0)
+  }
+}
+
+///|
+/// `using` / `await using` positional grammar (TS1155 / TS1156 / TS1493 /
+/// TS1494 / TS1547 / TS1548), object-literal getters (TS2378), reserved
+/// interface names (TS2427) and a `void`-annotated generator (TS2505).
+///
+/// Four of these extended a check that already existed and covered some of
+/// what it named: `is_disallowed_lexical_stmt_start` rejected `let` /
+/// `const` / `class` / `function` in a single-statement position and had no
+/// `using` arm; `check_getter_returns_value` read `module_.classes` only;
+/// the ten predefined-type names were written out for classes and for type
+/// aliases and not for interfaces; and the async return-type helper already
+/// took `is_generator` as an exemption.
+test "expr_check: using-declaration grammar, objlit getters, reserved names" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let d = "declare const d: Disposable; "
+  // A single-statement position rejects the declaration outright, so these
+  // assert a PARSE failure rather than an issue count — `parse_module_or_empty`
+  // yields an empty module, which is why they are checked by a separate
+  // predicate below rather than by `issues`.
+  let rejects = fn(src : String) -> Bool {
+    (try? @parser.Parser::from_source(src).parse_module()) is Err(_)
+  }
+  assert_true(rejects(d + "if (true) using x = d;"))
+  assert_true(rejects(d + "while (true) using x = d;"))
+  assert_true(rejects(d + "lbl: using x = d;"))
+  // A plain identifier REFERENCE named `using` in the same position is
+  // legal JavaScript and must still parse.
+  assert_true(not(rejects("declare const using: any; if (true) using;")))
+  assert_true(
+    not(
+      rejects("declare const using: {foo(): void}; while (false) using.foo();"),
+    ),
+  )
+  // The recorded-diagnostic half.
+  assert_true(issues("using x;") > 0)
+  assert_true(issues(d + "declare const o: any; for (using x in o) {}") > 0)
+  assert_true(issues(d + "switch (1) { case 1: using x = d; }") > 0)
+  @test.assert_eq(issues(d + "{ using x = d; }"), 0)
+  @test.assert_eq(issues(d + "using x = d;"), 0)
+  @test.assert_eq(
+    issues(d + "declare const o: Disposable[]; for (using x of o) {}"),
+    0,
+  )
+  @test.assert_eq(issues(d + "switch (1) { case 1: { using x = d; } }"), 0)
+  // TS2378 for an OBJECT-LITERAL getter, and every abstention.
+  let getter = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("`get` accessor must return a value") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(getter("var v = { get Foo() { } };") > 0)
+  assert_true(getter("var v = { get Foo(): number { } };") > 0)
+  assert_true(getter("class C { get F() { } }") > 0)
+  for
+    src in [
+      "var v = { get Foo() { return 1; } };",
+      // An annotation that accepts `undefined` makes falling off the end
+      // well-typed; a MISSING annotation is stored as `Any` and must not be
+      // read as one, which is why the parser passes `had_annotation`.
+       "var v = { get Foo(): any { } };", "var v = { get Foo(): void { } };", "var v = { get Foo() { throw 1; } };",
+      "var v = { set Foo(x: number) { } };", "var v = { Foo() { } };", "class C { get F() { return 1 } }",
+    ] {
+    @test.assert_eq(getter(src), 0)
+  }
+  // TS2427: every predefined-type name, shared with the class and
+  // type-alias rules. `number` / `boolean` / `string` / `void` have their
+  // own lexer token kinds and are rejected at parse time instead, which is
+  // what made the coverage look partial.
+  for n in ["any", "unknown", "never", "bigint", "symbol", "object"] {
+    assert_true(issues("interface \{n} { }") > 0)
+  }
+  @test.assert_eq(issues("interface Foo { }"), 0)
+  // TS2505, and the generator annotations that stay legal.
+  assert_true(issues("function* g3(): void { }") > 0)
+  assert_true(issues("class C { *m(): void { } }") > 0)
+  @test.assert_eq(issues("function* g(): Generator<number> { yield 1 }"), 0)
+  @test.assert_eq(issues("function* g() { yield 1 }"), 0)
+  @test.assert_eq(issues("async function f(): Promise<void> { }"), 0)
+  @test.assert_eq(issues("function f(): void { }"), 0)
+}
+
+///|
+/// Duplicate names inside ONE destructuring pattern (TS2451), a `var` in a
+/// `for…of` body colliding with the head's block-scoped binding (TS2481),
+/// and a `for…of` head whose iterable is the loop variable itself (TS7022).
+///
+/// `destructuringSameNames.ts` in the conformance corpus is the
+/// legal-neighbour list for the first rule, written by the TypeScript team:
+/// `let { foo, foo: bar }` binds two DISTINCT names, and every
+/// assignment-pattern repeat is legal because an assignment target is not a
+/// declaration. Those are asserted here rather than paraphrased.
+///
+/// The TS7022 case also records a mistake made while writing it: without a
+/// `no_implicit_any` gate the rule reported four TS7-ACCEPTED files —
+/// `for (var of of of) { }` and `for (var of in of) { }` bind a variable
+/// named `of` and iterate one named `of`, a real self-reference that tsc
+/// stays silent about under `@strict: false`. Every other
+/// `<noimplicitany>` recorder in the parser gates on that flag.
+test "expr_check: pattern duplicates, for-head var collision, self-iterable" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2451 — the error half of destructuringSameNames.ts.
+  for
+    src in [
+      "let { foo1, foo1 } = { foo1: 10 };", "let { foo2, bar2: foo2 } = { foo2: 20, bar2: 220 };",
+      "let { bar3: foo3, foo3 } = { foo3: 30, bar3: 330 };", "const { foo4, foo4 } = { foo4: 40 };",
+      "let [blah1, blah1] = [111, 222];", "const [blah2, blah2] = [333, 444];", "for (let [v, v] of [[]]) {}",
+      // Nested: two different properties binding one name.
+       "let { a: { x }, b: { x } } = { a: {x:1}, b: {x:2} };",
+      // Every declarator of a group is checked, not just the first.
+       "let { p } = { p: 1 }, [q, q] = [1, 2];",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // TS2481 and TS7022.
+  assert_true(issues("for (let v of []) { var v; }") > 0)
+  assert_true(issues("for (let v of []) { var v = 0; }") > 0)
+  assert_true(issues("// @noImplicitAny: true\nfor (var v of v) { }") > 0)
+  assert_true(
+    issues("// @noImplicitAny: true\nlet v = [1]; for (let v of v) { v; }") > 0,
+  )
+  // --- silent: the legal half of destructuringSameNames.ts, plus the
+  // shapes each rule must not reach.
+  for
+    src in [
+      "let { foo, foo: bar } = { foo: 1 };", "let foo: any, bar: any; ({ foo, foo } = { foo: 2 });",
+      "let foo: any, bar: any; ({ foo, foo: bar } = { foo: 3 });", "let foo: any, bar: any; ({ foo: bar, foo: bar } = { foo: 5 });",
+      "let foo: any; [foo, foo] = [111, 1111];",
+      // `var` merges.
+       "var [a, a] = [1, 2];", "var { z, z } = { z: 1 };", "const [a, b] = [1, 2];",
+      // TS2481: a different name, and a `var` in a NESTED block, which is a
+      // different scope and deliberately falls through.
+       "for (let v of []) { var w; }", "for (let v of []) { { var v; } }",
+      // TS7022: an annotation breaks the cycle, and an unrelated iterable is
+      // not a cycle at all.
+       "declare const arr: number[]; for (var v of arr) { }", "// @noImplicitAny: true\ndeclare const v: any; for (var q: any of v) { }",
+      // Without noImplicitAny tsc says nothing, which is what
+      // parserForOfStatement18/19 rely on.
+       "// @strict: false\nfor (var of of of) { }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// TS2449 (a class whose `extends` names a class declared later), TS5061
+/// (an ambient module pattern with more than one `*`) and TS1117 (an object
+/// literal with two properties of one name).
+///
+/// The TS2449 exemption is the interesting one and was found by probing,
+/// not by reasoning: an AMBIENT `declare class` emits nothing and asserts
+/// the binding exists at runtime from elsewhere, so declaration order in a
+/// `.d.ts` carries no runtime meaning and there is no temporal dead zone.
+/// Without that exemption `class C1 extends C2 {} declare class C2 {}` —
+/// ordinary @types layout — was flagged.
+test "expr_check: forward class base, module pattern, objlit duplicate key" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("class C1 extends C2 { } class C2 { }") > 0)
+  // Transitive: two independent forward references.
+  assert_true(
+    issues("class A extends B {} class B extends C {} class C {}") > 0,
+  )
+  assert_true(issues("declare module \"a*b*c\" { }") > 0)
+  assert_true(issues("var x = { a: 0, a: 1 };") > 0)
+  assert_true(issues("var a = 1; var x = { a, a: 2 };") > 0)
+  assert_true(
+    issues("var x = { get p() { return 1 }, get p() { return 2 } };") > 0,
+  )
+  assert_true(issues("var x = { \"k\": 1, \"k\": 2 };") > 0)
+  // --- silent
+  for
+    src in [
+      "class C2 { } class C1 extends C2 { }",
+      // An ambient base has no TDZ, in either direction.
+       "class C1 extends C2 {} declare class C2 { }", "declare class D1 extends D2 {} class D2 { }",
+      // An interface is a type: erased, no runtime binding, no order.
+       "class C1 implements I { } interface I { }",
+      // A base this pass cannot see the declaration of abstains.
+       "declare const Base: any; class C1 extends Base { }",
+      // One `*` is the legal wildcard form; none is an ordinary specifier.
+       "declare module \"foo/*\" { }", "declare module \"foo\" { }",
+      // A get/set PAIR is one property, not two.
+       "var x = { get p() { return 1 }, set p(v: number) { } };",
+      // A spread may legally supply a key another entry also writes.
+       "var o = {a:1}; var x = { ...o, a: 2 };", "var x = { a: 1, b: 2 };", "var k1 = \"a\"; var k2 = \"b\"; var x = { [k1]: 1, [k2]: 2 };",
+      // The COVER GRAMMAR: a `{ … }` followed by `=` was an object
+      // destructuring PATTERN, where duplicate names are legal. This
+      // shipped as a false positive in the first version of TS1117 and
+      // the CORPUS could not see it — `destructuringSameNames` also
+      // contains illegal spellings, so the file was a TP either way.
+       "let foo: any, bar: any; ({ foo, foo } = { foo: 2 });", "let foo: any, bar: any; ({ foo, foo: bar } = { foo: 3 });",
+      "let foo: any, bar: any; ({ foo: bar, foo: bar } = { foo: 5 });", "var x = { m() {}, n() {} };",
+      "var x = { a: { b: 1 }, c: { b: 2 } };",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CE, four rules that were each one missing condition next to a rule
+/// the repo already had:
+///
+/// - TS1048 `a rest parameter cannot have an initializer` — the 21st
+///   instance of this repo's recurring family, and the closest yet: TS1047
+///   (`a rest parameter cannot be optional`) sits on the adjacent line and
+///   asks about `?` where this asks about `=`.
+/// - TS1434 `unexpected keyword or identifier` for a repeated `static`.
+/// - TS1196 a catch clause annotation must be `any` or `unknown`. The
+///   annotation was already parsed here — and discarded — so only the
+///   comparison was missing.
+/// - TS1368 `class constructor may not be a generator`.
+///
+/// The legal neighbours matter more than the firing cases: `...a: number[]`
+/// against `...a = []`, one `static` against two, `catch (e: any)` and
+/// `catch (e)` against `catch (e: string)`, and `*gen()` against
+/// `*constructor()` — a generator is illegal only at that one name.
+test "expr_check: rest initializer, repeated static, catch annotation, generator ctor" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("function f(...a = []) { }") > 0)
+  assert_true(issues("const g = (...a: number[] = []) => a;") > 0)
+  assert_true(issues("class C { static static Foo() { } }") > 0)
+  assert_true(issues("class C { static static Foo: number; }") > 0)
+  assert_true(issues("class C { static static [x: string]: string; }") > 0)
+  assert_true(issues("try { } catch (e: string) { }") > 0)
+  assert_true(issues("try { } catch (e: number) { }") > 0)
+  assert_true(issues("class C { *constructor() { } }") > 0)
+  // --- silent
+  for
+    src in [
+      // A rest parameter is legal; only an initializer on one is not.
+      "function f(...a: number[]) { return a; }", "function f(a = 1) { return a; }",
+      // One `static` is the modifier; two is the error.
+       "class C { static Foo() { } }", "class C { static readonly Foo: number = 1; }",
+      "class C { static [x: string]: string; }",
+      // `any` and `unknown` are the two annotations TS allows, and none at
+      // all is the common spelling.
+       "try { } catch (e: any) { }", "try { } catch (e: unknown) { }", "try { } catch (e) { }",
+      // A generator is illegal at `constructor` and legal at every other
+      // member name.
+       "class C { constructor() { } }", "class C { *gen() { } }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batches CF and CG. Ten grammar rules and one shared context helper.
+///
+/// The `await using` half is worth stating: `record_await_using_context`
+/// is ONE function called from all THREE declaration sites (a statement, a
+/// block-statement, a for-head), because the TS2854 marker it replaced was
+/// written at exactly one of them — so `{ await using d = null }` inside a
+/// block, which is how the `awaitUsingDeclarations` tests are written,
+/// could never reach it.
+///
+/// Three of these rules were corpus FALSE POSITIVES first, and all three
+/// exemptions are in the silent list below rather than in the firing one:
+/// `for await (async of x)` and `for ((async) of x)` are both legal (the
+/// TS1106 restriction is a LOOKAHEAD rule, so writing `await` or a paren
+/// removes the thing it guards against), and `export type R = number`
+/// makes a file a module — which is why the `<module-syntax>` marker now
+/// sits at the `export` keyword in all three export parsers instead of on
+/// the export forms that bind a value.
+test "expr_check: quoted module name, strict reserved words, await using context" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  // TS1035 / TS1046: a quoted module name outside a `declare` context.
+  assert_true(issues("module \"Foo\" { }") > 0)
+  // TS1213: a strict-mode reserved word as a binding. A class body is
+  // automatically strict, which is what makes the first case an error.
+  assert_true(issues("class C { constructor (static) { } }") > 0)
+  assert_true(issues("class D { m(implements) { } }") > 0)
+  assert_true(issues("\"use strict\"; var public = 1;") > 0)
+  // TS1029: an accessibility modifier must precede `override`.
+  assert_true(
+    issues(
+      "class B { foo = 1 } class S extends B { constructor (override public foo: number) { super(); } }",
+    ) >
+    0,
+  )
+  // TS1031: `declare` may modify a field, never a method.
+  assert_true(issues("class C { declare Foo() { } }") > 0)
+  // TS1115: `continue` needs an ITERATION label, and this one is live.
+  assert_true(issues("target:\n  continue target;") > 0)
+  // TS1106.
+  assert_true(issues("var async; for (async of [1, 2]) {}") > 0)
+  // TS1063 / TS1319: module-only export forms inside a namespace.
+  assert_true(issues("namespace M { export = A; }") > 0)
+  assert_true(issues("namespace Foo { export default foo; }") > 0)
+  // TS1155 in a C-style for head.
+  assert_true(issues("for (using of;;) break;") > 0)
+  // TS2852 / TS18054 / TS2853: the three `await using` contexts.
+  assert_true(issues("function f() { await using x = null; }") > 0)
+  assert_true(issues("class C { static { await using x = null; } }") > 0)
+  assert_true(issues("await using x = null;") > 0)
+  // --- silent
+  for
+    src in [
+      // An ambient external module is exactly what a quoted name declares.
+      "declare module \"Foo\" { }", "declare module \"foo/*\" { }", "namespace M { }",
+      // Outside strict mode the reserved words are ordinary identifiers.
+       "var public = 1;", "var implements = 1; var package = 2;",
+      // The legal modifier order.
+       "class B { foo = 1 } class S extends B { constructor (public override foo: number) { super(); } }",
+      // `declare` on a field, and a member NAMED `declare`.
+       "class C { declare Foo: number; }", "class C { declare() { } }",
+      // `continue` to a loop label, through a label chain, and `break` to
+      // a non-loop label — which is legal and is the whole reason the two
+      // questions cannot share one answer.
+       "target: while (1) { continue target; }", "outer: inner: while (1) { continue outer; }",
+      "target: for (;;) { continue target; }", "target: { break target; }",
+      // The three TS1106 exemptions, all of them former false positives.
+       "var async; for (async in [1, 2]) {}", "var async; for ((async) of [1, 2]);",
+      "async function foo(x: any) { var async; for await (async of x) {} }",
+      // An initialized `using` in a C-style for head is legal.
+       "for (using of = null;;) break;",
+      // `await using` where it belongs, and `export type` as the only
+      // module syntax — the third former false positive.
+       "export {}; async function f() { await using x = null; }", "export {}; await using x = null;",
+      "export type R = number;\nawait using r = null;", "using r1 = null;\nexport type R1 = typeof r1;\nawait using r2 = null;",
+      // A nested `async function` must not turn the rest of an enclosing
+      // async body non-async.
+       "export {};\nasync function o() { async function i() { } await using x = null; }",
+      // The module-only export forms, in a module.
+       "export default 1;", "namespace M { export const a = 1; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CH: TS2591 (a Node global with no `@types/node`) and TS2391 (an
+/// overload signature with no implementation).
+///
+/// TS2591 is the one rule in these batches a working TypeScript programmer
+/// hits regularly: `module`, `require`, `process`, `__dirname` and friends
+/// are NOT in the default `lib` set — they come from `@types/node` — and
+/// they sat in the generated lib-global allowlist, so a `.ts` file using
+/// CommonJS without those types installed was accepted in silence. The
+/// allowlist itself is unchanged: its other consumers ask "could the
+/// platform have provided this name", and for those the conservative
+/// answer is still yes.
+///
+/// TS2391 is answered by LOOKAHEAD from the signature, not by carrying a
+/// pending run across statements. The first version did carry one and was
+/// a corpus FALSE POSITIVE on `recursiveTypesUsedAsFunctionParameters`, a
+/// TS7-ACCEPTED file: the run was flushed whenever `parse_stmt` saw a
+/// non-function statement, which includes the statements inside a nested
+/// function BODY, so a legal three-signature set inside another function
+/// was reported the moment the implementation's own `return null;` was
+/// parsed. That case is in the silent list below. Two declaration arms
+/// needed the hook — `parse_stmt`'s and the module loop's own — which is
+/// why `function data(): string; function next(): string;` stayed silent
+/// while the same pair without return annotations was reported.
+test "expr_check: node globals and overload implementations" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("module.exports = 1;") > 0)
+  assert_true(issues("var c = require(\"./config\");") > 0)
+  assert_true(issues("console.log(process.env.HOME);") > 0)
+  assert_true(issues("console.log(__dirname);") > 0)
+  assert_true(issues("function foo();\nfunction bar() { }") > 0)
+  assert_true(issues("{\n  function foo();\n  function bar() { }\n}") > 0)
+  assert_true(issues("namespace M {\n  function foo();\n}") > 0)
+  assert_true(issues("function data(): string;\nfunction next(): string;") > 0)
+  assert_true(issues("function foo();\nvar x = 1;") > 0)
+  // --- silent
+  for
+    src in [
+      // A declaration of the name resolves it, whichever form it takes —
+      // the node check runs only after every lookup has had its say.
+      "declare var module: any; module.exports = 1;", "declare function require(s: string): any; var c = require(\"./x\");",
+      "declare const process: { env: any }; console.log(process.env.HOME);", "namespace module { export const a = 1; } console.log(module.a);",
+      // Overload sets: several signatures above one implementation.
+       "function f(a: string): void;\nfunction f(a: number): void;\nfunction f(a: any): void { }",
+      "function f(): void;\nfunction f() { }\nfunction g(): void;\nfunction g() { }",
+      "async function f(a: string): Promise<void>;\nasync function f(a: any): Promise<void> { }",
+      // A set NESTED in another function — the false positive the
+      // pending-run version produced, and the reason the check is a
+      // lookahead.
+       "function other<T>() {\n  function foo5<V>(x: T): string;\n  function foo5<V>(x: number): number;\n  function foo5<V>(x: any): any { return null; }\n  var r = foo5(1);\n}",
+      // An ambient declaration asserts the implementation is elsewhere.
+       "declare function foo(): void;\nfunction bar() { }", "function bar() { }\nfunction baz() { }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CI: TS2357 / TS1109 — the operand of an assignment or an update
+/// operator must be a place a value can be written to.
+///
+/// The rule rides on `record_assign_target_strict_misuse`, which is
+/// already called at all four spellings JavaScript has for writing a
+/// binding (`=`, `+=`, `++x`, `x++`), so there is no fifth place to
+/// forget. It is a DENYLIST rather than the complementary allowlist on
+/// purpose: "anything that is not `Var` / `PropAccess` / `IndexAccess`"
+/// is the correct rule and the wrong implementation, because a target can
+/// arrive wrapped in nodes that say nothing about writability (`TypeArgs`,
+/// `As`, `Satisfies`, a `PureCall` marker) and this repo has already paid
+/// three soundness bugs for a wrapper node whose default arm failed open.
+/// A denylist fails the other way — an unlisted shape costs a MISS.
+///
+/// `x \n ++ \n ++ \n y` is in the firing list because ASI turns it into
+/// `x; ++(++y)`, whose outer operand is an update expression
+/// (parserS7.9_A5.7_T1). The neighbours that matter are the ones a
+/// program actually contains: `++(x)` (the parser strips the parens, so
+/// the shape reaching the check is a bare `Var`), `this.x = 1` (a
+/// property access on `this` is a place, unlike `this` itself), and
+/// `o["k"]++`.
+test "expr_check: assignment and update operands must be references" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("++this;") > 0)
+  assert_true(issues("async function f() { ++await 42; }") > 0)
+  assert_true(issues("async function f() { --await 42; }") > 0)
+  assert_true(issues("var x=0, y=0;\nx\n++\n++\ny") > 0)
+  assert_true(issues("++1;") > 0)
+  // --- silent
+  for
+    src in [
+      // The three writable forms, at each of the four spellings.
+      "var x = 1; ++x;", "var o = {a:1}; ++o.a;", "var a = [1]; ++a[0];", "var x = 1; x++;",
+      "var x = 1; x += 1;", "var o = {a:1}; o.a += 1;", "var o: any = {}; o[\"k\"]++;",
+      "for (var i = 0; i < 3; i++) { }",
+      // Parenthesized: legal, and the parens are gone by the time the
+      // check sees it, so this pins that the bare form is not flagged.
+       "var x = 1; ++(x);",
+      // A property access on `this` IS a place; `this` alone is not.
+       "class C { x: number = 0\n  m() { this.x = 1; } }",
+      // `await x++` is legal — the update is the operand of `await`, not
+      // the other way round.
+       "async function f() { var x = 42; await x++; }",
+      // The other unary operators only READ their operand.
+       "var x = 1; var y = -x; var z = !x;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CJ: six SCANNER-level rules, all of them a missing case in a
+/// loop that already had an exit for the well-formed shape.
+///
+/// - TS1010 `*/` expected: the block-comment skip's `None => break` was
+///   end-of-file inside a comment and said nothing about it.
+/// - TS1125 a radix prefix with no digits (`0x`, `0b`, `0o`). Three arms
+///   — hex, binary, octal — each of which silently substituted 0, so the
+///   rule existed in none of them. `invalid_radix_digit_count` answers a
+///   different question ("a digit outside this radix"), which is why `0x`
+///   alone fell between the two.
+/// - TS1260 keywords cannot contain escape characters. Only the escape
+///   path of the identifier scanner can produce one, and the escape
+///   decodes to a legal identifier, so nothing downstream had a reason to
+///   object: `var x = 1` scanned as the `var` KEYWORD.
+/// - TS1161 a regular-expression literal may not span a line. Without
+///   that, `/ b;` scanned to end of file and swallowed the rest of it.
+/// - TS1005 `)` expected: unbalanced groups in a regex, counted outside a
+///   character class only, since `/[(]/` is a perfectly good regex.
+/// - TS1127 invalid character, narrowed to the Latin-1 symbols and
+///   punctuation.
+///
+/// The last one is the one with a real judgement in it. Non-ASCII goes to
+/// the identifier scanner, which over-approximates ID_Continue as "any
+/// code unit >= 0x80" so that `変数` and `π` scan as one token — correct,
+/// and the reason `¬` (U+00AC) parsed clean. Without a Unicode table,
+/// "not an identifier character" is exactly what cannot be decided in
+/// general, so the rule covers one block where the answer is knowable and
+/// excludes the three code points in it that ARE ID_Start: `ª`, `µ`, `º`.
+/// Everything from U+00C0 up keeps the permissive treatment.
+test "expr_check: scanner-level grammar rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("var x = 1;\n/*CHECK#1/\n") > 0)
+  assert_true(issues("var n = 0x;") > 0)
+  assert_true(issues("var n = 0b;") > 0)
+  assert_true(issues("var n = 0o;") > 0)
+  assert_true(issues("\\u0076ar x = \"hello\";") > 0)
+  assert_true(issues("/ b;") > 0)
+  assert_true(issues("var x = /fo(o/;") > 0)
+  assert_true(issues("function f() {\n    \u{AC}\n    return;\n}") > 0)
+  // --- silent
+  for
+    src in [
+      // A comment that closes, and the JSDoc form that goes through the
+      // structured parser.
+      "var x = 1;\n/* ok */\nvar y = 2;", "/** @param a x */\nfunction f(a: number) { return a; }",
+      // Every radix with digits, and the BigInt suffix.
+       "var n = 0xff;", "var n = 0b1010;", "var n = 0o777;", "var n = 0xffn;",
+      // An escape in an IDENTIFIER is legal; only a keyword may not.
+       "var \\u0078 = 1;",
+      // Regexes: balanced, a paren inside a character class, an escaped
+      // paren, a slash inside a class, and nesting.
+       "var r = /fo(o)/;", "var r = /[(]/;", "var r = /\\(a/;", "var r = /[/]/;",
+      "var r = /((a)(b))/;",
+      // A `/` that is division, not a regex.
+       "var a = 4, b = 2; var c = a / b;",
+      // Unicode identifiers must keep scanning as one token.
+       "var \u{5909}\u{6570} = 1; var \u{3C0} = 3;", "var caf\u{E9} = 1; var na\u{EF}ve = 2;",
+      // The three Latin-1 code points that ARE ID_Start.
+       "var \u{B5}s = 1; var \u{BA} = 2; var \u{AA} = 3;",
+      // A symbol inside a string or a comment is not source at all.
+       "var s = \"\u{AC} \u{B1} \u{D7}\";", "// \u{AC} \u{B1} \u{D7}\nvar x = 1;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CK: `await` / `yield` in an enum member initializer (TS1308 /
+/// TS1163), and a legacy decorator on a `#private` class member (TS1206).
+///
+/// The enum rule needs its own check rather than the generic
+/// await-outside-async one, and the corpus file shows why: its enum sits
+/// inside an `async function*`, so `in_async` and `in_generator` are both
+/// true and both operators are legal THERE. An enum member initializer is
+/// a constant-expression position evaluated at compile time, so nothing
+/// that suspends may appear in one whatever the enclosing function is.
+///
+/// The decorator rule cost two false positives before it was right, and
+/// the mistake is one this repo keeps recording. The file that suggested
+/// it, `autoAccessorExperimentalDecorators`, combines TWO features —
+/// `accessor` and `#private` — and gating on either looked equally
+/// plausible. Its baseline errors on exactly the two PRIVATE members, and
+/// `@dec accessor prop` under `experimentalDecorators` is accepted by TS7
+/// (`decoratorOnClassProperty13`, and `static accessor y = 1` in
+/// `legacyDecorators-contextualTypes`), so the private name was doing all
+/// the work and the auto-accessor none of it. Both legal spellings are in
+/// the silent list.
+///
+/// Note the gate direction: `#private` is rejected by LEGACY decorators
+/// and supported by standard ES ones, so it points the opposite way from
+/// the `abstract` / `declare` rule next to it.
+test "expr_check: enum initializer suspends, legacy decorator on a private member" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(
+    issues(
+      "// @strict: false\nasync function* t(x: Promise<number>) { enum E { foo = await x } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nasync function* t(x: Promise<number>) { enum E { baz = yield 1 } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @experimentalDecorators: true\ndeclare function dec<T>(t: T): T;\nclass A { @dec #foo = 1; }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @experimentalDecorators: true\ndeclare function dec<T>(t: T): T;\nclass A { @dec #bar(): void { } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec accessor #a: any; }",
+    ) >
+    0,
+  )
+  // --- silent
+  for
+    src in [
+      // Ordinary enum initializers, including a non-literal one.
+      "enum E { a = 1, b = 2 }", "declare const k: number;\nenum E { a = k }", "enum E { a = \"x\" }",
+      // The operators are legal everywhere an enum is not.
+       "// @strict: false\nasync function f(x: Promise<number>) { var v = await x; return v; }",
+      // Under STANDARD ES decorators a private member is fine — the gate
+      // points the other way from the `abstract` / `declare` rule.
+       "declare function dec<T>(t: T): T;\nclass A { @dec #foo = 1; }", "declare var dec: any;\nclass C { @dec accessor a: any; }",
+      // Both former false positives: a decorated AUTO-ACCESSOR under
+      // legacy decorators is accepted by TS7.
+       "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec accessor prop: any; }",
+      "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec static accessor y: any = 1; }",
+      // An ordinary decorated field and method under legacy decorators.
+       "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec a: any; }",
+      "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec m() { } }",
+      // Undecorated private members and accessors.
+       "class A { #foo = 1\n  m() { return this.#foo } }", "class C { accessor a: any = 1; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CL: TS2348 (a class / construct-signature-only value called
+/// without `new`), TS2467, TS2302 in a static member's body and computed
+/// key, TS1117 on a well-known-symbol object-literal key, TS2449 in a
+/// class's own computed key, TS2454's lib-global exemption narrowed to
+/// script top level, and one-directional IIFE arity.
+///
+/// Every "silent" entry below was checked against the locally installed
+/// TypeScript compiler with `scripts/tsc_probe.mjs` rather than reasoned
+/// about, which is how the batch's three corpus false positives were
+/// found before they shipped and how two more were diagnosed after.
+test "expr_check: not-callable, computed keys and scoped exemptions (batch CL)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2348: a class called without `new`, bare and namespace-qualified
+      // (forgottenNew) and through a nested namespace.
+      "class C { }\nvar r = C();", "namespace Tools { export class NullLogger { } }\nvar logger = Tools.NullLogger();",
+      "namespace N { export namespace M { export class K { } } }\nvar bad = N.M.K();",
+      // TS2348: a construct-signature-only annotation, both spellings.
+       "declare var b: { new(): number };\nvar r = b();", "declare var k: new () => number;\nvar r = k();",
+      // TS2467: the class's own type parameter in a member's computed key.
+       "declare function foo<T>(): string;\nclass C<T> { [foo<T>()]() { } }",
+      // TS2302: the class type parameter reached from a static member's
+      // BODY and from its computed KEY, neither of which the signature
+      // scan could see.
+       "declare function foo<T>(): string;\nclass C<T> { static bar() { var obj = { [foo<T>()]() { } }; return obj; } }",
+      "declare function foo<T>(): string;\nclass C<T> { static [foo<T>()]() { } }",
+      // TS1117: a repeated well-known-symbol key in an object literal.
+       "var x = { [Symbol.isConcatSpreadable]: 0, [Symbol.isConcatSpreadable]: 1 };",
+      // TS2449: the class's own name in one of its computed keys.
+       "class C { static p = 10; [C.p]() { } }",
+      // TS2454: a lib-global name redeclared inside a namespace or a
+      // function is an ordinary uninitialized local, not the platform
+      // binding.
+       "namespace M { var Symbol: SymbolConstructor; var y = Symbol.iterator; }",
+      "namespace M { var Object: ObjectConstructor; var y = Object.keys; }", "function f() { var Symbol: SymbolConstructor; var y = Symbol.iterator; }",
+      // TS2554: too many arguments to an immediately-invoked literal.
+       "var bad = (function (p: number) { return p; })(1, 2);",
+      // The no-ASI form. `parserNoASIOnCallAfterFunctionExpression1`
+      // spells it `(<any>window).foo`, which cannot be used HERE:
+      // `parse_module_or_empty` goes through `Parser::from_source`,
+      // which defaults `allow_jsx` to true, so `<any>` scans as JSX and
+      // the cast never forms. The corpus file covers that spelling; this
+      // asserts the rule.
+       "var x = function () { }\n(1);",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // A call signature makes an object type callable — the
+      // `is_definitely_not_callable` `Object(_)` arm used to say
+      // otherwise, invisibly, because the permissive filter dropped the
+      // whole family.
+      "declare var q: { (): number };\nvar r = q();", "declare var q: { (): number; new(): string };\nvar a = q();\nvar b = new q();",
+      // A class constructed correctly, and one reached through a
+      // namespace.
+       "class C { }\nvar ok = new C();", "namespace Tools { export class NullLogger { } }\nvar ok = new Tools.NullLogger();",
+      // A local binding shadowing a class name is what the callee means.
+       "class Foo { }\nfunction shadow() { const Foo = () => 1; return Foo(); }",
+      // A same-named METHOD on an unrelated object is not that class.
+       "namespace N { export class Handler { } }\ndeclare var obj: { Handler(): number };\nvar ok = obj.Handler();",
+      // Declaration merging adds members and static properties, never a
+      // call signature.
+       "class C { }\ninterface C { z: number }\nnamespace C { export var w = 1; }\nvar ok = new C();",
+      // TS2467: a concrete type argument, and a type parameter belonging
+      // to an enclosing FUNCTION rather than a containing type.
+       "declare function foo<T>(): string;\nclass C<T> { [foo<string>()]() { } }",
+      "declare function foo<T>(): string;\nfunction g<T>() { class C { [foo<T>()]() { } }\n  return C; }",
+      // TS2302: a static method's OWN type parameter shadows the class's,
+      // and an instance method's body may use the class's freely.
+       "class C<T> { static bar<T>(x: T): T { return x; } }", "declare function foo<T>(): string;\nclass C<T> { bar() { var obj = { [foo<T>()]() { } }; return obj; } }",
+      // TS1117: distinct well-known symbols, an opaque key expression
+      // that may evaluate to two different symbols, and a getter/setter
+      // PAIR on one key.
+       "var x = { [Symbol.iterator]: 0, [Symbol.isConcatSpreadable]: 1 };", "declare function k(): string;\nvar x = { [k()]: 0, [k()]: 1 };",
+      "var x = { get [Symbol.toPrimitive]() { return 1; }, set [Symbol.toPrimitive](v: number) { } };",
+      // TS2449: a static field INITIALIZER runs after the binding is
+      // initialized, a method body later still, and another class's name
+      // is not this class's dead zone.
+       "class C { static p = 10; static q = C.p; }", "class C { static p = 10; m() { return C.p; } }",
+      "class Outer { static p = 1; }\nclass C { [Outer.p]() { } }",
+      // TS2454: at SCRIPT top level a `var` of a lib-global name merges
+      // with the platform binding, and an initialized one is assigned
+      // wherever it sits.
+       "var Symbol: SymbolConstructor;\nvar y = Symbol.iterator;", "namespace M { var Symbol: SymbolConstructor = globalThis.Symbol; var y = Symbol.iterator; }",
+      // TS2554: an IIFE's parameters are contextually typed, so FEWER
+      // arguments than parameters is legal and they come out
+      // `undefined` — `contextuallyTypedIife` has a section headed
+      // "missing arguments" saying so. Checking that direction cost four
+      // corpus false positives.
+       "var a = ((x: number, y: number, z: number) => 42)();", "var b = (function (x: number, u: number) { return x; })(42);",
+      "var c = ((p: number, q?: number) => p)(1);", "var d = ((...r: number[]) => r.length)(1, 2, 3);",
+      "var e = ((p: number = 5) => p)();", "var f = (function () { return 1; })();",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// The `is_definitely_not_callable` fix has to be asserted through the
+/// STRICT entry point. In permissive mode the whole "is not callable"
+/// family is suppressed, so `{ (): number }` being called would look
+/// silent whether or not the predicate is wrong — which is exactly how
+/// the bug survived: an unconditional `Object(_) => true` arm called
+/// every object type non-callable, including one whose entire purpose is
+/// a call signature, and no run could see it.
+test "expr_check: an object type with a call signature IS callable (strict)" {
+  let strict_issues = fn(src : String) -> Array[String] {
+    let out : Array[String] = []
+    for iss in check_module_function_bodies(parse_module_or_empty(src)) {
+      out.push(iss.message)
+    }
+    out
+  }
+  fn not_callable(src : String) -> Bool {
+    let mut hit = false
+    for m in strict_issues(src) {
+      if m.contains("is not callable") {
+        hit = true
+      }
+    }
+    hit
+  }
+
+  // Legal: a call signature, alone and beside a construct signature.
+  assert_false(not_callable("declare var q: { (): number };\nvar r = q();"))
+  assert_false(
+    not_callable("declare var q: { (): number; new(): string };\nvar a = q();"),
+  )
+  // Still reported: no call signature at all, and construct-only.
+  assert_true(not_callable("declare var o: { a: number };\nvar r = o();"))
+  assert_true(not_callable("declare var b: { new(): number };\nvar r = b();"))
+}
+
+///|
+/// Batch CM: TS2583 (a lib-era global under an older `lib`), TS2708 (a
+/// non-instantiated namespace used as a value), TS2350 (`new` over a
+/// call-signature-only type), TS2448 (a destructuring default reading a
+/// binding declared later in the same pattern), TS18038 / TS1107 (class
+/// static blocks), TS1200, TS1002 and TS2432.
+///
+/// Every "silent" entry was checked against the local TypeScript compiler
+/// with `scripts/tsc_probe.mjs`. That is how the `import a = A` false
+/// positive was diagnosed — an alias to an instantiated namespace IS a
+/// runtime value, which `namespace_is_instantiated` did not know.
+test "expr_check: lib era, namespace values, new over a call signature (batch CM)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2583: `SharedArrayBuffer` / `Atomics` come with
+      // lib.es2017.sharedmemory.
+      "// @lib: es5\nvar foge = new SharedArrayBuffer(1024);",
+      // TS2708: a namespace whose body declares nothing at runtime, in
+      // both the ambient and the ordinary spelling, and through a
+      // type-only nested namespace.
+       "namespace M { export interface Point { x: number } }\nvar m = M;", "declare namespace M { interface Point { x: number } }\nvar m = M;",
+      // TS2350: `new` over a call signature that returns a value, and over
+      // the two lib functions that are not constructors.
+       "declare var cf: { (): string };\nvar r = new cf();", "new Symbol();", "new BigInt(1);",
+      // TS2448: a default reading a binding declared at or after its own
+      // position, in both pattern kinds.
+       "const { e = f, f = f } = {} as any;", "const [a = b, b = 1] = [] as any;",
+      // TS18038: `for await` inside a class static block — the enclosing
+      // function does not rescue it.
+       "const nums = [1];\nclass C { static { for await (const n of nums) { } } }",
+      "const nums = [1];\nasync function foo() { class C { static { for await (const n of nums) { } } } }",
+      // TS1200: a line break before an expression arrow's `=>`.
+       "var f1 = ()\n  => { };",
+      // TS1002: a string literal reaching a raw line terminator.
+       "var bad = \"unclosed\nvar y = 1;",
+      // TS2432: two merged declarations both omitting the first
+      // initializer.
+       "enum E { A }\nenum E { B = 0 }\nenum E { C }",
+      // TS2500: an `implements` entry is not a qualified name.
+       "namespace A { export class B { } }\nclass C implements A?.B { }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // TS2583: the lib that declares it, and a user declaration.
+      "// @lib: es2017\nvar foge = new SharedArrayBuffer(1024);", "// @lib: es5\ndeclare var SharedArrayBuffer: any;\nvar foge = new SharedArrayBuffer(1024);",
+      // A type-only namespace nested inside another is NOT covered, and
+      // the reason is a lowering artifact rather than a judgement:
+      // `export namespace inA { … }` records a VALUE for `inA` (the
+      // namespace object `parser_namespace_lower` synthesizes), so the
+      // outer namespace reads as instantiated whatever its nested body
+      // holds. tsc reports TS2708 there; `importStatementsInterfaces`
+      // stays a MISS for it.
+       "namespace A { export namespace inA { export interface P { x: number } } }\nvar a = A;",
+      // TS2708: an INSTANTIATED namespace is a value; so is one whose only
+      // member is an `import` alias, because an alias to an instantiated
+      // namespace emits `var a = A` (exportImportAlias — the one false
+      // positive this rule shipped before measurement); and declaration
+      // merging with a class gives the name a value meaning the namespace
+      // body alone does not show.
+       "namespace M { export var v = 1; }\nvar m = M;", "namespace A { export var x = 1; }\nnamespace C { export import a = A; }\nvar z = C.a.x;",
+      "namespace M { export interface Point { x: number } }\nclass M { }\nvar m = M;",
+      // A local binding shadowing a type-only namespace name.
+       "namespace M { export interface P { x: number } }\nfunction f() { const M = 1; return M; }",
+      // TS2350: a construct signature, a void-returning call signature
+      // (tsc reports TS7009 there, not this), and an ordinary class.
+       "declare var cf: { (): string; new(): string };\nvar r = new cf();", "declare var vf: { (): void };\nvar r = new vf();",
+      "class C { }\nvar c = new C();",
+      // An old-style JavaScript constructor is a function declaration and
+      // is excluded by name, not by inference.
+       "// @strict: false\nfunction Point(x: number) { }\nvar p = new Point(1);",
+      // A user-declared `Symbol` is not the lib function.
+       "declare var Symbol: any;\nvar s = new Symbol();",
+      // TS2448: a default reading an EARLIER binding, an outer binding,
+      // and one inside a closure that runs after the pattern is bound.
+       "const { a = 1, c = a, d = a } = {} as any;", "const outerF = 1;\nconst { e = outerF } = {} as any;",
+      "const { e = () => f, f = 1 } = {} as any;",
+      // TS1107: a label declared INSIDE the static block still resolves,
+      // and so do the unlabelled forms.
+       "function foo(v: number) { class C { static { outer: break outer; loop: while (v) { if (v === 1) break loop; if (v === 2) continue loop; if (v === 3) break; if (v === 4) continue; } switch (v) { default: break; } } } }",
+      // TS18038: `for await` in an async function, outside any static
+      // block.
+       "const nums = [1];\nasync function foo() { for await (const n of nums) { } }",
+      // TS1200: a line break AFTER the arrow is fine, and a TYPE-position
+      // arrow may break before it.
+       "var f2 = (x: string) =>\n  x;", "type F = ()\n  => void;\nvar f: F;",
+      // TS1002: an escaped newline, a line continuation, and the other
+      // quote.
+       "var ok = \"a\\nb\";", "var ok3 = 'x';",
+      // TS2432: only ONE declaration omits the first initializer, and a
+      // single declaration never merges.
+       "enum E { A = 0 }\nenum E { B }\nenum E { C = 5 }", "enum E { A }",
+      // TS2500: an `extends` clause takes an EXPRESSION, so `extends
+      // A?.B` is LEGAL — `classExtendingOptionalChain` accepts the first
+      // half of its own file — and a genuine qualified name or a generic
+      // reference is fine on the `implements` side.
+       "namespace A { export class B { } }\nclass C1 extends A?.B { }", "namespace A { export interface B { x: number } }\nclass C implements A.B { x = 1; }",
+      "interface I<T> { x: T }\nclass C implements I<number> { x = 1; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CO: TS4111, TS1207, TS1249 and TS2474 — four one-file rules from
+/// the long tail of the compiler-probed ranking.
+///
+/// Every entry below, firing and silent alike, was checked against the
+/// local TypeScript compiler with `scripts/tsc_probe.mjs`. Two of the four
+/// have boundaries that could not have been reasoned out: a `const enum`
+/// accepts `1 << 4` and a reference to an outer `const` while rejecting a
+/// call, and TS1249's ambient form is where tsc 6.0.3 and the TS7 oracle
+/// DISAGREE — `decoratorInAmbientContext` is TS7-accepted, so the ambient
+/// and abstract exclusions are what keep this at FP 0.
+test "expr_check: index-signature dot access, decorator placement, const enums (batch CO)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS4111: dot access to an index-signature member, with and without
+      // a declared member of another name alongside it.
+      "// @noPropertyAccessFromIndexSignature: true\ninterface B { [k: string]: string }\ndeclare const b: B;\nb.foo;",
+      "// @noPropertyAccessFromIndexSignature: true\ninterface C { foo: string; [k: string]: string }\ndeclare const c: C;\nc.bar;",
+      // TS1207: both halves of one get/set pair decorated.
+       "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass E { @d1 get x() { return 0; } @d1 set x(v: number) { } }",
+      // TS1249: a decorator on a bodiless overload signature.
+       "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\nclass C {\n  @dec\n  method()\n  method() { }\n}",
+      // TS2474: a call in a `const enum` member initializer.
+       "const enum D { a = 10, b = Math.floor(1.5) }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // TS4111 is OFF by default, which is how the compiler behaves.
+      "interface B { [k: string]: string }\ndeclare const b: B;\nb.foo;",
+      // A declared member, the bracket form, and an `Object.prototype`
+      // member reached by dot — the last comes from the prototype and not
+      // from the index signature.
+       "// @noPropertyAccessFromIndexSignature: true\ninterface A { foo: string }\ndeclare const a: A;\na.foo;",
+      "// @noPropertyAccessFromIndexSignature: true\ninterface C { foo: string; [k: string]: string }\ndeclare const c: C;\nc.foo;\nc[\"bar\"];",
+      "// @noPropertyAccessFromIndexSignature: true\ninterface B { [k: string]: string }\ndeclare const b: B;\nb.toString();",
+      // TS1207: ONE half decorated, two different names, and the static /
+      // instance split — all four are separate members.
+       "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass A { @d1 get x() { return 0; } set x(v: number) { } }",
+      "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass B { get x() { return 0; } @d1 set x(v: number) { } }",
+      "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass E2 { @d1 get y() { return 0; } @d1 set z(v: number) { } }",
+      "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass F2 { @d1 static get w() { return 0; } @d1 set w(v: number) { } }",
+      // Under STANDARD ES decorators each accessor gets its own decorator
+      // application, so decorating both halves is legal — seven corpus
+      // false positives in `esDecorators/` said so, and every probe first
+      // written for this rule carried `@experimentalDecorators: true`, so
+      // none of them could see it.
+       "declare var dec: any;\nclass E { @dec get x() { return 1; } @dec set x(v: number) { } }",
+      // A class EXPRESSION is skipped, and that is a limitation rather
+      // than a rule: with NO directive the expression form fires while
+      // the identical declaration stays silent, so the decorator-mode
+      // flag is not reliable on that parse path. Recorded in TODO.md.
+       "declare var dec: any;\n(class E { @dec get x() { return 1; } @dec set x(v: number) { } });",
+      // TS1249: a decorated IMPLEMENTATION is the whole point of the
+      // diagnostic; an ambient or abstract bodiless member is not an
+      // overload, and `decoratorInAmbientContext` is TS7-ACCEPTED even
+      // though tsc 6.0.3 reports it.
+       "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\nclass C { @dec method() { } }",
+      "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\ndeclare class E { @dec m(): void; }",
+      "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\nabstract class F { @dec abstract g(): void; }",
+      // TS2474: everything a `const enum` initializer may legally be —
+      // arithmetic on literals, a shift, a unary minus, a bare reference
+      // to another member and a dotted one.
+       "const enum D { a = 10, b = 199 * 2, c = a - 1, d = 1 << 4, e = -5, f = D.a }",
+      // A reference to an outer `const` is a constant enum expression;
+      // `constEnum2`'s own `g = CONST` line is not among tsc's reports.
+       "const CONST = 9000 % 2;\nconst enum D { g = CONST }",
+      // The same call in a PLAIN enum is legal — the `const` is the whole
+      // difference.
+       "enum D { a = 10, b = Math.floor(1.5) }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CP: nine grammar / lexer / flag rules, each paired with the legal
+/// spelling it must stay silent on. Every boundary here was probed against
+/// the real compiler (`scripts/tsc_probe.mjs`) rather than reasoned about,
+/// and three of them are only correct because of what the probe said:
+/// `++t ** 2` is legal where `-t ** 2` is not, `a?` is not a non-simple
+/// parameter, and the `"use strict"` rule needs target >= es2016.
+test "expr_check: exponent LHS, nullish mixing, rest initializers, use strict (batch CP)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS1489: a leading-zero literal that an 8 or 9 makes decimal.
+      "var x = 09;", "var y = 019;",
+      // TS17006: a unary expression as the left operand of `**`, in both
+      // the direct and the nested-right-operand position.
+       "-1 ** 2;", "1 ** -2 ** 3;", "!1 ** 2;", "typeof 1 ** 2;",
+      // TS5076: `??` mixed with `||` or `&&` without parentheses, in
+      // either order.
+       "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? b || c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na || b ?? c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? b && c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na && b ?? c;",
+      // TS1186: a rest element with an initializer, in BOTH spellings —
+      // the destructuring-assignment form (which never reaches a pattern
+      // parser) and the binding-declaration form.
+       "declare var a: number[];\nvar x: number[];\n[...x = a] = a;", "declare var a: number[];\nvar [...z = a] = a;",
+      // TS1347: a `"use strict"` prologue with a non-simple parameter
+      // list, at es2016. All three kinds of non-simple parameter, plus a
+      // prologue that another directive precedes.
+       "// @target: es2016\nfunction f(a = 1) { \"use strict\"; }", "// @target: es2016\nfunction f(...r: any[]) { \"use strict\"; }",
+      "// @target: es2016\nfunction f({ p }: any) { \"use strict\"; }", "// @target: es2016\nfunction f(a = 1) { \"foo\"; \"use strict\"; }",
+      // TS17013: `new.target` outside any function.
+       "// @target: es2015\nconst a = new.target;",
+      // TS18016: a `#private` name with no enclosing class body — the
+      // decorator on a class is parsed before its body, so this is the
+      // corpus shape.
+       "// @target: esnext\ndeclare let dec: any;\n@dec((x: any) => x.#foo)\nclass A { #foo = 3; }",
+      // TS2354: `@importHelpers` with a `using` declaration, whose helper
+      // can never resolve in a single-file check.
+       "// @importHelpers: true\n// @target: es2022\nusing a = null;",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent (the legal neighbours)
+  for
+    src in [
+      // TS1489 stops at the leading zero that IS a legal literal, and at
+      // the legacy-octal spellings, which are a different code the lexer
+      // already had.
+      "var a = 0;", "var b = 0.5;", "var c = 0o7;", "var d = 0x9;",
+      // TS17006: every parenthesized spelling is legal, the RIGHT operand
+      // may be unary, and an UpdateExpression LHS (`++t`, `--t`) is
+      // explicitly allowed by the grammar where a UnaryExpression is not.
+       "-(1 ** 2);", "(-1) ** 2;", "2 ** -3;", "-(2 ** 3);", "var t = 1;\n++t ** 2;",
+      "var u = 1;\n--u ** 2;",
+      // TS5076: parentheses on either side make it legal, and an
+      // unmixed chain of one operator always was.
+       "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? (b || c);",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\n(a ?? b) || c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\n(a || b) ?? c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? b ?? c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na || b || c;",
+      // Two logical expressions of DIFFERENT operators in one statement
+      // list are not a mix — the span is one logical-OR expression, so it
+      // cannot straddle a statement or a comma.
+       "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\nvar p = a ?? b;\nvar q = b || c;",
+      // TS1186: a rest element with no initializer, a NON-rest element
+      // with one, and an initializer on the whole pattern.
+       "declare var a: number[];\nvar x: number[];\n[...x] = a;", "declare var a: number[];\nvar y = [1, 2];\n[y[0] = 5] = a;",
+      "function f([...r] = []) { }",
+      // TS1347 below es2016, where TypeScript downlevels the parameter so
+      // the emitted list is simple. es2015 and es5 both probed clean.
+       "// @target: es2015\nfunction f(a = 1) { \"use strict\"; }", "// @target: es5\nfunction f(...r: any[]) { \"use strict\"; }",
+      // At es2016 a SIMPLE list is fine, an optional marker does not make
+      // a list non-simple (`?` erases), and a `"use strict"` that a
+      // non-directive statement precedes is not a prologue directive.
+       "// @target: es2016\nfunction f(a: number) { \"use strict\"; }", "// @target: es2016\nfunction f(a?: number) { \"use strict\"; }",
+      "// @target: es2016\nfunction f(a = 1) { \"foo\"; var c = 1; \"use strict\"; }",
+      // A file with no `@target:` at all abstains: tsc 6.0.3 reports it,
+      // which says what the LOCAL compiler's default target is and
+      // nothing about TS7's.
+       "function f(a = 1) { \"use strict\"; }",
+      // TS17013 is legal in a function declaration, a function
+      // expression, a constructor, and an arrow nested in one of those.
+       "// @target: es2015\nfunction f() { return new.target; }", "// @target: es2015\nvar g = function () { return new.target; };",
+      "// @target: es2015\nclass C { constructor() { var t = new.target; } }", "// @target: es2015\nfunction h() { return () => new.target; }",
+      // TS18016: every `#private` inside a class body, including the
+      // static side, an `in` brand check, a class expression, a computed
+      // key's body, and an ambient declaration.
+       "// @target: esnext\nclass C { #x = 1; m() { return this.#x } static #s = 2; static t() { return C.#s } }",
+      "// @target: esnext\nclass D { #y = 1; has(o: any) { return #y in o } }", "// @target: esnext\nconst E = class { #z = 1; m() { return this.#z } };",
+      "// @target: esnext\ndeclare class F { #w: number }",
+      // A decorator on a MEMBER sits inside the class body, so a private
+      // name there resolves — the legal half of the corpus file.
+       "// @target: esnext\ndeclare let dec: any;\nclass A { #foo = 3;\n  @dec(this, (x: A) => x.#foo)\n  m() { } }",
+      // TS2354 needs both halves: the flag without a `using`, and a
+      // `using` without the flag.
+       "// @importHelpers: true\n// @target: es2022\nexport { };", "// @target: es2022\n// @lib: esnext\nusing a = null;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CP, second half: rules that needed a structural fact rather than
+/// a grammar one. Two of them are refinements of things already in the
+/// tree — a constructor counter that only ever compared against 2, and an
+/// `override` rule batch BY rejected outright — so the legal neighbours
+/// here are the cases that made those the right calls at the time.
+test "expr_check: constructor signatures, computed override, tuple index (batch CP2)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2390: constructor overload signatures with no implementation.
+      "class C { constructor(); }", "class C { constructor(); foo() { } }",
+      // An ABSTRACT class is not exempt — probed, and the opposite of
+      // what "abstract members have no bodies" suggests.
+       "abstract class C { constructor(); }",
+      // TS4113: `override` on a computed key whose base chain declares
+      // nothing at all, which is decidable without resolving the key.
+       "// @target: esnext\nconst foo = \"f\";\nclass A { }\nclass B extends A { override [foo]() { } }",
+      // TS2493: more destructured positions than the array literal has,
+      // in every kind the probe confirmed — plain, an elision counting as
+      // a position, a rest not saving the positions before it, and a
+      // nested pattern.
+       "var [c] = [];", "var [a, b] = [1];", "var [, h] = [1];", "var [d, ...r] = [];",
+      "var [[b]] = [[]];", "let [d] = [];", "const [e] = [];",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // TS2390: an implementation is present, in the plain and the
+      // overload-set spellings. An AMBIENT class needs none, and the
+      // parser routes `declare class` through a different function
+      // entirely, so the sentinel is unreachable there by construction.
+      "class D { constructor() { } }", "class B { constructor(a: number); constructor(a: string); constructor(a: any) { } }",
+      "declare class A { constructor(); }", "class E { foo() { } }",
+      // TS4113: the case batch BY was right to protect. A `const` string
+      // key is late-bindable, so `override [prop]()` is LEGAL when the
+      // base declares the key it resolves to — and the rule must abstain
+      // whenever the base declares anything at all, since it does not
+      // resolve the key.
+       "// @target: esnext\nconst prop = \"foo\";\nclass Base { [prop]() { } }\nclass Der extends Base { override [prop]() { } }",
+      "// @target: esnext\nconst prop = \"foo\";\nclass WithField { x = 1 }\nclass Der extends WithField { override [prop]() { } }",
+      // A merged interface supplies members, so the base does not count
+      // as declaring nothing. tsc DOES report this one (`[prop]` is
+      // `"foo"` and M declares only `m`), so it is a MISS here rather
+      // than a neighbour we must stay silent on — but it has to be a
+      // miss for the right reason: the first draft fired, because the
+      // chain walk consulted a merged interface only when no class of
+      // the name existed. Had M declared `foo`, the same firing would
+      // have been a false positive.
+       "// @target: esnext\nconst prop = \"foo\";\ninterface M { m(): void }\nclass M { }\nclass Der extends M { override [prop]() { } }",
+      // TS2493: a default supplies the missing element; a rest alone
+      // takes no position; a spread makes the length unknown; a
+      // non-literal right side is not decidable; and an explicit
+      // annotation is what makes the empty literal legal.
+       "var [a = 1] = [];", "var [...r] = [];", "var xs = [1, 2];\nvar [g] = [...xs];",
+      "declare var arr: number[];\nvar [f] = arr;", "var [i]: any = [];", "var [j] = [1, 2, 3];",
+      "var [f] = [undefined];", "var [e] = [] as any[];",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CQ: four rules whose boundary the real compiler had to settle,
+/// because reasoning about them gives the wrong answer twice. TS1212 is
+/// NOT gated on strict mode or on the target even though its message
+/// names strict mode; TS7008 fires on a private and a static member alike
+/// but not on an ambient one; and a write to a set-only private accessor
+/// is legal while a READ of one is the error.
+test "expr_check: reserved-word identifiers, implicit-any members, private access (batch CQ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS1212: `yield` / `let` in an identifier-REFERENCE position, at
+      // any target — probed at es5 and es6, sloppy script and all.
+      "// @target: es6\nyield;", "// @target: es6\nyield(foo);", "// @target: es6\nlet",
+      "// @target: es5\nyield;",
+      // TS7008: a class member with neither an annotation nor an
+      // initializer, under noImplicitAny. Plain, private and static.
+       "// @noImplicitAny: true\nclass A { p; }", "// @noImplicitAny: true\nclass B { #prop; }",
+      "// @noImplicitAny: true\nclass F { static #u; }",
+      // TS2803 / TS2806. Both already existed for class DECLARATIONS;
+      // what was missing is the class EXPRESSION, which is the shape
+      // both corpus files use (`const C = class { … }`) and which the
+      // existing checks structurally cannot see, since they read
+      // `module_.classes`. The declaration forms are here too, so a
+      // regression in EITHER implementation shows up.
+       "// @target: es2015\nclass A { #m() { } n() { this.#m = 1; } }", "// @target: es2015\nconst A2 = class { #m() { } n() { this.#m = 1; } };",
+      "// @target: es2015\nconst A3 = class { #m() { } n() { this.#m += 1; } };",
+      "// @target: es2015\nconst D = class { set #s(v: number) { } n() { return this.#s; } };",
+      // A compound assignment READS the old value, which is what makes
+      // this TS2806 rather than a legal write — the corpus shape.
+       "// @target: es2015\nconst E = class { set #s(v: number) { } n() { this.#s += 2; } };",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // TS1212 covers reference positions only. Every PROPERTY position
+      // is legal and each is parsed elsewhere: an object key, a property
+      // access, an interface member, an enum member, a class member.
+      "// @target: es5\nvar o = { yield: 1, let: 2 };", "// @target: es5\ndeclare const o: any;\nvar a = o.yield;\nvar b = o.let;",
+      "// @target: es5\ninterface I { yield: number; let: string }", "// @target: es5\nenum E { yield, let }",
+      "// @target: es5\nclass C { yield() { } }",
+      // The `yield` OPERATOR inside a generator is not an identifier.
+       "// @target: es6\nfunction* g() { yield 1; }", "// @target: es6\nvar o = { *m() { yield 2; } };",
+      // TS7008: an initializer infers the type, an annotation supplies
+      // it, and an AMBIENT class needs neither — `declare class` is
+      // parsed by a different function, so that exemption needs no gate.
+       "// @noImplicitAny: true\nclass B { q = 1; }", "// @noImplicitAny: true\nclass D { #s = 1; }",
+      "// @noImplicitAny: true\ndeclare class E { #t; }",
+      // Without the flag there is nothing to report.
+       "// @noImplicitAny: false\nclass A { p; }",
+      // An assignment in the CONSTRUCTOR supplies the type, and so does
+      // one in a STATIC BLOCK — `classStaticBlockUseBeforeDef1` shipped
+      // as a false positive on the first draft. Distinguishing those
+      // regions from a method body would need brace tracking, so ANY
+      // `.name =` in the body withdraws the report: the method-body case
+      // below is the MISS that buys it.
+       "// @noImplicitAny: true\nclass A2 { p; constructor() { this.p = 1; } }",
+      "// @noImplicitAny: true\n// @target: esnext\nclass A3 { static r; static { this.r = 1; } }",
+      "// @noImplicitAny: true\nclass A4 { q; m() { this.q = 1; } }",
+      // TS2803 / TS2806: a private FIELD is writable and readable; a
+      // set-only accessor may be WRITTEN (only reading it is the error);
+      // a get/set PAIR is readable; and a `#x in v` brand check is
+      // neither a read of an accessor nor a write.
+       "// @target: es2015\nconst A = class { #f = 1; n() { this.#f = 2; return this.#f; } };",
+      "// @target: es2015\nconst B = class { set #s(v: number) { } n() { this.#s = 1; } };",
+      "// @target: es2015\nconst C = class { get #p() { return 1 } set #p(v: number) { } n() { return this.#p; } };",
+      "// @target: esnext\nconst D = class { #brand: undefined; is(v: any) { return #brand in v } };",
+      // The member's own declaration is not an access — no `.` precedes
+      // it — so a private method declared and never touched is silent.
+       "// @target: es2015\nconst E = class { #m() { } };",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CR: three rules that are all one shape — a fact the parser
+/// already had, recorded at some of the places that produce it.
+test "expr_check: re-export specifiers, import types, unused privates (batch CR)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2307 through a RE-EXPORT. `import_module_specs` was filled by
+      // the import parsers only, so these reached the check with nothing
+      // to say even though the specifier was right there. All eight
+      // `… from "spec"` sites go through `expect_from_spec` now.
+      "// @target: es2015\nexport * as ns from './nonexistent';", "// @target: es2015\nexport * from './nonexistent';",
+      "// @target: es2015\nexport { a } from './nonexistent';",
+      // And through an import TYPE, whose specifier this arm consumed
+      // and discarded.
+       "// @target: es2015\nconst x: import(\"nope\") = 1;",
+      // TS6133: a `#private` nobody reads, under @noUnusedLocals.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass B { #v = 1; }",
+      // Only the unused one is reported when a sibling IS read.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass A { #u = 1; m() { return this.#u } }\nclass B { #v = 1; }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // An ambient module declaration in the file is what makes the
+      // correctly-spelled specifier resolvable, and that exemption is
+      // what keeps the import-type rule from firing on real code.
+      "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst y: import(\"foo\") = { x: 0 };",
+      // TS6133 needs the flag; the default is off, matching tsc.
+       "// @target: es2015\nclass B { #v = 1; }",
+      // A private that IS read, in each of the ways a read can be
+      // spelled — a method body and a brand check. A `#x in v` is a read
+      // to tsc, which is exactly why counting occurrences works.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass A { #u = 1; m() { return this.#u } }",
+      "// @noUnusedLocals: true\n// @target: esnext\nclass D { #brand: undefined; is(v: any) { return #brand in v } }",
+      // A get/set pair is TWO declarations of one member, so the count
+      // comparison has to allow for it: read once, it is used.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass C { get #p() { return 1 } set #p(v: number) { } m() { return this.#p } }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CS: operand-type rules, and a false positive the conformance
+/// gate could not see. The unary rule here REPLACES one that required a
+/// number: `+`, `-` and `~` all coerce, and the only type TypeScript
+/// refuses is `symbol` — so `~aString` and `-aBoolean` had been reported
+/// on legal code. Every boundary below was probed operator by operator.
+test "expr_check: unary coercion, symbol inference, instanceof and for-in operands (batch CS)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2469: symbol is the one type `+` / `-` / `~` reject.
+      "declare const sy: symbol;\nvar a = ~sy;", "declare const sy: symbol;\nvar a = -sy;",
+      "declare const sy: symbol;\nvar a = +sy;",
+      // `Symbol()` now infers as `symbol`, which is what makes the
+      // operand rules reachable at all — the call had no model in
+      // `infer_expr`, so every symbol rule was silent.
+       "var s = Symbol();\nvar bad: number = s;", "var s = Symbol();\n+s;",
+      // TS2358 / TS2359: an `instanceof` operand that is a definite
+      // primitive, on either side.
+       "declare const s: string;\ns instanceof Object;", "declare const sy: symbol;\nsy instanceof Object;",
+      "declare const o: object;\ndeclare const n: number;\no instanceof n;",
+      // TS2407: a `for...in` right-hand side that is a definite
+      // primitive, or `unknown`.
+       "for (const k in 1) { }", "for (const k in \"str\") { }", "declare const sy: symbol;\nfor (const k in sy) { }",
+      "declare const u: unknown;\nfor (const k in u) { }",
+      // TS2731: a symbol in a template substitution throws at runtime.
+       "declare const sy: symbol;\nconst t = `${sy}`;",
+      // TS18046: an unannotated catch binding is `unknown`.
+       "try { } catch (e) { console.log(e.message); }", "try { } catch (e) { e.foo(); }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // The four false-positive shapes the old unary rule produced.
+      // `+`, `-` and `~` apply ToNumeric, so a string and a boolean are
+      // both legal operands — `args[+randBool()]` is idiomatic, and
+      // flagging it made `typeArgumentsWithStringLiteralTypes01` a true
+      // positive for the WRONG reason.
+      "declare const s: string;\nvar a = ~s;", "declare const s: string;\nvar a = -s;",
+      "declare const b: boolean;\nvar a = ~b;", "declare const b: boolean;\nvar a = -b;",
+      // An object and an array coerce too (to NaN); tsc accepts both.
+       "declare const o: object;\nvar a = -o;",
+      // The BINARY operators are genuinely different and untouched:
+      // `s - 1` IS an error, so this file must still report exactly one
+      // thing rather than nothing — asserted in the fires list of the
+      // binary tests elsewhere. Here: `++` / `--` still require a
+      // number, which is a different code (TS2356) and still fires, so
+      // it is not in this silent list either.
+      //
+      // A user-declared `Symbol` wins over the lib model, so nothing is
+      // claimed about its return type.
+       "declare function Symbol(): string;\nvar s2 = Symbol();\nvar ok: string = s2;",
+      // TS2358 abstains for everything that is not a definite
+      // primitive: `unknown` is a LEGAL instanceof left operand (probed
+      // — and the opposite of the for-in answer), and so are `any`, an
+      // object type and a union.
+       "declare const u: unknown;\nu instanceof Object;", "declare const a: any;\na instanceof Object;",
+      "declare const o: object;\no instanceof Object;", "declare const t: string | object;\nt instanceof Object;",
+      // TS2407 accepts an object type and `any`.
+       "declare const o: object;\nfor (const k in o) { }", "declare const a: any;\nfor (const k in a) { }",
+      // TS2731 is only about symbol; a string and a number stringify.
+       "declare const s: string;\nconst t = `${s}`;", "declare const n: number;\nconst t = `${n}`;",
+      // TS18046: an annotation opts out, any narrowing spelling
+      // withdraws the report for the block, and a bare use or a
+      // re-throw touches nothing.
+       "try { } catch (e: any) { console.log(e.message); }", "try { } catch (e: unknown) { if (e instanceof Error) console.log(e.message); }",
+      "try { } catch (e) { if (e instanceof Error) console.log(e.message); }", "try { } catch (e) { if (typeof e === \"string\") console.log(e.length); }",
+      "try { } catch (e) { console.log(e); }", "try { } catch (e) { throw e; }",
+      // `@useUnknownInCatchVariables: false` turns it off, and so does
+      // `@strict: false`, which the flag follows.
+       "// @useUnknownInCatchVariables: false\ntry { } catch (e) { console.log(e.message); }",
+      "// @strict: false\ntry { } catch (e) { console.log(e.message); }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CT: TS2347 ("untyped function calls may not accept type
+/// arguments").
+///
+/// The whole risk in this rule is telling a genuine `any` from a type
+/// this checker failed to compute, and the silent list below is where
+/// that line is drawn — every entry there comes out `Any` in our model
+/// and has a real type in tsc. `staticIndexSignature6` is the corpus
+/// file that made the loose version a false positive.
+test "ts2347 untyped call type arguments" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // An ambient annotation (`functionCalls`), a plain annotated
+      // declaration with no initializer, and an unannotated one — all
+      // three are `any` in tsc, so all three are errors.
+      "declare var anyVar: any;\nanyVar<string>('hello');", "var x: any;\nx<number>(1);",
+      "var y;\ny<number>(1);",
+      // `new` is the same error, which is the whole of
+      // `anyAsConstructor`.
+       "var x: any;\nvar d = new x<any>(x);", "declare var anyVar: any;\nnew anyVar<string>();",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A call or `new` with type arguments against a callee that HAS a
+      // signature is the ordinary legal spelling — probed against tsc,
+      // which accepts every one of these.
+      "declare function f<T>(x: T): T;\nf<number>(1);", "declare class K<T> { constructor(v: T) }\nnew K<number>(1);",
+      "declare const o: { m<T>(x: T): T };\no.m<number>(1);", "const g = <T,>(v: T) => v;\ng<number>(1);",
+      // `any` callee with NO type arguments is legal, both spellings.
+       "declare var anyVar: any;\nanyVar(1);", "declare var anyVar: any;\nnew anyVar(1);",
+      // The line the rule has to hold: a binding whose type this
+      // checker could not compute. `foo()` returns a class expression,
+      // which comes out `Any` here and is a generic class in tsc, so
+      // `new C<number>()` is legal — this is `staticIndexSignature6`,
+      // and the loose form of the rule reported it.
+       "function foo() { return class<T> { m(v: T) { return v } } }\nconst C = foo()\nconst c = new C<number>();",
+      // Same shape through an ordinary call and through a lib global
+      // whose members our model leaves `Any`.
+       "declare function mk(): { <T>(x: T): T };\nconst h = mk();\nh<number>(1);",
+      "const p = JSON.parse('{}');\np<number>(1);",
+      // A declaration WITH an initializer is excluded whatever the
+      // initializer is: inference is what the exclusion is about, not
+      // the value.
+       "var z: any = 1;\nz<number>(1);",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CU: TS1240 / TS1241 / TS1329 for a legacy MEMBER decorator's
+/// arity. The class-level rule has existed for a long time
+/// (`check_class_decorator_signatures`); the member positions had
+/// nothing.
+///
+/// The arity table is probed rather than reasoned about, because "fewer
+/// parameters is fine" is NOT the rule: a property decorator must accept
+/// exactly 2 arguments and a method or accessor decorator 2 or 3. Every
+/// silent case below is a shape tsc accepts, including the `accessor`
+/// field — an auto-accessor's decorator gets a descriptor like a
+/// method's, which is the corpus false positive
+/// (`decoratorOnClassProperty13`) the first version shipped.
+test "member decorator arity" {
+  let issues = fn(src : String) -> Int {
+    let head = "// @experimentalDecorators: true\n// @strict: false\n"
+    check_module_function_bodies_permissive(parse_module_or_empty(head + src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // A property decorator's runtime arity is 2, so 1 and 3 are both
+      // wrong (decoratorOnClassProperty6 / 7).
+      "declare function dec(a: string): void;\nclass C { @dec prop; }", "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec prop; }",
+      // A method or accessor decorator's is 3, so 1 and 4 are wrong.
+       "declare function dec(a: string): void;\nclass C { @dec m() {} }", "declare function dec(a: string, b: string, c: string, d: string): void;\nclass C { @dec m() {} }",
+      "declare function dec(a: string): void;\nclass C { @dec get g() { return 1 } }",
+      // Zero-argument-callable gets tsc's factory wording instead
+      // (decoratorOnClassProperty11, decoratorOnClassMethod6).
+       "declare function dec(): void;\nclass C { @dec prop; }", "declare function dec(): void;\nclass C { @dec m() {} }",
+      "declare function dec(a?: string): void;\nclass C { @dec prop; }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // Exactly the runtime arity, on each member kind.
+      "declare function dec(a: string, b: string): void;\nclass C { @dec prop; }",
+      "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec m() {} }",
+      "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec get g() { return 1 } }",
+      "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec static sm() {} }",
+      // A method decorator may also take 2 — probed; tsc accepts it.
+       "declare function dec(a: string, b: string): void;\nclass C { @dec m() {} }",
+      // An `accessor` FIELD is decorated like a method, not like a
+      // property: `decoratorOnClassProperty13` is TS7-ACCEPTED with a
+      // 3-parameter decorator, and reading it as a property was the
+      // corpus false positive.
+       "declare function dec(a: string, b: string, c: string): void;\nclass C { @dec accessor prop; }",
+      // Optionality and rest widen the accepted range.
+       "declare function dec(a: string, b?: string): void;\nclass C { @dec prop; }",
+      "declare function dec(a: string, b: string, c?: string): void;\nclass C { @dec prop; }",
+      "declare function dec(...a: string[]): void;\nclass C { @dec prop; }", "declare function dec(a: string, b: string, ...r: string[]): void;\nclass C { @dec prop; }",
+      "declare function dec(a?: string, b?: string): void;\nclass C { @dec prop; }",
+      // A decorator whose signature is not in hand abstains: an
+      // undeclared name, and a CALLED factory (whose result type carries
+      // no optionality information, so the arity range would be a guess).
+       "class C { @unknownDec prop; }", "declare function dec(): (a: string) => void;\nclass C { @dec() prop; }",
+      // An inline expression form is not read at all.
+       "class C { @((a: string) => {}) prop; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CV: an AMBIENT class's accessors are recorded as accessors.
+///
+/// `parse_declare_class` upserted a `declare class`'s `get x(): T` into
+/// `properties` and pushed no `methods` entry carrying the `get` tag, so
+/// every consumer asking "is this base member an accessor or a data
+/// property" got the wrong answer for an ambient base. One defect, two
+/// faces — and the second one was a FALSE POSITIVE the corpus could not
+/// see, because it has no file of that shape.
+test "ambient class accessors" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2610: a base accessor overridden by a derived data property.
+  // `propertyOverridesAccessors4` is this with a get/set pair.
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: true\ndeclare class A { get x(): string }\nclass B extends A { x = 1 }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: true\ndeclare class A { get x(): string; set x(v: string) }\nclass B extends A { x = 1 }",
+    ) >
+    0,
+  )
+  // The static form, and a derived METHOD over a base ambient accessor
+  // (TS2423 / TS2426), which reads the same record.
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: true\ndeclare class A { static get x(): string }\nclass B extends A { static x = 1 }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare class A { get x(): string }\nclass B extends A { x() { return 1 } }",
+    ) >
+    0,
+  )
+  // The FALSE POSITIVE half: accessor over accessor is legal, and was
+  // reported TWICE while the ambient getter looked like a data property.
+  @test.assert_eq(
+    issues(
+      "declare class A { get x(): string; set x(v: string) }\nclass B extends A { get x() { return \"\" } set x(v: string) {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare class A { get x(): string }\nclass B extends A { get x() { return \"\" } }",
+    ),
+    0,
+  )
+  // An ambient accessor is still readable as a property from the outside
+  // (the upsert next to the new record is what does that), and it must
+  // not be mistaken for an uninitialized field under
+  // strictPropertyInitialization.
+  @test.assert_eq(
+    issues(
+      "// @strict: true\ndeclare class A { get x(): string }\nvar s: string = new A().x;",
+    ),
+    0,
+  )
+  // A plain ambient METHOD over a base accessor and vice versa are
+  // unaffected, and so is an ambient data property.
+  @test.assert_eq(
+    issues("declare class A { x: string }\nclass B extends A { x = \"a\" }"),
+    0,
+  )
+}
+
+///|
+/// Batch CW: four rules, each one an existing check that had been written
+/// for some of the spellings that produce it.
+test "batch CW rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2678: a literal case that cannot equal a literal scrutinee. The
+      // string spelling already worked; `infer_expr` widens a numeric
+      // literal to `number` and a boolean one to `boolean`, so those two
+      // were silent (invalidSwitchBreakStatement).
+      "switch (12) { case 5: break; }", "switch (true) { case false: break; }", "switch (1.5) { case 2.5: break; }",
+      "switch (\"a\") { case \"b\": break; }",
+      // TS2499: an interface `extends` takes a type reference, so `?.` is
+      // not a qualified name (interfaceExtendingOptionalChain).
+       "namespace Foo { export class Bar {} }\ninterface C1 extends Foo?.Bar {}",
+      // TS2725: under `module: commonjs` a class may not be named
+      // `Object`. Probed: not gated on export, nor on top level.
+       "// @module: commonjs\nexport class Object {}", "// @module: commonjs\nclass Object {}",
+      "// @module: commonjs\nexport default class Object {}",
+      // TS2430: an interface extending a class may not redeclare a member
+      // the class declares private or protected
+      // (interfaceWithPropertyThatIsPrivateInBaseType2).
+       "class Base { private x() {} }\ninterface Foo extends Base { x(): any; }",
+      "class Base { protected x() {} }\ninterface Foo extends Base { x(): any; }",
+      "class Base<T> { private x() {} }\ninterface Foo<T> extends Base<T> { x(): any; }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // The matching case, `default:`, and a non-literal scrutinee, which
+      // is every real-world switch.
+      "switch (12) { case 12: break; }", "switch (12) { case 12.0: break; }", "switch (true) { case true: break; }",
+      "switch (12) { default: break; }", "declare const n: number;\nswitch (n) { case 5: break; }",
+      "declare const s: string;\nswitch (s) { case \"a\": break; }",
+      // A `let` scrutinee widens in tsc too, so a mismatching case is
+      // legal there -- and this rule reads the SYNTAX, so it abstains for
+      // any name.
+       "let k = 12;\nswitch (k) { case 5: break; }",
+      // A qualified interface base with no `?.`, and a CLASS `extends`
+      // with one -- `class C extends A?.B {}` is LEGAL, since an extends
+      // clause on a class takes an expression.
+       "namespace Foo { export class Bar {} }\ninterface C1 extends Foo.Bar {}",
+      "declare var A: any;\nclass C extends A?.B {}",
+      // `Object` is only reserved under commonjs, and only that name.
+       "// @module: esnext\nexport class Object {}", "export class Object {}", "// @module: commonjs\nexport class Function {}",
+      "// @module: commonjs\nexport class Array {}",
+      // A PUBLIC base member may be redeclared, an unrelated name is
+      // fine, and an interface base (rather than a class) abstains.
+       "class Base { x() {} }\ninterface Foo extends Base { x(): void; }", "class Base { private x() {} }\ninterface Foo extends Base { y(): any; }",
+      "class Base { private x() {} }\ninterface Foo extends Base { }", "interface Base { x(): void }\ninterface Foo extends Base { x(): void; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CX: TS1013 (a rest parameter's trailing comma) and
+/// TS2415 / TS2417 (a derived member's accessibility).
+///
+/// The accessibility table was PROBED, all nine cells on both sides, and
+/// it is not "the modifiers must match": widening `protected` to `public`
+/// is legal, and an identical `private` redeclaration is an ERROR because
+/// a private member is nominal. Both of those cells are ones a rule
+/// written from the message text would get wrong.
+test "batch CX rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS1013, at each of the sites `parse_params` serves. Every
+      // parameter is ANNOTATED: an unannotated one is a noImplicitAny
+      // diagnostic of its own on this path, which would make the
+      // assertion pass without the rule.
+      "function f(...args: any[],) {}", "const g = (...args: any[],) => {};", "class X { constructor(...args: any[],) {} }",
+      "class Y { m(...args: any[],) {} }",
+      // TS2417 (static) and TS2415 (instance): narrowing, and anything
+      // over a private base member
+      // (derivedClassWithPrivateStaticShadowingProtectedStatic).
+      // Spelled with METHODS rather than fields throughout: an
+      // uninitialized field is a TS2564 of its own, which would make
+      // every one of these cases pass for the wrong reason and every
+      // silent case below fail.
+       "class B { protected static m(): void {} }\nclass D extends B { private static m(): void {} }",
+      "class B { protected m(): void {} }\nclass D extends B { private m(): void {} }",
+      "class B { static m(): void {} }\nclass D extends B { protected static m(): void {} }",
+      "class B { private static m(): void {} }\nclass D extends B { private static m(): void {} }",
+      "class B { private m(): void {} }\nclass D extends B { public m(): void {} }",
+      "class B { protected static x: string = \"\" }\nclass D extends B { private static x: string = \"\" }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A trailing comma after an ORDINARY parameter is legal, and an
+      // AMBIENT signature is exempt even after a rest -- both probed.
+      "function f(x: number,) {}", "const g = (x: number,) => {};", "declare function f25(...args: any[],): void;",
+      "declare class A { m(...args: any[],): void }", "function f(...args: any[]) {}",
+      "function f(a: number, ...args: any[]) {}",
+      // The three legal accessibility cells: identical public, identical
+      // protected, and WIDENING protected to public.
+       "class B { static m(): void {} }\nclass D extends B { static m(): void {} }",
+      "class B { protected static m(): void {} }\nclass D extends B { protected static m(): void {} }",
+      "class B { protected static m(): void {} }\nclass D extends B { public static m(): void {} }",
+      "class B { protected m(): void {} }\nclass D extends B { m(): void {} }",
+      // A name the base does not declare at all is a fresh member, not an
+      // override, whatever its accessibility.
+       "class B { protected static m(): void {} }\nclass D extends B { private static q(): void {} }",
+      // Staticness is part of the identity: a private INSTANCE member
+      // does not clash with a protected STATIC one of the same name.
+       "class B { protected static m(): void {} }\nclass D extends B { private m(): void {} }",
+      // An unresolvable base abstains.
+       "declare const Mix: any;\nclass D extends Mix { private static m(): void {} }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CY: TS2351, TS2532 and TS2661.
+///
+/// TS2532's silent list carries the false positive the first version
+/// shipped: our flow model narrows an `any`-typed binding to `Undefined`
+/// when its initializer is `undefined`, so `Undefined` had to come OUT
+/// of the arm. `Void` cannot be produced by narrowing, which is what
+/// makes the remaining half sound.
+test "batch CY rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2351: the value of an arithmetic expression has no construct
+      // signature (exponentiationOperatorWithNew).
+      "declare var a: any;\ndeclare var b: any;\nnew (a ** b);", "declare var a: any;\nnew (a + 1);",
+      "new (1);", "declare var a: any;\nnew (a < 1);",
+      // TS2532: destructuring reads properties off the source, so a
+      // `void` one is possibly-undefined
+      // (destructuringVoidStrictNullChecks).
+       "// @strictNullChecks: true\ndeclare const v: void;\nconst {} = v;", "// @strictNullChecks: true\ndeclare const v: void;\nconst { a } = v;",
+      // TS2661: only a local declaration can be exported
+      // (exportNonLocalDeclarations).
+       "export { nonexistentThing };", "export type { alsoMissing };",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // `new a ** b` parses as `(new a) ** b`, so the arithmetic is not
+      // the callee -- the same file's legal half. An identifier, a call
+      // and a property access all abstain.
+      "declare var a: any;\ndeclare var b: any;\nnew a ** b;", "declare var a: any;\nnew a();",
+      "declare var a: any;\nnew (a);", "class K {}\nnew K();", "declare var ns: any;\nnew ns.Thing();",
+      // TS2532 abstains when strictNullChecks is explicitly OFF, and for
+      // an ordinary object source. (The flag's DEFAULT in this checker is
+      // on, matching the conformance harness rather than tsc's own
+      // default, so the no-directive spelling is not the abstention.)
+       "// @strictNullChecks: false\ndeclare const v: void;\nconst {} = v;", "// @strict: false\ndeclare const v: void;\nconst {} = v;",
+      "// @strictNullChecks: true\nconst o = { x: 1 };\nconst { x } = o;",
+      // The false positive: `undefined` reaches the source type through
+      // NARROWING, not through a declaration, and tsc accepts it.
+       "// @strictNullChecks: true\nconst q: any = undefined;\nconst { y }: any = q;",
+      "// @strictNullChecks: true\nconst q: any = undefined;\nconst { y } = q;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // A RE-EXPORT names another module's declaration, so it must not be
+  // checked against this one's. Asserted on the MESSAGE rather than the
+  // count, because an unresolvable specifier is a TS2307 of its own and
+  // a count would be measuring that instead.
+  let non_local = fn(src : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains("only local declarations") {
+        n += 1
+      }
+    }
+    n
+  }
+  for
+    src in [
+      "export { whatever } from './other';", "export type { whatever } from './other';",
+      "import { thing } from './other';\nexport { thing };", "import thing from './other';\nexport { thing };",
+      "import * as ns from './other';\nexport { ns };",
+      // Every kind of local declaration is exportable, a type-only one
+      // included.
+       "type T = 1;\nconst v1 = 1;\nclass C1 {}\ninterface I1 {}\nenum E1 { A }\nfunction f1() {}\nexport { T, v1, C1, I1, E1, f1 };",
+      "type T = 1;\nexport type { T };", "declare const dv: number;\nexport { dv };",
+      "namespace N { export const k = 1 }\nexport { N };",
+    ] {
+    @test.assert_eq(non_local(src), 0)
+  }
+  assert_true(non_local("export { nonexistentThing };") > 0)
+}
+
+///|
+/// Batches CZ and DA: TS2403, TS2320, TS2395, TS2741.
+///
+/// The first three all read one `types_definitely_differ`, which exists
+/// because TS2403 and TS2320 turn on type IDENTITY and identity is
+/// STRUCTURAL: two differently-named interfaces with the same members
+/// are identical, and a union is identical to the same union in any
+/// order. `unionTypeEquivalence` puts both halves in one file --
+/// `var x: C` beside `var x: C | D` is the error, and the very next
+/// lines, `var y: string | number` beside `var y: number | string`, are
+/// legal. A rule that compared spellings would fail the second.
+test "batches CZ+DA rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  // TS2403: a multi-member union is identical only to a union, and an
+  // enum type is nominal.
+  assert_true(
+    only(
+      "class C {}\nclass D extends C { foo() {} }\nvar x: C;\nvar x: C | D;", "same type",
+    ) >
+    0,
+  )
+  assert_true(only("enum E { A }\nvar r: E;\nvar r: string;", "same type") > 0)
+  // TS2320: two bases that disagree on a member's type.
+  assert_true(
+    only(
+      "interface I1 { m(): { x: string } }\ninterface I2 { m(): { x: number } }\ninterface I3 extends I1, I2 { }",
+      "simultaneously extend",
+    ) >
+    0,
+  )
+  // TS2395: a merged declaration whose halves disagree about `export`.
+  assert_true(
+    only("export type A = {}\ntype A = {}", "all exported or all local") > 0,
+  )
+  assert_true(
+    only("interface I {}\nexport interface I {}", "all exported or all local") >
+    0,
+  )
+  // TS2741: a rest element's target receives an array.
+  assert_true(
+    only("var c = { bogus: 0 };\n[...c] = [\"\", 0];", "rest element") > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // The legal half of unionTypeEquivalence: a union is identical to
+      // the same union in any order, so BOTH sides being unions is the
+      // abstention that keeps this quiet.
+      "var y: string | number;\nvar y: number | string;", "class C {}\nvar x: C;\nvar x: C;",
+      // Two differently-named interfaces with the same members ARE
+      // identical, so a Named pair abstains -- and so does an inferred
+      // declaration, which is where the corpus's other TS2403 files live.
+       "interface A { x: number }\ninterface B { x: number }\nvar q: A;\nvar q: B;",
+      "var z = 1;\nvar z = \"\";",
+      // TS2320 abstains for one base, for a base that is not an
+      // interface of this module, and when the two agree.
+       "interface I1 { m(): string }\ninterface I3 extends I1 { }", "interface I1 { m(): { x: string } }\nclass K2 { m(): { x: number } { return { x: 1 } } }\ninterface I3 extends I1, K2 { }",
+      "interface I1 { m(): { x: string } }\ninterface I2 { m(): { x: string } }\ninterface I3 extends I1, I2 { }",
+      "interface I1 { a: string }\ninterface I2 { b: number }\ninterface I3 extends I1, I2 { }",
+      // TS2395: all-exported and all-local are both fine, and a lone
+      // exported alias must not be double-counted through the interface
+      // the parser synthesizes for it.
+       "export type A = {}\nexport type B = {}", "export type A = {}", "type A = {}\ntype A2 = {}",
+      "export interface I {}\nexport interface I {}",
+      // TS2741 abstains for an array or tuple target, for `any`, and for
+      // a Named one (an alias could be an array). The EMPTY object type
+      // is the one tsc ACCEPTS -- an array is assignable to `{}` -- and
+      // it cost two corpus false positives (nonIterableRestElement1 / 2)
+      // before the required-member condition existed; an all-optional
+      // shape is a different code (TS2559), so it is out too.
+       "var c: string[] = [];\n[...c] = [\"\", \"\"];", "var c: any;\n[...c] = [\"\", 0];",
+      "var c = {};\n[...c] = [\"\", 0];", "var c: { a?: number } = {};\n[...c] = [\"\", 0];",
+      "interface I { bogus: number }\ndeclare var c: I;\n[...c] = [\"\", 0];", "var a: string = \"\";\nvar c: string[] = [];\n[a, ...c] = [\"\", \"\"];",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch DB: TS2717 (merged interfaces disagreeing on a member) and
+/// TS2454 for a `var` bound by a `for...of` head.
+///
+/// The second rule is a SET-membership test rather than an ordering one,
+/// and the probe is why: tsc reports the read before the loop and the
+/// read after it alike, because an empty iterable assigns nothing. A
+/// `var` whose only assignment is a loop head is unassigned everywhere
+/// outside the body, full stop.
+test "batch DB rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(
+    only(
+      "interface A { x: string }\ninterface A { x: number }", "subsequent property declarations",
+    ) >
+    0,
+  )
+  assert_true(
+    only("v;\nfor (var v of [0]) { }", "used before being assigned") > 0,
+  )
+  // The read AFTER the loop is the same error -- the loop may not run.
+  assert_true(
+    only("for (var v of [0]) { }\nv;", "used before being assigned") > 0,
+  )
+  assert_true(
+    only("k;\nfor (var k in {}) { }", "used before being assigned") > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // Merged interfaces that agree, that declare different members,
+      // and one whose disagreement is with a type PARAMETER, which can
+      // be instantiated with anything.
+      "interface A { x: string }\ninterface A { x: string }", "interface A { x: string }\ninterface A { y: number }",
+      "interface A<T> { x: T }\ninterface A<T> { x: number }",
+      // A repeated `type` alias is a different diagnostic, and the
+      // synthesized interface must not make it look like a merge.
+       "type A = { x: string }", "type A = { x: string }\ntype B = { x: number }",
+      // `let` / `const` heads are block-scoped and assigned per
+      // iteration; an ASSIGNMENT head declares nothing; and a name the
+      // list assigns elsewhere is assigned.
+       "let v = 0;\nv;\nfor (v of [0]) { }", "var v = 1;\nv;\nfor (v of [0]) { }",
+      "for (let v of [0]) { }", "var v: number;\nv = 1;\nv;\nfor (v of [0]) { }",
+      // A read of an unrelated name.
+       "var w = 1;\nw;\nfor (var v of [0]) { }",
+    ] {
+    @test.assert_eq(
+      only(src, "subsequent property declarations") +
+      only(src, "used before being assigned"),
+      0,
+    )
+  }
+}
+
+///|
+/// Batch DC: TS2774 (a function tested for truthiness) and TS2488 (an
+/// array pattern whose default is not iterable).
+///
+/// TS2774's three conditions were each probed. `!f` is NOT reported by
+/// tsc, an optional function type is legal because it really can be
+/// nullish, and the check must see a bare NAME -- which is why the
+/// negated form is excluded at the call sites and the union at the type.
+test "batch DC rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires, at every condition position (one helper, so they cannot
+  // come to hold for the `if` and not the `while`)
+  for
+    src in [
+      "declare function f(): boolean;\nif (f) { }", "declare function f(): boolean;\nlet c = f ? 1 : 2;",
+      "declare function f(): boolean;\nwhile (f) { break }", "declare function f(): boolean;\ndo { break } while (f);",
+      "declare function f(): boolean;\nlet c = f && 1;", "function f(): boolean { return true }\nif (f) { }",
+    ] {
+    assert_true(only(src, "did you mean to call it instead") > 0)
+  }
+  // --- fires: a non-iterable default for an array pattern
+  for
+    src in [
+      "function foo1([...r] = null) {}", "function foo2([...r] = undefined) {}",
+      "function foo3([...r] = {}) {}", "function foo5([a] = null) {}",
+    ] {
+    assert_true(only(src, "must be iterable") > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // Called, a real boolean, an optional function (which CAN be
+      // nullish), the negated form tsc does not report, and a property
+      // access rather than a name.
+      "declare function f(): boolean;\nif (f()) { }", "declare const b: boolean;\nif (b) { }",
+      "declare var g: (() => void) | undefined;\nif (g) { }", "declare function f(): boolean;\nif (!f) { }",
+      "declare const o: { m(): void };\nif (o.m()) { }",
+      // An array literal default is iterable; so is an identifier, which
+      // abstains either way.
+       "function ok1([...r] = []) {}", "function ok2([...r] = [1]) {}", "declare const src: number[];\nfunction ok4([...r] = src) {}",
+      // An OBJECT pattern with an object default is the ordinary
+      // spelling and must not be caught by the array rule.
+       "function ok3({ a } = {}) {}",
+    ] {
+    @test.assert_eq(
+      only(src, "did you mean to call it instead") +
+      only(src, "must be iterable"),
+      0,
+    )
+  }
+}
+
+///|
+/// Batch DF: TS2393 (duplicate method implementations), TS2538 (a class
+/// used as an index type) and TS2767 (an iterator's `return` property).
+///
+/// TS2393's test is on the BODY, not the name, because overloads legally
+/// repeat a name -- and it had to be recorded in the PARSER, since
+/// `TsClassMethodDecl.body` is `None` for an EMPTY body as well as for a
+/// bodiless signature, so `m() {}` and `m();` are indistinguishable
+/// downstream.
+test "batch DF rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(only("class C { m() {} m() {} }", "duplicate function") > 0)
+  assert_true(
+    only("class C { public() {} public public() {} }", "duplicate function") > 0,
+  )
+  assert_true(
+    only(
+      "class Bar { m() { return 0 } }\nclass Foo extends Bar { m() { return super[Bar]() } }",
+      "cannot be used as an index type",
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      "class I { next() { return { done: false, value: \"\" } }\n  return: number = 0;\n  [Symbol.iterator]() { return this } }",
+      "must be a method",
+    ) >
+    0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // An overload plus its implementation, an instance/static pair and
+      // a get/set pair are all one member declared legally.
+      "class C { m(): void; m(a?: number): void { } }", "class C { m() {} static m() {} }",
+      "class C { get m() { return 1 } set m(v: number) {} }", "class C { m() {} n() {} }",
+      // An index type that is a symbol, a string or a number.
+       "declare const s: symbol;\nclass Bar { m() { return 0 } }\nclass Foo extends Bar { m() { return super[s] } }",
+      "declare const o: { [k: string]: number };\nconst k = \"a\";\nconst v = o[k];",
+      // A `return` METHOD is the legal spelling, and a `return` field on
+      // a class that is not an iterator is nobody's business. The
+      // unannotated `return = 0` abstains, which is why for-of30 itself
+      // is still a MISS -- firing on `Any` would flag
+      // `return = () => …`, the legal form of the same member.
+       "class I { next() { return { done: false, value: \"\" } }\n  return() { return { done: true, value: undefined } }\n  [Symbol.iterator]() { return this } }",
+      "class P { return: number = 0 }", "class I { return = 0;\n  [Symbol.iterator]() { return this } }",
+    ] {
+    @test.assert_eq(
+      only(src, "duplicate function") +
+      only(src, "cannot be used as an index type") +
+      only(src, "must be a method"),
+      0,
+    )
+  }
+}
+
+///|
+/// Batch DG: TS7036 (a dynamic import's specifier) and TS2365 (`+` with
+/// a boolean operand).
+///
+/// `import(spec)` had NO arm in `check_call_args_in_expr` at all, so the
+/// specifier expression was never walked by that check -- another
+/// wrapper node whose absence failed open. And `+` cannot join the
+/// arithmetic list, because it also concatenates: a boolean operand is
+/// only an error when the other side is not a string.
+test "batch DG rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  for
+    src in [
+      "declare function g(): boolean;\nvar p = import(g());", "declare function g(): number;\nvar p = import(g());",
+      "declare var b: boolean;\nconst q = import(b);",
+    ] {
+    assert_true(only(src, "specifier must be of type") > 0)
+  }
+  // A bare `import(spec);` STATEMENT is not reached: at statement start
+  // the import parser claims it, so it never becomes an expression
+  // statement this walk sees. The corpus file carries both spellings, so
+  // it flips anyway; recorded here because the asymmetry is real.
+  @test.assert_eq(
+    only(
+      "declare function g(): boolean;\nimport(g());", "specifier must be of type",
+    ),
+    0,
+  )
+  for
+    src in [
+      "declare var a: boolean;\ndeclare var b: number;\nvar r = a + b;", "declare var a: boolean;\ndeclare var b: boolean;\nvar r = a + b;",
+      "declare var b: number;\nvar r = true + b;",
+    ] {
+    assert_true(only(src, "cannot be applied to types") > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A string specifier, and the two shapes that abstain.
+      "var p = import(\"./x\");", "declare function g(): string;\nvar p = import(g());",
+      "declare function g(): any;\nvar p = import(g());", "declare function g(): unknown;\nvar p = import(g());",
+      // `boolean + string` is CONCATENATION and legal; `any` on either
+      // side abstains; number + number is ordinary arithmetic.
+       "declare var a: boolean;\nvar r = a + \"s\";", "declare var a: boolean;\ndeclare var s: string;\nvar r = s + a;",
+      "declare var a: boolean;\ndeclare var x: any;\nvar r = a + x;", "declare var b: number;\nvar r = b + 1;",
+      "declare var s: string;\nvar r = s + 1;",
+      // An object type is a different code, and a union abstains.
+       "declare var o: object;\ndeclare var a: boolean;\nvar r = a + o;", "declare var u: string | number;\ndeclare var a: boolean;\nvar r = a + u;",
+    ] {
+    @test.assert_eq(
+      only(src, "specifier must be of type") +
+      only(src, "cannot be applied to types"),
+      0,
+    )
+  }
+}
+
+///|
+/// `merge_interface_group` replaced a left FOLD of `merge_interfaces`, so
+/// what has to be proven is that the two agree -- not that the group
+/// version looks reasonable. Every field the merge touches is exercised
+/// with a shape that could tell the two apart:
+///
+///  - a member REDECLARED by a later half (`shared`), which must end up
+///    with the last half's type at the FIRST half's position;
+///  - a member declared twice inside ONE body (`dup` in half 1), which
+///    the pairwise version does not deduplicate and whose seen-index is
+///    the LAST of the two;
+///  - `readonly_fields` with a repeat across halves (deduplicated) and
+///    `internal_members` with one inside the first half (kept verbatim,
+///    because the pairwise merge only filters its `b` side);
+///  - `extends_*` and `index_signatures`, which concatenate in order.
+///
+/// A group of four, so an error that only shows up after two merges --
+/// the whole reason the fold was quadratic -- cannot hide.
+fn merge_group_iface(
+  name : String,
+  fields : Array[(String, @ast.TsType)],
+  readonly_fields : Array[String],
+  extends_names : Array[String],
+  internal_members : Array[String],
+) -> @ast.TsInterface {
+  {
+    name,
+    type_params: [],
+    type_param_bounds: [],
+    extends_names,
+    extends_args: extends_names.map(fn(_x) { [] }),
+    fields,
+    readonly_fields,
+    index_signatures: [],
+    method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members,
+    deprecated_members: [],
+  }
+}
+
+///|
+test "merge_interface_group matches pairwise fold" {
+  let halves = [
+    merge_group_iface(
+      "W",
+      [
+        ("a", @ast.TsType::Number),
+        ("dup", @ast.TsType::String_),
+        ("shared", @ast.TsType::Number),
+        ("dup", @ast.TsType::Boolean),
+      ],
+      ["ro1", "ro1"],
+      ["BaseA"],
+      ["int1", "int1"],
+    ),
+    merge_group_iface(
+      "W",
+      [("b", @ast.TsType::String_), ("shared", @ast.TsType::String_)],
+      ["ro2", "ro1"],
+      ["BaseB"],
+      ["int1", "int2"],
+    ),
+    merge_group_iface("W", [("dup", @ast.TsType::Number)], [], [], [
+      "int2", "int3",
+    ]),
+    merge_group_iface(
+      "W",
+      [("shared", @ast.TsType::Boolean), ("c", @ast.TsType::Number)],
+      ["ro3"],
+      ["BaseC"],
+      [],
+    ),
+  ]
+  // The fold the call site used to run.
+  let mut folded = halves[0]
+  for i in 1..<halves.length() {
+    folded = merge_interfaces(folded, halves[i])
+  }
+  let grouped = merge_interface_group(halves)
+  // Members: same names, same order, same types.
+  @test.assert_eq(grouped.fields.length(), folded.fields.length())
+  for i in 0..<folded.fields.length() {
+    @test.assert_eq(grouped.fields[i].0, folded.fields[i].0)
+    @test.assert_eq(
+      type_display(grouped.fields[i].1),
+      type_display(folded.fields[i].1),
+    )
+  }
+  // The redeclared member takes the LAST half's type, at the first
+  // half's position -- the property that makes the merge order-sensitive.
+  @test.assert_eq(grouped.fields[2].0, "shared")
+  @test.assert_eq(type_display(grouped.fields[2].1), "boolean")
+  @test.assert_eq(grouped.readonly_fields, folded.readonly_fields)
+  @test.assert_eq(grouped.extends_names, folded.extends_names)
+  @test.assert_eq(grouped.extends_args.length(), folded.extends_args.length())
+  @test.assert_eq(grouped.internal_members, folded.internal_members)
+  @test.assert_eq(grouped.deprecated_members, folded.deprecated_members)
+  @test.assert_eq(grouped.name, folded.name)
+  // A one-element group is the identity, which is the arm the call site
+  // takes for all but a handful of names in any real file.
+  @test.assert_eq(merge_interface_group([halves[0]]).fields.length(), 4)
 }

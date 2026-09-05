@@ -3,6 +3,25 @@
 // ============================================
 
 ///|
+/// Consume an arrow function's `=>`, recording TS1200 ("Line terminator
+/// not permitted before arrow") when a newline precedes the token.
+///
+/// The restriction is real and one-sided: `var f = ()\n => {}` is an
+/// error, while a newline AFTER the arrow is fine and a newline before a
+/// TYPE-position arrow (`type F = ()\n => void`) is legal too — probed
+/// against tsc, which is why `parser_type`'s arrow sites are left alone.
+///
+/// It exists as a helper rather than a check at the reporting site because
+/// expression parsing consumes this token in EIGHT places, and a rule
+/// written at one of eight is the shape this repo keeps finding.
+fn Parser::expect_arrow(self : Parser) -> Unit raise ParseError {
+  if self.peek().has_newline_before {
+    self.grammar_misuses.push("line terminator not permitted before arrow")
+  }
+  let _ = self.expect(Arrow)
+}
+
+///|
 // / expression (prefer)
 pub fn Parser::parse_expr(self : Parser) -> @ast.TsExpr raise ParseError {
   self.parse_comma()
@@ -375,6 +394,57 @@ fn Parser::record_assign_target_strict_misuse(
       }
     _ => ()
   }
+  self.record_invalid_assign_target(target)
+}
+
+///|
+/// TS2357 / TS1109: the operand of an assignment or an update operator has
+/// to be something a value can be WRITTEN to — a variable, a property
+/// access, or an element access. `++await 42`, `++this` and the `++ ++ y`
+/// that `x \n ++ \n ++ \n y` becomes after ASI are all rejected by tsc.
+///
+/// This is a DENYLIST rather than the complementary allowlist, and
+/// deliberately so. The allowlist reading — "flag anything that is not
+/// `Var` / `PropAccess` / `IndexAccess`" — is the correct rule and the
+/// wrong implementation, because a target can arrive wrapped in nodes that
+/// say nothing about writability (`TypeArgs`, `As`, `Satisfies`, a
+/// `PureCall` marker), and this repo has already paid three soundness bugs
+/// for a wrapper node whose default arm failed open. A denylist fails the
+/// other way: a shape nobody listed goes unflagged, which costs a MISS.
+///
+/// It rides on `record_assign_target_strict_misuse` so it reaches all four
+/// spellings JavaScript has for writing a binding (`=`, `+=`, `++x`,
+/// `x++`) without adding a fifth place to forget.
+fn Parser::record_invalid_assign_target(
+  self : Parser,
+  target : @ast.TsExpr,
+) -> Unit {
+  let invalid = match target {
+    // `this` is a binding the language never lets you write to. It is
+    // spelled as an ordinary `Var`, so it needs its own arm.
+    Var("this") => true
+    // An operator's RESULT is a value, not a place.
+    Await(_) | Yield(_) | YieldStar(_) | UnaryOp(_, _) | BinOp(_, _, _) => true
+    // A literal, likewise.
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayLit(_)
+    | ObjectLit(_) => true
+    // A call's result is a value. (Destructuring patterns arrive as
+    // `AssignPattern` / `Target`, not as `ArrayLit` / `ObjectLit`, which
+    // is why the two literal forms above can be listed.)
+    Call(_, _) | CallExpr(_, _) | MethodCall(_, _, _) | New(_, _) => true
+    _ => false
+  }
+  if invalid {
+    self.record_suppressible_grammar_misuse(
+      "the operand of an assignment or an increment / decrement operator must be a variable or a property access",
+    )
+  }
 }
 
 ///|
@@ -431,6 +501,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
       // `AssignPattern` with a `Target(...)` binding so the parser can
       // move on. Downstream passes treat the construct opaquely.
       ObjectLit(_) | ArrayLit(_) => {
+        self.record_rest_element_initializer(left)
         let _ = self.advance()
         let right = self.parse_assignment()
         AssignPattern(@ast.TsBinding::Target(left), right)
@@ -470,6 +541,36 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
     return CompoundAssignExpr(left, op, right)
   }
   left
+}
+
+///|
+/// TS1186 ("A rest element cannot have an initializer") for the
+/// DESTRUCTURING-ASSIGNMENT spelling, `[...x = a] = a`.
+///
+/// The rule has two sites and this is the one the previous attempts
+/// missed. A comment in `parse_assignment_binding_array` recorded the
+/// abstention and named the blocker in writing: that source never reaches
+/// a pattern parser, because `parse_assignment_target_expr` succeeds on
+/// the whole bracketed form. So the array LITERAL is where the shape
+/// lands, and this arm — an object or array literal on the left of `=` —
+/// is where the parser already knows it is a destructuring target. The
+/// binding-declaration spelling (`var [...z = a] = a`) is the second site
+/// and is checked in `parse_binding_array`; both are TS1186, probed.
+///
+/// A rest PARAMETER with an initializer (`function f(...r = a)`) is
+/// TS1048, a different code, and is not covered here. The object-rest
+/// spelling `({...y = a} = {})` is ACCEPTED by tsc, so only array
+/// elements are scanned.
+fn Parser::record_rest_element_initializer(
+  self : Parser,
+  target : @ast.TsExpr,
+) -> Unit {
+  guard target is ArrayLit(items) else { return }
+  for it in items {
+    if it is Spread(AssignExpr(_, _)) {
+      self.grammar_misuses.push("a rest element cannot have an initializer")
+    }
+  }
 }
 
 ///|
@@ -548,16 +649,42 @@ fn Parser::parse_object_member_name(
 }
 
 ///|
+/// Resolve a `#private` name to its brand-mangled form, and record TS18016
+/// ("Private identifiers are not allowed outside class bodies") when there
+/// is no enclosing class to resolve it against.
+///
+/// `current_class_brand` IS the "am I inside a class body" fact — the class
+/// parsers set it before parsing members and restore it after — so a
+/// `PrivateIdent` reaching any of these sites with no brand is by
+/// construction outside every class body. That is what makes the corpus
+/// case decidable without a scope model: a decorator on a class is parsed
+/// BEFORE its body, so `@dec(x => x.#foo)` above `class A { #foo }` has no
+/// brand, while `@dec(() => this.#foo)` on a class nested inside a method
+/// of `C` carries C's brand and is legal — both spellings are in
+/// `esDecorators-privateFieldAccess`, and tsc agrees.
+///
+/// One helper for all three brand-resolution sites (a member NAME, a
+/// property access, and a bare primary), which were three copies of the
+/// same match. Writing the diagnostic at one of them is the failure this
+/// repo's ledger keeps recording.
+fn Parser::resolve_private_name(self : Parser, name : String) -> String {
+  let private_name = "#" + name
+  match self.current_class_brand {
+    Some(brand) => mangle_private_name(private_name, brand)
+    None => {
+      self.grammar_misuses.push(
+        "private identifiers are not allowed outside class bodies",
+      )
+      private_name
+    }
+  }
+}
+
+///|
 fn Parser::parse_property_name_token(self : Parser) -> String raise ParseError {
   match self.advance().kind {
     Ident(name) => name
-    PrivateIdent(name) => {
-      let private_name = "#" + name
-      match self.current_class_brand {
-        Some(brand) => mangle_private_name(private_name, brand)
-        None => private_name
-      }
-    }
+    PrivateIdent(name) => self.resolve_private_name(name)
     Return => "return"
     If => "if"
     Else => "else"
@@ -612,7 +739,7 @@ fn Parser::parse_single_param_arrow(
   self : Parser,
   name : String,
 ) -> @ast.TsExpr raise ParseError {
-  let _ = self.expect(Arrow)
+  self.expect_arrow()
   let body = if self.check(LBrace) {
     let prev_function = self.in_function
     let prev_iteration = self.in_iteration
@@ -713,18 +840,80 @@ fn Parser::parse_ternary(self : Parser) -> @ast.TsExpr raise ParseError {
 // pass-through cost alone (callgrind, hono).
 
 ///|
+/// TS5076 / TS5077: `??` may not be mixed with `||` or `&&` without
+/// parentheses — `a ?? b || c` is a grammar error and every parenthesized
+/// spelling of it is legal (eight of them sit in
+/// `nullishCoalescingOperator5` as the legal half).
+///
+/// Decided over the TOKEN range this logical-OR level consumed, not over
+/// the AST, for the reason batch CF's TS1106 records: the parser strips
+/// parens, so `(a && b) ?? c` and `a && b ?? c` are the same tree. A
+/// depth-0 `&&` or `||` inside the span of an expression that also has a
+/// depth-0 `??` is exactly the unparenthesized mix; anything inside
+/// brackets is at depth > 0 and correctly ignored.
+///
+/// The span is one logical-OR expression, so it cannot straddle a comma, a
+/// `?:` branch, an argument or a statement — `a ?? b, c || d` is two
+/// separate calls and stays silent. A `??` inside a template substitution
+/// is invisible (the lexer keeps a template as one token), which costs a
+/// finding rather than inventing one.
+///
+/// Called from `parse_or` only, and only when that frame consumed a `??`
+/// (see the cost note there). The `parse_asserted_or` path — reached when
+/// a trailing `as` / `satisfies` was consumed — is deliberately not
+/// covered: its `left` operand is parsed by its caller, so it does not
+/// know where the expression began, and a span starting mid-expression
+/// would report against tokens it cannot see. That costs a MISS on
+/// `(a ?? b as T) || c`-shaped code and cannot false-positive.
+fn Parser::record_nullish_logical_mixing(self : Parser, start : Int) -> Unit {
+  let mut depth = 0
+  let mut has_coalesce = false
+  let mut has_logical = false
+  for i in start..<self.pos {
+    match self.tokens[i].kind {
+      LParen | LBracket | LBrace => depth = depth + 1
+      RParen | RBracket | RBrace => depth = depth - 1
+      QuestionQuestion => if depth == 0 { has_coalesce = true }
+      AmpAmp | PipePipe => if depth == 0 { has_logical = true }
+      _ => ()
+    }
+  }
+  if has_coalesce && has_logical {
+    self.grammar_misuses.push(
+      "`??` and `||` operations cannot be mixed without parentheses",
+    )
+  }
+}
+
+///|
 // / || (OR) and ?? (Nullish Coalesce)
 fn Parser::parse_or(self : Parser) -> @ast.TsExpr raise ParseError {
+  let start = self.pos
   let mut left = self.parse_and()
+  // Whether THIS frame consumed a `??`. The mixing scan below walks the
+  // frame's whole token span, and `parse_or` runs once per expression at
+  // this precedence level — for every expression in the file, nested — so
+  // scanning unconditionally is O(n^2) in the token count. It cost
+  // 180+ seconds on a 9 MB file and hung the test suite for 36 minutes
+  // before this gate existed. A `??` is what makes the question
+  // meaningful, and it is rare, so gating on it makes the total cost
+  // proportional to the nullish expressions rather than to the file.
+  let mut saw_coalesce = false
   while true {
     let op : @ast.TsBinOp = match self.peek().kind {
       PipePipe => Or
-      QuestionQuestion => Coalesce
+      QuestionQuestion => {
+        saw_coalesce = true
+        Coalesce
+      }
       _ => break
     }
     let _ = self.advance()
     let right = self.parse_and()
     left = BinOp(op, left, right)
+  }
+  if saw_coalesce {
+    self.record_nullish_logical_mixing(start)
   }
   left
 }
@@ -922,6 +1111,24 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
       PreInc | PreDec => self.record_assign_target_strict_misuse(operand)
       _ => ()
     }
+    // TS17006: `-1 ** 2` is a grammar error — the left operand of `**` may
+    // be an UpdateExpression but not a UnaryExpression, so the sign has to
+    // be parenthesized. Checked HERE rather than in `parse_exponent`
+    // because that sees an operand with its parens already stripped, and
+    // `(-1) ** 2` is legal: only a unary this frame just consumed can be
+    // the unparenthesized form. `++t ** 2` / `--t ** 2` are the
+    // UpdateExpression case and stay legal (probed, along with `!`,
+    // `typeof`, `void`, `~` and `delete`, which all error).
+    // `await x ** 2` is parsed further down and deliberately not covered.
+    if self.peek().kind is StarStar {
+      match op {
+        PreInc | PreDec => ()
+        _ =>
+          self.grammar_misuses.push(
+            "a unary expression is not allowed in the left-hand side of an exponentiation expression",
+          )
+      }
+    }
     return UnaryOp(op, operand)
   }
   if self.peek().kind is Yield {
@@ -970,6 +1177,21 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
         let expr = self.parse_assignment()
         return Yield(Some(expr))
       } else {
+        // TS1212: `yield` used as a plain IDENTIFIER reference. The
+        // message names strict mode, and tsc applies it regardless — a
+        // bare `yield;` and a `console.log(yield)` are both reported at
+        // es5 in a sloppy script, as is `var yield = 1` and a parameter
+        // named `yield`, so the rule is not gated on strictness or on
+        // the target.
+        //
+        // Only the reference position, which is the one this arm is.
+        // Every PROPERTY position stays legal and was probed: an object
+        // key, a property access, an interface member, an enum member
+        // and a class member all spell `yield` freely, and each is
+        // parsed elsewhere.
+        self.grammar_misuses.push(
+          "identifier expected — `yield` is a reserved word in strict mode",
+        )
         return Var("yield")
       }
     }
@@ -2476,7 +2698,7 @@ fn Parser::parse_generic_arrow_function(
   } else {
     @ast.TsType::Any
   }
-  let _ = self.expect(Arrow)
+  self.expect_arrow()
   let body = if self.check(LBrace) {
     let prev_function = self.in_function
     let prev_iteration = self.in_iteration
@@ -2804,7 +3026,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         self.parse_async_arrow_function()
       } else if self.peek_at(1).kind == Arrow {
         let _ = self.advance()
-        let _ = self.expect(Arrow)
+        self.expect_arrow()
         let body = if self.check(LBrace) {
           // Save and set function context for arrow block body
           let prev_function = self.in_function
@@ -2866,7 +3088,15 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       if self.in_strict {
         raise ParseError("Unexpected token: Let")
       } else {
+        // TS1212, the `let` half. Same shape and the same probed
+        // boundary as the `yield` arm above: `var let = 1` is reported at
+        // es5 and at es6 alike, while `{ let: 2 }`, `o.let`,
+        // `interface I { let: string }`, `enum E { let }` and
+        // `class C { let = 1 }` are all clean and parsed elsewhere.
         let _ = self.advance()
+        self.grammar_misuses.push(
+          "identifier expected — `let` is a reserved word in strict mode",
+        )
         Var("let")
       }
     As =>
@@ -2879,12 +3109,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     PrivateIdent(name) => {
       let _ = self.advance()
-      let private_name = "#" + name
-      let mangled = match self.current_class_brand {
-        Some(brand) => mangle_private_name(private_name, brand)
-        None => private_name
-      }
-      Var(mangled)
+      Var(self.resolve_private_name(name))
     }
     LParen => {
       let (paren_jsx, paren_embeds) = self.try_parse_parenthesized_jsx_expr()
@@ -2912,7 +3137,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             } else {
               @ast.TsType::Any
             }
-            let _ = self.expect(Arrow)
+            self.expect_arrow()
             // : blockexpression
             let body = if self.check(LBrace) {
               // Save and set function context for arrow block body
@@ -2967,7 +3192,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           } else {
             @ast.TsType::Any
           }
-          let _ = self.expect(Arrow)
+          self.expect_arrow()
           // : blockexpression
           let body = if self.check(LBrace) {
             // Save and set function context for arrow block body
@@ -3022,7 +3247,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         } else {
           @ast.TsType::Any
         }
-        let _ = self.expect(Arrow)
+        self.expect_arrow()
         // : blockexpression
         let body = if self.check(LBrace) {
           // Save and set function context for arrow block body
@@ -3106,6 +3331,25 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       let _ = self.advance()
       if self.match_(Dot) {
         let prop = self.parse_property_name_token()
+        // TS17013: `new.target` is only legal in the body of a function
+        // declaration, a function expression, or a constructor — probed,
+        // and the list is exact: a class METHOD, a static method, an
+        // accessor, an object-literal method, a class field initializer
+        // and a computed class key are all errors, while an arrow inside
+        // an allowed body inherits the permission and is fine.
+        //
+        // Only the OUTSIDE-ANY-FUNCTION case is reported, which is what
+        // `self.in_function` already answers. Deciding the others needs
+        // the nearest function-like KIND, and that is a flag to save,
+        // clear and restore at the fifteen body-parsing sites this file's
+        // ledger keeps recording as the place a rule gets forgotten. Both
+        // corpus files open with a top-level `new.target`, so the cheap
+        // half flips them; the rest is a MISS rather than a guess.
+        if prop == "target" && not(self.in_function) {
+          self.grammar_misuses.push(
+            "`new.target` is only allowed in the body of a function declaration, function expression, or constructor",
+          )
+        }
         return PropAccess(Var("new"), prop)
       }
       let mut type_name = ""
@@ -3125,13 +3369,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           while self.match_(Dot) {
             let part = match self.advance().kind {
               Ident(n) => n
-              PrivateIdent(name) => {
-                let private_name = "#" + name
-                match self.current_class_brand {
-                  Some(brand) => mangle_private_name(private_name, brand)
-                  None => private_name
-                }
-              }
+              PrivateIdent(name) => self.resolve_private_name(name)
               // Allow reserved words as property names (e.g., Symbol.for)
               For => "for"
               Return => "return"
@@ -3599,7 +3837,8 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
                 "a `set` accessor must have exactly one parameter",
               )
             }
-            let return_type = if self.check(Colon) {
+            let had_return_annotation = self.check(Colon)
+            let return_type = if had_return_annotation {
               let _ = self.advance()
               self.parse_type()
             } else {
@@ -3609,6 +3848,9 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             self.in_function = true
             let body = self.parse_block()
             self.in_function = prev_function
+            self.record_objlit_getter_returns(
+              is_getter, had_return_annotation, return_type, body,
+            )
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               type_params: [],
@@ -3968,7 +4210,8 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
                 "a `set` accessor must have exactly one parameter",
               )
             }
-            let return_type = if self.check(Colon) {
+            let had_return_annotation = self.check(Colon)
+            let return_type = if had_return_annotation {
               let _ = self.advance()
               self.parse_type()
             } else {
@@ -3978,6 +4221,9 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             self.in_function = true
             let body = self.parse_block()
             self.in_function = prev_function
+            self.record_objlit_getter_returns(
+              is_getter, had_return_annotation, return_type, body,
+            )
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               type_params: [],
@@ -4027,6 +4273,21 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         }
       }
       let _ = self.expect(RBrace)
+      // A `{ … }` in expression position is a COVER GRAMMAR: it is an
+      // object literal unless an `=` follows, in which case it was an
+      // object destructuring PATTERN all along and duplicate names in it
+      // are perfectly legal (`({ foo, foo } = { foo: 2 })` —
+      // destructuringSameNames, a TS7-ACCEPTED file). TS1117 must not
+      // reach that form.
+      //
+      // Found by the unit suite, not by the corpus: `destructuringSameNames`
+      // also contains genuinely illegal spellings, so the file was already
+      // a TP and the oracle could not see that half of it was being
+      // reported for the wrong reason. The three legal shapes were in
+      // `expr_check_wbtest.mbt` from an earlier batch and are what failed.
+      if not(self.check(Eq)) {
+        self.record_objlit_duplicate_keys(fields)
+      }
       ObjectLit(fields)
     }
     Function => {
@@ -4154,7 +4415,7 @@ fn Parser::parse_async_arrow_function(
           "`await` cannot be used as a parameter name in an async context",
         )
       }
-      let _ = self.expect(Arrow)
+      self.expect_arrow()
       let prev_async = self.in_async
       self.in_async = true
       let body = if self.check(LBrace) {
@@ -4231,7 +4492,7 @@ fn Parser::parse_async_arrow_function(
   } else {
     @ast.TsType::Any
   }
-  let _ = self.expect(Arrow)
+  self.expect_arrow()
   let prev_async = self.in_async
   self.in_async = true
   let body = if self.check(LBrace) {

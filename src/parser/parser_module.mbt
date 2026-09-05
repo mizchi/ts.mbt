@@ -10,6 +10,61 @@ fn Parser::match_ident(self : Parser, name : String) -> Bool {
 }
 
 ///|
+/// `from "spec"` — consume the keyword, take the specifier, and RECORD it.
+///
+/// The recording is what this exists for. `import_module_specs` is the
+/// list the TS2307 check reads, and it used to be filled by the import
+/// parsers only, so `export * as ns from './nonexistent'` and the other
+/// re-export forms reached that check with nothing to say. There are
+/// EIGHT `from`-with-specifier sites across the import, export and
+/// module-block parsers, all of them `expect_from()` followed by
+/// `expect_str_literal()`, so they all go through here instead — a push
+/// per site is how the asymmetry arose, and one helper is why it cannot
+/// come back.
+///
+/// `multi_file_source` still suppresses it: a `@filename:` test is
+/// several files concatenated, where a specifier really does resolve.
+/// A side-effect `import "spec"` has no `from` and keeps its own push.
+fn Parser::expect_from_spec(self : Parser) -> String raise ParseError {
+  self.expect_from()
+  let spec = self.expect_str_literal()
+  self.record_module_spec(spec)
+  spec
+}
+
+///|
+/// The OPTIONAL-`from` spelling: `export { a }` and
+/// `export { a } from "spec"` are both legal, so these sites test for the
+/// keyword instead of demanding it. `None` when there is no `from`.
+///
+/// This exists because covering `expect_from` alone was not enough, and
+/// the way it was not enough is the family this repo keeps recording:
+/// there are TWO ways this parser consumes `from`, and the first fix
+/// covered one — so `export * as ns from './nope'` reported and
+/// `export { a } from './nope'` did not. Both spellings record through
+/// `record_module_spec`, which is the single place that writes the list.
+fn Parser::try_from_spec(self : Parser) -> String? raise ParseError {
+  if self.match_(From) || self.match_ident("from") {
+    let spec = self.expect_str_literal()
+    self.record_module_spec(spec)
+    Some(spec)
+  } else {
+    None
+  }
+}
+
+///|
+/// The one place a module specifier enters `import_module_specs`, the
+/// list the TS2307 check reads. `multi_file_source` suppresses it: a
+/// `@filename:` test is several files concatenated, where a specifier
+/// really does resolve.
+fn Parser::record_module_spec(self : Parser, spec : String) -> Unit {
+  if !self.multi_file_source {
+    self.import_module_specs.push(spec)
+  }
+}
+
+///|
 fn Parser::expect_from(self : Parser) -> Unit raise ParseError {
   if self.match_(From) || self.match_ident("from") {
     return
@@ -85,6 +140,43 @@ fn Parser::parse_named_imports_with_type_flags(
     break
   }
   (items, type_flags)
+}
+
+///|
+/// Record the LOCAL names of an `export { … }` clause that has no
+/// `from` specifier, plus whether the clause was `export type { … }`.
+///
+/// The one place that writes these markers, called from each of the
+/// three export parsers once they know there is no specifier -- a
+/// re-export (`export { a } from './x'`) names something in ANOTHER
+/// module and must not be checked against this one's declarations. The
+/// `spec` argument is what makes that distinction impossible to forget:
+/// `parse_named_exports` itself stops at the `}` and cannot see whether
+/// a `from` follows.
+/// Record one `<export-type>NAME` marker per EXPORTED type declaration
+/// (a `type` alias or an `interface`). Read by TS2395, which needs to
+/// know how many of a merged declaration's halves carried `export`.
+///
+/// One function so the fact is written in one place; it is called from
+/// each of the three export parsers, which is where batch CF's
+/// `<module-syntax>` marker had to go for the same reason.
+fn Parser::record_exported_type_name(self : Parser, name : String) -> Unit {
+  self.grammar_misuses.push("<export-type>" + name)
+}
+
+///|
+fn Parser::record_local_export_names(
+  self : Parser,
+  items : Array[(String, String)],
+  spec : String?,
+) -> Unit {
+  if spec is Some(_) {
+    return
+  }
+  for item in items {
+    let (local_name, _) = item
+    self.grammar_misuses.push("<export-local>" + local_name)
+  }
 }
 
 ///|
@@ -305,8 +397,112 @@ fn Parser::scan_skipped_enum_initializer(
   }
   self.pos = start_pos
   match parsed {
-    Some(e) => self.record_enum_string_arith(e)
+    Some(e) => {
+      self.record_enum_string_arith(e)
+      self.record_enum_await_yield(e)
+      self.record_const_enum_nonconstant(e)
+    }
     None => ()
+  }
+}
+
+///|
+/// TS2474 ("const enum member initializers must be constant expressions")
+/// for the one shape that is decidable without evaluating anything: a
+/// CALL. A call result is never a constant enum expression, whatever it
+/// returns.
+///
+/// Everything else abstains, and the boundary was probed rather than
+/// reasoned. Legal in a `const enum`, all confirmed against the real
+/// compiler: arithmetic on literals (`199 * 2`), a shift (`1 << 4`), a
+/// unary minus, a reference to another member of the same enum (bare `a`
+/// or dotted `D.a`), and a reference to an outer `const` — which is why a
+/// bare identifier and a property access must NOT fire, and why
+/// `constEnum2`'s own `g = CONST` line is not among the two tsc reports.
+/// `"x".length` IS TS2474 and stays a MISS: it is a property access, and
+/// telling it apart from `D.a` needs resolution this does not do.
+fn Parser::record_const_enum_nonconstant(
+  self : Parser,
+  e : @ast.TsExpr,
+) -> Unit {
+  if not(self.in_const_enum) {
+    return
+  }
+  if expr_contains_call(e) {
+    self.grammar_misuses.push(
+      "const enum member initializers must be constant expressions",
+    )
+  }
+}
+
+///|
+/// True when `e` invokes something anywhere inside it. A missing arm
+/// loses a finding rather than inventing one, which is the right
+/// direction for TS2474.
+fn expr_contains_call(e : @ast.TsExpr) -> Bool {
+  match e {
+    Call(_, _)
+    | CallExpr(_, _)
+    | MethodCall(_, _, _)
+    | New(_, _)
+    | NewExpr(_, _) => true
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) =>
+      expr_contains_call(a) || expr_contains_call(b)
+    UnaryOp(_, a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | PureCall(a)
+    | TypeArgs(_, a)
+    | NonNull(a)
+    | Await(a)
+    | YieldStar(a) => expr_contains_call(a)
+    Cond(c, a, b) =>
+      expr_contains_call(c) || expr_contains_call(a) || expr_contains_call(b)
+    PropAccess(r, _) => expr_contains_call(r)
+    _ => false
+  }
+}
+
+///|
+/// TS1308 / TS1163: an `await` or `yield` expression in an ENUM member
+/// initializer.
+///
+/// The generic checks cannot catch these, and the corpus file
+/// (`enums/awaitAndYield`) shows exactly why: its enum sits inside an
+/// `async function*`, so `in_async` and `in_generator` are both true and
+/// both operators are legal *there*. An enum member initializer is a
+/// constant-expression position evaluated at compile time — no operator
+/// that suspends may appear in one, whatever the enclosing function is.
+///
+/// A shallow walk over the value-carrying operand positions: `await` and
+/// `yield` cannot hide behind a function boundary, because a nested
+/// function's body is its own initializer-free scope.
+fn Parser::record_enum_await_yield(self : Parser, e : @ast.TsExpr) -> Unit {
+  match e {
+    Await(_) =>
+      self.grammar_misuses.push(
+        "`await` expressions cannot be used in an enum member initializer",
+      )
+    Yield(_) =>
+      self.grammar_misuses.push(
+        "`yield` expressions cannot be used in an enum member initializer",
+      )
+    YieldStar(_) =>
+      self.grammar_misuses.push(
+        "`yield` expressions cannot be used in an enum member initializer",
+      )
+    BinOp(_, a, b) | Seq(a, b) => {
+      self.record_enum_await_yield(a)
+      self.record_enum_await_yield(b)
+    }
+    UnaryOp(_, a) | As(a, _) | Satisfies(a, _) | PureCall(a) | TypeArgs(_, a) =>
+      self.record_enum_await_yield(a)
+    Cond(c, a, b) => {
+      self.record_enum_await_yield(c)
+      self.record_enum_await_yield(a)
+      self.record_enum_await_yield(b)
+    }
+    _ => ()
   }
 }
 
@@ -383,6 +579,12 @@ fn Parser::parse_enum_decl_after_enum_keyword(
   self.record_reserved_binding_name(name)
   let _ = self.expect(LBrace)
   let members : Array[@ast.TsEnumMember] = []
+  // TS2474 applies to a `const enum` and not to a plain one — the same
+  // initializer is legal in the latter — so the flag rides for the body.
+  // Saved and restored rather than cleared: enums do not nest, but the
+  // idiom is what keeps the next nesting construct from breaking it.
+  let prev_const_enum = self.in_const_enum
+  self.in_const_enum = is_const
   while !self.check(RBrace) && !self.check(Eof) {
     // TS1132 ("Enum member expected"): a comma reaching the TOP of this
     // loop had no member before it — a leading `enum E { , }` or a doubled
@@ -411,6 +613,7 @@ fn Parser::parse_enum_decl_after_enum_keyword(
     }
   }
   let _ = self.expect(RBrace)
+  self.in_const_enum = prev_const_enum
   self.consume_semicolon()
   { name, members, is_const, is_declare }
 }
@@ -755,6 +958,21 @@ fn Parser::parse_namespace_decl_with_mode(
       "module declaration names may only use ' or \" quoted strings",
     )
   }
+  // TS1035 ("only ambient modules can use quoted names") and, for a
+  // `.d.ts` file, its TS1046 twin ("top-level declarations in a `.d.ts`
+  // file must start with `declare` or `export`"). A QUOTED module name
+  // declares an ambient EXTERNAL module, which only a `declare` context
+  // may do.
+  //
+  // The condition is exact rather than approximate: every declare-context
+  // caller tests `name == "module" && peek_at(1) is Str(_)` and routes
+  // that to `parse_ambient_external_module_decl*` BEFORE reaching here, so
+  // a quoted name arriving at THIS function is by construction a
+  // non-ambient one. `parserModuleDeclaration1` and its `.d.ts` twin are
+  // the same two lines of source and TS7 rejects both.
+  if keyword == "module" && self.peek().kind is Str(_) {
+    self.grammar_misuses.push("only ambient modules can use quoted names")
+  }
   let name = if self.is_qualified_type_name_part(0) {
     Some(self.parse_binding_ident())
   } else {
@@ -850,6 +1068,27 @@ fn Parser::parse_namespace_decl_with_mode(
           }
         } noraise {
           module_ => module_
+        }
+      }
+      // TS1063 and TS1319: `export = X` and `export default X` are module
+      // forms, and a NAMESPACE is not a module — neither is legal inside
+      // one (`parserExportAssignment5`, `parserExportAssignment9`). The
+      // body was parsed by a fresh `Parser`, which cannot know it is a
+      // namespace body, so it leaves a sentinel and the decision is made
+      // here where the context is known. An ambient EXTERNAL module
+      // (`declare module "spec" { export = X }`) legitimately uses
+      // `export =` and never reaches this function: every declare-context
+      // caller routes a quoted name to
+      // `parse_ambient_external_module_decl*` first.
+      for misuse in module_.grammar_misuses {
+        if misuse.has_prefix("<export-eq>") {
+          self.grammar_misuses.push(
+            "an export assignment cannot be used in a namespace",
+          )
+        } else if misuse.has_prefix("<export-default>") {
+          self.grammar_misuses.push(
+            "a default export can only be used in an ECMAScript-style module",
+          )
         }
       }
       let next_namespace : @ast.TsNamespaceDecl = {
@@ -2249,8 +2488,7 @@ fn Parser::parse_import_decl(
     if self.match_(Comma) {
       // continue to namespace/named
     } else {
-      self.expect_from()
-      let module_spec = self.expect_str_literal()
+      let module_spec = self.expect_from_spec()
       let attributes = self.parse_import_attributes()
       self.consume_semicolon()
       return {
@@ -2280,8 +2518,7 @@ fn Parser::parse_import_decl(
     }
     let _ = self.expect(RBrace)
   }
-  self.expect_from()
-  let module_spec = self.expect_str_literal()
+  let module_spec = self.expect_from_spec()
   let attributes = self.parse_import_attributes()
   self.consume_semicolon()
   {
@@ -2383,6 +2620,17 @@ fn Parser::parse_export_decl_for_module(
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
   let _ = self.expect(Export)
+  // Marker, not an error: an `export` of ANY kind makes the file a
+  // module. It goes here, at the keyword, rather than on the forms that
+  // happen to need it — the evidence set was assembled from the export
+  // shapes that bind a VALUE (`<export-value>` / `<export-default>` /
+  // `<export-eq>`), so a file whose only module syntax is `export type R
+  // = number` read as a script. That made `usingDeclarationsDeclarationEmit.2`
+  // — TS7-ACCEPTED, two `export type` aliases and nothing else — a false
+  // positive of the TS2853 rule below, and it was found that way rather
+  // than by reading. There are three `export` statement parsers; a marker
+  // written at the form is a marker written at one of them.
+  self.grammar_misuses.push("<module-syntax>")
   if self.match_(As) || self.match_ident("as") {
     if self.match_ident("namespace") {
       let _ = self.parse_binding_ident()
@@ -2418,15 +2666,13 @@ fn Parser::parse_export_decl_for_module(
     if self.match_(Star) {
       if self.match_(As) || self.match_ident("as") {
         let name = self.parse_binding_ident()
-        self.expect_from()
-        let module_spec = self.expect_str_literal()
+        let module_spec = self.expect_from_spec()
         reexports.push({
           module_spec,
           kind: @ast.TsReExportKind::Namespace(name),
           type_only: true,
         })
-      } else if self.match_(From) || self.match_ident("from") {
-        let module_spec = self.expect_str_literal()
+      } else if self.try_from_spec() is Some(module_spec) {
         reexports.push({
           module_spec,
           kind: @ast.TsReExportKind::All,
@@ -2439,8 +2685,9 @@ fn Parser::parse_export_decl_for_module(
     if self.match_(LBrace) {
       let items = self.parse_named_exports()
       let _ = self.expect(RBrace)
-      if self.match_(From) || self.match_ident("from") {
-        let module_spec = self.expect_str_literal()
+      let spec = self.try_from_spec()
+      self.record_local_export_names(items, spec)
+      if spec is Some(module_spec) {
         reexports.push({
           module_spec,
           kind: @ast.TsReExportKind::Named(items),
@@ -2531,6 +2778,13 @@ fn Parser::parse_export_decl_for_module(
       return (stmts, exports, reexports)
     }
     let expr = self.parse_expr()
+    // Marker, not an error: `export default` is legal in a module and
+    // TS1319 inside a NAMESPACE, and only the enclosing namespace parser
+    // knows which this is. The payload matches the ambient-side parser's
+    // convention (`<export-default>expr:`) so the TS2528 multiple-defaults
+    // count treats both paths alike — this RUNTIME path recorded nothing
+    // at all, and a namespace body is parsed runtime-first.
+    self.grammar_misuses.push("<export-default>expr:")
     let local_name = match expr {
       @ast.TsExpr::Var(name) => name
       _ => {
@@ -2552,8 +2806,7 @@ fn Parser::parse_export_decl_for_module(
   if self.match_(Star) {
     if self.match_(As) || self.match_ident("as") {
       let name = self.parse_binding_ident()
-      self.expect_from()
-      let module_spec = self.expect_str_literal()
+      let module_spec = self.expect_from_spec()
       reexports.push({
         module_spec,
         kind: @ast.TsReExportKind::Namespace(name),
@@ -2562,8 +2815,7 @@ fn Parser::parse_export_decl_for_module(
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
-    self.expect_from()
-    let module_spec = self.expect_str_literal()
+    let module_spec = self.expect_from_spec()
     reexports.push({
       module_spec,
       kind: @ast.TsReExportKind::All,
@@ -2575,8 +2827,9 @@ fn Parser::parse_export_decl_for_module(
   if self.match_(LBrace) {
     let items = self.parse_named_exports()
     let _ = self.expect(RBrace)
-    if self.match_(From) || self.match_ident("from") {
-      let module_spec = self.expect_str_literal()
+    let spec = self.try_from_spec()
+    self.record_local_export_names(items, spec)
+    if spec is Some(module_spec) {
       reexports.push({
         module_spec,
         kind: @ast.TsReExportKind::Named(items),
@@ -2677,12 +2930,14 @@ fn Parser::parse_export_decl_for_module(
       }
       Interface => {
         let iface = self.parse_interface()
+        self.record_exported_type_name(iface.name)
         self.collected_interfaces.push(iface)
         exports.push({ local_name: iface.name, export_name: iface.name })
         return (stmts, exports, reexports)
       }
       Type => {
         let type_alias = self.parse_type_alias()
+        self.record_exported_type_name(type_alias.name)
         self.collected_type_aliases.push(type_alias)
         exports.push({
           local_name: type_alias.name,
@@ -2828,6 +3083,17 @@ fn Parser::parse_export_enum_decl_for_module_block(
     return None
   }
   let _ = self.expect(Export)
+  // Marker, not an error: an `export` of ANY kind makes the file a
+  // module. It goes here, at the keyword, rather than on the forms that
+  // happen to need it — the evidence set was assembled from the export
+  // shapes that bind a VALUE (`<export-value>` / `<export-default>` /
+  // `<export-eq>`), so a file whose only module syntax is `export type R
+  // = number` read as a script. That made `usingDeclarationsDeclarationEmit.2`
+  // — TS7-ACCEPTED, two `export type` aliases and nothing else — a false
+  // positive of the TS2853 rule below, and it was found that way rather
+  // than by reading. There are three `export` statement parsers; a marker
+  // written at the form is a marker written at one of them.
+  self.grammar_misuses.push("<module-syntax>")
   if is_declare {
     let _ = self.advance()
   }
@@ -2873,11 +3139,8 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
       if self.match_(Comma) {
         // continue to namespace/named
       } else {
-        self.expect_from()
-        let default_spec = self.expect_str_literal()
-        if !self.multi_file_source {
-          self.import_module_specs.push(default_spec)
-        }
+        let default_spec = self.expect_from_spec()
+        let _ = default_spec
         self.skip_import_attributes()
         self.consume_semicolon()
         return
@@ -2895,11 +3158,8 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
   }
-  self.expect_from()
-  let tail_spec = self.expect_str_literal()
-  if !self.multi_file_source {
-    self.import_module_specs.push(tail_spec)
-  }
+  let tail_spec = self.expect_from_spec()
+  let _ = tail_spec
   self.skip_import_attributes()
   self.consume_semicolon()
 }
@@ -2987,6 +3247,17 @@ fn Parser::parse_export_stmt(
   top_level_stmts : Array[@ast.TsStmt],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
+  // Marker, not an error: an `export` of ANY kind makes the file a
+  // module. It goes here, at the keyword, rather than on the forms that
+  // happen to need it — the evidence set was assembled from the export
+  // shapes that bind a VALUE (`<export-value>` / `<export-default>` /
+  // `<export-eq>`), so a file whose only module syntax is `export type R
+  // = number` read as a script. That made `usingDeclarationsDeclarationEmit.2`
+  // — TS7-ACCEPTED, two `export type` aliases and nothing else — a false
+  // positive of the TS2853 rule below, and it was found that way rather
+  // than by reading. There are three `export` statement parsers; a marker
+  // written at the form is a marker written at one of them.
+  self.grammar_misuses.push("<module-syntax>")
   if self.match_(As) || self.match_ident("as") {
     if self.match_ident("namespace") {
       let _ = self.parse_binding_ident()
@@ -2997,22 +3268,20 @@ fn Parser::parse_export_stmt(
   }
   if self.match_(Type) || self.match_ident("type") {
     if self.match_(Star) {
-      if self.match_(From) || self.match_ident("from") {
-        let _ = self.expect_str_literal()
-      }
+      let _ = self.try_from_spec()
       self.consume_semicolon()
       return
     }
     if self.match_(LBrace) {
-      let _ = self.parse_named_exports()
+      let items = self.parse_named_exports()
       let _ = self.expect(RBrace)
-      if self.match_(From) || self.match_ident("from") {
-        let _ = self.expect_str_literal()
-      }
+      let spec = self.try_from_spec()
+      self.record_local_export_names(items, spec)
       self.consume_semicolon()
       return
     }
     let type_alias = self.parse_type_alias_after_type_keyword()
+    self.record_exported_type_name(type_alias.name)
     type_aliases.push(type_alias)
     match type_alias_to_interface(type_alias) {
       Some(iface) => interfaces.push(iface)
@@ -3129,7 +3398,9 @@ fn Parser::parse_export_stmt(
     _ => ()
   }
   if self.check(Interface) {
-    interfaces.push(self.parse_interface())
+    let iface = self.parse_interface()
+    self.record_exported_type_name(iface.name)
+    interfaces.push(iface)
     return
   }
   if self.is_const_enum_decl_start() {
@@ -3229,8 +3500,7 @@ fn Parser::parse_export_stmt(
     if self.match_(As) || self.match_ident("as") {
       let _ = self.parse_binding_ident()
     }
-    self.expect_from()
-    let _ = self.expect_str_literal()
+    let _ = self.expect_from_spec()
     self.consume_semicolon()
     return
   }
@@ -3238,10 +3508,28 @@ fn Parser::parse_export_stmt(
     // Marker, not an error: even an empty `export {}` makes the file a
     // module. Consumed by the TS1262 top-level `await`-name check.
     self.grammar_misuses.push("<module-syntax>")
-    self.parse_import_specifiers()
+    // This is the FOURTH site that parses an `export { … }` clause, and
+    // the only one that reached for `parse_import_specifiers` instead of
+    // `parse_named_exports`. That is why the TS2661 recorder written at
+    // the other three did not cover the plainest spelling there is --
+    // and it also meant a no-`from` clause's names landed in
+    // `imported_binding_names`, which is a list of LOCAL BINDINGS an
+    // import introduces. `export { x }` introduces none: it names
+    // something already declared. So the names go there only for a
+    // re-export, where the clause really does name another module's
+    // binding, and the recorder sees the rest.
+    let items = self.parse_named_exports()
     let _ = self.expect(RBrace)
-    if self.match_(From) || self.match_ident("from") {
-      let _ = self.expect_str_literal()
+    let spec = self.try_from_spec()
+    self.record_local_export_names(items, spec)
+    if spec is Some(_) {
+      for item in items {
+        let (local_name, export_name) = item
+        self.imported_binding_names.push(local_name)
+        if export_name != local_name {
+          self.imported_binding_names.push(export_name)
+        }
+      }
     }
     self.consume_semicolon()
     return
@@ -3255,6 +3543,21 @@ fn Parser::parse_export_stmt(
       type_param_bounds: [],
       type_: @ast.TsType::Any,
     })
+    // An import-equals alias is NOT recorded as a value here, and the
+    // asymmetry with `parse_module_block`'s plain `import a = A` (which
+    // does record one) is deliberate rather than an oversight.
+    //
+    // Recording one was tried, to give TS2708 the fact that
+    // `namespace C { export import a = A }` has something at runtime
+    // when `A` is instantiated. The corpus accepted it and the full test
+    // suite did not: the bridge emitter reads `values` to decide what to
+    // import, and `export import JSX = JSXInternal` where `JSXInternal`
+    // holds only an interface is a TYPE-ONLY alias that must produce no
+    // import at all (`type-only-export-import-entry.d.ts`). Whether the
+    // alias binds a value depends on the TARGET, which is not resolved
+    // at parse time, so neither answer is right for both consumers.
+    // `namespace_is_instantiated` gets the fact from `type_aliases`
+    // instead, where this path already records it.
     self.skip_until_semicolon()
     return
   }
@@ -3405,7 +3708,14 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       }
     }
     if self.check(Function) {
-      funcs.push(self.parse_function())
+      let func = self.parse_function()
+      // TS2391, second site. The module's own top-level loop parses a
+      // function declaration here rather than through `parse_stmt`, which
+      // is why `function data(): string; function next(): string;`
+      // (parserModuleDeclaration10) stayed silent while the same pair
+      // without return annotations was reported: two arms, one rule.
+      self.note_function_declaration(func.name, self.last_function_bodiless)
+      funcs.push(func)
     } else if (match self.peek().kind {
         Ident("async") =>
           match self.peek_at(1).kind {
@@ -3428,6 +3738,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       self.in_async = true
       let func = self.parse_function()
       self.in_async = prev_async
+      self.note_function_declaration(func.name, self.last_function_bodiless)
       funcs.push(func)
     } else if self.check(Interface) {
       interfaces.push(self.parse_interface())
@@ -3514,6 +3825,24 @@ fn Parser::parse_module_with_seeded_const_values_internal(
                 // declaration file" behavior) so existing flows that
                 // don't consult the augmentation list still see the
                 // members.
+                // TS5061: "Pattern 'X' can have at most one '*'
+                // character." A quoted ambient module name may be a
+                // WILDCARD pattern (`declare module "foo/*"`), and the
+                // pattern language allows exactly one `*`. Two or more is
+                // never legal, and a name with none is an ordinary
+                // specifier, so counting is the whole rule
+                // (`ambientDeclarationsPatterns_tooManyAsterisks`).
+                let mut asterisks = 0
+                for ch in spec {
+                  if ch == '*' {
+                    asterisks += 1
+                  }
+                }
+                if asterisks > 1 {
+                  self.grammar_misuses.push(
+                    "pattern `\{spec}` can have at most one `*` character",
+                  )
+                }
                 module_augmentations.push((spec, module_))
                 append_module_decls(
                   module_, funcs, interfaces, type_aliases, imports, values, classes,
@@ -3655,6 +3984,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   // Shared leading window for the directive detectors below (one slice
   // instead of one per detector).
   let module_head = source_head(self.src)
+  self.record_unused_private_members(module_head)
   {
     funcs,
     interfaces,

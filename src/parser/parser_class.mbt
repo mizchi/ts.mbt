@@ -1239,6 +1239,20 @@ fn Parser::parse_implements_names(self : Parser) -> Array[String] {
   let mut expect_name = true
   let mut angle = 0
   while !self.check(LBrace) && !self.check(Eof) {
+    // TS2500 ("A class can only implement an identifier/qualified-name
+    // with optional type arguments"): `implements A?.B` is not a
+    // qualified name. The collector's own comment above already named
+    // this shape as the thing it skips — the diagnostic was simply never
+    // written. Note the asymmetry, which is why this belongs here and
+    // not at the `extends` clause: `class C1 extends A?.B {}` is LEGAL
+    // (an `extends` clause takes an EXPRESSION), and
+    // `classExtendingOptionalChain` says so by accepting the first half
+    // of the same file.
+    if self.peek().kind is Question && angle == 0 && self.peek_at(1).kind is Dot {
+      self.grammar_misuses.push(
+        "a class can only implement an identifier / qualified-name with optional type arguments",
+      )
+    }
     match self.peek().kind {
       Lt => {
         angle += 1
@@ -1441,13 +1455,7 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
   }
   let name = match self.advance().kind {
     Ident(n) => n
-    PrivateIdent(n) => {
-      let private_name = "#" + n
-      match self.current_class_brand {
-        Some(brand) => mangle_private_name(private_name, brand)
-        None => private_name
-      }
-    }
+    PrivateIdent(n) => self.resolve_private_name(n)
     Str(s) => {
       // Quotedness is erased from the returned key; record it so
       // strict-property-initialization can exempt literal-named fields
@@ -1810,6 +1818,86 @@ fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError 
 }
 
 ///|
+/// True when a decorator expression mentions `super` (which this parser
+/// spells `Var("super")`).
+///
+/// TS2660: a decorator expression is evaluated where the CLASS is
+/// defined, not inside a member body, so `super` has no meaning there
+/// even when the class does extend something --
+/// `class C extends S { @(super.m) method() {} }` is an error
+/// (decoratorOnClassMethod12).
+///
+/// The arms are the shapes a decorator expression can take. Anything
+/// else returns false, which costs a MISS rather than a finding: the
+/// checker's `expr_mentions_super` is the complete walker and it cannot
+/// be used here, because member decorator expressions never reach the
+/// AST.
+fn decorator_mentions_super(d : @ast.TsExpr) -> Bool {
+  match d {
+    Var("super") => true
+    PropAccess(recv, _) => decorator_mentions_super(recv)
+    IndexAccess(recv, idx) =>
+      decorator_mentions_super(recv) || decorator_mentions_super(idx)
+    MethodCall(recv, _, args) => {
+      if decorator_mentions_super(recv) {
+        return true
+      }
+      for a in args {
+        if decorator_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    Call(n, args) => {
+      if n == "super" {
+        return true
+      }
+      for a in args {
+        if decorator_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) => {
+      if decorator_mentions_super(callee) {
+        return true
+      }
+      for a in args {
+        if decorator_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    TypeArgs(_, inner) | PureCall(inner) => decorator_mentions_super(inner)
+    _ => false
+  }
+}
+
+///|
+/// The head NAME of a decorator expression, plus whether it was written
+/// as a call. `@dec` -> `("bare", "dec")`, `@dec(1)` -> `("called",
+/// "dec")`. `None` for every other shape (an inline arrow, a member
+/// access, a parenthesized expression), which is what keeps the arity
+/// check to the two forms whose signature the checker can look up by
+/// name.
+fn decorator_head_name(d : @ast.TsExpr) -> (String, String)? {
+  match d {
+    Var(n) => if n.has_prefix("<") { None } else { Some(("bare", n)) }
+    Call(n, _) => if n.has_prefix("<") { None } else { Some(("called", n)) }
+    CallExpr(Var(n), _) =>
+      if n.has_prefix("<") {
+        None
+      } else {
+        Some(("called", n))
+      }
+    _ => None
+  }
+}
+
+///|
 /// Drain any decorators accumulated via `skip_decorator` since the
 /// last drain. Class parsers call this just before constructing the
 /// `TsClassDecl` so the decorators end up on the right declaration.
@@ -1882,6 +1970,173 @@ fn Parser::inject_instance_field_assigns(
 }
 
 ///|
+/// TS6133 ("'#unused' is declared but its value is never read") for a
+/// `#private` class member, under `@noUnusedLocals`.
+///
+/// Decided by COUNTING, which is what makes it sound in the one
+/// direction that matters. A private name is class-scoped, so every read
+/// of it must spell `#name` — therefore the number of `PrivateIdent`
+/// tokens carrying that name is an exact upper bound on
+/// declarations + reads, and when it does not EXCEED the declaration
+/// count the class parsers recorded, nothing reads it. A read this
+/// misses is impossible; an extra occurrence (a second class declaring
+/// the same name) only makes it quieter. That fail direction is the
+/// whole reason this is not the reference-recording walk an earlier note
+/// deferred: a missed read there makes a used member look unused, which
+/// is a false positive.
+///
+/// File-level rather than per-class, deliberately. `privateNameUnused`
+/// declares `#unused` FOUR times across three classes (a field, a
+/// method, and a get/set pair, which is two declarations of one member)
+/// and reads it never — 4 occurrences against 4 declarations. Its
+/// `#used` has the same four declarations plus three reads, so 7 against
+/// 4 and silent. A `#x in v` brand check IS a read to tsc and is one
+/// more occurrence, which is exactly why
+/// `privateNameInInExpressionUnused` reports its `#unused` and not its
+/// `#brand`.
+fn Parser::record_unused_private_members(self : Parser, head : String) -> Unit {
+  if not(detect_no_unused_locals(head)) {
+    return
+  }
+  if self.private_decl_counts.size() == 0 {
+    return
+  }
+  let occurrences : Map[String, Int] = {}
+  for tok in self.tokens {
+    if tok.kind is PrivateIdent(n) {
+      occurrences[n] = occurrences.get(n).unwrap_or(0) + 1
+    }
+  }
+  for entry in self.private_decl_counts {
+    let (name, decls) = entry
+    if occurrences.get(name).unwrap_or(0) <= decls {
+      self.grammar_misuses.push(
+        "`#\{name}` is declared but its value is never read",
+      )
+    }
+  }
+}
+
+///|
+/// TS2803 ("Cannot assign to private method") and TS2806 ("Private
+/// accessor was defined without a getter"), decided over the class
+/// body's TOKEN range — for a class EXPRESSION only.
+///
+/// Both diagnostics ALREADY EXIST in the checker, and probing them is
+/// what showed why the two corpus files were still MISSes: those checks
+/// read `module_.classes`, so they cannot see `const C = class { … }`,
+/// which is the shape BOTH files use. So this is not a second copy of a
+/// rule — `self.in_class_expr_body` restricts it to the case the
+/// existing ones structurally cannot reach, and a class DECLARATION is
+/// left entirely to them rather than reported twice.
+///
+/// A token scan rather than an AST walk, deliberately: a member body is
+/// an arbitrary expression tree, and every access to `#x` must spell
+/// `#x`, so scanning tokens is complete by construction where a walker
+/// missing one arm would lose findings silently.
+///
+/// A `PrivateIdent` counts as an ACCESS only when a `.` precedes it,
+/// which excludes both spellings that are not accesses: the member's own
+/// declaration (`#x = 1`) and the brand check (`#x in v`). What follows
+/// then decides the direction — a plain `=` is a write, a compound
+/// assignment is both (it reads the old value, which is what makes
+/// `this.#x += 2` a READ of a setter-only accessor), and `++` / `--`
+/// likewise. Anything else is a read.
+///
+/// Both boundaries were probed. Writing to a set-only accessor is legal
+/// and stays silent; writing to a GET-only one is TS2540, a different
+/// code, not raised here; and writing to a plain private FIELD is of
+/// course fine.
+fn Parser::record_private_member_misuse(
+  self : Parser,
+  body_start : Int,
+  methods : Array[String],
+  getters : Array[String],
+  setters : Array[String],
+  implicit_any : Array[(String, String)],
+) -> Unit {
+  // TS7008's other half. A member with no annotation and no initializer
+  // gets its type from an assignment in the CONSTRUCTOR (instance side)
+  // or a STATIC BLOCK (static side) — probed, and a method-body
+  // assignment does NOT count. Telling those regions apart from a flat
+  // token scan would need brace tracking, so any `.name =` in the body
+  // withdraws the report: that loses `class B { q; m() { this.q = 1 } }`
+  // (a MISS) and keeps `classStaticBlockUseBeforeDef1`, which shipped as
+  // a false positive on the first draft, silent.
+  let written : Map[String, Unit] = {}
+  for i in body_start..<self.pos {
+    let name = match self.tokens[i].kind {
+      Ident(n) => n
+      PrivateIdent(n) => "#" + n
+      _ => continue
+    }
+    if i == 0 || not(self.tokens[i - 1].kind is Dot) {
+      continue
+    }
+    if i + 1 < self.tokens.length() && self.tokens[i + 1].kind is Eq {
+      written[name] = ()
+    }
+  }
+  for entry in implicit_any {
+    let (shown, _) = entry
+    if not(written.contains(shown)) {
+      self.grammar_misuses.push(
+        "member `\{shown}` implicitly has an `any` type",
+      )
+    }
+  }
+  if not(self.in_class_expr_body) {
+    return
+  }
+  if methods.length() == 0 && setters.length() == 0 {
+    return
+  }
+  for i in body_start..<self.pos {
+    guard self.tokens[i].kind is PrivateIdent(name) else { continue }
+    if i == 0 || not(self.tokens[i - 1].kind is Dot) {
+      continue
+    }
+    let next = if i + 1 < self.tokens.length() {
+      self.tokens[i + 1].kind
+    } else {
+      Eof
+    }
+    let is_plain_write = next is Eq
+    let is_read_write = match next {
+      PlusEq
+      | MinusEq
+      | StarEq
+      | SlashEq
+      | PercentEq
+      | AmpEq
+      | PipeEq
+      | CaretEq
+      | LtLtEq
+      | GtGtEq
+      | GtGtGtEq
+      | StarStarEq
+      | AmpAmpEq
+      | PipePipeEq
+      | QuestionQuestionEq
+      | PlusPlus
+      | MinusMinus => true
+      _ => false
+    }
+    let reads = not(is_plain_write)
+    if (is_plain_write || is_read_write) && methods.contains(name) {
+      self.grammar_misuses.push(
+        "cannot assign to private method `#\{name}` — private methods are not writable",
+      )
+    }
+    if reads && setters.contains(name) && not(getters.contains(name)) {
+      self.grammar_misuses.push(
+        "private accessor `#\{name}` was defined without a getter",
+      )
+    }
+  }
+}
+
+///|
 fn Parser::parse_class_body(
   self : Parser,
   class_type_params : Array[String],
@@ -1891,6 +2146,7 @@ fn Parser::parse_class_body(
   Array[String],
   Array[String],
   Array[String],
+  Int,
   Int,
   Bool,
   Bool,
@@ -1903,14 +2159,52 @@ fn Parser::parse_class_body(
   Array[(Bool, String)],
 ) raise ParseError {
   let _ = self.expect(LBrace)
+  // First token INSIDE the body. TS2803 / TS2806 are decided from this
+  // token range rather than from an AST walk: a member's body is an
+  // arbitrary expression tree, and a walker that misses one arm loses a
+  // finding silently, while a token scan is complete by construction —
+  // every access to `#x` spells `#x`.
+  let body_token_start = self.pos
   // Class body is implicitly strict mode
   let prev_strict = self.in_strict
   self.in_strict = true
+  // TS2803 / TS2806: which `#private` names this class declares as a
+  // METHOD, and which as a SET-only accessor. Raw names (no brand), to
+  // match the `PrivateIdent` tokens the scan below reads.
+  let private_method_names : Array[String] = []
+  let private_getters : Array[String] = []
+  let private_setters : Array[String] = []
+  // TS7008 candidates: (spelling to report, key as the token scan sees
+  // it). Held until the body has been scanned, because an assignment in
+  // the class body can supply the type.
+  let implicit_any_candidates : Array[(String, String)] = []
+  // TS1207: which get/set accessors carried a decorator, keyed
+  // `<static>:<kind>:<name>`. Decorating BOTH halves of a get/set pair is
+  // an error — one descriptor covers both, so two decorators would be
+  // applied to the same thing. Accumulated per class BODY (this function
+  // is the one place a class's members are parsed, so there is no second
+  // site to forget) and decided at the end.
+  let decorated_accessors : Array[String] = []
+  // TS2393 support: the keys of methods that carried a real `{ … }` body
+  // in THIS class body. Keyed by staticness + accessor kind + name,
+  // because an instance and a static member of one name are different
+  // members and a `get`/`set` pair is two of them.
+  //
+  // Recorded here rather than derived from `cls.methods` afterwards
+  // because `TsClassMethodDecl.body` is `None` for an EMPTY body as
+  // well as for a bodiless overload signature -- so `m() {}` and `m();`
+  // are indistinguishable downstream, which is the class-shaped face of
+  // the `TsFunc.body` blocker this repo records for TS2393 / TS2394.
+  // The parser has `has_body_block` and does not need to guess.
+  let bodied_method_keys : Map[String, Bool] = {}
   let mut ctor : @ast.TsFunc? = None
   // Count constructor *implementations* (a `constructor(...) { ... }` with a
   // real body). Two or more is TS2392 ("Multiple constructor implementations
   // are not allowed").
   let mut ctor_impl_count = 0
+  // Constructor OVERLOAD SIGNATURES — bodiless `constructor(...)`
+  // declarations. Paired with `ctor_impl_count` for TS2390 below.
+  let mut ctor_sig_count = 0
   // Set when an accessibility modifier (`public` / `private` / `protected`)
   // was written on an index signature -- always TS1071.
   let mut index_sig_modifier_misuse = false
@@ -1991,6 +2285,12 @@ fn Parser::parse_class_body(
     let mut has_modifier = true
     let mut parsed_static_block = false
     let mut has_declare = false
+    // The stage-3 `accessor` field modifier. A decorator on one is
+    // invoked with a DESCRIPTOR like a method's, not with the two
+    // arguments a plain field's gets (decoratorOnClassProperty13 --
+    // TS7-ACCEPTED with a 3-parameter decorator), so the arity record
+    // below has to classify it as a method.
+    let mut is_auto_accessor = false
     let mut visibility = "public"
     // Whether an explicit accessibility modifier (`public` / `private` /
     // `protected`) was written on this member. Used to flag TS1071 -- such a
@@ -2026,11 +2326,51 @@ fn Parser::parse_class_body(
             if is_async_method || saw_override_modifier || is_readonly_field {
               modifier_order_misuse = true
             }
+            // TS1434 ("Unexpected keyword or identifier"): a SECOND
+            // `static` on one member — `static static Foo() {}`,
+            // `static static Foo;`, `static static [x: string]: string`
+            // (parserMemberFunctionDeclaration2, parserMemberVariable
+            // Declaration2, parserIndexMemberDeclaration10). tsc reports
+            // this as a stray identifier rather than a duplicate modifier,
+            // but the condition is exactly "already seen", the same shape
+            // as the TS1028 accessibility check twenty lines below.
+            if is_static {
+              self.grammar_misuses.push("unexpected keyword or identifier")
+            }
             is_static = true
             has_modifier = true
             // Check for static initialization block: static { ... }
             if self.check(LBrace) {
+              // TS1206: "Decorators are not valid here." A static
+              // initialization block is not a class ELEMENT a decorator can
+              // apply to, in either decorator mode (classStaticBlock19).
+              // Probed against the whole TS7-accepted corpus: not one file
+              // TypeScript 7 accepts decorates a static block, so this needs
+              // no mode gate.
+              if member_decorated {
+                self.invalid_decorator_uses.push("static block")
+              }
+              let prev_static_block = self.in_static_block
+              self.in_static_block = true
+              // TS1107 ("Jump target cannot cross function boundary"): a
+              // static block IS a function boundary, so a label declared
+              // outside it is not a jump target inside it. Fourteen sites
+              // in three files already save / clear / restore
+              // `self.labels` around a function body and this fifteenth
+              // one did not, so `label: while (v) { class C { static {
+              // break label } } }` found the outer label and stayed
+              // silent (classStaticBlock8). Labels declared INSIDE the
+              // block still resolve, which is what that file's second
+              // class checks.
+              let saved_labels : Array[String] = []
+              while self.labels.length() > 0 {
+                saved_labels.push(self.labels.pop().unwrap())
+              }
               let block = self.parse_block()
+              while saved_labels.length() > 0 {
+                self.labels.push(saved_labels.pop().unwrap())
+              }
+              self.in_static_block = prev_static_block
               elements.push(StaticBlock(block))
               // TS2448: a top-level class's static block executes at class
               // definition time, so its immediate reads / writes of a
@@ -2075,6 +2415,9 @@ fn Parser::parse_class_body(
           if self.can_consume_class_modifier() {
             let _ = self.advance()
             has_modifier = true
+            if n == "accessor" {
+              is_auto_accessor = true
+            }
             if n == "public" || n == "private" || n == "protected" {
               // TS1028: a second accessibility modifier on one member
               // (`public public Foo()`, `private protected x`).
@@ -2194,8 +2537,35 @@ fn Parser::parse_class_body(
       _ => ()
     }
     let is_generator = self.match_(Star)
+    // Whether the member name is a `#private` one. Read before the key is
+    // parsed, because `parse_class_method_key` mangles it to a brand and
+    // the `#` is gone by the time the decorator check below runs.
+    let key_is_private_name = self.peek().kind is PrivateIdent(_)
+    // The RAW `#private` name, captured before the key parse mangles it
+    // to a brand. Empty when the member is not a private one.
+    let raw_private_name = match self.peek().kind {
+      PrivateIdent(n) => n
+      _ => ""
+    }
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
+    // TS1436 ("Decorators must precede the name and all keywords of
+    // property declarations"): an `@` immediately after the member NAME,
+    // on the same line (`private prop @decorator` --
+    // decoratorOnClassMethod17).
+    //
+    // The same-line test is the whole rule. With a line terminator
+    // between them, ASI ends the property and the `@` opens the NEXT
+    // member's decorator list, which is the ordinary legal spelling and
+    // is what tsc accepts. And the check sits here, right after the key,
+    // because at this point a method still has `(` ahead and a property
+    // `:` / `=` / `;` -- an `@` in that slot is a misplaced decorator
+    // under every reading.
+    if self.check(At) && not(self.has_line_terminator_before()) {
+      self.grammar_misuses.push(
+        "decorators must precede the name and all keywords of property declarations",
+      )
+    }
     // TS1206: decorators are not valid on a constructor
     // (decoratorOnClassConstructor1), nor on `abstract` or ambient
     // (`declare`) members (esDecorators-classDeclaration-*-nonStatic
@@ -2210,16 +2580,123 @@ fn Parser::parse_class_body(
       } else if method_name == "constructor" &&
         (self.check(LParen) || self.check(Lt)) {
         self.invalid_decorator_uses.push("constructor")
+      } else if self.experimental_decorators && key_is_private_name {
+        // TS1206, and the mirror image of the `abstract` / `declare` case
+        // above: a `#private` member is something only LEGACY decorators
+        // reject, so the gate points the other way here
+        // (privateNamesAndDecorators, and the two private members of
+        // autoAccessorExperimentalDecorators).
+        //
+        // `accessor` was in this condition and was WRONG — two corpus
+        // false positives said so. `@dec accessor prop` under
+        // experimentalDecorators is accepted by TS7
+        // (decoratorOnClassProperty13, and `static accessor y = 1` in
+        // legacyDecorators-contextualTypes). The file that suggested the
+        // rule, autoAccessorExperimentalDecorators, combines TWO features
+        // and its baseline errors only on lines 12 and 15 — `accessor #a`
+        // and `static accessor #b`. The private name was doing all the
+        // work and the auto-accessor none of it: attributing the error to
+        // the wrong half of a two-feature file is the same mistake this
+        // repo records for `computed_props` and the decorator bucket.
+        self.invalid_decorator_uses.push("class member")
       }
     }
-    // TS1031: `declare` cannot modify a constructor implementation
-    // (`class C { declare constructor() {} }` —
-    // parserConstructorDeclaration4).
-    if has_declare &&
-      method_name == "constructor" &&
-      (self.check(LParen) || self.check(Lt)) {
+    if member_decorated {
+      match accessor_kind {
+        Some(kind) =>
+          decorated_accessors.push(
+            (if is_static { "s:" } else { "i:" }) + kind + ":" + method_name,
+          )
+        None => ()
+      }
+    }
+    // TS1240 / TS1241 / TS1329 support: record each of THIS member's
+    // decorators as a `<sig:...>` entry so the checker can compare the
+    // decorator's declared arity against the arity the runtime invokes it
+    // with. The runtime arity differs by member kind (a property
+    // decorator gets 2 arguments, a method or accessor decorator 3), which
+    // is why the kind is captured here rather than at the `@`: this is the
+    // first point where the key has been parsed, so `LParen` / `Lt` tells
+    // a method from a property.
+    //
+    // Rides in `invalid_decorator_uses` because that channel is already
+    // plumbed through every `TsModule` construction site; the `<sig:`
+    // prefix is skipped by the TS1206 consumer, which otherwise turns
+    // every entry into a diagnostic verbatim.
+    if member_decorated {
+      let kind = if accessor_kind is Some(_) ||
+        is_auto_accessor ||
+        self.check(LParen) ||
+        self.check(Lt) {
+        "method"
+      } else {
+        "property"
+      }
+      let mut di = deco_before
+      while di < self.pending_decorators.length() {
+        // TS2660: `super` in a decorator expression. Gated on NOT being
+        // inside a function, because a class nested in a member body of
+        // a derived class is a different question -- there the decorator
+        // expression really does evaluate where `super` is bound, and
+        // tsc accepts it (probed). `decoratorOnClassMethod12`'s class is
+        // at namespace level, so `in_function` is false for it.
+        if not(self.in_function) &&
+          decorator_mentions_super(self.pending_decorators[di]) {
+          self.grammar_misuses.push(
+            "`super` can only be referenced in members of derived classes or object literal expressions",
+          )
+        }
+        match decorator_head_name(self.pending_decorators[di]) {
+          Some((called, dname)) =>
+            self.invalid_decorator_uses.push(
+              "<sig:" + kind + ":" + called + ":" + dname + ">",
+            )
+          None => ()
+        }
+        di += 1
+      }
+    }
+    // TS2803 / TS2806 support: classify this member if it is a private
+    // one. A private METHOD is not writable; a private accessor with a
+    // setter and no getter is not readable.
+    if key_is_private_name && raw_private_name != "" {
+      // TS6133 support: one entry per private member DECLARATION. A
+      // get/set pair is two declarations of one member, which is what
+      // makes the count comparison in `record_unused_private_members`
+      // come out right.
+      self.private_decl_counts[raw_private_name] = self.private_decl_counts
+        .get(raw_private_name)
+        .unwrap_or(0) +
+        1
+      match accessor_kind {
+        Some("get") => private_getters.push(raw_private_name)
+        Some("set") => private_setters.push(raw_private_name)
+        Some(_) => ()
+        None =>
+          // A method, not a field: a field's key is followed by `:`, `=`,
+          // `?`, `!` or a terminator, never by a call signature.
+          if self.check(LParen) || self.check(Lt) {
+            private_method_names.push(raw_private_name)
+          }
+      }
+    }
+    // TS1031: `declare` may modify a class FIELD and nothing else, so any
+    // member whose name is followed by a call signature is an error. The
+    // rule was written for the constructor alone
+    // (`parserConstructorDeclaration4`) and stopped there, leaving
+    // `class C { declare Foo() { } }` silent
+    // (`parserMemberFunctionDeclaration5`).
+    //
+    // A field is unreachable from here: at this point the cursor sits
+    // immediately after the member name, so `declare x: (a: number) =>
+    // void` reads `Colon` and only a method reads `LParen` / `Lt`.
+    if has_declare && (self.check(LParen) || self.check(Lt)) {
       self.grammar_misuses.push(
-        "`declare` modifier cannot appear on a constructor",
+        if method_name == "constructor" {
+          "`declare` modifier cannot appear on a constructor"
+        } else {
+          "`declare` modifier cannot appear on a class method"
+        },
       )
     }
     if method_name != "<computed>" {
@@ -2231,21 +2708,32 @@ fn Parser::parse_class_body(
       if is_abstract_member {
         abstract_members.push(method_name)
       }
-      // TS4112/4113/4114 support: which members carried an `override`
-      // modifier (checked against the base chain, and -- under
-      // noImplicitOverride -- required on genuine overrides). Marker
-      // format matches other per-class sentinels; instance and static
-      // sides are distinguished.
-      if saw_override_modifier {
-        self.override_member_names.push(
-          (if is_static { "s:" } else { "i:" }) + method_name,
-        )
-      }
-      if has_declare {
-        self.override_member_names.push(
-          "<decl>" + (if is_static { "s:" } else { "i:" }) + method_name,
-        )
-      }
+    }
+    // TS4112/4113/4114 support: which members carried an `override`
+    // modifier (checked against the base chain, and -- under
+    // noImplicitOverride -- required on genuine overrides). Marker
+    // format matches other per-class sentinels; instance and static
+    // sides are distinguished.
+    //
+    // OUTSIDE the `!= "<computed>"` guard above, deliberately. That guard
+    // is right for the three lists it wraps — accessibility and
+    // abstractness are looked up BY NAME, and an opaque key has none —
+    // and it was inherited by this recording, which asks a different
+    // question: did a member carry `override` at all. So
+    // `class B extends A { override [foo]() {} }` recorded nothing and
+    // TS4113 could not fire. The checker decides what a `<computed>`
+    // entry may conclude; it is deliberately narrow, because
+    // `override [prop]()` IS legal when the base declares the key that
+    // `prop` resolves to (`overrideLateBindableName1`).
+    if saw_override_modifier {
+      self.override_member_names.push(
+        (if is_static { "s:" } else { "i:" }) + method_name,
+      )
+    }
+    if has_declare {
+      self.override_member_names.push(
+        "<decl>" + (if is_static { "s:" } else { "i:" }) + method_name,
+      )
     }
     let is_optional = self.match_(Question)
     let has_definite_assertion = self.match_(Bang)
@@ -2361,6 +2849,16 @@ fn Parser::parse_class_body(
             "`async` modifier cannot appear on a constructor declaration",
           )
         }
+        // TS1368: "Class constructor may not be a generator."
+        // `*constructor() {}` (constructorNameInGenerator). The `*` sits in
+        // the same modifier position as `async`, which is already rejected
+        // one line above; this is the fourth member of that list rather
+        // than a new rule.
+        if is_generator {
+          self.record_suppressible_grammar_misuse(
+            "class constructor may not be a generator",
+          )
+        }
         if saw_override_modifier {
           self.record_suppressible_grammar_misuse(
             "`override` modifier cannot appear on a constructor declaration",
@@ -2436,6 +2934,45 @@ fn Parser::parse_class_body(
       // overload signature). Used below to count constructor implementations
       // for TS2392.
       let has_body_block = not(consumed_semi) && self.check(LBrace)
+      // TS2393 ("Duplicate function implementation"): two methods of one
+      // name in one class body, both with a body
+      // (parserMemberFunctionDeclarationAmbiguities1, whose `public()`
+      // and `public public()` are the same member spelled twice).
+      // Overloads legally repeat a name, which is exactly why the test is
+      // on the BODY rather than the name.
+      if has_body_block && method_name != "<computed>" {
+        let mkey = (if is_static { "s:" } else { "i:" }) +
+          (match accessor_kind {
+            Some(k) => k
+            None => "m"
+          }) +
+          ":" +
+          method_name
+        if bodied_method_keys.get(mkey) is Some(_) {
+          self.grammar_misuses.push(
+            "duplicate function implementation: `" + method_name + "`",
+          )
+        } else {
+          bodied_method_keys[mkey] = true
+        }
+      }
+      // TS1249: a decorator can only decorate a method IMPLEMENTATION,
+      // not an overload signature. A bodiless method in an ambient
+      // (`declare class`) or abstract position is not an overload — it is
+      // the whole declaration — and legacy decorators accept those
+      // (decoratorInAmbientContext), so both are excluded. `constructor`
+      // is excluded because a decorated constructor is TS1206, a
+      // different rule that already fires above.
+      if member_decorated &&
+        not(has_body_block) &&
+        not(is_abstract_member) &&
+        not(has_declare) &&
+        not(self.in_ambient_module) &&
+        method_name != "constructor" {
+        self.grammar_misuses.push(
+          "a decorator can only decorate a method implementation, not an overload",
+        )
+      }
       // (Method-level TS7010 is intentionally not recorded: a bodiless
       // method with no implementation at all already reports TS2391, and
       // tsc does not flag an overload signature whose implementation
@@ -2567,6 +3104,14 @@ fn Parser::parse_class_body(
       if accessor_kind is None && key is Name("constructor") && !is_static {
         if has_body_block {
           ctor_impl_count += 1
+        } else {
+          // TS2390 support: a BODILESS constructor is an overload
+          // signature (or an ambient declaration). This counter existed
+          // only for implementations, and only the `>= 2` case was ever
+          // read — so `class C { constructor(); }`, a signature set with
+          // no implementation at all, was silent while its mirror image
+          // (two implementations, TS2392) was reported.
+          ctor_sig_count += 1
         }
         ctor = Some(func)
         // Materialize TS "parameter properties" (`constructor(readonly x:
@@ -2627,6 +3172,7 @@ fn Parser::parse_class_body(
       }
     } else {
       self.restore_local_type_param_bounds(local_type_param_bound_len)
+      let had_annotation = self.check(Colon)
       let field_type = if self.match_(Colon) {
         self.parse_type()
       } else {
@@ -2651,6 +3197,37 @@ fn Parser::parse_class_body(
         None
       }
       let _ = self.match_(Semicolon)
+      // TS7008 evidence: a field with NEITHER a type annotation NOR an
+      // initializer has no source of a type, so under `noImplicitAny` it
+      // is an implicit `any` member. Recorded here rather than decided in
+      // the checker because the annotation is what distinguishes it and
+      // the AST cannot: a missing annotation and an explicit `: any` are
+      // both `Any`.
+      //
+      // Every neighbour probed: `q = 1` (an initializer infers the type)
+      // and `r: number` are clean — `r` is TS2564, a different rule —
+      // while a `#private` name and the STATIC side both error like a
+      // plain one. An ambient class is exempt and needs no gate here,
+      // because `declare class` is parsed by `parse_declare_class` and
+      // never reaches this function.
+      if self.no_implicit_any &&
+        not(self.in_ambient_module) &&
+        not(had_annotation) &&
+        init is None &&
+        not(has_declare) {
+        // The SOURCE spelling, not the brand: `class_key_name` returns
+        // the mangled `__private_brand__N__u` for a private member, and
+        // a diagnostic naming that is a diagnostic nobody can act on.
+        let shown = if key_is_private_name && raw_private_name != "" {
+          "#" + raw_private_name
+        } else {
+          class_key_name(key)
+        }
+        // Deferred, not reported here: an assignment elsewhere in the
+        // class body can supply the type, and the body has not been read
+        // yet. `record_private_member_misuse` decides, after its scan.
+        implicit_any_candidates.push((shown, class_key_name(key)))
+      }
       // A `declare` field (`class C { declare x: T }`) is ambiently
       // typed and emits no runtime code, so TS never applies strict
       // property initialization (TS2564) to it. Fold it into the
@@ -2668,6 +3245,44 @@ fn Parser::parse_class_body(
     }
   }
   let _ = self.expect(RBrace)
+  self.record_private_member_misuse(
+    body_token_start, private_method_names, private_getters, private_setters, implicit_any_candidates,
+  )
+  // TS1207: a name whose GETTER and SETTER are both decorated. Checked
+  // here, where the whole body has been seen, and keyed on static-ness
+  // because the static and instance sides are separate members.
+  //
+  // Two gates, and the second is a limitation rather than a rule.
+  //
+  // LEGACY decorators only: under STANDARD ES decorators each accessor
+  // gets its own decorator application, so decorating both halves is
+  // legal. Seven corpus false positives in `esDecorators/` said so, and
+  // every probe written for this rule had carried
+  // `@experimentalDecorators: true`, so none of them could see it — the
+  // same gate direction as TS1206 for a `#private` member.
+  //
+  // And class DECLARATIONS only. Inside a class EXPRESSION body the
+  // decorator-mode flag is not reliable: `(class E { @dec get x() {…}
+  // @dec set x(v) {…} })` with NO directive fires while the identical
+  // class declaration stays silent, so some parser on that path carries
+  // the `true` default instead of the header-derived value. That is a
+  // pre-existing inconsistency affecting every decorator-mode-gated
+  // rule, not something this one should paper over, so the class
+  // expression is skipped and the inconsistency is recorded in TODO.md.
+  // It costs nothing here — `decoratorOnClassAccessor7` is six class
+  // declarations.
+  let ts1207_applies = self.experimental_decorators &&
+    not(self.in_class_expr_body)
+  for entry in (if ts1207_applies { decorated_accessors } else { [] }) {
+    if entry.contains(":get:") {
+      let counterpart = entry.replace(old=":get:", new=":set:")
+      if decorated_accessors.contains(counterpart) {
+        self.grammar_misuses.push(
+          "decorators cannot be applied to multiple get / set accessors of the same name",
+        )
+      }
+    }
+  }
   self.in_strict = prev_strict
   let mut overload_static_mix = false
   for name in ov_instance.keys() {
@@ -2710,8 +3325,8 @@ fn Parser::parse_class_body(
   }
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
-    index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
-    overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
+    ctor_sig_count, index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix,
+    overload_missing_impl, overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
     static_index_type_param_ref, index_naked_params,
   )
 }
@@ -2813,6 +3428,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     protected_members,
     abstract_members,
     ctor_impl_count,
+    ctor_sig_count,
     index_sig_modifier_misuse,
     abstract_member_with_body,
     overload_static_mix,
@@ -2861,6 +3477,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   if ctor_impl_count >= 2 {
     expr_class_sentinels.push("<multiple-ctor-impl>")
+  }
+  // TS2390: constructor signatures with no implementation. An AMBIENT
+  // class needs none (`declare class A { constructor(); }` is legal), but
+  // an ABSTRACT one does — probed, and the opposite of what "abstract
+  // members have no bodies" suggests.
+  if ctor_sig_count > 0 && ctor_impl_count == 0 {
+    expr_class_sentinels.push("<ctor-no-impl>")
   }
   if index_sig_modifier_misuse {
     expr_class_sentinels.push("<index-sig-modifier>")
@@ -3617,6 +4240,7 @@ fn Parser::parse_class_decl_with_abstract(
     protected_members,
     abstract_members,
     ctor_impl_count,
+    ctor_sig_count,
     index_sig_modifier_misuse,
     abstract_member_with_body,
     overload_static_mix,
@@ -3659,6 +4283,9 @@ fn Parser::parse_class_decl_with_abstract(
         }
       None => ()
     }
+  }
+  if ctor_sig_count > 0 && ctor_impl_count == 0 {
+    runtime_decl.duplicate_member_names.push("<ctor-no-impl>")
   }
   if ctor_impl_count >= 2 {
     runtime_decl.duplicate_member_names.push("<multiple-ctor-impl>")

@@ -72,12 +72,18 @@ ERRORS_SET="scripts/ts7_baselines/tsgo_errors_set.txt"
 SUBDIR=""
 MAX_FP=-1
 MAX_LEGAL_PARSEFAIL=-1
+MISS_LIST=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --max-fp) MAX_FP="$2"; shift 2 ;;
     --max-legal-parsefail) MAX_LEGAL_PARSEFAIL="$2"; shift 2 ;;
     --dir)    SUBDIR="$2"; shift 2 ;;
+    # Write every MISS file's path to FILE. The counts alone say how many
+    # we miss and nothing about WHICH, so ranking the remaining work means
+    # having the list; taking it from this loop rather than a second script
+    # is what keeps the two from disagreeing about what a MISS is.
+    --miss-list) MISS_LIST="$2"; shift 2 ;;
     *)        echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -93,6 +99,7 @@ fi
 declare -i tp=0 miss=0 fp=0 tn=0 tp_parse=0 pflegal=0 notrun=0
 fp_files=()
 pflegal_files=()
+[ -n "$MISS_LIST" ] && : > "$MISS_LIST"
 
 while IFS= read -r f; do
   # Multi-file cases need a project graph the single-file CLI lacks.
@@ -123,6 +130,7 @@ while IFS= read -r f; do
   if [ "${iss:-0}" -gt 0 ]; then flag=1; else flag=0; fi
   if   [ "$has" = 1 ] && [ "$flag" = 1 ]; then tp+=1
   elif [ "$has" = 1 ];                    then miss+=1
+    [ -n "$MISS_LIST" ] && echo "$f" >> "$MISS_LIST"
   elif [ "$flag" = 1 ];                   then fp+=1; fp_files+=("$f")
   else                                         tn+=1
   fi

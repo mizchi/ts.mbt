@@ -88,6 +88,12 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
   let mut saw_readonly = false
   let mut visibility = "public"
   let mut has_modifier = true
+  // TS1029: modifier ORDER. An accessibility modifier must precede
+  // `override`, so `override public foo` is an error and `public override
+  // foo` is not. The rule already existed for class MEMBERS; parameter
+  // properties never got it, because `skip_param_modifiers` consumed
+  // `override` only to discard it (`override11`).
+  let mut saw_override = false
   while has_modifier {
     has_modifier = false
     match self.peek().kind {
@@ -114,6 +120,13 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
             // other four (public/private/protected/readonly) are.
             if name != "override" {
               saw_property_modifier = true
+              if saw_override {
+                self.grammar_misuses.push(
+                  "`\{name}` modifier must precede `override` modifier",
+                )
+              }
+            } else {
+              saw_override = true
             }
             if name == "readonly" {
               saw_readonly = true
@@ -305,6 +318,23 @@ fn Parser::record_async_return_type_misuse(
   had_annotation : Bool,
   return_type : @ast.TsType,
 ) -> Unit {
+  // TS2505: "A generator cannot have a 'void' type annotation." Same
+  // question as the async rule below — does the declared return type
+  // contradict the function's KIND — so it lives in the same helper rather
+  // than in a second one; `is_generator` was already a parameter here, as
+  // the async rule's exemption.
+  //
+  // Only `void` is flagged. A generator's annotation is legally
+  // `Generator<…>` / `Iterator<…>` / `any` / a type parameter, and telling
+  // an arbitrary wrong annotation from a legal one needs the full
+  // assignability machinery; `void` is the one spelling tsc singles out
+  // with its own code, and it can never be right (a generator's call
+  // returns an object).
+  if is_generator && had_annotation && return_type is Void {
+    self.record_suppressible_grammar_misuse(
+      "a generator cannot have a `void` type annotation",
+    )
+  }
   if !is_async || is_generator || !had_annotation {
     return
   }
@@ -343,9 +373,46 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
     params.push(self.parse_param())
     while self.match_(Comma) {
       if self.check(RParen) {
+        // TS1013: a rest parameter may not have a trailing comma
+        // (`function f(...args,) {}` --
+        // trailingCommasInFunctionParametersAndArguments). A trailing
+        // comma after an ORDINARY parameter is legal, which is why the
+        // test is on the last parameter rather than on the comma, and
+        // this loop is the only place that can see both facts.
+        //
+        // An AMBIENT signature is exempt -- the corpus file says so in a
+        // comment, and tsc accepts `declare function f(...args,): void` --
+        // and needs no condition here: `declare function` and
+        // `declare class` route through
+        // `parse_declare_signature_params`, a different function
+        // entirely.
+        if params.length() > 0 && params[params.length() - 1].is_rest {
+          self.record_suppressible_grammar_misuse(
+            "a rest parameter cannot have a trailing comma",
+          )
+        }
         break
       }
       params.push(self.parse_param())
+    }
+  }
+  // TS2488: an ARRAY binding pattern's default must be iterable, so
+  // `function f([...r] = null) {}` -- and `= undefined`, and `= {}` --
+  // cannot destructure (restElementWithNullInitializer, whose fourth
+  // function, `= []`, is the legal one). Only the three definitely-
+  // non-iterable syntactic defaults are read; anything else, an
+  // identifier included, abstains.
+  for p in params {
+    match (p.binding, p.default) {
+      (Some(@ast.TsBinding::Array(_)), Some(d)) =>
+        match d {
+          NullLit | Var("undefined") | ObjectLit(_) =>
+            self.record_suppressible_grammar_misuse(
+              "an array destructuring pattern's default value must be iterable",
+            )
+          _ => ()
+        }
+      _ => ()
     }
   }
   // Parameter-list grammar rules, recorded here because this is the ONE
@@ -362,6 +429,17 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
     if p.is_rest && p.is_optional {
       self.record_suppressible_grammar_misuse(
         "a rest parameter cannot be optional",
+      )
+    }
+    // TS1048: `foo(...bar = 0)`. The other half of the same restriction —
+    // a rest parameter is always present as an array, so neither an
+    // optional marker nor a default can mean anything. Written here
+    // because it was NOT written here: TS1047 sat alone for as long as it
+    // did, which is the twenty-first instance in this repo of one rule
+    // landing at some of its spellings (parserParameterList10).
+    if p.is_rest && p.default is Some(_) {
+      self.record_suppressible_grammar_misuse(
+        "a rest parameter cannot have an initializer",
       )
     }
     // TS1016: a REQUIRED parameter after an optional one. Required means
@@ -1231,6 +1309,25 @@ fn Parser::parse_extends_clause_until_body(
     match self.peek().kind {
       LBrace if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 =>
         break
+      // TS2499 ("An interface can only extend an identifier /
+      // qualified-name with optional type arguments"):
+      // `interface C1 extends Foo?.Bar {}` is not a qualified name. This
+      // is batch CN's TS2500 for `implements` at the OTHER clause that
+      // takes a qualified name, and the asymmetry that made TS2500
+      // belong to `implements` alone does not apply here: a CLASS
+      // `extends` takes an expression (so `class C extends A?.B {}` is
+      // legal), but an INTERFACE `extends` takes a type reference. This
+      // function has exactly one caller, `parse_interface`, so the
+      // distinction is structural rather than a condition.
+      Question if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        angle_depth == 0 &&
+        self.peek_at(1).kind is Dot => {
+        self.grammar_misuses.push(
+          "an interface can only extend an identifier / qualified-name with optional type arguments",
+        )
+        self.advance() |> ignore
+      }
       Ident(name) if expect_name &&
         paren_depth == 0 &&
         bracket_depth == 0 &&
@@ -2843,6 +2940,48 @@ fn upsert_class_property(
 }
 
 ///|
+/// Record an ambient (`declare class`) accessor as a METHOD carrying the
+/// `get` / `set` tag, mirroring what the runtime class parser does for
+/// `class C { get x() {…} }`.
+///
+/// The property upsert next to each call site is what makes `a.x` read
+/// as a property, and it was for a long time the ONLY record — so every
+/// consumer that asks "is this base member an accessor or a data
+/// property" got the wrong answer for an ambient base. That is one
+/// defect with two faces: `declare class A { get x(): string }` beside
+/// `class B extends A { x = 1 }` is TS2610 and was silent, while the
+/// LEGAL accessor-over-accessor form was reported twice. The corpus has
+/// no file of the second shape, which is why FP 0 never caught it.
+///
+/// A body is `None` (an ambient member has none), which is also what
+/// distinguishes these from the runtime path's entries for any consumer
+/// that cares.
+fn record_ambient_accessor_method(
+  methods : Array[@ast.TsClassMethodDecl],
+  name : String,
+  tag : String,
+  is_static : Bool,
+  params : Array[(String, @ast.TsType)],
+  return_type : @ast.TsType,
+) -> Unit {
+  methods.push({
+    name,
+    type_params: [],
+    type_param_bounds: [],
+    params,
+    param_defaults: [],
+    param_is_rest: [],
+    return_type,
+    is_static,
+    body: None,
+    accessor: tag,
+    key_expr: None,
+    is_async: false,
+    is_generator: false,
+  })
+}
+
+///|
 fn Parser::parse_declare_class(
   self : Parser,
   is_abstract : Bool,
@@ -3044,7 +3183,7 @@ fn Parser::parse_declare_class(
       match member_name {
         Some(member_name) =>
           match accessor_kind {
-            Some("get") if is_public =>
+            Some("get") if is_public => {
               upsert_class_property(properties, {
                 name: member_name,
                 type_: return_type,
@@ -3054,6 +3193,15 @@ fn Parser::parse_declare_class(
                 has_initializer: false,
                 has_definite_assertion: false,
               })
+              record_ambient_accessor_method(
+                methods,
+                member_name,
+                "get",
+                is_static,
+                [],
+                return_type,
+              )
+            }
             Some("set") if is_public => {
               let setter_type = if params.length() > 0 {
                 let (_, type_) = params[0]
@@ -3070,6 +3218,14 @@ fn Parser::parse_declare_class(
                 has_initializer: false,
                 has_definite_assertion: false,
               })
+              record_ambient_accessor_method(
+                methods,
+                member_name,
+                "set",
+                is_static,
+                params,
+                @ast.TsType::Void,
+              )
             }
             _ =>
               if member_name == "constructor" &&

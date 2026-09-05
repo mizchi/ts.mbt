@@ -30,6 +30,22 @@ pub struct Parser {
   // sources (`.js` / `.ts`) flip this off so the declarations emit
   // a real binding.
   mut in_ambient_module : Bool
+  // True while parsing a class STATIC BLOCK body. A static block is
+  // neither a function nor module top level, and `in_function` /
+  // `in_async` cannot say so: a top-level class's static block leaves
+  // `in_function` false (which is what the TS2448 `<sb-read:>` walk
+  // relies on), and a class inside an `async` function leaves `in_async`
+  // true. Read by the `await using` rules (TS18054).
+  mut in_static_block : Bool
+  // Whether the declarator just parsed by `parse_var_decl_type` carried
+  // a type ANNOTATION. The returned type cannot say: a missing
+  // annotation and an explicit `: any` are both `Any`, and TS2493 needs
+  // to tell them apart. Read at the top of `parse_var_decl_item`.
+  mut last_var_decl_annotated : Bool
+  // True while parsing the members of a `const enum`. TS2474 restricts
+  // those initializers to constant expressions, and a plain `enum`
+  // accepts the same initializer, so the flag is the whole difference.
+  mut in_const_enum : Bool
   labels : Array[String] // for labeled break/continue validation
   src : String
   allow_jsx : Bool
@@ -129,6 +145,11 @@ pub struct Parser {
   // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
   // opts back in over `@strict: false`.
   no_implicit_any : Bool
+  // `useUnknownInCatchVariables`: an unannotated `catch (e)` binding is
+  // `unknown` rather than `any`, so using it without narrowing is
+  // TS18046. Follows `strict`, which the conformance baselines treat as
+  // ON for a directive-less file (same convention as noImplicitAny).
+  unknown_catch_variables : Bool
   // True when the test header carries `@experimentaldecorators: true`
   // (legacy decorators). Parameter decorators are only legal in that
   // mode — under standard (ES) decorators they are TS1206.
@@ -197,6 +218,11 @@ pub struct Parser {
   // Member names that carried an `override` modifier while parsing class
   // bodies ("i:"/"s:" prefixed for instance/static). Drained per class
   // into `<override-member:...>` sentinels for TS4112/4113/4114.
+  // TS6133: how many times each `#private` NAME is declared in this
+  // file (a get/set pair counts twice — two declarations of one member).
+  // Compared against the number of `PrivateIdent` tokens carrying it,
+  // which is an exact upper bound on declarations + reads.
+  private_decl_counts : Map[String, Int]
   override_member_names : Array[String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
@@ -283,6 +309,9 @@ pub fn Parser::new_with_strict_and_jsx(
     in_iteration: false,
     in_switch: false,
     in_ambient_module: false,
+    in_static_block: false,
+    last_var_decl_annotated: false,
+    in_const_enum: false,
     labels: [],
     src: "",
     allow_jsx,
@@ -307,6 +336,7 @@ pub fn Parser::new_with_strict_and_jsx(
     no_bound_inline: false,
     target_es6_plus: false,
     no_implicit_any: false,
+    unknown_catch_variables: false,
     experimental_decorators: true,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
@@ -318,6 +348,7 @@ pub fn Parser::new_with_strict_and_jsx(
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
@@ -362,6 +393,24 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
   }
+  if lexer.unterminated_block_comment {
+    grammar_misuses.push("`*/` expected")
+  }
+  if lexer.unterminated_regex {
+    grammar_misuses.push("unterminated regular expression literal")
+  }
+  if lexer.unterminated_string {
+    grammar_misuses.push("unterminated string literal")
+  }
+  for _i in 0..<lexer.empty_radix_literal_count {
+    grammar_misuses.push("hexadecimal digit expected")
+  }
+  for _i in 0..<lexer.escaped_keyword_count {
+    grammar_misuses.push("keywords cannot contain escape characters")
+  }
+  for _i in 0..<lexer.unbalanced_regex_group_count {
+    grammar_misuses.push("`)` expected in a regular expression literal")
+  }
   // Whole-source directive markers, collected in one pass (each used to
   // be its own full-source scan — two of them via lowered copies).
   let (has_ts_suppression, noimplicitthis_off, has_filename_directive) = scan_source_directive_flags(
@@ -393,10 +442,20 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   for _i in 0..<lexer.legacy_octal_literal_count {
     grammar_misuses.push("octal literals are not allowed")
   }
+  for _i in 0..<lexer.leading_zero_decimal_count {
+    grammar_misuses.push("decimals with leading zeros are not allowed")
+  }
   // Module-scoped flag marker for the override checks (TS4114 fires only
   // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.
   if detect_no_implicit_override(head) {
     grammar_misuses.push("<noimplicitoverride-on>")
+  }
+  // TS4111 fires only under `@noPropertyAccessFromIndexSignature: true`:
+  // reaching an index-signature member with dot notation is legal
+  // TypeScript by default and an error only when the option asks for the
+  // bracket form.
+  if detect_no_property_access_from_index_signature(head) {
+    grammar_misuses.push("<nopropertyaccessfromindexsignature-on>")
   }
   // TS2318 evidence: lib-set directives that provably remove global types
   // the checker requires. `@noLib: true` removes ALL of them (every ran
@@ -444,11 +503,45 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
       }
     None => ()
   }
+  // TS1346 / TS1347 evidence: a `"use strict"` prologue in a function with
+  // a non-simple parameter list is an error only from es2016 up. Below
+  // that TypeScript downlevels the default / rest / pattern parameter, so
+  // the EMITTED list is simple and the directive is fine — probed at es5,
+  // es2015 (both accepted) and es2016 (both codes).
+  //
+  // A file with NO `@target:` is deliberately left OFF even though tsc
+  // 6.0.3 reports both codes for one, because that says the local
+  // compiler's default target is es2016 or later and says nothing about
+  // TS7's. Guessing wrong there fires on every directive-less file in the
+  // corpus, so the abstention costs a MISS where the guess could cost a
+  // false positive.
+  match detect_target_list(head_lower) {
+    Some(targets) =>
+      if target_list_reaches_year(targets, 2016) {
+        grammar_misuses.push("<target-reaches-es2016>")
+      }
+    None => ()
+  }
   // Decorator-mode marker so checker-side decorator signature rules can
   // pick the runtime invocation arity (legacy = 1 arg, standard = 2).
   let experimental_decorators = detect_experimental_decorators(head_lower)
   if experimental_decorators {
     grammar_misuses.push("<experimental-decorators>")
+  }
+  // TS2725 evidence: under `module: commonjs` a class may not be named
+  // `Object`, because the emitted `exports.Object = Object` shadows the
+  // global the helpers use. Probed: the error does not depend on the
+  // class being exported, nor on it being at top level, and it applies
+  // to `Object` alone -- `Function` and `Array` are accepted.
+  if detect_commonjs_module(head_lower) {
+    grammar_misuses.push("<module-commonjs>")
+  }
+  // TS2354 evidence: `@importHelpers: true` makes an emit helper an
+  // IMPORT from `tslib`, which the single-file checker can never resolve.
+  // Only the conformance header spelling sets this, so real-world code
+  // (where the option lives in a tsconfig) cannot reach the diagnostic.
+  if detect_import_helpers(head) {
+    grammar_misuses.push("<import-helpers>")
   }
   // Marker for the TS2695 comma-operator check, which tsc disables under
   // `@allowUnreachableCode: true`.
@@ -470,6 +563,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_iteration: false,
     in_switch: false,
     in_ambient_module: false,
+    in_static_block: false,
+    last_var_decl_annotated: false,
+    in_const_enum: false,
     labels: [],
     src,
     allow_jsx,
@@ -494,6 +590,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(head_lower),
     no_implicit_any: detect_no_implicit_any(head),
+    unknown_catch_variables: detect_unknown_catch_variables(head),
     experimental_decorators,
     template_invalid_escape_positions: lexer.template_invalid_escape_positions,
     record_implicit_any_params: false,
@@ -505,6 +602,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
@@ -961,6 +1059,53 @@ fn detect_no_implicit_override(head : String) -> Bool {
 }
 
 ///|
+/// True when the conformance header enables
+/// `@noPropertyAccessFromIndexSignature`. `head` is the case-preserved
+/// leading window.
+fn detect_no_property_access_from_index_signature(head : String) -> Bool {
+  head.contains("@noPropertyAccessFromIndexSignature: true") ||
+  head.contains("@noPropertyAccessFromIndexSignature:true")
+}
+
+///|
+/// True when the conformance header enables `@importHelpers`. `head` is
+/// the case-preserved leading window.
+fn detect_import_helpers(head : String) -> Bool {
+  head.contains("@importHelpers: true") || head.contains("@importHelpers:true")
+}
+
+///|
+/// True when an unannotated `catch (e)` binding is `unknown` rather than
+/// `any` (TS18046). Follows `strict`: ON unless explicitly disabled.
+///
+/// A multi-valued directive (`@useUnknownInCatchVariables: true,false`)
+/// counts as ON, because the harness runs each variant and the file has
+/// errors if ANY run does — `controlFlowAliasingCatchVariables` is
+/// exactly that spelling.
+fn detect_unknown_catch_variables(head : String) -> Bool {
+  if head.contains("@useUnknownInCatchVariables: true") ||
+    head.contains("@useUnknownInCatchVariables:true") {
+    return true
+  }
+  if head.contains("@useUnknownInCatchVariables: false") ||
+    head.contains("@useUnknownInCatchVariables:false") {
+    return false
+  }
+  if head.contains("@strict: false") || head.contains("@strict:false") {
+    return false
+  }
+  true
+}
+
+///|
+/// True when the conformance header enables `@noUnusedLocals`. Default
+/// OFF, matching the compiler. `head` is the case-preserved window.
+fn detect_no_unused_locals(head : String) -> Bool {
+  head.contains("@noUnusedLocals: true") ||
+  head.contains("@noUnusedLocals:true")
+}
+
+///|
 /// True when the conformance header enables `@allowUnreachableCode`.
 /// tsc gates the TS2695 comma-operator check on this flag being off.
 /// `head` is the case-preserved leading window.
@@ -1078,15 +1223,27 @@ fn lib_list_grants_year(libs : String, year : Int) -> Bool {
 }
 
 ///|
-fn target_list_reaches_es2017(targets : String) -> Bool {
+/// True when any token of the `@target:` list names ES-`year` or later.
+///
+/// The harness runs a comma list once per entry and the file counts as
+/// erroring if ANY run errors, so a rule that fires at HIGH targets asks
+/// this (does some run reach the year) and a rule that fires at LOW ones
+/// asks `target_list_has_below_year`. Parameterised because it was
+/// written out twice at 2017 before a third year needed it.
+fn target_list_reaches_year(targets : String, year : Int) -> Bool {
   for tok in targets.split(",") {
     let t = tok.to_string().trim().to_owned()
     match es_token_year(t) {
-      Some(y) => if y >= 2017 { return true }
+      Some(y) => if y >= year { return true }
       None => ()
     }
   }
   false
+}
+
+///|
+fn target_list_reaches_es2017(targets : String) -> Bool {
+  target_list_reaches_year(targets, 2017)
 }
 
 ///|
@@ -1106,6 +1263,29 @@ fn target_list_has_below_es2017(targets : String) -> Bool {
 
 ///|
 /// `@experimentalDecorators: true` from the pre-lowered leading window.
+/// True when the conformance header names `commonjs` in its `@module:`
+/// list. Only that directive spelling sets it, so real-world code (where
+/// the option lives in a tsconfig) never reaches the rules that read it.
+fn detect_commonjs_module(head_lower : String) -> Bool {
+  match head_lower.find("@module:") {
+    Some(idx) => {
+      let after = head_lower[idx + "@module:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      for raw in line.split(",") {
+        if raw.trim().to_owned() == "commonjs" {
+          return true
+        }
+      }
+      false
+    }
+    None => false
+  }
+}
+
+///|
 fn detect_experimental_decorators(head : String) -> Bool {
   match head.find("@experimentaldecorators:") {
     Some(idx) => {
