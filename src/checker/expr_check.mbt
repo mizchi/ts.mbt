@@ -27,6 +27,19 @@ priv struct Resolver {
   interfaces : Map[String, @ast.TsInterface]
   classes : Map[String, @ast.TsClassDecl]
   type_aliases : Map[String, @ast.TsTypeAlias]
+  // The standard TypeScript utility types (`Exclude`, `ReturnType`,
+  // `Partial`, …) as alias bindings, consulted only when
+  // `type_aliases` has no entry for a name — so a module that declares
+  // its own `Exclude` still shadows the standard one.
+  //
+  // Held on the resolver rather than looked up through a helper because
+  // `standard_utility_types()` allocates an 18-entry map and
+  // `Resolver::unwrap` runs on every assignability diagnostic: this is
+  // one allocation per resolver instead of one per unwrap. Keeping the
+  // whole table (rather than a hand-written list of the names that
+  // happen to matter) is deliberate — a second copy of those names is
+  // the "one rule written in two places" defect this repo keeps finding.
+  standard_aliases : Map[String, AliasBinding]
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -177,6 +190,7 @@ fn Resolver::empty() -> Resolver {
     interfaces: {},
     classes: {},
     type_aliases: {},
+    standard_aliases: standard_utility_types(),
     globals: {},
     signatures: {},
     func_type_params: {},
@@ -1785,6 +1799,61 @@ fn Resolver::unwrap_element(
 }
 
 ///|
+/// The CONSTRUCT signature of `typeof ClassName`, or `None` when it
+/// cannot be known.
+///
+/// `Resolver::unwrap`'s `TypeOf` arm resolves a name through
+/// `self.globals`, and a class is recorded in `self.classes`, so
+/// `typeof C` resolves to nothing at all — which is why
+/// `InstanceType<typeof C>` and `ConstructorParameters<typeof C>` both
+/// abstained however well the `infer` matcher worked.
+///
+/// This deliberately answers ONLY the construct question, and is called
+/// only from the conditional decision. The constructor side of a class
+/// also carries its STATIC members, and `resolver_class_method_signature`
+/// says in its own comment that those are not modelled — so resolving
+/// `typeof C` to a bare `Constructor(...)` everywhere would make every
+/// static access through such a binding look like a missing property.
+/// Supplying it where a construct signature is what the pattern asked
+/// for cannot do that.
+///
+/// Two shapes abstain rather than guess, both for the same reason — the
+/// real signature is somewhere this function cannot see:
+///  - `extends mixin(Base)`, where `<expr-base>` marks a base whose
+///    constructor is the result of a call (the guard
+///    `class_constructor_signature` already applies for `new`);
+///  - a class with no constructor of its own but with a base, which
+///    INHERITS the base's constructor.
+/// A class with no constructor and no base is `new () => C`, which is
+/// what TypeScript gives it.
+fn Resolver::class_construct_signature(
+  self : Resolver,
+  name : String,
+) -> @ast.TsType? {
+  guard self.classes.get(name) is Some(cls) else { return None }
+  if cls.base_names.contains("<expr-base>") {
+    return None
+  }
+  match cls.constructor_params {
+    Some(params) => {
+      let types : Array[@ast.TsType] = []
+      for p in params {
+        types.push(p.1)
+      }
+      Some(Constructor(types, Named(name), cls.is_abstract))
+    }
+    // No constructor of its own: implicit `new () => C` only when there
+    // is no base to inherit one from.
+    None =>
+      if cls.base_names.length() == 0 {
+        Some(Constructor([], Named(name), cls.is_abstract))
+      } else {
+        None
+      }
+  }
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = {}
   let mut cur = ty
@@ -1819,27 +1888,84 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // shadows the name with its own alias, handled below).
       Applied("NoInfer", [inner]) if !self.type_aliases.contains("NoInfer") =>
         cur = inner
+      // `ThisType<T>` is declared in `lib.es5.d.ts` as
+      // `interface ThisType<T> {}` — an EMPTY marker whose only job is to
+      // set the contextual `this` type of an object literal's methods. It
+      // contributes no members, so structurally it is `{}` and
+      // `PropDesc<U> & ThisType<T>` is satisfied by a `PropDesc<U>`.
+      //
+      // The standard-utility table encodes it as the IDENTITY (`Named(T)`)
+      // and says in its own comment why: without a contextual-inference
+      // engine that is the useful answer to "what is `this` in here".
+      // That is a different question from "what members does this type
+      // have", and taking the identity answer for the structural one
+      // makes an intersection demand every member of `T` — which is
+      // exactly the false positive the conformance gate caught on
+      // `thisTypeInObjectLiterals2` the moment the resolver started
+      // consulting that table. So the marker is resolved here, ahead of
+      // the generic `Applied` arm, and the shared table is left alone for
+      // the consumer it was written for.
+      Applied("ThisType", _) if !self.type_aliases.contains("ThisType") =>
+        cur = Object([])
       Applied(n, args) =>
         if seen.contains(n) {
           keep_going = false
         } else {
-          match self.type_aliases.get(n) {
-            Some(aliased) if aliased.type_params.length() > 0 => {
+          // A module's own alias first, then the standard utility table.
+          // Both arrive here as (type_params, body); the module side
+          // wins on a name conflict, which is what lets a module
+          // override a stdlib utility shape.
+          let binding : (Array[String], @ast.TsType)? = match
+            self.type_aliases.get(n) {
+            Some(aliased) if aliased.type_params.length() > 0 =>
+              Some((aliased.type_params, aliased.type_))
+            Some(_) => None
+            None =>
+              // Only the CONDITIONAL-bodied entries of the standard
+              // table are taken here, and the gate is the body's SHAPE
+              // rather than a list of names — a second copy of those
+              // names is the defect this whole change exists to remove.
+              //
+              // The split is not arbitrary, it is the line between the
+              // entries that were inert and the ones that already work.
+              // A conditional body reduces to a concrete type by
+              // DECIDING, which nothing on this path did, so
+              // `Exclude` / `Extract` / `NonNullable` / `ReturnType` /
+              // `Parameters` / `Awaited` were all silent. The
+              // property-shape entries (`Partial`, `Required`,
+              // `Readonly`, `Pick`, `Record`, `Omit`) are mapped types
+              // over `keyof`, and `lookup_field` already has dedicated
+              // arms for them — resolving those here instead moves the
+              // shape out from under those arms and breaks them. That is
+              // measured, not predicted: wiring the whole table failed
+              // three tests (`Record<string, number>` losing `r.foo`,
+              // `Partial<Config>` losing `p.name`'s `| undefined`, and a
+              // `Record`-typed `satisfies` target), all of them real
+              // regressions rather than tests pinning old behaviour.
+              match self.standard_aliases.get(n) {
+                Some(std) if std.type_params.length() > 0 &&
+                  std.body is Conditional(_, _, _, _) =>
+                  Some((std.type_params, std.body))
+                _ => None
+              }
+          }
+          match binding {
+            Some((type_params, body)) => {
               seen[n] = true
               let bindings : Map[String, @ast.TsType] = {}
-              let limit = if args.length() < aliased.type_params.length() {
+              let limit = if args.length() < type_params.length() {
                 args.length()
               } else {
-                aliased.type_params.length()
+                type_params.length()
               }
               let mut i = 0
               while i < limit {
-                bindings[aliased.type_params[i]] = args[i]
+                bindings[type_params[i]] = args[i]
                 i = i + 1
               }
-              cur = substitute_params(aliased.type_, bindings)
+              cur = substitute_params(body, bindings)
             }
-            _ => keep_going = false
+            None => keep_going = false
           }
         }
       // `typeof varName` in type position — resolve the variable's current type.
@@ -1949,6 +2075,99 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
         let simplified = simplify_type(cur)
         match simplified {
           TemplateLiteralType(_, _) => keep_going = false
+          _ => cur = simplified
+        }
+      }
+      // A CONDITIONAL is the sixth computed-type form this loop reduces,
+      // and the only one that was missing: `Keyof`, `TypeOf`,
+      // `MappedType`, `IndexedAccess` and `TemplateLiteralType` all
+      // reduce above, and `Conditional` fell through to the catch-all.
+      //
+      // What that cost was NOT the conditional evaluator, which works:
+      // an inline `string extends string ? number : boolean` and a
+      // non-generic alias for one both resolve already, because neither
+      // needs anything substituted first. It was the COMPOSITION with a
+      // generic alias -- `type E<T> = T extends string ? … ` applied as
+      // `E<string>` substitutes correctly in the `Applied` arm above and
+      // then arrived here unreduced. That matters far beyond conditional
+      // types themselves: every standard utility type is a generic alias
+      // over a conditional body, so `ReturnType`, `Exclude`,
+      // `NonNullable`, `Parameters` and `Awaited` were all inert, and a
+      // `.d.ts` using them type-checked by ABSTAINING.
+      //
+      // The two operands are resolved through the resolver BEFORE
+      // simplifying, for the reason the `IndexedAccess` arm below
+      // records in its own comment: `simplify_type` carries no resolver,
+      // so a `Named` operand hits its catch-all and `extends_decision`
+      // comes back `None`. Only the operands are resolved, not the
+      // branches -- a branch is the RESULT and the caller unwraps it in
+      // turn, while resolving both eagerly would expand types the
+      // decision is about to discard.
+      //
+      // `simplify_type` returns the `Conditional` unchanged whenever
+      // `extends_decision` cannot decide. That is what makes this arm
+      // terminate (an undecided conditional stops the loop rather than
+      // re-entering it) and what keeps an undecidable conditional a MISS
+      // instead of a wrong answer.
+      Conditional(check, ext, t_branch, f_branch) => {
+        // An `infer` pattern is matched against the EXTENDS type as
+        // WRITTEN: resolving that side could rewrite the very shape the
+        // pattern exists to align with. Only the check side is resolved
+        // when a marker is present.
+        let has_infer = contains_infer_marker(ext)
+        // `unwrap` leaves a `TypeOf` untouched when the name is not a
+        // global, and a CLASS is not one — so `typeof C` arrives here
+        // unresolved, which is why `InstanceType<typeof C>` and
+        // `ConstructorParameters<typeof C>` abstained however well the
+        // `infer` matcher worked. Its construct signature is supplied
+        // for the DECISION only; see `class_construct_signature` for why
+        // it is not supplied everywhere.
+        let resolved_check = match self.unwrap(check) {
+          TypeOf(n) =>
+            match self.class_construct_signature(n) {
+              Some(ctor) => ctor
+              None => TypeOf(n)
+            }
+          other => other
+        }
+        let probe = @ast.TsType::Conditional(
+          resolved_check,
+          if has_infer {
+            ext
+          } else {
+            self.unwrap(ext)
+          },
+          t_branch,
+          f_branch,
+        )
+        let simplified = simplify_type(probe)
+        match simplified {
+          Conditional(_, _, _, _) =>
+            // `simplify_type` decides through the three-valued
+            // `extends_decision`, which cannot bind an `infer` — so
+            // every infer-shaped utility (`ReturnType`, `Parameters`,
+            // `Awaited`, `InstanceType`, …) abstained here.
+            // `reduce_conditional` is the reducer that can: it runs
+            // `match_infer_pattern` and substitutes the captures into
+            // the true branch.
+            //
+            // It is tried ONLY for the infer case, and deliberately not
+            // as a general fallback. Its non-infer path is
+            // `is_assignable_to`, which is two-valued: an undecidable
+            // `extends` would take the FALSE branch and answer
+            // confidently exactly where `extends_decision` correctly
+            // says "don't know". Keeping it behind `has_infer` is what
+            // stops this arm from turning an abstention into a wrong
+            // answer.
+            if has_infer {
+              let reduced = reduce_conditional(probe)
+              match reduced {
+                Conditional(_, _, _, _) => keep_going = false
+                _ => cur = reduced
+              }
+            } else {
+              keep_going = false
+            }
           _ => cur = simplified
         }
       }
@@ -11252,6 +11471,130 @@ fn single_call_signature_params(
 }
 
 ///|
+/// TS2769 ("No overload matches this call") for a callee that is a union
+/// of call signatures — which is how an overload set ingests.
+///
+/// `check_union_callee_arity` is the complementary rule and is
+/// deliberately kept off overload sets: it requires EVERY member to
+/// accept, which is right for a union-typed VALUE and wrong for an
+/// overload set, where one match is enough. That exclusion was correct
+/// and left a hole, because nothing took over — an overloaded call had
+/// its arguments checked by nothing at all, so `g(true)` against
+/// `g(a: string)` / `g(a: number)` was silent while the identical call
+/// to a single-signature `h(a: string)` was reported. Most of the
+/// standard library is overloaded, so that hole is wide on real input.
+///
+/// This reports only when EVERY member is PROVEN unable to accept the
+/// call, which makes it sound for a union-typed value too: if no
+/// constituent can accept, the call is wrong under either reading, so
+/// the two rules need not be told apart.
+///
+/// A member is proven unacceptable only by:
+///  - arity — fewer arguments than its required count, or more than its
+///    parameter count when it has no rest parameter;
+///  - a definite PRIMITIVE argument against a definite primitive
+///    parameter that it is not assignable to.
+///
+/// Everything else abstains, and abstention is per-MEMBER with an early
+/// return: one member that merely MIGHT accept silences the whole call.
+/// That is what keeps a generic overload (`f<T>(x: T): T`, whose
+/// parameter is a bare `Named`), an object-typed parameter, a rest
+/// parameter, a spread argument and an unreadable member from ever
+/// producing a finding.
+fn check_overload_set_no_match(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  callee_ty : @ast.TsType,
+  args : Array[@ast.TsExpr],
+  call_path : String,
+) -> Unit {
+  guard ctx.resolver.unwrap(callee_ty) is Union(members) else { return }
+  if members.length() < 2 {
+    return
+  }
+  // A spread hides the argument count entirely.
+  for a in args {
+    if a is Spread(_) {
+      return
+    }
+  }
+  // Every member has to be a call signature this can read; one that is
+  // not might accept anything.
+  let sigs : Array[(Array[@ast.TsType], Array[Bool])] = []
+  for m in members {
+    match callable_source_params(m, ctx.resolver) {
+      Some(pair) => sigs.push(pair)
+      None => return
+    }
+  }
+  let n = args.length()
+  let arg_tys : Array[@ast.TsType] = []
+  for a in args {
+    arg_tys.push(ctx.resolver.unwrap(infer_expr(env, ctx.resolver, a)))
+  }
+  for sig in sigs {
+    let (ps, optional_params) = sig
+    let mut has_rest = false
+    for p in ps {
+      if p is Rest(_) {
+        has_rest = true
+      }
+    }
+    // Proven by arity. The minimum is computed here rather than through
+    // `required_arity_from_callable_source` because a `declare function`
+    // overload arrives with its optionality WIDENED into the parameter
+    // type (`a?: string` becomes `string | undefined`) and an empty
+    // `optional_params` — which is the hazard
+    // `check_union_callee_arity`'s own comment records ("two callables
+    // can have identical widened parameter types while differing in
+    // whether that parameter was written with `?`"), and it cost a false
+    // positive here: `t()` against `t(a?: string)` was reported.
+    //
+    // A parameter that ACCEPTS undefined is treated as omittable. That
+    // over-counts optionals — a genuinely required `a: string |
+    // undefined` is counted omittable too — and over-counting only ever
+    // makes this proof weaker, so it costs a MISS and never a finding.
+    // Batch CU's decorator arity took the same trade for the same reason.
+    let mut min_arity = 0
+    for i in 0..<ps.length() {
+      let declared_optional = i < optional_params.length() && optional_params[i]
+      if !(ps[i] is Rest(_)) &&
+        !declared_optional &&
+        !(ps[i] is Void) &&
+        !type_accepts_undefined(ctx.resolver.unwrap(ps[i])) {
+        min_arity = i + 1
+      }
+    }
+    if n < min_arity {
+      continue
+    }
+    if !has_rest && n > ps.length() {
+      continue
+    }
+    // Proven by a primitive-to-primitive mismatch.
+    let mut proven_bad = false
+    for i in 0..<n {
+      if i >= ps.length() {
+        break
+      }
+      let pt = ctx.resolver.unwrap(ps[i])
+      if is_definite_primitive_type(pt) &&
+        is_definite_primitive_type(arg_tys[i]) &&
+        !is_assignable_to(arg_tys[i], pt) {
+        proven_bad = true
+        break
+      }
+    }
+    if proven_bad {
+      continue
+    }
+    // This member might accept — the call stands.
+    return
+  }
+  record_unfiltered(ctx, call_path, "no overload matches this call")
+}
+
+///|
 /// TS2554 for a union-of-functions callee whose members have *different*
 /// signatures. TypeScript first reduces same-arity union signatures to the
 /// narrowest parameter domain: `(x: "a" | undefined)` beats
@@ -17559,6 +17902,18 @@ fn check_call_args_in_expr(
               if ctx.resolver.signatures.get(name) is None {
                 check_union_callee_arity(ctx, other, args, "call `\{name}`")
               }
+              // Unlike the every-member arity rule above, this one is
+              // sound for an overload set AND for a union-typed value,
+              // so it is not gated on `signatures`: it fires only when
+              // NO member can accept, which is wrong under either
+              // reading.
+              check_overload_set_no_match(
+                env,
+                ctx,
+                other,
+                args,
+                "call `\{name}`",
+              )
               if is_construct_only_callee(other) {
                 record_unfiltered(
                   ctx,
@@ -17669,6 +18024,7 @@ fn check_call_args_in_expr(
           // can have identical widened parameter types while differing in
           // whether that parameter was written with `?`.
           check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          check_overload_set_no_match(env, ctx, raw_callee_ty, args, "call")
           match union_common_call_params(callee_ty, ctx.resolver) {
             Some(params) => check_arguments(env, params, args, ctx, "call")
             None => ()
@@ -32801,11 +33157,42 @@ fn check_interface_extends_compat(
     }
   }
 
+  // Interface declarations MERGE, and an index signature constrains the
+  // members of the MERGED type — so the two halves of
+  //
+  //     interface A { [x: number]: string }
+  //     interface A { [y: string]: { length: string } }
+  //
+  // conflict with each other and neither half conflicts with itself.
+  // This loop reads `module_.interfaces`, the per-DECLARATION list, so
+  // every cross-declaration conflict was invisible: the identical
+  // members written in ONE body are reported and the same members split
+  // across two are silent (mergedInterfacesWithIndexers2).
+  //
+  // A name with several declarations is therefore checked once, on the
+  // merged interface from the resolver, and skipped here — checking both
+  // would report every within-one-body conflict twice.
+  //
+  // Only names THIS module declares more than once are looked up, rather
+  // than iterating `resolver.interfaces` wholesale: that table also
+  // holds interfaces ingested from imported modules and the lib, and
+  // those are not this module's to report on.
+  let iface_decl_counts : Map[String, Int] = {}
+  for iface in module_.interfaces {
+    iface_decl_counts[iface.name] = (match iface_decl_counts.get(iface.name) {
+        Some(v) => v
+        None => 0
+      }) +
+      1
+  }
   for iface in module_.interfaces {
     // Generic interfaces are processed too: a property whose type is one of
     // the interface's own type parameters resolves to a bare `Named` that is
     // not object-shaped and not scalar, so `violates_index_value` leaves it
     // alone -- only concrete object / scalar properties are decided.
+    if iface_decl_counts.get(iface.name) is Some(n) && n > 1 {
+      continue
+    }
     check_index_props(
       iface.index_signatures,
       iface.fields,
@@ -32850,6 +33237,38 @@ fn check_interface_extends_compat(
       if inherited.length() > 0 {
         check_index_props(inherited, iface.fields, "interface \{iface.name}")
       }
+    }
+  }
+  // The merged pass for the names skipped above. `merge_interface_group`
+  // concatenates `index_signatures` and folds `fields`, so the entry in
+  // the resolver already IS the type an index signature has to constrain.
+  let merged_seen : Map[String, Unit] = {}
+  for iface in module_.interfaces {
+    if !(iface_decl_counts.get(iface.name) is Some(n) && n > 1) {
+      continue
+    }
+    if merged_seen.contains(iface.name) {
+      continue
+    }
+    merged_seen[iface.name] = ()
+    match resolver.interfaces.get(iface.name) {
+      Some(merged) => {
+        check_index_props(
+          merged.index_signatures,
+          merged.fields,
+          "interface \{merged.name}",
+        )
+        if merged.type_params.length() == 0 {
+          check_num_vs_str_sigs(
+            merged.index_signatures,
+            "interface \{merged.name}",
+          )
+        }
+      }
+      // No merged entry (a prefix mismatch, or a name the resolver did
+      // not ingest) — abstain rather than fall back to the halves, which
+      // is what produced the silence this pass exists to remove.
+      None => ()
     }
   }
   // Non-generic classes by name for the base-chain walks below.

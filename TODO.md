@@ -4395,3 +4395,252 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    the IteratorObject `using` fixtures (need lib-level
    `Iterator.prototype[Symbol.dispose]` type modeling), and NOBASE
    variant-baseline files (oracle artifacts, not checker gaps).
+
+## Checker conformance triage (MISS 176 -> a declared scope)
+
+Full analysis and the measurements behind it: `docs/checker-triage.md`.
+
+`MISS 176` is not a backlog. It sums work worth doing now with files
+nobody should ever fix, so it can rank nothing and can never reach zero.
+That is the defect that retired `docs/checker-priority.md`.
+
+All 176 classified by the MACHINERY a rule would need (not by error code
+— a code is not a difficulty class):
+
+| family | files | | family | files |
+|---|---|---|---|---|
+| assignability-core | 48 | | strict-null / narrowing | 8 |
+| symbol + computed key | 16 | | `this` typing | 7 |
+| other (singletons) | 16 | | decorator signature | 7 |
+| legacy / broken syntax | 15 | | locally accepted | 6 |
+| mapped / conditional / template | 13 | | resource mgmt (`using`) | 6 |
+| generic inference | 11 | | overload resolution | 2 |
+| iterator protocol | 11 | | implicit-any / strict | 10 |
+
+The biggest bucket ranks no work: all 48 `assignability-core` files open
+to ~10 unrelated causes (variadic tuples, intersections, contextual
+typing, `globalThis`, index-signature subtyping, spread types).
+
+Feature frequency, measured over 3,000 real `.d.ts` + 2,697 real `.ts`:
+conditional type **345**, `unique symbol` 183, mapped 143, `this` return
+115, index signature 102, `[Symbol.x]` key 72, template-literal 57/151,
+variadic tuple 20, **`using` 0**, **decorator 1**.
+
+CAPABILITY PROBE (the table that reorders everything — the classification
+says what a file NEEDS, not what we HAVE, and guessing at that was wrong
+twice). Common shape of each family, probed against `tscheck --strict`
+inside a function body:
+
+- CAUGHT: basic assignability, argument count, missing property, mapped
+  type via generic alias, `keyof`, strictNullChecks, `this` return type,
+  index signature, variadic tuple, generic function inference.
+- BLIND: conditional-via-generic-alias, the whole utility-type table,
+  template-literal with a placeholder, computed `unique symbol` key,
+  overload resolution.
+
+### Tier 1 — SUPPORT NOW
+
+- [~] **Conditional through a generic alias + the utility-type table.**
+  PARTLY DONE (batch DI). `Resolver::unwrap` now has a `Conditional`
+  arm — it was the only computed-type form of six without one — so
+  `type E<T> = T extends string ? … ; E<string>` reduces, and the
+  resolver consults `standard_utility_types()`, which had been
+  reachable ONLY through `module_alias_resolver`, a `pub fn` with no
+  caller outside its own file and its tests. Live now in both
+  directions: `Exclude`, `Extract`, `NonNullable`.
+  DONE too (batch DJ): the `infer`-binding half. `simplify_type`
+  decides through the three-valued `extends_decision`, which cannot
+  bind an `infer`, so `ReturnType` / `Parameters` / `Awaited` still
+  abstained even with the `Conditional` arm in place.
+  `reduce_conditional` (assignability.mbt) is the reducer that CAN —
+  it runs `match_infer_pattern` and substitutes the captures — and it
+  was reachable from `is_assignable_to` and from three return-type
+  sites, but not from alias resolution. It is now tried from the
+  `Conditional` arm, and ONLY when the extends type carries a marker:
+  its non-infer path is `is_assignable_to`, which is two-valued, so as
+  a general fallback it would take the FALSE branch on an undecidable
+  `extends` and answer confidently exactly where `extends_decision`
+  correctly says "don't know". `ReturnType`, `Parameters`, `Awaited`
+  now decide in both directions; **TP 2558 -> 2559, MISS 176 -> 175,
+  FP 0**. The extends side is deliberately NOT resolved through the
+  resolver when a marker is present — that would rewrite the shape the
+  pattern exists to align with.
+  DONE too (batch DK): `InstanceType` and `ConstructorParameters`.
+  The obvious suspect was `typeof C` — `unwrap`'s `TypeOf` arm reads
+  `globals` and a class lives in `classes`, so `typeof C` really does
+  arrive unresolved — and that was NOT the cause.
+  `InstanceType<new () => C>`, with no `typeof` anywhere, was equally
+  silent, which is what found the real defect: `contains_infer_marker`
+  descended into `Func` and had NO `Constructor` arm, so it answered
+  "no markers here" and the infer path never ran.
+  `match_infer_pattern` and `substitute_inferred_type` both already
+  handled `Constructor` — two of the trio right, the GATE wrong. Both
+  fixes are needed (`class_construct_signature` for the `typeof`
+  spelling), and the inline case is what proves which one mattered.
+  The construct signature is supplied for the conditional DECISION
+  only: a class's constructor side also carries its statics, which the
+  checker states it does not model, so resolving `typeof C` everywhere
+  would turn every static access through such a binding into a missing
+  property. A derived class with no constructor of its own abstains —
+  it inherits the base's.
+  Buys 0 corpus files again; the capability is the point.
+  Two things measured rather than assumed, both worth keeping:
+  the whole change bought **ZERO corpus files** (predicted — take it
+  for the capability), and wiring the FULL table was wrong: the
+  property-shape entries (`Partial`, `Required`, `Readonly`, `Pick`,
+  `Record`, `Omit`) already have dedicated `lookup_field` arms and
+  resolving them here moved the shape out from under those arms,
+  failing three tests. The fallback is gated on the body being a
+  `Conditional` — a shape test, not a name list, because a second copy
+  of those names is the defect the batch exists to remove.
+  And the conformance gate earned itself again: `ThisType<T>` is
+  `interface ThisType<T> {}` in `lib.es5.d.ts`, an EMPTY marker, while
+  the table encodes it as the identity for the contextual-`this`
+  question. Taking that answer structurally made
+  `PropDesc<U> & ThisType<T>` demand every member of `T` — one FP on
+  `thisTypeInObjectLiterals2`, now resolved to `{}` ahead of the
+  generic arm with the shared table left alone.
+- [ ] (original entry, for reference)
+  The single highest-value item. `(string extends string ? number :
+  boolean)` inline is CAUGHT and `type E = string extends …` is CAUGHT,
+  but `type E<T> = T extends string ? … ; E<string>` is BLIND — while
+  generic alias instantiation itself works for object / array / union /
+  passthrough / interface bodies, and `substitute_params`
+  (`generics.mbt:63`) and `substitute_named` (`simplify.mbt:57`) both
+  already have a `Conditional` arm. So this is a WIRING or
+  reduction-order gap, one investigation rather than one implementation.
+  It matters far beyond its 13 corpus files: every standard utility type
+  is a generic alias over a conditional body, so `ReturnType`,
+  `Exclude`, `NonNullable`, `Parameters` and `Awaited` are all inert in
+  the body-checking path — a `.d.ts` using them type-checks by
+  ABSTAINING, which is a silent hole in the bridge's primary input.
+  Check first whether these blind rows are ONE abstention path: the
+  control `Bogus<number>` (an unresolved generic name) is also silent.
+- [x] **Computed `unique symbol` keys — REFRAMED, and the label was
+  mine.** Opening all 16 files shows **11 distinct error codes**, so this
+  was never one feature: the same "a NAME is not a feature cluster"
+  mistake CLAUDE.md already records for the 21 `Symbol`-ish files. What
+  the 16 actually are:
+  - REJECTED already, with evidence: TS2466 x2 (batch CL measured 6 FPs
+    for 2 TPs on object-literal computed keys, and
+    `computedPropertyNames28` vs `30` is a distinction ONE file draws),
+    and TS2464 `symbolProperty3` (`var s = Symbol` infers `Any`).
+  - BLOCKED on overload resolution: TS2464 `computedPropertyNames9_*` x2
+    (`[f(true)]` needs the right overload picked to see the key is
+    `boolean`).
+  - BLOCKED on lib interface merging: TS2411 x2
+    (`objectType*HidingObjectIndexer`) augment the global `Object` and
+    the error comes from the LIB's members conflicting with the user's
+    index signature, under `skipDefaultLibCheck: false`.
+  - BLOCKED on block-scope resolution: TS18033 x2 (`let Infinity = {}`
+    shadowing the global inside a block, then `enum En { X = Infinity }`).
+  - The rest (TS1166 x2, TS2322, TS2339, TS2353, TS2416, TS2403) are one
+    unrelated thing each.
+  DONE (batch DL) is the one genuinely cheap file, and it is not a symbol
+  rule at all: TS2411 / TS2413 across MERGED interface declarations. The
+  rule was complete and correct and read `module_.interfaces`, the
+  per-DECLARATION list, so `interface A { [x: number]: string }` beside
+  `interface A { [y: string]: {length: string} }` was silent while the
+  identical members in ONE body were reported. **TP 2559 -> 2560, MISS
+  175 -> 174.** Worth more than its one file: `interface Config {
+  [k: string]: string; port: number }` is a mistake people actually make,
+  and index signatures appear in 102 of 3,000 real `.d.ts` files.
+- [x] **Overload resolution — DONE (batch DM), as TS2769.** The finding
+  is bigger than the rule: an overloaded call had its arguments checked
+  by NOTHING AT ALL. `g(true)` against `g(a: string)` / `g(a: number)`
+  was silent, as were wrong arity and zero arguments, while the
+  identical call to a single-signature `h(a: string)` was reported.
+  Most of the standard library is overloaded, so the hole is wide on
+  real input.
+  Why it existed is worth keeping: overload sets ingest as a `Union` of
+  call signatures, and `check_union_callee_arity` is DELIBERATELY not
+  applied to them — its rule is that EVERY member must accept, right
+  for a union-typed value and wrong for an overload set where one match
+  is enough. That exclusion is correct and its comment says so; what
+  was missing is that nothing took over.
+  `check_overload_set_no_match` reports only when EVERY member is
+  PROVEN unable to accept (arity, or a definite-primitive argument
+  against a definite-primitive parameter it is not assignable to).
+  That makes it sound for a union-typed VALUE too — if no constituent
+  can accept, the call is wrong under either reading — so it is not
+  gated on `resolver.signatures` and the two rules need not be told
+  apart. Abstention is per-member with an early return: one member that
+  merely MIGHT accept silences the call, which is what keeps a generic
+  overload, an object-typed parameter, a rest parameter, a spread
+  argument and an unreadable member silent.
+  Cost one FALSE POSITIVE first, and the hazard was already written
+  down: `check_union_callee_arity`'s comment records that "two callables
+  can have identical widened parameter types while differing in whether
+  that parameter was written with `?`", and a `declare function`
+  overload arrives with its optionality widened into the type
+  (`a?: string` becomes `string | undefined`) and an empty
+  `optional_params` — so `t()` against `t(a?: string)` was reported. A
+  parameter that ACCEPTS undefined is now treated as omittable, which
+  over-counts optionals and therefore only ever weakens the proof
+  (batch CU's decorator arity took the same trade).
+  0 corpus files (the one TS2769 miss is a generic-inference case), but
+  it CLOSES a known-gap fixture: `fixtures/mtsc/known-gaps/overload-resolution.ts`
+  moves from "records what we miss" to a regression pin.
+  KNOWN LIMIT, silence not a finding: an overload set declared as real
+  `function` declarations WITH an implementation does not reach this
+  check on the strict path — the `resolver.signatures` branch claims the
+  callee first. It works on the permissive path (which is what the
+  fixture exercises). Filed rather than fixed: the fix means touching
+  the single-signature argument checker.
+
+### Tier 2 — SUPPORT (cheap, mechanical, ~25 files)
+
+- [ ] Remaining grammar / declaration rules: TS2371 (default parameter on
+  a bodiless overload), TS2394 (overload incompatible with its
+  implementation), TS2386, TS2448, TS1308, TS2842, TS2708, TS1166,
+  TS2300. `has_body_block` at `parser_class.mbt:2936` already separates a
+  signature from an implementation and that site's own comment states
+  the abstention. NOTE: `parserParameterList16`/`17` and
+  `parserClassDeclaration12` are filed under legacy/broken-syntax and are
+  really these rules — they belong here, not in Tier 4.
+- [ ] implicit-any / strict family (10): TS7009/7010/7018/7022/7023/7031/
+  7053, TS2564/2565/2729. Small corpus count, highest USER-facing value
+  in this tier — it is what a real codebase hits the day it turns
+  `strict` on.
+- [ ] strict-null / narrowing (8).
+
+### Tier 3 — DEFER (~93 files, real but expensive)
+
+`assignability-core` (48), `generic-inference` (11), `iterator-protocol`
+(11), `this-typing` (7), `other` (16). Every one is genuine TS behaviour
+needing machinery we have not built: intersection reduction, contextual
+typing, `globalThis` modelling, index-signature subtyping, the
+async-iterator protocol. Do NOT take these for the MISS count — the
+measured rate is 2-12 files per batch. Take an individual file only when
+a real bridge input or `mtsc` target demands it, and record which one did.
+
+`decorator-signature` (7) sits here on a CAVEAT rather than a
+measurement: this corpus samples no Angular / NestJS / TypeORM. Promote
+if a bridge target uses them.
+
+### Tier 4 — WON'T SUPPORT (~24 files, declared out of scope)
+
+- [ ] Record the reasons in a scope file so they are not re-litigated:
+  - **legacy / broken syntax, 12 of 15.** Deliberately malformed input
+    (`parserErrorRecovery_ParameterList6`) and removed language features
+    (`import x = module("m")`, `/// <reference>` resolution). CLAUDE.md
+    already records that taking this cluster for its size is fitting the
+    corpus.
+  - **`using` declarations, 6.** ZERO occurrences in 5,697 real files.
+    The strongest out-of-scope case here. Revisit if a real dependency
+    adopts explicit resource management.
+  - **locally accepted, 6.** TS7 errors and local tsc 6.0.3 accepts, so
+    there is no oracle to develop against and no way to write the
+    legal-neighbour test this repo requires of every rule.
+
+### The recommendation that is not a rule
+
+- [ ] **Stop reporting one MISS number.** Check the Tier 4 list in as
+  `scripts/checker_out_of_scope.txt` (one path per line + reason), have
+  `checker_conformance_oracle.sh` read it, and report TWO numbers:
+  `MISS (in scope)` ~152 — the real backlog, which can reach zero — and
+  `OUT OF SCOPE` ~24. Gate on the former.
+  The FP budget is explicitly UNCHANGED: out-of-scope means "we will not
+  add a rule for it", never "we may flag it wrongly". A false positive on
+  one of these files is still a soundness bug, and the scope file must not
+  become a place to hide files we flag incorrectly.

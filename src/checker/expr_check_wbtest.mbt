@@ -17484,3 +17484,448 @@ test "merge_interface_group matches pairwise fold" {
   // takes for all but a handful of names in any real file.
   @test.assert_eq(merge_interface_group([halves[0]]).fields.length(), 4)
 }
+
+///|
+/// Tier 1: a CONDITIONAL reached through a generic alias, and the
+/// standard utility types that unlocks.
+///
+/// `Resolver::unwrap` reduces `Keyof`, `TypeOf`, `MappedType`,
+/// `IndexedAccess` and `TemplateLiteralType` and had no `Conditional`
+/// arm, so it fell to the catch-all. The evaluator itself was never the
+/// problem — an inline conditional and a NON-generic alias for one both
+/// resolved already, because neither needs anything substituted first.
+/// Only the composition with a generic alias abstained.
+///
+/// Every case is paired with its LEGAL neighbour, because "flags the
+/// wrong assignment" and "stays silent on the right one" are separate
+/// claims and only the second keeps the gate at FP 0. That is not
+/// hypothetical here: wiring the whole utility table in flagged
+/// `thisTypeInObjectLiterals2` (see the `ThisType` case below) and broke
+/// `Record` / `Partial` field lookup.
+test "expr_check: conditional via generic alias + the conditional utility types" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // The gap itself: substitution happens, then the conditional has to
+  // reduce. Both branches of the decision, each with its neighbour.
+  let cond = "type E<T> = T extends string ? number : boolean;\n"
+  assert_true(
+    n(cond + "function f() { const x: E<string> = true; return x }") > 0,
+  )
+  @test.assert_eq(
+    n(cond + "function f() { const x: E<string> = 1; return x }"),
+    0,
+  )
+  assert_true(n(cond + "function f() { const x: E<number> = 1; return x }") > 0)
+  @test.assert_eq(
+    n(cond + "function f() { const x: E<number> = true; return x }"),
+    0,
+  )
+  // The shapes that already worked, kept here so a future change cannot
+  // "fix" the arm by breaking them.
+  assert_true(
+    n(
+      "function f() { const x: (string extends string ? number : boolean) = true; return x }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      "type E2 = string extends string ? number : boolean;\nfunction f() { const x: E2 = true; return x }",
+    ) >
+    0,
+  )
+  // The conditional-bodied utility types, which were inert because the
+  // table they live in is only reachable through `module_alias_resolver`
+  // — a `pub fn` with no caller outside its own file and its tests.
+  assert_true(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"a\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"b\"; return x }"),
+    0,
+  )
+  assert_true(
+    n("function f() { const x: Extract<\"a\"|\"b\",\"a\"> = \"b\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Extract<\"a\"|\"b\",\"a\"> = \"a\"; return x }"),
+    0,
+  )
+  assert_true(
+    n("function f() { const x: NonNullable<string|null> = null; return x }") > 0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: NonNullable<string|null> = \"s\"; return x }"),
+    0,
+  )
+  // A module's own alias SHADOWS the standard table, which is what lets
+  // a module override a stdlib utility shape.
+  @test.assert_eq(
+    n(
+      "type Exclude<T,U> = string;\nfunction f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"anything\"; return x }",
+    ),
+    0,
+  )
+  // Still abstains where the conditional cannot be DECIDED: an
+  // unresolved generic name, and a type parameter as the check type.
+  @test.assert_eq(
+    n("function f() { const x: Bogus<number> = \"s\"; return x }"),
+    0,
+  )
+  @test.assert_eq(
+    n(cond + "function f<U>(u: U) { const x: E<U> = true; return x }"),
+    0,
+  )
+  // A self-referential conditional alias must not spin: `simplify_type`
+  // returns the `Conditional` unchanged when it cannot decide, which is
+  // what terminates the arm.
+  @test.assert_eq(
+    n(
+      "type R<T> = T extends [] ? never : R<T>;\nfunction f() { const x: R<[]> = 1; return x }",
+    ),
+    0,
+  )
+}
+
+///|
+/// `ThisType<T>` is `interface ThisType<T> {}` in `lib.es5.d.ts` — an
+/// EMPTY marker that only sets the contextual `this` of an object
+/// literal's methods. The standard-utility table encodes it as the
+/// identity, and says why in its own comment: without contextual
+/// inference that is the useful answer to "what is `this` here".
+///
+/// That is a different question from "what members does this type have",
+/// and taking the identity answer for the structural one makes
+/// `PropDesc<U> & ThisType<T>` demand every member of `T`. The
+/// conformance gate caught exactly that on `thisTypeInObjectLiterals2`
+/// the moment the resolver started reading the table, so the marker is
+/// resolved to `{}` ahead of the generic `Applied` arm and the shared
+/// table is left alone for the consumer it was written for.
+test "expr_check: ThisType is an empty marker, not the identity" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    n(
+      "interface PD<U> { value?: U }\ndeclare function dp<T,U>(o: T, d: PD<U> & ThisType<T>): void;\nfunction f() { dp({ x: 1 }, { value: 2 }) }",
+    ),
+    0,
+  )
+  // The property-shape utilities keep their existing dedicated handling
+  // in `lookup_field`; resolving them through the table instead moved
+  // the shape out from under those arms. Measured, not predicted — these
+  // two are the regressions that produced the body-shape gate.
+  assert_true(
+    n("function f(r: Record<string, number>): string { return r.foo }") > 0,
+  )
+  assert_true(
+    n(
+      "interface C { name: string }\nfunction f(p: Partial<C>): string { return p.name }",
+    ) >
+    0,
+  )
+}
+
+///|
+/// The `infer`-binding utility types: `ReturnType`, `Parameters`,
+/// `Awaited` and friends.
+///
+/// `simplify_type` decides a conditional through the three-valued
+/// `extends_decision`, which cannot bind an `infer`, so every one of
+/// these abstained even after the `Conditional` arm existed.
+/// `reduce_conditional` is the reducer that can — it runs
+/// `match_infer_pattern` and substitutes the captures — and it is tried
+/// ONLY when the extends type actually carries a marker.
+///
+/// That restriction is the whole safety argument, so it is worth stating
+/// where a test can see it: `reduce_conditional`'s non-infer path is
+/// `is_assignable_to`, which is two-valued, so used as a general
+/// fallback it would take the FALSE branch on an undecidable `extends`
+/// and answer confidently exactly where `extends_decision` correctly
+/// says "don't know". The `unresolved` case below is the one that would
+/// regress if the gate were dropped.
+test "expr_check: infer-binding utility types decide through reduce_conditional" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let g = "declare function g(): number;\n"
+  assert_true(
+    n(g + "function f() { const x: ReturnType<typeof g> = \"s\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n(g + "function f() { const x: ReturnType<typeof g> = 1; return x }"),
+    0,
+  )
+  assert_true(
+    n("function f() { const x: Awaited<Promise<number>> = \"s\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Awaited<Promise<number>> = 1; return x }"),
+    0,
+  )
+  let ga = "declare function ga(a: string): void;\n"
+  assert_true(
+    n(ga + "function f() { const x: Parameters<typeof ga> = [1]; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      ga + "function f() { const x: Parameters<typeof ga> = [\"s\"]; return x }",
+    ),
+    0,
+  )
+  // Abstains when the check type is an unbound type parameter. This is
+  // the case that pins the `has_infer` gate: a two-valued reducer would
+  // take the false branch here and report.
+  @test.assert_eq(
+    n("function f<U>(u: U) { const x: ReturnType<U> = 1; return x }"),
+    0,
+  )
+  // The non-infer conditional path is untouched by the fallback.
+  assert_true(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"a\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n("function f() { const x: Exclude<\"a\"|\"b\",\"a\"> = \"b\"; return x }"),
+    0,
+  )
+}
+
+///|
+/// `InstanceType` / `ConstructorParameters`, and the correction of a
+/// wrong diagnosis worth keeping.
+///
+/// The obvious suspect was `typeof C`: `Resolver::unwrap`'s `TypeOf` arm
+/// resolves through `self.globals` and a class lives in `self.classes`,
+/// so `typeof C` really does arrive unresolved. That was NOT the cause.
+/// `InstanceType<new () => C>`, with no `typeof` anywhere, was equally
+/// silent — which is what pointed at the real defect:
+/// `contains_infer_marker` descended into `Func` and had no
+/// `Constructor` arm, so it answered "no markers here" and the infer
+/// path never ran at all. `match_infer_pattern` and
+/// `substitute_inferred_type` both already handled `Constructor`; two of
+/// the trio were right and the gate was wrong.
+///
+/// Both fixes are needed, and the inline case is the one that proves the
+/// gate was the problem rather than the class lookup.
+test "expr_check: InstanceType / ConstructorParameters through a construct signature" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // No `typeof`: this is the case that isolates `contains_infer_marker`.
+  assert_true(
+    n(
+      "class C {}\nfunction f() { const x: InstanceType<new () => C> = \"s\"; return x }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "class C {}\nfunction f() { const x: InstanceType<new () => C> = new C(); return x }",
+    ),
+    0,
+  )
+  // Through `typeof C`, which needs `class_construct_signature`.
+  let c = "class C { m(): void {} }\n"
+  assert_true(
+    n(c + "function f() { const x: InstanceType<typeof C> = \"s\"; return x }") >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      c + "function f() { const x: InstanceType<typeof C> = new C(); return x }",
+    ),
+    0,
+  )
+  let ca = "class C { constructor(a: string) {} }\n"
+  assert_true(
+    n(
+      ca +
+      "function f() { const x: ConstructorParameters<typeof C> = [1]; return x }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      ca +
+      "function f() { const x: ConstructorParameters<typeof C> = [\"s\"]; return x }",
+    ),
+    0,
+  )
+  // The construct signature is supplied for the DECISION only. A class's
+  // constructor side also carries its statics, which this checker does
+  // not model, so resolving `typeof C` everywhere would make every
+  // static access through such a binding a missing property.
+  @test.assert_eq(
+    n(
+      "class C { static s(): number { return 1 } }\ndeclare const k: typeof C;\nfunction f() { const q: number = k.s(); return q }",
+    ),
+    0,
+  )
+  // Abstains where the real signature is somewhere the helper cannot
+  // see: a derived class with no constructor INHERITS the base's.
+  @test.assert_eq(
+    n(
+      "class B { constructor(a: string) {} }\nclass D extends B { }\nfunction f() { const x: ConstructorParameters<typeof D> = [1]; return x }",
+    ),
+    0,
+  )
+}
+
+///|
+/// TS2411 / TS2413 across MERGED interface declarations.
+///
+/// The rule itself was complete and correct — a member incompatible with
+/// a string index signature, a numeric index signature incompatible with
+/// a string one, unions, classes, inherited signatures, the legal
+/// subtype cases — and it read `module_.interfaces`, the per-DECLARATION
+/// list. Interface declarations merge, and an index signature constrains
+/// the members of the MERGED type, so the two halves of
+///
+///     interface A { [x: number]: string }
+///     interface A { [y: string]: { length: string } }
+///
+/// conflict with each other while neither half conflicts with itself.
+/// Written in one body it was reported; split across two it was silent.
+///
+/// A name with several declarations is checked once on the merged entry
+/// and skipped in the per-declaration loop, so a within-one-body
+/// conflict is not reported twice — which is what `single-declaration
+/// still reports exactly once` pins.
+test "expr_check: index-signature conflicts across merged interface halves" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // Cross-declaration: the case that was silent.
+  assert_true(
+    n(
+      "interface A { [x: number]: string }\ninterface A { [y: string]: { length: string } }\nfunction f(a: A) { return a }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      "interface B { [k: string]: string }\ninterface B { port: number }\nfunction f(b: B) { return b }",
+    ) >
+    0,
+  )
+  // Legal neighbours — a compatible member and a compatible numeric
+  // signature, both split across halves.
+  @test.assert_eq(
+    n(
+      "interface C { [k: string]: string }\ninterface C { host: string }\nfunction f(c: C) { return c }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "interface D { [x: number]: string }\ninterface D { [y: string]: string }\nfunction f(d: D) { return d }",
+    ),
+    0,
+  )
+  // A generic interface abstains: a property typed by the interface's own
+  // parameter is a bare `Named`, which `violates_index_value` leaves
+  // alone.
+  @test.assert_eq(
+    n(
+      "interface E<T> { [k: string]: T }\ninterface E<T> { v: T }\nfunction f(e: E<string>) { return e }",
+    ),
+    0,
+  )
+  // Single declaration: still reported, and exactly once.
+  @test.assert_eq(
+    n(
+      "interface F { [k: string]: string; port: number }\nfunction f(x: F) { return x }",
+    ),
+    1,
+  )
+}
+
+///|
+/// TS2769: no overload matches this call.
+///
+/// Overload sets ingest as a `Union` of call signatures, and
+/// `check_union_callee_arity` is deliberately kept off them — its rule is
+/// that EVERY member must accept, which is right for a union-typed value
+/// and wrong for an overload set where one match is enough. That
+/// exclusion was correct and nothing took over, so an overloaded call had
+/// its arguments checked by nothing at all: `g(true)` against
+/// `g(a: string)` / `g(a: number)` was silent while the identical call to
+/// a single-signature `h(a: string)` was reported. Most of the standard
+/// library is overloaded, so the hole is wide on real input.
+///
+/// The rule reports only when EVERY member is PROVEN unable to accept,
+/// which makes it sound for a union-typed value too. Abstention is
+/// per-member with an early return, so one member that merely MIGHT
+/// accept silences the call — that is what the five abstention cases pin.
+test "expr_check: TS2769 when no overload can accept the call" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let g = "declare function g(a: string): void;\ndeclare function g(a: number): void;\n"
+  // Proven unacceptable by type, and by arity in both directions.
+  assert_true(n(g + "function f() { g(true) }") > 0)
+  assert_true(n(g + "function f() { g(\"s\", 1) }") > 0)
+  assert_true(n(g + "function f() { g() }") > 0)
+  // A call that does match either overload must stay silent.
+  @test.assert_eq(n(g + "function f() { g(\"s\") }"), 0)
+  @test.assert_eq(n(g + "function f() { g(1) }"), 0)
+  // Abstentions. Each is a member this cannot prove unacceptable, and one
+  // such member silences the whole call.
+  //  - a generic overload's parameter is a bare `Named`;
+  @test.assert_eq(
+    n(
+      "declare function p(a: string): void;\ndeclare function p(a: number): void;\ndeclare function p<T>(a: T): void;\nfunction f() { p(true) }",
+    ),
+    0,
+  )
+  //  - an object-typed parameter is not a definite primitive;
+  @test.assert_eq(
+    n(
+      "interface X { k: number }\ndeclare function q(a: string): void;\ndeclare function q(a: X): void;\nfunction f() { q({ k: 1 }) }",
+    ),
+    0,
+  )
+  //  - a rest parameter lifts the arity bound;
+  @test.assert_eq(
+    n(
+      "declare function s(a: string): void;\ndeclare function s(...xs: number[]): void;\nfunction f() { s(true) }",
+    ),
+    0,
+  )
+  //  - a spread argument hides the count;
+  @test.assert_eq(n(g + "function f(xs: any[]) { g(...xs) }"), 0)
+  //  - and the false positive this cost first: a `declare function`
+  //    overload arrives with its optionality WIDENED into the parameter
+  //    type (`a?: string` becomes `string | undefined`) and an empty
+  //    `optional_params`, so the shared arity helper called `t()` one
+  //    argument short. A parameter that accepts undefined is treated as
+  //    omittable here, which over-counts optionals and therefore only
+  //    ever weakens the proof.
+  @test.assert_eq(
+    n(
+      "declare function t(a?: string): void;\ndeclare function t(a: number, b: number): void;\nfunction f() { t() }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare function v(a: string | undefined): void;\ndeclare function v(a: number, b: number): void;\nfunction f() { v() }",
+    ),
+    0,
+  )
+  // Sound for a union-typed VALUE as well, which is why the rule is not
+  // gated on `resolver.signatures`.
+  assert_true(
+    n(
+      "declare const u: ((a: string) => void) | ((a: number) => void);\nfunction f() { u(true) }",
+    ) >
+    0,
+  )
+}

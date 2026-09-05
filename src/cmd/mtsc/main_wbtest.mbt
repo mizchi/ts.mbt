@@ -28,7 +28,7 @@ test "mtsc typecheck accepts an imported binding" {
 async test "mtsc known-gap corpus records current missed diagnostics" {
   let cases = [
     "fixtures/mtsc/known-gaps/no-implicit-any.ts", "fixtures/mtsc/known-gaps/primitive-member.ts",
-    "fixtures/mtsc/known-gaps/aliased-discriminant.ts", "fixtures/mtsc/known-gaps/overload-resolution.ts",
+    "fixtures/mtsc/known-gaps/aliased-discriminant.ts",
   ]
   for path in cases {
     let source = @fs.read_file(path).text() catch {
@@ -37,6 +37,31 @@ async test "mtsc known-gap corpus records current missed diagnostics" {
     let issues = mtsc_collect_type_issues(source, false).unwrap()
     assert_eq(issues.length(), 0)
   }
+}
+
+///|
+/// `overload-resolution.ts` used to be one of the known gaps above and is
+/// now CLOSED, so it moves from "records what we miss" to a regression
+/// pin. Overload sets ingest as a union of call signatures, and
+/// `check_union_callee_arity` is deliberately not applied to them (its
+/// rule is that every member must accept, which is right for a
+/// union-typed value and wrong for an overload set). Nothing took over,
+/// so an overloaded call's arguments were checked by nothing at all —
+/// `check_overload_set_no_match` reports when NO member can accept.
+async test "mtsc reports TS2769 for a call matching no overload" {
+  let path = "fixtures/mtsc/known-gaps/overload-resolution.ts"
+  let source = @fs.read_file(path).text() catch {
+    e => fail("failed to read \{path}: \{e}")
+  }
+  let issues = mtsc_collect_type_issues(source, false).unwrap()
+  assert_true(issues.length() > 0)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("no overload matches this call") {
+      found = true
+    }
+  }
+  assert_true(found)
 }
 
 ///|

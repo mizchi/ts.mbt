@@ -848,6 +848,88 @@ product surfaces now.
   is spread proportionately across fifty rules with no single one to
   attribute, which is the shape a linear checker should have, and the
   20% on a 3.8 MB concatenation of every lib file is the whole price.
+  Every number above ranks work by CORPUS COUNT, and
+  `docs/checker-triage.md` is where that stops: `MISS 176` sums work
+  worth doing now with files nobody should ever fix, so it can rank
+  nothing and can never reach zero — the defect that retired
+  `docs/checker-priority.md`. All 176 are classified there by the
+  MACHINERY a rule needs, priced against how often the feature appears
+  in 3,000 real `.d.ts` files and 2,697 real `.ts` sources, and assigned
+  four tiers with the reason written down. Two measurements decide two
+  tiers outright: `using` declarations occur in **zero** of 5,697 real
+  files and are 6 of the misses, and the 48-file assignability bucket is
+  ~10 unrelated causes, so the largest bucket ranks no work — the same
+  label-for-objective substitution recorded four times above.
+  Its most useful output is a CAPABILITY PROBE, because the
+  classification says what a file NEEDS and not what we HAVE, and
+  guessing at that was wrong twice in one session. Probed against
+  `tscheck --strict`: mapped types, `keyof`, strictNullChecks,
+  `this`-types, index signatures, variadic tuples, generic function
+  inference and basic assignability are all CAUGHT at the common shape,
+  while conditional-via-generic-alias, the whole utility-type table,
+  template-literal types with a placeholder, computed `unique symbol`
+  keys and overload resolution were BLIND at the shape real code writes.
+  The first probe run reported every family blind and that was harness
+  error, not a finding: these entry points check function BODIES and the
+  probes put the error at top level, where nothing visits it.
+  Batches DI–DM took the Tier 1 rows and every one was the
+  applied-in-some-places family, four levels deep in the same feature.
+  `Resolver::unwrap` reduces `Keyof`, `TypeOf`, `MappedType`,
+  `IndexedAccess` and `TemplateLiteralType` and had **no `Conditional`
+  arm**; the evaluator itself works, since an inline conditional and a
+  non-generic alias for one both resolve — only the composition with a
+  generic alias abstained. `standard_utility_types()` had been
+  unit-tested for years behind `module_alias_resolver`, a `pub fn` with
+  **no caller outside its own file and its tests**, so a `.d.ts` using
+  `ReturnType<typeof f>` type-checked BY ABSTAINING. `simplify_type`
+  decides through the three-valued `extends_decision`, which cannot bind
+  an `infer`, and `reduce_conditional` — the reducer that can — was
+  reachable from `is_assignable_to` and not from alias resolution. And
+  `contains_infer_marker` descended into `Func` with no `Constructor`
+  arm, so `new (...args) => infer R` never ran the infer path at all,
+  while `match_infer_pattern` and `substitute_inferred_type` both
+  handled `Constructor` already: two of the trio right, the GATE wrong.
+  Three of those took a wrong diagnosis first, and the corrections are
+  the reusable part. `typeof C` really does arrive unresolved (the
+  `TypeOf` arm reads `globals`, a class lives in `classes`) and was NOT
+  why `InstanceType` was inert — `InstanceType<new () => C>`, with no
+  `typeof` anywhere, was equally silent, and that inline case is kept as
+  a test precisely because it is what distinguishes the gate from the
+  class lookup. Wiring the WHOLE utility table in was wrong: the
+  property-shape entries (`Partial`, `Record`, `Pick`, …) already have
+  dedicated `lookup_field` arms and resolving them here moved the shape
+  out from under those arms — three real regressions, not tests pinning
+  old behaviour. The fallback is gated on the body being a `Conditional`,
+  a SHAPE test rather than a name list, because a second copy of those
+  names is the defect the batch removes. And the conformance gate caught
+  a false positive the moment the resolver read that table:
+  `ThisType<T>` is `interface ThisType<T> {}` in `lib.es5.d.ts`, an
+  EMPTY marker, while the table encodes it as the identity and says why
+  in its own comment — that is the useful answer to "what is `this`
+  here", a different question from "what members does this type have",
+  and the identity answer used structurally makes
+  `PropDesc<U> & ThisType<T>` demand every member of `T`.
+  The ceiling is honest about itself: DI, DK and DM buy **zero** corpus
+  files each and DJ and DL buy one apiece, which is what the triage
+  predicted in writing ("take these for the capability, not the count").
+  What they buy instead is that `Exclude` / `Extract` / `NonNullable` /
+  `ReturnType` / `Parameters` / `Awaited` / `InstanceType` /
+  `ConstructorParameters` now decide, an index signature constrains the
+  MERGED interface rather than one declaration of it, and an overloaded
+  call's arguments are checked at all — they were checked by NOTHING,
+  because `check_union_callee_arity` is correctly excluded from overload
+  sets (every member must accept, right for a union VALUE and wrong for
+  an overload set) and nothing took over. Two of the five cost a false
+  positive whose hazard was already written down twenty lines away, both
+  about optionality widened into a parameter type.
+  The one Tier 1 row that did not survive contact is the `unique symbol`
+  cluster, and the label was mine: opening all 16 files gives ELEVEN
+  distinct error codes. Two are already rejected with measured evidence,
+  two need overload resolution, two need lib interface merging, two need
+  block-scope resolution of a shadowed `Infinity`, and the rest are one
+  unrelated thing each — so the one genuinely cheap file turned out not
+  to be a symbol rule at all. Recorded in TODO.md so the 16 are not
+  re-attacked as a group.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
