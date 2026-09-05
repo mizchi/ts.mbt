@@ -4590,14 +4590,31 @@ inside a function body:
 
 ### Tier 2 — SUPPORT (cheap, mechanical, ~25 files)
 
-- [ ] Remaining grammar / declaration rules: TS2371 (default parameter on
-  a bodiless overload), TS2394 (overload incompatible with its
-  implementation), TS2386, TS2448, TS1308, TS2842, TS2708, TS1166,
-  TS2300. `has_body_block` at `parser_class.mbt:2936` already separates a
-  signature from an implementation and that site's own comment states
-  the abstention. NOTE: `parserParameterList16`/`17` and
-  `parserClassDeclaration12` are filed under legacy/broken-syntax and are
-  really these rules — they belong here, not in Tier 4.
+- [x] **Batch DN: TS2371 + TS2394, +3 files at FP 0** (TP 2560 -> 2563,
+  in-scope MISS 157 -> 154) — `parserParameterList16`/`17` and
+  `parserClassDeclaration12`, the three files Tier 4 had mis-filed under
+  legacy/broken-syntax.
+  - TS2371 is the applied-in-some-places family in its strongest form:
+    the rule was not similar to an existing one, it WAS one. It lived as
+    a LOCAL function at the two bodiless exits of `parse_function_decl`,
+    and inline through a different channel for interface members, and the
+    CLASS path had nothing — `class C { foo(a = 4); foo(a, b) {} }` parsed
+    clean. Hoisted to one `Parser::record_bodiless_param_initializers`.
+    The rule is about the BODY and nothing else, so the test is
+    `has_body_block` rather than the modifiers; every bodiless position
+    was probed (overload signature, `abstract`, `declare class`,
+    `interface`, object type, function TYPE, `declare function`) and all
+    report. The legal neighbours are the two the message names plus an
+    ARROW, whose body follows the `=>` — which is what a class field
+    holding `(a = 1) => a` is.
+  - TS2394's arity half is ONE-directional and the message text does not
+    say which direction, so the table was probed cell by cell: an
+    implementation requiring MORE than a signature can supply is the
+    error, a SHORTER implementation is legal. Four of the eight silent
+    test cases are what a rule written from the message alone would
+    flag. A TYPE mismatch raises the same code and is abstained on.
+- [ ] Remaining grammar / declaration rules: TS2386, TS2448, TS1308,
+  TS2842, TS2708, TS1166, TS2300.
 - [ ] implicit-any / strict family (10): TS7009/7010/7018/7022/7023/7031/
   7053, TS2564/2565/2729. Small corpus count, highest USER-facing value
   in this tier — it is what a real codebase hits the day it turns

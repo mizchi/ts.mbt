@@ -958,6 +958,33 @@ product surfaces now.
   one mechanism that keeps a scope file from decaying into a suppression
   list is a report of STALE entries — a listed path that is no longer a
   MISS, proven by adding a bogus path and seeing it named.
+  Batch DN takes the first three Tier 2 files — the three the scope
+  review just moved OUT of Tier 4 — and its TS2371 is the
+  applied-in-some-places family in its strongest form yet: the rule was
+  not merely similar to an existing one, it WAS one, living as a LOCAL
+  function at the two bodiless exits of `parse_function_decl` and
+  inline through a second channel for interface members, with the CLASS
+  path holding nothing — so `class C { foo(a = 4); foo(a, b) {} }`
+  parsed clean. Hoisted to one recorder. The rule is about the BODY and
+  nothing else, which is what makes it decidable in the parser, so the
+  test is `has_body_block` and not the modifiers; every bodiless
+  position was probed (overload signature, `abstract`, `declare class`,
+  `interface`, object type, function TYPE, `declare function`) and all
+  seven report, while the legal spellings are the two the message names
+  plus an ARROW — whose body is what follows the `=>`, which is exactly
+  what a class field holding `(a = 1) => a` is. TS2394's arity half is
+  where probing earned itself back again: the rule is
+  ONE-DIRECTIONAL and the message ("not compatible with its
+  implementation signature") does not say which direction, so the table
+  was probed cell by cell. An implementation that requires MORE
+  arguments than a signature can supply is the error; a SHORTER
+  implementation is LEGAL (`m(a); m() {}`, `m(a, b); m(a) {}`), because
+  a function with fewer parameters is assignable to one with more. Four
+  of the eight silent cases in the new test are what a rule written
+  from the message text alone would have flagged — the same failure
+  mode as TS2415/TS2417, where "different accessibility modifiers"
+  reads as "they must match" and two cells go wrong in opposite
+  directions.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
