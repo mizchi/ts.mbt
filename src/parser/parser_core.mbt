@@ -260,6 +260,16 @@ pub struct Parser {
   // `(field name, declared type)` for every runtime class parsed in
   // this module. See `TsModuleBlock.class_fields`.
   collected_class_fields : Array[(String, @ast.TsType)]
+  // Classes declared somewhere OTHER than module top level — a function
+  // body, a block, an `if` branch, a static block. `TsModule.classes` is
+  // filled by the module-level statement dispatcher, which is the only
+  // thing that takes `last_runtime_class_decl`, so a class in any of those
+  // positions was invisible to every checker-level class rule: TS2420,
+  // TS2415 and TS2564 all fire at top level and none of them fired one
+  // scope in. Recorded here rather than into `classes` because that list
+  // is the resolver's NAME table and the bridge's emit list, and neither
+  // should learn a block-scoped name. See `TsModule.local_classes`.
+  collected_local_classes : Array[@ast.TsClassDecl]
   // Set when the module block parses `export = <expr>`.
   // Names exported with `export type { X }` — no runtime value. See
   // `TsModuleBlock.type_only_exports`.
@@ -358,6 +368,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_pure_declarations: {},
     collected_type_aliases: [],
     collected_interfaces: [],
+    collected_local_classes: [],
     collected_class_fields: [],
     collected_type_only_exports: {},
     collected_export_equals: false,
@@ -612,6 +623,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_pure_declarations: {},
     collected_type_aliases: [],
     collected_interfaces: [],
+    collected_local_classes: [],
     collected_class_fields: [],
     collected_type_only_exports: {},
     collected_export_equals: false,

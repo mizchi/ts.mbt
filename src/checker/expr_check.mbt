@@ -843,7 +843,20 @@ fn Resolver::ingest_module(
     }
   }
   for c in module_.classes {
-    r.classes[prefix + c.name] = c
+    // A class declared inside a function body is merged into
+    // `module_.classes` so the declaration-shape rules can see it, but it
+    // must NOT enter the resolver's NAME table: the name is block-scoped,
+    // and binding it here lets it shadow an outer binding of the same
+    // spelling. `localTypes2`/`3` are exactly that — a nested `class C`
+    // beside `let C = f(10)` in the enclosing function, where `new C(20)`
+    // means the LOCAL and got checked against the nested class's
+    // constructor arity. Cost two false positives before this line
+    // existed. A nested class whose BASE is also nested therefore does not
+    // resolve its base chain, which loses a finding rather than inventing
+    // one.
+    if !c.is_local {
+      r.classes[prefix + c.name] = c
+    }
   }
   for e in module_.enums {
     // TS declaration merging: two `enum E { … }` blocks with one name
@@ -20885,6 +20898,16 @@ pub fn check_module_function_bodies_with_context(
 fn check_private_member_access(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
+    // The doc comment above states this rule's premise — sound for a
+    // TOP-LEVEL class, because there is no enclosing class whose privates
+    // its body could legally reach. A class declared inside a method has
+    // exactly such an enclosing class, and merging those into
+    // `module_.classes` broke the premise before this line existed:
+    // `privateNameComputedPropertyName3` nests `class Bar` in
+    // `Foo.getValue` and uses `[obj.#name]`, one of Foo's privates.
+    if cls.is_local {
+      continue
+    }
     let declared : Map[String, Unit] = {}
     for p in cls.properties {
       if p.name.has_prefix("__private_brand__") {
@@ -21533,6 +21556,20 @@ fn block_has_value_return(stmts : Array[@ast.TsStmt]) -> Bool {
 fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let restricted : Map[String, String] = {}
   for cls in module_.classes {
+    // A class declared inside a function or another class's method is
+    // skipped on BOTH sides. Its own restricted constructor cannot be
+    // located relative to a use site without a scope chain, and — the
+    // false positive this cost — scanning its method bodies as if it were
+    // top level double-counts every `new` inside it:
+    // `classConstructorAccessibility4` has `class A { private
+    // constructor(); method() { class B { method() { new A() } } } }`,
+    // where the `new A()` is legal because it is inside A's own
+    // declaration. A's method body is already scanned with
+    // `enclosing = "A"`, which allows it; scanning B's body with
+    // `enclosing = "B"` reported the same expression a second time.
+    if cls.is_local {
+      continue
+    }
     let mut kind = ""
     for n in cls.private_members {
       if n == "constructor" {
@@ -21559,6 +21596,9 @@ fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] 
     scan_new_exprs_stmts(f.body.stmts, restricted, "", issues)
   }
   for cls in module_.classes {
+    if cls.is_local {
+      continue
+    }
     match cls.constructor_body {
       Some(b) => scan_new_exprs_stmts(b.stmts, restricted, cls.name, issues)
       None => ()
@@ -29711,6 +29751,62 @@ fn check_module_function_bodies_layered(
   type_modules : Array[@ast.TsModule],
   extra_globals : Array[(String, @ast.TsType)],
 ) -> Array[ExprIssue] {
+  // A class declared in a function body, a block or an `if` branch lands
+  // in `local_classes` rather than `classes` (see `TsModule.local_classes`
+  // for why the parser keeps them apart). Merging them HERE, before
+  // anything else runs, is what makes every one of the sixty-odd
+  // `module_.classes` loops below see them — TS2420, TS2415/TS2417 and
+  // TS2564 were all silent one scope in, while batch DN's parser-level
+  // TS2394 fired in both positions. The resolver ingest below reads the
+  // merged list too, so a nested class's base chain and member lookups
+  // resolve.
+  //
+  // A name already declared at top level is SKIPPED, and so is a repeat
+  // among the local classes themselves. Without that,
+  // `function f() { class A {} } class A {}` and
+  // `function f() { class A {} } function g() { class A {} }` would both
+  // read as two declarations of one name, which is exactly what
+  // `check_structural_duplicates` and `check_function_var_duplicates`
+  // report — a false positive built out of two perfectly legal scopes.
+  // Skipping can only lose a finding.
+  //
+  // `check_module` deliberately does NOT do this: its first act is a
+  // duplicate-declaration scan across every top-level kind, and a
+  // block-scoped name has no business in it.
+  let module_ = if module_.local_classes.length() == 0 {
+    module_
+  } else {
+    let seen : Map[String, Unit] = {}
+    for c in module_.classes {
+      seen[c.name] = ()
+    }
+    for i in module_.interfaces {
+      seen[i.name] = ()
+    }
+    for t in module_.type_aliases {
+      seen[t.name] = ()
+    }
+    for e in module_.enums {
+      seen[e.name] = ()
+    }
+    for n in module_.namespaces {
+      seen[n.name] = ()
+    }
+    for f in module_.funcs {
+      seen[f.name] = ()
+    }
+    let merged : Array[@ast.TsClassDecl] = []
+    for c in module_.classes {
+      merged.push(c)
+    }
+    for c in module_.local_classes {
+      if seen.get(c.name) is None {
+        seen[c.name] = ()
+        merged.push(c)
+      }
+    }
+    { ..module_, classes: merged }
+  }
   let resolver = Resolver::empty()
   for type_module in type_modules {
     Resolver::ingest_type_module(resolver, type_module, "")

@@ -312,6 +312,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         imports: [],
         values: [],
         classes: [],
+        local_classes: [],
         namespaces: [],
         enums: [],
         module_augmentations: [],
@@ -18097,4 +18098,83 @@ test "checker: += on a string-literal-typed target is concatenation" {
   assert_true(n("function f() { let b = true; b += 1; return b }") > 0)
   assert_true(n("function f() { let b = true; b -= 1; return b }") > 0)
   assert_true(n("function f() { let t = \"\"; t -= 1; return t }") > 0)
+}
+
+///|
+/// A class declared inside a function body, a block or an `if` branch is
+/// visible to the checker's class rules.
+///
+/// `TsModule.classes` is filled by the module-level statement dispatcher,
+/// which is the only thing that takes the parser's
+/// `last_runtime_class_decl` stash — so a class one scope in was recorded
+/// nowhere a class rule could read it, and TS2420, TS2415/TS2417 and
+/// TS2564 all fired at top level and at no other depth. (Batch DN's
+/// TS2394 fired in both, because it lives in the parser and never needed
+/// the list.) The parser collects them into `local_classes` and the
+/// checker merges the two at its entry point.
+///
+/// The merge is NOT unconditional, and each guard below is a false
+/// positive it cost first.
+test "checker: class rules see a class declared inside a function" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+
+  // --- fires at every nesting position, as it already did at top level.
+  let iface = "interface I { a: number }\n"
+  assert_true(n(iface + "class C implements I { }") > 0)
+  assert_true(n(iface + "function f() { class C implements I { } }") > 0)
+  assert_true(
+    n(iface + "function f() { if (1) { class C implements I { } } }") > 0,
+  )
+  assert_true(n(iface + "const g = () => { class C implements I { } };") > 0)
+  let base = "class B { protected m(): void {} }\n"
+  assert_true(n(base + "class D extends B { private m(): void {} }") > 0)
+  assert_true(
+    n(base + "function f() { class D extends B { private m(): void {} } }") > 0,
+  )
+  assert_true(n("class C { x: number; }") > 0)
+  assert_true(n("function f() { class C { x: number; } }") > 0)
+
+  // --- the name must NOT become a top-level declaration. Each of these
+  // is two legal scopes that a shared name table would read as one
+  // duplicate declaration.
+  let m = "{ m(): void {} }"
+  for
+    src in [
+      "function f() { class A " + m + " }\nclass A " + m,
+      "function f() { class A " + m + " }\nfunction g() { class A " + m + " }",
+      "interface A { q: number }\nfunction f() { class A " + m + " }",
+      "type A = number;\nfunction f() { class A " + m + " }",
+    ] {
+    @test.assert_eq(n(src), 0)
+  }
+
+  // --- and it must not enter the resolver's NAME table, or it shadows an
+  // outer binding of the same spelling. `localTypes2`/`3`: a nested
+  // `class C` beside `let C = f(10)`, where `new C(20)` means the LOCAL
+  // and was checked against the nested class's constructor arity.
+  @test.assert_eq(
+    n(
+      "function outer() {\n  function f(x: number) {\n    class C { constructor(public y: number) {} }\n    return C;\n  }\n  let C = f(10);\n  let v = new C(20);\n  return v;\n}",
+    ),
+    0,
+  )
+
+  // --- two rules are sound only BECAUSE the class is top level, and both
+  // say so. `new A()` inside a class nested in A's own method is inside
+  // A's declaration; a nested class's body may legally reach an outer
+  // class's `#private`.
+  @test.assert_eq(
+    n(
+      "class A {\n  private constructor() {}\n  method() {\n    class B { method() { new A() } }\n    class C extends A {}\n  }\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "class Foo {\n  #name = \"n\";\n  getValue(x: number) {\n    const obj = this;\n    class Bar { #y = 100; read() { return x + this.#y + (obj.#name as any) } }\n    return new Bar().read();\n  }\n}",
+    ),
+    0,
+  )
 }

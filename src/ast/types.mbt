@@ -775,6 +775,24 @@ pub(all) struct TsClassDecl {
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool
   is_constructible : Bool
+  // True when this class was declared somewhere other than module top
+  // level — a function body, a block, an `if` branch. Set by the parser's
+  // `record_local_class`; see `TsModule.local_classes`.
+  //
+  // Two consumers, and they want opposite things. Most checker class rules
+  // are about the DECLARATION's own shape (does it implement its
+  // interfaces, is a field definitely assigned, is an override
+  // compatible) and are just as true one scope in — those ignore this
+  // flag. A handful are sound only BECAUSE the class is top level, and
+  // they say so: `check_private_member_access`'s own comment ("nested
+  // class bodies are skipped — their accesses may legally reach an outer
+  // class's privates") and `check_constructor_accessibility`, where
+  // `new A()` inside a class nested in A's own method is legal. Those
+  // skip it. The resolver's NAME table skips it too, because a
+  // block-scoped name must not shadow an outer binding of the same
+  // spelling — `let C = f(10); new C(20)` next to a nested `class C` is
+  // where that cost four false positives.
+  is_local : Bool
   // Index signatures declared on the class body (e.g. `[key: string]:
   // T` inside `class C { [key: string]: T }`). Each entry pairs the key
   // type with the value type so the checker can resolve `instance.foo`
@@ -867,6 +885,14 @@ pub(all) struct TsModule {
   imports : Array[TsImport] // externalimport
   values : Array[TsValueDecl] // ambient value declarations
   classes : Array[TsClassDecl] // ambient class declarations
+  // Classes declared somewhere other than module top level — a function
+  // body, a block, an `if` branch. Kept OUT of `classes` deliberately:
+  // that list is the resolver's name table and the bridge's emit list, and
+  // a block-scoped name belongs in neither. The checker merges the two at
+  // its entry point (skipping any name already declared at top level) so
+  // its class rules stop being silent one scope in, which is where
+  // TS2420 / TS2415 / TS2564 all were.
+  local_classes : Array[TsClassDecl]
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
   // Ambient module-augmentation entries (`declare module "foo" { ... }`).

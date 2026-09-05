@@ -91,6 +91,7 @@ pub(all) struct TsClassDecl {
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool
   is_constructible : Bool
+  is_local : Bool
   index_signatures : Array[(TsType, TsType)]
   static_index_signatures : Array[(TsType, TsType)]
   decorators : Array[TsExpr]
@@ -293,6 +294,7 @@ pub(all) struct TsModule {
   imports : Array[TsImport]
   values : Array[TsValueDecl]
   classes : Array[TsClassDecl]
+  local_classes : Array[TsClassDecl]
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
   module_augmentations : Array[(String, TsModule)]

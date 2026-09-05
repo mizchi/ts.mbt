@@ -7,6 +7,7 @@ fn empty_module() -> @ast.TsModule {
     imports: [],
     values: [],
     classes: [],
+    local_classes: [],
     namespaces: [],
     enums: [],
     module_augmentations: [],

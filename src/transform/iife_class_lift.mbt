@@ -239,6 +239,7 @@ fn try_lift_iife_value(
     methods: all_methods,
     is_abstract: false,
     is_constructible: true,
+    is_local: false,
     index_signatures: [],
     static_index_signatures: [],
     decorators: [],

@@ -4667,17 +4667,55 @@ inside a function body:
     nothing else, while their real TS7 error is the TS6053 that already
     puts `parserRealSource3` in Tier 4. They are declared there now, and
     `--max-miss` — added one batch earlier — is what surfaced them.
-- [ ] implicit-any / strict family (7 left): TS7010/7018/7022/7023/7031/
-  7053, TS2564/2565/2729. Small corpus count, highest USER-facing value
-  in this tier — it is what a real codebase hits the day it turns
-  `strict` on. NOTE `localTypes1`'s seven TS2564s are ALL classes
-  declared inside a function, and every CHECKER-level class rule is blind
-  there (probed: TS2420, TS2415 and TS2564 all fire at top level and none
-  nested, while batch DN's parser-level TS2394 fires in both). The
-  parser's `record_runtime_class_decl` stash is taken only by the
-  module-level dispatcher, and a class nested in a function is lowered
-  away entirely below es6 — so the fix is not a one-liner and it moves
-  what the bridge sees.
+- [x] **Batch DP: every checker class rule now sees a class declared
+  inside a function** (+1 file, TP 2565 -> 2566, in-scope MISS 150 ->
+  149, FP 0). The count is not the point: the rules were silent at every
+  depth but zero.
+  - `TsModule.classes` is filled by the module-level statement
+    dispatcher, the only thing that took the parser's
+    `last_runtime_class_decl` stash, so a class one scope in was recorded
+    nowhere a rule could read. Probed before and after: TS2420
+    (implements), TS2415/TS2417 (extends compatibility) and TS2564
+    (definite assignment) all fired at top level and at no other depth,
+    while batch DN's TS2394 fired in both because it lives in the parser.
+    Now covered in a function body, a block, an `if` branch and an arrow
+    body.
+  - The parser collects them into `TsModule.local_classes` and the
+    checker merges the two at ONE entry point, which is what makes all
+    ~58 `module_.classes` loops see them without touching any of them.
+    `check_module` is deliberately excluded: its first act is a
+    duplicate-declaration scan across every top-level kind.
+  - **The merge cost four false positives before it was right, and every
+    one is the same mistake**: `module_.classes` does not mean "the
+    classes", it means "the classes with no enclosing scope", and three
+    rules depend on the second reading.
+    * `localTypes2`/`3` — the resolver's NAME table must not learn a
+      block-scoped name. A nested `class C` beside `let C = f(10)` made
+      `new C(20)` resolve to the class and fail its constructor arity.
+      `Resolver::ingest_module` skips `is_local`.
+    * `classConstructorAccessibility4` — `new A()` inside a class nested
+      in A's own method is legal. A's method body is already scanned with
+      `enclosing = "A"`; scanning the nested class's body as if it were
+      top level reported the same expression again.
+    * `privateNameComputedPropertyName3` — `check_private_member_access`
+      states its premise in its own doc comment ("nested class bodies are
+      skipped — their accesses may legally reach an outer class's
+      privates"), and the merge broke exactly that.
+    So `TsClassDecl` carries `is_local`, the three position-dependent
+    consumers test it, and the rest do not. Skipping a name already
+    declared at top level (or repeated among the local classes) is what
+    stops `function f() { class A {} } class A {}` reading as a duplicate.
+  - Measured linear: a hand ladder of N classes-inside-functions is
+    32/62/130/267 ms at 500/1000/2000/4000 (exponent 1.02), and the
+    scaling gate's seven axes are unchanged.
+  - Known remainder, deliberately not chased: a nested class whose BASE is
+    also nested does not resolve its base chain, because the base is not
+    in the resolver's name table either. That loses a finding rather than
+    inventing one.
+- [ ] implicit-any / strict family (6 left): TS7010/7018/7022/7023/7031/
+  7053, TS2565/2729. Small corpus count, highest USER-facing value in
+  this tier — it is what a real codebase hits the day it turns `strict`
+  on.
 - [x] strict-null / narrowing: 3 of 8 in batch DO (the `logicalAssignment`
   files). Five left.
 
@@ -4737,7 +4775,7 @@ if a bridge target uses them.
 
 ### The recommendation that is not a rule — DONE
 
-- [x] **Two MISS numbers.** `MISS in scope 150` (the backlog, which can
+- [x] **Two MISS numbers.** `MISS in scope 149` (the backlog, which can
   reach zero) beside `OUT OF SCOPE 19` (declared). `--scope-file /dev/null`
   reproduces the old single 174 — verified, not asserted.
   Nothing but the MISS branch consults the scope file, so a listed file can

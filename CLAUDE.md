@@ -1038,6 +1038,39 @@ product surfaces now.
   fix is wrong; they are declared out of scope now, and `--max-miss`,
   added one batch earlier, is what surfaced them — the gate earning
   itself back on its first real use.
+  Batch DP closes the defect DO measured: `TsModule.classes` is filled
+  by the module-level statement dispatcher, the only thing that took the
+  parser's `last_runtime_class_decl` stash, so a class declared in a
+  function body was recorded nowhere a rule could read and every
+  CHECKER-level class rule was silent at every depth but zero. The
+  parser collects those into `local_classes` and the checker merges the
+  two at ONE entry point, which is what gives all ~58
+  `module_.classes` loops the classes without touching any of them;
+  `check_module` is excluded because its first act is a
+  duplicate-declaration scan across every top-level kind. Worth +1
+  corpus file and the capability at four nesting positions (function
+  body, block, `if` branch, arrow body).
+  **The merge cost four false positives before it was right, and all
+  four are one mistake**: `module_.classes` does not mean "the classes",
+  it means "the classes with no enclosing scope", and three rules depend
+  on the second reading. The resolver's NAME table must not learn a
+  block-scoped name — a nested `class C` beside `let C = f(10)` made
+  `new C(20)` resolve to the class and fail its constructor arity
+  (`localTypes2`/`3`). `new A()` inside a class nested in A's own method
+  is legal, and A's method body is already scanned with
+  `enclosing = "A"`, so scanning the nested class as top level reported
+  the same expression twice (`classConstructorAccessibility4`). And
+  `check_private_member_access` states its premise in its own doc
+  comment — "nested class bodies are skipped, their accesses may legally
+  reach an outer class's privates" — which the merge broke exactly
+  (`privateNameComputedPropertyName3`). So `TsClassDecl` carries
+  `is_local`, those three consumers test it and the other fifty-five do
+  not; a name already declared at top level is skipped so
+  `function f() { class A {} } class A {}` is not a duplicate. Linear:
+  a hand ladder of N classes-inside-functions is 32/62/130/267 ms at
+  500/1000/2000/4000, exponent 1.02. The remainder is stated rather than
+  chased — a nested class whose BASE is also nested cannot resolve its
+  base chain, which loses a finding rather than inventing one.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

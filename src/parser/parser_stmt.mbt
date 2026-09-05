@@ -414,10 +414,21 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       }
     Return => self.parse_return()
     Throw => self.parse_throw()
-    Class => self.parse_class_decl()
+    // A class declared as a STATEMENT — in a function body, a block, an
+    // `if` branch. The module-level dispatcher has its own `Class` branch
+    // and never reaches here, so this arm sees exactly the positions
+    // `TsModule.classes` cannot: `record_local_class` collects them for
+    // the checker's class rules, which were silent one scope in.
+    Class => {
+      let stmt = self.parse_class_decl()
+      self.record_local_class()
+      stmt
+    }
     Ident("abstract") if self.peek_at(1).kind == Class => {
       let _ = self.advance()
-      self.parse_class_decl_with_abstract(true)
+      let stmt = self.parse_class_decl_with_abstract(true)
+      self.record_local_class()
+      stmt
     }
     Interface => {
       // Erased at runtime, collected for the same reason type aliases

@@ -3353,6 +3353,7 @@ fn Parser::parse_declare_class(
     static_index_signatures,
     is_abstract,
     is_constructible,
+    is_local: false,
     decorators: self.take_pending_decorators(),
     is_declare: true,
     private_members,

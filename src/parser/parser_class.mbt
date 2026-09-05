@@ -1120,6 +1120,7 @@ fn build_runtime_class_decl(
     static_index_signatures,
     is_abstract,
     is_constructible: !is_abstract,
+    is_local: false,
     // Decorators on runtime classes are attached by the caller via
     // `Parser::take_pending_decorators` after build returns; the
     // builder is parser-agnostic so it leaves the slot empty.
@@ -1157,6 +1158,28 @@ fn Parser::take_last_runtime_class_decl(self : Parser) -> @ast.TsClassDecl? {
   let result = self.last_runtime_class_decl
   self.last_runtime_class_decl = None
   result
+}
+
+///|
+/// Collect the class just parsed as a LOCAL one — declared in a function
+/// body, a block or an `if` branch rather than at module top level.
+///
+/// The module-level dispatcher takes `last_runtime_class_decl` right after
+/// parsing, and nothing else did, so a class one scope in was recorded
+/// nowhere a checker rule could read: TS2420 ("class does not implement
+/// interface"), TS2415 / TS2417 (accessibility and static-side
+/// compatibility) and TS2564 (definite assignment) all fire at module top
+/// level and none of them fired inside a function. Batch DN's TS2394 does,
+/// because it lives in the parser and never needed the list.
+///
+/// Taking the stash here also clears it, which is a small fix of its own:
+/// it used to be left dirty after a nested class, where only the next
+/// module-level class parse happened to overwrite it.
+fn Parser::record_local_class(self : Parser) -> Unit {
+  match self.take_last_runtime_class_decl() {
+    Some(decl) => self.collected_local_classes.push({ ..decl, is_local: true })
+    None => ()
+  }
 }
 
 ///|
@@ -3837,6 +3860,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     static_index_signatures: runtime_decl.static_index_signatures,
     is_abstract: runtime_decl.is_abstract,
     is_constructible: runtime_decl.is_constructible,
+    is_local: false,
     decorators: {
       let _ = self.take_pending_decorators()
       class_decorators
