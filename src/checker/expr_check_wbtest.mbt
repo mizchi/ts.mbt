@@ -17777,3 +17777,72 @@ test "expr_check: InstanceType / ConstructorParameters through a construct signa
     0,
   )
 }
+
+///|
+/// TS2411 / TS2413 across MERGED interface declarations.
+///
+/// The rule itself was complete and correct — a member incompatible with
+/// a string index signature, a numeric index signature incompatible with
+/// a string one, unions, classes, inherited signatures, the legal
+/// subtype cases — and it read `module_.interfaces`, the per-DECLARATION
+/// list. Interface declarations merge, and an index signature constrains
+/// the members of the MERGED type, so the two halves of
+///
+///     interface A { [x: number]: string }
+///     interface A { [y: string]: { length: string } }
+///
+/// conflict with each other while neither half conflicts with itself.
+/// Written in one body it was reported; split across two it was silent.
+///
+/// A name with several declarations is checked once on the merged entry
+/// and skipped in the per-declaration loop, so a within-one-body
+/// conflict is not reported twice — which is what `single-declaration
+/// still reports exactly once` pins.
+test "expr_check: index-signature conflicts across merged interface halves" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // Cross-declaration: the case that was silent.
+  assert_true(
+    n(
+      "interface A { [x: number]: string }\ninterface A { [y: string]: { length: string } }\nfunction f(a: A) { return a }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      "interface B { [k: string]: string }\ninterface B { port: number }\nfunction f(b: B) { return b }",
+    ) >
+    0,
+  )
+  // Legal neighbours — a compatible member and a compatible numeric
+  // signature, both split across halves.
+  @test.assert_eq(
+    n(
+      "interface C { [k: string]: string }\ninterface C { host: string }\nfunction f(c: C) { return c }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "interface D { [x: number]: string }\ninterface D { [y: string]: string }\nfunction f(d: D) { return d }",
+    ),
+    0,
+  )
+  // A generic interface abstains: a property typed by the interface's own
+  // parameter is a bare `Named`, which `violates_index_value` leaves
+  // alone.
+  @test.assert_eq(
+    n(
+      "interface E<T> { [k: string]: T }\ninterface E<T> { v: T }\nfunction f(e: E<string>) { return e }",
+    ),
+    0,
+  )
+  // Single declaration: still reported, and exactly once.
+  @test.assert_eq(
+    n(
+      "interface F { [k: string]: string; port: number }\nfunction f(x: F) { return x }",
+    ),
+    1,
+  )
+}

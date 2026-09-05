@@ -4516,9 +4516,35 @@ inside a function body:
   ABSTAINING, which is a silent hole in the bridge's primary input.
   Check first whether these blind rows are ONE abstention path: the
   control `Bogus<number>` (an unresolved generic name) is also silent.
-- [ ] **Computed `unique symbol` keys** (16 files). 183 real `.d.ts`
-  declare `unique symbol`, 72 use `[Symbol.x]` keys; blind at the common
-  shape.
+- [x] **Computed `unique symbol` keys — REFRAMED, and the label was
+  mine.** Opening all 16 files shows **11 distinct error codes**, so this
+  was never one feature: the same "a NAME is not a feature cluster"
+  mistake CLAUDE.md already records for the 21 `Symbol`-ish files. What
+  the 16 actually are:
+  - REJECTED already, with evidence: TS2466 x2 (batch CL measured 6 FPs
+    for 2 TPs on object-literal computed keys, and
+    `computedPropertyNames28` vs `30` is a distinction ONE file draws),
+    and TS2464 `symbolProperty3` (`var s = Symbol` infers `Any`).
+  - BLOCKED on overload resolution: TS2464 `computedPropertyNames9_*` x2
+    (`[f(true)]` needs the right overload picked to see the key is
+    `boolean`).
+  - BLOCKED on lib interface merging: TS2411 x2
+    (`objectType*HidingObjectIndexer`) augment the global `Object` and
+    the error comes from the LIB's members conflicting with the user's
+    index signature, under `skipDefaultLibCheck: false`.
+  - BLOCKED on block-scope resolution: TS18033 x2 (`let Infinity = {}`
+    shadowing the global inside a block, then `enum En { X = Infinity }`).
+  - The rest (TS1166 x2, TS2322, TS2339, TS2353, TS2416, TS2403) are one
+    unrelated thing each.
+  DONE (batch DL) is the one genuinely cheap file, and it is not a symbol
+  rule at all: TS2411 / TS2413 across MERGED interface declarations. The
+  rule was complete and correct and read `module_.interfaces`, the
+  per-DECLARATION list, so `interface A { [x: number]: string }` beside
+  `interface A { [y: string]: {length: string} }` was silent while the
+  identical members in ONE body were reported. **TP 2559 -> 2560, MISS
+  175 -> 174.** Worth more than its one file: `interface Config {
+  [k: string]: string; port: number }` is a mistake people actually make,
+  and index signatures appear in 102 of 3,000 real `.d.ts` files.
 - [ ] **Overload resolution** — select the right signature (2 solo files,
   contributes to TS2345 / TS2769). Overloads are the reason `.d.ts`
   files exist, and 566 of the 3,000 sampled carry repeated signatures.

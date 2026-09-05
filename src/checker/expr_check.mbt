@@ -33020,11 +33020,42 @@ fn check_interface_extends_compat(
     }
   }
 
+  // Interface declarations MERGE, and an index signature constrains the
+  // members of the MERGED type — so the two halves of
+  //
+  //     interface A { [x: number]: string }
+  //     interface A { [y: string]: { length: string } }
+  //
+  // conflict with each other and neither half conflicts with itself.
+  // This loop reads `module_.interfaces`, the per-DECLARATION list, so
+  // every cross-declaration conflict was invisible: the identical
+  // members written in ONE body are reported and the same members split
+  // across two are silent (mergedInterfacesWithIndexers2).
+  //
+  // A name with several declarations is therefore checked once, on the
+  // merged interface from the resolver, and skipped here — checking both
+  // would report every within-one-body conflict twice.
+  //
+  // Only names THIS module declares more than once are looked up, rather
+  // than iterating `resolver.interfaces` wholesale: that table also
+  // holds interfaces ingested from imported modules and the lib, and
+  // those are not this module's to report on.
+  let iface_decl_counts : Map[String, Int] = {}
+  for iface in module_.interfaces {
+    iface_decl_counts[iface.name] = (match iface_decl_counts.get(iface.name) {
+        Some(v) => v
+        None => 0
+      }) +
+      1
+  }
   for iface in module_.interfaces {
     // Generic interfaces are processed too: a property whose type is one of
     // the interface's own type parameters resolves to a bare `Named` that is
     // not object-shaped and not scalar, so `violates_index_value` leaves it
     // alone -- only concrete object / scalar properties are decided.
+    if iface_decl_counts.get(iface.name) is Some(n) && n > 1 {
+      continue
+    }
     check_index_props(
       iface.index_signatures,
       iface.fields,
@@ -33069,6 +33100,38 @@ fn check_interface_extends_compat(
       if inherited.length() > 0 {
         check_index_props(inherited, iface.fields, "interface \{iface.name}")
       }
+    }
+  }
+  // The merged pass for the names skipped above. `merge_interface_group`
+  // concatenates `index_signatures` and folds `fields`, so the entry in
+  // the resolver already IS the type an index signature has to constrain.
+  let merged_seen : Map[String, Unit] = {}
+  for iface in module_.interfaces {
+    if !(iface_decl_counts.get(iface.name) is Some(n) && n > 1) {
+      continue
+    }
+    if merged_seen.contains(iface.name) {
+      continue
+    }
+    merged_seen[iface.name] = ()
+    match resolver.interfaces.get(iface.name) {
+      Some(merged) => {
+        check_index_props(
+          merged.index_signatures,
+          merged.fields,
+          "interface \{merged.name}",
+        )
+        if merged.type_params.length() == 0 {
+          check_num_vs_str_sigs(
+            merged.index_signatures,
+            "interface \{merged.name}",
+          )
+        }
+      }
+      // No merged entry (a prefix mismatch, or a name the resolver did
+      // not ingest) — abstain rather than fall back to the halves, which
+      // is what produced the silence this pass exists to remove.
+      None => ()
     }
   }
   // Non-generic classes by name for the base-chain walks below.
