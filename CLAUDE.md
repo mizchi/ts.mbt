@@ -221,7 +221,23 @@ product surfaces now.
   other consumers ask "could the platform have provided this name" and for
   those the conservative answer is still yes; only `check_undefined_name`
   splits the two questions, and only after every declaration lookup has
-  run. It also half-retires a blocker this file records: `TsFunc.body`
+  run. That rule is also the one that broke a harness nobody thought to
+  re-run, and the class of mistake generalizes: a new CHECKER rule is a
+  new way for every harness that TYPE-CHECKS ITS OWN FIXTURES to start
+  failing, and `verify-mangle-safety` compiles all 185 of its cases
+  through `mtsc`. Two of them read `process.argv.length` — deliberately,
+  because a literal would be folded away before the passes under test
+  ran — so TS2591 turned both into `blocked-compile`, which the corpus
+  counts as a REGRESSION. It sat in the branch for eight batches: the
+  oracle and the 2,966 tests both stayed green, because neither compiles
+  a fixture. The fix is what the diagnostic asks for rather than a
+  workaround — `declare const process: { argv: string[] }`, which emits
+  nothing, so the value stays Node's and stays opaque to every fold. The
+  operational lesson is the checklist: after a rule that can reject a
+  NAME, run the fixture-compiling harnesses (`verify-mangle-safety`,
+  `verify-generated-fixtures`, `verify-scaffolds`, `verify-examples`,
+  `verify-mbti-dts`), not just `moon test` and the oracle.
+  It also half-retires a blocker this file records: `TsFunc.body`
   being non-optional really does block TS2393 / TS2394, but
   `last_function_bodiless` already carries the fact at PARSE time, so
   TS2391's pairing question was always answerable there. The way to get it

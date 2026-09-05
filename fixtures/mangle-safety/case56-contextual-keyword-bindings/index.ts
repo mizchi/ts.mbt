@@ -22,6 +22,13 @@
 // declared, read, closed over, shadowed, and exported, and the observed
 // values must match Node running the original.
 
+// `process` is not in the default `lib` set (it comes from
+// `@types/node`), and mtsc reports TS2591 for an undeclared use of
+// it. Declaring the one member this fixture reads is what the
+// diagnostic asks for; `declare` emits nothing, so `process.argv`
+// is still Node's at runtime and still opaque to every fold.
+declare const process: { argv: string[] };
+
 const type: string = "outer-type";
 const namespace: string = "outer-namespace";
 const declare: number = Number(process.argv.length);

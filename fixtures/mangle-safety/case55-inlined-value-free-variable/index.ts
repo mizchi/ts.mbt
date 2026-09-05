@@ -33,6 +33,13 @@
 // any of these passes ran, and the collision needs a binding that
 // survives to the mangler.
 
+// `process` is not in the default `lib` set (it comes from
+// `@types/node`), and mtsc reports TS2591 for an undeclared use of
+// it. Declaring the one member this fixture reads is what the
+// diagnostic asks for; `declare` emits nothing, so `process.argv`
+// is still Node's at runtime and still opaque to every fold.
+declare const process: { argv: string[] };
+
 const argc: number = Number(process.argv.length);
 
 // ---- call_inline -----------------------------------------------------
