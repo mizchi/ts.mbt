@@ -1071,6 +1071,35 @@ product surfaces now.
   500/1000/2000/4000, exponent 1.02. The remainder is stated rather than
   chased — a nested class whose BASE is also nested cannot resolve its
   base chain, which loses a finding rather than inventing one.
+  Batch DQ is the same defect on a second axis, and probing is what
+  made it worth taking: TS2420 / TS2415 / TS2564 all fire on a class
+  DECLARATION, on `declare class` AND on a namespace-scoped class, and
+  on `const C = class …` not one of them did — while a class expression
+  is how a mixin, a HOC and a decorated factory class are all written.
+  `parse_class_stub` records into `local_classes` from **both** of its
+  exits, which is the finding rather than the fix: the native
+  `NativeClassExpr` exit is taken ONLY when there is an `extends`
+  clause, and a base-less class expression falls through to the desugar
+  below it, so recording at the first alone bought exactly the one rule
+  that needs a base — TS2415 fired, the other two stayed silent, and
+  that asymmetry is what exposed the split. An anonymous class
+  expression gets a PER-OCCURRENCE synthetic name, not one shared
+  `<class expression>`: the merge skips a repeated name, so a shared one
+  would check only the first anonymous class in a file and a file with
+  several is the normal case. +3 corpus files.
+  Its one false positive is DP's lesson on a fifth axis and the sharpest
+  version of it: TS2449 ("class used before its declaration") compares
+  INDICES in `module_.classes`, which encode top-level source ORDER —
+  and a local class is appended, so its index is not a position at all.
+  Read as one it made every top-level class whose base shares a name
+  with a class expression look forward-referencing
+  (`accessorsOverrideProperty8`, where `const Base =
+  classWithProperties(…, class Base {})` sits beside `class MyClass
+  extends Base`). Exempting local classes on both sides costs the mirror
+  MISS — `const D = class extends B {}; class B {}` IS TS2449 and stays
+  quiet — which is the affordable half. So `module_.classes` turns out
+  to carry THREE meanings its consumers read separately: the set of
+  classes, the set with no enclosing scope, and their source order.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

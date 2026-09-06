@@ -1183,6 +1183,44 @@ fn Parser::record_local_class(self : Parser) -> Unit {
 }
 
 ///|
+/// Collect a class EXPRESSION (`const C = class { … }`) as a local class.
+///
+/// A class expression is never a top-level declaration — the binding
+/// belongs to the surrounding `const C = …`, not to the class — so this is
+/// unconditionally local and needs nothing from the six callers of
+/// `parse_class_stub`. Without it the class-shape rules were blind to the
+/// expression form: measured, TS2420 (implements), TS2415 (extends
+/// accessibility) and TS2564 (definite assignment) all fire on a class
+/// DECLARATION, on `declare class` and on a namespace-scoped class, and
+/// on `const C = class …` not one of them did.
+///
+/// Called from BOTH of `parse_class_stub`'s exits, which is the point:
+/// the native path is taken only when there is an `extends` clause, and a
+/// base-less class expression falls through to the desugar below it.
+/// Recording at the first exit alone bought exactly the one rule that
+/// needs a base — TS2415 fired and the other two stayed silent, which is
+/// how the split was found.
+///
+/// An anonymous class expression gets a synthetic, per-occurrence name
+/// (the base-less path already calls it `<class>`). Per-occurrence rather
+/// than one shared spelling on purpose: the checker's merge skips a
+/// repeated name, so a shared one would check only the FIRST anonymous
+/// class in a file, and a file with several is the normal case (mixins).
+/// Angle brackets are not identifier characters, so a synthetic name can
+/// never collide with a declared one.
+fn Parser::record_local_class_expr(
+  self : Parser,
+  decl : @ast.TsClassDecl,
+) -> Unit {
+  let name = if decl.name == "" || decl.name == "<class>" {
+    "<class expression \{self.collected_local_classes.length() + 1}>"
+  } else {
+    decl.name
+  }
+  self.collected_local_classes.push({ ..decl, name, is_local: true })
+}
+
+///|
 /// True when `t` mentions any of the type-parameter names held in `bounds`
 /// (the `(name, bound)` pairs pushed for the enclosing scope). Used to detect a
 /// static index signature whose value type references a class type parameter
@@ -3807,6 +3845,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         static_field_inits,
         instance_field_inits,
       }
+      self.record_local_class_expr(decorated_with_statics)
       return NativeClassExpr(decorated_with_statics, ctor_func)
     }
     None => ()
@@ -3872,6 +3911,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     duplicate_member_names: runtime_decl.duplicate_member_names,
   }
   self.record_runtime_class_decl(decorated)
+  self.record_local_class_expr(decorated)
   let instance_assigns : Array[@ast.TsStmt] = []
   let has_instance_private = has_instance_private_elements(elements)
   let has_static_private = has_static_private_elements(elements)

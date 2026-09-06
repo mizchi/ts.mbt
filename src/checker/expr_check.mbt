@@ -24507,17 +24507,30 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // ORDER inside a `.d.ts` carries no runtime meaning at all. Probed:
   // `class C1 extends C2 {} declare class C2 {}` fired before this
   // exemption was added, and that shape is ordinary @types layout.
+  // A LOCAL class (declared in a function body, or a class expression) is
+  // exempt on both sides, and the reason is about this rule's mechanism
+  // rather than about TypeScript: the comparison is between INDICES in
+  // `module_.classes`, which encode top-level source order, and local
+  // classes are appended to that list after the merge — so their index is
+  // not a position at all. Reading it as one made every top-level class
+  // whose base shares a name with a local class look forward-referencing
+  // (`accessorsOverrideProperty8`, where `const Base =
+  // classWithProperties(…, class Base {})` puts a class named `Base` at
+  // the end of the list and `class MyClass extends Base` reads as a
+  // forward reference). The exemption costs a MISS in the other
+  // direction — `const D = class extends B {}; class B {}` IS TS2449 and
+  // stays quiet — which is the affordable half.
   let class_index : Map[String, Int] = {}
   for i, c in module_.classes {
     // A repeated name is a different error (TS2300, batch CA); keep the
     // FIRST index so a later duplicate cannot make an earlier `extends`
     // look forward-referencing.
-    if not(class_index.contains(c.name)) && not(c.is_declare) {
+    if not(class_index.contains(c.name)) && not(c.is_declare) && not(c.is_local) {
       class_index[c.name] = i
     }
   }
   for i, cls in module_.classes {
-    if cls.is_declare {
+    if cls.is_declare || cls.is_local {
       continue
     }
     for base in cls.base_names {

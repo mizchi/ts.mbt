@@ -18178,3 +18178,66 @@ test "checker: class rules see a class declared inside a function" {
     0,
   )
 }
+
+///|
+/// The class rules also see a class EXPRESSION (`const C = class { … }`).
+///
+/// Same defect as a class declared in a function body, on a different
+/// axis: measured, TS2420 (implements), TS2415 (extends accessibility) and
+/// TS2564 (definite assignment) all fired on a class DECLARATION, on
+/// `declare class` and on a namespace-scoped class, and on the expression
+/// form none of them did. `parse_class_stub` records into `local_classes`
+/// now, from BOTH of its exits — the native one is taken only when there
+/// is an `extends` clause, so recording at that one alone bought exactly
+/// the rule that needs a base and left the other two silent, which is how
+/// the split was found.
+test "checker: class rules see a class expression" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let iface = "interface I { a: number }\n"
+  let base = "class B { protected m(): void {} }\n"
+
+  // --- fires. The first needs no base (the desugar exit), the second
+  // does (the native exit).
+  assert_true(n(iface + "const C = class implements I { };") > 0)
+  assert_true(
+    n(base + "const D = class extends B { private m(): void {} };") > 0,
+  )
+  assert_true(n("const C = class { x: number; };") > 0)
+  // A NAMED class expression keeps its own name in the diagnostic.
+  assert_true(n(iface + "const C = class Inner implements I { };") > 0)
+  // Inside a function, which is where a mixin factory puts one.
+  assert_true(n(iface + "function f() { return class implements I { }; }") > 0)
+  // Two ANONYMOUS expressions in one file must both be checked — the
+  // merge skips a repeated name, so they need distinct synthetic ones.
+  @test.assert_eq(
+    n("const A1 = class { x: number; };\nconst A2 = class { y: number; };"),
+    2,
+  )
+
+  // --- stays silent.
+  for
+    src in [
+      iface + "const C = class implements I { a = 1; };",
+      "const C = class { x: number = 1; };",
+      "const C = class { m(): void {} };",
+      // A named class expression whose name matches a top-level class is
+      // two different bindings; the merge skips the repeat.
+      "class D { z(): void {} }\nconst C = class D { m(): void {} };",
+      // TS2449 compares INDICES in `module_.classes`, which encode
+      // top-level source order — and a local class is appended, so its
+      // index is not a position. Reading it as one made every top-level
+      // class whose base shares a name with a class expression look
+      // forward-referencing (`accessorsOverrideProperty8`).
+      "const Base = (class Base { });\nclass MyClass extends Base { }",
+      // A class declared in a function body is evaluated when the
+      // function runs, so extending a class declared LATER at top level
+      // is legal — tsc accepts it.
+      "function f() { class D extends B {} return D }\nclass B { m(): void {} }",
+    ] {
+    @test.assert_eq(n(src), 0)
+  }
+  // ...while a genuine top-level forward reference still fires.
+  assert_true(n("class D extends B {}\nclass B { m(): void {} }") > 0)
+}

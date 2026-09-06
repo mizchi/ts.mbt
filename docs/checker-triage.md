@@ -248,8 +248,8 @@ produced a retired strategy document.
 That is now what the gate does:
 
 ```
-TP  err+flag  : 2566   (of which via parse rejection: 390)
-MISS in scope : 149   (the backlog — this one can reach zero)
+TP  err+flag  : 2569   (of which via parse rejection: 390)
+MISS in scope : 146   (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0     (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)

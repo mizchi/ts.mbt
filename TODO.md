@@ -4712,6 +4712,36 @@ inside a function body:
     also nested does not resolve its base chain, because the base is not
     in the resolver's name table either. That loses a finding rather than
     inventing one.
+- [x] **Batch DQ: the same rules also see a class EXPRESSION** (+3 files,
+  TP 2566 -> 2569, in-scope MISS 149 -> 146, FP 0). Probed first, which
+  is what made the axis worth taking: TS2420 / TS2415 / TS2564 all fire
+  on a class DECLARATION, on `declare class` AND on a namespace-scoped
+  class, and on `const C = class …` not one of them did — while
+  `const C = class {}` is how a mixin, a HOC and a decorated factory
+  class are all written.
+  - `parse_class_stub` records into `local_classes` from **both** of its
+    exits, which is the whole finding: the native `NativeClassExpr` exit
+    is taken only when there is an `extends` clause, and a base-less
+    class expression falls through to the desugar below it. Recording at
+    the first alone bought exactly the one rule that needs a base —
+    TS2415 fired and the other two stayed silent — which is how the
+    split was found rather than assumed.
+  - An anonymous class expression gets a per-occurrence synthetic name.
+    Per-occurrence and not one shared `<class expression>`, because the
+    merge skips a repeated name and a file with several anonymous
+    classes is the normal case; pinned by a test that asserts BOTH of
+    two get checked.
+  - One false positive, and it is the DP lesson on a fifth axis:
+    TS2449 ("class used before its declaration") compares INDICES in
+    `module_.classes`, which encode top-level source order — and a local
+    class is APPENDED, so its index is not a position. Reading it as one
+    made every top-level class whose base shares a name with a class
+    expression look forward-referencing
+    (`accessorsOverrideProperty8`: `const Base = classWithProperties(…,
+    class Base {})` beside `class MyClass extends Base`). Exempting
+    local classes on both sides costs the mirror MISS —
+    `const D = class extends B {}; class B {}` IS TS2449 and stays
+    quiet — which is the affordable half.
 - [ ] implicit-any / strict family (6 left): TS7010/7018/7022/7023/7031/
   7053, TS2565/2729. Small corpus count, highest USER-facing value in
   this tier — it is what a real codebase hits the day it turns `strict`
@@ -4775,7 +4805,7 @@ if a bridge target uses them.
 
 ### The recommendation that is not a rule — DONE
 
-- [x] **Two MISS numbers.** `MISS in scope 149` (the backlog, which can
+- [x] **Two MISS numbers.** `MISS in scope 146` (the backlog, which can
   reach zero) beside `OUT OF SCOPE 19` (declared). `--scope-file /dev/null`
   reproduces the old single 174 — verified, not asserted.
   Nothing but the MISS branch consults the scope file, so a listed file can
