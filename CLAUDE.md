@@ -1192,6 +1192,57 @@ product surfaces now.
   AT ALL; and a top-level `function d() { }` is parsed by the module loop
   into `module_.funcs` and is NOT pushed into `top_level_stmts`, so the
   outermost list has to be told about those holders by name.
+  Batch DT is +2 files for two rules, and its reusable finding is about
+  a KIND of lead rather than about either rule: both were the
+  applied-in-some-places family, and at the missing site each carried a
+  comment declining the rule with a stated reason that turned out to be
+  FALSE. A recorded abstention is a lead — and its REASON still has to be
+  probed. TS7010 ("lacks return-type annotation, implicitly has an `any`
+  return type") existed for a bodiless `function` declaration and for
+  `declare function` and for nothing else, so an interface method, an
+  object-type method, a class overload signature, an `abstract` member
+  and a `declare class` member were all silent; the class site's comment
+  said "tsc does not flag an overload signature whose implementation
+  carries the return annotation", and probing gives the inverse —
+  `m(); m(x: number); m(x?: number): void { }` reports on BOTH
+  signatures while annotated signatures with an unannotated
+  implementation are ACCEPTED, because the exemption belongs to the BODY
+  and not to the overload set. TS7022 / TS2448 (a binding whose own
+  initializer evaluates a reference to it) existed for a `for…of` head
+  and was missing at the DECLARATION site, so `let x = x` and
+  `const x = [x]` were silent; the head rule's two-arm walk was
+  justified by "a name reached through a call or a property is not the
+  iterable itself, so widening this would claim a cycle that is not
+  one", and the real line is not call-versus-property but whether the
+  reference is EVALUATED before the binding initializes —
+  `for (let v of [v])`, `[1, v]`, `g(v)` and `[...xs, v]` all report,
+  `o.v` does not (a property name is a `String` in this AST and can
+  never be reached as a `Var`), and `[() => v]` does not. Two codes, one
+  condition, each gated on the fact it needs: TS2448 applies to
+  `let`/`const` whatever the annotation says, since a TDZ is about time,
+  while TS7022 needs the annotation ABSENT and is all a `var` gets.
+  Threading the annotation fact in from the parse site also closed a
+  pre-existing false positive the head rule's own comment had promised
+  not to have — it gated on `var_type is Any`, which cannot tell an
+  absent annotation from an explicit `: any` (the same blocker recorded
+  for TS7031), so `for (var v: any of v)` was reported; and that
+  spelling is not "legal" either, it is TS2483 + TS2502, two codes this
+  rule does not claim, so the old behaviour was the right file for the
+  wrong reason. Three pre-existing tests asserted the TS7010 gap BY
+  NAME — the eighth, ninth and tenth in this repo found doing that —
+  because `parse_module_or_empty` defaults `noImplicitAny` to true and
+  all three wrote `class C { foo(x: number); foo(x: any) {} }` while
+  asserting 0, so each was measuring the implicit-any hole rather than
+  the overload rule it is named for.
+  The batch also corrects the triage twice, both times the
+  label-for-objective substitution: TS7023 and TS7053 were filed as
+  "cheap and mechanical" implicit-any work and are neither. TS7023's
+  three files all need an inference CYCLE detector through a class
+  method's un-annotated return type, and the only cheap version keys on
+  the exact corpus shape; TS7053's two need union-of-index-signature
+  member resolution and assignment-target widening of
+  `(options || {}).a`, which is why both files also carry TS2339 /
+  TS2322. Five files moved to Tier 3.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

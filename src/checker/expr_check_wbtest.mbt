@@ -10143,14 +10143,25 @@ test "expr_check: overload signatures mixing static and instance (TS2387/2388)" 
   assert_true(issues("class C { foo(); static foo(); }") > 0)
   // A legal static+instance method pair (each with a body) is not flagged,
   // even when each side also has its own overload signatures.
+  //
+  // The `: void` on the SIGNATURES is load-bearing: `parse_module_or_empty`
+  // defaults `noImplicitAny` to true, and a bodiless signature with no
+  // return annotation is TS7010 — which tsc reports on all four of these
+  // spellings. This assertion was `foo(x: number);` and passed only
+  // because batch DT's rule did not exist yet, so it was measuring the
+  // implicit-any hole rather than the static/instance mixing it is named
+  // for.
   @test.assert_eq(
     issues(
-      "class C { foo(x: number); foo(x: any) {} static foo(x: number); static foo(x: any) {} }",
+      "class C { foo(x: number): void; foo(x: any): void {} static foo(x: number): void; static foo(x: any): void {} }",
     ),
     0,
   )
   // Same-kind overloads with an implementation are fine.
-  @test.assert_eq(issues("class C { foo(x: number); foo(x: any): void {} }"), 0)
+  @test.assert_eq(
+    issues("class C { foo(x: number): void; foo(x: any): void {} }"),
+    0,
+  )
 }
 
 ///|
@@ -10160,8 +10171,13 @@ test "expr_check: overload signature with no implementation (TS2391)" {
   }
   // A bodyless method with no implementation in a runtime class is TS2391.
   assert_true(issues("class C { foo(); }") > 0)
-  // An overload signature followed by an implementation is fine.
-  @test.assert_eq(issues("class C { foo(x: number); foo(x: any): void {} }"), 0)
+  // An overload signature followed by an implementation is fine. The
+  // `: void` is required for the reason recorded in the TS2387/2388 test
+  // above — a bodiless signature with no return annotation is TS7010.
+  @test.assert_eq(
+    issues("class C { foo(x: number): void; foo(x: any): void {} }"),
+    0,
+  )
   // An optional method may omit its body.
   @test.assert_eq(issues("class C { foo?(): number; }"), 0)
   // Ambient declare-class signatures need no implementation.
@@ -10424,9 +10440,10 @@ test "expr_check: class-expression structural diagnostics" {
     ) >
     0,
   )
-  // Valid class expressions stay silent.
+  // Valid class expressions stay silent. `foo(): void;` rather than
+  // `foo();` for the TS7010 reason recorded in the TS2387/2388 test.
   @test.assert_eq(issues("const C = class { foo() {} };"), 0)
-  @test.assert_eq(issues("const C = class { foo(); foo() {} };"), 0)
+  @test.assert_eq(issues("const C = class { foo(): void; foo() {} };"), 0)
 }
 
 ///|
@@ -18480,4 +18497,105 @@ test "checker: TS2386 / TS2394 / TS2565 (batch DS)" {
     n("//@strict: false\nfunction d() { }\nif (!!false) { d.q = false }\nd.q"),
     0,
   )
+}
+
+///|
+/// Batch DT: TS7010 at the member signatures, and TS7022 / TS2448 at the
+/// two self-referential-initializer sites. Both are the
+/// applied-in-some-places family, and BOTH had a comment at the missing
+/// site stating an abstention whose stated reason turned out to be wrong.
+///
+/// TS7010 existed for a bodiless `function` declaration and for `declare
+/// function` and for nothing else. The class site's comment claimed "tsc
+/// does not flag an overload signature whose implementation carries the
+/// return annotation" — probed, `m(); m(x: number); m(x?: number): void
+/// { }` reports on BOTH signatures while annotated signatures with an
+/// unannotated implementation are ACCEPTED. The exemption belongs to the
+/// BODY, not to the set.
+///
+/// TS7022 existed for a `for…of` head whose iterable is a bare `Var`,
+/// with a comment claiming that widening past that "would claim a cycle
+/// that is not one" for a name reached through a call or a property.
+/// Probed, a call ARGUMENT does report and an array element does, while a
+/// property NAME does not and a nested arrow body does not — so the
+/// dividing line is not call-versus-property but "is this reference
+/// EVALUATED before the binding is initialized".
+test "checker: TS7010 / TS7022 / TS2448 (batch DT)" {
+  // The PERMISSIVE entry point: a `<noimplicitany>` marker is surfaced
+  // only there, which is where TS7010 lives.
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let nia = "// @noImplicitAny: true\n"
+
+  // --- TS7010 at each member position. A call / construct signature gets
+  // its own code from tsc (TS7020 / TS7013) with the signature kind in
+  // place of a name, and the same recorder covers both.
+  for
+    src in [
+      "interface I { foo(n: string); }", "var v: { foo(n: string); };", "type F = { foo(n: string) };",
+      "declare class C { m(); }", "class D { m(); m(x: number); m(x?: number) { } }",
+      "abstract class E { abstract m(); }", "interface I { new (n: string); }", "interface I { (n: string); }",
+      // Signatures unannotated, implementation ANNOTATED: still an error
+      // on the signatures. This is the case the old comment said tsc
+      // accepts.
+       "class D { m(); m(x: number); m(x?: number): void { } }", "class D { m(): void; m(x: number); m(x?: number): void { } }",
+    ] {
+    assert_true(n(nia + src) > 0)
+  }
+  // Silent: an annotation present (including an explicit `any`, which tsc
+  // accepts and which is why the test is on whether one was WRITTEN); an
+  // implementation, which infers from its body; a getter (TS7033) and a
+  // bare property (TS7008), two different rules; and the whole thing off
+  // under `noImplicitAny: false`.
+  for
+    src in [
+      "interface I { foo(n: string): void; }", "interface I { foo(n: string): any; }",
+      "class D { m(): void; m(x: number): void; m(x?: number) { } }", "class D { m() { } }",
+      "declare class C { m(): void; }", "abstract class E { abstract m(): void; }",
+      "interface I { get p(); }", "interface I { p; }",
+    ] {
+    @test.assert_eq(n(nia + src), 0)
+  }
+  @test.assert_eq(
+    n("// @noImplicitAny: false\ninterface I { foo(n: string); }"),
+    0,
+  )
+
+  // --- TS7022 / TS2448: the binding's own initializer evaluates a
+  // reference to it. Both the declaration site and the `for` head, and
+  // both the direct spelling and the ones the old walk could not see (an
+  // array element, a call argument, a spread).
+  for
+    src in [
+      "let x = x;", "let x = [x];", "function f() { let x = x; }", "let x = typeof x;",
+      "let x = x ? 1 : 2;", "let x: number = x;", "var x = x;", "for (let v of [v]) { }",
+      "for (let v of [1, v]) { }", "for (const v of [v]) { }", "for (var v of [v]) { }",
+      "for (let v in { v }) { }", "for (let i = i; ; ) { }", "for (let v of []) { for (let v of [v]) { } }",
+      "declare function g(a: unknown): any[];\nfor (let v of g(v)) { }", "declare const xs: any[];\nfor (let v of [...xs, v]) { }",
+      "declare const v0: number[];\nfor (let v of v0) { }\nfor (let w of w) { }",
+    ] {
+    assert_true(n(nia + src) > 0)
+  }
+  // Silent, and every one of these is a shape the walk had to be shaped
+  // around: a function / arrow / class body runs AFTER the binding is
+  // initialized; an object-literal KEY is not a reference (`{ x: 1 }` is
+  // legal, the shorthand `{ x }` is not); a later declarator may read an
+  // earlier one; a property NAME of the same spelling is not a
+  // reference; and an ordinary loop over an unrelated binding.
+  for
+    src in [
+      "let x = function () { return x; };", "let x: any = () => x;", "let x = class { m() { return x } };",
+      "let x = { x: 1 };", "declare const y: number;\nlet x = { x: y };", "let x = 1, y = x;",
+      "declare const o: { x: number };\nconst { x } = o;", "declare const arr: number[];\nfor (let v of arr) { }",
+      "declare const o2: { v: any[] };\nfor (let v of o2.v) { }", "declare const xs2: any[];\nfor (let v of [xs2]) { }",
+      "declare const w: number[];\nfor (let v of w) { const q = [v]; }", "declare const arr2: any[];\nlet x = arr2.map(v => x);",
+      // Not legal, but not OURS: tsc gives an annotated for-of head
+      // TS2483 + TS2502, two codes this rule does not claim, and an
+      // annotation breaks the inference cycle TS7022 is about. Reporting
+      // it would be the right file for the wrong reason.
+       "for (var v: any of v) { }",
+    ] {
+    @test.assert_eq(n(nia + src), 0)
+  }
 }

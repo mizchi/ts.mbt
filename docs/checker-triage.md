@@ -184,8 +184,23 @@ bridge's primary input.
   7031/7053, TS2564/2565/2729. This is what a real codebase hits the day
   it turns `strict` on, which makes it the highest *user-facing* value in
   Tier 2 even though the corpus count is small. TS7009 went in as batch
-  DO, TS2565 (expando use-before-assign) as batch DS; TS7031/TS7018 is
+  DO, TS2565 (expando use-before-assign) as batch DS, and TS7010 (a
+  bodiless member signature with no return annotation) plus TS7022 /
+  TS2448 (a self-referential initializer) as batch DT; TS7031/TS7018 is
   REJECTED with a mechanical blocker recorded in TODO.md.
+
+  **TS7023 and TS7053 do NOT belong in this tier**, and calling them
+  "cheap and mechanical" was the label-for-objective substitution this
+  document is written to warn about — measured by opening the files.
+  TS7023 is three files (`for-of33` / `-34` / `-35`) that all need an
+  inference CYCLE detector through a class method's un-annotated return
+  type; the only cheap version would key on the exact corpus shape ("the
+  iterated class's `next()` returns the loop variable"), which is fitting
+  the corpus. TS7053 is two files needing union-of-index-signature member
+  resolution (`{ foo: number } | { [s: string]: string }`) and
+  assignment-target widening of `(options || {}).a` — both Tier 3
+  assignability work, and both files also carry TS2339 / TS2322 for the
+  same reason. Five files moved to Tier 3.
 - **strict-null / narrowing** (8 files).
 
 ### Tier 3 — DEFER (~93 files, real but expensive)
@@ -255,8 +270,8 @@ produced a retired strategy document.
 That is now what the gate does:
 
 ```
-TP  err+flag  : 2575   (of which via parse rejection: 390)
-MISS in scope : 140   (the backlog — this one can reach zero)
+TP  err+flag  : 2577   (of which via parse rejection: 390)
+MISS in scope : 138   (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0     (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)

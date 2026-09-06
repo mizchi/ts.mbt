@@ -3169,11 +3169,31 @@ fn Parser::parse_class_body(
           "a decorator can only decorate a method implementation, not an overload",
         )
       }
-      // (Method-level TS7010 is intentionally not recorded: a bodiless
-      // method with no implementation at all already reports TS2391, and
-      // tsc does not flag an overload signature whose implementation
-      // carries the return annotation.)
-      let _ = had_return_annotation
+      // TS7010 (`noImplicitAny`): a BODILESS class member with no
+      // return-type annotation implicitly returns `any` — an overload
+      // signature, an `abstract` member and a `declare class` member
+      // alike. The IMPLEMENTATION is exempt because it infers from its
+      // body, which is the whole content of the test.
+      //
+      // The comment that used to sit here abstained and gave a reason
+      // that is the inverse of the truth: it said "tsc does not flag an
+      // overload signature whose implementation carries the return
+      // annotation", and probed, `m(); m(x: number); m(x?: number): void
+      // { }` reports on BOTH signatures while
+      // `m(): void; m(x: number): void; m(x?: number) { }` — annotated
+      // signatures, unannotated implementation — is ACCEPTED. The
+      // exemption belongs to the body, not to the set.
+      //
+      // Accessors are excluded (a getter with no annotation is TS7033, a
+      // different rule) and so is `constructor`, which has no return
+      // type to annotate.
+      if not(has_body_block) &&
+        accessor_kind is None &&
+        method_name != "constructor" {
+        self.record_implicit_any_member_return(
+          method_name, had_return_annotation,
+        )
+      }
       // TS1221 / overload-signature rule: a bodiless `*method()` is
       // always an error — generators are not allowed in ambient
       // contexts, and an overload signature cannot be a generator.

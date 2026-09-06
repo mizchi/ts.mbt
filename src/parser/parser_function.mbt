@@ -212,6 +212,48 @@ fn Parser::record_overload_optionality(
 }
 
 ///|
+/// TS7010 (`noImplicitAny`): a BODILESS signature with no return-type
+/// annotation implicitly returns `any` — there is no body to infer from.
+///
+/// The rule already existed for a bodiless `function` declaration and for
+/// `declare function` (see `record_implicit_any_return` and
+/// `parse_declare_function`) and for nothing else, so an interface method,
+/// an object-type method, a class overload signature, an `abstract`
+/// member and a `declare class` member were all silent — the
+/// applied-in-some-places family again. One recorder, called from every
+/// member parser.
+///
+/// `name` is the member's own name, or the `<call>` / `<new>` sentinel,
+/// which tsc gives their own codes (TS7020 / TS7013) with the signature
+/// kind in place of a name. Accessors and properties are NOT here: a
+/// getter with no annotation is TS7033 and a bare `p;` member is TS7008,
+/// two different rules, the second of which already fires.
+///
+/// The test is on whether an annotation was WRITTEN, not on the resolved
+/// type: `foo(n: string): any` is accepted by tsc while `foo(n: string)`
+/// is the error, and the member parsers default a missing annotation to
+/// `Void` or `Any` so the two are indistinguishable afterwards.
+fn Parser::record_implicit_any_member_return(
+  self : Parser,
+  name : String,
+  had_return_annotation : Bool,
+) -> Unit {
+  if not(self.no_implicit_any) || had_return_annotation {
+    return
+  }
+  let what = if name == "<call>" {
+    "call signature"
+  } else if name == "<new>" {
+    "construct signature"
+  } else {
+    "`" + name + "`"
+  }
+  self.grammar_misuses.push(
+    "<noimplicitany>\{what}, which lacks a return-type annotation, implicitly has an `any` return type",
+  )
+}
+
+///|
 /// TS2371: "A parameter initializer is only allowed in a function or
 /// constructor implementation."
 ///
@@ -2054,11 +2096,19 @@ pub fn Parser::parse_interface(
         }
       }
       // Return type
-      let return_type = if self.check(Colon) {
+      let had_return_annotation = self.check(Colon)
+      let return_type = if had_return_annotation {
         let _ = self.advance()
         self.parse_type()
       } else {
         @ast.TsType::Void
+      }
+      // TS7010 / TS7013 / TS7020: an interface member signature with no
+      // return annotation. Accessors get TS7033, a different rule.
+      if accessor_kind is None {
+        self.record_implicit_any_member_return(
+          field_name, had_return_annotation,
+        )
       }
       let param_types : Array[@ast.TsType] = []
       for param in method_params {
@@ -3275,7 +3325,15 @@ fn Parser::parse_declare_class(
         _ => ()
       }
       let params = self.parse_declare_signature_params()
-      let return_type = if self.check(Colon) {
+      let had_return_annotation = self.check(Colon)
+      // TS7010, fourth site: every `declare class` member is bodiless, so
+      // a missing return annotation always means an implicit `any`.
+      match member_name {
+        Some(n) if accessor_kind is None && n != "constructor" =>
+          self.record_implicit_any_member_return(n, had_return_annotation)
+        _ => ()
+      }
+      let return_type = if had_return_annotation {
         let _ = self.advance()
         self.parse_type()
       } else {

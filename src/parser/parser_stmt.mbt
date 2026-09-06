@@ -1371,6 +1371,13 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       _ => ()
     }
     let var_type = self.parse_var_decl_type()
+    // Read HERE, not at the recorder call below: the iterable expression
+    // and the loop body are parsed in between and either can contain a
+    // declaration whose own `parse_var_decl_type` overwrites the flag —
+    // the same hazard `parse_var_decl_item` records for the declaration
+    // site. `var_type is Any` cannot answer this on its own, because an
+    // ABSENT annotation and an explicit `: any` are the same `Any`.
+    let head_annotated = self.last_var_decl_annotated
     if self.check(Of) || self.check(In) {
       let is_in = self.check(In)
       if is_await && is_in {
@@ -1397,7 +1404,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       let body = self.parse_block_or_stmt_no_lexical()
       self.in_iteration = prev_iteration
       self.record_for_head_binding_misuses(
-        kind, binding, var_type, iterable, body,
+        kind, binding, var_type, head_annotated, iterable, body,
       )
       // Preserve the explicit type annotation on the loop binding when
       // present; `parse_var_decl_type` returns `Any` otherwise.
@@ -2232,6 +2239,7 @@ fn Parser::parse_var_decl_item(
   if not(annotated) {
     self.record_tuple_index_out_of_range(binding, init)
   }
+  self.record_self_referential_initializer(binding, init, kind, annotated)
   match kind {
     Var => @ast.TsStmt::Var(binding, type_, init)
     Let => @ast.TsStmt::Let(binding, type_, init)

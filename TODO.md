@@ -4859,9 +4859,89 @@ inside a function body:
     and is NOT pushed into `top_level_stmts`, so the outermost list has
     to be told about those holders by name and each such body scanned
     explicitly.
-- [ ] implicit-any / strict family (4 left): TS7010/7022/7023/7053,
-  TS2729. Small corpus count, highest USER-facing value in this
-  tier — it is what a real codebase hits the day it turns `strict` on.
+- [x] **Batch DT: TS7010 at the member signatures, TS7022 / TS2448 at
+  both self-reference sites, +2 files at FP 0** (TP 2575 -> 2577,
+  in-scope MISS 140 -> 138). Both rules are the applied-in-some-places
+  family, and BOTH had a comment at the missing site stating an
+  abstention whose stated reason turned out to be FALSE — which is the
+  reusable finding: a recorded abstention is a lead, and its reason still
+  has to be probed.
+  - **TS7010** ("'X', which lacks return-type annotation, implicitly has
+    an 'any' return type") existed for a bodiless `function` declaration
+    and for `declare function` and for NOTHING else, so an interface
+    method, an object-type method, a class overload signature, an
+    `abstract` member and a `declare class` member were all silent. One
+    recorder, four member parsers. The class site carried a comment
+    declining it because "tsc does not flag an overload signature whose
+    implementation carries the return annotation" — probed, `m();
+    m(x: number); m(x?: number): void { }` reports on BOTH signatures,
+    while `m(): void; m(x: number): void; m(x?: number) { }` (annotated
+    signatures, unannotated implementation) is ACCEPTED. The exemption
+    belongs to the BODY, not to the overload set, so the stated reason
+    was the inverse of the truth. Accessors and bare properties are
+    excluded because tsc gives them TS7033 and TS7008, two different
+    rules. The test is on whether an annotation was WRITTEN, not on the
+    resolved type: `foo(n: string): any` is accepted and the parsers
+    default a missing annotation to `Void`/`Any`, so the two are
+    indistinguishable afterwards.
+  - **TS7022 / TS2448** (a binding whose own initializer evaluates a
+    reference to it) existed for a `for…of` head whose iterable is a bare
+    `Var` and was missing at the DECLARATION site, so `let x = x`,
+    `const x = [x]` and `let x = typeof x` were all silent. The head
+    rule's walk was two arms wide with a comment claiming that widening
+    past them "would claim a cycle that is not one" for a name reached
+    through a call or a property. Probed, the dividing line is not
+    call-versus-property but whether the reference is EVALUATED before
+    the binding initializes: `for (let v of [v])`, `[1, v]`, `g(v)` and
+    `[...xs, v]` all report, while `o.v` does not (a property NAME is a
+    `String` in this AST and can never be reached as a `Var`) and
+    `[() => v]` does not (the body runs later). One shared walk now
+    serves both sites. Two codes, one condition, each gated on the fact
+    it needs: TS2448 applies to `let`/`const` whatever the annotation
+    says (`let x: number = x` is still TS2448, the TDZ being about time),
+    while TS7022 needs the annotation ABSENT and is all a `var` gets.
+  - Threading `head_annotated` in from the parse site fixed a
+    **pre-existing false positive** the head rule's own comment had
+    promised not to have: it gated on `var_type is Any`, which cannot
+    tell an absent annotation from an explicit `: any`, so
+    `for (var v: any of v)` was reported. And the comment's claim that
+    the spelling is "legal" is also wrong — tsc gives it TS2483 + TS2502,
+    two codes this rule does not claim, so the old behaviour was the
+    right file for the wrong reason and abstaining costs a MISS.
+  - **Three pre-existing tests asserted the TS7010 gap by name** — the
+    eighth, ninth and tenth in this repo found doing that. The
+    TS2387/TS2388, TS2391 and class-expression tests all wrote
+    `class C { foo(x: number); foo(x: any) {} }` and asserted 0, and
+    `parse_module_or_empty` defaults `noImplicitAny` to TRUE, so every
+    one of those sources is a file tsc rejects. Annotating the
+    signatures makes each test measure the rule it is named for.
+- [ ] **MOVED TO TIER 3 with evidence: TS7023 (3 files) and TS7053 (2).**
+  The triage called the whole implicit-any family "cheap and
+  mechanical"; opening the files says otherwise, and that is the
+  label-for-objective substitution again. TS7023's three files
+  (`for-of33` / `-34` / `-35`) need an inference CYCLE detector through
+  a class method's un-annotated return type — the only cheap version
+  keys on the exact corpus shape ("the iterated class's `next()` returns
+  the loop variable"), which is fitting the corpus for three files
+  nobody's real code resembles. TS7053's two need
+  union-of-index-signature member resolution and assignment-target
+  widening of `(options || {}).a`; both files also carry TS2339 /
+  TS2322 for the same underlying reason, which is what says it is one
+  Tier 3 capability rather than a grammar rule.
+- [ ] **FILED: `for (let v of [() => v])` is a pre-existing false
+  positive** — "cannot find name `v`" from the undefined-name walk, on a
+  file tsc ACCEPTS. The for-of head binding is entered into `env` AFTER
+  the iterable is inferred (correct for the TDZ), so an arrow body
+  inside the iterable cannot see it, while the same arrow in the loop
+  BODY resolves fine. Invisible to the conformance gate (no corpus file
+  has the shape) and pre-existing, verified against the pre-batch
+  binary. The fix has to bind the name for the undefined-name channel
+  only, without giving `infer_expr` a type for it during the iterable's
+  own inference.
+- [ ] implicit-any / strict family (2 left): TS7022's INDIRECT form
+  (through a function body — `let x = arr.map(v => x)`), TS2729. Small
+  corpus count, highest USER-facing value in this tier — it is what a
+  real codebase hits the day it turns `strict` on.
 - [ ] **FILED: TS2393 for duplicate top-level function implementations.**
   Batch DS's `<fn-impl:NAME>` marker removes the blocker
   `check_function_var_duplicates`' comment used to name, and it is pushed
