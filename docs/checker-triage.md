@@ -186,8 +186,13 @@ bridge's primary input.
   Tier 2 even though the corpus count is small. TS7009 went in as batch
   DO, TS2565 (expando use-before-assign) as batch DS, and TS7010 (a
   bodiless member signature with no return annotation) plus TS7022 /
-  TS2448 (a self-referential initializer) as batch DT; TS7031/TS7018 is
-  REJECTED with a mechanical blocker recorded in TODO.md.
+  TS2448 (a self-referential initializer) as batch DT, and TS2729 (a
+  field with no initializer read from another field's initializer) as
+  batch DU; TS7031/TS7018 is REJECTED with a mechanical blocker recorded
+  in TODO.md. Every one of DS, DT and DU targeted a recorded
+  ABSTENTION, and in DT and DU the stated reason turned out to be false —
+  which makes "open the comment that declines the rule, then probe its
+  reason" the highest-yield move left in this tier.
 
   **TS7023 and TS7053 do NOT belong in this tier**, and calling them
   "cheap and mechanical" was the label-for-objective substitution this
@@ -270,8 +275,8 @@ produced a retired strategy document.
 That is now what the gate does:
 
 ```
-TP  err+flag  : 2577   (of which via parse rejection: 390)
-MISS in scope : 138   (the backlog — this one can reach zero)
+TP  err+flag  : 2578   (of which via parse rejection: 390)
+MISS in scope : 137   (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0     (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)

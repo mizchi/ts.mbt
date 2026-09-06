@@ -28976,6 +28976,12 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // the strict-property-initialization check (literal-named fields
         // are exempt from TS2564).
         ()
+      } else if name.has_prefix("<optional-member:") {
+        // Marker, not an error: an instance field declared with `?`.
+        // Consumed by `check_class_property_init_order` (TS2729 exempts
+        // an optional field and not a `T | undefined` one, and the
+        // parser wraps the former into the latter).
+        ()
       } else if name.has_prefix("<static-use-before-def:") {
         // TS2729: a static block read / wrote a static field that is only
         // declared after the block.
@@ -34417,6 +34423,17 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     if decl.instance_field_inits.length() == 0 {
       continue
     }
+    // Instance fields declared with `?`, from the parser's
+    // `<optional-member:` sentinel. TS2729 exempts an OPTIONAL field and
+    // does NOT exempt `x: T | undefined` — probed, those differ — and the
+    // parser wraps the former into exactly the latter, so the type cannot
+    // answer this and the modifier arrives on its own channel.
+    let optional_fields : Map[String, Unit] = {}
+    for m in decl.duplicate_member_names {
+      if m.has_prefix("<optional-member:") {
+        optional_fields[m["<optional-member:".length():m.length() - 1].to_string()] = ()
+      }
+    }
     // Set of non-static field names declared on the class. We use this
     // to distinguish a reference to a class field (potential TS2729
     // candidate) from a reference to a method, accessor, or external
@@ -34427,17 +34444,56 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     // their names from the field set so `this.m1()` -> a method call
     // isn't flagged.
     //
-    // Only fields that carry an *initializer* (the entries of
-    // `instance_field_inits`) are flaggable: TS2729 is about reading a field
-    // before its initializer has run, so a field declared without one
-    // (`s!: Date`, `s: Date`) has no initialization to be "used before" and
-    // reading it -- even from an earlier field's initializer -- is silent.
-    // Restricting the candidate set to init-bearing fields avoids flagging
-    // those declarations (the `scopeResolutionIdentifiers` false positive:
-    // `s!: Date; n = this.s;`, where `s` precedes `n` and has no init).
+    // Fields that carry an *initializer* (the entries of
+    // `instance_field_inits`) are flaggable in DECLARATION ORDER — that is
+    // what the `inited` set below tracks.
+    //
+    // A field with NO initializer is also flaggable, and used not to be.
+    // The comment that stood here said such a field "has no initialization
+    // to be 'used before'", and that reason is FALSE: `class C { b; d =
+    // this.b }` and `class C { b: number; d = this.b }` are both TS2729,
+    // whichever order the two are written in, because a slot only written
+    // in the constructor is still `undefined` while field initializers run.
+    // The real exemption is a MODIFIER, and there are exactly two, probed
+    // one cell at a time:
+    //
+    //   b!: number; d = this.b     legal   (definite-assignment assertion)
+    //   b?: number; d = this.b     legal   (optional)
+    //   b;         d = this.b      TS2729
+    //   b: number; d = this.b      TS2729
+    //   b: number | undefined      TS2729  — so it is NOT "the type
+    //   b: any / unknown / void    TS2729     admits undefined"
+    //   declare b: number          TS2729
+    //   private b / #b             TS2729
+    //   static b; static d = C.b   legal   (a different channel)
+    //   b: number; m() { this.b }  legal   (a method body runs later)
+    //
+    // `scopeResolutionIdentifiers`, the false positive the old abstention
+    // was protecting against, is the `s!: Date; n = this.s;` form — so it
+    // was avoided for the wrong reason and is still avoided, now for the
+    // right one.
+    //
+    // A no-initializer field NEVER enters `inited`, which is exactly
+    // right: order does not matter for it.
+    //
+    // `declare b: T` is a recorded MISS rather than a decision: the parser
+    // folds `has_declare` into `has_definite_assertion` (correctly, for
+    // TS2564), so an ambient field looks asserted here. That loses a
+    // finding and cannot invent one.
     let field_names : Map[String, Unit] = {}
     for entry in decl.instance_field_inits {
       field_names[entry.0] = ()
+    }
+    for prop in decl.properties {
+      if prop.is_static ||
+        prop.has_initializer ||
+        prop.has_definite_assertion ||
+        prop.is_accessor ||
+        prop.name.has_prefix("<") ||
+        optional_fields.contains(prop.name) {
+        continue
+      }
+      field_names[prop.name] = ()
     }
     // Parameter properties (`constructor(public foo: T)`) declare a `this.foo`
     // slot written *during* the constructor body -- after every instance-field

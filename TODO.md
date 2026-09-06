@@ -4938,10 +4938,42 @@ inside a function body:
   binary. The fix has to bind the name for the undefined-name channel
   only, without giving `infer_expr` a type for it during the iterable's
   own inference.
-- [ ] implicit-any / strict family (2 left): TS7022's INDIRECT form
-  (through a function body — `let x = arr.map(v => x)`), TS2729. Small
-  corpus count, highest USER-facing value in this tier — it is what a
-  real codebase hits the day it turns `strict` on.
+- [x] **Batch DU: TS2729 for a field with NO initializer, +1 file at
+  FP 0** (TP 2577 -> 2578, in-scope MISS 138 -> 137). Third batch in a
+  row whose target was a recorded ABSTENTION, and the third whose stated
+  reason was false — which makes "open the comment that declines the
+  rule, then probe its reason" the highest-yield move left in this tier.
+  `check_class_property_init_order` restricted its candidate set to
+  init-bearing fields, saying a field declared without an initializer
+  "has no initialization to be 'used before'". It has:
+  `class C { b; d = this.b }` and `class C { b: number; d = this.b }`
+  are both TS2729 in either declaration order, because a slot only
+  written in the CONSTRUCTOR is still `undefined` while field
+  initializers run — so such a field never enters the `inited` set and
+  order does not matter for it.
+  The real exemption is a MODIFIER, and probing one cell at a time gives
+  exactly two: `!` and `?`. It is emphatically NOT "the declared type
+  admits undefined" — `b: number | undefined`, `b: any`, `b: unknown`
+  and `b: void` all report, and so does the whole thing under
+  `strictNullChecks: false`, so a rule written from the type would have
+  been wrong in four places. And since the parser wraps `x?: T` into
+  exactly `T | undefined`, the `?` CANNOT be read off the type: it rides
+  an `<optional-member:` sentinel through the class's duplicate-member
+  channel, recorded before the wrap, the same shape as
+  `<quoted-member:` (which exists because TS2564 needed a fact the type
+  could not carry either).
+  `scopeResolutionIdentifiers`, the false positive the old abstention
+  was protecting against, is the `s!: Date; n = this.s;` form — so it
+  was avoided for the wrong reason and is still avoided, for the right
+  one.
+  One declared MISS, stated at the site: `declare b: T` is TS2729 in
+  tsc, and the parser folds `has_declare` into `has_definite_assertion`
+  (correctly, for TS2564), so an ambient field reads as asserted here.
+  That loses a finding and cannot invent one.
+- [ ] implicit-any / strict family (1 left): TS7022's INDIRECT form
+  (through a function body — `let x = arr.map(v => x)`). Small corpus
+  count, highest USER-facing value in this tier — it is what a real
+  codebase hits the day it turns `strict` on.
 - [ ] **FILED: TS2393 for duplicate top-level function implementations.**
   Batch DS's `<fn-impl:NAME>` marker removes the blocker
   `check_function_var_duplicates`' comment used to name, and it is pushed

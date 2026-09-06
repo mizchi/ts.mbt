@@ -3394,6 +3394,16 @@ fn Parser::parse_class_body(
       } else {
         @ast.TsType::Any
       }
+      // TS2729 support, recorded BEFORE the type is wrapped, because
+      // wrapping is exactly what destroys the fact: `x?: T` becomes
+      // `T | undefined`, which is also what `x: T | undefined` is, and
+      // tsc treats those two differently — the optional field is exempt
+      // from the used-before-initialization check and the union-typed one
+      // is not. Instance fields only; a static field is read as `C.x`
+      // and goes through the separate static-use-before-def channel.
+      if is_optional && not(is_static) {
+        self.optional_member_names.push(class_key_name(key))
+      }
       let field_type = if is_optional {
         wrap_optional_ts_type(field_type)
       } else {
@@ -3636,6 +3646,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
+  let optional_names_start = self.optional_member_names.length()
   let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
@@ -3677,6 +3688,16 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   for qn in quoted_names {
     expr_class_sentinels.push("<quoted-member:" + qn + ">")
+  }
+  // TS2729 support: an OPTIONAL instance field is exempt from the
+  // used-before-initialization check while `x: T | undefined` is not,
+  // and the parser wraps `x?: T` to that exact type — so the modifier
+  // rides its own sentinel.
+  while self.optional_member_names.length() > optional_names_start {
+    match self.optional_member_names.pop() {
+      Some(n) => expr_class_sentinels.push("<optional-member:" + n + ">")
+      None => ()
+    }
   }
   while self.override_member_names.length() > override_names_start {
     match self.override_member_names.pop() {
@@ -4451,6 +4472,7 @@ fn Parser::parse_class_decl_with_abstract(
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
+  let optional_names_start = self.optional_member_names.length()
   let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
@@ -4485,6 +4507,17 @@ fn Parser::parse_class_decl_with_abstract(
     match self.quoted_member_names.pop() {
       Some(n) =>
         runtime_decl.duplicate_member_names.push("<quoted-member:" + n + ">")
+      None => ()
+    }
+  }
+  // TS2729 support: an OPTIONAL instance field is exempt from the
+  // used-before-initialization check while `x: T | undefined` is not,
+  // and the parser wraps `x?: T` to that exact type — so the modifier
+  // rides its own sentinel.
+  while self.optional_member_names.length() > optional_names_start {
+    match self.optional_member_names.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push("<optional-member:" + n + ">")
       None => ()
     }
   }

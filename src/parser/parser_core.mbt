@@ -215,6 +215,13 @@ pub struct Parser {
   // strict-property-initialization must exempt literal-named fields --
   // drained per class into `<quoted-member:...>` sentinels.
   quoted_member_names : Array[String]
+  // Instance field names that carried a `?` while parsing class bodies.
+  // TS2729 exempts an OPTIONAL field from the used-before-initialization
+  // check and does NOT exempt `x: T | undefined` — probed, those two
+  // differ — and the parser wraps `x?: T` to exactly `T | undefined`, so
+  // the type cannot answer and the modifier needs its own channel.
+  // Drained per class into `<optional-member:...>` sentinels.
+  optional_member_names : Array[String]
   // Member names that carried an `override` modifier while parsing class
   // bodies ("i:"/"s:" prefixed for instance/static). Drained per class
   // into `<override-member:...>` sentinels for TS4112/4113/4114.
@@ -358,6 +365,7 @@ pub fn Parser::new_with_strict_and_jsx(
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    optional_member_names: [],
     private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: {},
@@ -613,6 +621,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    optional_member_names: [],
     private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: lexer.pure_marker_positions,

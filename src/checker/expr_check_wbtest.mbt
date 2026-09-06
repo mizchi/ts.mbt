@@ -18599,3 +18599,74 @@ test "checker: TS7010 / TS7022 / TS2448 (batch DT)" {
     @test.assert_eq(n(nia + src), 0)
   }
 }
+
+///|
+/// Batch DU: TS2729 for a field with NO initializer — the third batch in
+/// a row whose target was a recorded abstention, and the third whose
+/// stated reason was false.
+///
+/// `check_class_property_init_order` restricted its candidate set to
+/// init-bearing fields, with a comment saying a field declared without an
+/// initializer "has no initialization to be 'used before'". It has:
+/// `class C { b; d = this.b }` is TS2729, because a slot only written in
+/// the CONSTRUCTOR is still `undefined` while field initializers run.
+/// Order does not matter for such a field, which is why it never enters
+/// the `inited` set.
+///
+/// The real exemption is a MODIFIER, and probing one cell at a time gives
+/// exactly two: `!` (definite-assignment assertion) and `?` (optional).
+/// It is NOT "the declared type admits undefined" — `b: number |
+/// undefined`, `b: any`, `b: unknown` and `b: void` all report, and so
+/// does the whole thing under `strictNullChecks: false`. Since the parser
+/// wraps `x?: T` into exactly `T | undefined`, the `?` cannot be read off
+/// the type and rides an `<optional-member:` sentinel instead.
+///
+/// `scopeResolutionIdentifiers`, the false positive the old abstention
+/// was protecting against, is the `s!: Date; n = this.s;` form — so it
+/// was avoided for the wrong reason and is still avoided, for the right
+/// one.
+test "checker: TS2729 for a field with no initializer (batch DU)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let h = "// @strictNullChecks: true\n// @target: esnext\n// @useDefineForClassFields: true\n"
+  for
+    src in [
+      // The corpus shape: a redeclared base field with no initializer.
+      "class Base { b = 1; }\nclass Derived extends Base { b; d = this.b; constructor() { super(); this.b = 2; } }",
+      "class C { b; d = this.b; constructor() { this.b = 2; } }", "class C { b; d = this.b; }",
+      "class C { b: number; d = this.b; constructor() { this.b = 2; } }",
+      // Order does NOT matter for a field with no initializer.
+       "class C { d = this.b; b; constructor() { this.b = 2; } }",
+      // An initializer-bearing field read out of order — the case the
+      // rule always covered.
+       "class C { d = this.b; b = 1; }",
+      // Not "the type admits undefined": all four of these report.
+       "class C { b: number | undefined; d = this.b; }", "class C { b: any; d = this.b; }",
+      "class C { b: unknown; d = this.b; }", "class C { b: void; d = this.b; }",
+      // Accessibility and privacy make no difference.
+       "class C { private b: number; d = this.b; constructor() { this.b = 1; } }",
+      "class C { b: number; d = this.b + 1; constructor() { this.b = 1; } }",
+    ] {
+    assert_true(issues(h + src) > 0)
+  }
+  // `strictNullChecks: false` does not turn it off either.
+  assert_true(
+    issues(
+      "// @strictNullChecks: false\n// @target: esnext\nclass C { b; d = this.b; constructor() { this.b = 2; } }",
+    ) >
+    0,
+  )
+  // Silent: the two exempting modifiers; a correctly-ordered
+  // initializer-bearing pair; the STATIC side (read as `C.b`, a separate
+  // channel); and a METHOD body, which runs after class setup.
+  for
+    src in [
+      "class C { b!: number; d = this.b; constructor() { this.b = 2; } }", "class C { readonly b!: number; d = this.b; }",
+      "class C { b?: number; d = this.b; }", "class C { b = 1; d = this.b; }", "class C { static b: number; static d = C.b; }",
+      "class C { b: number; m() { return this.b; } constructor() { this.b = 1; } }",
+      "class C { b: number; d = () => this.b; constructor() { this.b = 1; } }",
+    ] {
+    @test.assert_eq(issues(h + src), 0)
+  }
+}

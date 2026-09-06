@@ -1243,6 +1243,32 @@ product surfaces now.
   member resolution and assignment-target widening of
   `(options || {}).a`, which is why both files also carry TS2339 /
   TS2322. Five files moved to Tier 3.
+  Batch DU is +1 and is the THIRD batch in a row whose target was a
+  recorded abstention and the third whose stated reason was false, which
+  promotes the move to a rule: open the comment that declines a rule,
+  then probe its reason. `check_class_property_init_order` restricted
+  TS2729's candidate set to init-bearing fields, saying a field declared
+  without an initializer "has no initialization to be used before". It
+  has — `class C { b; d = this.b }` and `class C { b: number; d = this.b
+  }` are both TS2729 in EITHER declaration order, because a slot only
+  written in the constructor is still `undefined` while field
+  initializers run, so such a field never enters the `inited` set and
+  order does not matter for it. The real exemption is a MODIFIER, and
+  probing one cell at a time gives exactly two, `!` and `?`. It is
+  emphatically not "the declared type admits undefined":
+  `b: number | undefined`, `b: any`, `b: unknown` and `b: void` all
+  report, and so does the whole thing under `strictNullChecks: false`, so
+  a rule written from the type would have been wrong in four places. And
+  since the parser wraps `x?: T` into exactly `T | undefined`, the `?`
+  CANNOT be read off the type — it rides an `<optional-member:` sentinel
+  recorded before the wrap, the same shape as `<quoted-member:`, which
+  exists because TS2564 needed a fact the type could not carry either.
+  `scopeResolutionIdentifiers`, the false positive the old abstention was
+  protecting against, is the `s!: Date; n = this.s;` form, so it was
+  avoided for the wrong reason and is still avoided for the right one.
+  One declared MISS at the site: `declare b: T` is TS2729 in tsc, and the
+  parser folds `has_declare` into `has_definite_assertion` — correctly,
+  for TS2564 — so an ambient field reads as asserted here.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
