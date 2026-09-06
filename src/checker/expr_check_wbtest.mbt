@@ -18241,3 +18241,124 @@ test "checker: class rules see a class expression" {
   // ...while a genuine top-level forward reference still fires.
   assert_true(n("class D extends B {}\nclass B { m(): void {} }") > 0)
 }
+
+///|
+/// Batch DR: three rules on the nullish operators, all probed cell by
+/// cell against the real compiler because each one's boundary is
+/// counter-intuitive.
+///
+/// TS2869 ("right operand of ?? is unreachable") is purely SYNTACTIC in
+/// tsc: `false ?? true` reports and `const m = false; m ?? true` does
+/// not, even though neither can be nullish. A type-level version would
+/// report two shapes tsc accepts.
+///
+/// TS18048 / TS18049: the right operand of `??` runs only when the left
+/// is nullish, so inside it the left BINDING is narrowed to its nullish
+/// part and a member access on it is always an error.
+///
+/// TS2790 already existed for `delete o.b` and was blind to the other
+/// two spellings of the same property reference.
+test "checker: the nullish operators (batch DR)" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let strict = "//@strict: true\n"
+
+  // --- TS2869: a literal left operand.
+  for
+    lhs in ["false", "0", "\"a\"", "`a`", "(1)", "{}", "[]", "1n", "(() => 1)"] {
+    assert_true(
+      n(strict + "function f() { const x: any = \{lhs} ?? 1; return x }") > 0,
+    )
+  }
+  // Silent: `null` / `undefined` are nullish (tsc gives them TS2871, a
+  // different code we do not claim), a `const` of a literal and an
+  // annotated binding are both ACCEPTED by tsc even though neither can
+  // be nullish, and `void 0` is a declared MISS — tsc reports TS2869
+  // there but the right operand really is reached, so following it would
+  // encode a compiler quirk.
+  for
+    src in [
+      "function f() { const x: any = null ?? 1; return x }", "function f() { const x: any = undefined ?? 1; return x }",
+      "function f() { const x: any = void 0 ?? 1; return x }", "function f() { const m = false; const x: any = m ?? 1; return x }",
+      "declare const s: string;\nfunction f() { const x = s ?? \"b\"; return x }",
+      "declare const s: string | undefined;\nfunction f() { const x = s ?? \"b\"; return x }",
+      "declare function g(): number | undefined;\nfunction f() { const x = g() ?? 1; return x }",
+    ] {
+    @test.assert_eq(n(strict + src), 0)
+  }
+
+  // --- TS18048 / TS18049: the left binding is nullish in the RHS.
+  assert_true(
+    n(
+      strict +
+      "declare const q: 1 | 0 | null | undefined;\nfunction f() { return q ?? q.toFixed() }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      strict +
+      "declare const s: string | undefined;\nfunction f() { return s ?? s.length }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      strict +
+      "declare const a: number[] | undefined;\nfunction f() { return a ?? a[0] }",
+    ) >
+    0,
+  )
+  // Silent. The `!` assertion wraps the receiver so it never matches; a
+  // different binding is not the narrowed one; and an ASSIGNMENT inside
+  // the right operand makes the binding non-nullish again — which is why
+  // the rule matches the right operand's SHAPE instead of walking it,
+  // since a walk that missed an assignment form would fail open.
+  for
+    src in [
+      "declare const s: string | undefined;\nfunction f() { return s ?? s!.length }",
+      "declare const s: string | undefined;\ndeclare const t: string;\nfunction f() { return s ?? t.length }",
+      "declare let s: string | undefined;\nfunction f() { return s ?? ((s = \"x\"), s.length) }",
+      "declare const s: string | undefined;\nfunction f() { return s ?? \"fallback\" }",
+    ] {
+    @test.assert_eq(n(strict + src), 0)
+  }
+
+  // --- TS2790: the two spellings the rule was blind to. `delete o?.b`
+  // arrives as `OptionalChain(PropAccess(…))` and the match saw the
+  // WRAPPER — the fourth time a wrapper node's default arm has cost a
+  // silent miss here — and `delete o["b"]` had no arm at all.
+  assert_true(
+    n(
+      strict +
+      "declare const o: { b: string };\nfunction f() { delete o[\"b\"] }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      strict +
+      "declare const o: undefined | { b: string };\nfunction f() { delete o?.b }",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      strict +
+      "declare const o: { b?: { c: string } };\nfunction f() { delete o.b?.[\"c\"] }",
+    ) >
+    0,
+  )
+  // Silent: an optional property (or one that accepts `undefined`) may
+  // be deleted, an index signature is not a declared member, `any`
+  // abstains, and a computed key names nothing this can resolve.
+  for
+    src in [
+      "declare const o: { b?: string };\nfunction f() { delete o[\"b\"] }", "declare const o: undefined | { b?: string };\nfunction f() { delete o?.b }",
+      "declare const o: { [k: string]: string };\nfunction f() { delete o[\"b\"] }",
+      "declare const o: any;\nfunction f() { delete o[\"b\"] }", "declare const o: { b: string };\ndeclare const k: string;\nfunction f() { delete o[k] }",
+    ] {
+    @test.assert_eq(n(strict + src), 0)
+  }
+}

@@ -5042,6 +5042,46 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 /// of expression is always truthy"). Only syntactic literal forms qualify --
 /// a bare identifier or call result is never matched, so no inference is
 /// needed and the check is false-positive-free.
+
+///|
+/// True when `expr` is a syntactic literal whose value can never be
+/// `null` or `undefined`. Used for TS2869 ("Right operand of ?? is
+/// unreachable because the left operand is never nullish").
+///
+/// tsc's rule here is purely SYNTACTIC, which is the thing to get right
+/// and was measured rather than assumed: `false ?? true`, `0 ?? 1`,
+/// `"a" ?? "b"`, `{} ?? y` and `(() => 1) ?? y` all report, while
+/// `const m = false; m ?? true` and `declare const s: string; s ?? "b"`
+/// are ACCEPTED even though neither can be nullish either. So this must
+/// not consult a type — modelling the type-level version would report
+/// two shapes tsc allows.
+///
+/// Three exclusions, each deliberate:
+///  - `null` is nullish, and tsc gives it a different code (TS2871,
+///    "This expression is always nullish");
+///  - `undefined` parses as a bare identifier that can be shadowed, the
+///    same reason `is_syntactically_always_falsy` leaves it out;
+///  - `void <expr>` is `undefined`, so its right operand is ALWAYS
+///    reached — tsc reports TS2869 there anyway, and following it would
+///    mean encoding a compiler quirk as a rule. Left as a MISS.
+fn is_syntactically_never_nullish(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    ArrowFunc(_, _, _, _)
+    | FuncExpr(_)
+    | NativeClassExpr(_, _)
+    | ObjectLit(_)
+    | ArrayLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | IntLit(_)
+    | NumberLit(_)
+    | BigIntLit(_)
+    | TemplateLiteral(_, _) => true
+    _ => false
+  }
+}
+
+///|
 fn is_syntactically_always_truthy(expr : @ast.TsExpr) -> Bool {
   match expr {
     ArrowFunc(_, _, _, _)
@@ -18841,6 +18881,62 @@ fn check_call_args_in_expr(
           rearm_unassigned(ctx, unassigned_before)
         }
         Coalesce => {
+          // TS2869: a `??` whose LEFT operand is a syntactic literal can
+          // never take the right branch. Sibling of the TS2872 / TS2873
+          // literal-operand rules on `!` and `||`, and the same shape: no
+          // type is consulted, because tsc's rule here is syntactic and a
+          // type-level version would report
+          // `declare const s: string; s ?? "b"`, which it accepts.
+          if is_syntactically_never_nullish(l) {
+            record_unfiltered(
+              ctx, "`??`", "right operand of `??` is unreachable because the left operand is never nullish",
+            )
+          }
+          // TS18048 / TS18049: the RHS of `??` runs only when the LHS is
+          // nullish, so inside it the LHS binding is narrowed TO its
+          // nullish part — which makes a member access on that same
+          // binding always an error. `f ?? f.toFixed()`
+          // (nullishCoalescingOperator11) is the corpus shape.
+          //
+          // This matches the right operand's SHAPE rather than walking
+          // it, and that is the soundness argument rather than a
+          // shortcut: an assignment anywhere inside the RHS would make
+          // the binding non-nullish again (`s ?? ((s = "x"), s.length)`
+          // is ACCEPTED by tsc, measured), and a walk that missed an
+          // assignment form would fail OPEN into a false positive. When
+          // the access IS the whole right operand nothing can hide in
+          // it. A `!` assertion (`s ?? s!.length`) wraps the receiver in
+          // `NonNull` and so does not match, which is also what tsc
+          // wants.
+          //
+          // A `PropAccess` receiver (`o.a ?? o.a.length`) is TS18048 in
+          // tsc and stays a MISS here, for the reason
+          // `nullish_checkable_receiver` records: only a bare `Var` is a
+          // binding the narrowing engine rewrites precisely.
+          if ctx.strict_null_checks {
+            let recv_name = match r {
+              PropAccess(Var(n), _)
+              | MethodCall(Var(n), _, _)
+              | IndexAccess(Var(n), _) => Some(n)
+              _ => None
+            }
+            match recv_name {
+              Some(n) =>
+                if l is Var(ln) && ln == n {
+                  let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+                  match union_possibly_nullish(lt) {
+                    Some(kind) =>
+                      record(
+                        ctx,
+                        "`??`",
+                        "`\{n}` is possibly `\{type_display(kind)}` in the right operand of `??`",
+                      )
+                    None => ()
+                  }
+                }
+              None => ()
+            }
+          }
           // The RHS of `??` runs only when the LHS is nullish, so an
           // assignment inside it is conditional and does not discharge
           // TS2454 (`o ?? (a = 1); a.toString()` still reads `a` before
@@ -18937,8 +19033,34 @@ fn check_call_args_in_expr(
               ctx, "delete", "the operand of a `delete` operator must be a property reference",
             )
           }
-          match inner {
-            PropAccess(recv, prop) =>
+          // The operand is read through TWO peels, and both were gaps.
+          // `delete o?.b` arrives as `OptionalChain(PropAccess(…))`, so
+          // the match below saw the WRAPPER and fell through — the fourth
+          // time in this repo that a wrapper node's default arm has cost
+          // a silent miss (`TypeArgs` and `PureCall` are the other
+          // three). And `delete o["b"]` is the same property reference
+          // spelled with brackets, which had no arm at all. Both are
+          // TS2790 in tsc, measured; the corpus's `deleteChain` uses
+          // exactly those two spellings and nothing else.
+          //
+          // Inside an optional chain the access only happens when the
+          // receiver is non-nullish, so pruning the receiver's nullish
+          // part is what the `?.` itself guarantees — without it
+          // `declare const o1: undefined | { b: string }` resolves no
+          // field and the check abstains.
+          let (operand, in_chain) = match inner {
+            OptionalChain(chained) => (chained, true)
+            other => (other, false)
+          }
+          let prop_ref = match operand {
+            PropAccess(recv, prop) => Some((recv, prop))
+            // Only a string-LITERAL key names a property this can
+            // resolve; a computed key abstains.
+            IndexAccess(recv, StringLit(prop)) => Some((recv, prop))
+            _ => None
+          }
+          match prop_ref {
+            Some((recv, prop)) =>
               if prop.has_prefix("__private_brand__") {
                 record(
                   ctx, "delete", "the operand of a `delete` operator cannot be a private name",
@@ -18946,7 +19068,12 @@ fn check_call_args_in_expr(
               } else if ctx.strict_null_checks {
                 // TS2790 for a required field only fires under strictNullChecks;
                 // non-strict code may `delete` a required property freely.
-                let recv_ty = infer_expr(env, ctx.resolver, recv)
+                let raw_recv_ty = infer_expr(env, ctx.resolver, recv)
+                let recv_ty = if in_chain {
+                  prune_nullish(ctx.resolver, raw_recv_ty)
+                } else {
+                  raw_recv_ty
+                }
                 if is_checkable(recv_ty) &&
                   !is_in_scope_type_param(ctx, recv_ty) &&
                   !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
@@ -18962,7 +19089,7 @@ fn check_call_args_in_expr(
                   }
                 }
               }
-            _ => ()
+            None => ()
           }
         }
         // TS2356: the operand of `++` / `--` must be `any`, `number`,

@@ -1100,6 +1100,41 @@ product surfaces now.
   quiet — which is the affordable half. So `module_.classes` turns out
   to carry THREE meanings its consumers read separately: the set of
   classes, the set with no enclosing scope, and their source order.
+  Batch DR is three rules on the nullish operators for +3 files, and
+  each one's boundary had to be probed because reasoning gives the wrong
+  answer. TS2869 ("right operand of `??` is unreachable") is purely
+  SYNTACTIC in tsc: `false ?? true` and `{} ?? y` report while
+  `const m = false; m ?? true` and `declare const s: string; s ?? "b"`
+  are ACCEPTED — neither can be nullish either — so a type-level version
+  would have reported two shapes tsc allows. `null` / `undefined` get a
+  different code (TS2871) and `void 0` is a declared MISS, because tsc
+  reports TS2869 there while the right operand really IS reached and
+  following it would encode a compiler quirk. TS18048 / TS18049 is the
+  other side of the same operator: the right operand runs only when the
+  left is nullish, so inside it the left BINDING is narrowed to its
+  nullish part and a member access on it is always an error
+  (`f ?? f.toFixed()`). That rule matches the right operand's SHAPE
+  instead of walking it, and the reason is soundness rather than
+  economy — an assignment anywhere inside the RHS makes the binding
+  non-nullish again (`s ?? ((s = "x"), s.length)` is ACCEPTED,
+  measured), and a walk that missed an assignment form would fail OPEN
+  into a false positive, while an access that IS the whole right operand
+  can hide nothing. TS2790 is the applied-in-some-places family again
+  and the FOURTH wrapper-node fail-open miss: `delete o.b` was checked,
+  `delete o?.b` arrives as `OptionalChain(PropAccess(…))` and the match
+  saw the WRAPPER, and `delete o["b"]` — the same property reference
+  spelled with brackets — had no arm at all.
+  Its REJECTION is worth as much as the rules, because the blocker is
+  mechanical and exact. TS7031 / TS7018 (a nullish literal where a type
+  must be inferred, under `noImplicitAny` with `strictNullChecks` off) is
+  one sound rule covering three codes, and `var [a, b]: any = [undefined,
+  null]` is ACCEPTED by tsc while the unannotated form is TS7031 — yet
+  `TsStmt::Let` / `Const` / `Var` carries a `TsType` in which an ABSENT
+  annotation and an explicit `: any` are the same `Any`. The parser has
+  that fact at parse time (`parse_param` records it in
+  `written_any_params` off `had_annotation`), so the fix is a
+  declaration-level version of that channel plus a `strict_null_checks`
+  field on the Parser, which has `no_implicit_any` and not this one.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

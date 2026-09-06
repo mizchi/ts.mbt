@@ -4742,10 +4742,56 @@ inside a function body:
     local classes on both sides costs the mirror MISS —
     `const D = class extends B {}; class B {}` IS TS2449 and stays
     quiet — which is the affordable half.
-- [ ] implicit-any / strict family (6 left): TS7010/7018/7022/7023/7031/
-  7053, TS2565/2729. Small corpus count, highest USER-facing value in
-  this tier — it is what a real codebase hits the day it turns `strict`
-  on.
+- [x] **Batch DR: the nullish operators, +3 files at FP 0** (TP 2569 ->
+  2572, in-scope MISS 146 -> 143). Three rules, each with a boundary that
+  had to be probed cell by cell because reasoning about it gives the
+  wrong answer.
+  - **TS2869** ("right operand of `??` is unreachable") is purely
+    SYNTACTIC in tsc, which is the finding: `false ?? true`, `0 ?? 1`,
+    `{} ?? y` and `(() => 1) ?? y` all report, while
+    `const m = false; m ?? true` and `declare const s: string; s ?? "b"`
+    are ACCEPTED — neither can be nullish either. A type-level version
+    would have reported two shapes tsc allows. Sibling of the TS2872 /
+    TS2873 literal-operand rules on `!` and `||`, and it reuses their
+    literal classification. `null` / `undefined` are excluded (tsc gives
+    them TS2871, a different code); `void 0` is a declared MISS — tsc
+    reports TS2869 there but the right operand really IS reached, so
+    following it would encode a compiler quirk as a rule.
+  - **TS18048 / TS18049**: the right operand of `??` runs only when the
+    left is nullish, so inside it the left BINDING is narrowed to its
+    nullish part and a member access on it is always an error
+    (`f ?? f.toFixed()`). It matches the right operand's SHAPE rather
+    than walking it, and that is the soundness argument: an assignment
+    anywhere inside the RHS makes the binding non-nullish again
+    (`s ?? ((s = "x"), s.length)` is ACCEPTED, measured), and a walk that
+    missed an assignment form would fail OPEN into a false positive.
+    When the access IS the whole right operand nothing can hide in it.
+  - **TS2790** ALREADY EXISTED for `delete o.b` and was blind to the two
+    other spellings of the same property reference. `delete o?.b` arrives
+    as `OptionalChain(PropAccess(…))` and the match saw the WRAPPER —
+    the fourth time in this repo that a wrapper node's default arm has
+    cost a silent miss, after `TypeArgs` and `PureCall` twice — and
+    `delete o["b"]` had no arm at all. Inside an optional chain the
+    receiver's nullish part is pruned, which is exactly what the `?.`
+    guarantees.
+- [ ] **REJECTED for now with the condition: TS7031 / TS7018** (a nullish
+  literal where a type must be inferred, under `noImplicitAny` with
+  `strictNullChecks` OFF — `var [a, b] = [undefined, null]` and
+  `const o = { value: null }`). The rule is sound and the family is one
+  rule with three codes (TS7005 for a plain `const v = null` too), but
+  the blocker is mechanical and exact: **`var [a, b]: any = [undefined,
+  null]` is ACCEPTED by tsc and the unannotated form is TS7031**, while
+  `TsStmt::Let` / `Const` / `Var` carries a `TsType` in which an ABSENT
+  annotation and an explicit `: any` are the same `Any`. The parser has
+  that fact at parse time — `parse_param` records it in
+  `written_any_params` via `had_annotation` — so the fix is a
+  declaration-level equivalent of that channel plus a `strict_null_checks`
+  field on the Parser (which has `no_implicit_any` and not this one).
+  Two channels for two corpus files, only one of which
+  (`{ value: null }` in a legacy migration) has real-world value.
+- [ ] implicit-any / strict family (4 left): TS7010/7022/7023/7053,
+  TS2565/2729. Small corpus count, highest USER-facing value in this
+  tier — it is what a real codebase hits the day it turns `strict` on.
 - [x] strict-null / narrowing: 3 of 8 in batch DO (the `logicalAssignment`
   files). Five left.
 
@@ -4805,7 +4851,7 @@ if a bridge target uses them.
 
 ### The recommendation that is not a rule — DONE
 
-- [x] **Two MISS numbers.** `MISS in scope 146` (the backlog, which can
+- [x] **Two MISS numbers.** `MISS in scope 143` (the backlog, which can
   reach zero) beside `OUT OF SCOPE 19` (declared). `--scope-file /dev/null`
   reproduces the old single 174 — verified, not asserted.
   Nothing but the MISS branch consults the scope file, so a listed file can
