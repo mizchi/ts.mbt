@@ -18362,3 +18362,122 @@ test "checker: the nullish operators (batch DR)" {
     @test.assert_eq(n(strict + src), 0)
   }
 }
+
+///|
+/// Batch DS: TS2386 / TS2394 / TS2565, each probed cell by cell against
+/// the real compiler first, because all three read wrong from the message
+/// text alone.
+///
+/// TS2386 ("overload signatures must all be optional or required") is
+/// purely about the `?`, so it lives in the parser — and it needed FOUR
+/// sites, since a runtime class body, an interface, an object type
+/// literal and `declare class` each have their own member parser. In a
+/// runtime class the IMPLEMENTATION participates as required, which is
+/// what makes `m?(x); m?(s); m(v) { }` the error tsc reports.
+///
+/// TS2394's parameter half is one-directional and is only decidable once
+/// the parser says which declaration has a BODY (`<fn-impl:NAME>`): an
+/// all-ambient overload set has no implementation to compare against.
+///
+/// TS2565's boundary is the surprising one. A write spelled
+/// `d["q"] = 1` inside an `if` arm makes `d.q` LEGAL while `d.q = 1`
+/// there does not, and a write inside `switch (…) { default: … }` is
+/// definite — so every construct except a dotted write in an `if` arm is
+/// treated as a definite assignment, which gives up the `while` case as
+/// a MISS in exchange for FP 0.
+test "checker: TS2386 / TS2394 / TS2565 (batch DS)" {
+  let n = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let strict = "//@strict: true\n"
+
+  // --- TS2386 at all four declaration kinds.
+  for
+    src in [
+      "declare class A { m?(x: number): number; m(s: string): string }", "class B { m?(x: number): number; m(s: string): string; m(v: any): any { return v } }",
+      // All signatures optional and the implementation required: tsc
+      // reports on BOTH signatures, which is why the runtime-class site
+      // records the bodied declaration too.
+       "class C { m?(x: number): number; m?(s: string): string; m(v: any): any { return v } }",
+      "abstract class D { abstract m?(x: number): number; abstract m(s: string): string }",
+      "interface I { m?(x: number): number; m(s: string): string }", "var v: { m?(x: number): number; m(s: string): string };",
+    ] {
+    assert_true(n(strict + src) > 0)
+  }
+  // Silent: agreeing on `?` either way, two different names, a static
+  // and an instance member of one name, call signatures (which are not a
+  // member NAME), an accessor pair, a constructor overload set, and a
+  // same-named PROPERTY in another class — that last one is a duplicate
+  // identifier, a different error.
+  for
+    src in [
+      "declare class E { m?(x: number): number; m?(s: string): string }", "declare class F { n(x: number): number; n(s: string): string }",
+      "class G { m?(x: number): number; m?(s: string): string }", "class H { m(x: number): number; m(s: string): string; m(v: any): any { return v } }",
+      // `static m` and `m` are two different members, so they need not
+      // agree. Written as a `declare class` because a bodiless method in
+      // a runtime class raises TS2391 ("implementation is missing"),
+      // which would make this case pass for the wrong reason.
+       "declare class J { static m?(x: number): number; m(s: string): string }",
+      "interface K { m?(x: number): number; n(s: string): string }", "class L { get p(): number { return 1 } set p(v: number) { } }",
+      "class M { constructor(x: number); constructor(s: string); constructor(v: any) { } }",
+      "interface N { m?(x: number): number; m?(s: string): string }", "var v: { (x: number): number; (s: string): string };",
+      "class O { m?: number }\nclass P { m?(x: number): number }",
+    ] {
+    @test.assert_eq(n(strict + src), 0)
+  }
+
+  // --- TS2394's parameter half.
+  for
+    src in [
+      "function f(x: \"a\");\nfunction f(x: number) { }", "function f(x: string);\nfunction f(x: number) { }",
+      "function f(x: number, y: string);\nfunction f(x: number, y: number) { }",
+    ] {
+    assert_true(n(strict + src) > 0)
+  }
+  // Silent: `any` accepts anything; an implementation with FEWER
+  // parameters is legal (a shorter function is assignable to a longer
+  // one); matching types; a union implementation; an all-ambient set
+  // with no implementation at all; no annotations; an interface member
+  // (no implementation exists); a generic signature.
+  for
+    src in [
+      "function f(x: \"a\");\nfunction f(x: any) { }", "function f(a: string, b: string): void;\nfunction f(a: string): void { }",
+      "function f(x: string);\nfunction f(x: string) { }", "function f(x: string);\nfunction f(x: number);\nfunction f(x: string | number) { }",
+      "declare function f(x: string): void;\ndeclare function f(x: number): void;",
+      "interface I { f(x: string): void; f(x: number): void }", "function f<T>(x: T);\nfunction f(x: number) { }",
+    ] {
+    @test.assert_eq(n(strict + src), 0)
+  }
+
+  // --- TS2565.
+  for
+    src in [
+      "function d() { }\nif (!!false) { d.q = false }\nd.q", "const g = function () { }\nif (!!false) { g.e = 1 }\ng.e",
+      "const g = () => { }\nif (!!false) { g.e = 1 }\ng.e", "function f(b: boolean) { function d() { }\nif (b) { d.q = 1 }\nd.q }",
+      // Passing the holder to a function does NOT assign the property
+      // (probed), so the report still stands.
+       "declare function use(x: unknown): void\nfunction d() { }\nif (!!false) { d.q = 1 }\nuse(d)\nd.q",
+    ] {
+    assert_true(n(strict + src) > 0)
+  }
+  // Silent: both arms assign; an unconditional assignment; a `switch`
+  // `default` arm (which always runs); a bracket write with a literal
+  // key, in EITHER position — `if (b) { d["q"] = 1 }` then `d.q` is
+  // ACCEPTED by tsc, which is why the two spellings are separated; a
+  // read from another scope; and the whole rule off under
+  // `strictNullChecks: false`.
+  for
+    src in [
+      "function d() { }\nif (!!false) { d.q = false } else { d.q = true }\nd.q",
+      "function d() { }\nd.q = 1\nd.q", "function d() { }\nswitch (1) { default: d.q = 1 }\nd.q",
+      "function d() { }\nif (!!false) { d.q = 1 }\nd[\"q\"] = 2\nd.q", "function d() { }\nif (!!false) { d[\"q\"] = 1 }\nd.q",
+      "declare const k: string\nfunction d() { }\nif (!!false) { d[k] = 1 }\nd.q",
+      "function d() { }\nif (!!false) { d.q = 1 }\nfunction later() { return d.q }",
+    ] {
+    @test.assert_eq(n(strict + src), 0)
+  }
+  @test.assert_eq(
+    n("//@strict: false\nfunction d() { }\nif (!!false) { d.q = false }\nd.q"),
+    0,
+  )
+}

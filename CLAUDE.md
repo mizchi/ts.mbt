@@ -1135,6 +1135,63 @@ product surfaces now.
   `written_any_params` off `had_annotation`), so the fix is a
   declaration-level version of that channel plus a `strict_null_checks`
   field on the Parser, which has `no_implicit_any` and not this one.
+  Batch DS is TS2386 / TS2394 / TS2565 for +3 files, and its lesson is
+  that all three read WRONG from their message text. TS2386 ("overload
+  signatures must all be optional or required") is purely about the `?`,
+  so it needs no type and lives in the parser — and it needed FOUR sites,
+  because a runtime class body, an interface, an object type literal and
+  `declare class` each have their own member parser; the applied-in-some-
+  places family taken completely on the first pass instead of discovered
+  a batch later. In a runtime class the IMPLEMENTATION participates as
+  REQUIRED, which is what makes `m?(x); m?(s); m(v) { }` an error tsc
+  reports on both signatures, and `declare class` was the site with
+  nothing because its member parser DISCARDED the `?`
+  (`let _ = self.match_(Question)`). Only METHOD signatures participate:
+  two same-named PROPERTIES are a duplicate identifier (TS2300 / TS2717),
+  a different error that already fires, so putting properties in would
+  report one declaration twice.
+  TS2394's parameter half is where batch DN's recorded blocker finally
+  dissolved. `TsFunc.body` is not optional, so an overload SIGNATURE and
+  an implementation are indistinguishable downstream — and
+  `note_function_declaration` is already called at every site that pushes
+  a function declaration, with exactly the `bodiless` fact, so a
+  `<fn-impl:NAME>` marker turns "the last declaration is the
+  implementation" from the guess `check_overload_void_return` had to make
+  into a FACT. The rule went into that same function rather than beside
+  it. The marker is pushed ONLY from the module / namespace body loop,
+  because `grammar_misuses` is a flat scope-blind channel and a nested
+  `function f() { }` would otherwise claim an implementation for a name
+  that exists in another body — the same restriction is why TS2393 is
+  filed rather than shipped. Probed cell by cell, since the message does
+  not say which direction: an incompatible parameter TYPE is the error,
+  an implementation with FEWER parameters is LEGAL, and `any` accepts
+  everything.
+  TS2565 is expando flow — `function d() { }` then `d.e = 12`, and
+  reading a property assigned only in a conditional branch — and its
+  design decision is where the value is. One ordered pass per statement
+  list tracks DEFINITE / POSSIBLE per `HOLDER.PROP`, and the `if`
+  statement is the ONLY construct that can produce POSSIBLE: a write in
+  anything the pass does not model counts as DEFINITE, so an unmodelled
+  shape silences the check instead of firing on it. That is exactly what
+  `switch (1) { default: d.q = 1 }` needs, since the default arm always
+  runs and tsc accepts the read after it, so any reachability-aware
+  formulation would have false-positived there. The price is the `while`
+  case, which tsc does report, and that MISS is what buys FP 0. Three
+  facts had to be probed rather than reasoned: `d["q"] = 1` and
+  `d.q = 1` are NOT one rule (inside an `if` arm the bracket spelling
+  makes the later `d.q` LEGAL and the dotted one does not, so the two
+  spellings are collected separately); passing the holder to a function
+  does not assign the property, and neither does `Object.assign`, so the
+  report still stands; and a read from ANOTHER scope is legal however the
+  property was assigned, which is why the READ walk stops at a nested
+  function body and at a nested block while the WRITE walk descends into
+  both. Two parser facts cost the first two drafts, and both are this
+  file's recurring shape: `d.q = 1` at the top of a list is a
+  `PropAssign` STATEMENT while the identical line inside a block is
+  `Expr(PropAssignExpr(...))`, and reading only the first found NOTHING
+  AT ALL; and a top-level `function d() { }` is parsed by the module loop
+  into `module_.funcs` and is NOT pushed into `top_level_stmts`, so the
+  outermost list has to be told about those holders by name.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

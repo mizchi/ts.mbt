@@ -2333,6 +2333,12 @@ fn Parser::parse_class_body(
   // `signature_max_args` / `impl_required_arity` for why only that one
   // direction is an error.
   let sig_max_args : Map[String, Array[Int]] = {}
+  // TS2386 support: the `?`-ness of the first declaration of each member
+  // key in this class body. Unlike the interface / object-type sites, the
+  // IMPLEMENTATION participates — a bodied method can never be optional,
+  // so probing `m?(x); m?(s); m(v) { }` reports on BOTH signatures, and
+  // recording only the bodiless ones would accept it.
+  let method_sig_optional : Map[String, (Bool, Bool)] = {}
   let mut ctor : @ast.TsFunc? = None
   // Count constructor *implementations* (a `constructor(...) { ... }` with a
   // real body). Two or more is TS2392 ("Multiple constructor implementations
@@ -3096,6 +3102,20 @@ fn Parser::parse_class_body(
           }) +
           ":" +
           method_name
+        // TS2386: "Overload signatures must all be optional or required."
+        // An accessor and a `constructor` cannot carry `?` at all, so only
+        // plain methods participate. Unlike the interface / object-type
+        // sites, a bodied IMPLEMENTATION is recorded too, as REQUIRED —
+        // that is what makes `m?(x); m?(s); m(v) { }` the error tsc
+        // reports on both of its signatures.
+        if accessor_kind is None && method_name != "constructor" {
+          self.record_overload_optionality(
+            method_sig_optional,
+            mkey,
+            method_name,
+            is_optional && not(has_body_block),
+          )
+        }
         if has_body_block {
           // TS2393 ("Duplicate function implementation").
           if bodied_method_keys.get(mkey) is Some(_) {

@@ -4789,9 +4789,92 @@ inside a function body:
   field on the Parser (which has `no_implicit_any` and not this one).
   Two channels for two corpus files, only one of which
   (`{ value: null }` in a legacy migration) has real-world value.
+- [x] **Batch DS: TS2386 / TS2394 / TS2565, +3 files at FP 0** (TP 2572 ->
+  2575, in-scope MISS 143 -> 140). Three unrelated rules, and all three
+  read WRONG from their message text alone.
+  - **TS2386** ("overload signatures must all be optional or required")
+    is purely about the `?`, so it needs no type and lives in the parser.
+    It needed **four** sites — a runtime class body, an interface, an
+    object type literal and `declare class` each have their own member
+    parser — which is the applied-in-some-places family again, taken
+    completely on the first pass rather than discovered later. In a
+    runtime class the IMPLEMENTATION participates as REQUIRED: probing
+    `m?(x); m?(s); m(v) { }` reports on BOTH signatures, so recording
+    only the bodiless declarations would have accepted it. `declare
+    class`'s member parser DISCARDED the `?` (`let _ =
+    self.match_(Question)`), which is why that site was the one with
+    nothing. Only METHOD signatures participate: two same-named
+    PROPERTIES are a duplicate identifier (TS2300 / TS2717), a different
+    error that already fires, so putting properties in would report one
+    declaration twice. Accessors and `constructor` cannot carry `?` at
+    all. Keyed by static-ness as well as name, since `static m` and `m`
+    are two members and need not agree.
+  - **TS2394's parameter half** is where the batch-DN blocker finally
+    dissolved. `TsFunc.body` is not optional, so an overload SIGNATURE
+    and an implementation are indistinguishable downstream — and
+    `note_function_declaration` is called at every one of the four sites
+    that pushes a function declaration, with exactly the `bodiless` fact,
+    so a `<fn-impl:NAME>` marker makes "the last declaration is the
+    implementation" a FACT instead of the guess the neighbouring
+    `check_overload_void_return` had to make. The rule was added to that
+    same function rather than beside it. Probed cell by cell, because the
+    message ("not compatible with its implementation signature") does not
+    say which direction: an incompatible parameter TYPE is the error
+    (`f(x: "a"); f(x: number) { }`), an implementation with FEWER
+    parameters is LEGAL (a shorter function is assignable to a longer
+    one), and `any` accepts everything. Only a pair of
+    definitely-concrete primitives incompatible in BOTH directions is
+    judged; a type parameter, an object shape, a union or a missing
+    annotation abstains.
+  - **TS2565** ("property is used before being assigned") is expando
+    flow: `function d() { }` then `d.e = 12`, and reading a property
+    assigned only inside a conditional branch. One ordered pass per
+    statement list tracking DEFINITE / POSSIBLE per `HOLDER.PROP`, and
+    the `if` statement is the ONLY construct that produces `possible` —
+    a write in anything this pass does not model counts as definite, so
+    an unmodelled shape SILENCES the check instead of firing on it. That
+    is what `switch (1) { default: d.q = 1 }` needs: the default arm
+    always runs and tsc accepts the following read, so any
+    reachability-aware formulation would have false-positived there. It
+    costs the `while` case, which tsc DOES report, and that MISS is what
+    buys FP 0.
+    Three things had to be probed rather than reasoned. `d["q"] = 1` and
+    `d.q = 1` are NOT the same rule: inside an `if` arm the bracket
+    spelling makes the later `d.q` LEGAL and the dotted one does not, so
+    the two spellings are collected separately and only the dotted one
+    can be merely-possible. Passing the holder to a function does NOT
+    assign the property (nor does `Object.assign`), so the report still
+    stands there. And a read from ANOTHER scope is legal however the
+    property was assigned — the corpus file says so in its own comment
+    and `function later() { return d.q }` confirms it — so the read walk
+    stops at a nested function body and at a nested block, while the
+    WRITE walk descends into both (calling a write definite is the quiet
+    direction).
+    Two parser facts cost the first two drafts. `d.q = 1` at the top of a
+    list is a `PropAssign` STATEMENT while the identical line inside a
+    block is `Expr(PropAssignExpr(...))`, and reading only the first
+    found NOTHING at all — the same two-spellings-one-rule shape as
+    TS2386 above, in the AST instead of in the parsers. And a top-level
+    `function d() { }` is parsed by the module loop into `module_.funcs`
+    and is NOT pushed into `top_level_stmts`, so the outermost list has
+    to be told about those holders by name and each such body scanned
+    explicitly.
 - [ ] implicit-any / strict family (4 left): TS7010/7022/7023/7053,
-  TS2565/2729. Small corpus count, highest USER-facing value in this
+  TS2729. Small corpus count, highest USER-facing value in this
   tier — it is what a real codebase hits the day it turns `strict` on.
+- [ ] **FILED: TS2393 for duplicate top-level function implementations.**
+  Batch DS's `<fn-impl:NAME>` marker removes the blocker
+  `check_function_var_duplicates`' comment used to name, and it is pushed
+  once per implementation, so a COUNT is already available. What it does
+  NOT do is distinguish two implementations from two SCOPES: the marker
+  is restricted to the module / namespace body loop precisely because
+  `grammar_misuses` is flat and scope-blind, so `function f() { }` at top
+  level beside `function g() { function f() { } }` would otherwise read as
+  two implementations of one name and two legal scopes. With that
+  restriction in place the count is honest for the top level, and TS2393
+  is a small step from here — it was left out of batch DS only because
+  nothing in the corpus needed it. The class-member version already
+  exists and needs no scope model, a class body being one.
 - [x] strict-null / narrowing: 3 of 8 in batch DO (the `logicalAssignment`
   files). Five left.
 

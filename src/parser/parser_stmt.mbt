@@ -279,7 +279,30 @@ fn Parser::note_function_declaration(
   self : Parser,
   name : String,
   bodiless : Bool,
+  module_level : Bool,
 ) -> Unit {
+  // TS2394 support: `<fn-impl:NAME>` says this module declares a function
+  // IMPLEMENTATION of that name. `TsFunc.body` is not optional, so an
+  // overload SIGNATURE and an implementation are indistinguishable
+  // downstream — the blocker this repo records for TS2393 / TS2394 — and
+  // `bodiless` is exactly the missing fact, available here, at every one
+  // of the four sites that pushes a function declaration.
+  //
+  // `module_level` is true only at the two sites the module / namespace
+  // body loop owns, and the marker is pushed nowhere else. That matters
+  // because `grammar_misuses` is a FLAT, scope-blind channel: a nested
+  // `function f() { }` would otherwise record an implementation for a
+  // name that only exists inside another function's body, and the only
+  // consumer reads it against `module_.funcs`, which holds this body's
+  // OWN declarations. A nested overload set never reaches `funcs` at all,
+  // so the restriction gives up nothing.
+  //
+  // Ambient bodiless declarations are excluded for the same reason as
+  // below: in a `declare module` body a bodiless declaration asserts an
+  // implementation elsewhere and no local one exists to compare against.
+  if module_level && not(bodiless) && not(self.in_ambient_module) {
+    self.grammar_misuses.push("<fn-impl:\{name}>")
+  }
   if not(bodiless) || self.in_ambient_module {
     return
   }
@@ -489,7 +512,11 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.in_async = true
       let func = self.parse_function()
       self.in_async = prev_async
-      self.note_function_declaration(func.name, self.last_function_bodiless)
+      self.note_function_declaration(
+        func.name,
+        self.last_function_bodiless,
+        false,
+      )
       if self.last_function_bodiless {
         Empty
       } else {
@@ -500,7 +527,11 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // internalfunctiondefine: function name() { ... }
       // Let(name, Any, FuncExpr(func))
       let func = self.parse_function()
-      self.note_function_declaration(func.name, self.last_function_bodiless)
+      self.note_function_declaration(
+        func.name,
+        self.last_function_bodiless,
+        false,
+      )
       // A bodyless declaration is an overload signature or an ambient
       // `declare function`: type-only, and there can be several of them
       // above the one real implementation. Emitting each as

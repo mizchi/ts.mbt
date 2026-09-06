@@ -164,6 +164,54 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// TS2386: "Overload signatures must all be optional or required."
+///
+/// `seen` holds the `?`-ness of the FIRST method signature of each name in
+/// one type body; a later signature of that name that disagrees is the
+/// error. Probed against the real compiler: an object type literal, an
+/// interface and a class body all report, while both-optional,
+/// both-required and two different names are accepted. Only the `?`
+/// matters, so no type is consulted and this can live in the parser.
+///
+/// Restricted to METHOD signatures on purpose. Two same-named PROPERTIES
+/// (`{ m?: number; m: string }`) are a duplicate identifier — tsc gives
+/// that TS2300 / TS2717, a different error which already fires — so
+/// putting properties in here would report the same declaration twice.
+///
+/// One recorder called from every type-body parser, for the reason this
+/// repo keeps recording: a rule written at the interface is a rule missing
+/// from the object type literal.
+///
+/// `key` and `display` are separate because a class body's members are
+/// keyed by static-ness as well as name (`static m` and `m` are two
+/// members), while the message must name the member the way it was
+/// written.
+/// The map's value is `(first_optional, already_reported)`: three
+/// declarations of one name where the first disagrees with the other two
+/// are ONE error, so the flag keeps the message from being printed once
+/// per later declaration.
+fn Parser::record_overload_optionality(
+  self : Parser,
+  seen : Map[String, (Bool, Bool)],
+  key : String,
+  display : String,
+  is_optional : Bool,
+) -> Unit {
+  match seen.get(key) {
+    Some((first, reported)) =>
+      if first != is_optional && not(reported) {
+        seen[key] = (first, true)
+        self.grammar_misuses.push(
+          "overload signatures must all be optional or required: `" +
+          display +
+          "`",
+        )
+      }
+    None => seen[key] = (is_optional, false)
+  }
+}
+
+///|
 /// TS2371: "A parameter initializer is only allowed in a function or
 /// constructor implementation."
 ///
@@ -1601,6 +1649,12 @@ pub fn Parser::parse_interface(
   let method_type_param_bounds : Array[(String, Array[(String, @ast.TsType)])] = []
   let internal_members : Array[String] = []
   let deprecated_members : Array[String] = []
+  // TS2386 support: the `?` of the first METHOD signature seen for each
+  // name in THIS body. A later signature of the same name that disagrees
+  // is the error — `m?(x: number): number; m(s: string): string`. Only
+  // methods participate: two same-named PROPERTIES are a duplicate
+  // identifier (TS2300 / TS2717), a different error that already fires.
+  let method_sig_optional : Map[String, (Bool, Bool)] = {}
   while !self.check(RBrace) && !self.check(Eof) {
     // A JSDoc block directly above the member attaches to its first
     // token (which may be a `readonly` / accessibility modifier, so the
@@ -1978,6 +2032,14 @@ pub fn Parser::parse_interface(
     // Method signature: name(...): T or name<T>(...): U
     if self.check(LParen) {
       let _ = self.advance()
+      // TS2386: "Overload signatures must all be optional or required."
+      // Probed — an object TYPE, an interface and a class all report when
+      // two same-named method signatures disagree on `?`, and both-optional
+      // / both-required / different-names are all accepted. Purely about
+      // the `?`, so no type is consulted.
+      self.record_overload_optionality(
+        method_sig_optional, field_name, field_name, is_optional,
+      )
       let method_params = self.parse_params()
       let _ = self.expect(RParen)
       // TS2371: a parameter initializer (`x = 1`) is only allowed in an
@@ -3048,6 +3110,8 @@ fn Parser::parse_declare_class(
   let static_index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
   let declare_override_names : Array[String] = []
+  // TS2386 support: `(first_optional, already_reported)` per member key.
+  let declare_method_sig_optional : Map[String, (Bool, Bool)] = {}
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false
@@ -3177,7 +3241,7 @@ fn Parser::parse_declare_class(
       }
       None => ()
     }
-    let _ = self.match_(Question)
+    let member_is_optional = self.match_(Question)
     // Definite-assignment assertion (`foo!: T`) on a class field. Also
     // tolerate a stray `!` after a method name even though that is not
     // standard syntax, mirroring how the runtime class parser handles it.
@@ -3194,6 +3258,22 @@ fn Parser::parse_declare_class(
       )
     }
     if self.check(LParen) {
+      // TS2386, fourth site. `declare class` has its own member parser, so
+      // the rule written for the runtime class body, the interface and the
+      // object type literal was missing from exactly the declaration kind
+      // a `.d.ts` is made of. Every member here is bodiless, so unlike the
+      // runtime class site there is no implementation to record as
+      // required.
+      match member_name {
+        Some(n) if accessor_kind is None && n != "constructor" =>
+          self.record_overload_optionality(
+            declare_method_sig_optional,
+            (if is_static { "s:" } else { "i:" }) + n,
+            n,
+            member_is_optional,
+          )
+        _ => ()
+      }
       let params = self.parse_declare_signature_params()
       let return_type = if self.check(Colon) {
         let _ = self.advance()

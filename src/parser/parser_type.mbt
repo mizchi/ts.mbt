@@ -812,6 +812,14 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
   // on the same line. Recorded only on the success path so a speculative parse
   // that later falls back leaves no spurious diagnostic.
   let mut missing_separator = false
+  // TS2386 support: the `?`-ness of the first METHOD signature of each
+  // name in this object type. Accumulated into a list rather than pushed
+  // as it is found, for the same reason `missing_separator` is a flag —
+  // this parser is SPECULATIVE, and a diagnostic pushed during a parse
+  // that later falls back is a diagnostic on a shape that was never
+  // there.
+  let method_sig_optional : Map[String, (Bool, Bool)] = {}
+  let overload_optionality_misuses : Array[String] = []
   try {
     let _ = self.expect(LBrace)
     while !self.check(Eof) && !self.check(RBrace) {
@@ -954,6 +962,18 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
       if self.check(LParen) {
         // Method / call / construct signature.
         let _ = self.advance()
+        // A `<call>` / `<new>` sentinel is not a member NAME, so two of
+        // them are not two declarations of one name.
+        if field_name != "<call>" && field_name != "<new>" {
+          match method_sig_optional.get(field_name) {
+            Some((first, reported)) =>
+              if first != is_optional && not(reported) {
+                method_sig_optional[field_name] = (first, true)
+                overload_optionality_misuses.push(field_name)
+              }
+            None => method_sig_optional[field_name] = (is_optional, false)
+          }
+        }
         let method_params = self.parse_params()
         let _ = self.expect(RParen)
         let return_type = if self.check(Colon) {
@@ -1021,6 +1041,11 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
     if missing_separator {
       self.interface_member_modifier_misuses.push(
         "<object-member-no-separator>",
+      )
+    }
+    for name in overload_optionality_misuses {
+      self.grammar_misuses.push(
+        "overload signatures must all be optional or required: `" + name + "`",
       )
     }
     Some(Object(fields))

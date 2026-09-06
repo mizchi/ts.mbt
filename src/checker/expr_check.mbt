@@ -26547,6 +26547,479 @@ fn unary_op_display(op : @ast.TsUnaryOp) -> String {
 }
 
 ///|
+/// True when `e` is a function-valued initializer, i.e. the declaration it
+/// initializes can carry EXPANDO properties. `function d() { }` at
+/// statement level is lowered by the parser to
+/// `Let(Ident("d"), Any, FuncExpr(...))`, so a declaration and a
+/// `const g = function () { }` arrive as the same shape here.
+fn is_expando_holder_init(e : @ast.TsExpr) -> Bool {
+  match e {
+    FuncExpr(_) | ArrowFunc(_, _, _, _) => true
+    _ => false
+  }
+}
+
+///|
+/// Property writes this statement (or anything nested inside it) performs
+/// on one of `holders`, split by how the key was spelled:
+///
+///   - `dotted` gets `"HOLDER.PROP"` for a write spelled with a NAME
+///     (`d.q = 1`), the only spelling the caller's `if` logic treats as a
+///     merely-possible assignment;
+///   - `definite` gets `"HOLDER.PROP"` for a write spelled with a
+///     string-literal BRACKET (`d["q"] = 1`), marked assigned outright
+///     wherever it appears;
+///   - `opaque` gets the HOLDER for a write whose key cannot be spelled
+///     (`d[k] = 1`), which could land on any property, so nothing on that
+///     holder is reported afterwards.
+///
+/// The bracket / name split is not a cosmetic one — it is where tsc's line
+/// actually falls, probed: `if (b) { d["q"] = 1 }` then `d.q` is ACCEPTED
+/// while `if (b) { d.q = 1 }` then `d.q` is TS2565.
+///
+/// Both halves DESCEND into nested function bodies. A write in one is not
+/// really definite — the function may never be called — but calling it
+/// definite only ever SILENCES this check, and that is the fail direction
+/// the FP budget allows.
+///
+/// The write spellings are enumerated rather than reduced to one, because
+/// the two that matter here land in different AST arms: a top-level
+/// `d.q = 1` is a `PropAssign` STATEMENT while the same line inside a
+/// block is `Expr(PropAssignExpr(...))`, and reading only the first is how
+/// the first draft of this rule found nothing at all.
+fn expando_writes_in_stmt(
+  st : @ast.TsStmt,
+  holders : Map[String, Unit],
+  dotted : Map[String, Unit],
+  definite : Map[String, Bool],
+  opaque : Map[String, Unit],
+) -> Unit {
+  fn block(b : @ast.TsBlock) -> Unit {
+    for s in b.stmts {
+      expando_writes_in_stmt(s, holders, dotted, definite, opaque)
+    }
+  }
+
+  // `name` distinguishes `d.q = v` from `d["q"] = v`; `key` is `None` for
+  // the former and the bracket's key expression for the latter.
+  fn note(h : String, name : String?, key : @ast.TsExpr?) -> Unit {
+    if not(holders.contains(h)) {
+      return
+    }
+    match (name, key) {
+      (Some(p), _) => dotted["\{h}.\{p}"] = ()
+      (None, Some(StringLit(p))) => definite["\{h}.\{p}"] = true
+      (None, Some(_)) => opaque[h] = ()
+      (None, None) => ()
+    }
+  }
+
+  // A write performed by an EXPRESSION, wherever that expression sits.
+  fn expr(e : @ast.TsExpr) -> Unit {
+    match e {
+      PropAssignExpr(Var(h), p, v) => {
+        note(h, Some(p), None)
+        expr(v)
+      }
+      IndexAssignExpr(Var(h), k, v) => {
+        note(h, None, Some(k))
+        expr(v)
+      }
+      CompoundAssignExpr(PropAccess(Var(h), p), _, v) => {
+        note(h, Some(p), None)
+        expr(v)
+      }
+      CompoundAssignExpr(IndexAccess(Var(h), k), _, v) => {
+        note(h, None, Some(k))
+        expr(v)
+      }
+      Seq(l, r) | BinOp(_, l, r) => {
+        expr(l)
+        expr(r)
+      }
+      Cond(c, t, f) => {
+        expr(c)
+        expr(t)
+        expr(f)
+      }
+      UnaryOp(_, inner) | PureCall(inner) | Await(inner) | TypeArgs(_, inner) =>
+        expr(inner)
+      Call(_, args) | New(_, args) =>
+        for a in args {
+          expr(a)
+        }
+      CallExpr(callee, args) | NewExpr(callee, args) => {
+        expr(callee)
+        for a in args {
+          expr(a)
+        }
+      }
+      MethodCall(recv, _, args) => {
+        expr(recv)
+        for a in args {
+          expr(a)
+        }
+      }
+      FuncExpr(f) => block(f.body)
+      _ => ()
+    }
+  }
+
+  match st {
+    PropAssign(Var(h), p, v) => {
+      note(h, Some(p), None)
+      expr(v)
+    }
+    IndexAssign(Var(h), k, v) => {
+      note(h, None, Some(k))
+      expr(v)
+    }
+    Expr(e) | Throw(e) | Assign(_, e) | CompoundAssign(_, _, e) => expr(e)
+    Return(Some(e)) => expr(e)
+    Block(b) => block(b)
+    If(_, t, e) => {
+      block(t)
+      match e {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    While(_, b) | DoWhile(_, b) | With(_, b) => block(b)
+    For(_, _, _, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b) => block(b)
+    Try(t, _, c, f) => {
+      block(t)
+      match c {
+        Some(b) => block(b)
+        None => ()
+      }
+      match f {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    Switch(_, cases) =>
+      for c in cases {
+        block(c.body)
+      }
+    Label(_, inner) =>
+      expando_writes_in_stmt(inner, holders, dotted, definite, opaque)
+    Let(_, _, FuncExpr(f))
+    | Const(_, _, FuncExpr(f))
+    | Var(_, _, FuncExpr(f)) => block(f.body)
+    _ => ()
+  }
+}
+
+///|
+/// Every `HOLDER.PROP` this statement READS at its own level, as
+/// `"HOLDER.PROP"`.
+///
+/// "Its own level" is the point of the rule rather than an economy: tsc
+/// accepts a read from OUTSIDE the initialising scope
+/// (`typeFromPropertyAssignment36`'s own comment says so, and
+/// `function later() { return d.q }` next to a conditional `d.q = 1` is
+/// ACCEPTED), so the walk must stop at a nested function body and at a
+/// nested block. An expression form with no arm here costs a finding and
+/// cannot invent one.
+fn expando_reads_in_stmt(
+  st : @ast.TsStmt,
+  holders : Map[String, Unit],
+  out : Map[String, Unit],
+) -> Unit {
+  fn expr(e : @ast.TsExpr) -> Unit {
+    match e {
+      PropAccess(Var(h), p) => if holders.contains(h) { out["\{h}.\{p}"] = () }
+      PropAccess(inner, _) => expr(inner)
+      TypeArgs(_, inner)
+      | PureCall(inner)
+      | Spread(inner)
+      | UnaryOp(_, inner)
+      | Await(inner)
+      | YieldStar(inner) => expr(inner)
+      BinOp(_, l, r) | Seq(l, r) | IndexAccess(l, r) => {
+        expr(l)
+        expr(r)
+      }
+      Cond(c, t, f) => {
+        expr(c)
+        expr(t)
+        expr(f)
+      }
+      Call(_, args) =>
+        for a in args {
+          expr(a)
+        }
+      CallExpr(callee, args) | NewExpr(callee, args) => {
+        expr(callee)
+        for a in args {
+          expr(a)
+        }
+      }
+      New(_, args) =>
+        for a in args {
+          expr(a)
+        }
+      MethodCall(recv, _, args) => {
+        expr(recv)
+        for a in args {
+          expr(a)
+        }
+      }
+      ArrayLit(elems) =>
+        for el in elems {
+          expr(el)
+        }
+      ObjectLit(entries) =>
+        for kv in entries {
+          expr(kv.1)
+        }
+      // A nested function body is a DIFFERENT scope, where the read is
+      // legal however the property was assigned. Stop here.
+      _ => ()
+    }
+  }
+
+  match st {
+    Expr(e) | Throw(e) | Assign(_, e) | CompoundAssign(_, _, e) => expr(e)
+    Return(Some(e)) => expr(e)
+    Let(_, _, e) | Const(_, _, e) | Var(_, _, e) => expr(e)
+    PropAssign(_, _, v) => expr(v)
+    If(cond, _, _) | While(cond, _) | DoWhile(cond, _) | Switch(cond, _) =>
+      expr(cond)
+    _ => ()
+  }
+}
+
+///|
+/// TS2565: "Property 'q' is used before being assigned."
+///
+/// A function value gains EXPANDO properties by assignment
+/// (`function d() { }` then `d.e = 12`). Reading one that is assigned only
+/// inside a conditional branch is the error; the rule is a single ordered
+/// pass over one statement list, tracking per `HOLDER.PROP` whether the
+/// assignment seen so far is DEFINITE or merely POSSIBLE.
+///
+/// The `if` statement is the ONLY construct that produces `possible`, and
+/// that is a soundness decision rather than a shortcut: a write in any
+/// construct this pass does not model is recorded as definite, so an
+/// unmodelled shape silences the check instead of firing on it. Probed
+/// against the real compiler, which is where the line actually falls:
+///
+///   if (b) { d.q = 1 }              then d.q     TS2565
+///   if (b) { d.q = 1 } else { … }    then d.q     legal (both arms)
+///   d.q = 1                          then d.q     legal
+///   switch (1) { default: d.q = 1 }  then d.q     legal (default runs)
+///   while (b) { d.q = 1 }            then d.q     TS2565 — a MISS here
+///   if (b) { d.q = 1 }  function later() { return d.q }   legal
+///
+/// so the `while` row is given up to keep `switch`'s `default` — and any
+/// other reachability question — from producing a false positive. A
+/// property with no assignment anywhere is a different error (TS2339) and
+/// is not reported here.
+///
+/// Gated on `strictNullChecks`: with it off, tsc accepts every row above.
+fn check_expando_use_before_assign(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if not(module_.strict_null_checks) {
+    return issues
+  }
+  // A top-level `function d() { }` is parsed by the module loop into
+  // `module_.funcs` and is NOT pushed into `top_level_stmts`, so the
+  // outermost list has to be told about those holders by name; a function
+  // declared one scope in goes through `parse_stmt` and arrives as
+  // `Let(Ident, Any, FuncExpr)` like a `const g = function () { }` does.
+  // For the same reason each top-level function's own body is scanned
+  // here rather than reached by the nested recursion.
+  let top_holders : Array[String] = []
+  for f in module_.funcs {
+    top_holders.push(f.name)
+  }
+  expando_scan_stmt_list(module_.top_level_stmts, top_holders, issues)
+  for f in module_.funcs {
+    expando_scan_stmt_list(f.body.stmts, [], issues)
+  }
+  issues
+}
+
+///|
+/// One ordered pass over `stmts`, then a recursion into every nested
+/// statement list so an inner function body gets its own holders and its
+/// own definite / possible states. See
+/// `check_expando_use_before_assign` for the rule.
+fn expando_scan_stmt_list(
+  stmts : Array[@ast.TsStmt],
+  extra_holders : Array[String],
+  issues : Array[ExprIssue],
+) -> Unit {
+  let holders : Map[String, Unit] = {}
+  for n in extra_holders {
+    holders[n] = ()
+  }
+  // `HOLDER.PROP` -> true when the assignment seen so far is DEFINITE.
+  let assigned : Map[String, Bool] = {}
+  // Holders written through a key this pass cannot spell (`d[k] = 1`).
+  // Such a write could land on any property, so nothing on that holder is
+  // reported afterwards.
+  let opaque : Map[String, Unit] = {}
+  let reported : Map[String, Unit] = {}
+  for st in stmts {
+    // Reads first: a statement that both reads and writes reads the old
+    // value (`d.q = d.q`), and the corpus's shapes are one or the other.
+    let reads : Map[String, Unit] = {}
+    expando_reads_in_stmt(st, holders, reads)
+    for kv in reads {
+      let holder = match kv.0.find(".") {
+        Some(i) => kv.0[:i].to_string()
+        None => kv.0
+      }
+      if assigned.get(kv.0) is Some(false) &&
+        not(reported.contains(kv.0)) &&
+        not(opaque.contains(holder)) {
+        reported[kv.0] = ()
+        let prop = match kv.0.rev_find(".") {
+          Some(i) => kv.0[i + 1:].to_string()
+          None => kv.0
+        }
+        issues.push({
+          path: "expando `\{kv.0}`",
+          message: "property `\{prop}` is used before being assigned",
+        })
+      }
+    }
+    // A new holder, then this statement's writes.
+    match st {
+      Let(Ident(n), _, init)
+      | Const(Ident(n), _, init)
+      | Var(Ident(n), _, init) =>
+        if is_expando_holder_init(init) {
+          holders[n] = ()
+        }
+      _ => ()
+    }
+    match st {
+      If(_, then_b, else_b) => {
+        let tw : Map[String, Unit] = {}
+        for s in then_b.stmts {
+          expando_writes_in_stmt(s, holders, tw, assigned, opaque)
+        }
+        let ew : Map[String, Unit] = {}
+        match else_b {
+          Some(b) =>
+            for s in b.stmts {
+              expando_writes_in_stmt(s, holders, ew, assigned, opaque)
+            }
+          None => ()
+        }
+        for kv in tw {
+          if ew.contains(kv.0) {
+            assigned[kv.0] = true
+          } else if assigned.get(kv.0) is None {
+            assigned[kv.0] = false
+          }
+        }
+        for kv in ew {
+          if not(tw.contains(kv.0)) && assigned.get(kv.0) is None {
+            assigned[kv.0] = false
+          }
+        }
+      }
+      _ => {
+        // Every other construct — including a bare `HOLDER.PROP = v` at
+        // this level — counts as a definite assignment. See the header
+        // for why the unmodelled direction is the quiet one.
+        let w : Map[String, Unit] = {}
+        expando_writes_in_stmt(st, holders, w, assigned, opaque)
+        for kv in w {
+          assigned[kv.0] = true
+        }
+      }
+    }
+  }
+  // Nested statement lists, each with its own holders and states.
+  for st in stmts {
+    expando_scan_nested(st, issues)
+  }
+}
+
+///|
+fn expando_scan_nested(st : @ast.TsStmt, issues : Array[ExprIssue]) -> Unit {
+  fn block(b : @ast.TsBlock) -> Unit {
+    expando_scan_stmt_list(b.stmts, [], issues)
+  }
+
+  match st {
+    Let(_, _, FuncExpr(f))
+    | Const(_, _, FuncExpr(f))
+    | Var(_, _, FuncExpr(f)) => block(f.body)
+    Block(b) => block(b)
+    If(_, t, e) => {
+      block(t)
+      match e {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    While(_, b) | DoWhile(_, b) | With(_, b) => block(b)
+    For(_, _, _, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b) => block(b)
+    Try(t, _, c, f) => {
+      block(t)
+      match c {
+        Some(b) => block(b)
+        None => ()
+      }
+      match f {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    Switch(_, cases) =>
+      for c in cases {
+        block(c.body)
+      }
+    Label(_, inner) => expando_scan_nested(inner, issues)
+    _ => ()
+  }
+}
+
+///|
+/// TS2394: "This overload signature is not compatible with its
+/// implementation signature."
+///
+/// Two halves of one rule, on one grouping of `module_.funcs`:
+///
+///   - the RETURN half, which predates the parser marker and therefore has
+///     to GUESS that a trailing `void` declaration is the implementation;
+///   - the PARAMETER half, which compares a signature's parameter type
+///     against the implementation's at the same position.
+///
+/// The parameter half needs to know which declaration is the
+/// implementation rather than guess it, and `TsFunc.body` is not optional,
+/// so the parser records `<fn-impl:NAME>` off the `bodiless` fact it has
+/// at parse time. Without that marker the check declines: an all-ambient
+/// overload set (a `.d.ts`) has no implementation to compare against, and
+/// treating its last signature as one would report every legal overload
+/// set in the file.
+///
+/// The rule is deliberately NOT the general subtype test its message
+/// describes. Probed cell by cell against the real compiler:
+///
+///   f(x: 'a');   f(x: number) { }     TS2394   (incompatible parameter)
+///   f(x: string); f(x: number) { }    TS2394
+///   f(a, b);     f(a) { }             legal    (fewer impl parameters)
+///   f(a);        f(a, b) { }          TS2394   (arity — the class-site
+///                                               rule's direction)
+///   f(x: 'a');   f(x: any) { }        legal    (`any` accepts anything)
+///
+/// so only a pair of definitely-concrete primitives / literals that are
+/// incompatible in BOTH directions is judged. Everything else — `any`, a
+/// type parameter, an object shape, a union, a missing annotation —
+/// abstains, which costs a MISS rather than inventing a finding.
 fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   if module_.funcs.length() < 2 {
@@ -26567,6 +27040,17 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
       ambient_module_fns[af.name] = ()
     }
   }
+  // Names this module declares a function IMPLEMENTATION for, from the
+  // parser's `<fn-impl:NAME>` marker. See the header: the parameter half
+  // needs this as a FACT, not as "the last declaration is probably the
+  // implementation".
+  let has_impl : Map[String, Unit] = {}
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<fn-impl:") {
+      has_impl[gm["<fn-impl:".length():gm.length() - 1].to_string()] = ()
+    }
+  }
+  let decls_by_name : Map[String, Array[@ast.TsFunc]] = {}
   for f in module_.funcs {
     match by_name.get(f.name) {
       Some(arr) => arr.push(f.return_type)
@@ -26574,6 +27058,10 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
         by_name[f.name] = [f.return_type]
         order.push(f.name)
       }
+    }
+    match decls_by_name.get(f.name) {
+      Some(arr) => arr.push(f)
+      None => decls_by_name[f.name] = [f]
     }
   }
   fn is_concrete_scalar_ret(t : @ast.TsType) -> Bool {
@@ -26595,6 +27083,7 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
     if ambient_module_fns.contains(name) {
       continue
     }
+    let mut reported = false
     match by_name.get(name) {
       Some(rets) if rets.length() >= 2 =>
         if rets[rets.length() - 1] is Void {
@@ -26604,10 +27093,50 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
                 path: "function \{name}",
                 message: "this overload signature is not compatible with its implementation signature",
               })
+              reported = true
               break
             }
           }
         }
+      _ => ()
+    }
+    if reported || not(has_impl.contains(name)) {
+      continue
+    }
+    // The PARAMETER half. The implementation is the LAST declaration in
+    // source order — signatures precede it in every legal spelling — and
+    // the marker above is what makes that a fact rather than a guess.
+    match decls_by_name.get(name) {
+      Some(fns) if fns.length() >= 2 => {
+        let impl_ = fns[fns.length() - 1]
+        for i in 0..<(fns.length() - 1) {
+          let sig = fns[i]
+          let n = if sig.params.length() < impl_.params.length() {
+            sig.params.length()
+          } else {
+            impl_.params.length()
+          }
+          let mut bad = false
+          for p in 0..<n {
+            let st = sig.params[p].type_
+            let it = impl_.params[p].type_
+            if is_concrete_primitive_or_literal(st) &&
+              is_concrete_primitive_or_literal(it) &&
+              not(is_assignable_to(st, it)) &&
+              not(is_assignable_to(it, st)) {
+              bad = true
+              break
+            }
+          }
+          if bad {
+            issues.push({
+              path: "function \{name}",
+              message: "this overload signature is not compatible with its implementation signature",
+            })
+            break
+          }
+        }
+      }
       _ => ()
     }
   }
@@ -26643,11 +27172,15 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// missing binder forms this repo has paid for seven times.
 ///
 /// `var`+`var` stays legal, and function overloads still legally repeat a
-/// name. TS2393 ("Duplicate function implementation") is deliberately NOT
-/// attempted: `TsFunc.body` is not optional, so an overload SIGNATURE and an
-/// implementation are indistinguishable here — the neighbouring
-/// `check_overload_void_return` has to guess "the last declaration is the
-/// implementation" for the same reason.
+/// name. TS2393 ("Duplicate function implementation") is still NOT attempted
+/// here, but the blocker this comment used to name is gone: `TsFunc.body` is
+/// not optional, so an overload SIGNATURE and an implementation are
+/// indistinguishable in the AST — and the parser records the missing fact as
+/// `<fn-impl:NAME>` off its own `bodiless` flag, which is what
+/// `check_overload_void_return`'s parameter half reads instead of guessing.
+/// The marker is pushed once per implementation, so the COUNT TS2393 needs
+/// is available too; it is filed rather than done because nothing in the
+/// corpus asked for it.
 fn check_function_var_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let flagged : Map[String, Unit] = {}
@@ -30493,6 +31026,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_overload_void_return(module_) {
+    all.push(issue)
+  }
+  for issue in check_expando_use_before_assign(module_) {
     all.push(issue)
   }
   for issue in check_use_strict_with_non_simple_params(module_, resolver) {

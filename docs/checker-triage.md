@@ -175,10 +175,17 @@ bridge's primary input.
   These are the batch-DI shape: `has_body_block` at
   `parser_class.mbt:2936` already separates a signature from an
   implementation, and that site's own comment states the abstention.
+  TS2371 and TS2394's arity half went in as batch DN, TS2386 and
+  TS2394's parameter-type half as batch DS. Both TS2394 halves are
+  ONE-DIRECTIONAL and the message says nothing about which direction, so
+  the table had to be probed cell by cell — a SHORTER implementation is
+  legal, an incompatible parameter type is not.
 - **implicit-any / strict family** (10 files): TS7009/7010/7018/7022/7023/
   7031/7053, TS2564/2565/2729. This is what a real codebase hits the day
   it turns `strict` on, which makes it the highest *user-facing* value in
-  Tier 2 even though the corpus count is small.
+  Tier 2 even though the corpus count is small. TS7009 went in as batch
+  DO, TS2565 (expando use-before-assign) as batch DS; TS7031/TS7018 is
+  REJECTED with a mechanical blocker recorded in TODO.md.
 - **strict-null / narrowing** (8 files).
 
 ### Tier 3 — DEFER (~93 files, real but expensive)
@@ -248,8 +255,8 @@ produced a retired strategy document.
 That is now what the gate does:
 
 ```
-TP  err+flag  : 2572   (of which via parse rejection: 390)
-MISS in scope : 143   (the backlog — this one can reach zero)
+TP  err+flag  : 2575   (of which via parse rejection: 390)
+MISS in scope : 140   (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0     (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)
