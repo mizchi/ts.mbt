@@ -18670,3 +18670,83 @@ test "checker: TS2729 for a field with no initializer (batch DU)" {
     @test.assert_eq(issues(h + src), 0)
   }
 }
+
+///|
+/// Batch DV: TS7022's INDIRECT form — a `for (var v of new C)` head whose
+/// element type comes from C's iteration protocol, where an un-annotated
+/// `next()` / `[Symbol.iterator]()` RETURNS the loop variable.
+///
+/// Batch DT declined this on the grounds that the only cheap version
+/// would key on the exact corpus shape. That was too pessimistic, and the
+/// thing that settles it is in the corpus itself: `for-of25` and
+/// `for-of26` are `for-of33` and `for-of34` with the returned name
+/// changed from the loop variable `v` to an unrelated `var x: any`, and
+/// both are TS7-ACCEPTED. The discriminator is the NAME, which is the
+/// actual semantic distinction rather than a match on file contents.
+///
+/// Every gate was probed, and three of them keep the rule off legal code:
+/// only the two PROTOCOL methods count (a `helper()` returning the loop
+/// variable is accepted, because nothing consults its return type); an
+/// annotated return breaks the cycle; and a name the method itself BINDS
+/// is the method's own local, which is what makes
+/// `next() { let v = { value: 1, done: false }; return v }` — accepted by
+/// tsc — stay silent.
+test "checker: TS7022 indirect through the iteration protocol (batch DV)" {
+  // Counts only THIS rule's message. A whole-file count would be wrong
+  // for the `let`-head case below, which correctly draws a TS2304
+  // ("cannot find name `v`") from a different check — the class body is
+  // outside the loop's block scope, which is exactly what tsc reports
+  // there too.
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("referenced indirectly in its own initializer") {
+        n = n + 1
+      }
+    }
+    n
+  }
+  let h = "//@target: ES6\n//@noImplicitAny: true\n"
+  let proto = "[Symbol.iterator]() { return this; }"
+  for
+    src in [
+      // for-of33: the iterator method itself returns the loop variable.
+      "class C { [Symbol.iterator]() { return v; } }\nfor (var v of new C) { }",
+      // for-of34: `next()` returns it.
+      "class C { next() { return v; } \{proto} }\nfor (var v of new C) { }",
+      // for-of35: the mention is inside the returned object literal, which
+      // is why the mention test is the same walk the DIRECT form uses.
+      "class C { next() { return { done: true, value: v }; } \{proto} }\nfor (var v of new C) { }",
+    ] {
+    assert_true(issues(h + src) > 0)
+  }
+  // Silent, and each one is a gate rather than an accident:
+  //   - for-of25 / for-of26's shape: an unrelated name is returned;
+  //   - a proper iterator result mentioning nothing;
+  //   - an ANNOTATED return breaks the inference cycle;
+  //   - only `next` / `[Symbol.iterator]` are consulted;
+  //   - a parameter, and a local declared anywhere in the body, shadow
+  //     the loop variable — the local case is TS7-ACCEPTED when the
+  //     returned object is a proper iterator result, so it is a real
+  //     false-positive hazard and not just a wrong reason;
+  //   - a `let` head puts the class body outside the loop scope (tsc
+  //     gives TS2304 there) and an annotated head gets TS2483 + TS2502.
+  for
+    src in [
+      "var x: any;\nclass C { [Symbol.iterator]() { return x; } }\nfor (var v of new C) { }",
+      "var x: any;\nclass C { next() { return x; } \{proto} }\nfor (var v of new C) { }",
+      "class C { next() { return { value: 1, done: false }; } \{proto} }\nfor (var v of new C) { }",
+      "class C { next(): any { return v; } \{proto} }\nfor (var v of new C) { }",
+      "class C { helper() { return v; } next() { return { done: true, value: 1 }; } \{proto} }\nfor (var v of new C) { }",
+      "class C { next(v: number) { return v; } \{proto} }\nfor (var v of new C) { }",
+      "class C { next() { let v = { value: 1, done: false }; return v; } \{proto} }\nfor (var v of new C) { }",
+      "class C { next() { const v = { value: 1, done: false }; return v; } \{proto} }\nfor (var v of new C) { }",
+      "class C { next() { return v; } \{proto} }\nfor (let v of new C) { }",
+      "class C { next() { return v; } \{proto} }\nfor (var v: any of new C) { }",
+      // A class EXPRESSION contributes nothing, and must not leak its
+      // names into the next declaration that drains the accumulator.
+      "const K = class { next() { return v; } };\nclass C { next() { return { value: 1, done: false }; } \{proto} }\nfor (var v of new C) { }",
+    ] {
+    @test.assert_eq(issues(h + src), 0)
+  }
+}

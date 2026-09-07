@@ -3317,6 +3317,43 @@ fn Parser::parse_class_body(
         is_generator,
         is_async: is_async_method,
       }
+      // TS7022, the INDIRECT form. A `for (var v of new C)` head takes
+      // its element type from C's iteration protocol, so an un-annotated
+      // `next()` / `[Symbol.iterator]()` that RETURNS `v` is a genuine
+      // inference cycle. Recorded here, where the body and the
+      // return-annotation fact are both in hand; joined against the loop
+      // head in `record_for_head_binding_misuses`.
+      //
+      // Only the two protocol methods, probed: a `helper()` returning the
+      // loop variable is ACCEPTED, because nothing consults its return
+      // type. An annotated return (`next(): any`) is ACCEPTED too, which
+      // is why this needs `had_return_annotation` rather than
+      // `return_type is Any` — the AST cannot tell an absent annotation
+      // from an explicit `: any`. A parameter of the same name shadows
+      // the loop variable, so those methods are skipped (tsc gives that
+      // shape TS2490 / TS2763, a different pair of codes).
+      if has_body_block &&
+        not(is_static) &&
+        accessor_kind is None &&
+        not(had_return_annotation) &&
+        (method_name == "next" || method_name == "@@iterator") {
+        let names : Array[String] = []
+        collect_method_return_var_names(func.body, names)
+        // A name the method itself BINDS — a parameter, or any local
+        // declared anywhere in the body — is the method's own, not the
+        // loop variable. `collect_declared_names_in_block` records why
+        // that set is deliberately over-approximated.
+        let bound : Array[String] = []
+        for p in func.params {
+          bound.push(p.name)
+        }
+        self.collect_declared_names_in_block(func.body, bound)
+        for n in names {
+          if not(bound.contains(n)) {
+            self.protocol_return_names.push(n)
+          }
+        }
+      }
       if accessor_kind is None && key is Name("constructor") && !is_static {
         if has_body_block {
           ctor_impl_count += 1
@@ -3647,6 +3684,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
@@ -3698,6 +3736,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       Some(n) => expr_class_sentinels.push("<optional-member:" + n + ">")
       None => ()
     }
+  }
+  // A class EXPRESSION contributes no protocol-return names — nobody
+  // writes `for (var v of new (class { … }))` — but the accumulator must
+  // still be drained here, or its entries would leak into whichever
+  // class DECLARATION drains next.
+  while self.protocol_return_names.length() > protocol_returns_start {
+    let _ = self.protocol_return_names.pop()
   }
   while self.override_member_names.length() > override_names_start {
     match self.override_member_names.pop() {
@@ -4473,6 +4518,7 @@ fn Parser::parse_class_decl_with_abstract(
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
@@ -4519,6 +4565,26 @@ fn Parser::parse_class_decl_with_abstract(
       Some(n) =>
         runtime_decl.duplicate_member_names.push("<optional-member:" + n + ">")
       None => ()
+    }
+  }
+  // TS7022 (indirect): key this class's protocol-return names by the
+  // class name so the `for…of` head rule can join against `new C`.
+  {
+    let pr : Array[String] = []
+    while self.protocol_return_names.length() > protocol_returns_start {
+      match self.protocol_return_names.pop() {
+        Some(n) => pr.push(n)
+        None => ()
+      }
+    }
+    if pr.length() > 0 && name != "" {
+      match self.protocol_returns_by_class.get(name) {
+        Some(existing) =>
+          for n in pr {
+            existing.push(n)
+          }
+        None => self.protocol_returns_by_class[name] = pr
+      }
     }
   }
   while self.override_member_names.length() > override_names_start {

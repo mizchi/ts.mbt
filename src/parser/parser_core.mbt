@@ -222,6 +222,16 @@ pub struct Parser {
   // the type cannot answer and the modifier needs its own channel.
   // Drained per class into `<optional-member:...>` sentinels.
   optional_member_names : Array[String]
+  // TS7022, the INDIRECT form: bare `Var` names returned by an
+  // un-annotated `next()` / `[Symbol.iterator]()` of the class body being
+  // parsed. Accumulated here and drained per class into
+  // `protocol_returns_by_class`, which the `for…of` head rule joins
+  // against — see `record_for_head_binding_misuses`.
+  protocol_return_names : Array[String]
+  // Class name -> the names above. Filled at the end of each runtime
+  // class DECLARATION; a class expression is deliberately absent, since
+  // `for (var v of new (class { … }))` is not a shape anybody writes.
+  protocol_returns_by_class : Map[String, Array[String]]
   // Member names that carried an `override` modifier while parsing class
   // bodies ("i:"/"s:" prefixed for instance/static). Drained per class
   // into `<override-member:...>` sentinels for TS4112/4113/4114.
@@ -366,6 +376,8 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    protocol_return_names: [],
+    protocol_returns_by_class: {},
     private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: {},
@@ -622,6 +634,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    protocol_return_names: [],
+    protocol_returns_by_class: {},
     private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: lexer.pure_marker_positions,

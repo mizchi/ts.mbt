@@ -1269,6 +1269,46 @@ product surfaces now.
   One declared MISS at the site: `declare b: T` is TS2729 in tsc, and the
   parser folds `has_declare` into `has_definite_assertion` — correctly,
   for TS2564 — so an ambient field reads as asserted here.
+  Batch DV is +3 and is the batch that OVERTURNS one of these
+  abstentions rather than an old one: batch DT had declined exactly these
+  three files, saying "the only cheap version would key on the exact
+  corpus shape", and the thing that settles it had been in the corpus the
+  whole time. `for-of25` and `for-of26` are `for-of33` and `for-of34`
+  with the returned name changed from the loop variable `v` to an
+  unrelated `var x: any`, and both are TS7-ACCEPTED — so the
+  discriminator is the NAME, which is the actual semantic distinction and
+  not a match on file contents, and the corpus supplies twelve negative
+  controls for free. Fourth time in this series that a stated
+  abstention's reason turned out weaker than claimed, and the first where
+  the abstention was written one batch earlier by the same pass. The rule
+  is TS7022's INDIRECT form: a `for (var v of new C)` head takes its
+  element type from C's iteration protocol, so an un-annotated `next()` /
+  `[Symbol.iterator]()` that RETURNS `v` is a genuine inference cycle.
+  It lives entirely in the PARSER, which is what keeps it small — the
+  class body records the bare `Var` names its un-annotated protocol
+  methods return, keyed by class name, and
+  `record_for_head_binding_misuses`, where the DIRECT form already lives,
+  joins against `new C`; the mention test is `collect_iterable_var_names`,
+  the same walk, because "does this expression evaluate a reference to
+  NAME" is the same question and a second walk would be the
+  applied-in-some-places family in its purest form.
+  Three gates keep it off legal code and all three were probed. Only the
+  two PROTOCOL methods count — a `helper()` returning the loop variable
+  is ACCEPTED, since nothing consults its return type. An annotated
+  return breaks the cycle, so the rule needs `had_return_annotation`
+  rather than `return_type is Any`, the same absent-versus-`: any`
+  blocker recorded for TS7031 and TS2729. And a name the method itself
+  BINDS is its own local: `next() { let v = { value: 1, done: false };
+  return v }` beside `for (var v of new C)` is TS7-ACCEPTED, so firing
+  there would be a false positive on legal code that NO corpus file
+  covers — the bound-name set is over-approximated on purpose, losing
+  findings rather than inventing them.
+  The other half of the indirect form is NOT covered and is Tier 3, and
+  probing is what drew the line: the reportable class is generic
+  return-type inference from a CALLBACK, since `let x = arr.map(v => x)`
+  reports while `let x = g(() => x)` with `g` declaring its return type
+  is ACCEPTED, as are `let x = function () { return x }`, `[() => x]`
+  and `{ m: () => x }`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

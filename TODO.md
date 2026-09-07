@@ -4970,10 +4970,59 @@ inside a function body:
   tsc, and the parser folds `has_declare` into `has_definite_assertion`
   (correctly, for TS2564), so an ambient field reads as asserted here.
   That loses a finding and cannot invent one.
-- [ ] implicit-any / strict family (1 left): TS7022's INDIRECT form
-  (through a function body — `let x = arr.map(v => x)`). Small corpus
-  count, highest USER-facing value in this tier — it is what a real
-  codebase hits the day it turns `strict` on.
+- [x] **Batch DV: TS7022's INDIRECT form through the iteration protocol,
+  +3 files at FP 0** (TP 2578 -> 2581, in-scope MISS 137 -> 134). A
+  `for (var v of new C)` head takes its element type from C's iteration
+  protocol, so an un-annotated `next()` / `[Symbol.iterator]()` that
+  RETURNS `v` is a genuine inference cycle.
+  Batch DT declined exactly these three files one batch earlier, saying
+  "the only cheap version would key on the exact corpus shape". That was
+  too pessimistic, and the thing that settles it was in the corpus the
+  whole time: **`for-of25` and `for-of26` are `for-of33` and `for-of34`
+  with the returned name changed** from the loop variable `v` to an
+  unrelated `var x: any`, and both are TS7-ACCEPTED. So the
+  discriminator is the NAME — the actual semantic distinction, not a
+  match on file contents — and the corpus supplies its own negative
+  controls, twelve of them counting `for-of19`-`23`, `27`, `28`, `30`,
+  `31` and `ES5For-ofTypeCheck10`. Fourth time in this series that a
+  stated abstention's reason turned out weaker than claimed, and the
+  first where the abstention was my own from the batch before.
+  Implemented entirely in the PARSER, which is what keeps it small: the
+  class body records the bare `Var` names its un-annotated protocol
+  methods return, keyed by class name, and
+  `record_for_head_binding_misuses` — where TS7022's DIRECT form already
+  lives — joins against `new C`. The mention test is
+  `collect_iterable_var_names`, the same walk the direct form uses,
+  because "does this expression evaluate a reference to NAME" is the same
+  question and a second walk would be the applied-in-some-places family
+  in its purest form.
+  Every gate was probed, and three of them are what keep it off legal
+  code. Only the two PROTOCOL methods count — a `helper()` returning the
+  loop variable is ACCEPTED, because nothing consults its return type.
+  An annotated return breaks the cycle, so this needs
+  `had_return_annotation` rather than `return_type is Any` (the AST
+  cannot tell an absent annotation from an explicit `: any` — the same
+  blocker recorded for TS7031 and TS2729). And a name the method itself
+  BINDS is its own local: `next() { let v = { value: 1, done: false };
+  return v }` beside `for (var v of new C)` is TS7-ACCEPTED, so firing
+  there would be a false positive on legal code that no corpus file
+  covers. The bound-name set is deliberately over-approximated (a
+  nested block's `let`, a nested function's parameter), which loses
+  findings rather than inventing them.
+  Three declared MISSes, each stated at the site: a `let`/`const` head
+  (the class body is outside the loop's block scope, so tsc gives
+  TS2304 there and a different check already reports it), an
+  annotation-typed iterable (`declare const c: C; for (var v of c)`,
+  which needs the annotation resolved), and an IIFE inside the return
+  (`return (() => v)()`, which tsc reports because the IIFE's return
+  type feeds back).
+  The other half of the indirect form — generic return-type inference
+  from a callback (`let x = arr.map(v => x)`) — is NOT covered and is
+  Tier 3: probing shows the reportable class needs the callee's
+  signature and generic inference, since `let x = g(() => x)` with `g`
+  declaring a return type is ACCEPTED while `arr.map` is not, and
+  `let x = function () { return x }`, `[() => x]` and `{ m: () => x }`
+  are all accepted too.
 - [ ] **FILED: TS2393 for duplicate top-level function implementations.**
   Batch DS's `<fn-impl:NAME>` marker removes the blocker
   `check_function_var_duplicates`' comment used to name, and it is pushed

@@ -194,18 +194,26 @@ bridge's primary input.
   which makes "open the comment that declines the rule, then probe its
   reason" the highest-yield move left in this tier.
 
-  **TS7023 and TS7053 do NOT belong in this tier**, and calling them
-  "cheap and mechanical" was the label-for-objective substitution this
-  document is written to warn about — measured by opening the files.
-  TS7023 is three files (`for-of33` / `-34` / `-35`) that all need an
-  inference CYCLE detector through a class method's un-annotated return
-  type; the only cheap version would key on the exact corpus shape ("the
-  iterated class's `next()` returns the loop variable"), which is fitting
-  the corpus. TS7053 is two files needing union-of-index-signature member
-  resolution (`{ foo: number } | { [s: string]: string }`) and
-  assignment-target widening of `(options || {}).a` — both Tier 3
-  assignability work, and both files also carry TS2339 / TS2322 for the
-  same reason. Five files moved to Tier 3.
+  **TS7053 does not belong in this tier**, and calling the whole
+  implicit-any family "cheap and mechanical" was the label-for-objective
+  substitution this document is written to warn about. TS7053 is two
+  files needing union-of-index-signature member resolution
+  (`{ foo: number } | { [s: string]: string }`) and assignment-target
+  widening of `(options || {}).a` — both Tier 3 assignability work, and
+  both files also carry TS2339 / TS2322 for the same reason.
+
+  **TS7023's three files were moved to Tier 3 and then taken in batch
+  DV, and the correction is worth more than the files.** The stated
+  reason for deferring them was that "the only cheap version would key
+  on the exact corpus shape", and that was too pessimistic: the corpus
+  supplies its own negative controls. `for-of25` and `for-of26` are
+  `for-of33` and `for-of34` with the returned name changed from the loop
+  variable to an unrelated `var x: any`, and both are TS7-ACCEPTED — so
+  the discriminator is the NAME, which is the actual semantic
+  distinction and not a match on file contents. Fourth time in this
+  series that a stated abstention's reason turned out weaker than
+  claimed, and the first where the abstention was one of my own from the
+  batch before.
 - **strict-null / narrowing** (8 files).
 
 ### Tier 3 — DEFER (~93 files, real but expensive)
@@ -275,8 +283,8 @@ produced a retired strategy document.
 That is now what the gate does:
 
 ```
-TP  err+flag  : 2578   (of which via parse rejection: 390)
-MISS in scope : 137   (the backlog — this one can reach zero)
+TP  err+flag  : 2581   (of which via parse rejection: 390)
+MISS in scope : 134   (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0     (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0     (parser rejects TS7-legal files — parser bugs)
