@@ -2991,8 +2991,50 @@ product surfaces now.
   call. That leaves the struct FIELD itself still promising the enum
   (`erasedMethod : (String) -> Auto_BetaValue_or_AlphaValue` in `types.mbt`)
   — filed rather than half-applied, because the fix is a direction parameter
-  on `ffi_func_type_name` and the probe does not read struct fields yet, so
-  the honest first step is to COUNT them.
+  on `ffi_func_type_name` and the probe did not read struct fields, so the
+  honest first step was to COUNT them.
+  That count is section C of the probe, and it retires the entry that asked
+  for it. The label was standing in for the objective again — tenth instance
+  here, and the widest miss yet at **54x**: filed as "the function-typed
+  struct field" at 8, the class is ANY struct field carrying a payload enum,
+  at **438**. And what is wrong is a missing DIRECTION rather than a missing
+  arm. The corpus emits **259 `_to_js` struct converters and ZERO in the
+  other direction**, so a JS object handed to MoonBit as a struct is used
+  RAW: `Program::getSemanticDiagnostics` is
+  `(self, a, b) => self.getSemanticDiagnostics(a, b)`, which unwraps its
+  argument options and does nothing to the returned `Array[Diagnostic]`, so
+  `diag.messageText` is a raw JS string under
+  `Auto_StringValue_or_DiagnosticMessageChainValue` and a `match` on it reads
+  `$tag` off something that has none — with 33 externs returning `Diagnostic`
+  and `getSemanticDiagnostics` the most-used API the TypeScript compiler has.
+  That MoonBit structs are name-keyed JS objects is measured rather than
+  assumed: `__ts_mbt_to_js_diagnostic` reads one with `value["messageText"]`.
+  READ-REACHABILITY is the filter that makes it tractable and it changed the
+  answer by 50x — only a struct appearing in a RETURN position can receive a
+  JS value at all, and one that only crosses MoonBit -> JS is served
+  correctly by the `_to_js` converter that exists. 438 fields become **151**
+  read-reachable, **8** convertible and **143** erased, and the alarming
+  first reading ("247 React aria attributes would have to widen") was
+  measuring the wrong set: react_types is **5** under the filter. The ranking
+  is two rows, `typescript_ast` and `typescript` being the same
+  `typescript.d.ts` generated twice at 68/67 each, so the distinct work is 68
+  fields in ONE package plus 15 across six others.
+  The instrument carried the same substitution bug as the code TWICE, the
+  seventh time in this sequence: `bridge.js` helper names are the generator's
+  snake_case, which DOUBLES the underscore at a PascalCase boundary inside an
+  already-underscored name (`Auto_BoolValue_or_X` ->
+  `auto__bool_value_or__x`), so a hand-written snake_case reported 8/430 and
+  a too-loose match reported 260/178. Comparing with underscores stripped and
+  reconstructing nothing gives 8/143. Budgeted per PACKAGE in
+  `scripts/bridge_struct_enum_fields.txt` rather than declared per
+  occurrence, because 438 declarations rank no work and eight rows rank it
+  directly; growth fails, an undeclared package fails, and a drop is reported
+  so the budget follows it down, all three mutation-proven. The fix itself is
+  a real trade and is filed unshipped: widening an erased field needs no new
+  machinery and costs the type information on exactly the shapes a TS AST
+  walker touches, while a CONVERTING accessor beside a widened raw field —
+  what a class property already gets — keeps it for the price of a surface
+  rename.
   That pair is the fourth time in this sequence that a declining note's
   own stated reason was false, and both of its reasons were.
   `ffi_inline_js_return_expr_with_state` said converting an optional would

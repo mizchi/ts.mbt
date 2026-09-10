@@ -362,20 +362,67 @@ repo has been removed. Items below are scoped to the bridge generator only.
     test over it, which carries a NEGATIVE control (`string | URL`
     discriminates, so that union keeps its enum) so the fix cannot be
     "switch the lowering off".
-- [ ] **A function-typed struct FIELD's return is the same widening one axis
-  out, and is NOT covered.** `Service::erasedMethod`'s extern and declaration
-  now say `JSValue`, and the struct field the same interface renders —
-  `erasedMethod : (String) -> Auto_BetaValue_or_AlphaValue` in `types.mbt` —
-  still promises the enum over a raw JS value. Pre-existing, and strictly
-  improved rather than introduced: before the change the extern was wrong the
-  same way. The blocker is the one the method fix ran into and is mechanical:
-  `ffi_func_type_name` has no direction parameter, and it renders both an
-  interface member's function type (return crosses JS -> MoonBit) and a
-  callback parameter's (return crosses MoonBit -> JS, where the enum is
-  real). Giving it a direction is the fix; widening it blindly is what broke
-  `Matcher::_call_`. The probe does not read struct fields either, so the
-  first step is to teach `bridge_enum_return_probe.mjs` to count them — a
-  count of the occurrences is what says whether this is worth the parameter.
+- [x] **COUNTED the struct-field class, and the count retires the entry that
+  filed it.** The previous note called this "a function-typed struct FIELD's
+  return", estimated at 8, and said the first step was to teach
+  `bridge_enum_return_probe.mjs` to count them. Section C of the probe does,
+  and the label was standing in for the objective again — tenth instance in
+  this repo, and the widest miss yet at **54x**. The class is ANY struct field
+  carrying a payload enum, function-typed or not: **438**.
+  - **What is actually wrong is bigger than the widening, and it is a missing
+    DIRECTION rather than a missing arm.** Sections A and B ask about a
+    function's return; a struct field is the third position an enum can
+    occupy, and it is the one with no machinery at all. The corpus emits
+    **259 `_to_js` struct converters and ZERO in the other direction**, so a
+    JS object handed to MoonBit as a struct is used RAW —
+    `Program::getSemanticDiagnostics` is
+    `(self, a, b) => self.getSemanticDiagnostics(a, b)`, unwrapping its
+    argument options and doing nothing to the returned `Array[Diagnostic]`.
+    `diag.messageText` is therefore a raw JS string under
+    `Auto_StringValue_or_DiagnosticMessageChainValue`, and 33 externs return
+    `Diagnostic`. That MoonBit structs are name-keyed JS objects is not
+    assumed: `__ts_mbt_to_js_diagnostic` reads one with
+    `value["messageText"]`, so the generator's own output says so.
+  - **READ-REACHABILITY is the filter that makes it tractable, and it changed
+    the answer by 50x.** Only a struct that appears in a RETURN position can
+    receive a JS value at all; one that only crosses MoonBit -> JS is served
+    correctly by the `_to_js` converter that exists. 438 fields -> **151**
+    read-reachable, of which **8 convertible** and **143 erased**. The
+    alarming first reading — "247 React aria attributes would have to widen" —
+    was measuring the wrong set: react_types is **5** under the filter.
+  - **The ranking is two rows.** `typescript_ast` and `typescript` are the same
+    `typescript.d.ts` generated twice, 68 reachable / 67 erased each, so the
+    distinct work is 68 fields in ONE package plus 15 across six others.
+  - **The instrument carried the same substitution bug as the code, twice, for
+    the seventh time in this sequence.** `bridge.js` helper names are the
+    generator's snake_case, which DOUBLES the underscore at a PascalCase
+    boundary inside an already-underscored name (`Auto_BoolValue_or_X` ->
+    `auto__bool_value_or__x`). A hand-written snake_case reported 8
+    convertible / 430 erased; a too-loose match reported 260 / 178. Comparing
+    with underscores stripped and reconstructing nothing gives 8 / 143.
+  - Budgeted per PACKAGE in `scripts/bridge_struct_enum_fields.txt` rather
+    than declared per occurrence: 438 declarations would rank no work, and
+    eight rows rank it directly. Growth fails, an undeclared package fails, a
+    drop is reported so the budget follows it down — all three
+    mutation-proven.
+- [ ] **Fix the 143: widen, or emit a converting accessor.** Two options and
+  the choice is a real trade, so price it before writing it.
+  Widening an erased field's declared type to `JSValue` is the only answer
+  that needs no new machinery, and it costs the type information on exactly
+  the shapes a TS AST walker touches — `Diagnostic.messageText`,
+  `VariableDeclaration.parent`,
+  `VariableDeclarationList.parent`. The alternative keeps it: emit a
+  CONVERTING accessor (`Diagnostic::message_text(self) -> Auto_...`) beside a
+  widened raw field, which is what a class property already gets, at the cost
+  of a surface rename. The 8 convertible ones want neither — they want a
+  `_from_js` struct converter called at every struct-returning position, which
+  is 259 functions' worth of mirror and should be judged on its own.
+  Whatever ships, the blocker recorded for the function-typed spelling still
+  holds and is mechanical: `ffi_func_type_name` has no direction parameter and
+  renders both an interface member's function type (return crosses
+  JS -> MoonBit) and a callback parameter's (return crosses the other way,
+  where the enum is real), and widening it blindly is what broke
+  `Matcher::_call_`.
 - [x] **Convert an OPTIONAL tagged-union crossing — DONE**, and both of the
   reasons the previous note gave for declining it were false, which is the
   part worth keeping.
