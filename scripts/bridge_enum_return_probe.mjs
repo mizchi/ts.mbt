@@ -418,18 +418,19 @@ if (structBudget === null) {
       );
       continue;
     }
-    if (
-      p.reachable > b.reachable ||
-      p.convertible > b.convertible ||
-      p.erased > b.erased
-    ) {
+    // Only `reachable` and `erased` are gated upward. `convertible` RISING is
+    // an improvement — it means a field moved out of the unfixable half — and
+    // gating it was backwards: teaching the from_js builder to use a closed
+    // union's last case as the `else` moved 10 fields from erased to
+    // convertible and the gate reported five packages as having GROWN.
+    if (p.reachable > b.reachable || p.erased > b.erased) {
       structGrew += 1;
       lines.push(
-        `    GREW ${p.key}: reachable ${b.reachable}->${p.reachable}, convertible ${b.convertible}->${p.convertible}, erased ${b.erased}->${p.erased}`,
+        `    GREW ${p.key}: reachable ${b.reachable}->${p.reachable}, erased ${b.erased}->${p.erased} (convertible ${b.convertible}->${p.convertible})`,
       );
     } else if (
       p.reachable < b.reachable ||
-      p.convertible < b.convertible ||
+      p.convertible !== b.convertible ||
       p.erased < b.erased
     ) {
       structShrank += 1;

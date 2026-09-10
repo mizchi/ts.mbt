@@ -474,10 +474,53 @@ test "tagged union: an erased Named payload gets no instanceof predicate" {
     tagged_union_case_runtime_discriminator(@ast.TsType::Named("PathLike"))
     is None,
   )
-  assert_true(tagged_union_from_js_expression(decl, "v") is None)
-  // ...and the sound `_to_js` half survives, so parameter positions keep
-  // their type. Before the two directions were split, a declined `_from_js`
-  // took the whole converter pair down with it.
+  // The CONVERTER is still built, and the erased case is the `else`. This
+  // assertion used to be `is None`, and that was the abstention rather than
+  // the hazard: what must never be emitted is `v instanceof PathLike`, and a
+  // CLOSED union needs no predicate for its last case — anything that is not
+  // a `number` is a `PathLike` by declaration. Refusing the whole converter
+  // instead left the caller holding a raw JS value under a type claiming
+  // `{$tag, _0}`, which is wrong in the same direction and silent.
+  match tagged_union_from_js_expression(decl, "v") {
+    Some(body) => {
+      assert_false(body.contains("instanceof"))
+      assert_true(body.contains("if (typeof v === \"number\")"))
+      assert_true(body.contains("return { \"$tag\": 1, \"_0\": v }"))
+      // The erased case, tested by nothing and reached by exhaustion.
+      assert_true(body.contains("else return { \"$tag\": 0, \"_0\": v }"))
+      // No `throw`: with a fallback there is no unreached branch to guard.
+      assert_false(body.contains("throw"))
+    }
+    None => fail("a closed union with ONE erased case is still buildable")
+  }
+  // TWO erased cases and the else cannot choose between them, so that is
+  // where the refusal still lives.
+  let both_erased : BridgeTaggedUnionDecl = {
+    name: "Auto_CatchClauseValue_or_VariableDeclarationListValue",
+    cases: [
+      ("CatchClauseValue", @ast.TsType::Named("CatchClause")),
+      (
+        "VariableDeclarationListValue",
+        @ast.TsType::Named("VariableDeclarationList"),
+      ),
+    ],
+  }
+  assert_true(tagged_union_from_js_expression(both_erased, "v") is None)
+  // The declining NOTE now lives with the unions that still decline, and it
+  // still names a case and a reason: a count of refusals nobody can act on is
+  // what this note exists to avoid.
+  match tagged_union_bridge_js_converter_decls(both_erased) {
+    Some(snippet) => {
+      assert_false(snippet.contains("_from_js(value) { return"))
+      assert_true(snippet.contains("CatchClauseValue carries CatchClause"))
+      assert_false(snippet.contains("instanceof CatchClause"))
+    }
+    None => fail("the to_js half is always available")
+  }
+  // BOTH halves are emitted for this union now, and neither mentions the
+  // erased name. The `_to_js` half was always available — splitting the two
+  // directions is what stopped a declined `_from_js` taking it down — and the
+  // `_from_js` half arrives with the closed-union fallback.
   match tagged_union_bridge_js_converter_decls(decl) {
     Some(snippet) => {
       assert_true(
@@ -485,14 +528,12 @@ test "tagged union: an erased Named payload gets no instanceof predicate" {
           "export function __ts_mbt_tagged_union_path_or_file_descriptor_to_js",
         ),
       )
-      assert_false(
+      assert_true(
         snippet.contains(
           "export function __ts_mbt_tagged_union_path_or_file_descriptor_from_js",
         ),
       )
       assert_false(snippet.contains("instanceof PathLike"))
-      // The note names the case and the reason.
-      assert_true(snippet.contains("PathLikeValue carries PathLike"))
     }
     None => fail("the to_js half is always available")
   }

@@ -405,24 +405,78 @@ repo has been removed. Items below are scoped to the bridge generator only.
     eight rows rank it directly. Growth fails, an undeclared package fails, a
     drop is reported so the budget follows it down — all three
     mutation-proven.
-- [ ] **Fix the 143: widen, or emit a converting accessor.** Two options and
-  the choice is a real trade, so price it before writing it.
-  Widening an erased field's declared type to `JSValue` is the only answer
-  that needs no new machinery, and it costs the type information on exactly
-  the shapes a TS AST walker touches — `Diagnostic.messageText`,
-  `VariableDeclaration.parent`,
-  `VariableDeclarationList.parent`. The alternative keeps it: emit a
-  CONVERTING accessor (`Diagnostic::message_text(self) -> Auto_...`) beside a
-  widened raw field, which is what a class property already gets, at the cost
-  of a surface rename. The 8 convertible ones want neither — they want a
-  `_from_js` struct converter called at every struct-returning position, which
-  is 259 functions' worth of mirror and should be judged on its own.
-  Whatever ships, the blocker recorded for the function-typed spelling still
-  holds and is mechanical: `ffi_func_type_name` has no direction parameter and
-  renders both an interface member's function type (return crosses
-  JS -> MoonBit) and a callback parameter's (return crosses the other way,
-  where the enum is real), and widening it blindly is what broke
-  `Matcher::_call_`.
+- [x] **143 -> 133 and four of eight packages to zero, by making more unions
+  CONVERTIBLE rather than by widening or by an accessor.** Both filed options
+  were worse than the third, and one of them was wrong on its own terms:
+  a converting accessor "keeps the type information" only where a converter
+  EXISTS, and an erased enum has none, so that route never applied to the
+  erased half at all.
+  - **`tagged_union_from_js_expression` refused a union the moment ONE case
+    lacked a runtime discriminator, and it only has to refuse at TWO.** The
+    union is CLOSED: the value is declared to be one of its members, so
+    failing every other case's test IS the remaining case and that one needs
+    no predicate. `string | DiagnosticMessageChain` is exactly the shape —
+    `typeof === "string"` decides the first, the second is the `else` — and
+    that is `Diagnostic.messageText`, reached through
+    `Program::getSemanticDiagnostics`, the most-used API the TypeScript
+    compiler has. With two erased cases the else cannot choose
+    (`CatchClause | VariableDeclarationList`) and the refusal stands, which
+    is why the remaining 133 are the AST `parent` unions.
+    What is given up is stated rather than glossed: the `throw` was the only
+    thing that noticed a value the `.d.ts` mis-declared, and such a value is
+    now tagged as the fallback case. The alternative it replaces is the
+    caller receiving a raw JS value under a type claiming `{$tag, _0}` —
+    wrong in the same direction and silent — so nothing that used to be
+    caught stops being caught.
+  - **Relaxing the builder immediately exposed a SECOND copy of its
+    judgement**, which is the failure 8d227ad is already recorded for.
+    `ffi_tagged_union_return_is_safe_to_wrap` had its own
+    `None => return false` arm, so a `_from_js` now existed (the widening
+    therefore stopped firing) while the gate still declined to CALL it, and
+    five declarations promised the enum over a raw JS value again — the
+    probe named them. It asks the builder now, and keeps only its OWN
+    reason, a `TypeofFunction` payload the auto-wrap cannot model.
+  - **Then three of the five were the SEVENTH fail-open shape arm**, and the
+    third distinct site of the `Named`-only spelling in
+    `moonbit_js_ffi.mbt`. `ffi_type_needs_js_return_conversion_with_state`
+    and `ffi_type_js_return_expr` — a predicate and an emitter, each in an
+    optional and a non-optional spelling — matched `Named` alone at all
+    FOUR arms, so a synthesized union fell through every one and
+    `mkdtempSync_string_encoding_option_optional` declared
+    `Auto_StringValue_or_NonSharedBufferValue` over a raw `mkdtempSync(…)`.
+    One `ffi_wrappable_union_alias_name`, four callers.
+  - **The budget gate I shipped one commit earlier was wrong in the
+    convertible direction** and said so out loud: `convertible` RISING is an
+    improvement, and gating all three axes upward reported five packages as
+    having GROWN when ten fields moved out of the unfixable half. Only
+    `reachable` and `erased` are gated now; all four directions
+    mutation-proven.
+  - Measured: read-reachable 151 unchanged, **8 -> 18 convertible, 143 -> 133
+    erased**, four packages (vitest, node_fs, hono_jsx, react_jsx_runtime) at
+    zero erased. Converters 1,330 -> 1,377 and 15,147 exercised calls with
+    **0 runtime failures** and 0 unbound `instanceof` — which is the check
+    that matters, since every new fallback converter is executed there over a
+    value battery. Probe 0/0/0, quality report `pass`, scaffolds + fixtures +
+    examples pass, `moon test` 2994/2994.
+  - One test had to be updated rather than fixed, and the distinction is
+    worth keeping: it asserted a deliberate ABSTENTION (`from_js is None` for
+    `PathLike | number`), not a bug. Its real concern — that
+    `v instanceof PathLike` is never emitted — is still asserted, and the
+    declining-note coverage moved to the two-erased-case union where the
+    refusal now lives.
+- [ ] **The 133 that are left need the declared type to change.** Every one is
+  a union whose cases are two or more erased interfaces, so no converter can
+  exist and no accessor can help: `VariableDeclaration.parent`
+  (`CatchClause | VariableDeclarationList`), `VariableDeclarationList.parent`
+  (four erased statement kinds), `JSDocTypedefTag.fullName`. Widening the
+  struct field to `JSValue` is the only honest answer and it costs the type
+  information on exactly the shapes a TS AST walker touches — which is a
+  product decision, not a bug fix, and 64 fields in one package.
+  The blocker recorded for the function-typed spelling still holds and is
+  mechanical: `ffi_func_type_name` has no direction parameter and renders
+  both an interface member's function type (return crosses JS -> MoonBit) and
+  a callback parameter's (return crosses the other way, where the enum is
+  real), and widening it blindly is what broke `Matcher::_call_`.
 - [x] **Convert an OPTIONAL tagged-union crossing — DONE**, and both of the
   reasons the previous note gave for declining it were false, which is the
   part worth keeping.

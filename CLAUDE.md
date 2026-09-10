@@ -3029,12 +3029,50 @@ product surfaces now.
   `scripts/bridge_struct_enum_fields.txt` rather than declared per
   occurrence, because 438 declarations rank no work and eight rows rank it
   directly; growth fails, an undeclared package fails, and a drop is reported
-  so the budget follows it down, all three mutation-proven. The fix itself is
-  a real trade and is filed unshipped: widening an erased field needs no new
-  machinery and costs the type information on exactly the shapes a TS AST
-  walker touches, while a CONVERTING accessor beside a widened raw field —
-  what a class property already gets — keeps it for the price of a surface
-  rename.
+  so the budget follows it down, all three mutation-proven.
+  Both of the fixes that entry filed were worse than a third one, and one was
+  wrong on its own terms: a CONVERTING accessor "keeps the type information"
+  only where a converter EXISTS, and an erased enum has none, so that route
+  never applied to the erased half at all. What moved the count was making
+  more unions CONVERTIBLE. `tagged_union_from_js_expression` refused a union
+  the moment ONE case lacked a runtime discriminator and only has to refuse at
+  TWO: the union is CLOSED, so failing every other case's test IS the
+  remaining case and that one needs no predicate. `string |
+  DiagnosticMessageChain` is exactly that shape — and it is
+  `Diagnostic.messageText`. Two erased cases and the else cannot choose
+  (`CatchClause | VariableDeclarationList`), which is why the 133 left are the
+  AST `parent` unions. The `throw` was the only thing that noticed a value the
+  `.d.ts` mis-declared and such a value is now tagged as the fallback case;
+  the alternative it replaces is the caller receiving a raw JS value under a
+  type claiming `{$tag, _0}`, wrong in the same direction and silent, so
+  nothing that used to be caught stops being caught.
+  Relaxing the builder immediately exposed a SECOND copy of its judgement —
+  the failure 8d227ad is already recorded for.
+  `ffi_tagged_union_return_is_safe_to_wrap` had its own `None => return false`
+  arm, so a `_from_js` now existed (the widening therefore stopped firing)
+  while the gate still declined to CALL it, and five declarations promised the
+  enum over a raw JS value again. It asks the builder now and keeps only its
+  own reason, a `TypeofFunction` payload the auto-wrap cannot model. Three of
+  those five were then the SEVENTH fail-open shape arm and the third distinct
+  site of the `Named`-only spelling in this file:
+  `ffi_type_needs_js_return_conversion_with_state` and
+  `ffi_type_js_return_expr` — a predicate and an emitter, each in an optional
+  and a non-optional spelling — matched `Named` at all FOUR arms, so a
+  synthesized union fell through every one and
+  `mkdtempSync_string_encoding_option_optional` declared
+  `Auto_StringValue_or_NonSharedBufferValue` over a raw `mkdtempSync(…)`.
+  And the budget gate shipped one commit earlier was itself wrong in the
+  convertible direction: `convertible` RISING is an improvement, and gating
+  all three axes upward reported five packages as having GROWN when ten fields
+  moved out of the unfixable half — only `reachable` and `erased` are gated
+  now. Measured: **8 -> 18 convertible, 143 -> 133 erased**, four of the eight
+  packages at zero erased, converters 1,330 -> 1,377 with 15,147 exercised
+  calls at **0 runtime failures**, which is the check that matters since every
+  new fallback converter is executed there over a value battery. One test was
+  UPDATED rather than fixed and the distinction is worth keeping: it asserted
+  a deliberate abstention (`from_js is None` for `PathLike | number`), not a
+  bug, and its real concern — that `v instanceof PathLike` is never emitted —
+  is still asserted.
   That pair is the fourth time in this sequence that a declining note's
   own stated reason was false, and both of its reasons were.
   `ffi_inline_js_return_expr_with_state` said converting an optional would

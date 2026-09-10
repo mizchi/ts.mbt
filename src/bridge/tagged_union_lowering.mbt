@@ -688,41 +688,92 @@ pub fn tagged_union_to_js_expression_with_nested(
 ///|
 /// JS-side snippet that takes a JS value bound to `expr` and constructs the
 /// matching MoonBit tagged-union representation (`{$tag, _0}`). Returns
-/// `None` if any case lacks a runtime discriminator. Call sites must fall
-/// back to a primitive widening when this returns `None`.
+/// `None` when the construction cannot be decided at runtime; call sites must
+/// fall back to a primitive widening then.
+///
+/// A case whose payload is an ERASED TypeScript name has no predicate that can
+/// execute — `value instanceof <interface>` is a `ReferenceError` at the
+/// boundary rather than a type we failed to narrow — so this used to refuse the
+/// whole union the moment one case lacked a discriminator.
+///
+/// It only has to refuse when TWO or more do. The union is CLOSED: the value is
+/// declared to be one of its members, so failing every other case's test IS the
+/// remaining case, and that one needs no predicate. `string |
+/// DiagnosticMessageChain` is exactly the shape — `typeof === "string"` decides
+/// the first, and anything else is the second by declaration — and it is
+/// `Diagnostic.messageText`, reached through
+/// `Program::getSemanticDiagnostics`. With two undiscriminable cases the else
+/// cannot choose between them (`CatchClause | VariableDeclarationList`, both
+/// erased), and that is still `None`.
+///
+/// The fallback is emitted LAST whatever its declared position, which is what
+/// makes it an else rather than a test that swallows its siblings, and it
+/// replaces the `throw` rather than sitting before it. Worth being precise
+/// about what is given up: the throw was the only thing that noticed a value
+/// the `.d.ts` mis-declared. Now such a value is tagged as the fallback case
+/// instead — but the alternative this replaces is the caller receiving the raw
+/// JS value under a type claiming `{$tag, _0}`, which is wrong in the same
+/// direction and silent, so nothing that used to be caught stops being caught.
 pub fn tagged_union_from_js_expression(
   decl : BridgeTaggedUnionDecl,
   expr : String,
 ) -> String? {
-  let mut body = "(() => { "
+  let undiscriminable : Array[Int] = []
   for i, entry in decl.cases {
     let (_, inner) = entry
-    // The RUNTIME discriminator, not the shape one: a case whose payload is
-    // an erased TypeScript name has no predicate that can execute, and
-    // emitting `value instanceof <erased name>` here is a `ReferenceError`
-    // at the boundary rather than a type we failed to narrow.
+    if tagged_union_case_runtime_discriminator(inner) is None {
+      undiscriminable.push(i)
+    }
+  }
+  if undiscriminable.length() > 1 {
+    return None
+  }
+  let fallback = if undiscriminable.length() == 1 {
+    Some(undiscriminable[0])
+  } else {
+    None
+  }
+  fn case_return(i : Int, inner : @ast.TsType) -> String {
+    if tagged_union_case_is_no_payload(inner) {
+      "return { \"$tag\": " + i.to_string() + " }; "
+    } else {
+      "return { \"$tag\": " + i.to_string() + ", \"_0\": " + expr + " }; "
+    }
+  }
+
+  let mut body = "(() => { "
+  // `emitted` rather than `i == 0`, because the fallback may BE case 0 and the
+  // first real test then has to open the chain with `if`.
+  let mut emitted = 0
+  for i, entry in decl.cases {
+    let (_, inner) = entry
+    if fallback is Some(f) && f == i {
+      continue
+    }
     let predicate = match tagged_union_case_runtime_discriminator(inner) {
       Some(d) => tagged_union_case_predicate_text(d, expr)
       None => return None
     }
-    if i == 0 {
+    if emitted == 0 {
       body = body + "if (" + predicate + ") "
     } else {
       body = body + "else if (" + predicate + ") "
     }
-    if tagged_union_case_is_no_payload(inner) {
-      body = body + "return { \"$tag\": " + i.to_string() + " }; "
-    } else {
-      body = body +
-        "return { \"$tag\": " +
-        i.to_string() +
-        ", \"_0\": " +
-        expr +
-        " }; "
-    }
+    emitted += 1
+    body = body + case_return(i, inner)
   }
-  body = body + "throw new Error(\"unexpected " + decl.name + " value\"); })()"
-  Some(body)
+  match fallback {
+    Some(f) => {
+      let (_, inner) = decl.cases[f]
+      if emitted > 0 {
+        body = body + "else "
+      }
+      body = body + case_return(f, inner)
+    }
+    None =>
+      body = body + "throw new Error(\"unexpected " + decl.name + " value\"); "
+  }
+  Some(body + "})()")
 }
 
 ///|

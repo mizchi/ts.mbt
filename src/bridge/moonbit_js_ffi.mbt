@@ -3853,6 +3853,34 @@ fn ffi_type_needs_js_return_conversion(type_ : @ast.TsType) -> Bool {
 /// State-aware variant: also flags returns whose type is a tagged-union
 /// alias known to the FFI state, since those need a `__ts_mbt_<alias>_from_js`
 /// wrapper around the raw JS value.
+/// The alias whose `_from_js` a RETURN position should be routed through, or
+/// `None` when it should not be.
+///
+/// Four arms across `ffi_type_needs_js_return_conversion_with_state` and
+/// `ffi_type_js_return_expr` asked this — a predicate and an emitter, each in
+/// an optional and a non-optional spelling — and all four matched `Named`
+/// alone, so a SYNTHESIZED union fell through every one of them. That is the
+/// seventh fail-open shape arm in this repo's ledger and the third distinct
+/// site of the `Named`-only spelling in this file; it left
+/// `mkdtempSync_string_encoding_option_optional` declaring
+/// `Auto_StringValue_or_NonSharedBufferValue` over a raw
+/// `mkdtempSync(prefix, …)`. One helper, four callers.
+fn ffi_wrappable_union_alias_name(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> String? {
+  match ffi_output_union_alias_name(state, type_) {
+    Some(name) =>
+      if ffi_tagged_union_return_is_safe_to_wrap(state, name) {
+        Some(name)
+      } else {
+        None
+      }
+    None => None
+  }
+}
+
+///|
 fn ffi_type_needs_js_return_conversion_with_state(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
@@ -3863,16 +3891,16 @@ fn ffi_type_needs_js_return_conversion_with_state(
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) =>
       if is_optional {
-        match collapsed {
-          Named(name) =>
-            return ffi_tagged_union_return_is_safe_to_wrap(state, name)
-          _ => ()
+        if ffi_wrappable_union_alias_name(state, collapsed) is Some(_) {
+          return true
         }
       }
     None => ()
   }
+  if ffi_wrappable_union_alias_name(state, type_) is Some(_) {
+    return true
+  }
   match type_ {
-    Named(name) => ffi_tagged_union_return_is_safe_to_wrap(state, name)
     Func(_, _) => ffi_returned_func_needs_arg_wrap(state, type_)
     _ => false
   }
@@ -3941,17 +3969,26 @@ fn ffi_tagged_union_return_is_safe_to_wrap(
     Some(decl) => {
       for entry in decl.cases {
         let (_, inner) = entry
-        match tagged_union_case_runtime_discriminator(inner) {
-          // Function payloads stay on the raw passthrough: the generic
-          // wrapper would need closure conversion in both directions,
-          // which the auto-wrap doesn't model.
-          Some(TypeofFunction) => return false
-          // No executable predicate: the `_from_js` half was not emitted.
-          None => return false
-          _ => ()
+        // Function payloads stay on the raw passthrough: the generic wrapper
+        // would need closure conversion in both directions, which the
+        // auto-wrap doesn't model. This is this gate's OWN reason and the
+        // only one left in it.
+        if tagged_union_case_runtime_discriminator(inner)
+          is Some(TypeofFunction) {
+          return false
         }
       }
-      true
+      // Whether the `{$tag, _0}` construction can be decided at runtime is
+      // the BUILDER's judgement, so ask it rather than re-deriving it. This
+      // arm used to be `None => return false` — one undiscriminable case
+      // refused the union — and when the builder learned to use a closed
+      // union's last case as the `else`, the two answers diverged: the
+      // widening stopped firing because a `_from_js` now exists, while this
+      // gate still declined to CALL it, so five declarations promised the
+      // enum over a raw JS value again. A second copy of a judgement can
+      // only ever disagree with the first, which is the failure 8d227ad is
+      // recorded for.
+      tagged_union_from_js_expression(decl, "value") is Some(_)
     }
     None => false
   }
@@ -4278,22 +4315,24 @@ fn ffi_type_js_return_expr(
       // `{$tag, _0}` wrap form), so we just need to convert the raw JS
       // value to a Hires shape and pass `undefined` through unchanged.
       if is_optional {
-        match collapsed {
-          Named(name) if ffi_tagged_union_return_is_safe_to_wrap(state, name) => {
+        match ffi_wrappable_union_alias_name(state, collapsed) {
+          Some(name) => {
             let from_name = tagged_union_from_js_function_name(name)
             return "(\{expr} == null ? undefined : \{from_name}(\{expr}))"
           }
-          _ => ()
+          None => ()
         }
       }
     }
     None => ()
   }
+  // Before the shape match, since a `Union` reaches none of its arms and
+  // would fall through to the raw `expr`.
+  match ffi_wrappable_union_alias_name(state, type_) {
+    Some(name) => return "\{tagged_union_from_js_function_name(name)}(\{expr})"
+    None => ()
+  }
   match type_ {
-    Named(name) if ffi_tagged_union_return_is_safe_to_wrap(state, name) => {
-      let from_name = tagged_union_from_js_function_name(name)
-      "\{from_name}(\{expr})"
-    }
     Func(fn_params, _) if ffi_returned_func_needs_arg_wrap(state, type_) => {
       // Wrap the returned function once so each future call routes its
       // arguments through the same converters direct parameters get

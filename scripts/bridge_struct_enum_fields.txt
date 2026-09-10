@@ -46,6 +46,12 @@
 # converter called at every struct-returning position -- machinery that does
 # not exist, mirroring 259 functions.
 #
+# ONLY `reachable` and `erased` ARE GATED UPWARD. `convertible` rising is an
+# improvement -- a field moving out of the unfixable half -- and gating it was
+# backwards: teaching the from_js builder to use a closed union's last case as
+# the `else` moved 10 fields from erased to convertible, and the first version
+# of this gate reported five packages as having GROWN.
+#
 # THE TWO WRONG COUNTS THIS REPLACED
 #
 # Filed as "the function-typed struct field", which is 8. The real class is any
@@ -68,16 +74,26 @@
 # `Diagnostic.messageText`, `VariableDeclaration.parent` and
 # `VariableDeclarationList.parent` are the shapes a TS AST walker actually
 # touches, which is also why widening them to `JSValue` is a real ergonomic
-# cost and not a free fix. The alternative worth pricing before taking it: emit
-# a CONVERTING accessor (`Diagnostic::message_text(self) -> Auto_...`) beside a
-# widened raw field, the way a class property already gets one -- that keeps
-# the type information and costs a surface rename.
+# cost and not a free fix.
+#
+# A CONVERTING accessor (`Diagnostic::message_text(self) -> Auto_...`) beside a
+# widened raw field, the way a class property already gets one, was the filed
+# alternative on the grounds that it "keeps the type information". For an
+# ERASED field it does not: an accessor needs a converter and an erased enum
+# has none, so the accessor route only ever applied to the CONVERTIBLE half.
+# What actually moved the erased count was making more unions convertible --
+# see the closed-union fallback in `tagged_union_from_js_expression`, which
+# took the read-reachable split from 8/143 to 18/133 and four of these eight
+# packages to zero. `Diagnostic.messageText` (`string |
+# DiagnosticMessageChain`) is exactly that shape: `typeof === "string"` decides
+# the first case and the second is the `else`. What is left is the `parent`
+# unions, where BOTH cases are erased interfaces and the else cannot choose.
 
-typescript_ast                  | 68 | 1 | 67 | Diagnostic.messageText and the AST `parent` unions; 33 externs return Diagnostic, so this is the reachable concentration
-typescript                      | 68 | 1 | 67 | the same typescript.d.ts, generated again under the node-imports example
-vitest                          |  6 | 4 |  2 | SerializedConfig.diff / SerializedRootConfig.diff are the two erased ones
+typescript_ast                  | 68 | 4 | 64 | the AST `parent` unions, both of whose cases are erased interfaces; `Diagnostic.messageText` was here until the closed-union fallback converted it
+typescript                      | 68 | 4 | 64 | the same typescript.d.ts, generated again under the node-imports example
+vitest                          |  6 | 6 |  0 | SerializedConfig.diff / SerializedRootConfig.diff were the two erased ones and the closed-union fallback converts both
 react_types                     |  5 | 0 |  5 | aria_checked / aria_current / aria_haspopup: bool beside synthesized string-literal members, which have no from_js
-ts_to_moonbit_react_jsx_runtime |  2 | 1 |  1 | ButtonHTMLAttributes.children
-ts_to_moonbit_hono_jsx          |  1 | 0 |  1 | ButtonAttributes.children
+ts_to_moonbit_react_jsx_runtime |  2 | 2 |  0 | ButtonHTMLAttributes.children
+ts_to_moonbit_hono_jsx          |  1 | 1 |  0 | ButtonAttributes.children
 node_fs                         |  1 | 1 |  0 | ReadOptions.position, and its enum is buildable
 drizzle_orm                     |  0 | 0 |  0 | three fields carry an enum and no struct holding one is ever returned, so the read direction is unreachable
