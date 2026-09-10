@@ -464,19 +464,62 @@ repo has been removed. Items below are scoped to the bridge generator only.
     `v instanceof PathLike` is never emitted — is still asserted, and the
     declining-note coverage moved to the two-erased-case union where the
     refusal now lives.
-- [ ] **The 133 that are left need the declared type to change.** Every one is
-  a union whose cases are two or more erased interfaces, so no converter can
-  exist and no accessor can help: `VariableDeclaration.parent`
+- [x] **The 133 that are left are `JSValue` now — erased 133 -> 0.** Every one
+  was a union of two or more erased interfaces, so no converter could exist
+  and no accessor could help: `VariableDeclaration.parent`
   (`CatchClause | VariableDeclarationList`), `VariableDeclarationList.parent`
-  (four erased statement kinds), `JSDocTypedefTag.fullName`. Widening the
-  struct field to `JSValue` is the only honest answer and it costs the type
-  information on exactly the shapes a TS AST walker touches — which is a
-  product decision, not a bug fix, and 64 fields in one package.
-  The blocker recorded for the function-typed spelling still holds and is
-  mechanical: `ffi_func_type_name` has no direction parameter and renders
-  both an interface member's function type (return crosses JS -> MoonBit) and
-  a callback parameter's (return crosses the other way, where the enum is
-  real), and widening it blindly is what broke `Matcher::_call_`.
+  (four erased statement kinds), `JSDocTypedefTag.fullName`. The declared type
+  is now the type the emitted JS actually hands over, which costs the type
+  information on exactly the shapes a TS AST walker touches — a product
+  decision rather than a bug fix, and the honest one: a `match` on the old
+  declaration read `$tag` off a raw JS object that has none.
+  - **The widening is DIRECTIONAL, and computing that direction is the whole
+    change.** A struct that only ever crosses MoonBit -> JS keeps its enum
+    and its working `_to_js` converter, so react_types' `aria_checked` still
+    declares `Auto_BoolValue_or_...`. The fact comes from a pre-pass,
+    `ffi_collect_read_reachable_struct_names`: seed every RETURN position in
+    the module set (a function's return, a value's type, an interface
+    method's return, an index signature's value, a class property or method
+    return), then close over struct FIELDS — a struct reachable from a
+    returned struct is itself a struct a JS value can arrive as. For a
+    `Func` / `Constructor` field only the RETURN is followed, because a
+    callback's PARAMETERS are written by MoonBit and read by JS, which is
+    the opposite direction and exactly what broke `Matcher::_call_` when the
+    widening went into `ffi_function_type_parts`.
+  - **The fix measured NOTHING on its first run, and the reason is the family
+    this file keeps recording — inside my own fix.** I patched
+    `ffi_named_struct_decl_to_moonbit` and the count did not move, because an
+    INTERFACE-derived struct is rendered by
+    `ffi_struct_decl_to_moonbit`: two renderers of one decision, one of them
+    patched. Both take the same `is_read` test now.
+  - **The last five erased were the PROBE over-counting, not the generator
+    under-widening**, and the generator's AST pre-pass is what disagreed.
+    `HTMLAttributes::asAriaAttributes(self) -> AriaAttributes = "%identity"`
+    is a MoonBit-side upcast of a value the CALLER built, not a JS boundary
+    crossing, and section C was reading it as a return position. react_types
+    goes 5 read-reachable -> 0. Eighth time in this sequence that the
+    measuring instrument carried the same substitution bug as the code.
+  - Measured: **erased 133 -> 0**, total fields carrying an enum 438 -> 304
+    (134 widened), read-reachable 151 -> 17, synthesized enums declared
+    227 -> 180 (47 that nothing references any more). Gates: probe 0/0/0 and
+    `erased 0` on all eight packages, `verify-bridge-runtime` 86 modules /
+    1,330 converters / 14,630 calls / 0 failures / 0 unbound `instanceof`,
+    quality report `pass`, scaffolds + fixtures + examples 0,
+    `verify-mbti-dts` 0, `moon check` 0 errors, `moon test` 2994/2994.
+  - **What is left is 17 CONVERTIBLE fields, and widening them would be a
+    regression** — the type information is real there.
+    `Diagnostic.messageText` / `DiagnosticWithLocation.messageText`,
+    `TypeChecker.getConstantValue`, `LanguageService.prepareCallHierarchy`,
+    vitest's `diff` / `inspect` / `inspectBrk` and the two JSX `children`
+    unions all have a working `_from_js` that nothing calls at a struct
+    field. That is the separately filed `_from_js` struct converter, 259
+    functions' worth of mirror.
+  - The `ffi_func_type_name` direction blocker is UNCHANGED and still filed:
+    it renders both an interface member's function type (return crosses
+    JS -> MoonBit) and a callback parameter's (return crosses the other
+    way). The read-reachability pre-pass answers "can a JS value arrive as
+    this STRUCT", which is a different question from "which direction does
+    this function TYPE cross", so it does not dissolve that item.
 - [x] **Convert an OPTIONAL tagged-union crossing — DONE**, and both of the
   reasons the previous note gave for declining it were false, which is the
   part worth keeping.

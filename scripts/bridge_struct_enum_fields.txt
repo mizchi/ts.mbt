@@ -5,17 +5,17 @@
 #
 #   <package> | <read-reachable> | <convertible> | <erased> | <reason>
 #
-# A package not listed fails. Any of the three counts GROWING fails. A count
+# A package not listed fails. `reachable` or `erased` GROWING fails. A count
 # dropping is reported so the budget can follow it down -- the two directions
 # `scripts/bridge_widened_unions.txt` and `scripts/checker_out_of_scope.txt`
 # were both written for, so a budget cannot decay into a suppression list.
 #
 # WHY THIS IS A BUDGET AND NOT A BACKLOG OF DECLARED OCCURRENCES
 #
-# 438 struct fields declare a payload enum. Declaring each one would be a
-# four-hundred-line file that ranks no work -- the defect that retired
-# `docs/checker-priority.md`. The per-package counts are eight rows and they
-# rank the work directly: two of them are 95% of it.
+# 438 struct fields declared a payload enum when this file was written.
+# Declaring each one would be a four-hundred-line file that ranks no work --
+# the defect that retired `docs/checker-priority.md`. The per-package counts
+# are eight rows and they rank the work directly.
 #
 # WHAT IS WRONG, EXACTLY
 #
@@ -27,7 +27,7 @@
 # `(self, a, b) => self.getSemanticDiagnostics(a, b)` -- it unwraps its
 # argument options and does nothing to the returned `Array[Diagnostic]` -- so
 # `diag.messageText`, declared `Auto_StringValue_or_DiagnosticMessageChainValue`,
-# is a raw JS string, and a `match` on it reads `$tag` off something that has
+# was a raw JS string, and a `match` on it read `$tag` off something that has
 # none. 33 externs return `Diagnostic`, and `getSemanticDiagnostics` is the
 # most-used API the TypeScript compiler has.
 #
@@ -35,7 +35,7 @@
 # answer by 50x. It asks whether the struct appears in a RETURN position
 # anywhere in the package: only then can a JS value arrive as this struct, and
 # a struct that only ever crosses MoonBit -> JS is served correctly by the
-# `_to_js` converter that already exists. react_types goes from 247 fields to
+# `_to_js` converter that already exists. react_types went from 247 fields to
 # **5** under it, so the alarming first reading -- "247 React aria attributes
 # would have to be widened" -- was measuring the wrong set.
 #
@@ -52,6 +52,41 @@
 # the `else` moved 10 fields from erased to convertible, and the first version
 # of this gate reported five packages as having GROWN.
 #
+# ERASED IS ZERO NOW, AND THAT IS WHAT THE WIDENING BOUGHT
+#
+# Every read-reachable field whose enum has no `_from_js` is declared `JSValue`
+# instead: 133 -> 0, taking the total field count 438 -> 304, the read-reachable
+# set 151 -> 17, and the synthesized enum count 227 -> 180 (47 enums nothing
+# referenced any more). The declared type is now the type the emitted JS
+# actually hands over -- `VariableDeclaration.parent : JSValue` where it used
+# to promise `Auto_CatchClauseValue_or_VariableDeclarationListValue` over a raw
+# JS object. It is an ergonomic LOSS on exactly the shapes a TS AST walker
+# touches, and the honest one: a `match` on the old declaration read `$tag` off
+# something that has none.
+#
+# The widening is DIRECTIONAL, and that is what keeps react_types' typed
+# attributes typed. Only a read-reachable struct is widened, so a
+# write-only struct field keeps its enum and its `_to_js` converter --
+# `AriaAttributes.aria_checked` still declares
+# `Auto_BoolValue_or_...` because no JS value ever arrives as that struct.
+# react_types' `reachable` went 5 -> 0 by the same route the count did:
+# `HTMLAttributes::asAriaAttributes(self) -> AriaAttributes = "%identity"` is a
+# MoonBit-side upcast of a value the CALLER built, not a JS boundary crossing,
+# and this probe was counting it as a return position while the generator's
+# AST-level pre-pass correctly disagreed. Eighth time in this repo that the
+# measuring instrument carried the same substitution bug as the code.
+#
+# WHAT THE 17 CONVERTIBLE ONES ARE
+#
+# `Diagnostic.messageText` / `DiagnosticWithLocation.messageText`
+# (`string | DiagnosticMessageChain`), `TypeChecker.getConstantValue`
+# (`string | number`), `LanguageService.prepareCallHierarchy`, vitest's
+# `diff` / `inspect` / `inspectBrk`, and the two JSX `children` unions. Every
+# one has a working `_from_js` and nothing calls it at a struct field, which is
+# the separately filed `_from_js` struct converter -- 259 functions' worth of
+# mirror. Widening them would be a regression: the type information is real
+# there.
+#
 # THE TWO WRONG COUNTS THIS REPLACED
 #
 # Filed as "the function-typed struct field", which is 8. The real class is any
@@ -65,35 +100,12 @@
 # snake_case matched almost nothing and reported 8 convertible / 430 erased; a
 # too-loose one reported 260 / 178. Comparing with underscores stripped and
 # reconstructing nothing gives 8 / 143 of the read-reachable set.
-#
-# THE RANKING
-#
-# `typescript_ast` and `typescript` are the same `typescript.d.ts` generated
-# twice (its own example, and nested under the node-imports example), so the
-# distinct work is 68 fields in ONE package plus 15 across the other six.
-# `Diagnostic.messageText`, `VariableDeclaration.parent` and
-# `VariableDeclarationList.parent` are the shapes a TS AST walker actually
-# touches, which is also why widening them to `JSValue` is a real ergonomic
-# cost and not a free fix.
-#
-# A CONVERTING accessor (`Diagnostic::message_text(self) -> Auto_...`) beside a
-# widened raw field, the way a class property already gets one, was the filed
-# alternative on the grounds that it "keeps the type information". For an
-# ERASED field it does not: an accessor needs a converter and an erased enum
-# has none, so the accessor route only ever applied to the CONVERTIBLE half.
-# What actually moved the erased count was making more unions convertible --
-# see the closed-union fallback in `tagged_union_from_js_expression`, which
-# took the read-reachable split from 8/143 to 18/133 and four of these eight
-# packages to zero. `Diagnostic.messageText` (`string |
-# DiagnosticMessageChain`) is exactly that shape: `typeof === "string"` decides
-# the first case and the second is the `else`. What is left is the `parent`
-# unions, where BOTH cases are erased interfaces and the else cannot choose.
 
-typescript_ast                  | 68 | 4 | 64 | the AST `parent` unions, both of whose cases are erased interfaces; `Diagnostic.messageText` was here until the closed-union fallback converted it
-typescript                      | 68 | 4 | 64 | the same typescript.d.ts, generated again under the node-imports example
-vitest                          |  6 | 6 |  0 | SerializedConfig.diff / SerializedRootConfig.diff were the two erased ones and the closed-union fallback converts both
-react_types                     |  5 | 0 |  5 | aria_checked / aria_current / aria_haspopup: bool beside synthesized string-literal members, which have no from_js
-ts_to_moonbit_react_jsx_runtime |  2 | 2 |  0 | ButtonHTMLAttributes.children
-ts_to_moonbit_hono_jsx          |  1 | 1 |  0 | ButtonAttributes.children
-node_fs                         |  1 | 1 |  0 | ReadOptions.position, and its enum is buildable
-drizzle_orm                     |  0 | 0 |  0 | three fields carry an enum and no struct holding one is ever returned, so the read direction is unreachable
+typescript_ast                  | 4 | 4 | 0 | Diagnostic.messageText and DiagnosticWithLocation.messageText (converted by the closed-union fallback), TypeChecker.getConstantValue, LanguageService.prepareCallHierarchy; the AST `parent` unions were the erased 64 and are `JSValue` now
+typescript                      | 4 | 4 | 0 | the same typescript.d.ts, generated again under the node-imports example
+vitest                          | 6 | 6 | 0 | Serialized{,Root}Config.diff / .inspect / .inspectBrk, all six buildable
+react_types                     | 0 | 0 | 0 | its aria attributes are write-only, so no JS value arrives as those structs; the 5 it used to report were the `%identity` upcast helpers the probe read as returns
+ts_to_moonbit_react_jsx_runtime | 2 | 2 | 0 | ButtonHTMLAttributes.children and ReactElement.type_
+ts_to_moonbit_hono_jsx          | 1 | 1 | 0 | ButtonAttributes.children
+node_fs                         | 0 | 0 | 0 | ReadOptions.position carries an enum and no struct holding one is returned
+drizzle_orm                     | 0 | 0 | 0 | three fields carry an enum and no struct holding one is ever returned, so the read direction is unreachable

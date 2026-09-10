@@ -288,10 +288,27 @@ for (const mbti of walk("_build")) {
         /^pub\(all\) struct ([A-Za-z_][\w]*)(\[[^\]]*\])? \{\n((?:  .*\n)*)\}/gm,
       )) {
         const structName = m[1];
-        const returned = new RegExp(
+        // A return position, EXCLUDING the `%identity` upcast helpers.
+        // `HTMLAttributes::asAriaAttributes(self) -> AriaAttributes =
+        // "%identity"` is a MoonBit-side view of a value the caller
+        // CONSTRUCTED, not a JS boundary crossing, so it does not make
+        // `AriaAttributes` a struct a JS value can arrive as. Counting it did:
+        // this test reported react_types' three aria fields as read-reachable
+        // and the generator's AST-level pre-pass correctly disagreed, which is
+        // how the over-count was found. Eighth time the instrument was the
+        // thing that was wrong.
+        const returnPattern = new RegExp(
           `-> (Array\\[)?${structName}(\\])?\\??( =|$)`,
-          "m",
-        ).test(declSrc);
+        );
+        const upcastPattern = new RegExp(`::as${structName}\\s*\\(`);
+        const returned = declSrc
+          .split("\n")
+          .some(
+            (line) =>
+              returnPattern.test(line) &&
+              !upcastPattern.test(line) &&
+              !line.includes('"%identity"'),
+          );
         for (const line of m[3].split("\n")) {
           const field = line.trim();
           if (field === "") continue;

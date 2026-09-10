@@ -37,6 +37,12 @@ priv struct MoonBitJsFfiState {
   // declaration and the bridge.js converter pair. Keyed by synthetic name
   // for stable dedup across all lowering call sites.
   synthesized_inline_unions : Map[String, BridgeTaggedUnionDecl]
+  // Struct type names a JS value can arrive AS, from
+  // `ffi_collect_read_reachable_struct_names`. Read by the struct-field
+  // renderer and by nothing else: a field of one of these is a value the
+  // caller READS, and there is no `_from_js` struct converter anywhere in the
+  // corpus, so a tagged union the bridge cannot build has to widen there.
+  read_reachable_struct_names : Map[String, Unit]
   // `JSValue` / `Promise[X]` are emitted as self-contained `#external`
   // types so the generated bridge package has no `mizchi/js` dependency.
   // Track whether either appeared in the lowered output so the emission
@@ -436,6 +442,178 @@ fn ffi_is_likely_discarded_type_param_name(name : String) -> Bool {
 /// the bridge name is `ServerFoo` (the outermost namespace gets
 /// stripped as if export-equals'd; nested namespaces accumulate
 /// PascalCase prefixes).
+/// Every struct type NAME the caller can receive a JS value as, so a field of
+/// one is a value the caller READS.
+///
+/// This exists because a struct field typed as a tagged union the bridge
+/// cannot BUILD is a wrong value in exactly one direction. The corpus emits
+/// 259 `_to_js` struct converters and ZERO in the other direction, so a JS
+/// object handed to MoonBit as a struct is used RAW —
+/// `Program::getSemanticDiagnostics` is
+/// `(self, a, b) => self.getSemanticDiagnostics(a, b)` and does nothing to the
+/// returned `Array[Diagnostic]`, so `diag.messageText` is a raw JS string
+/// under `Auto_StringValue_or_DiagnosticMessageChainValue` and a `match` on it
+/// reads `$tag` off something that has none.
+///
+/// The WRITE direction is served correctly by the `_to_js` converter that
+/// already exists, so a struct that only ever crosses MoonBit -> JS must keep
+/// its typed field. That is not a small distinction: `react_types` has 247
+/// struct fields carrying a payload enum and 5 of them are read-reachable, so
+/// widening without this filter would strip the type off every React aria
+/// attribute for no reason at all.
+///
+/// Seeded from the RETURN positions the generator emits — a function's and an
+/// import's return, a value getter's type, a class property's getter, a class
+/// method's return, an index signature's value, and any function-typed
+/// interface member's return — and then closed TRANSITIVELY, because a field
+/// of a struct the caller reads is itself read (`Diagnostic` is returned, so
+/// `Diagnostic.relatedInformation`'s `DiagnosticRelatedInformation` is read
+/// too). Missing a position leaves the pre-existing wrong value in place
+/// rather than inventing anything, which is the affordable direction; the one
+/// to avoid is widening a field nothing can read.
+fn ffi_collect_read_reachable_struct_names(
+  modules : Map[String, DeclModuleInfo],
+) -> Map[String, Unit] {
+  let seeds : Array[@ast.TsType] = []
+  let fields_by_name : Map[String, Array[(String, @ast.TsType)]] = {}
+  for entry in modules {
+    let (_, info) = entry
+    ffi_collect_read_seeds_in_ts_module(info.module_, seeds, fields_by_name)
+  }
+  let reachable : Map[String, Unit] = {}
+  let pending : Array[String] = []
+  fn add(name : String) -> Unit {
+    if !reachable.contains(name) {
+      reachable[name] = ()
+      pending.push(name)
+    }
+  }
+
+  for seed in seeds {
+    for name in ffi_read_named_refs(seed) {
+      add(name)
+    }
+  }
+  // Transitive closure. Bounded by the number of distinct struct names, since
+  // `add` only pushes a name the map did not already hold.
+  while pending.length() > 0 {
+    let name = pending.unsafe_pop()
+    match fields_by_name.get(name) {
+      Some(fields) =>
+        for field in fields {
+          let (_, field_type) = field
+          for next in ffi_read_named_refs(field_type) {
+            add(next)
+          }
+        }
+      None => ()
+    }
+  }
+  reachable
+}
+
+///|
+/// The struct type names a value of this type can carry, in the READ
+/// direction. A `Func`'s PARAMETERS are written rather than read, so only its
+/// return is followed — the same variance the seed collection relies on.
+fn ffi_read_named_refs(type_ : @ast.TsType) -> Array[String] {
+  let out : Array[String] = []
+  fn go(t : @ast.TsType) -> Unit {
+    match t {
+      @ast.TsType::Named(n) => out.push(ffi_type_identifier(n, "OpaqueType"))
+      @ast.TsType::Applied(n, args) => {
+        out.push(ffi_type_identifier(n, "OpaqueType"))
+        for a in args {
+          go(a)
+        }
+      }
+      @ast.TsType::Array(inner) => go(inner)
+      @ast.TsType::Rest(inner) => go(inner)
+      @ast.TsType::CallableMeta(inner, _) => go(inner)
+      @ast.TsType::Union(parts) =>
+        for p in parts {
+          go(p)
+        }
+      @ast.TsType::Intersection(parts) =>
+        for p in parts {
+          go(p)
+        }
+      @ast.TsType::Tuple(parts) =>
+        for p in parts {
+          go(p)
+        }
+      @ast.TsType::Object(fields) =>
+        for f in fields {
+          go(f.1)
+        }
+      @ast.TsType::Func(_, ret) => go(ret)
+      @ast.TsType::Constructor(_, ret, _) => go(ret)
+      _ => ()
+    }
+  }
+
+  go(type_)
+  out
+}
+
+///|
+fn ffi_collect_read_seeds_in_ts_module(
+  ts_module : @ast.TsModule,
+  seeds : Array[@ast.TsType],
+  fields_by_name : Map[String, Array[(String, @ast.TsType)]],
+) -> Unit {
+  for func in ts_module.funcs {
+    seeds.push(func.return_type)
+  }
+  for import_ in ts_module.imports {
+    seeds.push(import_.return_type)
+  }
+  // A value declaration is emitted as `get_<name>() -> T`, so its own type is
+  // a return position.
+  for value in ts_module.values {
+    seeds.push(value.type_)
+  }
+  for iface in ts_module.interfaces {
+    fields_by_name[ffi_type_identifier(iface.name, "OpaqueType")] = iface.fields
+    // A function-typed member is a method whose return crosses JS -> MoonBit;
+    // a data member is only read once the interface itself is, which the
+    // transitive closure covers.
+    for field in iface.fields {
+      let (_, field_type) = field
+      match field_type {
+        @ast.TsType::Func(_, ret) => seeds.push(ret)
+        @ast.TsType::CallableMeta(inner, _) =>
+          match inner {
+            @ast.TsType::Func(_, ret) => seeds.push(ret)
+            _ => ()
+          }
+        _ => ()
+      }
+    }
+    // `index_get` returns the value type.
+    for sig in iface.index_signatures {
+      let (_, value_type) = sig
+      seeds.push(value_type)
+    }
+  }
+  for class_ in ts_module.classes {
+    for prop in class_.properties {
+      seeds.push(prop.type_)
+    }
+    for method in class_.methods {
+      seeds.push(method.return_type)
+    }
+  }
+  for namespace_ in ts_module.namespaces {
+    ffi_collect_read_seeds_in_ts_module(
+      namespace_.module_,
+      seeds,
+      fields_by_name,
+    )
+  }
+}
+
+///|
 fn ffi_register_module_iface_arities(
   modules : Map[String, DeclModuleInfo],
   generic_type_params_by_name : Map[String, Array[String]],
@@ -2156,6 +2334,7 @@ fn ffi_struct_decl_to_moonbit(
     "#warnings(\"-9\")",
     "pub(all) struct \{type_name}\{type_param_suffix} {",
   ]
+  let is_read = state.read_reachable_struct_names.contains(type_name)
   let method_lines : Array[String] = []
   let mut method_wrapper_count = 0
   let seen_fields : Array[String] = []
@@ -2174,7 +2353,19 @@ fn ffi_struct_decl_to_moonbit(
         "  // readonly in TypeScript; not enforced by generated MoonBit struct",
       )
     }
-    let raw_struct_field_type = ffi_struct_field_type_name(state, type_)
+    // A JS value can arrive AS this struct, so its fields are values the
+    // caller READS, and there is no `_from_js` struct converter anywhere in
+    // the corpus — only 259 in the other direction — so the field holds the
+    // raw JS value whatever the type says. A tagged union the bridge cannot
+    // BUILD therefore widens here, exactly as an imported function's return
+    // does. Off for a write-only struct, where the `_to_js` converter is
+    // correct and the typed field is worth keeping.
+    let read_type = if is_read {
+      ffi_widen_unbuildable_union_outputs(state, type_)
+    } else {
+      type_
+    }
+    let raw_struct_field_type = ffi_struct_field_type_name(state, read_type)
     // TypeScript `this` builder return -> owning struct.
     let struct_field_type = ffi_replace_this_token(
       raw_struct_field_type, type_name,
@@ -2405,6 +2596,14 @@ fn ffi_named_struct_decl_to_moonbit(
     "#warnings(\"-9\")",
     "pub(all) struct \{type_name} {",
   ]
+  // A JS value can arrive AS this struct, so its fields are values the caller
+  // READS — and there is no `_from_js` struct converter anywhere in the
+  // corpus, only 259 in the other direction, so the field is the raw JS value
+  // whatever the type says. A tagged union the bridge cannot BUILD therefore
+  // has to widen here, exactly as an imported function's return does.
+  // Off for a write-only struct, where the `_to_js` converter is correct and
+  // the typed field is worth keeping.
+  let is_read = state.read_reachable_struct_names.contains(type_name)
   let seen_fields : Array[String] = []
   for field in fields {
     let (field_name, field_type) = field
@@ -2413,7 +2612,12 @@ fn ffi_named_struct_decl_to_moonbit(
       continue
     }
     seen_fields.push(safe_name)
-    let safe_type = ffi_struct_field_type_name(state, field_type)
+    let read_type = if is_read {
+      ffi_widen_unbuildable_union_outputs(state, field_type)
+    } else {
+      field_type
+    }
+    let safe_type = ffi_struct_field_type_name(state, read_type)
     lines.push("  \{safe_name} : \{safe_type}")
   }
   lines.push("}")
@@ -6542,6 +6746,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     tagged_union_decls_by_name,
     synthesized_inline_unions: {},
+    read_reachable_struct_names: ffi_collect_read_reachable_struct_names(
+      modules,
+    ),
     needs_js_any: false,
     needs_promise: false,
     needs_option_return_wrap: false,

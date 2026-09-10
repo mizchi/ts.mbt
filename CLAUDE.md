@@ -3093,6 +3093,44 @@ product surfaces now.
   RETURN was routed at none — the same family as the accessors, one axis
   further out, and the reason to fix a renderer and then MEASURE rather
   than assume the site was the one that looked obvious.
+  The 133 erased struct fields are `JSValue` now, which takes that count to
+  **zero** — the declared type is the type the emitted JS actually hands
+  over, where `VariableDeclaration.parent` used to promise
+  `Auto_CatchClauseValue_or_VariableDeclarationListValue` over a raw JS
+  object a `match` would read `$tag` off. What makes the widening safe to
+  apply at all is that it is DIRECTIONAL, and computing the direction is
+  the whole change: `ffi_collect_read_reachable_struct_names` seeds every
+  RETURN position in the module set and closes over struct FIELDS, so a
+  struct reachable from a returned struct is itself one a JS value can
+  arrive as, while a write-only struct keeps its enum and its working
+  `_to_js` converter — react_types' `aria_checked` still declares
+  `Auto_BoolValue_or_...`. For a `Func` field only the RETURN is followed,
+  because a callback's PARAMETERS are written by MoonBit and read by JS,
+  which is the opposite direction and exactly what broke `Matcher::_call_`
+  when an earlier attempt put the widening in `ffi_function_type_parts`.
+  Two findings, and the first is this file's own recurring family committed
+  INSIDE the fix for it: the change measured NOTHING on its first run
+  because an INTERFACE-derived struct is rendered by
+  `ffi_struct_decl_to_moonbit` and an anonymous one by
+  `ffi_named_struct_decl_to_moonbit` — two renderers of one decision, one
+  of them patched, found by regenerating and seeing 133 unchanged. And the
+  last five erased were the PROBE over-counting rather than the generator
+  under-widening, with the generator's AST pre-pass the thing that
+  disagreed: `HTMLAttributes::asAriaAttributes(self) -> AriaAttributes =
+  "%identity"` is a MoonBit-side upcast of a value the CALLER built, not a
+  JS boundary crossing, and section C was reading it as a return position.
+  Eighth time in this sequence that the measuring instrument carried the
+  same substitution bug as the code. Measured: erased 133 -> 0, fields
+  carrying an enum 438 -> 304, read-reachable 151 -> 17, synthesized enums
+  227 -> 180 (47 nothing references any more), 14,630 converter calls at 0
+  failures. The 17 left are CONVERTIBLE and widening them would be a
+  regression — `Diagnostic.messageText`, `TypeChecker.getConstantValue`,
+  vitest's `diff`, the two JSX `children` unions — each with a working
+  `_from_js` that nothing calls at a struct field, which is the separately
+  filed `_from_js` struct converter and 259 functions' worth of mirror.
+  `ffi_func_type_name`'s missing direction parameter is untouched by this:
+  "can a JS value arrive as this STRUCT" and "which way does this function
+  TYPE cross" are different questions.
 
 ## Project Structure
 
