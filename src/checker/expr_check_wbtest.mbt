@@ -17321,12 +17321,9 @@ test "batch DF rules" {
        "declare const s: symbol;\nclass Bar { m() { return 0 } }\nclass Foo extends Bar { m() { return super[s] } }",
       "declare const o: { [k: string]: number };\nconst k = \"a\";\nconst v = o[k];",
       // A `return` METHOD is the legal spelling, and a `return` field on
-      // a class that is not an iterator is nobody's business. The
-      // unannotated `return = 0` abstains, which is why for-of30 itself
-      // is still a MISS -- firing on `Any` would flag
-      // `return = () => …`, the legal form of the same member.
+      // a class that is not an iterator is nobody's business.
        "class I { next() { return { done: false, value: \"\" } }\n  return() { return { done: true, value: undefined } }\n  [Symbol.iterator]() { return this } }",
-      "class P { return: number = 0 }", "class I { return = 0;\n  [Symbol.iterator]() { return this } }",
+      "class P { return: number = 0 }",
     ] {
     @test.assert_eq(
       only(src, "duplicate function") +
@@ -18978,5 +18975,632 @@ test "expr_check: an optional chain cannot contain private identifiers (batch DZ
       cls + "  m(o: A) { this?.getA(o.#b); } }",
     ] {
     @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EA: TS2526 (a `this` TYPE outside a non-static member) and
+/// TS2767's second channel (an iterator's `return` field initialized to
+/// something that is not a function).
+///
+/// Both cells of TS2526 that reasoning gets wrong are asserted below.
+/// The constructor's BODY is legal while its PARAMETER LIST is not, and
+/// NESTING does not open a new `this` context -- an object type literal,
+/// an `Array<this>`, a `this[]` and a callback parameter inside a
+/// constructor parameter all report, while every instance member and
+/// every interface member (a construct signature included) stays silent.
+/// Measured against the real compiler one spelling at a time, because
+/// "available only in a non-static member" reads as though the
+/// constructor were one.
+///
+/// TS2767 already existed and abstained on `for-of30` itself, with a
+/// stated reason that was true about the TYPE (the class parser records
+/// `Any` for an unannotated field, and firing on `Any` would flag
+/// `return = () => …`) and named only one of two routes to the fact: the
+/// INITIALIZER is in `instance_field_inits`, and a literal's shape
+/// proves it is not callable. The batch-DF test above had that exact
+/// source in its SILENT list -- the eleventh test in this repo found
+/// asserting a gap rather than a behaviour -- and it fires here.
+test "batch EA rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let this_ty = "a `this` type is available only in a non-static member"
+  let ret = "the `return` property of an iterator must be a method"
+  // --- TS2526 fires
+  assert_true(only("class C { constructor(a: this) {} }", this_ty) > 0)
+  assert_true(
+    only(
+      "class G<T> {}\nclass D { constructor(public host: G<this>) {} }", this_ty,
+    ) >
+    0,
+  )
+  assert_true(only("class C { static m(a: this) {} }", this_ty) > 0)
+  assert_true(only("class C { static p: this; }", this_ty) > 0)
+  assert_true(
+    only("class C { static m(): this { return null as any } }", this_ty) > 0,
+  )
+  // Nesting is not a fresh `this` context — all four of these are tsc
+  // errors and each descends through a different type wrapper.
+  assert_true(only("class C { constructor(a: { m(): this }) {} }", this_ty) > 0)
+  assert_true(only("class C { constructor(a: Array<this>) {} }", this_ty) > 0)
+  assert_true(only("class C { constructor(a: this[]) {} }", this_ty) > 0)
+  assert_true(
+    only("class C { constructor(a: (x: this) => void) {} }", this_ty) > 0,
+  )
+  // --- TS2767 fires: an unannotated field whose initializer cannot be a
+  // function, at each literal shape the allowlist covers.
+  let iter = fn(init : String) -> String {
+    "class I { next() { return { done: false, value: \"\" } }\n  return = " +
+    init +
+    ";\n  [Symbol.iterator]() { return this } }"
+  }
+  assert_true(only(iter("0"), ret) > 0)
+  assert_true(only(iter("\"x\""), ret) > 0)
+  assert_true(only(iter("{}"), ret) > 0)
+  assert_true(only(iter("[1]"), ret) > 0)
+  assert_true(only(iter("true"), ret) > 0)
+  // --- stays silent
+  for
+    src in [
+      // Every instance member position, and a getter's return type.
+      "class C { p: this; m(a: this): this { return this }\n  get g(): this { return this } }",
+      // The constructor BODY is a `this` context; only its parameter list
+      // is not.
+      "class C { constructor() { let x: this = this; } }",
+      // An interface member is the other half of the message, construct
+      // signature included (`interface I { new (a: this): void }` is
+      // ACCEPTED, which reads like it should not be).
+      "interface I { m(a: this): void; p: this; new (a: this): void }",
+      // A static member with no `this` anywhere.
+      "class C { static m(a: number): number { return a } static p: string; }",
+      // TS2767: the two function spellings of the same member, and
+      // `null` — which widens to `any` with `strictNullChecks` off, so
+      // tsc ACCEPTS it and so does the allowlist.
+      iter("() => ({ done: true, value: \"\" })"),
+      iter("function () { return { done: true, value: \"\" } }"),
+      iter("null"),
+      // A `return` field on a class that is not an iterator.
+      "class P { return = 0 }",
+    ] {
+    @test.assert_eq(only(src, this_ty) + only(src, ret), 0)
+  }
+}
+
+///|
+/// Batch EB: the four items the UNSUPPORTED.md groups B / C / E / F asked
+/// for — generic overload resolution, `globalThis`, intersection
+/// comparability, and a computed enum member's initializer type.
+///
+/// Each one's boundary was probed against the real compiler one spelling
+/// at a time, and three of the four have a cell that reasoning gets
+/// wrong:
+///
+///   - `const s = "a"; enum E { X = s }` is ACCEPTED (a string LITERAL
+///     initializer is how a string enum member is written) while
+///     `declare const s: string` is TS18033.
+///   - `this.zzz = 1` at script top level is ACCEPTED — an undeclared
+///     property may be created — while `this.name` is an error, because
+///     the DOM lib declares `name` with `const` and a block-scoped
+///     declaration is not a `globalThis` property.
+///   - `globalThis.x = 3` beside `var x` is legal and `globalThis.y = 4`
+///     beside `const y` is not, which is the pair `globalThis­Readonly­Properties`
+///     puts four lines apart.
+test "batch EB rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let gt = "does not exist on `typeof globalThis`"
+  let eq = "will always be false"
+  let en = "as required for computed enum member values"
+
+  // --- C: `globalThis` / script-level `this`
+  // The WRITE form at both spellings: a `PropAssign` statement at the top
+  // of the list, and an `Expr(PropAssignExpr(…))` inside a function.
+  assert_true(only("var x = 1\nconst y = 2\nglobalThis.y = 4\n", gt) > 0)
+  assert_true(only("const y = 2\nfunction f() { globalThis.y = 4 }\n", gt) > 0)
+  // The READ form, which already worked.
+  assert_true(only("const y = 2\nvar r = globalThis.y\n", gt) > 0)
+  // `this` is `typeof globalThis` at script scope and inside an arrow
+  // there; `name` is the DOM lib's `declare const`.
+  assert_true(only("this.name = \"x\"\n", gt) > 0)
+  assert_true(only("var f = (s: string) => { this.name = s }\n", gt) > 0)
+  assert_true(only("var r = this.name\n", gt) > 0)
+
+  // --- E: intersection comparability
+  let ifaces = "interface I1 { p1: number }\ninterface I2 extends I1 { p2: number }\ninterface I3 { p3: number }\ndeclare const y: I1 & I3\ndeclare const z: I2\n"
+  assert_true(only(ifaces + "var a = y === z\n", eq) > 0)
+  assert_true(only(ifaces + "var a = y == z\n", eq) > 0)
+  assert_true(only(ifaces + "var a = y !== z\n", eq) > 0)
+  // An intersection carrying a primitive part answers with that family.
+  assert_true(
+    only("function f<T>(x: T & number) { return x === \"hello\" }\n", eq) > 0,
+  )
+
+  // --- F: a computed enum member's initializer
+  assert_true(only("declare const s: string\nenum E { X = s }\n", en) > 0)
+  assert_true(only("declare const b: boolean\nenum E { X = b }\n", en) > 0)
+  assert_true(
+    only("declare const n: string | number\nenum E { X = n }\n", en) > 0,
+  )
+  assert_true(only("const o = {}\nenum E { X = o }\n", en) > 0)
+
+  // --- stays silent
+  for
+    src in [
+      // `var` DOES create a global property, and a name the file declares
+      // itself shadows the lib `const`.
+      "var x = 1\nglobalThis.x = 3\n", "var name = 1\nthis.name = \"x\"\n",
+      // An undeclared property may be created through `this` at script
+      // scope — tsc accepts it.
+       "this.zzz = 1\n",
+      // `this` inside a `function` is the callee's own, not the global
+      // object (tsc reports TS2683 there, a different diagnostic).
+       "function f() { this.name = 1 }\n", "function F() { this.name = \"x\" }\n",
+      // A class / object-literal method declaring the member.
+       "class C { name: string; m() { this.name = \"a\" } }\n", "var o = { name: \"x\", m() { this.name = \"y\" } }\n",
+      // E: a shape pair where one side IS comparable to the other, and a
+      // narrowing that leaves an overlap.
+       "interface A { p: number }\ninterface B extends A { q: number }\ndeclare const a: A\ndeclare const b: B\nvar r = a === b\n",
+      "function f<T>(x: T & string) { return x === \"hello\" }\n",
+      // `any` in an intersection makes it `any`, which overlaps anything.
+       "function f<T>(x: T & any) { return x === \"hello\" }\n",
+      // F: every legal initializer spelling.
+       "enum E { X = Infinity }\n", "enum E { X = NaN }\n", "const K = 5\nenum E { X = K }\n",
+      "let K = 5\nenum E { X = K }\n", "enum E { a = 1, b = a }\n",
+      // A string LITERAL type is legal — this is the cell the message
+      // text gets wrong.
+       "const s = \"a\"\nenum E { X = s }\n", "declare const a: any\nenum E { X = a }\n",
+    ] {
+    @test.assert_eq(only(src, gt) + only(src, eq) + only(src, en), 0)
+  }
+}
+
+///|
+/// Batch EE: the last three rows of `UNSUPPORTED.md` section G.
+///
+/// TS1308 (`await` in a parameter decorator) was blocked on
+/// `skip_param_decorators` discarding the expression, and a TOKEN
+/// sighting over the range that skip consumes is all the rule needs —
+/// every `await` must spell `await`. TS2393 was blocked on nothing: the
+/// `<fn-impl:NAME>` marker is pushed once per implementation and the
+/// consumer built a SET, throwing the count away. TS2708's `typeof`
+/// position was one site an existing rule had never been given.
+///
+/// Every boundary probed cell by cell, and two of the three have a
+/// legal neighbour that reads the other way round from the message text:
+/// a parameter decorator's async context is the ENCLOSING function's and
+/// not the method's, and a namespace carrying one runtime `export var` is
+/// instantiated and therefore fine.
+test "batch EE rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let aw = "`await` expressions are only allowed"
+  let dup = "duplicate function implementation"
+  let ns = "cannot use namespace"
+  let deco = "// @experimentaldecorators: true\ndeclare function dec(a: any): any;\ndeclare const v: Promise<number>;\n"
+  let nsdecl = "namespace A { export interface P { x: number } }\n"
+
+  // --- TS1308: the enclosing function decides, not the method.
+  assert_true(
+    only(
+      deco +
+      "function fn(): any { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      deco +
+      "function fn(): any { class C { m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      deco +
+      "function* fn(): any { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      deco +
+      "const fn = () => { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+
+  // --- TS2393: two implementations of one name, at every declaration
+  // spelling the module-level loop owns.
+  assert_true(
+    only("function d(a: number) { }\nfunction d(a: string) { }\n", dup) > 0,
+  )
+  assert_true(only("function d() { }\nfunction d() { }\n", dup) > 0)
+  assert_true(
+    only("export function d() { }\nexport function d() { }\n", dup) > 0,
+  )
+  assert_true(
+    only(
+      "export default function f() { }\nexport default function f() { }\n", dup,
+    ) >
+    0,
+  )
+  assert_true(
+    only("export async function d() { }\nexport async function d() { }\n", dup) >
+    0,
+  )
+
+  // --- TS2708 at a `typeof` TYPE position, which is the spelling a
+  // `.d.ts` uses and never reached `check_undefined_name`.
+  assert_true(only(nsdecl + "var m: typeof A;\n", ns) > 0)
+  assert_true(only(nsdecl + "type T = typeof A;\n", ns) > 0)
+  // The base SEGMENT is what matters, so a qualified query reports too.
+  assert_true(only(nsdecl + "var m: typeof A.P;\n", ns) > 0)
+  assert_true(only(nsdecl + "namespace C { var m: typeof A; }\n", ns) > 0)
+
+  // --- stays silent
+  for
+    src in [
+      // TS1308: an ASYNC enclosing function, spelled either way.
+      deco +
+      "async function fn(): any { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      deco +
+      "const fn = async () => { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      // No `await` in the decorator at all.
+      deco +
+      "function fn(): any { class C { async m(@dec(v) a: number) {} } return C }\n",
+      // At module / script top level tsc gives TS1375 / TS1378, two codes
+      // this rule does not claim.
+      deco + "class C { async m(@dec(await v) a: number) {} }\n",
+      // TS2393: an overload SET legally repeats the name, an ambient pair
+      // declares no implementation, and two SCOPES are two names.
+      "function d(a: number);\nfunction d(a: string);\nfunction d(a: any): void { }\n",
+      "declare function d(a: number): void;\ndeclare function d(a: string): void;\n",
+      "function d() { }\nnamespace N { function d() { } }\n",
+      "function d() { }\nfunction e() { }\n",
+      // TS2708: a namespace with a runtime member IS instantiated, so the
+      // value exists — the cell that keeps the rule off real `.d.ts`
+      // namespaces.
+      "namespace A { export interface P { x: number } export var v = 1 }\nvar m: typeof A;\n",
+      // And a class / enum / function of the same name gives the name a
+      // value through declaration merging.
+      nsdecl + "class A { }\nvar m: typeof A;\n",
+    ] {
+    @test.assert_eq(only(src, aw) + only(src, dup) + only(src, ns), 0)
+  }
+}
+
+///|
+/// Batch ED: a class-member modifier may not be followed by a line
+/// terminator, and two DATA FIELDS of one name are a duplicate.
+///
+/// Two independent bugs that had to be fixed together to reach
+/// `autoAccessor11`. The parser ate `accessor` as a modifier across a
+/// newline, LOSING a member from the class — from the emitted JS as much
+/// as from every checker rule that reads the member list — and the
+/// duplicate-member counter was missing the one clause (`nf >= 2`) that
+/// the private-name loop twenty lines below it already had, with the
+/// reason in its own comment.
+///
+/// Which modifiers forbid the line break was PROBED one at a time,
+/// because the answer is not "the TypeScript-only ones": eleven spellings
+/// do and `static` — the one the ECMAScript grammar writes with a
+/// reserved word — does not.
+test "batch ED rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let any_ = "implicitly has an `any` type"
+  let dup = "duplicate identifier"
+
+  // --- the line-break restriction. `<kw>` on its own line is a MEMBER
+  // named after the keyword, so each of these declares TWO un-annotated
+  // un-initialized fields and TS7008 fires twice.
+  for
+    kw in [
+      "readonly", "public", "private", "protected", "abstract", "override", "async",
+      "accessor", "get", "set",
+    ] {
+    @test.assert_eq(
+      only("//@noImplicitAny: true\nclass C {\n  \{kw}\n  a\n}\n", any_),
+      2,
+    )
+  }
+  // `declare` is the eleventh spelling and is NOT covered: it has its own
+  // TOKEN kind, so the modifier arm above never sees it and the `Declare`
+  // arm advances with no guard at all. Gating it there makes the member
+  // NAME a `Declare` token that the field-key parser rejects, so the class
+  // stops parsing — a PFLEGAL, which is worse than the MISS. Measured,
+  // not assumed, and the fix (teach the key parser that token) is filed.
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  declare\n  a\n}\n", any_),
+    0,
+  )
+  // `static` is the exception: `static \n a` is ONE static field `a`.
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  static\n  a\n}\n", any_),
+    1,
+  )
+  // The modifier spelling on ONE line still modifies, at every keyword
+  // the loop above covers — this is the legal neighbour, and without it
+  // "fixed" and "switched the modifiers off" look alike.
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  accessor a\n}\n", any_),
+    1,
+  )
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  readonly a\n}\n", any_),
+    1,
+  )
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  get a() { return 1 }\n}\n", any_),
+    0,
+  )
+
+  // --- two data fields of one name (the missing `nf >= 2`).
+  assert_true(only("class C { q = 1; q = 2 }\n", dup) > 0)
+  assert_true(only("class C { q: number; q: string }\n", dup) > 0)
+  assert_true(only("class C { q = 1; accessor q = 2 }\n", dup) > 0)
+  // A `#private` name reports as `#q`, not as the brand the class
+  // lowering renamed it to.
+  assert_true(only("class C { #q = 1; #q = 2 }\n", "`#q`") > 0)
+  // And the two together: three instance members named `accessor`.
+  assert_true(only("class C {\n  accessor\n  a\n  accessor\n  b\n}\n", dup) > 0)
+
+  // --- stays silent
+  for
+    src in [
+      // Static and instance halves are separate namespaces.
+      "class C { q = 1; static q = 2 }\n",
+      // A get/set PAIR is the one legal repeat.
+       "class C { get q() { return 1 }\n set q(v: number) {} }\n",
+      // An overload set legally repeats a method name.
+       "class C { m(); m(x: number); m(x?: number) {} }\n",
+      // Different names, and different classes.
+       "class C { q = 1; m() {} }\n", "class C { q = 1 }\nclass D { q = 2 }\n",
+      // A computed key is unknowable and abstains (tsc reports the
+      // literal spelling; this is a declared MISS).
+       "class C { [\"q\"] = 1; [\"q\"] = 2 }\n",
+    ] {
+    @test.assert_eq(only(src, dup), 0)
+  }
+}
+
+///|
+/// Batch EC: the two rules UNSUPPORTED.md section G filed as blocked on a
+/// mechanical fact rather than on machinery.
+///
+/// TS7031 / TS7018 needed the parse-time fact that the declaration
+/// carried NO annotation (an absent one and an explicit `: any` are the
+/// same `TsType::Any`) plus a `strict_null_checks` field on the Parser.
+/// TS2331 needed a region — inside a namespace body, and not inside a
+/// `this`-rebinding function — and batch EB had already built exactly
+/// that walk for the `globalThis` rule.
+///
+/// Every SILENT case below is a spelling tsc ACCEPTS, probed one at a
+/// time with `scripts/tsc_probe.mjs`, and three of them read the other
+/// way round from what the message text suggests: a DEFAULT on a binding
+/// element makes the whole thing legal even for `null`, a `function`
+/// inside a namespace is TS2683 rather than TS2331, and a class at script
+/// top level carrying a `@(this.x)` decorator is TS7017.
+test "batch EC rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // The two flags the TS7031 / TS7018 rule requires. Without
+  // `strictNullChecks` off a `null` initializer does not widen to `any`,
+  // and a directive-less file (every real `.ts` the bridge sees) defaults
+  // to having it ON.
+  let h = "//@strict: false\n//@noImplicitAny: true\n"
+  let be = "binding element"
+  let ol = "object literal's property"
+  let th = "cannot be referenced in a module or namespace body"
+
+  // --- TS7031: a destructuring element whose written source position is
+  // a nullish literal. Both declaration kinds, both pattern kinds, a
+  // hole, a rename and a nested pattern.
+  @test.assert_eq(only(h + "var [a, b] = [undefined, null];\n", be), 2)
+  @test.assert_eq(only(h + "let [a, b] = [undefined, null];\n", be), 2)
+  @test.assert_eq(only(h + "const [a, b] = [undefined, null];\n", be), 2)
+  // Only the nullish POSITION reports, not every element.
+  @test.assert_eq(only(h + "var [a, b] = [undefined, 1];\n", be), 1)
+  @test.assert_eq(only(h + "var [, b] = [1, null];\n", be), 1)
+  assert_true(only(h + "var {a} = {a: null};\n", be) > 0)
+  assert_true(only(h + "var {a: x} = {a: null};\n", be) > 0)
+  assert_true(only(h + "var [[a]] = [[null]];\n", be) > 0)
+  assert_true(only(h + "var {a: {b}} = {a: {b: null}};\n", be) > 0)
+
+  // --- TS7018: an object literal property whose value is nullish, in a
+  // declaration with no annotation to type it.
+  assert_true(only(h + "var o = { value: null };\n", ol) > 0)
+  assert_true(only(h + "var o = { value: undefined };\n", ol) > 0)
+  assert_true(only(h + "var o = { a: { b: null } };\n", ol) > 0)
+  assert_true(only(h + "var xs = [{ value: null }];\n", ol) > 0)
+  // A later declarator of the same group is judged on its own annotation.
+  assert_true(
+    only(
+      h + "var o: {value: any} = { value: null }, p = { value: null };\n",
+      ol,
+    ) >
+    0,
+  )
+  // The BLOCK-statement `using` path, which is how every
+  // `usingDeclarations` conformance test spells it.
+  assert_true(
+    only(h + "{\n  using _ = { [Symbol.dispose]() {}, value: null };\n}\n", ol) >
+    0,
+  )
+
+  // --- TS2331: `this` in a namespace body's non-function region.
+  assert_true(only("namespace M { const f = () => this; }\n", th) > 0)
+  assert_true(only("namespace M { const f = () => this.q; }\n", th) > 0)
+  assert_true(only("namespace M { var x = this; }\n", th) > 0)
+  assert_true(only("namespace M { const f = () => () => this; }\n", th) > 0)
+  assert_true(
+    only("namespace M { export namespace N { const f = () => this; } }\n", th) >
+    0,
+  )
+  // A class DECORATOR is evaluated where the class is defined, so it sees
+  // the namespace's `this`. The declaration form reaches the AST; the
+  // MEMBER form rides a parser sentinel converted at the namespace site.
+  assert_true(only("namespace M { @(this.dec) class C {} }\n", th) > 0)
+  assert_true(
+    only(
+      "//@experimentaldecorators: true\nnamespace M { class C { @(this.dec) method() {} } }\n",
+      th,
+    ) >
+    0,
+  )
+
+  // --- stays silent
+  for
+    src in [
+      // A DEFAULT supplies the type. True even for `null`, which does not
+      // trigger a default at runtime — the cell reasoning gets wrong.
+      h + "var [a = 1] = [undefined];\n",
+      h + "var {a = 1} = {a: null};\n",
+      // An annotation gives the initializer a contextual type, and `: any`
+      // counts — which is the whole reason the rule needs the parse-time
+      // fact instead of the `TsType`.
+      h + "var [a, b]: any = [undefined, null];\n",
+      h + "var [a, b]: [any, any] = [undefined, null];\n",
+      h + "var o: any = { value: null };\n",
+      h + "var o: { value: string } = { value: null };\n",
+      // No pattern and no object literal: `var a = undefined` is legal,
+      // and `var o = [null]` is TS7005 on the VARIABLE, a code this rule
+      // does not claim.
+      h + "var a = undefined;\n",
+      h + "var o = [null];\n",
+      h + "var [a, b] = [1, 2];\n",
+      // An assertion or a conditional types the initializer elsewhere.
+      h + "var [a, b] = [undefined, null] as any;\n",
+      h + "var o = { value: null } as any;\n",
+      h + "var o = { value: null as any };\n",
+      h + "var o = true ? { value: null } : { value: 1 };\n",
+      // A call ARGUMENT's object literal is contextually typed by the
+      // parameter, which is why the rule is restricted to declarations.
+      h + "function f(x: { value: string }) {}\nf({ value: null });\n",
+      // Both flags are required: with either the other way round tsc
+      // accepts the identical source.
+      "//@strict: false\n//@noImplicitAny: false\nvar o = { value: null };\n",
+      "//@strictNullChecks: true\n//@noImplicitAny: true\nvar [a, b] = [undefined, null];\n",
+      // TS2331: a `function` declaration or expression inside a namespace
+      // REBINDS `this`, and tsc reports TS2683 there instead.
+      "namespace M { function g() { return this; } }\n",
+      "namespace M { const g = function () { return this; }; }\n",
+      // A class body and an object-literal method are `this` contexts.
+      "namespace M { class C { m() { return this; } } }\n",
+      "namespace M { const o = { m() { return this; } }; }\n",
+      // Script top level is not a namespace body (tsc gives TS7041), and
+      // a class in a FUNCTION in a namespace is decorated in that
+      // function's scope (TS2683).
+      "const f = () => this;\n",
+      "//@experimentaldecorators: true\nclass C { @(this.dec) method() {} }\n",
+      "//@experimentaldecorators: true\nnamespace M { function f() { class C { @(this.dec) method() {} } } }\n",
+    ] {
+    @test.assert_eq(only(src, be) + only(src, ol) + only(src, th), 0)
+  }
+}
+
+///|
+/// Batch EB: a call to an OVERLOAD SET whose only accepting member is
+/// GENERIC now infers its instantiated return type.
+///
+/// The members are ingested as plain `Func`s with their type parameters
+/// recorded per NAME — and `func_type_params` is OVERWRITTEN per
+/// declaration, so for an overload set it holds the IMPLEMENTATION's list,
+/// which is empty. `computedPropertyNames9`'s `f(true)` therefore reached
+/// the union arm, matched no member, and came back carrying an unresolved
+/// `T` that every downstream check reads as unknowable.
+test "batch EB: generic overload return inference" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let overloads = "function f(s: string): string;\nfunction f(n: number): number;\nfunction f<T>(x: T): T;\nfunction f(x): any { }\n"
+  // The generic member is selected and instantiated: `f(true)` is
+  // `boolean`, which is not a legal computed key.
+  assert_true(
+    only(overloads + "var v = { [f(true)]: 0 };\n", "computed property name") >
+    0,
+  )
+  // The same through `declare function` overloads.
+  assert_true(
+    only(
+      "declare function g(s: string): string;\ndeclare function g<T>(x: T): T;\nvar probe: symbol = g(true);\n",
+      "expected `symbol`",
+    ) >
+    0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // A concrete member accepts these, so the answer they already had
+      // is kept — `string` and `number` are both legal computed keys.
+      overloads + "var v = { [f(\"a\")]: 0 };\n",
+      overloads + "var v = { [f(1)]: 0 };\n",
+      // A single generic function was never the broken case.
+      "function id<T>(x: T): T { return x }\nvar v = { [id(\"a\")]: 0 };\n",
+    ] {
+    @test.assert_eq(only(src, "computed property name"), 0)
   }
 }

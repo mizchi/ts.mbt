@@ -145,6 +145,14 @@ pub struct Parser {
   // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
   // opts back in over `@strict: false`.
   no_implicit_any : Bool
+  // `strictNullChecks` per the conformance-header directives, same
+  // convention and default (`true`) as `no_implicit_any` above: only an
+  // explicit `@strict: false` / `@strictNullChecks: false` turns it off.
+  // Read by the TS7031 / TS7018 recorder, which needs BOTH flags — a
+  // `null` / `undefined` initializer only widens to `any` when
+  // `strictNullChecks` is off, and a directive-less file (every real
+  // `.ts` / `.d.ts` the bridge parses) therefore never reaches it.
+  strict_null_checks : Bool
   // `useUnknownInCatchVariables`: an unannotated `catch (e)` binding is
   // `unknown` rather than `any`, so using it without narrowing is
   // TS18046. Follows `strict`, which the conformance baselines treat as
@@ -202,6 +210,19 @@ pub struct Parser {
   // string per offending member; the checker surfaces them. Empty for
   // well-formed input, so it never costs precision.
   interface_member_modifier_misuses : Array[String]
+  // TS2842: the unused RENAMINGS (`{ a: b }`) found in the binding pattern
+  // `parse_declare_param_name` just skipped, as `(key, new_name)` pairs.
+  // Overwritten on every call, like `last_var_decl_annotated` and
+  // `last_function_bodiless` -- each caller reads it immediately.
+  //
+  // It is a "last" slot rather than a pushed diagnostic because two of
+  // that function's four callers are SPECULATIVE: `type T = ([{ a: b }])`
+  // parses as a parameter list first and is re-parsed as a parenthesized
+  // TUPLE TYPE when no `=>` follows, and there `{ a: b }` is an object
+  // TYPE whose member `a` has type `b` -- legal, and in the corpus file
+  // this rule is for. So only a caller that has COMMITTED to a bodiless
+  // signature may turn these into findings.
+  last_param_pattern_renamings : Array[(String, String)]
   // Class-body structural diagnostics (`duplicate_member_names`, which also
   // carries the `<multiple-ctor-impl>` / `<index-sig-modifier>` /
   // `<abstract-impl>` sentinels) collected for *every* class parsed, including
@@ -363,6 +384,7 @@ pub fn Parser::new_with_strict_and_jsx(
     no_bound_inline: false,
     target_es6_plus: false,
     no_implicit_any: false,
+    strict_null_checks: true,
     unknown_catch_variables: false,
     experimental_decorators: true,
     record_implicit_any_params: false,
@@ -373,6 +395,7 @@ pub fn Parser::new_with_strict_and_jsx(
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
+    last_param_pattern_renamings: [],
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
@@ -512,6 +535,14 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
       if !lib_list_grants_year(libs, 2024) {
         grammar_misuses.push("<lib-lacks-es2024>")
       }
+      // TS2339 evidence for `globalThis.name`: the DOM libs declare
+      // `name` with `const`, so it is not a property of `globalThis` —
+      // but webworker declares the same name with `var`. The DEFAULT lib
+      // includes dom, so the rule reads the DOM answer unless an explicit
+      // `@lib:` list leaves dom out, which this marks.
+      if !libs.contains("dom") {
+        grammar_misuses.push("<lib-without-dom>")
+      }
     }
     None =>
       // No explicit `@lib:` — the default lib follows the target, so an
@@ -621,6 +652,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(head_lower),
     no_implicit_any: detect_no_implicit_any(head),
+    strict_null_checks: detect_strict_null_checks(head),
     unknown_catch_variables: detect_unknown_catch_variables(head),
     experimental_decorators,
     template_invalid_escape_positions: lexer.template_invalid_escape_positions,
@@ -631,6 +663,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     directive_strict: detect_directive_strict(head),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
+    last_param_pattern_renamings: [],
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],

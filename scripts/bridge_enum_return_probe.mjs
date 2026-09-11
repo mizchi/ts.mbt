@@ -107,12 +107,51 @@ function payloadEnums(src) {
 const BUILDS_MOONBIT_VALUE = /"\$tag":|_from_js\(/;
 const READS_MOONBIT_VALUE = /\.\$tag\s*===|_to_js\(/;
 
+// Section C's budget: a struct FIELD typed as a payload enum. Keyed per
+// package rather than per occurrence, because there are hundreds and a
+// four-hundred-line declaration file ranks nothing.
+const STRUCT_BUDGET_FILE = "scripts/bridge_struct_enum_fields.txt";
+function readStructBudget() {
+  let text = "";
+  try {
+    text = readFileSync(STRUCT_BUDGET_FILE, "utf8");
+  } catch {
+    return null;
+  }
+  const out = new Map();
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const [pkg, reachable, convertible, erased] = t.split("|").map((s) => s.trim());
+    if (!pkg) continue;
+    out.set(pkg, {
+      reachable: Number(reachable),
+      convertible: Number(convertible),
+      erased: Number(erased),
+    });
+  }
+  return out;
+}
+
+// Names in `bridge.js` are the generator's snake_case, which DOUBLES the
+// underscore at a PascalCase word boundary inside an already-underscored name
+// (`Auto_BoolValue_or_X` -> `auto__bool_value_or__x`). Reconstructing that by
+// hand is how the first two attempts at this count measured the wrong thing —
+// the same substitution bug as the code being hunted, for the seventh time —
+// so compare with underscores stripped and reconstruct nothing.
+const underscoreless = (s) => s.replace(/_/g, "").toLowerCase();
+
 let totalEnums = 0;
 let wrapperDecls = 0;
 let wrapperBad = 0;
 let inlineDecls = 0;
 let inlineBad = 0;
+let structFields = 0;
+let structReachable = 0;
+let structConvertible = 0;
+let structErased = 0;
 const byPkg = [];
+const structByPkg = [];
 
 for (const mbti of walk("_build")) {
   const dir = dirname(mbti);
@@ -200,6 +239,126 @@ for (const mbti of walk("_build")) {
     }
   }
 
+  // ---- Section C: struct FIELDS typed as a payload enum ------------------
+  //
+  // Sections A and B ask about a FUNCTION's return. A struct field is the
+  // third position a payload enum can occupy, and it is the one with no
+  // machinery behind it at all: the corpus has 259 `_to_js` struct converters
+  // and ZERO in the other direction, so a JS object handed to MoonBit as a
+  // struct is used RAW. `Program::getSemanticDiagnostics` is
+  // `(self, a, b) => self.getSemanticDiagnostics(a, b)` — it unwraps its
+  // argument options and does nothing to the returned `Array[Diagnostic]` —
+  // so `diag.messageText`, declared
+  // `Auto_StringValue_or_DiagnosticMessageChainValue`, is a raw JS string and
+  // a `match` on it reads `$tag` off something that has none.
+  //
+  // Two splits, because they rank different work.
+  //
+  // READ-REACHABLE: the struct appears in a RETURN position somewhere in the
+  // package. Only then can a JS value arrive as this struct, so only then is
+  // the read direction reachable at all; a struct that only ever crosses
+  // MoonBit -> JS is served correctly by the `_to_js` converter that exists.
+  //
+  // CONVERTIBLE vs ERASED: whether the field's enum has a `_from_js` helper.
+  // An erased one cannot be converted by any means, so widening the declared
+  // type is the only honest answer. A convertible one could be fixed properly,
+  // but only by a `_from_js` struct converter called at every struct-returning
+  // position — machinery that does not exist.
+  //
+  // This is REPORTED against a per-package budget rather than failed outright:
+  // the occurrences are pre-existing and in the hundreds, so a red gate here
+  // would rank no work, which is the defect `docs/checker-priority.md` was
+  // retired for. Growth fails; a drop is reported so the budget can follow.
+  {
+    const fromJsHelpers = new Set();
+    for (const m of jsSrc.matchAll(
+      /function __ts_mbt_tagged_union_([a-z_0-9]+)_from_js/g,
+    )) {
+      fromJsHelpers.add(underscoreless(m[1]));
+    }
+    let fields = 0;
+    let reachable = 0;
+    let convertible = 0;
+    let erased = 0;
+    const examples = [];
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith(".mbt")) continue;
+      const text = readFileSync(join(dir, file), "utf8");
+      for (const m of text.matchAll(
+        /^pub\(all\) struct ([A-Za-z_][\w]*)(\[[^\]]*\])? \{\n((?:  .*\n)*)\}/gm,
+      )) {
+        const structName = m[1];
+        // A return position, EXCLUDING the `%identity` upcast helpers.
+        // `HTMLAttributes::asAriaAttributes(self) -> AriaAttributes =
+        // "%identity"` is a MoonBit-side view of a value the caller
+        // CONSTRUCTED, not a JS boundary crossing, so it does not make
+        // `AriaAttributes` a struct a JS value can arrive as. Counting it did:
+        // this test reported react_types' three aria fields as read-reachable
+        // and the generator's AST-level pre-pass correctly disagreed, which is
+        // how the over-count was found. Eighth time the instrument was the
+        // thing that was wrong.
+        const returnPattern = new RegExp(
+          `-> (Array\\[)?${structName}(\\])?\\??( =|$)`,
+        );
+        const upcastPattern = new RegExp(`::as${structName}\\s*\\(`);
+        const returned = declSrc
+          .split("\n")
+          .some(
+            (line) =>
+              returnPattern.test(line) &&
+              !upcastPattern.test(line) &&
+              !line.includes('"%identity"'),
+          );
+        for (const line of m[3].split("\n")) {
+          const field = line.trim();
+          if (field === "") continue;
+          const sep = field.indexOf(" : ");
+          if (sep < 0) continue;
+          const declared = field.slice(sep + 3).trim();
+          // A function-typed field carries the enum in its RETURN; a plain
+          // one carries it directly. Filing this as "the function-typed
+          // field" is what put the estimate at 8 against 438 — tenth time a
+          // label stood in for the objective in this repo.
+          const arrow = declared.lastIndexOf(") -> ");
+          const carried = (
+            declared.startsWith("(") && arrow >= 0
+              ? declared.slice(arrow + 5)
+              : declared
+          )
+            .replace(/\?$/, "")
+            .trim();
+          if (!enums.has(carried)) continue;
+          fields += 1;
+          if (!returned) continue;
+          reachable += 1;
+          if (fromJsHelpers.has(underscoreless(carried))) {
+            convertible += 1;
+          } else {
+            erased += 1;
+            if (examples.length < 3) {
+              examples.push(`${structName}.${field.slice(0, sep)} : ${carried}`);
+            }
+          }
+        }
+      }
+    }
+    structFields += fields;
+    structReachable += reachable;
+    structConvertible += convertible;
+    structErased += erased;
+    if (fields > 0) {
+      structByPkg.push({
+        key: packageKey(dir),
+        pkg: mbti.replace(/^_build\//, "").replace(/\/bridge\.mbti$/, ""),
+        fields,
+        reachable,
+        convertible,
+        erased,
+        examples,
+      });
+    }
+  }
+
   if (bad.length) {
     byPkg.push({
       pkg: mbti.replace(/^_build\//, "").replace(/\/bridge\.mbti$/, ""),
@@ -231,6 +390,10 @@ console.log(`...missing a conversion:                      ${inlineBad}`);
 console.log(`declared unconverted crossings:               ${declaredSeen}`);
 console.log(`UNDECLARED unconverted crossings:             ${undeclared}`);
 console.log(`stale declarations:                           ${stale.length}`);
+console.log(`struct fields typed as a payload enum:        ${structFields}`);
+console.log(`...in a struct JS can RETURN (read-reachable): ${structReachable}`);
+console.log(`......enum has a _from_js (convertible):      ${structConvertible}`);
+console.log(`......enum has none (only widening):          ${structErased}`);
 
 for (const p of byPkg) {
   const rows = p.bad.filter((b) => !declared.has(`${p.key}|${b.fn}|${b.dir}`));
@@ -255,4 +418,63 @@ if (undeclared === 0 && stale.length === 0 && declaredSeen > 0) {
     console.log(`  ${String(k).padEnd(16)} ${v.length}`);
   }
 }
-process.exitCode = undeclared > 0 || stale.length > 0 ? 1 : 0;
+// ---- Section C's budget ----------------------------------------------------
+const structBudget = readStructBudget();
+let structGrew = 0;
+let structShrank = 0;
+if (structBudget === null) {
+  console.log(`\nno ${STRUCT_BUDGET_FILE}; struct-field counts are reported only`);
+} else {
+  const lines = [];
+  for (const p of structByPkg) {
+    const b = structBudget.get(p.key);
+    if (b === undefined) {
+      structGrew += 1;
+      lines.push(
+        `    UNDECLARED package ${p.key}: reachable ${p.reachable} (convertible ${p.convertible}, erased ${p.erased})`,
+      );
+      continue;
+    }
+    // Only `reachable` and `erased` are gated upward. `convertible` RISING is
+    // an improvement — it means a field moved out of the unfixable half — and
+    // gating it was backwards: teaching the from_js builder to use a closed
+    // union's last case as the `else` moved 10 fields from erased to
+    // convertible and the gate reported five packages as having GROWN.
+    if (p.reachable > b.reachable || p.erased > b.erased) {
+      structGrew += 1;
+      lines.push(
+        `    GREW ${p.key}: reachable ${b.reachable}->${p.reachable}, erased ${b.erased}->${p.erased} (convertible ${b.convertible}->${p.convertible})`,
+      );
+    } else if (
+      p.reachable < b.reachable ||
+      p.convertible !== b.convertible ||
+      p.erased < b.erased
+    ) {
+      structShrank += 1;
+      lines.push(
+        `    dropped ${p.key}: reachable ${b.reachable}->${p.reachable}, convertible ${b.convertible}->${p.convertible}, erased ${b.erased}->${p.erased} — lower the budget`,
+      );
+    }
+  }
+  for (const key of structBudget.keys()) {
+    if (!structByPkg.some((p) => p.key === key)) {
+      structShrank += 1;
+      lines.push(`    stale ${key}: no struct field carries a payload enum any more`);
+    }
+  }
+  if (lines.length) {
+    console.log("\nstruct-field budget:");
+    for (const l of lines) console.log(l);
+  }
+}
+console.log("\nread-reachable struct fields by package (the ranking):");
+for (const p of [...structByPkg].sort((a, b) => b.erased - a.erased)) {
+  // every package with a field, so the budget file can be built from this
+  console.log(
+    `  ${p.key.padEnd(24)} reachable ${String(p.reachable).padStart(3)}  convertible ${String(p.convertible).padStart(3)}  erased ${String(p.erased).padStart(3)}`,
+  );
+  for (const e of p.examples) console.log(`      ${e}`);
+}
+
+process.exitCode =
+  undeclared > 0 || stale.length > 0 || structGrew > 0 ? 1 : 0;

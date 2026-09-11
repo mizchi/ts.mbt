@@ -402,8 +402,28 @@ fn Parser::scan_skipped_enum_initializer(
       self.record_enum_string_arith(e)
       self.record_enum_await_yield(e)
       self.record_const_enum_nonconstant(e)
+      self.record_enum_init_name(e)
     }
     None => ()
+  }
+}
+
+///|
+/// TS18033: a computed enum member's initializer must be assignable to
+/// `number`. The enum AST keeps folded literal values only, so the
+/// initializer expression is gone by the time the checker sees the
+/// declaration -- but the one shape worth deciding is a BARE IDENTIFIER,
+/// and its name is all the checker needs to look the binding's type up
+/// and judge it (`check_enum_init_name_types`).
+///
+/// Only a bare `Var`. Arithmetic, a property access (`Other.member`), a
+/// call and a unary form all abstain: `A.b` is a legal cross-enum
+/// reference, and telling it from a non-numeric member read needs
+/// resolution this does not do.
+fn Parser::record_enum_init_name(self : Parser, e : @ast.TsExpr) -> Unit {
+  match e {
+    Var(n) => self.grammar_misuses.push("<enum-init-name:\{n}>")
+    _ => ()
   }
 }
 
@@ -1089,6 +1109,15 @@ fn Parser::parse_namespace_decl_with_mode(
         } else if misuse.has_prefix("<export-default>") {
           self.grammar_misuses.push(
             "a default export can only be used in an ECMAScript-style module",
+          )
+        } else if misuse.has_prefix("<this-in-decorator>") {
+          // TS2331: a member decorator expression mentioning `this`.
+          // Recorded as a sentinel by the class-member parser for the
+          // reason stated there — member decorator expressions never
+          // reach the AST, and the body's own parser cannot know it is a
+          // namespace body. Only reaching HERE proves it is one.
+          self.grammar_misuses.push(
+            "`this` cannot be referenced in a module or namespace body",
           )
         }
       }
@@ -3313,6 +3342,17 @@ fn Parser::parse_export_stmt(
       self.in_async = false
       self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
+        // TS2393 / TS2394 support. The `<fn-impl:NAME>` marker was
+        // pushed at the two module-level sites that parse a BARE
+        // `function` declaration and at NONE of the four export sites,
+        // so `export default function f() { }` twice — which is
+        // `multipleDefaultExports04` — recorded no implementation at
+        // all. `false` rather than `last_function_bodiless` because this
+        // arm parses through `parse_function_expr`, which does not set
+        // that flag: reading it here would read whatever the previous
+        // function left behind, and a default export cannot be an
+        // overload signature anyway.
+        self.note_function_declaration(func.name, false, true)
         funcs.push(func)
       }
       return
@@ -3334,6 +3374,15 @@ fn Parser::parse_export_stmt(
       }
       self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
+        // Reaching here means the NAMED branch above ran, which is the
+        // one that goes through `parse_function` — so the flag is this
+        // declaration's. An anonymous default export is `<anon>` and
+        // never gets here.
+        self.note_function_declaration(
+          func.name,
+          self.last_function_bodiless,
+          true,
+        )
         funcs.push(func)
       }
       return
@@ -3381,6 +3430,7 @@ fn Parser::parse_export_stmt(
     // to know which namespace members were exported (the nested-module
     // re-parse otherwise erases `export`-ness).
     self.grammar_misuses.push("<export-value>" + func.name)
+    self.note_function_declaration(func.name, self.last_function_bodiless, true)
     funcs.push(func)
     return
   }
@@ -3392,6 +3442,11 @@ fn Parser::parse_export_stmt(
       self.in_async = true
       let func = self.parse_function()
       self.grammar_misuses.push("<export-value>" + func.name)
+      self.note_function_declaration(
+        func.name,
+        self.last_function_bodiless,
+        true,
+      )
       funcs.push(func)
       self.in_async = false
       return

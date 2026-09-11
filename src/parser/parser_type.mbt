@@ -118,6 +118,12 @@ fn Parser::parse_paren_or_function_type(
 
   let param_types : Array[@ast.TsType] = []
   let param_optional : Array[Bool] = []
+  // TS2842, held until the `=>` below commits this to a function TYPE.
+  // `type T = ([{ a: b }, { b: a }])` reaches this loop too and is
+  // re-parsed as a parenthesized TUPLE TYPE when no arrow follows, where
+  // `{ a: b }` is an object type and perfectly legal -- and that pair of
+  // spellings is exactly what `destructuringInFunctionType` contains.
+  let renamings : Array[(String, String)] = []
   let mut can_be_function_type = true
   while true {
     let is_rest = self.match_ellipsis()
@@ -126,6 +132,9 @@ fn Parser::parse_paren_or_function_type(
         can_be_function_type = false
         break
       }
+    }
+    for r in self.last_param_pattern_renamings {
+      renamings.push(r)
     }
     let is_optional = self.match_(Question)
     // Type annotation on a function-type parameter is optional —
@@ -153,6 +162,7 @@ fn Parser::parse_paren_or_function_type(
     break
   }
   if can_be_function_type && self.match_(RParen) && self.match_(Arrow) {
+    self.record_param_pattern_renamings(renamings)
     return callable_type_with_optionality(
       Func(param_types, self.parse_type()),
       param_optional,
@@ -190,6 +200,10 @@ fn Parser::parse_constructor_tail(
   let _ = self.expect(LParen)
   let param_types : Array[@ast.TsType] = []
   let param_optional : Array[Bool] = []
+  // TS2842, held until the `=>` commits this to a constructor type — the
+  // same reason as in `parse_paren_or_function_type`, and `type C1 = new
+  // ([{ a: b }]) => void` is the corpus spelling.
+  let renamings : Array[(String, String)] = []
   if !self.match_(RParen) {
     let mut ok = true
     while true {
@@ -199,6 +213,9 @@ fn Parser::parse_constructor_tail(
           ok = false
           break
         }
+      }
+      for r in self.last_param_pattern_renamings {
+        renamings.push(r)
       }
       let is_optional = self.match_(Question)
       let pty = if self.match_(Colon) {
@@ -229,6 +246,7 @@ fn Parser::parse_constructor_tail(
   if !self.match_(Arrow) {
     return Any
   }
+  self.record_param_pattern_renamings(renamings)
   let ret = self.parse_type()
   let ctor = callable_type_with_optionality(
     @ast.TsType::Constructor(param_types, ret, is_abstract),
@@ -823,6 +841,10 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
   // TS7010 support, collected rather than pushed for the same
   // speculative-parse reason.
   let implicit_any_return_members : Array[String] = []
+  // TS2842, collected for the same reason as the two lists around it:
+  // this parser is SPECULATIVE, so a renaming found here is a finding
+  // only if the object type actually parses.
+  let member_param_renamings : Array[(String, String)] = []
   try {
     let _ = self.expect(LBrace)
     while !self.check(Eof) && !self.check(RBrace) {
@@ -979,6 +1001,13 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
         }
         let method_params = self.parse_params()
         let _ = self.expect(RParen)
+        // TS2842: an object-type member signature never has a body.
+        for prm in method_params {
+          match prm.binding {
+            Some(b) => binding_unused_renamings(b, member_param_renamings)
+            None => ()
+          }
+        }
         let had_return_annotation = self.check(Colon)
         let return_type = if had_return_annotation {
           let _ = self.advance()
@@ -1062,6 +1091,7 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
     for name in implicit_any_return_members {
       self.record_implicit_any_member_return(name, false)
     }
+    self.record_param_pattern_renamings(member_param_renamings)
     Some(Object(fields))
   } catch {
     _ => {

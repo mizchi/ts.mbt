@@ -84,3 +84,26 @@ typescript/tests/cases/conformance/override/override20.ts no-local-oracle: `noIm
 typescript/tests/cases/conformance/override/override2.ts no-local-oracle: `noImplicitOverride` against abstract members, including an abstract redeclaration and an abstract-to-concrete narrowing.
 typescript/tests/cases/conformance/statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash2.ts no-local-oracle: `foo: var y;` inside a `for...of` body that also closes over the loop binding.
 typescript/tests/cases/conformance/async/es5/asyncQualifiedReturnType_es5.ts no-local-oracle: an `async` function whose declared return type is a namespace-qualified `Promise` subclass.
+
+# ---------------------------------------------------------------------
+# lib-diagnostic — the file's ONLY error is inside a vendored `lib.*.d.ts`
+#
+# `@skipDefaultLibCheck: false` plus a global augmentation
+# (`interface Object { [x: string]: Object }`) makes tsc type-check
+# `lib.es5.d.ts` ITSELF against the added index signature, and every
+# diagnostic lands there — `TS2411(123,5)` and friends, at lines the
+# 33-line test source does not have. The checker has no notion of
+# checking a lib declaration file, and the test source contains no error
+# at all, so there is nothing here a rule could flag.
+#
+# Found by MEASUREMENT rather than by reading, and the measurement was
+# the instrument's own bug: `scripts/lib/tsc-probe.mjs` calls
+# `getSemanticDiagnostics()` with no argument, which returns EVERY
+# file's diagnostics, so `checker_miss_rank.mjs` had been attributing
+# lib errors to the test file. Re-running the whole MISS list with the
+# diagnostics filtered to the file itself says this is the only one of
+# the 118 where nothing is in scope — its sibling
+# `objectTypeHidingMembersOfExtendedObject` really does carry an
+# in-file `TS2411(13,5)` and stays in the backlog.
+# ---------------------------------------------------------------------
+typescript/tests/cases/conformance/types/members/objectTypeWithStringIndexerHidingObjectIndexer.ts lib-diagnostic: every error is inside `lib.es5.d.ts`, reached through `interface Object` augmentation under `@skipDefaultLibCheck: false`.

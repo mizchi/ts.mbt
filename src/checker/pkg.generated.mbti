@@ -139,6 +139,8 @@ pub(all) struct ExprIssue {
   message : String
 } derive(Eq, @debug.Debug)
 
+type ThisRegionVisitor
+
 pub(all) struct TypeCheckReport {
   issues : Array[TypeIssue]
 }

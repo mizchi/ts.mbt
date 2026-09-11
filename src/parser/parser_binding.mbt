@@ -550,6 +550,171 @@ fn Parser::record_self_referential_initializer(
 }
 
 ///|
+/// TS7031 ("Binding element 'X' implicitly has an 'any' type") and TS7018
+/// ("Object literal's property 'P' implicitly has an 'any' type"): ONE
+/// rule with two spellings, and the thing being flagged in both is a
+/// `null` / `undefined` literal standing where a type has to be INFERRED.
+/// With `strictNullChecks` off those two widen to `any`, so under
+/// `noImplicitAny` the inference is an error.
+///
+/// It lives in the parser because the fact it needs is not in the AST:
+/// `TsStmt::Let` / `Const` / `Var` carries a `TsType`, in which an ABSENT
+/// annotation and an explicit `: any` are the same `Any`, and the
+/// annotation is exactly what makes the difference —
+/// `var [a, b]: any = [undefined, null]` is ACCEPTED by tsc while the
+/// unannotated form is TS7031 twice. Same blocker TS7022 and TS2729
+/// record; the caller reads `last_var_decl_annotated` before the
+/// initializer is parsed and only calls this when it is false. Nothing
+/// here needs a type, so the whole rule is decidable at parse time.
+///
+/// BOTH flags are required and that is what keeps it off real code: a
+/// file with no `@strictNullChecks: false` / `@strict: false` directive
+/// defaults to `strict_null_checks: true`, which every `.ts` / `.d.ts`
+/// the bridge parses is, so the recorder cannot fire there at all.
+///
+/// Which of the two codes applies is decided by the BINDING, matching
+/// tsc: `var {a} = {a: null}` is TS7031 on `a` and NOT TS7018 on the
+/// property, so a pattern runs only the element half and an `Ident`
+/// binding only the object-literal half.
+///
+/// Every boundary was probed one cell at a time, because three of them
+/// read the other way round:
+///
+///   - a DEFAULT supplies the type, so `var [a = 1] = [undefined]` and
+///     `var {a = 1} = {a: null}` are both ACCEPTED — even for `null`,
+///     which does not trigger a default at runtime;
+///   - `var a = undefined` (no pattern, no object literal) is ACCEPTED,
+///     and `var o = [null]` is TS7005 on the VARIABLE rather than
+///     TS7018, so an array element is never reported here;
+///   - a renamed property reports the LOCAL name (`var {a: x} = {a: null}`
+///     names `x`), and a hole keeps its position (`var [, b] = [1, null]`
+///     reports `b`).
+///
+/// The abstentions each lose a finding rather than invent one: a REST
+/// element (`var [...r] = [null]`, TS7031 in tsc), an initializer behind
+/// an `as` (`[undefined] as const`), a computed or synthesized object key
+/// whose name nobody could act on, and every non-declaration position an
+/// object literal can sit in — a `return`, a class field initializer and
+/// a call argument are all TS7018 in tsc, but a call argument's literal
+/// is CONTEXTUALLY typed and legal, and this site cannot tell the two
+/// apart. An unannotated declaration has no contextual type by
+/// construction, which is the whole reason the rule is sound here.
+fn Parser::record_nullish_inferred_declaration(
+  self : Parser,
+  binding : @ast.TsBinding,
+  init : @ast.TsExpr,
+) -> Unit {
+  if not(self.no_implicit_any) || self.strict_null_checks {
+    return
+  }
+  match binding {
+    @ast.TsBinding::Ident(_) => self.record_nullish_objlit_props(init)
+    other => self.record_nullish_pattern_elements(other, init)
+  }
+}
+
+///|
+/// `null` / `undefined` written as a literal. `undefined` is an ordinary
+/// `Var` in this AST; `(null)` arrives as a bare `NullLit` because the
+/// parser strips parens, which is why the parenthesized spelling needs no
+/// arm of its own.
+fn expr_is_nullish_literal(e : @ast.TsExpr) -> Bool {
+  e is (NullLit | Var("undefined"))
+}
+
+///|
+/// The TS7018 half of `record_nullish_inferred_declaration`: an object
+/// literal property whose value is a nullish literal. Descends through
+/// nested object and array literals only — anything else (a call, an
+/// `as`, a function body) either introduces a contextual type or is a
+/// position this rule does not claim.
+fn Parser::record_nullish_objlit_props(self : Parser, e : @ast.TsExpr) -> Unit {
+  match e {
+    ObjectLit(entries) =>
+      for ent in entries {
+        if expr_is_nullish_literal(ent.1) {
+          // `@@`- and `<`-prefixed keys are the parser's own spellings for
+          // a well-known-symbol or computed key: a diagnostic naming one
+          // is a diagnostic nobody can act on, the lesson TS7008's
+          // `__private_brand__` message records.
+          if not(ent.0.has_prefix("@@")) && not(ent.0.has_prefix("<")) {
+            self.grammar_misuses.push(
+              "<noimplicitany>object literal's property `\{ent.0}` implicitly has an `any` type",
+            )
+          }
+        } else {
+          self.record_nullish_objlit_props(ent.1)
+        }
+      }
+    ArrayLit(items) =>
+      for it in items {
+        self.record_nullish_objlit_props(it)
+      }
+    _ => ()
+  }
+}
+
+///|
+/// The TS7031 half: a destructuring pattern's element whose source
+/// position in the written literal is a nullish literal. Positions are
+/// matched by index for an array pattern (a hole is a `None` item, so the
+/// alignment survives) and by key for an object pattern.
+fn Parser::record_nullish_pattern_elements(
+  self : Parser,
+  binding : @ast.TsBinding,
+  init : @ast.TsExpr,
+) -> Unit {
+  match (binding, init) {
+    (Array(ab), ArrayLit(items)) => {
+      let mut i = 0
+      while i < ab.items.length() && i < items.length() {
+        match ab.items[i] {
+          Some(elem) => self.record_nullish_binding_elem(elem, items[i])
+          None => ()
+        }
+        i = i + 1
+      }
+    }
+    (Object(ob), ObjectLit(entries)) =>
+      for p in ob.props {
+        for ent in entries {
+          if ent.0 == p.key {
+            self.record_nullish_binding_elem(
+              { binding: p.binding, default: p.default },
+              ent.1,
+            )
+            break
+          }
+        }
+      }
+    _ => ()
+  }
+}
+
+///|
+/// One element of a destructuring pattern against the expression the
+/// written literal supplies for it. A nested pattern recurses; a default
+/// abstains (probed: `var [a = 1] = [undefined]` is accepted).
+fn Parser::record_nullish_binding_elem(
+  self : Parser,
+  elem : @ast.TsBindingElem,
+  src : @ast.TsExpr,
+) -> Unit {
+  if elem.default is Some(_) {
+    return
+  }
+  match elem.binding {
+    @ast.TsBinding::Ident(n) =>
+      if expr_is_nullish_literal(src) {
+        self.grammar_misuses.push(
+          "<noimplicitany>binding element `\{n}` implicitly has an `any` type",
+        )
+      }
+    other => self.record_nullish_pattern_elements(other, src)
+  }
+}
+
+///|
 /// Two rules about a `for…of` / `for…in` HEAD binding, both keyed on the
 /// loop variable's own name and needing no type inference:
 ///

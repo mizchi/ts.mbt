@@ -8178,3 +8178,81 @@ test "parser: an overload signature must be able to reach its implementation" {
     @test.assert_eq(has(src), false)
   }
 }
+
+///|
+/// TS2842 ("'b' is an unused renaming of 'a'. Did you intend to use it as
+/// a type annotation?").
+///
+/// A renaming binds a name, and a parameter list with no BODY has nowhere
+/// to read it — which is the whole rule, and the reason it lives in the
+/// parser. Every bodiless position was probed against the real compiler
+/// and all of them report; a real function, a class method with a body
+/// and an arrow are all ACCEPTED.
+///
+/// The trap is that one of the SILENT cases parses through the very same
+/// code as one of the firing ones: `type T3 = ([{ a: b }, { b: a }])` is
+/// read as a parameter list first and re-parsed as a parenthesized TUPLE
+/// TYPE when no `=>` follows, where `{ a: b }` is an object type whose
+/// member `a` has type `b`. Both spellings are in
+/// `destructuringInFunctionType`, so recording at the point of the
+/// pattern rather than after the arrow commits would have flagged a legal
+/// line in the same file.
+test "parser: an unused renaming in a bodiless parameter list" {
+  let needle = "is an unused renaming of"
+  let count = fn(src : String) -> Int raise {
+    let m = Parser::from_source(src).parse_module()
+    m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length()
+  }
+
+  // --- fires, once per bodiless position.
+  // A function TYPE and a constructor type (the token-scan half).
+  assert_true(count("type F = ({ a: b }) => void;") > 0)
+  assert_true(count("type C1 = new ([{ a: b }]) => void;") > 0)
+  // Both renamings of the corpus file's `F3`, nested in an array pattern.
+  @test.assert_eq(count("type F3 = ([{ a: b }, { b: a }]) => void;"), 2)
+  // A nested object pattern's own renaming, one level in.
+  assert_true(count("type F = ({ a: { b: c } }) => void;") > 0)
+  // `declare function` and a `declare class` member.
+  assert_true(count("declare function g({ a: b }): void;") > 0)
+  assert_true(count("declare class D { m({ a: b }): void; }") > 0)
+  // An interface member, an object-type member and a class overload
+  // signature (the AST half, through `TsParam.binding`).
+  assert_true(count("interface I { m({ a: b }): void }") > 0)
+  assert_true(count("type T = { m({ a: b }): void };") > 0)
+  assert_true(count("class C { m({ a: b }); m(x: any) { return x } }") > 0)
+  assert_true(count("abstract class C { abstract m({ a: b }): void; }") > 0)
+  // A DEFAULT does not excuse the renaming that precedes it. Only the
+  // AST half can see this: the token scan stops at the `=` so that an
+  // object literal inside an initializer is never read as a pattern.
+  assert_true(count("interface I { m({ a: b = 1 }): void }") > 0)
+
+  // --- stays silent.
+  for
+    src in [
+      // An implementation — the one thing the message names as legal, at
+      // each of its three spellings.
+      "function h({ a: b }) { return b; }", "class K { m({ a: b }) { return b; } }",
+      "var v = ({ a: b }) => b;",
+      // A parenthesized TUPLE TYPE, which reaches the function-type
+      // parameter loop and backs out of it. `{ a: b }` here is an object
+      // type, not a pattern.
+       "type T3 = ([{ a: b }, { b: a }]);", "type T2 = ({ a });",
+      // A property destructured into a nested pattern is not a renaming,
+      // and tsc accepts it.
+       "type F4 = ([{ a: [b, c] }]) => void;", "type C1 = new ([{ a: [b, c] }]) => void;",
+      // No renaming at all.
+       "type F5 = ([a, b, c]) => void;", "var v2: ([a, b, c]) => string;", "declare function g({ a }): void;",
+      "interface I { m({ a, b }): void }",
+      // A rest element binds the object's remainder under its own name.
+       "interface I { m({ a, ...rest }): void }",
+      // An object TYPE in ANNOTATION position, which is the same three
+      // tokens in the same bodiless signature — `{ a: b }` after a `:`
+      // is a member `a` of type `b` and never a pattern. Silent because
+      // the scan runs only where the parameter NAME is, not because
+      // anything filters it out afterwards.
+       "type F = (x: { a: b }) => void;", "declare function g(x: { a: b }): void;",
+      "interface I { m(x: { a: b }): void }", "declare const h: (x: { a: b }, y: [{ a: b }]) => void;",
+    ] {
+    @test.assert_eq(count(src), 0)
+  }
+}

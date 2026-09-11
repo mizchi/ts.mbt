@@ -1,0 +1,111 @@
+# A struct FIELD typed as a payload-bearing enum, per package.
+#
+# Read by `scripts/bridge_enum_return_probe.mjs` (section C). Format,
+# `|`-separated:
+#
+#   <package> | <read-reachable> | <convertible> | <erased> | <reason>
+#
+# A package not listed fails. `reachable` or `erased` GROWING fails. A count
+# dropping is reported so the budget can follow it down -- the two directions
+# `scripts/bridge_widened_unions.txt` and `scripts/checker_out_of_scope.txt`
+# were both written for, so a budget cannot decay into a suppression list.
+#
+# WHY THIS IS A BUDGET AND NOT A BACKLOG OF DECLARED OCCURRENCES
+#
+# 438 struct fields declared a payload enum when this file was written.
+# Declaring each one would be a four-hundred-line file that ranks no work --
+# the defect that retired `docs/checker-priority.md`. The per-package counts
+# are eight rows and they rank the work directly.
+#
+# WHAT IS WRONG, EXACTLY
+#
+# Sections A and B ask about a FUNCTION's return. A struct field is the third
+# position a payload enum can occupy, and it is the one with no machinery
+# behind it at all: the corpus emits 259 `_to_js` struct converters and ZERO in
+# the other direction, so a JS object handed to MoonBit as a struct is used
+# RAW. `Program::getSemanticDiagnostics` is
+# `(self, a, b) => self.getSemanticDiagnostics(a, b)` -- it unwraps its
+# argument options and does nothing to the returned `Array[Diagnostic]` -- so
+# `diag.messageText`, declared `Auto_StringValue_or_DiagnosticMessageChainValue`,
+# was a raw JS string, and a `match` on it read `$tag` off something that has
+# none. 33 externs return `Diagnostic`, and `getSemanticDiagnostics` is the
+# most-used API the TypeScript compiler has.
+#
+# READ-REACHABLE is the filter that makes this tractable, and it changed the
+# answer by 50x. It asks whether the struct appears in a RETURN position
+# anywhere in the package: only then can a JS value arrive as this struct, and
+# a struct that only ever crosses MoonBit -> JS is served correctly by the
+# `_to_js` converter that already exists. react_types went from 247 fields to
+# **5** under it, so the alarming first reading -- "247 React aria attributes
+# would have to be widened" -- was measuring the wrong set.
+#
+# CONVERTIBLE vs ERASED says which fix each one can have. An erased field's
+# enum has no `_from_js` and no predicate can discriminate its cases, so
+# widening the declared type to `JSValue` is the only honest answer. A
+# convertible one could be fixed properly, but only by a `_from_js` struct
+# converter called at every struct-returning position -- machinery that does
+# not exist, mirroring 259 functions.
+#
+# ONLY `reachable` and `erased` ARE GATED UPWARD. `convertible` rising is an
+# improvement -- a field moving out of the unfixable half -- and gating it was
+# backwards: teaching the from_js builder to use a closed union's last case as
+# the `else` moved 10 fields from erased to convertible, and the first version
+# of this gate reported five packages as having GROWN.
+#
+# ERASED IS ZERO NOW, AND THAT IS WHAT THE WIDENING BOUGHT
+#
+# Every read-reachable field whose enum has no `_from_js` is declared `JSValue`
+# instead: 133 -> 0, taking the total field count 438 -> 304, the read-reachable
+# set 151 -> 17, and the synthesized enum count 227 -> 180 (47 enums nothing
+# referenced any more). The declared type is now the type the emitted JS
+# actually hands over -- `VariableDeclaration.parent : JSValue` where it used
+# to promise `Auto_CatchClauseValue_or_VariableDeclarationListValue` over a raw
+# JS object. It is an ergonomic LOSS on exactly the shapes a TS AST walker
+# touches, and the honest one: a `match` on the old declaration read `$tag` off
+# something that has none.
+#
+# The widening is DIRECTIONAL, and that is what keeps react_types' typed
+# attributes typed. Only a read-reachable struct is widened, so a
+# write-only struct field keeps its enum and its `_to_js` converter --
+# `AriaAttributes.aria_checked` still declares
+# `Auto_BoolValue_or_...` because no JS value ever arrives as that struct.
+# react_types' `reachable` went 5 -> 0 by the same route the count did:
+# `HTMLAttributes::asAriaAttributes(self) -> AriaAttributes = "%identity"` is a
+# MoonBit-side upcast of a value the CALLER built, not a JS boundary crossing,
+# and this probe was counting it as a return position while the generator's
+# AST-level pre-pass correctly disagreed. Eighth time in this repo that the
+# measuring instrument carried the same substitution bug as the code.
+#
+# WHAT THE 17 CONVERTIBLE ONES ARE
+#
+# `Diagnostic.messageText` / `DiagnosticWithLocation.messageText`
+# (`string | DiagnosticMessageChain`), `TypeChecker.getConstantValue`
+# (`string | number`), `LanguageService.prepareCallHierarchy`, vitest's
+# `diff` / `inspect` / `inspectBrk`, and the two JSX `children` unions. Every
+# one has a working `_from_js` and nothing calls it at a struct field, which is
+# the separately filed `_from_js` struct converter -- 259 functions' worth of
+# mirror. Widening them would be a regression: the type information is real
+# there.
+#
+# THE TWO WRONG COUNTS THIS REPLACED
+#
+# Filed as "the function-typed struct field", which is 8. The real class is any
+# struct field carrying the enum, 438 -- tenth instance in this repo of a label
+# standing in for the objective, and the widest miss yet at 54x.
+#
+# Then the instrument carried the same substitution bug as the code, for the
+# seventh time: `bridge.js` helper names are the generator's snake_case, which
+# DOUBLES the underscore at a PascalCase boundary inside an already-underscored
+# name (`Auto_BoolValue_or_X` -> `auto__bool_value_or__x`). A hand-written
+# snake_case matched almost nothing and reported 8 convertible / 430 erased; a
+# too-loose one reported 260 / 178. Comparing with underscores stripped and
+# reconstructing nothing gives 8 / 143 of the read-reachable set.
+
+typescript_ast                  | 4 | 4 | 0 | Diagnostic.messageText and DiagnosticWithLocation.messageText (converted by the closed-union fallback), TypeChecker.getConstantValue, LanguageService.prepareCallHierarchy; the AST `parent` unions were the erased 64 and are `JSValue` now
+typescript                      | 4 | 4 | 0 | the same typescript.d.ts, generated again under the node-imports example
+vitest                          | 6 | 6 | 0 | Serialized{,Root}Config.diff / .inspect / .inspectBrk, all six buildable
+react_types                     | 0 | 0 | 0 | its aria attributes are write-only, so no JS value arrives as those structs; the 5 it used to report were the `%identity` upcast helpers the probe read as returns
+ts_to_moonbit_react_jsx_runtime | 2 | 2 | 0 | ButtonHTMLAttributes.children and ReactElement.type_
+ts_to_moonbit_hono_jsx          | 1 | 1 | 0 | ButtonAttributes.children
+node_fs                         | 0 | 0 | 0 | ReadOptions.position carries an enum and no struct holding one is returned
+drizzle_orm                     | 0 | 0 | 0 | three fields carry an enum and no struct holding one is ever returned, so the read direction is unreachable

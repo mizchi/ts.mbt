@@ -1414,6 +1414,327 @@ product surfaces now.
   save / clear / restore discipline `self.labels` already needs at
   fifteen function-body sites. That is precisely how the
   applied-in-some-places bug gets written, for +1 file.
+  Batch EA is +3 off the compiler-probed long tail, and the ranking now
+  says there is nothing but tail left: **132 files and 85 codes with
+  exactly one file each**, with the four largest buckets (TS2322 14 solo,
+  TS2345 10, TS2339 7, TS2403 4) being variadic tuples, template-literal
+  types, conditional types and contextual typing, and every remaining
+  2-file cluster expensive for its own unrelated reason — TS2411 needs
+  `Object`'s own members modelled, TS2367 intersection assignability,
+  TS2464 and TS2349 overload resolution, TS18033 a destructured binding's
+  type. So three unrelated single-file rules is what this tier looks
+  like, and two of the three are worth more for what probing settled than
+  for the file.
+  TS2526 ("a `this` type is available only in a non-static member") reads
+  as a claim about MEMBERSHIP and is really about which declaration the
+  type is written in, so every cell was probed rather than reasoned. A
+  constructor's PARAMETER LIST is an error and its BODY is not —
+  `constructor() { let self: this = this }` is ACCEPTED — which is the
+  cell the message text gets wrong, and NESTING opens no new `this`
+  context, so `constructor(a: { m(): this })`, `Array<this>`, `this[]`
+  and `(x: this) => void` all report while every instance member and
+  every interface member including a CONSTRUCT signature stays silent.
+  Three positions tsc reports are declared MISSes with the reason at the
+  site, and the first is a rule about this repo rather than about
+  TypeScript: `type T = { m(): this }` is TS2526, and the bridge
+  generator runs `check_module` over real `.d.ts` input, where a false
+  positive costs generation rather than a conformance file. Its walker is
+  written out instead of reusing `type_references_any(ty, ["this"])`
+  because that one has no `CallableMeta` arm — the wrapper the type
+  parser puts around a callable with an optional parameter, and the sixth
+  fail-open wrapper arm in this file's ledger, this time costing only a
+  MISS.
+  TS2767 is the fifth batch in a row aimed at a recorded ABSTENTION and
+  the second where the stated blocker was true but named one of two
+  routes to the fact. Its comment said an unannotated `return = 0` leaves
+  the class parser recording `Any`, and that firing on `Any` would flag
+  `return = () => …` — the legal spelling of the same member — both
+  correct, and the INITIALIZER was in `instance_field_inits` all along,
+  where "this cannot be callable" is decidable from the expression's
+  shape. An ALLOWLIST of literal forms, so an unclassified spelling is a
+  MISS: `return = 0 as any` is `any` and tsc ACCEPTS it, so peeling `As`
+  would have been a false positive, and `null` is excluded because with
+  `strictNullChecks` off it widens to `any` and is accepted. The
+  batch-DF test carried that exact source in its SILENT list — the
+  eleventh test here found asserting a gap rather than a behaviour.
+  TS2842 ("an unused renaming … did you intend to use it as a type
+  annotation?") is a parser rule about bodiless-ness, and its trap is
+  that one LEGAL spelling parses through the very same code as an illegal
+  one and both are in the corpus file:
+  `type F3 = ([{ a: b }, { b: a }]) => void` is the error twice, while
+  `type T3 = ([{ a: b }, { b: a }])` is a parenthesized TUPLE TYPE whose
+  `{ a: b }` is an object type with a member `a` of type `b`. Both reach
+  `parse_paren_or_function_type`'s parameter loop, which re-parses when
+  no `=>` follows, so the renamings ride a `last_param_pattern_renamings`
+  slot and become findings only after the arrow COMMITS — recording at
+  the point of the pattern would have flagged a legal line in the file
+  the rule was written for. Two detectors for one question, because
+  `parse_param` builds a real `TsBinding` and `parse_declare_param_name`
+  brace-matches past the pattern and keeps nothing; the AST half is the
+  more precise one, since a DEFAULT has its own field there, where the
+  token scan must stop at the `=` or an object literal inside an
+  initializer reads as a pattern. Six call sites, and they are the set
+  TS2371 already uses.
+  Two findings that are not rules. `var m: typeof A` for a
+  non-instantiated namespace is SILENT while `var q = A` fires, so
+  TS2708 has a second hole independent of the alias one its comment
+  records: a `typeof` TYPE position never reaches `check_undefined_name`
+  at all, and that is the position a `.d.ts` uses.
+  `importStatementsInterfaces` needs both channels, which is why it is
+  still a MISS. And TS1308 inside a decorator expression is blocked on
+  `skip_param_decorators` discarding the expression, not on the rule: the
+  boundary is exact and probed, since a parameter decorator runs in the
+  scope OUTSIDE the class, so the same class body is TS1308 in a plain
+  `function` and ACCEPTED in an `async` one.
+  `src/checker/UNSUPPORTED.md` is the companion this section had been
+  missing, and writing it is what produced the next batch. The triage
+  classifies the backlog by the MACHINERY a rule needs; that file shows
+  the CODE a user would write, every snippet minimized and run through
+  both `tscheck` and the real compiler, so each entry is a measured gap
+  rather than a guess — and where `tscheck` reports something DIFFERENT
+  from tsc it says so, because a file can be flagged for the wrong reason
+  and the oracle counts it either way. It corrected itself twice while
+  being written, both times the label-for-objective substitution: TS2403
+  and TS2411 read as gaps because four and two MISS files raise them, and
+  `var x: number; var x: string;` and
+  `interface I { bar: number; [x: string]: string }` are ALREADY flagged,
+  so those files fail for unrelated reasons. Its own headline rule is to
+  open the corpus file before taking anything.
+  Batch EB took four of its sections for **+8 files at FP 0** (TP 2586 ->
+  2594, MISS in scope 129 -> 121), and three of the four were narrower
+  than the section that asked for them. "Overload resolution", a Tier 1
+  row, turned out to be one missing instantiation: the members are
+  already ingested as a Union of `Func`s and `infer_call` already selects
+  by argument assignability, but type parameters are recorded per NAME in
+  `func_type_params`, which is OVERWRITTEN per declaration — so for
+  `f(s: string); f(n: number); f<T>(x: T); f(x) {}` it holds the
+  IMPLEMENTATION's empty list, the generic member reached the union arm
+  as `Func([Named("T")], Named("T"))`, matched nothing, and the call came
+  back carrying an unresolved `T` that every downstream check reads as
+  unknowable. `func_overload_type_params` (the union across a name's
+  declarations, its own map because the existing consumers want the
+  per-declaration answer) plus an instantiating pass tried only AFTER
+  every non-generic member has failed — TypeScript's own order, so a call
+  a concrete overload accepts keeps the answer it already had.
+  TS18033's blocker was not the type either, which is what the triage
+  assumed: the checker already infers `string | number` for
+  `const { value = "123" } = thing` and `{}` for a block-local
+  `let Infinity = {}`, measured before anything was written. The enum AST
+  keeps FOLDED LITERAL values only, so the initializer expression never
+  reaches the checker at all; a `<enum-init-name:NAME>` marker carries
+  the one shape worth deciding and the checker resolves it in the
+  top-level env, which is where a DESTRUCTURED binding lives. Its
+  definitely-non-numeric set excludes LITERAL types, and that is the cell
+  reasoning gets wrong: `declare const s: string` is TS18033 while
+  `const s = "a"` — type `"a"` — is ACCEPTED, because a string literal
+  initializer is how a string enum member is written.
+  TS2367 on intersections had BOTH halves already, in the wrong place.
+  `cast_shape_fields` plus "each side requires a property the other
+  lacks" is the comparability test the `as` path has used for
+  `typeAssertionsWithIntersectionTypes01` all along and the equality arms
+  never asked; it is `shapes_definitely_disjoint` now and both call it,
+  `==` included — restricted to object shapes, because `==` coerces a
+  primitive against an object (`{} == "[object Object]"` is true) while
+  object against object is reference equality. And
+  `equality_primitive_family` gained an `Intersection` arm, since every
+  value of `T & number` is a number whatever `T` is, with `Any` /
+  `Unknown` / `Never` in a part abstaining outright: `any & number` IS
+  `any`, so answering "number" there would report a comparison tsc
+  accepts.
+  `globalThis` is the one that was a real hole, and it was the
+  applied-in-some-places family twice. The READ form
+  (`var r = globalThis.y`) was all the rule judged; the WRITE form was
+  missed at BOTH spellings, because `globalThis.y = 4` at the top of a
+  list is a `PropAssign` STATEMENT and the same line inside a function is
+  `Expr(PropAssignExpr(…))`, and both arms walked the RECEIVER and the
+  VALUE while the property NAME sat in the node itself, tested by
+  neither — with the legal neighbour four lines away in the corpus file,
+  since `globalThis.x = 3` beside a `var x` IS legal. A top-level
+  `function f() { … }` body was not reached at all, the batch DS parser
+  fact again. `this` at script scope IS `typeof globalThis`, arrows
+  included, and it gets its OWN region-scoped walk rather than a flag
+  threaded through that one, because the two questions have different
+  REGIONS: `globalThis.x` means the same in any body, `this` means the
+  global object only where nothing has rebound it — an arrow keeps it, a
+  `function` does not, and tsc reports TS2683 there instead. The cell
+  reasoning gets backwards is that `this.zzz = 1` is ACCEPTED (a new
+  global property may be created) while `this.name` is not, because
+  `name` is `declare const name: void` in the DOM lib and a block-scoped
+  LIB global is not a `globalThis` property either;
+  `is_lib_dom_blockscoped_value` is generated from the lib sources for
+  that — one name in the whole set — and is DOM-scoped rather than
+  unioned because webworker declares the same name with `var`. My own
+  measurement was wrong once here in this file's recurring way: grepping
+  for `does not exist on` counted the EXISTING class-member check's
+  report on `class C { m() { this.name = 1 } }` and read it as a false
+  positive of the new rule, where grepping the path prefix shows the walk
+  never enters a class body.
+  Batch EC took the two "unwired" rows of `UNSUPPORTED.md` section G —
+  the table of rules blocked on a MECHANICAL fact rather than on
+  machinery — for **+3 files at FP 0** (TP 2597 / MISS in scope 118),
+  and its reusable finding is about that table: **a blocker written down
+  is a claim with a date on it, and both of these had been removed by
+  earlier work that was not aiming at them.** TS7031 / TS7018 is one
+  rule with two spellings (with `strictNullChecks` off, `null` and
+  `undefined` widen to `any`, so under `noImplicitAny` an inference from
+  them is an error), and which CODE applies is decided by the BINDING,
+  matching tsc: `var {a} = {a: null}` is TS7031 on `a` and NOT TS7018 on
+  the property, so a pattern runs only the element half and an `Ident`
+  binding only the object-literal half. It belongs in the PARSER because
+  the fact it needs is not in the AST — the same absent-versus-`: any`
+  blocker recorded for TS7022, TS2729 and TS2448 — and HALF the recorded
+  blocker was already gone: `last_var_decl_annotated` carries the
+  annotation fact and `parse_var_decl_item` reads it BEFORE the
+  initializer is parsed, so a nested declaration cannot make this one
+  look annotated. Only `strict_null_checks` had to be added to the
+  Parser, and needing BOTH flags is what keeps the rule off real code: a
+  directive-less file defaults to `strictNullChecks: true`, which every
+  `.ts` / `.d.ts` the bridge parses is, so it cannot fire there at all.
+  Three cells read the other way round from the message text: a DEFAULT
+  supplies the type, so `var [a = 1] = [undefined]` and
+  `var {a = 1} = {a: null}` are ACCEPTED — true even for `null`, which
+  does not trigger a default at runtime; `var a = undefined` is legal
+  and `var o = [null]` is TS7005 on the VARIABLE, so an array element is
+  never reported; and a renamed property reports the LOCAL name while a
+  hole keeps its position. The abstentions lose a finding rather than
+  invent one, and the one that matters is the reason the rule is sound
+  where it sits: a call argument's object literal is CONTEXTUALLY typed
+  and LEGAL, this site cannot tell it from an inferred one, and an
+  unannotated declaration has no contextual type by construction. It
+  needed TWO sites and got both on the first pass — statement-level
+  `using` routes through `parse_var_decl_item` while the BLOCK-statement
+  `using` is its own parser, and that is the one every
+  `usingDeclarations` test actually writes, so a recorder at the first
+  alone would have reached neither corpus file.
+  TS2331's blocker was stated in writing as "a new Parser field needs
+  the save / clear / restore discipline `self.labels` needs at fifteen
+  function-body sites", and batch EB had dissolved it ONE BATCH EARLIER
+  by building `this_region_walk_stmt` for the `globalThis` rule: its
+  region — an arrow descended into, a `function` body and a class body
+  not — IS TS2331's region. So the rule is a second `ThisRegionVisitor`
+  over the same walk, and the visitor grew a `bare` callback beside
+  `prop` because the two consumers ask different questions about the
+  same node (the `globalThis` rule wants the property read off `this`;
+  TS2331 wants the `this` and never reaches the property). Twelve cells
+  probed and all now agree with tsc, including the two legal neighbours
+  that fall out of the walk for FREE — a class lives in
+  `module_.classes` rather than in `top_level_stmts`, and an
+  object-literal method's value is a `FuncExpr` the walk has no arm for.
+  A class DECORATOR came along on the argument TS2660 already makes for
+  `super` (a decorator expression is evaluated where the class is
+  DEFINED), reading `module_.classes` and never `local_classes`, since a
+  class declared inside a function is decorated in that function's scope
+  and tsc gives TS2683 there. The corpus file is the MEMBER-decorator
+  spelling, which needed a different mechanism that was also already
+  present: member decorator expressions never reach the AST and a
+  namespace body is parsed by a FRESH `Parser` that cannot know it is
+  one, so the class parser leaves a `<this-in-decorator>` sentinel and
+  `parse_namespace_decl_with_mode` converts it where the context is
+  known — exactly how TS1063 / TS1319 already work, with an unconverted
+  sentinel staying a `<`-prefixed marker the grammar loop skips.
+  `decorator_mentions_super` became `decorator_mentions_name(d, name)`
+  rather than gaining a twin, because "does this decorator expression
+  mention NAME" is one question. The file TS2331 does NOT buy is worth
+  recording with its exact blocker: `typeofThis.ts`'s error is
+  `typeof this.no` in a TYPE position, and `parse_typeof_type_query` has
+  no `This` arm, so `skip_typeof_operand` eats the operand and the
+  annotation collapses to `Any` before any checker sees the `this`.
+  Batch ED is **+1 file** plus one declared OUT OF SCOPE (TP 2598 / MISS
+  in scope 116 / OUT OF SCOPE 20), and all three of its findings are
+  worth more than the file. First, a class-member modifier spelled as a
+  CONTEXTUAL KEYWORD may not be followed by a line terminator — the
+  grammar writes `accessor [no LineTerminator here] ClassElementName` —
+  so `class C { accessor` / `a }` declares TWO members and eating the
+  keyword as a modifier LOSES a field from the emitted class as much as
+  from every rule that reads the member list. The covered set had to be
+  probed one keyword at a time, because it is not "the TypeScript-only
+  ones": `readonly`, `public`, `private`, `protected`, `abstract`,
+  `override`, `async`, `accessor` and `get` / `set` all become a member
+  NAME across the break, and `static` — the one the ECMAScript grammar
+  spells with a reserved word — does not. One test in
+  `can_consume_class_modifier` with `static` passing
+  `allow_line_break=true`, the default being the RESTRICTIVE answer so a
+  modifier added later inherits the rule; the `get` / `set` arm spells
+  its conditions inline instead of calling that helper, which is why the
+  rule needed writing at both. `declare` is a twelfth spelling
+  deliberately left alone: it has its own TOKEN kind, so the modifier arm
+  never sees it and the `Declare` arm advances with no guard at all, and
+  gating it makes the member name a `Declare` token the field-key parser
+  rejects — the class stops parsing, a PFLEGAL, which is worse than the
+  MISS. Second, `class C { q = 1; q = 2 }` was SILENT, and the clause
+  that decides it was already written twenty lines below in the
+  PRIVATE-name loop with the reason in its own comment: the public
+  duplicate counter's condition misses the case where the repeats are ALL
+  fields, so `nf >= 2` was the whole fix. Fifteen cells now agree with
+  tsc, including the legal repeats (instance + static, keyed apart as
+  `name|s` / `name|i`; a get/set pair; an overload set), and the
+  `#private` diagnostic had to be taught to print `#q` rather than
+  `__private_brand__0__q` — the same lesson TS7008 records, and the
+  private loop turns out to be dead for a runtime class because the
+  lowering renames `#q` before the member list is built.
+  Third, and the reason the out-of-scope entry exists: **the probe was
+  attributing OTHER files' diagnostics to the probed file.**
+  `scripts/lib/tsc-probe.mjs` calls `getSemanticDiagnostics()` with no
+  argument, which returns EVERY file's diagnostics, so
+  `objectTypeWithStringIndexerHidingObjectIndexer` — 33 lines — was
+  ranked by `TS2411(123,5)`, a line it does not have: its
+  `interface Object { [x: string]: Object }` augmentation under
+  `@skipDefaultLibCheck: false` makes tsc type-check `lib.es5.d.ts`
+  itself and every diagnostic lands THERE, while the test source is
+  error-free. `probe()` splits `diags` from `otherFiles` now, and
+  re-running the whole MISS list says this is the ONLY one of 118 where
+  nothing is in scope — its sibling really does carry an in-file
+  `TS2411(13,5)`. Ninth instance of the measuring instrument carrying the
+  same substitution bug as the code, and the first where the bug was
+  manufacturing a MISS rather than hiding one. What the re-ranking says
+  about the remainder: **116 files, 70 with exactly ONE error code and 84
+  codes with exactly one file**, and opening TS2403's four solo files
+  gives four unrelated mechanisms — spread-type computation, types
+  inferred through OVERLOAD resolution (the ANNOTATED shape
+  `var r: E; var r: Object` is already flagged), `this`-type resolution
+  plus the rule inside a method BODY, and contextual typing.
+  Batch EE closes the last three rows of `UNSUPPORTED.md` section G for
+  **+2 files** (TP 2600 / MISS in scope 114), and with it **all five of
+  that table**, whose real finding is about the table itself: a blocker
+  written down is a claim with a date on it, and **not one of the five
+  survived being probed.** Two had been dissolved by later work that was
+  not aiming at them, one was true of an approach nobody had to take, one
+  named only one of two routes to the fact, and TS2393's was not a
+  blocker at all. TS1308's recorded blocker — `skip_param_decorators`
+  discards the decorator expression, so the `await` never reaches the
+  AST — is TRUE and beside the point: a TOKEN sighting over the range
+  that skip already consumes needs no AST, because every `await` must
+  spell `await`, the same completeness-by-construction argument the
+  `#private` rules make for a class-body span. Its region is the cell
+  reasoning gets wrong — a parameter decorator is evaluated where the
+  CLASS is defined, so the async context that matters is the ENCLOSING
+  function's and the method's own `async` is irrelevant, with `function`,
+  `function*` and a plain arrow all TS1308 and `async function` and an
+  async arrow both ACCEPTED; `in_function` is required because top level
+  is TS1375 / TS1378, codes this rule does not claim. TS2393 had no
+  blocker: `<fn-impl:NAME>` is pushed once per IMPLEMENTATION and the
+  consumer built a `Map[String, Unit]`, so the COUNT was thrown away at
+  the point of USE — the marker was right and the reader was lossy.
+  Counting gives the rule, reported BEFORE the overload rules and taking
+  the name out of them, since a name with two implementations has no
+  overload SET and "this overload signature is not compatible with its
+  implementation signature" was the wrong sentence for it — the right
+  file for the wrong reason. The marker also had to be added at the FOUR
+  export sites, which had none, so `export default function f() { }`
+  twice recorded no implementation at all; one of the four passes `false`
+  rather than `last_function_bodiless` because that arm parses through
+  `parse_function_expr`, which does not set the flag, and reading it
+  there would read whatever the previous function left behind. TS2708's
+  `typeof` TYPE position buys **zero** files and that is the honest half
+  of the row: the position is wired (`var m: typeof A`,
+  `type T = typeof A`, `var m: typeof A.P` where the base SEGMENT is what
+  matters, and the namespace-nested form all report, while a namespace
+  carrying a runtime `export var` is ACCEPTED), and it needs no `env`
+  guard unlike the value path because the sweep reads only module- and
+  namespace-level declaration types, never a function body — but
+  `importStatementsInterfaces` still needs the OTHER channel the row
+  named, an `import a = A` alias whose value-ness depends on a target the
+  parser does not resolve.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
@@ -2991,8 +3312,88 @@ product surfaces now.
   call. That leaves the struct FIELD itself still promising the enum
   (`erasedMethod : (String) -> Auto_BetaValue_or_AlphaValue` in `types.mbt`)
   — filed rather than half-applied, because the fix is a direction parameter
-  on `ffi_func_type_name` and the probe does not read struct fields yet, so
-  the honest first step is to COUNT them.
+  on `ffi_func_type_name` and the probe did not read struct fields, so the
+  honest first step was to COUNT them.
+  That count is section C of the probe, and it retires the entry that asked
+  for it. The label was standing in for the objective again — tenth instance
+  here, and the widest miss yet at **54x**: filed as "the function-typed
+  struct field" at 8, the class is ANY struct field carrying a payload enum,
+  at **438**. And what is wrong is a missing DIRECTION rather than a missing
+  arm. The corpus emits **259 `_to_js` struct converters and ZERO in the
+  other direction**, so a JS object handed to MoonBit as a struct is used
+  RAW: `Program::getSemanticDiagnostics` is
+  `(self, a, b) => self.getSemanticDiagnostics(a, b)`, which unwraps its
+  argument options and does nothing to the returned `Array[Diagnostic]`, so
+  `diag.messageText` is a raw JS string under
+  `Auto_StringValue_or_DiagnosticMessageChainValue` and a `match` on it reads
+  `$tag` off something that has none — with 33 externs returning `Diagnostic`
+  and `getSemanticDiagnostics` the most-used API the TypeScript compiler has.
+  That MoonBit structs are name-keyed JS objects is measured rather than
+  assumed: `__ts_mbt_to_js_diagnostic` reads one with `value["messageText"]`.
+  READ-REACHABILITY is the filter that makes it tractable and it changed the
+  answer by 50x — only a struct appearing in a RETURN position can receive a
+  JS value at all, and one that only crosses MoonBit -> JS is served
+  correctly by the `_to_js` converter that exists. 438 fields become **151**
+  read-reachable, **8** convertible and **143** erased, and the alarming
+  first reading ("247 React aria attributes would have to widen") was
+  measuring the wrong set: react_types is **5** under the filter. The ranking
+  is two rows, `typescript_ast` and `typescript` being the same
+  `typescript.d.ts` generated twice at 68/67 each, so the distinct work is 68
+  fields in ONE package plus 15 across six others.
+  The instrument carried the same substitution bug as the code TWICE, the
+  seventh time in this sequence: `bridge.js` helper names are the generator's
+  snake_case, which DOUBLES the underscore at a PascalCase boundary inside an
+  already-underscored name (`Auto_BoolValue_or_X` ->
+  `auto__bool_value_or__x`), so a hand-written snake_case reported 8/430 and
+  a too-loose match reported 260/178. Comparing with underscores stripped and
+  reconstructing nothing gives 8/143. Budgeted per PACKAGE in
+  `scripts/bridge_struct_enum_fields.txt` rather than declared per
+  occurrence, because 438 declarations rank no work and eight rows rank it
+  directly; growth fails, an undeclared package fails, and a drop is reported
+  so the budget follows it down, all three mutation-proven.
+  Both of the fixes that entry filed were worse than a third one, and one was
+  wrong on its own terms: a CONVERTING accessor "keeps the type information"
+  only where a converter EXISTS, and an erased enum has none, so that route
+  never applied to the erased half at all. What moved the count was making
+  more unions CONVERTIBLE. `tagged_union_from_js_expression` refused a union
+  the moment ONE case lacked a runtime discriminator and only has to refuse at
+  TWO: the union is CLOSED, so failing every other case's test IS the
+  remaining case and that one needs no predicate. `string |
+  DiagnosticMessageChain` is exactly that shape — and it is
+  `Diagnostic.messageText`. Two erased cases and the else cannot choose
+  (`CatchClause | VariableDeclarationList`), which is why the 133 left are the
+  AST `parent` unions. The `throw` was the only thing that noticed a value the
+  `.d.ts` mis-declared and such a value is now tagged as the fallback case;
+  the alternative it replaces is the caller receiving a raw JS value under a
+  type claiming `{$tag, _0}`, wrong in the same direction and silent, so
+  nothing that used to be caught stops being caught.
+  Relaxing the builder immediately exposed a SECOND copy of its judgement —
+  the failure 8d227ad is already recorded for.
+  `ffi_tagged_union_return_is_safe_to_wrap` had its own `None => return false`
+  arm, so a `_from_js` now existed (the widening therefore stopped firing)
+  while the gate still declined to CALL it, and five declarations promised the
+  enum over a raw JS value again. It asks the builder now and keeps only its
+  own reason, a `TypeofFunction` payload the auto-wrap cannot model. Three of
+  those five were then the SEVENTH fail-open shape arm and the third distinct
+  site of the `Named`-only spelling in this file:
+  `ffi_type_needs_js_return_conversion_with_state` and
+  `ffi_type_js_return_expr` — a predicate and an emitter, each in an optional
+  and a non-optional spelling — matched `Named` at all FOUR arms, so a
+  synthesized union fell through every one and
+  `mkdtempSync_string_encoding_option_optional` declared
+  `Auto_StringValue_or_NonSharedBufferValue` over a raw `mkdtempSync(…)`.
+  And the budget gate shipped one commit earlier was itself wrong in the
+  convertible direction: `convertible` RISING is an improvement, and gating
+  all three axes upward reported five packages as having GROWN when ten fields
+  moved out of the unfixable half — only `reachable` and `erased` are gated
+  now. Measured: **8 -> 18 convertible, 143 -> 133 erased**, four of the eight
+  packages at zero erased, converters 1,330 -> 1,377 with 15,147 exercised
+  calls at **0 runtime failures**, which is the check that matters since every
+  new fallback converter is executed there over a value battery. One test was
+  UPDATED rather than fixed and the distinction is worth keeping: it asserted
+  a deliberate abstention (`from_js is None` for `PathLike | number`), not a
+  bug, and its real concern — that `v instanceof PathLike` is never emitted —
+  is still asserted.
   That pair is the fourth time in this sequence that a declining note's
   own stated reason was false, and both of its reasons were.
   `ffi_inline_js_return_expr_with_state` said converting an optional would
@@ -3013,6 +3414,44 @@ product surfaces now.
   RETURN was routed at none — the same family as the accessors, one axis
   further out, and the reason to fix a renderer and then MEASURE rather
   than assume the site was the one that looked obvious.
+  The 133 erased struct fields are `JSValue` now, which takes that count to
+  **zero** — the declared type is the type the emitted JS actually hands
+  over, where `VariableDeclaration.parent` used to promise
+  `Auto_CatchClauseValue_or_VariableDeclarationListValue` over a raw JS
+  object a `match` would read `$tag` off. What makes the widening safe to
+  apply at all is that it is DIRECTIONAL, and computing the direction is
+  the whole change: `ffi_collect_read_reachable_struct_names` seeds every
+  RETURN position in the module set and closes over struct FIELDS, so a
+  struct reachable from a returned struct is itself one a JS value can
+  arrive as, while a write-only struct keeps its enum and its working
+  `_to_js` converter — react_types' `aria_checked` still declares
+  `Auto_BoolValue_or_...`. For a `Func` field only the RETURN is followed,
+  because a callback's PARAMETERS are written by MoonBit and read by JS,
+  which is the opposite direction and exactly what broke `Matcher::_call_`
+  when an earlier attempt put the widening in `ffi_function_type_parts`.
+  Two findings, and the first is this file's own recurring family committed
+  INSIDE the fix for it: the change measured NOTHING on its first run
+  because an INTERFACE-derived struct is rendered by
+  `ffi_struct_decl_to_moonbit` and an anonymous one by
+  `ffi_named_struct_decl_to_moonbit` — two renderers of one decision, one
+  of them patched, found by regenerating and seeing 133 unchanged. And the
+  last five erased were the PROBE over-counting rather than the generator
+  under-widening, with the generator's AST pre-pass the thing that
+  disagreed: `HTMLAttributes::asAriaAttributes(self) -> AriaAttributes =
+  "%identity"` is a MoonBit-side upcast of a value the CALLER built, not a
+  JS boundary crossing, and section C was reading it as a return position.
+  Eighth time in this sequence that the measuring instrument carried the
+  same substitution bug as the code. Measured: erased 133 -> 0, fields
+  carrying an enum 438 -> 304, read-reachable 151 -> 17, synthesized enums
+  227 -> 180 (47 nothing references any more), 14,630 converter calls at 0
+  failures. The 17 left are CONVERTIBLE and widening them would be a
+  regression — `Diagnostic.messageText`, `TypeChecker.getConstantValue`,
+  vitest's `diff`, the two JSX `children` unions — each with a working
+  `_from_js` that nothing calls at a struct field, which is the separately
+  filed `_from_js` struct converter and 259 functions' worth of mirror.
+  `ffi_func_type_name`'s missing direction parameter is untouched by this:
+  "can a JS value arrive as this STRUCT" and "which way does this function
+  TYPE cross" are different questions.
 
 ## Project Structure
 

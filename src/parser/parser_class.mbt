@@ -1063,7 +1063,16 @@ fn build_runtime_class_decl(
     let ng = c[1]
     let ns = c[2]
     let nm = c[3]
-    let is_dup = (nf >= 1 && nf + ng + ns + nm > nf) ||
+    // `nf >= 2` — two DATA FIELDS of the same name — was the one clause
+    // missing here, and the private-name loop twenty lines below has it
+    // with the reason in its own comment ("the only legal repeat is a
+    // getter + setter pair"). `class C { q = 1; q = 2 }` is TS2300 in
+    // tsc and was silent; `nf + ng + ns + nm > nf` is false when the
+    // repeats are all fields, so every other clause missed it. Static and
+    // instance members are keyed apart (`name|s` / `name|i`), which is
+    // what keeps `q = 1; static q = 2` legal.
+    let is_dup = nf >= 2 ||
+      (nf >= 1 && nf + ng + ns + nm > nf) ||
       ng >= 2 ||
       ns >= 2 ||
       ((ng >= 1 || ns >= 1) && nm >= 1)
@@ -1648,7 +1657,36 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
 }
 
 ///|
-fn Parser::can_consume_class_modifier(self : Parser) -> Bool {
+fn Parser::can_consume_class_modifier(
+  self : Parser,
+  allow_line_break? : Bool = false,
+) -> Bool {
+  // A class-member modifier spelled as a CONTEXTUAL KEYWORD may not be
+  // followed by a line terminator — the grammar writes
+  // `accessor [no LineTerminator here] ClassElementName` — so
+  //
+  //     class C { accessor
+  //               a }
+  //
+  // declares TWO members, one named `accessor` and one named `a`, and
+  // eating the keyword as a modifier silently LOSES a field from the
+  // emitted class as well as from every checker rule that reads the
+  // member list. `autoAccessor11` is the corpus file, where three
+  // instance members end up named `accessor` (TS2300).
+  //
+  // Which modifiers this covers was probed one at a time rather than
+  // reasoned, because the answer is not "the TypeScript-only ones":
+  // `readonly`, `public`, `private`, `protected`, `declare`, `abstract`,
+  // `override`, `async`, `accessor` and `get` / `set` ALL become a member
+  // name across a line break, and `static` — the one modifier the
+  // ECMAScript grammar spells with a reserved word — does NOT, so
+  // `static` / `accessor` / `c` on three lines is a STATIC field named
+  // `accessor` plus an instance field `c`. That site passes
+  // `allow_line_break=true`; the default is the RESTRICTIVE answer, so a
+  // modifier added later inherits the rule instead of quietly opting out.
+  if not(allow_line_break) && self.peek_at(1).has_newline_before {
+    return false
+  }
   match self.peek_at(1).kind {
     Colon | LParen | Lt | Eq | Semicolon | RBrace | Question | Bang => false
     _ => true
@@ -1947,60 +1985,69 @@ fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError 
 }
 
 ///|
-/// True when a decorator expression mentions `super` (which this parser
-/// spells `Var("super")`).
+/// True when a decorator expression mentions the bare name `name` (this
+/// parser spells both `super` and `this` as a `Var`).
 ///
-/// TS2660: a decorator expression is evaluated where the CLASS is
-/// defined, not inside a member body, so `super` has no meaning there
-/// even when the class does extend something --
-/// `class C extends S { @(super.m) method() {} }` is an error
-/// (decoratorOnClassMethod12).
+/// Two codes ride on it, and both are about the same fact — a decorator
+/// expression is evaluated where the CLASS is defined and not inside a
+/// member body:
+///
+///   - TS2660 for `super`, which then has no meaning even when the class
+///     does extend something: `class C extends S { @(super.m) method() {} }`
+///     is an error (decoratorOnClassMethod12);
+///   - TS2331 for `this` when the class sits directly in a namespace
+///     body, where `this` is not a context at all
+///     (decoratorOnClassMethod11).
+///
+/// One walk rather than two, because "does this decorator expression
+/// mention NAME" is one question; a second copy of these arms is exactly
+/// the shape this repo keeps finding applied at some of its sites.
 ///
 /// The arms are the shapes a decorator expression can take. Anything
 /// else returns false, which costs a MISS rather than a finding: the
 /// checker's `expr_mentions_super` is the complete walker and it cannot
 /// be used here, because member decorator expressions never reach the
 /// AST.
-fn decorator_mentions_super(d : @ast.TsExpr) -> Bool {
+fn decorator_mentions_name(d : @ast.TsExpr, name : String) -> Bool {
   match d {
-    Var("super") => true
-    PropAccess(recv, _) => decorator_mentions_super(recv)
+    Var(n) if n == name => true
+    PropAccess(recv, _) => decorator_mentions_name(recv, name)
     IndexAccess(recv, idx) =>
-      decorator_mentions_super(recv) || decorator_mentions_super(idx)
+      decorator_mentions_name(recv, name) || decorator_mentions_name(idx, name)
     MethodCall(recv, _, args) => {
-      if decorator_mentions_super(recv) {
+      if decorator_mentions_name(recv, name) {
         return true
       }
       for a in args {
-        if decorator_mentions_super(a) {
+        if decorator_mentions_name(a, name) {
           return true
         }
       }
       false
     }
     Call(n, args) => {
-      if n == "super" {
+      if n == name {
         return true
       }
       for a in args {
-        if decorator_mentions_super(a) {
+        if decorator_mentions_name(a, name) {
           return true
         }
       }
       false
     }
     CallExpr(callee, args) => {
-      if decorator_mentions_super(callee) {
+      if decorator_mentions_name(callee, name) {
         return true
       }
       for a in args {
-        if decorator_mentions_super(a) {
+        if decorator_mentions_name(a, name) {
           return true
         }
       }
       false
     }
-    TypeArgs(_, inner) | PureCall(inner) => decorator_mentions_super(inner)
+    TypeArgs(_, inner) | PureCall(inner) => decorator_mentions_name(inner, name)
     _ => false
   }
 }
@@ -2460,7 +2507,9 @@ fn Parser::parse_class_body(
             has_modifier = true
           }
         Ident(n) if n == "static" =>
-          if self.can_consume_class_modifier() {
+          // The one modifier a line break may legally precede the member
+          // name across — see `can_consume_class_modifier`'s header.
+          if self.can_consume_class_modifier(allow_line_break=true) {
             let _ = self.advance()
             // TS1029: `static` must precede `async` / `override` / `readonly`.
             // If any of those was already consumed for this member, the
@@ -2596,6 +2645,18 @@ fn Parser::parse_class_body(
             }
           }
         Declare => {
+          // `declare` is its own TOKEN kind, so the `Ident(n) if n ==
+          // "declare"` arm above never sees it and this arm advances
+          // UNCONDITIONALLY — it has no `can_consume_class_modifier` call
+          // at all, which is why `class C { declare` / `a }` keeps ONE
+          // member where tsc sees two. It is the twelfth spelling of the
+          // rule that helper documents and the only one with no guard of
+          // any kind, and it is deliberately left alone: gating it here
+          // makes the member NAME a `Declare` token, which the field-key
+          // parser rejects, so the whole class stops parsing — a
+          // PFLEGAL, the one direction the budget forbids. Teaching the
+          // key parser that token is the fix, and it is filed rather than
+          // half-applied.
           let _ = self.advance()
           has_modifier = true
           has_declare = true
@@ -2649,6 +2710,13 @@ fn Parser::parse_class_body(
     let mut accessor_kind : String? = None
     match self.peek().kind {
       Ident(n) if (n == "get" || n == "set") &&
+        // The same no-line-terminator restriction
+        // `can_consume_class_modifier` documents: `get` on its own line
+        // is a FIELD named `get` followed by another member, not a
+        // getter. This arm spells its conditions inline instead of
+        // calling that helper, which is why the rule had to be written
+        // at both.
+        not(self.peek_at(1).has_newline_before) &&
         self.peek_at(1).kind != LParen &&
         self.peek_at(1).kind != Lt &&
         self.peek_at(1).kind != Colon &&
@@ -2783,10 +2851,29 @@ fn Parser::parse_class_body(
         // tsc accepts it (probed). `decoratorOnClassMethod12`'s class is
         // at namespace level, so `in_function` is false for it.
         if not(self.in_function) &&
-          decorator_mentions_super(self.pending_decorators[di]) {
+          decorator_mentions_name(self.pending_decorators[di], "super") {
           self.grammar_misuses.push(
             "`super` can only be referenced in members of derived classes or object literal expressions",
           )
+        }
+        // TS2331: `this` in a member decorator expression, which is
+        // evaluated where the class is DEFINED — so inside a namespace
+        // body it sees the namespace's `this`, and a namespace body is
+        // not a `this` context (`decoratorOnClassMethod11`). The region
+        // is the same one the `super` rule above needs, and both halves
+        // of it were probed: a class inside a FUNCTION inside a namespace
+        // is TS2683 instead, which `in_function` excludes, and a class at
+        // script top level is TS7017 rather than TS2331 — so being inside
+        // a namespace is required and cannot be decided here. A namespace
+        // body is parsed by a FRESH `Parser` that does not know it is
+        // one, so this leaves a SENTINEL and
+        // `parse_namespace_decl_with_mode` turns it into the diagnostic
+        // where the context is known, the same mechanism TS1063 /
+        // TS1319 use. An unconverted sentinel stays a `<`-prefixed
+        // marker, which the checker's grammar loop skips.
+        if not(self.in_function) &&
+          decorator_mentions_name(self.pending_decorators[di], "this") {
+          self.grammar_misuses.push("<this-in-decorator>")
         }
         match decorator_head_name(self.pending_decorators[di]) {
           Some((called, dname)) =>
