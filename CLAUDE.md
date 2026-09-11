@@ -848,6 +848,79 @@ product surfaces now.
   is spread proportionately across fifty rules with no single one to
   attribute, which is the shape a linear checker should have, and the
   20% on a 3.8 MB concatenation of every lib file is the whole price.
+  A later round asked the same question of HEAD against that same
+  commit and the answer is again nothing — seven axes linear, real
+  `.d.ts` 0.89–1.02x across 50 more commits and ~60 more rules — but it
+  found what those axes CANNOT ask. Every one of them grows a
+  module-wide LIST, and mtsc's own `--no-check` help says the check is
+  ~95% of a large compile, measured here at **93.4%** (0.392 s versus
+  5.949 s on terser's published 1.1 MB bundle). So five axes were added
+  for the lists the recent rules key on — `functions` (overload sets),
+  `namespaces`, `private-members`, `statements`, `function-bodies` —
+  and, decisively, three DEPTH probes. Three of the lists are linear
+  (`functions` 0.87, `statements` 0.75, `function-bodies` 1.04 and 1.10
+  at 8,000 bodies) and `private-members` read 1.17 and is NOT — see
+  below, since the probe that produced that number climbed a cheaper
+  ladder than the gate does; **depth is
+  not** either: `o.p.p…p` fits **2.60**, `a + a + … + a` **1.62**, nested
+  ternaries **1.44**. `namespaces` is quadratic at **1.96** and is
+  quadratic at the baseline too (2.01) — long-standing, and invisible
+  only because no axis grew that list. Its mechanism is structural: a
+  namespace body is its own `TsModule`, so the layered check runs once
+  per namespace and each run re-ingests the OUTER chain, and
+  `ingest_module` recurses the whole namespace tree. The root-wide name
+  backstops were hoisted out of that loop (`RootNameBackstops`, exact:
+  both maps are name-keyed, add-only, and identical at every sibling) —
+  -22% at n=1000 and nothing measurable on real files, since the most
+  namespace-dense `.d.ts` in this repo's `node_modules` is
+  `@types/node/fs.d.ts` at 43. The rest is DECLARED rather than fixed,
+  at a gated budget (`AXIS_BUDGET`, namespaces 2.15) so a regression
+  past the accepted cost still fails; a budget without a written reason
+  is a suppression list.
+  The member-chain quadratic is `infer_expr`'s own first line: the
+  `PropAccess` / `IndexAccess` arms look a chain up by its synthesised
+  dotted narrowing key, and `narrowing_key_for_expr` rebuilds that key
+  from the whole prefix at every level, then hashes it — two O(d²)
+  terms. Gating it on "did narrowing ever bind a path key" is **32x** on
+  that shape (2492 -> 78 ms at 400 levels, 2.67 -> 1.30) and was
+  **REVERTED**: maintaining the flag means testing every bound name on
+  the hottest path in the checker, which cost the 1.1 MB real bundle
+  **+8%** with `contains` and **+3.5%** with a hand-rolled scan. So
+  "ask the cheap question first" — the move that made
+  `class-method-dce`'s `off_bundle` a thunk — is a TRADE, not a free
+  win: there the question is a map lookup, here it is a string scan per
+  binding. The version that would pay sets the flag only where a path
+  key is CREATED, which needs the narrowing engine's creation sites
+  rather than `env.narrow`'s 49 call sites, and is filed. One
+  measurement lesson came with it: the first +8% reading was taken while
+  a `tscheck` from a killed 400-level probe was still burning a core for
+  eight minutes, so it had to be re-measured before it could be
+  believed — the same shape as the overlapping timing spans above.
+  Adding `namespaces` then broke the harness's OWN cost, and fixing
+  that is what exposed a second quadratic. At the default top rung its
+  ~90 s per iteration took the whole run from ~1 minute to ~15, against
+  a header promising it stays near a minute — a harness nobody will
+  wait for is as useless as one that cannot reach the answer. An axis
+  only needs a **4x spread between its endpoints** to separate linear
+  from quadratic, so a quadratic axis can climb a cheaper ladder and
+  fit the same exponent: `AXIS_RUNGS` gives `namespaces`
+  125/250/500/1000, where it reads 1.99 in 2 s against 2.20 on the
+  default rungs, and the row LABELS its own ladder or its milliseconds
+  read as comparable with the others'. The full run is back to 1m3s —
+  and its first completion says **`private-members` is 1.67**, the axis
+  the round above had called linear at 1.17. That 1.17 was fitted over
+  125..1000, where the curve has not turned over; a fit is only a fit
+  over the range it was taken on, so "linear" asserted from a cheap
+  ladder is a claim about the cheap ladder. The mechanism is an
+  ordinary nested scan: `private_brand_declared_on_receiver` answers
+  "does the receiver class declare this base name under a DIFFERENT
+  brand" by looping the receiver's `properties`, `methods` and
+  `private_members` — **per ACCESS** — so a class whose N members each
+  read one `#name` pays N x N. The index that removes it is ~20 lines
+  and is FILED rather than taken, because the quadratic is in the
+  members of a SINGLE class and single digits is the norm, where N² is
+  dozens of operations; it is declared at a gated 1.75 for the same
+  reason `namespaces` is at 2.15.
   Every number above ranks work by CORPUS COUNT, and
   `docs/checker-triage.md` is where that stops: `MISS 176` sums work
   worth doing now with files nobody should ever fix, so it can rank
