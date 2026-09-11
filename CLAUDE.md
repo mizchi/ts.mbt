@@ -857,9 +857,12 @@ product surfaces now.
   5.949 s on terser's published 1.1 MB bundle). So five axes were added
   for the lists the recent rules key on — `functions` (overload sets),
   `namespaces`, `private-members`, `statements`, `function-bodies` —
-  and, decisively, three DEPTH probes. The lists are all linear
-  (0.87 / 1.17 / 0.75 / 1.04, and 1.10 at 8,000 bodies); **depth is
-  not**: `o.p.p…p` fits **2.60**, `a + a + … + a` **1.62**, nested
+  and, decisively, three DEPTH probes. Three of the lists are linear
+  (`functions` 0.87, `statements` 0.75, `function-bodies` 1.04 and 1.10
+  at 8,000 bodies) and `private-members` read 1.17 and is NOT — see
+  below, since the probe that produced that number climbed a cheaper
+  ladder than the gate does; **depth is
+  not** either: `o.p.p…p` fits **2.60**, `a + a + … + a` **1.62**, nested
   ternaries **1.44**. `namespaces` is quadratic at **1.96** and is
   quadratic at the baseline too (2.01) — long-standing, and invisible
   only because no axis grew that list. Its mechanism is structural: a
@@ -893,6 +896,31 @@ product surfaces now.
   a `tscheck` from a killed 400-level probe was still burning a core for
   eight minutes, so it had to be re-measured before it could be
   believed — the same shape as the overlapping timing spans above.
+  Adding `namespaces` then broke the harness's OWN cost, and fixing
+  that is what exposed a second quadratic. At the default top rung its
+  ~90 s per iteration took the whole run from ~1 minute to ~15, against
+  a header promising it stays near a minute — a harness nobody will
+  wait for is as useless as one that cannot reach the answer. An axis
+  only needs a **4x spread between its endpoints** to separate linear
+  from quadratic, so a quadratic axis can climb a cheaper ladder and
+  fit the same exponent: `AXIS_RUNGS` gives `namespaces`
+  125/250/500/1000, where it reads 1.99 in 2 s against 2.20 on the
+  default rungs, and the row LABELS its own ladder or its milliseconds
+  read as comparable with the others'. The full run is back to 1m3s —
+  and its first completion says **`private-members` is 1.67**, the axis
+  the round above had called linear at 1.17. That 1.17 was fitted over
+  125..1000, where the curve has not turned over; a fit is only a fit
+  over the range it was taken on, so "linear" asserted from a cheap
+  ladder is a claim about the cheap ladder. The mechanism is an
+  ordinary nested scan: `private_brand_declared_on_receiver` answers
+  "does the receiver class declare this base name under a DIFFERENT
+  brand" by looping the receiver's `properties`, `methods` and
+  `private_members` — **per ACCESS** — so a class whose N members each
+  read one `#name` pays N x N. The index that removes it is ~20 lines
+  and is FILED rather than taken, because the quadratic is in the
+  members of a SINGLE class and single digits is the norm, where N² is
+  dozens of operations; it is declared at a gated 1.75 for the same
+  reason `namespaces` is at 2.15.
   Every number above ranks work by CORPUS COUNT, and
   `docs/checker-triage.md` is where that stops: `MISS 176` sums work
   worth doing now with files nobody should ever fix, so it can rank

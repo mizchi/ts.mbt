@@ -25,9 +25,10 @@ of them grows — so four axes were added: `functions` (overload sets,
 three declarations per name), `namespaces`, `private-members` (one class
 body, N `#private` members — the span-reading idiom has no cost model of
 its own) and `statements` (N statements in ONE function body, where
-`vars` puts them at module top level). Three are linear (0.87 / 1.17 /
-0.75). **`namespaces` is quadratic: exponent 1.96, 43 ms at 125
-namespaces and 2554 ms at 1000.**
+`vars` puts them at module top level). Two are linear (`functions` 0.87,
+`statements` 0.75), `private-members` reads 1.17 on the ladder used here
+and is NOT linear — see the correction below — and **`namespaces` is
+quadratic: exponent 1.96, 43 ms at 125 namespaces and 2554 ms at 1000.**
 
 It is NOT a regression — the baseline binary is 2.01 at 2557 ms, within
 noise of HEAD — so this is long-standing and was invisible for exactly
@@ -150,6 +151,46 @@ CREATED (the narrowing engine), leaving `bind` / `narrow` untouched:
 sites identified rather than the writes intercepted. Filed, not built.
 The binary-chain (1.62) and ternary (1.44) exponents are a DIFFERENT
 mechanism — the gate moved neither — and are unexplained.
+
+### Perf round, part 3 (2026-09-11): the new axis broke the harness's own cost, and the cap is what found the second quadratic
+
+Two defects, both mine, and the second was hidden by the first.
+
+`namespaces` at the default top rung (4,000) is **~90 seconds per
+iteration** — it is the quadratic part 1 records — so adding that axis
+took the default run from ~1 minute to **~15**, against a header that
+promises the whole run stays near a minute. A harness nobody will wait
+for is a harness nobody runs, which is the same failure as one that
+cannot reach the answer. An axis only needs a **4x spread between its
+endpoints** to separate linear from quadratic, so a quadratic axis can
+climb a cheaper ladder and fit the same exponent: `AXIS_RUNGS` gives
+`namespaces` 125/250/500/1000, where it reads 1.98–2.00 in 2 s against
+2.20 on the default rungs. `--rungs` still overrides everything, and the
+row LABELS its own ladder (`namespaces (n=125/250/500/1000)`) or its
+milliseconds read as comparable with the others' and they are not. The
+full run is back to **1m5s**.
+
+Capping it is what made the first full run finish, and that run reported
+a SECOND quadratic — in the axis part 1 had called linear.
+**`private-members` is 1.67**: 15.5 / 41.8 / 109.0 / 498.3 ms at
+500/1000/2000/4000. Part 1 measured 1.17 and believed it, because the
+probe that produced that number ran 125..1000, where the curve has not
+turned over yet. A fit is only a fit over the range it was taken on, and
+"linear" asserted from a cheap ladder is a claim about the cheap ladder.
+
+The mechanism is a nested scan, not anything structural.
+`private_brand_declared_on_receiver` answers "does the receiver class
+declare this base name under a DIFFERENT brand" by looping the
+receiver's `properties`, `methods` and `private_members` — **per
+ACCESS** — so a class whose N members each read one `#name` pays N x N.
+The fix is an index (per class, base name -> the brands declaring it,
+filled on first use), ~20 lines, and it is FILED rather than taken
+because the reach is nil: the quadratic is in the members of a SINGLE
+class, and a class with hundreds of `#private` members does not occur —
+single digits is the norm, where N^2 is dozens of operations. Declared
+at a gated budget of 1.75, so a regression past the measured cost still
+fails; that is the same treatment `namespaces` gets at 2.15 and the
+reason a budget entry is not a suppression.
 
 ### CI on `main` (2026-09-11): the packaging ignore list, and a warning that WAS actionable
 

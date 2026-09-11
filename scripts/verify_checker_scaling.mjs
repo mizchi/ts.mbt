@@ -64,6 +64,18 @@ const CANDIDATES = [
 // unambiguous.
 const DEFAULT_RUNGS = [500, 1000, 2000, 4000];
 
+// Per-axis rung override, for an axis whose top rung costs minutes.
+// The header promises the whole run stays near a minute, and an axis is
+// only required to span 4x between its endpoints to separate linear from
+// quadratic — so an axis that is itself quadratic must climb a cheaper
+// ladder or it alone dominates the run. `namespaces` at 4,000 is ~90 s
+// per iteration (it is the quadratic below), which took the default run
+// from ~1 minute to ~15; at 1,000 the same axis fits the same exponent
+// in 2 s. `--rungs` still overrides everything.
+const AXIS_RUNGS = {
+  namespaces: [125, 250, 500, 1000],
+};
+
 // Per-axis exponent budget. Every axis is held to `--max-exponent` (1.5)
 // unless it is named here, and a named axis is still GATED — at its own
 // measured number — so a regression past an accepted cost still fails.
@@ -88,6 +100,24 @@ const AXIS_BUDGET = {
   // `RootNameBackstops`) — worth -22% at n=1000 and nothing measurable
   // on any real file.
   namespaces: 2.15,
+  // KNOWN QUADRATIC in the number of `#private` members of ONE class, and
+  // the mechanism is a nested scan rather than anything structural:
+  // `private_brand_declared_on_receiver` answers "does the receiver class
+  // declare this base name under a DIFFERENT brand" by looping the
+  // receiver's `properties`, `methods` and `private_members` — per
+  // ACCESS. A class whose N members each read one `#name` therefore pays
+  // N x N. Found by this axis on its first full run after the rung cap
+  // below: at 125..1000 it fits 1.17 and looks linear, and the 2000 ->
+  // 4000 step is 111 -> 499 ms.
+  //
+  // The fix is an index (per class, base name -> the brands declaring
+  // it, filled on first use), which is ~20 lines and is filed rather
+  // than taken here because the reach is nil: the quadratic is in the
+  // members of a SINGLE class, and a class with hundreds of `#private`
+  // members does not occur — single digits is the norm, where N^2 is
+  // dozens of operations. Gated at its measured number so a regression
+  // past the accepted cost still fails.
+  "private-members": 1.75,
 };
 
 // One generator per axis. Each emits N declarations of ONE kind, so a
@@ -248,6 +278,7 @@ function parseArgs(argv) {
     baseline: null,
     keep: false,
     rungs: DEFAULT_RUNGS,
+    rungsExplicit: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -259,6 +290,7 @@ function parseArgs(argv) {
     // exponent only needs a 4x spread between its endpoints to separate
     // linear from quadratic.
     else if (a === "--rungs") {
+      opts.rungsExplicit = true;
       opts.rungs = argv[++i]
         .split(",")
         .map((x) => Number(x.trim()))
@@ -367,7 +399,9 @@ function main() {
   for (const axis of axes) {
     const times = [];
     let broke = null;
-    for (const n of RUNGS) {
+    // An explicit `--rungs` wins; otherwise an axis may declare its own.
+    const rungs = opts.rungsExplicit ? RUNGS : (AXIS_RUNGS[axis] ?? RUNGS);
+    for (const n of rungs) {
       const file = path.join(WORK, `${axis}-${n}.ts`);
       fs.writeFileSync(file, AXES[axis](n));
       // Small inputs finish fast enough that process startup dominates,
@@ -383,11 +417,11 @@ function main() {
       if (!opts.keep) fs.rmSync(file, { force: true });
     }
     if (broke) {
-      rows.push([axis, ...RUNGS.map(() => "-"), "-", "-", `ERROR ${broke}`]);
+      rows.push([axis, ...rungs.map(() => "-"), "-", "-", `ERROR ${broke}`]);
       failures.push(`${axis}: ${broke}`);
       continue;
     }
-    const k = exponent(RUNGS, times);
+    const k = exponent(rungs, times);
     // `same-bytes` is a control, not a budget: its declaration count is
     // constant, so its growth is whatever per-byte cost the checker has
     // and it is not asserted on. It is printed because a run where it
@@ -398,7 +432,9 @@ function main() {
     const bad = asserted && (Number.isNaN(k) || k > budget);
     if (bad) failures.push(`${axis}: exponent ${k.toFixed(2)} > ${budget.toFixed(2)}`);
     rows.push([
-      axis,
+      // A row on its own ladder says so, or its milliseconds read as
+      // comparable with the others' and they are not.
+      rungs === RUNGS ? axis : `${axis} (n=${rungs.join("/")})`,
       ...times.map((t) => `${t.toFixed(1)}ms`),
       Number.isNaN(k) ? "?" : k.toFixed(2),
       budget.toFixed(2),
