@@ -3,6 +3,86 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch ED (2026-09-11): a modifier may not be followed by a newline, and two fields of one name
+
++1 file at FP 0 (TP 2597 -> 2598, MISS in scope 121 -> 117) plus one file
+declared OUT OF SCOPE (117 -> 116, OUT OF SCOPE 19 -> 20). TWO independent
+bugs that both had to be fixed to reach one corpus file, and each is worth
+more than the file.
+
+- [x] **A class-member modifier spelled as a CONTEXTUAL KEYWORD may not be
+  followed by a line terminator.** The grammar writes
+  `accessor [no LineTerminator here] ClassElementName`, so
+  `class C { accessor` / `a }` declares TWO members — one named `accessor`,
+  one named `a` — and eating the keyword as a modifier LOSES a field from
+  the emitted class as much as from every checker rule that reads the
+  member list. Which modifiers this covers was probed one at a time,
+  because the answer is not "the TypeScript-only ones": `readonly`,
+  `public`, `private`, `protected`, `abstract`, `override`, `async`,
+  `accessor` and `get` / `set` all become a member name across the break,
+  and **`static` — the one the ECMAScript grammar spells with a reserved
+  word — does not**, so `static` / `accessor` / `c` on three lines is a
+  STATIC field named `accessor` plus an instance field `c`. One test in
+  `can_consume_class_modifier`, with the `static` site passing
+  `allow_line_break=true`; the default is the RESTRICTIVE answer so a
+  modifier added later inherits the rule. The `get` / `set` arm spells its
+  conditions inline rather than calling that helper, which is why the rule
+  had to be written at both — the applied-in-some-places family, found by
+  grepping the helper's call sites and then noticing a twelfth spelling
+  that does not use it.
+  `declare` IS that twelfth spelling and is deliberately NOT fixed: it has
+  its own TOKEN kind, so the modifier arm never sees it and the `Declare`
+  arm advances with no guard of any kind. Gating it makes the member NAME
+  a `Declare` token the field-key parser rejects, so the whole class stops
+  parsing — a PFLEGAL, which is worse than the MISS. Measured, reverted,
+  and the real fix (teach the key parser that token) is filed.
+- [x] **`nf >= 2`: two DATA FIELDS of one name are a duplicate**
+  (TS2300, +1: `autoAccessor11`). `class C { q = 1; q = 2 }` was SILENT,
+  and the clause that decides it was already written twenty lines below —
+  in the PRIVATE-name loop, with the reason in its own comment ("the only
+  legal repeat is a getter + setter pair"). The public loop's condition
+  was `(nf >= 1 && nf + ng + ns + nm > nf) || ng >= 2 || ns >= 2 ||
+  ((ng >= 1 || ns >= 1) && nm >= 1)`, and every clause misses the case
+  where the repeats are ALL fields. Fifteen cells probed and all now agree
+  with tsc: two fields, two annotated fields, field + same-named method,
+  two getters, field + `accessor` field and `#q` twice all fire, while
+  instance + static (keyed apart as `name|s` / `name|i`), a get/set pair,
+  an overload set, different names and different classes stay silent. A
+  computed key abstains, which is a declared MISS (tsc reports the literal
+  spelling). The `#private` diagnostic had to be taught to print `#q`
+  rather than `__private_brand__0__q` — the same lesson TS7008 records,
+  since a diagnostic naming a brand is one nobody can act on, and the
+  private loop turns out to be dead for a runtime class because the
+  lowering renames `#q` before the member list is built.
+- [x] **The probe was attributing OTHER files' diagnostics to the probed
+  file**, and that is what found the out-of-scope entry.
+  `scripts/lib/tsc-probe.mjs` calls `getSemanticDiagnostics()` with no
+  argument, which returns EVERY file's diagnostics — so
+  `objectTypeWithStringIndexerHidingObjectIndexer`, a 33-line source, was
+  ranked by `TS2411(123,5)`, a line it does not have. Its
+  `interface Object { [x: string]: Object }` augmentation plus
+  `@skipDefaultLibCheck: false` makes tsc type-check `lib.es5.d.ts`
+  ITSELF, and every diagnostic lands there; the file's own source is
+  error-free, so there is nothing a rule could flag. Declared out of scope
+  under a new `lib-diagnostic` kind. `probe()` now splits `diags` (this
+  file, plus file-less globals like TS2318) from `otherFiles`, which
+  `tsc_probe.mjs` reports on its own line, and re-running the whole MISS
+  list says this is the ONLY one of the 118 where nothing is in scope —
+  its sibling `objectTypeHidingMembersOfExtendedObject` really does carry
+  an in-file `TS2411(13,5)` and stays in the backlog. Ninth instance of
+  the measuring instrument carrying the same substitution bug as the code.
+- The re-ranking behind this batch is the honest answer to "what is left":
+  **116 files, 70 of them with exactly ONE error code and 84 codes with
+  exactly one file.** The four largest buckets are TS2322 (14 solo),
+  TS2345 (10), TS2339 (5) and TS2403 (4), and opening TS2403's four says
+  what the count cannot: one needs spread-type computation
+  (`spreadUnion2`), one needs types inferred through OVERLOAD resolution
+  (`enumAssignabilityInInheritance`, whose `var r4 = foo16(E.A)` has no
+  annotation at all — the annotated shape `var r: E; var r: Object` is
+  ALREADY flagged), one needs `this`-type resolution plus the rule inside
+  a method BODY (`typeOfThisGeneral`), and one is contextual typing. Four
+  files, four unrelated mechanisms.
+
 ### Batch EC (2026-09-11): the "unwired" rows of UNSUPPORTED.md section G
 
 +3 files at FP 0 (TP 2594 -> 2597, MISS in scope 121 -> 118, PFLEGAL 0).

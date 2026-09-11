@@ -37,7 +37,7 @@ if (files.length === 0) {
 }
 
 for (const file of files) {
-  const { opts, diags } = probe(file);
+  const { opts, diags, otherFiles } = probe(file);
   const shown =
     Object.entries(opts)
       .map(([k, v]) => `${k}=${v}`)
@@ -50,5 +50,14 @@ for (const file of files) {
   for (const d of diags) {
     const where = d.line ? `(${d.line},${d.col})` : "";
     console.log(`  TS${d.code}${where}: ${d.msg}`);
+  }
+  // Diagnostics tsc reported in ANOTHER file — almost always a vendored
+  // `lib.*.d.ts` type-checked against a global augmentation in this file
+  // under `@skipDefaultLibCheck: false`. Shown separately because they are
+  // not something a rule about this file could flag, and because they used
+  // to be printed as if they belonged to it.
+  if (!raw && otherFiles && otherFiles.length > 0) {
+    const files = [...new Set(otherFiles.map((d) => d.file))].join(", ");
+    console.log(`  (+ ${otherFiles.length} diagnostic(s) in ${files})`);
   }
 }

@@ -29450,9 +29450,19 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           message: "property `\{f}` is used before its initialization",
         })
       } else {
+        // A `#private` member reaches the parser's counter under its
+        // BRAND (`__private_brand__<N>__q`), because the class lowering
+        // renames it before the member list is built — so the raw name
+        // here would print a diagnostic naming a brand, which is one
+        // nobody can act on. Same lesson TS7008 records for
+        // `class_key_name`.
+        let shown = match private_brand_base_name(name) {
+          Some(base) => "#" + base
+          None => name
+        }
         issues.push({
           path: "class \{cls_name}",
-          message: "duplicate identifier `\{name}`",
+          message: "duplicate identifier `\{shown}`",
         })
       }
     }

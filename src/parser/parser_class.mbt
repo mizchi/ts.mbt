@@ -1063,7 +1063,16 @@ fn build_runtime_class_decl(
     let ng = c[1]
     let ns = c[2]
     let nm = c[3]
-    let is_dup = (nf >= 1 && nf + ng + ns + nm > nf) ||
+    // `nf >= 2` — two DATA FIELDS of the same name — was the one clause
+    // missing here, and the private-name loop twenty lines below has it
+    // with the reason in its own comment ("the only legal repeat is a
+    // getter + setter pair"). `class C { q = 1; q = 2 }` is TS2300 in
+    // tsc and was silent; `nf + ng + ns + nm > nf` is false when the
+    // repeats are all fields, so every other clause missed it. Static and
+    // instance members are keyed apart (`name|s` / `name|i`), which is
+    // what keeps `q = 1; static q = 2` legal.
+    let is_dup = nf >= 2 ||
+      (nf >= 1 && nf + ng + ns + nm > nf) ||
       ng >= 2 ||
       ns >= 2 ||
       ((ng >= 1 || ns >= 1) && nm >= 1)
@@ -1648,7 +1657,36 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
 }
 
 ///|
-fn Parser::can_consume_class_modifier(self : Parser) -> Bool {
+fn Parser::can_consume_class_modifier(
+  self : Parser,
+  allow_line_break? : Bool = false,
+) -> Bool {
+  // A class-member modifier spelled as a CONTEXTUAL KEYWORD may not be
+  // followed by a line terminator — the grammar writes
+  // `accessor [no LineTerminator here] ClassElementName` — so
+  //
+  //     class C { accessor
+  //               a }
+  //
+  // declares TWO members, one named `accessor` and one named `a`, and
+  // eating the keyword as a modifier silently LOSES a field from the
+  // emitted class as well as from every checker rule that reads the
+  // member list. `autoAccessor11` is the corpus file, where three
+  // instance members end up named `accessor` (TS2300).
+  //
+  // Which modifiers this covers was probed one at a time rather than
+  // reasoned, because the answer is not "the TypeScript-only ones":
+  // `readonly`, `public`, `private`, `protected`, `declare`, `abstract`,
+  // `override`, `async`, `accessor` and `get` / `set` ALL become a member
+  // name across a line break, and `static` — the one modifier the
+  // ECMAScript grammar spells with a reserved word — does NOT, so
+  // `static` / `accessor` / `c` on three lines is a STATIC field named
+  // `accessor` plus an instance field `c`. That site passes
+  // `allow_line_break=true`; the default is the RESTRICTIVE answer, so a
+  // modifier added later inherits the rule instead of quietly opting out.
+  if not(allow_line_break) && self.peek_at(1).has_newline_before {
+    return false
+  }
   match self.peek_at(1).kind {
     Colon | LParen | Lt | Eq | Semicolon | RBrace | Question | Bang => false
     _ => true
@@ -2469,7 +2507,9 @@ fn Parser::parse_class_body(
             has_modifier = true
           }
         Ident(n) if n == "static" =>
-          if self.can_consume_class_modifier() {
+          // The one modifier a line break may legally precede the member
+          // name across — see `can_consume_class_modifier`'s header.
+          if self.can_consume_class_modifier(allow_line_break=true) {
             let _ = self.advance()
             // TS1029: `static` must precede `async` / `override` / `readonly`.
             // If any of those was already consumed for this member, the
@@ -2605,6 +2645,18 @@ fn Parser::parse_class_body(
             }
           }
         Declare => {
+          // `declare` is its own TOKEN kind, so the `Ident(n) if n ==
+          // "declare"` arm above never sees it and this arm advances
+          // UNCONDITIONALLY — it has no `can_consume_class_modifier` call
+          // at all, which is why `class C { declare` / `a }` keeps ONE
+          // member where tsc sees two. It is the twelfth spelling of the
+          // rule that helper documents and the only one with no guard of
+          // any kind, and it is deliberately left alone: gating it here
+          // makes the member NAME a `Declare` token, which the field-key
+          // parser rejects, so the whole class stops parsing — a
+          // PFLEGAL, the one direction the budget forbids. Teaching the
+          // key parser that token is the fix, and it is filed rather than
+          // half-applied.
           let _ = self.advance()
           has_modifier = true
           has_declare = true
@@ -2658,6 +2710,13 @@ fn Parser::parse_class_body(
     let mut accessor_kind : String? = None
     match self.peek().kind {
       Ident(n) if (n == "get" || n == "set") &&
+        // The same no-line-terminator restriction
+        // `can_consume_class_modifier` documents: `get` on its own line
+        // is a FIELD named `get` followed by another member, not a
+        // getter. This arm spells its conditions inline instead of
+        // calling that helper, which is why the rule had to be written
+        // at both.
+        not(self.peek_at(1).has_newline_before) &&
         self.peek_at(1).kind != LParen &&
         self.peek_at(1).kind != Lt &&
         self.peek_at(1).kind != Colon &&

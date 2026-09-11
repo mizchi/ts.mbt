@@ -6,7 +6,7 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2597 / MISS in scope 118 / OUT OF SCOPE 19 / FP 0 /
+Measured at **TP 2598 / MISS in scope 116 / OUT OF SCOPE 20 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
@@ -18,6 +18,15 @@ rows for **+3 files at FP 0**, and both had a blocker that a previous batch
 had already removed without noticing.
 
 ## How to read this, and the one mistake to avoid
+
+**Check WHERE tsc put the diagnostic before believing it is about this
+file.** `scripts/lib/tsc-probe.mjs` used to call
+`getSemanticDiagnostics()` with no argument, which returns every file's
+diagnostics — so a 33-line test that augments `interface Object` under
+`@skipDefaultLibCheck: false` was ranked by errors tsc raised inside
+`lib.es5.d.ts`. It splits them now and `tsc_probe.mjs` prints the others
+on their own line; exactly one MISS file turned out to have nothing in
+scope at all.
 
 `docs/checker-triage.md` classifies the backlog by the machinery a rule
 needs. This file is the other half: the code a user would write.

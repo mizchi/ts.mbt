@@ -1639,6 +1639,60 @@ product surfaces now.
   `typeof this.no` in a TYPE position, and `parse_typeof_type_query` has
   no `This` arm, so `skip_typeof_operand` eats the operand and the
   annotation collapses to `Any` before any checker sees the `this`.
+  Batch ED is **+1 file** plus one declared OUT OF SCOPE (TP 2598 / MISS
+  in scope 116 / OUT OF SCOPE 20), and all three of its findings are
+  worth more than the file. First, a class-member modifier spelled as a
+  CONTEXTUAL KEYWORD may not be followed by a line terminator — the
+  grammar writes `accessor [no LineTerminator here] ClassElementName` —
+  so `class C { accessor` / `a }` declares TWO members and eating the
+  keyword as a modifier LOSES a field from the emitted class as much as
+  from every rule that reads the member list. The covered set had to be
+  probed one keyword at a time, because it is not "the TypeScript-only
+  ones": `readonly`, `public`, `private`, `protected`, `abstract`,
+  `override`, `async`, `accessor` and `get` / `set` all become a member
+  NAME across the break, and `static` — the one the ECMAScript grammar
+  spells with a reserved word — does not. One test in
+  `can_consume_class_modifier` with `static` passing
+  `allow_line_break=true`, the default being the RESTRICTIVE answer so a
+  modifier added later inherits the rule; the `get` / `set` arm spells
+  its conditions inline instead of calling that helper, which is why the
+  rule needed writing at both. `declare` is a twelfth spelling
+  deliberately left alone: it has its own TOKEN kind, so the modifier arm
+  never sees it and the `Declare` arm advances with no guard at all, and
+  gating it makes the member name a `Declare` token the field-key parser
+  rejects — the class stops parsing, a PFLEGAL, which is worse than the
+  MISS. Second, `class C { q = 1; q = 2 }` was SILENT, and the clause
+  that decides it was already written twenty lines below in the
+  PRIVATE-name loop with the reason in its own comment: the public
+  duplicate counter's condition misses the case where the repeats are ALL
+  fields, so `nf >= 2` was the whole fix. Fifteen cells now agree with
+  tsc, including the legal repeats (instance + static, keyed apart as
+  `name|s` / `name|i`; a get/set pair; an overload set), and the
+  `#private` diagnostic had to be taught to print `#q` rather than
+  `__private_brand__0__q` — the same lesson TS7008 records, and the
+  private loop turns out to be dead for a runtime class because the
+  lowering renames `#q` before the member list is built.
+  Third, and the reason the out-of-scope entry exists: **the probe was
+  attributing OTHER files' diagnostics to the probed file.**
+  `scripts/lib/tsc-probe.mjs` calls `getSemanticDiagnostics()` with no
+  argument, which returns EVERY file's diagnostics, so
+  `objectTypeWithStringIndexerHidingObjectIndexer` — 33 lines — was
+  ranked by `TS2411(123,5)`, a line it does not have: its
+  `interface Object { [x: string]: Object }` augmentation under
+  `@skipDefaultLibCheck: false` makes tsc type-check `lib.es5.d.ts`
+  itself and every diagnostic lands THERE, while the test source is
+  error-free. `probe()` splits `diags` from `otherFiles` now, and
+  re-running the whole MISS list says this is the ONLY one of 118 where
+  nothing is in scope — its sibling really does carry an in-file
+  `TS2411(13,5)`. Ninth instance of the measuring instrument carrying the
+  same substitution bug as the code, and the first where the bug was
+  manufacturing a MISS rather than hiding one. What the re-ranking says
+  about the remainder: **116 files, 70 with exactly ONE error code and 84
+  codes with exactly one file**, and opening TS2403's four solo files
+  gives four unrelated mechanisms — spread-type computation, types
+  inferred through OVERLOAD resolution (the ANNOTATED shape
+  `var r: E; var r: Object` is already flagged), `this`-type resolution
+  plus the rule inside a method BODY, and contextual typing.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

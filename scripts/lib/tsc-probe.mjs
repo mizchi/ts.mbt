@@ -9,6 +9,7 @@
 // second copy of them would be a second set of phantom findings, which is
 // the failure mode this repo keeps recording.
 import fs from "node:fs";
+import path from "node:path";
 import { createRequire } from "node:module";
 
 const require_ = createRequire(import.meta.url);
@@ -88,12 +89,18 @@ export function probe(file) {
     process.cwd(),
   );
   const program = ts.createProgram([file], options);
-  const diags = [
-    ...program.getSyntacticDiagnostics(),
-    ...program.getSemanticDiagnostics(),
-    ...program.getGlobalDiagnostics(),
-    ...errors,
-  ].map((d) => {
+  // `getSemanticDiagnostics()` with no argument returns EVERY file's
+  // diagnostics, including the vendored `lib.*.d.ts` — and a test that
+  // augments `interface Object` under `@skipDefaultLibCheck: false` makes
+  // tsc type-check the lib itself, so its errors were being attributed to
+  // the probed file at line numbers the file does not have. Split them:
+  // `diags` is what this file is responsible for (a diagnostic with no
+  // file, such as TS2318 "Cannot find global type", belongs here too),
+  // and `otherFiles` keeps the rest so the information is reported rather
+  // than lost.
+  const abs = path.resolve(file);
+  const split = (list) => list.filter((d) => !d.file || path.resolve(d.file.fileName) === abs);
+  const shape = (d) => {
     let line = 0;
     let col = 0;
     if (d.file && d.start !== undefined) {
@@ -105,8 +112,17 @@ export function probe(file) {
       code: d.code,
       line,
       col,
+      file: d.file ? path.basename(d.file.fileName) : null,
       msg: ts.flattenDiagnosticMessageText(d.messageText, " "),
     };
-  });
-  return { opts, diags };
+  };
+  const all = [
+    ...program.getSyntacticDiagnostics(),
+    ...program.getSemanticDiagnostics(),
+    ...program.getGlobalDiagnostics(),
+    ...errors,
+  ];
+  const diags = split(all).map(shape);
+  const otherFiles = all.filter((d) => !split([d]).length).map(shape);
+  return { opts, diags, otherFiles };
 }

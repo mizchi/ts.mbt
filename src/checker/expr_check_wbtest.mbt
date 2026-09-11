@@ -19175,6 +19175,111 @@ test "batch EB rules" {
 }
 
 ///|
+/// Batch ED: a class-member modifier may not be followed by a line
+/// terminator, and two DATA FIELDS of one name are a duplicate.
+///
+/// Two independent bugs that had to be fixed together to reach
+/// `autoAccessor11`. The parser ate `accessor` as a modifier across a
+/// newline, LOSING a member from the class — from the emitted JS as much
+/// as from every checker rule that reads the member list — and the
+/// duplicate-member counter was missing the one clause (`nf >= 2`) that
+/// the private-name loop twenty lines below it already had, with the
+/// reason in its own comment.
+///
+/// Which modifiers forbid the line break was PROBED one at a time,
+/// because the answer is not "the TypeScript-only ones": eleven spellings
+/// do and `static` — the one the ECMAScript grammar writes with a
+/// reserved word — does not.
+test "batch ED rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let any_ = "implicitly has an `any` type"
+  let dup = "duplicate identifier"
+
+  // --- the line-break restriction. `<kw>` on its own line is a MEMBER
+  // named after the keyword, so each of these declares TWO un-annotated
+  // un-initialized fields and TS7008 fires twice.
+  for
+    kw in [
+      "readonly", "public", "private", "protected", "abstract", "override", "async",
+      "accessor", "get", "set",
+    ] {
+    @test.assert_eq(
+      only("//@noImplicitAny: true\nclass C {\n  \{kw}\n  a\n}\n", any_),
+      2,
+    )
+  }
+  // `declare` is the eleventh spelling and is NOT covered: it has its own
+  // TOKEN kind, so the modifier arm above never sees it and the `Declare`
+  // arm advances with no guard at all. Gating it there makes the member
+  // NAME a `Declare` token that the field-key parser rejects, so the class
+  // stops parsing — a PFLEGAL, which is worse than the MISS. Measured,
+  // not assumed, and the fix (teach the key parser that token) is filed.
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  declare\n  a\n}\n", any_),
+    0,
+  )
+  // `static` is the exception: `static \n a` is ONE static field `a`.
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  static\n  a\n}\n", any_),
+    1,
+  )
+  // The modifier spelling on ONE line still modifies, at every keyword
+  // the loop above covers — this is the legal neighbour, and without it
+  // "fixed" and "switched the modifiers off" look alike.
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  accessor a\n}\n", any_),
+    1,
+  )
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  readonly a\n}\n", any_),
+    1,
+  )
+  @test.assert_eq(
+    only("//@noImplicitAny: true\nclass C {\n  get a() { return 1 }\n}\n", any_),
+    0,
+  )
+
+  // --- two data fields of one name (the missing `nf >= 2`).
+  assert_true(only("class C { q = 1; q = 2 }\n", dup) > 0)
+  assert_true(only("class C { q: number; q: string }\n", dup) > 0)
+  assert_true(only("class C { q = 1; accessor q = 2 }\n", dup) > 0)
+  // A `#private` name reports as `#q`, not as the brand the class
+  // lowering renamed it to.
+  assert_true(only("class C { #q = 1; #q = 2 }\n", "`#q`") > 0)
+  // And the two together: three instance members named `accessor`.
+  assert_true(only("class C {\n  accessor\n  a\n  accessor\n  b\n}\n", dup) > 0)
+
+  // --- stays silent
+  for
+    src in [
+      // Static and instance halves are separate namespaces.
+      "class C { q = 1; static q = 2 }\n",
+      // A get/set PAIR is the one legal repeat.
+       "class C { get q() { return 1 }\n set q(v: number) {} }\n",
+      // An overload set legally repeats a method name.
+       "class C { m(); m(x: number); m(x?: number) {} }\n",
+      // Different names, and different classes.
+       "class C { q = 1; m() {} }\n", "class C { q = 1 }\nclass D { q = 2 }\n",
+      // A computed key is unknowable and abstains (tsc reports the
+      // literal spelling; this is a declared MISS).
+       "class C { [\"q\"] = 1; [\"q\"] = 2 }\n",
+    ] {
+    @test.assert_eq(only(src, dup), 0)
+  }
+}
+
+///|
 /// Batch EC: the two rules UNSUPPORTED.md section G filed as blocked on a
 /// mechanical fact rather than on machinery.
 ///
