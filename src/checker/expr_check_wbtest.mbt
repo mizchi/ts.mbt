@@ -17321,12 +17321,9 @@ test "batch DF rules" {
        "declare const s: symbol;\nclass Bar { m() { return 0 } }\nclass Foo extends Bar { m() { return super[s] } }",
       "declare const o: { [k: string]: number };\nconst k = \"a\";\nconst v = o[k];",
       // A `return` METHOD is the legal spelling, and a `return` field on
-      // a class that is not an iterator is nobody's business. The
-      // unannotated `return = 0` abstains, which is why for-of30 itself
-      // is still a MISS -- firing on `Any` would flag
-      // `return = () => …`, the legal form of the same member.
+      // a class that is not an iterator is nobody's business.
        "class I { next() { return { done: false, value: \"\" } }\n  return() { return { done: true, value: undefined } }\n  [Symbol.iterator]() { return this } }",
-      "class P { return: number = 0 }", "class I { return = 0;\n  [Symbol.iterator]() { return this } }",
+      "class P { return: number = 0 }",
     ] {
     @test.assert_eq(
       only(src, "duplicate function") +
@@ -18978,5 +18975,103 @@ test "expr_check: an optional chain cannot contain private identifiers (batch DZ
       cls + "  m(o: A) { this?.getA(o.#b); } }",
     ] {
     @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EA: TS2526 (a `this` TYPE outside a non-static member) and
+/// TS2767's second channel (an iterator's `return` field initialized to
+/// something that is not a function).
+///
+/// Both cells of TS2526 that reasoning gets wrong are asserted below.
+/// The constructor's BODY is legal while its PARAMETER LIST is not, and
+/// NESTING does not open a new `this` context -- an object type literal,
+/// an `Array<this>`, a `this[]` and a callback parameter inside a
+/// constructor parameter all report, while every instance member and
+/// every interface member (a construct signature included) stays silent.
+/// Measured against the real compiler one spelling at a time, because
+/// "available only in a non-static member" reads as though the
+/// constructor were one.
+///
+/// TS2767 already existed and abstained on `for-of30` itself, with a
+/// stated reason that was true about the TYPE (the class parser records
+/// `Any` for an unannotated field, and firing on `Any` would flag
+/// `return = () => …`) and named only one of two routes to the fact: the
+/// INITIALIZER is in `instance_field_inits`, and a literal's shape
+/// proves it is not callable. The batch-DF test above had that exact
+/// source in its SILENT list -- the eleventh test in this repo found
+/// asserting a gap rather than a behaviour -- and it fires here.
+test "batch EA rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let this_ty = "a `this` type is available only in a non-static member"
+  let ret = "the `return` property of an iterator must be a method"
+  // --- TS2526 fires
+  assert_true(only("class C { constructor(a: this) {} }", this_ty) > 0)
+  assert_true(
+    only(
+      "class G<T> {}\nclass D { constructor(public host: G<this>) {} }", this_ty,
+    ) >
+    0,
+  )
+  assert_true(only("class C { static m(a: this) {} }", this_ty) > 0)
+  assert_true(only("class C { static p: this; }", this_ty) > 0)
+  assert_true(
+    only("class C { static m(): this { return null as any } }", this_ty) > 0,
+  )
+  // Nesting is not a fresh `this` context — all four of these are tsc
+  // errors and each descends through a different type wrapper.
+  assert_true(only("class C { constructor(a: { m(): this }) {} }", this_ty) > 0)
+  assert_true(only("class C { constructor(a: Array<this>) {} }", this_ty) > 0)
+  assert_true(only("class C { constructor(a: this[]) {} }", this_ty) > 0)
+  assert_true(
+    only("class C { constructor(a: (x: this) => void) {} }", this_ty) > 0,
+  )
+  // --- TS2767 fires: an unannotated field whose initializer cannot be a
+  // function, at each literal shape the allowlist covers.
+  let iter = fn(init : String) -> String {
+    "class I { next() { return { done: false, value: \"\" } }\n  return = " +
+    init +
+    ";\n  [Symbol.iterator]() { return this } }"
+  }
+  assert_true(only(iter("0"), ret) > 0)
+  assert_true(only(iter("\"x\""), ret) > 0)
+  assert_true(only(iter("{}"), ret) > 0)
+  assert_true(only(iter("[1]"), ret) > 0)
+  assert_true(only(iter("true"), ret) > 0)
+  // --- stays silent
+  for
+    src in [
+      // Every instance member position, and a getter's return type.
+      "class C { p: this; m(a: this): this { return this }\n  get g(): this { return this } }",
+      // The constructor BODY is a `this` context; only its parameter list
+      // is not.
+      "class C { constructor() { let x: this = this; } }",
+      // An interface member is the other half of the message, construct
+      // signature included (`interface I { new (a: this): void }` is
+      // ACCEPTED, which reads like it should not be).
+      "interface I { m(a: this): void; p: this; new (a: this): void }",
+      // A static member with no `this` anywhere.
+      "class C { static m(a: number): number { return a } static p: string; }",
+      // TS2767: the two function spellings of the same member, and
+      // `null` — which widens to `any` with `strictNullChecks` off, so
+      // tsc ACCEPTS it and so does the allowlist.
+      iter("() => ({ done: true, value: \"\" })"),
+      iter("function () { return { done: true, value: \"\" } }"),
+      iter("null"),
+      // A `return` field on a class that is not an iterator.
+      "class P { return = 0 }",
+    ] {
+    @test.assert_eq(only(src, this_ty) + only(src, ret), 0)
   }
 }

@@ -3,6 +3,114 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EA (2026-09-11): three rules off the compiler-probed long tail
+
++3 files at FP 0 (TP 2583 -> 2586, MISS in scope 132 -> 129, PFLEGAL 0).
+The ranking was re-made the way batch CM's was — every remaining MISS run
+through the real compiler under its own harness header, grouped by the
+codes it actually produced — and it says the same thing as last time, one
+notch further along: **132 files, 85 codes with exactly one file each**,
+and the four biggest buckets (TS2322 14 solo, TS2345 10, TS2339 7,
+TS2403 4) are variadic tuples, template-literal types, conditional types
+and contextual typing. Every 2-file cluster left is expensive — TS2411
+needs `Object`'s own members modelled, TS2367 intersection assignability,
+TS2464 and TS2349 overload resolution, TS18033 a destructured binding's
+type, and TS2466's two are the pair batch CL rejected with evidence. So
+the batch is three unrelated single-file rules, which is what this tier
+looks like now.
+
+- [x] **TS2526** — a `this` TYPE outside a non-static member
+  (`thisTypeErrors2`). Purely a question about which declaration the type
+  is written in, so it is a checker-side walk over
+  `constructor_params` plus every static member's signature, with no
+  parser change and no scope model. **Both cells reasoning gets wrong
+  were probed one spelling at a time.** A constructor's PARAMETER LIST is
+  an error and its BODY is not — `constructor() { let x: this = this }`
+  is ACCEPTED — and NESTING does not open a new `this` context, so
+  `constructor(a: { m(): this })`, `Array<this>`, `this[]` and
+  `(x: this) => void` all report. Silent for every instance member and
+  every interface member, a construct signature included
+  (`interface I { new (a: this): void }` is ACCEPTED, which reads like it
+  should not be).
+  - `type_mentions_this_type` is written out rather than reusing
+    `type_references_any(ty, ["this"])`, because that walk has no
+    `CallableMeta` arm and `CallableMeta` is what the type parser wraps a
+    callable with an OPTIONAL parameter in — the sixth time a wrapper
+    node's missing arm would have cost something here, and the first
+    where the cost was only a MISS.
+  - Three positions tsc reports and this deliberately does not, each with
+    the reason at the site: a type ALIAS body (`type T = { m(): this }`
+    is TS2526, and the bridge generator runs `check_module` over real
+    `.d.ts` input, where a false positive costs generation rather than a
+    conformance file), a top-level `declare function f(a: this)`, and a
+    nested function's return type inside a constructor. The last two need
+    the `this`-rebinding scope fact TS2331 is deferred on.
+- [x] **TS2767's second channel** — an iterator's `return` field
+  initialized to something that cannot be a function (`for-of30`). Fifth
+  batch in a row whose target was a recorded ABSTENTION, and the second
+  where the stated blocker was real but named only one of two routes to
+  the fact. The comment was right that the class parser records `Any` for
+  an unannotated field and that firing on `Any` would flag
+  `return = () => …`, the legal spelling of the same member — and the
+  INITIALIZER was in `instance_field_inits` the whole time, where
+  "definitely not callable" is decidable from the expression's shape.
+  - An ALLOWLIST of literal forms, so an unclassified spelling is a MISS
+    rather than a finding — which is the direction that matters, because
+    `return = 0 as any` is `any` and tsc ACCEPTS it, so peeling `As`
+    would have been a false positive. `null` / `undefined` are excluded
+    for the same measured reason: with `strictNullChecks` off they widen
+    to `any` and `return = null` is accepted.
+  - **The batch-DF test had that exact source in its SILENT list** —
+    eleventh test in this repo found asserting a gap rather than a
+    behaviour. It fires in the new test; the three real legal neighbours
+    (`() => …`, `function () {…}`, `null`) took its place.
+- [x] **TS2842** — an unused renaming (`{ a: b }`) in a parameter list
+  with no BODY (`destructuringInFunctionType`). A renaming binds a name
+  and a bodiless signature has nowhere to read it, which is the whole
+  rule and the reason it lives in the parser. Probed: a function TYPE, a
+  constructor type, `declare function`, a `declare class` member, an
+  interface method, an object-type member, a class overload signature, an
+  `abstract` member and a function-typed `const` ALL report, while a real
+  function, a method with a body and an arrow are ACCEPTED.
+  - **The trap is that one of the legal spellings parses through the very
+    same code as one of the illegal ones, and both are in the corpus
+    file.** `type F3 = ([{ a: b }, { b: a }]) => void` is TS2842 twice;
+    `type T3 = ([{ a: b }, { b: a }])` is a parenthesized TUPLE TYPE
+    where `{ a: b }` is an object type whose member `a` has type `b`, and
+    it is LEGAL. Both reach `parse_paren_or_function_type`'s parameter
+    loop, so the renamings are held in a local and become findings only
+    after the `=>` commits. `last_param_pattern_renamings` is the "last"
+    slot that carries them out of `parse_declare_param_name`, the same
+    idiom as `last_function_bodiless`.
+  - Two detectors for one question, because the two parameter parsers
+    keep different things: `parse_param` builds a real `TsBinding`, and
+    `parse_declare_param_name` brace-matches past the pattern and keeps
+    nothing at all. The message comes from one place. Six call sites, and
+    they are the set TS2371 already uses — evidence that it is the right
+    set rather than a guess.
+  - The AST half is the more precise of the two: a DEFAULT lives in its
+    own field there, so `{ a: b = 1 }` (which tsc reports) is a finding,
+    while the token scan has to stop at the `=` or an object literal
+    inside an initializer would read as a pattern. That is a declared
+    MISS for the function-type spelling only.
+- [ ] **TS2708 has a SECOND hole, independent of the alias one already
+  recorded.** `var m: typeof A` for a non-instantiated namespace is
+  silent while `var q = A` fires — measured, not assumed — so a `typeof`
+  TYPE position never reaches `check_undefined_name` at all.
+  `importStatementsInterfaces` needs BOTH that channel and the alias
+  target lookup (`import a = A` lands in `type_aliases`, and whether the
+  TARGET is instantiated is the second lookup the rule's own comment
+  says it does not do), which is two new channels for one file. The
+  `typeof` half is worth taking on its own terms: it is the position a
+  `.d.ts` uses.
+- [ ] **TS1308 in a decorator expression** (`decoratorOnClassMethodParameter3`)
+  stays a MISS for a mechanical reason: a PARAMETER decorator's
+  expression is discarded by `skip_param_decorators`, so the `await`
+  inside it is never parsed. The boundary is probed and exact — the
+  decorator runs in the scope OUTSIDE the class, so
+  `async function fn() { class C { async m(@dec(await v) a: number) {} } }`
+  is ACCEPTED and the same class inside a non-async `fn` is TS1308.
+
 ### Batch DZ (2026-09-08): the strict-null bucket, and what it really holds
 
 - [x] **TS18030** — an optional chain cannot contain private identifiers.

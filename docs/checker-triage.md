@@ -179,7 +179,15 @@ bridge's primary input.
   TS2394's parameter-type half as batch DS. Both TS2394 halves are
   ONE-DIRECTIONAL and the message says nothing about which direction, so
   the table had to be probed cell by cell — a SHORTER implementation is
-  legal, an incompatible parameter type is not.
+  legal, an incompatible parameter type is not. TS2842 went in as batch
+  EA, at the six bodiless parameter positions probing found — and one of
+  its LEGAL neighbours parses through the same parameter loop as the
+  error, so the finding has to wait for the `=>` to commit.
+  TS2708's remaining file is blocked on two channels rather than one:
+  a `typeof` TYPE position reaches no name check at all (measured: `var
+  m: typeof A` is silent where `var q = A` fires), and `import a = A`
+  needs the alias TARGET resolved before the instantiated question can
+  be asked of it.
 - **implicit-any / strict family** (10 files): TS7009/7010/7018/7022/7023/
   7031/7053, TS2564/2565/2729. This is what a real codebase hits the day
   it turns `strict` on, which makes it the highest *user-facing* value in

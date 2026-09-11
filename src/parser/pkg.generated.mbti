@@ -180,6 +180,7 @@ pub struct Parser {
   directive_strict : Bool
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]
+  last_param_pattern_renamings : Array[(String, String)]
   collected_class_dups : Array[(String, Array[String])]
   quoted_member_names : Array[String]
   optional_member_names : Array[String]

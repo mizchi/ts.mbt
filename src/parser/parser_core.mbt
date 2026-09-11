@@ -202,6 +202,19 @@ pub struct Parser {
   // string per offending member; the checker surfaces them. Empty for
   // well-formed input, so it never costs precision.
   interface_member_modifier_misuses : Array[String]
+  // TS2842: the unused RENAMINGS (`{ a: b }`) found in the binding pattern
+  // `parse_declare_param_name` just skipped, as `(key, new_name)` pairs.
+  // Overwritten on every call, like `last_var_decl_annotated` and
+  // `last_function_bodiless` -- each caller reads it immediately.
+  //
+  // It is a "last" slot rather than a pushed diagnostic because two of
+  // that function's four callers are SPECULATIVE: `type T = ([{ a: b }])`
+  // parses as a parameter list first and is re-parsed as a parenthesized
+  // TUPLE TYPE when no `=>` follows, and there `{ a: b }` is an object
+  // TYPE whose member `a` has type `b` -- legal, and in the corpus file
+  // this rule is for. So only a caller that has COMMITTED to a bodiless
+  // signature may turn these into findings.
+  last_param_pattern_renamings : Array[(String, String)]
   // Class-body structural diagnostics (`duplicate_member_names`, which also
   // carries the `<multiple-ctor-impl>` / `<index-sig-modifier>` /
   // `<abstract-impl>` sentinels) collected for *every* class parsed, including
@@ -373,6 +386,7 @@ pub fn Parser::new_with_strict_and_jsx(
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
+    last_param_pattern_renamings: [],
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
@@ -631,6 +645,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     directive_strict: detect_directive_strict(head),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
+    last_param_pattern_renamings: [],
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],

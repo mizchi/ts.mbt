@@ -1414,6 +1414,78 @@ product surfaces now.
   save / clear / restore discipline `self.labels` already needs at
   fifteen function-body sites. That is precisely how the
   applied-in-some-places bug gets written, for +1 file.
+  Batch EA is +3 off the compiler-probed long tail, and the ranking now
+  says there is nothing but tail left: **132 files and 85 codes with
+  exactly one file each**, with the four largest buckets (TS2322 14 solo,
+  TS2345 10, TS2339 7, TS2403 4) being variadic tuples, template-literal
+  types, conditional types and contextual typing, and every remaining
+  2-file cluster expensive for its own unrelated reason — TS2411 needs
+  `Object`'s own members modelled, TS2367 intersection assignability,
+  TS2464 and TS2349 overload resolution, TS18033 a destructured binding's
+  type. So three unrelated single-file rules is what this tier looks
+  like, and two of the three are worth more for what probing settled than
+  for the file.
+  TS2526 ("a `this` type is available only in a non-static member") reads
+  as a claim about MEMBERSHIP and is really about which declaration the
+  type is written in, so every cell was probed rather than reasoned. A
+  constructor's PARAMETER LIST is an error and its BODY is not —
+  `constructor() { let self: this = this }` is ACCEPTED — which is the
+  cell the message text gets wrong, and NESTING opens no new `this`
+  context, so `constructor(a: { m(): this })`, `Array<this>`, `this[]`
+  and `(x: this) => void` all report while every instance member and
+  every interface member including a CONSTRUCT signature stays silent.
+  Three positions tsc reports are declared MISSes with the reason at the
+  site, and the first is a rule about this repo rather than about
+  TypeScript: `type T = { m(): this }` is TS2526, and the bridge
+  generator runs `check_module` over real `.d.ts` input, where a false
+  positive costs generation rather than a conformance file. Its walker is
+  written out instead of reusing `type_references_any(ty, ["this"])`
+  because that one has no `CallableMeta` arm — the wrapper the type
+  parser puts around a callable with an optional parameter, and the sixth
+  fail-open wrapper arm in this file's ledger, this time costing only a
+  MISS.
+  TS2767 is the fifth batch in a row aimed at a recorded ABSTENTION and
+  the second where the stated blocker was true but named one of two
+  routes to the fact. Its comment said an unannotated `return = 0` leaves
+  the class parser recording `Any`, and that firing on `Any` would flag
+  `return = () => …` — the legal spelling of the same member — both
+  correct, and the INITIALIZER was in `instance_field_inits` all along,
+  where "this cannot be callable" is decidable from the expression's
+  shape. An ALLOWLIST of literal forms, so an unclassified spelling is a
+  MISS: `return = 0 as any` is `any` and tsc ACCEPTS it, so peeling `As`
+  would have been a false positive, and `null` is excluded because with
+  `strictNullChecks` off it widens to `any` and is accepted. The
+  batch-DF test carried that exact source in its SILENT list — the
+  eleventh test here found asserting a gap rather than a behaviour.
+  TS2842 ("an unused renaming … did you intend to use it as a type
+  annotation?") is a parser rule about bodiless-ness, and its trap is
+  that one LEGAL spelling parses through the very same code as an illegal
+  one and both are in the corpus file:
+  `type F3 = ([{ a: b }, { b: a }]) => void` is the error twice, while
+  `type T3 = ([{ a: b }, { b: a }])` is a parenthesized TUPLE TYPE whose
+  `{ a: b }` is an object type with a member `a` of type `b`. Both reach
+  `parse_paren_or_function_type`'s parameter loop, which re-parses when
+  no `=>` follows, so the renamings ride a `last_param_pattern_renamings`
+  slot and become findings only after the arrow COMMITS — recording at
+  the point of the pattern would have flagged a legal line in the file
+  the rule was written for. Two detectors for one question, because
+  `parse_param` builds a real `TsBinding` and `parse_declare_param_name`
+  brace-matches past the pattern and keeps nothing; the AST half is the
+  more precise one, since a DEFAULT has its own field there, where the
+  token scan must stop at the `=` or an object literal inside an
+  initializer reads as a pattern. Six call sites, and they are the set
+  TS2371 already uses.
+  Two findings that are not rules. `var m: typeof A` for a
+  non-instantiated namespace is SILENT while `var q = A` fires, so
+  TS2708 has a second hole independent of the alias one its comment
+  records: a `typeof` TYPE position never reaches `check_undefined_name`
+  at all, and that is the position a `.d.ts` uses.
+  `importStatementsInterfaces` needs both channels, which is why it is
+  still a MISS. And TS1308 inside a decorator expression is blocked on
+  `skip_param_decorators` discarding the expression, not on the rule: the
+  boundary is exact and probed, since a parameter decorator runs in the
+  scope OUTSIDE the class, so the same class body is TS1308 in a plain
+  `function` and ACCEPTED in an `async` one.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

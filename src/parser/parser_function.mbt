@@ -290,6 +290,78 @@ fn Parser::record_bodiless_param_initializers(
       break
     }
   }
+  // TS2842 asks a different question of the same bodiless-ness, so it
+  // rides the same recorder rather than a parallel set of call sites.
+  self.record_bodiless_param_renamings(params)
+}
+
+///|
+/// The unused renamings in a binding pattern the `parse_params` family
+/// built (TS2842 -- see `param_pattern_renamings` for the rule and the
+/// probed boundary).
+///
+/// Two detectors for one question, because the two parameter parsers keep
+/// different things: `parse_param` builds a real `TsBinding` and
+/// `parse_declare_param_name` brace-matches past the pattern and keeps
+/// nothing. The message comes from one place either way.
+///
+/// This half is the more precise of the two: a DEFAULT lives in its own
+/// `TsBindingElem.default` / `TsObjectBindingProp.default` field, so
+/// `{ a: b = 1 }` -- which tsc reports -- is a finding here, where the
+/// token scan has to stop at the `=` to avoid reading an object literal
+/// inside the initializer as a pattern.
+fn binding_unused_renamings(
+  b : @ast.TsBinding,
+  out : Array[(String, String)],
+) -> Unit {
+  match b {
+    Object(ob) =>
+      for prop in ob.props {
+        // A computed key (`{ [k]: b }`) abstains: the key's spelling is
+        // not known here, so "the name differs from the key" cannot be
+        // decided.
+        if prop.key_expr is None && prop.binding is Ident(n) && n != prop.key {
+          out.push((prop.key, n))
+        }
+        binding_unused_renamings(prop.binding, out)
+      }
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) => binding_unused_renamings(elem.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => binding_unused_renamings(r, out)
+        None => ()
+      }
+    }
+    Ident(_) | Target(_) => ()
+  }
+}
+
+///|
+/// TS2842 for a parameter list that has no body. Called from
+/// `record_bodiless_param_initializers` (the function-declaration and
+/// class-member signature exits) and from `parse_interface`, which
+/// reports its own TS2371 per parameter through
+/// `interface_member_modifier_misuses` and so does not route through
+/// that recorder. The object-TYPE member parser is the third caller and
+/// uses `binding_unused_renamings` directly, because it is SPECULATIVE:
+/// its findings have to be held until the object type parses.
+fn Parser::record_bodiless_param_renamings(
+  self : Parser,
+  params : Array[@ast.TsParam],
+) -> Unit {
+  let found : Array[(String, String)] = []
+  for param in params {
+    match param.binding {
+      Some(b) => binding_unused_renamings(b, found)
+      None => ()
+    }
+  }
+  self.record_param_pattern_renamings(found)
 }
 
 ///|
@@ -2084,6 +2156,12 @@ pub fn Parser::parse_interface(
       )
       let method_params = self.parse_params()
       let _ = self.expect(RParen)
+      // TS2842: an interface / object-type member signature never has a
+      // body. This site does not go through
+      // `record_bodiless_param_initializers` (it reports TS2371 per
+      // parameter through `interface_member_modifier_misuses` instead),
+      // so it calls the renaming recorder itself.
+      self.record_bodiless_param_renamings(method_params)
       // TS2371: a parameter initializer (`x = 1`) is only allowed in an
       // implementation signature. An interface method / call signature never
       // has a body, so any default here is an error. Recorded via the shared
@@ -2505,6 +2583,9 @@ pub fn Parser::parse_declare_function(
     // Handle rest parameter: ...name
     let is_rest = self.match_ellipsis()
     let param_name = self.parse_declare_param_name()
+    // TS2842: a `declare function` is bodiless by construction, so a
+    // renaming in its parameter pattern binds a name nothing can read.
+    self.record_param_pattern_renamings(self.last_param_pattern_renamings)
     // Handle optional parameter: name?
     let is_optional = self.match_(Question)
     // Type annotation is optional
@@ -2572,7 +2653,105 @@ pub fn Parser::parse_declare_function(
 }
 
 ///|
+/// TS2842: "'b' is an unused renaming of 'a'. Did you intend to use it as
+/// a type annotation?"
+///
+/// The unused RENAMINGS in the destructuring pattern occupying tokens
+/// `[start, end_)` -- `{ a: b }` gives `("a", "b")`. A renaming binds a
+/// name, and in a parameter list with no BODY there is nowhere for that
+/// name to be read, which is the whole rule: every bodiless position was
+/// probed against the real compiler and all of them report (a function
+/// TYPE, a constructor type, `declare function`, a `declare class`
+/// member, an interface method, an object-type member, a class overload
+/// signature, an `abstract` member, a function-typed `const`), while a
+/// real function, a class method with a body and an arrow are all
+/// ACCEPTED.
+///
+/// It reads the TOKENS because `parse_declare_param_name` does not build
+/// an AST for the pattern -- it brace-matches past it and returns
+/// `"<destructured>"`. The cost model matters for a span scan (batch CP's
+/// TS5076 was O(n^2) because `parse_or` runs once per expression at that
+/// precedence level): this one runs once per PARAMETER, over tokens that
+/// call has already walked, so it adds a constant factor and no term.
+///
+/// Two restrictions keep it from claiming a renaming that is not one.
+/// The value must be a bare identifier followed by `,` or `}`: a nested
+/// pattern (`{ a: [b, c] }`, `{ a: { b } }`) is not a renaming and tsc
+/// ACCEPTS it, and a nested object with its own renaming is caught by the
+/// same scan one level in. And a DEFAULT region is skipped, because an
+/// initializer is an expression and `{ a: b = { c: d } }` would otherwise
+/// report the object literal's `c: d` as a renaming -- so
+/// `{ a: b = 1 }`, which tsc does report, is a declared MISS: the `=`
+/// ends the scan for that property.
+fn param_pattern_renamings(
+  tokens : Array[Token],
+  start : Int,
+  end_ : Int,
+) -> Array[(String, String)] {
+  let out : Array[(String, String)] = []
+  // Nesting level inside the pattern's own brackets, and the level at
+  // which a `=` opened a default-value expression (-1 when not in one).
+  let mut depth = 0
+  let mut default_depth = -1
+  let mut i = start
+  fn key_of(k : TokenKind) -> String? {
+    match k {
+      Ident(n) => Some(n)
+      Str(s) => Some(s)
+      _ => None
+    }
+  }
+
+  while i < end_ {
+    match tokens[i].kind {
+      LBrace | LBracket | LParen => depth += 1
+      RBrace | RBracket | RParen => {
+        depth -= 1
+        if default_depth >= 0 && depth < default_depth {
+          default_depth = -1
+        }
+      }
+      Comma =>
+        if default_depth >= 0 && depth == default_depth {
+          default_depth = -1
+        }
+      Eq => if default_depth < 0 { default_depth = depth }
+      k =>
+        if default_depth < 0 && i + 3 < end_ {
+          match (key_of(k), tokens[i + 1].kind, tokens[i + 2].kind) {
+            (Some(key), Colon, Ident(value)) =>
+              if key != value &&
+                (tokens[i + 3].kind is Comma || tokens[i + 3].kind is RBrace) {
+                out.push((key, value))
+              }
+            _ => ()
+          }
+        }
+    }
+    i += 1
+  }
+  out
+}
+
+///|
+/// Turn the renamings `param_pattern_renamings` found into findings. Only
+/// a caller that knows its signature has no body may call this; the two
+/// speculative callers in `parser_type.mbt` hold the pairs in a local and
+/// call it after the `=>` commits them to a function type.
+fn Parser::record_param_pattern_renamings(
+  self : Parser,
+  renamings : Array[(String, String)],
+) -> Unit {
+  for r in renamings {
+    self.grammar_misuses.push(
+      "`\{r.1}` is an unused renaming of `\{r.0}`; did you intend to use it as a type annotation?",
+    )
+  }
+}
+
+///|
 fn Parser::parse_declare_param_name(self : Parser) -> String raise ParseError {
+  self.last_param_pattern_renamings.clear()
   match self.peek().kind {
     Ident(n) => {
       let _ = self.advance()
@@ -2632,6 +2811,7 @@ fn Parser::parse_declare_param_name(self : Parser) -> String raise ParseError {
         LBrace => RBrace
         _ => RBracket
       }
+      let pattern_start = self.pos
       let _ = self.advance()
       let mut depth = 1
       while depth > 0 && !self.check(Eof) {
@@ -2641,6 +2821,11 @@ fn Parser::parse_declare_param_name(self : Parser) -> String raise ParseError {
           depth -= 1
         }
         let _ = self.advance()
+      }
+      // TS2842, for whichever caller has committed to a bodiless
+      // signature — see `last_param_pattern_renamings`.
+      for r in param_pattern_renamings(self.tokens, pattern_start, self.pos) {
+        self.last_param_pattern_renamings.push(r)
       }
       "<destructured>"
     }
@@ -2741,6 +2926,8 @@ fn Parser::parse_declare_signature_params(
       }
     }
     let param_name = self.parse_declare_param_name()
+    // TS2842: every `declare class` member signature is bodiless.
+    self.record_param_pattern_renamings(self.last_param_pattern_renamings)
     if saw_param_prop_modifier {
       self.param_property_misuses.push(param_name)
     }

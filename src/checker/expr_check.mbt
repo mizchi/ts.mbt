@@ -24647,13 +24647,28 @@ fn check_for_of_head_var_reads(
 /// The iterator test is the `@@iterator` key the class parser resolves a
 /// well-known symbol to, so a class that merely happens to have a
 /// `return` field is untouched. The property's type must be a definite
-/// primitive: anything else, `Any` and a `Named` included, abstains --
-/// and that abstention is why `for-of30` itself stays a MISS. Its
-/// member is written `return = 0`, unannotated, and the class parser
-/// records the type as `Any` because it does not infer from a field
-/// initializer. Firing on `Any` would flag `return = () => ({…})`,
-/// which is the LEGAL spelling of the same member, so the rule waits
-/// for an annotation (`return: number`) it can read.
+/// primitive: anything else, `Any` and a `Named` included, abstains.
+///
+/// That abstention used to cost `for-of30` itself, and the reason it
+/// gave was true about the TYPE and wrong about the rule. The member
+/// there is written `return = 0`, unannotated, so the class parser
+/// records `Any` -- it does not infer a field's type from its
+/// initializer -- and firing on `Any` really would flag
+/// `return = () => ({…})`, the LEGAL spelling of the same member. But
+/// the INITIALIZER is a second channel and the parser already keeps it:
+/// `instance_field_inits` carries `("return", IntLit(0))`, and "this
+/// expression is definitely not a function" is decidable from its
+/// shape. Fifth batch in a row whose target was a recorded abstention
+/// (DT, DU, DV, DW), and the second where the stated blocker was real
+/// but named only one of the two routes to the fact.
+///
+/// The initializer test is an ALLOWLIST of literal forms, so a wrapped
+/// spelling falls through to a MISS rather than to a finding -- which is
+/// the fail direction that matters, because `return = 0 as any` is
+/// `any` and tsc ACCEPTS it, so peeling `As` would have been a false
+/// positive. `null` and `undefined` are excluded for the same reason
+/// measured against tsc: under `strict: false` a `null` initializer
+/// widens to `any` and `return = null` is accepted.
 fn check_iterator_return_property(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -24669,20 +24684,58 @@ fn check_iterator_return_property(
     if !is_iterator {
       continue
     }
+    let mut reported = false
     for p in cls.properties {
-      if p.name != "return" || p.is_static {
+      if p.name != "return" || p.is_static || reported {
         continue
       }
       let ty = resolver.unwrap(p.type_)
       if is_definite_primitive_type(ty) {
+        reported = true
         issues.push({
           path: "class \{cls.name}",
           message: "the `return` property of an iterator must be a method",
         })
       }
     }
+    if reported {
+      continue
+    }
+    for init in cls.instance_field_inits {
+      let (fname, fexpr) = init
+      if fname == "return" && expr_is_definitely_not_a_function(fexpr) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "the `return` property of an iterator must be a method",
+        })
+        break
+      }
+    }
   }
   issues
+}
+
+///|
+/// True when an expression's own shape proves its value is not callable.
+///
+/// An allowlist of literal forms rather than a denylist of function ones:
+/// a form nobody has classified must come out FALSE, because the only
+/// consumer (TS2767) turns a `true` into a diagnostic. `NullLit` and
+/// `undefined` are deliberately absent -- they are not functions, but
+/// with `strictNullChecks` off they widen to `any`, which is callable as
+/// far as the checker is concerned.
+fn expr_is_definitely_not_a_function(e : @ast.TsExpr) -> Bool {
+  match e {
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | TemplateLiteral(_, _)
+    | ObjectLit(_)
+    | ArrayLit(_) => true
+    _ => false
+  }
 }
 
 ///|
@@ -34870,6 +34923,7 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
     if cls.type_params.length() > 0 {
       check_static_uses_class_type_params(cls, issues)
     }
+    check_this_type_position(cls, issues)
     for meth in cls.methods {
       let path = "class \{cls.name} > \{meth.name}"
       check_dup_type_params(path, meth.type_params, issues)
@@ -35084,6 +35138,162 @@ fn stmt_type_positions_reference_any(
     Block(b) => blk(b)
     // A nested class declaration opens its own type-parameter scope; see
     // the abstention on `expr_type_positions_reference_any`.
+    _ => false
+  }
+}
+
+///|
+/// TS2526: "A 'this' type is available only in a non-static member of a
+/// class or interface."
+///
+/// The message reads like a statement about MEMBERSHIP and the boundary
+/// is really about which declaration the type is written in, so every
+/// cell was probed against the real compiler rather than reasoned from
+/// the text. Two positions inside a class are errors and they are the
+/// two this covers:
+///
+///   - a CONSTRUCTOR parameter (`constructor(a: this)`, and
+///     `constructor(public host: G<this>)` -- the parameter-property
+///     spelling is the one `thisTypeErrors2` uses). This is the cell
+///     reasoning gets wrong: the constructor BODY is fine
+///     (`constructor() { let self: this = this }` is ACCEPTED), so the
+///     illegal region is the parameter list alone.
+///   - any type position of a `static` member -- a parameter, the return
+///     type, or a property's type.
+///
+/// Silent for every instance member: a method parameter, a method or
+/// getter return, a property type, and every interface member including
+/// a construct signature (`interface I { new (a: this): void }` is
+/// ACCEPTED).
+///
+/// Nesting does NOT open a new `this` context, which is the second thing
+/// worth having measured: `constructor(a: { m(): this })`,
+/// `a: Array<this>`, `a: this[]` and `a: (x: this) => void` all report,
+/// so the scan descends through every type wrapper.
+///
+/// Three further positions tsc reports and this deliberately does not.
+/// A type ALIAS body (`type T = { m(): this }`) is TS2526 and is left
+/// alone because the bridge generator runs `check_module` over real
+/// `.d.ts` input, where a false positive costs generation rather than a
+/// conformance file, and no corpus file needs it. A top-level
+/// `declare function f(a: this)` and a nested function's return type
+/// inside a constructor are the same trade: both need a
+/// `this`-rebinding scope fact, which is what TS2331 is deferred on.
+fn check_this_type_position(
+  cls : @ast.TsClassDecl,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match cls.constructor_params {
+    Some(params) =>
+      for prm in params {
+        if type_mentions_this_type(prm.1) {
+          issues.push({
+            path: "class \{cls.name} > constructor",
+            message: "a `this` type is available only in a non-static member of a class or interface",
+          })
+          break
+        }
+      }
+    None => ()
+  }
+  for p in cls.properties {
+    if p.is_static && type_mentions_this_type(p.type_) {
+      issues.push({
+        path: "class \{cls.name} > static \{p.name}",
+        message: "a `this` type is available only in a non-static member of a class or interface",
+      })
+    }
+  }
+  for m in cls.methods {
+    if !m.is_static {
+      continue
+    }
+    let path = "class \{cls.name} > static \{m.name}"
+    if type_mentions_this_type(m.return_type) {
+      issues.push({
+        path,
+        message: "a `this` type is available only in a non-static member of a class or interface",
+      })
+      continue
+    }
+    for prm in m.params {
+      if type_mentions_this_type(prm.1) {
+        issues.push({
+          path,
+          message: "a `this` type is available only in a non-static member of a class or interface",
+        })
+        break
+      }
+    }
+  }
+}
+
+///|
+/// Does this type mention the polymorphic `this` type anywhere inside it?
+///
+/// The parser records TypeScript's `this` type as `Named("this")`, and no
+/// type PARAMETER can be spelled `this`, so the name test needs no scope.
+///
+/// Written rather than reusing `type_references_any(ty, ["this"])`
+/// because that walk has no `CallableMeta` arm, and `CallableMeta` is the
+/// wrapper the type parser puts around a callable with an OPTIONAL
+/// parameter -- so `constructor(a: (x?: this) => void)` would have fallen
+/// through its catch-all. This file's ledger records five soundness bugs
+/// paid for a wrapper node's fail-open default arm; here the cost would
+/// only be a MISS, and the arms are cheap.
+fn type_mentions_this_type(ty : @ast.TsType) -> Bool {
+  fn any_of(parts : Array[@ast.TsType]) -> Bool {
+    for p in parts {
+      if type_mentions_this_type(p) {
+        return true
+      }
+    }
+    false
+  }
+
+  match ty {
+    Named(n) => n == "this"
+    Applied(n, args) => n == "this" || any_of(args)
+    TypeOf(n) => n == "this"
+    Array(inner) | Rest(inner) | Keyof(inner) | CallableMeta(inner, _) =>
+      type_mentions_this_type(inner)
+    Union(parts) | Intersection(parts) | Tuple(parts) => any_of(parts)
+    Func(params, ret) => any_of(params) || type_mentions_this_type(ret)
+    Constructor(params, ret, _) =>
+      any_of(params) || type_mentions_this_type(ret)
+    GenericFunc(_, bounds, inner) => {
+      for b in bounds {
+        if type_mentions_this_type(b.1) {
+          return true
+        }
+      }
+      type_mentions_this_type(inner)
+    }
+    Object(fields) => {
+      for f in fields {
+        if type_mentions_this_type(f.0) || type_mentions_this_type(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for f in fields {
+        if type_mentions_this_type(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    IndexedAccess(obj, idx) =>
+      type_mentions_this_type(obj) || type_mentions_this_type(idx)
+    Conditional(a, b, x, y) =>
+      type_mentions_this_type(a) ||
+      type_mentions_this_type(b) ||
+      type_mentions_this_type(x) ||
+      type_mentions_this_type(y)
+    TemplateLiteralType(_, parts) => any_of(parts)
+    TypePredicate(_, inner) => type_mentions_this_type(inner)
     _ => false
   }
 }
