@@ -20,7 +20,3 @@ description = "TypeScript <-> MoonBit bridge generator"
 preferred_target = "native"
 
 source = "src"
-
-options(
-  exclude: [ "fixtures", "typescript", "src/cmd/tscheck" ],
-)
