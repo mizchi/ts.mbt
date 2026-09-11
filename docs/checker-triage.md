@@ -205,11 +205,13 @@ bridge's primary input.
   bodiless member signature with no return annotation) plus TS7022 /
   TS2448 (a self-referential initializer) as batch DT, and TS2729 (a
   field with no initializer read from another field's initializer) as
-  batch DU; TS7031/TS7018 is REJECTED with a mechanical blocker recorded
-  in TODO.md. Every one of DS, DT and DU targeted a recorded
-  ABSTENTION, and in DT and DU the stated reason turned out to be false —
-  which makes "open the comment that declines the rule, then probe its
-  reason" the highest-yield move left in this tier.
+  batch DU; TS7031/TS7018 went in as batch EC once its recorded blocker
+  was probed and found HALF false — the annotation fact was already on the
+  Parser as `last_var_decl_annotated`, so only `strict_null_checks` had to
+  be added. Every one of DS, DT, DU and EC targeted a recorded
+  ABSTENTION, and in DT, DU and EC the stated reason turned out to be
+  false — which makes "open the comment that declines the rule, then probe
+  its reason" the highest-yield move left in this tier.
 
   **TS7053 does not belong in this tier**, and calling the whole
   implicit-any family "cheap and mechanical" was the label-for-objective
@@ -241,17 +243,25 @@ bridge's primary input.
     position of the `?.` relative to the `#name` is the whole rule. TAKEN
     (batch DZ, +1 at FP 0). Its TS2532 is incidental.
   - `typeofThis` is TS2331, "`this` cannot be referenced in a module or
-    namespace body" — also grammar, and DEFERRED on a measured cost
-    rather than on difficulty. Probed cell by cell: an arrow inside a
-    namespace body fires at any nesting depth, a `function` declaration
-    OR expression inside one does not (it rebinds `this`), a class method
-    does not, and neither script nor module top level does — so the fact
-    needed is "inside a namespace body and not inside a `this`-rebinding
-    function". `in_function` cannot serve: it is true inside arrows too.
-    A new field means the save / clear / restore discipline `self.labels`
-    already needs at fifteen function-body sites, which is exactly how
-    the applied-in-some-places bug gets written. Worth +1 file; take it
-    with the label refactor, not before.
+    namespace body" — also grammar, and the deferral recorded here was
+    wrong twice over, which is worth keeping as a caution about deferring
+    on an IMPLEMENTATION rather than on the rule. Probed cell by cell:
+    an arrow inside a namespace body fires at any nesting depth, a
+    `function` declaration OR expression inside one does not (it rebinds
+    `this`), a class method does not, and neither script nor module top
+    level does — so the fact needed is "inside a namespace body and not
+    inside a `this`-rebinding function". This entry then said
+    `in_function` cannot serve (true — it is true inside arrows too) and
+    concluded that a new Parser field with the save / clear / restore
+    discipline `self.labels` needs at fifteen sites was the only route.
+    It was not: batch EB built exactly that REGION as a checker walk for
+    the `globalThis` rule, and batch EC took TS2331 as a second visitor
+    over it. The second error is the file: TS2331 shipped and
+    `typeofThis` is STILL a MISS, because its error is `typeof this.no`
+    in a TYPE position, which `parse_typeof_type_query` skips (no `This`
+    arm) so the annotation collapses to `Any`. The +1 file came from
+    `decoratorOnClassMethod11` instead — a file this entry never
+    mentioned.
   - `parserAmbiguityWithBinaryOperator4` is `if (a<b, b>(c + 1))`, which
     parses as a generic call whose type ARGUMENT is a `var`. The lever is
     TS2749 ("refers to a value, but is being used as a type here") — name
@@ -316,7 +326,11 @@ about in §1 — a label standing in for the objective:
   NAMED for `using` can carry an error `using` has nothing to do with:
   `usingDeclarationsWithObjectLiterals2` is TS7018 on `value: null`, which
   a plain `const` reproduces under the same two flags (probed), so it is
-  Tier 2's implicit-any family and stays in scope.
+  Tier 2's implicit-any family and stays in scope. **Batch EC flagged it**,
+  which is the payoff for keeping it in scope rather than filing it under
+  the feature its name advertises — and it is also what exposed the
+  BLOCK-statement `using` parser as a second declaration site the rule had
+  to reach.
 - **`locally-accepted` — 6.** TS7 errors on these and the local compiler
   6.0.3 accepts them, so there is no oracle to develop against and no way
   to write the legal-neighbour test this repo requires of every rule. This

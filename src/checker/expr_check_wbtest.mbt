@@ -19175,6 +19175,151 @@ test "batch EB rules" {
 }
 
 ///|
+/// Batch EC: the two rules UNSUPPORTED.md section G filed as blocked on a
+/// mechanical fact rather than on machinery.
+///
+/// TS7031 / TS7018 needed the parse-time fact that the declaration
+/// carried NO annotation (an absent one and an explicit `: any` are the
+/// same `TsType::Any`) plus a `strict_null_checks` field on the Parser.
+/// TS2331 needed a region — inside a namespace body, and not inside a
+/// `this`-rebinding function — and batch EB had already built exactly
+/// that walk for the `globalThis` rule.
+///
+/// Every SILENT case below is a spelling tsc ACCEPTS, probed one at a
+/// time with `scripts/tsc_probe.mjs`, and three of them read the other
+/// way round from what the message text suggests: a DEFAULT on a binding
+/// element makes the whole thing legal even for `null`, a `function`
+/// inside a namespace is TS2683 rather than TS2331, and a class at script
+/// top level carrying a `@(this.x)` decorator is TS7017.
+test "batch EC rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // The two flags the TS7031 / TS7018 rule requires. Without
+  // `strictNullChecks` off a `null` initializer does not widen to `any`,
+  // and a directive-less file (every real `.ts` the bridge sees) defaults
+  // to having it ON.
+  let h = "//@strict: false\n//@noImplicitAny: true\n"
+  let be = "binding element"
+  let ol = "object literal's property"
+  let th = "cannot be referenced in a module or namespace body"
+
+  // --- TS7031: a destructuring element whose written source position is
+  // a nullish literal. Both declaration kinds, both pattern kinds, a
+  // hole, a rename and a nested pattern.
+  @test.assert_eq(only(h + "var [a, b] = [undefined, null];\n", be), 2)
+  @test.assert_eq(only(h + "let [a, b] = [undefined, null];\n", be), 2)
+  @test.assert_eq(only(h + "const [a, b] = [undefined, null];\n", be), 2)
+  // Only the nullish POSITION reports, not every element.
+  @test.assert_eq(only(h + "var [a, b] = [undefined, 1];\n", be), 1)
+  @test.assert_eq(only(h + "var [, b] = [1, null];\n", be), 1)
+  assert_true(only(h + "var {a} = {a: null};\n", be) > 0)
+  assert_true(only(h + "var {a: x} = {a: null};\n", be) > 0)
+  assert_true(only(h + "var [[a]] = [[null]];\n", be) > 0)
+  assert_true(only(h + "var {a: {b}} = {a: {b: null}};\n", be) > 0)
+
+  // --- TS7018: an object literal property whose value is nullish, in a
+  // declaration with no annotation to type it.
+  assert_true(only(h + "var o = { value: null };\n", ol) > 0)
+  assert_true(only(h + "var o = { value: undefined };\n", ol) > 0)
+  assert_true(only(h + "var o = { a: { b: null } };\n", ol) > 0)
+  assert_true(only(h + "var xs = [{ value: null }];\n", ol) > 0)
+  // A later declarator of the same group is judged on its own annotation.
+  assert_true(
+    only(
+      h + "var o: {value: any} = { value: null }, p = { value: null };\n",
+      ol,
+    ) >
+    0,
+  )
+  // The BLOCK-statement `using` path, which is how every
+  // `usingDeclarations` conformance test spells it.
+  assert_true(
+    only(h + "{\n  using _ = { [Symbol.dispose]() {}, value: null };\n}\n", ol) >
+    0,
+  )
+
+  // --- TS2331: `this` in a namespace body's non-function region.
+  assert_true(only("namespace M { const f = () => this; }\n", th) > 0)
+  assert_true(only("namespace M { const f = () => this.q; }\n", th) > 0)
+  assert_true(only("namespace M { var x = this; }\n", th) > 0)
+  assert_true(only("namespace M { const f = () => () => this; }\n", th) > 0)
+  assert_true(
+    only("namespace M { export namespace N { const f = () => this; } }\n", th) >
+    0,
+  )
+  // A class DECORATOR is evaluated where the class is defined, so it sees
+  // the namespace's `this`. The declaration form reaches the AST; the
+  // MEMBER form rides a parser sentinel converted at the namespace site.
+  assert_true(only("namespace M { @(this.dec) class C {} }\n", th) > 0)
+  assert_true(
+    only(
+      "//@experimentaldecorators: true\nnamespace M { class C { @(this.dec) method() {} } }\n",
+      th,
+    ) >
+    0,
+  )
+
+  // --- stays silent
+  for
+    src in [
+      // A DEFAULT supplies the type. True even for `null`, which does not
+      // trigger a default at runtime — the cell reasoning gets wrong.
+      h + "var [a = 1] = [undefined];\n",
+      h + "var {a = 1} = {a: null};\n",
+      // An annotation gives the initializer a contextual type, and `: any`
+      // counts — which is the whole reason the rule needs the parse-time
+      // fact instead of the `TsType`.
+      h + "var [a, b]: any = [undefined, null];\n",
+      h + "var [a, b]: [any, any] = [undefined, null];\n",
+      h + "var o: any = { value: null };\n",
+      h + "var o: { value: string } = { value: null };\n",
+      // No pattern and no object literal: `var a = undefined` is legal,
+      // and `var o = [null]` is TS7005 on the VARIABLE, a code this rule
+      // does not claim.
+      h + "var a = undefined;\n",
+      h + "var o = [null];\n",
+      h + "var [a, b] = [1, 2];\n",
+      // An assertion or a conditional types the initializer elsewhere.
+      h + "var [a, b] = [undefined, null] as any;\n",
+      h + "var o = { value: null } as any;\n",
+      h + "var o = { value: null as any };\n",
+      h + "var o = true ? { value: null } : { value: 1 };\n",
+      // A call ARGUMENT's object literal is contextually typed by the
+      // parameter, which is why the rule is restricted to declarations.
+      h + "function f(x: { value: string }) {}\nf({ value: null });\n",
+      // Both flags are required: with either the other way round tsc
+      // accepts the identical source.
+      "//@strict: false\n//@noImplicitAny: false\nvar o = { value: null };\n",
+      "//@strictNullChecks: true\n//@noImplicitAny: true\nvar [a, b] = [undefined, null];\n",
+      // TS2331: a `function` declaration or expression inside a namespace
+      // REBINDS `this`, and tsc reports TS2683 there instead.
+      "namespace M { function g() { return this; } }\n",
+      "namespace M { const g = function () { return this; }; }\n",
+      // A class body and an object-literal method are `this` contexts.
+      "namespace M { class C { m() { return this; } } }\n",
+      "namespace M { const o = { m() { return this; } }; }\n",
+      // Script top level is not a namespace body (tsc gives TS7041), and
+      // a class in a FUNCTION in a namespace is decorated in that
+      // function's scope (TS2683).
+      "const f = () => this;\n",
+      "//@experimentaldecorators: true\nclass C { @(this.dec) method() {} }\n",
+      "//@experimentaldecorators: true\nnamespace M { function f() { class C { @(this.dec) method() {} } } }\n",
+    ] {
+    @test.assert_eq(only(src, be) + only(src, ol) + only(src, th), 0)
+  }
+}
+
+///|
 /// Batch EB: a call to an OVERLOAD SET whose only accepting member is
 /// GENERIC now infers its instantiated return type.
 ///

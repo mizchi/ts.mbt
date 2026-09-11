@@ -145,6 +145,14 @@ pub struct Parser {
   // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
   // opts back in over `@strict: false`.
   no_implicit_any : Bool
+  // `strictNullChecks` per the conformance-header directives, same
+  // convention and default (`true`) as `no_implicit_any` above: only an
+  // explicit `@strict: false` / `@strictNullChecks: false` turns it off.
+  // Read by the TS7031 / TS7018 recorder, which needs BOTH flags — a
+  // `null` / `undefined` initializer only widens to `any` when
+  // `strictNullChecks` is off, and a directive-less file (every real
+  // `.ts` / `.d.ts` the bridge parses) therefore never reaches it.
+  strict_null_checks : Bool
   // `useUnknownInCatchVariables`: an unannotated `catch (e)` binding is
   // `unknown` rather than `any`, so using it without narrowing is
   // TS18046. Follows `strict`, which the conformance baselines treat as
@@ -376,6 +384,7 @@ pub fn Parser::new_with_strict_and_jsx(
     no_bound_inline: false,
     target_es6_plus: false,
     no_implicit_any: false,
+    strict_null_checks: true,
     unknown_catch_variables: false,
     experimental_decorators: true,
     record_implicit_any_params: false,
@@ -643,6 +652,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(head_lower),
     no_implicit_any: detect_no_implicit_any(head),
+    strict_null_checks: detect_strict_null_checks(head),
     unknown_catch_variables: detect_unknown_catch_variables(head),
     experimental_decorators,
     template_invalid_escape_positions: lexer.template_invalid_escape_positions,

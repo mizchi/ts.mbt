@@ -3,6 +3,98 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EC (2026-09-11): the "unwired" rows of UNSUPPORTED.md section G
+
++3 files at FP 0 (TP 2594 -> 2597, MISS in scope 121 -> 118, PFLEGAL 0).
+Section G is the table of rules blocked on a MECHANICAL fact rather than on
+machinery, and the batch's reusable finding is about the table itself:
+**a blocker written down is a claim with a date on it, and both of these
+had been removed by earlier work that was not aiming at them.**
+
+- [x] **TS7031 / TS7018: a nullish literal where a type must be inferred**
+  (+2: `wideningTuples5`, `usingDeclarationsWithObjectLiterals2`). ONE rule
+  with two spellings — with `strictNullChecks` off, `null` and `undefined`
+  widen to `any`, so under `noImplicitAny` an inference from them is an
+  error. Which CODE applies is decided by the BINDING, matching tsc:
+  `var {a} = {a: null}` is TS7031 on `a` and NOT TS7018 on the property, so
+  a pattern runs only the element half and an `Ident` binding only the
+  object-literal half. It lives in the PARSER because the fact it needs is
+  not in the AST (`TsStmt::Let` / `Const` / `Var` carries a `TsType` where
+  an absent annotation and an explicit `: any` are the same `Any`, and
+  `var [a, b]: any = [undefined, null]` is ACCEPTED) — and the recorded
+  blocker was half wrong: `last_var_decl_annotated` already carries the
+  annotation fact, read by `parse_var_decl_item` BEFORE the initializer is
+  parsed so a nested declaration cannot make this one look annotated. Only
+  `strict_null_checks` had to be added to the Parser, nine lines, and both
+  flags being required is what keeps the rule off real code: a
+  directive-less file defaults to `strictNullChecks: true`, which every
+  `.ts` / `.d.ts` the bridge parses is, so it cannot fire there at all.
+  Three boundary cells read the other way round from the message text and
+  were probed one at a time: a DEFAULT supplies the type, so
+  `var [a = 1] = [undefined]` and `var {a = 1} = {a: null}` are ACCEPTED —
+  true even for `null`, which does not trigger a default at runtime;
+  `var a = undefined` is legal and `var o = [null]` is TS7005 on the
+  VARIABLE, so an array element is never reported; and a renamed property
+  reports the LOCAL name while a hole keeps its position. The abstentions
+  each lose a finding rather than invent one — a REST element, a
+  `satisfies`, `null!`, a computed key, and every non-declaration position
+  an object literal can sit in, where a call argument's literal is
+  CONTEXTUALLY typed and legal and this site cannot tell the two apart.
+  An unannotated declaration has no contextual type by construction, which
+  is the whole reason the rule is sound where it is. It needed TWO sites,
+  which is the applied-in-some-places family taken on the first pass
+  instead of discovered a batch later: `using` at statement level routes
+  through `parse_var_decl_item`, and the BLOCK-statement `using` path is
+  its own parser — the one every `usingDeclarations` conformance test
+  actually writes, so a recorder at the first alone reached neither
+  corpus file.
+- [x] **TS2331: `this` in a namespace body** (+1:
+  `decoratorOnClassMethod11`). The recorded blocker was "a new Parser field
+  needs the save / clear / restore discipline `self.labels` needs at
+  fifteen function-body sites", which was true of the approach it
+  considered and had been dissolved ONE BATCH EARLIER: batch EB built
+  `this_region_walk_stmt` for the `globalThis` rule, and its region — an
+  arrow is descended into, a `function` body and a class body are not — IS
+  TS2331's region. So the rule is a second `ThisRegionVisitor` over the
+  same walk rather than a walk of its own, and the visitor grew a `bare`
+  callback beside `prop` because the two consumers ask different questions
+  about the same node: `globalThis` wants the property read off `this`,
+  TS2331 wants the `this` and never reaches the property. Twelve cells
+  probed, all now agreeing with tsc: the arrow, `this.q`, `var x = this`,
+  an arrow in an arrow and a NESTED namespace all report, while
+  `function g() { return this }` and `const g = function () { … }` inside a
+  namespace are TS2683 (a different diagnostic — descending would trade a
+  MISS for a false positive), a class method and an object-literal method
+  are ACCEPTED and fall out of the walk for free, and script top level is
+  TS7041, which is why the caller gates on `outer_modules.length() > 0`.
+  A class DECORATOR is the second position and came along, since a
+  decorator expression is evaluated where the class is DEFINED — the same
+  argument TS2660 already makes for `super` — reading `module_.classes`
+  only and never `local_classes`, because a class declared inside a
+  function is decorated in that function's scope and tsc gives TS2683
+  (probed). The MEMBER-decorator spelling is the corpus file and needed a
+  different mechanism, also already present: member decorator expressions
+  never reach the AST, and a namespace body is parsed by a FRESH `Parser`
+  that cannot know it is one, so the class parser leaves a
+  `<this-in-decorator>` sentinel and `parse_namespace_decl_with_mode`
+  converts it where the context is known — the mechanism TS1063 / TS1319
+  already use, with an unconverted sentinel staying a `<`-prefixed marker
+  the checker's grammar loop skips. `decorator_mentions_super` became
+  `decorator_mentions_name(d, name)` rather than gaining a twin, since
+  "does this decorator expression mention NAME" is one question and a
+  second copy of those arms is the family this repo keeps finding.
+- Three of section G's rows stay filed, each with its blocker re-verified:
+  TS1308 (`skip_param_decorators` discards the expression), TS2708's
+  `typeof` type position (two independent channels — a `typeof` TYPE
+  position never reaches `check_undefined_name`, and `import a = A` needs
+  the alias TARGET resolved before "is it instantiated" can be asked), and
+  TS2393 (detected, reported with TS2394's message; 0 corpus files).
+  TS2331's OTHER corpus file, `typeofThis.ts`, also stays a MISS and the
+  reason is exact: its error is `typeof this.no` in a TYPE position, and
+  `parse_typeof_type_query` has no `This` arm, so the operand is skipped
+  by `skip_typeof_operand` and the annotation collapses to `Any` before
+  any checker can see the `this`.
+
 ### Batch EB (2026-09-11): the four items `src/checker/UNSUPPORTED.md` asked for
 
 +8 files at FP 0 (TP 2586 -> 2594, MISS in scope 129 -> 121, PFLEGAL 0).

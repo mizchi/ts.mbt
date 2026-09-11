@@ -1110,6 +1110,15 @@ fn Parser::parse_namespace_decl_with_mode(
           self.grammar_misuses.push(
             "a default export can only be used in an ECMAScript-style module",
           )
+        } else if misuse.has_prefix("<this-in-decorator>") {
+          // TS2331: a member decorator expression mentioning `this`.
+          // Recorded as a sentinel by the class-member parser for the
+          // reason stated there — member decorator expressions never
+          // reach the AST, and the body's own parser cannot know it is a
+          // namespace body. Only reaching HERE proves it is one.
+          self.grammar_misuses.push(
+            "`this` cannot be referenced in a module or namespace body",
+          )
         }
       }
       let next_namespace : @ast.TsNamespaceDecl = {

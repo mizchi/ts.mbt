@@ -1569,6 +1569,76 @@ product surfaces now.
   report on `class C { m() { this.name = 1 } }` and read it as a false
   positive of the new rule, where grepping the path prefix shows the walk
   never enters a class body.
+  Batch EC took the two "unwired" rows of `UNSUPPORTED.md` section G —
+  the table of rules blocked on a MECHANICAL fact rather than on
+  machinery — for **+3 files at FP 0** (TP 2597 / MISS in scope 118),
+  and its reusable finding is about that table: **a blocker written down
+  is a claim with a date on it, and both of these had been removed by
+  earlier work that was not aiming at them.** TS7031 / TS7018 is one
+  rule with two spellings (with `strictNullChecks` off, `null` and
+  `undefined` widen to `any`, so under `noImplicitAny` an inference from
+  them is an error), and which CODE applies is decided by the BINDING,
+  matching tsc: `var {a} = {a: null}` is TS7031 on `a` and NOT TS7018 on
+  the property, so a pattern runs only the element half and an `Ident`
+  binding only the object-literal half. It belongs in the PARSER because
+  the fact it needs is not in the AST — the same absent-versus-`: any`
+  blocker recorded for TS7022, TS2729 and TS2448 — and HALF the recorded
+  blocker was already gone: `last_var_decl_annotated` carries the
+  annotation fact and `parse_var_decl_item` reads it BEFORE the
+  initializer is parsed, so a nested declaration cannot make this one
+  look annotated. Only `strict_null_checks` had to be added to the
+  Parser, and needing BOTH flags is what keeps the rule off real code: a
+  directive-less file defaults to `strictNullChecks: true`, which every
+  `.ts` / `.d.ts` the bridge parses is, so it cannot fire there at all.
+  Three cells read the other way round from the message text: a DEFAULT
+  supplies the type, so `var [a = 1] = [undefined]` and
+  `var {a = 1} = {a: null}` are ACCEPTED — true even for `null`, which
+  does not trigger a default at runtime; `var a = undefined` is legal
+  and `var o = [null]` is TS7005 on the VARIABLE, so an array element is
+  never reported; and a renamed property reports the LOCAL name while a
+  hole keeps its position. The abstentions lose a finding rather than
+  invent one, and the one that matters is the reason the rule is sound
+  where it sits: a call argument's object literal is CONTEXTUALLY typed
+  and LEGAL, this site cannot tell it from an inferred one, and an
+  unannotated declaration has no contextual type by construction. It
+  needed TWO sites and got both on the first pass — statement-level
+  `using` routes through `parse_var_decl_item` while the BLOCK-statement
+  `using` is its own parser, and that is the one every
+  `usingDeclarations` test actually writes, so a recorder at the first
+  alone would have reached neither corpus file.
+  TS2331's blocker was stated in writing as "a new Parser field needs
+  the save / clear / restore discipline `self.labels` needs at fifteen
+  function-body sites", and batch EB had dissolved it ONE BATCH EARLIER
+  by building `this_region_walk_stmt` for the `globalThis` rule: its
+  region — an arrow descended into, a `function` body and a class body
+  not — IS TS2331's region. So the rule is a second `ThisRegionVisitor`
+  over the same walk, and the visitor grew a `bare` callback beside
+  `prop` because the two consumers ask different questions about the
+  same node (the `globalThis` rule wants the property read off `this`;
+  TS2331 wants the `this` and never reaches the property). Twelve cells
+  probed and all now agree with tsc, including the two legal neighbours
+  that fall out of the walk for FREE — a class lives in
+  `module_.classes` rather than in `top_level_stmts`, and an
+  object-literal method's value is a `FuncExpr` the walk has no arm for.
+  A class DECORATOR came along on the argument TS2660 already makes for
+  `super` (a decorator expression is evaluated where the class is
+  DEFINED), reading `module_.classes` and never `local_classes`, since a
+  class declared inside a function is decorated in that function's scope
+  and tsc gives TS2683 there. The corpus file is the MEMBER-decorator
+  spelling, which needed a different mechanism that was also already
+  present: member decorator expressions never reach the AST and a
+  namespace body is parsed by a FRESH `Parser` that cannot know it is
+  one, so the class parser leaves a `<this-in-decorator>` sentinel and
+  `parse_namespace_decl_with_mode` converts it where the context is
+  known — exactly how TS1063 / TS1319 already work, with an unconverted
+  sentinel staying a `<`-prefixed marker the grammar loop skips.
+  `decorator_mentions_super` became `decorator_mentions_name(d, name)`
+  rather than gaining a twin, because "does this decorator expression
+  mention NAME" is one question. The file TS2331 does NOT buy is worth
+  recording with its exact blocker: `typeofThis.ts`'s error is
+  `typeof this.no` in a TYPE position, and `parse_typeof_type_query` has
+  no `This` arm, so `skip_typeof_operand` eats the operand and the
+  annotation collapses to `Any` before any checker sees the `this`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

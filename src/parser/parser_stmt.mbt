@@ -1936,6 +1936,21 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
         }
         _ => ()
       }
+      // TS7018, the same rule `parse_var_decl_item` runs for a `var` /
+      // `let` / `const` declarator: a `null` / `undefined` literal
+      // standing where the declaration's type has to be inferred. This is
+      // the BLOCK-statement `using` path — the second of the three
+      // declaration sites batch CG records for this form, and the one
+      // every `usingDeclarations` conformance test actually writes, so a
+      // recorder placed only at `parse_var_like` reaches none of them.
+      // The `using` binding is always a plain name (a pattern is TS1492
+      // above), so only the object-literal half can apply.
+      if not(has_annotation) {
+        self.record_nullish_inferred_declaration(
+          @ast.TsBinding::Ident(binding_name),
+          using_first_operand(init),
+        )
+      }
       // Parse the remaining statements in this block into the try body.
       let rest_stmts : Array[@ast.TsStmt] = []
       let rest_positions : Array[Int] = []
@@ -2238,6 +2253,11 @@ fn Parser::parse_var_decl_item(
   }
   if not(annotated) {
     self.record_tuple_index_out_of_range(binding, init)
+    // TS7031 / TS7018: a `null` / `undefined` literal standing where the
+    // declaration's type has to be inferred. Gated on the annotation
+    // being absent for the reason the recorder's header gives — an
+    // annotated declaration has a contextual type and is legal.
+    self.record_nullish_inferred_declaration(binding, init)
   }
   self.record_self_referential_initializer(binding, init, kind, annotated)
   match kind {

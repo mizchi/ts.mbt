@@ -29794,19 +29794,39 @@ fn normalized_union_members(
 }
 
 ///|
-/// Walk an expression for `this.<name>` in a region where `this` is the
-/// GLOBAL object, calling `flag` with each property name found.
+/// What the `this`-region walk reports. Two callbacks rather than one,
+/// because the two consumers ask different questions about the SAME node:
+/// the `globalThis` rule wants the property NAME of a `this.<name>`
+/// reference (is `name` a property of `typeof globalThis`), while TS2331
+/// wants the `this` reference itself and does not care what is read off
+/// it. A single callback would have forced one of them to reconstruct the
+/// other's question, and `this.q` inside a namespace is TS2331 on the
+/// `this` — the property is never reached.
+struct ThisRegionVisitor {
+  prop : (String) -> Unit
+  bare : () -> Unit
+}
+
+///|
+/// Walk an expression for `this` in a region where nothing has rebound it,
+/// calling `flag.bare` at each `this` reference and `flag.prop` with the
+/// name of each `this.<name>` read.
 ///
 /// An arrow's body is still that region (an arrow does not rebind `this`);
 /// a `function` expression's body and a class body are not, and they
 /// deliberately have no arm here — tsc reports TS2683 in a `function`,
 /// which is a different diagnostic, so descending would trade a MISS for
 /// a false positive.
-fn this_region_walk_expr(e : @ast.TsExpr, flag : (String) -> Unit) -> Unit {
+fn this_region_walk_expr(e : @ast.TsExpr, flag : ThisRegionVisitor) -> Unit {
   match e {
-    PropAccess(Var("this"), p) => flag(p)
+    Var("this") => (flag.bare)()
+    PropAccess(Var("this"), p) => {
+      (flag.bare)()
+      (flag.prop)(p)
+    }
     PropAssignExpr(Var("this"), key, v) => {
-      flag(key)
+      (flag.bare)()
+      (flag.prop)(key)
       this_region_walk_expr(v, flag)
     }
     PropAccess(r, _) => this_region_walk_expr(r, flag)
@@ -29878,7 +29898,7 @@ fn this_region_walk_expr(e : @ast.TsExpr, flag : (String) -> Unit) -> Unit {
 /// top of a statement list is a `PropAssign` STATEMENT and the identical
 /// line inside a block is `Expr(PropAssignExpr(…))`, so both spellings are
 /// handled — the parser fact batch DS records.
-fn this_region_walk_stmt(stmt : @ast.TsStmt, flag : (String) -> Unit) -> Unit {
+fn this_region_walk_stmt(stmt : @ast.TsStmt, flag : ThisRegionVisitor) -> Unit {
   fn blk(b : @ast.TsBlock) -> Unit {
     for st in b.stmts {
       this_region_walk_stmt(st, flag)
@@ -29895,7 +29915,8 @@ fn this_region_walk_stmt(stmt : @ast.TsStmt, flag : (String) -> Unit) -> Unit {
     | Throw(e)
     | Return(Some(e)) => this_region_walk_expr(e, flag)
     PropAssign(Var("this"), key, v) => {
-      flag(key)
+      (flag.bare)()
+      (flag.prop)(key)
       this_region_walk_expr(v, flag)
     }
     PropAssign(r, _, v) => {
@@ -29918,6 +29939,73 @@ fn this_region_walk_stmt(stmt : @ast.TsStmt, flag : (String) -> Unit) -> Unit {
     Block(b) => blk(b)
     _ => ()
   }
+}
+
+///|
+/// TS2331 ("'this' cannot be referenced in a module or namespace body"):
+/// a namespace body is not a `this` context, so a `this` reference
+/// anywhere in it that no function has rebound is an error.
+///
+/// The REGION is the whole rule, and it is exactly the one the
+/// `globalThis` check already needed, which is why this shares
+/// `this_region_walk_stmt` rather than carrying its own walk: an arrow
+/// does not rebind `this` and is descended into, while a `function`
+/// declaration or expression and a class body do and have no arm there.
+/// Every cell was probed:
+///
+///   - `namespace M { const f = () => this }`, `() => this.q`,
+///     `var x = this`, an arrow inside an arrow, and the same inside a
+///     NESTED namespace all report;
+///   - `function g() { return this }` and
+///     `const g = function () { return this }` inside a namespace are
+///     TS2683 instead — a different diagnostic, so descending into either
+///     would trade a MISS for a false positive;
+///   - `class C { m() { return this } }` and `const o = { m() { return
+///     this } }` inside a namespace are ACCEPTED, and fall out of the
+///     walk for free: a class lives in `module_.classes` rather than in
+///     `top_level_stmts`, and an object-literal method's value is a
+///     `FuncExpr`, which the walk has no arm for;
+///   - script top level and module top level do NOT report (tsc gives
+///     TS7041 there), which is why the caller gates on
+///     `outer_modules.length() > 0`.
+///
+/// A class DECORATOR is the second position, and the region argument is
+/// the same one TS2660 makes for `super`: a decorator expression is
+/// evaluated where the class is DEFINED, so inside a namespace body it
+/// sees the namespace's `this`. Only `module_.classes` is walked, never
+/// `local_classes` — a class declared inside a function is decorated in
+/// that function's scope, where `this` is rebound, and tsc reports TS2683
+/// for it (probed). The MEMBER-decorator spelling cannot be judged here
+/// at all, because member decorator expressions never reach the AST; the
+/// parser records it and `parse_namespace_decl_with_mode` converts the
+/// sentinel, which is where the namespace context is known.
+fn check_namespace_body_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut reported = false
+  let visitor : ThisRegionVisitor = {
+    // The property read off `this` is irrelevant: the error is on the
+    // `this` itself, so `this.q` inside a namespace is TS2331 and never
+    // reaches a member lookup.
+    prop: fn(_p) {  },
+    bare: fn() {
+      if not(reported) {
+        reported = true
+        issues.push({
+          path: "this",
+          message: "`this` cannot be referenced in a module or namespace body",
+        })
+      }
+    },
+  }
+  for stmt in module_.top_level_stmts {
+    this_region_walk_stmt(stmt, visitor)
+  }
+  for cls in module_.classes {
+    for d in cls.decorators {
+      this_region_walk_expr(d, visitor)
+    }
+  }
+  issues
 }
 
 ///|
@@ -30178,9 +30266,15 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
 
+  let this_visitor : ThisRegionVisitor = {
+    prop: flag_this_prop,
+    // This rule asks only about the property read off `this`; a bare
+    // `this` at script scope is `typeof globalThis` and perfectly legal.
+    bare: fn() {  },
+  }
   for stmt in module_.top_level_stmts {
     walk_stmt(stmt)
-    this_region_walk_stmt(stmt, flag_this_prop)
+    this_region_walk_stmt(stmt, this_visitor)
   }
   // A top-level `function f() { globalThis.y = 4 }` is parsed into
   // `module_.funcs` and is NOT pushed into `top_level_stmts`, so the
@@ -31788,6 +31882,13 @@ fn check_module_function_bodies_layered(
       module_, resolver, merged_base_args, merged_dups,
     ) {
     all.push(issue)
+  }
+  // TS2331: `this` in a namespace body. Gated on being INSIDE one —
+  // script and module top level are TS7041 in tsc, not this code.
+  if outer_modules.length() > 0 {
+    for issue in check_namespace_body_this(module_) {
+      all.push(issue)
+    }
   }
   for issue in check_reserved_type_alias_names(module_) {
     all.push(issue)

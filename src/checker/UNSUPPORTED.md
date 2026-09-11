@@ -6,14 +6,16 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2594 / MISS in scope 121 / OUT OF SCOPE 19 / FP 0 /
+Measured at **TP 2597 / MISS in scope 118 / OUT OF SCOPE 19 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
 
 Sections B, C, E and F were taken in batch EB — **+8 files at FP 0** — and
 each keeps its entry with what shipped and what is still missing, because
-the residue is the useful part.
+the residue is the useful part. Batch EC then took two of section G's five
+rows for **+3 files at FP 0**, and both had a blocker that a previous batch
+had already removed without noticing.
 
 ## How to read this, and the one mistake to avoid
 
@@ -324,11 +326,28 @@ running during the statement walk — and an enum is not a statement.
 
 Each of these has a probed, exact boundary and a named blocker.
 
+**Two of the five are DONE (batch EC, +3 files at FP 0), and the lesson is
+about this table rather than about either rule: a blocker written down here
+is a claim with a date on it.** TS7031 / TS7018 needed a
+`strict_null_checks` field on the Parser, which is nine lines, and the
+annotation fact was already there as `last_var_decl_annotated` — read by
+`parse_var_decl_item` before the initializer is parsed, for exactly this
+reason. TS2331's blocker ("a new Parser field needs the save / clear /
+restore discipline `self.labels` needs at fifteen function-body sites") was
+true of the approach it considered and was dissolved by batch EB, which
+built the region-scoped `this` walk for the `globalThis` rule one batch
+earlier — an arrow is descended into, a `function` body and a class body
+are not, which IS TS2331's region. The member-DECORATOR spelling needed a
+different mechanism and got one that was also already there: a namespace
+body is parsed by a fresh `Parser` that cannot know it is one, so the class
+parser leaves a sentinel and `parse_namespace_decl_with_mode` converts it,
+the same way TS1063 / TS1319 already work.
+
 | Shape | tsc | Blocker |
 |---|---|---|
-| `var [a, b] = [undefined, null]` / `const o = { value: null }` | TS7031 / TS7018 | `TsStmt::Let` / `Const` / `Var` carries a `TsType` in which an ABSENT annotation and an explicit `: any` are the same `Any` — and `var [a, b]: any = [undefined, null]` is ACCEPTED by tsc. Needs a declaration-level version of `parse_param`'s `written_any_params` channel plus a `strict_null_checks` field on the Parser (which has `no_implicit_any` and not this one). |
+| ~~`var [a, b] = [undefined, null]` / `const o = { value: null }`~~ | TS7031 / TS7018 | **DONE (batch EC).** The annotation fact was `last_var_decl_annotated`, already read at `parse_var_decl_item`; the Parser gained `strict_null_checks`, and both flags being required is what keeps the rule off real code — a directive-less file defaults to `strictNullChecks: true`, so no `.ts` / `.d.ts` the bridge parses can reach it. Still MISSes, each losing a finding: a REST element, a `satisfies`, `null!`, a computed key, and every non-declaration position (a `return`, a class field, a call argument — where the literal is CONTEXTUALLY typed and legal, which is why the rule is restricted to declarations). |
 | `function fn(v: Promise<number>) { class C { async m(@dec(await v) a: number) {} } }` | TS1308 | `skip_param_decorators` discards the decorator expression, so the `await` never reaches the AST. The boundary is probed: a parameter decorator runs in the scope OUTSIDE the class, so the identical class body is ACCEPTED when `fn` is `async`. |
-| `namespace M { const f = () => this }` | TS2331 | Needs "inside a namespace body and not inside a `this`-rebinding function". `in_function` cannot serve (true inside arrows too), and a new Parser field needs the save / clear / restore discipline `self.labels` needs at fifteen function-body sites. We DO report the neighbouring TS2683 here, so the file is flagged for a different reason. |
+| ~~`namespace M { const f = () => this }`~~ | TS2331 | **DONE (batch EC).** Batch EB's `this_region_walk_stmt` is the region, so the rule is a second `ThisRegionVisitor` over the same walk; a class DECORATOR came along (`module_.classes[].decorators`, never `local_classes` — a class in a function is decorated in that function's scope and tsc gives TS2683). The member-decorator spelling rides a parser sentinel because member decorator expressions never reach the AST. Still a MISS: `typeof this.no` in a TYPE position, which is what `typeofThis.ts` writes — `parse_typeof_type_query` has no `This` arm, so the operand is skipped and the annotation collapses to `Any`. |
 | `namespace C { var m: typeof A }` (A type-only) | TS2708 | Two independent holes: a `typeof` TYPE position never reaches `check_undefined_name` (`var q = A` DOES fire), and `import a = A` needs the alias TARGET resolved before "is it instantiated" can be asked of it. |
 | `function d(a: number) {…}` `function d(a: string) {…}` | TS2393 | Detected, but reported as TS2394's message. `grammar_misuses` is flat and scope-blind, so telling two implementations from two SCOPES needs the `<fn-impl:NAME>` marker restricted to the module / namespace body loop (which it is) plus a nesting fact it does not carry. |
 
@@ -354,11 +373,12 @@ it cannot decay into a suppression list.
 
 Two rules, both learned the hard way:
 
-1. **Probe the reason, not just the rule.** Five batches in a row (DT, DU,
-   DV, DW, EA) targeted a recorded abstention, and in four of them the
+1. **Probe the reason, not just the rule.** Six batches in a row (DT, DU,
+   DV, DW, EA, EC) targeted a recorded abstention, and in five of them the
    stated reason turned out false or to name only one of two routes to the
    fact. A comment declining a rule is a lead; its REASON is a claim to be
-   measured.
+   measured — and a blocker can also be removed by a LATER batch that was
+   not aiming at it, which is what happened to both of batch EC's rows.
 2. **Pair every rule with its LEGAL neighbour.** "Fires on the corpus file"
    and "stays silent on the legal spelling" are separate claims, and only
    the second keeps FP at zero. `scripts/tsc_probe.mjs` answers the second

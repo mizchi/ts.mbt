@@ -170,6 +170,7 @@ pub struct Parser {
   mut no_bound_inline : Bool
   target_es6_plus : Bool
   no_implicit_any : Bool
+  strict_null_checks : Bool
   unknown_catch_variables : Bool
   experimental_decorators : Bool
   mut record_implicit_any_params : Bool

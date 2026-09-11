@@ -1947,60 +1947,69 @@ fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError 
 }
 
 ///|
-/// True when a decorator expression mentions `super` (which this parser
-/// spells `Var("super")`).
+/// True when a decorator expression mentions the bare name `name` (this
+/// parser spells both `super` and `this` as a `Var`).
 ///
-/// TS2660: a decorator expression is evaluated where the CLASS is
-/// defined, not inside a member body, so `super` has no meaning there
-/// even when the class does extend something --
-/// `class C extends S { @(super.m) method() {} }` is an error
-/// (decoratorOnClassMethod12).
+/// Two codes ride on it, and both are about the same fact — a decorator
+/// expression is evaluated where the CLASS is defined and not inside a
+/// member body:
+///
+///   - TS2660 for `super`, which then has no meaning even when the class
+///     does extend something: `class C extends S { @(super.m) method() {} }`
+///     is an error (decoratorOnClassMethod12);
+///   - TS2331 for `this` when the class sits directly in a namespace
+///     body, where `this` is not a context at all
+///     (decoratorOnClassMethod11).
+///
+/// One walk rather than two, because "does this decorator expression
+/// mention NAME" is one question; a second copy of these arms is exactly
+/// the shape this repo keeps finding applied at some of its sites.
 ///
 /// The arms are the shapes a decorator expression can take. Anything
 /// else returns false, which costs a MISS rather than a finding: the
 /// checker's `expr_mentions_super` is the complete walker and it cannot
 /// be used here, because member decorator expressions never reach the
 /// AST.
-fn decorator_mentions_super(d : @ast.TsExpr) -> Bool {
+fn decorator_mentions_name(d : @ast.TsExpr, name : String) -> Bool {
   match d {
-    Var("super") => true
-    PropAccess(recv, _) => decorator_mentions_super(recv)
+    Var(n) if n == name => true
+    PropAccess(recv, _) => decorator_mentions_name(recv, name)
     IndexAccess(recv, idx) =>
-      decorator_mentions_super(recv) || decorator_mentions_super(idx)
+      decorator_mentions_name(recv, name) || decorator_mentions_name(idx, name)
     MethodCall(recv, _, args) => {
-      if decorator_mentions_super(recv) {
+      if decorator_mentions_name(recv, name) {
         return true
       }
       for a in args {
-        if decorator_mentions_super(a) {
+        if decorator_mentions_name(a, name) {
           return true
         }
       }
       false
     }
     Call(n, args) => {
-      if n == "super" {
+      if n == name {
         return true
       }
       for a in args {
-        if decorator_mentions_super(a) {
+        if decorator_mentions_name(a, name) {
           return true
         }
       }
       false
     }
     CallExpr(callee, args) => {
-      if decorator_mentions_super(callee) {
+      if decorator_mentions_name(callee, name) {
         return true
       }
       for a in args {
-        if decorator_mentions_super(a) {
+        if decorator_mentions_name(a, name) {
           return true
         }
       }
       false
     }
-    TypeArgs(_, inner) | PureCall(inner) => decorator_mentions_super(inner)
+    TypeArgs(_, inner) | PureCall(inner) => decorator_mentions_name(inner, name)
     _ => false
   }
 }
@@ -2783,10 +2792,29 @@ fn Parser::parse_class_body(
         // tsc accepts it (probed). `decoratorOnClassMethod12`'s class is
         // at namespace level, so `in_function` is false for it.
         if not(self.in_function) &&
-          decorator_mentions_super(self.pending_decorators[di]) {
+          decorator_mentions_name(self.pending_decorators[di], "super") {
           self.grammar_misuses.push(
             "`super` can only be referenced in members of derived classes or object literal expressions",
           )
+        }
+        // TS2331: `this` in a member decorator expression, which is
+        // evaluated where the class is DEFINED — so inside a namespace
+        // body it sees the namespace's `this`, and a namespace body is
+        // not a `this` context (`decoratorOnClassMethod11`). The region
+        // is the same one the `super` rule above needs, and both halves
+        // of it were probed: a class inside a FUNCTION inside a namespace
+        // is TS2683 instead, which `in_function` excludes, and a class at
+        // script top level is TS7017 rather than TS2331 — so being inside
+        // a namespace is required and cannot be decided here. A namespace
+        // body is parsed by a FRESH `Parser` that does not know it is
+        // one, so this leaves a SENTINEL and
+        // `parse_namespace_decl_with_mode` turns it into the diagnostic
+        // where the context is known, the same mechanism TS1063 /
+        // TS1319 use. An unconverted sentinel stays a `<`-prefixed
+        // marker, which the checker's grammar loop skips.
+        if not(self.in_function) &&
+          decorator_mentions_name(self.pending_decorators[di], "this") {
+          self.grammar_misuses.push("<this-in-decorator>")
         }
         match decorator_head_name(self.pending_decorators[di]) {
           Some((called, dname)) =>

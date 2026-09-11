@@ -1384,6 +1384,7 @@ fn Parser::parse_parenthesized_expr(
     // Compiler-option context must survive into the sub-parse too — the
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,
+    strict_null_checks: self.strict_null_checks,
   }
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async
@@ -1467,6 +1468,7 @@ fn Parser::parse_expr_until_top_level(
     // Compiler-option context must survive into the sub-parse too — the
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,
+    strict_null_checks: self.strict_null_checks,
   }
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async
