@@ -1486,6 +1486,89 @@ product surfaces now.
   boundary is exact and probed, since a parameter decorator runs in the
   scope OUTSIDE the class, so the same class body is TS1308 in a plain
   `function` and ACCEPTED in an `async` one.
+  `src/checker/UNSUPPORTED.md` is the companion this section had been
+  missing, and writing it is what produced the next batch. The triage
+  classifies the backlog by the MACHINERY a rule needs; that file shows
+  the CODE a user would write, every snippet minimized and run through
+  both `tscheck` and the real compiler, so each entry is a measured gap
+  rather than a guess — and where `tscheck` reports something DIFFERENT
+  from tsc it says so, because a file can be flagged for the wrong reason
+  and the oracle counts it either way. It corrected itself twice while
+  being written, both times the label-for-objective substitution: TS2403
+  and TS2411 read as gaps because four and two MISS files raise them, and
+  `var x: number; var x: string;` and
+  `interface I { bar: number; [x: string]: string }` are ALREADY flagged,
+  so those files fail for unrelated reasons. Its own headline rule is to
+  open the corpus file before taking anything.
+  Batch EB took four of its sections for **+8 files at FP 0** (TP 2586 ->
+  2594, MISS in scope 129 -> 121), and three of the four were narrower
+  than the section that asked for them. "Overload resolution", a Tier 1
+  row, turned out to be one missing instantiation: the members are
+  already ingested as a Union of `Func`s and `infer_call` already selects
+  by argument assignability, but type parameters are recorded per NAME in
+  `func_type_params`, which is OVERWRITTEN per declaration — so for
+  `f(s: string); f(n: number); f<T>(x: T); f(x) {}` it holds the
+  IMPLEMENTATION's empty list, the generic member reached the union arm
+  as `Func([Named("T")], Named("T"))`, matched nothing, and the call came
+  back carrying an unresolved `T` that every downstream check reads as
+  unknowable. `func_overload_type_params` (the union across a name's
+  declarations, its own map because the existing consumers want the
+  per-declaration answer) plus an instantiating pass tried only AFTER
+  every non-generic member has failed — TypeScript's own order, so a call
+  a concrete overload accepts keeps the answer it already had.
+  TS18033's blocker was not the type either, which is what the triage
+  assumed: the checker already infers `string | number` for
+  `const { value = "123" } = thing` and `{}` for a block-local
+  `let Infinity = {}`, measured before anything was written. The enum AST
+  keeps FOLDED LITERAL values only, so the initializer expression never
+  reaches the checker at all; a `<enum-init-name:NAME>` marker carries
+  the one shape worth deciding and the checker resolves it in the
+  top-level env, which is where a DESTRUCTURED binding lives. Its
+  definitely-non-numeric set excludes LITERAL types, and that is the cell
+  reasoning gets wrong: `declare const s: string` is TS18033 while
+  `const s = "a"` — type `"a"` — is ACCEPTED, because a string literal
+  initializer is how a string enum member is written.
+  TS2367 on intersections had BOTH halves already, in the wrong place.
+  `cast_shape_fields` plus "each side requires a property the other
+  lacks" is the comparability test the `as` path has used for
+  `typeAssertionsWithIntersectionTypes01` all along and the equality arms
+  never asked; it is `shapes_definitely_disjoint` now and both call it,
+  `==` included — restricted to object shapes, because `==` coerces a
+  primitive against an object (`{} == "[object Object]"` is true) while
+  object against object is reference equality. And
+  `equality_primitive_family` gained an `Intersection` arm, since every
+  value of `T & number` is a number whatever `T` is, with `Any` /
+  `Unknown` / `Never` in a part abstaining outright: `any & number` IS
+  `any`, so answering "number" there would report a comparison tsc
+  accepts.
+  `globalThis` is the one that was a real hole, and it was the
+  applied-in-some-places family twice. The READ form
+  (`var r = globalThis.y`) was all the rule judged; the WRITE form was
+  missed at BOTH spellings, because `globalThis.y = 4` at the top of a
+  list is a `PropAssign` STATEMENT and the same line inside a function is
+  `Expr(PropAssignExpr(…))`, and both arms walked the RECEIVER and the
+  VALUE while the property NAME sat in the node itself, tested by
+  neither — with the legal neighbour four lines away in the corpus file,
+  since `globalThis.x = 3` beside a `var x` IS legal. A top-level
+  `function f() { … }` body was not reached at all, the batch DS parser
+  fact again. `this` at script scope IS `typeof globalThis`, arrows
+  included, and it gets its OWN region-scoped walk rather than a flag
+  threaded through that one, because the two questions have different
+  REGIONS: `globalThis.x` means the same in any body, `this` means the
+  global object only where nothing has rebound it — an arrow keeps it, a
+  `function` does not, and tsc reports TS2683 there instead. The cell
+  reasoning gets backwards is that `this.zzz = 1` is ACCEPTED (a new
+  global property may be created) while `this.name` is not, because
+  `name` is `declare const name: void` in the DOM lib and a block-scoped
+  LIB global is not a `globalThis` property either;
+  `is_lib_dom_blockscoped_value` is generated from the lib sources for
+  that — one name in the whole set — and is DOM-scoped rather than
+  unioned because webworker declares the same name with `var`. My own
+  measurement was wrong once here in this file's recurring way: grepping
+  for `does not exist on` counted the EXISTING class-member check's
+  report on `class C { m() { this.name = 1 } }` and read it as a false
+  positive of the new rule, where grepping the path prefix shows the walk
+  never enters a class body.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

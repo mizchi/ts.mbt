@@ -19075,3 +19075,153 @@ test "batch EA rules" {
     @test.assert_eq(only(src, this_ty) + only(src, ret), 0)
   }
 }
+
+///|
+/// Batch EB: the four items the UNSUPPORTED.md groups B / C / E / F asked
+/// for — generic overload resolution, `globalThis`, intersection
+/// comparability, and a computed enum member's initializer type.
+///
+/// Each one's boundary was probed against the real compiler one spelling
+/// at a time, and three of the four have a cell that reasoning gets
+/// wrong:
+///
+///   - `const s = "a"; enum E { X = s }` is ACCEPTED (a string LITERAL
+///     initializer is how a string enum member is written) while
+///     `declare const s: string` is TS18033.
+///   - `this.zzz = 1` at script top level is ACCEPTED — an undeclared
+///     property may be created — while `this.name` is an error, because
+///     the DOM lib declares `name` with `const` and a block-scoped
+///     declaration is not a `globalThis` property.
+///   - `globalThis.x = 3` beside `var x` is legal and `globalThis.y = 4`
+///     beside `const y` is not, which is the pair `globalThis­Readonly­Properties`
+///     puts four lines apart.
+test "batch EB rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let gt = "does not exist on `typeof globalThis`"
+  let eq = "will always be false"
+  let en = "as required for computed enum member values"
+
+  // --- C: `globalThis` / script-level `this`
+  // The WRITE form at both spellings: a `PropAssign` statement at the top
+  // of the list, and an `Expr(PropAssignExpr(…))` inside a function.
+  assert_true(only("var x = 1\nconst y = 2\nglobalThis.y = 4\n", gt) > 0)
+  assert_true(only("const y = 2\nfunction f() { globalThis.y = 4 }\n", gt) > 0)
+  // The READ form, which already worked.
+  assert_true(only("const y = 2\nvar r = globalThis.y\n", gt) > 0)
+  // `this` is `typeof globalThis` at script scope and inside an arrow
+  // there; `name` is the DOM lib's `declare const`.
+  assert_true(only("this.name = \"x\"\n", gt) > 0)
+  assert_true(only("var f = (s: string) => { this.name = s }\n", gt) > 0)
+  assert_true(only("var r = this.name\n", gt) > 0)
+
+  // --- E: intersection comparability
+  let ifaces = "interface I1 { p1: number }\ninterface I2 extends I1 { p2: number }\ninterface I3 { p3: number }\ndeclare const y: I1 & I3\ndeclare const z: I2\n"
+  assert_true(only(ifaces + "var a = y === z\n", eq) > 0)
+  assert_true(only(ifaces + "var a = y == z\n", eq) > 0)
+  assert_true(only(ifaces + "var a = y !== z\n", eq) > 0)
+  // An intersection carrying a primitive part answers with that family.
+  assert_true(
+    only("function f<T>(x: T & number) { return x === \"hello\" }\n", eq) > 0,
+  )
+
+  // --- F: a computed enum member's initializer
+  assert_true(only("declare const s: string\nenum E { X = s }\n", en) > 0)
+  assert_true(only("declare const b: boolean\nenum E { X = b }\n", en) > 0)
+  assert_true(
+    only("declare const n: string | number\nenum E { X = n }\n", en) > 0,
+  )
+  assert_true(only("const o = {}\nenum E { X = o }\n", en) > 0)
+
+  // --- stays silent
+  for
+    src in [
+      // `var` DOES create a global property, and a name the file declares
+      // itself shadows the lib `const`.
+      "var x = 1\nglobalThis.x = 3\n", "var name = 1\nthis.name = \"x\"\n",
+      // An undeclared property may be created through `this` at script
+      // scope — tsc accepts it.
+       "this.zzz = 1\n",
+      // `this` inside a `function` is the callee's own, not the global
+      // object (tsc reports TS2683 there, a different diagnostic).
+       "function f() { this.name = 1 }\n", "function F() { this.name = \"x\" }\n",
+      // A class / object-literal method declaring the member.
+       "class C { name: string; m() { this.name = \"a\" } }\n", "var o = { name: \"x\", m() { this.name = \"y\" } }\n",
+      // E: a shape pair where one side IS comparable to the other, and a
+      // narrowing that leaves an overlap.
+       "interface A { p: number }\ninterface B extends A { q: number }\ndeclare const a: A\ndeclare const b: B\nvar r = a === b\n",
+      "function f<T>(x: T & string) { return x === \"hello\" }\n",
+      // `any` in an intersection makes it `any`, which overlaps anything.
+       "function f<T>(x: T & any) { return x === \"hello\" }\n",
+      // F: every legal initializer spelling.
+       "enum E { X = Infinity }\n", "enum E { X = NaN }\n", "const K = 5\nenum E { X = K }\n",
+      "let K = 5\nenum E { X = K }\n", "enum E { a = 1, b = a }\n",
+      // A string LITERAL type is legal — this is the cell the message
+      // text gets wrong.
+       "const s = \"a\"\nenum E { X = s }\n", "declare const a: any\nenum E { X = a }\n",
+    ] {
+    @test.assert_eq(only(src, gt) + only(src, eq) + only(src, en), 0)
+  }
+}
+
+///|
+/// Batch EB: a call to an OVERLOAD SET whose only accepting member is
+/// GENERIC now infers its instantiated return type.
+///
+/// The members are ingested as plain `Func`s with their type parameters
+/// recorded per NAME — and `func_type_params` is OVERWRITTEN per
+/// declaration, so for an overload set it holds the IMPLEMENTATION's list,
+/// which is empty. `computedPropertyNames9`'s `f(true)` therefore reached
+/// the union arm, matched no member, and came back carrying an unresolved
+/// `T` that every downstream check reads as unknowable.
+test "batch EB: generic overload return inference" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let overloads = "function f(s: string): string;\nfunction f(n: number): number;\nfunction f<T>(x: T): T;\nfunction f(x): any { }\n"
+  // The generic member is selected and instantiated: `f(true)` is
+  // `boolean`, which is not a legal computed key.
+  assert_true(
+    only(overloads + "var v = { [f(true)]: 0 };\n", "computed property name") >
+    0,
+  )
+  // The same through `declare function` overloads.
+  assert_true(
+    only(
+      "declare function g(s: string): string;\ndeclare function g<T>(x: T): T;\nvar probe: symbol = g(true);\n",
+      "expected `symbol`",
+    ) >
+    0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // A concrete member accepts these, so the answer they already had
+      // is kept — `string` and `number` are both legal computed keys.
+      overloads + "var v = { [f(\"a\")]: 0 };\n",
+      overloads + "var v = { [f(1)]: 0 };\n",
+      // A single generic function was never the broken case.
+      "function id<T>(x: T): T { return x }\nvar v = { [id(\"a\")]: 0 };\n",
+    ] {
+    @test.assert_eq(only(src, "computed property name"), 0)
+  }
+}

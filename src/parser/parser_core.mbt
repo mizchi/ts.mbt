@@ -526,6 +526,14 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
       if !lib_list_grants_year(libs, 2024) {
         grammar_misuses.push("<lib-lacks-es2024>")
       }
+      // TS2339 evidence for `globalThis.name`: the DOM libs declare
+      // `name` with `const`, so it is not a property of `globalThis` —
+      // but webworker declares the same name with `var`. The DEFAULT lib
+      // includes dom, so the rule reads the DOM answer unless an explicit
+      // `@lib:` list leaves dom out, which this marks.
+      if !libs.contains("dom") {
+        grammar_misuses.push("<lib-without-dom>")
+      }
     }
     None =>
       // No explicit `@lib:` — the default lib follows the target, so an

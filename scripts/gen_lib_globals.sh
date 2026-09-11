@@ -37,6 +37,25 @@ fi
 grep -hoP '^\s*(?:interface|type|declare\s+(?:class|abstract class|namespace|enum|type))\s+\K[A-Za-z_$][A-Za-z0-9_$]*' "$LIB"/*.d.ts \
   | sort -u > /tmp/lib_type_names.txt
 
+# Ambient global values the DOM libs declare with `const` / `let` and never
+# with `var` / `function` / `class`. A block-scoped declaration is NOT a
+# property of `globalThis`, which makes `globalThis.name = "x"` and
+# `this.name = x` at script scope TS2339 — the only shape in the whole lib
+# set today is `declare const name: void` in dom.generated.d.ts, and the
+# reason it has to be DOM-scoped rather than unioned is that
+# webworker.generated.d.ts declares the same name as `declare var name:
+# string`. The default lib for every target includes dom and not the full
+# webworker surface, so the DOM answer is the default answer; the checker
+# abstains when an explicit `@lib:` list leaves dom out.
+{
+  grep -hoP '^\s*declare\s+(?:const|let)\s+\K[A-Za-z_$][A-Za-z0-9_$]*' "$LIB"/dom*.d.ts || true
+} | sort -u > /tmp/lib_dom_blockscoped_all.txt
+{
+  grep -hoP '^\s*declare\s+(?:var|function|async function|class|abstract class|namespace|enum)\s+\K[A-Za-z_$][A-Za-z0-9_$]*' "$LIB"/dom*.d.ts || true
+} | sort -u > /tmp/lib_dom_varish.txt
+comm -23 /tmp/lib_dom_blockscoped_all.txt /tmp/lib_dom_varish.txt \
+  > /tmp/lib_dom_blockscoped.txt
+
 emit_match() {
   # $1 = fn name, $2 = names file. Emits a memoized predicate: the raw
   # match spans thousands of arms and callers probe the same module-local
@@ -89,8 +108,16 @@ emit_match() {
   echo "/// \`IteratorResult\`, …). Interfaces, type aliases, declared classes,"
   echo "/// namespaces, and enums across every lib target."
   emit_match is_lib_global_type /tmp/lib_type_names.txt
+  echo ""
+  echo "///|"
+  echo "/// True when \`name\` is declared \`const\` / \`let\` by the DOM libs and"
+  echo "/// never \`var\` / \`function\` / \`class\` there — i.e. it is a lib global"
+  echo "/// that is NOT a property of \`globalThis\`. See the generator for why"
+  echo "/// this is DOM-scoped rather than unioned across every lib."
+  emit_match is_lib_dom_blockscoped_value /tmp/lib_dom_blockscoped.txt
 } > "$OUT"
 
 echo "wrote $OUT"
 echo "  value globals: $(wc -l < /tmp/lib_value_names.txt)"
 echo "  type globals:  $(wc -l < /tmp/lib_type_names.txt)"
+echo "  dom block-scoped: $(wc -l < /tmp/lib_dom_blockscoped.txt)"

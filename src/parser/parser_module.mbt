@@ -402,8 +402,28 @@ fn Parser::scan_skipped_enum_initializer(
       self.record_enum_string_arith(e)
       self.record_enum_await_yield(e)
       self.record_const_enum_nonconstant(e)
+      self.record_enum_init_name(e)
     }
     None => ()
+  }
+}
+
+///|
+/// TS18033: a computed enum member's initializer must be assignable to
+/// `number`. The enum AST keeps folded literal values only, so the
+/// initializer expression is gone by the time the checker sees the
+/// declaration -- but the one shape worth deciding is a BARE IDENTIFIER,
+/// and its name is all the checker needs to look the binding's type up
+/// and judge it (`check_enum_init_name_types`).
+///
+/// Only a bare `Var`. Arithmetic, a property access (`Other.member`), a
+/// call and a unary form all abstain: `A.b` is a legal cross-enum
+/// reference, and telling it from a non-numeric member read needs
+/// resolution this does not do.
+fn Parser::record_enum_init_name(self : Parser, e : @ast.TsExpr) -> Unit {
+  match e {
+    Var(n) => self.grammar_misuses.push("<enum-init-name:\{n}>")
+    _ => ()
   }
 }
 

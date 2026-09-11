@@ -3,6 +3,127 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EB (2026-09-11): the four items `src/checker/UNSUPPORTED.md` asked for
+
++8 files at FP 0 (TP 2586 -> 2594, MISS in scope 129 -> 121, PFLEGAL 0).
+`src/checker/UNSUPPORTED.md` is the new companion to
+`docs/checker-triage.md`: the triage classifies the backlog by the
+MACHINERY a rule needs, and that file shows the CODE a user would write,
+every snippet minimized and run through both `tscheck` and the real
+compiler so each entry is a measured gap. Writing it is what produced
+this batch's targets — and it corrected itself twice while being written,
+both times the label-for-objective substitution: **TS2403 and TS2411 read
+as gaps because four and two MISS files raise them, and
+`var x: number; var x: string;` and
+`interface I { bar: number; [x: string]: string }` are ALREADY flagged.**
+
+- [x] **B: a call to an overload set whose only accepting member is
+  GENERIC** (TS2464, +2: `computedPropertyNames9_ES6` / `_ES5`). Filed as
+  "overload resolution", a Tier 1 row — and what was broken is much
+  narrower. The members are already ingested as a Union of `Func`s and
+  `infer_call` already selects by argument assignability; the type
+  parameters are recorded per NAME in `func_type_params`, which is
+  OVERWRITTEN per declaration, so for `f(s: string); f(n: number);
+  f<T>(x: T); f(x) {}` it holds the IMPLEMENTATION's empty list. The
+  generic member reached the union arm as `Func([Named("T")],
+  Named("T"))`, matched nothing, and the call came back carrying an
+  unresolved `T` that every downstream check reads as unknowable.
+  - `func_overload_type_params` is the union across a name's
+    declarations, kept as its OWN map because `func_type_params`'
+    existing consumers want the per-declaration answer.
+  - Tried only after every non-generic member has failed, which is also
+    TypeScript's order — so a call a concrete overload accepts keeps the
+    answer it already had, and `f("a")` / `f(1)` are in the test as the
+    controls.
+- [x] **C: `globalThis` and the script-level `this`** (TS2339, +3:
+  `globalThisReadonlyProperties`, `emitArrowFunctionThisCapturing{,ES6}`).
+  Three findings, two of them about code already present.
+  - The READ form (`var r = globalThis.y`) was all the rule judged. The
+    WRITE form was missed at **both** of its spellings —
+    `globalThis.y = 4` at the top of a list is a `PropAssign` STATEMENT
+    and the same line inside a function is `Expr(PropAssignExpr(…))`, and
+    both arms walked the RECEIVER and the VALUE while the property NAME
+    sat in the node itself, tested by neither. The batch DS parser fact
+    again, and the legal neighbour is four lines away in the corpus file:
+    `globalThis.x = 3` beside a `var x` IS legal.
+  - A top-level `function f() { globalThis.y = 4 }` body was not reached
+    at all, because a top-level function is parsed into `module_.funcs`
+    and not into `top_level_stmts`. Buys no corpus file.
+  - `this` at script scope IS `typeof globalThis`, including inside an
+    ARROW — which is where both arrow files put it. It gets its OWN
+    region-scoped walk rather than a flag threaded through the
+    `globalThis` one, because the two questions have different REGIONS:
+    `globalThis.x` means the same in any body, `this` means the global
+    object only where nothing has rebound it. An arrow keeps it, a
+    `function` does not (tsc reports TS2683 there — a different
+    diagnostic), so the walk stops at every `function` and class body and
+    loses a finding rather than inventing one.
+  - **`this.name` is an error and `this.zzz` is not**, which reasoning
+    gets backwards: an undeclared property may be CREATED through `this`
+    at script scope. `name` is `declare const name: void` in
+    dom.generated.d.ts, and a block-scoped LIB global is not a
+    `globalThis` property either. `is_lib_dom_blockscoped_value` is
+    generated from the lib sources for that — one name in the whole set
+    today — and is DOM-scoped rather than unioned because
+    `webworker.generated.d.ts` declares the same name with `var`; the
+    rule abstains when an explicit `@lib:` list leaves dom out, and a
+    name the file declares itself wins.
+  - My own MEASUREMENT was wrong once here and the pattern is this
+    file's: grepping for `does not exist on` counted the EXISTING
+    class-member check's report on `class C { m() { this.name = 1 } }`
+    and read it as a false positive of the new rule. Grepping the path
+    prefix instead shows the walk never enters a class body.
+- [x] **E: intersection comparability** (TS2367, +2:
+  `equalityWithIntersectionTypes01`, `intersectionNarrowing`). Both halves
+  existed, in the wrong place.
+  - `cast_shape_fields` plus "each side requires a property the other
+    lacks" is the test the `as` path (TS2352) has used for
+    `typeAssertionsWithIntersectionTypes01` all along, and the equality
+    arms never asked. It is `shapes_definitely_disjoint` now and both
+    call it. `==` gets it too, restricted to object shapes: `==` coerces
+    a primitive against an object (`{} == "[object Object]"` is true)
+    while object against object is reference equality, where `===`'s
+    answer holds.
+  - `equality_primitive_family` gained an `Intersection` arm, because
+    every value of `T & number` is a number whatever `T` is — that is
+    `intersectionNarrowing`'s `f5`, and it fires there and on none of
+    f1-f4, which are legal narrowings. `Any` / `Unknown` / `Never` in a
+    part abstains outright: `any & number` IS `any`, so answering
+    "number" would report a comparison tsc accepts.
+- [x] **F: a computed enum member's initializer type** (TS18033, +1:
+  `enumErrorOnConstantBindingWithInitializer`). The blocker was NOT the
+  type, which is what the triage assumed: the checker already infers
+  `string | number` for `const { value = "123" } = thing` and `{}` for a
+  block-local `let Infinity = {}` — measured before writing anything.
+  What is missing is that the enum AST keeps FOLDED LITERAL values only,
+  so the initializer expression never reaches the checker. A
+  `<enum-init-name:NAME>` marker carries the one shape worth deciding (a
+  bare identifier) and the checker resolves it in the top-level env,
+  which is where a DESTRUCTURED binding lives — `resolver.globals`
+  records only `Var(Ident(n), ty, _)`.
+  - The definitely-non-numeric set excludes LITERAL types, and that is
+    the cell reasoning gets wrong: `declare const s: string` is TS18033
+    while `const s = "a"` — type `"a"` — is **ACCEPTED**, because a
+    string literal initializer is how a string enum member is written.
+    `Infinity` / `NaN` / `any` / a sibling member abstain by not
+    resolving, all four probed.
+  - Placing the check needed one more fix: the top-level statement walk
+    is guarded on `top_level_stmts.length() > 0`, and a file of exactly
+    `declare const s: string` plus an enum has none, so the whole block
+    was skipped.
+- [ ] **STILL MISSING in those four groups**, each with its blocker
+  measured rather than guessed:
+  - `(typeof globalThis)["\"ambientModule\""]` — an `IndexedAccess` on
+    `typeof globalThis` in a TYPE position reaches no name check, and
+    firing there needs the declared-globals set to be complete in type
+    position.
+  - `enumShadowedInfinityNaN` — SCOPE, not type: its `let Infinity = {}`
+    is in a block with the enum, and an enum is hoisted into
+    `module_.enums` with no record of the block, so the shadowing binding
+    is not in the top-level env.
+  - `neverIntersectionNotCallable` — needs intersection REDUCTION to
+    `never`, which is E's machinery rather than B's.
+
 ### Batch EA (2026-09-11): three rules off the compiler-probed long tail
 
 +3 files at FP 0 (TP 2583 -> 2586, MISS in scope 132 -> 129, PFLEGAL 0).

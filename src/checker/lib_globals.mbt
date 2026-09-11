@@ -3292,3 +3292,30 @@ fn is_lib_global_type_uncached(name : String) -> Bool {
     _ => false
   }
 }
+
+///|
+/// True when `name` is declared `const` / `let` by the DOM libs and
+/// never `var` / `function` / `class` there — i.e. it is a lib global
+/// that is NOT a property of `globalThis`. See the generator for why
+/// this is DOM-scoped rather than unioned across every lib.
+let is_lib_dom_blockscoped_value_memo : Map[String, Bool] = {}
+
+///|
+fn is_lib_dom_blockscoped_value(name : String) -> Bool {
+  match is_lib_dom_blockscoped_value_memo.get(name) {
+    Some(v) => v
+    None => {
+      let v = is_lib_dom_blockscoped_value_uncached(name)
+      is_lib_dom_blockscoped_value_memo[name] = v
+      v
+    }
+  }
+}
+
+///|
+fn is_lib_dom_blockscoped_value_uncached(name : String) -> Bool {
+  match name {
+    "name" => true
+    _ => false
+  }
+}

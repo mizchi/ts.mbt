@@ -162,6 +162,15 @@ and would make the fix cheaper still.
 | computed `unique symbol` keys | 183 `.d.ts` declare `unique symbol`, 72 use `[Symbol.x]` keys; blind at the common shape | 16 |
 | overload resolution (select the right signature) | overloads are the reason `.d.ts` files exist; blind | 2 |
 
+**The overload row was taken in batch EB and it was not "overload
+resolution".** Selection by argument assignability already existed; what
+was missing is that a GENERIC member of the set never got instantiated,
+because type parameters are recorded per NAME in `func_type_params` and
+that map is overwritten per declaration — for an overload set it holds
+the implementation's (empty) list. See TODO.md; the general capability is
+still absent and `neverIntersectionNotCallable` needs intersection
+reduction rather than this.
+
 Take these for the capability, not the count. The conformance yield is
 modest; the difference is that a `.d.ts` using `ReturnType<typeof f>`
 currently type-checks by *abstaining*, which is a silent hole in the

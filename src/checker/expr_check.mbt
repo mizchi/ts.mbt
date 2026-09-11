@@ -48,7 +48,17 @@ priv struct Resolver {
   signatures : Map[String, Array[@ast.TsParam]]
   // Generic type-parameter names declared on top-level functions, keyed by
   // function name. Empty array for non-generic functions.
+  //
+  // OVERWRITTEN per declaration, so for an OVERLOAD SET it holds the last
+  // declaration's list — which for `function f(s: string); function f<T>(x:
+  // T); function f(x) {}` is the implementation's, i.e. empty.
   func_type_params : Map[String, Array[String]]
+  // The UNION of type-parameter names across every declaration of a name.
+  // `func_type_params` cannot answer for an overload set (see above) and
+  // its existing consumers want the per-declaration answer, so the
+  // accumulated one is its own map rather than a change to that one.
+  // Read only when the callee resolves to a Union of signatures.
+  func_overload_type_params : Map[String, Array[String]]
   // Per-function `<const T>` modifier flags, positionally aligned with
   // `func_type_params[name]`. A `true` entry means generic inference
   // should not widen the inferred literal type for that parameter.
@@ -185,6 +195,33 @@ fn namespace_is_instantiated(m : @ast.TsModule) -> Bool {
 }
 
 ///|
+/// Add `tps` to the accumulated overload type-parameter list for `key`,
+/// keeping it duplicate-free. See `func_overload_type_params`.
+fn accumulate_overload_type_params(
+  r : Resolver,
+  key : String,
+  tps : Array[String],
+) -> Unit {
+  if tps.length() == 0 {
+    return
+  }
+  let existing = match r.func_overload_type_params.get(key) {
+    Some(e) => e
+    None => []
+  }
+  let out : Array[String] = []
+  for t in existing {
+    out.push(t)
+  }
+  for t in tps {
+    if !out.contains(t) {
+      out.push(t)
+    }
+  }
+  r.func_overload_type_params[key] = out
+}
+
+///|
 fn Resolver::empty() -> Resolver {
   {
     interfaces: {},
@@ -194,6 +231,7 @@ fn Resolver::empty() -> Resolver {
     globals: {},
     signatures: {},
     func_type_params: {},
+    func_overload_type_params: {},
     func_type_param_bounds: {},
     func_const_type_params: {},
     enums: {},
@@ -938,6 +976,7 @@ fn Resolver::ingest_module(
     // `declare function f<T>(...)` imports — without this the inference
     // path skipped imports entirely.
     r.func_type_params[prefix + imp.name] = imp.type_params
+    accumulate_overload_type_params(r, prefix + imp.name, imp.type_params)
     // Synthesize a minimal `TsParam` list (names only) so the rich-
     // signature path used by `apply_type_predicate_narrowing` can map
     // the predicate's parameter name to an argument index.
@@ -1044,6 +1083,7 @@ fn Resolver::ingest_module(
     }
     r.signatures[prefix + f.name] = effective_params
     r.func_type_params[prefix + f.name] = f.type_params
+    accumulate_overload_type_params(r, prefix + f.name, f.type_params)
     r.func_const_type_params[prefix + f.name] = f.const_type_params
     if f.type_param_bounds.length() > 0 {
       r.func_type_param_bounds[prefix + f.name] = f.type_param_bounds
@@ -6826,6 +6866,17 @@ fn enum_numeric_literal_disjoint(
 
 ///|
 fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  // Two different primitive FAMILIES never overlap, and asking that first
+  // is what lets an intersection carrying a primitive part be decided: the
+  // `Intersection` arm below is a fail-open catch-all, so `T & number`
+  // against `string` would otherwise be called overlapping. Every pair the
+  // arms below already decide answers the same way here (a cross-family
+  // primitive pair falls through to the final `false`), so this only adds
+  // the cases `equality_primitive_family` newly answers for.
+  match (equality_primitive_family(a), equality_primitive_family(b)) {
+    (Some(fa), Some(fb)) => if fa != fb { return false }
+    _ => ()
+  }
   match (a, b) {
     (Any, _) | (_, Any) => true
     (Never, _) | (_, Never) => true
@@ -7119,7 +7170,11 @@ fn check_binop_operands(
         !is_nullish_kw(r) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
-        (not(types_can_overlap(lt, rt)) || literal_union_disjoint(lt, rt)) {
+        (
+          not(types_can_overlap(lt, rt)) ||
+          literal_union_disjoint(lt, rt) ||
+          shapes_definitely_disjoint(ctx.resolver, lt, rt)
+        ) {
         record(
           ctx,
           "strict equality",
@@ -7177,7 +7232,22 @@ fn check_binop_operands(
               "comparing `\{type_display(lt)}` and `\{type_display(rt)}` with == will always be false",
             )
           }
-        _ => ()
+        _ =>
+          // Two object SHAPES: `==` coerces a primitive against an object
+          // (`{} == "[object Object]"` is true), so the family gate above
+          // is right to refuse those — but object against object is
+          // reference equality, where "no value inhabits both" is the same
+          // answer `===` gives. `equalityWithIntersectionTypes01` compares
+          // its pair with all four operators.
+          if !is_typeof(l) &&
+            !is_typeof(r) &&
+            shapes_definitely_disjoint(ctx.resolver, lt, rt) {
+            record(
+              ctx,
+              "loose equality",
+              "comparing `\{type_display(lt)}` and `\{type_display(rt)}` with == will always be false",
+            )
+          }
       }
     }
     // Relational comparison (`<`, `<=`, `>`, `>=`): the `null` / `undefined`
@@ -7194,12 +7264,43 @@ fn check_binop_operands(
 /// matching literal forms. Returns `None` for anything else (objects,
 /// named references, unions, `null` / `undefined`, etc.) where `==`
 /// coercion or structural shape makes a "no overlap" call unsafe.
+///
+/// An INTERSECTION carrying a primitive part answers with that family,
+/// because every value of `T & number` is a number whatever `T` is —
+/// which is what makes `x === "hello"` on a `T & number` parameter
+/// decidable without narrowing `T` (intersectionNarrowing's `f5`). Only
+/// the parts that HAVE a family vote, so a type-parameter part or an
+/// inlined `string | number` bound abstains rather than disagreeing; two
+/// different families among the parts means the intersection is `never`,
+/// which is a different diagnostic and not this one's business.
+///
+/// `Any` / `Unknown` / `Never` in a part is the one case that must
+/// abstain outright: `any & number` IS `any` in TypeScript, so answering
+/// "number" there would report a comparison tsc accepts.
 fn equality_primitive_family(t : @ast.TsType) -> String? {
   match t {
     String_ | Literal(_) | TemplateLiteralType(_, _) => Some("string")
     Number | Int | NumberLiteral(_) => Some("number")
     Boolean | BooleanLiteral(_) => Some("boolean")
     BigInt | BigIntLiteral(_) => Some("bigint")
+    Intersection(parts) => {
+      let mut found : String? = None
+      for p in parts {
+        match p {
+          Any | Unknown | Never => return None
+          _ => ()
+        }
+        match equality_primitive_family(p) {
+          Some(f) =>
+            match found {
+              Some(prev) => if prev != f { return None }
+              None => found = Some(f)
+            }
+          None => ()
+        }
+      }
+      found
+    }
     _ => None
   }
 }
@@ -7494,6 +7595,37 @@ fn infer_expr(
           }
           _ => ()
         }
+      }
+      // An OVERLOAD SET whose members include a generic signature. The
+      // members are ingested as plain `Func`s with their type parameters
+      // recorded per NAME, so `infer_call`'s union arm compares a `boolean`
+      // argument against a bare `Named("T")` parameter, matches nothing,
+      // and hands back a union containing an unresolved `T` — which every
+      // downstream check treats as unknowable. `computedPropertyNames9`'s
+      // `f(true)` against `f(s: string); f(n: number); f<T>(x: T)` is
+      // exactly that: only the generic member accepts it, and its return
+      // is `boolean`.
+      //
+      // Tried only after the non-generic members have all failed, which is
+      // also TypeScript's order, so a call a concrete overload accepts
+      // keeps the answer it already had.
+      match callee_ty {
+        Union(_) =>
+          match
+            infer_generic_overload_call(
+              env,
+              resolver,
+              callee_ty,
+              args,
+              match resolver.func_overload_type_params.get(name) {
+                Some(tps) => tps
+                None => []
+              },
+            ) {
+            Some(ret) => return ret
+            None => ()
+          }
+        _ => ()
       }
       infer_call(env, resolver, callee_ty, args)
     }
@@ -8295,6 +8427,80 @@ fn type_param_occurs(tp : String, t : @ast.TsType) -> Bool {
         None => false
       }
   }
+}
+
+///|
+/// The return type of a call to an OVERLOAD SET, selected from the
+/// members whose parameters mention a type parameter and instantiated
+/// from the arguments. `None` when no such member accepts them, which
+/// leaves the existing `infer_call` answer in place.
+///
+/// The non-generic members are deliberately NOT tried here: the caller
+/// runs this only after `infer_call`'s own union arm has failed to match
+/// one, and trying them again in a different order could change an answer
+/// that is already right. A member is "generic" when any of `tps`
+/// appears in its parameter list — `tps` is the union across the name's
+/// declarations, so a member that mentions none of them is skipped.
+///
+/// Every argument must be assignable to the SUBSTITUTED parameter, so a
+/// solved binding that contradicts another position rejects the member
+/// rather than silently widening it.
+fn infer_generic_overload_call(
+  env : ExprEnv,
+  resolver : Resolver,
+  callee_ty : @ast.TsType,
+  args : Array[@ast.TsExpr],
+  tps : Array[String],
+) -> @ast.TsType? {
+  if tps.length() == 0 {
+    return None
+  }
+  let parts = match resolver.unwrap(callee_ty) {
+    Union(ps) => ps
+    _ => return None
+  }
+  let arg_types : Array[@ast.TsType] = []
+  for a in args {
+    arg_types.push(resolver.unwrap(infer_expr(env, resolver, a)))
+  }
+  for part in parts {
+    match resolver.unwrap(part) {
+      Func(params, ret) =>
+        if params.length() == arg_types.length() {
+          let mut mentions_tp = false
+          for p in params {
+            if type_references_any(p, tps) {
+              mentions_tp = true
+            }
+          }
+          if mentions_tp {
+            let bindings = solve_generic_bindings(
+              env,
+              resolver,
+              tps,
+              params,
+              args,
+              None,
+            )
+            let mut ok = true
+            for i in 0..<params.length() {
+              if !is_assignable_to(
+                  arg_types[i],
+                  substitute_params(params[i], bindings),
+                ) {
+                ok = false
+                break
+              }
+            }
+            if ok {
+              return Some(substitute_params(ret, bindings))
+            }
+          }
+        }
+      _ => ()
+    }
+  }
+  None
 }
 
 ///|
@@ -20516,41 +20722,22 @@ fn check_call_args_in_expr(
             "as",
             "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
           )
-        } else {
           // TS2352 between object shapes (interfaces, intersections of
           // interfaces, literal shapes): the conversion is a definite
           // mistake when EACH side declares a required property the other
           // side lacks entirely -- then neither direction is comparable
           // (`<I3>z` where `z: I2`; typeAssertionsWithIntersectionTypes01).
           // Any unresolvable / generic / indexed / computed shape abstains.
-          match
-            (
-              cast_shape_fields(ctx.resolver, inferred_u, 0),
-              cast_shape_fields(ctx.resolver, asserted_u, 0),
-            ) {
-            (Some(src), Some(tgt)) => {
-              let mut tgt_requires_missing = false
-              for name, required in tgt {
-                if required && !src.contains(name) {
-                  tgt_requires_missing = true
-                }
-              }
-              let mut src_requires_missing = false
-              for name, required in src {
-                if required && !tgt.contains(name) {
-                  src_requires_missing = true
-                }
-              }
-              if tgt_requires_missing && src_requires_missing {
-                record(
-                  ctx,
-                  "as",
-                  "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
-                )
-              }
-            }
-            _ => ()
-          }
+        } else if shapes_definitely_disjoint(
+            ctx.resolver,
+            inferred_u,
+            asserted_u,
+          ) {
+          record(
+            ctx,
+            "as",
+            "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
+          )
         }
       }
     }
@@ -24632,6 +24819,73 @@ fn check_for_of_head_var_reads(
           })
         }
       _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// TS18033: "Type 'X' is not assignable to type 'number' as required for
+/// computed enum member values."
+///
+/// The parser marks a computed member whose initializer is a bare
+/// identifier (`<enum-init-name:NAME>`); this resolves NAME against the
+/// top-level env and fires when the type is DEFINITELY not numeric. A
+/// name that does not resolve abstains, which is what keeps
+/// `enum E { a = 1, b = a }` silent — a sibling member is not a binding —
+/// and `Infinity` / `NaN` with it, since a numeric lib global is not in
+/// this env either and both are ACCEPTED by tsc.
+///
+/// The definitely-non-numeric set was probed one spelling at a time and
+/// it does NOT include a literal type, which is the cell reasoning gets
+/// wrong: `declare const s: string` is TS18033 while
+/// `const s = "a"` — type `"a"` — is **ACCEPTED**, because a string
+/// literal initializer is how a string enum member is written. `any` is
+/// accepted, `boolean` and `{}` are not, and a UNION fires only when some
+/// part is itself definitely non-numeric (`string | number` does, the
+/// corpus case; `"a" | 1` abstains).
+///
+/// `enumShadowedInfinityNaN` stays a MISS and the reason is scope rather
+/// than type: its `let Infinity = {}` sits in a BLOCK with the enum, and
+/// an enum is hoisted into `module_.enums` with no record of the block it
+/// came from, so the binding that shadows the lib global is not in this
+/// env. Reaching it needs the block's own env, which means running this
+/// during the statement walk — and the enum is not a statement.
+fn check_enum_init_name_types(
+  module_ : @ast.TsModule,
+  env : ExprEnv,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn definitely_not_numeric(t : @ast.TsType) -> Bool {
+    match resolver.unwrap(t) {
+      String_ | Boolean | Object(_) | Struct(_, _) => true
+      Union(parts) => {
+        for p in parts {
+          if definitely_not_numeric(p) {
+            return true
+          }
+        }
+        false
+      }
+      _ => false
+    }
+  }
+
+  for gm in module_.grammar_misuses {
+    if !gm.has_prefix("<enum-init-name:") {
+      continue
+    }
+    let name = gm["<enum-init-name:".length():gm.length() - 1].to_string()
+    match env.lookup(name) {
+      Some(ty) =>
+        if definitely_not_numeric(ty) {
+          issues.push({
+            path: "enum member initializer `\{name}`",
+            message: "type `\{type_display(ty)}` is not assignable to type `number` as required for computed enum member values",
+          })
+        }
+      None => ()
     }
   }
   issues
@@ -29540,6 +29794,133 @@ fn normalized_union_members(
 }
 
 ///|
+/// Walk an expression for `this.<name>` in a region where `this` is the
+/// GLOBAL object, calling `flag` with each property name found.
+///
+/// An arrow's body is still that region (an arrow does not rebind `this`);
+/// a `function` expression's body and a class body are not, and they
+/// deliberately have no arm here — tsc reports TS2683 in a `function`,
+/// which is a different diagnostic, so descending would trade a MISS for
+/// a false positive.
+fn this_region_walk_expr(e : @ast.TsExpr, flag : (String) -> Unit) -> Unit {
+  match e {
+    PropAccess(Var("this"), p) => flag(p)
+    PropAssignExpr(Var("this"), key, v) => {
+      flag(key)
+      this_region_walk_expr(v, flag)
+    }
+    PropAccess(r, _) => this_region_walk_expr(r, flag)
+    PropAssignExpr(r, _, v) => {
+      this_region_walk_expr(r, flag)
+      this_region_walk_expr(v, flag)
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(x) => this_region_walk_expr(x, flag)
+        ArrowBlock(b) =>
+          for st in b.stmts {
+            this_region_walk_stmt(st, flag)
+          }
+      }
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) => {
+      this_region_walk_expr(a, flag)
+      this_region_walk_expr(b, flag)
+    }
+    Cond(a, b, c) | IndexAssignExpr(a, b, c) => {
+      this_region_walk_expr(a, flag)
+      this_region_walk_expr(b, flag)
+      this_region_walk_expr(c, flag)
+    }
+    UnaryOp(_, x)
+    | Spread(x)
+    | Await(x)
+    | AssignExpr(_, x)
+    | As(x, _)
+    | Satisfies(x, _)
+    | PureCall(x)
+    | TypeArgs(_, x)
+    | NonNull(x)
+    | OptionalChain(x) => this_region_walk_expr(x, flag)
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        this_region_walk_expr(a, flag)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      this_region_walk_expr(callee, flag)
+      for a in args {
+        this_region_walk_expr(a, flag)
+      }
+    }
+    MethodCall(r, _, args) => {
+      this_region_walk_expr(r, flag)
+      for a in args {
+        this_region_walk_expr(a, flag)
+      }
+    }
+    ArrayLit(items) =>
+      for it in items {
+        this_region_walk_expr(it, flag)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        this_region_walk_expr(ent.1, flag)
+      }
+    TemplateLiteral(_, exprs) =>
+      for x in exprs {
+        this_region_walk_expr(x, flag)
+      }
+    _ => ()
+  }
+}
+
+///|
+/// The statement half of `this_region_walk_expr`. `this.<name> = v` at the
+/// top of a statement list is a `PropAssign` STATEMENT and the identical
+/// line inside a block is `Expr(PropAssignExpr(…))`, so both spellings are
+/// handled — the parser fact batch DS records.
+fn this_region_walk_stmt(stmt : @ast.TsStmt, flag : (String) -> Unit) -> Unit {
+  fn blk(b : @ast.TsBlock) -> Unit {
+    for st in b.stmts {
+      this_region_walk_stmt(st, flag)
+    }
+  }
+
+  match stmt {
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Expr(e)
+    | Throw(e)
+    | Return(Some(e)) => this_region_walk_expr(e, flag)
+    PropAssign(Var("this"), key, v) => {
+      flag(key)
+      this_region_walk_expr(v, flag)
+    }
+    PropAssign(r, _, v) => {
+      this_region_walk_expr(r, flag)
+      this_region_walk_expr(v, flag)
+    }
+    If(c, t, e) => {
+      this_region_walk_expr(c, flag)
+      blk(t)
+      match e {
+        Some(x) => blk(x)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) | With(c, b) => {
+      this_region_walk_expr(c, flag)
+      blk(b)
+    }
+    Label(_, st) => this_region_walk_stmt(st, flag)
+    Block(b) => blk(b)
+    _ => ()
+  }
+}
+
+///|
 /// TS2339 for `globalThis.<name>` where `<name>` is a top-level `let` /
 /// `const` in this file: block-scoped declarations never become
 /// `globalThis` properties (globalThisBlockscopedProperties). Only the
@@ -29547,6 +29928,18 @@ fn normalized_union_members(
 /// different codes. Walks top-level statements and their direct
 /// initializer / operand expressions; nested function bodies are covered
 /// too via the recursive statement walk.
+///
+/// The READ form (`var r = globalThis.y`) was all this judged, and the
+/// WRITE form is the commoner one — `globalThis.y = 4` is what a person
+/// writes when they mean to create a global. It was missed at BOTH of its
+/// spellings, for the reason batch DS records: `globalThis.y = 4` at the
+/// top of a statement list is a `PropAssign` STATEMENT, the identical line
+/// inside a function is `Expr(PropAssignExpr(…))`, and both arms walked
+/// the RECEIVER and the VALUE while the property NAME sat in the node
+/// itself, tested by neither. `globalThisReadonlyProperties` is the
+/// corpus file, and its `globalThis.x = 3` against a `var x` is the legal
+/// neighbour in the same four lines: a `var` DOES create a global
+/// property.
 fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let block_scoped : Map[String, Bool] = {}
@@ -29557,20 +29950,71 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
       _ => ()
     }
   }
-  if block_scoped.length() == 0 {
-    return issues
+  // A LIB global declared `const` is block-scoped too, and the same
+  // TS2339 follows: `declare const name: void` in dom.generated.d.ts is
+  // the whole of that set today, which is what makes
+  // `emitArrowFunctionThisCapturing`'s `this.name = x` an error on a
+  // script whose every other line is legal. Withheld when an explicit
+  // `@lib:` list excludes dom, because webworker declares `name` with
+  // `var` and there it IS a property. A name the file declares itself
+  // wins — a local `var name` shadows the lib `const`, so the redeclared
+  // spelling must not be flagged.
+  let mut lib_without_dom = false
+  for gm in module_.grammar_misuses {
+    if gm == "<lib-without-dom>" {
+      lib_without_dom = true
+    }
   }
+  let self_declared : Map[String, Unit] = {}
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), _, _) => self_declared[n] = ()
+      _ => ()
+    }
+  }
+  for f in module_.funcs {
+    self_declared[f.name] = ()
+  }
+  for c in module_.classes {
+    self_declared[c.name] = ()
+  }
+  for v in module_.values {
+    self_declared[v.name] = ()
+  }
+  // Probed per occurrence rather than enumerated: the generated predicate
+  // answers name-by-name and there is no list to iterate.
+  fn not_a_global_property(key : String) -> Bool {
+    if block_scoped.get(key) is Some(_) {
+      return true
+    }
+    !lib_without_dom &&
+    !self_declared.contains(key) &&
+    is_lib_dom_blockscoped_value(key)
+  }
+  // The WRITE form's property name lives on the assignment node rather
+  // than inside an expression, so it needs its own test at each of the
+  // two spellings. One helper, called from both.
+  fn flag_if_block_scoped(recv : @ast.TsExpr, key : String) -> Unit {
+    if recv is Var("globalThis") && not_a_global_property(key) {
+      issues.push({
+        path: "globalThis.\{key}",
+        message: "property `\{key}` does not exist on `typeof globalThis`",
+      })
+    }
+  }
+
   fn walk_expr(e : @ast.TsExpr) -> Unit {
     match e {
       PropAccess(Var("globalThis"), p) =>
-        if block_scoped.get(p) is Some(_) {
+        if not_a_global_property(p) {
           issues.push({
             path: "globalThis.\{p}",
             message: "property `\{p}` does not exist on `typeof globalThis`",
           })
         }
       PropAccess(r, _) => walk_expr(r)
-      PropAssignExpr(r, _, v) => {
+      PropAssignExpr(r, key, v) => {
+        flag_if_block_scoped(r, key)
         walk_expr(r)
         walk_expr(v)
       }
@@ -29647,7 +30091,8 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
       | Expr(e)
       | Throw(e)
       | Return(Some(e)) => walk_expr(e)
-      PropAssign(r, _, v) => {
+      PropAssign(r, key, v) => {
+        flag_if_block_scoped(r, key)
         walk_expr(r)
         walk_expr(v)
       }
@@ -29714,8 +30159,38 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
 
+  // `this` at SCRIPT top level IS `typeof globalThis`, and inside an ARROW
+  // there it still is — an arrow does not rebind `this`. So the same
+  // TS2339 applies to `this.<name>`, and that is what
+  // `emitArrowFunctionThisCapturing{,ES6}` report: their `this.name = x`
+  // sits inside `var f2 = (x: string) => { … }`.
+  //
+  // A SEPARATE walk (`this_region_walk_stmt`) rather than a flag threaded
+  // through the one above, because the two questions have different
+  // REGIONS: `globalThis.x` means the same thing in any body, while `this`
+  // means the global object only where nothing has rebound it.
+  fn flag_this_prop(key : String) -> Unit {
+    if not_a_global_property(key) {
+      issues.push({
+        path: "this.\{key}",
+        message: "property `\{key}` does not exist on `typeof globalThis`",
+      })
+    }
+  }
+
   for stmt in module_.top_level_stmts {
     walk_stmt(stmt)
+    this_region_walk_stmt(stmt, flag_this_prop)
+  }
+  // A top-level `function f() { globalThis.y = 4 }` is parsed into
+  // `module_.funcs` and is NOT pushed into `top_level_stmts`, so the
+  // recursive statement walk above never reaches its body — the same
+  // parser fact batch DS's TS2565 had to be told about by name. Buys no
+  // corpus file and is the same rule at a site that had nothing.
+  for f in module_.funcs {
+    for st in f.body.stmts {
+      walk_stmt(st)
+    }
   }
   issues
 }
@@ -31041,7 +31516,18 @@ fn check_module_function_bodies_layered(
   }
   // Top-level statements (const/let/var with explicit type annotations).
   // Walk them in a module-scope env so local names resolve correctly.
-  if module_.top_level_stmts.length() > 0 {
+  //
+  // The enum-initializer check below needs this env even when there are no
+  // statements to walk — `declare const s: string` lands in
+  // `module_.values` and an enum is not a statement, so a file made of
+  // exactly those two has an empty list and would skip the whole block.
+  let mut has_enum_init_marker = false
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<enum-init-name:") {
+      has_enum_init_marker = true
+    }
+  }
+  if module_.top_level_stmts.length() > 0 || has_enum_init_marker {
     let top_ctx : CheckCtx = {
       path_prefix: "top-level",
       script_top_level: outer_modules.length() == 0,
@@ -31066,6 +31552,15 @@ fn check_module_function_bodies_layered(
       check_stmt(env, stmt, top_ctx)
     }
     for issue in top_ctx.issues {
+      all.push(issue)
+    }
+    // TS18033 needs a binding's TYPE and the parser's `<enum-init-name:>`
+    // marker carries only its name, so the lookup has to happen where the
+    // bindings are: this env, after the whole top-level list has been
+    // walked. `resolver.globals` is not enough — the corpus case is
+    // `const { value = "123" } = thing`, a DESTRUCTURING, and the module
+    // ingest records only `Var(Ident(n), ty, _)` shapes.
+    for issue in check_enum_init_name_types(module_, env, resolver) {
       all.push(issue)
     }
   }
@@ -33324,6 +33819,48 @@ fn check_abstract_implementation(
 /// collected faithfully: generic interfaces, index signatures, computed /
 /// synthetic members, generic heritage, unresolvable names. Interfaces walk
 /// their `extends` chain; intersections merge every part.
+/// Neither of these two object shapes is comparable to the other: EACH
+/// declares a required property the other lacks entirely, so no value can
+/// inhabit both and no assignment in either direction is legal.
+///
+/// This is comparability — assignability in EITHER direction — and it is
+/// the test behind two diagnostics that had it written once.
+/// `typeAssertionsWithIntersectionTypes01` is the `as` form (TS2352) and
+/// `equalityWithIntersectionTypes01` is `===` / `==` (TS2367): `y: I1 & I3`
+/// against `z: I2` where `I2 extends I1` adds `p2` and `I3` adds `p3`, so
+/// each side requires what the other has never heard of. One value
+/// satisfies both interfaces structurally, which is exactly why this must
+/// ask about DECLARED members rather than about any particular value.
+///
+/// Every unresolvable shape abstains through `cast_shape_fields` —
+/// generics, index signatures, computed keys, an interface with generic
+/// heritage — so a shape we cannot enumerate costs a MISS.
+fn shapes_definitely_disjoint(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> Bool {
+  match (cast_shape_fields(resolver, a, 0), cast_shape_fields(resolver, b, 0)) {
+    (Some(af), Some(bf)) => {
+      let mut b_requires_missing = false
+      for name, required in bf {
+        if required && !af.contains(name) {
+          b_requires_missing = true
+        }
+      }
+      let mut a_requires_missing = false
+      for name, required in af {
+        if required && !bf.contains(name) {
+          a_requires_missing = true
+        }
+      }
+      a_requires_missing && b_requires_missing
+    }
+    _ => false
+  }
+}
+
+///|
 fn cast_shape_fields(
   resolver : Resolver,
   t : @ast.TsType,
