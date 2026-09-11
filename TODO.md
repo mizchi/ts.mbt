@@ -3,6 +3,55 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### CI on `main` (2026-09-11): the packaging ignore list, and a warning that WAS actionable
+
+`main` was red before #239 and stayed red after it: run 590 at `3036d6f`
+— #239's exact base — fails the `test` job at `just verify-scaffolds`, on
+one line the toolchain prints and this repo can act on. `moon.mod`'s
+`options(exclude: ...)` is deprecated in favour of `.gitignore` /
+`.moonignore`, and `scripts/warning_guard.sh` treats any uncoded
+`Warning:` as fatal, so the FIRST guarded `moon` call in the script died
+— which is also why the three later guard-using steps
+(`verify-generated-fixtures`, `verify-examples`, `verify-mangle-safety`)
+never ran and say nothing about their own health under that toolchain.
+
+The tempting fix is the wrong one. `warning_guard.sh` already allowlists
+four warning codes, and its comment states the standard: those are
+"bleeding-edge churn" the deprecation "isn't actionable from this repo".
+This one is actionable — the warning names the replacement — so the fix
+is to obey it, which also silences it for every harness at once instead
+of the one whose allowlist gets edited.
+
+**The semantics are the whole difficulty, and they are a REPLACEMENT, not
+an addition**: `.moonignore` overrides `.gitignore` *in the same
+directory*, so a root `.moonignore` carrying only the three
+development-only paths takes the root `.gitignore` out of the packaging
+walk entirely. Measured rather than reasoned about — the archive went
+from 350 entries to 415, and all 65 additions were
+`examples/moonbit-to-typescript/_build/**`, a tree only `.gitignore`'s
+`_build/` had been keeping out. With the output patterns carried across
+as well, `moon package --list` produces a file list **identical** to the
+pre-change baseline, 350 entries, diff empty.
+
+Two things were probed rather than assumed, one of them a hazard the old
+key could not have had:
+
+- **`.moonignore` does not hide a package from the BUILD.**
+  `src/cmd/tscheck` is in it and `moon build --target native
+  src/cmd/tscheck` still relinks the binary `verify-checker-soundness`
+  needs. `options(exclude:)` was packaging-only; an ignore file plausibly
+  is not, and that would have taken the soundness gate down.
+- **The warning really is gone, on the toolchain that emits it.** Local
+  moon is 0.1.20260819 and prints nothing here, so the fix was verified
+  against `latest` (0.1.20260904) installed into an isolated `MOON_HOME`:
+  with the old `moon.mod` the repo's own guard exits 1 naming the
+  deprecation, with the fix it exits 0. A minimal probe module confirms
+  the exclusion still happens under that toolchain — same archive
+  contents with `.moonignore` as with `options(exclude:)`.
+
+`verify-scaffolds`, `verify-generated-fixtures` and `verify-examples` all
+pass locally after the change.
+
 ### Batch EE (2026-09-11): section G's last three rows — every blocker in it was wrong
 
 +2 files at FP 0 (TP 2598 -> 2600, MISS in scope 116 -> 114, PFLEGAL 0).

@@ -1,0 +1,29 @@
+# What `moon package` / `moon publish` leave out of the published archive.
+#
+# This REPLACES the root `.gitignore` for packaging rather than adding to
+# it: moon reads `.moonignore` in preference to `.gitignore` in the same
+# directory, so every build output `.gitignore` keeps out of git has to be
+# repeated here or it lands in the archive. Measured, not assumed — with
+# only the three development-only paths at the bottom, the zip grew by 65
+# entries, all of them `examples/moonbit-to-typescript/_build/**`. The
+# other output patterns below never fired on the corpus as it stands and
+# are carried so a regenerated `dist/` or glue directory cannot leak
+# either.
+#
+# The bottom three are what `moon.mod`'s `options(exclude: ...)` carried
+# until the toolchain deprecated that key: the fixture corpus, the
+# TypeScript conformance submodule and the `tscheck` development binary
+# are none of them part of the library.
+
+# Build outputs and fetched dependencies
+_build/
+target
+.mooncakes/
+node_modules/
+examples/**/dist/
+examples/**/__tsmbt_glue__*/
+
+# Development-only trees
+fixtures
+typescript
+src/cmd/tscheck
