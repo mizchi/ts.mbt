@@ -3,6 +3,154 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Perf round (2026-09-11): nothing regressed, and the axis nobody measured is quadratic
+
+Asked "what got slower", the differential says **nothing**, and that is the
+first half of the answer. `tscheck` built at `c4fd605` (batch DH, the last
+time the cost was measured) against HEAD, 50 commits and ~60 new checker
+rules later:
+
+- every one of the seven existing ladder axes is linear at HEAD
+  (interfaces 1.08, merged-interfaces 0.96, classes 1.12, exports 0.97,
+  type-aliases 1.06, enums 1.03, vars 1.00);
+- on real `.d.ts` input HEAD is **0.89–1.02x** of the baseline —
+  `typescript.d.ts` full check 198.9 -> 176.4 ms, `lib.dom.d.ts`
+  263.7 -> 269.6 ms, parse-only 0.96–1.01x. Sixty rules cost nothing
+  measurable, which is the shape a linear checker should have and what
+  batch DH also found.
+
+The second half is what the gate could not see. `verify-checker-scaling`
+had seven axes, and the rules batches DN–EE added are keyed on lists none
+of them grows — so four axes were added: `functions` (overload sets,
+three declarations per name), `namespaces`, `private-members` (one class
+body, N `#private` members — the span-reading idiom has no cost model of
+its own) and `statements` (N statements in ONE function body, where
+`vars` puts them at module top level). Three are linear (0.87 / 1.17 /
+0.75). **`namespaces` is quadratic: exponent 1.96, 43 ms at 125
+namespaces and 2554 ms at 1000.**
+
+It is NOT a regression — the baseline binary is 2.01 at 2557 ms, within
+noise of HEAD — so this is long-standing and was invisible for exactly
+one reason: no axis grew that list. Ninth instance in this file of an
+instrument that could not reach the answer.
+
+The mechanism is structural rather than a nested scan. A namespace body
+is re-parsed into its own `TsModule`, so
+`check_module_function_bodies_layered` runs once per namespace, and each
+run rebuilds its resolver from the OUTER chain — where
+`Resolver::ingest_module` recurses through the whole namespace tree
+registering every nested declaration under its prefix, and
+`collect_module_value_names` recurses through it again (that recursion is
+its purpose: a reference inside one namespace may name a binding in a
+sibling). N namespaces therefore walk the whole tree N times, twice.
+
+**One half of that is fixed exactly.** The two root-wide backstops
+(`declared_value_names`, `any_uninitialized_values`) are functions of the
+OUTERMOST module alone, so every namespace was deriving the same answer:
+both maps are keyed by name and only ever added to, and the only writer
+besides the collectors is the `extra_globals` loop, which writes the same
+keys for every sibling. `RootNameBackstops` computes them once at the top
+level and hands the objects down. Worth **-22% at n=1000** (2554 ->
+1988 ms) and **nothing measurable on real files** (0.94–1.02x), which is
+a fact about real input rather than about the fix: the most
+namespace-dense `.d.ts` in this repo's own `node_modules` is
+`@types/node/fs.d.ts` at 43, where the whole check is 48 ms, and the
+ladder does not separate from linear until a few hundred.
+
+The other half — the per-sibling `ingest_module` over the outer chain —
+is **declared, not fixed**, with its cost gated rather than suppressed.
+Removing it needs a layered resolver: a parent consulted on miss (~200
+direct field reads in `expr_check.mbt`) or a journalled overlay that can
+be undone per sibling (which must reproduce `ingest_module`'s interface
+merging and overload accumulation exactly, in a checker whose budget is
+FP 0). Two cheaper things were considered and rejected with their
+reasons: sharing one resolver across siblings leaks a sibling's
+bare-name declarations into the next one, which can only invent
+findings; and copying the outer resolver's maps per sibling is still
+O(outer) per sibling, so the exponent does not move — it buys a constant
+against a real correctness surface (`namespace_value_decls`'s values are
+themselves maps, so a shallow copy shares them).
+
+So the harness grew a per-axis budget: `AXIS_BUDGET` holds `namespaces`
+at 2.15 with the mechanism and the real-world cost written at the entry,
+and the axis is still GATED — a regression past the accepted cost fails
+the run. A budget without a written reason is a suppression list, which
+is the defect that retired `docs/checker-priority.md`. `--rungs` was
+added at the same time, because an axis whose top rung takes 17 s per
+iteration is one nobody investigates: the exponent only needs a 4x
+spread between endpoints.
+
+### Perf round, part 2 (2026-09-11): the cost is the CHECK, and it is quadratic in expression DEPTH
+
+The ladder axes all grow a module-wide LIST, and the first round's answer
+was that every one of them is linear. That is the wrong question for a
+large compile, and mtsc's own help says why: `--no-check` is documented as
+"the check is ~95% of a large compile". **Measured rather than quoted** —
+on terser's published 1.1 MB bundle, `mtsc --bundle --mangle` is 0.392 s
+with `--no-check` and 5.949 s without it, so the type check is **93.4%**
+of that compile. Scaling is worse than linear: at 9.1 MB
+(`typescript.js`) the same command had not finished after 150 s of CPU,
+where linear from 1.1 MB would be ~46 s.
+
+So the next question was which SHAPE is superlinear, and the list axes
+cannot ask it. Three depth probes, each one shape real JS is full of:
+
+| shape | 50 / 100 / 200 / 400 (or 250…2000) | exponent |
+| --- | --- | --- |
+| `o.p.p.…p` member chain | 10.9 / 40.1 / 285.1 / 2431.2 ms | **2.60** |
+| `a + a + … + a` binary chain | 10.7 / 24.5 / 82.6 / 311.4 ms | **1.62** |
+| nested ternaries | 6.8 / 13.1 / 38.5 / 136.3 ms | 1.44 |
+
+Every module-wide axis is linear and DEPTH is quadratic-to-cubic. Tenth
+instance in this file of an instrument that could not reach the answer,
+and the sharpest: the harness header says its own axes name "the size of
+a module-wide list", which is exactly the dimension that turned out not
+to be the problem.
+
+The mechanism is one line at the top of `infer_expr`'s `PropAccess` arm.
+It looks the chain up by its synthesised dotted narrowing key first, and
+`narrowing_key_for_expr` builds that key by walking the whole receiver
+prefix — so a chain of depth d builds d strings whose lengths sum to
+O(d²), then HASHES each one for an `env.lookup`, which is the second
+O(d²). The `IndexAccess` arm does the same. Neither can succeed unless
+flow narrowing actually bound a path key, and that is the cheap question
+nobody asked.
+
+**That gate was implemented, measured and REVERTED**, and the numbers are
+the point. `ExprEnv::saw_dotted_binding` — a monotonic flag set by every
+write into `vars` (`bind`, `narrow` and the snapshot restore, which is
+all three sites), never cleared on scope exit, so a stale `true` only
+forgoes the shortcut while a stale `false` would change an answer — takes
+the member chain from **2492 ms to 78 ms at 400 levels, exponent 2.67 ->
+1.30 (32x)**. On the input that matters it is a LOSS: the 1.1 MB real
+bundle went 5533 -> 5985 ms, **+8%**, because maintaining the flag means
+testing every bound name on the hottest path in the checker. Replacing
+`contains(".") || contains("[")` with a hand-rolled scan recovered half
+of it and no more — 5631 -> 5830 ms, **+3.5%** — so the shortcut costs
+real code 3.5% to save a depth real code does not have. Reverted, with
+the reproduction and the mechanism recorded at the site.
+
+Two things that cost a measurement each, both worth keeping:
+
+- **A stray probe was competing.** The first fix2 reading was taken while
+  a `tscheck` from the killed 1000-level member probe was still burning
+  a core — eight minutes of it. Killing it and re-measuring is what
+  turned "+8% is contamination" into "+8% reproduces", and it is the same
+  lesson as the overlapping timing spans recorded above: an unexplained
+  number is a number to explain before it is a number to act on.
+- **The cheap question has to be cheap.** `class-method-dce`'s
+  `off_bundle` thunk works because asking costs a map lookup; here asking
+  costs a string scan per binding, and there are millions of bindings.
+  "Ask the cheap question first" is not a free move — it is a trade, and
+  this one priced out.
+
+What would pay is a version that sets the flag only where a path key is
+CREATED (the narrowing engine), leaving `bind` / `narrow` untouched:
+`env.narrow` / `env.bind` have 49 call sites, so it needs the creation
+sites identified rather than the writes intercepted. Filed, not built.
+The binary-chain (1.62) and ternary (1.44) exponents are a DIFFERENT
+mechanism — the gate moved neither — and are unexplained.
+
 ### CI on `main` (2026-09-11): the packaging ignore list, and a warning that WAS actionable
 
 `main` was red before #239 and stayed red after it: run 590 at `3036d6f`

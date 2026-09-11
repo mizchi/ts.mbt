@@ -222,6 +222,29 @@ fn accumulate_overload_type_params(
 }
 
 ///|
+/// The two root-wide name backstops a NESTED namespace check needs, held
+/// so they can be computed once per file instead of once per namespace.
+///
+/// `collect_module_value_names` recurses into every namespace in the tree
+/// (that is its purpose — a reference inside one namespace may name a
+/// binding in a sibling), and the nested branch of
+/// `check_module_function_bodies_layered` called it with the OUTERMOST
+/// module, once per namespace. So a file with N namespaces walked the
+/// whole declaration tree N times, which is the quadratic the
+/// `namespaces` axis of `verify-checker-scaling` reports.
+///
+/// Sharing one object across every namespace in a file is exact rather
+/// than approximate, and that rests on two facts: both maps are keyed by
+/// NAME and only ever added to, and the only writer other than the two
+/// collectors is the `extra_globals` loop, which writes the same keys and
+/// values for every sibling. The content was therefore already identical
+/// at every namespace; the recomputation produced nothing.
+priv struct RootNameBackstops {
+  declared_value_names : Map[String, Bool]
+  any_uninitialized_values : Map[String, Bool]
+}
+
+///|
 fn Resolver::empty() -> Resolver {
   {
     interfaces: {},
@@ -248,6 +271,14 @@ fn Resolver::empty() -> Resolver {
     no_property_access_from_index_signature: false,
     target_reaches_es2016: false,
   }
+}
+
+///|
+/// A resolver whose two name backstops are the caller's objects rather
+/// than fresh maps, so a nested namespace check inherits them instead of
+/// re-deriving them from the root. See `RootNameBackstops`.
+fn Resolver::empty_with_backstops(b : RootNameBackstops) -> Resolver {
+  { ..Resolver::empty(), declared_value_names: b.declared_value_names, any_uninitialized_values: b.any_uninitialized_values }
 }
 
 ///|
@@ -7966,6 +7997,13 @@ fn infer_expr(
       // `PropAccess`-chain that the narrowing path tracks, look up the
       // synthesised dotted env key first. Falls through to the
       // structural resolver lookup when no narrowing binding exists.
+      //
+      // This is quadratic in the depth of a chain — the key is rebuilt
+      // from the whole prefix at every level, then hashed — and gating it
+      // on "did narrowing ever bind a path key" was implemented, measured
+      // and REVERTED: see the perf entry in TODO.md for the numbers
+      // (32x on a 400-deep chain, +3.5% on a 1.1 MB real bundle, because
+      // the flag has to be maintained on the hottest path there is).
       match narrowing_key_for_expr(@ast.TsExpr::PropAccess(receiver, name)) {
         Some(key) =>
           match env.lookup(key) {
@@ -31353,6 +31391,7 @@ fn check_module_function_bodies_layered(
   permissive : Bool,
   type_modules : Array[@ast.TsModule],
   extra_globals : Array[(String, @ast.TsType)],
+  backstops~ : RootNameBackstops? = None,
 ) -> Array[ExprIssue] {
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
@@ -31410,7 +31449,12 @@ fn check_module_function_bodies_layered(
     }
     { ..module_, classes: merged }
   }
-  let resolver = Resolver::empty()
+  // A nested call inherits the root-wide backstops when the caller has
+  // them (see `RootNameBackstops`); every other resolver starts empty.
+  let resolver = match backstops {
+    Some(b) => Resolver::empty_with_backstops(b)
+    None => Resolver::empty()
+  }
   for type_module in type_modules {
     Resolver::ingest_type_module(resolver, type_module, "")
   }
@@ -31429,11 +31473,20 @@ fn check_module_function_bodies_layered(
     // bindings unqualified without tripping a "cannot find name" false
     // positive. The top-level branch above applies the same collection to its
     // current module.
-    collect_module_value_names(outer_modules[0], resolver.declared_value_names)
-    collect_any_uninitialized_values(
-      outer_modules[0],
-      resolver.any_uninitialized_values,
-    )
+    //
+    // Skipped when the caller handed those maps down: the collection is
+    // over the SAME outermost module every time, so re-deriving it per
+    // namespace walked the whole tree once per namespace and computed an
+    // identical answer. `backstops` is None only for a call that did not
+    // come through the namespace loop below, which keeps this path exact
+    // rather than merely unreachable.
+    if backstops is None {
+      collect_module_value_names(outer_modules[0], resolver.declared_value_names)
+      collect_any_uninitialized_values(
+        outer_modules[0],
+        resolver.any_uninitialized_values,
+      )
+    }
   }
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
@@ -32546,6 +32599,20 @@ fn check_module_function_bodies_layered(
     next_outers.push(o)
   }
   next_outers.push(module_)
+  // Hand the root-wide backstops down rather than letting each namespace
+  // re-derive them from the outermost module. Whichever branch above ran,
+  // these two maps now hold exactly what that derivation produces — the
+  // top-level branch collected from `module_`, which IS the outermost
+  // module for everything below here, and a nested frame either inherited
+  // them or collected the same thing itself.
+  let nested_backstops : RootNameBackstops = match backstops {
+    Some(b) => b
+    None =>
+      {
+        declared_value_names: resolver.declared_value_names,
+        any_uninitialized_values: resolver.any_uninitialized_values,
+      }
+  }
   for ns in module_.namespaces {
     let issues = check_module_function_bodies_layered(
       ns.module_,
@@ -32553,6 +32620,7 @@ fn check_module_function_bodies_layered(
       permissive,
       type_modules,
       extra_globals,
+      backstops=Some(nested_backstops),
     )
     let prefix = if ns.name == "<global>" {
       "declare global"
