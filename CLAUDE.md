@@ -1693,6 +1693,48 @@ product surfaces now.
   inferred through OVERLOAD resolution (the ANNOTATED shape
   `var r: E; var r: Object` is already flagged), `this`-type resolution
   plus the rule inside a method BODY, and contextual typing.
+  Batch EE closes the last three rows of `UNSUPPORTED.md` section G for
+  **+2 files** (TP 2600 / MISS in scope 114), and with it **all five of
+  that table**, whose real finding is about the table itself: a blocker
+  written down is a claim with a date on it, and **not one of the five
+  survived being probed.** Two had been dissolved by later work that was
+  not aiming at them, one was true of an approach nobody had to take, one
+  named only one of two routes to the fact, and TS2393's was not a
+  blocker at all. TS1308's recorded blocker — `skip_param_decorators`
+  discards the decorator expression, so the `await` never reaches the
+  AST — is TRUE and beside the point: a TOKEN sighting over the range
+  that skip already consumes needs no AST, because every `await` must
+  spell `await`, the same completeness-by-construction argument the
+  `#private` rules make for a class-body span. Its region is the cell
+  reasoning gets wrong — a parameter decorator is evaluated where the
+  CLASS is defined, so the async context that matters is the ENCLOSING
+  function's and the method's own `async` is irrelevant, with `function`,
+  `function*` and a plain arrow all TS1308 and `async function` and an
+  async arrow both ACCEPTED; `in_function` is required because top level
+  is TS1375 / TS1378, codes this rule does not claim. TS2393 had no
+  blocker: `<fn-impl:NAME>` is pushed once per IMPLEMENTATION and the
+  consumer built a `Map[String, Unit]`, so the COUNT was thrown away at
+  the point of USE — the marker was right and the reader was lossy.
+  Counting gives the rule, reported BEFORE the overload rules and taking
+  the name out of them, since a name with two implementations has no
+  overload SET and "this overload signature is not compatible with its
+  implementation signature" was the wrong sentence for it — the right
+  file for the wrong reason. The marker also had to be added at the FOUR
+  export sites, which had none, so `export default function f() { }`
+  twice recorded no implementation at all; one of the four passes `false`
+  rather than `last_function_bodiless` because that arm parses through
+  `parse_function_expr`, which does not set the flag, and reading it
+  there would read whatever the previous function left behind. TS2708's
+  `typeof` TYPE position buys **zero** files and that is the honest half
+  of the row: the position is wired (`var m: typeof A`,
+  `type T = typeof A`, `var m: typeof A.P` where the base SEGMENT is what
+  matters, and the namespace-nested form all report, while a namespace
+  carrying a runtime `export var` is ACCEPTED), and it needs no `env`
+  guard unlike the value path because the sweep reads only module- and
+  namespace-level declaration types, never a function body — but
+  `importStatementsInterfaces` still needs the OTHER channel the row
+  named, an `import a = A` alias whose value-ness depends on a target the
+  parser does not resolve.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -25,12 +25,31 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
         self.skip_type_args()
       }
     }
+    // TS1308: an `await` expression inside the decorator. A parameter
+    // decorator is evaluated where the CLASS is defined, not inside the
+    // member, so the async context that matters is the ENCLOSING
+    // function's — probed, and the method's own `async` is irrelevant:
+    // `function fn() { class C { async m(@dec(await v) a) {} } }` and the
+    // same with a plain `m` are both TS1308, while `async function fn`
+    // and `const fn = async () => …` are both ACCEPTED. At module or
+    // script top level tsc gives TS1375 / TS1378 instead, two codes this
+    // rule does not claim, which is why `in_function` is required.
+    //
+    // The expression never reaches the AST — this function SKIPS it —
+    // which is the blocker `UNSUPPORTED.md` recorded, and a token
+    // sighting is all the rule needs: every `await` must spell `await`,
+    // so the scan is complete by construction over the range the skip
+    // consumes. `await` is an `Ident` in this lexer, not a keyword token.
+    let mut saw_await = false
     if self.check(LParen) {
       let _ = self.advance()
       let mut paren_depth = 1
       let mut brace_depth = 0
       let mut bracket_depth = 0
       while paren_depth > 0 && !self.check(Eof) {
+        if self.peek().kind is Ident("await") {
+          saw_await = true
+        }
         match self.peek().kind {
           LParen => {
             paren_depth += 1
@@ -65,6 +84,11 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
           }
         }
       }
+    }
+    if saw_await && self.in_function && not(self.in_async) {
+      self.grammar_misuses.push(
+        "`await` expressions are only allowed within async functions and at the top levels of modules",
+      )
     }
     // A following `@` means another stacked decorator — defer the verdict
     // to the LAST decorator in the chain, whose follower reveals whether

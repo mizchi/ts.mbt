@@ -3,6 +3,65 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EE (2026-09-11): section G's last three rows — every blocker in it was wrong
+
++2 files at FP 0 (TP 2598 -> 2600, MISS in scope 116 -> 114, PFLEGAL 0).
+With this, **all five of `UNSUPPORTED.md` section G is closed**, and the
+finding is about the TABLE: a blocker written down is a claim with a date
+on it, and not one of the five survived being probed. Two had been
+dissolved by later work that was not aiming at them, one was true of an
+approach nobody had to take, one named only one of two routes to the fact,
+and TS2393's was not a blocker at all.
+
+- [x] **TS1308: `await` inside a parameter decorator** (+1:
+  `decoratorOnClassMethodParameter3`). The recorded blocker —
+  `skip_param_decorators` discards the expression, so the `await` never
+  reaches the AST — is TRUE, and beside the point: a TOKEN sighting over
+  the range that skip already consumes needs no AST, because every `await`
+  must spell `await`, which makes the scan complete by construction (the
+  same argument the `#private` rules use for a class-body span). The
+  region is the cell reasoning gets wrong: a parameter decorator is
+  evaluated where the CLASS is defined, so the async context that matters
+  is the ENCLOSING function's and the METHOD's own `async` is irrelevant —
+  `function fn() { class C { async m(@dec(await v) a) {} } }` and the same
+  with a plain `m` are both TS1308, while `async function fn` and
+  `const fn = async () => …` are both ACCEPTED. `in_function` is required
+  because at module / script top level tsc gives TS1375 / TS1378, two
+  codes this rule does not claim. Eight cells probed, all agreeing.
+- [x] **TS2393: duplicate function implementation** (+1:
+  `multipleDefaultExports04`). There was no blocker: `<fn-impl:NAME>` is
+  pushed once per IMPLEMENTATION and the consumer built a
+  `Map[String, Unit]`, so the COUNT the rule needs was thrown away at the
+  point of use. Counting instead gives it, reported BEFORE the overload
+  rules and taking the name out of them — the two shapes are mutually
+  exclusive, and `function d(a: number) { }` beside
+  `function d(a: string) { }` used to get "this overload signature is not
+  compatible with its implementation signature", the right file for the
+  wrong reason. The marker also had to be added at the FOUR export sites,
+  which had none: it sat at the two module-level sites that parse a bare
+  `function` declaration, so `export default function f() { }` twice
+  recorded no implementation at all. One of those four passes `false`
+  rather than `last_function_bodiless` and says why — that arm parses
+  through `parse_function_expr`, which does not set the flag, so reading
+  it would read whatever the previous function left behind. Eight cells
+  probed: four fire, and an overload set, an ambient pair, two SCOPES and
+  two different names stay silent.
+- [x] **TS2708 at a `typeof` TYPE position** (+0 files, and that is the
+  honest half). `check_undefined_name` has judged the VALUE spelling
+  (`var q = A`) for some time and a `typeof` type never reaches it, so
+  `var m: typeof A` — the spelling a `.d.ts` uses — was silent.
+  `var m: typeof A`, `type T = typeof A`, `var m: typeof A.P` (the base
+  SEGMENT is what matters) and the namespace-nested form all report now,
+  while a namespace carrying a runtime `export var v = 1` is ACCEPTED,
+  which is the cell that keeps the rule off real `.d.ts` namespaces. It
+  needs no `env` guard unlike the value path, and the reason is written at
+  the site: the sweep reads only module- and namespace-level declaration
+  types, never a function body, so a local shadow cannot reach it.
+  `importStatementsInterfaces` is STILL a MISS, exactly as the row's other
+  half predicted — its `var m: typeof a` goes through an `import a = A`
+  alias, and whether such an alias binds a value depends on the TARGET,
+  which is not resolved at parse time.
+
 ### Batch ED (2026-09-11): a modifier may not be followed by a newline, and two fields of one name
 
 +1 file at FP 0 (TP 2597 -> 2598, MISS in scope 121 -> 117) plus one file

@@ -19175,6 +19175,135 @@ test "batch EB rules" {
 }
 
 ///|
+/// Batch EE: the last three rows of `UNSUPPORTED.md` section G.
+///
+/// TS1308 (`await` in a parameter decorator) was blocked on
+/// `skip_param_decorators` discarding the expression, and a TOKEN
+/// sighting over the range that skip consumes is all the rule needs —
+/// every `await` must spell `await`. TS2393 was blocked on nothing: the
+/// `<fn-impl:NAME>` marker is pushed once per implementation and the
+/// consumer built a SET, throwing the count away. TS2708's `typeof`
+/// position was one site an existing rule had never been given.
+///
+/// Every boundary probed cell by cell, and two of the three have a
+/// legal neighbour that reads the other way round from the message text:
+/// a parameter decorator's async context is the ENCLOSING function's and
+/// not the method's, and a namespace carrying one runtime `export var` is
+/// instantiated and therefore fine.
+test "batch EE rules" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let aw = "`await` expressions are only allowed"
+  let dup = "duplicate function implementation"
+  let ns = "cannot use namespace"
+  let deco = "// @experimentaldecorators: true\ndeclare function dec(a: any): any;\ndeclare const v: Promise<number>;\n"
+  let nsdecl = "namespace A { export interface P { x: number } }\n"
+
+  // --- TS1308: the enclosing function decides, not the method.
+  assert_true(
+    only(
+      deco +
+      "function fn(): any { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      deco +
+      "function fn(): any { class C { m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      deco +
+      "function* fn(): any { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+  assert_true(
+    only(
+      deco +
+      "const fn = () => { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      aw,
+    ) >
+    0,
+  )
+
+  // --- TS2393: two implementations of one name, at every declaration
+  // spelling the module-level loop owns.
+  assert_true(
+    only("function d(a: number) { }\nfunction d(a: string) { }\n", dup) > 0,
+  )
+  assert_true(only("function d() { }\nfunction d() { }\n", dup) > 0)
+  assert_true(
+    only("export function d() { }\nexport function d() { }\n", dup) > 0,
+  )
+  assert_true(
+    only(
+      "export default function f() { }\nexport default function f() { }\n", dup,
+    ) >
+    0,
+  )
+  assert_true(
+    only("export async function d() { }\nexport async function d() { }\n", dup) >
+    0,
+  )
+
+  // --- TS2708 at a `typeof` TYPE position, which is the spelling a
+  // `.d.ts` uses and never reached `check_undefined_name`.
+  assert_true(only(nsdecl + "var m: typeof A;\n", ns) > 0)
+  assert_true(only(nsdecl + "type T = typeof A;\n", ns) > 0)
+  // The base SEGMENT is what matters, so a qualified query reports too.
+  assert_true(only(nsdecl + "var m: typeof A.P;\n", ns) > 0)
+  assert_true(only(nsdecl + "namespace C { var m: typeof A; }\n", ns) > 0)
+
+  // --- stays silent
+  for
+    src in [
+      // TS1308: an ASYNC enclosing function, spelled either way.
+      deco +
+      "async function fn(): any { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      deco +
+      "const fn = async () => { class C { async m(@dec(await v) a: number) {} } return C }\n",
+      // No `await` in the decorator at all.
+      deco +
+      "function fn(): any { class C { async m(@dec(v) a: number) {} } return C }\n",
+      // At module / script top level tsc gives TS1375 / TS1378, two codes
+      // this rule does not claim.
+      deco + "class C { async m(@dec(await v) a: number) {} }\n",
+      // TS2393: an overload SET legally repeats the name, an ambient pair
+      // declares no implementation, and two SCOPES are two names.
+      "function d(a: number);\nfunction d(a: string);\nfunction d(a: any): void { }\n",
+      "declare function d(a: number): void;\ndeclare function d(a: string): void;\n",
+      "function d() { }\nnamespace N { function d() { } }\n",
+      "function d() { }\nfunction e() { }\n",
+      // TS2708: a namespace with a runtime member IS instantiated, so the
+      // value exists — the cell that keeps the rule off real `.d.ts`
+      // namespaces.
+      "namespace A { export interface P { x: number } export var v = 1 }\nvar m: typeof A;\n",
+      // And a class / enum / function of the same name gives the name a
+      // value through declaration merging.
+      nsdecl + "class A { }\nvar m: typeof A;\n",
+    ] {
+    @test.assert_eq(only(src, aw) + only(src, dup) + only(src, ns), 0)
+  }
+}
+
+///|
 /// Batch ED: a class-member modifier may not be followed by a line
 /// terminator, and two DATA FIELDS of one name are a duplicate.
 ///

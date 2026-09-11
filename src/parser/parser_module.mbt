@@ -3342,6 +3342,17 @@ fn Parser::parse_export_stmt(
       self.in_async = false
       self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
+        // TS2393 / TS2394 support. The `<fn-impl:NAME>` marker was
+        // pushed at the two module-level sites that parse a BARE
+        // `function` declaration and at NONE of the four export sites,
+        // so `export default function f() { }` twice — which is
+        // `multipleDefaultExports04` — recorded no implementation at
+        // all. `false` rather than `last_function_bodiless` because this
+        // arm parses through `parse_function_expr`, which does not set
+        // that flag: reading it here would read whatever the previous
+        // function left behind, and a default export cannot be an
+        // overload signature anyway.
+        self.note_function_declaration(func.name, false, true)
         funcs.push(func)
       }
       return
@@ -3363,6 +3374,15 @@ fn Parser::parse_export_stmt(
       }
       self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
+        // Reaching here means the NAMED branch above ran, which is the
+        // one that goes through `parse_function` — so the flag is this
+        // declaration's. An anonymous default export is `<anon>` and
+        // never gets here.
+        self.note_function_declaration(
+          func.name,
+          self.last_function_bodiless,
+          true,
+        )
         funcs.push(func)
       }
       return
@@ -3410,6 +3430,7 @@ fn Parser::parse_export_stmt(
     // to know which namespace members were exported (the nested-module
     // re-parse otherwise erases `export`-ness).
     self.grammar_misuses.push("<export-value>" + func.name)
+    self.note_function_declaration(func.name, self.last_function_bodiless, true)
     funcs.push(func)
     return
   }
@@ -3421,6 +3442,11 @@ fn Parser::parse_export_stmt(
       self.in_async = true
       let func = self.parse_function()
       self.grammar_misuses.push("<export-value>" + func.name)
+      self.note_function_declaration(
+        func.name,
+        self.last_function_bodiless,
+        true,
+      )
       funcs.push(func)
       self.in_async = false
       return

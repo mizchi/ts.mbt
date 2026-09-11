@@ -27503,10 +27503,16 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // parser's `<fn-impl:NAME>` marker. See the header: the parameter half
   // needs this as a FACT, not as "the last declaration is probably the
   // implementation".
-  let has_impl : Map[String, Unit] = {}
+  // COUNTED, not a set: the marker is pushed once per IMPLEMENTATION, so
+  // two of them for one name is TS2393 ("Duplicate function
+  // implementation") — the rule this file recorded as filed "because
+  // nothing in the corpus asked for it", which `multipleDefaultExports04`
+  // now does. A set threw exactly that count away.
+  let impl_count : Map[String, Int] = {}
   for gm in module_.grammar_misuses {
     if gm.has_prefix("<fn-impl:") {
-      has_impl[gm["<fn-impl:".length():gm.length() - 1].to_string()] = ()
+      let n = gm["<fn-impl:".length():gm.length() - 1].to_string()
+      impl_count[n] = impl_count.get(n).unwrap_or(0) + 1
     }
   }
   let decls_by_name : Map[String, Array[@ast.TsFunc]] = {}
@@ -27542,6 +27548,22 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
     if ambient_module_fns.contains(name) {
       continue
     }
+    // TS2393 comes FIRST and takes the name out of the overload rules
+    // below, because the two shapes are mutually exclusive: a name with
+    // two implementations has no overload SET, so "this overload
+    // signature is not compatible with its implementation signature" is
+    // the wrong sentence for it — and that is precisely what
+    // `function d(a: number) { }` beside `function d(a: string) { }` used
+    // to get, the right file for the wrong reason. tsc reports the code
+    // once per implementation; one report per NAME is enough here, since
+    // the oracle counts files and a second copy tells a reader nothing.
+    if impl_count.get(name).unwrap_or(0) >= 2 {
+      issues.push({
+        path: "function \{name}",
+        message: "duplicate function implementation",
+      })
+      continue
+    }
     let mut reported = false
     match by_name.get(name) {
       Some(rets) if rets.length() >= 2 =>
@@ -27559,7 +27581,7 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
         }
       _ => ()
     }
-    if reported || not(has_impl.contains(name)) {
+    if reported || impl_count.get(name).unwrap_or(0) == 0 {
       continue
     }
     // The PARAMETER half. The implementation is the LAST declaration in
@@ -27971,6 +27993,124 @@ fn check_invalid_primitive_type_names(
       issues.push({
         path: "type \{name}",
         message: "Cannot find name '\{name}'.",
+      })
+    }
+  }
+  issues
+}
+
+///|
+/// The BASE segment of every `typeof` type query inside `ty`
+/// (`typeof A.P` -> `A`). A query is stored as one dotted string, so the
+/// base is everything before the first `.` — the same idiom
+/// `check_instance_member_ctor_param_refs` uses on the same node.
+fn collect_typeof_query_bases(ty : @ast.TsType, out : Array[String]) -> Unit {
+  match ty {
+    TypeOf(q) => {
+      let base = match q.find(".") {
+        Some(i) => q.substring(start=0, end=i)
+        None => q
+      }
+      out.push(base)
+    }
+    Array(e) | Rest(e) | Keyof(e) => collect_typeof_query_bases(e, out)
+    Union(parts) | Intersection(parts) | Tuple(parts) =>
+      for pt in parts {
+        collect_typeof_query_bases(pt, out)
+      }
+    Applied(_, args) =>
+      for a in args {
+        collect_typeof_query_bases(a, out)
+      }
+    Func(params, ret) => {
+      for pt in params {
+        collect_typeof_query_bases(pt, out)
+      }
+      collect_typeof_query_bases(ret, out)
+    }
+    Object(fields) =>
+      for f in fields {
+        collect_typeof_query_bases(f.1, out)
+      }
+    _ => ()
+  }
+}
+
+///|
+/// TS2708 ("Cannot use namespace 'M' as a value") at a `typeof` TYPE
+/// position. `check_undefined_name` has judged the VALUE spelling
+/// (`var q = A`) for some time and a `typeof` type never reaches it at
+/// all, so `var m: typeof A` — which is the spelling a `.d.ts` uses —
+/// was silent for a namespace whose body declares nothing that exists at
+/// runtime.
+///
+/// The four exclusions are the value path's, minus the one it needs and
+/// this one does not: that check has to consult `env` because
+/// `parser_namespace_lower` lowers EVERY namespace to `var N = N || {}`,
+/// so a binding could be either the synthesized object or a real local.
+/// Here the sweep reads only module- and namespace-level declaration
+/// types, never a function body, so a local shadow cannot reach it — and
+/// at module level a real `var A` beside `namespace A` is a duplicate
+/// declaration rather than a merge. Declaration merging is still what
+/// makes the rest decidable, so a class, an enum or a function of the
+/// same name each rule the name out.
+///
+/// Probed: `var m: typeof A`, `type T = typeof A`, `var m: typeof A.P`
+/// (the base segment is what matters) and the same inside a namespace
+/// body all report, while a namespace carrying a runtime
+/// `export var v = 1` is ACCEPTED — that one is instantiated and the
+/// value exists. `namespace C { import a = A; var m: typeof a }` is
+/// TS2708 in tsc and stays a MISS: whether an `import a = A` alias binds
+/// a value depends on the TARGET, which is not resolved at parse time,
+/// and `namespace_is_instantiated` reads the fact off `type_aliases` —
+/// the second channel `importStatementsInterfaces` needs, recorded where
+/// the parser note already explains it.
+fn check_typeof_namespace_value_types(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let found : Array[String] = []
+  for v in module_.values {
+    collect_typeof_query_bases(v.type_, found)
+  }
+  for ta in module_.type_aliases {
+    collect_typeof_query_bases(ta.type_, found)
+  }
+  for iface in module_.interfaces {
+    for field in iface.fields {
+      collect_typeof_query_bases(field.1, found)
+    }
+  }
+  for f in module_.funcs {
+    for param in f.params {
+      collect_typeof_query_bases(param.type_, found)
+    }
+    collect_typeof_query_bases(f.return_type, found)
+  }
+  // A runtime top-level `var m: typeof A` stays a STATEMENT rather than
+  // being lowered into `module_.values`, the same reason
+  // `check_invalid_primitive_type_names` sweeps these separately.
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(_, type_, _) | Let(_, type_, _) | Const(_, type_, _) =>
+        collect_typeof_query_bases(type_, found)
+      _ => ()
+    }
+  }
+  let issues : Array[ExprIssue] = []
+  let seen : Map[String, Unit] = {}
+  for name in found {
+    if seen.contains(name) {
+      continue
+    }
+    seen[name] = ()
+    if resolver.namespace_instantiated.get(name) is Some(false) &&
+      resolver.classes.get(name) is None &&
+      resolver.enums.get(name) is None &&
+      resolver.signatures.get(name) is None {
+      issues.push({
+        path: "typeof `\{name}`",
+        message: "cannot use namespace `\{name}` as a value",
       })
     }
   }
@@ -31904,6 +32044,11 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_invalid_primitive_type_names(module_) {
+    all.push(issue)
+  }
+  // TS2708 at a `typeof` TYPE position — the spelling a `.d.ts` uses,
+  // which never reaches `check_undefined_name`.
+  for issue in check_typeof_namespace_value_types(module_, resolver) {
     all.push(issue)
   }
   for issue in check_property_overridden_as_accessor(module_, resolver) {
