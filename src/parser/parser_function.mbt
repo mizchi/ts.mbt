@@ -3344,9 +3344,7 @@ fn Parser::parse_declare_class(
     // TS2314: a generic `declare class` with no defaulted type parameter
     // requires all of its type arguments on a bare reference. Read the flag
     // before the base / body parse clobbers it via a nested generic.
-    if name != "" &&
-      names.length() > 0 &&
-      !self.last_type_params_had_default {
+    if name != "" && names.length() > 0 && !self.last_type_params_had_default {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{name}",
       )

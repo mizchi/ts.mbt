@@ -4686,9 +4686,7 @@ test "bundle: the JSX runtime import is deduplicated across modules" {
     Ok(out) => {
       let jsx_imports = out.js
         .split("\n")
-        .filter(l => {
-          l.has_prefix("import ") && l.contains("jsx-runtime")
-        })
+        .filter(l => l.has_prefix("import ") && l.contains("jsx-runtime"))
         .length()
       // One statement per distinct binding set is fine; what must not
       // happen is the same NAME imported twice.

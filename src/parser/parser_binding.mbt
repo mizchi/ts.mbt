@@ -806,9 +806,7 @@ fn Parser::record_for_head_binding_misuses(
   // BINDING as the iterable (`declare const c: C; for (var v of c)`) is
   // the same error in tsc but needs the annotation resolved, which this
   // site cannot do. Each loses a finding rather than inventing one.
-  if self.no_implicit_any &&
-    kind is @ast.TsForOfKind::Var &&
-    !head_annotated {
+  if self.no_implicit_any && kind is @ast.TsForOfKind::Var && !head_annotated {
     let iter_class = match iterable {
       New(c, _) => Some(c)
       NewExpr(Var(c), _) => Some(c)

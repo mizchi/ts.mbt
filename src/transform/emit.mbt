@@ -1606,10 +1606,8 @@ fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
   // else — real positions, a stale array, or none at all — is a real
   // block, which is the safe answer: keeping braces costs bytes, while
   // dropping them from a real block merges two scopes.
-  if !(
-      block.stmt_positions.length() == 1 &&
-      block.stmt_positions[0] == @ast.DECL_GROUP_POSITION
-    ) {
+  if !(block.stmt_positions.length() == 1 &&
+    block.stmt_positions[0] == @ast.DECL_GROUP_POSITION) {
     return false
   }
   let kind = match block.stmts[0] {

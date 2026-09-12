@@ -10457,8 +10457,7 @@ fn check_expr_against(
     if !target_open && is_checkable(expected_u) {
       let leaks_undef = type_has_undefined(inferred_u) &&
         !type_has_undefined(expected_u)
-      let leaks_null = type_has_null(inferred_u) &&
-        !type_has_null(expected_u)
+      let leaks_null = type_has_null(inferred_u) && !type_has_null(expected_u)
       if leaks_undef || leaks_null {
         record(
           ctx,
@@ -10554,10 +10553,8 @@ fn check_expr_against(
         // widenings (`number`→`Number`, `string`→`String`) and `Object` /
         // `Function` are guarded as universal targets below, so letting these
         // through stays false-positive-free while catching e.g. `foo<Date>(1)`.
-        !(
-          is_well_known_type_name(n) &&
-          is_concrete_primitive_or_literal(inferred_u)
-        ) {
+        !(is_well_known_type_name(n) &&
+        is_concrete_primitive_or_literal(inferred_u)) {
         return
       }
     _ => ()
@@ -33137,7 +33134,8 @@ fn collect_ctor_this_members_expr(
     | ArrayHole
     | Var(_)
     | ImportMeta => ()
-    TypeArgs(_, inner) => collect_ctor_this_members_expr(inner, members, opaque_)
+    TypeArgs(_, inner) =>
+      collect_ctor_this_members_expr(inner, members, opaque_)
     PropAccess(recv, name) =>
       if expr_is_this(recv) {
         members[name] = ()

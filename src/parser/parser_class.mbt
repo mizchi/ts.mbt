@@ -3621,8 +3621,7 @@ fn Parser::parse_class_body(
   // expression is skipped and the inconsistency is recorded in TODO.md.
   // It costs nothing here — `decoratorOnClassAccessor7` is six class
   // declarations.
-  let ts1207_applies = self.experimental_decorators &&
-    !self.in_class_expr_body
+  let ts1207_applies = self.experimental_decorators && !self.in_class_expr_body
   for entry in (if ts1207_applies { decorated_accessors } else { [] }) {
     if entry.contains(":get:") {
       let counterpart = entry.replace(old=":get:", new=":set:")
