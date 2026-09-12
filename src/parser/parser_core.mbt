@@ -177,6 +177,16 @@ pub struct Parser {
   // signature contextual type can supply them), while method params are
   // never contextually typed and keep recording.
   mut in_class_expr_body : Bool
+  // Which class member a parameter being parsed belongs to, for the
+  // TS1239 parameter-decorator rules: `"ctor"`, `"static"`, `"instance"`,
+  // or `""` when the parameter is not a class member's (a plain function,
+  // an arrow, a function type — where a decorator is not legal anyway, so
+  // the empty default records nothing). `skip_param_decorators` is the
+  // only consumer, and it needs the fact because the three positions are
+  // handed DIFFERENT arguments at runtime: a constructor parameter's
+  // decorator gets `(typeof C, undefined, index)` while an instance
+  // method parameter's gets `(C, "methodName", index)`.
+  mut param_decorator_owner : String
   // Parameter names the source annotated explicitly with `: any`. tsc
   // never reports TS7006 for these, but post-parse `TsParam.type_` can't
   // distinguish a written `any` from a missing annotation — the
@@ -390,6 +400,7 @@ pub fn Parser::new_with_strict_and_jsx(
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
+    param_decorator_owner: "",
     written_any_params: {},
     template_invalid_escape_positions: [],
     directive_strict: false,
@@ -659,6 +670,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
+    param_decorator_owner: "",
     written_any_params: {},
     directive_strict: detect_directive_strict(head),
     param_optional_initializer_misuses: [],

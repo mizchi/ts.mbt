@@ -16,15 +16,24 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
     // `@(expr)` decorator heads (`(@((t, k, i) => {}) p: any)` —
     // legacyDecorators-contextualTypes) go straight to the balanced
     // paren skip below; identifier heads consume their member chain.
+    // TS1239 support: the decorator's head NAME and whether it was called.
+    // Same `(called, dname)` pair `decorator_head_name` produces for a
+    // MEMBER decorator, reconstructed from tokens because this function
+    // skips the expression rather than building one — the blocker
+    // `UNSUPPORTED.md` recorded for TS1308, with the same answer: the
+    // head of a decorator must be spelled out, so reading it off the
+    // tokens the skip already consumes is complete by construction.
+    let mut head_name = ""
     if !self.check(LParen) {
-      let _ = self.parse_binding_ident()
+      head_name = self.parse_binding_ident()
       while self.match_(Dot) {
-        let _ = self.parse_binding_ident()
+        head_name = head_name + "." + self.parse_binding_ident()
       }
       if self.check(Lt) {
         self.skip_type_args()
       }
     }
+    let head_called = if self.check(LParen) { "called" } else { "bare" }
     // TS1308: an `await` expression inside the decorator. A parameter
     // decorator is evaluated where the CLASS is defined, not inside the
     // member, so the async context that matters is the ENCLOSING
@@ -95,6 +104,35 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
     // the chain precedes a class expression or a real parameter.
     if record_at && !self.check(Class) && !self.check(At) {
       self.invalid_decorator_uses.push("parameter")
+    }
+    // TS1239: record this parameter decorator for the signature checks,
+    // in the same `<sig:...>` channel the member positions use. The
+    // `owner` slot carries which member the parameter belongs to —
+    // `"ctor"` is the one the runtime hands `undefined` as the property
+    // key, and `"instance"` the one it hands the class INSTANCE as the
+    // target. Same `!self.check(Class)` guard as the TS1206 recording
+    // above: a decorator chain followed by `class` is a decorated class
+    // EXPRESSION inside parens, not a parameter decorator.
+    if head_name != "" &&
+      self.param_decorator_owner != "" &&
+      !self.check(Class) &&
+      !self.check(At) {
+      let heritage = if self.class_decl_no_heritage {
+        "plain"
+      } else {
+        "heritage"
+      }
+      self.invalid_decorator_uses.push(
+        "<sig:parameter:" +
+        head_called +
+        ":" +
+        self.param_decorator_owner +
+        ":" +
+        heritage +
+        ":" +
+        head_name +
+        ">",
+      )
     }
   }
 }
@@ -392,6 +430,15 @@ fn Parser::record_bodiless_param_renamings(
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
+  // Everything below this line can reach another parameter list — a
+  // default value holding an arrow, or a destructuring pattern holding
+  // one — and those parameters belong to that callable, not to this class
+  // member. Cleared here rather than at each nested parser (the
+  // save / clear / restore discipline `self.labels` needs at fifteen
+  // sites, which is how the applied-in-some-places bug gets written) and
+  // restored at exit so the next parameter in THIS list still sees it.
+  let prev_pdo = self.param_decorator_owner
+  self.param_decorator_owner = ""
   let (is_param_property, is_readonly_param, visibility_param) = self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
@@ -503,6 +550,7 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   if is_optional && !(default is None) {
     self.param_optional_initializer_misuses.push(name)
   }
+  self.param_decorator_owner = prev_pdo
   { name, binding: Some(binding), is_rest, is_optional, type_, default }
 }
 

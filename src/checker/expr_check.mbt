@@ -86,6 +86,15 @@ priv struct Resolver {
   // wins, so a receiver-class miss is a real TS18014) from a legal outward
   // lexical reference.
   private_brand_decls : Map[String, Array[String]]
+  // `brand id -> lexically ENCLOSING class's brand id`, from the parser's
+  // `<private-parent:N:M>` sentinels. `private_brand_decls` answers the
+  // one-level question (does the class holding the reference declare
+  // `#x`); a `#x` reference resolves outward through every enclosing class
+  // body, so a declaration two levels out shadows one three levels out.
+  // An absent entry terminates the walk, which makes the chain
+  // self-limiting for a top-level class and leaves the old suppression in
+  // charge wherever the parser could not record a parent.
+  private_brand_parent : Map[String, String]
   // Qualified-access support (TS2339 on `A.y` where `y` is declared but
   // not exported): per namespace name (prefixed for nesting), the value
   // names its body declares and the subset the parser marked
@@ -260,6 +269,7 @@ fn Resolver::empty() -> Resolver {
     enums: {},
     declared_value_names: {},
     private_brand_decls: {},
+    private_brand_parent: {},
     namespace_value_decls: {},
     namespace_exports: {},
     namespace_instantiated: {},
@@ -4731,9 +4741,11 @@ fn private_brand_base_name(prop : String) -> String? {
 /// nested class (`class Foo { #name; m() { class Bar { g(o: Foo) { return
 /// o.#name } } } }`) carries Bar's brand while `Foo` declares the member
 /// under its own brand — a raw lookup miss that is not an error. When the
-/// receiver's chain declares the same base name we cannot distinguish that
-/// legal nested access from an illegal cross-class one, so stay silent;
-/// a base name declared *nowhere* on the receiver still reports.
+/// receiver's chain declares the same base name this generally cannot
+/// distinguish that legal nested access from an illegal cross-class one, so
+/// it stays silent; a base name declared *nowhere* on the receiver still
+/// reports, and so does one whose LEXICAL owner (see `private_brand_owner`)
+/// is provably a different class than the receiver's.
 fn private_brand_declared_on_receiver(
   resolver : Resolver,
   recv_ty : @ast.TsType,
@@ -4754,6 +4766,25 @@ fn private_brand_declared_on_receiver(
   let class_name = match resolver.unwrap(recv_ty) {
     Named(n) | Applied(n, _) | Struct(n, _) => n
     _ => return false
+  }
+  // TS18014 again, one level further out. The check above is the
+  // one-level case; a `#name` reference actually resolves OUTWARD through
+  // every enclosing class body and binds to the first that declares it, so
+  // the shadowing declaration can sit on a class BETWEEN the reference and
+  // the receiver — which is `privateNamesInNestedClasses-2`, where `A.#x`
+  // is written inside a `C` nested in a `B` that declares its own `#x`.
+  //
+  // This can only ever force a REPORT, never a suppression, and the
+  // asymmetry is load-bearing rather than cautious: returning `true` here
+  // when the owner IS the receiver's class short-circuits the staticness
+  // check downstream, which is what `privateNameStaticFieldAccess` and
+  // `privateNamesUnique-3` need — `static #foo` declared and `x.#foo`
+  // written on an instance resolves to exactly that declaration and is
+  // still an error. Measured: the symmetric version was +1 file and -1.
+  if private_brand_owner(resolver, prop, base) is Some(owner_brand) &&
+    receiver_private_brand(resolver, class_name, base) is Some(recv_brand) &&
+    recv_brand != owner_brand {
+    return false
   }
   // Two conditions must both hold to suppress:
   //   1. The *reference's* brand belongs to no class the resolver knows.
@@ -4790,6 +4821,81 @@ fn private_brand_declared_on_receiver(
     }
     None => false
   }
+}
+
+///|
+/// Which class a `#name` reference actually binds to: the brand of the
+/// first class body, walking outward from the one holding the reference,
+/// that declares `base`. `None` when no class in the chain declares it —
+/// the reference resolves to nothing, which is a different error
+/// (TS18013 / TS2339) and left to the caller's heuristic.
+///
+/// This is the lexical resolution tsc performs, and it is what makes
+/// TS18014 decidable: the answer says WHICH declaration the reference
+/// means, so comparing it against the receiver's own declaration settles
+/// legality without any of the "we cannot tell these apart" abstention the
+/// one-level test needed.
+///
+/// The chain comes from `private_brand_parent`, so an unrecorded link ends
+/// the walk early and can only produce `None` or an ancestor nearer than
+/// the true owner — both of which lose a finding rather than invent one.
+/// The `seen` set is not paranoia: the map is built from parser markers and
+/// a malformed pair would otherwise loop forever.
+fn private_brand_owner(
+  resolver : Resolver,
+  prop : String,
+  base : String,
+) -> String? {
+  guard private_brand_id(prop) is Some(start) else { return None }
+  let seen : Map[String, Unit] = Map([])
+  let mut cur = start
+  while !seen.contains(cur) {
+    seen[cur] = ()
+    if resolver.private_brand_decls.get(cur) is Some(bases) &&
+      bases.contains(base) {
+      return Some(cur)
+    }
+    match resolver.private_brand_parent.get(cur) {
+      Some(p) => cur = p
+      None => break
+    }
+  }
+  None
+}
+
+///|
+/// The brand id under which class `class_name` declares the private member
+/// `base`, or `None` when it declares no such member. Private names are
+/// never inherited, so only the class's own member lists count.
+fn receiver_private_brand(
+  resolver : Resolver,
+  class_name : String,
+  base : String,
+) -> String? {
+  guard resolver.classes.get(class_name) is Some(cls) else { return None }
+  let brand_of = fn(name : String) -> String? {
+    if private_brand_base_name(name) is Some(b) && b == base {
+      private_brand_id(name)
+    } else {
+      None
+    }
+  }
+  for p in cls.properties {
+    if brand_of(p.name) is Some(b) {
+      return Some(b)
+    }
+  }
+  for m in cls.methods {
+    if brand_of(m.name) is Some(b) {
+      return Some(b)
+    }
+  }
+  for n in cls.private_members {
+    if brand_of(n) is Some(b) {
+      return Some(b)
+    }
+  }
+  None
 }
 
 ///|
@@ -16595,24 +16701,47 @@ fn check_iterable_class_protocol(
 
 ///|
 /// A type that provably has no `[Symbol.iterator]()`: the non-iterable
-/// primitives. `string` is iterable (chars), arrays / tuples are, and
-/// anything named / generic / `any` could be — only these are safe calls.
+/// primitives, plus a function type. `string` is iterable (chars), arrays /
+/// tuples are, and anything named / generic / `any` could be — only these
+/// are safe calls.
+///
+/// `Func` is here rather than in a second predicate beside it because
+/// "is this type provably non-iterable" is ONE question and this repo has
+/// paid for the other arrangement a dozen times. Probed at every cell the
+/// three consumers can reach: `for (const v of f)`,
+/// `for (const [a, b] of [g1, g2])`, `yield* f` and a union with a
+/// function member are all TS2488, while `string`, an array, a tuple, a
+/// `Generator` and an interface declaring `[Symbol.iterator]` stay legal.
+///
+/// `void` / `null` / `undefined` are TS2488 too and are deliberately NOT
+/// here: our flow model narrows an `any`-typed binding to `Undefined` when
+/// its initializer is `undefined` (the hazard `check_computed_key_type`
+/// and batch CY's TS2532 both record), so an arm for it would report a
+/// type tsc calls `any`. That loses a finding nobody writes rather than
+/// inventing one.
 fn is_non_iterable_primitive(t : @ast.TsType) -> Bool {
   match t {
     Number | Boolean | Symbol | BigInt => true
     NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    Func(_, _) => true
     _ => false
   }
 }
 
 ///|
-/// TS2488 for provably non-iterable `for-of` sources beyond class
-/// instances: a non-iterable primitive (`for (const v of 0)` —
-/// ES5For-ofTypeCheck12), a union with a non-iterable primitive member
-/// (`string | number` — ES5For-ofTypeCheck7/9), and an object type whose
-/// `[Symbol.iterator]` member is optional and may thus be absent
-/// (for-of29).
-fn check_forof_non_iterable(ctx : CheckCtx, iter_ty : @ast.TsType) -> Unit {
+/// TS2488 for provably non-iterable sources beyond class instances: a
+/// non-iterable primitive (`for (const v of 0)` — ES5For-ofTypeCheck12), a
+/// union with a non-iterable primitive member (`string | number` —
+/// ES5For-ofTypeCheck7/9), and an object type whose `[Symbol.iterator]`
+/// member is optional and may thus be absent (for-of29).
+///
+/// `path` because `yield*` carries the same obligation and this was a
+/// `for-of`-only helper with the path baked in.
+fn check_forof_non_iterable(
+  ctx : CheckCtx,
+  iter_ty : @ast.TsType,
+  path : String,
+) -> Unit {
   let msg = "type `\{type_display(iter_ty)}` must have a `[Symbol.iterator]()` method that returns an iterator"
   match ctx.resolver.unwrap(iter_ty) {
     Union(ms) => {
@@ -16623,16 +16752,16 @@ fn check_forof_non_iterable(ctx : CheckCtx, iter_ty : @ast.TsType) -> Unit {
         }
       }
       if bad {
-        record(ctx, "for-of iterable", msg)
+        record(ctx, path, msg)
       }
     }
     Object(fields) =>
       for f in fields {
         if f.0 is Literal("@@iterator") && type_accepts_undefined(f.1) {
-          record(ctx, "for-of iterable", msg)
+          record(ctx, path, msg)
         }
       }
-    t => if is_non_iterable_primitive(t) { record(ctx, "for-of iterable", msg) }
+    t => if is_non_iterable_primitive(t) { record(ctx, path, msg) }
   }
 }
 
@@ -17239,7 +17368,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // method returning an iterator (extracted; also used for array
       // spreads and assignment-form destructuring).
       check_iterable_class_protocol(ctx, iter_ty, "for-of iterable")
-      check_forof_non_iterable(ctx, iter_ty)
+      check_forof_non_iterable(ctx, iter_ty, "for-of iterable")
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -20580,6 +20709,19 @@ fn check_call_args_in_expr(
       }
     YieldStar(operand) => {
       check_call_args_in_expr(env, operand, ctx)
+      // TS2488: `yield*` delegates to an ITERABLE, so the operand has the
+      // same obligation a `for-of` source has — and the TS2488 apparatus
+      // (`check_iterable_class_protocol` for a class instance,
+      // `check_forof_non_iterable` for a primitive / union / optional
+      // `@@iterator`) was wired into the `for-of` site and nowhere else.
+      // `yield* foo` where `foo` is the generator FUNCTION rather than a
+      // call to it (YieldExpression6_es6) is the real-world shape: the
+      // operand is a `Func`, which no amount of `yield_type` knowledge
+      // reaches, since the check below needs a declared element type and
+      // a generator without a return annotation has none.
+      let operand_ty = infer_expr(env, ctx.resolver, operand)
+      check_iterable_class_protocol(ctx, operand_ty, "yield* iterable")
+      check_forof_non_iterable(ctx, operand_ty, "yield* iterable")
       // `yield* iter` delegates to another iterable. Validate against
       // `Iterable<T>` / `Generator<T, ...>` of the same element type.
       if is_checkable(ctx.yield_type) {
@@ -29611,6 +29753,12 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // Marker, not an error: a private member declaration keyed by its
         // class brand. Consumed by `private_brand_declared_on_receiver`.
         ()
+      } else if name.has_prefix("<private-parent:") {
+        // Marker, not an error: this class body's lexically enclosing class
+        // brand. Consumed by `private_brand_owner`. Every non-marker entry
+        // in this channel becomes a diagnostic verbatim, so a marker
+        // without a skip arm here IS a finding (batch CO's TS4111).
+        ()
       } else if name.has_prefix("<index-naked-param:") {
         // Marker, not an error: an instance index signature's declared value
         // type was a naked bounded type parameter. Consumed by
@@ -30823,6 +30971,35 @@ fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int {
 }
 
 ///|
+/// True when this file declares `name` as a class, an interface or a type
+/// alias, at module level or inside any namespace. Used to withdraw a rule
+/// that keys on a LIB type's spelling (`Function`, and nothing else so
+/// far) when the file has made that spelling mean something local.
+fn module_declares_type_name(module_ : @ast.TsModule, name : String) -> Bool {
+  for c in module_.classes {
+    if c.name == name {
+      return true
+    }
+  }
+  for i in module_.interfaces {
+    if i.name == name {
+      return true
+    }
+  }
+  for a in module_.type_aliases {
+    if a.name == name {
+      return true
+    }
+  }
+  for ns in module_.namespaces {
+    if module_declares_type_name(ns.module_, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 /// TS1240 / TS1241 / TS1329: a legacy (`experimentalDecorators`) MEMBER
 /// decorator whose declared arity cannot match the runtime invocation.
 /// The class-level version of this is `check_class_decorator_signatures`
@@ -30867,18 +31044,30 @@ fn check_member_decorator_signatures(
   if !legacy {
     return issues
   }
+  // Hoisted out of the loop below: the answer is the same for every
+  // decorator in the module, and asking it per marker is
+  // O(decorators x declarations) on a file that has many of both — the
+  // shape `verify-checker-scaling` exists to catch, and the fix
+  // `RootNameBackstops` already applies one function over.
+  let function_name_is_local = module_declares_type_name(module_, "Function")
   for entry in module_.invalid_decorator_uses {
     if !entry.has_prefix("<sig:") {
       continue
     }
     let body = entry[5:entry.length() - 1].to_owned()
     let parts = body.split(":").collect()
-    if parts.length() != 3 {
+    if parts.length() != 5 {
       continue
     }
     let kind = parts[0].to_owned()
     let called = parts[1].to_owned()
-    let dname = parts[2].to_owned()
+    let owner = parts[2].to_owned()
+    // A CONSTRUCTOR parameter's decorator is handed `typeof C` as its
+    // target, like a static member's, which is why the owner has three
+    // values and not two.
+    let is_static_member = owner == "static" || owner == "ctor"
+    let class_has_heritage = parts[3].to_owned() == "heritage"
+    let dname = parts[4].to_owned()
     // `@dec(...)` is skipped: the signature the runtime invokes is the
     // FACTORY's return type, which reaches us as a bare `Func(types)`
     // with no optionality information -- and a parameter's optionality is
@@ -30890,6 +31079,59 @@ fn check_member_decorator_signatures(
       continue
     }
     guard resolver.signatures.get(dname) is Some(params) else { continue }
+    // TS1240 / TS1241 on the TARGET's type rather than on the arity, which
+    // is the other half of "can this decorator resolve here" and had
+    // nothing. The runtime passes the class's INSTANCE type to an instance
+    // member's decorator (`C.prototype`, typed `C`) and `typeof C` to a
+    // static one, so a decorator declaring `target: Function` can never
+    // resolve on an instance member and always resolves on a static one —
+    // `decoratorOnClassMethod10`, and the same at a property
+    // (TS1240) and at an accessor.
+    //
+    // A denylist of exactly one spelling, for the reason
+    // `is_non_iterable_primitive` is one: `target: Object`, `target: any`,
+    // `target: C` and `target: Function | Object` are all legal, and
+    // "which named types does a class instance fail to satisfy" is the
+    // whole assignability question. `Function` is the one a person
+    // actually writes, and the two ways it could be legal are both
+    // excluded — a class with heritage can BE a function
+    // (`class A extends Function { @dec m() {} }` is ACCEPTED, probed),
+    // and a file redeclaring the NAME `Function` means something else by
+    // it. A first parameter that is a REST parameter abstains: the target
+    // then lands in an array whose element type is the question, and that
+    // is not this spelling.
+    if !is_static_member &&
+      !class_has_heritage &&
+      params.length() > 0 &&
+      !params[0].is_rest &&
+      params[0].type_ is Named("Function") &&
+      !function_name_is_local {
+      issues.push({
+        path: "decorator `\{dname}`",
+        message: "unable to resolve signature of \{kind} decorator when called as an expression: the decorator's first parameter is declared `Function`, but the runtime passes the class instance",
+      })
+      continue
+    }
+    // TS1239 on the PROPERTY KEY: a CONSTRUCTOR parameter's decorator is
+    // invoked as `(typeof C, undefined, index)` — there is no member name
+    // to pass — so a second parameter whose type does not admit
+    // `undefined` can never resolve
+    // (`decoratorOnClassConstructorParameter1`). A method parameter's
+    // decorator gets the method's name, so the same signature is legal
+    // there; probed both ways, and both flags matter — with
+    // `strictNullChecks` OFF tsc accepts it, because `undefined` is then
+    // assignable to everything.
+    if owner == "ctor" &&
+      module_.strict_null_checks &&
+      params.length() > 1 &&
+      !params[1].is_rest &&
+      !type_accepts_undefined(params[1].type_) {
+      issues.push({
+        path: "decorator `\{dname}`",
+        message: "unable to resolve signature of parameter decorator when called as an expression: a constructor parameter's decorator is passed `undefined` as the property key, which `\{type_display(params[1].type_)}` does not accept",
+      })
+      continue
+    }
     let mut lo = 0
     let mut total = 0
     let mut has_rest = false
@@ -30921,8 +31163,13 @@ fn check_member_decorator_signatures(
       lo <= n && (hi < 0 || n <= hi)
     }
 
+    // A parameter decorator's runtime arity is exactly 3 — probed: 1, 2
+    // and 4 all report and 3 is the only accepted count, so unlike a
+    // method decorator it has no 2-or-3 latitude.
     let ok = if kind == "property" {
       accepts(2)
+    } else if kind == "parameter" {
+      accepts(3)
     } else {
       accepts(2) || accepts(3)
     }
@@ -30948,6 +31195,117 @@ fn check_member_decorator_signatures(
       })
     }
   }
+  issues
+}
+
+///|
+/// TS1064, the NAMED half: an `async` function or method whose declared
+/// return type is a name this file declares as a CLASS or an INTERFACE.
+///
+/// `Parser::record_async_return_type_misuse` owns the rest of the rule and
+/// records its own abstention in writing: the alias and the subclass are
+/// the same named-annotation node at parse time
+/// (`type P = Promise<void>` is LEGAL, `class MyPromise<T> extends
+/// Promise<T>` is not), so every named annotation abstains there, and the
+/// note names the fix — "a name declared in-file as a CLASS or INTERFACE
+/// cannot be an alias". That fact lives here, so this is the other half of
+/// one rule rather than a second rule.
+///
+/// Probed cell by cell against the real compiler, because the boundary is
+/// not the one the message text suggests:
+///
+///   interface P extends Promise<void> {}   async f(): P    TS1064
+///   class MyPromise<T> extends Promise<T>  async f(): M<…> TS1064
+///   declare class D {}                     async f(): D    TS1064
+///   interface I {}                         async f(): I    TS1064
+///   namespace X { export class M<T> extends Promise<T> {} }
+///                                          async f(): X.M<void>  TS1064
+///   type P = Promise<void>                 async f(): P    LEGAL
+///   interface Promise<T> { extra(): void } async f(): Promise<void>  LEGAL
+///
+/// So EXTENDING `Promise` buys an interface or class nothing — being a
+/// nominal declaration at all is the error — while a declaration-merged
+/// `interface Promise<T>` is the global `Promise` and must stay silent,
+/// which is why the name is exempt by spelling. That exemption costs the
+/// shadowing case (`class Promise<T> {}` in-file IS TS1064), one MISS for
+/// a soundness hole nobody can close cheaply.
+///
+/// A name declared BOTH ways abstains, and an alias to something other
+/// than `Promise` (`type P = number`, which tsc reports) is a declared
+/// MISS: deciding it means resolving the alias body, which is the
+/// abstention the parser already states.
+fn check_async_named_return_types(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // Names this file declares nominally, and names it declares as type
+  // aliases — both qualified with the namespace prefix a type annotation
+  // has to spell (`parse_named_type_tail` joins the segments with `.`).
+  let nominal : Map[String, Unit] = Map([])
+  let aliases : Map[String, Unit] = Map([])
+  fn collect(m : @ast.TsModule, prefix : String) -> Unit {
+    for c in m.classes {
+      nominal[prefix + c.name] = ()
+    }
+    for i in m.interfaces {
+      nominal[prefix + i.name] = ()
+    }
+    for a in m.type_aliases {
+      aliases[prefix + a.name] = ()
+    }
+    for ns in m.namespaces {
+      collect(ns.module_, prefix + ns.name + ".")
+    }
+  }
+
+  collect(module_, "")
+  let rejected = fn(
+    is_async : Bool,
+    is_generator : Bool,
+    rt : @ast.TsType,
+  ) -> String? {
+    if !is_async || is_generator {
+      return None
+    }
+    let n = match rt {
+      Named(n) | Applied(n, _) => n
+      _ => return None
+    }
+    // The global `Promise` is what the rule demands, and an in-file
+    // `interface Promise<T>` merges INTO it.
+    if n == "Promise" || n.has_suffix(".Promise") {
+      return None
+    }
+    if nominal.contains(n) && !aliases.contains(n) {
+      Some(n)
+    } else {
+      None
+    }
+  }
+  fn walk(m : @ast.TsModule) -> Unit {
+    for f in m.funcs {
+      if rejected(f.is_async, f.is_generator, f.return_type) is Some(_) {
+        issues.push({
+          path: "function `\{f.name}`",
+          message: "the return type of an `async` function or method must be the global `Promise<T>` type",
+        })
+      }
+    }
+    for c in m.classes {
+      for meth in c.methods {
+        if rejected(meth.is_async, meth.is_generator, meth.return_type)
+          is Some(_) {
+          issues.push({
+            path: "method `\{c.name}.\{meth.name}`",
+            message: "the return type of an `async` function or method must be the global `Promise<T>` type",
+          })
+        }
+      }
+    }
+    for ns in m.namespaces {
+      walk(ns.module_)
+    }
+  }
+
+  walk(module_)
   issues
 }
 
@@ -31518,6 +31876,13 @@ fn check_module_function_bodies_layered(
             }
             None => ()
           }
+        } else if name.has_prefix("<private-parent:") {
+          let body = name["<private-parent:".length():name.length() - 1].to_owned()
+          match body.find(":") {
+            Some(i) =>
+              resolver.private_brand_parent[body[:i].to_owned()] = body[i + 1:].to_owned()
+            None => ()
+          }
         }
       }
     }
@@ -31936,6 +32301,13 @@ fn check_module_function_bodies_layered(
     }
     // TS2741 generator returns declared as protocol-extending interfaces.
     for issue in check_generator_interface_returns(module_, resolver) {
+      all.push(issue)
+    }
+    // TS1064, the named half of the parser's `async` return-type rule.
+    // Permissive-only alongside the checks above: the bridge generator
+    // runs `check_module` over real `.d.ts` input, where an ambient
+    // `async` declaration is not a shape worth the exposure.
+    for issue in check_async_named_return_types(module_) {
       all.push(issue)
     }
   }

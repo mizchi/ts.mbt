@@ -2314,6 +2314,37 @@ fn Parser::record_private_member_misuse(
 }
 
 ///|
+/// Marker recording this class body's lexically ENCLOSING class brand, so
+/// the checker can resolve a `#name` reference the way tsc does — outward
+/// through the chain of enclosing class bodies, stopping at the first one
+/// that declares it (TS18014).
+///
+/// `<private-decl:N:x>` alone answers "does the class the reference sits in
+/// declare `#x`", which is the one-level version of that question; a
+/// reference in a class nested TWO deep
+/// (`class A { static #x; constructor() { class B { #x; constructor() {
+/// class C { constructor() { A.#x } } } } } }`) is shadowed by B and neither
+/// C nor A can see it. `None` when this class body has no enclosing class,
+/// which makes the chain terminate rather than need a root marker.
+///
+/// `current_class_brand` is NOT reset by a function body, which is correct
+/// here: a private name resolves lexically through one, so a class inside a
+/// method of `A` still has `A` as its enclosing brand.
+fn private_parent_sentinel(brand_id : Int, prev_brand : String?) -> String? {
+  match prev_brand {
+    Some(pb) => {
+      let prefix = "__private_brand__"
+      if pb.has_prefix(prefix) {
+        Some("<private-parent:\{brand_id}:\{pb[prefix.length():].to_owned()}>")
+      } else {
+        None
+      }
+    }
+    None => None
+  }
+}
+
+///|
 fn Parser::parse_class_body(
   self : Parser,
   class_type_params : Array[String],
@@ -2843,6 +2874,22 @@ fn Parser::parse_class_body(
       } else {
         "property"
       }
+      // TS1240 / TS1241 need two more facts about the MEMBER, and this is
+      // the only point that has both. The runtime hands a member decorator
+      // the class INSTANCE type for an instance member and `typeof C` for
+      // a static one, so a decorator declaring `target: Function` is wrong
+      // for the first and right for the second — probed both ways. And a
+      // class with heritage can legitimately BE a function
+      // (`class A extends Function { @dec m() {} }` is ACCEPTED), so the
+      // rule abstains there; `class_decl_no_heritage` is set by both class
+      // paths with save/restore around this body, which is exactly the
+      // fact needed.
+      let staticness = if is_static { "static" } else { "instance" }
+      let heritage = if self.class_decl_no_heritage {
+        "plain"
+      } else {
+        "heritage"
+      }
       let mut di = deco_before
       while di < self.pending_decorators.length() {
         // TS2660: `super` in a decorator expression. Gated on NOT being
@@ -2879,7 +2926,17 @@ fn Parser::parse_class_body(
         match decorator_head_name(self.pending_decorators[di]) {
           Some((called, dname)) =>
             self.invalid_decorator_uses.push(
-              "<sig:" + kind + ":" + called + ":" + dname + ">",
+              "<sig:" +
+              kind +
+              ":" +
+              called +
+              ":" +
+              staticness +
+              ":" +
+              heritage +
+              ":" +
+              dname +
+              ">",
             )
           None => ()
         }
@@ -3013,7 +3070,22 @@ fn Parser::parse_class_body(
         self.record_implicit_any_params = self.class_decl_no_heritage &&
           accessor_kind is None &&
           !(is_constructor_method && self.in_class_expr_body)
+        // TS1239: which member this parameter list belongs to, for the
+        // parameter-decorator rules. Set here rather than at
+        // `skip_param_decorators` because this is the only site that knows
+        // both facts, and restored immediately so a nested function's
+        // parameters (a default value holding an arrow, say) record
+        // nothing.
+        let prev_pdo = self.param_decorator_owner
+        self.param_decorator_owner = if is_constructor_method {
+          "ctor"
+        } else if is_static {
+          "static"
+        } else {
+          "instance"
+        }
         let params = self.parse_params()
+        self.param_decorator_owner = prev_pdo
         self.record_implicit_any_params = prev_record_nia
         let _ = self.expect(RParen)
         // TS1054 / TS1049: accessors have fixed arities — a getter takes
@@ -3901,6 +3973,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       _ => ()
     }
   }
+  match private_parent_sentinel(brand_id, prev_brand) {
+    Some(s) => expr_class_sentinels.push(s)
+    None => ()
+  }
   if expr_class_sentinels.length() > 0 {
     self.collected_class_dups.push((class_name, expr_class_sentinels))
   }
@@ -4754,6 +4830,10 @@ fn Parser::parse_class_decl_with_abstract(
         }
       _ => ()
     }
+  }
+  match private_parent_sentinel(brand_id, prev_brand) {
+    Some(s) => runtime_decl.duplicate_member_names.push(s)
+    None => ()
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from

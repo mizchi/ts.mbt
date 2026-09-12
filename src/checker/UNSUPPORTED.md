@@ -6,7 +6,7 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2601 / MISS in scope 113 / OUT OF SCOPE 20 / FP 0 /
+Measured at **TP 2607 / MISS in scope 108 / OUT OF SCOPE 19 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
@@ -18,6 +18,18 @@ treated as a BINDING by three separate consumers, so a bare reference to
 that spelling resolved anywhere in the module. A MISS can be a rule the
 checker already has, defeated by a fact the parser recorded with the
 wrong meaning; that kind never appears in a machinery classification.
+
+Batch EG's six files are the same story four more times over, and none of
+them is in a section below either. TS2488 existed and was wired into the
+`for-of` source and not into `yield*`; TS18014 asked its question one
+lexical level deep when a `#name` resolves outward through every
+enclosing class body; TS1064's named half was an abstention whose own
+header named the fix; and the decorator signature checks compared ARITY
+and never a TYPE. The only genuinely absent machinery the batch found is
+filed with its measured blocker rather than shipped — TS2490 needs to
+tell `next() { return "" }` from `next(): any { return "" }`, and
+`TsClassMethodDecl` keeps no annotation-presence field, the
+absent-versus-`: any` gap this file records in section G.
 
 Sections B, C, E and F were taken in batch EB — **+8 files at FP 0** — and
 each keeps its entry with what shipped and what is still missing, because

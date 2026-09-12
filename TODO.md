@@ -3,6 +3,169 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EG (2026-09-12): four rules, and the one that had to stay ASYMMETRIC
+
+**+6 files at FP 0** (TP 2601 -> 2607, MISS in scope 113 -> 108, PFLEGAL 0,
+TN 1750), plus one file retired from `scripts/checker_out_of_scope.txt` as
+STALE — `asyncQualifiedReturnType_es5` was declared `no-local-oracle` and
+the TS1064 rule below makes it a TP, which the oracle's stale-entry report
+named on the first run after the change.
+
+The ranking came from re-running every remaining MISS file through the real
+compiler (`checker_miss_rank.mjs`), and it says the tail is all there is:
+**67 of 113 files carry exactly one error code and 84 codes have exactly one
+file**, with the four largest buckets (TS2322 15 solo, TS2345 10, TS2339 5,
+TS2403 4) being variadic tuples, template-literal types, conditional types
+and contextual typing. So four small unrelated rules is what this tier looks
+like, and three of the four are the applied-in-some-places family.
+
+- [x] **TS2488 for `yield*`** (+1: `YieldExpression6_es6`). The whole TS2488
+  apparatus existed and was wired into ONE position:
+  `check_iterable_class_protocol` for a class instance and
+  `check_forof_non_iterable` for a primitive / union / optional
+  `@@iterator`, both called from the `ForOf` arm and from nowhere else.
+  `yield*` delegates to an iterable and carries the same obligation, and
+  its own arm could not reach it — the existing check there needs a
+  declared element type (`ctx.yield_type`) and a generator without a return
+  annotation has none, which is every corpus file and most real code. The
+  rule also needed `Func` in `is_non_iterable_primitive`, which is the
+  real-world shape: `yield* foo` instead of `yield* foo()`, forgetting to
+  CALL the generator. Widening that predicate reaches the two `for-of`
+  consumers as well and tsc reports both (`for (const v of f)`,
+  `for (const [a, b] of [g1, g2])`). `void` / `null` / `undefined` are
+  TS2488 too and are deliberately NOT in it: our flow model narrows an
+  `any`-typed binding to `Undefined` when its initializer is `undefined`
+  (the hazard batch CY's TS2532 records), so an arm for it would report a
+  type tsc calls `any`. Eleven cells probed; `string`, an array, a tuple, a
+  `Generator` and an interface declaring `[Symbol.iterator]` all stay
+  legal.
+- [x] **TS18014 one level further out** (+1: `privateNamesInNestedClasses-2`)
+  — and this is the one worth reading. `private_brand_declared_on_receiver`
+  asked whether the class HOLDING the reference declares the same `#name`,
+  which is the one-level version of the question; a `#x` reference resolves
+  OUTWARD through every enclosing class body and binds to the first that
+  declares it, so the shadowing declaration can sit on a class BETWEEN the
+  reference and the receiver. That is the corpus file exactly: `A.#x`
+  written inside a `C` nested in a `B` that declares its own `#x`. The
+  chain comes from a new `<private-parent:CHILD:PARENT>` sentinel beside
+  the `<private-decl:BRAND:base>` one the rule already reads, pushed from
+  both class paths through one helper, and `current_class_brand` not being
+  reset by a function body is CORRECT here — a private name resolves
+  lexically through one.
+
+  **The first version was symmetric and measured +1 TP and −1**, which is
+  the finding. Reading an owner match as PERMISSION (returning "suppress"
+  when the lexical owner is the receiver's own class) short-circuits the
+  staticness check downstream, and `privateNameStaticFieldAccess` and
+  `privateNamesUnique-3` are exactly that: `static #foo` declared and
+  `x.#foo` written on an instance resolves to precisely that declaration
+  and is still an error. So the walk can only ever force a REPORT, never a
+  suppression — purely additive, with the old heuristic left in charge of
+  everything else. Seven cells now agree with tsc, including the two that
+  make the asymmetry load-bearing and the one a symmetric version would
+  also have got right (the owner IS the receiver, two levels out).
+- [x] **TS1064's named half** (+2: `asyncQualifiedReturnType_es6`, and
+  `_es5` out of the scope file). `Parser::record_async_return_type_misuse`
+  states the abstention and names the fix in its own header — "the alias
+  and the subclass are the SAME named-annotation node at parse time … a
+  name declared in-file as a CLASS or INTERFACE cannot be an alias — and is
+  filed rather than built". Built. It is the other half of one rule rather
+  than a second rule: the parser keeps every non-named annotation and the
+  checker, which has the declaration table, decides the named ones.
+
+  Probed cell by cell, because the boundary is not what the message text
+  suggests. EXTENDING `Promise` buys an interface or a class nothing —
+  being a nominal declaration at all is the error, so `interface I {}` and
+  `declare class D {}` report as readily as `class MyPromise<T> extends
+  Promise<T>` — while a declaration-merged `interface Promise<T> { extra():
+  void }` IS the global `Promise` and must stay silent, which is why the
+  NAME is exempt by spelling. That exemption costs the shadowing case
+  (`class Promise<T> {}` in-file is TS1064), one MISS for a hole nobody can
+  close cheaply. A qualified name is `Named("X.MyPromise")` here, so the
+  namespace prefix is reconstructed by recursing `module_.namespaces` — no
+  resolver involvement at all. An alias to something other than `Promise`
+  (`type P = number`, which tsc reports) is a declared MISS: deciding it
+  means resolving the alias body, which is the abstention the parser
+  already states.
+- [x] **The decorator signature checks on the TYPES** (+2:
+  `decoratorOnClassMethod10`, `decoratorOnClassConstructorParameter1`).
+  Batch CU compared a member decorator's declared ARITY against the
+  runtime's; "can this decorator resolve here" has a second half and it had
+  nothing. Two facts, both probed one cell at a time:
+
+  The TARGET. The runtime passes a member decorator the class's INSTANCE
+  type for an instance member (`C.prototype`, typed `C`) and `typeof C` for
+  a static one and for a CONSTRUCTOR parameter, so `target: Function` can
+  never resolve on the first and always resolves on the other two. A
+  denylist of exactly one spelling, for the reason
+  `is_non_iterable_primitive` is one — `target: Object`, `target: any`,
+  `target: C` and `target: Function | Object` are all legal, and "which
+  named types does a class instance fail to satisfy" is the whole
+  assignability question. Both ways it could be legal are excluded: a class
+  with heritage can BE a function (`class A extends Function { @dec m() {}
+  }` is ACCEPTED, probed — the guard is not caution), and a file
+  redeclaring the NAME `Function` means something else by it. That second
+  test is hoisted out of the marker loop, because asking it per marker is
+  O(decorators x declarations) — the shape `verify-checker-scaling` exists
+  to catch.
+
+  The PROPERTY KEY. A constructor parameter's decorator is invoked as
+  `(typeof C, undefined, index)` — there is no member name to pass — so a
+  second parameter whose type does not admit `undefined` can never resolve.
+  A METHOD parameter's decorator gets the method's name, so the identical
+  signature is legal there, and the verdict ALSO depends on
+  `strictNullChecks`: with it off tsc accepts, because `undefined` is then
+  assignable to everything. Two flags rather than one fact, and both
+  measured against the local compiler under explicit `@strictNullChecks:
+  false` / `true`.
+
+  Parameter decorators had no `<sig:>` marker at all, which is why both
+  facts were unreachable at that position. `skip_param_decorators` SKIPS
+  the expression — batch EE's TS1308 blocker — and the same answer applies:
+  the head of a decorator must be spelled out, so reading `(called, dname)`
+  off the tokens the skip already consumes is complete by construction. The
+  owner (`ctor` / `static` / `instance`) rides a Parser field set around
+  the ONE `parse_params()` call in `parse_class_body`, and cleared inside
+  `parse_param` for everything after the decorator scan — a default value
+  or a destructuring pattern can hold another parameter list, and those
+  parameters belong to that callable. Clearing once in `parse_param` rather
+  than at each nested parser is the point: the alternative is the
+  save / clear / restore discipline `self.labels` needs at fifteen sites,
+  which is how the applied-in-some-places bug gets written. A parameter
+  decorator's runtime arity also turns out to be exactly 3 — probed: 1, 2
+  and 4 all report — unlike a method decorator's 2-or-3 latitude.
+
+**Filed rather than built: TS2490** (`for-of15`, +1). "The type returned by
+the `next()` method of an iterator must have a `value` property", and the
+boundary is fully probed: `next() { return "" }`, `next(): string`,
+`next() { return 1 }`, `next() { return { done: true } }` and `next() { }`
+all report, while an object literal carrying `value`, an annotation carrying
+it, and `next(): any` are accepted — and a `[Symbol.iterator]()` returning
+something OTHER than `this` is accepted whatever `next` says, so the
+returns-`this` test `check_iterable_class_protocol` already computes is
+required. The blocker is mechanical and CHECKED rather than assumed:
+`TsClassMethodDecl` has no annotation-presence field, so `next() { return ""
+}` (TS2490) and `next(): any { return "" }` (ACCEPTED) are the same node
+downstream — the absent-versus-`: any` blocker this file records for TS7031,
+TS7022, TS2729, TS2448 and TS2564. The route is equally concrete:
+`parse_class_body` already has `had_return_annotation` in hand at exactly
+the `next` / `@@iterator` site, because batch DV's TS7022 indirect rule keys
+on it there, so the fact needs a Parser-level stack drained per class into a
+`<unannotated-return:next>` sentinel — the `self.optional_member_names`
+shape, three sites plus the ingestion. Not taken because the batch is
+already at +6 and a new parse-time channel for one file is the wrong trade;
+recorded with its condition rather than its verdict.
+
+Gates on this head: oracle TP 2607 / MISS in scope 108 / OUT OF SCOPE 19 /
+FP 0 / PFLEGAL 0 / TN 1750; `moon check --deny-warn` clean; assertions
+3,004 / 3,004; `verify-checker-scaling` 12 of 12 axes within budget
+(`private-members` 1.54 against 1.75 — the chain walk adds a constant factor
+to an already-declared quadratic, not a new exponent); mangle-safety
+186/186; dce-coverage 31 eliminated / 0 broken; rule-equivalence 80
+equivalent / 0 unsound; graph-walk, generated-fixtures, scaffolds, examples,
+mbti-dts, bridge-runtime (0 unbound, 0 runtime failures) and
+bridge-enum-returns all green.
+
 ### Perf round (2026-09-11): nothing regressed, and the axis nobody measured is quadratic
 
 Asked "what got slower", the differential says **nothing**, and that is the

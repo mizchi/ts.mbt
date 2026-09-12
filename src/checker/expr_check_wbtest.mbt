@@ -11387,6 +11387,111 @@ test "expr_check: nested-class private shadowing (TS18014)" {
     ),
     0,
   )
+  // The shadowing declaration may sit on a class BETWEEN the reference and
+  // the receiver: `A.#x` written inside a `C` nested in a `B` that declares
+  // its own `#x` binds to B's, so A cannot supply it
+  // (privateNamesInNestedClasses-2). A one-level "does the referencing
+  // class declare it" test finds nothing here.
+  assert_true(
+    issues(
+      "class A { static #x = 5; constructor () { class B { #x = 5; constructor() { class C { constructor() { A.#x } } } } } }",
+    ) >
+    0,
+  )
+  // Same nesting depth, nothing shadowing: the reference walks out to A.
+  @test.assert_eq(
+    issues(
+      "class A { static #x = 5; constructor () { class B { #y = 5; constructor() { class C { constructor() { A.#x } } } } } }",
+    ),
+    0,
+  )
+  // The lexical owner IS the receiver's class, two levels out — legal, and
+  // the cell a symmetric owner test would still get right.
+  @test.assert_eq(
+    issues(
+      "class A { #x = 5; m() { class B { #x = 1; n() { class C { g(o: B) { return o.#x } } return C } } return B } }",
+    ),
+    0,
+  )
+  // The two cells that make the owner walk REPORT-ONLY. Both resolve to
+  // exactly the receiver's own declaration and are still errors, because
+  // the declaration is STATIC and the access is on an instance — so an
+  // owner match must not be read as permission.
+  @test.assert_eq(
+    issues("class A { static #x = 5; constructor() { A.#x } }"),
+    0,
+  )
+  assert_true(
+    issues("class A { static #x = 5; constructor() { this.#x } }") > 0,
+  )
+  assert_true(
+    issues("class B { static #foo = true; test(x: B) { x.#foo } }") > 0,
+  )
+}
+
+///|
+/// TS2488 at `yield*`. The apparatus (`check_iterable_class_protocol` for a
+/// class instance, `check_forof_non_iterable` for a primitive / union /
+/// optional `@@iterator`) was wired into the `for-of` source and nowhere
+/// else, so `yield* foo` — forgetting to CALL the generator, which is the
+/// real-world shape and `YieldExpression6_es6` — was silent.
+test "expr_check: yield* delegates to an iterable (TS2488)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The corpus shape: the generator FUNCTION rather than a call to it.
+  assert_true(issues("function* foo() { yield* foo }") > 0)
+  assert_true(
+    issues(
+      "declare const f: (x: number) => string;\nfunction* g() { yield* f }",
+    ) >
+    0,
+  )
+  // A non-iterable primitive, and a union with one in it.
+  assert_true(
+    issues("declare const n: number;\nfunction* g() { yield* n }") > 0,
+  )
+  assert_true(
+    issues(
+      "declare const u: string | (() => void);\nfunction* g() { yield* u }",
+    ) >
+    0,
+  )
+  // A class instance with no `[Symbol.iterator]` at all.
+  assert_true(
+    issues("class C { m() {} }\nfunction* g() { yield* new C() }") > 0,
+  )
+  // The legal neighbours. Calling the generator is the whole difference in
+  // the corpus file; `string`, an array, a tuple and an interface that
+  // declares the protocol are all iterable.
+  @test.assert_eq(issues("function* foo() { yield* foo() }"), 0)
+  @test.assert_eq(issues("function* g() { yield* [1, 2]; yield* \"str\" }"), 0)
+  @test.assert_eq(
+    issues(
+      "interface HasIter { [Symbol.iterator](): Iterator<number> }\ndeclare const h: HasIter;\nfunction* g() { yield* h }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("declare const t: [number, string];\nfunction* g() { yield* t }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("declare const a: any;\nfunction* g() { yield* a }"),
+    0,
+  )
+  // Widening `is_non_iterable_primitive` reaches the `for-of` consumers
+  // too, and tsc reports both of these.
+  assert_true(
+    issues("declare const f: (x: number) => string;\nfor (const v of f) { }") >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare const g1: () => void;\ndeclare const g2: () => void;\nfor (const [a, b] of [g1, g2]) { }",
+    ) >
+    0,
+  )
 }
 
 ///|
@@ -19685,4 +19790,100 @@ test "batch EF: a method shorthand's key is not a binding" {
     ),
     0,
   )
+}
+
+///|
+/// Batch EG: TS1064's named half, and the decorator signature checks at the
+/// positions and on the FACTS they had none for.
+///
+/// Every cell below was probed against the real compiler first. Three of
+/// them read backwards from the message text, which is why:
+///
+///   - "the return type of an async function must be the global
+///     `Promise<T>`" reads as a rule about EXTENDING `Promise`, and
+///     extending it buys an interface or a class nothing — being a nominal
+///     declaration at all is the error, while a type ALIAS to
+///     `Promise<void>` is legal and a declaration-merged
+///     `interface Promise<T>` IS the global one.
+///   - a decorator's `target: Function` is wrong on an INSTANCE member and
+///     right on a static one and on a constructor parameter, because those
+///     two are handed `typeof C`.
+///   - a CONSTRUCTOR parameter's decorator is handed `undefined` as its
+///     property key and a method parameter's is handed the method name, so
+///     one signature is legal in one position and not the other — and the
+///     verdict also depends on `strictNullChecks`, which is the cell that
+///     makes it two flags rather than one fact.
+test "batch EG rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS1064: a name declared in-file as a CLASS or an INTERFACE cannot
+      // be an alias to `Promise`, which is the fact
+      // `record_async_return_type_misuse` names as its blocker and
+      // abstains on. Namespace-qualified is the corpus shape
+      // (asyncQualifiedReturnType).
+      "namespace X { export class MyPromise<T> extends Promise<T> {} }\nasync function f(): X.MyPromise<void> {}",
+      "class MyPromise<T> extends Promise<T> {}\nasync function f(): MyPromise<void> {}",
+      "interface P extends Promise<void> {}\nasync function f(): P {}", "interface I {}\nasync function f(): I {}",
+      "declare class D {}\nasync function g(): D {}", "class Plain {}\nasync function f(): Plain {}",
+      // The class-METHOD spelling of the same rule.
+       "namespace X { export class MyPromise<T> extends Promise<T> {} }\nclass C { async m(): X.MyPromise<void> {} }",
+      // TS1241 / TS1240: `target: Function` on an instance member.
+       "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: number): void;\nclass A { @dec m() {} }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: string | symbol): void;\nclass A { @dec p = 1; }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: string | symbol): void;\nclass A { @dec get g() { return 1 } }",
+      // The same fact at an instance METHOD PARAMETER, which had no
+      // `<sig:>` marker at all before this batch.
+       "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: string | symbol, i: number): void;\nclass A { m(@dec p: number) {} }",
+      // TS1239: a constructor parameter's decorator is passed `undefined`
+      // as the property key.
+       "// @experimentalDecorators: true\ndeclare function dec(target: Function, propertyKey: string | symbol, parameterIndex: number): void;\nclass C { constructor(@dec p: number) {} }",
+      // And a parameter decorator's runtime arity is exactly 3.
+       "// @experimentalDecorators: true\ndeclare function d1(target: any): void;\nclass C { constructor(@d1 a: number) {} }",
+      "// @experimentalDecorators: true\ndeclare function d2(target: any, k: any): void;\nclass C { constructor(@d2 a: number) {} }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A type ALIAS resolves, which is the legal neighbour the parser's
+      // abstention exists to protect, and an in-file `interface Promise`
+      // MERGES with the lib's rather than shadowing it.
+      "type P = Promise<void>;\nasync function f(): P {}", "interface Promise<T> { extra(): void }\nasync function f(): Promise<void> {}",
+      "async function f(): Promise<void> {}", "async function f() {}", "async function* g(): AsyncGenerator<number> { yield 1 }",
+      // An alias to something that is NOT `Promise` is a declared MISS:
+      // deciding it means resolving the alias body.
+       "type P = number;\nasync function f(): P { return 1 as any }",
+      // TS1241's legal neighbours. A static member and a constructor
+      // parameter are both handed `typeof C`; `Object`, `any` and the
+      // class's own type all accept the instance; and a class with
+      // heritage can BE a function, so the rule abstains there.
+       "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: string | symbol): void;\nclass B { @dec static m() {} }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: string | symbol): void;\nclass B { @dec static q = 1; }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: string | symbol, i: number): void;\nclass B { static m(@dec p: number) {} }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: Object, k: string | symbol): void;\nclass C { @dec m() {} }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: any, k: any): void;\nclass C { @dec m() {} }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: C, k: string | symbol): void;\nclass C { @dec m() {} }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: Function, k: string | symbol): void;\nclass A extends Function { @dec m() {} }",
+      // TS1239's legal neighbours: a property key that admits
+      // `undefined`, an `any` one, the same signature at a METHOD
+      // parameter (where the key is the method's name), and the whole
+      // thing with `strictNullChecks` off.
+       "// @experimentalDecorators: true\ndeclare function dU(target: Function, propertyKey: string | symbol | undefined, parameterIndex: number): void;\nclass A { constructor(@dU p: number) {} }",
+      "// @experimentalDecorators: true\ndeclare function dA(target: Function, propertyKey: any, parameterIndex: number): void;\nclass A { constructor(@dA p: number) {} }",
+      "// @experimentalDecorators: true\ndeclare function dec(target: any, propertyKey: string | symbol, parameterIndex: number): void;\nclass A { m(@dec p: number) {} }",
+      "// @experimentalDecorators: true\n// @strictNullChecks: false\ndeclare function dec(target: any, propertyKey: string | symbol, parameterIndex: number): void;\nclass C { constructor(@dec p: number) {} }",
+      // The correct arity, and a decorator on a plain FUNCTION's
+      // parameter, which is not a class member and records nothing.
+       "// @experimentalDecorators: true\ndeclare function d3(target: any, k: any, i: any): void;\nclass C { constructor(@d3 a: number) {} }",
+      // Standard ES decorators: a different and much quieter rule, and
+      // the whole check is gated off without the legacy flag.
+       "declare function dec(target: Function, k: string | symbol): void;\nclass A { @dec m() {} }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
 }

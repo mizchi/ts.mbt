@@ -1916,6 +1916,99 @@ product surfaces now.
   `*_bench_wbtest.mbt` files are `it.bench` timing loops and assert
   nothing, so the assertion-bearing run is 3,002 where the full one is
   3,004 — the difference is exactly those two entries, not lost coverage.
+  Batch EG is **+6** (TP 2601 -> 2607, MISS in scope 113 -> 108) plus one
+  file retired from the scope file as STALE, and three of its four rules
+  are the applied-in-some-places family again. The whole TS2488
+  apparatus — `check_iterable_class_protocol` for a class instance,
+  `check_forof_non_iterable` for a primitive / union / optional
+  `@@iterator` — was wired into the `for-of` arm and nowhere else, so
+  `yield*`, which delegates to an ITERABLE and carries the same
+  obligation, had only a check needing a declared element type
+  (`ctx.yield_type`) that a generator without a return annotation does
+  not have. The shape that matters is `yield* foo` instead of
+  `yield* foo()`: forgetting to CALL the generator, which needed `Func`
+  in `is_non_iterable_primitive` and therefore reaches the two `for-of`
+  consumers too (tsc reports both). `void` / `null` / `undefined` are
+  TS2488 as well and are deliberately OUT, because our flow model
+  narrows an `any`-typed binding to `Undefined` when its initializer is
+  `undefined` — batch CY's TS2532 hazard, and an arm for it would report
+  a type tsc calls `any`.
+  TS18014 is the one worth reading, because the FIRST version measured
+  +1 TP and **−1**. `private_brand_declared_on_receiver` asked whether
+  the class HOLDING the reference declares the same `#name`, which is the
+  one-level version of the question: a `#x` reference resolves OUTWARD
+  through every enclosing class body and binds to the first that declares
+  it, so the shadowing declaration can sit on a class BETWEEN the
+  reference and the receiver — `A.#x` inside a `C` nested in a `B` that
+  declares its own `#x`. The chain rides a new
+  `<private-parent:CHILD:PARENT>` sentinel beside the
+  `<private-decl:BRAND:base>` one the rule already reads, and
+  `current_class_brand` not being reset by a function body is CORRECT
+  there, since a private name resolves lexically through one. What the
+  symmetric version got wrong is reading an owner MATCH as permission:
+  returning "suppress" when the lexical owner is the receiver's own class
+  short-circuits the staticness check downstream, and
+  `privateNameStaticFieldAccess` / `privateNamesUnique-3` are exactly
+  that — `static #foo` declared and `x.#foo` written on an instance
+  resolves to precisely that declaration and is still an error. So the
+  walk may only ever force a REPORT, never a suppression; the old
+  heuristic stays in charge of everything else.
+  TS1064's named half is the twelfth time a recorded abstention named its
+  own fix in writing: `record_async_return_type_misuse`'s header says
+  "the alias and the subclass are the SAME named-annotation node at parse
+  time … a name declared in-file as a CLASS or INTERFACE cannot be an
+  alias — and is filed rather than built". The boundary is not what the
+  message text suggests — EXTENDING `Promise` buys an interface or class
+  nothing, so `interface I {}` and `declare class D {}` report as readily
+  as a `Promise` subclass, while a declaration-merged
+  `interface Promise<T>` IS the global one and must stay silent, which is
+  why the NAME is exempt by spelling (costing the `class Promise<T> {}`
+  shadowing case as a MISS). A qualified annotation is
+  `Named("X.MyPromise")` here, so the namespace prefix is reconstructed
+  by recursing `module_.namespaces` with no resolver involvement at all.
+  The decorator rules are batch CU's arity check's missing other half —
+  "can this decorator resolve here" is also a question about TYPES — and
+  every cell was probed. The runtime hands a member decorator the class
+  INSTANCE type for an instance member and `typeof C` for a static one
+  AND for a constructor parameter, so `target: Function` can never
+  resolve on the first and always resolves on the other two; both ways it
+  could be legal are excluded, since a class with heritage can BE a
+  function (`class A extends Function { @dec m() {} }` is ACCEPTED — the
+  guard is measurement, not caution) and a file redeclaring the NAME
+  `Function` means something else by it. A constructor parameter's
+  decorator is invoked as `(typeof C, undefined, index)`, so a second
+  parameter that does not admit `undefined` cannot resolve — while a
+  METHOD parameter's gets the method's name, making the identical
+  signature legal there, and the verdict depends on `strictNullChecks`
+  too, which is two flags rather than one fact. Parameter decorators had
+  no `<sig:>` marker AT ALL, and `skip_param_decorators` skips the
+  expression — batch EE's TS1308 blocker, with the same answer: a
+  decorator's head must be spelled out, so reading `(called, dname)` off
+  the tokens the skip already consumes is complete by construction. The
+  owner (`ctor` / `static` / `instance`) rides a Parser field set around
+  the ONE `parse_params()` call in `parse_class_body` and cleared inside
+  `parse_param` for everything after the decorator scan, because a
+  default value or a destructuring pattern can hold another parameter
+  list whose parameters belong to that callable — clearing once there
+  rather than at each nested parser is the point, the alternative being
+  the save / clear / restore discipline `self.labels` needs at fifteen
+  sites. Two measurement notes: a parameter decorator's runtime arity is
+  exactly 3 (probed — 1, 2 and 4 all report) unlike a method decorator's
+  2-or-3 latitude; and the "does this file redeclare `Function`" test is
+  HOISTED out of the marker loop, since asking it per marker is
+  O(decorators x declarations), the shape `verify-checker-scaling` exists
+  to catch.
+  TS2490 is filed rather than built, with a CHECKED blocker rather than
+  an assumed one: `TsClassMethodDecl` has no annotation-presence field,
+  so `next() { return "" }` (TS2490) and `next(): any { return "" }`
+  (ACCEPTED) are the same node downstream — the absent-versus-`: any`
+  blocker this file records for TS7031, TS7022, TS2729, TS2448 and
+  TS2564 — and `parse_class_body` already holds `had_return_annotation`
+  at exactly the `next` / `@@iterator` site, because batch DV's TS7022
+  indirect rule keys on it there. The route is a Parser-level stack
+  drained per class into a sentinel, the `self.optional_member_names`
+  shape; not taken because a new parse-time channel for one file is the
+  wrong trade at +6.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -83,7 +83,6 @@ typescript/tests/cases/conformance/es6/Symbols/symbolProperty37.ts no-local-orac
 typescript/tests/cases/conformance/override/override20.ts no-local-oracle: `noImplicitOverride` against a base that is a class expression typed as an intersection of two construct signatures.
 typescript/tests/cases/conformance/override/override2.ts no-local-oracle: `noImplicitOverride` against abstract members, including an abstract redeclaration and an abstract-to-concrete narrowing.
 typescript/tests/cases/conformance/statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash2.ts no-local-oracle: `foo: var y;` inside a `for...of` body that also closes over the loop binding.
-typescript/tests/cases/conformance/async/es5/asyncQualifiedReturnType_es5.ts no-local-oracle: an `async` function whose declared return type is a namespace-qualified `Promise` subclass.
 
 # ---------------------------------------------------------------------
 # lib-diagnostic — the file's ONLY error is inside a vendored `lib.*.d.ts`
