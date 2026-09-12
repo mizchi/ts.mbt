@@ -61,7 +61,7 @@ fn object_shape_take_identifier_at(
 
 ///|
 fn object_shape_compact_ascii_space(source : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut last_was_space = false
   for c in source {
     let is_space = c == ' ' || c == '\n' || c == '\r' || c == '\t'

@@ -714,7 +714,7 @@ fn static_block_use_before_def(
     return hits
   }
   // First declaration index of every public static field.
-  let first_decl : Map[String, Int] = {}
+  let first_decl : Map[String, Int] = Map([])
   for i, element in elements {
     match element {
       Field(true, Name(n), _, _, _, _) =>
@@ -730,7 +730,7 @@ fn static_block_use_before_def(
   for i, element in elements {
     match element {
       StaticBlock(block) => {
-        let later : Map[String, Bool] = {}
+        let later : Map[String, Bool] = Map([])
         for n, di in first_decl {
           if di > i {
             later[n] = true
@@ -1013,13 +1013,13 @@ fn build_runtime_class_decl(
   // Legal and left silent: a single field, method *overloads* (several
   // non-accessor methods -- a separate diagnostic family), and a get/set
   // pair.
-  let counts : Map[String, Array[Int]] = {} // key -> [field, get, set, method]
-  let key_name : Map[String, String] = {}
+  let counts : Map[String, Array[Int]] = Map([]) // key -> [field, get, set, method]
+  let key_name : Map[String, String] = Map([])
   // Private names (`#foo`) share a *single* namespace across the static and
   // instance halves of a class (a static `#foo` and an instance `#foo`
   // collide, TS2804), unlike public members. Accumulate them separately keyed
   // by the bare name with no `|s` / `|i` split.
-  let priv_counts : Map[String, Array[Int]] = {}
+  let priv_counts : Map[String, Array[Int]] = Map([])
   for element in elements {
     let (name, is_static, slot) = match element {
       Field(s, Name(n), _, _, _, _) => (n, s, 0)
@@ -1057,7 +1057,7 @@ fn build_runtime_class_decl(
     c[slot] += 1
   }
   let duplicate_member_names : Array[String] = []
-  let dup_seen : Map[String, Unit] = {}
+  let dup_seen : Map[String, Unit] = Map([])
   for key, c in counts {
     let nf = c[0]
     let ng = c[1]
@@ -1684,7 +1684,7 @@ fn Parser::can_consume_class_modifier(
   // `accessor` plus an instance field `c`. That site passes
   // `allow_line_break=true`; the default is the RESTRICTIVE answer, so a
   // modifier added later inherits the rule instead of quietly opting out.
-  if not(allow_line_break) && self.peek_at(1).has_newline_before {
+  if !allow_line_break && self.peek_at(1).has_newline_before {
     return false
   }
   match self.peek_at(1).kind {
@@ -2171,13 +2171,13 @@ fn Parser::inject_instance_field_assigns(
 /// `privateNameInInExpressionUnused` reports its `#unused` and not its
 /// `#brand`.
 fn Parser::record_unused_private_members(self : Parser, head : String) -> Unit {
-  if not(detect_no_unused_locals(head)) {
+  if !detect_no_unused_locals(head) {
     return
   }
-  if self.private_decl_counts.size() == 0 {
+  if self.private_decl_counts.length() == 0 {
     return
   }
-  let occurrences : Map[String, Int] = {}
+  let occurrences : Map[String, Int] = Map([])
   for tok in self.tokens {
     if tok.kind is PrivateIdent(n) {
       occurrences[n] = occurrences.get(n).unwrap_or(0) + 1
@@ -2239,14 +2239,14 @@ fn Parser::record_private_member_misuse(
   // withdraws the report: that loses `class B { q; m() { this.q = 1 } }`
   // (a MISS) and keeps `classStaticBlockUseBeforeDef1`, which shipped as
   // a false positive on the first draft, silent.
-  let written : Map[String, Unit] = {}
+  let written : Map[String, Unit] = Map([])
   for i in body_start..<self.pos {
     let name = match self.tokens[i].kind {
       Ident(n) => n
       PrivateIdent(n) => "#" + n
       _ => continue
     }
-    if i == 0 || not(self.tokens[i - 1].kind is Dot) {
+    if i == 0 || !(self.tokens[i - 1].kind is Dot) {
       continue
     }
     if i + 1 < self.tokens.length() && self.tokens[i + 1].kind is Eq {
@@ -2255,13 +2255,13 @@ fn Parser::record_private_member_misuse(
   }
   for entry in implicit_any {
     let (shown, _) = entry
-    if not(written.contains(shown)) {
+    if !written.contains(shown) {
       self.grammar_misuses.push(
         "member `\{shown}` implicitly has an `any` type",
       )
     }
   }
-  if not(self.in_class_expr_body) {
+  if !self.in_class_expr_body {
     return
   }
   if methods.length() == 0 && setters.length() == 0 {
@@ -2269,7 +2269,7 @@ fn Parser::record_private_member_misuse(
   }
   for i in body_start..<self.pos {
     guard self.tokens[i].kind is PrivateIdent(name) else { continue }
-    if i == 0 || not(self.tokens[i - 1].kind is Dot) {
+    if i == 0 || !(self.tokens[i - 1].kind is Dot) {
       continue
     }
     let next = if i + 1 < self.tokens.length() {
@@ -2298,13 +2298,13 @@ fn Parser::record_private_member_misuse(
       | MinusMinus => true
       _ => false
     }
-    let reads = not(is_plain_write)
+    let reads = !is_plain_write
     if (is_plain_write || is_read_write) && methods.contains(name) {
       self.grammar_misuses.push(
         "cannot assign to private method `#\{name}` — private methods are not writable",
       )
     }
-    if reads && setters.contains(name) && not(getters.contains(name)) {
+    if reads && setters.contains(name) && !getters.contains(name) {
       self.grammar_misuses.push(
         "private accessor `#\{name}` was defined without a getter",
       )
@@ -2372,20 +2372,20 @@ fn Parser::parse_class_body(
   // are indistinguishable downstream, which is the class-shaped face of
   // the `TsFunc.body` blocker this repo records for TS2393 / TS2394.
   // The parser has `has_body_block` and does not need to guess.
-  let bodied_method_keys : Map[String, Bool] = {}
+  let bodied_method_keys : Map[String, Bool] = Map([])
   // TS2394 support: for each member key, the largest argument count each
   // BODILESS overload signature of it can supply (`-1` = unbounded, i.e.
   // the signature has a rest parameter). Compared against the
   // IMPLEMENTATION's required arity when that arrives — see
   // `signature_max_args` / `impl_required_arity` for why only that one
   // direction is an error.
-  let sig_max_args : Map[String, Array[Int]] = {}
+  let sig_max_args : Map[String, Array[Int]] = Map([])
   // TS2386 support: the `?`-ness of the first declaration of each member
   // key in this class body. Unlike the interface / object-type sites, the
   // IMPLEMENTATION participates — a bodied method can never be optional,
   // so probing `m?(x); m?(s); m(v) { }` reports on BOTH signatures, and
   // recording only the bodiless ones would accept it.
-  let method_sig_optional : Map[String, (Bool, Bool)] = {}
+  let method_sig_optional : Map[String, (Bool, Bool)] = Map([])
   let mut ctor : @ast.TsFunc? = None
   // Count constructor *implementations* (a `constructor(...) { ... }` with a
   // real body). Two or more is TS2392 ("Multiple constructor implementations
@@ -2410,14 +2410,14 @@ fn Parser::parse_class_body(
   // `has_body_block` (not the AST body, which can't tell an empty `{}` from a
   // signature) so an ordinary static+instance method *pair with bodies* is not
   // flagged.
-  let ov_static : Map[String, Unit] = {}
-  let ov_instance : Map[String, Unit] = {}
+  let ov_static : Map[String, Unit] = Map([])
+  let ov_instance : Map[String, Unit] = Map([])
   // Body-bearing (implementation) methods by name, per static-ness. A name
   // with both a static and an instance *implementation* is two distinct
   // overload sets (e.g. `foo(){}` and `static foo(){}`), which is legal even
   // when each side also has bodyless overload signatures.
-  let impl_static : Map[String, Unit] = {}
-  let impl_instance : Map[String, Unit] = {}
+  let impl_static : Map[String, Unit] = Map([])
+  let impl_instance : Map[String, Unit] = Map([])
   let elements : Array[ClassElement] = []
   // Names declared `private` / `protected`, collected so the class decl
   // can expose member visibility to the checker (TS2341 / TS2445).
@@ -2716,7 +2716,7 @@ fn Parser::parse_class_body(
         // getter. This arm spells its conditions inline instead of
         // calling that helper, which is why the rule had to be written
         // at both.
-        not(self.peek_at(1).has_newline_before) &&
+        !self.peek_at(1).has_newline_before &&
         self.peek_at(1).kind != LParen &&
         self.peek_at(1).kind != Lt &&
         self.peek_at(1).kind != Colon &&
@@ -2771,7 +2771,7 @@ fn Parser::parse_class_body(
     // because at this point a method still has `(` ahead and a property
     // `:` / `=` / `;` -- an `@` in that slot is a misplaced decorator
     // under every reading.
-    if self.check(At) && not(self.has_line_terminator_before()) {
+    if self.check(At) && !self.has_line_terminator_before() {
       self.grammar_misuses.push(
         "decorators must precede the name and all keywords of property declarations",
       )
@@ -2850,7 +2850,7 @@ fn Parser::parse_class_body(
         // expression really does evaluate where `super` is bound, and
         // tsc accepts it (probed). `decoratorOnClassMethod12`'s class is
         // at namespace level, so `in_function` is false for it.
-        if not(self.in_function) &&
+        if !self.in_function &&
           decorator_mentions_name(self.pending_decorators[di], "super") {
           self.grammar_misuses.push(
             "`super` can only be referenced in members of derived classes or object literal expressions",
@@ -2871,7 +2871,7 @@ fn Parser::parse_class_body(
         // where the context is known, the same mechanism TS1063 /
         // TS1319 use. An unconverted sentinel stays a `<`-prefixed
         // marker, which the checker's grammar loop skips.
-        if not(self.in_function) &&
+        if !self.in_function &&
           decorator_mentions_name(self.pending_decorators[di], "this") {
           self.grammar_misuses.push("<this-in-decorator>")
         }
@@ -3138,7 +3138,7 @@ fn Parser::parse_class_body(
               )
             }
             for p in params {
-              if not(p.default is None) {
+              if !(p.default is None) {
                 self.record_suppressible_grammar_misuse(
                   "a `set` accessor parameter cannot have an initializer",
                 )
@@ -3162,7 +3162,7 @@ fn Parser::parse_class_body(
       // A real `{ ... }` body marks an *implementation* (vs. a bodyless
       // overload signature). Used below to count constructor implementations
       // for TS2392.
-      let has_body_block = not(consumed_semi) && self.check(LBrace)
+      let has_body_block = !consumed_semi && self.check(LBrace)
       // TS2371: a parameter initializer belongs to an IMPLEMENTATION, so a
       // bodiless class member cannot carry one — an overload signature
       // (`foo(a = 4);`), an `abstract` member, and a `declare class`
@@ -3172,7 +3172,7 @@ fn Parser::parse_class_body(
       // had nothing here, so `class C { foo(a = 4); foo(a, b) {} }` parsed
       // clean; `record_bodiless_param_initializers` is now the one
       // recorder for both.
-      if not(has_body_block) {
+      if !has_body_block {
         self.record_bodiless_param_initializers(params)
       }
       // TS2393 ("Duplicate function implementation"): two methods of one
@@ -3200,7 +3200,7 @@ fn Parser::parse_class_body(
             method_sig_optional,
             mkey,
             method_name,
-            is_optional && not(has_body_block),
+            is_optional && !has_body_block,
           )
         }
         if has_body_block {
@@ -3247,10 +3247,10 @@ fn Parser::parse_class_body(
       // is excluded because a decorated constructor is TS1206, a
       // different rule that already fires above.
       if member_decorated &&
-        not(has_body_block) &&
-        not(is_abstract_member) &&
-        not(has_declare) &&
-        not(self.in_ambient_module) &&
+        !has_body_block &&
+        !is_abstract_member &&
+        !has_declare &&
+        !self.in_ambient_module &&
         method_name != "constructor" {
         self.grammar_misuses.push(
           "a decorator can only decorate a method implementation, not an overload",
@@ -3274,7 +3274,7 @@ fn Parser::parse_class_body(
       // Accessors are excluded (a getter with no annotation is TS7033, a
       // different rule) and so is `constructor`, which has no return
       // type to annotate.
-      if not(has_body_block) &&
+      if !has_body_block &&
         accessor_kind is None &&
         method_name != "constructor" {
         self.record_implicit_any_member_return(
@@ -3420,9 +3420,9 @@ fn Parser::parse_class_body(
       // the loop variable, so those methods are skipped (tsc gives that
       // shape TS2490 / TS2763, a different pair of codes).
       if has_body_block &&
-        not(is_static) &&
+        !is_static &&
         accessor_kind is None &&
-        not(had_return_annotation) &&
+        !had_return_annotation &&
         (method_name == "next" || method_name == "@@iterator") {
         let names : Array[String] = []
         collect_method_return_var_names(func.body, names)
@@ -3436,7 +3436,7 @@ fn Parser::parse_class_body(
         }
         self.collect_declared_names_in_block(func.body, bound)
         for n in names {
-          if not(bound.contains(n)) {
+          if !bound.contains(n) {
             self.protocol_return_names.push(n)
           }
         }
@@ -3493,8 +3493,8 @@ fn Parser::parse_class_body(
         // Optional methods (`foo?()`) may omit their body, so they are neither
         // overload signatures nor missing implementations -- skip them.
         if accessor_kind is None &&
-          not(is_abstract_member) &&
-          not(is_optional) &&
+          !is_abstract_member &&
+          !is_optional &&
           method_name != "<computed>" {
           if has_body_block {
             if is_static {
@@ -3525,7 +3525,7 @@ fn Parser::parse_class_body(
       // from the used-before-initialization check and the union-typed one
       // is not. Instance fields only; a static field is read as `C.x`
       // and goes through the separate static-use-before-def channel.
-      if is_optional && not(is_static) {
+      if is_optional && !is_static {
         self.optional_member_names.push(class_key_name(key))
       }
       let field_type = if is_optional {
@@ -3561,10 +3561,10 @@ fn Parser::parse_class_body(
       // because `declare class` is parsed by `parse_declare_class` and
       // never reaches this function.
       if self.no_implicit_any &&
-        not(self.in_ambient_module) &&
-        not(had_annotation) &&
+        !self.in_ambient_module &&
+        !had_annotation &&
         init is None &&
-        not(has_declare) {
+        !has_declare {
         // The SOURCE spelling, not the brand: `class_key_name` returns
         // the mangled `__private_brand__N__u` for a private member, and
         // a diagnostic naming that is a diagnostic nobody can act on.
@@ -3622,7 +3622,7 @@ fn Parser::parse_class_body(
   // It costs nothing here — `decoratorOnClassAccessor7` is six class
   // declarations.
   let ts1207_applies = self.experimental_decorators &&
-    not(self.in_class_expr_body)
+    !self.in_class_expr_body
   for entry in (if ts1207_applies { decorated_accessors } else { [] }) {
     if entry.contains(":get:") {
       let counterpart = entry.replace(old=":get:", new=":set:")
@@ -3639,7 +3639,7 @@ fn Parser::parse_class_body(
     // Bodyless signatures on both sides, but NOT a full instance+static
     // implementation pair (which would be two distinct, legal overload sets).
     if ov_static.contains(name) &&
-      not(impl_static.contains(name) && impl_instance.contains(name)) {
+      !(impl_static.contains(name) && impl_instance.contains(name)) {
       overload_static_mix = true
       break
     }
@@ -3650,7 +3650,7 @@ fn Parser::parse_class_body(
   let mut overload_missing_impl = false
   fn check_missing(names : Map[String, Unit]) -> Bool {
     for name in names.keys() {
-      if not(impl_static.contains(name)) && not(impl_instance.contains(name)) {
+      if !impl_static.contains(name) && !impl_instance.contains(name) {
         return true
       }
     }
@@ -3708,7 +3708,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     // parameter requires all of its type arguments on a bare reference.
     if class_name != "" &&
       names.length() > 0 &&
-      not(self.last_type_params_had_default) {
+      !self.last_type_params_had_default {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{class_name}",
       )
@@ -3836,7 +3836,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       Some(n) =>
         if n.has_prefix("<decl>") {
           expr_class_sentinels.push(
-            "<declare-member:" + n["<decl>".length():].to_string() + ">",
+            "<declare-member:" + n["<decl>".length():].to_owned() + ">",
           )
         } else {
           expr_class_sentinels.push("<override-member:" + n + ">")
@@ -3894,7 +3894,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     match element {
       Field(_, Name(n), _, _, _, _) | Method(_, Name(n), _, _) =>
         if n.has_prefix(brand_member_prefix) {
-          let base = n[brand_member_prefix.length():].to_string()
+          let base = n[brand_member_prefix.length():].to_owned()
           expr_class_sentinels.push("<private-decl:\{brand_id}:\{base}>")
         }
       _ => ()
@@ -4552,7 +4552,7 @@ fn Parser::parse_class_decl_with_abstract(
     if name != "" &&
       name != "<class>" &&
       names.length() > 0 &&
-      not(self.last_type_params_had_default) {
+      !self.last_type_params_had_default {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{name}",
       )
@@ -4679,7 +4679,7 @@ fn Parser::parse_class_decl_with_abstract(
       Some(n) =>
         if n.has_prefix("<decl>") {
           runtime_decl.duplicate_member_names.push(
-            "<declare-member:" + n["<decl>".length():].to_string() + ">",
+            "<declare-member:" + n["<decl>".length():].to_owned() + ">",
           )
         } else {
           runtime_decl.duplicate_member_names.push(
@@ -4740,7 +4740,7 @@ fn Parser::parse_class_decl_with_abstract(
     match element {
       Field(_, Name(n), _, _, _, _) | Method(_, Name(n), _, _) =>
         if n.has_prefix(brand_member_prefix) {
-          let base = n[brand_member_prefix.length():].to_string()
+          let base = n[brand_member_prefix.length():].to_owned()
           runtime_decl.duplicate_member_names.push(
             "<private-decl:\{brand_id}:\{base}>",
           )

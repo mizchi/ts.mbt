@@ -289,7 +289,7 @@ test "mangle: shape-coloring rename shares short names across disjoint shapes" {
       // ...and the rename pool reuses short names across the two
       // disjoint shapes: only TWO distinct short names suffice.
       // (Default global-cohort rename would have needed four.)
-      let single_char_names : Map[String, Bool] = {}
+      let single_char_names : Map[String, Bool] = Map([])
       for c in "abcdefghijklmnopqrstuvwxyz" {
         let probe = "." + c.to_string()
         if js.contains(probe) {
@@ -321,7 +321,7 @@ test "mangle: shape-coloring keeps co-occurring keys distinct" {
       assert_false(js.contains("yCoord"))
       // The shortened keys must still be distinct — fishing them
       // out: the object literal must carry TWO entries.
-      let single_char_names : Map[String, Bool] = {}
+      let single_char_names : Map[String, Bool] = Map([])
       for c in "abcdefghijklmnopqrstuvwxyz" {
         let probe = "." + c.to_string()
         if js.contains(probe) {
@@ -379,7 +379,7 @@ test "mangle: shape-coloring keeps class fields and methods distinct" {
   assert_false(js.contains("alphaCount"))
   assert_false(js.contains("alphaCache"))
   assert_false(js.contains("bump"))
-  let shorts : Map[String, Bool] = {}
+  let shorts : Map[String, Bool] = Map([])
   for c in "abcdefghijklmnopqrstuvwxyz" {
     let probe = "." + c.to_string()
     if js.contains(probe) {
@@ -434,7 +434,7 @@ test "mangle: shape-coloring walks arrows for captured this" {
   let js = e.to_string()
   assert_false(js.contains("alpha"))
   assert_false(js.contains("beta"))
-  let shorts : Map[String, Bool] = {}
+  let shorts : Map[String, Bool] = Map([])
   for c in "abcdefghijklmnopqrstuvwxyz" {
     let probe = "." + c.to_string()
     if js.contains(probe) {
@@ -463,7 +463,7 @@ test "mangle: shape-coloring catches Symbol PropReceiver conflicts" {
       assert_false(js.contains("beta"))
       // `alpha` and `beta` are on the same `o`; they must NOT
       // share a short name.
-      let shorts : Map[String, Bool] = {}
+      let shorts : Map[String, Bool] = Map([])
       for c in "abcdefghijklmnopqrstuvwxyz" {
         let probe = "." + c.to_string()
         if js.contains(probe) {
@@ -1097,7 +1097,7 @@ test "the mangler's built-in list covers every implicitly-invoked protocol" {
   //
   // Checked rather than commented, because the failure is a bundle that
   // throws at runtime and nothing else in the suite compares the two.
-  let reserved : Map[String, Bool] = {}
+  let reserved : Map[String, Bool] = Map([])
   for n in mangler_builtin_reserved_properties {
     reserved[n] = true
   }
@@ -1171,7 +1171,7 @@ test "the descriptor flags a `defineProperty` reads are all reserved" {
   // nobody else had needed were absent. Checked as a list membership
   // because that is the fact that was wrong; the corpus case
   // `case48-property-descriptor` checks the behaviour under Node.
-  let reserved : Map[String, Bool] = {}
+  let reserved : Map[String, Bool] = Map([])
   for n in mangler_builtin_reserved_properties {
     reserved[n] = true
   }

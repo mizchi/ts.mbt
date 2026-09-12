@@ -240,13 +240,13 @@ async fn load_module_record(
     if !line.has_prefix("/// <reference path=\"") {
       continue
     }
-    let rest = line.substring(start="/// <reference path=\"".length())
+    let rest = line["/// <reference path=\"".length():].to_owned()
     let ref_rel = match rest.find("\"") {
-      Some(end_idx) => rest.substring(start=0, end=end_idx).to_string()
+      Some(end_idx) => rest[:end_idx].to_owned()
       None => continue
     }
     let base_dir = match path.rev_find("/") {
-      Some(idx) => path.substring(start=0, end=idx).to_string()
+      Some(idx) => path[:idx].to_owned()
       None => "."
     }
     let ref_path = base_dir + "/" + ref_rel
@@ -269,7 +269,7 @@ async fn load_module_record(
 async fn load_type_module_graph(
   entry_path : String,
 ) -> ModuleGraph raise ModuleGraphError {
-  let loaded : Map[String, ResolvedModuleRecord] = {}
+  let loaded : Map[String, ResolvedModuleRecord] = Map([])
   let visiting : Array[String] = []
   load_module_record(entry_path, loaded, visiting)
   let paths : Array[String] = []
@@ -289,7 +289,7 @@ async fn load_type_module_graph(
 
 ///|
 fn graph_to_map(graph : ModuleGraph) -> Map[String, ResolvedModuleRecord] {
-  let result : Map[String, ResolvedModuleRecord] = {}
+  let result : Map[String, ResolvedModuleRecord] = Map([])
   for module_ in graph.modules {
     result[module_.path] = module_
   }
@@ -623,7 +623,7 @@ fn resolve_export_surface_from_map(
 ///|
 fn resolve_export_surface(graph : ModuleGraph) -> Array[ResolvedExport] {
   let records = graph_to_map(graph)
-  let cache : Map[String, Array[ResolvedExport]] = {}
+  let cache : Map[String, Array[ResolvedExport]] = Map([])
   let visiting : Array[String] = []
   let exports = resolve_export_surface_from_map(
     graph.entry_path,

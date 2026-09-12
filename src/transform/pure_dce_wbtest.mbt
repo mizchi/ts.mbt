@@ -12,7 +12,7 @@
 
 ///|
 fn dce_vfs(entries : Array[(String, String)]) -> Map[String, String] {
-  let m : Map[String, String] = {}
+  let m : Map[String, String] = Map([])
   for entry in entries {
     m[entry.0] = entry.1
   }

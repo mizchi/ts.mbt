@@ -103,7 +103,7 @@ pub fn plan_discriminant_ints(
     read_count: {},
   }
   disc_scan_block(scan, block)
-  let maps : Map[String, Map[String, Int]] = {}
+  let maps : Map[String, Map[String, Int]] = Map([])
   for entry in scan.writes {
     let (name, literals) = entry
     if scan.blocked.contains(name) {
@@ -157,7 +157,7 @@ pub fn plan_discriminant_ints(
       )
       continue
     }
-    let numbering : Map[String, Int] = {}
+    let numbering : Map[String, Int] = Map([])
     for i, lit in literals {
       numbering[lit] = i
     }
@@ -560,7 +560,6 @@ fn disc_rewrite_stmt(
             }
         }
         out.push({
-          ..c,
           test_expr: new_test,
           body: disc_rewrite_block(c.body, plan),
         })

@@ -100,7 +100,7 @@ fn expand_generic(
         Some(binding) =>
           if binding.type_params.length() == resolved_args.length() &&
             binding.type_params.length() > 0 {
-            let bindings : Map[String, @ast.TsType] = {}
+            let bindings : Map[String, @ast.TsType] = Map([])
             for i in 0..<binding.type_params.length() {
               // Pre-simplify the bound argument: `Keyof(Struct(...))` reduces
               // to a `Union` of literals so the distributive-conditional
@@ -298,7 +298,7 @@ fn substitute_params(
             Some(Union(members)) => {
               let branches : Array[@ast.TsType] = []
               for m in members {
-                let scoped : Map[String, @ast.TsType] = {}
+                let scoped : Map[String, @ast.TsType] = Map([])
                 for entry in bindings {
                   scoped[entry.0] = entry.1
                 }
@@ -398,7 +398,7 @@ fn scoped_without(
   bindings : Map[String, @ast.TsType],
   name : String,
 ) -> Map[String, @ast.TsType] {
-  let out : Map[String, @ast.TsType] = {}
+  let out : Map[String, @ast.TsType] = Map([])
   for entry in bindings {
     if entry.0 != name {
       out[entry.0] = entry.1

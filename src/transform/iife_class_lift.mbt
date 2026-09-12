@@ -129,7 +129,7 @@ fn try_lift_iife_value(
   // Pre-scan: collect `__get_NAME` / `__set_NAME` function definitions
   // that the parser emits for named getter/setter methods. These are
   // referenced by `PropAssign(proto, "@@get:NAME", Var("__get_NAME"))`.
-  let accessor_funcs : Map[String, @ast.TsFunc] = {}
+  let accessor_funcs : Map[String, @ast.TsFunc] = Map([])
   for s in body.stmts {
     match s {
       Let(@ast.TsBinding::Ident(n), _, @ast.TsExpr::FuncExpr(f))
@@ -747,7 +747,7 @@ fn lifted_method_params(
   let prologue : Array[@ast.TsStmt] = []
   // Names the body already uses, so the synthesized parameter cannot
   // shadow one of them.
-  let taken : Map[String, Bool] = {}
+  let taken : Map[String, Bool] = Map([])
   for i, p in f.params {
     let is_pattern = match p.binding {
       Some(@ast.TsBinding::Object(_)) | Some(@ast.TsBinding::Array(_)) => true
@@ -755,7 +755,7 @@ fn lifted_method_params(
     }
     if is_pattern {
       if taken.is_empty() {
-        let refs : Map[String, Bool] = {}
+        let refs : Map[String, Bool] = Map([])
         collect_var_refs_in_block(f.body, refs)
         for n in refs.keys() {
           taken[n] = true

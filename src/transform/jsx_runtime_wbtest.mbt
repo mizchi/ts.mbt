@@ -294,7 +294,7 @@ test "jsx: the runtime import covers helpers used inside a function expression" 
     JsxConfig::default(),
     block,
   )
-  assert_true(needed.contains("jsx"), msg="needed = \{needed}")
+  assert_true(needed.contains("jsx"), msg="needed = \{Repr(needed)}")
 }
 
 ///|

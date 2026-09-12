@@ -646,7 +646,7 @@ fn build_property_rename_map(
   // candidate set is empty.
   census? : Array[String]? = None,
 ) -> Map[String, String] {
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   collect_property_names(block, names)
   let mut n_reserved = 0
   let mut n_sentinel = 0
@@ -699,7 +699,7 @@ fn build_property_rename_map(
   match census {
     Some(out) => {
       out.push(
-        "\{names.size()} distinct property name(s) in the bundle; \{candidates.length()} are candidates.",
+        "\{names.length()} distinct property name(s) in the bundle; \{candidates.length()} are candidates.",
       )
       out.push(
         "dropped: \{n_reserved} reserved, \{n_sentinel} parser sentinel; kept \{n_private_kept} `#private` (class-scoped, no proof needed).",
@@ -735,7 +735,7 @@ fn build_property_rename_map(
     }
     None => ()
   }
-  let map : Map[String, String] = {}
+  let map : Map[String, String] = Map([])
   let mut counter = 0
   for n in candidates {
     let private_ = is_private_member_name(n)
@@ -778,10 +778,10 @@ fn build_property_rename_map_colored(
   block : @ast.TsBlock,
   reserved : Map[String, Bool],
 ) -> Map[String, String] {
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   collect_property_names(block, names)
   let candidates : Array[String] = []
-  let candidate_set : Map[String, Bool] = {}
+  let candidate_set : Map[String, Bool] = Map([])
   for entry in names {
     let n = entry.0
     if reserved.contains(n) {
@@ -800,7 +800,7 @@ fn build_property_rename_map_colored(
   }
   candidates.sort()
   // Build the conflict graph from the four shape sources.
-  let conflicts : Map[String, Map[String, Bool]] = {}
+  let conflicts : Map[String, Map[String, Bool]] = Map([])
   fn add_pair(a, b) {
     if a == b {
       return
@@ -835,7 +835,7 @@ fn build_property_rename_map_colored(
   let (g, _) = build_symbol_graph_with_sinks(block, {})
   for sym in g.symbols {
     let shape : Array[String] = []
-    let seen : Map[String, Bool] = {}
+    let seen : Map[String, Bool] = Map([])
     fn push_unique(p : String) {
       if !seen.contains(p) {
         seen[p] = true
@@ -863,7 +863,7 @@ fn build_property_rename_map_colored(
   }
   // Frequency-weighted ordering: high-occurrence names get the
   // shortest free color so the resulting bytes drop more.
-  let freq : Map[String, Int] = {}
+  let freq : Map[String, Int] = Map([])
   count_property_occurrences(block, freq)
   candidates.sort_by(fn(a, b) {
     let fa = freq.get(a).unwrap_or(0)
@@ -875,10 +875,10 @@ fn build_property_rename_map_colored(
     }
   })
   // Greedy graph coloring with deterministic short-name picks.
-  let name_to_color : Map[String, Int] = {}
-  let map : Map[String, String] = {}
+  let name_to_color : Map[String, Int] = Map([])
+  let map : Map[String, String] = Map([])
   for n in candidates {
-    let used_colors : Map[Int, Bool] = {}
+    let used_colors : Map[Int, Bool] = Map([])
     match conflicts.get(n) {
       Some(neighbors) =>
         for entry in neighbors {
@@ -1027,7 +1027,7 @@ fn collect_shape_cliques_in_stmt(
       // PropAssigns, so without this walk the class clique would miss
       // every field that doesn't appear in `decl.properties`.
       let class_keys : Array[String] = []
-      let seen : Map[String, Bool] = {}
+      let seen : Map[String, Bool] = Map([])
       let push_key = fn(n : String) {
         if !seen.contains(n) {
           seen[n] = true
@@ -1185,7 +1185,7 @@ fn collect_shape_cliques_in_expr(
       }
     NativeClassExpr(decl, ctor) => {
       let class_keys : Array[String] = []
-      let seen : Map[String, Bool] = {}
+      let seen : Map[String, Bool] = Map([])
       let push_key = fn(n : String) {
         if !seen.contains(n) {
           seen[n] = true
@@ -1447,7 +1447,7 @@ fn count_property_occurrences(
   block : @ast.TsBlock,
   out : Map[String, Int],
 ) -> Unit {
-  let collected : Map[String, Bool] = {}
+  let collected : Map[String, Bool] = Map([])
   collect_property_names(block, collected)
   // The simpler walker only records presence; for the coloring
   // heuristic any positive count works. Use a flat +1 per name
@@ -1485,7 +1485,7 @@ priv struct ScopeFrame {
 
 ///|
 fn ScopeFrame::new_root(reserved : Map[String, Bool]) -> ScopeFrame {
-  let used : Map[String, Bool] = {}
+  let used : Map[String, Bool] = Map([])
   for entry in reserved {
     let (n, _) = entry
     used[n] = true
@@ -1563,7 +1563,7 @@ fn ScopeFrame::function_child(
 ) -> ScopeFrame {
   // Collect all Var references inside the body (non-recursive: stops at
   // nested function boundaries so we only see free vars of this level).
-  let refs : Map[String, Bool] = {}
+  let refs : Map[String, Bool] = Map([])
   collect_var_refs_block(body, refs)
   for p in params {
     match p.binding {
@@ -1578,7 +1578,7 @@ fn ScopeFrame::function_child(
   // For each referenced name, look up its short name via the parent chain.
   // If it was renamed, pre-occupy that short name in the new scope so the
   // param allocator skips it.
-  let used : Map[String, Bool] = {}
+  let used : Map[String, Bool] = Map([])
   for name, _ in refs {
     // Mark the resolved short name (even when unchanged) so inner-scope
     // param allocation never shadows an outer free variable. Without this,
@@ -2018,7 +2018,7 @@ fn next_short_name(n : Int) -> String {
   // The high digit picks from the 52-char first-alphabet.
   digits.push(m)
   // 4. Emit high → low.
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut i = digits.length() - 1
   let n_digits = digits.length()
   while i >= 0 {
@@ -2051,7 +2051,7 @@ pub fn mangle_block_with_renames(
   cfg : ManglerConfig,
 ) -> (@ast.TsBlock, Map[String, String]) {
   let (out, root) = mangle_block_impl(block, cfg)
-  let renames : Map[String, String] = {}
+  let renames : Map[String, String] = Map([])
   for entry in root.renames {
     renames[entry.0] = entry.1
   }
@@ -2071,7 +2071,7 @@ fn mangle_block_impl(
 ) -> (@ast.TsBlock, ScopeFrame) {
   // Reserved set = built-ins ∪ explicit ∪ (top-level decls when
   // `preserve_top_level`).
-  let reserved : Map[String, Bool] = {}
+  let reserved : Map[String, Bool] = Map([])
   for n in mangler_builtin_reserved {
     reserved[n] = true
   }
@@ -2145,7 +2145,7 @@ fn mangle_block_impl(
   }
   // Optional property-name pass on top of the identifier rename.
   let final_block = if cfg.mangle_properties {
-    let prop_reserved : Map[String, Bool] = {}
+    let prop_reserved : Map[String, Bool] = Map([])
     for n in mangler_builtin_reserved_properties {
       prop_reserved[n] = true
     }
@@ -2413,7 +2413,7 @@ fn hoist_var_decls_into_scope(
   scope : ScopeFrame,
   reserved : Map[String, Bool],
 ) -> Unit {
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   hoist_var_names_from_block(block, names)
   // Sort so the rename map is deterministic across compiler runs.
   let sorted : Array[String] = []
@@ -2914,7 +2914,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
         ArrowExpr(_) => {
           // Expression body: synthesize a block with a single Return
           // so we can reuse function_child's free-var collection.
-          let refs : Map[String, Bool] = {}
+          let refs : Map[String, Bool] = Map([])
           match body {
             ArrowExpr(e) => collect_var_refs_expr(e, refs)
             _ => ()
@@ -2931,7 +2931,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
               None => ()
             }
           }
-          let used : Map[String, Bool] = {}
+          let used : Map[String, Bool] = Map([])
           for name, _ in refs {
             let short = scope.resolve(name)
             if short != name {
@@ -3129,14 +3129,14 @@ fn rename_class_decl_idents(
         let renamed_defaults : Array[@ast.TsExpr?] = []
         // Same shadowing hazard as `rename_param_list`: a default is
         // evaluated in the method's own scope.
-        let param_reserved : Map[String, Bool] = {}
+        let param_reserved : Map[String, Bool] = Map([])
         for k in inner.reserved.keys() {
           param_reserved[k] = true
         }
         for d in m.param_defaults {
           match d {
             Some(expr) => {
-              let refs : Map[String, Bool] = {}
+              let refs : Map[String, Bool] = Map([])
               collect_var_refs_expr(expr, refs)
               for n in refs.keys() {
                 param_reserved[inner.resolve(n)] = true
@@ -3338,14 +3338,14 @@ fn param_default_free_names(
   scope : ScopeFrame,
   reserved : Map[String, Bool],
 ) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for k in reserved.keys() {
     out[k] = true
   }
   for p in params {
     match p.default {
       Some(d) => {
-        let refs : Map[String, Bool] = {}
+        let refs : Map[String, Bool] = Map([])
         collect_var_refs_expr(d, refs)
         for n in refs.keys() {
           out[scope.resolve(n)] = true

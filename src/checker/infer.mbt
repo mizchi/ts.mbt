@@ -173,7 +173,7 @@ pub fn match_infer_pattern(
       // Try each pattern branch in isolation; commit only if a branch matches
       // without conflicting with already-committed bindings.
       for p_item in p_items {
-        let branch_bindings : Map[String, @ast.TsType] = {}
+        let branch_bindings : Map[String, @ast.TsType] = Map([])
         if match_infer_pattern(source, p_item, branch_bindings) {
           for entry in branch_bindings {
             let (name, type_) = entry

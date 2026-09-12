@@ -585,7 +585,7 @@ async fn remove_moonbit_js_glue_dir(path : String) -> Unit {
 fn collect_async_js_export_modes_from_glue(
   glue_mbt : String,
 ) -> Map[String, Bool] {
-  let modes : Map[String, Bool] = {}
+  let modes : Map[String, Bool] = Map([])
   for line_view in glue_mbt.split("\n") {
     let trimmed = line_view.trim().to_owned()
     if !trimmed.has_prefix("pub async fn ") {

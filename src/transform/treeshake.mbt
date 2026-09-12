@@ -82,7 +82,7 @@ fn drop_dead_stores(
 ) -> @ast.TsBlock {
   // Plain bindings declared by this block. A name declared elsewhere
   // could be a host global, and `globalThing = 1` is observable.
-  let declared : Map[String, Bool] = {}
+  let declared : Map[String, Bool] = Map([])
   for stmt in block.stmts {
     match stmt {
       Let(@ast.TsBinding::Ident(n), _, _)
@@ -99,7 +99,7 @@ fn drop_dead_stores(
   // binds. Everything else goes through the ordinary reference walk,
   // which counts an assignment target as a reference — deliberately, so
   // the two rules cannot disagree about a store this pass declines.
-  let reads : Map[String, Bool] = {}
+  let reads : Map[String, Bool] = Map([])
   for stmt in block.stmts {
     match stmt {
       // Both spellings of a statement-level assignment. The parser
@@ -161,7 +161,7 @@ fn treeshake_flat_block(
   // (single name + pure rhs) or a side-effect root. Build a name ->
   // DeclEntry index for the BFS.
   let decls : Array[DeclEntry] = []
-  let decl_by_name : Map[String, Int] = {}
+  let decl_by_name : Map[String, Int] = Map([])
   let is_decl : Array[Bool] = []
   for stmt in block.stmts {
     let _ = stmt
@@ -173,7 +173,7 @@ fn treeshake_flat_block(
       | Const(@ast.TsBinding::Ident(name), _, rhs)
       | Var(@ast.TsBinding::Ident(name), _, rhs) =>
         if is_pure_init(rhs, pure_calls) {
-          let refs : Map[String, Bool] = {}
+          let refs : Map[String, Bool] = Map([])
           collect_var_refs_in_expr(rhs, refs)
           decl_by_name[name] = decls.length()
           decls.push({ refs, })
@@ -186,7 +186,7 @@ fn treeshake_flat_block(
       // of treeshake. The RHS "references" are: the base class (if
       // `extends Base`) and all method body free variables.
       NativeClassStmt(decl, ctor) if decl.name != "" => {
-        let refs : Map[String, Bool] = {}
+        let refs : Map[String, Bool] = Map([])
         // Base class reference
         match decl.base_expr {
           Some(e) => collect_var_refs_in_expr(e, refs)
@@ -240,7 +240,7 @@ fn treeshake_flat_block(
 
   // Pass 2: seed the live set with every name that appears in a
   // root (non-droppable) stmt. Walk the stmt's full expression tree.
-  let live : Map[String, Bool] = {}
+  let live : Map[String, Bool] = Map([])
   let worklist : Array[String] = []
   // Caller-supplied roots: the names the bundle EXPORTS. Nothing inside
   // the bundle has to reference an exported binding, so without this
@@ -256,7 +256,7 @@ fn treeshake_flat_block(
     if is_decl[i] {
       continue
     }
-    let refs : Map[String, Bool] = {}
+    let refs : Map[String, Bool] = Map([])
     collect_var_refs_in_stmt(stmt, refs)
     for r in refs.keys() {
       if decl_by_name.contains(r) && !live.contains(r) {

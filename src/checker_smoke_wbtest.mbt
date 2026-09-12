@@ -132,7 +132,7 @@ test "checker: generic substitution works on parser-produced bindings" {
       return
     }
   }
-  let table : Map[String, @checker.AliasBinding] = {}
+  let table : Map[String, @checker.AliasBinding] = Map([])
   for ta in module_.type_aliases {
     table[ta.name] = { type_params: ta.type_params, body: ta.type_ }
   }
@@ -269,7 +269,7 @@ test "checker: assignability roundtrips on parsed type aliases" {
       return
     }
   }
-  let table : Map[String, @ast.TsType] = {}
+  let table : Map[String, @ast.TsType] = Map([])
   for ta in module_.type_aliases {
     table[ta.name] = ta.type_
   }

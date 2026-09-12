@@ -34,7 +34,7 @@ fn skip_json_space(src : String, start : Int) -> Int {
 ///|
 fn json_parse_string(src : String, start : Int) -> (String, Int) {
   let mut i = start + 1
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   while i < src.length() {
     let c = char_at(src, i)
     if c == '"' {
@@ -711,7 +711,7 @@ fn append_resolution_candidates(
 ///|
 /// `@fs.kind` answers, memoized. A compile is one process over a
 /// snapshot of the tree, so nothing here can go stale within a run.
-let path_kinds : Map[String, @fs.FileKind] = {}
+let path_kinds : Map[String, @fs.FileKind] = Map([])
 
 ///|
 async fn path_kind(path : String) -> @fs.FileKind {
@@ -989,7 +989,7 @@ fn resolve_types_versions_targets(
 /// so 68 importers of `clsx` are 68 distinct keys and share nothing. The
 /// repeats were real and the memo could not see them. What repeats
 /// across importers is the WORK, not the question.
-let read_file_texts : Map[String, String?] = {}
+let read_file_texts : Map[String, String?] = Map([])
 
 ///|
 async fn read_text_file(path : String) -> String? {
@@ -1005,7 +1005,7 @@ async fn read_text_file(path : String) -> String? {
 ///|
 /// `@fs.realpath`, memoized. Same reason: it is a syscall per candidate
 /// package root, and the roots repeat across importers.
-let real_paths : Map[String, String] = {}
+let real_paths : Map[String, String] = Map([])
 
 ///|
 async fn cached_realpath(path : String) -> String {

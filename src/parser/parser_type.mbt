@@ -836,7 +836,7 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
   // this parser is SPECULATIVE, and a diagnostic pushed during a parse
   // that later falls back is a diagnostic on a shape that was never
   // there.
-  let method_sig_optional : Map[String, (Bool, Bool)] = {}
+  let method_sig_optional : Map[String, (Bool, Bool)] = Map([])
   let overload_optionality_misuses : Array[String] = []
   // TS7010 support, collected rather than pushed for the same
   // speculative-parse reason.
@@ -992,7 +992,7 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
         if field_name != "<call>" && field_name != "<new>" {
           match method_sig_optional.get(field_name) {
             Some((first, reported)) =>
-              if first != is_optional && not(reported) {
+              if first != is_optional && !reported {
                 method_sig_optional[field_name] = (first, true)
                 overload_optionality_misuses.push(field_name)
               }
@@ -1019,7 +1019,7 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
         // same reason as `missing_separator` above: this parser is
         // SPECULATIVE, and a diagnostic pushed during a parse that later
         // falls back is a diagnostic on a shape that was never there.
-        if not(had_return_annotation) {
+        if !had_return_annotation {
           implicit_any_return_members.push(field_name)
         }
         let field_type = callable_func_type_from_params(
@@ -1286,7 +1286,7 @@ fn Parser::local_type_param_bound(self : Parser, name : String) -> @ast.TsType? 
       // `U` and `T` as unrelated. A visited set guards malformed cycles
       // (`<A extends B, B extends A>`).
       let mut cur = bound
-      let seen : Map[String, Bool] = {}
+      let seen : Map[String, Bool] = Map([])
       seen[name] = true
       while cur is Named(n) && !seen.contains(n) {
         seen[n] = true
@@ -1515,7 +1515,7 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         // `import("foo")` quiet.
         match self.peek().kind {
           Str(spec) =>
-            if not(self.multi_file_source) {
+            if !self.multi_file_source {
               self.import_module_specs.push(spec)
             }
           _ => ()
@@ -1931,7 +1931,7 @@ fn match_infer_pattern(
       }
     (_, Union(pattern_items)) => {
       for pattern_item in pattern_items {
-        let branch_bindings : Map[String, @ast.TsType] = {}
+        let branch_bindings : Map[String, @ast.TsType] = Map([])
         if match_infer_pattern(source, pattern_item, branch_bindings) {
           for entry in branch_bindings {
             let (name, type_) = entry
@@ -2050,7 +2050,7 @@ fn Parser::parse_conditional_type_tail(
   let true_type = self.parse_type()
   let _ = self.expect(Colon)
   let false_type = self.parse_type()
-  let infer_bindings : Map[String, @ast.TsType] = {}
+  let infer_bindings : Map[String, @ast.TsType] = Map([])
   if match_infer_pattern(source, target, infer_bindings) {
     return substitute_inferred_type(true_type, infer_bindings)
   }

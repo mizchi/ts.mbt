@@ -176,8 +176,8 @@ fn scalar_assigned_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit 
 ///|
 /// Propagate top-level scalar `const` bindings to their read sites.
 pub fn const_scalar_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
-  let values : Map[String, @ast.TsExpr] = {}
-  let bytes : Map[String, Int] = {}
+  let values : Map[String, @ast.TsExpr] = Map([])
+  let bytes : Map[String, Int] = Map([])
   for stmt in block.stmts {
     match stmt {
       Const(@ast.TsBinding::Ident(name), _, e) =>
@@ -195,7 +195,7 @@ pub fn const_scalar_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     return block
   }
   // Reads, and writes that rule a candidate out.
-  let refs : Map[String, Int] = {}
+  let refs : Map[String, Int] = Map([])
   surface_visit_exprs_block(block, e => {
     match e {
       Var(n) => if values.contains(n) { refs[n] = refs.get(n).unwrap_or(0) + 1 }
@@ -212,9 +212,9 @@ pub fn const_scalar_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
       _ => ()
     }
   })
-  let assigned : Map[String, Bool] = {}
+  let assigned : Map[String, Bool] = Map([])
   scalar_assigned_names(block, assigned)
-  let chosen : Map[String, @ast.TsExpr] = {}
+  let chosen : Map[String, @ast.TsExpr] = Map([])
   for name, lit in values {
     if assigned.contains(name) {
       continue
@@ -233,7 +233,7 @@ pub fn const_scalar_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // a no-op; the top-level statements are walked directly (not through
   // `rewrite_block`) because narrowing by the top-level block's own
   // bindings would drop every candidate.
-  let tables : AsConstTables = { shapes: Map::new(), scalars: chosen }
+  let tables : AsConstTables = { shapes: Map([]), scalars: chosen }
   let out : Array[@ast.TsStmt] = []
   for s in block.stmts {
     out.push(rewrite_stmt(s, tables))

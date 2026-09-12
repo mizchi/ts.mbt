@@ -38,7 +38,7 @@ test "is_assignable_to_with: stops on alias cycle without looping" {
 
 ///|
 test "is_assignable_to_with: unresolved name falls back to nominal match" {
-  let table : Map[String, @ast.TsType] = {}
+  let table : Map[String, @ast.TsType] = Map([])
   let resolve = make_resolver(table)
   // Unknown names are treated as nominal — only equal names match.
   assert_true(is_assignable_to_with(Named("Foo"), Named("Foo"), resolve))

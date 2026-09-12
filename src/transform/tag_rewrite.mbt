@@ -171,7 +171,7 @@ pub fn tag_rewrite_block(
     block, exported,
   )
   // 3. For each candidate K, verify the safety gates.
-  let candidates : Map[String, Map[String, Int]] = {}
+  let candidates : Map[String, Map[String, Int]] = Map([])
   for entry in unions {
     let (k, literals) = entry
     if k_type_name_is_exported(k, alias_to_k, shapes, exported_type_names)
@@ -185,7 +185,7 @@ pub fn tag_rewrite_block(
       }
       continue
     }
-    let lit_set : Map[String, Bool] = {}
+    let lit_set : Map[String, Bool] = Map([])
     for s in literals {
       lit_set[s] = true
     }
@@ -220,7 +220,7 @@ pub fn tag_rewrite_block(
       }
       continue
     }
-    let id_map : Map[String, Int] = {}
+    let id_map : Map[String, Int] = Map([])
     for i in 0..<literals.length() {
       id_map[literals[i]] = i
     }
@@ -252,18 +252,18 @@ fn collect_named_shapes(
   interfaces : Array[@ast.TsInterface],
   type_aliases : Array[@ast.TsTypeAlias],
 ) -> Map[String, Map[String, String]] {
-  let by_name : Map[String, @ast.TsInterface] = {}
+  let by_name : Map[String, @ast.TsInterface] = Map([])
   for i in interfaces {
     by_name[i.name] = i
   }
-  let out : Map[String, Map[String, String]] = {}
+  let out : Map[String, Map[String, String]] = Map([])
   for i in interfaces {
-    let fields : Map[String, String] = {}
+    let fields : Map[String, String] = Map([])
     // Walk the `extends` chain so a discriminant declared on a shared
     // base counts for every derived variant. `visited` guards the
     // cyclic declarations a hand-written `.d.ts` can contain; a
     // derived interface's own field wins over an inherited one.
-    let visited : Map[String, Bool] = {}
+    let visited : Map[String, Bool] = Map([])
     let queue = [i.name]
     while queue.pop() is Some(n) {
       if visited.contains(n) {
@@ -287,7 +287,7 @@ fn collect_named_shapes(
   }
   for ta in type_aliases {
     if ta.type_ is Object(fs) {
-      let fields : Map[String, String] = {}
+      let fields : Map[String, String] = Map([])
       for f in fs {
         if f.0 is Literal(k) && f.1 is Literal(v) {
           fields[k] = v
@@ -431,7 +431,7 @@ fn collect_exported_signature_type_names(
   block : @ast.TsBlock,
   exported : Map[String, Bool],
 ) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for s in block.stmts {
     match s {
       Var(b, ty, init) | Let(b, ty, init) | Const(b, ty, init) => {
@@ -566,7 +566,7 @@ fn explain_no_union_found(
   // `shapes` cannot resolve is a variant declared outside the bundle
   // (an ambient `.d.ts`, a dependency's types) — that is a different
   // problem from a variant that is genuinely not an object.
-  let labels : Map[String, Int] = {}
+  let labels : Map[String, Int] = Map([])
   for ta in type_aliases {
     match ta.type_ {
       Union(parts) => {
@@ -647,7 +647,7 @@ fn collect_alias_to_k(
   type_aliases : Array[@ast.TsTypeAlias],
   shapes : Map[String, Map[String, String]],
 ) -> Map[String, String] {
-  let out : Map[String, String] = {}
+  let out : Map[String, String] = Map([])
   for ta in type_aliases {
     match ta.type_ {
       Union(parts) => {
@@ -686,7 +686,7 @@ fn collect_du_bindings_for_k(
   literals : Map[String, Bool],
   alias_to_k : Map[String, String],
 ) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   collect_du_bindings_block(block, k, literals, alias_to_k, out)
   out
 }
@@ -1374,7 +1374,7 @@ fn collect_discriminated_unions(
   type_aliases : Array[@ast.TsTypeAlias],
   shapes : Map[String, Map[String, String]],
 ) -> Map[String, Array[String]] {
-  let out : Map[String, Array[String]] = {}
+  let out : Map[String, Array[String]] = Map([])
   for ta in type_aliases {
     match ta.type_ {
       Union(parts) => {
@@ -1386,7 +1386,7 @@ fn collect_discriminated_unions(
         match common {
           Some((k, literals)) => {
             let existing = out.get(k).unwrap_or([])
-            let seen : Map[String, Bool] = {}
+            let seen : Map[String, Bool] = Map([])
             for s in existing {
               seen[s] = true
             }
@@ -1424,7 +1424,7 @@ fn find_common_string_discriminant(
     Some(m) => m
     None => return None
   }
-  let mut candidate_keys : Map[String, Bool] = {}
+  let mut candidate_keys : Map[String, Bool] = Map([])
   for entry in first_fields {
     candidate_keys[entry.0] = true
   }
@@ -1434,7 +1434,7 @@ fn find_common_string_discriminant(
       Some(m) => m
       None => return None
     }
-    let next_keys : Map[String, Bool] = {}
+    let next_keys : Map[String, Bool] = Map([])
     for entry in m {
       if candidate_keys.contains(entry.0) {
         next_keys[entry.0] = true
@@ -1456,7 +1456,7 @@ fn find_common_string_discriminant(
   }
   // Collect the literal value at `k` for each variant.
   let literals : Array[String] = []
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   for fields in per_part {
     match fields.get(k) {
       Some(lit) =>
@@ -1481,7 +1481,7 @@ fn object_string_literal_fields(
 ) -> Map[String, String]? {
   match ty {
     Object(fields) => {
-      let out : Map[String, String] = {}
+      let out : Map[String, String] = Map([])
       for f in fields {
         let key = match f.0 {
           Literal(s) => s
@@ -1779,7 +1779,7 @@ fn check_prop_uses_safe(
   k : String,
   literals : Array[String],
 ) -> Bool {
-  let lit_set : Map[String, Bool] = {}
+  let lit_set : Map[String, Bool] = Map([])
   for s in literals {
     lit_set[s] = true
   }
@@ -2212,7 +2212,7 @@ fn check_object_literals_safe(
   k : String,
   literals : Array[String],
 ) -> Bool {
-  let lit_set : Map[String, Bool] = {}
+  let lit_set : Map[String, Bool] = Map([])
   for s in literals {
     lit_set[s] = true
   }

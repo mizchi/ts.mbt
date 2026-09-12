@@ -57,11 +57,11 @@ priv struct TrivialFn {
 /// `function f(…) {…}` into `Let(Ident("f"), _, FuncExpr(…))`, so that
 /// is the shape to look for, alongside an arrow with an expression body.
 fn collect_trivial_fns(block : @ast.TsBlock) -> Map[String, TrivialFn] {
-  let out : Map[String, TrivialFn] = {}
+  let out : Map[String, TrivialFn] = Map([])
   // A name declared more than once, or reassigned anywhere, is not safe
   // to resolve syntactically — the call site might reach a different
   // value than the declaration this pass read.
-  let declared_count : Map[String, Int] = {}
+  let declared_count : Map[String, Int] = Map([])
   for s in block.stmts {
     match s {
       Let(@ast.TsBinding::Ident(n), _, _)
@@ -71,7 +71,7 @@ fn collect_trivial_fns(block : @ast.TsBlock) -> Map[String, TrivialFn] {
       _ => ()
     }
   }
-  let reassigned : Map[String, Bool] = {}
+  let reassigned : Map[String, Bool] = Map([])
   for s in block.stmts {
     collect_reassigned_stmt(s, reassigned)
   }
@@ -167,7 +167,7 @@ fn trivial_fn_of(own_name : String, rhs : @ast.TsExpr) -> TrivialFn? {
       return None
     }
   }
-  let free : Map[String, Bool] = {}
+  let free : Map[String, Bool] = Map([])
   collect_var_refs_expr(body, free)
   Some({
     params: names,
@@ -223,7 +223,7 @@ fn params_read_in_argument_order(
     return true
   }
   let seen : Array[String] = []
-  let ok = Ref::new(true)
+  let ok = Ref(true)
   fn is_param(n : String) -> Bool {
     params.contains(n)
   }
@@ -534,7 +534,7 @@ trait SubstitutedValue {
 ///|
 /// `collect_var_refs_expr` over one expression, as a table value.
 pub impl SubstitutedValue for @ast.TsExpr with fn free_names(self) {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   collect_var_refs_expr(self, out)
   out
 }
@@ -585,7 +585,7 @@ fn[T : SubstitutedValue] narrow_trivial_fns(
   if drop.is_empty() {
     return tbl
   }
-  let out : Map[String, T] = Map::new()
+  let out : Map[String, T] = Map([])
   for k in tbl.keys() {
     if drop.contains(k) {
       continue

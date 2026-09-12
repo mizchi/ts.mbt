@@ -109,7 +109,7 @@ pub fn plan_unused_params(
     return { keep_count: {} }
   }
   scan_param_uses(scan, block)
-  let keep_count : Map[String, Int] = {}
+  let keep_count : Map[String, Int] = Map([])
   for entry in scan.params {
     let (name, params) = entry
     if keep.contains(name) {
@@ -165,7 +165,7 @@ pub fn plan_unused_params(
     }
     // (4) `arguments` sees the real argument list whatever the
     // parameters say.
-    let referenced : Map[String, Bool] = {}
+    let referenced : Map[String, Bool] = Map([])
     collect_var_refs_in_block(body, referenced)
     if referenced.contains("arguments") {
       declines.push(
@@ -466,7 +466,6 @@ fn trim_params_stmt(stmt : @ast.TsStmt, plan : ArityPlan) -> @ast.TsStmt {
       let out : Array[@ast.TsSwitchCase] = []
       for c in cases {
         out.push({
-          ..c,
           test_expr: match c.test_expr {
             Some(te) => Some(trim_params_expr(te, plan))
             None => None

@@ -176,7 +176,7 @@ fn expand_for_diagnostic_generic(
         Some(b) =>
           if b.type_params.length() == resolved_args.length() &&
             b.type_params.length() > 0 {
-            let bindings : Map[String, @ast.TsType] = {}
+            let bindings : Map[String, @ast.TsType] = Map([])
             for i in 0..<b.type_params.length() {
               bindings[b.type_params[i]] = resolved_args[i]
             }

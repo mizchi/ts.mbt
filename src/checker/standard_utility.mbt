@@ -9,7 +9,7 @@
 
 ///|
 pub fn standard_utility_types() -> Map[String, AliasBinding] {
-  let table : Map[String, AliasBinding] = {}
+  let table : Map[String, AliasBinding] = Map([])
 
   // type Exclude<T, U> = T extends U ? never : T
   table["Exclude"] = {

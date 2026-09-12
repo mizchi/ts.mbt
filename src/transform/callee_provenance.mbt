@@ -36,7 +36,7 @@ enum CalleeClass {
   /// Anything else. The body is invisible, so every argument's
   /// property names escape.
   ForeignCallee
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 /// The facts a provenance question needs.
@@ -277,11 +277,11 @@ fn host_provenance_names(
   block : @ast.TsBlock,
   externals : Map[String, Bool],
 ) -> (Map[String, Bool], Map[String, Bool]) {
-  let roots : Map[String, Bool] = {}
+  let roots : Map[String, Bool] = Map([])
   for n in externals.keys() {
     roots[n] = true
   }
-  let host_returning : Map[String, Bool] = {}
+  let host_returning : Map[String, Bool] = Map([])
   let mut round = 0
   let mut changed = true
   while changed && round < 8 {

@@ -71,8 +71,8 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   let issues : Array[TypeIssue] = []
 
   // 1. Duplicate declarations across all top-level kinds.
-  let seen_names : Map[String, Unit] = {}
-  let dup_set : Map[String, Unit] = {}
+  let seen_names : Map[String, Unit] = Map([])
+  let dup_set : Map[String, Unit] = Map([])
   let duplicates : Array[String] = []
   for iface in module_.interfaces {
     record_or_duplicate(seen_names, dup_set, duplicates, iface.name)
@@ -124,7 +124,7 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   //     output must not produce. Adjacency is built once (merged across
   //     same-name declarations) so each interface's check is a plain DFS
   //     instead of rescanning every declaration at every step.
-  let iface_edges : Map[String, Array[String]] = {}
+  let iface_edges : Map[String, Array[String]] = Map([])
   for iface in module_.interfaces {
     match iface_edges.get(iface.name) {
       Some(edges) =>
@@ -135,7 +135,7 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
     }
   }
   for iface in module_.interfaces {
-    let visited : Map[String, Unit] = {}
+    let visited : Map[String, Unit] = Map([])
     if iface_extends_reaches(
         iface_edges,
         iface.name,
@@ -238,11 +238,11 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   //    non-generic cases enums / 0-parameter decls (TS2315 "type is not
   //    generic"). Restricted to locally-declared names, so lib / cross-file
   //    references (`Array<T>`, `Promise<T>`) are never flagged.
-  let arities : Map[String, Int] = {}
+  let arities : Map[String, Int] = Map([])
   // A name declared at two different arities (illegal declaration merging,
   // or an interface/namespace name clash) is ambiguous -- drop it so the
   // arity check never mis-fires on a shape we can't pin down.
-  let arity_conflict : Map[String, Unit] = {}
+  let arity_conflict : Map[String, Unit] = Map([])
   fn record_arity(name : String, n : Int) -> Unit {
     match arities.get(name) {
       Some(prev) => if prev != n { arity_conflict[name] = () }
@@ -275,16 +275,16 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   // resolve to an in-scope type parameter rather than a same-named generic
   // declaration -- `check_arity`'s `scope` does not track nested signature
   // scopes, so this exclusion keeps the bare-reference check sound.
-  let all_type_param_names : Map[String, Unit] = {}
+  let all_type_param_names : Map[String, Unit] = Map([])
   for entry in module_.interface_member_modifier_misuses {
     if entry.has_prefix("<type-param-name>") {
-      all_type_param_names[entry.substring(start="<type-param-name>".length())] = ()
+      all_type_param_names[entry["<type-param-name>".length():].to_owned()] = ()
     }
   }
-  let noarg_required : Map[String, Unit] = {}
+  let noarg_required : Map[String, Unit] = Map([])
   for entry in module_.interface_member_modifier_misuses {
     if entry.has_prefix("<generic-noarg-required>") {
-      let nm = entry.substring(start="<generic-noarg-required>".length())
+      let nm = entry["<generic-noarg-required>".length():].to_owned()
       if arities.get(nm) is Some(_) &&
         arity_conflict.get(nm) is None &&
         all_type_param_names.get(nm) is None {
@@ -297,14 +297,14 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   // without a default). Merged declarations keep the smallest K --
   // TypeScript merges type-parameter defaults across declarations, so the
   // most permissive minimum is the sound choice for an FP-free check.
-  let min_arities : Map[String, Int] = {}
+  let min_arities : Map[String, Int] = Map([])
   for entry in module_.interface_member_modifier_misuses {
     if entry.has_prefix("<generic-min-arity>") {
-      let rest = entry.substring(start="<generic-min-arity>".length())
+      let rest = entry["<generic-min-arity>".length():].to_owned()
       match rest.find("=") {
         Some(eq_pos) => {
-          let nm = rest.substring(start=0, end=eq_pos)
-          let k = @string.parse_int(rest.substring(start=eq_pos + 1)) catch {
+          let nm = rest[:eq_pos].to_owned()
+          let k = @string.parse_int(rest[eq_pos + 1:].to_owned()) catch {
             _ => continue
           }
           match min_arities.get(nm) {
@@ -380,9 +380,9 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   // Generic declarations that carry `<P extends Bound>` constraints — type
   // aliases, interfaces, and classes alike. A `Applied(Name, args)` reference
   // to any of them must supply arguments that satisfy the bounds.
-  let alias_params : Map[String, Array[String]] = {}
-  let alias_bounds : Map[String, Array[(String, @ast.TsType)]] = {}
-  let non_generic_alias_bodies : Map[String, @ast.TsType] = {}
+  let alias_params : Map[String, Array[String]] = Map([])
+  let alias_bounds : Map[String, Array[(String, @ast.TsType)]] = Map([])
+  let non_generic_alias_bodies : Map[String, @ast.TsType] = Map([])
   for ta in module_.type_aliases {
     if ta.type_param_bounds.length() > 0 {
       alias_params[ta.name] = ta.type_params
@@ -415,7 +415,7 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   // machinery flags a non-string argument (`Uppercase<42>`) as TS2344. This
   // also makes `alias_bounds` non-empty, so the constraint walk below always
   // runs even in files that declare no generics of their own.
-  let user_declared_type_names : Map[String, Unit] = {}
+  let user_declared_type_names : Map[String, Unit] = Map([])
   for ta in module_.type_aliases {
     user_declared_type_names[ta.name] = ()
   }
@@ -627,7 +627,7 @@ fn check_constraints(
                     false
                   } else {
                     extends_decision_with(arg, target, resolve) is Some(false) &&
-                    not(is_assignable_to(arg, target))
+                    !is_assignable_to(arg, target)
                   }
                   match (if violates { Some(false) } else { None }) {
                     Some(false) => {
@@ -850,11 +850,11 @@ fn check_arity(
     // is an error. `noarg_required` holds exactly those names (recorded by the
     // parser, arity-conflict names excluded), so this is false-positive-free.
     Named(name) =>
-      if not(scope.contains(name)) && noarg_required.get(name) is Some(_) {
+      if !scope.contains(name) && noarg_required.get(name) is Some(_) {
         let already = issues
           .iter()
           .any(fn(i) { i.kind == TypeAliasArityMismatch && i.name == name })
-        if not(already) {
+        if !already {
           match arities.get(name) {
             Some(expected) =>
               issues.push({
@@ -946,7 +946,7 @@ fn record_or_duplicate(
   // Set-backed so the top-level duplicate scan stays O(n): the previous
   // `Array::contains` per name was O(n^2) over the declaration count.
   if seen.contains(name) {
-    if not(dup_set.contains(name)) {
+    if !dup_set.contains(name) {
       dup_set[name] = ()
       duplicates.push(name)
     }

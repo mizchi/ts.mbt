@@ -90,8 +90,8 @@ fn Parser::parse_import_specifiers(self : Parser) -> Unit raise ParseError {
     let _ = self.maybe_match_type_modifier()
     let imported = self.parse_binding_ident()
     if self.match_(As) || self.match_ident("as") {
-      let local = self.parse_binding_ident()
-      self.imported_binding_names.push(local)
+      let local_ = self.parse_binding_ident()
+      self.imported_binding_names.push(local_)
     } else {
       self.imported_binding_names.push(imported)
     }
@@ -446,7 +446,7 @@ fn Parser::record_const_enum_nonconstant(
   self : Parser,
   e : @ast.TsExpr,
 ) -> Unit {
-  if not(self.in_const_enum) {
+  if !self.in_const_enum {
     return
   }
   if expr_contains_call(e) {
@@ -1255,7 +1255,7 @@ fn value_decl_static_return_expr_from_block_with_depth(
   if depth <= 0 {
     return None
   }
-  let local_const_values : Map[String, @ast.TsExpr] = {}
+  let local_const_values : Map[String, @ast.TsExpr] = Map([])
   for entry in const_values {
     local_const_values[entry.0] = entry.1
   }
@@ -3731,7 +3731,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   let enums : Array[@ast.TsEnumDecl] = []
   let module_augmentations : Array[(String, @ast.TsModule)] = []
   let top_level_stmts : Array[@ast.TsStmt] = []
-  let const_values : Map[String, @ast.TsExpr] = {}
+  let const_values : Map[String, @ast.TsExpr] = Map([])
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
   }
@@ -4031,7 +4031,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   // runtime but the checker needs them to resolve Named(T) references inside
   // those bodies. Module-level declarations (already in `type_aliases`) take
   // priority: only add a collected alias if the name isn't already registered.
-  let seen_aliases : Map[String, Bool] = {}
+  let seen_aliases : Map[String, Bool] = Map([])
   for ta in type_aliases {
     seen_aliases[ta.name] = true
   }
@@ -4277,7 +4277,7 @@ fn Parser::parse_module_block_with_const_values(
   // express. See `TsModuleBlock.module_request_order`.
   let module_request_order : Array[String] = []
   let enums : Array[@ast.TsEnumDecl] = []
-  let const_values : Map[String, @ast.TsExpr] = {}
+  let const_values : Map[String, @ast.TsExpr] = Map([])
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
   }
@@ -4640,7 +4640,7 @@ pub fn collect_exported_const_values_from_source(
   let (module_block, const_values) = parser.parse_module_block_with_const_values(
     seeded_const_values,
   )
-  let exported_const_values : Map[String, @ast.TsExpr] = {}
+  let exported_const_values : Map[String, @ast.TsExpr] = Map([])
   for export_ in module_block.exports {
     match const_values.get(export_.local_name) {
       Some(expr) => exported_const_values[export_.export_name] = expr

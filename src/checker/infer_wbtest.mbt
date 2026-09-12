@@ -5,21 +5,21 @@ fn infer_marker(name : String) -> @ast.TsType {
 
 ///|
 test "match_infer_pattern: identical types match without bindings" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   assert_true(match_infer_pattern(String_, String_, bindings))
   @test.assert_eq(bindings.length(), 0)
 }
 
 ///|
 test "match_infer_pattern: bare infer captures source" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   assert_true(match_infer_pattern(String_, infer_marker("U"), bindings))
   @test.assert_eq(bindings.get("U"), Some(String_))
 }
 
 ///|
 test "match_infer_pattern: Promise<infer U> binds U to inner" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Applied("Promise", [infer_marker("U")])
   let source : @ast.TsType = Applied("Promise", [String_])
   assert_true(match_infer_pattern(source, pattern, bindings))
@@ -28,7 +28,7 @@ test "match_infer_pattern: Promise<infer U> binds U to inner" {
 
 ///|
 test "match_infer_pattern: array element infer" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Array(infer_marker("E"))
   let source : @ast.TsType = Array(Number)
   assert_true(match_infer_pattern(source, pattern, bindings))
@@ -37,7 +37,7 @@ test "match_infer_pattern: array element infer" {
 
 ///|
 test "match_infer_pattern: function param/return infer" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   // (arg: infer A) => infer R  vs  (arg: string) => number
   let pattern : @ast.TsType = Func([infer_marker("A")], infer_marker("R"))
   let source : @ast.TsType = Func([String_], Number)
@@ -48,7 +48,7 @@ test "match_infer_pattern: function param/return infer" {
 
 ///|
 test "match_infer_pattern: structural mismatch fails" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Applied("Promise", [infer_marker("U")])
   let source : @ast.TsType = Array(String_)
   assert_false(match_infer_pattern(source, pattern, bindings))
@@ -56,7 +56,7 @@ test "match_infer_pattern: structural mismatch fails" {
 
 ///|
 test "match_infer_pattern: conflicting binding fails" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   // [infer X, infer X] vs [string, number] — second binding conflicts.
   let pattern : @ast.TsType = Tuple([infer_marker("X"), infer_marker("X")])
   let source : @ast.TsType = Tuple([String_, Number])
@@ -73,7 +73,7 @@ test "match_infer_pattern: `infer X extends Bound` rejects disjoint source" {
   // Pattern `infer T extends string` against source `number`: the
   // bound is definitively violated, so the conditional should pick its
   // false branch.
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   assert_false(
     match_infer_pattern(Number, infer_marker_with_bound("T", String_), bindings),
   )
@@ -83,7 +83,7 @@ test "match_infer_pattern: `infer X extends Bound` rejects disjoint source" {
 ///|
 test "match_infer_pattern: `infer X extends Bound` accepts matching source" {
   // Source `"a"` extends `string` — bind succeeds.
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   assert_true(
     match_infer_pattern(
       Literal("a"),
@@ -100,7 +100,7 @@ test "match_infer_pattern: variadic Parameters<F> captures rest-tail tuple" {
   // `Func([String, Rest(Array(Number))], Void)`. The Parameters<F>
   // pattern is `Func([Array(infer P)], Any)`. P should bind to
   // `Tuple([String, Rest(Array(Number))])`.
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let source : @ast.TsType = Func([String_, Rest(Array(Number))], Void)
   let pattern : @ast.TsType = Func([Array(infer_marker("P"))], Any)
   assert_true(match_infer_pattern(source, pattern, bindings))
@@ -116,7 +116,7 @@ test "match_infer_pattern: `infer X extends Bound` rejects undecidable source" {
   // is undecidable, so strict-mode matching rejects the bind and lets
   // the surrounding conditional pick its false branch — rather than
   // silently widening the inferred type beyond the bound.
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   assert_false(
     match_infer_pattern(
       Named("Foo"),
@@ -129,7 +129,7 @@ test "match_infer_pattern: `infer X extends Bound` rejects undecidable source" {
 
 ///|
 test "match_infer_pattern: union pattern picks the matching branch" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   // Promise<infer U> | Array<infer U>  vs  Promise<string>
   let pattern : @ast.TsType = Union([
     Applied("Promise", [infer_marker("U")]),
@@ -150,7 +150,7 @@ test "substitute_inferred_type: replaces Named with binding" {
 
 ///|
 test "match_infer_pattern: rest pattern (...args: any[]) accepts any arity" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Func([Array(Any)], infer_marker("R"))
   let source : @ast.TsType = Func([String_, Number, Boolean], Named("Date"))
   assert_true(match_infer_pattern(source, pattern, bindings))
@@ -159,7 +159,7 @@ test "match_infer_pattern: rest pattern (...args: any[]) accepts any arity" {
 
 ///|
 test "match_infer_pattern: rest pattern captures params as Tuple" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   // (...args: infer P) => any  vs  (x: string, y: number) => void
   let pattern : @ast.TsType = Func([Array(infer_marker("P"))], Any)
   let source : @ast.TsType = Func([String_, Number], Void)
@@ -169,7 +169,7 @@ test "match_infer_pattern: rest pattern captures params as Tuple" {
 
 ///|
 test "match_infer_pattern: rest pattern with no source params still matches" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Func([Array(Any)], infer_marker("R"))
   let source : @ast.TsType = Func([], String_)
   assert_true(match_infer_pattern(source, pattern, bindings))
@@ -178,7 +178,7 @@ test "match_infer_pattern: rest pattern with no source params still matches" {
 
 ///|
 test "match_infer_pattern: object pattern { value: infer V }" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Object([(Literal("value"), infer_marker("V"))])
   let source : @ast.TsType = Object([
     (Literal("value"), Number),
@@ -190,7 +190,7 @@ test "match_infer_pattern: object pattern { value: infer V }" {
 
 ///|
 test "match_infer_pattern: object pattern requires every field to match" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Object([
     (Literal("value"), infer_marker("V")),
     (Literal("kind"), Literal("ok")),
@@ -205,7 +205,7 @@ test "match_infer_pattern: object pattern requires every field to match" {
 
 ///|
 test "match_infer_pattern: object pattern fails on missing field" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   let pattern : @ast.TsType = Object([
     (Literal("value"), infer_marker("V")),
     (Literal("missing"), String_),
@@ -216,7 +216,7 @@ test "match_infer_pattern: object pattern fails on missing field" {
 
 ///|
 test "match_infer_pattern: intersection pattern matches against intersection" {
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   // Pattern: A & B<infer X>;  Source: A & B<string>
   let pattern : @ast.TsType = Intersection([
     Named("A"),

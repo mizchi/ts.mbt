@@ -8,7 +8,7 @@
 
 ///|
 fn surface_vfs(entries : Array[(String, String)]) -> Map[String, String] {
-  let m : Map[String, String] = {}
+  let m : Map[String, String] = Map([])
   for entry in entries {
     m[entry.0] = entry.1
   }
@@ -20,7 +20,7 @@ fn surface_props_of(source : String, exported : Array[String]) -> Array[String] 
   let block = @parser.Parser::from_source(source).parse_module_block() catch {
     e => abort("parse error: \{e}")
   }
-  let locals : Map[String, Bool] = {}
+  let locals : Map[String, Bool] = Map([])
   for n in exported {
     locals[n] = true
   }
@@ -41,7 +41,7 @@ fn surface_props_of_classes(
   let block = @parser.Parser::from_source(source).parse_module_block() catch {
     e => abort("parse error: \{e}")
   }
-  let locals : Map[String, Bool] = {}
+  let locals : Map[String, Bool] = Map([])
   for n in exported {
     locals[n] = true
   }
@@ -55,12 +55,12 @@ fn surface_props_of_classes(
 fn assert_names(actual : Array[String], expected : Array[String]) -> Unit raise {
   for want in expected {
     if !actual.contains(want) {
-      fail("expected `\{want}` to be reserved, got \{actual}")
+      fail("expected `\{want}` to be reserved, got \{Repr(actual)}")
     }
   }
   for got in actual {
     if !expected.contains(got) {
-      fail("`\{got}` was reserved unexpectedly, got \{actual}")
+      fail("`\{got}` was reserved unexpectedly, got \{Repr(actual)}")
     }
   }
 }

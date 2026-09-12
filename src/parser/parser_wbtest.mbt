@@ -7735,8 +7735,8 @@ test "parser: index-signature grammar rules reach both member parsers" {
   let bad = [
     "[]: number", "[a, b]: number", "[...a]", "[a?]", "[a: boolean]", "[a: any]",
   ]
-  for member in bad {
-    for src in ["interface I { \{member} }", "type R = { \{member} };"] {
+  for member_ in bad {
+    for src in ["interface I { \{member_} }", "type R = { \{member_} };"] {
       let m = Parser::from_source(src).parse_module() catch {
         e => fail("expected `\{src}` to parse: \{e}")
       }
@@ -7793,7 +7793,7 @@ test "parser: parameter-list and accessor grammar rules" {
       e => fail("expected `\{src}` to parse: \{e}")
     }
     if m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length() == 0 {
-      fail("expected `\{needle}` for `\{src}`, got \{m.grammar_misuses}")
+      fail("expected `\{needle}` for `\{src}`, got \{Repr(m.grammar_misuses)}")
     }
   }
   let legal = [
@@ -7869,7 +7869,7 @@ test "parser: empty heritage lists and rest-element trailing commas" {
       e => fail("expected `\{src}` to parse: \{e}")
     }
     if m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length() == 0 {
-      fail("expected `\{needle}` for `\{src}`, got \{m.grammar_misuses}")
+      fail("expected `\{needle}` for `\{src}`, got \{Repr(m.grammar_misuses)}")
     }
   }
   // A trailing comma after a NON-rest element is legal, and an `extends`
@@ -7897,8 +7897,8 @@ test "parser: a computed member key must be a literal or unique symbol" {
   // index-signature rules in the same place won 2 of 8 corpus files when
   // written at only one of them.
   let bad = ["[\"\" + \"\"](): void", "[foo()](): void", "[a = 0]"]
-  for member in bad {
-    for src in ["interface I { \{member} }", "var v: { \{member} };"] {
+  for member_ in bad {
+    for src in ["interface I { \{member_} }", "var v: { \{member_} };"] {
       let m = Parser::from_source(src).parse_module() catch {
         e => fail("expected `\{src}` to parse: \{e}")
       }

@@ -105,7 +105,7 @@ let advanced_types_source : String =
 /// readonly/optional properties so that benchmarks can scale to inputs
 /// larger than what is convenient to hand-write inline.
 fn build_wide_interface(field_count : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_string("export interface Wide {\n")
   for i in 0..<field_count {
     let n = i.to_string()
@@ -143,7 +143,7 @@ let wide_2000 : String = build_wide_interface(2000)
 /// `parse_jsdoc_block` path, which dominated whole-file profiles before
 /// the view-based rewrite.
 fn build_jsdoc_heavy(decl_count : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i in 0..<decl_count {
     let n = i.to_string()
     buf.write_string("/**\n")
@@ -179,7 +179,7 @@ let jsdoc_heavy_300 : String = build_jsdoc_heavy(300)
 /// when `allow_jsx` is on, the dominant cost on legacy TS sources like
 /// parserharness.ts. Tracks the speculative re-parse overhead.
 fn build_cast_heavy(func_count : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i in 0..<func_count {
     let n = i.to_string()
     buf.write_string("function conv" + n + "(x: unknown): number {\n")
@@ -312,7 +312,7 @@ async test "bench parser: TypeScript lib files (file IO)" {
     println("skip: typescript submodule files not found")
     return
   }
-  let bencher = @bench.new()
+  let bencher = @bench.Bench()
   for entry in prepared {
     let (path, text) = entry
     let bytes = text.length()

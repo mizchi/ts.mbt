@@ -1730,14 +1730,14 @@ pub fn emit_moonbit_decl_with_sections_types_and_arities(
 ) -> String {
   let declared_type_names : Array[String] = []
   let generic_preserved_type_names : Array[String] = []
-  let generic_preserved_type_arity_by_name : Map[String, Int] = {}
+  let generic_preserved_type_arity_by_name : Map[String, Int] = Map([])
   // When a class and an interface share a name (TS declaration merging) the
   // class drives the emitted shape: `class_decl_to_moonbit_sections` emits
   // `declare pub type ClassName[T, U]` with the class's type-params, and the
   // interface emission is skipped below. Pre-collect class names + their
   // arities so interface registration aligns with the class.
   let class_decl_names : Array[String] = []
-  let class_arity_by_name : Map[String, Int] = {}
+  let class_arity_by_name : Map[String, Int] = Map([])
   for class_ in module_.classes {
     class_decl_names.push(class_.name)
     if moonbit_should_preserve_class_type_params(class_) {

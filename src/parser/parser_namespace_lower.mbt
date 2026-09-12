@@ -127,8 +127,8 @@ fn lower_namespace_block(
   // `export interface I` spec has no runtime binding, so assigning it
   // onto the namespace object would reference a name that does not
   // exist.
-  let declared : Map[String, Bool] = {}
-  let mutable : Map[String, Bool] = {}
+  let declared : Map[String, Bool] = Map([])
+  let mutable : Map[String, Bool] = Map([])
   for stmt in body.block.stmts {
     collect_namespace_decl_names(stmt, declared, mutable)
   }

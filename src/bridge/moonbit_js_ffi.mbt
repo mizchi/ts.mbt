@@ -475,12 +475,12 @@ fn ffi_collect_read_reachable_struct_names(
   modules : Map[String, DeclModuleInfo],
 ) -> Map[String, Unit] {
   let seeds : Array[@ast.TsType] = []
-  let fields_by_name : Map[String, Array[(String, @ast.TsType)]] = {}
+  let fields_by_name : Map[String, Array[(String, @ast.TsType)]] = Map([])
   for entry in modules {
     let (_, info) = entry
     ffi_collect_read_seeds_in_ts_module(info.module_, seeds, fields_by_name)
   }
-  let reachable : Map[String, Unit] = {}
+  let reachable : Map[String, Unit] = Map([])
   let pending : Array[String] = []
   fn add(name : String) -> Unit {
     if !reachable.contains(name) {
@@ -600,8 +600,8 @@ fn ffi_collect_read_seeds_in_ts_module(
     for prop in class_.properties {
       seeds.push(prop.type_)
     }
-    for method in class_.methods {
-      seeds.push(method.return_type)
+    for method_ in class_.methods {
+      seeds.push(method_.return_type)
     }
   }
   for namespace_ in ts_module.namespaces {
@@ -3612,7 +3612,7 @@ fn ffi_alias_constructor_bridge_line(ctor : FfiAliasConstructor) -> String {
 fn ffi_type_alias_map_by_type_name(
   modules : Map[String, DeclModuleInfo],
 ) -> Map[String, @ast.TsTypeAlias] {
-  let aliases : Map[String, @ast.TsTypeAlias] = {}
+  let aliases : Map[String, @ast.TsTypeAlias] = Map([])
   for entry in modules {
     let info = entry.1
     for type_alias in info.module_.type_aliases {
@@ -6435,7 +6435,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_enums, exported_classes,
   )
-  let class_surface_cache : Map[String, Array[ResolvedExport]] = {}
+  let class_surface_cache : Map[String, Array[ResolvedExport]] = Map([])
   let emitted_exported_imports = append_exported_imports(
     exported_imports,
     exported_import_overload_wrappers(
@@ -6529,7 +6529,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   // `default.DNS`) must be re-rooted at the top-level alias -- otherwise
   // the glue emits `import default_ from "uuid"`, which crashes at load
   // time because the public package has no default export.
-  let public_alias_by_source : Map[String, String] = {}
+  let public_alias_by_source : Map[String, String] = Map([])
   if ffi_module_spec_uses_public_exports(module_spec) {
     for export_ in export_surface {
       if export_.export_name.contains(".") || export_.kind is Ambiguous {
@@ -6560,18 +6560,18 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     let (root, rest) = match runtime_name.find(".") {
       Some(idx) =>
         (
-          runtime_name.substring(start=0, end=idx).to_string(),
-          runtime_name.substring(start=idx).to_string(),
+          runtime_name[:idx].to_owned(),
+          runtime_name[idx:].to_owned(),
         )
       None => (runtime_name, "")
     }
     match public_alias_by_source.get(source_path + "\u{0}" + root) {
-      Some(alias) if alias != root => alias + rest
+      Some(alias_) if alias_ != root => alias_ + rest
       _ => runtime_name
     }
   }
 
-  let import_runtime_export_names : Map[String, String] = {}
+  let import_runtime_export_names : Map[String, String] = Map([])
   for exported in emitted_exported_imports {
     let raw = if base_import_export_names.contains(exported.export_name) {
       ffi_runtime_export_name_for_module(
@@ -6589,7 +6589,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       raw,
     )
   }
-  let func_runtime_export_names : Map[String, String] = {}
+  let func_runtime_export_names : Map[String, String] = Map([])
   for exported in emitted_exported_funcs {
     let raw = if base_func_export_names.contains(exported.export_name) {
       ffi_runtime_export_name_for_module(
@@ -6607,7 +6607,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       raw,
     )
   }
-  let value_runtime_export_names : Map[String, String] = {}
+  let value_runtime_export_names : Map[String, String] = Map([])
   for exported in exported_values {
     value_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
       exported.source_path,
@@ -6620,7 +6620,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ),
     )
   }
-  let class_runtime_export_names : Map[String, String] = {}
+  let class_runtime_export_names : Map[String, String] = Map([])
   for exported in exported_classes {
     class_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
       exported.source_path,
@@ -6636,7 +6636,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let namespace_import_roots = bridge_namespace_import_roots_for_export_equals(
     export_surface, modules, module_spec,
   )
-  let tuple_result_field_names : Map[String, Array[String]] = {}
+  let tuple_result_field_names : Map[String, Array[String]] = Map([])
   for spec in tuple_result_interfaces {
     if !spec.needs_runtime_tuple_wrapper {
       continue
@@ -6650,14 +6650,14 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
 
   let declared_type_names : Array[String] = []
   let struct_type_names : Array[String] = []
-  let generic_type_params_by_name : Map[String, Array[String]] = {}
+  let generic_type_params_by_name : Map[String, Array[String]] = Map([])
   // Pre-collect class names + their generic-preserved arities so the
   // interface registration agrees with the class on shared names. When a
   // class and an interface share a name (TS declaration merging) the
   // class drives the emitted shape (`#external pub type ClassName[T]`)
   // and the interface's own emission is skipped below.
   let class_type_names : Array[String] = []
-  let class_arity_by_type_name : Map[String, Array[String]] = {}
+  let class_arity_by_type_name : Map[String, Array[String]] = Map([])
   for class_ in classes {
     let class_type_name = ffi_class_type_name(class_.name)
     class_type_names.push(class_type_name)
@@ -6716,7 +6716,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   // normalize passes above (decl emission runs first in a package
   // bundle, so the registry already holds the full set).
   decl_drain_synthesized_union_aliases(exported_tagged_unions)
-  let tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl] = {}
+  let tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl] = Map([])
   for tagged in exported_tagged_unions {
     let type_name = ffi_type_identifier(tagged.decl.name, "OpaqueType")
     declared_type_names.push(type_name)
@@ -8192,8 +8192,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let rendered_bridge_lines : Array[String] = [
     "// AUTO-GENERATED by `ts2mbt` (mizchi/ts). DO NOT EDIT -- your changes", "// will be lost on the next `ts2mbt generate` / `ts2mbt vendor`.",
   ]
-  let sibling_aliases : Map[String, Array[String]] = {}
-  let names_by_source : Map[String, Array[String]] = {}
+  let sibling_aliases : Map[String, Array[String]] = Map([])
+  let names_by_source : Map[String, Array[String]] = Map([])
   for export_ in export_surface {
     if export_.export_name.contains(".") || export_.kind is Ambiguous {
       continue
@@ -8212,7 +8212,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   // `const WebSocketServer: typeof Server`, where the interface half of
   // WebSocketServer wins the decl resolution and the value never reaches
   // `exported_values`). Scan the source modules' raw value decls instead.
-  let alias_scanned_paths : Map[String, Unit] = {}
+  let alias_scanned_paths : Map[String, Unit] = Map([])
   for export_ in export_surface {
     if export_.export_name.contains(".") || export_.kind is Ambiguous {
       continue

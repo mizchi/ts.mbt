@@ -47,7 +47,7 @@ priv struct AsConstCandidate {
 /// over a handful of elements and the table is small — no precomputed
 /// field, unlike `TrivialFn`.
 impl SubstitutedValue for AsConstCandidate with fn free_names(self) {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   match self.shape {
     ArrShape(items) =>
       for e in items {
@@ -140,7 +140,7 @@ fn AsConstTables::narrow_binding(
 ///|
 pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // 1. Find candidate top-level bindings.
-  let candidates : Map[String, AsConstCandidate] = {}
+  let candidates : Map[String, AsConstCandidate] = Map([])
   for stmt in block.stmts {
     match stmt {
       Const(@ast.TsBinding::Ident(name), _, e) =>
@@ -162,7 +162,7 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     scan_stmt_for_unsafe_uses(stmt, candidates)
   }
   // 3. Filter to survivors.
-  let survivors : Map[String, AsConstCandidate] = {}
+  let survivors : Map[String, AsConstCandidate] = Map([])
   for entry in candidates {
     if !entry.1.disqualified {
       survivors[entry.0] = entry.1
@@ -172,7 +172,7 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     return block
   }
   // 4. Rewrite every safe access.
-  let tables : AsConstTables = { shapes: survivors, scalars: Map::new() }
+  let tables : AsConstTables = { shapes: survivors, scalars: Map([]) }
   let new_stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     new_stmts.push(rewrite_stmt(s, tables))
@@ -201,7 +201,7 @@ fn extract_as_const_shape(expr : @ast.TsExpr) -> AsConstShape? {
       Some(ArrShape(out))
     }
     ObjectLit(entries) => {
-      let m : Map[String, @ast.TsExpr] = {}
+      let m : Map[String, @ast.TsExpr] = Map([])
       for ent in entries {
         if !is_scalar_literal(ent.1) {
           return None

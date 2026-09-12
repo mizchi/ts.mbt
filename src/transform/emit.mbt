@@ -51,7 +51,7 @@ priv struct Emitter {
 ///|
 fn Emitter::new(pretty? : Bool = true) -> Emitter {
   {
-    buf: StringBuilder::new(),
+    buf: StringBuilder(),
     indent: 0,
     pretty,
     out_line: 0,
@@ -372,7 +372,7 @@ pub fn transform_source_full(
   // referenced by the runtime block is a value reference by
   // construction. `preserve_top_level` keeps every top-level name
   // unmangled in this path, so those references still match.
-  let value_refs : Map[String, Bool] = {}
+  let value_refs : Map[String, Bool] = Map([])
   collect_var_refs_in_block(mangled, value_refs)
   // A name the block declares itself cannot also be imported: the input
   // only type-checked because the import was type-only in use, so the
@@ -476,7 +476,7 @@ fn elide_unused_import(
 /// dropped. Emitting it anyway produces a bundle that fails to load,
 /// which is worse than an export the consumer finds missing.
 fn declared_top_level_names(block : @ast.TsBlock) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   fn note(b : @ast.TsBinding) -> Unit {
     match b {
       Ident(n) => out[n] = true
@@ -1606,9 +1606,9 @@ fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
   // else — real positions, a stale array, or none at all — is a real
   // block, which is the safe answer: keeping braces costs bytes, while
   // dropping them from a real block merges two scopes.
-  if not(
+  if !(
       block.stmt_positions.length() == 1 &&
-      block.stmt_positions[0] == @ast.DECL_GROUP_POSITION,
+      block.stmt_positions[0] == @ast.DECL_GROUP_POSITION
     ) {
     return false
   }
@@ -2753,7 +2753,7 @@ fn emit_template_literal(
 /// forms (`\\n`, `\\u0041`) decoded to their actual characters and
 /// stay as-is — JS template literals accept the raw characters.
 fn escape_template_part(s : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let chars = s.to_array()
   let n = chars.length()
   let mut i = 0
@@ -3527,7 +3527,7 @@ fn is_numeric_literal_key(s : String) -> Bool {
 /// Covers backslash, double quote, and the control chars JS doesn't
 /// accept verbatim inside double-quoted strings.
 fn escape_string_literal(s : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i = 0; i < s.length(); i = i + 1 {
     let c = s[i]
     if c == '\\' {

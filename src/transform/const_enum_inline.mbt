@@ -41,7 +41,7 @@ pub fn build_enum_inline_table(
   enums : Array[@ast.TsEnumDecl],
   include_non_const? : Bool = false,
 ) -> Map[String, @ast.TsExpr] {
-  let out : Map[String, @ast.TsExpr] = {}
+  let out : Map[String, @ast.TsExpr] = Map([])
   for decl in enums {
     if decl.is_declare {
       continue
@@ -127,11 +127,11 @@ fn narrow_const_enum_table(
   if shadowed.is_empty() || tbl.is_empty() {
     return tbl
   }
-  let out : Map[String, @ast.TsExpr] = {}
+  let out : Map[String, @ast.TsExpr] = Map([])
   let mut dropped = false
   for k, v in tbl {
     let head = match k.find(".") {
-      Some(i) => k.substring(start=0, end=i)
+      Some(i) => k[:i].to_owned()
       None => k
     }
     if shadowed.contains(head) {
@@ -677,7 +677,7 @@ pub fn imported_const_enum_table(
   reexport_specs_of : (String) -> Array[@ast.TsReExportSpec]?,
   resolve_spec : (String, String) -> String?,
 ) -> Map[String, @ast.TsExpr] {
-  let out : Map[String, @ast.TsExpr] = {}
+  let out : Map[String, @ast.TsExpr] = Map([])
   for imp in imports {
     if imp.type_only {
       continue
@@ -713,7 +713,7 @@ pub fn imported_const_enum_table(
         continue
       }
       let imported = pair.0
-      let local = pair.1
+      let local_ = pair.1
       match
         resolve_exported_const_enum(
           dep,
@@ -727,7 +727,7 @@ pub fn imported_const_enum_table(
         Some(decl) => {
           // Re-key the decl's members under the local name so
           // `import { ArchType as A }` substitutes `A.Array` too.
-          let renamed : @ast.TsEnumDecl = { ..decl, name: local }
+          let renamed : @ast.TsEnumDecl = { ..decl, name: local_ }
           let table = build_const_enum_table([renamed])
           for entry in table {
             out[entry.0] = entry.1
@@ -857,7 +857,7 @@ fn collect_exported_const_enums(
   // Aliases first, so `export { E as F }` decides the exposed name and a
   // decl that is only reachable under its alias is not also exposed
   // under its local one.
-  let aliased : Map[String, Bool] = {}
+  let aliased : Map[String, Bool] = Map([])
   match export_specs_of(path) {
     Some(specs) =>
       for spec in specs {

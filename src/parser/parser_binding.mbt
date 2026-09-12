@@ -303,7 +303,7 @@ fn Parser::record_pattern_duplicate_bindings(
   binding : @ast.TsBinding,
   is_block_scoped : Bool,
 ) -> Unit {
-  if not(is_block_scoped) {
+  if !is_block_scoped {
     return
   }
   match binding {
@@ -314,10 +314,10 @@ fn Parser::record_pattern_duplicate_bindings(
   }
   let names : Array[String] = []
   self.collect_binding_names(binding, names)
-  let seen : Map[String, Unit] = {}
-  let reported : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
+  let reported : Map[String, Unit] = Map([])
   for n in names {
-    if seen.contains(n) && not(reported.contains(n)) {
+    if seen.contains(n) && !reported.contains(n) {
       reported[n] = ()
       self.grammar_misuses.push("cannot redeclare block-scoped variable `\{n}`")
     }
@@ -532,7 +532,7 @@ fn Parser::record_self_referential_initializer(
   }
   let mentioned : Array[String] = []
   collect_iterable_var_names(init, mentioned)
-  if not(mentioned.contains(name)) {
+  if !mentioned.contains(name) {
     return
   }
   match kind {
@@ -541,7 +541,7 @@ fn Parser::record_self_referential_initializer(
         "block-scoped variable `\{name}` used before its declaration",
       )
     VarKind::Var =>
-      if self.no_implicit_any && not(annotated) {
+      if self.no_implicit_any && !annotated {
         self.grammar_misuses.push(
           "<noimplicitany>`\{name}` implicitly has type `any` because it does not have a type annotation and is referenced in its own initializer",
         )
@@ -604,7 +604,7 @@ fn Parser::record_nullish_inferred_declaration(
   binding : @ast.TsBinding,
   init : @ast.TsExpr,
 ) -> Unit {
-  if not(self.no_implicit_any) || self.strict_null_checks {
+  if !self.no_implicit_any || self.strict_null_checks {
     return
   }
   match binding {
@@ -637,7 +637,7 @@ fn Parser::record_nullish_objlit_props(self : Parser, e : @ast.TsExpr) -> Unit {
           // a well-known-symbol or computed key: a diagnostic naming one
           // is a diagnostic nobody can act on, the lesson TS7008's
           // `__private_brand__` message records.
-          if not(ent.0.has_prefix("@@")) && not(ent.0.has_prefix("<")) {
+          if !ent.0.has_prefix("@@") && !ent.0.has_prefix("<") {
             self.grammar_misuses.push(
               "<noimplicitany>object literal's property `\{ent.0}` implicitly has an `any` type",
             )
@@ -775,7 +775,7 @@ fn Parser::record_for_head_binding_misuses(
   // it here made this the twentieth instance in the repo of a rule applied
   // at some of its sites, and the first one written by the same pass that
   // was cataloguing them.
-  if self.no_implicit_any && var_type is Any && not(head_annotated) {
+  if self.no_implicit_any && var_type is Any && !head_annotated {
     let mentioned : Array[String] = []
     collect_iterable_var_names(iterable, mentioned)
     for n in names {
@@ -808,7 +808,7 @@ fn Parser::record_for_head_binding_misuses(
   // site cannot do. Each loses a finding rather than inventing one.
   if self.no_implicit_any &&
     kind is @ast.TsForOfKind::Var &&
-    not(head_annotated) {
+    !head_annotated {
     let iter_class = match iterable {
       New(c, _) => Some(c)
       NewExpr(Var(c), _) => Some(c)

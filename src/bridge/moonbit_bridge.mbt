@@ -742,7 +742,7 @@ fn collect_bridge_index_accessor_mbti(
 ) -> Map[String, Array[String]] {
   let marker = "pub extern \"js\" fn "
   let plain_marker = "pub fn "
-  let result : Map[String, Array[String]] = {}
+  let result : Map[String, Array[String]] = Map([])
   let mut pending_alias = ""
   for line_view in bridge_mbt.split("\n") {
     let trimmed = line_view.to_owned().trim().to_owned()
@@ -753,7 +753,7 @@ fn collect_bridge_index_accessor_mbti(
       pending_alias = trimmed
       continue
     }
-    let alias = pending_alias
+    let alias_ = pending_alias
     pending_alias = ""
     // The enum-valued setter is a plain `pub fn` wrapper over a private
     // extern rather than an extern itself, so both forms are accepted.
@@ -778,10 +778,10 @@ fn collect_bridge_index_accessor_mbti(
     if sig.has_suffix("=") || sig.has_suffix("{") {
       sig = sig[:sig.length() - 1].to_owned().trim().to_owned()
     }
-    let mbti_line = if alias == "" {
+    let mbti_line = if alias_ == "" {
       "pub fn \{sig}"
     } else {
-      alias + "\npub fn \{sig}"
+      alias_ + "\npub fn \{sig}"
     }
     let entry = result.get(name).unwrap_or([])
     if !entry.contains(mbti_line) {
@@ -1271,7 +1271,7 @@ fn reconcile_bridge_widened_union_returns(
   // (`get_name_of_jsdoc_typedef`); a member extern keeps the `Type::method`
   // spelling the declaration uses. Both are keyed here under the name the
   // `.mbti` side will look up.
-  let extern_returns : Map[String, String] = {}
+  let extern_returns : Map[String, String] = Map([])
   for line_view in bridge_mbt.split("\n") {
     let line = line_view.to_owned().trim().to_owned()
     match bridge_split_fn_decl_line(line, "pub extern \"js\" fn ") {
@@ -1368,7 +1368,7 @@ fn add_bridge_ergonomic_helper_decls(
   bridge_mbt : String,
 ) -> String {
   let derived_names : Array[String] = []
-  let derived_decl : Map[String, String] = {}
+  let derived_decl : Map[String, String] = Map([])
   for line_view in bridge_mbt.split("\n") {
     let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_pub_extern_fn_decl_line(line) {

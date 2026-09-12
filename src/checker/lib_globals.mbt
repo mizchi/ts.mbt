@@ -6,7 +6,7 @@
 ///|
 /// True when `name` is a standard-library ambient global *value*
 /// (`console`, `Math`, `Promise`, `document`, `Symbol`, …).
-let is_lib_global_value_memo : Map[String, Bool] = {}
+let is_lib_global_value_memo : Map[String, Bool] = Map([])
 
 ///|
 fn is_lib_global_value(name : String) -> Bool {
@@ -1065,7 +1065,7 @@ fn is_lib_global_value_uncached(name : String) -> Bool {
 /// (`PropertyDescriptor`, `PromiseLike`, `HTMLElement`,
 /// `IteratorResult`, …). Interfaces, type aliases, declared classes,
 /// namespaces, and enums across every lib target.
-let is_lib_global_type_memo : Map[String, Bool] = {}
+let is_lib_global_type_memo : Map[String, Bool] = Map([])
 
 ///|
 fn is_lib_global_type(name : String) -> Bool {
@@ -3298,7 +3298,7 @@ fn is_lib_global_type_uncached(name : String) -> Bool {
 /// never `var` / `function` / `class` there — i.e. it is a lib global
 /// that is NOT a property of `globalThis`. See the generator for why
 /// this is DOM-scoped rather than unioned across every lib.
-let is_lib_dom_blockscoped_value_memo : Map[String, Bool] = {}
+let is_lib_dom_blockscoped_value_memo : Map[String, Bool] = Map([])
 
 ///|
 fn is_lib_dom_blockscoped_value(name : String) -> Bool {

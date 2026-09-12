@@ -890,23 +890,23 @@ fn Parser::has_line_terminator_before(self : Parser) -> Bool {
 fn detect_use_strict_prologue(src : String) -> Bool {
   let mut in_block_comment = false
   for line in src.split("\n") {
-    let mut t = line.trim_start().to_string()
+    let mut t = line.trim_start().to_owned()
     // Strip a leading BOM the lexer would otherwise hide.
     if t.has_prefix("\u{FEFF}") {
-      t = t[1:].to_string().trim_start().to_string()
+      t = t[1:].trim_start().to_owned()
     }
     if in_block_comment {
       match t.find("*/") {
         Some(i) => {
           in_block_comment = false
-          t = t[i + 2:].to_string().trim_start().to_string()
+          t = t[i + 2:].trim_start().to_owned()
         }
         None => continue
       }
     }
     while t.has_prefix("/*") {
       match t.find("*/") {
-        Some(i) => t = t[i + 2:].to_string().trim_start().to_string()
+        Some(i) => t = t[i + 2:].trim_start().to_owned()
         None => {
           in_block_comment = true
           break
@@ -1086,7 +1086,7 @@ fn detect_target_es6_plus(head : String) -> Bool {
         None => rest
       }
       for raw in line.split(",") {
-        let tok = raw.trim().to_string()
+        let tok = raw.trim().to_owned()
         if tok == "es6" || tok == "esnext" || tok.has_prefix("es20") {
           return true
         }
@@ -1223,7 +1223,7 @@ fn detect_lib_list(head : String) -> String? {
 /// slices. `es5` / `es2015.promise` etc. do NOT.
 fn lib_list_grants_iterable(libs : String) -> Bool {
   for tok in libs.split(",") {
-    let t = tok.to_string().trim().to_owned()
+    let t = tok.trim().to_owned()
     if t == "es6" ||
       t == "esnext" ||
       t == "es2015.iterable" ||
@@ -1264,7 +1264,7 @@ fn es_token_year(t : String) -> Int? {
   }
   if t.has_prefix("es20") && !t.contains(".") && t.length() == 6 {
     let mut y = 0
-    for c in t.substring(start=2) {
+    for c in t[2:] {
       if c < '0' || c > '9' {
         return None
       }
@@ -1281,7 +1281,7 @@ fn es_token_year(t : String) -> Int? {
 /// exact year (`es2017.object` grants 2017).
 fn lib_list_grants_year(libs : String, year : Int) -> Bool {
   for tok in libs.split(",") {
-    let t = tok.to_string().trim().to_owned()
+    let t = tok.trim().to_owned()
     match es_token_year(t) {
       Some(y) => if y >= year { return true }
       None => if t.has_prefix("es" + year.to_string() + ".") { return true }
@@ -1300,7 +1300,7 @@ fn lib_list_grants_year(libs : String, year : Int) -> Bool {
 /// written out twice at 2017 before a third year needed it.
 fn target_list_reaches_year(targets : String, year : Int) -> Bool {
   for tok in targets.split(",") {
-    let t = tok.to_string().trim().to_owned()
+    let t = tok.trim().to_owned()
     match es_token_year(t) {
       Some(y) => if y >= year { return true }
       None => ()
@@ -1317,7 +1317,7 @@ fn target_list_reaches_es2017(targets : String) -> Bool {
 ///|
 fn target_list_has_below_es2017(targets : String) -> Bool {
   for tok in targets.split(",") {
-    let t = tok.to_string().trim().to_owned()
+    let t = tok.trim().to_owned()
     if t == "es5" || t == "es3" {
       return true
     }

@@ -74,7 +74,7 @@ pub fn collect_externally_visible_props(
 /// was computing the breakdown twice — 2,165 ms each on the 9 MB
 /// TypeScript bundle, which is 25% of that compile paid twice over.
 pub fn merge_escape_breakdown(b : EscapeBreakdown) -> Array[String] {
-  let reserved : Map[String, Bool] = {}
+  let reserved : Map[String, Bool] = Map([])
   for
     group in [
       b.external_chain,
@@ -128,7 +128,7 @@ pub fn class_members_reachable_off_bundle(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
 ) -> Array[String] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   // `external_class_member_names`, not `escape_breakdown`: the latter
   // goes on to build the whole reserved set, which took 40 seconds on
   // the 9 MB TypeScript bundle for a result this function throws 99% of
@@ -161,13 +161,13 @@ pub fn class_members_reachable_off_bundle(
 /// covers the real runtime globals.
 pub fn undeclared_referenced_names(block : @ast.TsBlock) -> Map[String, Bool] {
   let graph = build_symbol_graph(block, {})
-  let declared : Map[String, Bool] = {}
+  let declared : Map[String, Bool] = Map([])
   for sym in graph.symbols {
     declared[sym.name] = true
   }
-  let referenced : Map[String, Bool] = {}
+  let referenced : Map[String, Bool] = Map([])
   collect_var_refs_in_block(block, referenced)
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for name in referenced.keys() {
     if !declared.contains(name) && !is_dynamically_bound_name(name) {
       out[name] = true
@@ -222,13 +222,13 @@ fn has_object_literal_def(sym : Symbol) -> Bool {
   for d in sym.defs {
     match d.init {
       Some(@ast.TsExpr::ObjectLit(entries)) => {
-        let mut opaque = false
+        let mut opaque_ = false
         for ent in entries {
           if is_opaque_object_key(ent.0) {
-            opaque = true
+            opaque_ = true
           }
         }
-        if !opaque {
+        if !opaque_ {
           return true
         }
       }
@@ -292,7 +292,7 @@ pub fn external_import_bindings(
 pub fn imported_bindings(
   external_imports : Array[@ast.TsImportDecl],
 ) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for imp in external_imports {
     match imp.default_binding {
       Some(n) => out[n] = true
@@ -352,11 +352,11 @@ let known_global_bindings : Array[String] = [
 // where `k: "foo" | "bar"` reserves just `foo` / `bar` instead of
 // the wildcard.
 fn literal_string_name_set(g : SymbolGraph) -> Map[String, Array[String]] {
-  let counts : Map[String, Int] = {}
+  let counts : Map[String, Int] = Map([])
   for s in g.symbols {
     counts[s.name] = counts.get(s.name).unwrap_or(0) + 1
   }
-  let out : Map[String, Array[String]] = {}
+  let out : Map[String, Array[String]] = Map([])
   for s in g.symbols {
     if counts.get(s.name).unwrap_or(0) != 1 {
       continue

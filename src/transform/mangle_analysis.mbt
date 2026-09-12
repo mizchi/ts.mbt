@@ -28,9 +28,9 @@ pub fn auto_reserve_from_module(
   module_ : @ast.TsModule,
   base : ManglerConfig,
 ) -> ManglerConfig {
-  let reachable : Map[String, Bool] = {}
-  let reserved_props : Map[String, Bool] = {}
-  let exported_names : Map[String, Bool] = {}
+  let reachable : Map[String, Bool] = Map([])
+  let reserved_props : Map[String, Bool] = Map([])
+  let exported_names : Map[String, Bool] = Map([])
   for spec in block.exports {
     exported_names[spec.local_name] = true
     exported_names[spec.export_name] = true

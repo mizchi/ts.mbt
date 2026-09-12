@@ -99,7 +99,7 @@ let vlq_base64_chars : String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstu
 /// per-segment encoding used in the `mappings` field of a v3 source
 /// map.
 pub fn vlq_encode(value : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   // Move the sign bit to bit 0 of the resulting unsigned integer.
   let mut v = if value < 0 { (-value << 1).lor(1) } else { value << 1 }
   if v == 0 {
@@ -242,7 +242,7 @@ pub fn SourceMapBuilder::to_json_multi(
   sources_content : Array[String],
   output_path~ : String,
 ) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_string("{\"version\":3,\"file\":\"")
   write_json_escaped(buf, output_path)
   buf.write_string("\",\"sources\":[")
@@ -276,7 +276,7 @@ pub fn SourceMapBuilder::to_json_multi(
 /// every numeric field in a segment is delta-encoded against the
 /// previous segment's value.
 fn SourceMapBuilder::encode_mappings(self : SourceMapBuilder) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut prev_src_line = 0
   let mut prev_src_col = 0
   let mut prev_src_id = 0

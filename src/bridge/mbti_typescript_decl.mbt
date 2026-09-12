@@ -27,7 +27,7 @@ pub fn parse_typescript_import_rewrite_map_source(
 ) -> Map[String, String]? {
   let json = @json.parse(source) catch { _ => return None }
   guard json is Object(members) else { return None }
-  let rewrites : Map[String, String] = {}
+  let rewrites : Map[String, String] = Map([])
   for pair in members {
     let (module_spec, value) = pair
     guard value is String(rewritten_spec) else { return None }
@@ -1753,7 +1753,7 @@ fn collect_root_mbti_local_type_params(
 ) -> Map[String, Array[MbtiTypeParam]] raise MbtiTypescriptDeclError {
   let imports = parse_mbti_imports(source)
   let used_aliases : Array[String] = []
-  let type_params_by_name : Map[String, Array[MbtiTypeParam]] = {}
+  let type_params_by_name : Map[String, Array[MbtiTypeParam]] = Map([])
   let lines : Array[String] = []
   for line in source.split("\n") {
     lines.push(line.to_owned())
@@ -2327,7 +2327,7 @@ fn collect_mbti_bundle_autolink_glue_decls(
   allowed_external_import_spec_rewrites? : Map[String, String] = {},
 ) -> Array[MbtiAutolinkGlueDecl] raise MbtiTypescriptDeclError {
   let decls : Array[MbtiAutolinkGlueDecl] = []
-  let local_package_aliases : Map[String, String] = {}
+  let local_package_aliases : Map[String, String] = Map([])
   for package_name in loaded.ordered_packages {
     local_package_aliases[package_name] = mbti_source_alias_for_package(
       loaded.root_package_name,
@@ -2349,7 +2349,7 @@ fn collect_mbti_bundle_autolink_glue_decls(
           "missing generated package alias for \{package_name}",
         )
     }
-    let local_package_import_alias_rewrites : Map[String, String] = {}
+    let local_package_import_alias_rewrites : Map[String, String] = Map([])
     let external_import_aliases : Array[String] = []
     for import_ref in parse_mbti_imports(source) {
       match local_package_aliases.get(import_ref.module_spec) {
@@ -2670,7 +2670,7 @@ async fn load_mbti_package_sources(
       )
   }
   let source_root_dir = mbti_dirname(root_file_path)
-  let package_sources : Map[String, String] = {}
+  let package_sources : Map[String, String] = Map([])
   let pending_packages : Array[String] = [root_package_name]
   let ordered_packages : Array[String] = []
   package_sources[root_package_name] = root_source
@@ -4383,7 +4383,7 @@ fn compute_import_alias_rewrites(
   occupied_names : Array[String],
   rewrite_order : Array[String],
 ) -> Map[String, String] {
-  let rewrites : Map[String, String] = {}
+  let rewrites : Map[String, String] = Map([])
   let occupied : Array[String] = []
   for name in occupied_names {
     mbti_push_unique_ts_name(occupied, name)
@@ -5133,26 +5133,26 @@ fn parse_mbti_to_typescript_with_import_rewrites(
   let top_level_decls : Array[String] = []
   let top_level_export_names : Array[String] = []
   let type_order : Array[String] = []
-  let type_kinds : Map[String, String] = {}
-  let type_params_by_name : Map[String, Array[MbtiTypeParam]] = {}
-  let struct_decls : Map[String, MbtiStructDecl] = {}
-  let enum_like_decls : Map[String, MbtiEnumLikeDecl] = {}
-  let type_alias_decls : Map[String, MbtiTypeAliasDecl] = {}
+  let type_kinds : Map[String, String] = Map([])
+  let type_params_by_name : Map[String, Array[MbtiTypeParam]] = Map([])
+  let struct_decls : Map[String, MbtiStructDecl] = Map([])
+  let enum_like_decls : Map[String, MbtiEnumLikeDecl] = Map([])
+  let type_alias_decls : Map[String, MbtiTypeAliasDecl] = Map([])
   let private_type_order : Array[String] = []
-  let private_type_alias_decls : Map[String, MbtiTypeAliasDecl] = {}
+  let private_type_alias_decls : Map[String, MbtiTypeAliasDecl] = Map([])
   let trait_order : Array[String] = []
-  let trait_decls : Map[String, MbtiTraitDecl] = {}
-  let struct_method_decls : Map[String, Array[String]] = {}
-  let enum_method_decls : Map[String, Array[String]] = {}
-  let alias_method_decls : Map[String, Array[String]] = {}
-  let struct_traits : Map[String, Array[String]] = {}
-  let enum_traits : Map[String, Array[String]] = {}
-  let alias_traits : Map[String, Array[String]] = {}
+  let trait_decls : Map[String, MbtiTraitDecl] = Map([])
+  let struct_method_decls : Map[String, Array[String]] = Map([])
+  let enum_method_decls : Map[String, Array[String]] = Map([])
+  let alias_method_decls : Map[String, Array[String]] = Map([])
+  let struct_traits : Map[String, Array[String]] = Map([])
+  let enum_traits : Map[String, Array[String]] = Map([])
+  let alias_traits : Map[String, Array[String]] = Map([])
   let mut has_show_trait = false
   let mut has_eq_trait = false
   let marker_trait_order : Array[String] = []
-  let marker_trait_decls : Map[String, MbtiMarkerTraitDecl] = {}
-  let namespace_member_decls : Map[String, Array[String]] = {}
+  let marker_trait_decls : Map[String, MbtiMarkerTraitDecl] = Map([])
+  let namespace_member_decls : Map[String, Array[String]] = Map([])
   let function_decls : Array[MbtiFunctionDecl] = []
   let impl_decls : Array[MbtiImplDecl] = []
   let lines : Array[String] = []
@@ -5786,7 +5786,7 @@ pub async fn emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
           "package \{package_name} is outside root bundle \{root_package_name}",
         )
     }
-    let import_rewrites : Map[String, String] = {}
+    let import_rewrites : Map[String, String] = Map([])
     for pair in external_import_spec_rewrites {
       let (module_spec, rewritten_spec) = pair
       import_rewrites[module_spec] = rewritten_spec
@@ -6338,8 +6338,8 @@ fn strip_runtime_inaccessible_typescript_package_files(
   generic_glue_export_names? : Array[String] = [],
   allowed_external_import_spec_rewrites? : Map[String, String] = {},
 ) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError {
-  let inaccessible_by_path : Map[String, Array[String]] = {}
-  let source_by_path : Map[String, String] = {}
+  let inaccessible_by_path : Map[String, Array[String]] = Map([])
+  let source_by_path : Map[String, String] = Map([])
   for package_name in loaded.ordered_packages {
     let source = match loaded.package_sources.get(package_name) {
       Some(source) => source
@@ -6603,7 +6603,7 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
   )
   let facade_export_names : Array[String] = []
   let generic_glue_export_names : Array[String] = []
-  let facade_ts_decls_by_path : Map[String, Array[String]] = {}
+  let facade_ts_decls_by_path : Map[String, Array[String]] = Map([])
   for decl in glue_decls {
     facade_export_names.push(decl.runtime_export_name)
     if decl.uses_generic_any {

@@ -270,7 +270,7 @@ pub fn BundleOptions::with_treeshake(
 /// runs the class-method scan once per file over one bundle-wide scope,
 /// so a single `Reflect.ownKeys` call is reported once per module.
 fn dedup_reflection_warnings(lines : Array[String]) -> Array[String] {
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   let out : Array[String] = []
   for l in lines {
     if !seen.contains(l) {
@@ -538,11 +538,11 @@ pub fn bundle_modules(
   } else {
     PhaseTimer::disabled()
   }
-  let modules : Map[String, ModuleNode] = {}
+  let modules : Map[String, ModuleNode] = Map([])
   // External (bare specifier) imports we want to re-emit at the top
   // of the bundle so the consumer's loader / browser handles them.
   let external_imports : Array[@ast.TsImportDecl] = []
-  let external_seen : Map[String, Bool] = {}
+  let external_seen : Map[String, Bool] = Map([])
   let graph_started = @bench.monotonic_clock_start()
   match
     load_module_graph(
@@ -593,7 +593,7 @@ pub fn bundle_modules(
       p => modules.get(p).map(n => n.reexport_specs),
       (from, spec) => modules.get(from).bind(n => n.resolved_imports.get(spec)),
     )
-    if table.size() > 0 {
+    if table.length() > 0 {
       modules[path] = { ..m, block: inline_const_enums(m.block, table) }
     }
   }
@@ -629,13 +629,13 @@ pub fn bundle_modules(
   // bundle has to reference an exported binding), and as the starting
   // point for the property mangler's escape analysis.
   let entry_exports = entry_export_bindings(modules, link_renames, entry)
-  let export_roots : Map[String, Bool] = {}
+  let export_roots : Map[String, Bool] = Map([])
   for ex in entry_exports {
     if ex.from_external is None {
       export_roots[ex.local_name] = true
     }
   }
-  let mut mangle_export_renames : Map[String, String] = {}
+  let mut mangle_export_renames : Map[String, String] = Map([])
   let e = Emitter::new(pretty=!opts.minify)
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
@@ -682,7 +682,7 @@ pub fn bundle_modules(
   // each declaration carries in the MERGED block. Filled alongside the
   // diagnostic run below and consumed by the second purity run, the
   // one whose result is allowed to delete code.
-  let linked_assumed_pure : Map[String, Bool] = {}
+  let linked_assumed_pure : Map[String, Bool] = Map([])
   // Run the purity / impure-getter diagnostic over a combined
   // view of every module's lowered stmts. Doing this once up
   // front, BEFORE the optimization passes restructure the AST,
@@ -693,7 +693,7 @@ pub fn bundle_modules(
     // Union the per-module JSDoc-asserted pure set so the
     // analysis trusts the user's `@__NO_SIDE_EFFECTS__` /
     // `@__PURE__` annotations across the whole bundle.
-    let assumed_pure : Map[String, Bool] = {}
+    let assumed_pure : Map[String, Bool] = Map([])
     for path in order {
       let m = match modules.get(path) {
         Some(node) => node
@@ -922,7 +922,7 @@ pub fn bundle_modules(
     combined = timer.phase("private-fields", () => {
       lower_private_fields(combined)
     })
-    let export_surface : Map[String, Bool] = {}
+    let export_surface : Map[String, Bool] = Map([])
     timer.phase("export-surface", () => {
       for n in exported_surface_props(combined, export_roots) {
         export_surface[n] = true
@@ -1206,7 +1206,7 @@ pub fn bundle_modules(
           // into the reserved set except those matching the
           // internal-marker prefix. The mangle pass then renames
           // just the markers.
-          let collected : Map[String, Bool] = {}
+          let collected : Map[String, Bool] = Map([])
           collect_property_names(combined, collected)
           for n in collected.keys() {
             if !is_internal_marker_property(n) {
@@ -1222,7 +1222,7 @@ pub fn bundle_modules(
       // suppressed too — both depend on the same proof that no
       // property name escapes via reflection.
       if effective_mangle_props {
-        let reserved_set : Map[String, Bool] = {}
+        let reserved_set : Map[String, Bool] = Map([])
         for n in extra_reserved {
           reserved_set[n] = true
         }
@@ -1316,7 +1316,7 @@ pub fn bundle_modules(
       // meaningful `.name`. A `.name` read on anything else observes an
       // ordinary property and constrains nothing.
       if observed_names.length() > 0 {
-        let ctors : Map[String, Bool] = {}
+        let ctors : Map[String, Bool] = Map([])
         timer.phase("observed-names: ctor set", () => {
           constructor_like_top_level(combined, ctors)
         })
@@ -1353,7 +1353,7 @@ pub fn bundle_modules(
           // mangler, so the analysis has to normalize its own copy.
           // `keep` is every top-level name, so the copy inlines calls
           // without deleting declarations.
-          let keep_all : Map[String, Bool] = {}
+          let keep_all : Map[String, Bool] = Map([])
           for n in collect_top_level_decl_names(combined) {
             keep_all[n] = true
           }
@@ -1387,7 +1387,7 @@ pub fn bundle_modules(
               // unconstrained and the hierarchy says nothing. Fall back
               // to every callable — expensive, and the only sound answer
               // here.
-              let ctors : Map[String, Bool] = {}
+              let ctors : Map[String, Bool] = Map([])
               constructor_like_top_level(combined, ctors)
               for n in ctors.keys() {
                 external_reserved.push(n)
@@ -1477,7 +1477,7 @@ pub fn bundle_modules(
       // mangler has already run at this point and renames the top level
       // freely, so `export_roots` (what the source called them) matches
       // nothing — the same trap the treeshake call below documents.
-      let live_roots : Map[String, Bool] = {}
+      let live_roots : Map[String, Bool] = Map([])
       for name in export_roots.keys() {
         live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
       }
@@ -1598,7 +1598,7 @@ pub fn bundle_modules(
     // `export default <name>` must use the POST-mangle short form
     // because that's what survives in the body.
     if entry_exports.length() > 0 {
-      let declared : Map[String, Bool] = {}
+      let declared : Map[String, Bool] = Map([])
       for n in collect_top_level_decl_names(combined) {
         declared[n] = true
       }
@@ -1619,7 +1619,7 @@ pub fn bundle_modules(
         None => ()
       }
     }
-    let export_surface : Map[String, Bool] = {}
+    let export_surface : Map[String, Bool] = Map([])
     for
       n in exported_surface_props(
         { stmts: all_stmts, stmt_positions: [] },
@@ -1651,7 +1651,7 @@ pub fn bundle_modules(
     // it is loop-invariant, so computing it per module would be one full
     // escape analysis per file — and passing it as a thunk means a
     // bundle whose sniff scan blocks the pass pays for none at all.
-    let dce_off_bundle_memo : Ref[Array[String]?] = Ref::new(None)
+    let dce_off_bundle_memo : Ref[Array[String]?] = Ref(None)
     let dce_off_bundle = () => {
       match dce_off_bundle_memo.val {
         Some(v) => v
@@ -1761,7 +1761,7 @@ pub fn bundle_modules(
         if entry_exports.length() > 0 {
           // Per-module emit keeps each module's stmts separate, so
           // the "does a binding exist" check spans every module.
-          let declared : Map[String, Bool] = {}
+          let declared : Map[String, Bool] = Map([])
           for other in order {
             match modules.get(other) {
               Some(node) =>
@@ -1890,14 +1890,14 @@ fn record_external_import(
   // a second copy would duplicate a side effect.
   if imp.side_effect_only || binds_nothing {
     let key = "effect:" + imp.module_spec
-    if not(external_seen.contains(key)) {
+    if !external_seen.contains(key) {
       external_seen[key] = true
       external_imports.push(imp)
     }
     return
   }
-  fn claim(local : String) -> Bool {
-    let key = imp.module_spec + ":bind:" + local
+  fn claim(local_ : String) -> Bool {
+    let key = imp.module_spec + ":bind:" + local_
     if external_seen.contains(key) {
       false
     } else {
@@ -2093,7 +2093,7 @@ fn load_module_graph(
     cjs_exports_var: detect_cjs_exports_var(lowered),
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
-  let resolved : Map[String, String] = {}
+  let resolved : Map[String, String] = Map([])
   for imp in mb.imports {
     if imp.type_only {
       // type-only imports don't survive into JS — leave them out.
@@ -2297,8 +2297,8 @@ fn topological_order(
   entry : String,
 ) -> Array[String] {
   let order : Array[String] = []
-  let visited : Map[String, Bool] = {}
-  let stack : Map[String, Bool] = {}
+  let visited : Map[String, Bool] = Map([])
+  let stack : Map[String, Bool] = Map([])
   fn visit(path : String) -> Unit {
     if visited.contains(path) {
       return
@@ -2684,7 +2684,7 @@ fn module_is_commonjs(mb : @ast.TsModuleBlock) -> Bool {
     mb.reexports.length() > 0 {
     return false
   }
-  let refs : Map[String, Bool] = {}
+  let refs : Map[String, Bool] = Map([])
   collect_var_refs_in_block(mb.block, refs)
   refs.contains("module") ||
   refs.contains("exports") ||

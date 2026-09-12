@@ -22,7 +22,7 @@ pub fn drop_dead_properties_block(
   block : @ast.TsBlock,
   reserved : Map[String, Bool],
 ) -> @ast.TsBlock {
-  let read_props : Map[String, Bool] = {}
+  let read_props : Map[String, Bool] = Map([])
   collect_read_property_names_block(block, read_props)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
@@ -945,10 +945,10 @@ pub fn explain_dead_fields(
   block : @ast.TsBlock,
   reserved : Map[String, Bool],
 ) -> Array[String] {
-  let read_props : Map[String, Bool] = {}
+  let read_props : Map[String, Bool] = Map([])
   collect_read_property_names_block(block, read_props)
   let out : Array[String] = []
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   fn note(reason : String) -> Unit {
     if !seen.contains(reason) {
       seen[reason] = true

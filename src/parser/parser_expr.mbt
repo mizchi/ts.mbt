@@ -3389,7 +3389,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         // ledger keeps recording as the place a rule gets forgotten. Both
         // corpus files open with a top-level `new.target`, so the cheap
         // half flips them; the rest is a MISS rather than a guess.
-        if prop == "target" && not(self.in_function) {
+        if prop == "target" && !self.in_function {
           self.grammar_misuses.push(
             "`new.target` is only allowed in the body of a function declaration, function expression, or constructor",
           )
@@ -4329,7 +4329,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       // a TP and the oracle could not see that half of it was being
       // reported for the wrong reason. The three legal shapes were in
       // `expr_check_wbtest.mbt` from an earlier batch and are what failed.
-      if not(self.check(Eq)) {
+      if !self.check(Eq) {
         self.record_objlit_duplicate_keys(fields)
       }
       ObjectLit(fields)

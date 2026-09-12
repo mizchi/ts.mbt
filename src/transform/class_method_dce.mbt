@@ -211,7 +211,7 @@ pub fn class_method_dce_block(
   //     that is the right trade: the ranking explains why a drop was
   //     refused, and here nothing was going to be dropped. The note
   //     below says so.
-  let accessed : Map[String, Bool] = {}
+  let accessed : Map[String, Bool] = Map([])
   timer.phase("dce: static accesses", () => {
     collect_static_accesses_block_skipping_iife(
       analysed, iife_classes_in_scope, accessed,
@@ -239,7 +239,7 @@ pub fn class_method_dce_block(
     build_symbol_graph(analysed, {})
   })
   let class_names = declared_class_names(analysed)
-  let alias_bodies : Map[String, @ast.TsType] = {}
+  let alias_bodies : Map[String, @ast.TsType] = Map([])
   for ta in type_aliases {
     alias_bodies[ta.name] = ta.type_
   }
@@ -340,7 +340,7 @@ pub fn class_method_dce_block(
           // statement, so the count is a lower bound on the occurrences
           // rather than an exact tally — enough to rank them, not
           // enough to quote as a total.
-          let seen : Map[String, Int] = {}
+          let seen : Map[String, Int] = Map([])
           let order : Array[String] = []
           for r in facts.reflection {
             if !seen.contains(r) {
@@ -387,7 +387,7 @@ pub fn class_method_dce_block(
 /// arbitrary occurrence. Capped — a bundle with fifty variations of
 /// the same shape has nothing more to say after the first dozen.
 fn rank_sink_reasons(reasons : Array[String]) -> Array[String] {
-  let counts : Map[String, Int] = {}
+  let counts : Map[String, Int] = Map([])
   for r in reasons {
     counts[r] = counts.get(r).unwrap_or(0) + 1
   }
@@ -501,7 +501,7 @@ fn report_method_dce(
 /// judge a computed-key read. Both sets are name-keyed and drop
 /// shadowed names, so a hit is a proof about *the* binding of that
 /// name.
-struct SniffFacts {
+priv struct SniffFacts {
   /// Bindings that provably hold a number (`numeric_vars.mbt`).
   numeric : Map[String, Bool]
   /// `name -> (bindings carrying it, how many are provably numeric)`.
@@ -539,7 +539,7 @@ struct SniffFacts {
 /// Names of classes declared in this bundle. Only their methods can
 /// be deleted, so only their names disqualify a container type below.
 fn declared_class_names(block : @ast.TsBlock) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for s in block.stmts {
     match s {
       NativeClassStmt(decl, _) => out[decl.name] = true
@@ -644,8 +644,8 @@ fn class_field_containers(
   class_names : Map[String, Bool],
   aliases : Map[String, @ast.TsType],
 ) -> Map[String, Bool] {
-  let container : Map[String, Bool] = {}
-  let other : Map[String, Bool] = {}
+  let container : Map[String, Bool] = Map([])
+  let other : Map[String, Bool] = Map([])
   // The annotations the parser captured before the lowering erased
   // them. This is the source that actually has anything to say on a
   // real bundle; the walk below only catches classes that still carry
@@ -676,7 +676,7 @@ fn class_field_containers(
       _ => ()
     }
   }
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for name in container.keys() {
     if !other.contains(name) {
       out[name] = true
@@ -691,7 +691,7 @@ fn class_field_containers(
 /// Returns the set of class names defined via the IIFE-lowered
 /// shape at the top level.
 fn collect_iife_class_names(block : @ast.TsBlock) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for s in block.stmts {
     match s {
       Var(
