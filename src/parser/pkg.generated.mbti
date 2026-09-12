@@ -57,6 +57,8 @@ pub async fn resolve_type_module_specifier(String, String) -> String?
 
 pub async fn tsconfig_compiler_option(String, String) -> String?
 
+pub fn value_identifier_needs_suffix(String) -> Bool
+
 // Errors
 pub(all) suberror ParseError {
   ParseError(String)

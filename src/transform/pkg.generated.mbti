@@ -240,7 +240,7 @@ pub(all) struct BundleOutput {
   timings : Array[(String, Double)]
 }
 
-type CalleeClass derive(Eq, Show)
+type CalleeClass derive(Eq, @debug.Debug)
 
 pub(all) struct ContainerFacts {
   class_names : Map[String, Bool]
@@ -422,8 +422,6 @@ pub(all) enum SinkObservation {
   StringifyOnly
 }
 
-type SniffFacts
-
 pub(all) struct SourceMapBuilder {
   lines : Array[Array[Segment]]
   mut last_out_line : Int
@@ -518,7 +516,7 @@ pub(all) struct Violation {
   kind : String
   name : String
   detail : String
-} derive(Show)
+} derive(@debug.Debug)
 
 // Type aliases
 pub type ScopeId = Int
