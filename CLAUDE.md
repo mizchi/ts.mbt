@@ -1860,6 +1860,62 @@ product surfaces now.
   `importStatementsInterfaces` still needs the OTHER channel the row
   named, an `import a = A` alias whose value-ness depends on a target the
   parser does not resolve.
+  Batch EF is **+1** (TP 2601 / MISS in scope 113) and the conformance
+  file is the smallest thing it found. The PARSER stored two different
+  shapes identically — `{ foo() {} }`, where the name is the property
+  KEY, and `{ foo: function foo() {} }`, where it IS a binding in the
+  body — both as `("foo", FuncExpr { name: "foo" })`, and THREE consumers
+  each guessed which one they had. The guess is not decidable from the
+  data they had, which is why all three were wrong somewhere:
+  `collect_expr_value_names` declared the name in the module-wide
+  `declared_value_names` backstop, so `var v = { aaa() {} }` made a bare
+  `aaa;` legal ANYWHERE in the file and let one method body see a SIBLING
+  method's key — that, and not the recursion binding, is what hid
+  `YieldExpression10_es6`'s TS2304; `check_funcexpr_with_context`
+  surfaced the name for recursion, inventing a binding for a shorthand;
+  and `emit` / `mangle` reconstructed the shorthand from `f.name == key`,
+  which is equally true of a named function expression whose name matches
+  its key. That last one is a live bug in the plainest path there is —
+  `mtsc file.ts`, no optimization flag, where
+  `{ fact: function fact(n) { … fact(n - 1) } }` prints 120 under Node on
+  the source and throws `ReferenceError` on the output. It was broken
+  TWICE, and the second break only appeared after fixing the first and
+  re-measuring: with the discriminator corrected, `emit_function_expr`
+  then dropped the name outright, because it drops any name the body
+  references — a workaround that is CORRECT for a borrowed member key (a
+  class method lowered to `C.prototype.m = function m() {}` must not
+  shadow an outer `m`, the `toJSON` case its own comment names) and wrong
+  for a real self-binding.
+  The fix is one parse-time field, `TsFunc.name_is_member_key`, and its
+  most useful property is that MoonBit requires every field of a record
+  literal — so adding it made the census COMPILER-DRIVEN rather than a
+  grep, naming all 32 construction sites and forcing each to be
+  classified. This file records ten instances of a rule applied in some
+  places and not others, every one found by reading; this is the first
+  where the language enumerated the sites instead.
+  The legal neighbour is what kills the cheap discriminator, and the
+  probe for it was written BEFORE the fix:
+  `{ foo: function foo() { return foo } }` is legal, has `f.name == key`,
+  and must stay silent. Ten probes now agree with tsc — five that fire
+  (the corpus shape, a sibling key, the module-wide leak, a getter key, a
+  body reading its own key) and five that do not (a named function
+  expression, one held in a property of the same spelling, a recursive
+  one, a method reaching a real outer function, and `this.<key>`).
+  `fixtures/mangle-safety/case62-named-funcexpr-self-binding` observes
+  BOTH directions in one file, because a fix that merely stopped dropping
+  names would pass the self-binding export and fail the other two.
+  Two notes on the harnesses, both about this session rather than the
+  rule. A formal mutation test was NOT run on that case, and what stands
+  in its place is stronger for the emitter half: each half of the fix was
+  shown necessary by measurement in sequence (no fix → throws via the
+  shorthand collapse; discriminator only → throws via the name drop; both
+  → 120). And checking the submodule out changes what `moon test` COSTS:
+  the parser bench then chews the real 3.1 MB `checker.ts` where it
+  previously printed "skip: typescript submodule files not found", so the
+  suite stops being comparable to a count taken without it. The two
+  `*_bench_wbtest.mbt` files are `it.bench` timing loops and assert
+  nothing, so the assertion-bearing run is 3,002 where the full one is
+  3,004 — the difference is exactly those two entries, not lost coverage.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

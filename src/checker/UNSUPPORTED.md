@@ -6,10 +6,18 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2600 / MISS in scope 114 / OUT OF SCOPE 20 / FP 0 /
+Measured at **TP 2601 / MISS in scope 113 / OUT OF SCOPE 20 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
+
+Batch EF's file is not in any section below, and the reason is worth a
+line here: nothing was missing. `YieldExpression10_es6` needed no
+machinery at all — an object-literal method shorthand's name was being
+treated as a BINDING by three separate consumers, so a bare reference to
+that spelling resolved anywhere in the module. A MISS can be a rule the
+checker already has, defeated by a fact the parser recorded with the
+wrong meaning; that kind never appears in a machinery classification.
 
 Sections B, C, E and F were taken in batch EB — **+8 files at FP 0** — and
 each keeps its entry with what shipped and what is still missing, because
