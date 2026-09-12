@@ -73,9 +73,41 @@ fn is_all_underscores(name : String) -> Bool {
 }
 
 ///|
-fn value_identifier_needs_suffix(name : String) -> Bool {
+/// Whether a MoonBit-side VALUE identifier collides with a word the
+/// language takes, and so needs the `_` suffix the generators append.
+///
+/// `pub` because this is the ONE copy. `moonbit_js_ffi.mbt` and
+/// `moonbit_bridge.mbt` each carried their own, and the three had
+/// DIFFERENT contents -- the bridge copy was missing `alias`, `local`,
+/// `method`, `override`, `resume`, `priv`, `constructor`, `final` and
+/// `move`, so one generated file could spell a name `method_` while
+/// another spelled the same name `method`.
+///
+/// The first group below is words the compiler RESERVES rather than
+/// takes (warning 0035, "reserved for possible future use"). A generated
+/// name is a name nobody can edit, so a reserved word there is a warning
+/// in the user's build today and a hard error whenever MoonBit promotes
+/// it -- `extend` is not hypothetical, vitest's `.extend` put six of
+/// them in `examples/typescript-to-moonbit-vitest`. The set was PROBED
+/// against the toolchain (273 candidate words declared as bindings, the
+/// ones that warn kept), not guessed from a changelog.
+pub fn value_identifier_needs_suffix(name : String) -> Bool {
   match name {
-    "alias"
+    "abstract"
+    | "atomic"
+    | "comptime"
+    | "dyn"
+    | "extend"
+    | "macro"
+    | "member"
+    | "opaque"
+    | "recur"
+    | "sealed"
+    | "unsafe"
+    | "virtual"
+    | "volatile"
+    | "yield"
+    | "alias"
     | "and"
     | "as"
     | "assert"
@@ -180,6 +212,15 @@ fn sanitize_value_identifier(name : String, fallback : String) -> String {
 ///|
 fn sanitize_identifier(name : String, fallback : String) -> String {
   let result = sanitize_identifier_chars(name, fallback)
+  // NOT `value_identifier_needs_suffix`, though it looks like the same
+  // question. `to_snake_case` feeds this, and its output is sometimes a
+  // whole identifier and sometimes a FRAGMENT that gets composed:
+  // `"get_" + to_snake_case(value.name)`. A word that collides on its
+  // own cannot collide inside `get_<word>`, so suffixing the fragment
+  // renames public API for a collision that cannot happen -- widening
+  // this list to the 88-word one turned vitest's `get_assert` into
+  // `get_assert_`, which `verify-examples` catches. Keep it to words
+  // that are a hazard even as a fragment.
   match result {
     "alias"
     | "as"

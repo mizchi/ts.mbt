@@ -132,74 +132,12 @@ fn bridge_to_snake_case(name : String) -> String {
 
 ///|
 fn bridge_value_identifier_needs_suffix(name : String) -> Bool {
-  match name {
-    "and"
-    | "as"
-    | "assert"
-    | "async"
-    | "await"
-    | "break"
-    | "case"
-    | "catch"
-    | "class"
-    | "const"
-    | "continue"
-    | "declare"
-    | "defer"
-    | "do"
-    | "else"
-    | "enum"
-    | "export"
-    | "extern"
-    | "false"
-    | "finally"
-    | "fn"
-    | "for"
-    | "if"
-    | "include"
-    | "import"
-    | "in"
-    | "interface"
-    | "is"
-    | "guard"
-    | "lazy"
-    | "let"
-    | "loop"
-    | "match"
-    | "module"
-    | "namespace"
-    | "new"
-    | "null"
-    | "or"
-    | "package"
-    | "private"
-    | "protected"
-    | "pub"
-    | "public"
-    | "raise"
-    | "readonly"
-    | "ref"
-    | "return"
-    | "static"
-    | "struct"
-    | "super"
-    | "switch"
-    | "test"
-    | "throw"
-    | "trait"
-    | "true"
-    | "try"
-    | "typeof"
-    | "type"
-    | "typealias"
-    | "using"
-    | "use"
-    | "var"
-    | "void"
-    | "with"
-    | "while" => true
-    _ => false
-  }
+  // One list, in `@parser`. This copy had drifted: it was missing
+  // `alias`, `constructor`, `final`, `local`, `method`, `move`,
+  // `override`, `priv` and `resume`, all of which the extern generator's
+  // copy had -- so the same TypeScript name could come out `method_` in
+  // `externs.mbt` and `method` in `bridge.mbt`.
+  @parser.value_identifier_needs_suffix(name)
 }
 
 ///|
