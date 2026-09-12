@@ -69,9 +69,61 @@ product surfaces now.
   `verify-checker-soundness` builds DEBUG, so six target files "did not
   change" because the run was measuring code from before the change (it
   picks the newer build now, and prints which); and `moon check
-  --deny-warn` cannot gate anything here, since the tree carries 450+
-  pre-existing warnings — plain `moon check` reporting `0 errors` is the
-  check.
+  --deny-warn` could not gate anything, since the tree carried 450+
+  pre-existing warnings — plain `moon check` reporting `0 errors` was the
+  check. **That is no longer true: `--deny-warn` is clean and IS the
+  gate.** The cleanup is worth two notes. The count everyone quoted was
+  wrong by 40%, because `src/checker/moon.pkg` carried
+  `warnings = "-0020-0035-0082"` — suppressing exactly the three
+  diagnostics the cleanup was about, in the largest package in the repo,
+  under a comment saying the work would be "performed separately". 814
+  became 1,376 the moment it came out; a suppression nobody can see past
+  is the defect that retired `docs/checker-priority.md`, in a `moon.pkg`.
+  And a spelling has to be PROBED before it is applied in bulk: `!` binds
+  the whole postfix chain (asserted by VALUE, since `(!m).contains` is a
+  type error on a `Map` and so proves nothing about precedence),
+  `String::substring` returns an owned `String` where `s[a:b]` is a view
+  (so every site is `s[a:b].to_owned()`), and `try?` is NOT mechanically
+  `Ok`/`Err` — the compiler's own guidance says so, and 147 of the 148
+  were one best-effort-cleanup idiom. The renames take this repo's own
+  convention rather than inventing one: `module_`, `type_`, `class_` and
+  `enum_` are spelled that way at 5,022 sites for exactly this reason.
+  Two of the twelve leftovers were not warnings at all. `export_surface`
+  matched `MethodCall(Var(n), meth, args)` BEFORE
+  `MethodCall(Var("Object"), "defineProperty", args)`, and the generic
+  pattern also matches the specific call — so every
+  `Object.defineProperty(NAME, "prop", …)` write was invisible to
+  `index_prop_assigns`, which its own doc comment says it indexes, and
+  the compiler had been reporting it as unreachable code all along.
+  `callable_arity_range` was dead because
+  `check_member_decorator_signatures` computes its `(lo, hi)` INLINE —
+  it needs `is_optional` and `default`, which a `TsType` cannot carry, as
+  that function's own comment explains — so the helper could not serve
+  the rule its own header names.
+  The same family lives in the GENERATOR, where it reached the product:
+  four functions answered "does this MoonBit value identifier need a `_`
+  suffix", and the three answering it for a whole identifier had THREE
+  different contents (74 / 74 / 65 words), the bridge copy missing nine
+  the extern copy had — so one TypeScript name could come out `method_`
+  in `externs.mbt` and `method` in `bridge.mbt`. Fourteen reserved words
+  were missing from all of them, `extend` among them, which put six
+  warnings in every user's build of the vitest example. The set was
+  probed (273 candidates declared as bindings, keeping the ones that
+  warn; two rounds were needed, so it may still be short a word nobody
+  guessed). The FOURTH list is NOT the same rule, and unifying it is what
+  `verify-examples` caught: `to_snake_case` feeds `sanitize_identifier`
+  and its output is sometimes a whole identifier and sometimes a FRAGMENT
+  that gets composed (`"get_" + to_snake_case(value.name)`), so a word
+  that collides alone cannot collide inside `get_<word>` — the wider list
+  renamed vitest's public `get_assert` to `get_assert_` for a collision
+  that cannot happen. Its narrower list is restored with that reason at
+  the site. What stays un-fixed in the generated output is stated rather
+  than silently left: ~1,080 `Array`-in-JS-FFI deprecations and ~450
+  phantom type parameters are a `FixedArray` migration and a generated-
+  API question, not warning cleanup.
+  `moon fmt` is still not run, and now has a number: it rewrites 63 files
+  at HEAD on this toolchain, which is the drift CI's own
+  `continue-on-error` comment documents.
   Two lessons repeat across the batches and are worth stating once. First,
   a rule's LEGAL neighbour is the thing to test: "fires on the corpus file"
   and "stays silent on the legal spelling" are separate claims, and only
@@ -3553,7 +3605,12 @@ typescript.mbt/
 ## Commands
 
 ```bash
-# Check for errors
+# Check for errors AND warnings. This is clean as of the latest
+# toolchain (moon 0.1.20260904 / moonc v0.10.12) and is the gate — an
+# earlier note here said it could not be, which was true of a tree
+# carrying 450+ warnings and is not true now. Keep it at zero: the way
+# it stopped being a gate the first time was a `warnings = "-00.."`
+# line in one package's moon.pkg, not a decision anyone made.
 moon check --deny-warn
 
 # Run tests. Takes about an hour, and most of that is NOT tests: the
