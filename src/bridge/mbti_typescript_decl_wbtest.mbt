@@ -775,7 +775,7 @@ test "bridge: emit TypeScript declarations imports fully qualified external type
       "export function nodes(items: Array<mizchi_luna_core.Node<void, string>>): mizchi_luna_core.Node<void, string>;",
     ),
   )
-  let rewrites : Map[String, String] = {}
+  let rewrites : Map[String, String] = Map([])
   rewrites["mizchi/luna/core"] = "./core"
   let rewritten = parse_mbti_to_typescript_with_import_rewrites(
     source, rewrites,
@@ -1020,7 +1020,7 @@ test "bridge: parse TypeScript import rewrite map source accepts string-object j
 
 ///|
 async test "bridge: emit TypeScript package bundle from mbti rewrites external imports through configured map" {
-  let import_rewrites : Map[String, String] = {}
+  let import_rewrites : Map[String, String] = Map([])
   import_rewrites["moonbitlang/core/debug"] = "demo-debug"
   let files = emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
     "fixtures/mbti_typescript_package/pkg.generated.mbti", import_rewrites,
@@ -1128,7 +1128,7 @@ test "bridge: strips public functions that expose an external MoonBit type" {
   assert_true(stripped.contains("export function render(s: string): string;"))
   assert_true(stripped.contains("export type ExternalDocument = unknown;"))
   assert_false(stripped.contains("import type"))
-  let sources : Map[String, String] = {}
+  let sources : Map[String, String] = Map([])
   sources["demo/api"] = source
   let diagnostics = render_autolink_diagnostics_md(
     "demo/api",
@@ -1149,9 +1149,9 @@ test "bridge: strips public functions that expose an external MoonBit type" {
   }
   assert_eq(glue_decls.length(), 1)
   assert_eq(glue_decls[0].export_name, "render")
-  let mapped_sources : Map[String, String] = {}
+  let mapped_sources : Map[String, String] = Map([])
   mapped_sources["demo/api"] = source
-  let import_rewrites : Map[String, String] = {}
+  let import_rewrites : Map[String, String] = Map([])
   import_rewrites["demo/core"] = "@demo/core-types"
   let mapped_glue_decls = collect_mbti_bundle_autolink_glue_decls(
     {
@@ -1219,7 +1219,7 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
 
 ///|
 async test "bridge: emit TypeScript scaffold bundle removes an unused configured external import" {
-  let import_rewrites : Map[String, String] = {}
+  let import_rewrites : Map[String, String] = Map([])
   import_rewrites["moonbitlang/core/debug"] = "demo-debug"
   let bundle = emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
     "fixtures/mbti_typescript_package/pkg.generated.mbti", import_rewrites,

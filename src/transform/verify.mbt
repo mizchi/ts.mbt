@@ -37,7 +37,7 @@ pub(all) struct Violation {
   kind : String
   name : String
   detail : String
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Names that resolve to nothing inside the bundle and are not the
@@ -63,7 +63,7 @@ pub fn verify_emitted_bundle(
   }
   // Import bindings live on the module block, not in its statements, so
   // the symbol graph never declares them.
-  let allowed : Map[String, Bool] = {}
+  let allowed : Map[String, Bool] = Map([])
   for name in js_runtime_global_names() {
     allowed[name] = true
   }
@@ -154,7 +154,7 @@ pub fn verify_emitted_bundle(
 /// but `a < b > (c)` is valid JavaScript that this parser may resolve the
 /// same way, and a verifier that reports valid output gets turned off.
 fn typescript_constructs_in_block(block : @ast.TsBlock) -> Array[String] {
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   ts_walk_block(block, seen)
   let names : Array[String] = []
   for entry in seen {

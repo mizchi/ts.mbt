@@ -2,7 +2,7 @@
 
 ///|
 fn safety_vfs(entries : Array[(String, String)]) -> Map[String, String] {
-  let m : Map[String, String] = {}
+  let m : Map[String, String] = Map([])
   for entry in entries {
     m[entry.0] = entry.1
   }
@@ -219,7 +219,7 @@ test "phase4: typed function parameter narrows external escape" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["sink"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("aaa"))
@@ -237,7 +237,7 @@ test "phase4: typed arrow parameter narrows external escape" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["sink"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("kkk"))
@@ -296,7 +296,7 @@ test "phase4: typed class method parameter narrows external escape" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["sink"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("aaa"))
@@ -319,7 +319,7 @@ test "phase2: external IndexAssign narrows via literal-union index variable" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["react"] = true
   let result = collect_externally_visible_props(block, externals)
   // Both literal members of the union are reserved.
@@ -340,7 +340,7 @@ test "phase2: external IndexAssign narrows via single-literal index variable" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["react"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("useState"))
@@ -359,7 +359,7 @@ test "phase2: external IndexAssign narrows via as-cast on index" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["react"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("useState"))
@@ -377,7 +377,7 @@ test "phase2: external IndexAssign with bare string index keeps wildcard" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["react"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("*"))
@@ -400,7 +400,7 @@ test "phase4: External call arg narrows via static type annotation" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["sink"] = true
   let result = collect_externally_visible_props(block, externals)
   // Type-driven keys are reserved.
@@ -422,7 +422,7 @@ test "phase4: External call arg keeps wildcard when type is missing" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["sink"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("*"))
@@ -440,7 +440,7 @@ test "phase4: External call arg keeps wildcard for index-signature type" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   externals["sink"] = true
   let result = collect_externally_visible_props(block, externals)
   assert_true(result.contains("*"))

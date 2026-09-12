@@ -18,7 +18,7 @@
 /// Recursively descends into nested namespaces and inline object
 /// types appearing in field / parameter / return positions.
 pub fn type_declared_property_names(module_ : @ast.TsModule) -> Array[String] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   collect_property_names_from_module(module_, out)
   let names : Array[String] = []
   for k in out.keys() {
@@ -173,27 +173,27 @@ pub fn entry_export_property_names(
   // Build name-> declaration lookups so we can follow `Named(X)`
   // references through aliases / interfaces / classes without
   // walking the whole module on each step.
-  let interfaces : Map[String, @ast.TsInterface] = {}
+  let interfaces : Map[String, @ast.TsInterface] = Map([])
   for i in module_.interfaces {
     interfaces[i.name] = i
   }
-  let aliases : Map[String, @ast.TsTypeAlias] = {}
+  let aliases : Map[String, @ast.TsTypeAlias] = Map([])
   for a in module_.type_aliases {
     aliases[a.name] = a
   }
-  let classes : Map[String, @ast.TsClassDecl] = {}
+  let classes : Map[String, @ast.TsClassDecl] = Map([])
   for c in module_.classes {
     classes[c.name] = c
   }
   // Build a set of exported names for quick lookup.
-  let exported : Map[String, Bool] = {}
+  let exported : Map[String, Bool] = Map([])
   for n in exported_local_names {
     exported[n] = true
   }
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   // `visited_names` short-circuits cycles in type references
   // (`interface A { x: B }` + `interface B { y: A }`).
-  let visited_names : Map[String, Bool] = {}
+  let visited_names : Map[String, Bool] = Map([])
   // Seed the walk with every reachable declaration that's exported.
   for f in module_.funcs {
     if exported.contains(f.name) {

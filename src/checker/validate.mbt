@@ -15,7 +15,7 @@
 pub fn unresolved_type_references(module_ : @ast.TsModule) -> Array[String] {
   let declared = module_declared_name_set(module_)
   let acc : Array[String] = []
-  let acc_set : Map[String, Unit] = {}
+  let acc_set : Map[String, Unit] = Map([])
   let no_locals : Array[String] = []
   for iface in module_.interfaces {
     for field in iface.fields {
@@ -116,7 +116,7 @@ pub fn unresolved_typeof_references(module_ : @ast.TsModule) -> Array[String] {
 // (TS2304 over `typeof X`) and the computed-type-key check (TS2304 over
 // `{ [e]: T }`).
 fn module_value_name_set(module_ : @ast.TsModule) -> Map[String, Bool] {
-  let values : Map[String, Bool] = {}
+  let values : Map[String, Bool] = Map([])
   for f in module_.funcs {
     values[f.name] = true
     for param in f.params {
@@ -178,10 +178,10 @@ pub fn check_dts_top_level_modifiers(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let exported : Map[String, Unit] = {}
+  let exported : Map[String, Unit] = Map([])
   for gm in module_.grammar_misuses {
     if gm.has_prefix("<export-value>") {
-      exported[gm["<export-value>".length():].to_string()] = ()
+      exported[gm["<export-value>".length():].to_owned()] = ()
     }
   }
   // Declarations written inside a `declare module "spec" { ... }` body are
@@ -329,9 +329,9 @@ fn module_declared_names(module_ : @ast.TsModule) -> Array[String] {
   // (an `Array::contains` per push made it O(n^2), which dominated the
   // checker on modules with thousands of interfaces).
   let names : Array[String] = []
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   fn add(name : String) -> Unit {
-    if not(seen.contains(name)) {
+    if !seen.contains(name) {
       seen[name] = ()
       names.push(name)
     }
@@ -360,7 +360,7 @@ fn module_declared_names(module_ : @ast.TsModule) -> Array[String] {
 /// the reference walk, which previously did a linear `Array::contains` per
 /// referenced name (O(n^2) over the module surface).
 fn module_declared_name_set(module_ : @ast.TsModule) -> Map[String, Unit] {
-  let set : Map[String, Unit] = {}
+  let set : Map[String, Unit] = Map([])
   // A name this module IMPORTS is declared as far as this file can tell —
   // the target is in another module, which a single-file walk cannot
   // read. Without these, `import { T } from "./t"; type U = T` reports
@@ -457,7 +457,7 @@ fn collect_typeof_bases(type_ : @ast.TsType, acc : Array[String]) -> Unit {
         return
       }
       let base = match query.find(".") {
-        Some(i) => query.substring(start=0, end=i)
+        Some(i) => query[:i].to_owned()
         None => query
       }
       if base != "" && !acc.contains(base) {
@@ -565,7 +565,7 @@ fn collect_infer_binders(type_ : @ast.TsType, out : Array[String]) -> Unit {
 fn check_type(
   type_ : @ast.TsType,
   declared : Map[String, Unit],
-  local : Array[String],
+  local_ : Array[String],
   acc : Array[String],
   acc_set : Map[String, Unit],
 ) -> Unit {
@@ -574,7 +574,7 @@ fn check_type(
   // linearly. Together they replace the old merged-and-copied `scope` array,
   // which made the walk O(n^2) over the module surface.
   fn in_scope(name : String) -> Bool {
-    declared.contains(name) || local.contains(name)
+    declared.contains(name) || local_.contains(name)
   }
 
   fn note(name : String) -> Unit {
@@ -585,10 +585,10 @@ fn check_type(
     // `is_lib_global_type` is the GENERATED registry and is the correct
     // question here. The hand list stays as a superset for the few names
     // it carries that the registry may not.
-    if not(in_scope(name)) &&
-      not(is_well_known_type_name(name)) &&
-      not(is_lib_global_type(name)) {
-      if not(acc_set.contains(name)) {
+    if !in_scope(name) &&
+      !is_well_known_type_name(name) &&
+      !is_lib_global_type(name) {
+      if !acc_set.contains(name) {
         acc_set[name] = ()
         acc.push(name)
       }
@@ -603,7 +603,7 @@ fn check_type(
   // name reads as an undeclared type reference at its every use.
   fn extended(names : Array[String]) -> Array[String] {
     let out : Array[String] = []
-    for n in local {
+    for n in local_ {
       out.push(n)
     }
     for n in names {
@@ -620,12 +620,12 @@ fn check_type(
     // constraint (`infer A extends Date`) is a real reference.
     Applied("__tsmbt_infer", args) =>
       if args.length() > 1 {
-        check_type(args[1], declared, local, acc, acc_set)
+        check_type(args[1], declared, local_, acc, acc_set)
       }
     Applied(name, args) => {
       note(name)
       for a in args {
-        check_type(a, declared, local, acc, acc_set)
+        check_type(a, declared, local_, acc, acc_set)
       }
     }
     // `GenericFunc`, `MappedType` and `MappedTypeRemap` are deliberately
@@ -638,33 +638,33 @@ fn check_type(
     // walking a node that was previously SKIPPED converts a silent MISS
     // into a false positive — the one direction the budget forbids.
     // Skipping them is sound and costs recall inside those forms only.
-    Array(inner) => check_type(inner, declared, local, acc, acc_set)
+    Array(inner) => check_type(inner, declared, local_, acc, acc_set)
     Tuple(items) =>
       for it in items {
-        check_type(it, declared, local, acc, acc_set)
+        check_type(it, declared, local_, acc, acc_set)
       }
     Object(fields) =>
       for f in fields {
-        check_type(f.0, declared, local, acc, acc_set)
-        check_type(f.1, declared, local, acc, acc_set)
+        check_type(f.0, declared, local_, acc, acc_set)
+        check_type(f.1, declared, local_, acc, acc_set)
       }
     Struct(_, fields) =>
       for f in fields {
-        check_type(f.1, declared, local, acc, acc_set)
+        check_type(f.1, declared, local_, acc, acc_set)
       }
     Func(params, ret) => {
       for p in params {
-        check_type(p, declared, local, acc, acc_set)
+        check_type(p, declared, local_, acc, acc_set)
       }
-      check_type(ret, declared, local, acc, acc_set)
+      check_type(ret, declared, local_, acc, acc_set)
     }
     Union(members) | Intersection(members) =>
       for m in members {
-        check_type(m, declared, local, acc, acc_set)
+        check_type(m, declared, local_, acc, acc_set)
       }
     Conditional(check_t, extends, t_branch, f_branch) => {
-      check_type(check_t, declared, local, acc, acc_set)
-      check_type(extends, declared, local, acc, acc_set)
+      check_type(check_t, declared, local_, acc, acc_set)
+      check_type(extends, declared, local_, acc, acc_set)
       // Names bound by `infer` in the extends clause are in scope in the
       // branches — the true branch is where they are meant to be used.
       // Both branches get them: an `infer` name is not a reference in the
@@ -672,7 +672,7 @@ fn check_type(
       let bound : Array[String] = []
       collect_infer_binders(extends, bound)
       let branch_scope = if bound.length() == 0 {
-        local
+        local_
       } else {
         extended(bound)
       }
@@ -680,8 +680,8 @@ fn check_type(
       check_type(f_branch, declared, branch_scope, acc, acc_set)
     }
     IndexedAccess(base, key) => {
-      check_type(base, declared, local, acc, acc_set)
-      check_type(key, declared, local, acc, acc_set)
+      check_type(base, declared, local_, acc, acc_set)
+      check_type(key, declared, local_, acc, acc_set)
     }
     _ => ()
   }

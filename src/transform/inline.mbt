@@ -549,8 +549,8 @@ fn inline_pass(
   // collect once over the entire block. A single name reassigned
   // ANYWHERE (even in a nested function) disqualifies it from
   // inlining — that includes the rhs being moved.
-  let reassigned : Map[String, Bool] = {}
-  let captured : Map[String, Bool] = {}
+  let reassigned : Map[String, Bool] = Map([])
+  let captured : Map[String, Bool] = Map([])
   for s in input {
     collect_reassigned_stmt(s, reassigned)
     collect_captured_stmt(s, captured)
@@ -645,7 +645,7 @@ fn try_inline(
   // scope, we can't safely defer the rhs to the use site (its
   // value at the use point could differ from its value at the
   // decl point).
-  let rhs_refs : Map[String, Bool] = {}
+  let rhs_refs : Map[String, Bool] = Map([])
   collect_var_refs_in_expr_local(rhs, rhs_refs)
   for r in rhs_refs.keys() {
     if reassigned.contains(r) {

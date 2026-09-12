@@ -123,8 +123,8 @@ fn Parser::record_objlit_duplicate_keys(
   self : Parser,
   fields : Array[(String, @ast.TsExpr)],
 ) -> Unit {
-  let seen : Map[String, Unit] = {}
-  let reported : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
+  let reported : Map[String, Unit] = Map([])
   for f in fields {
     let k = match (f.0.has_prefix("@@computed:"), f.1) {
       (true, ComputedProp(PropAccess(Var("Symbol"), wk), _)) => "@@wk:" + wk
@@ -137,13 +137,13 @@ fn Parser::record_objlit_duplicate_keys(
     if k.has_prefix("<") ||
       (
         k.has_prefix("@@") &&
-        not(k.has_prefix("@@get:")) &&
-        not(k.has_prefix("@@set:")) &&
-        not(k.has_prefix("@@wk:"))
+        !k.has_prefix("@@get:") &&
+        !k.has_prefix("@@set:") &&
+        !k.has_prefix("@@wk:")
       ) {
       continue
     }
-    if seen.contains(k) && not(reported.contains(k)) {
+    if seen.contains(k) && !reported.contains(k) {
       reported[k] = ()
       self.grammar_misuses.push(
         "an object literal cannot have multiple properties with the same name",
@@ -161,7 +161,7 @@ fn Parser::record_objlit_getter_returns(
   return_type : @ast.TsType,
   body : @ast.TsBlock,
 ) -> Unit {
-  if not(is_getter) || body.stmts.length() > 0 {
+  if !is_getter || body.stmts.length() > 0 {
     return
   }
   if had_annotation {
@@ -300,10 +300,10 @@ fn Parser::note_function_declaration(
   // Ambient bodiless declarations are excluded for the same reason as
   // below: in a `declare module` body a bodiless declaration asserts an
   // implementation elsewhere and no local one exists to compare against.
-  if module_level && not(bodiless) && not(self.in_ambient_module) {
+  if module_level && !bodiless && !self.in_ambient_module {
     self.grammar_misuses.push("<fn-impl:\{name}>")
   }
-  if not(bodiless) || self.in_ambient_module {
+  if !bodiless || self.in_ambient_module {
     return
   }
   // Offset of the follower's NAME token, or `None` when the follower is
@@ -327,7 +327,7 @@ fn Parser::note_function_declaration(
     Some(i) => self.peek_at(i).kind is Ident(n) && n == name
     None => false
   }
-  if not(follows) {
+  if !follows {
     self.record_suppressible_grammar_misuse(
       "function implementation is missing or not immediately following the declaration for `\{name}`",
     )
@@ -717,7 +717,7 @@ fn Parser::record_await_using_context(self : Parser, using_kw : String) -> Unit 
   }
   if self.in_function {
     // TS2852.
-    if not(self.in_async) {
+    if !self.in_async {
       self.grammar_misuses.push(
         "`await using` statements are only allowed within async functions and at the top levels of modules",
       )
@@ -816,7 +816,7 @@ fn Parser::parse_var_like(
       Var(Object(ob), _, ObjectLit(entries))
       | Let(Object(ob), _, ObjectLit(entries))
       | Const(Object(ob), _, ObjectLit(entries)) => {
-        let keys : Map[String, Bool] = {}
+        let keys : Map[String, Bool] = Map([])
         // A spread of a syntactic object LITERAL keeps the key set
         // knowable — fold its keys in recursively
         // (`const { g } = { ...{ c: 0 }, f: 0 }` — destructuringSpread).
@@ -834,7 +834,7 @@ fn Parser::parse_var_like(
               continue
             }
             if e.0.has_prefix("@@get:") || e.0.has_prefix("@@set:") {
-              keys[e.0.substring(start=6)] = true
+              keys[e.0[6:].to_owned()] = true
               continue
             }
             if e.0.has_prefix("<") || e.0.has_prefix("@@") {
@@ -1101,7 +1101,7 @@ fn Parser::record_unknown_catch_use(
   had_annotation : Bool,
   body_start : Int,
 ) -> Unit {
-  if name == "" || had_annotation || not(self.unknown_catch_variables) {
+  if name == "" || had_annotation || !self.unknown_catch_variables {
     return
   }
   let mut used = false
@@ -1424,7 +1424,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     // both fine — a `using` in a C-style for head is allowed, and only
     // the missing initializer is the error (`usingDeclarationsInForOf.4`
     // errors on its third line alone).
-    if using_declaration && not(self.check(Eq)) {
+    if using_declaration && !self.check(Eq) {
       self.grammar_misuses.push(
         "'\{using_kw}' declarations must be initialized",
       )
@@ -1475,9 +1475,9 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         //   `for ((async) of x)`     — a parenthesized LHS is not the bare
         //                              token the restriction names
         //                              (parserForOfStatement24).
-        if not(is_in) &&
-          not(is_await) &&
-          not(lhs_parenthesized) &&
+        if !is_in &&
+          !is_await &&
+          !lhs_parenthesized &&
           binding is @ast.TsBinding::Ident("async") {
           self.grammar_misuses.push(
             "the left-hand side of a `for...of` statement may not be `async`",
@@ -1945,7 +1945,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       // recorder placed only at `parse_var_like` reaches none of them.
       // The `using` binding is always a plain name (a pattern is TS1492
       // above), so only the object-literal half can apply.
-      if not(has_annotation) {
+      if !has_annotation {
         self.record_nullish_inferred_declaration(
           @ast.TsBinding::Ident(binding_name),
           using_first_operand(init),
@@ -2251,7 +2251,7 @@ fn Parser::parse_var_decl_item(
       }
     }
   }
-  if not(annotated) {
+  if !annotated {
     self.record_tuple_index_out_of_range(binding, init)
     // TS7031 / TS7018: a `null` / `undefined` literal standing where the
     // declaration's type has to be inferred. Gated on the annotation
@@ -2314,7 +2314,7 @@ fn Parser::record_tuple_index_out_of_range(
         Some(e) => e.default is Some(_)
         None => false
       }
-      if not(has_default) {
+      if !has_default {
         self.grammar_misuses.push(
           "tuple type of length \{items.length()} has no element at index \{i}",
         )

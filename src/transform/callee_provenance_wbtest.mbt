@@ -11,7 +11,7 @@
 /// set the bundler would compute for it (the undeclared references).
 fn escaping_props(source : String) -> Array[String] raise {
   let block = @parser.parse_block_from_source(source)
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   for n in undeclared_referenced_names(block).keys() {
     externals[n] = true
   }

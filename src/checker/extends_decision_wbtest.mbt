@@ -127,7 +127,7 @@ test "extends_decision_with_generics: resolves Applied bindings" {
 
 ///|
 test "extends_decision_with_generics: 3-valued unknown survives expansion" {
-  let table : Map[String, AliasBinding] = {}
+  let table : Map[String, AliasBinding] = Map([])
   let resolve = fn(name) { table.get(name) }
   // Two unrelated nominal types stay unknown.
   @test.assert_eq(

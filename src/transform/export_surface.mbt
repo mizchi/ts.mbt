@@ -350,6 +350,23 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
           Some(tp) => record(tp.0, tp.1, value)
           None => ()
         }
+      // `Object.defineProperty(NAME, "prop", …)` is matched BEFORE the
+      // generic method-call arm below: that arm's pattern is
+      // `MethodCall(Var(n), meth, args)`, which also matches this call,
+      // so ordering it second made this arm unreachable and every
+      // `defineProperty` write invisible to the index.
+      @ast.TsExpr::MethodCall(
+        @ast.TsExpr::Var("Object"),
+        "defineProperty",
+        args
+      ) =>
+        if args.length() >= 3 {
+          match (args[0], args[1]) {
+            (@ast.TsExpr::Var(n), @ast.TsExpr::StringLit(prop)) =>
+              record(n, prop, args[2])
+            _ => ()
+          }
+        }
       // `store.set(k, v)`, `list.push(v)`, `seen.add(v)` — the value
       // goes into a container the bundle owns, and comes back out of
       // `get` / an index / an iteration. The key argument of `set` is
@@ -363,18 +380,6 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
                 None => w.container_writes[n] = [a]
               }
             }
-          }
-        }
-      @ast.TsExpr::MethodCall(
-        @ast.TsExpr::Var("Object"),
-        "defineProperty",
-        args
-      ) =>
-        if args.length() >= 3 {
-          match (args[0], args[1]) {
-            (@ast.TsExpr::Var(n), @ast.TsExpr::StringLit(prop)) =>
-              record(n, prop, args[2])
-            _ => ()
           }
         }
       _ => ()
@@ -402,7 +407,7 @@ fn surface_escape_class(
   decl : @ast.TsClassDecl,
   depth : Int,
 ) -> Unit {
-  let private_ : Map[String, Bool] = {}
+  let private_ : Map[String, Bool] = Map([])
   for n in decl.private_members {
     private_[n] = true
   }
@@ -722,7 +727,7 @@ fn surface_method_returns(
     // caller's hands, and resolving which part needs the shape we are
     // trying to avoid committing to.
     for r in returns {
-      let refs : Map[String, Bool] = {}
+      let refs : Map[String, Bool] = Map([])
       collect_var_refs_in_expr(r, refs)
       if refs.contains("this") {
         return None
@@ -790,7 +795,7 @@ fn surface_escape_returned_args(
   if returns.length() == 0 {
     return
   }
-  let mentioned : Map[String, Bool] = {}
+  let mentioned : Map[String, Bool] = Map([])
   for r in returns {
     collect_var_refs_in_expr(r, mentioned)
   }

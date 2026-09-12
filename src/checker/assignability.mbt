@@ -344,7 +344,7 @@ fn try_match_literal_template(
     return None
   }
   for split in after_part..<=last_search {
-    let buf = StringBuilder::new()
+    let buf = StringBuilder()
     for i in after_part..<split {
       buf.write_char(name[i].to_int().unsafe_to_char())
     }
@@ -368,7 +368,7 @@ fn template_produces_single(
   args : Array[@ast.TsType],
   name : String,
 ) -> Bool {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i in 0..<parts.length() {
     buf.write_string(parts[i])
     if i < args.length() {
@@ -1100,7 +1100,7 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
   match t {
     Conditional(check, extends, true_branch, false_branch) =>
       if contains_infer_marker(extends) {
-        let bindings : Map[String, @ast.TsType] = {}
+        let bindings : Map[String, @ast.TsType] = Map([])
         if match_infer_pattern(check, extends, bindings) {
           substitute_inferred_type(true_branch, bindings)
         } else {

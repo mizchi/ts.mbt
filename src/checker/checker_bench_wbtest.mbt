@@ -101,7 +101,7 @@ let bench_advanced_source : String =
 /// share field shapes so the checker's resolver + structural lookups
 /// scale predictably.
 fn build_bench_wide_module(n : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i in 0..<n {
     let suffix = i.to_string()
     buf.write_string("interface Wide" + suffix + " {\n")
@@ -136,7 +136,7 @@ let bench_wide_5000 : String = build_bench_wide_module(5000)
 /// distribution, mapped-key remapping, and call sites that exercise
 /// `solve_generic_bindings`.
 fn build_bench_generic_heavy(n : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_string("type Awaited<T> = T extends Promise<infer U> ? U : T;\n")
   buf.write_string(
     "type ReturnType<F> = F extends (...args: any) => infer R ? R : any;\n",
@@ -177,7 +177,7 @@ fn build_bench_generic_heavy(n : Int) -> String {
 /// sites. Exercises `check_jsx_attrs`, `infer_param_bindings` for
 /// generic components, and the spread-prop path.
 fn build_bench_jsx_heavy(components : Int, callsites : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_string(
     "interface CardProps { title: string; count: number; active?: boolean }\n",
   )
@@ -556,7 +556,7 @@ async test "bench checker: TypeScript compiler source (file IO)" {
   // (`check_module_function_bodies`, which builds the resolver and
   // walks bodies) and the resolver-build-only pass. The delta reveals
   // how much of the wall-clock the body walk is responsible for.
-  let bencher = @bench.new()
+  let bencher = @bench.Bench()
   println("checker bench (file IO) — per-file:")
   for entry in prepared {
     let (path, chars, _) = entry

@@ -23,8 +23,8 @@ pub fn emit_entry_dts(
   exported_local_names : Array[String],
   deprecations : Map[String, String],
 ) -> String {
-  let buf = StringBuilder::new()
-  let exported : Map[String, Bool] = {}
+  let buf = StringBuilder()
+  let exported : Map[String, Bool] = Map([])
   for n in exported_local_names {
     exported[n] = true
   }
@@ -351,7 +351,7 @@ fn emit_type_params_with_bounds(
   if params.length() == 0 {
     return
   }
-  let bound_map : Map[String, @ast.TsType] = {}
+  let bound_map : Map[String, @ast.TsType] = Map([])
   for b in bounds {
     bound_map[b.0] = b.1
   }

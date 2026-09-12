@@ -143,7 +143,7 @@ pub fn infer_container_symbols(
   g : SymbolGraph,
   facts : ContainerFacts,
 ) -> Map[SymbolId, Bool] {
-  let containers : Map[SymbolId, Bool] = {}
+  let containers : Map[SymbolId, Bool] = Map([])
   let mut changed = true
   let mut rounds = 0
   // Monotone: each round only adds. The cap is a runaway backstop.
@@ -311,13 +311,13 @@ pub fn container_name_set(
   g : SymbolGraph,
   containers : Map[SymbolId, Bool],
 ) -> Map[String, Bool] {
-  let disqualified : Map[String, Bool] = {}
+  let disqualified : Map[String, Bool] = Map([])
   for s in g.symbols {
     if !containers.contains(s.id) {
       disqualified[s.name] = true
     }
   }
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for s in g.symbols {
     if containers.contains(s.id) && !disqualified.contains(s.name) {
       out[s.name] = true
@@ -330,13 +330,13 @@ pub fn container_name_set(
 /// Bindings declared `string`, for the `s.match(…)` rule. Same
 /// all-or-nothing projection as everything else here.
 pub fn string_name_set(g : SymbolGraph) -> Map[String, Bool] {
-  let disqualified : Map[String, Bool] = {}
+  let disqualified : Map[String, Bool] = Map([])
   for s in g.symbols {
     if !(s.ts_type is String_) {
       disqualified[s.name] = true
     }
   }
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for s in g.symbols {
     if s.ts_type is String_ && !disqualified.contains(s.name) {
       out[s.name] = true

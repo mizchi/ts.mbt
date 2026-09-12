@@ -1605,7 +1605,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
               }
               if runtime_params.length() == new_args.length() {
                 let mut can_inline = true
-                let subs : Map[String, @ast.TsExpr] = {}
+                let subs : Map[String, @ast.TsExpr] = Map([])
                 for i, p in runtime_params {
                   if p.is_rest ||
                     (match p.binding {
@@ -1938,7 +1938,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       } else {
         // Try to fold all expressions to their string representations.
         let mut all_lit = true
-        let buf = StringBuilder::new()
+        let buf = StringBuilder()
         buf.write_string(parts[0])
         for i, e in new_exprs {
           match e {
@@ -2187,7 +2187,7 @@ fn fold_math_call(
     Var("String") => {
       // `String.fromCharCode(65)` → `"A"` for single-char literal args.
       if method_ == "fromCharCode" && args.length() >= 1 {
-        let buf = StringBuilder::new()
+        let buf = StringBuilder()
         let mut all_lit = true
         for arg in args {
           match arg {
@@ -2275,7 +2275,7 @@ fn fold_math_call(
           NullLit => Some("null")
           StringLit(s) => {
             // Produce the JSON-encoded form: `"..."` with escapes.
-            let buf = StringBuilder::new()
+            let buf = StringBuilder()
             buf.write_char('"')
             for ch in s.iter() {
               match ch {
@@ -4047,7 +4047,7 @@ fn format_int_radix(n : Int, radix : Int) -> String {
     buf.push(digits[m % radix].to_int().unsafe_to_char())
     m = m / radix
   }
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   for i = buf.length() - 1; i >= 0; i = i - 1 {
     sb.write_char(buf[i])
   }

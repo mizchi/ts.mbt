@@ -187,7 +187,7 @@ pub fn constructor_like_top_level(
 pub fn classes_observing_own_name(
   block : @ast.TsBlock,
 ) -> (Map[String, Bool], Bool) {
-  let observing : Map[String, Bool] = {}
+  let observing : Map[String, Bool] = Map([])
   // `subclass -> base`, to close over the hierarchy afterwards.
   let bases : Array[(String, Array[String])] = []
   let mut inside_class_total = 0
@@ -195,7 +195,7 @@ pub fn classes_observing_own_name(
     decl : @ast.TsClassDecl,
     ctor : @ast.TsFunc?,
   ) -> Bool {
-    let seen : Map[String, Bool] = {}
+    let seen : Map[String, Bool] = Map([])
     match decl.constructor_body {
       Some(b) => collect_read_property_names_block(b, seen)
       None => ()
@@ -262,7 +262,7 @@ pub fn classes_observing_own_name(
   // Did every `.constructor.name` in the bundle come from a class body we
   // accounted for? If the whole block mentions the sentinel but no class
   // body did, the read is somewhere `this` is unconstrained.
-  let whole : Map[String, Bool] = {}
+  let whole : Map[String, Bool] = Map([])
   collect_read_property_names_block(block, whole)
   let found_outside = whole.contains(NAME_OF_CTOR) && inside_class_total == 0
   (observing, found_outside)
@@ -299,7 +299,7 @@ pub fn is_name_observation_key(key : String) -> Bool {
 /// bundle class is called `Object` and the mangler never invents that
 /// name.
 pub fn ctor_name_comparison_literals(block : @ast.TsBlock) -> Array[String]? {
-  let read : Map[String, Bool] = {}
+  let read : Map[String, Bool] = Map([])
   collect_read_property_names_block(block, read)
   if read.contains(NAME_OF_CTOR) {
     return None
@@ -325,7 +325,7 @@ pub fn ctor_name_comparison_literals(block : @ast.TsBlock) -> Array[String]? {
 /// a base class doing `this.constructor.name` is read through every
 /// subclass — so the caller has to reserve every candidate.
 pub fn observed_class_names(block : @ast.TsBlock) -> (Array[String], Bool) {
-  let read : Map[String, Bool] = {}
+  let read : Map[String, Bool] = Map([])
   collect_read_property_names_block(block, read)
   // `.name` is never read at all: nothing to reserve, and the common
   // case pays one map lookup.

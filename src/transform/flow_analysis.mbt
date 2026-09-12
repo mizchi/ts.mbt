@@ -129,7 +129,7 @@ pub fn analyze_observability(
   g : SymbolGraph,
   scoped_sinks : Array[(Sink, ScopeId)],
 ) -> Map[SymbolId, Observability] {
-  let result : Map[SymbolId, Observability] = {}
+  let result : Map[SymbolId, Observability] = Map([])
   let worklist : Array[SymbolId] = []
 
   // Pre-build a reverse index `FuncArg(fid, i) -> arg expressions
@@ -144,8 +144,8 @@ pub fn analyze_observability(
   // `--mangle-properties`, which nothing in the corpus enables on a
   // target that size; `class_method_dce` now asks the same question on
   // every bundle, which is what surfaced it.
-  let arg_edges_by_param : Map[SymbolId, Array[FlowNode]] = {}
-  let val_edges_by_sym : Map[SymbolId, Array[FlowNode]] = {}
+  let arg_edges_by_param : Map[SymbolId, Array[FlowNode]] = Map([])
+  let val_edges_by_sym : Map[SymbolId, Array[FlowNode]] = Map([])
   for edge in g.flow_edges {
     match edge.to {
       FuncArg(fid, idx) =>
@@ -326,7 +326,7 @@ fn propagate_to_flow_source(
   result : Map[SymbolId, Observability],
   worklist : Array[SymbolId],
 ) -> Unit {
-  let visited : Map[SymbolId, Bool] = {}
+  let visited : Map[SymbolId, Bool] = Map([])
   propagate_to_flow_source_visited(src, obs, g, result, worklist, visited)
 }
 
@@ -437,7 +437,7 @@ pub fn reserved_props_from_observability(
   // over-reserves, so not knowing is the safe direction.
   synthesized_namespaces? : Map[String, Bool]? = None,
 ) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   // One `out[k] = true` plus one attribution, so the two cannot drift.
   fn keep(k : String, why : String) -> Unit {
     out[k] = true
@@ -455,7 +455,7 @@ pub fn reserved_props_from_observability(
   // `collect_direct_props` writes into a plain map; route it through
   // `keep` so its names carry the same attribution as everything else.
   fn keep_direct(sym : Symbol, why : String) -> Unit {
-    let tmp : Map[String, Bool] = {}
+    let tmp : Map[String, Bool] = Map([])
     collect_direct_props(sym, tmp)
     for k in tmp.keys() {
       keep(k, why)
@@ -692,7 +692,7 @@ pub fn build_type_env(
   interfaces : Array[@ast.TsInterface],
   type_aliases : Array[@ast.TsTypeAlias],
 ) -> Map[String, @ast.TsType] {
-  let env : Map[String, @ast.TsType] = {}
+  let env : Map[String, @ast.TsType] = Map([])
   for ta in type_aliases {
     env[ta.name] = ta.type_
   }
@@ -732,8 +732,8 @@ fn obs_at_least_direct(obs : Observability) -> Bool {
 /// Keyed by class name. Two classes sharing a name across modules merge,
 /// which over-reserves rather than under-reserves.
 pub fn class_member_names(block : @ast.TsBlock) -> Map[String, Array[String]] {
-  let out : Map[String, Array[String]] = {}
-  fn record(class_name : String, member : String) -> Unit {
+  let out : Map[String, Array[String]] = Map([])
+  fn record(class_name : String, member_ : String) -> Unit {
     let names = match out.get(class_name) {
       Some(existing) => existing
       None => {
@@ -742,8 +742,8 @@ pub fn class_member_names(block : @ast.TsBlock) -> Map[String, Array[String]] {
         fresh
       }
     }
-    if !names.contains(member) {
-      names.push(member)
+    if !names.contains(member_) {
+      names.push(member_)
     }
   }
 

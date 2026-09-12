@@ -1541,7 +1541,7 @@ fn sg_record_use(w : SgWalker, name : String, context : UseContext) -> Unit {
     // are indistinguishable here — the caller has the host's name list
     // — so record it and let `verify_block` decide.
     None =>
-      if not(w.g.unresolved.contains(name)) {
+      if !w.g.unresolved.contains(name) {
         w.g.unresolved[name] = w.current_scope
       }
   }

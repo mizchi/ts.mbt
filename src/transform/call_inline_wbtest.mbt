@@ -24,10 +24,10 @@ test "call_inline: the table finds both shapes a top-level function takes" {
     names.push(entry.0)
   }
   names.sort()
-  inspect(
+  @debug.debug_inspect(
     names,
     content=(
-      #|[declOne, arrowOne]
+      #|["declOne", "arrowOne"]
     ),
   )
 }

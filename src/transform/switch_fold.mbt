@@ -140,7 +140,7 @@ pub(all) struct SwitchFoldEntry {
 /// arm, not the selected one: the table is narrowed on entering a scope,
 /// before any call site has picked an arm.
 impl SubstitutedValue for SwitchFoldEntry with fn free_names(self) {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for k in self.arms.keys() {
     match self.arms.get(k) {
       Some(e) => collect_var_refs_expr(e, out)
@@ -161,7 +161,7 @@ pub fn build_switch_fold_table(
   // count cannot tell those apart.
   explain? : Array[String]? = None,
 ) -> SwitchFoldTable {
-  let entries : Map[String, SwitchFoldEntry] = {}
+  let entries : Map[String, SwitchFoldEntry] = Map([])
   for stmt in block.stmts {
     match stmt {
       Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
@@ -250,7 +250,7 @@ fn explain_switch_fold_candidates(
     }
   }
   out.push(
-    "\{shaped} function(s) take a closed string-literal union as their first parameter; \{entries.size()} became specializable.",
+    "\{shaped} function(s) take a closed string-literal union as their first parameter; \{entries.length()} became specializable.",
   )
   if top_shaped < shaped {
     out.push(
@@ -260,8 +260,8 @@ fn explain_switch_fold_candidates(
   // Group the rejections by reason, and NAME them. A count says how
   // many; only the names say what to look at, and the whole point of
   // this report is that "0 bytes" was never actionable on its own.
-  let counts : Map[String, Int] = {}
-  let named : Map[String, Array[String]] = {}
+  let counts : Map[String, Int] = Map([])
+  let named : Map[String, Array[String]] = Map([])
   for entry in all_shaped {
     match entry.1 {
       Some(rej) => {
@@ -364,7 +364,7 @@ fn try_extract_switch_fold(
   // Every arm must be `case "lit": return EXPR;`.
   // A single `default: return EXPR;` is also accepted: it acts as a
   // fallback for any union literal that doesn't have an explicit arm.
-  let arms : Map[String, @ast.TsExpr] = {}
+  let arms : Map[String, @ast.TsExpr] = Map([])
   let mut default_expr : @ast.TsExpr? = None
   for c in cases {
     match c.test_expr {

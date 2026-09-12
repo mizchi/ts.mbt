@@ -833,7 +833,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
 /// statement (not nested in a branch or loop), so the removal is safe.
 fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
   // Collect the indices of top-level `this.X = void 0` statements.
-  let void_inits : Map[String, Int] = {}
+  let void_inits : Map[String, Int] = Map([])
   for i, s in block.stmts {
     match s {
       PropAssign(
@@ -856,7 +856,7 @@ fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
   }
   // For each void-0 init, check if there is a later top-level unconditional
   // assignment to the same property. If so, mark it for removal.
-  let removals : Map[Int, Bool] = {}
+  let removals : Map[Int, Bool] = Map([])
   for p, init_idx in void_inits {
     for j = init_idx + 1; j < block.stmts.length(); j = j + 1 {
       let s = block.stmts[j]
@@ -1886,7 +1886,7 @@ fn foldable_tail_decl(
 /// to stop: the reference that matters is the one inside a closure,
 /// where it is legal precisely because it is deferred.
 fn expr_refers_to(expr : @ast.TsExpr, name : String) -> Bool {
-  let refs : Map[String, Bool] = {}
+  let refs : Map[String, Bool] = Map([])
   collect_var_refs_in_expr(expr, refs)
   refs.contains(name)
 }

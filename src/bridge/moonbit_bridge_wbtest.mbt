@@ -1139,25 +1139,25 @@ test "bridge: boxed optional returns get a MoonBit-side Option wrapper" {
   // the JS backend; opaque handles, JSValue, Double and arrays use the
   // `{$tag, _0}` box, so raw `value | undefined` extern returns must be
   // rebuilt via `__ts_mbt_wrap_option_return`.
-  let opaque : Array[String] = ["SQL", "JSValue"]
-  assert_true(bridge_optional_return_needs_wrap(opaque, "SQL[JSValue]?"))
-  assert_true(bridge_optional_return_needs_wrap(opaque, "JSValue?"))
-  assert_true(bridge_optional_return_needs_wrap(opaque, "Double?"))
-  assert_true(bridge_optional_return_needs_wrap(opaque, "Array[String]?"))
+  let opaque_ : Array[String] = ["SQL", "JSValue"]
+  assert_true(bridge_optional_return_needs_wrap(opaque_, "SQL[JSValue]?"))
+  assert_true(bridge_optional_return_needs_wrap(opaque_, "JSValue?"))
+  assert_true(bridge_optional_return_needs_wrap(opaque_, "Double?"))
+  assert_true(bridge_optional_return_needs_wrap(opaque_, "Array[String]?"))
   assert_true(
-    bridge_optional_return_needs_wrap(opaque, "((String) -> JSValue)?"),
+    bridge_optional_return_needs_wrap(opaque_, "((String) -> JSValue)?"),
   )
   // Unboxed payloads keep the raw passthrough.
-  assert_false(bridge_optional_return_needs_wrap(opaque, "String?"))
-  assert_false(bridge_optional_return_needs_wrap(opaque, "Bool?"))
+  assert_false(bridge_optional_return_needs_wrap(opaque_, "String?"))
+  assert_false(bridge_optional_return_needs_wrap(opaque_, "Bool?"))
   // The trailing `?` of a function-typed return binds to the function's
   // result, not the whole type.
   assert_false(
     bridge_optional_return_needs_wrap(
-      opaque, "() -> ((PropsForRenderer) -> JSValue)?",
+      opaque_, "() -> ((PropsForRenderer) -> JSValue)?",
     ),
   )
-  assert_false(bridge_optional_return_needs_wrap(opaque, "SQL[JSValue]"))
+  assert_false(bridge_optional_return_needs_wrap(opaque_, "SQL[JSValue]"))
 }
 
 ///|

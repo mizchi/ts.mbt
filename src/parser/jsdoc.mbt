@@ -85,11 +85,11 @@ fn parse_jsdoc_block_view(text : StringView) -> JsdocBlock? {
   // Accumulators. The description and each tag's content are built by
   // appending cleaned line views separated by '\n', matching the old
   // join("\n") shape exactly.
-  let description = StringBuilder::new()
+  let description = StringBuilder()
   let mut description_started = false
   let tags : Array[JsdocTag] = []
   let mut current_tag_name = ""
-  let tag_content = StringBuilder::new()
+  let tag_content = StringBuilder()
   let mut in_description = true
   fn flush_tag() {
     tags.push(

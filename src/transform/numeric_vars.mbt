@@ -38,7 +38,7 @@
 /// Run the numeric-variable inference and return the set of
 /// symbol ids that are provably numeric.
 pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
-  let numeric : Map[SymbolId, Bool] = {}
+  let numeric : Map[SymbolId, Bool] = Map([])
   let mut changed = true
   let mut rounds = 0
   // Bound iterations defensively. Each round can only ADD entries
@@ -202,13 +202,13 @@ pub fn numeric_name_set(
   g : SymbolGraph,
   numeric : Map[SymbolId, Bool],
 ) -> Map[String, Bool] {
-  let non_numeric : Map[String, Bool] = {}
+  let non_numeric : Map[String, Bool] = Map([])
   for s in g.symbols {
     if !numeric.contains(s.id) {
       non_numeric[s.name] = true
     }
   }
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   for s in g.symbols {
     if numeric.contains(s.id) && !non_numeric.contains(s.name) {
       out[s.name] = true
@@ -231,7 +231,7 @@ pub fn numeric_name_census(
   g : SymbolGraph,
   numeric : Map[SymbolId, Bool],
 ) -> Map[String, (Int, Int)] {
-  let out : Map[String, (Int, Int)] = {}
+  let out : Map[String, (Int, Int)] = Map([])
   for s in g.symbols {
     let cur = out.get(s.name).unwrap_or((0, 0))
     out[s.name] = (

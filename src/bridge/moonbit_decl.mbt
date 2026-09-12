@@ -506,7 +506,7 @@ fn exported_const_namespace_expr(set : ExportedConstValueSet) -> @ast.TsExpr {
 
 ///|
 fn build_record_map(graph : ModuleGraph) -> Map[String, ResolvedModuleRecord] {
-  let records : Map[String, ResolvedModuleRecord] = {}
+  let records : Map[String, ResolvedModuleRecord] = Map([])
   for record in graph.modules {
     records[record.path] = record
   }
@@ -612,7 +612,7 @@ async fn build_exported_const_value_map_by_path(
   graph : ModuleGraph,
 ) -> Map[String, ExportedConstValueSet] raise ModuleGraphError {
   let records = build_record_map(graph)
-  let cache : Map[String, ExportedConstValueSet] = {}
+  let cache : Map[String, ExportedConstValueSet] = Map([])
   let visiting : Array[String] = []
   for record in graph.modules {
     cache[record.path] = build_exported_const_value_map_for_path(
@@ -630,7 +630,7 @@ fn build_imported_const_seed(
   record : ResolvedModuleRecord,
   exported_const_values_by_path : Map[String, ExportedConstValueSet],
 ) -> Map[String, @ast.TsExpr] {
-  let seeded_const_values : Map[String, @ast.TsExpr] = {}
+  let seeded_const_values : Map[String, @ast.TsExpr] = Map([])
   for i, import_decl in record.module_block.imports {
     let resolved_edge = record.imports[i]
     if import_decl.type_only ||
@@ -677,7 +677,7 @@ async fn build_decl_module_map(
   let exported_const_values_by_path = build_exported_const_value_map_by_path(
     graph,
   )
-  let modules : Map[String, DeclModuleInfo] = {}
+  let modules : Map[String, DeclModuleInfo] = Map([])
   for record in graph.modules {
     let seeded_const_values = build_imported_const_seed(
       record, exported_const_values_by_path,
@@ -1921,17 +1921,17 @@ fn decl_qualified_namespace_type_name(
       None => return None
     }
   }
-  let member = segments[segments.length() - 1]
+  let member_ = segments[segments.length() - 1]
   let mut member_exists = false
   for iface in current.interfaces {
-    if iface.name == member {
+    if iface.name == member_ {
       member_exists = true
       break
     }
   }
   if !member_exists {
     for enum_ in current.enums {
-      if enum_.name == member {
+      if enum_.name == member_ {
         member_exists = true
         break
       }
@@ -1940,7 +1940,7 @@ fn decl_qualified_namespace_type_name(
   if !member_exists {
     return None
   }
-  Some(namespace_type_export_name(prefix, member))
+  Some(namespace_type_export_name(prefix, member_))
 }
 
 ///|
@@ -2072,7 +2072,7 @@ fn resolve_decl_from_local_name(
                   // type names are not yet known at this resolve step;
                   // pass an empty map so the lower path falls back to the
                   // raw alias names.
-                  let canonical_types_for_lower : Map[String, String] = {}
+                  let canonical_types_for_lower : Map[String, String] = Map([])
                   // Normalize BEFORE the utility lowering: the rules match
                   // raw parse shapes (`Record<string, never>` inside a
                   // brand intersection, `Registry[keyof Registry]`), which
@@ -2390,7 +2390,7 @@ fn append_exported_value_call_signature(
     Object(fields) => fields
     Named(n) => {
       let iface_name = match n.rev_find(".") {
-        Some(idx) => n.substring(start=idx + 1).to_string()
+        Some(idx) => n[idx + 1:].to_owned()
         None => n
       }
       match find_interface_decl(info.module_, iface_name) {
@@ -2477,7 +2477,7 @@ fn append_exported_value_interface_methods(
       // Qualified references (`_.LoDashStatic`) resolve by their last
       // segment; the parser flattens the namespace's declarations.
       match n.rev_find(".") {
-        Some(idx) => n.substring(start=idx + 1).to_string()
+        Some(idx) => n[idx + 1:].to_owned()
         None => n
       }
     _ => return
@@ -2488,7 +2488,7 @@ fn append_exported_value_interface_methods(
   if iface.type_params.length() > 0 {
     return
   }
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   for func in funcs {
     seen[func.export_name] = ()
   }
@@ -2565,7 +2565,7 @@ fn collect_exported_decls(
   let values : Array[ExportedValueDecl] = []
   let classes : Array[ExportedClassDecl] = []
   let notes : Array[String] = []
-  let surface_cache : Map[String, Array[ResolvedExport]] = {}
+  let surface_cache : Map[String, Array[ResolvedExport]] = Map([])
   for export_ in export_surface {
     match export_.kind {
       Namespace => {
@@ -2760,7 +2760,7 @@ fn build_canonical_type_name_map(
   enums : Array[ExportedEnumDecl],
   classes : Array[ExportedClassDecl],
 ) -> Map[String, String] {
-  let canonical : Map[String, String] = {}
+  let canonical : Map[String, String] = Map([])
   for exported in interfaces {
     let key = decl_key(exported.source_path, exported.local_name)
     match canonical.get(key) {
@@ -4046,7 +4046,7 @@ fn typeof_class_constructor_params_type(
 /// sibling const -- must abstain instead of expanding forever (minimatch's
 /// `const minimatch: { defaults: (d) => typeof minimatch }`). Keyed by
 /// module path + query; generation is single-threaded.
-let typeof_value_query_visiting : Map[String, Unit] = {}
+let typeof_value_query_visiting : Map[String, Unit] = Map([])
 
 ///|
 fn typeof_value_query_type(
@@ -5589,10 +5589,10 @@ fn decl_join_union_alias_to_common_base(
     None => ()
   }
   let mut common : Array[String]? = None
-  for member in members {
+  for member_ in members {
     let ancestors : Array[String] = []
     if !decl_member_ancestor_names(
-        ta_info, modules, canonical_types, member, ancestors, 0,
+        ta_info, modules, canonical_types, member_, ancestors, 0,
       ) {
       return None
     }
@@ -5635,14 +5635,14 @@ fn decl_member_ancestor_names(
   info : DeclModuleInfo,
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
-  member : @ast.TsType,
+  member_ : @ast.TsType,
   out : Array[String],
   depth : Int,
 ) -> Bool {
   if depth > 4 {
     return false
   }
-  let member_name = match member {
+  let member_name = match member_ {
     Named(n) => n
     Applied(n, _) => n
     _ => return false
@@ -5801,8 +5801,8 @@ fn decl_join_never_exclusive_object_union(t : @ast.TsType) -> @ast.TsType? {
     return None
   }
   let shapes : Array[Array[(String, @ast.TsType)]] = []
-  for member in members {
-    let fields = match member {
+  for member_ in members {
+    let fields = match member_ {
       Object(fields) => fields
       _ => return None
     }
@@ -6239,7 +6239,7 @@ fn lower_react_utility_type(
       let lowered_target = lower_react_utility_type(
         info, target, modules, canonical_types,
       )
-      let infer_bindings : Map[String, @ast.TsType] = {}
+      let infer_bindings : Map[String, @ast.TsType] = Map([])
       if @checker.match_infer_pattern(
           lowered_source, lowered_target, infer_bindings,
         ) {
@@ -7695,9 +7695,9 @@ fn decl_reset_event_member_specials() -> Unit {
 ///|
 fn decl_event_member_special(
   owner : String,
-  member : String,
+  member_ : String,
 ) -> (String, String)? {
-  decl_event_member_specials.get(owner + "\u{0}" + member)
+  decl_event_member_specials.get(owner + "\u{0}" + member_)
 }
 
 ///|
@@ -7712,7 +7712,7 @@ fn decl_event_literal_suffix(value : String) -> String? {
   if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')) {
     return None
   }
-  let out = StringBuilder::new()
+  let out = StringBuilder()
   for c in value {
     if (c >= 'a' && c <= 'z') ||
       (c >= 'A' && c <= 'Z') ||
@@ -7967,8 +7967,8 @@ fn decl_instantiated_union_alias_name(
     _ => return None
   }
   let mut has_func = false
-  for member in members {
-    if member is Func(_, _) {
+  for member_ in members {
+    if member_ is Func(_, _) {
       has_func = true
       break
     }
@@ -12196,7 +12196,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // Generic-preserved class / interface arities so a tagged-union case
   // payload like `VNodeValue(VNode)` can be widened to `VNode[JSValue]`
   // when `VNode` itself was emitted as `pub type VNode[T]`.
-  let tagged_union_arity_registry : Map[String, Array[String]] = {}
+  let tagged_union_arity_registry : Map[String, Array[String]] = Map([])
   for class_ in exported_classes {
     if class_.class_.type_params.length() > 0 {
       tagged_union_arity_registry[class_.class_.name] = class_.class_.type_params
@@ -12237,7 +12237,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_enums, exported_classes,
   )
-  let class_surface_cache : Map[String, Array[ResolvedExport]] = {}
+  let class_surface_cache : Map[String, Array[ResolvedExport]] = Map([])
   let emitted_exported_imports = append_exported_imports(
     exported_imports,
     exported_import_overload_wrappers(
@@ -12515,7 +12515,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // `recordArtifact(task : Test, ...)` widen to bare `Test` while the
   // FFI side emits `pub type Test[ExtraContext]`, hitting `[4040]`
   // arity-mismatch.
-  let cross_module_arities : Map[String, Int] = {}
+  let cross_module_arities : Map[String, Int] = Map([])
   collect_cross_module_iface_arities(modules, cross_module_arities)
   for class_ in exported_classes {
     if class_.class_.type_params.length() > 0 &&

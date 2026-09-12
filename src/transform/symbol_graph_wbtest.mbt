@@ -16,7 +16,7 @@ fn build_graph_with_external(
   externals : Array[String],
 ) -> SymbolGraph raise {
   let block = @parser.parse_block_from_source(src)
-  let map : Map[String, Bool] = {}
+  let map : Map[String, Bool] = Map([])
   for n in externals {
     map[n] = true
   }

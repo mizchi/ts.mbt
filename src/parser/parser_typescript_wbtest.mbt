@@ -107,10 +107,11 @@ async test "parser: parse TypeScript lib d.ts files" {
       }
     }
     let parser = Parser::from_source(content)
-    let result : Result[@ast.TsModule, ParseError] = try? parser.parse_module()
-    match result {
-      Ok(_) => ()
-      Err(err) => failures.push(path + ": " + "\{err}")
+    let _ = parser.parse_module() catch {
+      err => {
+        failures.push(path + ": " + "\{err}")
+        continue
+      }
     }
   }
   if failures.length() > 0 {
@@ -125,7 +126,7 @@ async test "parser: parse TypeScript lib d.ts files" {
 ///|
 /// Extract interface field names only (for comparison)
 fn extract_field_names(module_ : @ast.TsModule) -> Map[String, Array[String]] {
-  let result : Map[String, Array[String]] = {}
+  let result : Map[String, Array[String]] = Map([])
   for iface in module_.interfaces {
     let names : Array[String] = []
     for field in iface.fields {
@@ -1086,7 +1087,7 @@ async fn collect_baseline_basenames() -> Map[String, Bool] {
     _ => []
   }
   let suffix = ".errors.txt"
-  let set : Map[String, Bool] = {}
+  let set : Map[String, Bool] = Map([])
   for name in entries {
     if name.has_suffix(suffix) {
       let stem = name[:name.length() - suffix.length()].to_owned()
@@ -1147,7 +1148,7 @@ async test "checker: accuracy against TypeScript conformance baselines" {
   let mut recall_miss = 0
   let mut precision_hit = 0
   let mut precision_miss = 0
-  let per_dir : Map[String, (Int, Int, Int, Int)] = {}
+  let per_dir : Map[String, (Int, Int, Int, Int)] = Map([])
   for dir in dirs {
     let files = collect_ts_source_files_recursive(dir)
     let mut d_rh = 0
@@ -1272,7 +1273,7 @@ async test "parser: smoke-run against the entire TypeScript repo source" {
   let mut total = 0
   let mut parsed = 0
   let mut checked = 0
-  let per_dir : Map[String, (Int, Int)] = {}
+  let per_dir : Map[String, (Int, Int)] = Map([])
   let parse_failures : Array[String] = []
   let check_crashes : Array[String] = []
   for path in files {

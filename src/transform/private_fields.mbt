@@ -62,11 +62,11 @@ fn private_brand_member(name : String) -> String? {
   let rest = name[prefix.length():].to_owned()
   match rest.find("__") {
     Some(i) => {
-      let member = rest[i + 2:].to_owned()
-      if member.is_empty() {
+      let member_ = rest[i + 2:].to_owned()
+      if member_.is_empty() {
         None
       } else {
-        Some(member)
+        Some(member_)
       }
     }
     None => None
@@ -121,10 +121,10 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
   // gate below is a statement-level question.
   let declares_per_stmt : Array[Map[String, Bool]] = []
   let mentions_per_stmt : Array[Map[String, Bool]] = []
-  let declarable : Map[String, Bool] = {}
-  let mentioned_anywhere : Map[String, Bool] = {}
+  let declarable : Map[String, Bool] = Map([])
+  let mentioned_anywhere : Map[String, Bool] = Map([])
   for st in block.stmts {
-    let d : Map[String, Bool] = {}
+    let d : Map[String, Bool] = Map([])
     match st {
       @ast.TsStmt::NativeClassStmt(decl, ctor) =>
         collect_declarable_members(decl, ctor, d)
@@ -138,7 +138,7 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
       declarable[n] = true
     }
     declares_per_stmt.push(d)
-    let m : Map[String, Bool] = {}
+    let m : Map[String, Bool] = Map([])
     collect_property_names({ stmts: [st], stmt_positions: [] }, m)
     for n in m.keys() {
       mentioned_anywhere[n] = true
@@ -174,7 +174,7 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
   // and the old count refused. That refusal was hono's whole remaining
   // brand set: five of its six surviving brands were this, not the
   // accessor.
-  let map : Map[String, String] = {}
+  let map : Map[String, String] = Map([])
   for n in declarable.keys() {
     let mut confined = true
     for i in 0..<block.stmts.length() {
@@ -187,7 +187,7 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
       continue
     }
     match private_brand_member(n) {
-      Some(member) => {
+      Some(member_) => {
         // The bare `#member` spelling must not already be in the
         // bundle. The parser only brands a `#x` reference when it is
         // lexically inside a class body — a reference mtsc hoisted OUT
@@ -195,10 +195,10 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
         // `#matchResult` while the class writes
         // `__private_brand__N__matchResult`. Renaming the brand to the
         // same text is what put a `#` name outside a class body.
-        if mentioned_anywhere.contains("#" + member) {
+        if mentioned_anywhere.contains("#" + member_) {
           continue
         }
-        map[n] = "#" + member
+        map[n] = "#" + member_
       }
       None => ()
     }
@@ -263,7 +263,7 @@ fn class_private_this_assigns(
   ctor : @ast.TsFunc?,
 ) -> Array[String] {
   let out : Array[String] = []
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   fn scan(body : @ast.TsBlock) -> Unit {
     for s in body.stmts {
       let prop = match s {

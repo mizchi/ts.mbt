@@ -11,7 +11,7 @@
 ///|
 fn up_plan(source : String, exported : Array[String]) -> Map[String, Int] raise {
   let block = @parser.parse_block_from_source(source)
-  let keep : Map[String, Bool] = {}
+  let keep : Map[String, Bool] = Map([])
   for n in exported {
     keep[n] = true
   }

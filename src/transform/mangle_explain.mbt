@@ -131,7 +131,7 @@ pub fn external_class_member_names(
 ) -> Array[String] {
   let (graph, obs_map, _, _) = block_observability(block, external_bindings)
   let class_members = class_member_names(block)
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   collect_external_class_members(graph, obs_map, class_members, out)
   sorted_names(out)
 }
@@ -185,7 +185,7 @@ pub fn escape_breakdown(
   // union of them. Lets an `external.obj[k] = v` site reserve the exact
   // key set instead of the wildcard.
   let literal_idx_names = literal_string_name_set(graph)
-  let reserved_external : Map[String, Bool] = {}
+  let reserved_external : Map[String, Bool] = Map([])
   collect_props_on_external_block(
     block, external_bindings, reserved_external, numeric_names, literal_idx_names,
   )
@@ -202,7 +202,7 @@ pub fn escape_breakdown(
   // `name -> the facts that reserved it`, so the report can say WHICH
   // fact reserved 340 names instead of only that 340 are reserved. See
   // `obs_attribution_summary`.
-  let obs_provenance : Map[String, Array[String]] = {}
+  let obs_provenance : Map[String, Array[String]] = Map([])
   let reserved_obs = reserved_props_from_observability(
     graph,
     obs_map,
@@ -214,7 +214,7 @@ pub fn escape_breakdown(
   // A sink argument that IS an object literal (`external.send({ id: 1 })`)
   // has no free variable to seed, so the flow analysis never sees it.
   // Its keys leave all the same.
-  let reserved_literals : Map[String, Bool] = {}
+  let reserved_literals : Map[String, Bool] = Map([])
   for entry in scoped_sinks {
     let (sink, _) = entry
     match sink.observation {
@@ -226,7 +226,7 @@ pub fn escape_breakdown(
   // keys on its own initializer. Walking a value tree from a set of
   // roots is what door 1 does from the entry's exports; same walk,
   // different roots.
-  let recursive_roots : Map[String, Bool] = {}
+  let recursive_roots : Map[String, Bool] = Map([])
   for entry in obs_map {
     let (sym_id, obs) = entry
     let sym = graph.symbols[sym_id]
@@ -245,8 +245,8 @@ pub fn escape_breakdown(
       _ => ()
     }
   }
-  let reserved_tree : Map[String, Bool] = {}
-  if recursive_roots.size() > 0 {
+  let reserved_tree : Map[String, Bool] = Map([])
+  if recursive_roots.length() > 0 {
     for n in exported_surface_props(block, recursive_roots) {
       reserved_tree[n] = true
     }
@@ -256,7 +256,7 @@ pub fn escape_breakdown(
   // reads off it are exactly the ones that must survive — a name we
   // never read can't be broken by renaming ours. The wildcard is for the
   // other direction, a value going OUT to a body we can't see.
-  let reserved_from_external : Map[String, Bool] = {}
+  let reserved_from_external : Map[String, Bool] = Map([])
   for sym in graph.symbols {
     let mut from_external = host_shaped_names.contains(sym.name)
     for d in sym.defs {
@@ -279,7 +279,7 @@ pub fn escape_breakdown(
   }
   // `"k" in obj` names a property with a string the mangler does not
   // rewrite, so `k` has to survive.
-  let reserved_in_probes : Map[String, Bool] = {}
+  let reserved_in_probes : Map[String, Bool] = Map([])
   collect_in_probe_names_block(block, reserved_in_probes)
   // Attribute the wildcard. Two sources: a binding that crosses the
   // boundary without a closed type annotation, and a dynamic write or
@@ -308,7 +308,7 @@ pub fn escape_breakdown(
   // The External-only slice, for `class_method_dce` — reported here so
   // `--explain-mangle` can show it, computed by the same function the
   // pass itself calls.
-  let external_class_members : Map[String, Bool] = {}
+  let external_class_members : Map[String, Bool] = Map([])
   collect_external_class_members(
     graph, obs_map, class_members, external_class_members,
   )
@@ -333,8 +333,8 @@ pub fn escape_breakdown(
 fn obs_attribution_summary(
   provenance : Map[String, Array[String]],
 ) -> Array[String] {
-  let counts : Map[String, Int] = {}
-  let examples : Map[String, Array[String]] = {}
+  let counts : Map[String, Int] = Map([])
+  let examples : Map[String, Array[String]] = Map([])
   for entry in provenance {
     let (name, whys) = entry
     if is_internal_marker_prop(name) {
@@ -420,7 +420,7 @@ fn explain_external_index_wildcards(
 
   fn check(recv : @ast.TsExpr, idx : @ast.TsExpr, kind : String) -> Unit {
     if is_external_chain(recv, externals) {
-      let probe : Map[String, Bool] = {}
+      let probe : Map[String, Bool] = Map([])
       if !reserve_external_index_keys(
           idx, probe, numeric_names, literal_idx_names,
         ) {

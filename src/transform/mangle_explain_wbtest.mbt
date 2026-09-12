@@ -13,7 +13,7 @@
 /// The breakdown, computed the way the bundler would compute it.
 fn breakdown_of(source : String) -> EscapeBreakdown raise {
   let block = @parser.parse_block_from_source(source)
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   for n in undeclared_referenced_names(block).keys() {
     externals[n] = true
   }
@@ -31,7 +31,7 @@ fn lifted_block(source : String) -> @ast.TsBlock raise {
 ///|
 /// Every name the breakdown reserves, in any section, sorted.
 fn breakdown_names(b : EscapeBreakdown) -> Array[String] {
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   for
     group in [
       b.external_chain,
@@ -91,7 +91,7 @@ test "explain: the breakdown merges to exactly what the mangler reserves" {
   ]
   for src in sources {
     let block = @parser.parse_block_from_source(src)
-    let externals : Map[String, Bool] = {}
+    let externals : Map[String, Bool] = Map([])
     for n in undeclared_referenced_names(block).keys() {
       externals[n] = true
     }
@@ -243,7 +243,7 @@ fn escaping_with_types(
   aliases : Array[@ast.TsTypeAlias],
 ) -> Array[String] raise {
   let block = @parser.parse_block_from_source(source)
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   for n in undeclared_referenced_names(block).keys() {
     externals[n] = true
   }
@@ -401,7 +401,7 @@ test "type env: the wildcard explanation goes away once the name resolves" {
       #|
     ),
   )
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   for n in undeclared_referenced_names(block).keys() {
     externals[n] = true
   }
@@ -617,7 +617,7 @@ test "explain: an arity decline names the condition that fired" {
       #|
     ),
   )
-  let keep : Map[String, Bool] = {}
+  let keep : Map[String, Bool] = Map([])
   let declines : Array[String] = []
   let _ = plan_unused_params(block, keep~, declines~)
   let mut found = false
@@ -725,7 +725,7 @@ test "type env: a primitive crossing the boundary reserves nothing" {
     #|HostBridge.channel.post(flag);
     #|
   let block = @parser.parse_block_from_source(src)
-  let externals : Map[String, Bool] = {}
+  let externals : Map[String, Bool] = Map([])
   for n in undeclared_referenced_names(block).keys() {
     externals[n] = true
   }
@@ -745,7 +745,7 @@ test "type env: an unannotated or opaque crossing still reserves the wildcard" {
       "const v: any = { a: 1 };\nHostBridge.post(v);\n",
     ] {
     let block = @parser.parse_block_from_source(src)
-    let externals : Map[String, Bool] = {}
+    let externals : Map[String, Bool] = Map([])
     for n in undeclared_referenced_names(block).keys() {
       externals[n] = true
     }

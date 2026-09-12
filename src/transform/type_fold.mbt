@@ -100,7 +100,7 @@ fn TypeScope::get(self : TypeScope, name : String) -> @ast.TsType? {
 /// frequent bug in this pipeline. The count says how many candidates
 /// there were and how many survived; it does not re-derive why.
 pub fn count_type_fold_sites(block : @ast.TsBlock) -> Int {
-  let n = Ref::new(0)
+  let n = Ref(0)
   for s in block.stmts {
     count_tf_sites_stmt(s, n, None)
   }
@@ -115,8 +115,8 @@ pub fn count_type_fold_sites(block : @ast.TsBlock) -> Int {
 /// not — so a corpus made mostly of null checks is a pass with nothing
 /// to do rather than a lookup that is failing.
 pub fn count_type_fold_sites_by_kind(block : @ast.TsBlock) -> Map[String, Int] {
-  let n = Ref::new(0)
-  let kinds : Map[String, Int] = {}
+  let n = Ref(0)
+  let kinds : Map[String, Int] = Map([])
   for s in block.stmts {
     count_tf_sites_stmt(s, n, Some(kinds))
   }
@@ -179,14 +179,14 @@ pub fn type_fold_block(
     return block
   }
   let scope = TypeScope::root()
-  let alias_table : Map[String, @ast.TsType] = {}
+  let alias_table : Map[String, @ast.TsType] = Map([])
   // Cross-module bundles can contribute multiple aliases sharing one
   // name (e.g. two modules each declaring `type Shape = …`). Keying by
   // bare name picks the last writer wholesale and could narrow an
   // earlier module's switch, dropping a reachable `default` arm. When
   // names collide with different bodies, drop the entry so resolution
   // falls back to `Named(n)` and the folder stays conservative.
-  let ambiguous_alias : Map[String, Unit] = {}
+  let ambiguous_alias : Map[String, Unit] = Map([])
   for ta in type_aliases {
     // Only non-generic aliases participate in eager Named-resolution.
     // Generic ones (`Foo<T> = …`) need parameter substitution that the
@@ -1373,7 +1373,7 @@ fn drop_exhaustive_default(
     _ => return cases
   }
   // Every literal in the union must be matched by a case.
-  let covered : Map[String, Bool] = {}
+  let covered : Map[String, Bool] = Map([])
   for c in cases {
     match c.test_expr {
       Some(@ast.TsExpr::StringLit(s)) => covered[s] = true

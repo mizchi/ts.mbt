@@ -522,7 +522,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         // still uses the string path below.
         let mut value : Double = 0.0
         let mut has_digit = false
-        let digits = StringBuilder::new()
+        let digits = StringBuilder()
         while true {
           match self.peek() {
             Some('_') => {
@@ -806,7 +806,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
     self.src[start:self.pos].to_owned()
   }
   let s = if has_sep {
-    let cleaned = StringBuilder::new()
+    let cleaned = StringBuilder()
     for ch in raw {
       if ch == '_' {
         continue
@@ -883,7 +883,7 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
 
 ///|
 fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
@@ -967,7 +967,7 @@ fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
   // `classify_ident_or_keyword` calls a keyword is one, so the two cannot
   // drift apart.
   let kind = classify_ident_or_keyword(buf.to_string())
-  if not(kind is Ident(_)) {
+  if !(kind is Ident(_)) {
     self.escaped_keyword_count += 1
   }
   kind
@@ -1173,7 +1173,7 @@ fn Lexer::scan_private_ident(self : Lexer) -> TokenKind {
   if self.pos >= len || self.src[self.pos].to_int() != '\\'.to_int() {
     return PrivateIdent(self.src[start:self.pos].to_owned())
   }
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
@@ -1275,7 +1275,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
     }
     self.pos += 1
   }
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
@@ -1793,8 +1793,8 @@ fn Lexer::scan_template_parts_with_raw(
   let cooked_parts : Array[String] = []
   let raw_parts : Array[String] = []
   let exprs : Array[String] = []
-  let mut cooked_buf = StringBuilder::new()
-  let mut raw_buf = StringBuilder::new()
+  let mut cooked_buf = StringBuilder()
+  let mut raw_buf = StringBuilder()
   while true {
     match self.peek() {
       None => {
@@ -1811,8 +1811,8 @@ fn Lexer::scan_template_parts_with_raw(
           let _ = self.advance()
           cooked_parts.push(cooked_buf.to_string())
           raw_parts.push(raw_buf.to_string())
-          cooked_buf = StringBuilder::new()
-          raw_buf = StringBuilder::new()
+          cooked_buf = StringBuilder()
+          raw_buf = StringBuilder()
           let expr_src = self.scan_template_expr_source()
           exprs.push(expr_src)
         } else if c == '\\' {
@@ -2061,7 +2061,7 @@ fn Lexer::enqueue_template_tokens(self : Lexer, pos : Int) -> Unit {
 ///|
 // / literal (`...`)
 fn Lexer::scan_template(self : Lexer) -> TokenKind {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   while true {
     match self.peek() {
       None => break
@@ -2255,7 +2255,7 @@ fn Lexer::skip_string_body(self : Lexer, quote : Char) -> Unit {
 ///|
 // / literal (/pattern/flags)
 fn Lexer::scan_regex(self : Lexer) -> TokenKind {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut in_class = false
   let mut escaped = false
   // TS1005 evidence: unescaped group parens OUTSIDE a character class.
@@ -2304,12 +2304,12 @@ fn Lexer::scan_regex(self : Lexer) -> TokenKind {
       }
     }
   }
-  if not(closed) {
+  if !closed {
     self.unterminated_regex = true
   } else if group_depth > 0 {
     self.unbalanced_regex_group_count += 1
   }
-  let flags = StringBuilder::new()
+  let flags = StringBuilder()
   while true {
     match self.peek() {
       Some(c) =>
@@ -2815,7 +2815,7 @@ pub fn Lexer::tokenize(self : Lexer) -> Array[Token] {
   let len = self.src.length()
   let tokens : Array[Token] = if len >= 1024 {
     let cap = len / 2 + 4
-    Array::new(capacity=cap)
+    Array(capacity=cap)
   } else {
     []
   }

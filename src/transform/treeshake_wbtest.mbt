@@ -2,7 +2,7 @@
 
 ///|
 fn ts_vfs(entries : Array[(String, String)]) -> Map[String, String] {
-  let m : Map[String, String] = {}
+  let m : Map[String, String] = Map([])
   for entry in entries {
     m[entry.0] = entry.1
   }
@@ -126,7 +126,7 @@ test "treeshake: dead NativeClassStmt is dropped" {
     #|console.log("hello");
   let block = @parser.parse_block_from_source(src)
   let out = treeshake_block(block)
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   for s in out.stmts {
     match s {
       @ast.TsStmt::NativeClassStmt(decl, _) => names[decl.name] = true
@@ -151,7 +151,7 @@ test "treeshake: live NativeClassStmt is retained" {
   // treeshaker sees the structured form and can reason about the class name.
   let lifted = iife_class_lift_block(block)
   let out = treeshake_block(lifted)
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   for s in out.stmts {
     match s {
       @ast.TsStmt::NativeClassStmt(decl, _) => names[decl.name] = true

@@ -316,7 +316,7 @@ fn split_top_level_type_args(source : String) -> Array[String] {
 
 ///|
 fn strip_ascii_space(source : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for c in source {
     if c != ' ' && c != '\n' && c != '\r' && c != '\t' {
       buf.write_char(c)
@@ -327,7 +327,7 @@ fn strip_ascii_space(source : String) -> String {
 
 ///|
 fn compact_ascii_space(source : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut last_was_space = false
   for c in source {
     let is_space = c == ' ' || c == '\n' || c == '\r' || c == '\t'
@@ -346,7 +346,7 @@ fn compact_ascii_space(source : String) -> String {
 
 ///|
 fn strip_block_comments(source : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut i = 0
   while i < source.length() {
     if i + 1 < source.length() &&
@@ -630,7 +630,7 @@ fn substitute_type_params(
   type_params : Array[String],
   type_args : Array[String],
 ) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut i = 0
   while i < source.length() {
     let c = char_at(source, i)
@@ -765,7 +765,7 @@ fn expand_known_alias_refs(
   source : String,
   rules : TypeScriptDeclNormalizationRules,
 ) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut i = 0
   while i < source.length() {
     let c = char_at(source, i)
@@ -977,7 +977,7 @@ fn replace_prefixed_type_refs(
   state : TypeScriptDeclNormalizationState,
 ) -> String {
   let prefix = ns_alias + "."
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut i = 0
   while i < source.length() {
     if !has_prefix_at(source, prefix, i) {

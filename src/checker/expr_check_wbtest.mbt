@@ -7617,7 +7617,7 @@ test "expr_check: destructuring rest pattern carries the remaining fields" {
   @test.assert_eq(missing.length(), 1)
   // `rest.b` / `rest.c` must not produce any "does not exist" diagnostic.
   let other_missing = issues.filter(fn(i) {
-    i.message.contains("does not exist") && not(i.message.contains("`a`"))
+    i.message.contains("does not exist") && !i.message.contains("`a`")
   })
   @test.assert_eq(other_missing.length(), 0)
 }
@@ -7711,7 +7711,7 @@ test "expr_check: function-value rest param still flags real errors" {
   // element, not the array).
   let elem = ts63_messages(decl + "function g(): void { f(1, true, 5); }")
   assert_true(elem.iter().any(fn(m) { m.contains("got `number`") }))
-  assert_true(not(elem.iter().any(fn(m) { m.contains("argument(s)") })))
+  assert_true(!elem.iter().any(fn(m) { m.contains("argument(s)") }))
   // Missing the required fixed param is still a too-few arity error.
   let few = ts63_messages(decl + "function g(): void { f(); }")
   assert_true(few.iter().any(fn(m) { m.contains("at least 1 argument(s)") }))
@@ -15334,18 +15334,21 @@ test "expr_check: using-declaration grammar, objlit getters, reserved names" {
   // yields an empty module, which is why they are checked by a separate
   // predicate below rather than by `issues`.
   let rejects = fn(src : String) -> Bool {
-    (try? @parser.Parser::from_source(src).parse_module()) is Err(_)
+    try {
+      ignore(@parser.Parser::from_source(src).parse_module())
+      false
+    } catch {
+      _ => true
+    }
   }
   assert_true(rejects(d + "if (true) using x = d;"))
   assert_true(rejects(d + "while (true) using x = d;"))
   assert_true(rejects(d + "lbl: using x = d;"))
   // A plain identifier REFERENCE named `using` in the same position is
   // legal JavaScript and must still parse.
-  assert_true(not(rejects("declare const using: any; if (true) using;")))
+  assert_true(!rejects("declare const using: any; if (true) using;"))
   assert_true(
-    not(
-      rejects("declare const using: {foo(): void}; while (false) using.foo();"),
-    ),
+    !rejects("declare const using: {foo(): void}; while (false) using.foo();"),
   )
   // The recorded-diagnostic half.
   assert_true(issues("using x;") > 0)

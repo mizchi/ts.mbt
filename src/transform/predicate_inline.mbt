@@ -147,7 +147,7 @@ pub(all) struct PredicateEntry {
 /// parameter is substituted away, so naming it here only makes the pass
 /// more conservative.
 impl SubstitutedValue for PredicateEntry with fn free_names(self) {
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   collect_var_refs_expr(self.body_expr, out)
   out
 }
@@ -361,8 +361,8 @@ fn count_predicate_calls(
   // is why the non-call tally is `Var` sightings MINUS `CallExpr`
   // callees rather than a category of its own — miscounting that way
   // would make every called predicate look permanently referenced.
-  let var_sightings : Map[String, Int] = {}
-  let callee_vars : Map[String, Int] = {}
+  let var_sightings : Map[String, Int] = Map([])
+  let callee_vars : Map[String, Int] = Map([])
   surface_visit_exprs_block(block, e => {
     match e {
       Call(n, _) => bump(calls, n)
@@ -404,9 +404,9 @@ pub fn build_predicate_table(
   // walk.
   exported? : Map[String, Bool] = {},
 ) -> PredicateTable {
-  let entries : Map[String, PredicateEntry] = {}
-  let calls : Map[String, Int] = {}
-  let other_refs : Map[String, Int] = {}
+  let entries : Map[String, PredicateEntry] = Map([])
+  let calls : Map[String, Int] = Map([])
+  let other_refs : Map[String, Int] = Map([])
   count_predicate_calls(block, calls, other_refs)
   for stmt in block.stmts {
     match stmt {
@@ -425,7 +425,7 @@ pub fn build_predicate_table(
                   param_refs: refs,
                   body_cost: cost,
                   call_sites: calls.get(name).unwrap_or(0),
-                  removable: not(exported.contains(name)) &&
+                  removable: !exported.contains(name) &&
                   other_refs.get(name).unwrap_or(0) == 0,
                 }
               None => ()
@@ -449,7 +449,7 @@ pub fn build_predicate_table(
 ///  * Is it WORTH IT — every call site pays a copy of the body, and the
 ///    declaration only disappears when the last caller is inlined.
 fn should_inline_predicate(entry : PredicateEntry, arg : @ast.TsExpr) -> Bool {
-  if entry.param_refs > 1 && not(arg_is_duplicable(arg)) {
+  if entry.param_refs > 1 && !arg_is_duplicable(arg) {
     return false
   }
   // One caller AND removable: the body moves rather than multiplies,

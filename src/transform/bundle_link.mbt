@@ -51,10 +51,10 @@ fn link_module_graph(
   // maps a module's original local name to its possibly-renamed
   // global form (entries are only present when a rename actually
   // happened — unchanged names stay implicit).
-  let taken : Map[String, Bool] = {}
+  let taken : Map[String, Bool] = Map([])
   // Filled by `synthesize_namespace_bindings_for` below and returned, so
   // the property mangler can recognise these bindings by fact.
-  let synthesized_namespace_names : Map[String, Bool] = {}
+  let synthesized_namespace_names : Map[String, Bool] = Map([])
   // Pre-reserve JS globals so a module's local binding (typically a
   // synthesized namespace object — `export * as Symbol from "…"` →
   // `const Symbol = {…}`) doesn't TDZ-shadow the runtime global at
@@ -82,19 +82,19 @@ fn link_module_graph(
       taken[nb.1] = true
     }
   }
-  let rename_per_module : Map[String, Map[String, String]] = {}
+  let rename_per_module : Map[String, Map[String, String]] = Map([])
   // namespace_local_renames[path][ns_local] = globally-unique name
   // used for the synthesized `const <unique> = { ... }` binding.
   // Built alongside the regular rename so the namespace synthesis
   // doesn't collide with any other top-level declaration.
-  let namespace_local_renames : Map[String, Map[String, String]] = {}
+  let namespace_local_renames : Map[String, Map[String, String]] = Map([])
   let mut suffix_counter = 0
   for path in order {
     let m = match modules.get(path) {
       Some(node) => node
       None => continue
     }
-    let module_renames : Map[String, String] = {}
+    let module_renames : Map[String, String] = Map([])
     let names = collect_top_level_decl_names(m.block)
     for name in names {
       if !taken.contains(name) {
@@ -110,7 +110,7 @@ fn link_module_graph(
     // Reserve a unique name for every `import * as ns` namespace
     // local. The synthesized `const <ns> = {...}` decl uses this
     // name so it never clashes with another module's bindings.
-    let ns_locals : Map[String, String] = {}
+    let ns_locals : Map[String, String] = Map([])
     for imp in m.import_decls {
       if imp.type_only || imp.side_effect_only {
         continue
@@ -229,7 +229,7 @@ fn link_module_graph(
   // Only bindings imported under a different alias are touched, and with
   // `--mangle` on the names are replaced anyway, so the corpus is
   // byte-identical.
-  let minted_unique : Map[String, Bool] = {}
+  let minted_unique : Map[String, Bool] = Map([])
   for path, node in modules {
     for entry in rename_per_module.get(path).unwrap_or({}) {
       minted_unique[entry.1] = true
@@ -238,7 +238,7 @@ fn link_module_graph(
   }
   // final name -> (declaring module, its original local name), so a
   // target name can be traced back to the binding that has to move.
-  let owner_of_final : Map[String, (String, String)] = {}
+  let owner_of_final : Map[String, (String, String)] = Map([])
   for path, node in modules {
     let renames = rename_per_module.get(path).unwrap_or({})
     for name in collect_top_level_decl_names(node.block) {
@@ -260,7 +260,7 @@ fn link_module_graph(
       }
       let pairs : Array[(String, String)] = []
       match imp.default_binding {
-        Some(alias) => pairs.push(("default", alias))
+        Some(alias_) => pairs.push(("default", alias_))
         None => ()
       }
       for nb in imp.named_bindings {
@@ -304,9 +304,9 @@ fn link_module_graph(
       }
     }
   }
-  let runtime_bindings : Map[String, Bool] = {}
+  let runtime_bindings : Map[String, Bool] = Map([])
   for path, node in modules {
-    let decls : Map[String, Bool] = {}
+    let decls : Map[String, Bool] = Map([])
     collect_local_decl_names_in_block(node.block, decls)
     let renames = rename_per_module.get(path).unwrap_or({})
     for n in decls.keys() {
@@ -326,19 +326,19 @@ fn link_module_graph(
   // as ns from "./a"` patterns. It's consumed in Phase 3 by a
   // dedicated walker that rewrites `ns.X` / `ns["X"]` / `ns.X(...)`
   // into a bare reference.
-  let import_subs : Map[String, Map[String, String]] = {}
-  let namespace_subs_per_module : Map[String, Map[String, Map[String, String]]] = {}
+  let import_subs : Map[String, Map[String, String]] = Map([])
+  let namespace_subs_per_module : Map[String, Map[String, Map[String, String]]] = Map([])
   // CJS property-access substitutions: for named imports from CJS-wrapped modules
   // that have no export_specs, substitute `localAlias` with `cjsVar.importedName`.
   // `cjs_prop_subs_per_module[path] = [(localAlias, cjsVar, importedName)]`
-  let cjs_prop_subs_per_module : Map[String, Array[(String, String, String)]] = {}
+  let cjs_prop_subs_per_module : Map[String, Array[(String, String, String)]] = Map([])
   for path in order {
     let m = match modules.get(path) {
       Some(node) => node
       None => continue
     }
-    let subs : Map[String, String] = {}
-    let namespace_subs : Map[String, Map[String, String]] = {}
+    let subs : Map[String, String] = Map([])
+    let namespace_subs : Map[String, Map[String, String]] = Map([])
     let cjs_prop_subs : Array[(String, String, String)] = []
     for imp in m.import_decls {
       if imp.type_only || imp.side_effect_only {
@@ -407,7 +407,7 @@ fn link_module_graph(
       // actual escape site instead of the first member access.
       match imp.namespace_binding {
         Some(ns_local) => {
-          let props : Map[String, String] = {}
+          let props : Map[String, String] = Map([])
           let dep_type_only = type_only_export_names(dep)
           for spec in dep.export_specs {
             // ESM: `import * as ns` does not include `default`.
@@ -485,7 +485,7 @@ fn link_module_graph(
         Some(node) => node
         None => continue
       }
-      let props : Map[String, String] = {}
+      let props : Map[String, String] = Map([])
       let dep_type_only = type_only_export_names(dep)
       for spec in dep.export_specs {
         if dep_type_only.contains(spec.local_name) ||
@@ -535,7 +535,7 @@ fn link_module_graph(
     }
     let ns_subs = namespace_subs_per_module.get(path).unwrap_or({})
     let ns_locals = namespace_local_renames.get(path).unwrap_or({})
-    let combined_map : Map[String, String] = {}
+    let combined_map : Map[String, String] = Map([])
     let renames = rename_per_module.get(path).unwrap_or({})
     for entry in renames {
       combined_map[entry.0] = entry.1
@@ -566,9 +566,9 @@ fn link_module_graph(
     // into the escape list further down — the synthesized
     // `const ns = { ... }` binding then resolves the access at
     // runtime.
-    let local_decl_names : Map[String, Bool] = {}
+    let local_decl_names : Map[String, Bool] = Map([])
     collect_local_decl_names_in_block(m.block, local_decl_names)
-    let forced_escape : Map[String, Bool] = {}
+    let forced_escape : Map[String, Bool] = Map([])
     // A namespace this module EXPORTS BY NAME — `import * as Pattern
     // from "./patterns"; export { Pattern, Pattern as P };` — escapes,
     // and `block_references_var` cannot see it: an export specifier is
@@ -583,12 +583,12 @@ fn link_module_graph(
     for spec in m.export_specs {
       forced_escape[spec.local_name] = true
     }
-    let filtered_ns_subs : Map[String, Map[String, String]] = {}
+    let filtered_ns_subs : Map[String, Map[String, String]] = Map([])
     for entry in ns_subs {
       let original_ns = entry.0
       let final_ns = ns_locals.get(original_ns).unwrap_or(original_ns)
       let props = entry.1
-      let kept : Map[String, String] = {}
+      let kept : Map[String, String] = Map([])
       let mut had_collision = false
       for p in props {
         let exp_name = p.0
@@ -627,7 +627,7 @@ fn link_module_graph(
     // synthesized object: downstream modules import `ns` by name and
     // expect a runtime binding to exist. Collect them up-front so
     // they bypass the in-module escape check.
-    let reexport_namespaces : Map[String, Bool] = {}
+    let reexport_namespaces : Map[String, Bool] = Map([])
     for re in m.reexport_specs {
       if re.type_only {
         continue
@@ -797,7 +797,7 @@ fn entry_export_bindings(
   entry : String,
 ) -> Array[BundleExport] {
   let out : Array[BundleExport] = []
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   let em = match modules.get(entry) {
     Some(node) => node
     None => return out
@@ -869,7 +869,7 @@ fn entry_export_bindings(
               }
             }
           All => {
-            let surface : Map[String, String] = {}
+            let surface : Map[String, String] = Map([])
             for spec in dep_node.export_specs {
               // `export *` does not forward `default`.
               if spec.export_name == "default" {
@@ -963,9 +963,9 @@ fn entry_export_bindings(
 /// still throw. `isolatedModules` / `verbatimModuleSyntax` forbid that
 /// spelling, and `re.type_only` covers the `export type { … }` form.
 fn type_only_export_names(node : ModuleNode) -> Map[String, Bool] {
-  let runtime : Map[String, Bool] = {}
+  let runtime : Map[String, Bool] = Map([])
   collect_local_decl_names_in_block(node.block, runtime)
-  let out : Map[String, Bool] = {}
+  let out : Map[String, Bool] = Map([])
   // What the module SAID is type-only. Deriving it from the module's own
   // `type_aliases` / `interfaces` below only finds a type DECLARED here;
   // `export type { Pattern }` re-exporting a type imported from
@@ -1072,7 +1072,7 @@ fn resolve_export(
   module_path : String,
   export_name : String,
 ) -> String? {
-  let visited : Map[String, Bool] = {}
+  let visited : Map[String, Bool] = Map([])
   resolve_export_with_visited(
     modules, rename_per_module, namespace_local_renames, module_path, export_name,
     visited,
@@ -1945,12 +1945,12 @@ fn shadow_map_for_params(
   if map.is_empty() {
     return map
   }
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   collect_param_binding_names(params, names)
   if names.is_empty() {
     return map
   }
-  let out : Map[String, String] = {}
+  let out : Map[String, String] = Map([])
   for entry in map {
     if !names.contains(entry.0) {
       out[entry.0] = entry.1
@@ -1971,12 +1971,12 @@ fn shadow_ns_for_params(
   if ns.is_empty() {
     return ns
   }
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   collect_param_binding_names(params, names)
   if names.is_empty() {
     return ns
   }
-  let out : Map[String, Map[String, String]] = {}
+  let out : Map[String, Map[String, String]] = Map([])
   for entry in ns {
     if !names.contains(entry.0) {
       out[entry.0] = entry.1
@@ -1993,7 +1993,7 @@ fn shadow_map_for_method_params(
   if map.is_empty() {
     return map
   }
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   for p in params {
     if p.0 != "" {
       names[p.0] = true
@@ -2002,7 +2002,7 @@ fn shadow_map_for_method_params(
   if names.is_empty() {
     return map
   }
-  let out : Map[String, String] = {}
+  let out : Map[String, String] = Map([])
   for entry in map {
     if !names.contains(entry.0) {
       out[entry.0] = entry.1
@@ -2019,7 +2019,7 @@ fn shadow_ns_for_method_params(
   if ns.is_empty() {
     return ns
   }
-  let names : Map[String, Bool] = {}
+  let names : Map[String, Bool] = Map([])
   for p in params {
     if p.0 != "" {
       names[p.0] = true
@@ -2028,7 +2028,7 @@ fn shadow_ns_for_method_params(
   if names.is_empty() {
     return ns
   }
-  let out : Map[String, Map[String, String]] = {}
+  let out : Map[String, Map[String, String]] = Map([])
   for entry in ns {
     if !names.contains(entry.0) {
       out[entry.0] = entry.1
@@ -2257,7 +2257,7 @@ fn find_char_index(s : String, target : Char) -> Int {
 
 ///|
 fn block_references_var(block : @ast.TsBlock, name : String) -> Bool {
-  let refs : Map[String, Bool] = {}
+  let refs : Map[String, Bool] = Map([])
   collect_var_refs_in_block(block, refs)
   refs.contains(name)
 }

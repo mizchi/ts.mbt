@@ -85,7 +85,7 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
         }
       }
     }
-    if saw_await && self.in_function && not(self.in_async) {
+    if saw_await && self.in_function && !self.in_async {
       self.grammar_misuses.push(
         "`await` expressions are only allowed within async functions and at the top levels of modules",
       )
@@ -223,7 +223,7 @@ fn Parser::record_overload_optionality(
 ) -> Unit {
   match seen.get(key) {
     Some((first, reported)) =>
-      if first != is_optional && not(reported) {
+      if first != is_optional && !reported {
         seen[key] = (first, true)
         self.grammar_misuses.push(
           "overload signatures must all be optional or required: `" +
@@ -262,7 +262,7 @@ fn Parser::record_implicit_any_member_return(
   name : String,
   had_return_annotation : Bool,
 ) -> Unit {
-  if not(self.no_implicit_any) || had_return_annotation {
+  if !self.no_implicit_any || had_return_annotation {
     return
   }
   let what = if name == "<call>" {
@@ -500,7 +500,7 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   // TS1015: a parameter cannot be both optional (`x?`) and have an
   // initializer (`x = e`). The `?` is otherwise lost into the parameter
   // type below, so record the conflict here where both facts are visible.
-  if is_optional && not(default is None) {
+  if is_optional && !(default is None) {
     self.param_optional_initializer_misuses.push(name)
   }
   { name, binding: Some(binding), is_rest, is_optional, type_, default }
@@ -709,7 +709,7 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
     }
   }
   // Check for duplicates
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   for name in all_names {
     if seen.contains(name) {
       // In strict mode or with non-simple params, duplicates are errors
@@ -906,7 +906,7 @@ fn apply_jsdoc_param_overlay(
     None => return params
   }
   // Build a name -> JSDoc-type-string map.
-  let by_name : Map[String, String] = {}
+  let by_name : Map[String, String] = Map([])
   for t in jb.tags {
     match t {
       Param(pname, Some(ty), _) => by_name[pname] = ty
@@ -1753,7 +1753,7 @@ pub fn Parser::parse_interface(
   // TS2314: a generic interface with no defaulted type parameter requires all
   // of its type arguments, so a bare reference (`I` without `<...>`) is an
   // error. Recorded via the shared channel; the checker consults it.
-  if type_params.length() > 0 && not(self.last_type_params_had_default) {
+  if type_params.length() > 0 && !self.last_type_params_had_default {
     self.interface_member_modifier_misuses.push(
       "<generic-noarg-required>\{name}",
     )
@@ -1792,7 +1792,7 @@ pub fn Parser::parse_interface(
   // is the error — `m?(x: number): number; m(s: string): string`. Only
   // methods participate: two same-named PROPERTIES are a duplicate
   // identifier (TS2300 / TS2717), a different error that already fires.
-  let method_sig_optional : Map[String, (Bool, Bool)] = {}
+  let method_sig_optional : Map[String, (Bool, Bool)] = Map([])
   while !self.check(RBrace) && !self.check(Eof) {
     // A JSDoc block directly above the member attaches to its first
     // token (which may be a `readonly` / accessibility modifier, so the
@@ -1817,11 +1817,11 @@ pub fn Parser::parse_interface(
     // is handled separately below). `name` is the member it precedes.
     while self.can_consume_interface_accessibility_modifier() {
       let _ = self.advance()
-      let member = match self.peek().kind {
+      let member_ = match self.peek().kind {
         Ident(n) => n
         _ => "<member>"
       }
-      self.interface_member_modifier_misuses.push("\{name}.\{member}")
+      self.interface_member_modifier_misuses.push("\{name}.\{member_}")
     }
     // Skip readonly modifier
     let mut is_readonly_field = false
@@ -2522,7 +2522,7 @@ fn Parser::parse_type_alias_after_type_keyword(
   // of its type arguments; a bare reference (`A` without `<...>`) is an error.
   // Read before the alias body is parsed (which could clobber the flag via a
   // nested generic).
-  if type_params.length() > 0 && not(self.last_type_params_had_default) {
+  if type_params.length() > 0 && !self.last_type_params_had_default {
     self.interface_member_modifier_misuses.push(
       "<generic-noarg-required>\{name}",
     )
@@ -3346,7 +3346,7 @@ fn Parser::parse_declare_class(
     // before the base / body parse clobbers it via a nested generic.
     if name != "" &&
       names.length() > 0 &&
-      not(self.last_type_params_had_default) {
+      !self.last_type_params_had_default {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{name}",
       )
@@ -3372,7 +3372,7 @@ fn Parser::parse_declare_class(
   let static_blocks : Array[@ast.TsBlock] = []
   let declare_override_names : Array[String] = []
   // TS2386 support: `(first_optional, already_reported)` per member key.
-  let declare_method_sig_optional : Map[String, (Bool, Bool)] = {}
+  let declare_method_sig_optional : Map[String, (Bool, Bool)] = Map([])
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false

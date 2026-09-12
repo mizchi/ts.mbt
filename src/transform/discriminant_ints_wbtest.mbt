@@ -12,7 +12,7 @@ fn disc_plan(
   reserved : Array[String],
 ) -> DiscriminantPlan raise {
   let block = @parser.parse_block_from_source(source)
-  let r : Map[String, Bool] = {}
+  let r : Map[String, Bool] = Map([])
   for n in reserved {
     r[n] = true
   }
@@ -69,7 +69,7 @@ test "discriminant: an equality comparison is renumbered" {
     ),
     [],
   )
-  @test.assert_eq(plan.maps.get("tag").is_empty(), false)
+  @test.assert_eq(plan.maps.get("tag") is None, false)
 }
 
 // ---------------------------------------------------------------------

@@ -27,7 +27,7 @@ pub async fn read_oracle_cache(path : String) -> Map[String, @ast.TsType] {
       }
     _ => return {}
   }
-  let result : Map[String, @ast.TsType] = {}
+  let result : Map[String, @ast.TsType] = Map([])
   for entry in resolutions {
     match entry {
       Object(fields) => {

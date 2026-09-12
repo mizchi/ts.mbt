@@ -186,7 +186,7 @@ pub fn analyze_purity_with(
   // `@__PURE__` annotation. We add them to `assumed_pure` before the
   // main analysis runs so the existing fixpoint trusts them when
   // their callers loop in.
-  let augmented_assumed : Map[String, Bool] = {}
+  let augmented_assumed : Map[String, Bool] = Map([])
   for entry in assumed_pure {
     augmented_assumed[entry.0] = entry.1
   }
@@ -205,7 +205,7 @@ pub fn analyze_purity_with(
   // Step 1: collect every top-level function-like declaration —
   // both `Let/Const(Ident(name), _, FuncExpr/ArrowFunc)` and
   // explicit `NativeClassStmt` declarations.
-  let funcs : Map[String, @ast.TsBlock] = {}
+  let funcs : Map[String, @ast.TsBlock] = Map([])
   for stmt in block.stmts {
     match stmt {
       Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f)) =>
@@ -236,13 +236,13 @@ pub fn analyze_purity_with(
     }
   }
   // Step 2: per-function direct purity + call set.
-  let direct_impure : Map[String, Bool] = {}
-  let calls_of : Map[String, Array[String]] = {}
+  let direct_impure : Map[String, Bool] = Map([])
+  let calls_of : Map[String, Array[String]] = Map([])
   for entry in funcs {
     let (name, body) = entry
     let mut directly_impure = false
     let called : Array[String] = []
-    let called_seen : Map[String, Bool] = {}
+    let called_seen : Map[String, Bool] = Map([])
     walk_block_for_purity(body, false, fn(kind) {
       match kind {
         PureWalkEvent::SideEffect => directly_impure = true
@@ -259,7 +259,7 @@ pub fn analyze_purity_with(
   // Step 3: fixpoint. A function is impure if it's directly
   // impure OR it calls an impure function. Iterate until no
   // new names get marked.
-  let impure : Map[String, Bool] = {}
+  let impure : Map[String, Bool] = Map([])
   for entry in direct_impure {
     let (name, flag) = entry
     // `assumed_pure` overrides direct-impurity flags: a JSDoc-
@@ -304,7 +304,7 @@ pub fn analyze_purity_with(
   // in every assumption from `assumed_pure` so JSDoc-annotated
   // functions land in the output even when they aren't in our
   // collected function table (e.g. ambient `declare function`).
-  let pure : Map[String, Bool] = {}
+  let pure : Map[String, Bool] = Map([])
   for entry in direct_impure {
     let (name, _) = entry
     if !impure.contains(name) {
@@ -852,7 +852,7 @@ fn is_signature_pure_func(f : @ast.TsFunc) -> Bool {
     }
   }
   // Locals starts with the parameter names.
-  let locals : Map[String, Bool] = {}
+  let locals : Map[String, Bool] = Map([])
   for p in f.params {
     locals[p.name] = true
   }

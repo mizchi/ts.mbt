@@ -23,7 +23,7 @@ async fn module_spec_resolves_on_disk(
   spec : String,
 ) -> Bool {
   let dir = match file_path.rev_find("/") {
-    Some(idx) => file_path.substring(start=0, end=idx).to_string()
+    Some(idx) => file_path[:idx].to_owned()
     None => "."
   }
   if spec.has_prefix("./") || spec.has_prefix("../") || spec == "." {
@@ -52,16 +52,16 @@ async fn module_spec_resolves_on_disk(
   let head = if spec.has_prefix("@") {
     match spec.find("/") {
       Some(first) =>
-        match spec.substring(start=first + 1).find("/") {
+        match spec[first + 1:].find("/") {
           Some(second) =>
-            spec.substring(start=0, end=first + 1 + second).to_string()
+            spec[:first + 1 + second].to_owned()
           None => spec
         }
       None => spec
     }
   } else {
     match spec.find("/") {
-      Some(first) => spec.substring(start=0, end=first).to_string()
+      Some(first) => spec[:first].to_owned()
       None => spec
     }
   }
@@ -72,7 +72,7 @@ async fn module_spec_resolves_on_disk(
       return true
     }
     match cur.rev_find("/") {
-      Some(idx) if idx > 0 => cur = cur.substring(start=0, end=idx).to_string()
+      Some(idx) if idx > 0 => cur = cur[:idx].to_owned()
       _ => break
     }
   }
@@ -150,16 +150,14 @@ async fn main {
       // Files inside node_modules are real packages whose imports resolve
       // against the filesystem, which the single-file checker can't see.
       // Drop TS2307 issues whose specifier actually resolves on disk.
-      let kept = if path.find("node_modules").is_empty() {
+      let kept = if path.find("node_modules") is None {
         issues
       } else {
         let out : Array[@checker.ExprIssue] = []
         for iss in issues {
           let prefix = "cannot find module `"
           if iss.message.has_prefix(prefix) && iss.message.has_suffix("`") {
-            let spec = iss.message
-              .substring(start=prefix.length(), end=iss.message.length() - 1)
-              .to_string()
+            let spec = iss.message[prefix.length():iss.message.length() - 1].to_owned()
             if module_spec_resolves_on_disk(path, spec) {
               continue
             }

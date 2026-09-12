@@ -3,7 +3,7 @@
 
 ///|
 fn dp_vfs(entries : Array[(String, String)]) -> Map[String, String] {
-  let m : Map[String, String] = {}
+  let m : Map[String, String] = Map([])
   for entry in entries {
     m[entry.0] = entry.1
   }
@@ -111,7 +111,7 @@ test "type_props: inline object types contribute to the harvest" {
     #|}
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
   let names = type_declared_property_names(module_)
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   for n in names {
     seen[n] = true
   }

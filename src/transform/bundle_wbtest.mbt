@@ -3,7 +3,7 @@
 
 ///|
 fn vfs(entries : Array[(String, String)]) -> Map[String, String] {
-  let m : Map[String, String] = {}
+  let m : Map[String, String] = Map([])
   for entry in entries {
     m[entry.0] = entry.1
   }
@@ -482,7 +482,7 @@ test "bundle: --reserve-entry-exports keeps exported type surface" {
   }
   let module_ = @parser.parse_module_from_source_with_const_values(source, {})
   let reserved = entry_export_property_names(module_, ["start", "Config"])
-  let r : Map[String, Bool] = {}
+  let r : Map[String, Bool] = Map([])
   for n in reserved {
     r[n] = true
   }
@@ -506,7 +506,7 @@ test "bundle: --reserve-entry-exports follows class signatures" {
     "}\n"
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
   let reserved = entry_export_property_names(module_, ["Service"])
-  let r : Map[String, Bool] = {}
+  let r : Map[String, Bool] = Map([])
   for n in reserved {
     r[n] = true
   }
@@ -1879,7 +1879,7 @@ test "reflection warning: reported only when it costs a method" {
 ///|
 /// Joins `out.explain` so a test can assert on the report as a whole.
 fn explain_text(out : BundleOutput) -> String {
-  let b = StringBuilder::new()
+  let b = StringBuilder()
   for line in out.explain {
     b.write_string(line)
     b.write_string("\n")
@@ -3573,7 +3573,7 @@ test "bundle: an overload set emits one declaration and still exports" {
         match rest.find("function pick") {
           Some(i) => {
             count += 1
-            rest = rest.substring(start=i + 13)
+            rest = rest[i + 13:].to_owned()
           }
           None => break
         }
@@ -4326,9 +4326,9 @@ test "verify: a dangling reference is reported, a clean bundle is not" {
   )
   assert_true(
     dangling.length() == 1,
-    msg="expected one violation, got \{dangling}",
+    msg="expected one violation, got \{Repr(dangling)}",
   )
-  assert_true(dangling[0].name == "CODES", msg="wrong name: \{dangling}")
+  assert_true(dangling[0].name == "CODES", msg="wrong name: \{Repr(dangling)}")
   // Host globals, imports and `let x;`'s parser sentinel must not be
   // reported — a verifier that cries wolf gets switched off.
   let clean = verify_emitted_bundle(
@@ -4340,7 +4340,7 @@ test "verify: a dangling reference is reported, a clean bundle is not" {
       #|
     ),
   )
-  assert_true(clean.length() == 0, msg="false positive: \{clean}")
+  assert_true(clean.length() == 0, msg="false positive: \{Repr(clean)}")
 }
 
 ///|
@@ -4362,7 +4362,7 @@ test "bundle: two unresolved imports from one module both survive" {
       assert_true(out.js.contains("simplify"))
       // Both bindings must be IMPORTED, not merely referenced.
       let import_lines = out.js.split("\n").filter(l => l.has_prefix("import "))
-      let joined = import_lines.map(l => l.to_string()).join(" | ")
+      let joined = import_lines.map(l => l.to_owned()).join(" | ")
       assert_true(joined.contains("simplify"))
       assert_true(joined.contains("curveToBezier"))
       // And the verifier, which is the check that would have caught the
@@ -4687,7 +4687,7 @@ test "bundle: the JSX runtime import is deduplicated across modules" {
       let jsx_imports = out.js
         .split("\n")
         .filter(l => {
-          l.has_prefix("import ") && l.to_string().contains("jsx-runtime")
+          l.has_prefix("import ") && l.contains("jsx-runtime")
         })
         .length()
       // One statement per distinct binding set is fine; what must not
@@ -4696,8 +4696,8 @@ test "bundle: the JSX runtime import is deduplicated across modules" {
         .split("\n")
         .filter(l => {
           l.has_prefix("import ") &&
-          l.to_string().contains("jsx-runtime") &&
-          l.to_string().contains("{ jsx ")
+          l.contains("jsx-runtime") &&
+          l.contains("{ jsx ")
         })
         .length()
       assert_true(jsx_imports >= 1)

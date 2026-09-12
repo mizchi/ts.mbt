@@ -43,7 +43,7 @@ async fn collect_baseline_basenames() -> Map[String, Bool] {
     _ => []
   }
   let suffix = ".errors.txt"
-  let set : Map[String, Bool] = {}
+  let set : Map[String, Bool] = Map([])
   for name in entries {
     if name.has_suffix(suffix) {
       let stem = name[:name.length() - suffix.length()].to_owned()
@@ -134,7 +134,7 @@ async fn main {
   let mut recall_miss = 0
   let mut precision_hit = 0
   let mut precision_miss = 0
-  let per_dir : Map[String, (Int, Int, Int, Int)] = {}
+  let per_dir : Map[String, (Int, Int, Int, Int)] = Map([])
   for dir in dirs {
     let files = collect_ts_source_files_recursive(dir)
     let mut d_rh = 0

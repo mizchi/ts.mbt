@@ -320,9 +320,9 @@ fn merge_interface_group(decls : Array[@ast.TsInterface]) -> @ast.TsInterface {
     return first
   }
   let fields : Array[(String, @ast.TsType)] = []
-  let seen : Map[String, Int] = {}
+  let seen : Map[String, Int] = Map([])
   let readonly_fields : Array[String] = []
-  let ro_seen : Map[String, Bool] = {}
+  let ro_seen : Map[String, Bool] = Map([])
   let extends_names : Array[String] = []
   let extends_args : Array[Array[@ast.TsType]] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
@@ -403,7 +403,7 @@ fn merge_interfaces(
   b : @ast.TsInterface,
 ) -> @ast.TsInterface {
   let fields : Array[(String, @ast.TsType)] = []
-  let seen : Map[String, Int] = {}
+  let seen : Map[String, Int] = Map([])
   // Take `a`'s fields first, then let `b` override / extend.
   for f in a.fields {
     seen[f.0] = fields.length()
@@ -419,7 +419,7 @@ fn merge_interfaces(
     }
   }
   let readonly_fields : Array[String] = []
-  let ro_seen : Map[String, Bool] = {}
+  let ro_seen : Map[String, Bool] = Map([])
   for n in a.readonly_fields {
     if !(ro_seen.get(n) is Some(_)) {
       ro_seen[n] = true
@@ -886,7 +886,7 @@ fn Resolver::ingest_module(
   // declarations, rather than folded pairwise with a full copy of the
   // accumulator at each step. The group order is declaration order,
   // which is what the merge semantics above are defined in terms of.
-  let iface_groups : Map[String, Array[@ast.TsInterface]] = {}
+  let iface_groups : Map[String, Array[@ast.TsInterface]] = Map([])
   let iface_order : Array[String] = []
   for i in module_.interfaces {
     let key = prefix + i.name
@@ -934,7 +934,7 @@ fn Resolver::ingest_module(
     match r.enums.get(prefix + e.name) {
       Some(existing) => {
         let merged_members : Array[@ast.TsEnumMember] = []
-        let seen_members : Map[String, Unit] = {}
+        let seen_members : Map[String, Unit] = Map([])
         for m in existing.members {
           seen_members[m.name] = ()
           merged_members.push(m)
@@ -1037,7 +1037,7 @@ fn Resolver::ingest_module(
   // name has at least one bodyless declaration, bodied declarations of the
   // same name stay out of the ingested union (they still contribute
   // `signatures` metadata below).
-  let has_sig_only : Map[String, Bool] = {}
+  let has_sig_only : Map[String, Bool] = Map([])
   for f in module_.funcs {
     if f.body.stmts.length() == 0 {
       has_sig_only[f.name] = true
@@ -1124,7 +1124,7 @@ fn Resolver::ingest_module(
   // group same-name declarations into bodyless overload signatures vs
   // implementations; register only the unambiguous
   // all-TemplateStringsArray shape.
-  let tag_groups : Map[String, (Int, Int, Bool)] = {}
+  let tag_groups : Map[String, (Int, Int, Bool)] = Map([])
   for f in module_.funcs {
     let is_sig_only = f.body.stmts.length() == 0
     let tsa_first = f.params.length() > 0 &&
@@ -1162,7 +1162,7 @@ fn Resolver::ingest_module(
       let decls = match r.namespace_value_decls.get(ns_key) {
         Some(m) => m
         None => {
-          let m : Map[String, Bool] = {}
+          let m : Map[String, Bool] = Map([])
           r.namespace_value_decls[ns_key] = m
           m
         }
@@ -1170,7 +1170,7 @@ fn Resolver::ingest_module(
       let exports = match r.namespace_exports.get(ns_key) {
         Some(m) => m
         None => {
-          let m : Map[String, Bool] = {}
+          let m : Map[String, Bool] = Map([])
           r.namespace_exports[ns_key] = m
           m
         }
@@ -1200,7 +1200,7 @@ fn Resolver::ingest_module(
       }
       for gm in nsm.grammar_misuses {
         if gm.has_prefix("<export-value>") {
-          exports[gm["<export-value>".length():].to_string()] = true
+          exports[gm["<export-value>".length():].to_owned()] = true
         }
       }
       // Same-name namespace blocks MERGE, so one instantiated block makes
@@ -1699,7 +1699,7 @@ fn resolver_eval_mapped_remap(
     }
   }
   for k in keys {
-    let bind : Map[String, @ast.TsType] = {}
+    let bind : Map[String, @ast.TsType] = Map([])
     bind[binder] = Literal(k)
     let remap_k = substitute_params(remap, bind)
     let branch_key = fn(b : @ast.TsType) -> @ast.TsType {
@@ -1939,7 +1939,7 @@ fn Resolver::class_construct_signature(
 
 ///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   let mut cur = ty
   let mut keep_going = true
   while keep_going {
@@ -2036,7 +2036,7 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           match binding {
             Some((type_params, body)) => {
               seen[n] = true
-              let bindings : Map[String, @ast.TsType] = {}
+              let bindings : Map[String, @ast.TsType] = Map([])
               let limit = if args.length() < type_params.length() {
                 args.length()
               } else {
@@ -2476,7 +2476,7 @@ fn scoped_bindings_for_method(
       if names.length() == 0 {
         return bindings
       }
-      let scoped : Map[String, @ast.TsType] = {}
+      let scoped : Map[String, @ast.TsType] = Map([])
       for kv in bindings {
         if !names.contains(kv.0) {
           scoped[kv.0] = kv.1
@@ -2917,7 +2917,7 @@ fn Resolver::lookup_field_core(
     Applied(n, args) =>
       match self.interfaces.get(n) {
         Some(iface) => {
-          let bindings : Map[String, @ast.TsType] = {}
+          let bindings : Map[String, @ast.TsType] = Map([])
           let limit = if args.length() < iface.type_params.length() {
             args.length()
           } else {
@@ -2981,7 +2981,7 @@ fn Resolver::lookup_field_core(
               // Same shape as the interface arm, walking class members
               // (instance only — static members aren't reachable via
               // `recv.field` on an instance).
-              let bindings : Map[String, @ast.TsType] = {}
+              let bindings : Map[String, @ast.TsType] = Map([])
               let limit = if args.length() < cls.type_params.length() {
                 args.length()
               } else {
@@ -3007,7 +3007,7 @@ fn Resolver::lookup_field_core(
                   // the assignability check then leaves unconstrained)
                   // instead of being resolved to the class's type argument.
                   let method_bindings = if m.type_params.length() > 0 {
-                    let scoped : Map[String, @ast.TsType] = {}
+                    let scoped : Map[String, @ast.TsType] = Map([])
                     for kv in bindings {
                       if !m.type_params.contains(kv.0) {
                         scoped[kv.0] = kv.1
@@ -3228,7 +3228,7 @@ fn collect_index_sigs(
       seen[n] = true
       match resolver.interfaces.get(n) {
         Some(iface) => {
-          let bindings : Map[String, @ast.TsType] = {}
+          let bindings : Map[String, @ast.TsType] = Map([])
           let limit = if args.length() < iface.type_params.length() {
             args.length()
           } else {
@@ -4325,7 +4325,7 @@ fn Resolver::lookup_constructor_sig(
           if cls.base_names.length() == 0 {
             Some(([], []))
           } else {
-            self.lookup_inherited_constructor_sig(cls.base_names[0], Map::new())
+            self.lookup_inherited_constructor_sig(cls.base_names[0], Map([]))
           }
       }
     None => None
@@ -4478,7 +4478,7 @@ fn ExprEnv::restore_from(
   self : ExprEnv,
   snap : Array[(String, @ast.TsType)],
 ) -> Unit {
-  let kept : Map[String, @ast.TsType] = {}
+  let kept : Map[String, @ast.TsType] = Map([])
   for entry in snap {
     kept[entry.0] = entry.1
   }
@@ -4823,7 +4823,7 @@ fn private_brand_id(prop : String) -> String? {
   }
   let rest = prop[prefix.length():].to_owned()
   match rest.find("__") {
-    Some(i) => Some(rest[:i].to_string())
+    Some(i) => Some(rest[:i].to_owned())
     None => None
   }
 }
@@ -4952,7 +4952,7 @@ fn nominal_private_blocks(
     Some(tn) =>
       if class_has_private_member(resolver, tn) {
         match s_class {
-          Some(sn) => if not(class_extends(resolver, sn, tn)) { return true }
+          Some(sn) => if !class_extends(resolver, sn, tn) { return true }
           None => return true
         }
       }
@@ -4962,7 +4962,7 @@ fn nominal_private_blocks(
     Some(sn) =>
       if class_has_private_member(resolver, sn) {
         match t_class {
-          Some(tn) => if not(class_extends(resolver, sn, tn)) { return true }
+          Some(tn) => if !class_extends(resolver, sn, tn) { return true }
           None => return true
         }
       }
@@ -6166,7 +6166,7 @@ fn relational_unconstrained_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
   match ty {
     Named(n) =>
       ctx.in_scope_type_params.contains(n) &&
-      not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == n }))
+      !ctx.type_param_bounds.iter().any(fn(b) { b.0 == n })
     _ => false
   }
 }
@@ -6953,7 +6953,7 @@ fn collect_string_literals(ty : @ast.TsType, out : Array[String]) -> Bool {
     }
     Union(parts) => {
       for p in parts {
-        if not(collect_string_literals(p, out)) {
+        if !collect_string_literals(p, out) {
           return false
         }
       }
@@ -6982,7 +6982,7 @@ fn collect_number_literals(ty : @ast.TsType, out : Array[String]) -> Bool {
     }
     Union(parts) => {
       for p in parts {
-        if not(collect_number_literals(p, out)) {
+        if !collect_number_literals(p, out) {
           return false
         }
       }
@@ -7095,8 +7095,8 @@ fn check_binop_operands(
       if is_definite_primitive_type(lt) &&
         is_definite_primitive_type(rt) &&
         (is_bool(lt) || is_bool(rt)) &&
-        not(is_string_kind(lt)) &&
-        not(is_string_kind(rt)) {
+        !is_string_kind(lt) &&
+        !is_string_kind(rt) {
         record(
           ctx,
           "`+` operands",
@@ -7202,7 +7202,7 @@ fn check_binop_operands(
         is_checkable(lt) &&
         is_checkable(rt) &&
         (
-          not(types_can_overlap(lt, rt)) ||
+          !types_can_overlap(lt, rt) ||
           literal_union_disjoint(lt, rt) ||
           shapes_definitely_disjoint(ctx.resolver, lt, rt)
         ) {
@@ -7349,7 +7349,7 @@ fn fold_constant_template(
   if parts.length() != exprs.length() + 1 {
     return None
   }
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i, e in exprs {
     buf.write_string(parts[i])
     match e {
@@ -8558,7 +8558,7 @@ fn solve_generic_bindings(
   // from the other positions and the NoInfer argument is CHECKED against
   // the pinned binding instead of contributing to it (noInfer.ts).
   let params = params.map(fn(p) { strip_noinfer_positions(p) })
-  let bindings : Map[String, @ast.TsType] = {}
+  let bindings : Map[String, @ast.TsType] = Map([])
   for tp in type_params {
     bindings[tp] = @ast.TsType::Any
   }
@@ -8570,7 +8570,7 @@ fn solve_generic_bindings(
   // the first-wins inference so a genuine mismatch (`g([1,2,3], "abc")`) is
   // still reported — the nested position pins `T` and the bare one is then
   // a real assignability check.
-  let widen_safe : Map[String, Unit] = {}
+  let widen_safe : Map[String, Unit] = Map([])
   for tp in type_params {
     let mut nested = false
     for p in params {
@@ -9101,7 +9101,7 @@ fn infer_typeof_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
     Undefined | Void => lit("undefined")
     Func(_, _) | Constructor(_, _, _) => lit("function")
     Union(parts) => {
-      let seen : Map[String, Bool] = {}
+      let seen : Map[String, Bool] = Map([])
       let tags : Array[@ast.TsType] = []
       for p in parts {
         let tag = infer_typeof_type(resolver, p)
@@ -10151,7 +10151,7 @@ fn check_expr_against(
         }
       }
       if all_lit && parts.length() == tpl_exprs.length() + 1 {
-        let buf = StringBuilder::new()
+        let buf = StringBuilder()
         for i, part in parts {
           buf.write_string(part)
           if i < tpl_exprs.length() {
@@ -10414,7 +10414,7 @@ fn check_expr_against(
   match inferred_u {
     Named(tp) =>
       if ctx.in_scope_type_params.contains(tp) &&
-        not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == tp })) {
+        !ctx.type_param_bounds.iter().any(fn(b) { b.0 == tp }) {
         let target_is_concrete_object = match expected_u {
           Object(_) | Struct(_, _) => true
           // The `object` keyword excludes primitives; an unconstrained `T`
@@ -10422,7 +10422,7 @@ fn check_expr_against(
           // TS2322 (tsc suggests an `extends object` constraint).
           NonPrimitiveObject => true
           Named(tn) =>
-            not(ctx.in_scope_type_params.contains(tn)) &&
+            !ctx.in_scope_type_params.contains(tn) &&
             ctx.resolver.interfaces.get(tn) is Some(_)
           _ => false
         }
@@ -10454,11 +10454,11 @@ fn check_expr_against(
       Named(tn) => ctx.in_scope_type_params.contains(tn)
       _ => false
     }
-    if not(target_open) && is_checkable(expected_u) {
+    if !target_open && is_checkable(expected_u) {
       let leaks_undef = type_has_undefined(inferred_u) &&
-        not(type_has_undefined(expected_u))
+        !type_has_undefined(expected_u)
       let leaks_null = type_has_null(inferred_u) &&
-        not(type_has_null(expected_u))
+        !type_has_null(expected_u)
       if leaks_undef || leaks_null {
         record(
           ctx,
@@ -10554,9 +10554,9 @@ fn check_expr_against(
         // widenings (`number`→`Number`, `string`→`String`) and `Object` /
         // `Function` are guarded as universal targets below, so letting these
         // through stays false-positive-free while catching e.g. `foo<Date>(1)`.
-        not(
+        !(
           is_well_known_type_name(n) &&
-          is_concrete_primitive_or_literal(inferred_u),
+          is_concrete_primitive_or_literal(inferred_u)
         ) {
         return
       }
@@ -10689,9 +10689,9 @@ fn check_expr_against(
       (Some(s), Some(t)) =>
         if not_generic_func(s) &&
           not_generic_func(t) &&
-          not(type_has_intersection_or_applied(s)) &&
-          not(type_has_intersection_or_applied(t)) &&
-          not(is_assignable_to_bivariant(s, t)) {
+          !type_has_intersection_or_applied(s) &&
+          !type_has_intersection_or_applied(t) &&
+          !is_assignable_to_bivariant(s, t) {
           record(
             ctx,
             sub_path,
@@ -10910,7 +10910,7 @@ fn check_expr_against(
     // legitimately accept a literal that the checked signature rejects.
     let precise_literal_mismatch = precise_literal_type(expr) is Some(_) &&
       literal_union_members(expected_u) is Some(_) &&
-      not(sub_path.contains("arg["))
+      !sub_path.contains("arg[")
     let shown = if precise_literal_mismatch {
       inferred_u
     } else {
@@ -11300,15 +11300,15 @@ fn type_deeply_contains_unmodeled(
   if type_is_unmodeled_shape(ty, resolver) {
     return true
   }
-  fn recur(t : @ast.TsType) -> Bool {
+  fn recur_(t : @ast.TsType) -> Bool {
     type_deeply_contains_unmodeled(t, resolver, depth=depth + 1, visited~)
   }
 
   match resolver.unwrap(ty) {
-    Array(inner) | Rest(inner) => recur(inner)
+    Array(inner) | Rest(inner) => recur_(inner)
     Union(parts) | Intersection(parts) | Tuple(parts) => {
       for p in parts {
-        if recur(p) {
+        if recur_(p) {
           return true
         }
       }
@@ -11316,7 +11316,7 @@ fn type_deeply_contains_unmodeled(
     }
     Object(fields) => {
       for f in fields {
-        if recur(f.1) {
+        if recur_(f.1) {
           return true
         }
       }
@@ -11324,11 +11324,11 @@ fn type_deeply_contains_unmodeled(
     }
     Func(params, ret) => {
       for p in params {
-        if recur(p) {
+        if recur_(p) {
           return true
         }
       }
-      recur(ret)
+      recur_(ret)
     }
     Named(n) => {
       if visited.contains(n) {
@@ -11339,7 +11339,7 @@ fn type_deeply_contains_unmodeled(
         Some(iface) => {
           let mut hit = false
           for field in iface.fields {
-            if recur(field.1) {
+            if recur_(field.1) {
               hit = true
               break
             }
@@ -11353,7 +11353,7 @@ fn type_deeply_contains_unmodeled(
     }
     Applied(_, args) => {
       for a in args {
-        if recur(a) {
+        if recur_(a) {
           return true
         }
       }
@@ -11551,7 +11551,7 @@ fn shape_is_callable(ty : @ast.TsType, resolver : Resolver) -> Bool {
 /// type each, so overload sets don't match structurally; comparing them
 /// produces false `expected C but got I` mismatches. Stay silent.
 fn shape_has_overloads(ty : @ast.TsType, resolver : Resolver) -> Bool {
-  let seen : Map[String, Bool] = {}
+  let seen : Map[String, Bool] = Map([])
   for f in collect_declared_fields(ty, resolver) {
     if seen.contains(f.0) {
       return true
@@ -12184,7 +12184,7 @@ fn callable_source_params(
       GenericFunc(_, _, inner) => go(inner, remaining_alias_hops)
       Named(name) if remaining_alias_hops > 0 =>
         match resolver.type_aliases.get(name) {
-          Some(alias) => go(alias.type_, remaining_alias_hops - 1)
+          Some(alias_) => go(alias_.type_, remaining_alias_hops - 1)
           None =>
             match resolver.unwrap(current) {
               Func(params, _) => Some((params, []))
@@ -12193,18 +12193,18 @@ fn callable_source_params(
         }
       Applied(name, args) if remaining_alias_hops > 0 =>
         match resolver.type_aliases.get(name) {
-          Some(alias) if alias.type_params.length() > 0 => {
+          Some(alias_) if alias_.type_params.length() > 0 => {
             let bindings : Map[String, @ast.TsType] = Map([])
-            let limit = if args.length() < alias.type_params.length() {
+            let limit = if args.length() < alias_.type_params.length() {
               args.length()
             } else {
-              alias.type_params.length()
+              alias_.type_params.length()
             }
             for i in 0..<limit {
-              bindings[alias.type_params[i]] = args[i]
+              bindings[alias_.type_params[i]] = args[i]
             }
             go(
-              substitute_params(alias.type_, bindings),
+              substitute_params(alias_.type_, bindings),
               remaining_alias_hops - 1,
             )
           }
@@ -12562,7 +12562,7 @@ fn check_jsx_attrs(
     }
   }
   let props = if type_params.length() > 0 {
-    let bindings : Map[String, @ast.TsType] = {}
+    let bindings : Map[String, @ast.TsType] = Map([])
     for tp in type_params {
       bindings[tp] = @ast.TsType::Any
     }
@@ -12620,7 +12620,7 @@ fn check_jsx_attrs(
   // `key` and `ref` are reserved JSX attributes — React intercepts them
   // before they reach the component, so they aren't validated against
   // the declared props.
-  let spread_provided : Map[String, Bool] = {}
+  let spread_provided : Map[String, Bool] = Map([])
   for entry in attrs {
     let name = entry.0
     if name == "key" || name == "ref" {
@@ -12683,7 +12683,7 @@ fn check_jsx_attrs(
   // Missing-required check. JSX children populate the synthetic
   // `children` prop, so include it in `provided` when at least one
   // child is present.
-  let provided : Map[String, Bool] = {}
+  let provided : Map[String, Bool] = Map([])
   for entry in attrs {
     if entry.0 != "" {
       provided[entry.0] = true
@@ -12805,7 +12805,7 @@ fn object_lit_never_satisfies_union(
     entry_types.push((entry.0, infer_expr(env, resolver, entry.1)))
   }
   for shape in member_shapes {
-    let field_by_name : Map[String, @ast.TsType] = {}
+    let field_by_name : Map[String, @ast.TsType] = Map([])
     for f in shape {
       field_by_name[f.0] = f.1
     }
@@ -12892,8 +12892,8 @@ fn target_is_projectable_record(
   match resolver.unwrap(ty) {
     Applied("Record", [k, v]) =>
       resolver.unwrap(k) is (String_ | Number | Int) &&
-      not(type_contains_unresolved_named(v, resolver)) &&
-      not(is_in_scope_type_param(ctx, v))
+      !type_contains_unresolved_named(v, resolver) &&
+      !is_in_scope_type_param(ctx, v)
     _ => false
   }
 }
@@ -12938,7 +12938,7 @@ fn check_object_lit_against_target(
   // declared names and nothing can be reported missing — which is right,
   // since `Record<string, V>` requires no particular key.
   if member_recv_unmodeled(target, resolver) &&
-    not(target_is_projectable_record(target, resolver, ctx)) {
+    !target_is_projectable_record(target, resolver, ctx) {
     return
   }
   // An unresolved `Named` / `Applied` target — typically a method-level type
@@ -12962,7 +12962,7 @@ fn check_object_lit_against_target(
   // this predicate does not recognise as unresolved. A type-parameter KEY
   // is the same hazard (`f<K extends string>(o: Record<K, number>)`), so
   // the key must be the concrete keyword.
-  if not(target_is_projectable_record(target, resolver, ctx)) &&
+  if !target_is_projectable_record(target, resolver, ctx) &&
     type_contains_unresolved_named(target, resolver) {
     return
   }
@@ -13000,7 +13000,7 @@ fn check_object_lit_against_target(
   // unit test, not the gate.
   let suppress_excess = sub_path.contains("arg[") &&
     resolver.unwrap(target) is Object(_) &&
-    not(arg_callee_non_generic)
+    !arg_callee_non_generic
   // Per-field type checks for each provided key.
   for entry in entries {
     let key = entry.0
@@ -13079,7 +13079,7 @@ fn check_object_lit_against_target(
   // `undefined` (optional, written `x?: T` or `T | undefined`) are
   // exempt.
   let declared = collect_declared_fields(target, resolver)
-  let provided : Map[String, Bool] = {}
+  let provided : Map[String, Bool] = Map([])
   for entry in entries {
     if entry.0.has_prefix("@@spread:") {
       // A `{...spread}` entry contributes every field of the spread source,
@@ -13091,7 +13091,7 @@ fn check_object_lit_against_target(
       let spread_ty = infer_expr(env, resolver, entry.1)
       for sf in collect_declared_fields(spread_ty, resolver) {
         let n = if sf.0.has_prefix("@@get:") || sf.0.has_prefix("@@set:") {
-          sf.0.substring(start=6)
+          sf.0[6:].to_owned()
         } else {
           sf.0
         }
@@ -13258,7 +13258,7 @@ fn collect_declared_fields(
     Applied(n, args) =>
       match resolver.interfaces.get(n) {
         Some(iface) => {
-          let bindings : Map[String, @ast.TsType] = {}
+          let bindings : Map[String, @ast.TsType] = Map([])
           let limit = if args.length() < iface.type_params.length() {
             args.length()
           } else {
@@ -13298,7 +13298,7 @@ fn collect_declared_fields(
         None =>
           match resolver.classes.get(n) {
             Some(cls) => {
-              let bindings : Map[String, @ast.TsType] = {}
+              let bindings : Map[String, @ast.TsType] = Map([])
               let limit = if args.length() < cls.type_params.length() {
                 args.length()
               } else {
@@ -13336,14 +13336,14 @@ fn collect_declared_fields(
         ()
       } else {
         let first_fields = collect_declared_fields(parts[0], resolver)
-        let common : Map[String, @ast.TsType] = {}
+        let common : Map[String, @ast.TsType] = Map([])
         for f in first_fields {
           common[f.0] = f.1
         }
         let mut i = 1
         while i < parts.length() {
           let member_fields = collect_declared_fields(parts[i], resolver)
-          let member_map : Map[String, @ast.TsType] = {}
+          let member_map : Map[String, @ast.TsType] = Map([])
           for f in member_fields {
             member_map[f.0] = f.1
           }
@@ -13695,7 +13695,7 @@ fn unassigned_without(
   src : Map[String, Bool],
   names : Array[String],
 ) -> Map[String, Bool] {
-  let m : Map[String, Bool] = {}
+  let m : Map[String, Bool] = Map([])
   for k, v in src {
     m[k] = v
   }
@@ -14389,7 +14389,7 @@ fn loop_backedge_bindings(
   if !collect_loop_assignments(body, assigns) {
     return out
   }
-  let merged : Map[String, @ast.TsType] = {}
+  let merged : Map[String, @ast.TsType] = Map([])
   for a in assigns {
     let (name, rhs) = a
     if expr_mentions_name(cond, name) {
@@ -14905,7 +14905,7 @@ fn bind_object_pattern(
       if declared.length() == 0 {
         env.bind(rest_name, @ast.TsType::Any)
       } else {
-        let taken : Map[String, Unit] = {}
+        let taken : Map[String, Unit] = Map([])
         for prop in ob.props {
           taken[prop.key] = ()
         }
@@ -14965,7 +14965,7 @@ fn check_compound_assign(
   // Asking assignability instead covers the literal types and widens the
   // EXEMPTION, so it can only lose a finding, never invent one.
   let needs_numeric = match op {
-    AddAssign => not(is_assignable_to(target, @ast.TsType::String_))
+    AddAssign => !is_assignable_to(target, @ast.TsType::String_)
     SubAssign
     | MulAssign
     | DivAssign
@@ -15393,8 +15393,8 @@ fn discriminant_field_matcher(
     // member access renders as `PropAccess(Var(enum), member)` and the field
     // type of an enum-member literal parses as `Named("Enum.Member")`, so we
     // match on the qualified name.
-    PropAccess(Var(enum_name), member) => {
-      let qualified = enum_name + "." + member
+    PropAccess(Var(enum_name), member_) => {
+      let qualified = enum_name + "." + member_
       Some(fn(ft) {
         match ft {
           Named(x) => x == qualified
@@ -16390,7 +16390,7 @@ fn check_block_narrowing_exit(
   for stmt in block.stmts {
     check_stmt(env, stmt, ctx)
   }
-  let exit : Map[String, @ast.TsType] = {}
+  let exit : Map[String, @ast.TsType] = Map([])
   for e in env.full_snapshot() {
     exit[e.0] = e.1
   }
@@ -16635,7 +16635,7 @@ fn check_object_pattern_from_literal(
   ob : @ast.TsObjectBinding,
   entries : Array[(String, @ast.TsExpr)],
 ) -> Unit {
-  let keys : Map[String, Bool] = {}
+  let keys : Map[String, Bool] = Map([])
   // A spread of a syntactic object LITERAL keeps the key set knowable —
   // fold its keys in recursively (`{ ...{ a: 0 } , x: 0 }` provides `a`
   // and `x`; destructuringSpread). Any other spread source abstains.
@@ -16649,7 +16649,7 @@ fn check_object_pattern_from_literal(
         continue
       }
       if e.0.has_prefix("@@get:") || e.0.has_prefix("@@set:") {
-        keys[e.0.substring(start=6)] = true
+        keys[e.0[6:].to_owned()] = true
         continue
       }
       if e.0.has_prefix("<") || e.0.has_prefix("@@") {
@@ -16796,7 +16796,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // could itself be `[Symbol.iterator]`, in which case we stay silent.
       match init {
         ObjectLit(entries) =>
-          if not(entries.iter().any(fn(e) { e.1 is ComputedProp(_, _) })) {
+          if !entries.iter().any(fn(e) { e.1 is ComputedProp(_, _) }) {
             record(
               ctx, "destructuring init", "object literal must have a `[Symbol.iterator]()` method to be destructured as an array",
             )
@@ -16861,7 +16861,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // narrowing: it comes only from an annotation or from a function
       // that returns nothing, and destructuring either really is the
       // error.
-      if ctx.strict_null_checks && not(is_checkable(declared)) {
+      if ctx.strict_null_checks && !is_checkable(declared) {
         if ctx.resolver.unwrap(source_ty) is Void {
           record_unfiltered(
             ctx, "destructuring init", "object is possibly `undefined`",
@@ -17082,7 +17082,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     If(cond, then_block, else_block) => {
       check_call_args_in_expr(env, cond, ctx)
       record_function_as_condition(env, ctx, cond)
-      let pre_map : Map[String, @ast.TsType] = {}
+      let pre_map : Map[String, @ast.TsType] = Map([])
       for e in env.full_snapshot() {
         pre_map[e.0] = e.1
       }
@@ -17103,7 +17103,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         // No `else`: the else path is the fall-through with the condition's
         // else-narrowing applied and no statements.
         None => {
-          let m : Map[String, @ast.TsType] = {}
+          let m : Map[String, @ast.TsType] = Map([])
           for k, v in pre_map {
             m[k] = v
           }
@@ -17133,7 +17133,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         // Union can only widen back toward the pre-`if` type, so the join
         // never over-narrows. Only touch variables that actually changed in
         // a branch.
-        let cands : Map[String, Unit] = {}
+        let cands : Map[String, Unit] = Map([])
         for k, v in then_exit {
           if pre_map.get(k) != Some(v) {
             cands[k] = ()
@@ -17501,7 +17501,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             if is_checkable(scrutinee_ty) &&
               is_checkable(case_ty) &&
               (
-                not(types_can_overlap(scrutinee_ty, case_ty)) ||
+                !types_can_overlap(scrutinee_ty, case_ty) ||
                 literal_union_disjoint(scrutinee_ty, case_ty)
               ) {
               record(
@@ -17700,7 +17700,7 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
   let lib_too_old = ctx.resolver.lib_lacks_es2017 &&
     is_es2017_sharedmemory_global(name)
   if is_pseudo_value_keyword(name) ||
-    (is_lib_global_value(name) && not(node_only) && not(lib_too_old)) {
+    (is_lib_global_value(name) && !node_only && !lib_too_old) {
     return
   }
   // A private-field BRAND is not a value reference at all.
@@ -17904,7 +17904,7 @@ fn check_explicit_type_args(
       call_args : Array[@ast.TsExpr],
       path : String,
     ) -> Unit {
-      let bindings : Map[String, @ast.TsType] = {}
+      let bindings : Map[String, @ast.TsType] = Map([])
       for i in 0..<params.length() {
         bindings[params[i]] = targs[i]
       }
@@ -17929,7 +17929,7 @@ fn check_explicit_type_args(
       Call(_, call_args) =>
         match ctx.resolver.signatures.get(name) {
           Some(sig) =>
-            if not(sig.iter().any(fn(p) { p.is_rest })) {
+            if !sig.iter().any(fn(p) { p.is_rest }) {
               check_against(
                 sig.map(fn(p) { p.type_ }),
                 call_args,
@@ -17941,7 +17941,7 @@ fn check_explicit_type_args(
       New(_, call_args) =>
         match ctx.resolver.lookup_constructor_sig(name) {
           Some((formal_types, sig)) =>
-            if not(sig.iter().any(fn(p) { p.is_rest })) {
+            if !sig.iter().any(fn(p) { p.is_rest }) {
               check_against(formal_types, call_args, "new `\{name}`")
             }
           None => ()
@@ -18367,7 +18367,7 @@ fn check_call_args_in_expr(
       // reads it before assignment, same as a bare reference.
       if name != "__ts_no_init__" &&
         ctx.unassigned.get(name) is Some(block_scoped) &&
-        (not(ctx.in_computed_key) || block_scoped) {
+        (!ctx.in_computed_key || block_scoped) {
         record(
           ctx,
           "use `\{name}`",
@@ -18571,7 +18571,7 @@ fn check_call_args_in_expr(
               has_rest = true
             }
           }
-          if not(has_rest) && args.length() > ps.length() {
+          if !has_rest && args.length() > ps.length() {
             let mut spread = false
             for a in args {
               if a is Spread(_) {
@@ -18579,7 +18579,7 @@ fn check_call_args_in_expr(
               }
             }
             // A spread argument expands to an unknown count.
-            if not(spread) {
+            if !spread {
               record_unfiltered(
                 ctx,
                 "call",
@@ -19140,7 +19140,7 @@ fn check_call_args_in_expr(
           match t {
             Named(p) =>
               ctx.in_scope_type_params.contains(p) &&
-              not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == p }))
+              !ctx.type_param_bounds.iter().any(fn(b) { b.0 == p })
             _ => false
           }
         }
@@ -19476,7 +19476,7 @@ fn check_call_args_in_expr(
                   !member_recv_unmodeled(recv_ty, ctx.resolver) {
                   match ctx.resolver.lookup_field(recv_ty, prop) {
                     Some(ft) =>
-                      if is_checkable(ft) && not(type_has_undefined(ft)) {
+                      if is_checkable(ft) && !type_has_undefined(ft) {
                         record(
                           ctx, "delete", "the operand of a `delete` operator must be optional",
                         )
@@ -19500,14 +19500,14 @@ fn check_call_args_in_expr(
           // (receiver resolving to an enum object, not shadowed locally)
           // can never be an assignment target.
           match inner {
-            PropAccess(Var(recv_name), member)
-            | IndexAccess(Var(recv_name), StringLit(member)) =>
+            PropAccess(Var(recv_name), member_)
+            | IndexAccess(Var(recv_name), StringLit(member_)) =>
               if env.lookup(recv_name) is None &&
                 ctx.resolver.enums.get(recv_name) is Some(_) {
                 record_unfiltered(
                   ctx,
                   "unary op",
-                  "cannot assign to `\{member}` because it is a read-only property",
+                  "cannot assign to `\{member_}` because it is a read-only property",
                 )
               }
             _ => ()
@@ -20849,7 +20849,7 @@ fn check_call_args_in_expr(
     Var(name) => {
       if name != "__ts_no_init__" &&
         ctx.unassigned.get(name) is Some(block_scoped) &&
-        (not(ctx.in_computed_key) || block_scoped) {
+        (!ctx.in_computed_key || block_scoped) {
         record(
           ctx,
           "use `\{name}`",
@@ -21412,7 +21412,7 @@ fn check_private_member_access(module_ : @ast.TsModule) -> Array[ExprIssue] {
     if cls.is_local {
       continue
     }
-    let declared : Map[String, Unit] = {}
+    let declared : Map[String, Unit] = Map([])
     for p in cls.properties {
       if p.name.has_prefix("__private_brand__") {
         declared[p.name] = ()
@@ -21423,7 +21423,7 @@ fn check_private_member_access(module_ : @ast.TsModule) -> Array[ExprIssue] {
         declared[m.name] = ()
       }
     }
-    if declared.size() == 0 {
+    if declared.length() == 0 {
       continue
     }
     // The class's own brand (`__private_brand__N`) -- all its `#`-members share
@@ -21469,7 +21469,7 @@ fn private_brand_of(name : String) -> String? {
   if !name.has_prefix(prefix) {
     return None
   }
-  let rest = name.substring(start=prefix.length())
+  let rest = name[prefix.length():].to_owned()
   let chars = rest.to_array()
   let mut i = 0
   while i < chars.length() && chars[i] >= '0' && chars[i] <= '9' {
@@ -21478,7 +21478,7 @@ fn private_brand_of(name : String) -> String? {
   if i == 0 {
     return None
   }
-  Some(prefix + rest.substring(start=0, end=i))
+  Some(prefix + rest[:i].to_owned())
 }
 
 ///|
@@ -21727,9 +21727,9 @@ fn check_private_method_assignments(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
-    let targets : Map[String, String] = {}
-    let has_setter : Map[String, Unit] = {}
-    let getters : Map[String, Unit] = {}
+    let targets : Map[String, String] = Map([])
+    let has_setter : Map[String, Unit] = Map([])
+    let getters : Map[String, Unit] = Map([])
     for m in cls.methods {
       if !m.name.has_prefix("__private_brand__") {
         continue
@@ -21747,7 +21747,7 @@ fn check_private_method_assignments(
         targets[name] = "cannot assign to a read-only private accessor"
       }
     }
-    if targets.size() == 0 {
+    if targets.length() == 0 {
       continue
     }
     let owner = cls.name
@@ -21901,8 +21901,8 @@ fn check_prototype_static_member_assign(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
-    let inst : Map[String, Unit] = {}
-    let stat : Map[String, Unit] = {}
+    let inst : Map[String, Unit] = Map([])
+    let stat : Map[String, Unit] = Map([])
     for m in cls.methods {
       if m.accessor == "" && is_concrete_primitive_or_literal(m.return_type) {
         if m.is_static {
@@ -21912,7 +21912,7 @@ fn check_prototype_static_member_assign(
         }
       }
     }
-    if inst.size() == 0 && stat.size() == 0 {
+    if inst.length() == 0 && stat.length() == 0 {
       continue
     }
     let cn = cls.name
@@ -21921,7 +21921,7 @@ fn check_prototype_static_member_assign(
       prop : String,
       value : @ast.TsExpr,
     ) -> Unit {
-      if not(arrow_is_void_returning(value)) {
+      if !arrow_is_void_returning(value) {
         return
       }
       let hit = match recv {
@@ -21996,7 +21996,7 @@ fn check_prototype_static_member_assign(
 /// own). Expression-bodied arrows return a value and are never void here.
 fn arrow_is_void_returning(expr : @ast.TsExpr) -> Bool {
   match expr {
-    ArrowFunc(_, _, ArrowBlock(b), _) => not(block_has_value_return(b.stmts))
+    ArrowFunc(_, _, ArrowBlock(b), _) => !block_has_value_return(b.stmts)
     _ => false
   }
 }
@@ -22058,7 +22058,7 @@ fn block_has_value_return(stmts : Array[@ast.TsStmt]) -> Bool {
 /// that appears at module top level, in a free function, or in a *different*
 /// class's body (all provably outside C), which is false-positive-free.
 fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] {
-  let restricted : Map[String, String] = {}
+  let restricted : Map[String, String] = Map([])
   for cls in module_.classes {
     // A class declared inside a function or another class's method is
     // skipped on BOTH sides. Its own restricted constructor cannot be
@@ -22092,7 +22092,7 @@ fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] 
     }
   }
   let issues : Array[ExprIssue] = []
-  if restricted.size() == 0 {
+  if restricted.length() == 0 {
     return issues
   }
   scan_new_exprs_stmts(module_.top_level_stmts, restricted, "", issues)
@@ -22295,11 +22295,11 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "abstract methods can only appear within an abstract class",
       })
     }
-    let abstract_set : Map[String, Unit] = {}
+    let abstract_set : Map[String, Unit] = Map([])
     for n in cls.abstract_members {
       abstract_set[n] = ()
     }
-    let private_set : Map[String, Unit] = {}
+    let private_set : Map[String, Unit] = Map([])
     for n in cls.private_members {
       private_set[n] = ()
     }
@@ -22356,17 +22356,17 @@ fn circular_type_param_names(
   type_params : Array[String],
   bounds : Array[(String, @ast.TsType)],
 ) -> Array[String] {
-  let tp_set : Map[String, Unit] = {}
+  let tp_set : Map[String, Unit] = Map([])
   for p in type_params {
     tp_set[p] = ()
   }
-  let bound_of : Map[String, @ast.TsType] = {}
+  let bound_of : Map[String, @ast.TsType] = Map([])
   for b in bounds {
     bound_of[b.0] = b.1
   }
   let circular : Array[String] = []
   for p in type_params {
-    let visited : Map[String, Unit] = {}
+    let visited : Map[String, Unit] = Map([])
     visited[p] = ()
     let mut cur = p
     let mut is_circular = false
@@ -23775,7 +23775,7 @@ fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
       }
     }
     // (2) / (3) constructor body, in source order, up to the `super(…)` call.
-    if not(flagged) {
+    if !flagged {
       match cls.constructor_body {
         Some(body) => {
           let mut super_seen = false
@@ -24299,7 +24299,7 @@ fn check_member_accessibility_mismatch(
     }
     let base_name = cls.base_names[0]
     guard resolver.classes.get(base_name) is Some(base) else { continue }
-    let reported : Map[String, Unit] = {}
+    let reported : Map[String, Unit] = Map([])
     fn consider(name : String, is_static : Bool) -> Unit {
       if name.has_prefix("<") || name.has_prefix("#") || name == "constructor" {
         return
@@ -24407,11 +24407,11 @@ fn check_non_local_exports(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let reported : Map[String, Unit] = {}
+  let reported : Map[String, Unit] = Map([])
   // `imported_binding_names` is an Array, so `.contains` is a scan; a
   // barrel module re-exporting what it imports has many of both, and the
   // product is the one superlinear term in an otherwise linear check.
-  let imported : Map[String, Unit] = {}
+  let imported : Map[String, Unit] = Map([])
   for n in module_.imported_binding_names {
     imported[n] = ()
   }
@@ -24583,7 +24583,7 @@ fn check_interface_conflicting_bases(
         // One pass over the right base's members instead of a
         // fields x fields scan. Two DOM-sized bases are ~1M comparisons
         // per pair as a nested scan and ~2K as an indexed join.
-        let rfields : Map[String, Array[@ast.TsType]] = {}
+        let rfields : Map[String, Array[@ast.TsType]] = Map([])
         for ra in ri.fields {
           let (rname, rty) = ra
           match rfields.get(rname) {
@@ -24638,7 +24638,7 @@ fn check_merged_export_modifiers(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let exported : Map[String, Int] = {}
+  let exported : Map[String, Int] = Map([])
   for gm in module_.grammar_misuses {
     if !gm.has_prefix("<export-type>") {
       continue
@@ -24657,7 +24657,7 @@ fn check_merged_export_modifiers(
   // `.d.ts` is 16M string comparisons -- 3.3x the whole old check time,
   // measured. Nothing about the rule changes: these are the same two
   // counts, read from an index.
-  let alias_counts : Map[String, Int] = {}
+  let alias_counts : Map[String, Int] = Map([])
   for ta in module_.type_aliases {
     alias_counts[ta.name] = (match alias_counts.get(ta.name) {
         Some(v) => v
@@ -24665,7 +24665,7 @@ fn check_merged_export_modifiers(
       }) +
       1
   }
-  let iface_counts : Map[String, Int] = {}
+  let iface_counts : Map[String, Int] = Map([])
   for iface in module_.interfaces {
     iface_counts[iface.name] = (match iface_counts.get(iface.name) {
         Some(v) => v
@@ -24713,7 +24713,7 @@ fn check_merged_interface_member_conflicts(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let alias_names : Map[String, Unit] = {}
+  let alias_names : Map[String, Unit] = Map([])
   for ta in module_.type_aliases {
     alias_names[ta.name] = ()
   }
@@ -24728,7 +24728,7 @@ fn check_merged_interface_member_conflicts(
   // visited in first-appearance order, so the pairs this examines and
   // the order it reports them in are exactly what the pair loop produced
   // once the `b.name != a.name` arm is taken out.
-  let by_name : Map[String, Array[Int]] = {}
+  let by_name : Map[String, Array[Int]] = Map([])
   let order : Array[String] = []
   for i in 0..<module_.interfaces.length() {
     let name = module_.interfaces[i].name
@@ -24740,7 +24740,7 @@ fn check_merged_interface_member_conflicts(
       }
     }
   }
-  let reported : Map[String, Unit] = {}
+  let reported : Map[String, Unit] = Map([])
   for name in order {
     if alias_names.contains(name) {
       continue
@@ -24766,7 +24766,7 @@ fn check_merged_interface_member_conflicts(
     // loop -- where `types_definitely_differ` abstains on (first, later)
     // but would have proven (later, later') -- and losing a finding is
     // the affordable direction.
-    let first_ty : Map[String, @ast.TsType] = {}
+    let first_ty : Map[String, @ast.TsType] = Map([])
     for gi in 0..<idxs.length() {
       if reported.contains(name) {
         break
@@ -24825,8 +24825,8 @@ fn check_for_of_head_var_reads(
   if !strict {
     return issues
   }
-  let head_vars : Map[String, Unit] = {}
-  let assigned : Map[String, Unit] = {}
+  let head_vars : Map[String, Unit] = Map([])
+  let assigned : Map[String, Unit] = Map([])
   for stmt in module_.top_level_stmts {
     match stmt {
       ForOf(@ast.TsForOfKind::Var, @ast.TsBinding::Ident(n), _, _, _)
@@ -24843,7 +24843,7 @@ fn check_for_of_head_var_reads(
       _ => ()
     }
   }
-  let reported : Map[String, Unit] = {}
+  let reported : Map[String, Unit] = Map([])
   for stmt in module_.top_level_stmts {
     match stmt {
       Expr(@ast.TsExpr::Var(n)) =>
@@ -24914,7 +24914,7 @@ fn check_enum_init_name_types(
     if !gm.has_prefix("<enum-init-name:") {
       continue
     }
-    let name = gm["<enum-init-name:".length():gm.length() - 1].to_string()
+    let name = gm["<enum-init-name:".length():gm.length() - 1].to_owned()
     match env.lookup(name) {
       Some(ty) =>
         if definitely_not_numeric(ty) {
@@ -25055,7 +25055,7 @@ fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
         path: "class \{cls.name}",
         message: "class name cannot be `\{cls.name}`",
       })
-    } else if commonjs && cls.name == "Object" && not(cls.is_declare) {
+    } else if commonjs && cls.name == "Object" && !cls.is_declare {
       issues.push({
         path: "class \{cls.name}",
         message: "class name cannot be `Object` when targeting ES5 and above with module CommonJS",
@@ -25144,12 +25144,12 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // forward reference). The exemption costs a MISS in the other
   // direction — `const D = class extends B {}; class B {}` IS TS2449 and
   // stays quiet — which is the affordable half.
-  let class_index : Map[String, Int] = {}
+  let class_index : Map[String, Int] = Map([])
   for i, c in module_.classes {
     // A repeated name is a different error (TS2300, batch CA); keep the
     // FIRST index so a later duplicate cannot make an earlier `extends`
     // look forward-referencing.
-    if not(class_index.contains(c.name)) && not(c.is_declare) && not(c.is_local) {
+    if !class_index.contains(c.name) && !c.is_declare && !c.is_local {
       class_index[c.name] = i
     }
   }
@@ -25185,7 +25185,7 @@ fn check_class_interface_merge_modifiers(
   // Index interfaces by name once so the per-class lookup is O(1) rather than
   // an inner scan over every interface (which made this O(classes ×
   // interfaces) on files that declare many of both).
-  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  let iface_by_name : Map[String, @ast.TsInterface] = Map([])
   for iface in module_.interfaces {
     if iface_by_name.get(iface.name) is None {
       iface_by_name[iface.name] = iface
@@ -25199,11 +25199,11 @@ fn check_class_interface_merge_modifiers(
     }
     match iface_by_name.get(cls.name) {
       Some(iface) => {
-        let iface_field_names : Map[String, Unit] = {}
+        let iface_field_names : Map[String, Unit] = Map([])
         for field in iface.fields {
           iface_field_names[field.0] = ()
         }
-        let seen : Map[String, Unit] = {}
+        let seen : Map[String, Unit] = Map([])
         for name in cls.private_members {
           if iface_field_names.get(name) is Some(_) && seen.get(name) is None {
             seen[name] = ()
@@ -25589,14 +25589,14 @@ fn check_derived_indexer_compat(
   // `(class, is_numeric_key) -> naked type-parameter name` markers recorded
   // by the parser: the AST's index-signature value was widened to the
   // parameter's bound, so the generic slot is recovered from here.
-  let naked_params : Map[String, String] = {}
+  let naked_params : Map[String, String] = Map([])
   for entry in class_dups {
     for name in entry.1 {
       if name.has_prefix("<index-naked-param:num:") {
-        let param = name["<index-naked-param:num:".length():name.length() - 1].to_string()
+        let param = name["<index-naked-param:num:".length():name.length() - 1].to_owned()
         naked_params[entry.0 + "|num"] = param
       } else if name.has_prefix("<index-naked-param:str:") {
-        let param = name["<index-naked-param:str:".length():name.length() - 1].to_string()
+        let param = name["<index-naked-param:str:".length():name.length() - 1].to_owned()
         naked_params[entry.0 + "|str"] = param
       }
     }
@@ -25634,7 +25634,7 @@ fn check_derived_indexer_compat(
     }
     // Bind the base's type parameters to the `extends B<...>` arguments
     // recorded by the parser (empty for a non-generic base).
-    let bindings : Map[String, @ast.TsType] = {}
+    let bindings : Map[String, @ast.TsType] = Map([])
     for entry in base_type_args {
       if entry.0 == cls.name && entry.1 == base_name {
         for i, tp in base_type_params {
@@ -25647,7 +25647,7 @@ fn check_derived_indexer_compat(
     // A generic base referenced without arguments leaves its parameters
     // unbound; substituting would compare against the raw parameter name.
     if base_type_params.length() > 0 &&
-      bindings.size() != base_type_params.length() {
+      bindings.length() != base_type_params.length() {
       continue
     }
     for dsig in cls.index_signatures {
@@ -25736,7 +25736,7 @@ fn check_derived_indexer_compat(
     guard base_info is Some((base_type_params, base_index_signatures)) else {
       continue
     }
-    let bindings : Map[String, @ast.TsType] = {}
+    let bindings : Map[String, @ast.TsType] = Map([])
     if iface.extends_args.length() == 1 {
       for i, tp in base_type_params {
         if i < iface.extends_args[0].length() {
@@ -25745,7 +25745,7 @@ fn check_derived_indexer_compat(
       }
     }
     if base_type_params.length() > 0 &&
-      bindings.size() != base_type_params.length() {
+      bindings.length() != base_type_params.length() {
       continue
     }
     for dsig in iface.index_signatures {
@@ -25954,8 +25954,8 @@ fn check_accessor_pair_types(
       continue
     }
     // key -> (getter type?, setter param type?)
-    let getters : Map[String, @ast.TsType] = {}
-    let setters : Map[String, @ast.TsType] = {}
+    let getters : Map[String, @ast.TsType] = Map([])
+    let setters : Map[String, @ast.TsType] = Map([])
     for meth in cls.methods {
       let key = match meth.key_expr {
         Some(ke) => "\{ke}" + (if meth.is_static { "|s" } else { "|i" })
@@ -26018,7 +26018,7 @@ fn tuple_covariant_by_extends(
       return true
     }
     let mut frontier = [from]
-    let visited : Map[String, Unit] = {}
+    let visited : Map[String, Unit] = Map([])
     for _ in 0..<16 {
       let next : Array[String] = []
       for n in frontier {
@@ -26093,7 +26093,7 @@ fn check_interface_extends_member_compat(
     for bi, base_name in iface.extends_names {
       guard resolver.interfaces.get(base_name) is Some(base) else { continue }
       // Instantiate a generic base from the recorded `extends B<...>` args.
-      let bindings : Map[String, @ast.TsType] = {}
+      let bindings : Map[String, @ast.TsType] = Map([])
       if base.type_params.length() > 0 {
         if bi < iface.extends_args.length() {
           for i, tp in base.type_params {
@@ -26102,7 +26102,7 @@ fn check_interface_extends_member_compat(
             }
           }
         }
-        if bindings.size() != base.type_params.length() {
+        if bindings.length() != base.type_params.length() {
           continue
         }
       }
@@ -26206,7 +26206,7 @@ fn check_unresolved_signature_type_refs(
   if module_.module_augmentations.length() > 0 {
     return []
   }
-  let declared : Map[String, Unit] = {}
+  let declared : Map[String, Unit] = Map([])
   fn collect_declared(m : @ast.TsModule) -> Unit {
     for iface in m.interfaces {
       declared[iface.name] = ()
@@ -26457,7 +26457,7 @@ fn check_dot_access_to_index_signature(
   recv : @ast.TsExpr,
   prop : String,
 ) -> Unit {
-  if not(ctx.resolver.no_property_access_from_index_signature) {
+  if !ctx.resolver.no_property_access_from_index_signature {
     return
   }
   if object_prototype_member(prop) is Some(_) {
@@ -26475,7 +26475,7 @@ fn check_dot_access_to_index_signature(
       has_string_index = true
     }
   }
-  if not(has_string_index) {
+  if !has_string_index {
     return
   }
   for f in iface.fields {
@@ -26516,7 +26516,7 @@ fn check_namespace_or_enum_member_access(
   // namespace object from a genuine local shadow.
   let _ = env
   match ctx.resolver.namespace_exports.get(n) {
-    Some(exports) if exports.size() > 0 =>
+    Some(exports) if exports.length() > 0 =>
       match ctx.resolver.namespace_value_decls.get(n) {
         Some(decls) =>
           if decls.contains(prop) && !exports.contains(prop) {
@@ -26602,9 +26602,9 @@ fn resolve_base_chain_members(
   class_by_name : Map[String, @ast.TsClassDecl],
   iface_by_name : Map[String, @ast.TsInterface],
 ) -> BaseChainMembers {
-  let instance : Map[String, Unit] = {}
-  let static_ : Map[String, Unit] = {}
-  let abstract_ : Map[String, Unit] = {}
+  let instance : Map[String, Unit] = Map([])
+  let static_ : Map[String, Unit] = Map([])
+  let abstract_ : Map[String, Unit] = Map([])
   if cls.base_names.length() == 0 && cls.base_expr is None {
     return { instance, static_, abstract_, resolvable: true, has_opaque: false }
   }
@@ -26619,7 +26619,7 @@ fn resolve_base_chain_members(
   }
   let mut resolvable = true
   let mut cursor : String? = Some(cls.base_names[0])
-  let visited : Map[String, Unit] = {}
+  let visited : Map[String, Unit] = Map([])
   let mut has_opaque = false
   while cursor is Some(bn) {
     if visited.contains(bn) {
@@ -26719,30 +26719,30 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
       no_implicit_override = true
     }
   }
-  let class_by_name : Map[String, @ast.TsClassDecl] = {}
+  let class_by_name : Map[String, @ast.TsClassDecl] = Map([])
   for c in module_.classes {
     class_by_name[c.name] = c
   }
-  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  let iface_by_name : Map[String, @ast.TsInterface] = Map([])
   for i in module_.interfaces {
     if i.type_params.length() == 0 {
       iface_by_name[i.name] = i
     }
   }
   for cls in module_.classes {
-    let overrides : Map[String, Unit] = {}
-    let declare_members : Map[String, Unit] = {}
+    let overrides : Map[String, Unit] = Map([])
+    let declare_members : Map[String, Unit] = Map([])
     for d in cls.duplicate_member_names {
       if d.has_prefix("<override-member:") {
-        overrides[d["<override-member:".length():d.length() - 1].to_string()] = ()
+        overrides[d["<override-member:".length():d.length() - 1].to_owned()] = ()
       }
       if d.has_prefix("<declare-member:") {
-        declare_members[d["<declare-member:".length():d.length() - 1].to_string()] = ()
+        declare_members[d["<declare-member:".length():d.length() - 1].to_owned()] = ()
       }
     }
     let has_heritage = cls.base_names.length() > 0 || cls.base_expr is Some(_)
     if !has_heritage {
-      if overrides.size() > 0 {
+      if overrides.length() > 0 {
         issues.push({
           path: "class \{cls.name}",
           message: "this member cannot have an `override` modifier because its containing class does not extend another class",
@@ -26756,14 +26756,14 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
     let base_instance = chain.instance
     let base_static = chain.static_
     let base_abstract = chain.abstract_
-    if not(chain.resolvable) {
+    if !chain.resolvable {
       continue
     }
     // TS4113: overrides that no base declares.
     for kv in overrides {
       let name = kv.0
       let is_static_m = name.has_prefix("s:")
-      let bare = name[2:].to_string()
+      let bare = name[2:].to_owned()
       if bare == "<computed>" {
         // An `override` on a COMPUTED key. Batch BY rejected this rule
         // outright and was right to: `override [prop]()` is legal when
@@ -26781,10 +26781,10 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // Merged-interface members count as declarations (they are folded
         // into `instance` above), so `interface M { m(): void }` beside
         // `class M {}` correctly abstains.
-        if base_instance.size() == 0 &&
-          base_static.size() == 0 &&
-          base_abstract.size() == 0 &&
-          not(chain.has_opaque) {
+        if base_instance.length() == 0 &&
+          base_static.length() == 0 &&
+          base_abstract.length() == 0 &&
+          !chain.has_opaque {
           issues.push({
             path: "class \{cls.name}",
             message: "this member cannot have an `override` modifier because it is not declared in the base class",
@@ -26837,7 +26837,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
           })
         }
       }
-      let seen_members : Map[String, Unit] = {}
+      let seen_members : Map[String, Unit] = Map([])
       for m in cls.methods {
         let key = (if m.is_static { "s:" } else { "i:" }) + m.name
         if !seen_members.contains(key) {
@@ -26898,7 +26898,7 @@ fn check_use_strict_with_non_simple_params(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  if not(resolver.target_reaches_es2016) {
+  if !resolver.target_reaches_es2016 {
     return issues
   }
   fn non_simple(params : Array[@ast.TsParam]) -> Bool {
@@ -27089,24 +27089,24 @@ fn expando_writes_in_stmt(
   holders : Map[String, Unit],
   dotted : Map[String, Unit],
   definite : Map[String, Bool],
-  opaque : Map[String, Unit],
+  opaque_ : Map[String, Unit],
 ) -> Unit {
   fn block(b : @ast.TsBlock) -> Unit {
     for s in b.stmts {
-      expando_writes_in_stmt(s, holders, dotted, definite, opaque)
+      expando_writes_in_stmt(s, holders, dotted, definite, opaque_)
     }
   }
 
   // `name` distinguishes `d.q = v` from `d["q"] = v`; `key` is `None` for
   // the former and the bracket's key expression for the latter.
   fn note(h : String, name : String?, key : @ast.TsExpr?) -> Unit {
-    if not(holders.contains(h)) {
+    if !holders.contains(h) {
       return
     }
     match (name, key) {
       (Some(p), _) => dotted["\{h}.\{p}"] = ()
       (None, Some(StringLit(p))) => definite["\{h}.\{p}"] = true
-      (None, Some(_)) => opaque[h] = ()
+      (None, Some(_)) => opaque_[h] = ()
       (None, None) => ()
     }
   }
@@ -27202,7 +27202,7 @@ fn expando_writes_in_stmt(
         block(c.body)
       }
     Label(_, inner) =>
-      expando_writes_in_stmt(inner, holders, dotted, definite, opaque)
+      expando_writes_in_stmt(inner, holders, dotted, definite, opaque_)
     Let(_, _, FuncExpr(f))
     | Const(_, _, FuncExpr(f))
     | Var(_, _, FuncExpr(f)) => block(f.body)
@@ -27320,7 +27320,7 @@ fn expando_reads_in_stmt(
 /// Gated on `strictNullChecks`: with it off, tsc accepts every row above.
 fn check_expando_use_before_assign(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  if not(module_.strict_null_checks) {
+  if !module_.strict_null_checks {
     return issues
   }
   // A top-level `function d() { }` is parsed by the module loop into
@@ -27351,33 +27351,33 @@ fn expando_scan_stmt_list(
   extra_holders : Array[String],
   issues : Array[ExprIssue],
 ) -> Unit {
-  let holders : Map[String, Unit] = {}
+  let holders : Map[String, Unit] = Map([])
   for n in extra_holders {
     holders[n] = ()
   }
   // `HOLDER.PROP` -> true when the assignment seen so far is DEFINITE.
-  let assigned : Map[String, Bool] = {}
+  let assigned : Map[String, Bool] = Map([])
   // Holders written through a key this pass cannot spell (`d[k] = 1`).
   // Such a write could land on any property, so nothing on that holder is
   // reported afterwards.
-  let opaque : Map[String, Unit] = {}
-  let reported : Map[String, Unit] = {}
+  let opaque_ : Map[String, Unit] = Map([])
+  let reported : Map[String, Unit] = Map([])
   for st in stmts {
     // Reads first: a statement that both reads and writes reads the old
     // value (`d.q = d.q`), and the corpus's shapes are one or the other.
-    let reads : Map[String, Unit] = {}
+    let reads : Map[String, Unit] = Map([])
     expando_reads_in_stmt(st, holders, reads)
     for kv in reads {
       let holder = match kv.0.find(".") {
-        Some(i) => kv.0[:i].to_string()
+        Some(i) => kv.0[:i].to_owned()
         None => kv.0
       }
       if assigned.get(kv.0) is Some(false) &&
-        not(reported.contains(kv.0)) &&
-        not(opaque.contains(holder)) {
+        !reported.contains(kv.0) &&
+        !opaque_.contains(holder) {
         reported[kv.0] = ()
         let prop = match kv.0.rev_find(".") {
-          Some(i) => kv.0[i + 1:].to_string()
+          Some(i) => kv.0[i + 1:].to_owned()
           None => kv.0
         }
         issues.push({
@@ -27398,15 +27398,15 @@ fn expando_scan_stmt_list(
     }
     match st {
       If(_, then_b, else_b) => {
-        let tw : Map[String, Unit] = {}
+        let tw : Map[String, Unit] = Map([])
         for s in then_b.stmts {
-          expando_writes_in_stmt(s, holders, tw, assigned, opaque)
+          expando_writes_in_stmt(s, holders, tw, assigned, opaque_)
         }
-        let ew : Map[String, Unit] = {}
+        let ew : Map[String, Unit] = Map([])
         match else_b {
           Some(b) =>
             for s in b.stmts {
-              expando_writes_in_stmt(s, holders, ew, assigned, opaque)
+              expando_writes_in_stmt(s, holders, ew, assigned, opaque_)
             }
           None => ()
         }
@@ -27418,7 +27418,7 @@ fn expando_scan_stmt_list(
           }
         }
         for kv in ew {
-          if not(tw.contains(kv.0)) && assigned.get(kv.0) is None {
+          if !tw.contains(kv.0) && assigned.get(kv.0) is None {
             assigned[kv.0] = false
           }
         }
@@ -27427,8 +27427,8 @@ fn expando_scan_stmt_list(
         // Every other construct — including a bare `HOLDER.PROP = v` at
         // this level — counts as a definite assignment. See the header
         // for why the unmodelled direction is the quiet one.
-        let w : Map[String, Unit] = {}
-        expando_writes_in_stmt(st, holders, w, assigned, opaque)
+        let w : Map[String, Unit] = Map([])
+        expando_writes_in_stmt(st, holders, w, assigned, opaque_)
         for kv in w {
           assigned[kv.0] = true
         }
@@ -27523,14 +27523,14 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
     return issues
   }
   // Group same-name declarations in source order.
-  let by_name : Map[String, Array[@ast.TsType]] = {}
+  let by_name : Map[String, Array[@ast.TsType]] = Map([])
   let order : Array[String] = []
   // Functions written inside a `declare module "spec" { ... }` body are
   // ambient overload signatures with no implementation; the trailing
   // void-return heuristic below assumes the last decl is the
   // implementation, which doesn't hold there (@types/node crypto's
   // `randomInt` / `verify`). Exempt them by name.
-  let ambient_module_fns : Map[String, Unit] = {}
+  let ambient_module_fns : Map[String, Unit] = Map([])
   for entry in module_.module_augmentations {
     let (_, aug) = entry
     for af in aug.funcs {
@@ -27546,14 +27546,14 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // implementation") — the rule this file recorded as filed "because
   // nothing in the corpus asked for it", which `multipleDefaultExports04`
   // now does. A set threw exactly that count away.
-  let impl_count : Map[String, Int] = {}
+  let impl_count : Map[String, Int] = Map([])
   for gm in module_.grammar_misuses {
     if gm.has_prefix("<fn-impl:") {
-      let n = gm["<fn-impl:".length():gm.length() - 1].to_string()
+      let n = gm["<fn-impl:".length():gm.length() - 1].to_owned()
       impl_count[n] = impl_count.get(n).unwrap_or(0) + 1
     }
   }
-  let decls_by_name : Map[String, Array[@ast.TsFunc]] = {}
+  let decls_by_name : Map[String, Array[@ast.TsFunc]] = Map([])
   for f in module_.funcs {
     match by_name.get(f.name) {
       Some(arr) => arr.push(f.return_type)
@@ -27641,8 +27641,8 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
             let it = impl_.params[p].type_
             if is_concrete_primitive_or_literal(st) &&
               is_concrete_primitive_or_literal(it) &&
-              not(is_assignable_to(st, it)) &&
-              not(is_assignable_to(it, st)) {
+              !is_assignable_to(st, it) &&
+              !is_assignable_to(it, st) {
               bad = true
               break
             }
@@ -27702,9 +27702,9 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// corpus asked for it.
 fn check_function_var_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let flagged : Map[String, Unit] = {}
+  let flagged : Map[String, Unit] = Map([])
   let report = fn(n : String) {
-    if not(flagged.contains(n)) {
+    if !flagged.contains(n) {
       flagged[n] = ()
       issues.push({
         path: "declare `\{n}`",
@@ -27712,14 +27712,14 @@ fn check_function_var_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
       })
     }
   }
-  let func_names : Map[String, Unit] = {}
+  let func_names : Map[String, Unit] = Map([])
   for f in module_.funcs {
     func_names[f.name] = ()
   }
   // Names already bound at top level, split by declaration kind: a `var`
   // may be re-declared by another `var` and nothing else.
-  let block_scoped : Map[String, Unit] = {}
-  let var_scoped : Map[String, Unit] = {}
+  let block_scoped : Map[String, Unit] = Map([])
+  let var_scoped : Map[String, Unit] = Map([])
   for stmt in module_.top_level_stmts {
     match stmt {
       Let(Ident(n), _, _) | Const(Ident(n), _, _) => {
@@ -27745,7 +27745,7 @@ fn check_function_var_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // INTERFACE and with a same-named NAMESPACE, and both of those live in
   // their own module lists, so a repeat inside `classes` is always the
   // illegal form.
-  let class_seen : Map[String, Unit] = {}
+  let class_seen : Map[String, Unit] = Map([])
   for c in module_.classes {
     if class_seen.contains(c.name) {
       report(c.name)
@@ -27779,17 +27779,17 @@ fn check_class_namespace_static_merge(
       // markers (namespace bodies re-parse as nested modules, which
       // erases `export`-ness otherwise). Non-exported locals don't
       // participate in the class merge.
-      let exported : Map[String, Unit] = {}
+      let exported : Map[String, Unit] = Map([])
       for gm in nsm.grammar_misuses {
         if gm.has_prefix("<export-value>") {
-          exported[gm["<export-value>".length():].to_string()] = ()
+          exported[gm["<export-value>".length():].to_owned()] = ()
         }
       }
-      if exported.size() == 0 {
+      if exported.length() == 0 {
         continue
       }
       // Exported *value* names of the namespace body.
-      let value_names : Map[String, Unit] = {}
+      let value_names : Map[String, Unit] = Map([])
       for f in nsm.funcs {
         value_names[f.name] = ()
       }
@@ -27809,7 +27809,7 @@ fn check_class_namespace_static_merge(
           _ => ()
         }
       }
-      let flagged : Map[String, Unit] = {}
+      let flagged : Map[String, Unit] = Map([])
       fn flag(name : String) -> Unit {
         if name != "<computed>" &&
           !name.has_prefix("__private_brand__") &&
@@ -27851,7 +27851,7 @@ fn check_duplicate_computed_accessors(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
-    let seen : Map[String, Unit] = {}
+    let seen : Map[String, Unit] = Map([])
     for m in cls.methods {
       if m.name == "<computed>" && (m.accessor == "get" || m.accessor == "set") {
         match m.key_expr {
@@ -27879,11 +27879,11 @@ fn check_duplicate_computed_accessors(
 
 ///|
 fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
-  let func_names : Map[String, Unit] = {}
+  let func_names : Map[String, Unit] = Map([])
   for f in module_.funcs {
     func_names[f.name] = ()
   }
-  let non_function_decls : Map[String, Unit] = {}
+  let non_function_decls : Map[String, Unit] = Map([])
   for c in module_.classes {
     non_function_decls[c.name] = ()
   }
@@ -28046,7 +28046,7 @@ fn collect_typeof_query_bases(ty : @ast.TsType, out : Array[String]) -> Unit {
   match ty {
     TypeOf(q) => {
       let base = match q.find(".") {
-        Some(i) => q.substring(start=0, end=i)
+        Some(i) => q[:i].to_owned()
         None => q
       }
       out.push(base)
@@ -28136,7 +28136,7 @@ fn check_typeof_namespace_value_types(
     }
   }
   let issues : Array[ExprIssue] = []
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   for name in found {
     if seen.contains(name) {
       continue
@@ -28176,9 +28176,9 @@ fn nearest_ancestor_member_kind(
   name : String,
   is_static : Bool,
 ) -> Int? {
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   let mut cur = start_base
-  while not(seen.contains(cur)) {
+  while !seen.contains(cur) {
     seen[cur] = ()
     let cls = match resolver.classes.get(cur) {
       Some(c) => c
@@ -28217,7 +28217,7 @@ fn check_method_accessor_override_mismatch(
       continue
     }
     let base = cls.base_names[0]
-    let reported : Map[String, Unit] = {}
+    let reported : Map[String, Unit] = Map([])
     for m in cls.methods {
       if reported.contains(m.name) {
         continue
@@ -28235,7 +28235,7 @@ fn check_method_accessor_override_mismatch(
           }
         // Derived regular method over a base accessor.
         Some(2) =>
-          if not(derived_is_accessor) {
+          if !derived_is_accessor {
             reported[m.name] = ()
             issues.push({
               path: "class \{cls.name}.\{m.name}",
@@ -28281,9 +28281,9 @@ fn nearest_ancestor_member_is_property(
   name : String,
   is_static : Bool,
 ) -> Bool? {
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   let mut cur = start_base
-  while not(seen.contains(cur)) {
+  while !seen.contains(cur) {
     seen[cur] = ()
     let cls = match resolver.classes.get(cur) {
       Some(c) => c
@@ -28331,7 +28331,7 @@ fn check_property_overridden_as_accessor(
       continue
     }
     let base = cls.base_names[0]
-    let reported : Map[String, Unit] = {}
+    let reported : Map[String, Unit] = Map([])
     for m in cls.methods {
       if m.accessor == "" || reported.contains(m.name) {
         continue
@@ -28384,9 +28384,9 @@ fn Resolver::nearest_member_decl_kind(
   start : String,
   name : String,
 ) -> Int? {
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   let mut cur = start
-  while not(seen.contains(cur)) {
+  while !seen.contains(cur) {
     seen[cur] = ()
     let cls = match self.classes.get(cur) {
       Some(c) => c
@@ -28428,10 +28428,10 @@ fn check_unimplemented_abstract_members(
     // Gather abstract member names from proper ancestors, requiring the chain
     // to be fully resolvable.
     let abstract_names : Array[String] = []
-    let seen : Map[String, Unit] = {}
+    let seen : Map[String, Unit] = Map([])
     let mut cur = cls.base_names[0]
     let mut chain_ok = true
-    while not(seen.contains(cur)) {
+    while !seen.contains(cur) {
       seen[cur] = ()
       let anc = match resolver.classes.get(cur) {
         Some(c) => c
@@ -28457,7 +28457,7 @@ fn check_unimplemented_abstract_members(
     if !chain_ok {
       continue
     }
-    let reported : Map[String, Unit] = {}
+    let reported : Map[String, Unit] = Map([])
     for name in abstract_names {
       if reported.contains(name) {
         continue
@@ -28486,7 +28486,7 @@ fn check_field_init_references_ctor_param(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
-    let params : Map[String, Unit] = {}
+    let params : Map[String, Unit] = Map([])
     match cls.constructor_params {
       Some(ps) =>
         for p in ps {
@@ -28518,7 +28518,7 @@ fn check_field_init_references_ctor_param(
       match p.type_ {
         TypeOf(q) => {
           let base = match q.find(".") {
-            Some(i) => q.substring(start=0, end=i)
+            Some(i) => q[:i].to_owned()
             None => q
           }
           if params.contains(base) {
@@ -28554,7 +28554,7 @@ fn check_merged_enum_first_member_initializers(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // path -> (total declarations, declarations omitting the first initializer)
-  let groups : Map[String, (Int, Int)] = {}
+  let groups : Map[String, (Int, Int)] = Map([])
   fn walk(m : @ast.TsModule, prefix : String) -> Unit {
     for e in m.enums {
       if e.is_declare {
@@ -28563,7 +28563,7 @@ fn check_merged_enum_first_member_initializers(
       let key = prefix + e.name
       let omits = e.members.length() > 0 &&
         e.members[0].value is None &&
-        not(e.members[0].is_computed)
+        !e.members[0].is_computed
       let cur = match groups.get(key) {
         Some(v) => v
         None => (0, 0)
@@ -28591,8 +28591,8 @@ fn check_merged_enum_first_member_initializers(
 fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for e in module_.enums {
-    let seen : Map[String, Bool] = {}
-    let reported : Map[String, Bool] = {}
+    let seen : Map[String, Bool] = Map([])
+    let reported : Map[String, Bool] = Map([])
     for em in e.members {
       if seen.get(em.name) is Some(_) {
         if !(reported.get(em.name) is Some(_)) {
@@ -28665,8 +28665,8 @@ fn check_interface_merge_type_params(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let first : Map[String, @ast.TsInterface] = {}
-  let reported : Map[String, Bool] = {}
+  let first : Map[String, @ast.TsInterface] = Map([])
+  let reported : Map[String, Bool] = Map([])
   for iface in module_.interfaces {
     match first.get(iface.name) {
       None => first[iface.name] = iface
@@ -28800,7 +28800,7 @@ fn check_uncontextual_object_literals(
   // Member map of a decidable satisfies target, or None when any part is
   // unresolvable / could supply function context via an index signature.
   fn sat_members(t : @ast.TsType) -> Map[String, @ast.TsType]? {
-    let out : Map[String, @ast.TsType] = {}
+    let out : Map[String, @ast.TsType] = Map([])
     fn add_object(fields : Array[(@ast.TsType, @ast.TsType)]) -> Bool {
       for f in fields {
         match f.0 {
@@ -28875,7 +28875,7 @@ fn check_uncontextual_object_literals(
         if decl_ty is Any {
           for kv in props {
             guard kv.0.has_prefix("@@set:") else { continue }
-            let prop_name = kv.0["@@set:".length():].to_string()
+            let prop_name = kv.0["@@set:".length():].to_owned()
             let mut has_getter = false
             for other in props {
               if other.0 == "@@get:" + prop_name {
@@ -29206,7 +29206,7 @@ fn check_union_context_implicit_any(
     }
     guard resolver.unwrap(decl_ty) is Union(members) else { continue }
     let member_sig_keys : Array[String] = []
-    let mut opaque = false
+    let mut opaque_ = false
     for m in members {
       let sigs = collect_call_signatures(m, resolver)
       let lists : Array[String] = []
@@ -29217,12 +29217,12 @@ fn check_union_context_implicit_any(
             // unreliable — abstain for the whole declaration.
             for p2 in ps2 {
               if type_contains_unresolved_named(p2, resolver) {
-                opaque = true
+                opaque_ = true
               }
             }
-            lists.push("\{ps2}")
+            lists.push("\{Repr(ps2)}")
           }
-          _ => opaque = true
+          _ => opaque_ = true
         }
       }
       if lists.length() > 0 {
@@ -29230,7 +29230,7 @@ fn check_union_context_implicit_any(
         member_sig_keys.push(lists.join(";"))
       }
     }
-    if opaque || member_sig_keys.length() < 2 {
+    if opaque_ || member_sig_keys.length() < 2 {
       continue
     }
     let mut identical = true
@@ -29289,7 +29289,7 @@ fn is_single_upper_letter(name : String) -> Bool {
 fn check_undeclared_type_parameters(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
-  let declared : Map[String, Unit] = {}
+  let declared : Map[String, Unit] = Map([])
   collect_declared_type_names(module_, declared)
   let issues : Array[ExprIssue] = []
   walk_module_undeclared_tps(module_, [], declared, issues)
@@ -29360,7 +29360,7 @@ fn walk_module_undeclared_tps(
     // so each field must see the union of the overloads' binders.
     // Group once per interface — the per-field linear scan over
     // `method_type_params` was quadratic on lib.dom-sized interfaces.
-    let method_tps_by_name : Map[String, Array[String]] = {}
+    let method_tps_by_name : Map[String, Array[String]] = Map([])
     for entry in iface.method_type_params {
       match method_tps_by_name.get(entry.0) {
         Some(acc) =>
@@ -29526,7 +29526,7 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // it is the superset of `module_.classes[].duplicate_member_names`, so it is
   // the sole source. A `(class, name)` guard dedups in case the same class is
   // recorded twice.
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   for entry in module_.class_dup_diagnostics {
     let cls_name = entry.0
     for name in entry.1 {
@@ -29622,7 +29622,7 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
       } else if name.has_prefix("<static-use-before-def:") {
         // TS2729: a static block read / wrote a static field that is only
         // declared after the block.
-        let f = name["<static-use-before-def:".length():name.length() - 1].to_string()
+        let f = name["<static-use-before-def:".length():name.length() - 1].to_owned()
         issues.push({
           path: "class \{cls_name}",
           message: "property `\{f}` is used before its initialization",
@@ -29840,7 +29840,7 @@ fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int) -> String? {
             Some(k) =>
               // Reuse the Constructor spelling: `fn(...)=>r` -> `ctor(...)=>r`.
               if k.has_prefix("fn(") {
-                Some("ctor" + k.substring(start=2))
+                Some("ctor" + k[2:].to_owned())
               } else {
                 None
               }
@@ -29933,10 +29933,10 @@ fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int) -> String? {
       // so `C` vs `C | D` must remain non-identical.
       let deduped : Array[String] = []
       for k in keys {
-        let atomic = !k.contains("{") && !k.contains("(")
+        let atomic_ = !k.contains("{") && !k.contains("(")
         if deduped.length() == 0 ||
           deduped[deduped.length() - 1] != k ||
-          !atomic {
+          !atomic_ {
           deduped.push(k)
         }
       }
@@ -29990,7 +29990,7 @@ fn normalized_union_members(
 /// it. A single callback would have forced one of them to reconstruct the
 /// other's question, and `this.q` inside a namespace is TS2331 on the
 /// `this` — the property is never reached.
-struct ThisRegionVisitor {
+priv struct ThisRegionVisitor {
   prop : (String) -> Unit
   bare : () -> Unit
 }
@@ -30176,7 +30176,7 @@ fn check_namespace_body_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
     // reaches a member lookup.
     prop: fn(_p) {  },
     bare: fn() {
-      if not(reported) {
+      if !reported {
         reported = true
         issues.push({
           path: "this",
@@ -30218,7 +30218,7 @@ fn check_namespace_body_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// property.
 fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let block_scoped : Map[String, Bool] = {}
+  let block_scoped : Map[String, Bool] = Map([])
   for stmt in module_.top_level_stmts {
     match stmt {
       Let(@ast.TsBinding::Ident(n), _, _)
@@ -30241,7 +30241,7 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
       lib_without_dom = true
     }
   }
-  let self_declared : Map[String, Unit] = {}
+  let self_declared : Map[String, Unit] = Map([])
   for stmt in module_.top_level_stmts {
     match stmt {
       Var(@ast.TsBinding::Ident(n), _, _) => self_declared[n] = ()
@@ -30492,12 +30492,12 @@ fn check_var_redeclaration_types(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let first_key : Map[String, String] = {}
+  let first_key : Map[String, String] = Map([])
   // The first declaration's TYPE as well as its key, because
   // `identity_key` abstains for shapes it cannot normalize and the
   // fallback below can still decide some of them.
-  let first_type : Map[String, @ast.TsType] = {}
-  let reported : Map[String, Unit] = {}
+  let first_type : Map[String, @ast.TsType] = Map([])
+  let reported : Map[String, Unit] = Map([])
   fn consider(name : String, ty : @ast.TsType) -> Unit {
     if !is_checkable(ty) {
       return
@@ -30810,39 +30810,6 @@ fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int {
 }
 
 ///|
-/// Inclusive arity RANGE of a callable type: `(min, max)`, with `max`
-/// set to -1 for an unbounded list (a rest parameter). `None` when the
-/// type isn't a plain function shape.
-///
-/// Separate from `callable_required_arity` because the decorator rules
-/// need both ends: a decorator declared with FEWER parameters than the
-/// runtime passes is as much an error as one declared with more, and
-/// only `max` can say so.
-fn callable_arity_range(resolver : Resolver, t : @ast.TsType) -> (Int, Int)? {
-  match resolver.unwrap(t) {
-    GenericFunc(_, _, inner) => callable_arity_range(resolver, inner)
-    Func(ps, _) => {
-      let mut required = 0
-      let mut total = 0
-      let mut has_rest = false
-      for p in ps {
-        match p {
-          Rest(_) => has_rest = true
-          other => {
-            total += 1
-            if !type_accepts_undefined(other) {
-              required += 1
-            }
-          }
-        }
-      }
-      Some((required, if has_rest { -1 } else { total }))
-    }
-    _ => None
-  }
-}
-
-///|
 /// TS1240 / TS1241 / TS1329: a legacy (`experimentalDecorators`) MEMBER
 /// decorator whose declared arity cannot match the runtime invocation.
 /// The class-level version of this is `check_class_decorator_signatures`
@@ -30896,9 +30863,9 @@ fn check_member_decorator_signatures(
     if parts.length() != 3 {
       continue
     }
-    let kind = parts[0].to_string()
-    let called = parts[1].to_string()
-    let dname = parts[2].to_string()
+    let kind = parts[0].to_owned()
+    let called = parts[1].to_owned()
+    let dname = parts[2].to_owned()
     // `@dec(...)` is skipped: the signature the runtime invokes is the
     // FACTORY's return type, which reaches us as a bare `Func(types)`
     // with no optionality information -- and a parameter's optionality is
@@ -31162,8 +31129,8 @@ fn member_name_duplicates(
       _ => false
     }
   }
-  let count : Map[String, Int] = {}
-  let has_property : Map[String, Bool] = {}
+  let count : Map[String, Int] = Map([])
+  let has_property : Map[String, Bool] = Map([])
   let order : Array[String] = []
   for f in fields {
     let name = f.0
@@ -31340,35 +31307,35 @@ fn parser_channel_issues(module_ : @ast.TsModule) -> Array[ExprIssue] {
   //     no body).
   //   - otherwise        -> TS1070: an accessibility modifier
   //     (`private` / `public` / `protected`) cannot appear on a type member.
-  for member in module_.interface_member_modifier_misuses {
-    if member.has_prefix("<param-init>") {
-      let m = member.substring(start="<param-init>".length())
+  for member_ in module_.interface_member_modifier_misuses {
+    if member_.has_prefix("<param-init>") {
+      let m = member_["<param-init>".length():].to_owned()
       all.push({
         path: "member `\{m}`",
         message: "a parameter initializer is only allowed in an implementation signature",
       })
-    } else if member.has_prefix("<const-typeparam>") {
-      let m = member.substring(start="<const-typeparam>".length())
+    } else if member_.has_prefix("<const-typeparam>") {
+      let m = member_["<const-typeparam>".length():].to_owned()
       all.push({
         path: "type parameter `\{m}`",
         message: "`const` modifier can only appear on a type parameter of a function, method or class",
       })
-    } else if member == "<tuple-required-after-optional>" {
+    } else if member_ == "<tuple-required-after-optional>" {
       all.push({
         path: "tuple type",
         message: "a required element cannot follow an optional element",
       })
-    } else if member == "<object-member-no-separator>" {
+    } else if member_ == "<object-member-no-separator>" {
       all.push({ path: "object type", message: "`;` expected" })
-    } else if member.has_prefix("<generic-noarg-required>") ||
-      member.has_prefix("<generic-min-arity>") ||
-      member.has_prefix("<type-param-name>") {
+    } else if member_.has_prefix("<generic-noarg-required>") ||
+      member_.has_prefix("<generic-min-arity>") ||
+      member_.has_prefix("<type-param-name>") {
       // Consumed by the TS2314 arity check in `check_module`, not a
       // diagnostic of its own -- skip it here.
       ()
     } else {
       all.push({
-        path: "member `\{member}`",
+        path: "member `\{member_}`",
         message: "accessibility modifier cannot appear on a type member",
       })
     }
@@ -31418,7 +31385,7 @@ fn check_module_function_bodies_layered(
   let module_ = if module_.local_classes.length() == 0 {
     module_
   } else {
-    let seen : Map[String, Unit] = {}
+    let seen : Map[String, Unit] = Map([])
     for c in module_.classes {
       seen[c.name] = ()
     }
@@ -31526,11 +31493,11 @@ fn check_module_function_bodies_layered(
     for entry in dups {
       for name in entry.1 {
         if name.has_prefix("<private-decl:") {
-          let body = name["<private-decl:".length():name.length() - 1].to_string()
+          let body = name["<private-decl:".length():name.length() - 1].to_owned()
           match body.find(":") {
             Some(i) => {
-              let brand_id = body[:i].to_string()
-              let base = body[i + 1:].to_string()
+              let brand_id = body[:i].to_owned()
+              let base = body[i + 1:].to_owned()
               match resolver.private_brand_decls.get(brand_id) {
                 Some(arr) => arr.push(base)
                 None => resolver.private_brand_decls[brand_id] = [base]
@@ -31731,8 +31698,8 @@ fn check_module_function_bodies_layered(
     // field may share a name. `check_expr_against` subsumes the member-access
     // walk that this loop previously did via `check_call_args_in_expr`, so the
     // existing coverage is preserved while adding the assignability check.
-    let static_field_types : Map[String, @ast.TsType] = {}
-    let instance_field_types : Map[String, @ast.TsType] = {}
+    let static_field_types : Map[String, @ast.TsType] = Map([])
+    let instance_field_types : Map[String, @ast.TsType] = Map([])
     for prop in cls.properties {
       if prop.is_static {
         static_field_types[prop.name] = prop.type_
@@ -32148,7 +32115,7 @@ fn check_module_function_bodies_layered(
   }
   // Object-shaped names visible from outer scopes (a nested namespace's
   // interface can `extends` a member typed by a top-level interface).
-  let outer_object_names : Map[String, Unit] = {}
+  let outer_object_names : Map[String, Unit] = Map([])
   for o in outer_modules {
     for iface in o.interfaces {
       outer_object_names[iface.name] = ()
@@ -32219,14 +32186,14 @@ fn check_module_function_bodies_layered(
     // imports against a genuine node_modules tree. `tslib` is exempt (the
     // harness ships it for importHelpers runs).
     if permissive {
-      let ambient_specs : Map[String, Unit] = {}
+      let ambient_specs : Map[String, Unit] = Map([])
       for aug in module_.module_augmentations {
         ambient_specs[aug.0] = ()
         // `declare module "node:fs"` also provides the unprefixed "fs"
         // spec and vice versa — @types/node declares each builtin under
         // one spelling and imports it under the other.
         if aug.0.has_prefix("node:") {
-          ambient_specs[aug.0["node:".length():].to_string()] = ()
+          ambient_specs[aug.0["node:".length():].to_owned()] = ()
         } else {
           ambient_specs["node:" + aug.0] = ()
         }
@@ -32264,7 +32231,7 @@ fn check_module_function_bodies_layered(
         node_builtins.contains(spec) ||
         // Builtin subpaths (`stream/web`, `timers/promises`).
         (match spec.find("/") {
-          Some(i) => node_builtins.contains(spec[:i].to_string())
+          Some(i) => node_builtins.contains(spec[:i].to_owned())
           None => false
         })
       }
@@ -32276,7 +32243,7 @@ fn check_module_function_bodies_layered(
       // nothing to say — the same rule holding for some of the forms it
       // names. Deduplicated because one specifier can now arrive from two
       // routes and a doubled diagnostic is noise.
-      let reported : Map[String, Unit] = {}
+      let reported : Map[String, Unit] = Map([])
       for spec in module_.import_module_specs {
         if spec != "tslib" &&
           !is_ambient_module_bundle &&
@@ -32296,12 +32263,12 @@ fn check_module_function_bodies_layered(
     // ONE default); anonymous functions and class/expression defaults each
     // count individually.
     let mut default_count = 0
-    let seen_default_fns : Map[String, Unit] = {}
+    let seen_default_fns : Map[String, Unit] = Map([])
     for gm in module_.grammar_misuses {
       if gm.has_prefix("<export-default>") {
-        let payload = gm["<export-default>".length():].to_string()
+        let payload = gm["<export-default>".length():].to_owned()
         if payload.has_prefix("fn:") {
-          let fname = payload["fn:".length():].to_string()
+          let fname = payload["fn:".length():].to_owned()
           if fname == "<anon>" {
             default_count += 1
           } else if !seen_default_fns.contains(fname) {
@@ -32352,7 +32319,7 @@ fn check_module_function_bodies_layered(
     // no imports and no exports cannot have one
     // (`awaitUsingDeclarations.13`, `awaitUsingDeclarationsInForOf.4` —
     // tsc's own message suggests adding an empty `export {}`).
-    if top_await_using && not(has_module_syntax) {
+    if top_await_using && !has_module_syntax {
       all.push({
         path: "top-level `await using`",
         message: "`await using` statements are only allowed at the top level of a file when that file is a module",
@@ -32363,12 +32330,12 @@ fn check_module_function_bodies_layered(
     // definition time). `grammar_misuses` is append-only in parse order,
     // so an `<sb-read:X>` seen before X's `<letconst-decl:X>` — with the
     // declaration present at all — is a definite use-before-declaration.
-    let tdz_declared : Map[String, Bool] = {}
-    let tdz_pending : Map[String, Bool] = {}
-    let tdz_reported : Map[String, Bool] = {}
+    let tdz_declared : Map[String, Bool] = Map([])
+    let tdz_pending : Map[String, Bool] = Map([])
+    let tdz_reported : Map[String, Bool] = Map([])
     for gm in module_.grammar_misuses {
       if gm.has_prefix("<letconst-decl:") {
-        let n = gm["<letconst-decl:".length():gm.length() - 1].to_string()
+        let n = gm["<letconst-decl:".length():gm.length() - 1].to_owned()
         tdz_declared[n] = true
         if tdz_pending.get(n) is Some(_) && tdz_reported.get(n) is None {
           tdz_reported[n] = true
@@ -32380,7 +32347,7 @@ fn check_module_function_bodies_layered(
         continue
       }
       if gm.has_prefix("<sb-read:") {
-        let n = gm["<sb-read:".length():gm.length() - 1].to_string()
+        let n = gm["<sb-read:".length():gm.length() - 1].to_owned()
         if tdz_declared.get(n) is None {
           tdz_pending[n] = true
         }
@@ -32395,7 +32362,7 @@ fn check_module_function_bodies_layered(
     let mut computed_key_values : Map[String, Bool]? = None
     for gm in module_.grammar_misuses {
       if gm.has_prefix("<computed-type-key>") {
-        let key = gm["<computed-type-key>".length():].to_string()
+        let key = gm["<computed-type-key>".length():].to_owned()
         let values = match computed_key_values {
           Some(v) => v
           None => {
@@ -32476,7 +32443,7 @@ fn check_module_function_bodies_layered(
       // TS2304: `export = name` over a provably undeclared value. Same
       // resolution contract as the computed-type-key check above.
       if gm.has_prefix("<export-eq>") {
-        let key = gm["<export-eq>".length():].to_string()
+        let key = gm["<export-eq>".length():].to_owned()
         let values = match computed_key_values {
           Some(v) => v
           None => {
@@ -32500,7 +32467,7 @@ fn check_module_function_bodies_layered(
       // (parserImportDeclaration1). Same resolution contract as
       // `<export-eq>` above.
       if gm.has_prefix("<import-eq-root>") {
-        let key = gm["<import-eq-root>".length():].to_string()
+        let key = gm["<import-eq-root>".length():].to_owned()
         let values = match computed_key_values {
           Some(v) => v
           None => {
@@ -32527,7 +32494,7 @@ fn check_module_function_bodies_layered(
         if permissive {
           all.push({
             path: "noImplicitAny",
-            message: gm["<noimplicitany>".length():].to_string(),
+            message: gm["<noimplicitany>".length():].to_owned(),
           })
         }
       } else if gm.has_prefix("<") {
@@ -32690,7 +32657,7 @@ fn applied_generic_mismatch(
         let ta = ctx.resolver.unwrap(t_args[i])
         if is_concrete_primitive_or_literal(sa) &&
           is_concrete_primitive_or_literal(ta) {
-          if not(is_assignable_to(sa, ta)) && not(is_assignable_to(ta, sa)) {
+          if !is_assignable_to(sa, ta) && !is_assignable_to(ta, sa) {
             return true
           }
           continue
@@ -32704,8 +32671,8 @@ fn applied_generic_mismatch(
             if sn != tn &&
               is_resolvable_nominal_name(ctx.resolver, sn) &&
               is_resolvable_nominal_name(ctx.resolver, tn) &&
-              not(is_structurally_assignable_named(sa, ta, ctx.resolver)) &&
-              not(is_structurally_assignable_named(ta, sa, ctx.resolver)) {
+              !is_structurally_assignable_named(sa, ta, ctx.resolver) &&
+              !is_structurally_assignable_named(ta, sa, ctx.resolver) {
               return true
             }
           _ => ()
@@ -32740,7 +32707,7 @@ fn instantiate_generic_interface(
         iface.method_type_params.length() > 0 {
         return None
       }
-      let bindings : Map[String, @ast.TsType] = {}
+      let bindings : Map[String, @ast.TsType] = Map([])
       for i in 0..<iface.type_params.length() {
         bindings[iface.type_params[i]] = args[i]
       }
@@ -32791,10 +32758,10 @@ fn generic_instantiation_mismatch(
     Object(_) | Struct(_, _) => true
     _ => false
   }
-  if not(s_shape) || not(t_shape) {
+  if !s_shape || !t_shape {
     return false
   }
-  not(is_assignable_to(s, t)) && not(is_assignable_to(t, s))
+  !is_assignable_to(s, t) && !is_assignable_to(t, s)
 }
 
 ///|
@@ -32829,7 +32796,7 @@ fn intersection_target_mismatch(
     Named(n) => is_resolvable_nominal_name(resolver, n)
     _ => false
   }
-  if not(source_concrete) && not(source_shape) {
+  if !source_concrete && !source_shape {
     return false
   }
   for part in parts {
@@ -32839,14 +32806,14 @@ fn intersection_target_mismatch(
       Named(n) => is_resolvable_nominal_name(resolver, n)
       _ => false
     }
-    if not(object_like) {
+    if !object_like {
       continue
     }
     if source_concrete {
       return true
     }
-    if not(is_assignable_to(source, p)) &&
-      not(is_structurally_assignable_named(source, p, resolver)) {
+    if !is_assignable_to(source, p) &&
+      !is_structurally_assignable_named(source, p, resolver) {
       return true
     }
   }
@@ -32864,7 +32831,7 @@ fn flatten_intersection_objects(
   resolver : Resolver,
 ) -> @ast.TsType? {
   let merged : Array[(@ast.TsType, @ast.TsType)] = []
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   for part in parts {
     let fields = match resolver.unwrap(part) {
       Object(fs) => fs
@@ -33042,10 +33009,10 @@ fn expr_is_this(expr : @ast.TsExpr) -> Bool {
 fn collect_ctor_this_members_block(
   block : @ast.TsBlock,
   members : Map[String, Unit],
-  opaque : Array[Bool],
+  opaque_ : Array[Bool],
 ) -> Unit {
   for stmt in block.stmts {
-    collect_ctor_this_members_stmt(stmt, members, opaque)
+    collect_ctor_this_members_stmt(stmt, members, opaque_)
   }
 }
 
@@ -33053,103 +33020,103 @@ fn collect_ctor_this_members_block(
 fn collect_ctor_this_members_stmt(
   stmt : @ast.TsStmt,
   members : Map[String, Unit],
-  opaque : Array[Bool],
+  opaque_ : Array[Bool],
 ) -> Unit {
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Assign(_, e) =>
-      collect_ctor_this_members_expr(e, members, opaque)
+      collect_ctor_this_members_expr(e, members, opaque_)
     CompoundAssign(_, _, e) =>
-      collect_ctor_this_members_expr(e, members, opaque)
+      collect_ctor_this_members_expr(e, members, opaque_)
     IndexAssign(recv, idx, val) => {
       if expr_is_this(recv) {
         match idx {
           StringLit(name) => members[name] = ()
           _ => {
-            opaque[0] = true
-            collect_ctor_this_members_expr(idx, members, opaque)
+            opaque_[0] = true
+            collect_ctor_this_members_expr(idx, members, opaque_)
           }
         }
       } else {
-        collect_ctor_this_members_expr(recv, members, opaque)
-        collect_ctor_this_members_expr(idx, members, opaque)
+        collect_ctor_this_members_expr(recv, members, opaque_)
+        collect_ctor_this_members_expr(idx, members, opaque_)
       }
-      collect_ctor_this_members_expr(val, members, opaque)
+      collect_ctor_this_members_expr(val, members, opaque_)
     }
     PropAssign(recv, name, val) => {
       if expr_is_this(recv) {
         members[name] = ()
       } else {
-        collect_ctor_this_members_expr(recv, members, opaque)
+        collect_ctor_this_members_expr(recv, members, opaque_)
       }
-      collect_ctor_this_members_expr(val, members, opaque)
+      collect_ctor_this_members_expr(val, members, opaque_)
     }
-    Expr(e) | Throw(e) => collect_ctor_this_members_expr(e, members, opaque)
+    Expr(e) | Throw(e) => collect_ctor_this_members_expr(e, members, opaque_)
     Return(opt) =>
       match opt {
-        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque_)
         None => ()
       }
     Try(b, _, c, f) => {
-      collect_ctor_this_members_block(b, members, opaque)
+      collect_ctor_this_members_block(b, members, opaque_)
       match c {
-        Some(cb) => collect_ctor_this_members_block(cb, members, opaque)
+        Some(cb) => collect_ctor_this_members_block(cb, members, opaque_)
         None => ()
       }
       match f {
-        Some(fb) => collect_ctor_this_members_block(fb, members, opaque)
+        Some(fb) => collect_ctor_this_members_block(fb, members, opaque_)
         None => ()
       }
     }
     If(c, t, e) => {
-      collect_ctor_this_members_expr(c, members, opaque)
-      collect_ctor_this_members_block(t, members, opaque)
+      collect_ctor_this_members_expr(c, members, opaque_)
+      collect_ctor_this_members_block(t, members, opaque_)
       match e {
-        Some(eb) => collect_ctor_this_members_block(eb, members, opaque)
+        Some(eb) => collect_ctor_this_members_block(eb, members, opaque_)
         None => ()
       }
     }
     While(c, b) | DoWhile(c, b) => {
-      collect_ctor_this_members_expr(c, members, opaque)
-      collect_ctor_this_members_block(b, members, opaque)
+      collect_ctor_this_members_expr(c, members, opaque_)
+      collect_ctor_this_members_block(b, members, opaque_)
     }
     For(init, cond, update, body) => {
       match init {
-        Some(s) => collect_ctor_this_members_stmt(s, members, opaque)
+        Some(s) => collect_ctor_this_members_stmt(s, members, opaque_)
         None => ()
       }
       match cond {
-        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque_)
         None => ()
       }
       match update {
-        Some(s) => collect_ctor_this_members_stmt(s, members, opaque)
+        Some(s) => collect_ctor_this_members_stmt(s, members, opaque_)
         None => ()
       }
-      collect_ctor_this_members_block(body, members, opaque)
+      collect_ctor_this_members_block(body, members, opaque_)
     }
     ForOf(_, _, _, it, body)
     | ForAwaitOf(_, _, _, it, body)
     | ForIn(_, _, _, it, body) => {
-      collect_ctor_this_members_expr(it, members, opaque)
-      collect_ctor_this_members_block(body, members, opaque)
+      collect_ctor_this_members_expr(it, members, opaque_)
+      collect_ctor_this_members_block(body, members, opaque_)
     }
     Switch(e, cases) => {
-      collect_ctor_this_members_expr(e, members, opaque)
+      collect_ctor_this_members_expr(e, members, opaque_)
       for cse in cases {
         match cse.test_expr {
-          Some(te) => collect_ctor_this_members_expr(te, members, opaque)
+          Some(te) => collect_ctor_this_members_expr(te, members, opaque_)
           None => ()
         }
-        collect_ctor_this_members_block(cse.body, members, opaque)
+        collect_ctor_this_members_block(cse.body, members, opaque_)
       }
     }
     With(e, b) => {
-      collect_ctor_this_members_expr(e, members, opaque)
-      collect_ctor_this_members_block(b, members, opaque)
+      collect_ctor_this_members_expr(e, members, opaque_)
+      collect_ctor_this_members_block(b, members, opaque_)
     }
-    Label(_, s) => collect_ctor_this_members_stmt(s, members, opaque)
-    Block(b) => collect_ctor_this_members_block(b, members, opaque)
-    NativeClassStmt(_, _) => opaque[0] = true
+    Label(_, s) => collect_ctor_this_members_stmt(s, members, opaque_)
+    Block(b) => collect_ctor_this_members_block(b, members, opaque_)
+    NativeClassStmt(_, _) => opaque_[0] = true
     Debugger | Break(_) | Continue(_) | Empty => ()
   }
 }
@@ -33158,7 +33125,7 @@ fn collect_ctor_this_members_stmt(
 fn collect_ctor_this_members_expr(
   expr : @ast.TsExpr,
   members : Map[String, Unit],
-  opaque : Array[Bool],
+  opaque_ : Array[Bool],
 ) -> Unit {
   match expr {
     NumberLit(_)
@@ -33170,29 +33137,29 @@ fn collect_ctor_this_members_expr(
     | ArrayHole
     | Var(_)
     | ImportMeta => ()
-    TypeArgs(_, inner) => collect_ctor_this_members_expr(inner, members, opaque)
+    TypeArgs(_, inner) => collect_ctor_this_members_expr(inner, members, opaque_)
     PropAccess(recv, name) =>
       if expr_is_this(recv) {
         members[name] = ()
       } else {
-        collect_ctor_this_members_expr(recv, members, opaque)
+        collect_ctor_this_members_expr(recv, members, opaque_)
       }
     IndexAccess(recv, idx) =>
       if expr_is_this(recv) {
         match idx {
           StringLit(name) => members[name] = ()
           _ => {
-            opaque[0] = true
-            collect_ctor_this_members_expr(idx, members, opaque)
+            opaque_[0] = true
+            collect_ctor_this_members_expr(idx, members, opaque_)
           }
         }
       } else {
-        collect_ctor_this_members_expr(recv, members, opaque)
-        collect_ctor_this_members_expr(idx, members, opaque)
+        collect_ctor_this_members_expr(recv, members, opaque_)
+        collect_ctor_this_members_expr(idx, members, opaque_)
       }
     BinOp(_, a, b) | Seq(a, b) => {
-      collect_ctor_this_members_expr(a, members, opaque)
-      collect_ctor_this_members_expr(b, members, opaque)
+      collect_ctor_this_members_expr(a, members, opaque_)
+      collect_ctor_this_members_expr(b, members, opaque_)
     }
     UnaryOp(_, a)
     | Spread(a)
@@ -33202,114 +33169,114 @@ fn collect_ctor_this_members_expr(
     | OptionalChain(a)
     | YieldStar(a)
     | As(a, _)
-    | Satisfies(a, _) => collect_ctor_this_members_expr(a, members, opaque)
+    | Satisfies(a, _) => collect_ctor_this_members_expr(a, members, opaque_)
     Call(_, args) | New(_, args) =>
       for a in args {
-        collect_ctor_this_members_expr(a, members, opaque)
+        collect_ctor_this_members_expr(a, members, opaque_)
       }
     CallExpr(callee, args) | NewExpr(callee, args) => {
-      collect_ctor_this_members_expr(callee, members, opaque)
+      collect_ctor_this_members_expr(callee, members, opaque_)
       for a in args {
-        collect_ctor_this_members_expr(a, members, opaque)
+        collect_ctor_this_members_expr(a, members, opaque_)
       }
     }
     MethodCall(recv, _, args) => {
-      collect_ctor_this_members_expr(recv, members, opaque)
+      collect_ctor_this_members_expr(recv, members, opaque_)
       for a in args {
-        collect_ctor_this_members_expr(a, members, opaque)
+        collect_ctor_this_members_expr(a, members, opaque_)
       }
     }
     Cond(a, b, c) => {
-      collect_ctor_this_members_expr(a, members, opaque)
-      collect_ctor_this_members_expr(b, members, opaque)
-      collect_ctor_this_members_expr(c, members, opaque)
+      collect_ctor_this_members_expr(a, members, opaque_)
+      collect_ctor_this_members_expr(b, members, opaque_)
+      collect_ctor_this_members_expr(c, members, opaque_)
     }
     ArrayLit(items) =>
       for it in items {
-        collect_ctor_this_members_expr(it, members, opaque)
+        collect_ctor_this_members_expr(it, members, opaque_)
       }
     ObjectLit(entries) =>
       for e in entries {
-        collect_ctor_this_members_expr(e.1, members, opaque)
+        collect_ctor_this_members_expr(e.1, members, opaque_)
       }
     ComputedProp(k, v) => {
-      collect_ctor_this_members_expr(k, members, opaque)
-      collect_ctor_this_members_expr(v, members, opaque)
+      collect_ctor_this_members_expr(k, members, opaque_)
+      collect_ctor_this_members_expr(v, members, opaque_)
     }
-    AssignExpr(_, val) => collect_ctor_this_members_expr(val, members, opaque)
+    AssignExpr(_, val) => collect_ctor_this_members_expr(val, members, opaque_)
     PropAssignExpr(recv, name, val) => {
       if expr_is_this(recv) {
         members[name] = ()
       } else {
-        collect_ctor_this_members_expr(recv, members, opaque)
+        collect_ctor_this_members_expr(recv, members, opaque_)
       }
-      collect_ctor_this_members_expr(val, members, opaque)
+      collect_ctor_this_members_expr(val, members, opaque_)
     }
     CompoundAssignExpr(target, _, val) => {
-      collect_ctor_this_members_expr(target, members, opaque)
-      collect_ctor_this_members_expr(val, members, opaque)
+      collect_ctor_this_members_expr(target, members, opaque_)
+      collect_ctor_this_members_expr(val, members, opaque_)
     }
     IndexAssignExpr(recv, idx, val) => {
       if expr_is_this(recv) {
         match idx {
           StringLit(name) => members[name] = ()
           _ => {
-            opaque[0] = true
-            collect_ctor_this_members_expr(idx, members, opaque)
+            opaque_[0] = true
+            collect_ctor_this_members_expr(idx, members, opaque_)
           }
         }
       } else {
-        collect_ctor_this_members_expr(recv, members, opaque)
-        collect_ctor_this_members_expr(idx, members, opaque)
+        collect_ctor_this_members_expr(recv, members, opaque_)
+        collect_ctor_this_members_expr(idx, members, opaque_)
       }
-      collect_ctor_this_members_expr(val, members, opaque)
+      collect_ctor_this_members_expr(val, members, opaque_)
     }
     ArrowFunc(_, _, body, _) =>
       match body {
-        ArrowExpr(e) => collect_ctor_this_members_expr(e, members, opaque)
-        ArrowBlock(b) => collect_ctor_this_members_block(b, members, opaque)
+        ArrowExpr(e) => collect_ctor_this_members_expr(e, members, opaque_)
+        ArrowBlock(b) => collect_ctor_this_members_block(b, members, opaque_)
       }
-    FuncExpr(f) => collect_ctor_this_members_block(f.body, members, opaque)
+    FuncExpr(f) => collect_ctor_this_members_block(f.body, members, opaque_)
     TemplateLiteral(_, exprs) =>
       for e in exprs {
-        collect_ctor_this_members_expr(e, members, opaque)
+        collect_ctor_this_members_expr(e, members, opaque_)
       }
     TaggedTemplate(tag, _, _, exprs) => {
-      collect_ctor_this_members_expr(tag, members, opaque)
+      collect_ctor_this_members_expr(tag, members, opaque_)
       for e in exprs {
-        collect_ctor_this_members_expr(e, members, opaque)
+        collect_ctor_this_members_expr(e, members, opaque_)
       }
     }
     Yield(opt) =>
       match opt {
-        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque_)
         None => ()
       }
     DynamicImport(a, b) => {
-      collect_ctor_this_members_expr(a, members, opaque)
+      collect_ctor_this_members_expr(a, members, opaque_)
       match b {
-        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque_)
         None => ()
       }
     }
     JsxElement(_, attrs, children) => {
       for at in attrs {
         match at.1 {
-          Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+          Some(e) => collect_ctor_this_members_expr(e, members, opaque_)
           None => ()
         }
       }
       for ch in children {
-        collect_ctor_this_members_expr(ch, members, opaque)
+        collect_ctor_this_members_expr(ch, members, opaque_)
       }
     }
     // Forms that may bind a `this`-member in a way we don't model, or a
     // nested class shape — be conservative so the caller skips the class.
     AssignPattern(_, val) => {
-      opaque[0] = true
-      collect_ctor_this_members_expr(val, members, opaque)
+      opaque_[0] = true
+      collect_ctor_this_members_expr(val, members, opaque_)
     }
-    NativeClassExpr(_, _) => opaque[0] = true
+    NativeClassExpr(_, _) => opaque_[0] = true
   }
 }
 
@@ -33343,7 +33310,7 @@ fn check_native_class_property_initializers(
   // ambient by construction; the parser flattens them into
   // `module_.classes` without the `declare` flag, so exempt them by name
   // (@types/node's `declare module "util" { class MIMEType { ... } }`).
-  let ambient_module_classes : Map[String, Unit] = {}
+  let ambient_module_classes : Map[String, Unit] = Map([])
   for entry in module_.module_augmentations {
     let (_, aug) = entry
     for c in aug.classes {
@@ -33375,7 +33342,7 @@ fn check_native_class_property_initializers(
     // properties (`constructor(public x: T)`) auto-assign, so their names
     // are seeded in too. A field that never appears is a sound TS2564
     // candidate even when a constructor is present.
-    let ctor_members : Map[String, Unit] = {}
+    let ctor_members : Map[String, Unit] = Map([])
     let ctor_opaque : Array[Bool] = [false]
     match decl.constructor_params {
       Some(params) => {
@@ -33408,7 +33375,7 @@ fn check_native_class_property_initializers(
     // skip them below. `class C { get x() {…} }` upserts `x` into
     // `decl.properties` with `has_initializer = false`, but TS treats
     // the getter body as the initializer.
-    let accessor_names : Map[String, Unit] = {}
+    let accessor_names : Map[String, Unit] = Map([])
     for m in decl.methods {
       if !m.is_static && (m.accessor == "get" || m.accessor == "set") {
         accessor_names[m.name] = ()
@@ -33420,10 +33387,10 @@ fn check_native_class_property_initializers(
     // names are recognisable by shape; quoted names come from the
     // parser's `<quoted-member:...>` markers (quoting is otherwise
     // erased).
-    let quoted_names : Map[String, Unit] = {}
+    let quoted_names : Map[String, Unit] = Map([])
     for n in decl.duplicate_member_names {
       if n.has_prefix("<quoted-member:") {
-        quoted_names[n["<quoted-member:".length():n.length() - 1].to_string()] = ()
+        quoted_names[n["<quoted-member:".length():n.length() - 1].to_owned()] = ()
       }
     }
     fn is_numeric_shaped(name : String) -> Bool {
@@ -33722,7 +33689,7 @@ fn check_class_member_structure(
     // `protected_members` (a plain `#x` with no modifier is *not* added).
     // So a branded name in either list is exactly a modifier-on-`#name`
     // declaration, which TS rejects unconditionally — false-positive-free.
-    let reported_brand_modifier : Map[String, Unit] = {}
+    let reported_brand_modifier : Map[String, Unit] = Map([])
     for name in decl.private_members {
       if name.has_prefix("__private_brand__") &&
         !reported_brand_modifier.contains(name) {
@@ -33811,7 +33778,7 @@ fn check_class_member_structure(
     // than the parser's `class_decl_no_heritage`, which also requires an
     // empty `implements` list.
     let is_derived = decl.base_names.length() > 0 || decl.base_expr is Some(_)
-    if not(is_derived) {
+    if !is_derived {
       let in_ctor = decl.constructor_body is Some(body) &&
         block_mentions_super(body, AnyRef)
       if in_ctor || class_mentions_super_outside_ctor(decl, AnyRef) {
@@ -33851,9 +33818,9 @@ fn check_class_member_structure(
     // Key by "name|static" so an instance and a static accessor of the
     // same name don't collide. A computed key (`name == "<computed>"`)
     // can't be statically compared, so skip it.
-    let get_seen : Map[String, Unit] = {}
-    let set_seen : Map[String, Unit] = {}
-    let reported_dup : Map[String, Unit] = {}
+    let get_seen : Map[String, Unit] = Map([])
+    let set_seen : Map[String, Unit] = Map([])
+    let reported_dup : Map[String, Unit] = Map([])
     for m in decl.methods {
       if m.name == "<computed>" {
         continue
@@ -33878,8 +33845,8 @@ fn check_class_member_structure(
     // --- Duplicate regular-method implementations + field/method name
     // clashes (TS2393 / TS2300). Overload signatures (`body == None`)
     // legally share a name, so only count methods that carry a body.
-    let bodied_method : Map[String, Unit] = {}
-    let regular_method : Map[String, Unit] = {}
+    let bodied_method : Map[String, Unit] = Map([])
+    let regular_method : Map[String, Unit] = Map([])
     for m in decl.methods {
       if m.name == "<computed>" || m.accessor != "" {
         continue
@@ -34011,7 +33978,7 @@ fn check_class_member_structure(
     if decl.type_params.length() == 0 && decl.base_names.length() > 0 {
       match resolver.classes.get(decl.base_names[0]) {
         Some(base) if base.type_params.length() == 0 => {
-          let base_props : Map[String, @ast.TsType] = {}
+          let base_props : Map[String, @ast.TsType] = Map([])
           let base_accessors = class_instance_accessor_names(base)
           for p in base.properties {
             if !p.is_static &&
@@ -34081,20 +34048,20 @@ fn check_abstract_implementation(
       continue
     }
     // name -> the abstract base that declared the still-unimplemented member.
-    let abstract_needed : Map[String, String] = {}
-    let concrete : Map[String, Unit] = {}
+    let abstract_needed : Map[String, String] = Map([])
+    let concrete : Map[String, Unit] = Map([])
     fn add_concrete(c : @ast.TsClassDecl) -> Unit {
-      let abs : Map[String, Unit] = {}
+      let abs : Map[String, Unit] = Map([])
       for a in c.abstract_members {
         abs[a] = ()
       }
       for p in c.properties {
-        if not(abs.contains(p.name)) {
+        if !abs.contains(p.name) {
           concrete[p.name] = ()
         }
       }
       for m in c.methods {
-        if not(abs.contains(m.name)) {
+        if !abs.contains(m.name) {
           concrete[m.name] = ()
         }
       }
@@ -34109,7 +34076,7 @@ fn check_abstract_implementation(
       match resolver.classes.get(current.base_names[0]) {
         Some(base) => {
           for a in base.abstract_members {
-            if not(abstract_needed.contains(a)) {
+            if !abstract_needed.contains(a) {
               abstract_needed[a] = base.name
             }
           }
@@ -34122,11 +34089,11 @@ fn check_abstract_implementation(
         }
       }
     }
-    if not(resolvable) {
+    if !resolvable {
       continue
     }
     for name, from_class in abstract_needed {
-      if not(concrete.contains(name)) {
+      if !concrete.contains(name) {
         issues.push({
           path: "class \{cls.name}",
           message: "non-abstract class `\{cls.name}` does not implement inherited abstract member `\{name}` from class `\{from_class}`",
@@ -34199,7 +34166,7 @@ fn cast_shape_fields(
       if iface.type_params.length() > 0 || iface.index_signatures.length() > 0 {
         return None
       }
-      let out : Map[String, Bool] = {}
+      let out : Map[String, Bool] = Map([])
       for f in iface.fields {
         if f.0.has_prefix("<") {
           return None
@@ -34223,7 +34190,7 @@ fn cast_shape_fields(
       Some(out)
     }
     Intersection(parts) => {
-      let out : Map[String, Bool] = {}
+      let out : Map[String, Bool] = Map([])
       for p in parts {
         match cast_shape_fields(resolver, p, depth + 1) {
           Some(pf) =>
@@ -34238,7 +34205,7 @@ fn cast_shape_fields(
       Some(out)
     }
     Object(fields) => {
-      let out : Map[String, Bool] = {}
+      let out : Map[String, Bool] = Map([])
       for f in fields {
         match f.0 {
           Literal(k) =>
@@ -34253,7 +34220,7 @@ fn cast_shape_fields(
       Some(out)
     }
     Struct(_, fields) => {
-      let out : Map[String, Bool] = {}
+      let out : Map[String, Bool] = Map([])
       for f in fields {
         if f.0.has_prefix("<") {
           return None
@@ -34309,11 +34276,11 @@ fn check_class_implements(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let class_by_name : Map[String, @ast.TsClassDecl] = {}
+  let class_by_name : Map[String, @ast.TsClassDecl] = Map([])
   for c in module_.classes {
     class_by_name[c.name] = c
   }
-  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  let iface_by_name : Map[String, @ast.TsInterface] = Map([])
   for i in module_.interfaces {
     if i.type_params.length() == 0 {
       iface_by_name[i.name] = i
@@ -34323,7 +34290,7 @@ fn check_class_implements(
     if cls.implements_names.length() == 0 || cls.type_params.length() > 0 {
       continue
     }
-    let nonpublic : Map[String, Unit] = {}
+    let nonpublic : Map[String, Unit] = Map([])
     for n in cls.private_members {
       nonpublic[n] = ()
     }
@@ -34331,7 +34298,7 @@ fn check_class_implements(
       nonpublic[n] = ()
     }
     let accessors = class_instance_accessor_names(cls)
-    let cls_props : Map[String, @ast.TsType] = {}
+    let cls_props : Map[String, @ast.TsType] = Map([])
     for p in cls.properties {
       if !p.is_static && !p.is_accessor && !accessors.contains(p.name) {
         cls_props[p.name] = p.type_
@@ -34342,7 +34309,7 @@ fn check_class_implements(
     // suppresses a diagnostic, so a route counted twice costs nothing and a
     // route missed would be a false positive.
     let chain = resolve_base_chain_members(cls, class_by_name, iface_by_name)
-    let supplied : Map[String, Unit] = {}
+    let supplied : Map[String, Unit] = Map([])
     for p in cls.properties {
       if !p.is_static {
         supplied[p.name] = ()
@@ -34391,7 +34358,7 @@ fn check_class_implements(
       None => ()
     }
     let can_check_missing = chain.resolvable &&
-      not(cls.is_abstract) &&
+      !cls.is_abstract &&
       cls.index_signatures.length() == 0
     for iname in cls.implements_names {
       let iface = match resolver.interfaces.get(iname) {
@@ -34437,9 +34404,9 @@ fn check_class_implements(
         // cannot be compared, so both abstain.
         if can_check_missing &&
           mname != "<computed>" &&
-          not(mname.has_prefix("#")) &&
-          not(type_has_undefined(f.1)) &&
-          not(supplied.contains(mname)) {
+          !mname.has_prefix("#") &&
+          !type_has_undefined(f.1) &&
+          !supplied.contains(mname) {
           issues.push({
             path: "class \{cls.name}",
             message: "incorrectly implements interface `\{iname}`: member `\{mname}` is missing",
@@ -34489,7 +34456,7 @@ fn callable_member_incompatible(
   same_kind &&
   not_generic_func(derived) &&
   not_generic_func(base) &&
-  not(is_assignable_to_bivariant(d, b))
+  !is_assignable_to_bivariant(d, b)
 }
 
 ///|
@@ -34527,7 +34494,7 @@ fn check_interface_extends_compat(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // Index declared interfaces by name (non-generic only).
-  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  let iface_by_name : Map[String, @ast.TsInterface] = Map([])
   for iface in module_.interfaces {
     if iface.type_params.length() == 0 {
       iface_by_name[iface.name] = iface
@@ -34538,7 +34505,7 @@ fn check_interface_extends_compat(
   // scalar override against it. Seeded with outer-scope names so a
   // namespaced interface extending a member typed by a top-level
   // interface is still recognised.
-  let object_shaped : Map[String, Unit] = {}
+  let object_shaped : Map[String, Unit] = Map([])
   for name, _ in outer_object_names {
     object_shaped[name] = ()
   }
@@ -34598,7 +34565,7 @@ fn check_interface_extends_compat(
   let base_fields_cache : Map[
     String,
     (Map[String, @ast.TsType], Map[String, Int]),
-  ] = {}
+  ] = Map([])
   fn base_field_maps(
     name : String,
     base : @ast.TsInterface,
@@ -34606,8 +34573,8 @@ fn check_interface_extends_compat(
     match base_fields_cache.get(name) {
       Some(v) => v
       None => {
-        let fields : Map[String, @ast.TsType] = {}
-        let counts : Map[String, Int] = {}
+        let fields : Map[String, @ast.TsType] = Map([])
+        let counts : Map[String, Int] = Map([])
         for f in base.fields {
           fields[f.0] = f.1
           counts[f.0] = match counts.get(f.0) {
@@ -34635,7 +34602,7 @@ fn check_interface_extends_compat(
     // `addEventListener<K extends keyof ...>` + string-overload pattern
     // misfired 464 times. Count once per derived declaration (NOT per
     // base edge) and skip those members below.
-    let derived_counts : Map[String, Int] = {}
+    let derived_counts : Map[String, Int] = Map([])
     for df in iface.fields {
       derived_counts[df.0] = match derived_counts.get(df.0) {
         Some(n) => n + 1
@@ -34679,7 +34646,7 @@ fn check_interface_extends_compat(
           return true
         }
         let mut frontier = [from]
-        let visited : Map[String, Unit] = {}
+        let visited : Map[String, Unit] = Map([])
         for _ in 0..<16 {
           let next : Array[String] = []
           for n in frontier {
@@ -35157,7 +35124,7 @@ fn check_interface_extends_compat(
   // than iterating `resolver.interfaces` wholesale: that table also
   // holds interfaces ingested from imported modules and the lib, and
   // those are not this module's to report on.
-  let iface_decl_counts : Map[String, Int] = {}
+  let iface_decl_counts : Map[String, Int] = Map([])
   for iface in module_.interfaces {
     iface_decl_counts[iface.name] = (match iface_decl_counts.get(iface.name) {
         Some(v) => v
@@ -35186,7 +35153,7 @@ fn check_interface_extends_compat(
     // indexer). Walk non-generic extends chains, guarding cycles.
     if iface.type_params.length() == 0 && iface.extends_names.length() > 0 {
       let inherited : Array[(@ast.TsType, @ast.TsType)] = []
-      let visited : Map[String, Unit] = {}
+      let visited : Map[String, Unit] = Map([])
       visited[iface.name] = ()
       let stack : Array[String] = []
       for bi, base_name in iface.extends_names {
@@ -35222,7 +35189,7 @@ fn check_interface_extends_compat(
   // The merged pass for the names skipped above. `merge_interface_group`
   // concatenates `index_signatures` and folds `fields`, so the entry in
   // the resolver already IS the type an index signature has to constrain.
-  let merged_seen : Map[String, Unit] = {}
+  let merged_seen : Map[String, Unit] = Map([])
   for iface in module_.interfaces {
     if !(iface_decl_counts.get(iface.name) is Some(n) && n > 1) {
       continue
@@ -35252,7 +35219,7 @@ fn check_interface_extends_compat(
     }
   }
   // Non-generic classes by name for the base-chain walks below.
-  let cls_by_name : Map[String, @ast.TsClassDecl] = {}
+  let cls_by_name : Map[String, @ast.TsClassDecl] = Map([])
   for c in module_.classes {
     if c.type_params.length() == 0 && cls_by_name.get(c.name) is None {
       cls_by_name[c.name] = c
@@ -35319,11 +35286,11 @@ fn check_interface_extends_compat(
       // inherited signatures — the declaring class already did that.
       let inherited_sigs : Array[(@ast.TsType, @ast.TsType)] = []
       let inherited_fields : Array[(String, @ast.TsType)] = []
-      let own_names : Map[String, Unit] = {}
+      let own_names : Map[String, Unit] = Map([])
       for f in fields {
         own_names[f.0] = ()
       }
-      let visited : Map[String, Unit] = {}
+      let visited : Map[String, Unit] = Map([])
       visited[c.name] = ()
       let stack : Array[String] = []
       for bn in c.base_names {
@@ -35373,7 +35340,7 @@ fn check_interface_extends_compat(
       if c.static_index_signatures.length() > 0 {
         // Same accessor exclusion as the instance walk: get/set pairs are
         // upserted into `properties` with an imprecise type.
-        let static_accessors : Map[String, Unit] = {}
+        let static_accessors : Map[String, Unit] = Map([])
         for m in c.methods {
           if m.is_static && (m.accessor == "get" || m.accessor == "set") {
             static_accessors[m.name] = ()
@@ -35426,7 +35393,7 @@ fn check_interface_extends_compat(
 ///|
 /// Names of a class's non-static get/set accessors.
 fn class_instance_accessor_names(decl : @ast.TsClassDecl) -> Map[String, Unit] {
-  let names : Map[String, Unit] = {}
+  let names : Map[String, Unit] = Map([])
   for m in decl.methods {
     if !m.is_static && (m.accessor == "get" || m.accessor == "set") {
       names[m.name] = ()
@@ -35452,7 +35419,7 @@ fn class_instance_field_names(
   decl : @ast.TsClassDecl,
   accessors : Map[String, Unit],
 ) -> Map[String, Unit] {
-  let names : Map[String, Unit] = {}
+  let names : Map[String, Unit] = Map([])
   for prop in decl.properties {
     if prop.is_static {
       continue
@@ -35494,10 +35461,10 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     // does NOT exempt `x: T | undefined` — probed, those differ — and the
     // parser wraps the former into exactly the latter, so the type cannot
     // answer this and the modifier arrives on its own channel.
-    let optional_fields : Map[String, Unit] = {}
+    let optional_fields : Map[String, Unit] = Map([])
     for m in decl.duplicate_member_names {
       if m.has_prefix("<optional-member:") {
-        optional_fields[m["<optional-member:".length():m.length() - 1].to_string()] = ()
+        optional_fields[m["<optional-member:".length():m.length() - 1].to_owned()] = ()
       }
     }
     // Set of non-static field names declared on the class. We use this
@@ -35546,7 +35513,7 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     // folds `has_declare` into `has_definite_assertion` (correctly, for
     // TS2564), so an ambient field looks asserted here. That loses a
     // finding and cannot invent one.
-    let field_names : Map[String, Unit] = {}
+    let field_names : Map[String, Unit] = Map([])
     for entry in decl.instance_field_inits {
       field_names[entry.0] = ()
     }
@@ -35570,7 +35537,7 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     // and reading `this.x` there is TS2339, handled elsewhere -- not TS2729).
     match decl.constructor_params {
       Some(params) => {
-        let prop_names : Map[String, Unit] = {}
+        let prop_names : Map[String, Unit] = Map([])
         for prop in decl.properties {
           if !prop.is_static {
             prop_names[prop.name] = ()
@@ -35596,7 +35563,7 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     // Walk inits in source order. The set of *already initialized*
     // names grows as we go; a reference to `this.X` where X is a known
     // field but not yet in `inited` is the TS2729 signal.
-    let inited : Map[String, Unit] = {}
+    let inited : Map[String, Unit] = Map([])
     for entry in decl.instance_field_inits {
       let (name, init_expr) = entry
       collect_this_refs_for_uninit_field(

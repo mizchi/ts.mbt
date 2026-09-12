@@ -1105,19 +1105,19 @@ fn mtsc_ts_equivalents(base : String) -> Array[String] {
 /// candidate that does not exist is then a map lookup rather than a
 /// syscall. Only a candidate the listing admits costs an `@fs.kind`, and
 /// that is at most one per import.
-let mtsc_dir_entries : Map[String, Map[String, Bool]] = {}
+let mtsc_dir_entries : Map[String, Map[String, Bool]] = Map([])
 
 ///|
 /// `@fs.kind(path) is Regular`, memoized. Distinct from the listing:
 /// the listing says a *name* is there, this says it is a file and not a
 /// directory.
-let mtsc_regular_files : Map[String, Bool] = {}
+let mtsc_regular_files : Map[String, Bool] = Map([])
 
 ///|
 /// `mtsc_resolve_existing` results. The loader resolves the same path
 /// twice per edge — once to record the edge, once when the queue reaches
 /// it — and a module imported from n places is resolved n times.
-let mtsc_resolved_paths : Map[String, String] = {}
+let mtsc_resolved_paths : Map[String, String] = Map([])
 
 ///|
 /// The names directly inside `dir`, read once. A directory that cannot
@@ -1129,7 +1129,7 @@ async fn mtsc_dir_listing(dir : String) -> Map[String, Bool] {
   match mtsc_dir_entries.get(key) {
     Some(m) => m
     None => {
-      let m : Map[String, Bool] = {}
+      let m : Map[String, Bool] = Map([])
       let names = @fs.readdir(key) catch { _ => [] }
       for n in names {
         m[n] = true
@@ -1184,11 +1184,6 @@ async fn mtsc_resolve_existing_uncached(base : String) -> String {
     }
   }
   base
-}
-
-///|
-async fn mtsc_path_exists(path : String) -> Bool {
-  @fs.exists(path)
 }
 
 ///|
@@ -1407,11 +1402,11 @@ async fn main {
     None => "output.js"
   }
   if opts.bundle {
-    let files : Map[String, String] = {}
+    let files : Map[String, String] = Map([])
     let edges : Array[@mtsc_core.MtscModuleEdge] = []
-    let aliases : Map[String, String] = {}
-    let type_props : Map[String, Bool] = {}
-    let parsed_blocks : Map[String, @ast.TsModuleBlock] = {}
+    let aliases : Map[String, String] = Map([])
+    let type_props : Map[String, Bool] = Map([])
+    let parsed_blocks : Map[String, @ast.TsModuleBlock] = Map([])
     let parse_split : Array[Double] = []
     // `--timing` covers the CLI's own work too. The transform pipeline
     // reports its own phases, but the first measurement of `checker.ts`
