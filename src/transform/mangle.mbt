@@ -3239,7 +3239,10 @@ fn rename_object_entry_value(
 
 ///|
 fn is_method_shorthand_worth_keeping(key : String, f : @ast.TsFunc) -> Bool {
-  f.name == key && key != "" && !object_method_prefers_arrow(f)
+  // `name_is_member_key` rather than `f.name == key`: the latter is also
+  // true of a named function expression held in a property, whose name IS
+  // a binding, and emitting THAT as a shorthand loses the binding.
+  f.name_is_member_key && key != "" && !object_method_prefers_arrow(f)
 }
 
 ///|
@@ -3316,6 +3319,7 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
     body: new_body,
     is_generator: f.is_generator,
     is_async: f.is_async,
+    name_is_member_key: f.name_is_member_key,
   }
 }
 
@@ -3873,6 +3877,7 @@ fn rename_properties_in_expr(
         body: rename_properties_in_block(f.body, prop_map),
         is_generator: f.is_generator,
         is_async: f.is_async,
+        name_is_member_key: f.name_is_member_key,
       })
     }
     Yield(opt) =>

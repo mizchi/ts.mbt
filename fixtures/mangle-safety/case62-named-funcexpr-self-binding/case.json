@@ -1,0 +1,7 @@
+{
+  "origin": "ts.mbt — found while probing why `YieldExpression10_es6.ts` (TS2304) stayed a conformance MISS. The checker's miss and this runtime bug are the same root cause: the parser stored an object-literal method shorthand and a named function expression identically.",
+  "what": "`{ fact: function fact(n) { … fact(n - 1) } }` lost its self-binding twice over. The emitter reconstructed a method SHORTHAND from `f.name == key`, which is equally true of a named function expression whose name matches the property key; and `emit_function_expr` drops the name whenever the body references it, a workaround that is correct for a BORROWED member key (a lowered class method must not shadow an outer function of the same name) and wrong for a real self-binding. Either alone gives `ReferenceError: fact is not defined` under plain `mtsc` with no optimization flag. `TsFunc.name_is_member_key` makes the distinction a parse-time fact instead of a guess. Both directions are observed here: `factorial` fails if the self-binding is lost, and `viaShorthand` / `viaClassMethod` fail if the fix over-corrects and keeps a borrowed name that then shadows the outer `helper`.",
+  "mtscArgs": [],
+  "exports": ["factorial", "viaShorthand", "viaClassMethod"],
+  "expectStatus": "pass"
+}

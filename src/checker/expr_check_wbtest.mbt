@@ -19607,3 +19607,82 @@ test "batch EB: generic overload return inference" {
     @test.assert_eq(only(src, "computed property name"), 0)
   }
 }
+
+///|
+/// Batch EF: an object-literal method shorthand's name is the property KEY
+/// and binds nothing, so it must not answer a name lookup.
+///
+/// The parser stores `{ foo() {} }` and `{ foo: function foo() {} }`
+/// identically as `("foo", FuncExpr { name: "foo" })`, and two places read
+/// that name as a binding: the module-wide `declared_value_names` backstop
+/// (which made a bare `aaa;` legal ANYWHERE in a file containing
+/// `{ aaa() {} }`, and let one method body see a SIBLING method's key) and
+/// `check_funcexpr_with_context`'s recursion binding. `name_is_member_key`
+/// tells the two shapes apart.
+///
+/// Every legal neighbour here is one the cheap discriminator `f.name == key`
+/// would have got wrong: a named function expression's name IS a binding,
+/// including when it is held in a property of the same spelling.
+test "batch EF: a method shorthand's key is not a binding" {
+  let only = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for
+      issue in check_module_function_bodies_permissive(
+        parse_module_or_empty(src),
+      ) {
+      if issue.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  let nf = "cannot find name"
+
+  // --- FIRES: the key binds nothing, so these are TS2304.
+  // The corpus shape (YieldExpression10_es6): a generator method whose
+  // body yields its own key.
+  assert_true(only("var v = { * foo() { yield(foo); } };\n", nf) > 0)
+  // The same through a plain method, and through a getter.
+  assert_true(only("var v = { foo() { return foo; } };\n", nf) > 0)
+  assert_true(only("var v = { get foo() { return foo; } };\n", nf) > 0)
+  // A SIBLING method's key is not in scope either.
+  assert_true(
+    only("var v = { aaa() { return bbb; }, bbb() { return 1; } };\n", nf) > 0,
+  )
+  // The key did not leak to module scope: a reference after the literal,
+  // and one hoisted before it, are both unresolved.
+  assert_true(only("var v = { aaa() { return 1; } };\naaa;\n", nf) > 0)
+  assert_true(only("aaa;\nvar v = { aaa() { return 1; } };\n", nf) > 0)
+
+  // --- SILENT: a named function EXPRESSION binds its own name.
+  @test.assert_eq(only("var v = function foo() { return foo; };\n", nf), 0)
+  // Including when it sits in a property whose key is the same spelling —
+  // the case `f.name == key` cannot distinguish.
+  @test.assert_eq(
+    only("var v = { foo: function foo() { return foo; } };\n", nf),
+    0,
+  )
+  @test.assert_eq(
+    only(
+      "var v = { f: function fact(n: number): number { return n <= 1 ? 1 : n * fact(n - 1); } };\n",
+      nf,
+    ),
+    0,
+  )
+  // A method body reaching a real outer declaration still resolves, and
+  // `this.<key>` was never a name lookup.
+  @test.assert_eq(
+    only("function h() { return 1; }\nvar v = { a() { return h(); } };\n", nf),
+    0,
+  )
+  @test.assert_eq(only("var v = { aaa() { return this.aaa; } };\n", nf), 0)
+  // A class method's name is not a binding in its body either, and the
+  // outer function of the same spelling is what a body reference means.
+  @test.assert_eq(
+    only(
+      "function helper() { return 1; }\nclass C { helper() { return helper(); } }\n",
+      nf,
+    ),
+    0,
+  )
+}

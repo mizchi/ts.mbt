@@ -2142,6 +2142,7 @@ fn Parser::inject_instance_field_assigns(
     type_param_bounds: func.type_param_bounds,
     is_generator: func.is_generator,
     is_async: func.is_async,
+    name_is_member_key: false,
   }
 }
 
@@ -3403,6 +3404,7 @@ fn Parser::parse_class_body(
         body,
         is_generator,
         is_async: is_async_method,
+        name_is_member_key: true,
       }
       // TS7022, the INDIRECT form. A `for (var v of new C)` head takes
       // its element type from C's iteration protocol, so an un-annotated
@@ -3924,6 +3926,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }),
           [],
         )
@@ -4008,6 +4011,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: false,
             })
           } else {
             None
@@ -4211,6 +4215,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
         None => {
@@ -4225,6 +4230,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
       }
@@ -4485,6 +4491,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           const_type_params: [],
           is_generator: false,
           is_async: false,
+          name_is_member_key: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
         let call_expr = @ast.TsExpr::CallExpr(call_method, [
@@ -4507,6 +4514,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       const_type_params: [],
       is_generator: false,
       is_async: false,
+      name_is_member_key: false,
     }),
     [],
   )
@@ -4838,6 +4846,7 @@ fn Parser::parse_class_decl_with_abstract(
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: false,
             }
           } else {
             // No fields and no constructor — emit class with no
@@ -4853,6 +4862,7 @@ fn Parser::parse_class_decl_with_abstract(
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: false,
             }
           }
       }
@@ -5017,6 +5027,7 @@ fn Parser::parse_class_decl_with_abstract(
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
         None => {
@@ -5031,6 +5042,7 @@ fn Parser::parse_class_decl_with_abstract(
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
       }
@@ -5282,6 +5294,7 @@ fn Parser::parse_class_decl_with_abstract(
           const_type_params: [],
           is_generator: false,
           is_async: false,
+          name_is_member_key: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
         let call_expr = @ast.TsExpr::CallExpr(call_method, [
@@ -5314,6 +5327,7 @@ fn Parser::parse_class_decl_with_abstract(
         const_type_params: [],
         is_generator: false,
         is_async: false,
+        name_is_member_key: false,
       }),
       [],
     )

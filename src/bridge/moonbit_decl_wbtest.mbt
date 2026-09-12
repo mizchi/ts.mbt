@@ -391,6 +391,7 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
       const_type_params: [],
       is_generator: false,
       is_async: false,
+      name_is_member_key: false,
     }),
   )
   assert_eq(

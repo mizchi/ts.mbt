@@ -806,6 +806,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       body: { stmts: [], stmt_positions: [] },
       is_generator,
       is_async,
+      name_is_member_key: false,
     }
   }
   if !self.check(LBrace) {
@@ -823,6 +824,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       body: { stmts: [], stmt_positions: [] },
       is_generator,
       is_async,
+      name_is_member_key: false,
     }
   }
   self.last_function_bodiless = false
@@ -892,6 +894,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     body,
     is_generator,
     is_async,
+    name_is_member_key: false,
   }
 }
 
@@ -1187,6 +1190,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     body,
     is_generator,
     is_async,
+    name_is_member_key: false,
   }
 }
 

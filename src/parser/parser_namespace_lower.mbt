@@ -172,6 +172,7 @@ fn lower_namespace_block(
     body: { stmts: inner, stmt_positions: [] },
     is_generator: false,
     is_async: false,
+    name_is_member_key: false,
   }
   @ast.TsStmt::Block({
     stmts: [
@@ -206,6 +207,7 @@ fn namespace_live_export(
     },
     is_generator: false,
     is_async: false,
+    name_is_member_key: false,
   }
   @ast.TsStmt::Expr(
     @ast.TsExpr::MethodCall(@ast.TsExpr::Var("Object"), "defineProperty", [

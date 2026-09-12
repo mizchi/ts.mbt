@@ -787,7 +787,16 @@ fn collect_expr_value_names(
 ) -> Unit {
   match expr {
     FuncExpr(f) => {
-      if f.name != "" {
+      // An object-literal METHOD SHORTHAND's `name` is the property KEY, not
+      // a binding, so declaring it here suppressed TS2304 for that spelling
+      // across the WHOLE module: `var v = { aaa() {} }` made a bare `aaa;`
+      // legal anywhere in the file, and a method body could see a SIBLING
+      // method's key. This backstop is deliberately over-approximating, so
+      // the name of a genuine named function expression stays (it is only
+      // bound in its own body, and claiming module scope for it loses a
+      // finding rather than inventing one) — but a key that binds nothing
+      // is noise with no direction to be safe in.
+      if f.name != "" && !f.name_is_member_key {
         out[f.name] = true
       }
       for p in f.params {
@@ -13782,7 +13791,14 @@ fn check_funcexpr_with_context(
   // A named function expression (`var v = function fact(n) { … }`) binds its
   // own name inside the body for recursion; surface it so `fact(n - 1)` does
   // not trip the TS2304 backstop.
-  if f.name != "" && env.lookup(f.name) is None {
+  //
+  // An object-literal METHOD SHORTHAND binds nothing: `{ foo() {} }` stores
+  // the property KEY in `name`, so surfacing it invented a binding and
+  // `{ * foo() { yield(foo) } }` (TS2304, YieldExpression10_es6) read as
+  // legal. `f.name == key` cannot tell the two apart — that is exactly
+  // `{ foo: function foo() { … foo() } }`, which IS legal and must stay
+  // silent — so the parser marks the shorthand instead.
+  if f.name != "" && !f.name_is_member_key && env.lookup(f.name) is None {
     let own_params : Array[@ast.TsType] = []
     for p in f.params {
       own_params.push(p.type_)
@@ -31579,6 +31595,8 @@ fn check_module_function_bodies_layered(
         // must not demand a value).
         is_generator: meth.is_generator,
         is_async: meth.is_async,
+        // A synthesized class-method body, not an object literal.
+        name_is_member_key: false,
       }
       // Bind `this` to the instance type only for instance methods. In a
       // `static` method `this` is the class/constructor side (its members
@@ -31646,6 +31664,8 @@ fn check_module_function_bodies_layered(
       type_param_bounds: cls.type_param_bounds,
       is_generator: false,
       is_async: false,
+      // A synthesized constructor body, not an object literal.
+      name_is_member_key: false,
     }
     for
       issue in check_function_body_with(

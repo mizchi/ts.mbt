@@ -2293,9 +2293,17 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
               @ast.TsArrowBody::ArrowBlock(blk) => emit_block(e, blk)
             }
           }
-          (key, FuncExpr(f)) if f.name == key && key != "" => {
+          (key, FuncExpr(f)) if f.name_is_member_key && key != "" => {
             // Method shorthand: `key(args) {...}`. The parser stores
-            // method shorthand as `(key, FuncExpr {name: key, ...})`.
+            // method shorthand as `(key, FuncExpr {name: key, ...})`
+            // and marks it with `name_is_member_key`. Testing
+            // `f.name == key` instead was WRONG in one direction that
+            // costs a running program: it is also true of
+            // `{ fact: function fact(n) { … fact(n - 1) } }`, a NAMED
+            // FUNCTION EXPRESSION whose name IS a binding in its own
+            // body. Re-emitting that as a shorthand dropped the
+            // self-binding, and the call threw `ReferenceError` under
+            // plain `mtsc` with no optimization flag.
             // Re-emitting as the shorthand avoids introducing a
             // named-function-expression self-binding that would
             // shadow rewritten names (e.g. when `core.clone` is
@@ -2929,10 +2937,16 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   // surfaces on every IIFE-lowered class method whose name
   // collides with an imported function (effect's `EffectPrimitive
   // .toJSON` is the textbook case).
+  // The body-reference test applies ONLY to a borrowed member key. For a
+  // source-level named function expression the name IS a binding, so a
+  // reference to it in the body is the recursion the source wrote, not a
+  // shadowed outer name — dropping it there turned
+  // `{ fact: function fact(n) { … fact(n - 1) } }` into an anonymous
+  // function and the call threw `ReferenceError` under plain `mtsc`.
   if f.name != "" &&
     is_valid_js_ident(f.name) &&
     !is_reserved_word(f.name) &&
-    !func_body_references_name_as_free_var(f, f.name) {
+    !(f.name_is_member_key && func_body_references_name_as_free_var(f, f.name)) {
     // In minify mode, `function*name()` needs no space — `*` is
     // punctuation, not a word token. Non-generators must keep the
     // space: `functionname` would be parsed as one identifier.

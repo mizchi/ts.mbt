@@ -613,6 +613,7 @@ fn Parser::parse_object_method_value(
     body,
     is_generator,
     is_async,
+    name_is_member_key: true,
   })
 }
 
@@ -3905,6 +3906,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: true,
             })
           } else if is_ident_key &&
             prop_key == "async" &&
@@ -4278,6 +4280,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: true,
             })
           } else if is_ident_key &&
             prop_key == "async" &&
