@@ -2167,6 +2167,46 @@ fn Resolver::interface_is_structurally_empty_rec(
 
 ///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  // Fast path, for exactly the reason `unwrap_containers` states on its
+  // own thirty lines above — "this runs on every assignability
+  // diagnostic", so decide before allocating anything. That sibling got
+  // the guard and this one, which it delegates to and which is hotter,
+  // did not: the applied-in-some-places family in the hottest function
+  // in the checker.
+  //
+  // The `seen` map below exists only for cycle detection while PEELING,
+  // and only the arms of the loop's match can peel. Every other type —
+  // every primitive, `Object`, `Struct`, `Func`, `Union`,
+  // `Intersection`, `Array`, `Tuple`, `Literal` — reaches the catch-all
+  // on the first iteration, sets `keep_going = false`, and is returned
+  // unchanged, having allocated a `Map` for nothing. On a 2,000-term
+  // `a + a + … + a` chain (8 KB of source, 0.25 s) callgrind put
+  // `new_map[String, Bool]` at 6.5% and `Map[String, Bool]` at 3.9% of
+  // self cost, with `moonbit_drop_object` / `scan_regular_object` /
+  // `mi_free` at 41% between them — millions of one-element maps built
+  // and dropped.
+  //
+  // The list is the loop's own arm list, extracted mechanically rather
+  // than written from memory: it must be a SUPERSET of the peelable
+  // forms, since excluding one that peels would silently stop resolving
+  // it. Including one that does not peel costs only the old behaviour.
+  // `GenericFunc` and `CallableMeta` are in it because they are the
+  // wrapper nodes whose fail-open default arms this repo has already
+  // paid for seven times.
+  match ty {
+    Named(_)
+    | Applied(_, _)
+    | TypeOf(_)
+    | Keyof(_)
+    | MappedType(_, _, _, _)
+    | MappedTypeRemap(_, _, _, _, _)
+    | IndexedAccess(_, _)
+    | TemplateLiteralType(_, _)
+    | Conditional(_, _, _, _)
+    | GenericFunc(_, _, _)
+    | CallableMeta(_, _) => ()
+    _ => return ty
+  }
   let seen : Map[String, Bool] = Map([])
   let mut cur = ty
   let mut keep_going = true
