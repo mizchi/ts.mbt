@@ -4881,51 +4881,11 @@ priv struct ExprEnv {
   // O(bindings in scope), four times over, per block. Grows to the
   // number of writes in one function body, which is linear in the code.
   journal : Array[EnvUndo]
-  // Enclosing scope, consulted on a lookup MISS. A nested function's
-  // scope used to be built by COPYING every outer binding into a fresh
-  // env one `bind` at a time — O(outer bindings) per closure, which is
-  // what `checker.ts` (one ~50,000-line function holding thousands of
-  // closures over a shared scope) was largely made of, and what the
-  // `nested-closures` axis measures. A parent pointer is O(1).
-  //
-  // Writes always land in the CHILD's own maps, so a nested scope
-  // shadows rather than mutating its enclosing one — the property the
-  // copy provided by construction and the reason the four sites could
-  // say "binding inside this synthetic env doesn't touch the outer one".
-  parent : ExprEnv?
-  // `check_funcexpr_with_context`'s `<class>` case: an inherited name
-  // reports its DECLARED type rather than its narrowed one, because the
-  // parser's class-expression IIFE lowering runs member bodies after the
-  // guard region ends and TypeScript does not carry control-flow
-  // narrowing into them (`typeGuardInClass`).
-  inherit_declared_only : Bool
 }
 
 ///|
 fn ExprEnv::new() -> ExprEnv {
-  { vars: {}, declared: {}, journal: [], parent: None, inherit_declared_only: false }
-}
-
-///|
-/// A nested scope over `outer`, in O(1). Replaces `ExprEnv::new()` plus a
-/// full copy of `outer`'s bindings at the four sites that give a nested
-/// function its own scope.
-///
-/// Safe to hold `outer` LIVE rather than a snapshot of it, and that was
-/// checked rather than assumed: a parent pointer sees mutations made to
-/// the enclosing env after the child exists, where a copy could not, so
-/// every one of the four sites was read for a post-creation write to
-/// `outer`. There is none — the two in `infer_arrow_body_with_params`
-/// sit in a different `match` arm from that function's only live use of
-/// `outer`, and the other two mention it only in comments.
-fn ExprEnv::child_of(outer : ExprEnv, reset_narrowing~ : Bool = false) -> ExprEnv {
-  {
-    vars: {},
-    declared: {},
-    journal: [],
-    parent: Some(outer),
-    inherit_declared_only: reset_narrowing,
-  }
+  { vars: {}, declared: {}, journal: [] }
 }
 
 ///|
@@ -5021,16 +4981,7 @@ fn ExprEnv::bind(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
   // First write wins for `declared` -- subsequent narrowing rewrites
   // only `vars`. `declare_type` is the explicit alternative when the
   // caller wants to set / reset the declared slot deliberately.
-  //
-  // The test is against the whole CHAIN, not this scope's own map, so a
-  // parameter shadowing an outer binding leaves the declared slot where
-  // it was. That is what the copy did — it filled the child's `declared`
-  // for every inherited name, so `contains` was already true — and
-  // keeping it makes this refactor a pure change of representation. A
-  // bare `self.declared.contains` would have been a semantic change
-  // riding along with a performance one, which is the thing that makes a
-  // failure ambiguous.
-  if self.lookup_declared(name) is None {
+  if !self.declared.contains(name) {
     self.journal.push(DeclDel(name))
     self.declared[name] = ty
   }
@@ -5062,6 +5013,46 @@ fn ExprEnv::declare_type(
   self.declared[name] = ty
 }
 
+///|
+/// Fill a BRAND-NEW env with the bindings of an enclosing one, without
+/// journalling, for the four sites that give a nested function its own
+/// scope. `reset_narrowing` takes each name's DECLARED type instead of
+/// its narrowed one — `check_funcexpr_with_context` needs that for the
+/// parser's `<class>` IIFE lowering, since class member bodies run after
+/// the guard region ends and TypeScript does not carry control-flow
+/// narrowing into them (`typeGuardInClass`).
+///
+/// Skipping the journal here is sound, and the argument is about ORDER
+/// rather than about this env being discarded: every `mark` is the
+/// journal's length at the time it is taken, so an entry pushed BEFORE
+/// any mark exists sits below every mark that will ever be taken and can
+/// never be popped. The fill runs on a fresh env whose first `mark`
+/// comes later, from the nested body's own `check_block`. Journalling it
+/// cost the `nested-closures` axis ~20% for records nothing can reach.
+///
+/// It does NOT make this path cheap — it is still O(outer bindings) per
+/// closure, which is that axis's 2.01 and what the layered-env fix filed
+/// in TODO.md is for. This only stops the journal from making it worse.
+fn ExprEnv::fill_from(
+  self : ExprEnv,
+  outer : ExprEnv,
+  reset_narrowing~ : Bool = false,
+) -> Unit {
+  for entry in outer.full_snapshot() {
+    let ty = if reset_narrowing {
+      match outer.lookup_declared(entry.0) {
+        Some(d) => d
+        None => entry.1
+      }
+    } else {
+      entry.1
+    }
+    self.vars[entry.0] = ty
+    if !self.declared.contains(entry.0) {
+      self.declared[entry.0] = ty
+    }
+  }
+}
 
 ///|
 /// Drop a binding, journalled. The one caller works on a synthetic env
@@ -5079,24 +5070,7 @@ fn ExprEnv::unbind(self : ExprEnv, name : String) -> Unit {
 
 ///|
 fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
-  match self.vars.get(name) {
-    Some(t) => Some(t)
-    None =>
-      match self.parent {
-        Some(parent) =>
-          if self.inherit_declared_only {
-            // Mirrors what the copy did: the declared type when there is
-            // one, else the narrowed value.
-            match parent.lookup_declared(name) {
-              Some(d) => Some(d)
-              None => parent.lookup(name)
-            }
-          } else {
-            parent.lookup(name)
-          }
-        None => None
-      }
-  }
+  self.vars.get(name)
 }
 
 ///|
@@ -5107,14 +5081,7 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 /// `resolver.globals` for module-level variables) rather than
 /// silently using the narrowed type.
 fn ExprEnv::lookup_declared(self : ExprEnv, name : String) -> @ast.TsType? {
-  match self.declared.get(name) {
-    Some(t) => Some(t)
-    None =>
-      match self.parent {
-        Some(parent) => parent.lookup_declared(name)
-        None => None
-      }
-  }
+  self.declared.get(name)
 }
 
 ///|
@@ -5124,45 +5091,11 @@ fn ExprEnv::lookup_declared(self : ExprEnv, name : String) -> @ast.TsType? {
 /// only; the matching `declared` entries are walked in step on
 /// restore so a nested `let x: T;` doesn't leak its declared slot.
 fn ExprEnv::full_snapshot(self : ExprEnv) -> Array[(String, @ast.TsType)] {
-  // With a parent chain this has to report the whole VISIBLE env, not
-  // just this scope's own map: its two remaining callers materialize the
-  // env to compute a branch join, and they were written when a nested
-  // scope held a copy of everything. Parent first so a child entry
-  // overwrites it, which is the shadowing order.
-  let acc : Map[String, @ast.TsType] = Map([])
-  self.collect_visible(acc)
   let entries : Array[(String, @ast.TsType)] = []
-  for name, ty in acc {
-    entries.push((name, ty))
+  for entry in self.vars {
+    entries.push((entry.0, entry.1))
   }
   entries
-}
-
-///|
-/// Accumulate the visible bindings, outermost scope first.
-fn ExprEnv::collect_visible(
-  self : ExprEnv,
-  acc : Map[String, @ast.TsType],
-) -> Unit {
-  match self.parent {
-    Some(parent) => {
-      parent.collect_visible(acc)
-      if self.inherit_declared_only {
-        // Same substitution `lookup` makes for this flag: an inherited
-        // name reports its declared type where it has one.
-        for name, _ in acc {
-          match parent.lookup_declared(name) {
-            Some(d) => acc[name] = d
-            None => ()
-          }
-        }
-      }
-    }
-    None => ()
-  }
-  for entry in self.vars {
-    acc[entry.0] = entry.1
-  }
 }
 
 
@@ -15236,7 +15169,8 @@ fn infer_arrow_body_with_params(
 ) -> @ast.TsType {
   match callback {
     ArrowFunc(arrow_params, declared_ret, body, is_async) => {
-      let env = ExprEnv::child_of(outer)
+      let env = ExprEnv::new()
+      env.fill_from(outer)
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
@@ -15263,7 +15197,8 @@ fn infer_arrow_body_with_params(
       wrap_async_return(is_async, inner)
     }
     FuncExpr(f) => {
-      let env = ExprEnv::child_of(outer)
+      let env = ExprEnv::new()
+      env.fill_from(outer)
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
@@ -15364,7 +15299,11 @@ fn check_arrow_with_context(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
-  let env = ExprEnv::child_of(outer)
+  let env = ExprEnv::new()
+  // Carry parent bindings into the inner scope. We don't snapshot/restore —
+  // `ExprEnv` is mutable, but binding inside this synthetic env doesn't
+  // touch the outer one.
+  env.fill_from(outer)
   let param_names : Array[String] = []
   let mut i = 0
   while i < arrow_params.length() {
@@ -15514,13 +15453,13 @@ fn check_funcexpr_with_context(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
+  let env = ExprEnv::new()
   // `<class>` marks the parser's class-expression IIFE lowering. Class
   // member bodies execute after the guard region ends, so TypeScript does
-  // NOT carry control-flow narrowing into them (typeGuardInClass) — such a
-  // body reads each captured name at its DECLARED type, which is what
-  // `inherit_declared_only` does on a lookup miss.
+  // NOT carry control-flow narrowing into them (typeGuardInClass) —
+  // rebind captured variables at their declared types.
   let reset_narrowing = f.name == "<class>"
-  let env = ExprEnv::child_of(outer, reset_narrowing~)
+  env.fill_from(outer, reset_narrowing~)
   let param_names : Array[String] = []
   let mut i = 0
   while i < f.params.length() {
