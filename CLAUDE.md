@@ -32,8 +32,8 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2518 / MISS 216 / FP 0 /
-  PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
+  is a soundness bug, and there are none (TP 2635 / MISS in scope 80 /
+  OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
   answers both: `node_modules/typescript` is 6.0.3, and
@@ -2100,6 +2100,115 @@ product surfaces now.
   `self.labels` needs at fifteen sites. A recorded abstention whose reason
   probing CONFIRMS is worth as much as one it refutes, and this is the
   second.
+  Batch EI is **99 -> 80** (+19 files, TP 2616 -> 2635, FP 0), the largest
+  single batch in this series, and the reason it is large is that thirteen
+  of its nineteen rules needed no type information at all: a `const enum`
+  initializer that EVALUATES to `Infinity` or `NaN` (TS2477 / TS2478 —
+  gated on `in_const_enum`, which is the whole rule, since a plain enum
+  takes the identical initializers in silence), an object-rest element
+  whose target is a binding pattern, `yield` in a generator's own
+  parameter initializer, an optional binding-pattern parameter in an
+  IMPLEMENTATION, `export { globalThis }`, a decorated or modified `this`
+  parameter and a `this` parameter that is not first, `super` with type
+  arguments, an assignment to a class / enum / function declaration, a
+  private name as an indexed-access key, `infer` outside an extends
+  clause, and one `infer` name declared twice with different constraints.
+  Four are the applied-in-some-places family, and one of the four is the
+  purest instance yet: `<import-eq-root>` had the DOT test inside its
+  guard, so TS2503 was written for `import X = A.B.C` and applied to one
+  of the two spellings — a single-segment `import f = NonExistent` never
+  reached the recorder, and the root of a one-segment reference is the
+  whole reference. The other three: a private / protected member reached
+  by DESTRUCTURING had no check at all where `k.priv` has been reported
+  for years (the verdict is now one function both callers share, rather
+  than a second copy of the rule — the family written into its own fix);
+  `reaches_alias` treated a mapped type's SOURCE as a structural barrier
+  when computing the key set is exactly what needs the alias resolved
+  (`type Recurse = { [K in keyof Recurse]: Recurse[K] }`), while the VALUE
+  position really is a barrier and must keep having no arm, which is what
+  keeps `type A = { x: A }` and the generic `Circular<T>` / `Transform<T>`
+  in the same corpus file silent; and TS2411's index-value arm required a
+  CLASS on both sides where the corpus file augments an INTERFACE.
+  **The optionality PROXY turned out to be live at two more sites**, and
+  that is the recall finding of the batch. Batch EH replaced
+  `is_assignable_to(undefined, ty)` with the union test in
+  `check_expr_against`; `object_fields_assignable` and
+  `struct_assignable_named_rec` were still asking `type_accepts_undefined`,
+  which answers yes for `any` / `unknown` / `undefined` / `void` — none of
+  which the `?` can produce. The second of those is the live bug rather
+  than a MISS, because that function only ever PROVES assignability, so a
+  permissive answer SUPPRESSES the diagnostic: `class Bar { x }`, whose
+  unannotated field becomes `any`, accepted every source, which is the
+  commonest spelling of a required member there is. The UNION case stays
+  tolerated at all three sites, and that is not a shortcut — there
+  `x?: T` and `x: T | undefined` really are the same node.
+  TS1338 is the batch's clearest legal-neighbour lesson and **the corpus
+  caught both halves of it**. The first version cleared the permission
+  when it descended into a nested conditional's check / then / else
+  positions, and the message means "inside SOME conditional's extends
+  clause", not this one's: `type X11<T> = T extends ((infer U) extends
+  number ? 1 : 0) ? 1 : 0` is ACCEPTED — `inferTypesWithExtends1` says so
+  in its own comment — while the identical inner conditional as a whole
+  alias BODY is TS1338 three times, and not on its extends position. The
+  first TS2838 was wrong the same way: an unconstrained `infer U` beside a
+  constrained one is ACCEPTED in either order, "same behavior as
+  class/interface" in that file's words, because a missing constraint is
+  INHERITED rather than contradicting — so only a WRITTEN bound
+  participates.
+  TS2855 / TS2340 is where reasoning gets a cell backwards in the way this
+  file keeps recording. `super.x` reaching a base DATA FIELD is an error
+  WHATEVER its visibility — the field is an own property of each instance
+  and `super` looks on the prototype — yet the corpus file
+  (`privateInstanceMemberAccessibility`) is written as if it were an
+  accessibility rule, and the older message it carries says "only public
+  and protected METHODS". Probed: `private`, `protected` and `public` base
+  fields all report; the local compiler gives TS2340 at `target: es5` and
+  TS2855 from es2015 up, which is why one rule carries both numbers. Three
+  neighbours are accepted and each needed its own exclusion — a METHOD and
+  an ACCESSOR (both on the prototype, so a name also present in `methods`
+  abstains, which also covers batch CV's ambient accessors upserted into
+  BOTH lists), a PARAMETER PROPERTY, and a STATIC base member of the same
+  name, which cost two false positives
+  (`thisAndSuperInStaticMembers1`/`2`): in a static member `super` is the
+  base CONSTRUCTOR, where a `static` field of that name really does live,
+  and static and instance field initializers share one `CheckCtx` path so
+  the context cannot be read there at all.
+  The false positive the corpus structurally cannot see is the fourth in
+  four batches found by probing a legal neighbour, and it was a rule that
+  had gone STALE against the language: the get/set pair check required the
+  getter's type to be assignable to the setter's parameter type, and
+  **TypeScript 4.3 made those types allowed to DIVERGE**.
+  `get p(): string { return "" }` beside `set p(x: number)` is ACCEPTED,
+  and so is every class-typed pair; the error, if any, lands where the
+  value is READ. Only an UNANNOTATED getter is an error, and there the
+  getter's type comes contextually FROM the setter, so what tsc reports is
+  the `return` inside the body — the same verdict either way. The
+  annotation-presence fact is not in `TsClassMethodDecl` (the
+  absent-versus-`: any` blocker recorded here for TS7031, TS7022, TS2729,
+  TS2448 and TS2564), so the pair is judged only for a member the parser
+  put in `unannotated_return_members` — batch EH's `<unannotated-return:>`
+  channel, built for TS2490 and now serving a second rule. One more cell
+  came with it, and it is a case of OUR parser being more precise than
+  tsc: a computed key pairs the two accessors only when it is a late-bound
+  name of LITERAL type, so `[G.B]` and `["get1"]` pair while `[1 << 6]`
+  does not — its type is `number`, not the literal `64` — and our parser
+  folds the shift to the member name `64`. Ten cells now agree with tsc.
+  Four items were measured and NOT taken. The one worth reading is TS2304
+  for an undeclared `infer X extends Bound`, which was written, wired and
+  **REVERTED after instrumenting rather than re-reading**: the type parser
+  REDUCES a conditional whose extends relation it can decide, so
+  `type Test<T> = T extends infer A extends B ? number : string` arrives
+  at the checker as the bare `Number` and neither the marker nor its bound
+  survives. Its scaffolding went with it — a per-position binder set
+  threaded down the walk, which is the one thing that would make the
+  general `unresolved_type_references` version usable, and dead code that
+  reads like live code is a defect. The other three: TS2797 needs a link
+  from a class declared inside a function to that function's PARAMETER
+  types and type-parameter bounds, which nothing provides; TS2339 for
+  `Symbol.<unknown member>` needs a file-level fact the member parser
+  cannot have (whether the file augments `interface SymbolConstructor`,
+  which `symbolProperty61` legally does); and TS18046 through an ALIASED
+  guard needs assignment invalidation of the alias.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

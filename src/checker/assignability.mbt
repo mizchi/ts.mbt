@@ -1048,13 +1048,47 @@ fn is_object_assignable_inner(
         }
       None => ()
     }
-    // A target field whose type accepts `undefined` (the desugaring of
-    // `x?: T`) tolerates the source missing that field entirely.
-    if !type_accepts_undefined(t_type) {
+    // A target field written `x?: T` tolerates the source missing it
+    // entirely. That fact is not in the AST as a flag — the type parser
+    // wraps `x?: T` into `Union([T, Undefined])` ALWAYS — so the union IS
+    // the encoding and `target_field_optional` reads it directly.
+    //
+    // It used to ask `type_accepts_undefined`, which is a PROXY for the
+    // question and answers yes for four shapes the `?` can never produce:
+    // `x: any`, `x: unknown`, `x: undefined` and `x: void` are all
+    // REQUIRED members that tsc reports missing (probed, and `x: any` is
+    // what an unannotated `class Bar { x }` field becomes — ordinary
+    // TypeScript, so the proxy was silently dropping the commonest
+    // spelling there is). Same defect batch EH fixed in
+    // `check_expr_against`'s missing-required test; this is the second
+    // site of the one question.
+    //
+    // The UNION case stays tolerated, and that is not a shortcut: there
+    // `x?: T` and `x: T | undefined` really are the same node, so
+    // reporting would be a false positive on the optional spelling.
+    if !target_field_optional(t_type) {
       return false
     }
   }
   true
+}
+
+///|
+/// True when a TARGET object/class field's type is the encoding of `x?: T`
+/// — a union with an `Undefined` (or `Null`) member. See the call site for
+/// why this is not `type_accepts_undefined`.
+fn target_field_optional(t : @ast.TsType) -> Bool {
+  match t {
+    Union(members) => {
+      for m in members {
+        if m is (Undefined | Null) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
 }
 
 ///|

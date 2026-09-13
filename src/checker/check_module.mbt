@@ -1032,6 +1032,28 @@ fn reaches_alias(
         None => false
       }
     }
+    // A mapped type's SOURCE (the `in` operand) is not a structural
+    // barrier, and this is the position the walk was missing:
+    // `type Recurse = { [K in keyof Recurse]: Recurse[K] }` is TS2456,
+    // because computing the key set needs `keyof Recurse`, which needs
+    // `Recurse`. The VALUE position deliberately has no arm — that IS a
+    // barrier, which is what makes `type A = { x: A }` legal and what
+    // keeps `type Circular<T> = { [P in keyof T]: Circular<T> }` and
+    // `type Transform<T> = { [K in keyof T]: Transform<T[K]> }` (both
+    // TS7-ACCEPTED, in this same corpus file) silent: their source is
+    // `keyof T`, a type parameter.
+    MappedType(_, source, _, _) =>
+      reaches_alias(module_, target, source, visited)
+    // The `as` remap is evaluated per key alongside the source, so it is
+    // in the same position.
+    MappedTypeRemap(_, source, remap, _, _) =>
+      reaches_alias(module_, target, source, visited) ||
+      reaches_alias(module_, target, remap, visited)
+    // `keyof X` needs X's members, so it cannot break a cycle either.
+    // Reachable only from a non-barrier position above, which is why
+    // `type A = { x: keyof A }` stays silent (the Object is the barrier)
+    // while `type A = keyof A` reports.
+    Keyof(inner) => reaches_alias(module_, target, inner, visited)
     _ => false
   }
 }

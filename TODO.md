@@ -3,6 +3,220 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EI (2026-09-13): MISS 99 -> 80, and an optionality PROXY at two more sites
+
+**+19 files at FP 0** (TP 2616 -> 2635, MISS in scope 99 -> **80**,
+PFLEGAL 0, TN 1750). Nineteen rules, thirteen of them pure grammar or
+declaration shape, and the two findings worth more than any single file
+are both about **one question answered in several places**: the `?` on a
+member, and the `?` on a get/set pair.
+
+- [x] **TS2477 / TS2478** (+1: `enumConstantMembers`). A `const enum`
+  member initializer that EVALUATES to a non-finite value, or to `NaN`.
+  The one rule in the enum family that needs the VALUE rather than the
+  shape, and it is decidable because a const enum initializer is a
+  constant expression by definition: `enum_const_double` folds the literal
+  arithmetic and abstains on anything else, so an unfoldable initializer
+  costs a MISS. `in_const_enum` is the whole rule — a PLAIN enum takes
+  `1 / 0`, `NaN`, `Infinity` and `-Infinity` in silence (probed), while
+  `declare const enum` reports and needs no code of its own.
+- [x] **TS2501** (+1: `restPropertyWithBindingPattern`). An object-rest
+  element whose target is a binding pattern (`({...{}} = {})`). Sibling of
+  `record_rest_element_initializer`, in the same arm and for the same
+  reason. Object rest ONLY, which is the asymmetry probing settled:
+  `[...[a]] = [1]` is ACCEPTED. The parenthesized forms carry a second
+  code (TS2701) this rule does not claim — the parser strips parens, so
+  `{...{}}` and `{...({})}` are the same node here.
+- [x] **TS2523** (+1: `FunctionDeclaration7_es6`). `yield` in a
+  generator's own parameter initializer. `in_generator` is the gate, and
+  it is why the rule can sit in ONE place rather than at each of the
+  fifteen `parse_params()` sites: a `yield` in a parameter list becomes a
+  Yield NODE only when the enclosing context is a generator, and there
+  every spelling is an error. The three cells that decide the walk:
+  `function* f(a = yield)` and `function* f(a = { b: yield })` report,
+  `function* f(a = () => yield)` does NOT — an arrow's body is its own
+  scope, so `expr_yields_outside_function` stops at every function
+  boundary.
+- [x] **TS2463** (+1: `optionalBindingParameters2`). An optional
+  binding-pattern parameter in an IMPLEMENTATION. The exact MIRROR of
+  `record_bodiless_param_initializers` — the same body-or-not question
+  inverted — so it is called from the two places that have already decided
+  it and nowhere else. Recording it in `parse_param` would be wrong at its
+  own site: the `?` on a pattern parameter is LEGAL in every bodiless
+  position (`declare function`, an interface member, a `declare class`
+  member, a function TYPE — all four probed and accepted). The arrow and
+  object-method spellings stay MISSes, which is what the two-call-site
+  restriction buys.
+- [x] **TS2661** (+1: `globalThisGlobalExportAsGlobal`). `globalThis` is
+  carved out of `check_non_local_exports`' lib-global exclusion, and the
+  reason is tsc's own message: it has a DEDICATED sentence for this name,
+  so the verdict does not rest on the general "a lib declaration is not a
+  local one" argument the exclusion hedges against. `globalThis` is not a
+  declaration at all.
+- [x] **TS1433 / TS2680** (+1: `decoratorOnClassMethodThisParameter`). A
+  decorated or modified `this` parameter, and a `this` parameter that is
+  not first. Both facts were already in hand at the two right places —
+  `parse_param` has the decorator and modifier answers, `parse_params` is
+  the one function that sees every parameter list in the language. One
+  cell cost a false positive first: `visibility_param` defaults to
+  `"public"` whether or not a keyword was written, so it answers "which
+  accessibility applies" and not "was a modifier present";
+  `is_param_property` is the second question.
+- [x] **TS2754** (+1: `taggedTemplatesWithTypeArguments2`). `super` with
+  type arguments, at the one place that sees the type-argument list.
+  `super<number>(1)` and `super<number>.m()` both report;
+  `super()` / `super.m()` are accepted.
+- [x] **TS2629 / TS2628 / TS2630** (+1: `assignments`). One rule, three
+  messages: an assignment whose target is a class, an enum or a function
+  declaration. Restricted to TOP-LEVEL statements, and the restriction is
+  what makes it sound — a nested scope can shadow any of these names
+  (`class C {} function f(C) { C = null }` is legal) and the flat
+  `top_level_stmts` list is the one place the name is unambiguously the
+  module-level declaration. `let C = class {}; C = null` and
+  `let f = function () {}; f = null` are both ACCEPTED, which is why
+  `is_local` classes are skipped; an ambient `declare class` /
+  `declare function` DOES report and needs no condition.
+- [x] **TS1005** (+1: `privateNamesAndIndexedAccess`). A private name as
+  an indexed-access type key (`C[#bar]`). Recorded as a grammar misuse
+  rather than raised: the fall-through already recovers the type as `Any`,
+  and a parse REJECTION here would risk a PFLEGAL on anything else
+  reaching that arm.
+- [x] **TS1338** (+2: `inferTypes1`, `templateLiteralTypes1`). An `infer`
+  outside a conditional's extends clause. **The corpus caught the first
+  version**, and the cell it caught is the whole rule: the three
+  non-extends positions INHERIT the permission rather than clearing it,
+  because the message means "inside SOME conditional's extends clause".
+  `type X11<T> = T extends ((infer U) extends number ? 1 : 0) ? 1 : 0` is
+  ACCEPTED — `inferTypesWithExtends1` says so in its own comment — while
+  the identical inner conditional as a whole alias BODY is TS1338 three
+  times, and not on the extends position.
+- [x] **TS2838** (+1: `inferTypesWithExtends2`). One `infer` name declared
+  twice with DIFFERENT constraints in the same extends clause. Only a
+  WRITTEN bound participates, and that is the second cell the corpus
+  caught: an unconstrained declaration beside a constrained one is
+  ACCEPTED in either order, which `inferTypesWithExtends1` calls "same
+  behavior as class/interface" — a missing constraint is inherited rather
+  than contradicting.
+- [x] **TS2488 / TS2504** (+1: `types.forAwait.es2018.2`). An OBJECT
+  LITERAL as a `for-of` / `for await` source — the same mistake against
+  the two protocols, which is why one function takes `is_await`. It reads
+  the EXPRESSION rather than the inferred type, and that is what makes it
+  complete by construction rather than a guess about the object model: an
+  object literal is a full description of its own members. The two shapes
+  that can hide a protocol method — a COMPUTED key (how
+  `[Symbol.iterator]() {}` is written) and a SPREAD — abstain outright.
+- [x] **TS2341 / TS2445** (+1:
+  `privateProtectedMembersAreNotAccessibleDestructuring`). Destructuring
+  reaches a member exactly as a property access does, and this spelling
+  had no check at all: `let { priv } = k` was silent where `k.priv` has
+  been reported for years. `check_member_accessibility`'s verdict is split
+  into `check_class_member_accessibility` so the two callers share one
+  rule rather than getting a second copy — the applied-in-some-places bug
+  written into its own fix. The enclosing-class context comes from
+  `ctx.path_prefix`, so the corpus file's legal cases (inside K's own
+  method, and a protected member in a subclass) fall out with no condition.
+- [x] **TS2855 / TS2340** (+1: `privateInstanceMemberAccessibility`). A
+  `super` access reaching a base DATA FIELD. `super.x` looks the property
+  up on the base PROTOTYPE and a class field is an own property of each
+  instance, so there is nothing there to read WHATEVER its visibility —
+  and that is the cell reasoning gets wrong. The corpus file is written as
+  if it were an accessibility rule and its older message says "only public
+  and protected METHODS"; `private`, `protected` and `public` base fields
+  all report, and the local compiler gives TS2340 at `target: es5` and
+  TS2855 from es2015 up, which is why one rule carries both numbers.
+  Three neighbours are accepted and each needed its own exclusion: a
+  METHOD and an ACCESSOR (both on the prototype, so a name also in
+  `methods` abstains — which covers batch CV's ambient accessors, upserted
+  into both lists), a PARAMETER PROPERTY, and **a STATIC base member of
+  the same name**, which cost two false positives
+  (`thisAndSuperInStaticMembers1`/`2`): in a static member `super` is the
+  base CONSTRUCTOR, where a `static` field of that name really does live,
+  and static and instance field initializers share one `CheckCtx` path so
+  the context cannot be read there.
+- [x] **TS2456** (+1: `recursiveMappedTypes`). A mapped type's SOURCE is
+  not a structural barrier, and it was the one position `reaches_alias`
+  was missing: `type Recurse = { [K in keyof Recurse]: Recurse[K] }` is
+  circular because computing the key set needs `keyof Recurse`. The VALUE
+  position deliberately has no arm — that IS a barrier, which is what
+  keeps `type A = { x: A }` legal and what keeps `Circular<T>` and
+  `Transform<T>`, both TS7-ACCEPTED in the same corpus file, silent: their
+  source is `keyof T`, a type parameter.
+- [x] **TS2503** (+1: `verbatimModuleSyntaxInternalImportEquals`). The
+  `<import-eq-root>` recorder had the dot test inside its guard, so the
+  rule was written for the DOTTED spelling and applied to one of the two:
+  a single-segment target (`import f1 = NonExistent;`) never reached it.
+  The root of a one-segment reference is the whole reference. Probed: a
+  namespace and an enum target are legal, a CLASS or INTERFACE target is
+  TS2702, a different code the consumer abstains on.
+- [x] **The optionality PROXY, at two more sites** (+1:
+  `iterableArrayPattern17`). Batch EH replaced
+  `is_assignable_to(undefined, ty)` with the union test in
+  `check_expr_against`; the same question was still being asked by the
+  proxy in `object_fields_assignable` and in
+  `struct_assignable_named_rec`. The second one is the live bug: it only
+  ever PROVES assignability, so a permissive answer SUPPRESSES the
+  diagnostic — and `class Bar { x }`, whose unannotated field becomes
+  `any`, accepted every source. `any` / `unknown` / `undefined` / `void`
+  are all REQUIRED members tsc reports missing (probed); the UNION case
+  stays tolerated, because there `x?: T` and `x: T | undefined` really are
+  the same node.
+- [x] **TS2411 with an INTERFACE index value** (+1:
+  `objectTypeHidingMembersOfExtendedObject`). The class-only arm could
+  never reach `interface Object { data: A; [x: string]: Object }`, which
+  augments the lib interface. Only the fields the module DECLARES for that
+  name are required, so an interface whose real surface is larger
+  under-requires — losing findings, never inventing them, which is also
+  why an `extends` chain needs no guard on that side.
+
+**The false positive the corpus structurally cannot see** — the fourth
+batch in a row to find one by probing a legal neighbour. The get/set pair
+rule required the getter's type to be assignable to the setter's parameter
+type, and **TypeScript 4.3 made those types allowed to DIVERGE**:
+`get p(): string { return "" }` beside `set p(x: number)` is ACCEPTED, and
+the error, if any, lands where the value is READ. Only an UNANNOTATED
+getter is an error, and there the getter's type comes contextually FROM
+the setter, so what tsc reports is the `return` inside the body. The
+annotation-presence fact is not in `TsClassMethodDecl` — the
+absent-versus-`: any` blocker this repo records for TS7031, TS7022,
+TS2729, TS2448 and TS2564 — so the pair is judged only for a member the
+parser recorded in `unannotated_return_members`, the
+`<unannotated-return:>` channel batch EH built for TS2490. One more cell
+came with it: a COMPUTED key pairs the two accessors only when it is a
+late-bound name of LITERAL type, so `[G.B]` and `["get1"]` pair and
+`[1 << 6]` does not — its type is `number`, not the literal `64`, and our
+parser folding the shift to the member name `64` is more precise than
+tsc's own model. Ten cells now agree with tsc.
+
+**Measured and NOT taken**, each with its blocker rather than a verdict:
+
+- **TS2304 for an `infer X extends Bound` whose bound is undeclared**
+  (`inferTypesInvalidExtendsDeclaration`). Written, wired, and REVERTED
+  after instrumenting rather than re-reading: the type parser REDUCES a
+  conditional whose extends relation it can decide, so
+  `type Test<T> = T extends infer A extends B ? number : string` arrives
+  as the bare `Number` and neither the marker nor its bound survives. The
+  rule's own scaffolding (a per-position binder set threaded down the
+  walk, which is what makes the general `unresolved_type_references`
+  version unusable) is gone with it — dead code that reads like live code
+  is a defect.
+- **TS2797** (`mixinAbstractClasses.2`). Needs the link from a class
+  declared inside a function to that function's PARAMETER types and type
+  parameter bounds: the base is `baseClass`, a value parameter whose type
+  is `TBaseClass extends abstract new (...args: any) => any`. Nothing
+  connects a `local_classes` entry to its enclosing function.
+- **TS2339 for `Symbol.<unknown member>`** (`parserES5SymbolProperty4`).
+  The occurrence is a TYPE-position computed key in a `declare class`, and
+  the verdict needs a file-level fact the member parser cannot have:
+  whether the file augments `interface SymbolConstructor` (symbolProperty61
+  does, legally). Routable through a sentinel; not worth a new channel at
+  +19.
+- **TS18046 through an ALIASED guard**
+  (`controlFlowAliasingCatchVariables`). `const isString = typeof e ===
+  'string'` followed by `e = 1` invalidates the alias, so the later
+  `if (isString)` no longer narrows. Needs aliased control flow plus
+  assignment invalidation; the existing token-scan withdrawal sees the
+  `typeof e === 'string'` elsewhere in the block and abstains.
+
 ### Batch EH (2026-09-13): MISS under 100, and five false positives the corpus could not see
 
 **+9 files at FP 0** (TP 2607 -> 2616, MISS in scope 108 -> **99**, PFLEGAL 0,

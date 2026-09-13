@@ -6,7 +6,7 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2616 / MISS in scope 99 / OUT OF SCOPE 19 / FP 0 /
+Measured at **TP 2635 / MISS in scope 80 / OUT OF SCOPE 19 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
@@ -18,6 +18,25 @@ treated as a BINDING by three separate consumers, so a bare reference to
 that spelling resolved anywhere in the module. A MISS can be a rule the
 checker already has, defeated by a fact the parser recorded with the
 wrong meaning; that kind never appears in a machinery classification.
+
+Batch EI's nineteen files are the strongest version of that observation
+so far, and not one of them is in a section below. Thirteen were pure
+grammar or declaration shape — a `const enum` initializer that evaluates
+to `Infinity`, a `yield` in a generator's parameter list, a decorated
+`this` parameter, `super` with type arguments, an assignment to a class or
+enum or function, an `infer` outside an extends clause. Four were the
+applied-in-some-places family: `<import-eq-root>` was recorded for the
+DOTTED `import X = A.B` and not the single-segment spelling; a private
+member reached by DESTRUCTURING had no check where the dotted access has
+had one for years; `reaches_alias` treated a mapped type's SOURCE as a
+structural barrier when computing its key set needs the alias resolved;
+and TS2411's index-value arm required a CLASS where the corpus file
+augments an INTERFACE. And two were an optionality PROXY still live at
+two sites after batch EH fixed the third — `type_accepts_undefined`
+standing in for "is this member optional", which answers yes for `any`,
+so `class Bar { x }` accepted every source. The lesson this file exists
+for holds: **a machinery classification cannot see a rule the checker
+already has, applied in some of the places that produce it.**
 
 Batch EG's six files are the same story four more times over, and none of
 them is in a section below either. TS2488 existed and was wired into the

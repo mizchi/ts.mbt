@@ -20021,3 +20021,185 @@ test "batch EH rules" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EI: the nineteen rules that took MISS in scope from 99 to 80, and
+/// their LEGAL neighbours. Every cell here was first run through the real
+/// compiler (`scripts/tsc_probe.mjs`); the silent list is the half that
+/// keeps the gate at FP 0, and three of its entries are shapes an earlier
+/// draft of a rule in this batch actually reported.
+test "batch EI rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2477 / TS2478: a `const enum` member initializer that evaluates
+      // to a non-finite value, or to NaN. The `const` is the whole rule.
+      "const enum E { a = 1 / 0 }", "const enum E { a = NaN }", "const enum E { a = Infinity }",
+      "const enum E { a = -Infinity }", "const enum E { a = 2 / 0.0 }", "const enum E { a = 0.0 / 0.0 }",
+      "declare const enum E { a = 1 / 0 }",
+      // TS2501: an object-rest element whose target is a binding pattern.
+      "({...{}} = {});", "({...({})} = {});", "({...[]} = {});",
+      // TS2523: `yield` in a generator's own parameter initializer.
+      "function* bar() { function* foo(a = yield) { } }",
+      "function* bar() { function* foo(a = { b: yield }) { } }",
+      // TS2463: an optional binding-pattern parameter in an
+      // IMPLEMENTATION, at a function and at a class method, both
+      // pattern kinds.
+      "function foo({ x }?: { x: string }) { }", "function foo([a]?: number[]) { }",
+      "class K { m({ x }?: { x: string }) { } }",
+      // TS2661: `export { globalThis }`, both spellings.
+      "export { globalThis as global };", "export { globalThis };",
+      // TS1433 / TS2680: a decorated or modified `this` parameter, and a
+      // `this` parameter that is not first.
+      "class C { constructor(private this: C) { } }", "class C { m(a: number, this: C) { } }",
+      "function f(a: number, this: Window) { }",
+      // TS2754: `super` with type arguments.
+      "class B { constructor(x?: number) { } }\nclass D extends B { constructor() { super<number>(1) } }",
+      // TS2629 / TS2628 / TS2630: assignment to a class, an enum or a
+      // function declaration — including the ambient spellings.
+      "class C { }\nC = null;", "enum E { A }\nE = null;", "function f() { }\nf = null;",
+      "declare class C { }\nC = null;",
+      // TS1005: a private name as an indexed-access type key.
+      "class C { foo = 3; #bar = 3;\n  m() { const v: C[#bar] = 3; return v } }",
+      // TS1338: `infer` outside any conditional's extends clause — at the
+      // alias top level, inside a template literal type, and in a
+      // conditional's check / then / else positions.
+      "type T = infer U;", "type T = `${infer X}`;", "type T<A> = (infer B) extends infer C ? infer D : infer E;",
+      // TS2838: one `infer` name declared twice with DIFFERENT written
+      // constraints in the same extends clause.
+      "type X<T> = T extends { a: infer U extends string, b: infer U extends number } ? U : never;",
+      // TS2488 / TS2504: an object literal as a `for-of` / `for await`
+      // source.
+      "for (const x of {}) { }", "async function f() { for await (const x of {}) { } }",
+      // TS2341 / TS2445: a private / protected member reached by
+      // DESTRUCTURING rather than by property access.
+      "class K { private priv = 1; protected prot = 2 }\nlet k = new K();\nlet { priv } = k;",
+      "class K { private priv = 1; protected prot = 2 }\nlet k = new K();\nlet { prot } = k;",
+      "class K { private priv = 1 }\nfunction f({ priv }: K) { }",
+      // TS2855 / TS2340: a `super` access reaching a base DATA FIELD, at
+      // every visibility and through an ambient base.
+      "class B { private priv: string = \"\" }\nclass D extends B { m() { return super.priv } }",
+      "class B { protected prot: string = \"\" }\nclass D extends B { m() { return super.prot } }",
+      "class B { pub: string = \"\" }\nclass D extends B { m() { return super.pub } }",
+      "declare class B { pub: string }\nclass D extends B { m() { return super.pub } }",
+      // TS2456: a circular alias through a mapped type's SOURCE, direct
+      // and mutual, and through a bare `keyof`.
+      "type R = { [K in keyof R]: string };", "type A = { [K in keyof B]: string };\ntype B = { [K in keyof A]: string };",
+      "type K = keyof K;",
+      // TS2503: an `import =` alias to an undeclared namespace — the
+      // SINGLE-segment spelling, which the dotted-only recorder missed.
+      "import f = NonExistent;",
+      // The optionality PROXY: an `any`-typed required member (explicit,
+      // or the unannotated field that becomes one) no longer excuses a
+      // source that lacks it.
+      "class Bar { x: any }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
+      "class Bar { x }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
+      "interface I { x: any }\nclass Other { y: string = \"\" }\nfunction f(a: I) { }\nf(new Other());",
+      // TS2411 with an INTERFACE index value, which the class-only arm
+      // could never reach.
+      "interface SI { data: SA; [x: string]: SB }\nclass SA { foo: string = \"\" }\nclass SB { bar: string = \"\" }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A PLAIN enum takes the identical non-finite initializers, and a
+      // const enum's finite arithmetic is fine.
+      "enum P { a = 1 / 0, b = NaN, c = Infinity, d = -Infinity }", "const enum P { a = 1 / 2, b = -1, c = 0x10, d = 1 + 2 }",
+      // Every object-rest target real code writes, and the ARRAY pattern
+      // spelling, which tsc ACCEPTS.
+      "declare let rest: any;\n({...rest} = {});", "declare let o: any;\n({...o.p} = {});",
+      "declare let o: any;\n({...o[0]} = {});", "declare let a: any;\n[...[a]] = [1];",
+      // `yield` in a generator BODY, and a plain default. (Spelled as a
+      // statement rather than `let a = yield`, which is a real TS7057
+      // under the noImplicitAny default and would measure that rule.)
+      "function* g() { yield 1; }", "function* g(a = 1) { }",
+      // ... and an ARROW inside the default: its body is its own scope, so
+      // the `yield` there is an identifier and tsc does not report TS2523.
+      "function* outer() { function* f(a = () => 1) { } }",
+      // TS2463's bodiless positions — all five accepted by tsc.
+      "declare function f({ x }?: { x: string }): void;", "interface I { m({ x }?: { x: string }): void }",
+      "declare class D { m({ x }?: { x: string }): void }", "type F = ({ x }?: { x: string }) => void;",
+      "function f({ x }: { x: string }) { }", "function f({ x } = { x: \"\" }) { }",
+      "function f(x?: number) { }",
+      // A `this` parameter with no decorator and no modifier, in every
+      // position that has one.
+      "class C { m(this: C) { } }", "function f(this: Window, a: number) { }",
+      "interface I { m(this: I): void }",
+      // `super` with no type arguments.
+      "class B { constructor() { } m(): void { } }\nclass D extends B { constructor() { super() } n() { super.m() } }",
+      // The five legal assignment targets from the corpus file.
+      "var v;\nv = null;", "function f(p: any) { p = null; }", "let C = class { };\nC = null;",
+      "let f = function () { };\nf = null;",
+      // An ordinary indexed-access type key.
+      "class C { foo = 3 }\ndeclare const v: C[\"foo\"];",
+      // TS1338's legal shapes. The third is the one the corpus caught: a
+      // nested conditional INSIDE an extends clause inherits the
+      // permission, so `infer U` in its check position is accepted.
+      "type U<T> = T extends (infer A)[] ? A : T;", "type P<T> = T extends Promise<infer A> ? A : T;",
+      "type X<T> = T extends ((infer U) extends number ? 1 : 0) ? 1 : 0;",
+      // TS2838: identical constraints, and the ABSENT one — a missing
+      // constraint is inherited rather than contradicting, which
+      // inferTypesWithExtends1 states in its own comments.
+      "type X<T> = T extends { a: infer U, b: infer U } ? U : never;",
+      "type X<T> = T extends { a: infer U extends string, b: infer U extends string } ? U : never;",
+      "type X<T> = T extends { a: infer U extends string, b: infer U } ? U : never;",
+      "type X<T> = T extends { a: infer U, b: infer U extends string } ? U : never;",
+      // A `for-of` source that IS iterable, and an object literal
+      // carrying a computed key — the one shape that can hide the
+      // protocol method, so it abstains.
+      "for (const x of [1, 2]) { }", "for (const x of { [Symbol.iterator]() { return [][Symbol.iterator]() } }) { }",
+      // Destructuring a private / protected member from INSIDE the class,
+      // and a protected one from a subclass.
+      "class K { private priv = 1; protected prot = 2;\n  m() { let { priv: a, prot: b } = this; return [a, b] } }",
+      "class K { protected prot = 2 }\nclass C extends K { m() { let { prot } = this; return prot } }",
+      // `super` reaching a base METHOD or ACCESSOR — both live on the
+      // prototype — and a base PARAMETER PROPERTY, which tsc accepts.
+      "class B { m() { } get g(): string { return \"\" } }\nclass D extends B { t() { return super.m() } u() { return super.g } }",
+      "class B { constructor(public pub: string) { } }\nclass D extends B { constructor() { super(\"\"); } t() { return super.pub } }",
+      // A STATIC base member of the same name: there `super` is the base
+      // CONSTRUCTOR, where a static field really does live.
+      "declare class B { static a: any; a: number }\nclass C extends B { static z = super.a }",
+      // Recursion through a mapped type's VALUE, or an object member, is
+      // a structural barrier — and a GENERIC alias's `keyof T` source
+      // names a type parameter, not the alias.
+      "type A = { x: A };", "type C<T> = { [P in keyof T]: C<T> };", "type T<X> = { [P in keyof X]: T<X[P]> };",
+      "type E = { [K in \"a\" | \"b\"]: E };",
+      // An `import =` alias whose target IS declared.
+      "namespace NS { export const v = 1 }\nimport a = NS;", "enum NE { A }\nimport a = NE;",
+      // The UNION optionality case stays tolerated: there `x?: T` and
+      // `x: T | undefined` really are the same node.
+      "class Bar { x?: string }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
+      "class Bar { x: string | undefined }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
+      // TS2411 with an interface index value the member DOES satisfy.
+      "interface SI { data: SB; [x: string]: SB }\nclass SB { bar: string = \"\" }",
+      // --- the accessor-pair false positive this batch fixed, which the
+      // corpus structurally cannot see (no TS7-ACCEPTED file has the
+      // shape). TypeScript 4.3 lets a get/set pair's ANNOTATED types
+      // diverge; the error, if any, lands where the value is read.
+      "class C { get p(): string { return \"\" } set p(x: number) { } }",
+      "class C { get p(): boolean { return true } set p(x: number) { } }",
+      "class F { x: string = \"\" }\nclass F2 { x: string = \"\"; y: string = \"\" }\nclass C { get p(): F { return new F() } set p(v: F2) { } }",
+      "interface I { get p(): boolean; set p(x: number); }",
+      // And a computed key that is not a late-bound name of LITERAL type
+      // (`1 << 6` has type `number`, not `64`) pairs nothing, which tsc
+      // agrees with.
+      "class C { get [1 << 6]() { return true } set [1 << 6](x: number) { } }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- the accessor pair tsc DOES reject: an UNANNOTATED getter, whose
+  // type comes contextually from the setter.
+  for
+    src in [
+      "class C { get p() { return true } set p(x: number) { } }",
+      "enum G { B = \"b\" }\nclass C { get [G.B]() { return true } set [G.B](x: number) { } }",
+      "class F { x: string = \"\" }\nclass F2 { x: string = \"\"; y: string = \"\" }\nclass C { get p() { return new F() } set p(v: F2) { } }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}

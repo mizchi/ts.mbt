@@ -3247,6 +3247,11 @@ fn Parser::parse_class_body(
       // recorder for both.
       if !has_body_block {
         self.record_bodiless_param_initializers(params)
+      } else {
+        // TS2463 is the same question with the answer inverted — an
+        // optional binding-pattern parameter is legal in every bodiless
+        // position and an error in an implementation.
+        self.record_implementation_optional_pattern_params(params)
       }
       // TS2393 ("Duplicate function implementation"): two methods of one
       // name in one class body, both with a body
