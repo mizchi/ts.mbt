@@ -4875,20 +4875,114 @@ priv struct ExprEnv {
   // narrowed to `string`, because the assignment target stays at the
   // declared union.
   declared : Map[String, @ast.TsType]
+  // Undo log for `mark` / `unwind`. Append-only within a scope and
+  // truncated by `unwind`, so its length is the mark: O(mutations)
+  // where the `full_snapshot` / `restore_from` pair it replaces was
+  // O(bindings in scope), four times over, per block. Grows to the
+  // number of writes in one function body, which is linear in the code.
+  journal : Array[EnvUndo]
 }
 
 ///|
 fn ExprEnv::new() -> ExprEnv {
-  { vars: {}, declared: {} }
+  { vars: {}, declared: {}, journal: [] }
+}
+
+///|
+/// One undo step. `*Set` carries the value the slot held before the
+/// write; `*Del` means the slot was absent, so undoing removes it.
+priv enum EnvUndo {
+  VarSet(String, @ast.TsType)
+  VarDel(String)
+  DeclSet(String, @ast.TsType)
+  DeclDel(String)
+}
+
+///|
+/// Record how to undo a pending write to `vars[name]`.
+fn ExprEnv::record_var(self : ExprEnv, name : String) -> Unit {
+  match self.vars.get(name) {
+    Some(old) => self.journal.push(VarSet(name, old))
+    None => self.journal.push(VarDel(name))
+  }
+}
+
+///|
+/// Record how to undo a pending write to `declared[name]`.
+fn ExprEnv::record_decl(self : ExprEnv, name : String) -> Unit {
+  match self.declared.get(name) {
+    Some(old) => self.journal.push(DeclSet(name, old))
+    None => self.journal.push(DeclDel(name))
+  }
+}
+
+///|
+/// Where the journal is now. Paired with `unwind` to bracket a scope —
+/// this is the replacement for the `full_snapshot` / `restore_from` pair,
+/// and it is O(1) where that pair was four O(bindings in scope) passes
+/// with string hashing.
+///
+/// Why the pair had to go: `check_block` brackets EVERY `{ }` — every
+/// `if` body, every loop body, every bare block — so a body with N
+/// bindings and N blocks paid N x N. Measured on bare blocks against the
+/// same assignments unbraced: 0.018 / 0.045 / 0.177 / 0.865 s at
+/// exponent 1.86, against 0.008 / 0.010 / 0.015 / 0.025 s at 0.55. At
+/// n=2000 the braces alone were 35x, on 8% MORE bytes. The
+/// `block-scopes` axis is that shape.
+///
+/// The PRECONDITION is strict LIFO nesting, which an array snapshot did
+/// not need, and it was audited before this was written rather than
+/// assumed: all 15 save sites are function-locals restored in the same
+/// function and never stored or passed, so call-stack nesting is
+/// automatic (a callee can only unwind its own mark); `check_stmt`'s
+/// seven live in mutually exclusive `match` arms; and the two
+/// double-restore sites are the ternary pattern, where the mutations
+/// after the first unwind push new entries that the second unwind pops,
+/// landing on the same mark. `full_snapshot` STAYS for its other two
+/// uses — an enumerator that copies an outer env into a fresh child, and
+/// a read-out that materializes the env as a `Map` — both of which
+/// genuinely need every binding.
+fn ExprEnv::mark(self : ExprEnv) -> Int {
+  self.journal.length()
+}
+
+///|
+/// Undo every journalled write back to `mark`.
+///
+/// One behaviour change against the `restore_from` it replaces, and it is
+/// a FIX rather than a regression: that function removed the `declared`
+/// slot only for names absent from the vars snapshot, so a nested
+/// `let x: T` whose name already existed outside left its `declare_type`
+/// override in place — exactly the leak `full_snapshot`'s own doc comment
+/// claimed not to have. Unwinding restores both maps precisely.
+fn ExprEnv::unwind(self : ExprEnv, mark : Int) -> Unit {
+  while self.journal.length() > mark {
+    match self.journal.pop() {
+      Some(VarSet(name, old)) => self.vars[name] = old
+      Some(VarDel(name)) => {
+        let _ = self.vars.remove(name)
+
+      }
+      Some(DeclSet(name, old)) => self.declared[name] = old
+      Some(DeclDel(name)) => {
+        let _ = self.declared.remove(name)
+
+      }
+      // `length() > mark` guarantees an entry; this arm cannot run.
+      None => break
+    }
+  }
 }
 
 ///|
 fn ExprEnv::bind(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
+  self.record_var(name)
   self.vars[name] = ty
   // First write wins for `declared` -- subsequent narrowing rewrites
   // only `vars`. `declare_type` is the explicit alternative when the
   // caller wants to set / reset the declared slot deliberately.
   if !self.declared.contains(name) {
+    self.journal.push(DeclDel(name))
     self.declared[name] = ty
   }
 }
@@ -4899,6 +4993,7 @@ fn ExprEnv::bind(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
 /// (`x = "hi"; x;` narrows `x` to `string`) and by analyse_narrowing
 /// to avoid promoting a narrowed type into the assignment target.
 fn ExprEnv::narrow(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
+  self.record_var(name)
   self.vars[name] = ty
 }
 
@@ -4914,7 +5009,22 @@ fn ExprEnv::declare_type(
   name : String,
   ty : @ast.TsType,
 ) -> Unit {
+  self.record_decl(name)
   self.declared[name] = ty
+}
+
+///|
+/// Drop a binding, journalled. The one caller works on a synthetic env
+/// it discards two statements later, so it could have removed the
+/// entries directly — but "every mutation is journalled" is the
+/// invariant that makes `unwind` safe to reason about, and an
+/// un-journalled write is the one thing that breaks it.
+fn ExprEnv::unbind(self : ExprEnv, name : String) -> Unit {
+  self.record_var(name)
+  self.record_decl(name)
+  let _ = self.vars.remove(name)
+  let _ = self.declared.remove(name)
+
 }
 
 ///|
@@ -4947,32 +5057,6 @@ fn ExprEnv::full_snapshot(self : ExprEnv) -> Array[(String, @ast.TsType)] {
   entries
 }
 
-///|
-fn ExprEnv::restore_from(
-  self : ExprEnv,
-  snap : Array[(String, @ast.TsType)],
-) -> Unit {
-  let kept : Map[String, @ast.TsType] = Map([])
-  for entry in snap {
-    kept[entry.0] = entry.1
-  }
-  let to_remove : Array[String] = []
-  for entry in self.vars {
-    if !kept.contains(entry.0) {
-      to_remove.push(entry.0)
-    }
-  }
-  for n in to_remove {
-    let _ = self.vars.remove(n)
-    // Drop the matching declared slot too: a name that wasn't in
-    // `vars` at snapshot time was introduced after, so its declared
-    // entry was also introduced after and must go.
-    let _ = self.declared.remove(n)
-  }
-  for entry in snap {
-    self.vars[entry.0] = entry.1
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Context — issues accumulator + return type + async flag + resolver.
@@ -10748,17 +10832,17 @@ fn check_expr_against(
       // checking each branch so a `Var` the condition guards
       // (`x !== undefined ? x.foo : 0`) isn't re-flagged as possibly-undefined.
       let eff = analyze_narrowing(env, ctx.resolver, c)
-      let snap = env.full_snapshot()
+      let snap = env.mark()
       for b in eff.then_binds {
         env.narrow(b.0, b.1)
       }
       check_expr_against(env, then_, expected, ctx, sub_path + " (then)")
-      env.restore_from(snap)
+      env.unwind(snap)
       for b in eff.else_binds {
         env.narrow(b.0, b.1)
       }
       check_expr_against(env, else_, expected, ctx, sub_path + " (else)")
-      env.restore_from(snap)
+      env.unwind(snap)
       return
     }
     // Logical operators propagate the contextual type to their *right*
@@ -10780,12 +10864,12 @@ fn check_expr_against(
         BinOp(And, _, _) => eff.then_binds
         _ => eff.else_binds
       }
-      let snap = env.full_snapshot()
+      let snap = env.mark()
       for b in binds {
         env.narrow(b.0, b.1)
       }
       check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
-      env.restore_from(snap)
+      env.unwind(snap)
       return
     }
     (BinOp(Coalesce, _, r), _) => {
@@ -15158,8 +15242,7 @@ fn infer_block_return(
     }
   }
   for name in added {
-    let _ = env.vars.remove(name)
-    let _ = env.declared.remove(name)
+    env.unbind(name)
   }
   if first {
     @ast.TsType::Undefined
@@ -17145,12 +17228,12 @@ fn collect_narrowing(
         for b in lo.then_binds {
           then_binds.push(b)
         }
-        let snap = env.full_snapshot()
+        let snap = env.mark()
         for b in lo.then_binds {
           env.bind(b.0, b.1)
         }
         let ro = analyze_narrowing(env, resolver, r)
-        env.restore_from(snap)
+        env.unwind(snap)
         for b in ro.then_binds {
           then_binds.push(b)
         }
@@ -17172,12 +17255,12 @@ fn collect_narrowing(
         for b in lo.else_binds {
           else_binds.push(b)
         }
-        let snap = env.full_snapshot()
+        let snap = env.mark()
         for b in lo.else_binds {
           env.bind(b.0, b.1)
         }
         let ro = analyze_narrowing(env, resolver, r)
-        env.restore_from(snap)
+        env.unwind(snap)
         for b in ro.else_binds {
           else_binds.push(b)
         }
@@ -18008,11 +18091,11 @@ fn analyze_equality(
 
 ///|
 fn check_block(env : ExprEnv, block : @ast.TsBlock, ctx : CheckCtx) -> Unit {
-  let pre = env.full_snapshot()
+  let pre = env.mark()
   for stmt in block.stmts {
     check_stmt(env, stmt, ctx)
   }
-  env.restore_from(pre)
+  env.unwind(pre)
 }
 
 ///|
@@ -18026,7 +18109,7 @@ fn check_block_narrowing_exit(
   ctx : CheckCtx,
   binds : Array[(String, @ast.TsType)],
 ) -> Map[String, @ast.TsType] {
-  let pre = env.full_snapshot()
+  let pre = env.mark()
   for b in binds {
     env.bind(b.0, b.1)
   }
@@ -18037,7 +18120,7 @@ fn check_block_narrowing_exit(
   for e in env.full_snapshot() {
     exit[e.0] = e.1
   }
-  env.restore_from(pre)
+  env.unwind(pre)
   exit
 }
 
@@ -18958,7 +19041,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // Snapshot / restore around the body so the narrowing (and any in-body
       // reassignment) doesn't leak past the loop, where the condition is
       // false — mirrors the `For` handler.
-      let pre = env.full_snapshot()
+      let pre = env.mark()
       // Loop back-edge join: a variable reassigned inside the body sees the
       // union of its entry type and the assigned types on the next
       // iteration (`x = ""; while (cond) { x = len(x); }` makes `x`
@@ -18972,7 +19055,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         env.bind(b.0, b.1)
       }
       check_block(env, body, ctx)
-      env.restore_from(pre)
+      env.unwind(pre)
     }
     DoWhile(cond, body) => {
       record_function_as_condition(env, ctx, cond)
@@ -18985,7 +19068,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, cond, ctx)
     }
     For(init, cond, update, body) => {
-      let pre = env.full_snapshot()
+      let pre = env.mark()
       match init {
         Some(s) => check_stmt(env, s, ctx)
         None => ()
@@ -19007,7 +19090,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None => ()
       }
       check_block(env, body, ctx)
-      env.restore_from(pre)
+      env.unwind(pre)
     }
     ForOf(kind, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
@@ -19081,7 +19164,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           }
         }
       }
-      let pre = env.full_snapshot()
+      let pre = env.mark()
       // TS2454: same reasoning as for-in — the loop variable is assigned
       // each iteration, so reused declarations clear. A destructuring
       // pattern (`for ([k, v] of …)`) assigns every name it binds.
@@ -19162,7 +19245,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         _ => bind_pattern(env, ctx, binding, elem_ty)
       }
       check_block(env, body, ctx)
-      env.restore_from(pre)
+      env.unwind(pre)
     }
     ForAwaitOf(_, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
@@ -19186,11 +19269,11 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       } else {
         inferred_elem
       }
-      let pre = env.full_snapshot()
+      let pre = env.mark()
       clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
-      env.restore_from(pre)
+      env.unwind(pre)
     }
     ForIn(_, binding, declared, iter, body) => {
       // TS2491/TS2461: the left side of `for...in` can never be a
@@ -19230,14 +19313,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       } else {
         @ast.TsType::String_
       }
-      let pre = env.full_snapshot()
+      let pre = env.mark()
       // TS2454: the loop binding is *assigned* each iteration, so a
       // previously-declared `let k: T;` reused as the for-in target
       // (`for (k in obj) ...`) shouldn't trip use-before-assign.
       clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, key_ty)
       check_block(env, body, ctx)
-      env.restore_from(pre)
+      env.unwind(pre)
     }
     Switch(scrutinee, cases) => {
       check_call_args_in_expr(env, scrutinee, ctx)
@@ -19305,7 +19388,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           }
           None => ()
         }
-        let pre = env.full_snapshot()
+        let pre = env.mark()
         match (scrutinee_name, case_.test_expr) {
           (Some(name), Some(t)) =>
             apply_switch_case_narrowing(env, ctx.resolver, name, t)
@@ -19338,7 +19421,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           _ => ()
         }
         check_block(env, case_.body, ctx)
-        env.restore_from(pre)
+        env.unwind(pre)
       }
     }
     With(_, body) => check_block(env, body, ctx)
@@ -19346,7 +19429,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_block(env, try_block, ctx)
       match catch_block {
         Some(cb) => {
-          let pre = env.full_snapshot()
+          let pre = env.mark()
           // TS 4.0+ defaults catch bindings to `unknown`. We don't model
           // `unknown` separately (it folds into `Any` here), but binding to
           // `Any` matches the prior semantics — the caller still has to
@@ -19357,7 +19440,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             _ => ()
           }
           check_block(env, cb, ctx)
-          env.restore_from(pre)
+          env.unwind(pre)
         }
         None => ()
       }
@@ -21128,13 +21211,13 @@ fn check_call_args_in_expr(
         And | Or => {
           let eff = analyze_narrowing(env, ctx.resolver, l)
           let binds = if op is And { eff.then_binds } else { eff.else_binds }
-          let snap = env.full_snapshot()
+          let snap = env.mark()
           for b in binds {
             env.narrow(b.0, b.1)
           }
           let unassigned_before = snapshot_unassigned(ctx)
           check_call_args_in_expr(env, r, ctx)
-          env.restore_from(snap)
+          env.unwind(snap)
           rearm_unassigned(ctx, unassigned_before)
         }
         Coalesce => {
@@ -21439,17 +21522,17 @@ fn check_call_args_in_expr(
       // sees the truthy effect, the alternative the falsy one), so
       // `x !== undefined ? x.foo : 0` doesn't re-flag `x` as possibly-undefined.
       let eff = analyze_narrowing(env, ctx.resolver, c)
-      let snap = env.full_snapshot()
+      let snap = env.mark()
       for b in eff.then_binds {
         env.narrow(b.0, b.1)
       }
       check_call_args_in_expr(env, t, ctx)
-      env.restore_from(snap)
+      env.unwind(snap)
       for b in eff.else_binds {
         env.narrow(b.0, b.1)
       }
       check_call_args_in_expr(env, e, ctx)
-      env.restore_from(snap)
+      env.unwind(snap)
     }
     ArrayLit(items) =>
       for it in items {
