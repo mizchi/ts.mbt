@@ -305,32 +305,60 @@ fn graph_type_modules(
   edges : Array[MtscModuleEdge],
 ) -> Array[@ast.TsModule] {
   let type_modules : Array[@ast.TsModule] = []
-  let visited_paths : Array[String] = []
+  // Dedup by PATH rather than by importer. The push below happens once
+  // per EDGE, so a module imported by k members of the closure was
+  // returned k times -- in a barrel graph (every module imports the
+  // barrel, the barrel re-exports every module, which is what
+  // `./_namespaces/ts.js` is in the TypeScript sources and what an
+  // `index.ts` is in most packages) that is the barrel once per module,
+  // and `Resolver::ingest_type_module` was measured at 51,841 calls for
+  // a 162-module graph, about 2 x 161^2.
+  //
+  // It is not only waste. `Resolver::ingest_type_module` merges each
+  // ingested interface into any same-named one already in the resolver,
+  // and `merge_interfaces` is NOT idempotent: `fields`,
+  // `readonly_fields`, `internal_members` and `deprecated_members`
+  // dedup, while `extends_names` / `extends_args`, `index_signatures`,
+  // `method_type_params` and `method_type_param_bounds` are pushed from
+  // both sides unconditionally. So ingesting one module twice gave its
+  // interfaces a doubled `extends` list and doubled index signatures.
+  // No probe produced an observable diagnostic difference from that, so
+  // it is recorded as a latent corruption rather than a demonstrated
+  // false positive -- but a resolver that has ingested a module once is
+  // the state every consumer is written against.
+  let emitted_paths : Map[String, Bool] = Map([])
+  // Both of these were linear scans over arrays, walked per pending path
+  // and per edge respectively, which is O(V^2) and O(E x M) on top of
+  // the quadratic above.
+  let visited_paths : Map[String, Bool] = Map([])
+  let by_path : Map[String, ParsedMtscModule] = Map([])
+  for m in modules {
+    // First declaration wins, matching `find_graph_module`'s scan order.
+    if by_path.get(m.source.path) is None {
+      by_path[m.source.path] = m
+    }
+  }
   let pending_paths : Array[String] = [module_.source.path]
   let mut cursor = 0
   while cursor < pending_paths.length() {
     let importer_path = pending_paths[cursor]
     cursor = cursor + 1
-    let mut already_visited = false
-    for path in visited_paths {
-      if path == importer_path {
-        already_visited = true
-        break
-      }
-    }
-    if already_visited {
+    if visited_paths.get(importer_path) is Some(_) {
       continue
     }
-    visited_paths.push(importer_path)
+    visited_paths[importer_path] = true
     for edge in edges {
       if edge.importerPath != importer_path {
         continue
       }
-      let target = match find_graph_module(modules, edge.targetPath) {
+      let target = match by_path.get(edge.targetPath) {
         Some(target) => target
         None => continue
       }
-      type_modules.push(target.module_)
+      if emitted_paths.get(target.source.path) is None {
+        emitted_paths[target.source.path] = true
+        type_modules.push(target.module_)
+      }
       pending_paths.push(target.source.path)
     }
   }
