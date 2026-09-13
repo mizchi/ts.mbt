@@ -246,6 +246,7 @@ pub(all) struct TsFunc {
   body : TsBlock
   is_generator : Bool
   is_async : Bool
+  name_is_member_key : Bool
 } derive(@debug.Debug)
 pub impl Show for TsFunc
 

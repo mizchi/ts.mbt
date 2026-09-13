@@ -543,6 +543,29 @@ pub(all) struct TsFunc {
   body : TsBlock
   is_generator : Bool
   is_async : Bool
+  // True when this came from an object-literal METHOD SHORTHAND
+  // (`{ foo() {} }`), where `name` is the property KEY rather than a
+  // function name. The distinction is not cosmetic and both directions
+  // had a live bug before this field existed, because the parser stored
+  // `{ foo() {} }` and `{ foo: function foo() {} }` identically as
+  // `("foo", FuncExpr { name: "foo" })`:
+  //
+  //   - a named function expression BINDS its name in its own body, for
+  //     recursion, and a method shorthand binds nothing. The checker's
+  //     `check_funcexpr_with_context` surfaced the name either way, so
+  //     `{ * foo() { yield(foo) } }` (TS2304) read as legal.
+  //   - `emit`/`mangle` reconstructed the shorthand by testing
+  //     `f.name == key`, which is also true of
+  //     `{ fact: function fact(n) { … fact(n - 1) } }` — so that
+  //     re-emitted as a shorthand, the self-binding disappeared, and the
+  //     call threw `ReferenceError` under plain `mtsc` with no
+  //     optimization flag.
+  //
+  // A shorthand is also not interchangeable with a function-expression
+  // property for reasons beyond the binding: it has no `prototype` and
+  // cannot be `new`ed, and it may use `super`. So the two must stay
+  // distinct rather than be collapsed to whichever is shorter.
+  name_is_member_key : Bool
 } derive(Debug)
 
 ///|

@@ -16,15 +16,24 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
     // `@(expr)` decorator heads (`(@((t, k, i) => {}) p: any)` —
     // legacyDecorators-contextualTypes) go straight to the balanced
     // paren skip below; identifier heads consume their member chain.
+    // TS1239 support: the decorator's head NAME and whether it was called.
+    // Same `(called, dname)` pair `decorator_head_name` produces for a
+    // MEMBER decorator, reconstructed from tokens because this function
+    // skips the expression rather than building one — the blocker
+    // `UNSUPPORTED.md` recorded for TS1308, with the same answer: the
+    // head of a decorator must be spelled out, so reading it off the
+    // tokens the skip already consumes is complete by construction.
+    let mut head_name = ""
     if !self.check(LParen) {
-      let _ = self.parse_binding_ident()
+      head_name = self.parse_binding_ident()
       while self.match_(Dot) {
-        let _ = self.parse_binding_ident()
+        head_name = head_name + "." + self.parse_binding_ident()
       }
       if self.check(Lt) {
         self.skip_type_args()
       }
     }
+    let head_called = if self.check(LParen) { "called" } else { "bare" }
     // TS1308: an `await` expression inside the decorator. A parameter
     // decorator is evaluated where the CLASS is defined, not inside the
     // member, so the async context that matters is the ENCLOSING
@@ -95,6 +104,35 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
     // the chain precedes a class expression or a real parameter.
     if record_at && !self.check(Class) && !self.check(At) {
       self.invalid_decorator_uses.push("parameter")
+    }
+    // TS1239: record this parameter decorator for the signature checks,
+    // in the same `<sig:...>` channel the member positions use. The
+    // `owner` slot carries which member the parameter belongs to —
+    // `"ctor"` is the one the runtime hands `undefined` as the property
+    // key, and `"instance"` the one it hands the class INSTANCE as the
+    // target. Same `!self.check(Class)` guard as the TS1206 recording
+    // above: a decorator chain followed by `class` is a decorated class
+    // EXPRESSION inside parens, not a parameter decorator.
+    if head_name != "" &&
+      self.param_decorator_owner != "" &&
+      !self.check(Class) &&
+      !self.check(At) {
+      let heritage = if self.class_decl_no_heritage {
+        "plain"
+      } else {
+        "heritage"
+      }
+      self.invalid_decorator_uses.push(
+        "<sig:parameter:" +
+        head_called +
+        ":" +
+        self.param_decorator_owner +
+        ":" +
+        heritage +
+        ":" +
+        head_name +
+        ">",
+      )
     }
   }
 }
@@ -320,6 +358,95 @@ fn Parser::record_bodiless_param_initializers(
 }
 
 ///|
+/// True when `e` contains a `yield` expression that is NOT inside a nested
+/// function. Used by TS2523 (see `parse_param`).
+///
+/// Stopping at `ArrowFunc` / `FuncExpr` / `NativeClassExpr` is the whole
+/// point rather than an economy: `function* f(a = () => yield)` is
+/// accepted as a TS2523, since an arrow body is its own scope and the
+/// token there is an identifier. A missing arm on the way DOWN loses a
+/// finding rather than inventing one.
+fn expr_yields_outside_function(e : @ast.TsExpr) -> Bool {
+  match e {
+    Yield(_) | YieldStar(_) => true
+    // A function boundary: whatever `yield` means inside, it is not this
+    // parameter list's.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) =>
+      expr_yields_outside_function(a) || expr_yields_outside_function(b)
+    UnaryOp(_, a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | PureCall(a)
+    | TypeArgs(_, a)
+    | NonNull(a)
+    | Await(a)
+    | Spread(a)
+    | PropAccess(a, _)
+    | OptionalChain(a) => expr_yields_outside_function(a)
+    Cond(c, a, b) =>
+      expr_yields_outside_function(c) ||
+      expr_yields_outside_function(a) ||
+      expr_yields_outside_function(b)
+    Call(_, args) | New(_, args) =>
+      args.iter().any(expr_yields_outside_function)
+    CallExpr(f, args) | NewExpr(f, args) =>
+      expr_yields_outside_function(f) || args.iter().any(expr_yields_outside_function)
+    MethodCall(r, _, args) =>
+      expr_yields_outside_function(r) || args.iter().any(expr_yields_outside_function)
+    ArrayLit(items) => items.iter().any(expr_yields_outside_function)
+    ObjectLit(fields) =>
+      fields.iter().any(fn(f) { expr_yields_outside_function(f.1) })
+    ComputedProp(k, v) =>
+      expr_yields_outside_function(k) || expr_yields_outside_function(v)
+    TemplateLiteral(_, exprs) => exprs.iter().any(expr_yields_outside_function)
+    TaggedTemplate(tag, _, _, exprs) =>
+      expr_yields_outside_function(tag) ||
+      exprs.iter().any(expr_yields_outside_function)
+    _ => false
+  }
+}
+
+///|
+/// TS2463: "A binding pattern parameter cannot be optional in an
+/// implementation signature."
+///
+/// The exact MIRROR of `record_bodiless_param_initializers` — the same
+/// body-or-not question with the answer inverted — so it is deliberately
+/// called from the two places that have already decided the question, and
+/// nowhere else: `parse_function_decl`'s `last_function_bodiless = false`
+/// line, and the `else` of `parse_class_body`'s `has_body_block` test.
+/// Recording it in `parse_param` instead would be wrong at its own site:
+/// the `?` on a pattern parameter is LEGAL in every bodiless position, and
+/// `parse_param` cannot tell which it is in.
+///
+/// Probed cell by cell, because the message names "implementation
+/// signature" and the thing that decides it is the BODY: a function
+/// declaration, a runtime class method and an arrow all report, while
+/// `declare function f({ x }?: T)`, an `interface` member, a
+/// `declare class` member, `{ x }` with no `?`, a non-pattern `x?`, and a
+/// DEFAULT in place of the `?` (`function f({ x } = { x: "" })`) are all
+/// accepted. Both pattern kinds fire — `[a]?` as readily as `{ x }?`.
+///
+/// The arrow and object-literal-method spellings stay MISSes: neither
+/// routes through a site that has computed the fact, and inventing a third
+/// channel for them is what the two-call-site restriction above buys.
+fn Parser::record_implementation_optional_pattern_params(
+  self : Parser,
+  params : Array[@ast.TsParam],
+) -> Unit {
+  for param in params {
+    if param.is_optional &&
+      (param.binding is Some(Object(_)) || param.binding is Some(Array(_))) {
+      self.grammar_misuses.push(
+        "a binding pattern parameter cannot be optional in an implementation signature",
+      )
+      break
+    }
+  }
+}
+
+///|
 /// The unused renamings in a binding pattern the `parse_params` family
 /// built (TS2842 -- see `param_pattern_renamings` for the rule and the
 /// probed boundary).
@@ -391,7 +518,17 @@ fn Parser::record_bodiless_param_renamings(
 ///|
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
+  let had_param_decorator = self.check(At)
   self.skip_param_decorators()
+  // Everything below this line can reach another parameter list — a
+  // default value holding an arrow, or a destructuring pattern holding
+  // one — and those parameters belong to that callable, not to this class
+  // member. Cleared here rather than at each nested parser (the
+  // save / clear / restore discipline `self.labels` needs at fifteen
+  // sites, which is how the applied-in-some-places bug gets written) and
+  // restored at exit so the next parameter in THIS list still sees it.
+  let prev_pdo = self.param_decorator_owner
+  self.param_decorator_owner = ""
   let (is_param_property, is_readonly_param, visibility_param) = self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
@@ -405,6 +542,31 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   if name == "await" && self.in_async {
     self.grammar_misuses.push(
       "`await` cannot be used as a parameter name in an async context",
+    )
+  }
+  // TS1433: "Neither decorators nor modifiers may be applied to `this`
+  // parameters." A `this` parameter is a TYPE annotation wearing a
+  // parameter's clothes — it binds nothing and exists at no runtime
+  // position — so a decorator has no argument to receive and an
+  // accessibility modifier has no field to create.
+  //
+  // Both halves of the message are one test here because both facts are
+  // already in hand: `skip_param_decorators` ran two lines up (the `@`
+  // is read before it, since the skip consumes it) and
+  // `skip_param_modifiers` on the line above returns the three modifier
+  // answers. Probed: `class C { method(@dec this: C) {} }` and
+  // `class C { constructor(private this: C) {} }` both report, while a
+  // bare `this: C` parameter, a decorated ORDINARY parameter, and a
+  // `this` parameter on a function or an interface member are all
+  // accepted.
+  // `visibility_param` is deliberately NOT consulted: it defaults to
+  // `"public"` whether or not a keyword was written, so it answers "which
+  // accessibility applies" and not "was a modifier present" —
+  // `is_param_property` is the second question, true when any of the four
+  // was consumed.
+  if name == "this" && (had_param_decorator || is_param_property) {
+    self.grammar_misuses.push(
+      "neither decorators nor modifiers may be applied to `this` parameters",
     )
   }
   // TS1212: a parameter named `yield` inside a *generator* -- reserved in
@@ -458,6 +620,34 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   } else {
     None
   }
+  // TS2523: a `yield` EXPRESSION in a parameter initializer.
+  //
+  // The gate is `in_generator`, and it is the reason this rule can sit in
+  // one place rather than at each of the fifteen `parse_params()` sites: a
+  // `yield` in a parameter list is parsed as a Yield NODE only when the
+  // enclosing context is a generator, and in that context every spelling
+  // is an error — TS2523 when the callable owning these parameters is
+  // itself a generator (`function*bar() { function*foo(a = yield) {} }`,
+  // the corpus shape), and TS1212 + TS2304 when it is not
+  // (`function* outer() { function inner(a = yield) {} }`). So no LEGAL
+  // source can reach this push. The second shape is reported here with
+  // the wrong code — measured, not assumed: our reserved-word rule is
+  // silent there, since `yield` reached the identifier parser as a Yield
+  // node rather than a name. An error file either way, and the honest
+  // alternative would be a per-call-site "is this callable a generator"
+  // flag threaded through fifteen `parse_params()` sites.
+  //
+  // The three cells that decide the walk, probed: `function* f(a = yield)`
+  // and `function* f(a = { b: yield })` report, and
+  // `function* f(a = () => yield)` does NOT — an arrow's body is its own
+  // function scope, so the `yield` there is an identifier. Hence
+  // `expr_yields_outside_function`, which stops at every function
+  // boundary. A parameter NAMED `yield` is TS1212 and handled above.
+  if self.in_generator && default is Some(d) && expr_yields_outside_function(d) {
+    self.grammar_misuses.push(
+      "`yield` expressions cannot be used in a parameter initializer",
+    )
+  }
   // TS7006 / TS7019 / TS7031 (noImplicitAny): an unannotated,
   // default-less parameter of a *function declaration* implicitly has an
   // `any` type -- declarations are never contextually typed, so the verdict
@@ -503,6 +693,7 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   if is_optional && !(default is None) {
     self.param_optional_initializer_misuses.push(name)
   }
+  self.param_decorator_owner = prev_pdo
   { name, binding: Some(binding), is_rest, is_optional, type_, default }
 }
 
@@ -619,6 +810,17 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
         break
       }
       params.push(self.parse_param())
+    }
+  }
+  // TS2680: "A `this` parameter must be the first parameter." Decidable
+  // from the list alone, which is why it lives here rather than in
+  // `parse_param` — the index is the whole rule, and `parse_params` is the
+  // one function that sees every parameter list in the language (a class
+  // method, a free function and a function TYPE all report; probed).
+  for i, p in params {
+    if i > 0 && p.name == "this" {
+      self.grammar_misuses.push("a `this` parameter must be the first parameter")
+      break
     }
   }
   // TS2488: an ARRAY binding pattern's default must be iterable, so
@@ -806,6 +1008,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       body: { stmts: [], stmt_positions: [] },
       is_generator,
       is_async,
+      name_is_member_key: false,
     }
   }
   if !self.check(LBrace) {
@@ -823,9 +1026,11 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       body: { stmts: [], stmt_positions: [] },
       is_generator,
       is_async,
+      name_is_member_key: false,
     }
   }
   self.last_function_bodiless = false
+  self.record_implementation_optional_pattern_params(params)
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator
   let prev_async = self.in_async
@@ -892,6 +1097,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     body,
     is_generator,
     is_async,
+    name_is_member_key: false,
   }
 }
 
@@ -1187,6 +1393,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     body,
     is_generator,
     is_async,
+    name_is_member_key: false,
   }
 }
 
@@ -3344,9 +3551,7 @@ fn Parser::parse_declare_class(
     // TS2314: a generic `declare class` with no defaulted type parameter
     // requires all of its type arguments on a bare reference. Read the flag
     // before the base / body parse clobbers it via a nested generic.
-    if name != "" &&
-      names.length() > 0 &&
-      !self.last_type_params_had_default {
+    if name != "" && names.length() > 0 && !self.last_type_params_had_default {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{name}",
       )

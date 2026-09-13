@@ -402,6 +402,7 @@ fn Parser::scan_skipped_enum_initializer(
       self.record_enum_string_arith(e)
       self.record_enum_await_yield(e)
       self.record_const_enum_nonconstant(e)
+      self.record_const_enum_nonfinite(e)
       self.record_enum_init_name(e)
     }
     None => ()
@@ -453,6 +454,84 @@ fn Parser::record_const_enum_nonconstant(
     self.grammar_misuses.push(
       "const enum member initializers must be constant expressions",
     )
+  }
+}
+
+///|
+/// TS2477 / TS2478: a `const enum` member initializer that EVALUATES to a
+/// non-finite number, or to `NaN`.
+///
+/// This is the one rule in the enum family that needs the VALUE rather
+/// than the shape, and it is decidable because a const enum initializer is
+/// a constant expression by definition — `enum_const_double` folds the
+/// literal arithmetic and abstains on anything it cannot evaluate, so an
+/// unfoldable initializer costs a MISS rather than a finding.
+///
+/// Gated on `in_const_enum`, and that gate is the whole rule: a PLAIN enum
+/// takes the identical initializers in silence. Probed —
+/// `enum P { a = 1 / 0, b = NaN, c = Infinity, d = -Infinity }` is
+/// ACCEPTED, and `declare const enum P { a = 1 / 0 }` reports, so the
+/// `declare` half needs no code (both spellings reach this function with
+/// `is_const` true). `const enum P { a = 1 / 2, b = -1, c = 0x10,
+/// d = 1 + 2 }` is accepted, which is what the finite test buys.
+///
+/// The two codes are not one rule with two messages: tsc separates them,
+/// NaN being a "disallowed value" rather than a non-finite one.
+///
+/// `enumShadowedInfinityNaN` — where `Infinity` and `NaN` are block-scoped
+/// `let`s — is out of reach by construction, since both of its enums are
+/// plain. So reading the bare names as the globals cannot be defeated by a
+/// shadow in any file this rule can see.
+fn Parser::record_const_enum_nonfinite(self : Parser, e : @ast.TsExpr) -> Unit {
+  if !self.in_const_enum {
+    return
+  }
+  match enum_const_double(e) {
+    Some(v) =>
+      if v.is_nan() {
+        self.grammar_misuses.push(
+          "`const` enum member initializer was evaluated to disallowed value 'NaN'",
+        )
+      } else if v.is_inf() {
+        self.grammar_misuses.push(
+          "`const` enum member initializer was evaluated to a non-finite value",
+        )
+      }
+    None => ()
+  }
+}
+
+///|
+/// Fold a const-enum initializer to its numeric value, or `None` when it
+/// cannot be evaluated here. Deliberately narrow: the literal forms, the
+/// two non-finite globals, unary sign, and the five arithmetic operators
+/// whose result can leave the finite range. Everything else — an
+/// identifier, a member reference, a call, a bitwise operator (whose
+/// result is always a 32-bit int) — abstains.
+fn enum_const_double(e : @ast.TsExpr) -> Double? {
+  match e {
+    NumberLit(d) => Some(d)
+    IntLit(i) => Some(i.to_double())
+    // Spelled as arithmetic rather than through `@double`, which this
+    // package does not import.
+    Var("NaN") => Some(0.0 / 0.0)
+    Var("Infinity") => Some(1.0 / 0.0)
+    UnaryOp(Neg, a) => enum_const_double(a).map(fn(v) { -v })
+    UnaryOp(Plus, a) => enum_const_double(a)
+    BinOp(op, a, b) =>
+      match (enum_const_double(a), enum_const_double(b)) {
+        (Some(x), Some(y)) =>
+          match op {
+            Add => Some(x + y)
+            Sub => Some(x - y)
+            Mul => Some(x * y)
+            Div => Some(x / y)
+            Mod => Some(x % y)
+            _ => None
+          }
+        _ => None
+      }
+    _ => None
   }
 }
 
@@ -1172,9 +1251,22 @@ fn Parser::parse_import_equals_decl(
     // Entity-reference alias (`import X = A.B.C`): record the ROOT name so
     // the checker can flag a provably undeclared namespace (TS2503 —
     // parserImportDeclaration1).
+    //
+    // The dot test used to be part of the guard, so the rule was written
+    // for the DOTTED spelling and applied to one of the two: a
+    // single-segment target (`import f1 = NonExistent;`) never reached
+    // the recorder at all, and that is the spelling
+    // `verbatimModuleSyntaxInternalImportEquals` uses. The root of a
+    // one-segment reference is the whole reference, so the same marker
+    // answers both. Probed: a namespace and an enum target are legal, a
+    // CLASS or INTERFACE target is TS2702 ("only refers to a type") — a
+    // different code the consumer abstains on, since both are declared
+    // names.
     match self.peek().kind {
-      Ident(root) if self.peek_at(1).kind == Dot =>
-        self.grammar_misuses.push("<import-eq-root>" + root)
+      Ident(root) =>
+        if self.peek_at(1).kind == Dot || self.peek_at(1).kind == Semicolon {
+          self.grammar_misuses.push("<import-eq-root>" + root)
+        }
       _ => ()
     }
     self.skip_until_semicolon()

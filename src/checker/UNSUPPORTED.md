@@ -6,10 +6,61 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2600 / MISS in scope 114 / OUT OF SCOPE 20 / FP 0 /
+Measured at **TP 2635 / MISS in scope 80 / OUT OF SCOPE 19 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
+
+Batch EF's file is not in any section below, and the reason is worth a
+line here: nothing was missing. `YieldExpression10_es6` needed no
+machinery at all — an object-literal method shorthand's name was being
+treated as a BINDING by three separate consumers, so a bare reference to
+that spelling resolved anywhere in the module. A MISS can be a rule the
+checker already has, defeated by a fact the parser recorded with the
+wrong meaning; that kind never appears in a machinery classification.
+
+Batch EI's nineteen files are the strongest version of that observation
+so far, and not one of them is in a section below. Thirteen were pure
+grammar or declaration shape — a `const enum` initializer that evaluates
+to `Infinity`, a `yield` in a generator's parameter list, a decorated
+`this` parameter, `super` with type arguments, an assignment to a class or
+enum or function, an `infer` outside an extends clause. Four were the
+applied-in-some-places family: `<import-eq-root>` was recorded for the
+DOTTED `import X = A.B` and not the single-segment spelling; a private
+member reached by DESTRUCTURING had no check where the dotted access has
+had one for years; `reaches_alias` treated a mapped type's SOURCE as a
+structural barrier when computing its key set needs the alias resolved;
+and TS2411's index-value arm required a CLASS where the corpus file
+augments an INTERFACE. And two were an optionality PROXY still live at
+two sites after batch EH fixed the third — `type_accepts_undefined`
+standing in for "is this member optional", which answers yes for `any`,
+so `class Bar { x }` accepted every source. The lesson this file exists
+for holds: **a machinery classification cannot see a rule the checker
+already has, applied in some of the places that produce it.**
+
+Batch EG's six files are the same story four more times over, and none of
+them is in a section below either. TS2488 existed and was wired into the
+`for-of` source and not into `yield*`; TS18014 asked its question one
+lexical level deep when a `#name` resolves outward through every
+enclosing class body; TS1064's named half was an abstention whose own
+header named the fix; and the decorator signature checks compared ARITY
+and never a TYPE. The only genuinely absent machinery the batch found is
+filed with its measured blocker rather than shipped — TS2490 needs to
+tell `next() { return "" }` from `next(): any { return "" }`, and
+`TsClassMethodDecl` keeps no annotation-presence field, the
+absent-versus-`: any` gap this file records in section G.
+
+Batch EH built that channel and took TS2490 with it, along with eight more
+rules — and its more useful output is the **five false positives** it
+fixed, none of which this file could have listed, because a false positive
+is not a gap in what the checker knows. Two of them were CANCELLING: the
+optional-chain result type added `| undefined` unconditionally, which made
+a member lookup fail, which meant the array-predicate callback whose
+declared return type was also wrong was never judged — so
+`optionalChainingInArrow` scored as a correct TN with both bugs present.
+The lesson generalizes past this file's subject: **what the checker gets
+WRONG can be hidden by what it does not reach**, so the shapes worth
+minimizing here are not only the silent ones.
 
 Sections B, C, E and F were taken in batch EB — **+8 files at FP 0** — and
 each keeps its entry with what shipped and what is still missing, because

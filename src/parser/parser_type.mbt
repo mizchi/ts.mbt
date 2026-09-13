@@ -1699,6 +1699,23 @@ fn Parser::parse_postfix_type(
       let _ = self.advance() // ]
       return self.parse_postfix_type(Array(base_type))
     }
+    // TS1005: a PRIVATE NAME as an indexed-access key (`C[#bar]`). tsc
+    // reports it as a plain `']' expected` — the private-name grammar has
+    // no type-level form at all, which is exactly what
+    // `privateNamesAndIndexedAccess` documents in its own comment ("not
+    // supported yet, could support in future"). Recorded as a grammar
+    // misuse rather than raised, because the fall-through below already
+    // recovers the type as `Any` and a parse REJECTION here would risk a
+    // PFLEGAL on anything else that reaches this arm.
+    //
+    // The neighbouring spellings in that same file stay untouched:
+    // `C["foo"]` is an ordinary indexed access, and `this.#bar` is a
+    // value-position access parsed elsewhere.
+    if self.peek().kind is PrivateIdent(_) {
+      self.grammar_misuses.push(
+        "`]` expected — a private name cannot be used as an indexed-access key",
+      )
+    }
     // Indexed access type: T[K]. Try to parse the index as a type so later
     // passes can resolve `T["field"]` etc. against concrete interfaces; if
     // parsing fails for any reason, fall back to the original skip-and-Any

@@ -502,6 +502,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
       // move on. Downstream passes treat the construct opaquely.
       ObjectLit(_) | ArrayLit(_) => {
         self.record_rest_element_initializer(left)
+        self.record_object_rest_binding_pattern(left)
         let _ = self.advance()
         let right = self.parse_assignment()
         AssignPattern(@ast.TsBinding::Target(left), right)
@@ -574,6 +575,41 @@ fn Parser::record_rest_element_initializer(
 }
 
 ///|
+/// TS2501 ("A rest element cannot contain a binding pattern") for the
+/// object-rest spelling, `({...{}} = {})`.
+///
+/// The sibling of `record_rest_element_initializer`, reached from the same
+/// arm and for the same reason: a destructuring ASSIGNMENT's target is an
+/// object literal by the time the parser sees it, so the rest element's
+/// operand is an ordinary expression and a pattern there is an object or
+/// array literal.
+///
+/// Object rest only, which is the asymmetry probing settled:
+/// `[...[a]] = [1]` is ACCEPTED — an array pattern's rest element may
+/// contain one — while all four object spellings in
+/// `restPropertyWithBindingPattern` report. The parenthesized forms carry
+/// a second code (TS2701, "the target of an object rest assignment must be
+/// a variable or a property access") that this rule does not claim: the
+/// parser strips parens, so `{...{}}` and `{...({})}` are the same node
+/// here and telling them apart is not possible from the AST.
+///
+/// The legal neighbours are every rest target real code writes —
+/// `({...rest} = {})`, `({...o.p} = {})`, `({...o[0]} = {})` — all
+/// confirmed accepted, and none of them is a literal.
+fn Parser::record_object_rest_binding_pattern(
+  self : Parser,
+  target : @ast.TsExpr,
+) -> Unit {
+  guard target is ObjectLit(fields) else { return }
+  for f in fields {
+    if f.0.has_prefix("@@spread:") &&
+      (f.1 is ObjectLit(_) || f.1 is ArrayLit(_)) {
+      self.grammar_misuses.push("a rest element cannot contain a binding pattern")
+    }
+  }
+}
+
+///|
 fn Parser::parse_object_method_value(
   self : Parser,
   name : String,
@@ -613,6 +649,7 @@ fn Parser::parse_object_method_value(
     body,
     is_generator,
     is_async,
+    name_is_member_key: true,
   })
 }
 
@@ -2567,6 +2604,16 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       continue
     }
     if self.try_skip_call_type_args(expr) {
+      // TS2754: "`super` may not use type arguments." A `super` call
+      // resolves to the base class's constructor, which is already
+      // instantiated by the `extends` clause's own type arguments — there
+      // is nothing left for a caller to supply. Both spellings report
+      // (probed): `super<number>(1)` and `super<number>.m()`, while
+      // `super()` and `super.m()` are accepted, and this is the one place
+      // that sees the type-argument list at all.
+      if expr is Var("super") {
+        self.grammar_misuses.push("`super` may not use type arguments")
+      }
       // Stash the captured type args; the next loop iteration builds the
       // actual call and wraps it (see the `LParen` branch below).
       pending_type_args = self.pending_call_type_args
@@ -3905,6 +3952,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: true,
             })
           } else if is_ident_key &&
             prop_key == "async" &&
@@ -4278,6 +4326,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: true,
             })
           } else if is_ident_key &&
             prop_key == "async" &&

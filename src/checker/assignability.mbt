@@ -845,6 +845,34 @@ fn is_assignable_to_inner(
       let t_obj = struct_fields_to_object(t_fields)
       is_object_assignable_inner(s_fields, t_obj, bivariant_params)
     }
+    // An ARRAY satisfies a NUMERIC index signature: every numeric key
+    // yields the element type. `var v: { [n: number]: Bar } = arr` is
+    // ACCEPTED by tsc and reached the `_ => false` catch-all below, which
+    // made it a false positive on legal code (probed alongside the three
+    // shapes tsc really does reject there — a function, a `number`, and a
+    // STRING index signature, all of which still decline).
+    //
+    // Only when the target declares NOTHING but numeric index signatures:
+    // a named member would have to exist on the array value itself, and a
+    // string index signature demands every property be the value type,
+    // which `length` / `push` are not.
+    (Array(elem), Object(t_fields))
+    | (Applied("Array", [elem]), Object(t_fields))
+    | (Applied("ReadonlyArray", [elem]), Object(t_fields)) => {
+      if t_fields.length() == 0 {
+        return false
+      }
+      for f in t_fields {
+        match f.0 {
+          Number | Int =>
+            if !is_assignable_to_inner(elem, f.1, bivariant_params) {
+              return false
+            }
+          _ => return false
+        }
+      }
+      true
+    }
     // Named/applied references are nominal: only equal names match.
     (Named(a), Named(b)) => a == b
     (Applied(a, args_a), Applied(b, args_b)) => {
@@ -1020,13 +1048,47 @@ fn is_object_assignable_inner(
         }
       None => ()
     }
-    // A target field whose type accepts `undefined` (the desugaring of
-    // `x?: T`) tolerates the source missing that field entirely.
-    if !type_accepts_undefined(t_type) {
+    // A target field written `x?: T` tolerates the source missing it
+    // entirely. That fact is not in the AST as a flag — the type parser
+    // wraps `x?: T` into `Union([T, Undefined])` ALWAYS — so the union IS
+    // the encoding and `target_field_optional` reads it directly.
+    //
+    // It used to ask `type_accepts_undefined`, which is a PROXY for the
+    // question and answers yes for four shapes the `?` can never produce:
+    // `x: any`, `x: unknown`, `x: undefined` and `x: void` are all
+    // REQUIRED members that tsc reports missing (probed, and `x: any` is
+    // what an unannotated `class Bar { x }` field becomes — ordinary
+    // TypeScript, so the proxy was silently dropping the commonest
+    // spelling there is). Same defect batch EH fixed in
+    // `check_expr_against`'s missing-required test; this is the second
+    // site of the one question.
+    //
+    // The UNION case stays tolerated, and that is not a shortcut: there
+    // `x?: T` and `x: T | undefined` really are the same node, so
+    // reporting would be a false positive on the optional spelling.
+    if !target_field_optional(t_type) {
       return false
     }
   }
   true
+}
+
+///|
+/// True when a TARGET object/class field's type is the encoding of `x?: T`
+/// — a union with an `Undefined` (or `Null`) member. See the call site for
+/// why this is not `type_accepts_undefined`.
+fn target_field_optional(t : @ast.TsType) -> Bool {
+  match t {
+    Union(members) => {
+      for m in members {
+        if m is (Undefined | Null) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
 }
 
 ///|

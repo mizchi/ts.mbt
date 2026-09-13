@@ -6486,10 +6486,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     }
     let (root, rest) = match runtime_name.find(".") {
       Some(idx) =>
-        (
-          runtime_name[:idx].to_owned(),
-          runtime_name[idx:].to_owned(),
-        )
+        (runtime_name[:idx].to_owned(), runtime_name[idx:].to_owned())
       None => (runtime_name, "")
     }
     match public_alias_by_source.get(source_path + "\u{0}" + root) {

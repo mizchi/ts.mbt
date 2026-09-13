@@ -208,6 +208,7 @@ test "validate_module: lib.d.ts ambient type aliases resolve (PropertyKey)" {
         body: { stmts: [], stmt_positions: [] },
         is_generator: false,
         is_async: false,
+        name_is_member_key: false,
       },
     ],
   }

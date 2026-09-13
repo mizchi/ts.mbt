@@ -57,6 +57,8 @@ pub async fn resolve_type_module_specifier(String, String) -> String?
 
 pub async fn tsconfig_compiler_option(String, String) -> String?
 
+pub fn value_identifier_needs_suffix(String) -> Bool
+
 // Errors
 pub(all) suberror ParseError {
   ParseError(String)
@@ -176,6 +178,7 @@ pub struct Parser {
   mut record_implicit_any_params : Bool
   mut class_decl_no_heritage : Bool
   mut in_class_expr_body : Bool
+  mut param_decorator_owner : String
   written_any_params : Map[String, Unit]
   template_invalid_escape_positions : Array[Int]
   directive_strict : Bool
@@ -185,6 +188,7 @@ pub struct Parser {
   collected_class_dups : Array[(String, Array[String])]
   quoted_member_names : Array[String]
   optional_member_names : Array[String]
+  unannotated_return_members : Array[String]
   protocol_return_names : Array[String]
   protocol_returns_by_class : Map[String, Array[String]]
   private_decl_counts : Map[String, Int]

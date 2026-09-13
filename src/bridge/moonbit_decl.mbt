@@ -1350,6 +1350,7 @@ fn synthesize_func_from_expr(
         type_param_bounds: func.type_param_bounds,
         is_generator: func.is_generator,
         is_async: func.is_async,
+        name_is_member_key: false,
       })
     @ast.TsExpr::ArrowFunc(params, _declared_ret, body, is_async) => {
       let normalized_params = merge_func_param_types(params, declared_type)
@@ -1381,6 +1382,7 @@ fn synthesize_func_from_expr(
         type_param_bounds: [],
         is_generator: false,
         is_async,
+        name_is_member_key: false,
       })
     }
     _ => None
@@ -2456,6 +2458,7 @@ fn append_exported_value_call_signature(
       body: { stmts: [], stmt_positions: [] },
       is_generator: false,
       is_async: false,
+      name_is_member_key: false,
     },
   })
 }
@@ -2535,6 +2538,7 @@ fn append_exported_value_interface_methods(
         body: { stmts: [], stmt_positions: [] },
         is_generator: false,
         is_async: false,
+        name_is_member_key: false,
       },
     })
   }
@@ -11282,6 +11286,7 @@ fn clone_exported_func(
     type_param_bounds: exported.func.type_param_bounds,
     is_generator: exported.func.is_generator,
     is_async: exported.func.is_async,
+    name_is_member_key: false,
   }
 }
 

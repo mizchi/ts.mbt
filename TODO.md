@@ -3,6 +3,575 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EI (2026-09-13): MISS 99 -> 80, and an optionality PROXY at two more sites
+
+**+19 files at FP 0** (TP 2616 -> 2635, MISS in scope 99 -> **80**,
+PFLEGAL 0, TN 1750). Nineteen rules, thirteen of them pure grammar or
+declaration shape, and the two findings worth more than any single file
+are both about **one question answered in several places**: the `?` on a
+member, and the `?` on a get/set pair.
+
+- [x] **TS2477 / TS2478** (+1: `enumConstantMembers`). A `const enum`
+  member initializer that EVALUATES to a non-finite value, or to `NaN`.
+  The one rule in the enum family that needs the VALUE rather than the
+  shape, and it is decidable because a const enum initializer is a
+  constant expression by definition: `enum_const_double` folds the literal
+  arithmetic and abstains on anything else, so an unfoldable initializer
+  costs a MISS. `in_const_enum` is the whole rule — a PLAIN enum takes
+  `1 / 0`, `NaN`, `Infinity` and `-Infinity` in silence (probed), while
+  `declare const enum` reports and needs no code of its own.
+- [x] **TS2501** (+1: `restPropertyWithBindingPattern`). An object-rest
+  element whose target is a binding pattern (`({...{}} = {})`). Sibling of
+  `record_rest_element_initializer`, in the same arm and for the same
+  reason. Object rest ONLY, which is the asymmetry probing settled:
+  `[...[a]] = [1]` is ACCEPTED. The parenthesized forms carry a second
+  code (TS2701) this rule does not claim — the parser strips parens, so
+  `{...{}}` and `{...({})}` are the same node here.
+- [x] **TS2523** (+1: `FunctionDeclaration7_es6`). `yield` in a
+  generator's own parameter initializer. `in_generator` is the gate, and
+  it is why the rule can sit in ONE place rather than at each of the
+  fifteen `parse_params()` sites: a `yield` in a parameter list becomes a
+  Yield NODE only when the enclosing context is a generator, and there
+  every spelling is an error. The three cells that decide the walk:
+  `function* f(a = yield)` and `function* f(a = { b: yield })` report,
+  `function* f(a = () => yield)` does NOT — an arrow's body is its own
+  scope, so `expr_yields_outside_function` stops at every function
+  boundary.
+- [x] **TS2463** (+1: `optionalBindingParameters2`). An optional
+  binding-pattern parameter in an IMPLEMENTATION. The exact MIRROR of
+  `record_bodiless_param_initializers` — the same body-or-not question
+  inverted — so it is called from the two places that have already decided
+  it and nowhere else. Recording it in `parse_param` would be wrong at its
+  own site: the `?` on a pattern parameter is LEGAL in every bodiless
+  position (`declare function`, an interface member, a `declare class`
+  member, a function TYPE — all four probed and accepted). The arrow and
+  object-method spellings stay MISSes, which is what the two-call-site
+  restriction buys.
+- [x] **TS2661** (+1: `globalThisGlobalExportAsGlobal`). `globalThis` is
+  carved out of `check_non_local_exports`' lib-global exclusion, and the
+  reason is tsc's own message: it has a DEDICATED sentence for this name,
+  so the verdict does not rest on the general "a lib declaration is not a
+  local one" argument the exclusion hedges against. `globalThis` is not a
+  declaration at all.
+- [x] **TS1433 / TS2680** (+1: `decoratorOnClassMethodThisParameter`). A
+  decorated or modified `this` parameter, and a `this` parameter that is
+  not first. Both facts were already in hand at the two right places —
+  `parse_param` has the decorator and modifier answers, `parse_params` is
+  the one function that sees every parameter list in the language. One
+  cell cost a false positive first: `visibility_param` defaults to
+  `"public"` whether or not a keyword was written, so it answers "which
+  accessibility applies" and not "was a modifier present";
+  `is_param_property` is the second question.
+- [x] **TS2754** (+1: `taggedTemplatesWithTypeArguments2`). `super` with
+  type arguments, at the one place that sees the type-argument list.
+  `super<number>(1)` and `super<number>.m()` both report;
+  `super()` / `super.m()` are accepted.
+- [x] **TS2629 / TS2628 / TS2630** (+1: `assignments`). One rule, three
+  messages: an assignment whose target is a class, an enum or a function
+  declaration. Restricted to TOP-LEVEL statements, and the restriction is
+  what makes it sound — a nested scope can shadow any of these names
+  (`class C {} function f(C) { C = null }` is legal) and the flat
+  `top_level_stmts` list is the one place the name is unambiguously the
+  module-level declaration. `let C = class {}; C = null` and
+  `let f = function () {}; f = null` are both ACCEPTED, which is why
+  `is_local` classes are skipped; an ambient `declare class` /
+  `declare function` DOES report and needs no condition.
+- [x] **TS1005** (+1: `privateNamesAndIndexedAccess`). A private name as
+  an indexed-access type key (`C[#bar]`). Recorded as a grammar misuse
+  rather than raised: the fall-through already recovers the type as `Any`,
+  and a parse REJECTION here would risk a PFLEGAL on anything else
+  reaching that arm.
+- [x] **TS1338** (+2: `inferTypes1`, `templateLiteralTypes1`). An `infer`
+  outside a conditional's extends clause. **The corpus caught the first
+  version**, and the cell it caught is the whole rule: the three
+  non-extends positions INHERIT the permission rather than clearing it,
+  because the message means "inside SOME conditional's extends clause".
+  `type X11<T> = T extends ((infer U) extends number ? 1 : 0) ? 1 : 0` is
+  ACCEPTED — `inferTypesWithExtends1` says so in its own comment — while
+  the identical inner conditional as a whole alias BODY is TS1338 three
+  times, and not on the extends position.
+- [x] **TS2838** (+1: `inferTypesWithExtends2`). One `infer` name declared
+  twice with DIFFERENT constraints in the same extends clause. Only a
+  WRITTEN bound participates, and that is the second cell the corpus
+  caught: an unconstrained declaration beside a constrained one is
+  ACCEPTED in either order, which `inferTypesWithExtends1` calls "same
+  behavior as class/interface" — a missing constraint is inherited rather
+  than contradicting.
+- [x] **TS2488 / TS2504** (+1: `types.forAwait.es2018.2`). An OBJECT
+  LITERAL as a `for-of` / `for await` source — the same mistake against
+  the two protocols, which is why one function takes `is_await`. It reads
+  the EXPRESSION rather than the inferred type, and that is what makes it
+  complete by construction rather than a guess about the object model: an
+  object literal is a full description of its own members. The two shapes
+  that can hide a protocol method — a COMPUTED key (how
+  `[Symbol.iterator]() {}` is written) and a SPREAD — abstain outright.
+- [x] **TS2341 / TS2445** (+1:
+  `privateProtectedMembersAreNotAccessibleDestructuring`). Destructuring
+  reaches a member exactly as a property access does, and this spelling
+  had no check at all: `let { priv } = k` was silent where `k.priv` has
+  been reported for years. `check_member_accessibility`'s verdict is split
+  into `check_class_member_accessibility` so the two callers share one
+  rule rather than getting a second copy — the applied-in-some-places bug
+  written into its own fix. The enclosing-class context comes from
+  `ctx.path_prefix`, so the corpus file's legal cases (inside K's own
+  method, and a protected member in a subclass) fall out with no condition.
+- [x] **TS2855 / TS2340** (+1: `privateInstanceMemberAccessibility`). A
+  `super` access reaching a base DATA FIELD. `super.x` looks the property
+  up on the base PROTOTYPE and a class field is an own property of each
+  instance, so there is nothing there to read WHATEVER its visibility —
+  and that is the cell reasoning gets wrong. The corpus file is written as
+  if it were an accessibility rule and its older message says "only public
+  and protected METHODS"; `private`, `protected` and `public` base fields
+  all report, and the local compiler gives TS2340 at `target: es5` and
+  TS2855 from es2015 up, which is why one rule carries both numbers.
+  Three neighbours are accepted and each needed its own exclusion: a
+  METHOD and an ACCESSOR (both on the prototype, so a name also in
+  `methods` abstains — which covers batch CV's ambient accessors, upserted
+  into both lists), a PARAMETER PROPERTY, and **a STATIC base member of
+  the same name**, which cost two false positives
+  (`thisAndSuperInStaticMembers1`/`2`): in a static member `super` is the
+  base CONSTRUCTOR, where a `static` field of that name really does live,
+  and static and instance field initializers share one `CheckCtx` path so
+  the context cannot be read there.
+- [x] **TS2456** (+1: `recursiveMappedTypes`). A mapped type's SOURCE is
+  not a structural barrier, and it was the one position `reaches_alias`
+  was missing: `type Recurse = { [K in keyof Recurse]: Recurse[K] }` is
+  circular because computing the key set needs `keyof Recurse`. The VALUE
+  position deliberately has no arm — that IS a barrier, which is what
+  keeps `type A = { x: A }` legal and what keeps `Circular<T>` and
+  `Transform<T>`, both TS7-ACCEPTED in the same corpus file, silent: their
+  source is `keyof T`, a type parameter.
+- [x] **TS2503** (+1: `verbatimModuleSyntaxInternalImportEquals`). The
+  `<import-eq-root>` recorder had the dot test inside its guard, so the
+  rule was written for the DOTTED spelling and applied to one of the two:
+  a single-segment target (`import f1 = NonExistent;`) never reached it.
+  The root of a one-segment reference is the whole reference. Probed: a
+  namespace and an enum target are legal, a CLASS or INTERFACE target is
+  TS2702, a different code the consumer abstains on.
+- [x] **The optionality PROXY, at two more sites** (+1:
+  `iterableArrayPattern17`). Batch EH replaced
+  `is_assignable_to(undefined, ty)` with the union test in
+  `check_expr_against`; the same question was still being asked by the
+  proxy in `object_fields_assignable` and in
+  `struct_assignable_named_rec`. The second one is the live bug: it only
+  ever PROVES assignability, so a permissive answer SUPPRESSES the
+  diagnostic — and `class Bar { x }`, whose unannotated field becomes
+  `any`, accepted every source. `any` / `unknown` / `undefined` / `void`
+  are all REQUIRED members tsc reports missing (probed); the UNION case
+  stays tolerated, because there `x?: T` and `x: T | undefined` really are
+  the same node.
+- [x] **TS2411 with an INTERFACE index value** (+1:
+  `objectTypeHidingMembersOfExtendedObject`). The class-only arm could
+  never reach `interface Object { data: A; [x: string]: Object }`, which
+  augments the lib interface. Only the fields the module DECLARES for that
+  name are required, so an interface whose real surface is larger
+  under-requires — losing findings, never inventing them, which is also
+  why an `extends` chain needs no guard on that side.
+
+**The false positive the corpus structurally cannot see** — the fourth
+batch in a row to find one by probing a legal neighbour. The get/set pair
+rule required the getter's type to be assignable to the setter's parameter
+type, and **TypeScript 4.3 made those types allowed to DIVERGE**:
+`get p(): string { return "" }` beside `set p(x: number)` is ACCEPTED, and
+the error, if any, lands where the value is READ. Only an UNANNOTATED
+getter is an error, and there the getter's type comes contextually FROM
+the setter, so what tsc reports is the `return` inside the body. The
+annotation-presence fact is not in `TsClassMethodDecl` — the
+absent-versus-`: any` blocker this repo records for TS7031, TS7022,
+TS2729, TS2448 and TS2564 — so the pair is judged only for a member the
+parser recorded in `unannotated_return_members`, the
+`<unannotated-return:>` channel batch EH built for TS2490. One more cell
+came with it: a COMPUTED key pairs the two accessors only when it is a
+late-bound name of LITERAL type, so `[G.B]` and `["get1"]` pair and
+`[1 << 6]` does not — its type is `number`, not the literal `64`, and our
+parser folding the shift to the member name `64` is more precise than
+tsc's own model. Ten cells now agree with tsc.
+
+**Measured and NOT taken**, each with its blocker rather than a verdict:
+
+- **TS2304 for an `infer X extends Bound` whose bound is undeclared**
+  (`inferTypesInvalidExtendsDeclaration`). Written, wired, and REVERTED
+  after instrumenting rather than re-reading: the type parser REDUCES a
+  conditional whose extends relation it can decide, so
+  `type Test<T> = T extends infer A extends B ? number : string` arrives
+  as the bare `Number` and neither the marker nor its bound survives. The
+  rule's own scaffolding (a per-position binder set threaded down the
+  walk, which is what makes the general `unresolved_type_references`
+  version unusable) is gone with it — dead code that reads like live code
+  is a defect.
+- **TS2797** (`mixinAbstractClasses.2`). Needs the link from a class
+  declared inside a function to that function's PARAMETER types and type
+  parameter bounds: the base is `baseClass`, a value parameter whose type
+  is `TBaseClass extends abstract new (...args: any) => any`. Nothing
+  connects a `local_classes` entry to its enclosing function.
+- **TS2339 for `Symbol.<unknown member>`** (`parserES5SymbolProperty4`).
+  The occurrence is a TYPE-position computed key in a `declare class`, and
+  the verdict needs a file-level fact the member parser cannot have:
+  whether the file augments `interface SymbolConstructor` (symbolProperty61
+  does, legally). Routable through a sentinel; not worth a new channel at
+  +19.
+- **TS18046 through an ALIASED guard**
+  (`controlFlowAliasingCatchVariables`). `const isString = typeof e ===
+  'string'` followed by `e = 1` invalidates the alias, so the later
+  `if (isString)` no longer narrows. Needs aliased control flow plus
+  assignment invalidation; the existing token-scan withdrawal sees the
+  `typeof e === 'string'` elsewhere in the block and abstains.
+
+### Batch EH (2026-09-13): MISS under 100, and five false positives the corpus could not see
+
+**+9 files at FP 0** (TP 2607 -> 2616, MISS in scope 108 -> **99**, PFLEGAL 0,
+TN 1750). Nine rules, and the more useful half of the batch is the **five
+false positives** it fixed — legal code tsc accepts that this checker
+reported. Two of them were only reachable because a new rule stopped
+another bug from hiding them, which is the finding worth keeping: **a
+false positive can be held out of sight by a second bug, and the corpus
+scores the pair as correct.**
+
+- [x] **Union callee arity** (+1: `unionTypeCallSignatures4`).
+  `check_union_callee_arity` computes `max_min` — the LARGEST minimum arity
+  across the union's members, which is what tsc's `combineUnionParameters`
+  encodes — and then OVERWROTE it with `min_min`, the smallest, whenever no
+  member's parameter domain dominated the others'. `callable_params_narrower_than`
+  returns `None` on a length mismatch, so nothing can dominate the moment
+  the members differ in parameter COUNT, and the fallback ran: `A1 | A2`
+  accepted one argument where tsc requires two. Probed across five shapes
+  including two with a rest member, and `max_min` agrees with tsc on every
+  cell (`(a) => void | (...r) => void` requires 1, not 0). The dominance
+  reduction is kept for the case it was written for and can now only apply
+  where every member has the same arity.
+- [x] **TS2420 on the INDEX SIGNATURES** (+1: `subtypingWithNumericIndexer5`).
+  `check_class_implements` excludes a class that declares an index signature
+  from its missing-member arm, and nothing then asked whether the indexer it
+  DOES declare is compatible with the interface's. The coverage rule is
+  asymmetric and was probed one cell at a time: a STRING indexer satisfies a
+  numeric one (every numeric key is a string key) and a numeric one does NOT
+  satisfy a string one — tsc's own two wordings say so. Only the
+  compatibility half ships; the "index signature for type 'number' is
+  missing" half needs the base chain's index signatures, which
+  `resolve_base_chain_members` does not carry.
+- [x] **TS2416 on a class METHOD's TYPE** (+1: `symbolProperty24`). The check
+  compared a data-PROPERTY's type and a member's PRESENCE; a method's type
+  was compared by nothing, so `interface I { m(): number }` beside
+  `class C implements I { m(): string { … } }` was silent, and so were the
+  `m: () => number` property-of-function-type spelling and a PARAMETER-type
+  mismatch. `member_override_incompatible` cannot answer it — a `Func` on
+  both sides falls through its final `false` — so `method_override_incompatible`
+  compares returns COVARIANTLY and parameters BIVARIANTLY, which is the cell
+  reasoning gets wrong: `m(x: string)` against `m(x: any)` is LEGAL, so a
+  contravariant comparison would report it.
+- [x] **TS2490: an iterator's `next()` result** (+1: `for-of15`). Filed one
+  batch ago with a blocker, and the blocker is what this batch removed. Five
+  cells report (`next() { return "" }`, `next(): string`,
+  `next() { return 1 }`, `next() { return { done: true } }`, `next() { }`)
+  and three do not (an object carrying `value` annotated or returned, and
+  `next(): any`). The `[Symbol.iterator]()`-returns-`this` gate is required
+  rather than cosmetic: when it returns something else, THAT object's `next`
+  is consulted and tsc accepts whatever this class's says.
+
+  The channel both TS2416 and TS2490 needed is `<unannotated-return:NAME>`,
+  a per-class sentinel in the shape `optional_member_names` already uses.
+  `TsClassMethodDecl.return_type` is `Any` for a missing annotation and for
+  an explicit `: any` alike — the blocker recorded for TS7031 / TS7022 /
+  TS2729 / TS2448 — and both rules have to infer the return from the BODY,
+  which is right for the first and a false positive for the second. The
+  marker asserts two facts, and the second one matters: the body was a real
+  `{ … }` block, which is the only way to read a `None` body as `void`,
+  since `TsClassMethodDecl.body` is `None` for an EMPTY body as well as for
+  a bodiless overload signature.
+- [x] **TS2698: a spread of `T & undefined`** (+1: `spreadObjectOrFalsy`).
+  The existing arm covered non-iterable primitives; an INTERSECTION with a
+  nullish part is the shape the corpus file writes, and its four legal
+  neighbours are all UNIONS that keep a non-nullish part. The bare
+  `Undefined` / `Null` spellings tsc also reports are deliberately absent:
+  our flow model narrows an `any`-typed binding to `Undefined` when its
+  initializer is `undefined`, so an arm for it would report a type tsc calls
+  `any`. An intersection with a nullish part cannot be produced by
+  narrowing — it is only ever written.
+- [x] **`Record<K, V>`'s keys, and the optionality PROXY** (+1:
+  `assignmentCompatWithEnumIndexer`). Two independent gaps in one file.
+  `collect_declared_fields` had arms for five projectable utilities and none
+  for `Record`, the one whose fields come from its KEY argument rather than
+  from a source shape. An ENUM key is the cell reasoning gets wrong and it
+  was probed: `enum E { A }` makes `Record<E, any>` require the key `"0"` —
+  the member's VALUE — so `{ 0: 1 }` satisfies it and `{ A: 1 }` is an
+  EXCESS property. Auto-numbering is reproduced rather than guessed, because
+  the AST keeps a folded value only for members that wrote one; a member
+  after a non-numeric one abstains for the whole enum.
+
+  Wiring that in still reported nothing, and the reason is the second gap:
+  the missing-required check asked `is_assignable_to(undefined, ty)` as a
+  proxy for "is this member optional". The `?` is not in the AST — the
+  parser wraps `a?: T` into `T | undefined`, ALWAYS producing a union — so
+  the union IS the encoding, and the proxy answered yes for five shapes the
+  `?` can never produce. Probed one at a time: `a: any`, `a: unknown`,
+  `a: string | undefined`, `a: undefined` and `a: void` are all required
+  members tsc reports missing, and only `a?: any` is not. The union case
+  stays suppressed, because there the two spellings really are the same
+  node.
+- [x] **A property write spelled with BRACKETS** (+1: `symbolProperty46`).
+  `PropAssign` has checked `recv.prop = value` against the member's declared
+  type for a long time and `recv["prop"] = value` reached nothing at all —
+  the shape recorded for TS2790's `delete o["b"]`, and it needed BOTH the
+  statement and the EXPRESSION arm, since `o["p"] = 1` at the top of a list
+  is a statement and the identical line inside a function body is an
+  expression. The key resolution is not re-derived: `infer_index` is what
+  the READ side uses, so index signatures and literal keys answer here
+  exactly as they do there.
+
+  Two things had to come with it. `infer_index` had no arm mapping
+  `Symbol.hasInstance` to the mangled member name `@@hasInstance`, so a
+  well-known-symbol index was `Any` in both directions. And an ACCESSOR pair
+  has to be resolved before `lookup_field`, which hands back the GETTER's
+  SIGNATURE: the parser upserts a plainly-named `get p(): T` into
+  `properties` as `p: T`, so the dotted path never needed it, while a
+  COMPUTED key gets only the `methods` entry. Comparing an assigned value
+  against a function type is a false positive on the legal write, and the
+  corpus file has one of each on adjacent lines.
+- [x] **TS2349: an intersection reduced to `never`** (+1:
+  `neverIntersectionNotCallable`). Two constituents declaring the same
+  member with definitely-conflicting types make the intersection
+  uninhabitable, so it has no call signature either — tsc's message says
+  exactly that. `types_definitely_differ` is the conflict test and abstains
+  on everything it cannot prove, and the accumulation is one pass over the
+  constituents rather than a pair loop, for the reason
+  `check_merged_interface_member_conflicts` is one pass. It reports through
+  `record_unfiltered`: the permissive filter drops the "not callable" family
+  wholesale — the suppression batch CL had to carve TS2348 out of — and the
+  reduction proof is exact.
+- [x] **A spread does not copy `#private` members** (+1:
+  `privateNameAndObjectRestSpread`). `({ ...other }).#prop` is TS2339
+  because a private field is not an own enumerable property, and carrying it
+  into the spread's inferred shape made the private-name existence check
+  resolve a member that cannot be there. The diagnostic also had to be
+  taught to print `#prop` rather than `__private_brand__0__prop` — the third
+  time in this repo, after TS7008 and batch ED's duplicate-member check, so
+  `member_display_name` is now one function the whole property-access family
+  routes through.
+
+**The five false positives, and why the corpus could not see them.**
+
+1. **`?.` on a receiver that cannot be nullish.** The `OptionalChain` arm of
+   `infer_expr` unioned `undefined` into the result unconditionally, so
+   `declare const c: { p: number }; const n: number = c?.p` was reported.
+   Writing `?.` on a non-nullable receiver is redundant, not wrong.
+2. **The array predicates.** `filter` / `some` / `every` / `find` /
+   `findIndex` / `findLast` / `findLastIndex` all declare their callback as
+   returning `unknown` in `lib.es5.d.ts`, and the table said `boolean` — so
+   `names.filter(x => x)`, the commonest spelling there is, was reported as
+   "expected `boolean` but got `string`".
+
+   These two were **cancelling**. `optionalChainingInArrow` is
+   `names?.filter(x => x)`, and the optional-chain bug added `| undefined`
+   to the receiver, so the member lookup failed and the callback was never
+   judged: the corpus file scored as a TN with both bugs present, and fixing
+   either one alone turns it into an FP. That is the reason to fix an FP
+   even when the gate is already at zero.
+3. **An ARRAY assigned to a numeric index signature.** `var v: { [n: number]:
+   Bar } = arr` is ACCEPTED by tsc — every numeric key yields the element
+   type — and reached `is_assignable_to`'s `_ => false`. Probed alongside
+   the three shapes tsc really does reject there (a function, a `number`,
+   and a STRING index signature), all of which still decline.
+4. **An overloaded computed-key method.** `lookup_field` returns the FIRST
+   declaration's signature, so the new symbol-index arm reported
+   `c[Symbol.iterator](0)` against `[Symbol.iterator](x: string)` —
+   `symbolProperty40`, TS7-ACCEPTED. Caught by the gate on the first
+   measurement of that rule.
+5. **A brand in a user-facing diagnostic.** Not a wrong verdict, a
+   useless one.
+
+**What was measured and NOT taken.** `arrayLiterals`'s TS2353 needs the
+VALUE type of an object-type index signature, and
+`try_parse_object_type_with_members` discards it by design — its own doc
+comment says index signatures are "kept (keyed by the key type, with an
+`Any` value) so the 'any key' meaning survives" — so the array-literal
+element check has nothing to compare against. `wideningTuples7`'s TS7010
+needs the body of a function EXPRESSION at a `var` initializer, which is
+not walked at all (the same shape reports for a function DECLARATION).
+`enumShadowedInfinityNaN`'s TS18033 needs the enum's own BLOCK scope, and
+an enum is hoisted into `module_.enums` with no record of the block it came
+from. And `computedPropertyNames30` was re-probed rather than re-argued:
+the distinction CLAUDE.md called "modelling a distinction ONE file draws"
+is reproducible — `super()` in an object-literal computed key is TS2466
+when an ARROW or function expression lies between it and the constructor
+and ACCEPTED directly in the constructor, confirmed across five hand-written
+cells — but deciding it needs a "is there a function boundary between here
+and the class body" fact, which is a new Parser field with the same
+save / clear / restore discipline at fifteen sites that `self.labels`
+needs. Filed with the measurement rather than the verdict.
+
+Gates on this head: oracle TP 2616 / MISS in scope 99 / OUT OF SCOPE 19 /
+FP 0 / PFLEGAL 0 / TN 1750; `moon check --deny-warn` clean; assertions
+3,005 / 3,005; `verify-checker-scaling` 12 of 12 axes within budget
+(`private-members` 1.59 against 1.75, `namespaces` 2.06 against 2.15);
+mangle-safety 186/186; dce-coverage 31 eliminated / 0 broken;
+rule-equivalence 80 equivalent / 0 unsound; graph-walk,
+generated-fixtures, scaffolds, examples, mbti-dts, bridge-runtime (0
+unbound, 14,630 converter calls at 0 failures) and bridge-enum-returns all
+green.
+
+### Batch EG (2026-09-12): four rules, and the one that had to stay ASYMMETRIC
+
+**+6 files at FP 0** (TP 2601 -> 2607, MISS in scope 113 -> 108, PFLEGAL 0,
+TN 1750), plus one file retired from `scripts/checker_out_of_scope.txt` as
+STALE — `asyncQualifiedReturnType_es5` was declared `no-local-oracle` and
+the TS1064 rule below makes it a TP, which the oracle's stale-entry report
+named on the first run after the change.
+
+The ranking came from re-running every remaining MISS file through the real
+compiler (`checker_miss_rank.mjs`), and it says the tail is all there is:
+**67 of 113 files carry exactly one error code and 84 codes have exactly one
+file**, with the four largest buckets (TS2322 15 solo, TS2345 10, TS2339 5,
+TS2403 4) being variadic tuples, template-literal types, conditional types
+and contextual typing. So four small unrelated rules is what this tier looks
+like, and three of the four are the applied-in-some-places family.
+
+- [x] **TS2488 for `yield*`** (+1: `YieldExpression6_es6`). The whole TS2488
+  apparatus existed and was wired into ONE position:
+  `check_iterable_class_protocol` for a class instance and
+  `check_forof_non_iterable` for a primitive / union / optional
+  `@@iterator`, both called from the `ForOf` arm and from nowhere else.
+  `yield*` delegates to an iterable and carries the same obligation, and
+  its own arm could not reach it — the existing check there needs a
+  declared element type (`ctx.yield_type`) and a generator without a return
+  annotation has none, which is every corpus file and most real code. The
+  rule also needed `Func` in `is_non_iterable_primitive`, which is the
+  real-world shape: `yield* foo` instead of `yield* foo()`, forgetting to
+  CALL the generator. Widening that predicate reaches the two `for-of`
+  consumers as well and tsc reports both (`for (const v of f)`,
+  `for (const [a, b] of [g1, g2])`). `void` / `null` / `undefined` are
+  TS2488 too and are deliberately NOT in it: our flow model narrows an
+  `any`-typed binding to `Undefined` when its initializer is `undefined`
+  (the hazard batch CY's TS2532 records), so an arm for it would report a
+  type tsc calls `any`. Eleven cells probed; `string`, an array, a tuple, a
+  `Generator` and an interface declaring `[Symbol.iterator]` all stay
+  legal.
+- [x] **TS18014 one level further out** (+1: `privateNamesInNestedClasses-2`)
+  — and this is the one worth reading. `private_brand_declared_on_receiver`
+  asked whether the class HOLDING the reference declares the same `#name`,
+  which is the one-level version of the question; a `#x` reference resolves
+  OUTWARD through every enclosing class body and binds to the first that
+  declares it, so the shadowing declaration can sit on a class BETWEEN the
+  reference and the receiver. That is the corpus file exactly: `A.#x`
+  written inside a `C` nested in a `B` that declares its own `#x`. The
+  chain comes from a new `<private-parent:CHILD:PARENT>` sentinel beside
+  the `<private-decl:BRAND:base>` one the rule already reads, pushed from
+  both class paths through one helper, and `current_class_brand` not being
+  reset by a function body is CORRECT here — a private name resolves
+  lexically through one.
+
+  **The first version was symmetric and measured +1 TP and −1**, which is
+  the finding. Reading an owner match as PERMISSION (returning "suppress"
+  when the lexical owner is the receiver's own class) short-circuits the
+  staticness check downstream, and `privateNameStaticFieldAccess` and
+  `privateNamesUnique-3` are exactly that: `static #foo` declared and
+  `x.#foo` written on an instance resolves to precisely that declaration
+  and is still an error. So the walk can only ever force a REPORT, never a
+  suppression — purely additive, with the old heuristic left in charge of
+  everything else. Seven cells now agree with tsc, including the two that
+  make the asymmetry load-bearing and the one a symmetric version would
+  also have got right (the owner IS the receiver, two levels out).
+- [x] **TS1064's named half** (+2: `asyncQualifiedReturnType_es6`, and
+  `_es5` out of the scope file). `Parser::record_async_return_type_misuse`
+  states the abstention and names the fix in its own header — "the alias
+  and the subclass are the SAME named-annotation node at parse time … a
+  name declared in-file as a CLASS or INTERFACE cannot be an alias — and is
+  filed rather than built". Built. It is the other half of one rule rather
+  than a second rule: the parser keeps every non-named annotation and the
+  checker, which has the declaration table, decides the named ones.
+
+  Probed cell by cell, because the boundary is not what the message text
+  suggests. EXTENDING `Promise` buys an interface or a class nothing —
+  being a nominal declaration at all is the error, so `interface I {}` and
+  `declare class D {}` report as readily as `class MyPromise<T> extends
+  Promise<T>` — while a declaration-merged `interface Promise<T> { extra():
+  void }` IS the global `Promise` and must stay silent, which is why the
+  NAME is exempt by spelling. That exemption costs the shadowing case
+  (`class Promise<T> {}` in-file is TS1064), one MISS for a hole nobody can
+  close cheaply. A qualified name is `Named("X.MyPromise")` here, so the
+  namespace prefix is reconstructed by recursing `module_.namespaces` — no
+  resolver involvement at all. An alias to something other than `Promise`
+  (`type P = number`, which tsc reports) is a declared MISS: deciding it
+  means resolving the alias body, which is the abstention the parser
+  already states.
+- [x] **The decorator signature checks on the TYPES** (+2:
+  `decoratorOnClassMethod10`, `decoratorOnClassConstructorParameter1`).
+  Batch CU compared a member decorator's declared ARITY against the
+  runtime's; "can this decorator resolve here" has a second half and it had
+  nothing. Two facts, both probed one cell at a time:
+
+  The TARGET. The runtime passes a member decorator the class's INSTANCE
+  type for an instance member (`C.prototype`, typed `C`) and `typeof C` for
+  a static one and for a CONSTRUCTOR parameter, so `target: Function` can
+  never resolve on the first and always resolves on the other two. A
+  denylist of exactly one spelling, for the reason
+  `is_non_iterable_primitive` is one — `target: Object`, `target: any`,
+  `target: C` and `target: Function | Object` are all legal, and "which
+  named types does a class instance fail to satisfy" is the whole
+  assignability question. Both ways it could be legal are excluded: a class
+  with heritage can BE a function (`class A extends Function { @dec m() {}
+  }` is ACCEPTED, probed — the guard is not caution), and a file
+  redeclaring the NAME `Function` means something else by it. That second
+  test is hoisted out of the marker loop, because asking it per marker is
+  O(decorators x declarations) — the shape `verify-checker-scaling` exists
+  to catch.
+
+  The PROPERTY KEY. A constructor parameter's decorator is invoked as
+  `(typeof C, undefined, index)` — there is no member name to pass — so a
+  second parameter whose type does not admit `undefined` can never resolve.
+  A METHOD parameter's decorator gets the method's name, so the identical
+  signature is legal there, and the verdict ALSO depends on
+  `strictNullChecks`: with it off tsc accepts, because `undefined` is then
+  assignable to everything. Two flags rather than one fact, and both
+  measured against the local compiler under explicit `@strictNullChecks:
+  false` / `true`.
+
+  Parameter decorators had no `<sig:>` marker at all, which is why both
+  facts were unreachable at that position. `skip_param_decorators` SKIPS
+  the expression — batch EE's TS1308 blocker — and the same answer applies:
+  the head of a decorator must be spelled out, so reading `(called, dname)`
+  off the tokens the skip already consumes is complete by construction. The
+  owner (`ctor` / `static` / `instance`) rides a Parser field set around
+  the ONE `parse_params()` call in `parse_class_body`, and cleared inside
+  `parse_param` for everything after the decorator scan — a default value
+  or a destructuring pattern can hold another parameter list, and those
+  parameters belong to that callable. Clearing once in `parse_param` rather
+  than at each nested parser is the point: the alternative is the
+  save / clear / restore discipline `self.labels` needs at fifteen sites,
+  which is how the applied-in-some-places bug gets written. A parameter
+  decorator's runtime arity also turns out to be exactly 3 — probed: 1, 2
+  and 4 all report — unlike a method decorator's 2-or-3 latitude.
+
+**Filed rather than built: TS2490** (`for-of15`, +1). "The type returned by
+the `next()` method of an iterator must have a `value` property", and the
+boundary is fully probed: `next() { return "" }`, `next(): string`,
+`next() { return 1 }`, `next() { return { done: true } }` and `next() { }`
+all report, while an object literal carrying `value`, an annotation carrying
+it, and `next(): any` are accepted — and a `[Symbol.iterator]()` returning
+something OTHER than `this` is accepted whatever `next` says, so the
+returns-`this` test `check_iterable_class_protocol` already computes is
+required. The blocker is mechanical and CHECKED rather than assumed:
+`TsClassMethodDecl` has no annotation-presence field, so `next() { return ""
+}` (TS2490) and `next(): any { return "" }` (ACCEPTED) are the same node
+downstream — the absent-versus-`: any` blocker this file records for TS7031,
+TS7022, TS2729, TS2448 and TS2564. The route is equally concrete:
+`parse_class_body` already has `had_return_annotation` in hand at exactly
+the `next` / `@@iterator` site, because batch DV's TS7022 indirect rule keys
+on it there, so the fact needs a Parser-level stack drained per class into a
+`<unannotated-return:next>` sentinel — the `self.optional_member_names`
+shape, three sites plus the ingestion. Not taken because the batch is
+already at +6 and a new parse-time channel for one file is the wrong trade;
+recorded with its condition rather than its verdict.
+
+Gates on this head: oracle TP 2607 / MISS in scope 108 / OUT OF SCOPE 19 /
+FP 0 / PFLEGAL 0 / TN 1750; `moon check --deny-warn` clean; assertions
+3,004 / 3,004; `verify-checker-scaling` 12 of 12 axes within budget
+(`private-members` 1.54 against 1.75 — the chain walk adds a constant factor
+to an already-declared quadratic, not a new exponent); mangle-safety
+186/186; dce-coverage 31 eliminated / 0 broken; rule-equivalence 80
+equivalent / 0 unsound; graph-walk, generated-fixtures, scaffolds, examples,
+mbti-dts, bridge-runtime (0 unbound, 0 runtime failures) and
+bridge-enum-returns all green.
+
 ### Perf round (2026-09-11): nothing regressed, and the axis nobody measured is quadratic
 
 Asked "what got slower", the differential says **nothing**, and that is the

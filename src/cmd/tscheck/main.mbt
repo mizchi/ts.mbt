@@ -53,8 +53,7 @@ async fn module_spec_resolves_on_disk(
     match spec.find("/") {
       Some(first) =>
         match spec[first + 1:].find("/") {
-          Some(second) =>
-            spec[:first + 1 + second].to_owned()
+          Some(second) => spec[:first + 1 + second].to_owned()
           None => spec
         }
       None => spec

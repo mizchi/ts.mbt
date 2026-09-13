@@ -44,7 +44,9 @@ async test "mtsc JavaScript module exposes only the Vite graph checker ABI" {
 ///|
 async test "write_text_file preserves UTF-8 text in generated outputs" {
   let root = wbtest_tmp_project_benchmark_root("write_text_file_utf8")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   ensure_dir_tree(root)
   let path = wbtest_join_path(root, "unicode.txt")
   let expected = "MoonBit — 日本語 😀\n"
@@ -119,7 +121,9 @@ fn wbtest_find_file_content(
 async fn wbtest_prepare_tmp_neverthrow_like_fixture(
   root : String,
 ) -> String raise Error {
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let dirs = [
     root,
     wbtest_join_path(root, "dist"),
@@ -286,7 +290,9 @@ async test "resolve_unified_mbt_input_path_from_roots finds ghq-style package na
   let root = wbtest_tmp_project_benchmark_root("unified_fake_ghq")
   let github_root = wbtest_join_path(root, "github.com")
   let pkg_dir = wbtest_join_path(github_root, "mizchi/ripple/src")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   @fs.mkdir(wbtest_join_path(root, "github.com"), permission=0o755)
   @fs.mkdir(wbtest_join_path(github_root, "mizchi"), permission=0o755)
@@ -315,7 +321,9 @@ async test "resolve_unified_mbt_input_path_from_roots finds package names from g
   let github_root = wbtest_join_path(root, "github.com")
   let repo_dir = wbtest_join_path(github_root, "mizchi/moonbit_jsonschema")
   let pkg_dir = wbtest_join_path(repo_dir, "src")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   ensure_dir_tree(pkg_dir)
   @fs.write_file(
     wbtest_join_path(repo_dir, "moon.mod.json"),
@@ -364,7 +372,9 @@ async test "infer_unified_tsmbt_direction detects package names and TypeScript e
 ///|
 async test "resolve_unified_mbt_input_path_from_roots prefers ghq package checkout over local fixture" {
   let root = wbtest_tmp_project_benchmark_root("resolve_mbt_ghq_precedence")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let local_root = wbtest_join_path(root, "local")
   let ghq_root = wbtest_join_path(root, "github.com")
   let fixture_path = wbtest_join_path(
@@ -427,7 +437,9 @@ test "rewrite_moonbit_js_runtime_text injects require shim for esm output" {
 ///|
 async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold from package name" {
   let root = wbtest_tmp_project_benchmark_root("unified_mbt_to_ts")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   assert_true(
     emit_unified_tsmbt_scaffold(
       "examples/counter",
@@ -469,7 +481,9 @@ async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold fro
 ///|
 async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
   let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   assert_true(
     emit_unified_tsmbt_scaffold(
       "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
@@ -509,7 +523,9 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
 async test "emit_unified_tsmbt_scaffold writes requested TypeScript diagnostics" {
   let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt_diagnostics")
   let diagnostics_path = wbtest_join_path(root, "reports/scaffold.md")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   assert_true(
     emit_unified_tsmbt_scaffold(
       "fixtures/resolver/project/types/export-equals-entry.d.ts",
@@ -583,7 +599,9 @@ async test "emit_unified_tsmbt_scaffold strict mode rejects JSValue fallbacks" {
     "unified_ts_to_mbt_strict_jsvalue",
   )
   let diagnostics_path = wbtest_join_path(root, "strict.md")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   assert_false(
     emit_unified_tsmbt_scaffold(
       "fixtures/resolver/project/types/export-equals-entry.d.ts",
@@ -609,7 +627,9 @@ async test "emit_unified_tsmbt_scaffold strict mode rejects unsupported exports"
     "unified_ts_to_mbt_strict_unsupported",
   )
   let diagnostics_path = wbtest_join_path(root, "strict.md")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   assert_false(
     emit_unified_tsmbt_scaffold(
       "fixtures/resolver/project/types/ambiguous-entry.d.ts",
@@ -637,7 +657,9 @@ async test "emit_unified_tsmbt_scaffold strict mode rejects enum-like unsupporte
     "unified_ts_to_mbt_strict_enum_like_unsupported",
   )
   let diagnostics_path = wbtest_join_path(root, "strict.md")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   assert_false(
     emit_unified_tsmbt_scaffold(
       "fixtures/resolver/project/types/unsupported-enum-like-entry.d.ts",
@@ -669,7 +691,9 @@ async test "emit_unified_tsmbt_scaffold strict mode rejects enum-like unsupporte
 async test "emit_unified_tsmbt_scaffold creates nested TypeScript to MoonBit output dirs" {
   let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt_nested")
   let out_dir = wbtest_join_path(root, "dist/generated")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   assert_true(
     emit_unified_tsmbt_scaffold(
       "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
@@ -774,7 +798,9 @@ async test "emit_js_link_config_from_mbti_text emits MoonBit JS link config from
 ///|
 async test "emit_typescript_package_from_mbti writes recursive declaration bundle" {
   let root = wbtest_tmp_project_benchmark_root("mbti_typescript_package_bundle")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_typescript_package_from_mbti(
     "fixtures/mbti_typescript_package/pkg.generated.mbti",
@@ -797,7 +823,9 @@ async test "emit_typescript_scaffold_from_mbti writes declaration package metada
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_scaffold_bundle",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   assert_true(
     emit_typescript_scaffold_from_mbti(
@@ -839,7 +867,9 @@ async test "emit_typescript_package_from_mbti rewrites external imports from jso
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_package_bundle_rewrites",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_typescript_package_from_mbti(
     "fixtures/mbti_typescript_package/pkg.generated.mbti",
@@ -858,7 +888,9 @@ async test "emit_typescript_scaffold_from_mbti rejects mbti fixtures without sou
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_scaffold_bundle_fixture_rejected",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   assert_false(
     emit_typescript_scaffold_from_mbti(
@@ -877,7 +909,9 @@ async test "emit_typescript_scaffold_from_mbti handles moon.mod source subdir" {
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_scaffold_source_subdir",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let pkg_dir = wbtest_join_path(root, "src/pkg")
   ensure_dir_tree(pkg_dir)
   @fs.write_file(
@@ -949,7 +983,9 @@ async test "emit_typescript_scaffold_from_mbti handles DSL moon.mod source subdi
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_scaffold_dsl_source_subdir",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let pkg_dir = wbtest_join_path(root, "src/pkg")
   ensure_dir_tree(pkg_dir)
   @fs.write_file(
@@ -1009,7 +1045,9 @@ async test "emit_typescript_scaffold_from_mbti handles DSL moon.mod source subdi
 ///|
 async test "emit_typescript_npm_package_from_project creates a publishable npm directory" {
   let root = wbtest_tmp_project_benchmark_root("mbt2ts_pkg_publishable")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let source_root = wbtest_join_path(root, "src")
   ensure_dir_tree(source_root)
   @fs.write_file(
@@ -1089,7 +1127,9 @@ async test "emit_typescript_npm_package_from_project creates a publishable npm d
 ///|
 async test "emit_typescript_npm_package_from_project exports unreferenced source submodules" {
   let root = wbtest_tmp_project_benchmark_root("mbt2ts_pkg_submodule_exports")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let source_root = wbtest_join_path(root, "src")
   let mtsc_root = wbtest_join_path(source_root, "mtsc")
   let command_root = wbtest_join_path(source_root, "cmd/checker")
@@ -1197,7 +1237,9 @@ async test "emit_typescript_facade_scaffold_from_mbti writes facade declarations
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_facade_scaffold",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   assert_true(
     emit_typescript_facade_scaffold_from_mbti(
@@ -1223,7 +1265,9 @@ async test "emit_typescript_facade_scaffold_from_mbti keeps root imports in faca
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_facade_scaffold_imports",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   assert_true(
     emit_typescript_facade_scaffold_from_mbti(
@@ -1555,7 +1599,9 @@ test "emit_moonbit_bridge_package splits large generated source into review file
 ///|
 async test "emit_moonbit_bridge_package writes package files to output dir" {
   let root = wbtest_tmp_project_benchmark_root("bridge_package")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let _ = emit_moonbit_bridge_package(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
     root,
@@ -1609,7 +1655,9 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
   )
   assert_false(bridge_js.contains("__ts_mbt_scale_point"))
   assert_false(bridge_mbt.contains("unsafeCast"))
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -1660,7 +1708,9 @@ test "bridge runtime validation permits absent optional primitive fields" {
 ///|
 async test "emit_moonbit_bridge_package rewrites relative runtime bridge to self-contained module path" {
   let root = wbtest_tmp_project_benchmark_root("bridge_package_relative")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let _ = emit_moonbit_bridge_package(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "./runtime/runtime-function.js",
     root,
@@ -1693,13 +1743,17 @@ async test "emit_moonbit_bridge_package rewrites relative runtime bridge to self
       "export { scalePoint as __ts_mbt_scale_point } from \"./runtime/runtime-function.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
 async test "emit_moonbit_bridge_package rewrites multiple relative generated bindings to bridge.js" {
   let root = wbtest_tmp_project_benchmark_root("bridge_package_class_property")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let _ = emit_moonbit_bridge_package(
     "fixtures/resolver/project/types/class-property-entry.d.ts", "./runtime/class-property.js",
     root,
@@ -1731,7 +1785,9 @@ async test "emit_moonbit_bridge_package rewrites multiple relative generated bin
       "pub extern \"js\" fn CounterState::get_counter_state_label(self : CounterState) -> String =",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -1739,7 +1795,9 @@ async test "emit_moonbit_bridge_package rewrites rooted class-property alias ree
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_class_property_reexport_rooted",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let runtime_js_path = @fs.realpath(
     "fixtures/bridge_smoke/runtime/class-property.js",
@@ -1791,7 +1849,9 @@ async test "emit_moonbit_bridge_package rewrites rooted class-property alias ree
       "export function __ts_mbt_get_runtime_state_version() { return CounterState.version; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -1799,7 +1859,9 @@ async test "emit_moonbit_bridge_package rewrites bare class-property alias reexp
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_class_property_reexport_bare",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/resolver/project/types/bare-class-property-entry.d.ts", "pkg-class-property",
@@ -1841,13 +1903,17 @@ async test "emit_moonbit_bridge_package rewrites bare class-property alias reexp
       "export function __ts_mbt_new_runtime_state() { return new CounterState(); }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
 async test "emit_moonbit_bridge_package emits self-contained widened exports without mizchi/js" {
   let root = wbtest_tmp_project_benchmark_root("bridge_package_export_equals")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let _ = emit_moonbit_bridge_package(
     "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
     root,
@@ -1874,13 +1940,17 @@ async test "emit_moonbit_bridge_package emits self-contained widened exports wit
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_default() -> JSValue = \"__ts_mbt_get_default\"",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
 async test "emit_moonbit_bridge_package rewrites parent-relative default function bridge to self-contained module path" {
   let root = wbtest_tmp_project_benchmark_root("bridge_package_parent_relative")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let pkg_root = wbtest_join_path(root, "pkg")
   let _ = emit_moonbit_bridge_package(
@@ -1910,7 +1980,9 @@ async test "emit_moonbit_bridge_package rewrites parent-relative default functio
       "export { default as __ts_mbt_default } from \"../runtime/default-function.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -1918,7 +1990,9 @@ async test "emit_moonbit_bridge_package rewrites bare default class alias reexpo
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_default_class_reexport_bare",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/resolver/project/types/bare-default-class-entry.d.ts", "pkg-default-class",
@@ -1953,7 +2027,9 @@ async test "emit_moonbit_bridge_package rewrites bare default class alias reexpo
       "export function __ts_mbt_new_runtime_counter(initial) { return new default_(initial); }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -1961,7 +2037,9 @@ async test "emit_moonbit_bridge_package rewrites subpath class alias reexport ge
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_class_property_reexport_subpath",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/resolver/project/types/subpath-class-entry.d.ts", "pkg-class-subpath/state",
@@ -1998,13 +2076,17 @@ async test "emit_moonbit_bridge_package rewrites subpath class alias reexport ge
   assert_true(
     bridge_js.contains("const CounterState = __ts_mbt_module.CounterState;"),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
 async test "emit_moonbit_bridge_package rewrites relative default class helpers to bridge.js" {
   let root = wbtest_tmp_project_benchmark_root("bridge_package_default_class")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/default-class-entry.ts", "./runtime/default-class.js",
     root,
@@ -2047,7 +2129,9 @@ async test "emit_moonbit_bridge_package rewrites relative default class helpers 
       "export function __ts_mbt_default_from(seed) { return default_.from(seed); }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -2055,7 +2139,9 @@ async test "emit_moonbit_bridge_package rewrites deep parent-relative mixed defa
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_default_class_mixed",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let nested = wbtest_join_path(root, "nested")
   @fs.mkdir(nested, permission=0o755)
@@ -2102,7 +2188,9 @@ async test "emit_moonbit_bridge_package rewrites deep parent-relative mixed defa
       "export { surround as __ts_mbt_surround } from \"../../runtime/default-class-mixed.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -2110,7 +2198,9 @@ async test "emit_moonbit_bridge_package keeps aliased default reexports bound to
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_default_class_mixed_reexport",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let nested = wbtest_join_path(root, "nested")
   @fs.mkdir(nested, permission=0o755)
@@ -2157,7 +2247,9 @@ async test "emit_moonbit_bridge_package keeps aliased default reexports bound to
       "export { surround as __ts_mbt_decorate } from \"../../runtime/default-class-mixed.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -2323,7 +2415,9 @@ async test "emit_moonbit_scaffold_from_ts handles runtime ts imported class expo
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_runtime_import_reexport_class",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/runtime-import-reexport-class-entry.ts", "./runtime/runtime-import-reexport-class.js",
@@ -2365,7 +2459,9 @@ async test "emit_moonbit_scaffold_from_ts handles semicolonless runtime ts impor
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_runtime_import_reexport_class_barrel",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/runtime-import-reexport-class-barrel-entry.ts",
@@ -2405,7 +2501,9 @@ async test "emit_moonbit_scaffold_from_ts handles semicolonless runtime export t
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_runtime_semicolonless_export_type_alias",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/runtime-semicolonless-export-type-alias-entry.ts",
@@ -3096,7 +3194,9 @@ async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry"
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_neverthrow_like_fixture",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts", "/runtime/neverthrow-like.js",
@@ -3131,7 +3231,9 @@ async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry"
       "pub fn fetchUser(id : String) -> ResultAsync {\n  fetch_user(id)\n}",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3159,7 +3261,9 @@ async test "emit_moonbit_bridge_package rewrites destructured value helpers to b
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/destructured-value-entry.ts", "./runtime/destructured-value.js",
@@ -3201,7 +3305,9 @@ async test "emit_moonbit_bridge_package rewrites destructured value helpers to b
   assert_true(
     bridge_js.contains("export function __ts_mbt_get_build() { return build; }"),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3209,7 +3315,9 @@ async test "emit_moonbit_bridge_package rewrites nested and array-rest destructu
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_destructured_nested_rest_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/destructured-nested-rest-value-entry.ts", "./runtime/destructured-nested-rest-value.js",
@@ -3256,7 +3364,9 @@ async test "emit_moonbit_bridge_package rewrites nested and array-rest destructu
   assert_true(
     bridge_js.contains("export function __ts_mbt_get_tail() { return tail; }"),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3264,7 +3374,9 @@ async test "emit_moonbit_bridge_package rewrites object-rest destructured value 
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_object_rest_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/object-rest-value-entry.ts", "./runtime/object-rest-value.js",
@@ -3299,7 +3411,9 @@ async test "emit_moonbit_bridge_package rewrites object-rest destructured value 
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3307,7 +3421,9 @@ async test "emit_moonbit_bridge_package rewrites computed-key destructured value
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/computed-destructured-value-entry.ts", "./runtime/computed-destructured-value.js",
@@ -3352,7 +3468,9 @@ async test "emit_moonbit_bridge_package rewrites computed-key destructured value
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3360,7 +3478,9 @@ async test "emit_moonbit_bridge_package rewrites template-literal computed-key d
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_template_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/template-computed-destructured-value-entry.ts", "./runtime/template-computed-destructured-value.js",
@@ -3405,7 +3525,9 @@ async test "emit_moonbit_bridge_package rewrites template-literal computed-key d
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3413,7 +3535,9 @@ async test "emit_moonbit_bridge_package rewrites concatenated computed-key destr
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_concat_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/concat-computed-destructured-value-entry.ts", "./runtime/concat-computed-destructured-value.js",
@@ -3458,7 +3582,9 @@ async test "emit_moonbit_bridge_package rewrites concatenated computed-key destr
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3466,7 +3592,9 @@ async test "emit_moonbit_bridge_package rewrites primitive-literal computed-key 
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_primitive_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/primitive-computed-destructured-value-entry.ts", "./runtime/primitive-computed-destructured-value.js",
@@ -3521,7 +3649,9 @@ async test "emit_moonbit_bridge_package rewrites primitive-literal computed-key 
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3529,7 +3659,9 @@ async test "emit_moonbit_bridge_package rewrites void-and-negative-bigint comput
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_void_bigint_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/void-bigint-computed-destructured-value-entry.ts", "./runtime/void-bigint-computed-destructured-value.js",
@@ -3574,7 +3706,9 @@ async test "emit_moonbit_bridge_package rewrites void-and-negative-bigint comput
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3582,7 +3716,9 @@ async test "emit_moonbit_bridge_package rewrites const-reference computed-key de
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_const_ref_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/const-ref-computed-destructured-value-entry.ts", "./runtime/const-ref-computed-destructured-value.js",
@@ -3627,7 +3763,9 @@ async test "emit_moonbit_bridge_package rewrites const-reference computed-key de
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3635,7 +3773,9 @@ async test "emit_moonbit_bridge_package rewrites destructured-const-reference co
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_destructured_const_ref_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/destructured-const-ref-computed-destructured-value-entry.ts",
@@ -3680,7 +3820,9 @@ async test "emit_moonbit_bridge_package rewrites destructured-const-reference co
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3688,7 +3830,9 @@ async test "emit_moonbit_bridge_package rewrites const-object-access computed-ke
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_const_object_access_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/const-object-access-computed-destructured-value-entry.ts",
@@ -3733,7 +3877,9 @@ async test "emit_moonbit_bridge_package rewrites const-object-access computed-ke
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3741,7 +3887,9 @@ async test "emit_moonbit_bridge_package rewrites nested-const-object-access comp
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_nested_const_object_access_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/nested-const-object-access-computed-destructured-value-entry.ts",
@@ -3786,7 +3934,9 @@ async test "emit_moonbit_bridge_package rewrites nested-const-object-access comp
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3794,7 +3944,9 @@ async test "emit_moonbit_bridge_package rewrites const-array-access computed-key
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_const_array_access_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/const-array-access-computed-destructured-value-entry.ts",
@@ -3839,7 +3991,9 @@ async test "emit_moonbit_bridge_package rewrites const-array-access computed-key
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3847,7 +4001,9 @@ async test "emit_moonbit_bridge_package rewrites nested-const-array-access compu
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_nested_const_array_access_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/nested-const-array-access-computed-destructured-value-entry.ts",
@@ -3892,7 +4048,9 @@ async test "emit_moonbit_bridge_package rewrites nested-const-array-access compu
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3900,7 +4058,9 @@ async test "emit_moonbit_bridge_package rewrites const-index-alias computed-key 
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_const_index_alias_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/const-index-alias-computed-destructured-value-entry.ts",
@@ -3945,7 +4105,9 @@ async test "emit_moonbit_bridge_package rewrites const-index-alias computed-key 
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -3953,7 +4115,9 @@ async test "emit_moonbit_bridge_package rewrites const-index-table computed-key 
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_const_index_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/const-index-table-computed-destructured-value-entry.ts",
@@ -3998,7 +4162,9 @@ async test "emit_moonbit_bridge_package rewrites const-index-table computed-key 
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4006,7 +4172,9 @@ async test "emit_moonbit_bridge_package rewrites nested-index-table computed-key
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_nested_index_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/nested-index-table-computed-destructured-value-entry.ts",
@@ -4051,7 +4219,9 @@ async test "emit_moonbit_bridge_package rewrites nested-index-table computed-key
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4059,7 +4229,9 @@ async test "emit_moonbit_bridge_package rewrites imported const-table computed-k
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-const-table-entry.ts", "./runtime/imported-const-table-entry.js",
@@ -4104,7 +4276,9 @@ async test "emit_moonbit_bridge_package rewrites imported const-table computed-k
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4112,7 +4286,9 @@ async test "emit_moonbit_bridge_package rewrites imported namespace const-table 
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_namespace_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-namespace-const-table-entry.ts", "./runtime/imported-namespace-const-table-entry.js",
@@ -4157,7 +4333,9 @@ async test "emit_moonbit_bridge_package rewrites imported namespace const-table 
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4165,7 +4343,9 @@ async test "emit_moonbit_bridge_package rewrites imported default const-table co
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_default_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-default-const-table-entry.ts", "./runtime/imported-default-const-table-entry.js",
@@ -4210,7 +4390,9 @@ async test "emit_moonbit_bridge_package rewrites imported default const-table co
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4218,7 +4400,9 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_inline_default_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-inline-default-const-table-entry.ts", "./runtime/imported-inline-default-const-table-entry.js",
@@ -4263,7 +4447,9 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4271,7 +4457,9 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_inline_default_const_table_as_const_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-inline-default-const-table-as-const-entry.ts",
@@ -4316,7 +4504,9 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4324,7 +4514,9 @@ async test "emit_moonbit_bridge_package rewrites imported iife default const-tab
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_iife_default_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-iife-default-const-table-entry.ts", "./runtime/imported-iife-default-const-table-entry.js",
@@ -4369,7 +4561,9 @@ async test "emit_moonbit_bridge_package rewrites imported iife default const-tab
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4377,7 +4571,9 @@ async test "emit_moonbit_bridge_package rewrites imported iife local const-table
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_iife_local_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-iife-local-const-table-entry.ts", "./runtime/imported-iife-local-const-table-entry.js",
@@ -4422,7 +4618,9 @@ async test "emit_moonbit_bridge_package rewrites imported iife local const-table
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4430,7 +4628,9 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local co
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_function_iife_local_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-function-iife-local-const-table-entry.ts", "./runtime/imported-function-iife-local-const-table-entry.js",
@@ -4475,7 +4675,9 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local co
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4483,7 +4685,9 @@ async test "emit_moonbit_bridge_package rewrites imported iife local let-table c
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_iife_local_let_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-iife-local-let-table-entry.ts", "./runtime/imported-iife-local-let-table-entry.js",
@@ -4528,7 +4732,9 @@ async test "emit_moonbit_bridge_package rewrites imported iife local let-table c
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4536,7 +4742,9 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local le
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_function_iife_local_let_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-function-iife-local-let-table-entry.ts", "./runtime/imported-function-iife-local-let-table-entry.js",
@@ -4581,7 +4789,9 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local le
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4589,7 +4799,9 @@ async test "emit_moonbit_bridge_package widens imported reassigned local let-tab
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_iife_reassigned_let_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-iife-reassigned-let-table-entry.ts", "./runtime/imported-iife-reassigned-let-table-entry.js",
@@ -4629,7 +4841,9 @@ async test "emit_moonbit_bridge_package widens imported reassigned local let-tab
       "import { build, restMeta, runtimeVersion } from \"./runtime/imported-iife-reassigned-let-table-entry.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4637,7 +4851,9 @@ async test "emit_moonbit_bridge_package widens imported prop-mutated local let-t
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_iife_prop_mutated_let_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-iife-prop-mutated-let-table-entry.ts", "./runtime/imported-iife-prop-mutated-let-table-entry.js",
@@ -4677,7 +4893,9 @@ async test "emit_moonbit_bridge_package widens imported prop-mutated local let-t
       "import { build, restMeta, runtimeVersion } from \"./runtime/imported-iife-prop-mutated-let-table-entry.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4685,7 +4903,9 @@ async test "emit_moonbit_bridge_package widens imported index-mutated local let-
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_function_iife_index_mutated_let_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-function-iife-index-mutated-let-table-entry.ts",
@@ -4725,7 +4945,9 @@ async test "emit_moonbit_bridge_package widens imported index-mutated local let-
       "import { build, restMeta, runtimeVersion } from \"./runtime/imported-function-iife-index-mutated-let-table-entry.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4733,7 +4955,9 @@ async test "emit_moonbit_bridge_package rewrites imported reexported const-table
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_reexported_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-reexported-const-table-entry.ts", "./runtime/imported-reexported-const-table-entry.js",
@@ -4778,7 +5002,9 @@ async test "emit_moonbit_bridge_package rewrites imported reexported const-table
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4786,7 +5012,9 @@ async test "emit_moonbit_bridge_package rewrites imported chained const-table co
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_chained_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-chained-const-table-entry.ts", "./runtime/imported-chained-const-table-entry.js",
@@ -4831,7 +5059,9 @@ async test "emit_moonbit_bridge_package rewrites imported chained const-table co
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4839,7 +5069,9 @@ async test "emit_moonbit_bridge_package rewrites imported star const-table compu
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_star_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-star-const-table-entry.ts", "./runtime/imported-star-const-table-entry.js",
@@ -4884,7 +5116,9 @@ async test "emit_moonbit_bridge_package rewrites imported star const-table compu
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4892,7 +5126,9 @@ async test "emit_moonbit_bridge_package rewrites imported deep star const-table 
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_deep_star_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-deep-star-const-table-entry.ts", "./runtime/imported-deep-star-const-table-entry.js",
@@ -4937,7 +5173,9 @@ async test "emit_moonbit_bridge_package rewrites imported deep star const-table 
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4945,7 +5183,9 @@ async test "emit_moonbit_bridge_package rewrites imported mixed barrel const-tab
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_mixed_barrel_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-mixed-barrel-const-table-entry.ts", "./runtime/imported-mixed-barrel-const-table-entry.js",
@@ -4990,7 +5230,9 @@ async test "emit_moonbit_bridge_package rewrites imported mixed barrel const-tab
       "export function __ts_mbt_get_rest_meta() { return restMeta; }",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -4998,7 +5240,9 @@ async test "emit_moonbit_bridge_package widens conflicting star const-table comp
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_package_imported_conflicting_star_const_table_computed_destructured_value",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_bridge_package(
     "fixtures/bridge_smoke/imported-conflicting-star-const-table-entry.ts", "./runtime/imported-conflicting-star-const-table-entry.js",
@@ -5038,7 +5282,9 @@ async test "emit_moonbit_bridge_package widens conflicting star const-table comp
       "import { build, restMeta, runtimeVersion } from \"./runtime/imported-conflicting-star-const-table-entry.js\";",
     ),
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -5203,7 +5449,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace declaratio
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-entry.d.ts", "./runtime/react-like.js",
@@ -5235,7 +5483,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ambient me
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_ambient_members",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-ambient-members-entry.d.ts",
@@ -5259,7 +5509,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_hook_tuple",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",
@@ -5341,7 +5593,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace JSX namesp
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_jsx",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts", "./runtime/react-like.js",
@@ -5374,7 +5628,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace JSX constr
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_jsx_constructor",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-jsx-constructor-entry.d.ts",
@@ -5395,7 +5651,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace conditiona
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_conditional_utility",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-conditional-utility-entry.d.ts",
@@ -5416,7 +5674,9 @@ async test "emit_moonbit_scaffold_from_ts handles exported JSX namespace members
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_exported_jsx_namespace",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts", "react/jsx-runtime",
@@ -5449,7 +5709,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace PropsWithC
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_props_with_children",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-props-with-children-entry.d.ts",
@@ -5488,7 +5750,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentP
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_component_props",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-component-props-entry.d.ts",
@@ -5526,7 +5790,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentP
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_component_props_without_ref",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",
@@ -5555,7 +5821,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentP
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_component_props_with_ref",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-component-props-with-ref-entry.d.ts",
@@ -5590,7 +5858,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace nested Pro
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_nested_props_with_children",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-nested-props-with-children-entry.d.ts",
@@ -5627,7 +5897,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace PropsWitho
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_props_ref_alias",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-props-ref-alias-entry.d.ts",
@@ -5666,7 +5938,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace optional R
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_optional_react_fields",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-optional-react-fields-entry.d.ts",
@@ -5695,7 +5969,9 @@ async test "emit_moonbit_scaffold_from_ts handles exported jsx-dev-runtime signa
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_exported_jsx_dev_runtime",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts", "react/jsx-dev-runtime",
@@ -5719,7 +5995,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace inline Pro
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_inline_props_with_children",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-inline-props-with-children-entry.d.ts",
@@ -5757,7 +6035,9 @@ async test "emit_moonbit_scaffold_from_ts sanitizes reserved exported function a
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_export_as_namespace_sanitize",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/export-as-namespace-sanitize-entry.d.ts", "./runtime/react-like.js",
@@ -5808,7 +6088,9 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
   let root = wbtest_tmp_project_benchmark_root(
     "bridge_scaffold_hono_options_alias",
   )
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/hono-options-entry.d.ts", "./runtime/hono.js",
@@ -5842,7 +6124,11 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
 async test "emit_moonbit_decl_text handles neverthrow-like package entry from tmp path" {
   let root = wbtest_tmp_neverthrow_like_root("decl")
   @async.with_task_group(async fn(group) {
-    group.add_defer(async fn() { @fs.rmdir(root, recursive=true) catch { _ => () } })
+    group.add_defer(async fn() {
+      @fs.rmdir(root, recursive=true) catch {
+        _ => ()
+      }
+    })
     let entry_path = wbtest_prepare_tmp_neverthrow_like_fixture(root) catch {
       _ => {
         fail("Failed to prepare tmp fixture")
@@ -5870,7 +6156,11 @@ async test "emit_moonbit_decl_text handles neverthrow-like package entry from tm
 async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry from tmp path" {
   let root = wbtest_tmp_neverthrow_like_root("ffi")
   @async.with_task_group(async fn(group) {
-    group.add_defer(async fn() { @fs.rmdir(root, recursive=true) catch { _ => () } })
+    group.add_defer(async fn() {
+      @fs.rmdir(root, recursive=true) catch {
+        _ => ()
+      }
+    })
     let entry_path = wbtest_prepare_tmp_neverthrow_like_fixture(root) catch {
       _ => {
         fail("Failed to prepare tmp fixture")
@@ -5898,7 +6188,11 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry from
 async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry from tmp path" {
   let root = wbtest_tmp_neverthrow_like_root("bridge_package")
   @async.with_task_group(async fn(group) {
-    group.add_defer(async fn() { @fs.rmdir(root, recursive=true) catch { _ => () } })
+    group.add_defer(async fn() {
+      @fs.rmdir(root, recursive=true) catch {
+        _ => ()
+      }
+    })
     let entry_path = wbtest_prepare_tmp_neverthrow_like_fixture(root) catch {
       _ => {
         fail("Failed to prepare tmp fixture")
@@ -5960,7 +6254,9 @@ async test "collect_moonbit_ts_scaffold_unsupported_exports ignores namespace ex
 ///|
 async test "emit_moonbit_scaffold_from_ts keeps ambiguous export surfaces as diagnostics" {
   let root = wbtest_tmp_project_benchmark_root("bridge_scaffold_ambiguous")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   @fs.mkdir(root, permission=0o755)
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/ambiguous-entry.d.ts", "./runtime/ambiguous.js",
@@ -6018,7 +6314,9 @@ async test "emit_moonbit_scaffold_from_ts keeps ambiguous export surfaces as dia
 ///|
 async test "emit_moonbit_scaffold_from_ts handles namespace export surfaces" {
   let root = wbtest_tmp_project_benchmark_root("bridge_scaffold_namespace")
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
   let _ = emit_moonbit_scaffold_from_ts(
     "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js", root,
   )
@@ -6044,7 +6342,9 @@ async test "emit_moonbit_scaffold_from_ts handles namespace export surfaces" {
   assert_true(bridge_mbti.contains("declare pub fn get_shapes() -> Shapes"))
   assert_true(bridge_mbt.contains("pub extern \"js\" fn get_shapes()"))
   assert_true(bridge_js.contains("export function __ts_mbt_get_shapes()"))
-  @fs.rmdir(root, recursive=true) catch { _ => () }
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
 }
 
 ///|

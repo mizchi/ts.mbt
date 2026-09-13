@@ -2142,6 +2142,7 @@ fn Parser::inject_instance_field_assigns(
     type_param_bounds: func.type_param_bounds,
     is_generator: func.is_generator,
     is_async: func.is_async,
+    name_is_member_key: false,
   }
 }
 
@@ -2309,6 +2310,37 @@ fn Parser::record_private_member_misuse(
         "private accessor `#\{name}` was defined without a getter",
       )
     }
+  }
+}
+
+///|
+/// Marker recording this class body's lexically ENCLOSING class brand, so
+/// the checker can resolve a `#name` reference the way tsc does — outward
+/// through the chain of enclosing class bodies, stopping at the first one
+/// that declares it (TS18014).
+///
+/// `<private-decl:N:x>` alone answers "does the class the reference sits in
+/// declare `#x`", which is the one-level version of that question; a
+/// reference in a class nested TWO deep
+/// (`class A { static #x; constructor() { class B { #x; constructor() {
+/// class C { constructor() { A.#x } } } } } }`) is shadowed by B and neither
+/// C nor A can see it. `None` when this class body has no enclosing class,
+/// which makes the chain terminate rather than need a root marker.
+///
+/// `current_class_brand` is NOT reset by a function body, which is correct
+/// here: a private name resolves lexically through one, so a class inside a
+/// method of `A` still has `A` as its enclosing brand.
+fn private_parent_sentinel(brand_id : Int, prev_brand : String?) -> String? {
+  match prev_brand {
+    Some(pb) => {
+      let prefix = "__private_brand__"
+      if pb.has_prefix(prefix) {
+        Some("<private-parent:\{brand_id}:\{pb[prefix.length():].to_owned()}>")
+      } else {
+        None
+      }
+    }
+    None => None
   }
 }
 
@@ -2842,6 +2874,22 @@ fn Parser::parse_class_body(
       } else {
         "property"
       }
+      // TS1240 / TS1241 need two more facts about the MEMBER, and this is
+      // the only point that has both. The runtime hands a member decorator
+      // the class INSTANCE type for an instance member and `typeof C` for
+      // a static one, so a decorator declaring `target: Function` is wrong
+      // for the first and right for the second — probed both ways. And a
+      // class with heritage can legitimately BE a function
+      // (`class A extends Function { @dec m() {} }` is ACCEPTED), so the
+      // rule abstains there; `class_decl_no_heritage` is set by both class
+      // paths with save/restore around this body, which is exactly the
+      // fact needed.
+      let staticness = if is_static { "static" } else { "instance" }
+      let heritage = if self.class_decl_no_heritage {
+        "plain"
+      } else {
+        "heritage"
+      }
       let mut di = deco_before
       while di < self.pending_decorators.length() {
         // TS2660: `super` in a decorator expression. Gated on NOT being
@@ -2878,7 +2926,17 @@ fn Parser::parse_class_body(
         match decorator_head_name(self.pending_decorators[di]) {
           Some((called, dname)) =>
             self.invalid_decorator_uses.push(
-              "<sig:" + kind + ":" + called + ":" + dname + ">",
+              "<sig:" +
+              kind +
+              ":" +
+              called +
+              ":" +
+              staticness +
+              ":" +
+              heritage +
+              ":" +
+              dname +
+              ">",
             )
           None => ()
         }
@@ -3012,7 +3070,22 @@ fn Parser::parse_class_body(
         self.record_implicit_any_params = self.class_decl_no_heritage &&
           accessor_kind is None &&
           !(is_constructor_method && self.in_class_expr_body)
+        // TS1239: which member this parameter list belongs to, for the
+        // parameter-decorator rules. Set here rather than at
+        // `skip_param_decorators` because this is the only site that knows
+        // both facts, and restored immediately so a nested function's
+        // parameters (a default value holding an arrow, say) record
+        // nothing.
+        let prev_pdo = self.param_decorator_owner
+        self.param_decorator_owner = if is_constructor_method {
+          "ctor"
+        } else if is_static {
+          "static"
+        } else {
+          "instance"
+        }
         let params = self.parse_params()
+        self.param_decorator_owner = prev_pdo
         self.record_implicit_any_params = prev_record_nia
         let _ = self.expect(RParen)
         // TS1054 / TS1049: accessors have fixed arities — a getter takes
@@ -3174,6 +3247,11 @@ fn Parser::parse_class_body(
       // recorder for both.
       if !has_body_block {
         self.record_bodiless_param_initializers(params)
+      } else {
+        // TS2463 is the same question with the answer inverted — an
+        // optional binding-pattern parameter is legal in every bodiless
+        // position and an error in an implementation.
+        self.record_implementation_optional_pattern_params(params)
       }
       // TS2393 ("Duplicate function implementation"): two methods of one
       // name in one class body, both with a body
@@ -3403,6 +3481,29 @@ fn Parser::parse_class_body(
         body,
         is_generator,
         is_async: is_async_method,
+        name_is_member_key: true,
+      }
+      // Which bodied instance methods carry NO return annotation. The AST
+      // cannot say — a missing annotation and an explicit `: any` are both
+      // `Any` in `TsClassMethodDecl.return_type`, the blocker this repo
+      // records for TS7031 / TS7022 / TS2729 / TS2448 — and two checker
+      // rules need it, because both have to infer the return from the BODY
+      // and must not do that for a member the author annotated `any`:
+      // TS2416 (a method's signature against the interface member it
+      // implements) and TS2490 (an iterator's `next()` result). Recorded
+      // here for the same reason TS7022's names are: this is the one point
+      // that has the body and the annotation fact together.
+      // A GETTER is included: its return type is the accessor pair's VALUE
+      // type, which is what a write to the member is checked against, and
+      // a setter's parameter is routinely unannotated precisely because the
+      // getter supplies it (`symbolProperty46`). A SETTER is not — its
+      // "return" is `void` and means nothing here.
+      if has_body_block &&
+        !is_static &&
+        (accessor_kind is None || accessor_kind is Some("get")) &&
+        !had_return_annotation &&
+        method_name != "" {
+        self.unannotated_return_members.push(method_name)
       }
       // TS7022, the INDIRECT form. A `for (var v of new C)` head takes
       // its element type from C's iteration protocol, so an un-annotated
@@ -3621,8 +3722,7 @@ fn Parser::parse_class_body(
   // expression is skipped and the inconsistency is recorded in TODO.md.
   // It costs nothing here — `decoratorOnClassAccessor7` is six class
   // declarations.
-  let ts1207_applies = self.experimental_decorators &&
-    !self.in_class_expr_body
+  let ts1207_applies = self.experimental_decorators && !self.in_class_expr_body
   for entry in (if ts1207_applies { decorated_accessors } else { [] }) {
     if entry.contains(":get:") {
       let counterpart = entry.replace(old=":get:", new=":set:")
@@ -3771,6 +3871,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let unann_return_start = self.unannotated_return_members.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
@@ -3821,6 +3922,15 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   while self.optional_member_names.length() > optional_names_start {
     match self.optional_member_names.pop() {
       Some(n) => expr_class_sentinels.push("<optional-member:" + n + ">")
+      None => ()
+    }
+  }
+  // TS2416 / TS2490: which bodied instance methods carried no return
+  // annotation. Both rules infer the return from the BODY and must not do
+  // that for a member written `: any`, which the AST cannot tell apart.
+  while self.unannotated_return_members.length() > unann_return_start {
+    match self.unannotated_return_members.pop() {
+      Some(n) => expr_class_sentinels.push("<unannotated-return:" + n + ">")
       None => ()
     }
   }
@@ -3900,6 +4010,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       _ => ()
     }
   }
+  match private_parent_sentinel(brand_id, prev_brand) {
+    Some(s) => expr_class_sentinels.push(s)
+    None => ()
+  }
   if expr_class_sentinels.length() > 0 {
     self.collected_class_dups.push((class_name, expr_class_sentinels))
   }
@@ -3925,6 +4039,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }),
           [],
         )
@@ -4009,6 +4124,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: false,
             })
           } else {
             None
@@ -4212,6 +4328,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
         None => {
@@ -4226,6 +4343,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
       }
@@ -4486,6 +4604,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           const_type_params: [],
           is_generator: false,
           is_async: false,
+          name_is_member_key: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
         let call_expr = @ast.TsExpr::CallExpr(call_method, [
@@ -4508,6 +4627,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       const_type_params: [],
       is_generator: false,
       is_async: false,
+      name_is_member_key: false,
     }),
     [],
   )
@@ -4605,6 +4725,7 @@ fn Parser::parse_class_decl_with_abstract(
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let unann_return_start = self.unannotated_return_members.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
@@ -4651,6 +4772,15 @@ fn Parser::parse_class_decl_with_abstract(
     match self.optional_member_names.pop() {
       Some(n) =>
         runtime_decl.duplicate_member_names.push("<optional-member:" + n + ">")
+      None => ()
+    }
+  }
+  while self.unannotated_return_members.length() > unann_return_start {
+    match self.unannotated_return_members.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push(
+          "<unannotated-return:" + n + ">",
+        )
       None => ()
     }
   }
@@ -4748,6 +4878,10 @@ fn Parser::parse_class_decl_with_abstract(
       _ => ()
     }
   }
+  match private_parent_sentinel(brand_id, prev_brand) {
+    Some(s) => runtime_decl.duplicate_member_names.push(s)
+    None => ()
+  }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from
   // `module_.classes`. The top-level collector also records these, so the
@@ -4839,6 +4973,7 @@ fn Parser::parse_class_decl_with_abstract(
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: false,
             }
           } else {
             // No fields and no constructor — emit class with no
@@ -4854,6 +4989,7 @@ fn Parser::parse_class_decl_with_abstract(
               const_type_params: [],
               is_generator: false,
               is_async: false,
+              name_is_member_key: false,
             }
           }
       }
@@ -5018,6 +5154,7 @@ fn Parser::parse_class_decl_with_abstract(
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
         None => {
@@ -5032,6 +5169,7 @@ fn Parser::parse_class_decl_with_abstract(
             const_type_params: [],
             is_generator: false,
             is_async: false,
+            name_is_member_key: false,
           }
         }
       }
@@ -5283,6 +5421,7 @@ fn Parser::parse_class_decl_with_abstract(
           const_type_params: [],
           is_generator: false,
           is_async: false,
+          name_is_member_key: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
         let call_expr = @ast.TsExpr::CallExpr(call_method, [
@@ -5315,6 +5454,7 @@ fn Parser::parse_class_decl_with_abstract(
         const_type_params: [],
         is_generator: false,
         is_async: false,
+        name_is_member_key: false,
       }),
       [],
     )
