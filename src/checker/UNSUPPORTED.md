@@ -6,7 +6,7 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2635 / MISS in scope 80 / OUT OF SCOPE 19 / FP 0 /
+Measured at **TP 2637 / MISS in scope 78 / OUT OF SCOPE 19 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
@@ -429,6 +429,9 @@ the same way TS1063 / TS1319 already work.
 | `class C { [prop]() {} }` with `override` | TS4113 | A `const` string key is late-bindable, so `override [prop]()` is LEGAL when the base declares what `prop` resolves to. Only a base chain declaring NOTHING is decidable, and that is what ships. |
 | `computedPropertyNames28` / `30` (`super` in an object-literal computed key) | TS2466 | Modelling the distinction ONE corpus file draws is fitting the corpus: three TS7-ACCEPTED files say an object-literal computed key may legally mention `super`, and the earlier attempt cost 6 false positives for 2 true ones. |
 | `using` / `await using` declarations | various | **Zero** of 5,697 real `.d.ts` / `.ts` files use them. Six MISS files; declared Tier 4. |
+| `i[k]` where `interface I { [k]: number }` and `declare const k: unique symbol` | TS2322 | The KEY must resolve to the member the type declares, and the parser stores a user symbol key as `<computed>` — it has no stable identity. A NAME-keyed identity would claim two same-spelled bindings in different scopes are one member, which is a false positive. The WELL-KNOWN spelling (`i[Symbol.iterator]`) does resolve, because the parser gives it a stable `@@<name>`; batch EJ wired that half. |
+| a template-literal type with a placeholder, against a literal | TS2322 | Still BLIND, the one row of `docs/checker-triage.md`'s capability table that no batch has closed (see A-2). Needs the placeholder matched against the source literal's text, which nothing models. |
+| `Extract<1 \| "a", 1>` | TS2322 | `Exclude` / `Extract` decide over a literal union of ONE kind and abstain over a mixed one. Found by re-probing the capability table in batch EJ rather than by a corpus file, and narrower than the retired `utility types` BLIND row implied. |
 
 `scripts/checker_out_of_scope.txt` holds the 19 paths declared out of
 scope, each with a kind and a reason. That file reports STALE entries, so

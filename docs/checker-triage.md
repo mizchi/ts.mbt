@@ -109,28 +109,45 @@ Re-probed inside a function:
 | `keyof` | CAUGHT |
 | strictNullChecks (`o.a` where `a?:`) | CAUGHT |
 | `this` return type | CAUGHT |
-| index signature value type | CAUGHT |
+| index signature value type | CAUGHT — `interface` form only when this was taken; the four INLINE positions were blind until batch EJ |
 | variadic tuple | CAUGHT |
 | generic function inference | CAUGHT |
-| **conditional type via a generic alias** | **BLIND** |
-| **utility types** (`Exclude`/`NonNullable`/`ReturnType`/`Awaited`) | **BLIND** |
+| conditional type via a generic alias | ~~BLIND~~ **CAUGHT** (batch DI) |
+| utility types (`Exclude`/`NonNullable`/`ReturnType`/`Awaited`) | ~~BLIND~~ **CAUGHT** (batches DJ–DM) |
 | **template-literal type with a placeholder** | **BLIND** |
 | **computed `unique symbol` key** | **BLIND** |
-| **overload resolution** | **BLIND** |
+| overload resolution | ~~BLIND~~ **CAUGHT** (batch EB) |
+| **`Extract` over a MIXED-kind literal union** (`Extract<1 \| "a", 1>`) | **BLIND** — `Exclude` over one kind is caught |
 
 This is the most useful table in the document, and it reorders everything.
-Four of the five blind rows are features that appear in *hundreds* of real
-`.d.ts` files, and they are blind at the shape real code actually writes —
-not at a corner.
+Four of the five blind rows were features that appear in *hundreds* of real
+`.d.ts` files, blind at the shape real code actually writes — not at a
+corner.
+
+**Three of those five are now CAUGHT, and this table said BLIND for
+several batches after they were closed.** A capability verdict is a claim
+with a date on it, exactly like a recorded blocker or a filed item: the
+strikethroughs above are the re-probe, run cell by cell against
+`tscheck --strict` beside the real compiler, not a recollection of which
+batch closed what. Re-probe before quoting a row. Two rows are still
+blind, and one row was added by the re-probe rather than by a batch —
+`Extract` decides over a single-kind literal union and not over a mixed
+one, which is a narrower gap than the retired `utility types` row implied.
 
 ### The conditional-type finding is narrower than it looks
 
-Worth stating precisely, because the cost estimate depends on it:
+**CLOSED by batch DI** — the diagnosis below was right and the third line
+is now CAUGHT. Kept because the diagnosis is the reusable part: it named
+a wiring gap where the table's `BLIND` verdict suggested a missing
+feature, and that is what made it one investigation instead of one
+implementation.
+
+Worth stating precisely, because the cost estimate depended on it:
 
 ```
 const x: (string extends string ? number : boolean) = true;  // CAUGHT
 type E = string extends string ? number : boolean;           // CAUGHT
-type E<T> = T extends string ? number : boolean; E<string>   // BLIND
+type E<T> = T extends string ? number : boolean; E<string>   // was BLIND, now CAUGHT
 ```
 
 The conditional evaluator **works** on concrete types, and
@@ -141,11 +158,13 @@ interface bodies all resolve correctly, as does the same shape written as
 an interface. It is only the composition of the two that abstains.
 
 So this is a **wiring or reduction-order gap, not a missing feature** —
-one investigation, not one implementation. And it is the single
+one investigation, not one implementation. And it was the single
 highest-value item on the list, because every utility type in the standard
-table is a generic alias over a conditional body, which means
-`ReturnType`, `Exclude`, `NonNullable`, `Parameters` and `Awaited` are all
-inert in the body-checking path today.
+table is a generic alias over a conditional body, which meant
+`ReturnType`, `Exclude`, `NonNullable`, `Parameters` and `Awaited` were
+all inert in the body-checking path. Batch DI added the missing
+`Conditional` arm to `Resolver::unwrap`, batches DJ–DM wired the rest,
+and all five decide now (re-probed above).
 
 One control matters for interpreting all of this: `Bogus<number>`, an
 *unresolved* generic name, is also silent. Some of these blind rows may be

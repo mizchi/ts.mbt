@@ -875,6 +875,16 @@ fn is_assignable_to_inner(
     }
     // Named/applied references are nominal: only equal names match.
     (Named(a), Named(b)) => a == b
+    // A `Struct(name, fields)` is the RESOLVER's own expansion of
+    // `Named(name)` — `unwrap_containers_at` produces exactly that for a
+    // plain interface — so the two spellings name one type and differ only
+    // in whether the side was resolved. That split really happens: a caller
+    // resolving only the SOURCE reaches here with `Struct("Bar", …)` against
+    // a target's `Named("Bar")`, which fell to the catch-all below and made
+    // `var v: { [n: number]: Bar } = arr` (tsc: ACCEPTED) a false positive.
+    // Matching by name only, so an unequal pair keeps the structural
+    // treatment the `Object`/`Struct` arms above give it.
+    (Struct(a, _), Named(b)) | (Named(a), Struct(b, _)) => a == b
     (Applied(a, args_a), Applied(b, args_b)) => {
       if a != b || args_a.length() != args_b.length() {
         return false
@@ -988,6 +998,30 @@ fn literal_key_index_bucket(key : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+/// True for a TARGET member name that no source can ever match, so that
+/// requiring it would reject every source: `<computed>`, the name the
+/// parsers give a computed key they could not resolve to a stable
+/// spelling.
+///
+/// `symbolProperty61` is the corpus file that says so, and it is
+/// TS7-ACCEPTED. A user-AUGMENTED
+/// `interface SymbolConstructor { readonly obs: symbol }` makes
+/// `Symbol.obs` a real symbol outside the standard well-known set, so
+/// `type InteropObservable<T> = { [Symbol.obs]: … }` keeps a `<computed>`
+/// member while the class implementing it spells the same symbol through a
+/// `const observable` binding. tsc matches the two; nothing here can.
+///
+/// This is the restriction the well-known-symbol parser path already
+/// states in its own comment — "we never invent a required member the
+/// checker can't match structurally" — applied at the three places that do
+/// the requiring. `check_object_lit_against_target`'s missing-required loop
+/// has skipped the name all along, so the fact was written on one side of
+/// the question and not the other three.
+fn target_member_unmatchable(name : String) -> Bool {
+  name == "<computed>"
+}
+
+///|
 fn is_object_assignable_inner(
   s_fields : Array[(@ast.TsType, @ast.TsType)],
   t_fields : Array[(@ast.TsType, @ast.TsType)],
@@ -995,6 +1029,9 @@ fn is_object_assignable_inner(
 ) -> Bool {
   for t_field in t_fields {
     let (t_key, t_type) = t_field
+    if t_key is Literal(tn) && target_member_unmatchable(tn) {
+      continue
+    }
     if is_index_signature_key(t_key) {
       // Every source field of a matching kind must satisfy the signature.
       for s_field in s_fields {

@@ -919,32 +919,102 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
                   self.grammar_misuses.push("<computed-type-key>" + key)
                 _ => ()
               }
-              self.pos = saved_pos
-              return None
-            }
-            let _ = self.advance() // index name
-            let _ = self.expect(Colon)
-            let key_type = self.parse_type()
-            self.record_index_signature_key_misuse(key_type)
-            let _ = self.expect(RBracket)
-            let _ = self.match_(Question)
-            // Consume the value type to advance the cursor, but record the
-            // signature with an `Any` value. Keeping the index signature
-            // (key typed `String_` / `Number`) preserves the "any key"
-            // meaning the mangle-safety and TS2454 passes need; widening
-            // the value to `Any` keeps us from driving value-assignability
-            // checks off an anonymous index signature, where our checker's
-            // object-literal getter modelling (`get x()` rendered as
-            // `() => T`) would otherwise produce spurious mismatches.
-            if self.check(Colon) {
-              let _ = self.advance()
-              let _ = self.parse_type()
+              // A computed key that is not a well-known symbol and not an
+              // index signature keeps the member as `<computed>` and the
+              // object type PARSES, which is what the interface-body parser
+              // has always done (`parse_interface_body`'s own `"<computed>"`).
+              //
+              // Abandoning the whole type here — `self.pos = saved_pos;
+              // return None` — was a FALSE POSITIVE on legal code, and one
+              // the conformance corpus cannot see. `declare const k: unique
+              // symbol; type T = { [k]: number; other: string }` collapsed to
+              // `Any`, and then every SIBLING read was reported: `t.other`
+              // came back "property `other` does not exist on `T`" where tsc
+              // accepts it. One un-nameable member cost the identity of all
+              // of them. The `interface` spelling of the same declaration was
+              // already silent, so this is the inline-versus-named axis again.
+              //
+              // The member stays opaque rather than gaining a name, which
+              // matches the interface path exactly: `i[k]` is still a MISS,
+              // because a name-keyed identity for a user symbol would claim
+              // that two same-spelled bindings in different scopes are one
+              // member. `<computed>` is what the excess-property and
+              // missing-required checks already know to stay quiet about.
+              //
+              // The two recorders above are unaffected: both only fire on a
+              // genuinely malformed key (`[]`, `[a, b]`, `[...a]`, `[a?]`),
+              // and a plain `[k]` matches none of them.
+              let mut depth = 0
+              while !self.check(Eof) {
+                match self.peek().kind {
+                  RBracket =>
+                    if depth == 0 {
+                      break
+                    } else {
+                      depth -= 1
+                    }
+                  LBracket | LParen | LBrace => depth += 1
+                  RParen | RBrace => depth -= 1
+                  _ => ()
+                }
+                let _ = self.advance()
+              }
+              let _ = self.expect(RBracket)
+              "<computed>"
             } else {
-              self.record_index_signature_missing_annotation()
+              let _ = self.advance() // index name
+              let _ = self.expect(Colon)
+              let key_type = self.parse_type()
+              self.record_index_signature_key_misuse(key_type)
+              let _ = self.expect(RBracket)
+              let _ = self.match_(Question)
+              // The index signature's VALUE type, kept rather than widened.
+              //
+              // It used to be recorded as `Any` — "consume the value type
+              // to advance the cursor" — and the reason written here was a
+              // specific false-positive hazard: our object-literal getter
+              // modelling renders `get x()` as `() => T`, so an
+              // assignability check driven off an anonymous index signature
+              // would mismatch. That reason was PROBED rather than trusted,
+              // which is what this repo's ledger asks of a recorded
+              // abstention, and it is TRUE: keeping the value reported
+              // `{ get x() { return 1 } }` against `{ [k: string]: number }`,
+              // which tsc accepts. The answer is to MODEL the getter (judge
+              // the entry by its written return annotation, else by a
+              // single-`Return` body, else abstain) rather than to keep
+              // discarding every index signature's type for it — the
+              // getter shapes are pinned by tests beside that rule, and the
+              // corpus is FP 0 with the value kept.
+              //
+              // What the widening cost is the CHECKER being blind at every
+              // INLINE position while the `interface M { [k: string]: T }`
+              // declaration form kept working — a type-alias body, a nested
+              // member, a return type and a parameter all read as `Any`,
+              // which is the applied-in-some-places family on the
+              // inline-versus-named axis. 102 of 3,000 real `.d.ts` files
+              // carry an inline index signature.
+              //
+              // The BRIDGE is NOT fixed by this and the regenerated corpus
+              // is byte-identical: `type D = { [k: string]: Foo }` still
+              // emits nothing at all, where `interface D` gets
+              // `index_get(self, key) -> Foo?` / `index_set(…, value : Foo)`.
+              // That gap is in two bridge renderers and is filed in TODO.md;
+              // it is stated here so this site is not read as having closed
+              // it.
+              //
+              // An index signature with no annotation at all stays `Any`,
+              // which is the only honest answer for it.
+              let value_type = if self.check(Colon) {
+                let _ = self.advance()
+                self.parse_type()
+              } else {
+                self.record_index_signature_missing_annotation()
+                @ast.TsType::Any
+              }
+              fields.push((key_type, value_type))
+              let _ = self.match_(Semicolon) || self.match_(Comma)
+              continue
             }
-            fields.push((key_type, @ast.TsType::Any))
-            let _ = self.match_(Semicolon) || self.match_(Comma)
-            continue
           }
         }
         Ident(n) => {

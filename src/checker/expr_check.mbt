@@ -3374,6 +3374,137 @@ fn Resolver::lookup_index_sig(
 }
 
 ///|
+/// True when `field` resolves on `recv` ONLY through an INDEX SIGNATURE —
+/// the receiver declares no named member of that spelling, and an index
+/// signature whose key accepts it supplies the type instead.
+///
+/// `lookup_field` cannot answer this: its three index-signature fallbacks
+/// (the interface arm, the generic-interface arm and the `Object` arm) each
+/// return a bare type, so a member reached through `[k: string]: V` is
+/// indistinguishable downstream from one the type declares. That difference
+/// is the whole of TS2790's boundary, probed cell by cell against the real
+/// compiler: `delete o["b"]` and `delete o.b` on `{ [k: string]: string }`
+/// are both ACCEPTED, so is `delete o[1]` on `{ [n: number]: string }`, and
+/// so is a numeric key against a STRING index signature — while a DECLARED
+/// member is TS2790 even when a sibling index signature exists
+/// (`{ [k: string]: string; b: string }` reports). So neither "the receiver
+/// has an index signature" nor "the member resolves" is the question.
+///
+/// Fails toward TRUE. A receiver that carries an index signature but whose
+/// declared member set cannot be enumerated here (an `extends` chain, a
+/// union, a shape with no arm below) answers `true`, which makes the caller
+/// abstain and lose a finding rather than report one on legal code. A
+/// receiver with NO accepting index signature answers `false` immediately,
+/// so this changes nothing for the ordinary shapes.
+///
+/// TS4111 (`check_dot_access_to_index_signature`) asks a neighbouring
+/// question — "did this DOT access reach an index-signature member" — and is
+/// deliberately not routed through here: it must REPORT on the answer, so
+/// its non-enumerable case has to fail the other way, and it is additionally
+/// restricted to a string index signature and to the dot spelling. A future
+/// third consumer should take the fail direction as a parameter rather than
+/// copy either.
+fn Resolver::member_is_index_signature_only(
+  self : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> Bool {
+  let unwrapped = self.unwrap(recv)
+  // A key that parses as an integer is what a NUMERIC index signature
+  // accepts; the `Object` arm of `lookup_field_core` draws the line the
+  // same way.
+  let field_is_numeric = try @string.parse_int(field) catch {
+    _ => false
+  } noraise {
+    _ => true
+  }
+  // `Record<K, V>` is a mapped type, and which of the two it is depends on
+  // `K`: over `string` / `number` / `symbol` it IS an index signature
+  // (`delete r["b"]` accepted), while a finite key set declares real
+  // members (`Record<"a" | "b", string>` reports TS2790).
+  match unwrapped {
+    Applied("Record", [k, _]) =>
+      return match self.unwrap(k) {
+        String_ | Number | Int | Symbol => true
+        _ => false
+      }
+    _ => ()
+  }
+  // Which index signatures could supply this key, and can the declared
+  // member set be enumerated here?
+  let (accepts, declared_known, declares_field) = match unwrapped {
+    Object(entries) => {
+      let mut accepts = false
+      let mut declares = false
+      for entry in entries {
+        match entry.0 {
+          Literal(name) => if name == field { declares = true }
+          String_ => accepts = true
+          Number | Int => if field_is_numeric { accepts = true }
+          _ => ()
+        }
+      }
+      // An inline object type lists every member it has.
+      (accepts, true, declares)
+    }
+    Named(_) | Applied(_, _) => {
+      let sigs : Array[(@ast.TsType, @ast.TsType)] = []
+      collect_index_sigs(self, unwrapped, sigs, {})
+      let mut accepts = false
+      for sig in sigs {
+        match sig.0 {
+          String_ | Literal(_) => accepts = true
+          Number | Int => if field_is_numeric { accepts = true }
+          _ => ()
+        }
+      }
+      let name = match unwrapped {
+        Named(n) | Applied(n, _) => n
+        _ => ""
+      }
+      match self.interfaces.get(name) {
+        Some(iface) => {
+          let mut declares = false
+          for f in iface.fields {
+            if f.0 == field {
+              declares = true
+            }
+          }
+          // A base could declare it; do not claim to have enumerated.
+          (accepts, iface.extends_names.is_empty(), declares)
+        }
+        None =>
+          match self.classes.get(name) {
+            Some(cls) => {
+              let mut declares = false
+              for p in cls.properties {
+                if p.name == field && !p.is_static {
+                  declares = true
+                }
+              }
+              for m in cls.methods {
+                if m.name == field && !m.is_static {
+                  declares = true
+                }
+              }
+              (accepts, cls.base_names.is_empty(), declares)
+            }
+            None => (accepts, false, false)
+          }
+      }
+    }
+    _ => (false, false, false)
+  }
+  if !accepts {
+    return false
+  }
+  if !declared_known {
+    return true
+  }
+  !declares_field
+}
+
+///|
 /// Well-known `Promise.prototype.*` members. `inner` is the resolved-value
 /// type (the `T` in `Promise<T>`). The chainable `then` / `catch` /
 /// `finally` methods need callback-driven inference for the result type;
@@ -9272,7 +9403,20 @@ fn infer_index(
     // fields (and the index signature as fallback). For non-literal
     // indices, fall back to the interface's index signature value type
     // so `obj[i]` on `{ [k: string]: V }` returns `V` instead of `Any`.
-    Named(_) | Applied(_, _) =>
+    //
+    // `Object(_)` and `Struct(_, _)` belong here too, and their absence was
+    // the whole arm listing the NAMED shapes and omitting the STRUCTURAL
+    // one: a BRACKETED read on an inline object type resolved nothing —
+    // `i["a"]` on `(i: { a: number })` came back `Any` — while the dotted
+    // `i.a` and the identical read on a named `interface` both worked. Both
+    // helpers this arm calls already handle the structural shapes
+    // (`lookup_field` is what the dotted path uses), and the two
+    // class-keyed guards below simply decline for a receiver with no name.
+    //
+    // It is also what made the inline index signature unreachable through
+    // brackets once the parser stopped discarding its value type:
+    // `m["anything"]` on `{ [k: string]: number }`.
+    Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
       match idx_expr {
         // A WELL-KNOWN SYMBOL index. The class and interface parsers mangle
         // `[Symbol.hasInstance]` to the stable member name `@@hasInstance`,
@@ -9691,6 +9835,21 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // An object shape carrying a member the parsers could not NAME
+  // (`<computed>`) cannot be compared structurally at all, on either side,
+  // so every arm below would be deciding on a shape whose identity is
+  // missing. Guarded once here rather than at the twenty-odd emit sites,
+  // and for the same reason the well-known-symbol parser path states in
+  // its own comment: "we never invent a required member the checker can't
+  // match structurally." `symbolProperty61` is the TS7-ACCEPTED file —
+  // a user-AUGMENTED `interface SymbolConstructor { readonly obs: symbol }`
+  // puts `Symbol.obs` outside the standard well-known set, so
+  // `type InteropObservable<T> = { [Symbol.obs]: … }` keeps a `<computed>`
+  // member while the class satisfying it spells the same symbol through a
+  // `const observable` binding. tsc matches the two; nothing here can.
+  if type_has_computed_member(expected_shape, ctx.resolver) {
+    return
+  }
   // --- Batch AL targeted rules (all conservative, unfiltered) ---
   // A bare variable source uses its DECLARED type: our assignment
   // narrowing over-narrows non-union declared types (`symObj = sym`
@@ -11374,6 +11533,11 @@ fn struct_assignable_named_rec(
     return false
   }
   for f in target_fields {
+    // See `target_member_unmatchable`: a `<computed>` target member can
+    // never be found on any source, so requiring it rejects everything.
+    if target_member_unmatchable(f.0) {
+      continue
+    }
     let want = resolver.unwrap(f.1)
     match resolver.lookup_field(s, f.0) {
       Some(have) => {
@@ -12215,6 +12379,11 @@ fn intrinsic_source_satisfies_object(
     return false
   }
   for f in target_fields {
+    // See `target_member_unmatchable`: a `<computed>` target member can
+    // never be found on any source, so requiring it rejects everything.
+    if target_member_unmatchable(f.0) {
+      continue
+    }
     let want = resolver.unwrap(f.1)
     match resolver.lookup_field(s, f.0) {
       Some(have) =>
@@ -12227,6 +12396,27 @@ fn intrinsic_source_satisfies_object(
     }
   }
   true
+}
+
+///|
+/// True when `t` is (or unwraps to) an object shape carrying a member the
+/// parsers could not name (`<computed>`). Sibling of
+/// `type_has_call_signature` and used the same way: the member's identity is
+/// a symbol this checker did not resolve, so a structural comparison
+/// against the shape cannot decide anything.
+fn type_has_computed_member(t : @ast.TsType, resolver : Resolver) -> Bool {
+  let fields = match resolver.unwrap(t) {
+    Object(fs) => fs
+    Struct(_, fs) => fs.map(fn(f) { (@ast.TsType::Literal(f.0), f.1) })
+    _ => return false
+  }
+  for f in fields {
+    match f.0 {
+      Literal(name) => if target_member_unmatchable(name) { return true }
+      _ => ()
+    }
+  }
+  false
 }
 
 ///|
@@ -13441,6 +13631,46 @@ fn target_is_projectable_record(
 }
 
 ///|
+/// Check an object literal's GETTER entry against the type the target
+/// declares for that member. What a getter contributes is its RETURN type,
+/// not the accessor's own `() => T`.
+///
+/// Two routes, and the order matters for the message. A WRITTEN return
+/// annotation is the contribution outright. Otherwise a body that is
+/// exactly one `return e` is checked through `check_expr_against` on `e` —
+/// which reuses every suppression and produces the precise "expected X but
+/// got Y" the direct spelling gets, rather than a second message for the
+/// same mistake. Anything else abstains: a multi-statement body would need
+/// `infer_block_return` and the answer would be no better than silence.
+fn check_objlit_getter_against(
+  env : ExprEnv,
+  value : @ast.TsExpr,
+  declared : @ast.TsType,
+  resolver : Resolver,
+  ctx : CheckCtx,
+  path : String,
+) -> Unit {
+  guard value is FuncExpr(f) else { return }
+  if is_checkable(f.return_type) {
+    if is_checkable(declared) &&
+      !is_assignable_to(
+        resolver.unwrap(f.return_type),
+        resolver.unwrap(declared),
+      ) {
+      record(
+        ctx,
+        path,
+        "expected `\{type_display(declared)}` but got `\{type_display(f.return_type)}`",
+      )
+    }
+    return
+  }
+  if f.body.stmts.length() == 1 && f.body.stmts[0] is Return(Some(e)) {
+    check_expr_against(env, e, declared, ctx, path)
+  }
+}
+
+///|
 fn check_object_lit_against_target(
   env : ExprEnv,
   entries : Array[(String, @ast.TsExpr)],
@@ -13592,16 +13822,50 @@ fn check_object_lit_against_target(
       }
       continue
     }
+    // An ACCESSOR entry surfaces under `@@get:NAME` / `@@set:NAME`, and the
+    // member it contributes is `NAME`. Reading the raw key here was wrong
+    // in both directions, neither visible to the conformance corpus:
+    //
+    //   - the excess / declared lookup missed, so `interface I { x: number }`
+    //     beside `const i: I = { get x() { return 1 } }` reported
+    //     "property `x` is required by `I`" — a false positive on ordinary
+    //     code, and the missing-required loop BELOW already strips the
+    //     prefix in its spread branch with a comment saying why. One fact,
+    //     two branches of one loop, written in one.
+    //   - and where the target has an index signature the getter's own
+    //     type (`() => number`) was checked against the index VALUE
+    //     (`number`), which is the hazard
+    //     `try_parse_object_type_with_members` recorded as its reason for
+    //     throwing the value type away. The reason was real; discarding
+    //     every index signature's value type was not the fix.
+    let (key, accessor) = if key.has_prefix("@@get:") {
+      (key[6:].to_owned(), "get")
+    } else if key.has_prefix("@@set:") {
+      (key[6:].to_owned(), "set")
+    } else {
+      (key, "")
+    }
     match resolver.lookup_field(target, key) {
       Some(declared) =>
-        check_expr_against(
-          env,
-          value,
-          declared,
-          ctx,
-          "\{sub_path}.\{key}",
-          arg_callee_non_generic~,
-        )
+        if accessor == "get" {
+          check_objlit_getter_against(
+            env, value, declared, resolver, ctx, "\{sub_path}.\{key}",
+          )
+        } else if accessor == "set" {
+          // A SETTER contributes the WRITE type, which is its parameter
+          // and the opposite direction from the one this function checks.
+          // Counting the member as provided is all that is needed here.
+          ()
+        } else {
+          check_expr_against(
+            env,
+            value,
+            declared,
+            ctx,
+            "\{sub_path}.\{key}",
+            arg_callee_non_generic~,
+          )
+        }
       None =>
         // Unknown key on the target — TS calls this an excess-property
         // error. Skip class/struct opaque shapes by relying on lookup_field
@@ -13639,6 +13903,10 @@ fn check_object_lit_against_target(
         }
         provided[n] = true
       }
+    } else if entry.0.has_prefix("@@get:") || entry.0.has_prefix("@@set:") {
+      // Same normalization as the per-field loop above: `get x()` provides
+      // the member `x`.
+      provided[entry.0[6:].to_owned()] = true
     } else {
       provided[entry.0] = true
     }
@@ -20492,7 +20760,19 @@ fn check_call_args_in_expr(
                   !member_recv_unmodeled(recv_ty, ctx.resolver) {
                   match ctx.resolver.lookup_field(recv_ty, prop) {
                     Some(ft) =>
-                      if is_checkable(ft) && !type_has_undefined(ft) {
+                      // A member reached only through an INDEX SIGNATURE is
+                      // removable whatever its value type — that is what
+                      // makes `delete o["b"]` on `{ [k: string]: string }`
+                      // legal — and `lookup_field` cannot say which route
+                      // it took. Before the inline index signature's value
+                      // type was kept by the parser it came back `Any`,
+                      // which `is_checkable` happened to reject; keeping the
+                      // type turned that accident into a false positive.
+                      if is_checkable(ft) &&
+                        !type_has_undefined(ft) &&
+                        !ctx.resolver.member_is_index_signature_only(
+                          recv_ty, prop,
+                        ) {
                         record(
                           ctx, "delete", "the operand of a `delete` operator must be optional",
                         )
@@ -36122,8 +36402,34 @@ fn check_class_implements(
         }
       None => ()
     }
+    // A member the class declares under an UN-NAMEABLE key could be the one
+    // supplying any of the interface's members, so the missing-member arm
+    // has to abstain for the whole class — the same reasoning
+    // `check_object_lit_against_target` applies through `has_computed_entry`
+    // for an object literal carrying a computed key.
+    //
+    // The arm below already skips a computed member on the INTERFACE side
+    // (`mname != "<computed>"`), and this is the mirror it was missing.
+    // `symbolProperty61`'s shape is exactly it and is TS7-ACCEPTED: the
+    // interface writes `[Symbol.obs]`, which the interface parser resolves
+    // to `@@obs`, while the class writes `[observable]` — a `const` bound
+    // to the same symbol — which arrives as `<computed>`. The two name the
+    // one member and nothing here can align them, so
+    // "member `@@obs` is missing" was a false positive on legal code.
+    let mut cls_has_unnameable_member = false
+    for p in cls.properties {
+      if target_member_unmatchable(p.name) {
+        cls_has_unnameable_member = true
+      }
+    }
+    for m in cls.methods {
+      if target_member_unmatchable(m.name) {
+        cls_has_unnameable_member = true
+      }
+    }
     let can_check_missing = chain.resolvable &&
       !cls.is_abstract &&
+      !cls_has_unnameable_member &&
       cls.index_signatures.length() == 0
     for iname in cls.implements_names {
       let iface = match resolver.interfaces.get(iname) {

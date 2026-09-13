@@ -3,6 +3,137 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EJ (2026-09-13): the inline index signature's value type, and six false positives
+
+**+2 files at FP 0** (TP 2635 -> 2637, MISS in scope 80 -> **78**,
+PFLEGAL 0, TN 1750). Two items, picked by what a real `.d.ts` uses rather
+than by the corpus — which by 80 ranks almost nothing, with 41 of the
+remaining codes carrying exactly one file each. The files are the smaller
+half: the batch fixed **four pre-existing false positives the conformance
+gate structurally cannot see**, and introduced two more that tests written
+for earlier batches caught.
+
+**1. `try_parse_object_type_with_members` discarded every index
+signature's value type.** Its own comment stated it ("index signatures are
+kept, keyed by the key type, with an `Any` value"), and batch EH filed
+`arrayLiterals` on exactly that blocker. So the checker was blind at all
+four INLINE positions — a type ALIAS, a nested member, a return type, a
+parameter — while the `interface` declaration form has worked for a long
+time: the applied-in-some-places family with the DECLARATION FORM as the
+axis, and the inline form is what an inline `.d.ts` parameter writes (102
+of 3,000 real `.d.ts` files carry one).
+
+The recorded reason for discarding it was PROBED and held — the thirteenth
+recorded abstention opened in this series and the fifth whose reason
+survived. An object literal's GETTER entry has type `() => T`, which is
+not the index VALUE, so keeping the type reported
+`{ get x() { return 1 } }` against `{ [k: string]: number }`. The fix is
+to MODEL the getter rather than to re-abstain:
+`check_objlit_getter_against` judges the entry by its written return
+annotation, else by a single-`Return` body, else abstains. That same
+modelling closed two PRE-EXISTING false positives beside it, because an
+accessor entry surfaces under `@@get:NAME` / `@@set:NAME` and the
+per-entry loop read the RAW key, so a declared member satisfied by a
+getter looked unprovided. A SETTER is skipped outright: TypeScript 4.3
+lets the pair's types diverge, so a setter's parameter is not the read
+type — the same language change that made batch EI's get/set pair check
+stale.
+
+**2. `infer_index`'s member arm listed `Named` and `Applied` and omitted
+`Object` and `Struct`**, so `i["a"]` on an inline object type resolved
+nothing. Two more pre-existing false positives came out from under it. The
+first: an un-nameable computed key (`<computed>`) made
+`try_parse_object_type_with_members` abandon the WHOLE object type, so one
+`[k]: number` cost the identity of every SIBLING member and every read
+then reported "does not exist" — the interface body parser already skips
+balanced tokens to `]` and evaluates to `"<computed>"`, and mirroring it
+is the fix. The second: `symbolProperty61` (TS7-ACCEPTED — a user-
+AUGMENTED `interface SymbolConstructor` putting `Symbol.obs` outside the
+standard well-known set) shows a `<computed>` member cannot be REQUIRED of
+anything either, which the well-known-symbol parser path states in its own
+comment and which nothing enforced where the requiring happens. Guarded
+once at `check_expr_against`'s entry rather than at the twenty-odd emit
+sites, plus `target_member_unmatchable` in the two field loops and in
+`check_class_implements`.
+
+**That FP site was guessed wrong TWICE** — `is_object_assignable_inner`,
+then `struct_assignable_named_rec` — and settled by instrumenting the
+REPORT site, which printed nothing and so named the wrong function in one
+run. Same lesson as the `ServerType` diagnosis: instrument a "this cannot
+be happening" gap rather than re-read it.
+
+**The two false positives the change introduced**, both caught by
+pre-existing tests, and neither about index signatures as such:
+
+- `delete o["b"]` on `{ [k: string]: string }` is ACCEPTED and started
+  reporting TS2790. `lookup_field` returns a bare type and cannot say
+  whether the member came from a DECLARED entry or from the
+  index-signature fallback — a distinction it has three copies of (the
+  interface arm, the generic-interface arm, the `Object` arm) and exposes
+  at none. Before the parser change that member came back `Any`, which
+  `is_checkable` happened to reject, so the rule was right by accident.
+  The boundary is exact and was probed cell by cell: both spellings, the
+  `interface` and `declare class` forms, an `extends` chain,
+  `Record<string, V>` and a numeric key against a STRING index signature
+  are all accepted, while a DECLARED member is TS2790 even when a sibling
+  index signature exists (`{ [k: string]: string; b: string }` reports).
+  So neither "the receiver has an index signature" nor "the member
+  resolves" is the question. `Record<K, V>` needs `K` inspected, since
+  `Record<"a" | "b", string>` declares real members and reports.
+  `member_is_index_signature_only` fails toward TRUE, so a receiver whose
+  declared set it cannot enumerate abstains and loses a finding. TS4111
+  asks the neighbouring question and is deliberately NOT routed through
+  it: it must REPORT on the answer, so its non-enumerable case needs the
+  opposite fail direction, and a third consumer should take the direction
+  as a parameter rather than copy either.
+- `var v: { [n: number]: Bar } = arr`, the legal neighbour batch EH added
+  a test for one batch earlier. `is_assignable_to_inner` had no arm
+  pairing a `Struct` with the `Named` it is the resolution OF: the caller
+  resolved only the SOURCE, so `Struct("Bar", …)` met `Named("Bar")` and
+  fell to the catch-all. `unwrap_containers_at` produces
+  `Struct(n, iface.fields)` for a plain interface, so the name is the
+  nominal name and the two spellings are one type — nominal identity,
+  matching the `(Named(a), Named(b)) => a == b` arm right above it. The
+  resolved/unresolved split can reach ANY of that function's forty arms,
+  so this is one arm's worth of a general hazard.
+
+**FILED: the BRIDGE half of item 1 is untouched, and the scope is worth
+stating because it is easy to overclaim.** The parser fix closes the
+CHECKER only; regenerated output is byte-identical.
+`type AliasDict = { [k: string]: Foo }` still produces NOTHING — not an
+opaque `pub type`, not an `Unsupported export` note, the export simply
+vanishes — while `interface NamedDict { [k: string]: Foo }` gets
+`index_get(self, key) -> Foo?` / `index_set(…, value : Foo)`, and
+`takeInline(o: { [k: string]: Foo })` degrades to `o : JSValue`. Two
+sites: `ffi_type_alias_decl_to_moonbit` (`src/bridge/moonbit_js_ffi.mbt`)
+returns `None` when the rendered target contains `JSValue`, and the
+accessor loop lives inside the INTERFACE renderer
+(`for sig in iface.index_signatures`, calling
+`ffi_index_signature_accessor_decls`). `type AliasPoint = { x: number }`
+DOES become a `pub(all) struct`, so alias-to-object-type is handled
+generally and only the index-signature case falls through — which is what
+makes this a gap in one renderer rather than a missing feature.
+
+**NOT taken: reading a member keyed by a user `unique symbol`** (`i[k]`
+where `interface I { [k]: number }` and `declare const k: unique symbol`).
+It needs the KEY resolved to the member the type declares, and a
+name-keyed identity would claim two same-spelled bindings in different
+scopes are one member — a false positive, the one direction the budget
+forbids. The WELL-KNOWN symbol spelling (`i[Symbol.iterator]`) does
+resolve, because the parser gives it a stable `@@<name>`.
+
+**Docs corrected rather than appended to.** `docs/checker-triage.md`'s
+capability table said BLIND for three rows that batches DI–DM and EB had
+closed (conditional type via a generic alias, the utility-type table,
+overload resolution), re-probed cell by cell here; the re-probe also ADDED
+a row, since `Extract` decides over a single-kind literal union and not
+over a mixed one (`Extract<1 | "a", 1>`), a narrower gap than the retired
+`utility types` row implied. And CLAUDE.md's two "filed rather than fixed"
+checker holes — `#x in obj` and `Array.prototype.sort()` — have both been
+fixed for several batches (`case58`, `case59-array-builtin-arity`),
+verified by probe. A capability verdict and a filed item are each a claim
+with a date on it, the same as a recorded blocker.
+
 ### Batch EI (2026-09-13): MISS 99 -> 80, and an optionality PROXY at two more sites
 
 **+19 files at FP 0** (TP 2616 -> 2635, MISS in scope 99 -> **80**,
@@ -1787,6 +1918,30 @@ looks like now.
     way). The read-reachability pre-pass answers "can a JS value arrive as
     this STRUCT", which is a different question from "which direction does
     this function TYPE cross", so it does not dissolve that item.
+- [ ] **FILED: a type ALIAS whose target is an object type with an INDEX
+  SIGNATURE produces no bridge surface at all.** Batch EJ fixed the
+  CHECKER half of this (the parser was discarding the value type at every
+  inline position); the bridge output is byte-identical, and the scope
+  correction is worth recording because the two halves look like one
+  item. Measured on a four-declaration `.d.ts`:
+  `interface NamedDict { [k: string]: Foo }` gets
+  `index_get(self, key : String) -> Foo?` and
+  `index_set(self, key : String, value : Foo)`, while
+  `type AliasDict = { [k: string]: Foo }` emits NOTHING — not an opaque
+  `pub type`, not an `Unsupported export` note; the export simply
+  vanishes from the generated package. A parameter degrades too:
+  `takeInline(o: { [k: string]: Foo })` renders `o : JSValue`.
+  Two sites. `ffi_type_alias_decl_to_moonbit`
+  (`src/bridge/moonbit_js_ffi.mbt`) returns `None` when the rendered
+  target contains `JSValue`, which is what drops the declaration; the
+  accessor loop lives inside the INTERFACE renderer
+  (`for sig in iface.index_signatures`, calling
+  `ffi_index_signature_accessor_decls`), so nothing reaches an alias.
+  `type AliasPoint = { x: number; y: number }` DOES become a
+  `pub(all) struct`, so alias-to-object-type is handled generally — this
+  is one renderer missing a case, not a missing feature. The silent drop
+  is the worse half: an `Unsupported export` note at least appears in the
+  bridge quality report, and this does not, so the report cannot see it.
 - [x] **Convert an OPTIONAL tagged-union crossing — DONE**, and both of the
   reasons the previous note gave for declining it were false, which is the
   part worth keeping.
@@ -6975,13 +7130,17 @@ inside a function body:
   needs a fact threaded through `check_expr_against`, which has ~30
   callers; the real-world diagnostic is the only argument for it, and it
   is a good one.
-- [ ] **FILED: `arrayLiterals.ts`** — the last excess-property MISS of
-  the three needs an object literal checked against a target whose shape
-  is a NUMERIC INDEX SIGNATURE (`{ [n: number]: { a: string; b: number } }`),
-  where each element's value must be checked against the index value
-  type. The `@@computed:` arm of `check_object_lit_against_target`
-  already does exactly this lookup for one narrow case, so the machinery
-  is there; the third file, `symbolProperty21`, is a computed
+- [x] **DONE (batch EJ): `arrayLiterals.ts`** — filed as needing an
+  object literal checked against a NUMERIC INDEX SIGNATURE target
+  (`{ [n: number]: { a: string; b: number } }`), with the machinery said
+  to be present in the `@@computed:` arm. The machinery WAS present; the
+  blocker was one level down and mechanical, which is why the estimate
+  read the wrong way. `try_parse_object_type_with_members` DISCARDED the
+  index signature's value type outright — its own comment says index
+  signatures are "kept (keyed by the key type, with an `Any` value)" —
+  so the element's value was being checked against `Any` and passed. The
+  file flags with no change to `check_object_lit_against_target` at all.
+  The third file, `symbolProperty21`, is a computed
   `[Symbol.toPrimitive]` key, which that function skips by design.
 
 - [x] **Batch DY: the assignment-form `for…of` target at all three

@@ -20203,3 +20203,109 @@ test "batch EI rules" {
     assert_true(issues(src) > 0)
   }
 }
+
+///|
+/// Batch EJ: the inline index signature's VALUE type, kept rather than
+/// widened, and the un-nameable computed member.
+///
+/// Every cell was run through the real compiler first. The silent list
+/// carries FOUR false positives this batch fixed, none of which the
+/// conformance corpus can see — three of them pre-existing and one the
+/// price of keeping the index value type, which is the hazard
+/// `try_parse_object_type_with_members` had recorded as its reason for
+/// throwing that type away.
+test "batch EJ rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // The index signature's value type survives at every INLINE position;
+      // only the `interface` declaration form used to keep it.
+      "type D = { [k: string]: number };\nfunction f(m: D) { const s: string = m.anything; return s }",
+      "interface Outer { dict: { [k: string]: number } }\nfunction f(o: Outer) { const s: string = o.dict.anything; return s }",
+      "declare function g(): { [k: string]: number };\nfunction f() { const s: string = g().anything; return s }",
+      "function f(m: { [k: string]: number }) { const s: string = m.anything; return s }",
+      // ... including an object literal ARGUMENT against an inline
+      // index-signature parameter, which real code writes constantly.
+      "declare function g(o: { [k: string]: number }): void;\nfunction f() { g({ a: \"s\" }); }",
+      // A bracketed read on an INLINE object type: `infer_index`'s member arm
+      // listed the named shapes and omitted the structural one.
+      "function f(i: { a: number }) { const s: string = i[\"a\"]; return s }",
+      "function f(m: { [k: string]: number }) { const s: string = m[\"anything\"]; return s }",
+      "function f(i: { [Symbol.iterator]: number }) { const s: string = i[Symbol.iterator]; return s }",
+      "type T = { [Symbol.iterator]: number };\nfunction f(i: T) { const s: string = i[Symbol.iterator]; return s }",
+      // A GETTER entry is judged by its RETURN type, against a named member
+      // and against an index signature's value alike.
+      "interface I2 { x: number }\nfunction f() { const i: I2 = { get x() { return \"s\" } }; return i }",
+      "type D2 = { [k: string]: number };\nfunction f() { const d: D2 = { get x() { return \"s\" } }; return d }",
+      "interface I3 { x: number }\nfunction f() { const i: I3 = { get x(): string { return \"\" } }; return i }",
+      // TS2790 still fires for a DECLARED member — including one declared
+      // alongside an index signature, which is the cell that rules out
+      // "the receiver has an index signature" as the question.
+      "declare const o: { b: string };\nfunction f() { delete o.b }",
+      "declare const o: { [k: string]: string; b: string };\nfunction f() { delete o.b }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // An index signature with NO annotation stays `Any`, which is the only
+      // honest answer for it, so a read off one decides nothing.
+      "type A = { [k: string]: any };\nfunction f() { const d: A = { x: \"s\", y: 1 }; return d }",
+      "type D2 = { [k: string]: number };\nfunction f() { const d: D2 = { a: 1, b: 2 }; return d }",
+      "function f(o: { a: number; [k: string]: number }) { const n: number = o.a; return n }",
+      "function f(m: { [k: string]: number }) { const n: number = m.anything; return n }",
+      // --- the four false positives, all invisible to the corpus.
+      //
+      // (1) and (2) pre-existing: an ACCESSOR entry surfaces under
+      // `@@get:`/`@@set:`, and reading the raw key made the declared member
+      // look unprovided. TypeScript 4.3 also lets the pair's types diverge,
+      // so a setter's parameter is not the read type.
+      "interface I { x: number }\nfunction f() { const i: I = { get x() { return 1 } }; return i }",
+      "interface I { x: number }\nfunction f() { const i: I = { get x() { return 1 }, set x(v: number) { } }; return i }",
+      // (3) the hazard the parser comment named, and the reason it gave for
+      // discarding every index signature's value type: a getter's own type
+      // is `() => T`, which is not the index VALUE.
+      "declare function g(o: { [k: string]: number }): void;\nfunction f() { g({ get x() { return 1 } }); }",
+      "type D = { [k: string]: number };\nfunction f() { const d: D = { get x() { return 1 } }; return d }",
+      "type F = { [k: string]: () => number };\nfunction f() { const d: F = { m() { return 1 } }; return d }",
+      // (4) pre-existing: one un-nameable computed key used to cost the
+      // identity of every SIBLING member, because the whole object type was
+      // abandoned and every read then reported "does not exist".
+      "declare const k: unique symbol;\ntype T = { [k]: number; other: string };\nfunction f(t: T) { const s: string = t.other; return s }",
+      "declare const k2: unique symbol;\ninterface I { [k2]: number; other: string }\nfunction f(i: I) { const s: string = i.other; return s }",
+      "function f(i: { [Symbol.iterator]: number; a: number }) { const n: number = i.a; return n }",
+      // An un-matchable `<computed>` member cannot be required of anything —
+      // the restriction the well-known-symbol parser path states in its own
+      // comment, now applied where the requiring happens (symbolProperty61).
+      "declare const k3: unique symbol;\ninterface Obs { [Symbol.iterator]: () => void }\nclass C implements Obs { [k3]() { } }",
+      // (5) the two false positives keeping the index signature's value
+      // type introduced, both invisible to the corpus and both caught by a
+      // test written for an earlier batch.
+      //
+      // A member reached ONLY through an index signature is removable
+      // whatever its value type. Probed cell by cell: both spellings, the
+      // interface and class declaration forms, an `extends` chain, a
+      // `Record` over `string`, and a numeric key against a string index
+      // signature are all ACCEPTED by tsc.
+      "declare const o: { [k: string]: string };\nfunction f() { delete o[\"b\"] }",
+      "declare const o: { [k: string]: string };\nfunction f() { delete o.b }",
+      "declare const o: { [k: string]: string };\nfunction f() { delete o[\"1\"] }",
+      "declare const o: { [n: number]: string };\nfunction f() { delete o[1] }",
+      "interface I4 { [k: string]: string }\ndeclare const o: I4;\nfunction f() { delete o.b }",
+      "interface I5 { [k: string]: string }\ninterface J5 extends I5 { }\ndeclare const o: J5;\nfunction f() { delete o.b }",
+      "declare class C5 { [k: string]: string }\ndeclare const o: C5;\nfunction f() { delete o.b }",
+      "declare const o: Record<string, string>;\nfunction f() { delete o[\"b\"] }",
+      // And an ARRAY still satisfies a NUMERIC index signature now that the
+      // value type is real: the resolver expands the source's element to
+      // `Struct("Bar", …)` while the target's index value stays
+      // `Named("Bar")`, and nominal identity across that split had no arm.
+      "interface Bar2 { b: string }\ndeclare const arr: Bar2[];\nvar v: { [n: number]: Bar2 } = arr;",
+      "interface Bar3 { b: string }\ndeclare const arr: Bar3[];\nvar v: { [n: number]: { b: string } } = arr;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

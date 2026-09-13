@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2635 / MISS in scope 80 /
+  is a soundness bug, and there are none (TP 2637 / MISS in scope 78 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -2209,6 +2209,108 @@ product surfaces now.
   cannot have (whether the file augments `interface SymbolConstructor`,
   which `symbolProperty61` legally does); and TS18046 through an ALIASED
   guard needs assignment invalidation of the alias.
+  Batch EJ is **+2** (MISS in scope 80 -> 78) and is the first batch here
+  ranked by what a real `.d.ts` uses rather than by the corpus, which by
+  then ranked almost nothing — 41 of the remaining 80 codes have exactly
+  one file each. Its two items are a PARSER abstention and a walker arm,
+  and between them they fixed **four pre-existing false positives the
+  conformance gate structurally cannot see** plus the two the change
+  itself introduced, which is the batch's real output.
+  `try_parse_object_type_with_members` DISCARDED every index signature's
+  value type — its own comment said index signatures are "kept (keyed by
+  the key type, with an `Any` value)", batch EH filed `arrayLiterals` on
+  exactly that blocker — so the checker was blind at all four INLINE
+  positions (a type ALIAS, a nested member, a return type, a parameter)
+  while the `interface` declaration form has worked for a long time. That
+  is the applied-in-some-places family with the axis being the DECLARATION
+  FORM, and the inline form is what an inline `.d.ts` parameter writes;
+  102 of 3,000 real `.d.ts` files carry one. The stated reason for
+  discarding it was PROBED and turned out TRUE — thirteenth recorded
+  abstention opened, and the fifth whose reason held: an object literal's
+  GETTER entry has type `() => T`, which is not the index VALUE, so
+  keeping the type reported `{ get x() { return 1 } }` against
+  `{ [k: string]: number }`. The fix is to model the getter rather than
+  to re-abstain — `check_objlit_getter_against` judges the entry by its
+  written return annotation, else by a single-`Return` body, else
+  abstains — and the same modelling closed two PRE-EXISTING false
+  positives beside it, because an accessor entry surfaces under
+  `@@get:NAME` / `@@set:NAME` and the per-entry loop read the RAW key, so
+  a declared member satisfied by a getter looked unprovided. A setter is
+  skipped outright: TypeScript 4.3 lets the pair's types diverge, so a
+  setter's parameter is not the read type — the same fact that made batch
+  EI's get/set pair check stale against the language.
+  The other item is `infer_index`'s member arm, which listed `Named` and
+  `Applied` and omitted `Object` and `Struct`, so `i["a"]` on an INLINE
+  object type resolved nothing. Two more pre-existing false positives
+  came out from under it, and the second is the one worth reading. An
+  un-nameable computed key (`<computed>`) used to make
+  `try_parse_object_type_with_members` abandon the WHOLE object type, so
+  one `[k]: number` cost the identity of every SIBLING member and every
+  read then reported "does not exist"; the interface body parser already
+  skipped balanced tokens to `]` and evaluated to `"<computed>"`, and
+  mirroring it is the fix. Then `symbolProperty61` — TS7-ACCEPTED, a
+  user-AUGMENTED `interface SymbolConstructor` putting `Symbol.obs`
+  outside the standard well-known set — showed that a `<computed>` member
+  cannot be REQUIRED of anything either, which the well-known-symbol
+  parser path states in its own comment ("we never invent a required
+  member the checker can't match structurally") and which nothing
+  enforced where the requiring happens. Guarded once at
+  `check_expr_against`'s entry rather than at the twenty-odd emit sites,
+  plus `target_member_unmatchable` in the two field loops and
+  `check_class_implements`. **That FP site was guessed wrong TWICE** —
+  `is_object_assignable_inner`, then `struct_assignable_named_rec` — and
+  settled by instrumenting the report site, which printed nothing and so
+  named the wrong function immediately. Same lesson as the `ServerType`
+  diagnosis: instrument a "this cannot be happening" gap rather than
+  re-read it.
+  The two false positives the change DID introduce were both caught by
+  tests written for earlier batches, and neither is about index
+  signatures as such. `delete o["b"]` on `{ [k: string]: string }` is
+  ACCEPTED and started reporting TS2790, because `lookup_field` returns a
+  bare type and cannot say whether the member came from a DECLARED entry
+  or from the index-signature fallback — a distinction it has three
+  copies of (the interface arm, the generic-interface arm, the `Object`
+  arm) and exposes at none. Before the parser change that member came
+  back `Any`, which `is_checkable` happened to reject, so the rule was
+  right by accident. The boundary is exact and was probed cell by cell:
+  both spellings, the interface and `declare class` forms, an `extends`
+  chain, `Record<string, V>` and a numeric key against a STRING index
+  signature are all accepted, while a DECLARED member is TS2790 even when
+  a sibling index signature exists (`{ [k: string]: string; b: string }`
+  reports) — so neither "the receiver has an index signature" nor "the
+  member resolves" is the question. `Record<K, V>` needs `K` inspected,
+  since `Record<"a" | "b", string>` declares real members and reports.
+  `member_is_index_signature_only` fails toward TRUE, so a receiver whose
+  declared set it cannot enumerate abstains and loses a finding; TS4111
+  asks the neighbouring question and is deliberately NOT routed through
+  it, because it must REPORT on the answer and so needs the opposite fail
+  direction.
+  The second was `var v: { [n: number]: Bar } = arr`, the legal neighbour
+  batch EH had added a test for one batch earlier. `is_assignable_to_inner`
+  had no arm pairing a `Struct` with the `Named` it is the resolution OF:
+  the caller resolved only the SOURCE, so `Struct("Bar", …)` met
+  `Named("Bar")` and fell to the catch-all. `unwrap_containers_at`
+  produces `Struct(n, iface.fields)` for a plain interface, so the name is
+  the nominal name and the two spellings are one type — nominal identity,
+  matching the `(Named(a), Named(b)) => a == b` arm right above it. Worth
+  recording that the resolved/unresolved split can reach ANY of that
+  function's forty arms, so this is one arm's worth of a general hazard.
+  What the batch does NOT buy is the bridge half, and the scope is worth
+  stating because it is easy to overclaim: the parser fix closes the
+  CHECKER only. The generated output is byte-identical, and
+  `type AliasDict = { [k: string]: Foo }` still produces NOTHING at all —
+  not an opaque `pub type`, not an `Unsupported export` note — while
+  `interface NamedDict { [k: string]: Foo }` gets `index_get` /
+  `index_set`, because `ffi_type_alias_decl_to_moonbit` returns `None`
+  when the rendered target contains `JSValue` and the accessor loop lives
+  inside the INTERFACE renderer. `type AliasPoint = { x: number }` DOES
+  become a struct, so alias-to-object-type is handled generally and only
+  the index-signature case falls through. Filed with both sites.
+  The `i[k]` half of the symbol item is deliberately NOT taken: reading a
+  member keyed by a user `unique symbol` needs the KEY resolved to the
+  member the type declares, and a name-keyed identity would claim two
+  same-spelled bindings in different scopes are one member — a false
+  positive, the one direction the budget forbids.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
@@ -2846,14 +2948,18 @@ product surfaces now.
   passing, correctly, since declining to rename breaks nothing, while
   dropping the `#` from the mint fails it on all four ways a private must
   stay invisible (`Object.keys`, `JSON.stringify`, spread, `for…in`).
-  Writing it turned up two CHECKER holes, both unrelated and both filed
-  rather than fixed: `#x in obj` — the ergonomic brand check, and the
-  idiomatic class type guard — fails with `cannot find name
-  __private_brand__0__path` because the `in` operand is lowered to the
-  brand name the checker has no entry for; and `Array.prototype.sort()`
-  with no comparator is rejected as `expected 1 argument(s), got 0`.
-  Neither is reachable from the corpus because every fixture that would
-  hit them was written around them, which is how they survived.
+  Writing it turned up two CHECKER holes, both unrelated: `#x in obj` —
+  the ergonomic brand check, and the idiomatic class type guard — failed
+  with `cannot find name __private_brand__0__path` because the `in`
+  operand is lowered to the brand name the checker has no entry for; and
+  `Array.prototype.sort()` with no comparator was rejected as
+  `expected 1 argument(s), got 0`. Neither was reachable from the corpus
+  because every fixture that would hit them was written around them,
+  which is how they survived. **Both are FIXED** — `case58` covers the
+  brand check and `case59-array-builtin-arity` the eighteen array-builtin
+  arities — and this entry said "filed rather than fixed" for several
+  batches after they were closed. A filed item is a claim with a date on
+  it in the same way a recorded blocker is: re-probe before quoting it.
   `just verify-pass-lattice` is the harness that exists to find exactly
   this — a pass present in some flag combinations and not others — and it
   ran the guilty combination (bare `--bundle` is the first entry in its
