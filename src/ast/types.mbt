@@ -1211,3 +1211,46 @@ pub(all) struct TypedModule {
 /// Real positions are source byte offsets, so a negative value cannot
 /// collide with one.
 pub const DECL_GROUP_POSITION : Int = -1
+
+///|
+/// True when the parameter at `index` is TypeScript's `this` parameter —
+/// `m(this: T, n: number)`, which declares the type of the RECEIVER and
+/// occupies no runtime argument position. It is only that when it is
+/// FIRST: a `this` anywhere else is TS2680, which the parser reports, and
+/// stays in the list so that rule keeps seeing it.
+///
+/// Call this from every place a parameter LIST becomes a callable's
+/// positional list — in the parser and in the checker alike, which is why
+/// it lives here rather than in either. Two such places had the rule
+/// inline with the reason in their own comments
+/// (`parse_declare_signature_params` and the `declare class` member
+/// parser, which is why `declare function f(this: T, n)` and
+/// `declare class D { m(this: D, n) }` were always right) and the
+/// interface member, the class method, the function expression and the
+/// function TYPE had nothing.
+///
+/// That cost a wrong VALUE in the product rather than a missed
+/// diagnostic. `interface Handler { handle(this: Handler, n: number):
+/// void }` generated
+/// `Handler::handle(self : Handler, arg0 : Handler, arg1 : Double)` over
+/// the body `(self, arg0, arg1) => self.handle(arg0, arg1)`, so every
+/// argument a MoonBit caller passed landed one slot to the right of the
+/// JS method's real parameters, and `type Cb = (this: Widget, ev:
+/// number) => void` became `(Widget, Double) -> Unit`, a closure JS calls
+/// with one argument while MoonBit expects two. In the checker it was an
+/// arity false positive on every such call (`i.m(12)` -> "expected 2
+/// argument(s), got 1") and, where the count happened to match, a
+/// per-argument comparison against the receiver's type. `this` parameters
+/// are pervasive in real `.d.ts` input — every `lib.dom.d.ts`
+/// event-handler type has one — so this reached the bridge's primary
+/// input, and no conformance file could see it.
+///
+/// The parameter LIST itself keeps the entry at every parse site: TS1433
+/// (a decorated or modified `this` parameter), TS2680 and
+/// `check_implicit_any_this` (a function that types its `this` does not
+/// get TS2683) all read it there, and the two `declare` paths drop it for
+/// the separate reason their comments give — a generated `bridge.js` body
+/// may not spell `function f(this, …)`, which Node rejects outright.
+pub fn is_receiver_this_param(name : String, index : Int) -> Bool {
+  name == "this" && index == 0
+}

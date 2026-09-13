@@ -6,7 +6,7 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2637 / MISS in scope 78 / OUT OF SCOPE 19 / FP 0 /
+Measured at **TP 2636 / MISS in scope 79 / OUT OF SCOPE 19 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
@@ -298,6 +298,50 @@ budget forbids — so this is deliberately last.
 `||`-right-operand narrowing (`typeGuardsInRightOperandOfOrOrOperator`) is
 **already handled** at the common shape: `typeof x !== "string" ||
 x.length` stays silent and `typeof x === "string" || x.length` fires.
+
+---
+
+## D2. The `this` PARAMETER's type (TS2684) — the largest remaining cluster
+
+Five files: `types/thisType/unionThisTypeInFunctions.ts`,
+`types/thisType/looseThisTypeInFunctions.ts`,
+`types/union/unionTypeCallSignatures5.ts`,
+`types/union/unionTypeCallSignatures6.ts`,
+`async/es2017/await_incorrectThisType.ts`.
+
+```ts
+type Cb = (this: HTMLElement, ev: Event) => void;
+declare const h: Cb;
+h(new Event("x"));   // tsc: TS2684, the `this` context of type 'void'
+                     //       is not assignable to method's 'this' of
+                     //       type 'HTMLElement'
+```
+
+The cheapest reportable case needs no inference: a BARE call (no
+receiver) through a callable whose `this` parameter is not `void` / `any`
+gets `void` as its `this` context, which is exactly what TS2684 is for —
+and forgetting the receiver on a `this`-typed callback is a real mistake.
+
+**Blocked on a channel, and the blocker is a change batch EK made
+deliberately.** Batch EK removed the `this` parameter from every
+callable's positional type list, because counting it there was a wrong
+VALUE in the generated bridge and an arity false positive in the checker
+(see CLAUDE.md and `@ast.is_receiver_this_param`). A `Func(params, ret)`
+carries no names, so by the time a call site sees the callee's type the
+`this` type is gone. Two routes, both priced:
+
+- add the `this` type to `CallableMeta`, which is **46 construction and
+  match sites across six files** (`src/ast`, `src/parser`, `src/checker`
+  x2, `src/bridge` x2, `src/transform`). MoonBit makes that census
+  compiler-driven rather than a grep, which is the right property, but it
+  touches the bridge and the emitters for a rule neither needs.
+- a name-keyed parser marker (`type F1 = (this: A) => void` records
+  `F1`), which is cheap and cannot see the inline spelling
+  `declare const g: (this: A) => void`, where there is no name to key on.
+
+Keeping the parameter in the positional list is NOT an option: that is
+the bug batch EK fixed, measured at 881 occurrences of `(this:` in
+`lib.dom.d.ts`.
 
 ---
 

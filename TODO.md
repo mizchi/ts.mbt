@@ -3,6 +3,155 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EK (2026-09-13): the `this` parameter counted as an argument — a product bug
+
+**MISS in scope 78 -> 79, TP 2637 -> 2636, FP 0, PFLEGAL 0, TN 1750.**
+The first batch in this series whose conformance count goes the WRONG
+way, and the reason is what `--max-miss` exists to surface rather than a
+regression — see the ratchet's own comment in the `justfile`.
+
+The ranking said what it has said for several batches (41 of the 78 codes
+have exactly one file each, so the corpus count ranks nothing), so the
+files were opened and ranked by which shape REAL `.d.ts` input writes.
+The answer was not a missing diagnostic.
+
+**1. TypeScript's `this` parameter was counted as a real parameter.**
+`m(this: T, n: number)` declares the type of the RECEIVER and occupies no
+argument position. The rule that says so existed at TWO of the six places
+a parameter LIST becomes a callable's positional list —
+`parse_declare_signature_params` and the `declare class` member parser,
+each with the reason in its own comment (a generated `bridge.js` body may
+not spell `function f(this, …)`, which Node rejects outright). The
+interface member, the runtime class method, the function expression, the
+function TYPE and `lookup_field_core`'s GENERIC class arm had nothing.
+
+Sixteenth instance of the applied-in-some-places family and the most
+expensive yet, because it reached the PRODUCT:
+
+```
+interface Handler { handle(this: Handler, n: number): void }
+  before: Handler::handle(self : Handler, arg0 : Handler, arg1 : Double)
+          #| (self, arg0, arg1) => self.handle(arg0, arg1)
+  after:  Handler::handle(self : Handler, arg0 : Double)
+          #| (self, arg0) => self.handle(arg0)
+
+type Cb = (this: Widget, ev: number) => void
+  before: pub type Cb = (Widget, Double) -> Unit
+  after:  pub type Cb = (Double) -> Unit
+```
+
+The JS method takes ONE argument, so every argument a MoonBit caller
+passed landed one slot to the right; the callback type made a closure JS
+calls with one argument expect two. `declare class W { tick(this: W, n) }`
+was correct all along — that asymmetry between two adjacent declarations
+is what exposed it. In the checker it was an arity false positive on every
+such call (`i.m(12)` -> "expected 2 argument(s), got 1") and, where the
+count happened to match, a per-argument comparison against the receiver's
+type.
+
+Scale is measured, not asserted: **881 occurrences of `(this:` in
+`lib.dom.d.ts`** — every DOM event-handler type has one — against **zero
+in the corpus's own generator inputs**, which is exactly why no gate could
+see it. Same reason recorded for the `_from_js` corpus hole.
+
+`@ast.is_receiver_this_param` lives in `src/ast` because the parser and
+the checker both need it. The parameter LIST keeps the entry at every
+parse site on purpose: TS1433 (a decorated `this` parameter), TS2680 (a
+`this` that is not first) and `check_implicit_any_this` (a function that
+types its `this` does not get TS2683) all read it there, so dropping it in
+`parse_params` would have converted the third into a false positive.
+Sixteen cells now agree with tsc.
+
+**The gate paid for it with a right-looking number**, the third recorded
+instance of that shape after batch CS's unary operators and batch DO's
+`+=` exemption. `looseThisTypeInFunctions` and `unionTypeCallSignatures6`
+were TPs whose ENTIRE report content was the phantom — including two lines
+the corpus file itself annotates `// ok` (`o.implicitThis =
+c.implicitThis`) and `f1()` reported as "expected at least 1 argument(s),
+got 0" for a signature that takes none. Both are MISSes now; their real
+errors are all TS2684, filed in `src/checker/UNSUPPORTED.md` section D2
+with the two priced routes to a channel (46 `CallableMeta` sites, or a
+name-keyed marker that cannot see the inline spelling). At five files it
+is now the largest remaining cluster.
+
+**2. An empty interface was treated as nominal.** `Resolver::unwrap`
+resolves `ThisType<T>` to `Object([])` because "it contributes no members,
+so structurally it is `{}`" — its own comment — and EVERY OTHER empty
+interface fell through to the nominal `(Named(a), Named(b)) => a == b`
+arm, so `interface Z { }` beside `const z: Z = xv` reported
+"expected `Z` but got `X`" on code tsc accepts. `interface Props { }` is
+ordinary in real `.d.ts` input, so this was a false positive in the
+bridge's primary input. Twelfth instance of the family, and the first
+where the special case's own comment states the general rule.
+
+The `extends` chain is walked, because `interface Props extends BaseProps
+{ }` is how React-shaped code writes it, and it fails toward "not empty"
+so an unresolvable or generic base keeps the old nominal behaviour. It
+inherits the inline `{}` target's one gap rather than adding its own:
+`const z: {} = null` was already silent before this (probed), so
+`const z: Z = null` stays a MISS for exactly the reason the spelling it
+now shares does.
+
+The FIRST placement was UNREACHABLE — the existing `Named(n)` arm already
+matches every `Named`, the same shape CLAUDE.md records for
+`export_surface`'s `Object.defineProperty` — and `moon check --deny-warn`
+named it in one run.
+
+**3. TS2559, the WEAK TYPE check**, which nothing here implemented. A
+target whose every member is optional accepts any object structurally, so
+every assignability arm correctly stays silent and TypeScript reports it
+anyway: an options bag handed a completely unrelated object is always a
+mistake, and it is among the commonest diagnostics real code hits.
+
+Three cells read the other way round from the rule's description, all
+probed: the SOURCE must have at least one member too (`interface X { }`
+into a weak target is ACCEPTED — with no properties there are none to
+have in common); one shared name is enough whatever its type; and an
+optional METHOD counts as a member while a target with even one REQUIRED
+member is not weak at all (TS2741, which already fires, so including it
+would report one mistake twice). An object LITERAL source belongs to the
+excess-property check, which owns that spelling (TS2353).
+
+Its first version bought **zero** corpus files, because
+`enumerable_member_names` had no `Intersection` arm and `type XY = X & Y`
+assigned to an all-optional `Z` is the shape the rule's own corpus file
+uses — the seventh fail-open shape arm in this ledger, found by measuring
+rather than by reading. A UNION source is deliberately not enumerable
+(tsc gives it TS2322 with the weak-type reason nested, which already
+fires), and a CLASS is not enumerable either, because
+`collect_declared_fields` reads `cls.properties` and never `cls.methods`
+— a member it cannot see would make an overlapping pair look disjoint,
+which is the one direction the budget forbids.
+
+**NOT taken, each with its blocker rather than a verdict.**
+
+- [ ] **FILED: TS7010 for an unannotated function whose inferred return
+  contains an implicit `any`** (`function bar() { return [] }`,
+  `wideningTuples7`). One sound rule over a clean probed boundary: every
+  `return` must carry a nullish literal, an empty array literal, or an
+  array of only those; an explicitly written `: any` is exempt (the
+  absent-versus-`: any` blocker, so it needs `had_return_annotation`); a
+  single non-nullish return anywhere rescues it; a named function gets
+  TS7010 and an anonymous one TS7011. It needs **`strictNullChecks:
+  false`** — under strict, `[]` is `never[]` and there is no implicit
+  any — so it cannot fire on real code at all, the same reason batch EC
+  records for TS7031. The recorded blocker ("the body of a function
+  EXPRESSION at a `var` initializer is not walked at all") is FALSE and
+  was probed: all seven body positions are walked.
+- [ ] **FILED: `typeof C` does not resolve for a CLASS**, which blocks
+  constructor-accessibility assignment (TS2322,
+  `classConstructorAccessibility3`) and is a real-world gap in its own
+  right — `typeof C` is how a factory, a registry and a DI container all
+  spell a class value. `let a: typeof Foo = 1` is silent, because the
+  `TypeOf` arm of `Resolver::unwrap` reads `globals` and a class lives in
+  `classes`. The accessibility rule itself has a clean probed 3x3 (the
+  source must be at least as accessible as the target) whose surprising
+  cell is that an identical `private` redeclaration across two classes is
+  ACCEPTED — unlike TS2415, where it is an error. Synthesizing a class's
+  static side (static members plus a construct signature) is its own
+  piece of work with its own false-positive surface, since every `typeof
+  C` annotation in the corpus becomes judged at once.
+
 ### Batch EJ (2026-09-13): the inline index signature's value type, and six false positives
 
 **+2 files at FP 0** (TP 2635 -> 2637, MISS in scope 80 -> **78**,

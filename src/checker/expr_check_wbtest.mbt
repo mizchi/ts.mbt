@@ -20309,3 +20309,104 @@ test "batch EJ rules" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EK: the `this` parameter counted as a real parameter, the empty
+/// interface treated as nominal, and TS2559 (the weak-type check).
+///
+/// The first two are false positives that the conformance gate
+/// structurally cannot see and that reached the PRODUCT — the bridge runs
+/// `check_module` over real `.d.ts` input, where both shapes are
+/// everywhere (`lib.dom.d.ts` gives every event-handler type a `this`
+/// parameter; `interface Props { }` is ordinary). Every cell below was
+/// run through the real compiler (`scripts/tsc_probe.mjs`) before being
+/// written down.
+test "batch EK rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The STRICT entry point, for the one cell the permissive filter
+  // suppresses: a class method's arity. CLAUDE.md's own note applies —
+  // a unit test should assert through the strict path so the diagnostic
+  // stays assertable rather than depending on the corpus filter.
+  let strict_count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    strict_count(
+      "class C { m(this: C, n: number): void {} }\ndeclare const c: C;\nfunction f() { c.m(); }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    strict_count(
+      "class C { m(this: C, n: number): void {} }\ndeclare const c: C;\nfunction f() { c.m(12); }",
+    ),
+    0,
+  )
+  // --- fires
+  for
+    src in [
+      // The arity check still WORKS across a `this` parameter — it just
+      // counts the positional parameters now. tsc gives TS2554 on both,
+      // with the same numbers.
+      "interface I { m(this: I, n: number): void }\ndeclare const i: I;\nfunction f() { i.m(1, 2); }",
+      // An empty interface EXTENDING a non-empty one is not empty, so the
+      // missing member is still reported (tsc: TS2741).
+      "interface X { x: string }\ninterface Base { b: number }\ninterface Z extends Base { }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      // TS2559: an all-optional target and a source sharing no member
+      // name, at each position the check runs in.
+      "interface X { x: string }\ninterface Z { z?: boolean }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      "interface X { x: string }\ntype Z = { z?: boolean };\ndeclare const xv: X;\nfunction f(): Z { return xv }",
+      "interface X { x: string }\ninterface Z { z?: boolean }\ndeclare function g(o: Z): void;\ndeclare const xv: X;\nfunction f() { g(xv) }",
+      // An optional METHOD is a member, so the target is still weak.
+      "interface X { x: string }\ninterface Z { z?(): void }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      // An INTERSECTION source is enumerable — the union of its parts'
+      // members — and is the shape the corpus file uses.
+      "interface X { x: string }\ninterface Y { y: number }\ninterface Z { z?: boolean }\ndeclare const xy: X & Y;\nfunction f() { const z: Z = xy; return z }",
+      // A target with a REQUIRED member is not weak; that is the
+      // missing-property rule, which already fires (tsc: TS2741).
+      "interface X { x: string }\ninterface Z { z?: boolean; r: number }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      // An object LITERAL source belongs to the excess-property check
+      // (tsc: TS2353), which owns that spelling.
+      "interface Z { z?: boolean }\nfunction f() { const z: Z = { x: 1 }; return z }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // A `this` parameter types the RECEIVER and occupies no argument
+      // slot. Ten spellings, one per parameter-list parser: the interface
+      // member, the class method, the function TYPE, a zero-argument
+      // signature, a trailing optional, a static, a function EXPRESSION at
+      // a `var` initializer, an object-literal method, and the two
+      // `declare` forms that were always right.
+      "interface I { m(this: I, n: number): void }\ndeclare const i: I;\nfunction f() { i.m(12); }",
+      "class C { m(this: C, n: number): void {} }\ndeclare const c: C;\nfunction f() { c.m(12); }",
+      "declare const g: (this: void, n: number) => void;\nfunction f() { g(12); }",
+      "interface I { m(this: I): void }\ndeclare const i: I;\nfunction f() { i.m(); }",
+      "interface I { m(this: I, a: number, b?: string): void }\ndeclare const i: I;\nfunction f() { i.m(1); }",
+      "declare class D { static s(this: typeof D, n: number): void }\nfunction f() { D.s(1); }",
+      "var fx = function (this: void, n: number) { };\nfunction g() { fx(1); }",
+      "const o = { m: function (this: any, n: number) { } };\nfunction f() { o.m(1); }",
+      "declare function gg(this: void, n: number): void;\nfunction f() { gg(12); }",
+      "declare class W { tick(this: W, n: number): void }\ndeclare const w: W;\nfunction f() { w.tick(1); }",
+      // An interface that declares NOTHING is structurally `{}` and
+      // accepts every non-nullish value — including through an `extends`
+      // chain of empty interfaces, and at a call argument.
+      "interface X { x: string }\ninterface Z { }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      "interface X { x: string }\ninterface Base { }\ninterface Z extends Base { }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      "interface X { x: string }\ninterface Z { }\ndeclare const xv: X;\nfunction g(o: Z): void {}\nfunction f() { g(xv) }",
+      "declare const xv: number;\ninterface Z { }\nfunction f() { const z: Z = xv; return z }",
+      // TS2559's legal neighbours. One shared member name is enough
+      // whatever its type; an empty target is not weak (there are no
+      // properties to have in common); an empty SOURCE is accepted for the
+      // same reason; and an index signature on the target accepts any name.
+      "interface X { x: string }\ninterface Z { z?: boolean; x?: string }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      "interface X { }\ninterface Z { z?: boolean }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+      "interface X { x: string }\ninterface Z { z?: boolean; [k: string]: any }\ndeclare const xv: X;\nfunction f() { const z: Z = xv; return z }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

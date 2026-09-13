@@ -8,6 +8,8 @@ import {
 // Values
 pub const DECL_GROUP_POSITION : Int = -1
 
+pub fn is_receiver_this_param(String, Int) -> Bool
+
 // Errors
 
 // Types and methods

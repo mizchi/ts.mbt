@@ -1338,6 +1338,14 @@ fn method_callable_param_types(
 ) -> Array[@ast.TsType] {
   let out : Array[@ast.TsType] = []
   for i, p in m.params {
+    // See `@ast.is_receiver_this_param`: `m(this: C, n: number)` types the
+    // RECEIVER, so it is not a positional slot. This is the one place a
+    // class method's parameter list becomes a callable's type list — the
+    // same reason the default-widening below lives here — so its callers
+    // get it without any of them being touched.
+    if @ast.is_receiver_this_param(p.0, i) {
+      continue
+    }
     let has_default = i < m.param_defaults.length() &&
       m.param_defaults[i] is Some(_)
     if has_default && !type_accepts_undefined_param(p.1) {
@@ -1356,7 +1364,13 @@ fn method_callable_param_types(
 /// own type since arity handles `Rest(_)` directly.
 fn callable_param_types(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
   let out : Array[@ast.TsType] = []
-  for p in params {
+  for index, p in params {
+    // See `@ast.is_receiver_this_param`. An ARROW cannot declare one
+    // (TS2730), but a function EXPRESSION can — `var f = function (this:
+    // T, n: number) { }` — and both arrive here.
+    if @ast.is_receiver_this_param(p.name, index) {
+      continue
+    }
     if !p.is_rest &&
       param_is_optional(p) &&
       !type_accepts_undefined_param(p.type_) {
@@ -1378,8 +1392,17 @@ fn required_arity(params : Array[@ast.TsParam]) -> Int {
   // already), then return the last required index + 1.
   let mut last_required = 0
   let mut i = 0
-  while i < params.length() {
-    let p = params[i]
+  // See `@ast.is_receiver_this_param`: a leading `this` occupies no
+  // argument position, so it neither raises the required count nor shifts
+  // the index of the parameters after it.
+  let skip = if params.length() > 0 &&
+    @ast.is_receiver_this_param(params[0].name, 0) {
+    1
+  } else {
+    0
+  }
+  while i + skip < params.length() {
+    let p = params[i + skip]
     if !param_is_optional(p) {
       last_required = i + 1
     }
@@ -1966,6 +1989,74 @@ fn Resolver::class_construct_signature(
 }
 
 ///|
+/// True when `name` is declared in this module as an interface with no
+/// members of any kind — no fields (the list `<call>` / `<new>` /
+/// `<computed>` sentinels also land in), no index signatures, no
+/// `extends` clause and no type parameters. Such an interface IS `{}`.
+///
+/// The declaration-merged record is what `self.interfaces` holds, so a
+/// name declared empty in one half and non-empty in another is correctly
+/// not empty here.
+fn Resolver::interface_is_structurally_empty(
+  self : Resolver,
+  name : String,
+) -> Bool {
+  self.interface_is_structurally_empty_rec(name, [])
+}
+
+///|
+/// The recursive half. An empty interface EXTENDING only empty
+/// interfaces is itself empty — `interface Props extends BaseProps { }`,
+/// which real React-shaped `.d.ts` input writes constantly — so the
+/// chain is walked rather than declined at the first `extends`.
+///
+/// Fails toward FALSE, which is the side that keeps the existing
+/// behaviour: a base this cannot resolve (not an interface in this
+/// module, generic, carrying type arguments) makes the whole chain
+/// "not empty", so the type stays nominal and nothing new is accepted.
+/// `seen` makes a cyclic `extends` answer false rather than recurse.
+fn Resolver::interface_is_structurally_empty_rec(
+  self : Resolver,
+  name : String,
+  seen : Array[String],
+) -> Bool {
+  // A module alias of the same spelling wins, as everywhere else on this
+  // path, and is resolved by the caller's own alias arm.
+  if self.type_aliases.contains(name) {
+    return false
+  }
+  if seen.contains(name) {
+    return false
+  }
+  match self.interfaces.get(name) {
+    Some(iface) => {
+      if !iface.fields.is_empty() ||
+        !iface.index_signatures.is_empty() ||
+        !iface.type_params.is_empty() {
+        return false
+      }
+      if iface.extends_names.is_empty() {
+        return true
+      }
+      let next = [name, ..seen]
+      for i, base in iface.extends_names {
+        // A base with type ARGUMENTS could project members in, so it is
+        // not decidable here.
+        if i < iface.extends_args.length() &&
+          !iface.extends_args[i].is_empty() {
+          return false
+        }
+        if !self.interface_is_structurally_empty_rec(base, next) {
+          return false
+        }
+      }
+      true
+    }
+    None => false
+  }
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = Map([])
   let mut cur = ty
@@ -1991,7 +2082,38 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                   seen[n] = true
                   cur = Array(elem)
                 }
-                None => keep_going = false
+                None =>
+                  // An interface that declares NOTHING is structurally
+                  // `{}`, which accepts every non-nullish value — and the
+                  // `ThisType<T>` arm below already says so for the one
+                  // empty interface `lib.es5.d.ts` happens to declare,
+                  // with the reasoning spelled out. Every OTHER empty
+                  // interface fell through to the nominal
+                  // `(Named(a), Named(b)) => a == b` arm of
+                  // `is_assignable_to_inner`, so `interface Z { }` beside
+                  // `const z: Z = xv` reported "expected `Z` but got `X`"
+                  // on code tsc accepts. `interface Props { }` is a shape
+                  // real `.d.ts` input is full of, so this was a false
+                  // positive in the bridge's primary input that no
+                  // conformance file could see. Twelfth instance of one
+                  // rule written for the special case and never for the
+                  // general one, and the first where the special case's
+                  // own comment states the general rule.
+                  //
+                  // Losing the NAME is the point: a type with no members
+                  // has no nominal identity in TypeScript, so two
+                  // different empty interfaces really are mutually
+                  // assignable. It also inherits the inline `{}` target's
+                  // one gap rather than adding a gap of its own: `const z:
+                  // {} = null` was already silent before this (probed), so
+                  // `const z: Z = null` — a real TS2322 — stays a MISS for
+                  // exactly the reason the spelling it now shares does.
+                  if self.interface_is_structurally_empty(n) {
+                    seen[n] = true
+                    cur = Object([])
+                  } else {
+                    keep_going = false
+                  }
               }
           }
         }
@@ -3057,9 +3179,16 @@ fn Resolver::lookup_field_core(
                   } else {
                     bindings
                   }
+                  // Routed through `method_callable_param_types` rather
+                  // than reading `m.params`: the NON-generic class arm
+                  // (`lookup_class_field`) already calls it, so building
+                  // the list here is the same decision made twice, and
+                  // this copy was missing both of that function's facts —
+                  // a leading `this` parameter is not a positional slot,
+                  // and a DEFAULTED parameter widens to `T | undefined`.
                   let param_types : Array[@ast.TsType] = []
-                  for mp in m.params {
-                    param_types.push(substitute_params(mp.1, method_bindings))
+                  for t in method_callable_param_types(m) {
+                    param_types.push(substitute_params(t, method_bindings))
                   }
                   return Some(
                     @ast.TsType::Func(
@@ -9867,6 +9996,19 @@ fn check_expr_against(
       }
     _ => ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
   }
+  // TS2559, the WEAK TYPE check. Decided before everything below because
+  // it is not an assignability question at all: an all-optional target
+  // accepts any object structurally, so every arm further down correctly
+  // stays silent, and TypeScript reports it anyway. See
+  // `weak_type_no_common_members` for the probed boundary.
+  if weak_type_no_common_members(src_shape, expected_shape, expr, ctx.resolver) {
+    record(
+      ctx,
+      sub_path,
+      "type `\{type_display(src_shape)}` has no properties in common with type `\{type_display(expected)}`",
+    )
+    return
+  }
   // (0) Well-known-symbol members compare by their annotated OBJECT
   // shape: shorthand type members are `any`-typed, which the general
   // member compare tolerates as omittable — but both sides here are
@@ -12404,6 +12546,136 @@ fn intrinsic_source_satisfies_object(
 /// `type_has_call_signature` and used the same way: the member's identity is
 /// a symbol this checker did not resolve, so a structural comparison
 /// against the shape cannot decide anything.
+/// The named members of `t` when they can be enumerated COMPLETELY, else
+/// `None`. "Completely" is the whole point: the weak-type rule below
+/// decides that two shapes share NO member name, and a member this cannot
+/// see would make an overlapping pair look disjoint — a false positive.
+///
+/// So this is narrower than `collect_declared_fields`, which it delegates
+/// to: an interface (with its `extends` chain) and an inline object type
+/// are enumerable, and a CLASS is not, because that function reads
+/// `cls.properties` and never `cls.methods`. An index signature or a
+/// call / construct signature means the shape accepts names that are not
+/// in the list at all.
+fn enumerable_member_names(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[(String, @ast.TsType)]? {
+  let unwrapped = resolver.unwrap(t)
+  match unwrapped {
+    Object(entries) => {
+      // A bare-primitive-keyed entry is an inline index signature.
+      for e in entries {
+        if !(e.0 is Literal(_)) {
+          return None
+        }
+      }
+      ()
+    }
+    Struct(_, _) => ()
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) => if !iface.index_signatures.is_empty() { return None }
+        None => return None
+      }
+    // An INTERSECTION of enumerable shapes is enumerable: its members are
+    // the union of the parts'. `collect_declared_fields` has no
+    // `Intersection` arm, so this collects them here — and it is the shape
+    // the rule's own corpus file uses (`type XY = X & Y` assigned to an
+    // all-optional `Z`), which is why the first version bought nothing.
+    // A UNION is deliberately NOT enumerable for this purpose: tsc gives
+    // a union source a different code (TS2322, with the weak-type reason
+    // nested inside), which already fires.
+    Intersection(parts) => {
+      let all : Array[(String, @ast.TsType)] = []
+      for part in parts {
+        guard enumerable_member_names(part, resolver) is Some(fs) else {
+          return None
+        }
+        for f in fs {
+          all.push(f)
+        }
+      }
+      return Some(all)
+    }
+    _ => return None
+  }
+  let fields = collect_declared_fields(unwrapped, resolver)
+  for f in fields {
+    // `<call>` / `<new>` / `<computed>`: a shape whose membership this
+    // cannot name.
+    if f.0.has_prefix("<") || target_member_unmatchable(f.0) {
+      return None
+    }
+  }
+  Some(fields)
+}
+
+///|
+/// TS2559 ("Type 'X' has no properties in common with type 'Y'") — the
+/// WEAK TYPE check. A target whose every member is optional accepts any
+/// object structurally, so assignability alone says nothing; TypeScript
+/// adds this rule precisely because an all-optional type is what an
+/// options bag looks like, and handing one a completely unrelated object
+/// is always a mistake. It is among the most common diagnostics real code
+/// hits, and nothing here implemented it.
+///
+/// Every cell was probed against the real compiler, and three read the
+/// other way round from the rule's description:
+///
+///   - the SOURCE must have at least one member too. `interface X { }`
+///     into a weak target is ACCEPTED — with no properties there are none
+///     to have in common, and tsc does not report it.
+///   - one shared name is enough, whatever its type. `{ z?: boolean }`
+///     against a source declaring `z: string` is ACCEPTED here; a type
+///     mismatch on the shared member is a different diagnostic.
+///   - an optional METHOD counts as a member (`{ z?(): void }` is weak),
+///     and a target with even one REQUIRED member is not weak at all —
+///     that is TS2741 ("property is missing"), which already fires, so
+///     including it would report one mistake twice.
+///
+/// An object LITERAL source is excluded because the excess-property check
+/// owns that spelling (tsc gives TS2353 there, and we already do). Both
+/// sides must be completely enumerable — see `enumerable_member_names` —
+/// so a class, an index signature or a call signature on either side
+/// abstains, losing a finding rather than inventing one.
+fn weak_type_no_common_members(
+  src : @ast.TsType,
+  target : @ast.TsType,
+  expr : @ast.TsExpr,
+  resolver : Resolver,
+) -> Bool {
+  if expr is ObjectLit(_) {
+    return false
+  }
+  guard enumerable_member_names(target, resolver) is Some(t_fields) else {
+    return false
+  }
+  if t_fields.is_empty() {
+    return false
+  }
+  for f in t_fields {
+    if !target_field_optional(f.1) {
+      return false
+    }
+  }
+  guard enumerable_member_names(src, resolver) is Some(s_fields) else {
+    return false
+  }
+  if s_fields.is_empty() {
+    return false
+  }
+  for sf in s_fields {
+    for tf in t_fields {
+      if sf.0 == tf.0 {
+        return false
+      }
+    }
+  }
+  true
+}
+
+///|
 fn type_has_computed_member(t : @ast.TsType, resolver : Resolver) -> Bool {
   let fields = match resolver.unwrap(t) {
     Object(fs) => fs
@@ -32546,7 +32818,11 @@ fn callable_required_arity(resolver : Resolver, t : @ast.TsType) -> Int? {
 /// arrows / function expressions).
 fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int {
   let mut required = 0
-  for p in params {
+  for index, p in params {
+    // See `@ast.is_receiver_this_param`.
+    if @ast.is_receiver_this_param(p.name, index) {
+      continue
+    }
     if !p.is_rest && p.default is None {
       required += 1
     }

@@ -27,7 +27,12 @@ fn callable_func_type_from_params(
 ) -> @ast.TsType {
   let types : Array[@ast.TsType] = []
   let optional : Array[Bool] = []
-  for param in params {
+  for index, param in params {
+    // See `@ast.is_receiver_this_param`: the receiver's type is not an argument
+    // position, so it must not enter the callable's positional list.
+    if @ast.is_receiver_this_param(param.name, index) {
+      continue
+    }
     // Declaration-style rest parameters already carry their array-shaped
     // element type (`...checks: string[]` -> `Array[String]`). Keep the
     // existing representation used by interface/object members; function
@@ -127,12 +132,20 @@ fn Parser::parse_paren_or_function_type(
   let mut can_be_function_type = true
   while true {
     let is_rest = self.match_ellipsis()
-    let _ = self.parse_declare_param_name() catch {
+    let param_name = self.parse_declare_param_name() catch {
       _ => {
         can_be_function_type = false
         break
       }
     }
+    // See `@ast.is_receiver_this_param`. A function TYPE's `this` parameter
+    // (`type Cb = (this: Widget, ev: number) => void`, the shape every DOM
+    // event-handler type uses) is the receiver's type, so it occupies no
+    // positional slot — `pub type Cb = (Widget, Double) -> Unit` made every
+    // MoonBit closure JS calls with one argument expect two.
+    let is_this_param = @ast.is_receiver_this_param(
+      param_name, param_types.length(),
+    )
     for r in self.last_param_pattern_renamings {
       renamings.push(r)
     }
@@ -151,8 +164,10 @@ fn Parser::parse_paren_or_function_type(
     // `T | undefined`, mirroring declaration parameters, so arity / required-
     // param reasoning sees it as omittable.
     let pty = if is_optional { wrap_optional_ts_type(pty) } else { pty }
-    param_types.push(if is_rest { Rest(pty) } else { pty })
-    param_optional.push(is_optional)
+    if !is_this_param {
+      param_types.push(if is_rest { Rest(pty) } else { pty })
+      param_optional.push(is_optional)
+    }
     if self.match_(Comma) {
       if self.check(RParen) {
         break

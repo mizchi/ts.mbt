@@ -142,9 +142,22 @@ checker-miss-buckets *ARGS:
 # MISS count (`scripts/checker_out_of_scope.txt` holds the declared
 # remainder, `docs/checker-triage.md` the argument) — lower it whenever a
 # batch improves it, the same way the FP budget only ever tightened.
+#
+# It went UP by one once, from 78 to 79, in batch EK, and the reason is
+# the thing this gate exists to surface rather than a regression to fix.
+# Removing the phantom `this` parameter (`@ast.is_receiver_this_param`)
+# silenced every report `looseThisTypeInFunctions` and
+# `unionTypeCallSignatures6` used to make — all of them false positives
+# on lines those files annotate `// ok` — so both moved from TP to MISS
+# even though nothing got worse. A conformance file counts as a TP if we
+# flag it AT ALL, which is why the count can fall when a false positive
+# is fixed; the same lesson batch DO records for `parserRealSource1`/`2`
+# and batch CS for the unary-operator rule. Their real errors are all
+# `this`-TYPE checking (TS2684), the largest remaining cluster at five
+# files, filed with its exact blocker in `src/checker/UNSUPPORTED.md`.
 verify-checker-soundness:
     moon build --target native
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 78
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 79
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #
