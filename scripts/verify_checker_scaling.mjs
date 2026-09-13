@@ -74,6 +74,11 @@ const DEFAULT_RUNGS = [500, 1000, 2000, 4000];
 // in 2 s. `--rungs` still overrides everything.
 const AXIS_RUNGS = {
   namespaces: [125, 250, 500, 1000],
+  // Quadratic, so it climbs a cheaper ladder for the same reason
+  // `namespaces` does: 4x between the endpoints separates linear from
+  // quadratic, and at 4,000 this axis alone would dominate the run. It
+  // fits 2.14 here in 2 s against 2.20 on the default rungs.
+  "nested-closures": [250, 500, 1000, 2000],
   // A chain this long is already far past anything real (the deepest
   // `extends` chain in this repo's own node_modules is single digits), and
   // 50..400 spans the 8x that separates linear from quadratic.
@@ -122,6 +127,25 @@ const AXIS_BUDGET = {
   // dozens of operations. Gated at its measured number so a regression
   // past the accepted cost still fails.
   "private-members": 1.75,
+  // Declared at its measured number, and unlike `private-members` the
+  // reach here is NOT nil: this is the dominant cost on real input.
+  // `typescript/src/compiler/checker.ts` is one ~50,000-line function
+  // containing thousands of closures over a shared scope, and it alone is
+  // 27.8 s of a 56 s compile of this repo's own submodule — 8.82 us/byte
+  // against 0.27-0.38 for the ~0.5 MB sources beside it.
+  //
+  // It is gated rather than fixed because the fix is a refactor of the
+  // checker's hottest data structure and wants its own change. The
+  // save/restore pair is O(enclosing bindings) at 21 paired call sites;
+  // replacing it with an undo JOURNAL (record each mutation's previous
+  // value, unwind to a mark) makes it O(mutations in the scope) and there
+  // are only 3 writes to `vars`, 2 removes and 4 `declared` mutations to
+  // intercept. The PRECONDITION is what needs auditing first, and it is
+  // why this is not a one-liner: a journal requires strict LIFO nesting,
+  // while an array snapshot tolerates any order — several call sites
+  // restore one snapshot twice (idempotent either way), but a pair that
+  // restores an OUTER snapshot before an inner one would silently differ.
+  "nested-closures": 2.25,
 };
 
 // One generator per axis. Each emits N declarations of ONE kind, so a
@@ -269,6 +293,52 @@ const AXES = {
       out.push(`}`);
       out.push(`function b${i}Helper(x: number): string { return String(x * 2) }`);
     }
+    return out.join("\n") + "\n";
+  },
+  // CLOSURES NESTED INSIDE ONE BODY — the dimension every other axis
+  // misses, and the one that dominates a real compile.
+  //
+  // `function-bodies` above grows N SIBLING functions, each with its own
+  // small scope, and reads 1.04. `statements` below grows N statements in
+  // ONE body with no closures, and reads 0.75. Neither grows closures
+  // nested in a large enclosing scope, and that is what a real large
+  // function is: `typescript/src/compiler/checker.ts` is essentially one
+  // 50,000-line `createTypeChecker` containing thousands of inner
+  // functions over one shared scope.
+  //
+  // What that costs, measured: checker.ts alone is 27.8 s of `tscheck`
+  // at 8.82 us/byte, where parser.ts / utilities.ts / types.ts at ~0.5 MB
+  // each run at 0.27-0.38 us/byte. Truncating inside the giant function
+  // (balancing braces so each probe still parses) gives 0.372 s at 245 KB,
+  // 3.76 s at 1.15 MB, 9.14 s at 1.76 MB, 15.94 s at 2.32 MB, 28.14 s at
+  // 3.10 MB — exponent 2.03 in the size of ONE function body.
+  //
+  // The mechanism is the env save/restore around each nested body.
+  // `ExprEnv::full_snapshot` copies the whole `vars` map into an array and
+  // `ExprEnv::restore_from` then makes three more full passes over it
+  // (build a `kept` map from the snapshot, scan `vars` for names to drop,
+  // rewrite every snapshot entry) — four O(enclosing bindings) passes with
+  // string hashing, per closure. callgrind on a 20,000-line probe: 916
+  // `check_funcexpr_with_context` calls, and 83% of self cost is String
+  // hash (29.5%), Map[String, TsType] add/set/iter/push/rehash (24.4%) and
+  // alloc + GC (29.1%).
+  //
+  // The isolated shape below fits 1.90, and its control — the same
+  // bindings and closures split into N separate small functions, at 1.4x
+  // the bytes — fits 0.77. At n=1600 the nested form is 18x slower on 30%
+  // FEWER bytes, which is what makes this a scope-size effect rather than
+  // a byte effect.
+  "nested-closures": (n) => {
+    const out = [];
+    out.push(`export function outer(): number {`);
+    for (let i = 0; i < n; i++) out.push(`  const v${i}: number = ${i};`);
+    // Each closure reads one enclosing binding, so the scope it is
+    // checked against is the whole outer body rather than a fresh one.
+    for (let i = 0; i < n; i++) {
+      out.push(`  const f${i} = (x: number): number => x + v${i};`);
+    }
+    out.push(`  return f0(1);`);
+    out.push(`}`);
     return out.join("\n") + "\n";
   },
   // Statements inside ONE function body: the expando (TS2565) ordered
