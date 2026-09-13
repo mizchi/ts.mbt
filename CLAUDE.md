@@ -1029,13 +1029,47 @@ product surfaces now.
   35x slower on 8% MORE bytes**. Narrowing is not the trigger — a plain
   `if (b)` fits 2.10 against 2.04 for a real type guard — and
   `statements` could not see it because its statements are unbraced.
-  `block-scopes` is the fifteenth axis at a gated 1.92. The LIFO
-  precondition HOLDS: every save is a function-local restored in the
+  `block-scopes` was the fifteenth axis at a gated 1.92 and is **0.94,
+  linear, now** — the journal shipped, and the axis added to gate the
+  quadratic was retired by the fix one commit later, which is what a
+  gate is for. The LIFO precondition HOLDS and was audited BEFORE the
+  code rather than after: every save is a function-local restored in the
   same function, so call-stack nesting is automatic; `check_stmt`'s
   seven are in mutually exclusive match arms; and the two double-restore
   sites are the ternary pattern, where the mutations after the first
   unwind push new log entries that the second unwind pops — the case
   that looked like an aliasing hazard and is not.
+  **`ExprEnv::mark` / `unwind` is the first change in this whole round
+  worth anything on real input: `checker.ts` 27.79 s -> 9.55 s (2.9x)
+  and the 5.26 MB corpus 55.8 s -> 32.8 s (1.70x), at oracle TP 2636 /
+  MISS in scope 79 / FP 0 / PFLEGAL 0 / TN 1750 unchanged.** The three
+  fixes before it were ~1% each, and the difference in method is the
+  whole lesson of the round: those came from profiling a synthetic
+  ladder and extrapolating, this came from measuring the real file,
+  bisecting INSIDE it, isolating the construct against a control, and
+  only then writing code. Deleting `restore_from` rather than leaving it
+  beside the new pair is what made the migration safe — the compiler
+  then enforces that every save site moved, and the residue came out at
+  exactly the 6 `full_snapshot` uses the audit predicted.
+  Two notes on what it cost and what it did not fix. The journal adds an
+  undo record to every `bind`, which REGRESSED the one axis it cannot
+  help: `nested-closures` 2.00 -> 2.01 with times ~20% higher, since the
+  closure-copy path does N binds per closure on a journal nothing ever
+  unwinds. `ExprEnv::fill_from` is the non-journalling initial fill for
+  those four sites, and the argument for skipping the log there is about
+  ORDER rather than about the env being discarded: every `mark` is the
+  journal's length when taken, so an entry pushed BEFORE any mark exists
+  sits below every mark that will ever be taken and can never be popped.
+  That axis is now the lowest it has ever measured (1610 ms at the top
+  rung against 2395 pre-journal) and still **2.13**, because the copy
+  itself is untouched — the layered env is what fixes that, and it stays
+  filed. And `if` statements keep a SECOND O(env) cost the journal does
+  not reach: the `If` arm materializes the whole env as a `Map` three to
+  four times per statement for the branch join, so the `ifs` shape went
+  3.795 -> 2.080 s and is still 1.98. The join's own comment names the
+  fix — "only touch variables that actually changed in a branch" — and
+  the journal now knows that set in O(changes), where the code finds it
+  by scanning both exit maps against a full `pre_map`.
   **The route there is worth more than the fix, because five hypotheses
   died and every one of them died to a measurement rather than to
   re-reading.** A module-graph quadratic looked certain: a BARREL graph

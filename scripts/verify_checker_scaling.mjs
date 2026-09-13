@@ -147,13 +147,14 @@ const AXIS_BUDGET = {
   // restore one snapshot twice (idempotent either way), but a pair that
   // restores an OUTER snapshot before an inner one would silently differ.
   "nested-closures": 2.25,
-  // KNOWN QUADRATIC per `{ }` block, and the same root as
-  // `nested-closures` seen from the other side: `check_block` snapshots
-  // the whole env on entry and restores it on exit, so N blocks in a body
-  // with N bindings pay N x N. Measured 1.86 isolated (35x at n=2000
-  // against the unbraced control); gated here at its measured number on
-  // the axis ladder. Fixed by the same undo journal, whose precondition
-  // is audited and holds — see the axis comment.
+  // WAS quadratic per `{ }` block — `check_block` snapshotted the whole
+  // env on entry and restored it on exit, so N blocks in a body with N
+  // bindings paid N x N (1.86 isolated, 35x at n=2000 against the
+  // unbraced control). FIXED by the undo journal; the axis reads 0.94.
+  // The entry stays as headroom rather than as an accepted cost: the
+  // journal is O(mutations), so a rule that re-introduces an O(env)
+  // pass per block would show up here, and this is the only axis that
+  // watches that shape. Tighten it toward 1.5 if it proves stable.
   "block-scopes": 2.1,
 };
 
@@ -367,8 +368,13 @@ const AXES = {
   // the same as `if (typeof p === "string")` at 2.04, because the block
   // pays the snapshot whether or not anything narrows.
   //
-  // The fix is the undo JOURNAL filed in TODO.md, whose LIFO
-  // precondition has been audited and HOLDS: all 17 save sites are
+  // FIXED by the undo journal (`ExprEnv::mark` / `unwind`), so this axis
+  // reads 0.94 now and the budget below is what a REGRESSION would have
+  // to cross rather than an accepted cost. Kept because the quadratic it
+  // caught was worth 2.9x on `checker.ts` and 1.70x on a 5.26 MB corpus,
+  // and nothing else in the suite watches this shape.
+  //
+  // The journal's LIFO precondition was audited and HOLDS: all 17 save sites are
   // function-locals restored in the same function, the only multi-save
   // function has them in mutually exclusive match arms, and the two
   // double-restore sites are the ternary pattern (one mark unwound

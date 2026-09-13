@@ -1102,12 +1102,61 @@ removes, 4 `declared` mutations** — and `declared` being
 first-write-wins is what makes the semantics match for any name already
 in the snapshot.
 
-- [ ] **FILED: the undo JOURNAL for the 17 SAVE sites.** Precondition
-  audited and holding (above), so what remains is the change itself:
-  `mark()` returns the log length, each mutation pushes its previous
-  value, `unwind(mark)` pops and applies. Keeps `full_snapshot` for the
-  enumerator and read-out uses. Worth the `block-scopes` exponent, which
-  is every block in every function.
+- [x] **DONE: the undo JOURNAL for the SAVE sites**, and it is the first
+  change in this round worth anything on real input:
+
+  | | before | after |
+  | --- | --- | --- |
+  | `checker.ts` (3.01 MB real) | 27.79 s | **9.55 s (2.9x)** |
+  | corpus (5.26 MB) | 55.8 s | **32.8 s (1.70x)** |
+  | `block-scopes` axis | 1.93 | **0.94, linear** |
+
+  `block-scopes` now matches its unbraced control exactly, so the braces
+  cost nothing — the axis added to gate the quadratic was retired by the
+  fix one commit later. Oracle TP 2636 / MISS in scope 79 / OUT OF SCOPE
+  19 / FP 0 / PFLEGAL 0 / TN 1750, UNCHANGED, which is also the answer on
+  the one deliberate semantic change: `restore_from` removed the
+  `declared` slot only for names ABSENT from the vars snapshot, so a
+  nested `let x: T` shadowing an outer name left its `declare_type`
+  override in place — the leak `full_snapshot`'s own doc comment claimed
+  not to have. Unwinding restores both maps precisely and no conformance
+  file depended on the old behaviour.
+
+  Three things about the method, since the three fixes before this were
+  ~1% each and this one is 2.9x. The audit ran BEFORE the code. The
+  measurement ran on the REAL file, bisected INSIDE it, and isolated the
+  construct against a control, rather than profiling a synthetic ladder
+  and extrapolating. And `restore_from` was DELETED rather than left
+  beside the new pair, so the compiler enforced that all 15 save sites
+  migrated and the residue came out at exactly the 6 `full_snapshot`
+  uses the audit predicted.
+
+- [x] **DONE: `ExprEnv::fill_from`**, because the journal regressed the
+  one axis it cannot help — `nested-closures` 2.00 -> 2.01 with times
+  ~20% higher, the closure path doing N binds per closure on a journal
+  nothing unwinds. The reason skipping the log is sound there is about
+  ORDER, not about the env being discarded: every `mark` is the
+  journal's length when taken, so an entry pushed BEFORE any mark exists
+  sits below every mark that will ever be taken and can never be popped;
+  the fill runs on a fresh env whose first mark comes later, from the
+  nested body's own `check_block`. It also folds the `reset_narrowing`
+  variant in rather than leaving a fourth copy of the loop. That axis is
+  now the lowest it has measured (1610 ms at the top rung against 2395
+  pre-journal) and still 2.13, because the copy itself is untouched.
+
+- [ ] **FILED: the branch join's three-to-four full-env `Map`
+  materializations.** `if` keeps a SECOND O(env) cost the journal does
+  not reach, so the `ifs` shape went 3.795 -> 2.080 s and is still
+  **1.98**. The `If` arm builds `pre_map` from the whole env, then
+  `check_block_narrowing_exit` returns a full exit `Map` for each
+  branch, plus a copy on the no-else path. The join's own comment names
+  the fix — "Only touch variables that actually changed in a branch" —
+  and it finds them by scanning both exit maps against `pre_map`, which
+  is O(env) to discover a handful of names. **The journal now knows that
+  set directly**: the entries between a branch's mark and its end name
+  exactly the mutated bindings, so `check_block_narrowing_exit` can
+  return the changed pairs read off the journal before unwinding and the
+  three materializations disappear.
 - [ ] **FILED: a LAYERED `ExprEnv` for the 4 ENUMERATOR sites** — a
   parent pointer consulted on lookup miss instead of copying every outer
   binding into the child. This is the `nested-closures` fix and it is
