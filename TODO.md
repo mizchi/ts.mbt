@@ -1157,20 +1157,41 @@ in the snapshot.
   exactly the mutated bindings, so `check_block_narrowing_exit` can
   return the changed pairs read off the journal before unwinding and the
   three materializations disappear.
-- [ ] **FILED: a LAYERED `ExprEnv` for the 4 ENUMERATOR sites** — a
-  parent pointer consulted on lookup miss instead of copying every outer
-  binding into the child. This is the `nested-closures` fix and it is
-  what `checker.ts`'s 27.8 s is made of. **Feasibility measured rather
-  than assumed: `ExprEnv` has 8 methods and exactly ONE place outside
-  them touches the fields** (`env.vars.remove` / `env.declared.remove`
-  at 15161-15162), so the read surface is fully encapsulated. Two
-  details, both checked: that `remove` loop runs on a synthetic env that
-  is discarded two statements later, so child-vs-copy semantics cannot
-  be observed; and `check_funcexpr_with_context`'s `reset_narrowing`
-  (`f.name == "<class>"`, which rebinds captured names at their DECLARED
-  types because class member bodies run after the guard region ends)
-  becomes a flag on the child — on miss, ask the parent for
-  `lookup_declared` rather than `lookup`.
+- [x] **REJECTED with evidence: a LAYERED `ExprEnv` for the 4 ENUMERATOR
+  sites.** Implemented, measured and REVERTED (5737882, reverted in
+  3d690ba). A parent pointer consulted on lookup miss, instead of
+  copying every outer binding into the child:
+
+  | | before | after |
+  | --- | --- | --- |
+  | `nested-closures` axis | 2.13, 1610 ms top rung | **0.98, 29 ms — 55x** |
+  | `checker.ts` (real) | 9.55 s | **10.29 / 10.72 / 10.72 s — +9%** |
+  | corpus (5.26 MB) | 32.8 s | 31.9 / 32.8 s — neutral |
+
+  **The axis OVERSTATES this cost, and that is the finding.** Each
+  closure in the generator reads exactly ONE outer binding, so the copy
+  is pure overhead there and layering is free. Real closures do many
+  lookups each, and chain depth in real code is small (2-5), so layering
+  turns `lookup` — the hottest operation in the checker — into 2-5 map
+  probes instead of one, and that costs more than the avoided O(N) copy
+  saves. The trade is structural rather than a tuning problem: no
+  threshold helps, because `checker.ts`'s outer scope is exactly the
+  large one that would layer.
+
+  Same shape as the member-chain gate this file already records — 32x
+  synthetic, -3.5% real, reverted — and the fourth time this session a
+  synthetic measurement misled, but the FIRST time it misled about a fix
+  rather than a diagnosis. The axis comment now says so, and says the
+  honest improvement is to raise its lookups-per-closure ratio so it
+  stops rewarding this trade.
+
+  What the attempt did establish, for whoever tries again: the read
+  surface really is small (`ExprEnv` has 8 methods and exactly one
+  external field access); no site mutates `outer` after the child is
+  created, so a live parent pointer is safe; and `bind`'s
+  first-write-wins has to test the whole CHAIN to reproduce the copy's
+  `declared` behaviour, since the copy filled the child's `declared` for
+  every inherited name.
 
 **Five hypotheses died, and the route is the reusable part.**
 

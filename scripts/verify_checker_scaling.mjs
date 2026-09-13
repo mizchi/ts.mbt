@@ -338,6 +338,27 @@ const AXES = {
   // the bytes — fits 0.77. At n=1600 the nested form is 18x slower on 30%
   // FEWER bytes, which is what makes this a scope-size effect rather than
   // a byte effect.
+  //
+  // READ THIS BEFORE ACTING ON THIS AXIS: it OVERSTATES the cost, and the
+  // fix it points at was implemented, measured and REVERTED. A layered
+  // env (a parent pointer consulted on lookup miss, instead of copying
+  // the outer scope into the child) takes this axis from 2.13 to **0.98,
+  // 1610 ms -> 29 ms at the top rung, 55x** — and costs the real
+  // `checker.ts` **+9%**, reproducibly (10.29 / 10.72 / 10.72 s against a
+  // 9.55 s baseline), with the 5.26 MB corpus neutral.
+  //
+  // The reason is a ratio this generator gets wrong. Each closure here
+  // reads exactly ONE outer binding, so the copy is pure overhead and
+  // layering is free. Real closures do many lookups each, and chain depth
+  // in real code is small (2-5), so layering turns `lookup` — the hottest
+  // operation in the checker — into 2-5 map probes instead of one, which
+  // costs more than the avoided O(N) copy saves. The trade is structural,
+  // not a tuning problem: no threshold helps, because `checker.ts`'s
+  // outer scope is exactly the large one that would layer.
+  //
+  // So this axis is a REGRESSION DETECTOR for the copy getting worse, not
+  // a target to drive to 1.0. Raising the lookups-per-closure ratio here
+  // would make it representative and is the honest improvement to it.
   "nested-closures": (n) => {
     const out = [];
     out.push(`export function outer(): number {`);
