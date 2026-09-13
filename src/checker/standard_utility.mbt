@@ -8,7 +8,37 @@
 //   is_assignable_to_with_generics(s, t, resolve)
 
 ///|
+/// The table, built once for the process.
+///
+/// It is a CONSTANT — eighteen entries whose values are deep `Conditional`
+/// / `MappedType` AST trees — and `Resolver::empty` used to rebuild it per
+/// resolver. That looked like one allocation per module check, which is
+/// what the `standard_aliases` comment on the resolver says; measurement
+/// says **52,003 constructions for a 162-module graph**, because
+/// `Resolver::ingest_type_module` allocates a whole scratch `Resolver` as
+/// its output buffer and runs once per (module x transitively reachable
+/// module). It was 14.0% of a callgrind profile of that compile, plus its
+/// share of the allocator and GC rows above it.
+///
+/// Sharing one instance is safe because the table is never written:
+/// `standard_aliases` has exactly one reader in the whole repo
+/// (`Resolver::unwrap`'s `self.standard_aliases.get(n)`, consulted only
+/// when `type_aliases` has no entry for the name, so a module declaring
+/// its own `Exclude` still shadows the standard one) and no writer other
+/// than the resolver's own construction. A future writer would leak
+/// across every resolver in the process, so add one only by giving the
+/// resolver its own copy.
+let standard_utility_table : Map[String, AliasBinding] = build_standard_utility_types()
+
+///|
+/// The shared table. Callers must treat the result as read-only; see
+/// `standard_utility_table`.
 pub fn standard_utility_types() -> Map[String, AliasBinding] {
+  standard_utility_table
+}
+
+///|
+fn build_standard_utility_types() -> Map[String, AliasBinding] {
   let table : Map[String, AliasBinding] = Map([])
 
   // type Exclude<T, U> = T extends U ? never : T
