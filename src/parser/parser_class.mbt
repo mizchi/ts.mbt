@@ -3478,6 +3478,28 @@ fn Parser::parse_class_body(
         is_async: is_async_method,
         name_is_member_key: true,
       }
+      // Which bodied instance methods carry NO return annotation. The AST
+      // cannot say — a missing annotation and an explicit `: any` are both
+      // `Any` in `TsClassMethodDecl.return_type`, the blocker this repo
+      // records for TS7031 / TS7022 / TS2729 / TS2448 — and two checker
+      // rules need it, because both have to infer the return from the BODY
+      // and must not do that for a member the author annotated `any`:
+      // TS2416 (a method's signature against the interface member it
+      // implements) and TS2490 (an iterator's `next()` result). Recorded
+      // here for the same reason TS7022's names are: this is the one point
+      // that has the body and the annotation fact together.
+      // A GETTER is included: its return type is the accessor pair's VALUE
+      // type, which is what a write to the member is checked against, and
+      // a setter's parameter is routinely unannotated precisely because the
+      // getter supplies it (`symbolProperty46`). A SETTER is not — its
+      // "return" is `void` and means nothing here.
+      if has_body_block &&
+        !is_static &&
+        (accessor_kind is None || accessor_kind is Some("get")) &&
+        !had_return_annotation &&
+        method_name != "" {
+        self.unannotated_return_members.push(method_name)
+      }
       // TS7022, the INDIRECT form. A `for (var v of new C)` head takes
       // its element type from C's iteration protocol, so an un-annotated
       // `next()` / `[Symbol.iterator]()` that RETURNS `v` is a genuine
@@ -3844,6 +3866,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let unann_return_start = self.unannotated_return_members.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
@@ -3894,6 +3917,15 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   while self.optional_member_names.length() > optional_names_start {
     match self.optional_member_names.pop() {
       Some(n) => expr_class_sentinels.push("<optional-member:" + n + ">")
+      None => ()
+    }
+  }
+  // TS2416 / TS2490: which bodied instance methods carried no return
+  // annotation. Both rules infer the return from the BODY and must not do
+  // that for a member written `: any`, which the AST cannot tell apart.
+  while self.unannotated_return_members.length() > unann_return_start {
+    match self.unannotated_return_members.pop() {
+      Some(n) => expr_class_sentinels.push("<unannotated-return:" + n + ">")
       None => ()
     }
   }
@@ -4688,6 +4720,7 @@ fn Parser::parse_class_decl_with_abstract(
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let unann_return_start = self.unannotated_return_members.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
@@ -4734,6 +4767,15 @@ fn Parser::parse_class_decl_with_abstract(
     match self.optional_member_names.pop() {
       Some(n) =>
         runtime_decl.duplicate_member_names.push("<optional-member:" + n + ">")
+      None => ()
+    }
+  }
+  while self.unannotated_return_members.length() > unann_return_start {
+    match self.unannotated_return_members.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push(
+          "<unannotated-return:" + n + ">",
+        )
       None => ()
     }
   }

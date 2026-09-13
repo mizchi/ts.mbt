@@ -2009,6 +2009,97 @@ product surfaces now.
   drained per class into a sentinel, the `self.optional_member_names`
   shape; not taken because a new parse-time channel for one file is the
   wrong trade at +6.
+  Batch EH takes MISS in scope **under 100** — 108 -> 99, TP 2607 -> 2616,
+  FP 0 — and its more useful half is the **five false positives** it
+  fixed, because two of them were CANCELLING and the corpus scored the
+  pair as correct. `infer_expr`'s `OptionalChain` arm unioned `undefined`
+  into the result unconditionally, so `declare const c: { p: number };
+  const n: number = c?.p` was reported (writing `?.` on a non-nullable
+  receiver is redundant, not wrong); and the array-method table declared
+  `filter` / `some` / `every` / `find`'s callback as returning `boolean`
+  where `lib.es5.d.ts` says `unknown`, so `names.filter(x => x)` — the
+  commonest spelling there is — was reported. `optionalChainingInArrow` is
+  `names?.filter(x => x)`: the first bug added `| undefined` to the
+  receiver, the member lookup failed, and the callback was never judged,
+  so the file was a TN with BOTH bugs present and fixing either one alone
+  turns it into an FP. That is the reason to fix a false positive even
+  when the gate already reads zero. The other three: an ARRAY is
+  assignable to a numeric index signature (`var v: { [n: number]: Bar } =
+  arr` is ACCEPTED by tsc and reached `is_assignable_to`'s `_ => false`),
+  `lookup_field` returns the FIRST declaration of an overloaded
+  computed-key method so the new symbol-index arm reported a call against
+  a later overload, and a private-name diagnostic printed
+  `__private_brand__0__prop` — the third time, so `member_display_name` is
+  now one function the whole property-access family routes through.
+  Four of the nine rules are the applied-in-some-places family. TS2416's
+  method half: the check compared a data-PROPERTY's type and a member's
+  PRESENCE and judged a method's type by nothing, and
+  `member_override_incompatible` could not answer it — a `Func` on both
+  sides falls through its final `false` — so the comparison is returns
+  COVARIANTLY, parameters BIVARIANTLY, which is the cell reasoning gets
+  wrong (`m(x: string)` against `m(x: any)` is LEGAL). A property write
+  spelled with BRACKETS reached nothing where the dotted spelling has
+  been checked for a long time, at BOTH its statement and expression arms
+  — the parser fact this file records for TS2565 and `globalThis`. TS2420
+  never asked whether the index signature a class DOES declare is
+  compatible with the interface's, and the coverage rule is asymmetric:
+  a STRING indexer satisfies a numeric one and a numeric one does not
+  satisfy a string one. And `collect_declared_fields` had arms for five
+  projectable utilities and none for `Record`, the one whose fields come
+  from its KEY argument rather than from a source shape.
+  Two blockers dissolved, and both were written down. TS2490 was FILED one
+  batch earlier with its exact blocker and route, and building the route —
+  a `<unannotated-return:NAME>` per-class sentinel in the shape
+  `optional_member_names` already uses — bought TS2490 and TS2416's
+  unannotated case together. The marker asserts TWO facts and the second
+  is the one that matters: the body was a real `{ … }` block, which is the
+  only way to read a `None` body as `void`, since
+  `TsClassMethodDecl.body` is `None` for an EMPTY body as well as for a
+  bodiless overload signature. The other blocker was a PROXY rather than a
+  channel: the missing-required check asked
+  `is_assignable_to(undefined, ty)` for "is this member optional", and the
+  `?` is not in the AST — the parser wraps `a?: T` into `T | undefined`,
+  ALWAYS producing a union, so the union IS the encoding and the proxy
+  answered yes for five shapes the `?` can never produce. `a: any`,
+  `a: unknown`, `a: string | undefined`, `a: undefined` and `a: void` are
+  all required members tsc reports missing and only `a?: any` is not; the
+  union case stays suppressed because there the two spellings really are
+  the same node.
+  Three cells were probed rather than reasoned and all three read
+  backwards. A union-typed VALUE's call requires the LARGEST minimum arity
+  of its members (tsc's `combineUnionParameters`) and the code overwrote
+  that with the SMALLEST whenever no member's parameter domain dominated —
+  which is the moment the members differ in parameter COUNT, since
+  `callable_params_narrower_than` returns `None` on a length mismatch.
+  `Record<E, any>` with `enum E { A }` requires the key `"0"`, the
+  member's VALUE, so `{ 0: 1 }` satisfies it and `{ A: 1 }` is an EXCESS
+  property — and auto-numbering has to be REPRODUCED, because the AST
+  keeps a folded value only for members that wrote one. And TS2698's
+  intersection arm takes `T & undefined` while every UNION keeping a
+  non-nullish part is legal; the bare `Undefined` / `Null` spellings tsc
+  also reports are out, because our flow model narrows an `any`-typed
+  binding to `Undefined` and an intersection with a nullish part can only
+  ever be written.
+  Four items were measured and NOT taken, each with the blocker rather
+  than a verdict. `arrayLiterals`'s TS2353 needs the VALUE type of an
+  object-type index signature, which `try_parse_object_type_with_members`
+  discards BY DESIGN — its own comment says index signatures are "kept
+  (keyed by the key type, with an `Any` value)". `wideningTuples7`'s
+  TS7010 needs the body of a function EXPRESSION at a `var` initializer,
+  which is not walked at all while the same shape reports for a function
+  DECLARATION. `enumShadowedInfinityNaN`'s TS18033 needs the enum's own
+  BLOCK scope, and an enum is hoisted into `module_.enums` with no record
+  of the block it came from. And `computedPropertyNames30` was RE-PROBED
+  rather than re-argued: the distinction this file called "modelling a
+  distinction ONE file draws" is reproducible — `super()` in an
+  object-literal computed key is TS2466 when an ARROW or a function
+  expression lies between it and the constructor and ACCEPTED directly in
+  the constructor, across five hand-written cells — but deciding it needs
+  a "is there a function boundary between here and the class body" fact,
+  which is a new Parser field with the save / clear / restore discipline
+  `self.labels` needs at fifteen sites. A recorded abstention whose reason
+  probing CONFIRMS is worth as much as one it refutes, and this is the
+  second.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

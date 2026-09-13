@@ -6,7 +6,7 @@ not a guess. Where `tscheck` reports something *different* from tsc, that is
 stated — a file can be flagged for the wrong reason, and the conformance
 oracle counts the file either way.
 
-Measured at **TP 2607 / MISS in scope 108 / OUT OF SCOPE 19 / FP 0 /
+Measured at **TP 2616 / MISS in scope 99 / OUT OF SCOPE 19 / FP 0 /
 PFLEGAL 0** (`just verify-checker-soundness`). The MISS number moves with
 every batch; the SHAPES here move much more slowly, which is why this file
 is organized by machinery rather than by error code.
@@ -30,6 +30,18 @@ filed with its measured blocker rather than shipped — TS2490 needs to
 tell `next() { return "" }` from `next(): any { return "" }`, and
 `TsClassMethodDecl` keeps no annotation-presence field, the
 absent-versus-`: any` gap this file records in section G.
+
+Batch EH built that channel and took TS2490 with it, along with eight more
+rules — and its more useful output is the **five false positives** it
+fixed, none of which this file could have listed, because a false positive
+is not a gap in what the checker knows. Two of them were CANCELLING: the
+optional-chain result type added `| undefined` unconditionally, which made
+a member lookup fail, which meant the array-predicate callback whose
+declared return type was also wrong was never judged — so
+`optionalChainingInArrow` scored as a correct TN with both bugs present.
+The lesson generalizes past this file's subject: **what the checker gets
+WRONG can be hidden by what it does not reach**, so the shapes worth
+minimizing here are not only the silent ones.
 
 Sections B, C, E and F were taken in batch EB — **+8 files at FP 0** — and
 each keeps its entry with what shipped and what is still missing, because

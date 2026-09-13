@@ -845,6 +845,34 @@ fn is_assignable_to_inner(
       let t_obj = struct_fields_to_object(t_fields)
       is_object_assignable_inner(s_fields, t_obj, bivariant_params)
     }
+    // An ARRAY satisfies a NUMERIC index signature: every numeric key
+    // yields the element type. `var v: { [n: number]: Bar } = arr` is
+    // ACCEPTED by tsc and reached the `_ => false` catch-all below, which
+    // made it a false positive on legal code (probed alongside the three
+    // shapes tsc really does reject there — a function, a `number`, and a
+    // STRING index signature, all of which still decline).
+    //
+    // Only when the target declares NOTHING but numeric index signatures:
+    // a named member would have to exist on the array value itself, and a
+    // string index signature demands every property be the value type,
+    // which `length` / `push` are not.
+    (Array(elem), Object(t_fields))
+    | (Applied("Array", [elem]), Object(t_fields))
+    | (Applied("ReadonlyArray", [elem]), Object(t_fields)) => {
+      if t_fields.length() == 0 {
+        return false
+      }
+      for f in t_fields {
+        match f.0 {
+          Number | Int =>
+            if !is_assignable_to_inner(elem, f.1, bivariant_params) {
+              return false
+            }
+          _ => return false
+        }
+      }
+      true
+    }
     // Named/applied references are nominal: only equal names match.
     (Named(a), Named(b)) => a == b
     (Applied(a, args_a), Applied(b, args_b)) => {

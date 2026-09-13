@@ -95,6 +95,14 @@ priv struct Resolver {
   // self-limiting for a top-level class and leaves the old suppression in
   // charge wherever the parser could not record a parent.
   private_brand_parent : Map[String, String]
+  // `class name -> bodied instance METHOD names that carried NO return
+  // annotation`, from the parser's `<unannotated-return:NAME>` sentinels.
+  // `TsClassMethodDecl.return_type` is `Any` for a missing annotation and
+  // for an explicit `: any` alike, and TS2416 / TS2490 both have to infer
+  // the return from the BODY — correct for the first, a false positive for
+  // the second. An absent entry means "annotated, or not recorded", so a
+  // missing sentinel costs a MISS.
+  unannotated_return_members : Map[String, Array[String]]
   // Qualified-access support (TS2339 on `A.y` where `y` is declared but
   // not exported): per namespace name (prefixed for nesting), the value
   // names its body declares and the subset the parser marked
@@ -270,6 +278,7 @@ fn Resolver::empty() -> Resolver {
     declared_value_names: {},
     private_brand_decls: {},
     private_brand_parent: {},
+    unannotated_return_members: {},
     namespace_value_decls: {},
     namespace_exports: {},
     namespace_instantiated: {},
@@ -2310,7 +2319,19 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
   let cb = fn(ret) {
     @ast.TsType::Func([elem, @ast.TsType::Number, arr_t], ret)
   }
-  let cb_bool = cb(@ast.TsType::Boolean)
+  // `filter` / `some` / `every` / `find` / `findIndex` / `findLast` /
+  // `findLastIndex` all declare their predicate as returning `unknown` in
+  // `lib.es5.d.ts`, NOT `boolean` — the call site only needs truthiness.
+  // Declaring `boolean` here was a false positive on the commonest
+  // spelling there is: `names.filter(x => x)`, `.some(x => x)`,
+  // `.every(x => x)` and `.find(x => x)` are all ACCEPTED by tsc and were
+  // all reported as "expected `boolean` but got `string`". The corpus did
+  // contain the shape (`optionalChainingInArrow`) and did not catch it,
+  // because the optional-chain result type was adding `| undefined` to the
+  // receiver unconditionally — so the member lookup failed and the
+  // callback was never judged. Two bugs cancelling; fixing either alone
+  // surfaces the other.
+  let cb_bool = cb(@ast.TsType::Unknown)
   // An OPTIONAL parameter, spelled the way the arity check already reads
   // optionality: `required_arity_from_types` treats a parameter whose
   // type accepts `undefined` as omittable, because the parser widens
@@ -6408,6 +6429,50 @@ fn is_definitely_not_arithmetic(ty : @ast.TsType) -> Bool {
 // "not callable" diagnostic stays free of false positives. Permissive for
 // Named / Applied (interfaces may carry call signatures), Union / Intersection
 // (overload sets), and unresolved type-level forms.
+///|
+/// TS2349 for an INTERSECTION that TypeScript reduces to `never`: when two
+/// constituents declare the same member with definitely-conflicting types,
+/// no value can inhabit the intersection, so it has no call signature
+/// either — `{ (x: string): number, a: "" } & { a: number }` called as
+/// `f()` is `neverIntersectionNotCallable`, and tsc's own message says the
+/// intersection "was reduced to 'never' because property 'a' has
+/// conflicting types in some constituents".
+///
+/// Separate from `is_definitely_not_callable` because deciding it needs the
+/// resolver, which that predicate does not take. `types_definitely_differ`
+/// is the conflict test and abstains on everything it cannot prove — a
+/// `Named` pair, an `any`, differing member SETS (a missing member is not a
+/// conflict, since it may be optional) — so this reports only where the
+/// reduction is certain.
+fn intersection_reduces_to_never(resolver : Resolver, ty : @ast.TsType) -> Bool {
+  guard resolver.unwrap(ty) is Intersection(parts) else { return false }
+  // First-seen type per member name, across constituents. One pass, for the
+  // reason `check_merged_interface_member_conflicts` is one pass: a pair
+  // loop over constituents is quadratic for a rule that can only act on
+  // same-named members.
+  let first : Map[String, @ast.TsType] = Map([])
+  for part in parts {
+    match resolver.unwrap(part) {
+      Object(fields) =>
+        for f in fields {
+          match f.0 {
+            Literal(n) =>
+              match first.get(n) {
+                Some(prev) =>
+                  if types_definitely_differ(resolver, prev, f.1) {
+                    return true
+                  }
+                None => first[n] = f.1
+              }
+            _ => ()
+          }
+        }
+      _ => ()
+    }
+  }
+  false
+}
+
 fn is_definitely_not_callable(ty : @ast.TsType) -> Bool {
   match ty {
     Number
@@ -8216,6 +8281,15 @@ fn infer_expr(
           let spread_ty = infer_expr(env, resolver, entry.1)
           if spread_shape_is_known(spread_ty, resolver) {
             for f in collect_declared_fields(spread_ty, resolver) {
+              // A `#private` member is NOT copied by a spread — it is not
+              // an own enumerable property — so the result does not have
+              // it and `({ ...other }).#prop` is TS2339
+              // (`privateNameAndObjectRestSpread`). Carrying it over made
+              // the private-name existence check resolve a member that
+              // cannot be there.
+              if f.0.has_prefix("__private_brand__") {
+                continue
+              }
               fields.push((@ast.TsType::Literal(f.0), f.1))
             }
           } else {
@@ -8309,11 +8383,31 @@ fn infer_expr(
     NonNull(inner) => non_nullable(infer_expr(env, resolver, inner))
     // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
     OptionalChain(inner) => {
-      // `a?.b` — infer the chain result, then widen with `undefined` because
-      // the chain short-circuits to `undefined` when the receiver is nullish.
+      // `a?.b` — infer the chain result, then widen with `undefined`
+      // because the chain short-circuits to `undefined` when the receiver
+      // is nullish. It only short-circuits when the receiver CAN be
+      // nullish, though, and adding `undefined` unconditionally is a false
+      // positive on legal code the corpus does not cover:
+      // `declare const c: { p: number }; const n: number = c?.p` is
+      // ACCEPTED by tsc (probed) and was reported here. Writing `?.` on a
+      // non-nullable receiver is redundant rather than wrong.
       let inner_ty = infer_expr(env, resolver, inner)
       let base = prune_nullish(resolver, inner_ty)
-      narrow_union(base, @ast.TsType::Undefined)
+      let recv = match inner {
+        PropAccess(r, _) | IndexAccess(r, _) | MethodCall(r, _, _) => Some(r)
+        _ => None
+      }
+      let receiver_non_nullish = match recv {
+        Some(r) =>
+          definitely_non_nullish(resolver.unwrap(infer_expr(env, resolver, r)))
+        // A shape this cannot read keeps the old, wider answer.
+        None => false
+      }
+      if receiver_non_nullish {
+        base
+      } else {
+        narrow_union(base, @ast.TsType::Undefined)
+      }
     }
     // JSX element / fragment. The value itself is opaque at the type
     // level (we don't model React's `ReactNode` / `JSX.Element`), so
@@ -9059,6 +9153,42 @@ fn infer_index(
     // so `obj[i]` on `{ [k: string]: V }` returns `V` instead of `Any`.
     Named(_) | Applied(_, _) =>
       match idx_expr {
+        // A WELL-KNOWN SYMBOL index. The class and interface parsers mangle
+        // `[Symbol.hasInstance]` to the stable member name `@@hasInstance`,
+        // and nothing here translated the index expression back — so
+        // `d[Symbol.hasInstance]` came out `Any` in both directions, which
+        // is what made `symbolProperty46`'s write silent. A user
+        // declaration of `Symbol` disables the shortcut, the same guard
+        // `check_computed_key_type` uses for the same reason.
+        PropAccess(Var("Symbol"), wk) if well_known_symbol_index_ok(
+            wk, resolver,
+          ) =>
+          // An ACCESSOR pair has to be resolved before `lookup_field`,
+          // which would hand back the GETTER's signature. The parser
+          // upserts a plainly-named `get p(): T` into `properties` as
+          // `p: T`, so the dotted path never needed this; a COMPUTED key
+          // gets only the `methods` entry, so `lookup_field("@@hasInstance")`
+          // answers `() => T` and comparing an assigned value against a
+          // function type is a false positive on the legal write.
+          match accessor_member_value_type(resolver, recv, "@@" + wk) {
+            Some(t) => t
+            None =>
+              // An OVERLOAD SET abstains. `lookup_field` returns the FIRST
+              // declaration's signature, so `c[Symbol.iterator](0)` against
+              // `[Symbol.iterator](x: string)` / `(x: number)` was reported
+              // for the first overload's parameter type
+              // (`symbolProperty40`, TS7-ACCEPTED). Reading a set as a
+              // union is `func_overload_type_params`' job and not this
+              // lookup's.
+              if class_member_declared_more_than_once(resolver, recv, "@@" + wk) {
+                @ast.TsType::Any
+              } else {
+                match resolver.lookup_field(recv, "@@" + wk) {
+                  Some(t) => t
+                  None => @ast.TsType::Any
+                }
+              }
+          }
         StringLit(key) =>
           match resolver.lookup_field(recv, key) {
             Some(t) => t
@@ -10088,6 +10218,33 @@ fn check_expr_against(
     (ArrayLit(items), Applied("Readonly", [Array(elem)])) => {
       check_array_lit_elements_against(env, items, elem, ctx, sub_path)
       return
+    }
+    // An array literal against a NUMERIC INDEX SIGNATURE. The assignability
+    // side now accepts an array there (every numeric key yields the element
+    // type), and contextual typing has to follow it or the elements are
+    // judged by nothing: `var c: { [n: number]: { a: string } } = [{ a: '',
+    // c: '' }]` has an excess property tsc reports (`arrayLiterals`), and
+    // the whole literal used to be compared as one type instead. Only a
+    // target whose members are ALL numeric index signatures — the same
+    // condition the assignability arm requires, for the same reason.
+    (ArrayLit(items), Object(t_fields)) => {
+      let mut value_ty : @ast.TsType? = None
+      let mut only_numeric = t_fields.length() > 0
+      for f in t_fields {
+        match f.0 {
+          Number | Int => if value_ty is None { value_ty = Some(f.1) }
+          _ => only_numeric = false
+        }
+      }
+      if only_numeric {
+        match value_ty {
+          Some(elem) => {
+            check_array_lit_elements_against(env, items, elem, ctx, sub_path)
+            return
+          }
+          None => ()
+        }
+      }
     }
     _ => ()
   }
@@ -12224,13 +12381,26 @@ fn check_union_callee_arity(
       }
     }
   }
+  // A union-typed VALUE is ONE of its members and the call site cannot
+  // know which, so the argument list has to satisfy all of them — which is
+  // what tsc's union signature encodes: `combineUnionParameters` takes the
+  // LONGEST parameter list and the LARGEST minimum count. `max_min` is
+  // already that maximum, so the reduction below only ever LOWERS it, and
+  // the `min_min` fallback lowered it all the way to the smallest member's
+  // minimum. That fallback is what made every union whose members differ in
+  // parameter COUNT silent — `callable_params_narrower_than` returns `None`
+  // on a length mismatch, so nothing can dominate and the fallback ran:
+  // `A1 | A2` accepted one argument where tsc says two. Probed across five
+  // shapes, including two with a rest member, and `max_min` agrees with tsc
+  // on every cell (`(a) => void | (...r) => void` requires 1, not 0).
+  //
+  // `dominant_min` is kept for the case it was written for — same arity, a
+  // strictly narrower domain, where TypeScript reduces to that member's
+  // signature and its `?` decides the minimum — and it can now only apply
+  // where every member has the same parameter count.
   match dominant_min {
     Some(min_) => max_min = min_
-    None =>
-      match min_min {
-        Some(min_) => max_min = min_
-        None => return
-      }
+    None => if min_min is None { return }
   }
   let n = args.length()
   if n < max_min {
@@ -12540,6 +12710,127 @@ fn member_override_incompatible(
     return !is_assignable_to(d, b)
   }
   false
+}
+
+///|
+/// The type a bodied method with NO return annotation returns, for the two
+/// rules that need it (TS2416's method comparison and TS2490's iterator
+/// result). `None` whenever the answer is not exact.
+///
+/// The body must be EMPTY (`void`) or EXACTLY one `return <expr>`, which is
+/// deliberately the narrowest useful shape: anything more needs to know
+/// which returns are reachable and how their types union, and a wrong
+/// answer here becomes a finding rather than a MISS. Inferred in a FRESH
+/// env and literal-widened, the same way `iterator_class_element_type`
+/// reads a `value` property — tsc widens `return ""` to `string`, so
+/// comparing against the literal `""` would be the wrong type.
+///
+/// `async` and generator methods abstain: their declared return is a
+/// `Promise` / `Generator` wrapper around whatever the body yields, so the
+/// body's own type is not the method's.
+///
+/// CALL ONLY for a method the parser's `<unannotated-return:NAME>` sentinel
+/// names. That marker asserts two things this function relies on and cannot
+/// check for itself: the annotation was ABSENT (`m(): any { return "" }` is
+/// `any` to tsc, so inferring `string` there would report legal code), and
+/// the body was a real `{ … }` block. The second is why a `None` body is
+/// read as `void` rather than as unknown —
+/// `TsClassMethodDecl.body` is `None` for an EMPTY body as well as for a
+/// bodiless overload signature, the blocker recorded for TS2393, and only
+/// the parser can tell `next() { }` from `next();`.
+fn method_sole_return_type(
+  m : @ast.TsClassMethodDecl,
+  resolver : Resolver,
+) -> @ast.TsType? {
+  if m.is_async || m.is_generator {
+    return None
+  }
+  guard m.body is Some(b) else { return Some(@ast.TsType::Void) }
+  if b.stmts.length() == 0 {
+    return Some(@ast.TsType::Void)
+  }
+  guard b.stmts.length() == 1 else { return None }
+  guard b.stmts[0] is Return(Some(e)) else { return None }
+  let t = widen_literal(infer_expr(ExprEnv::new(), resolver, e))
+  if t is Any || t is Unknown {
+    None
+  } else {
+    Some(t)
+  }
+}
+
+///|
+/// TS2416 for a class METHOD against the interface member it implements.
+///
+/// `member_override_incompatible` cannot answer this: its arms are scalars
+/// and named declarations, and a `Func` on both sides falls through to its
+/// final `false`. So a method's SIGNATURE is compared here, and only where
+/// every part of the comparison is decidable:
+///
+///   - the return types with plain (covariant) assignability, since a
+///     method's return is covariant in TypeScript too;
+///   - the parameters BIVARIANTLY, which is what TypeScript does for a
+///     method — probed, and it is the cell reasoning gets wrong:
+///     `m(x: string)` against `m(x: any)` is LEGAL, so a contravariant
+///     comparison would report it.
+///
+/// `Any` / `Unknown` / a generic instantiation on either side abstains, an
+/// arity difference abstains (an optional or rest parameter makes the
+/// comparison a different question), and a base member that is not callable
+/// at all reports only when it is a bare scalar — a class supplying a
+/// method where the interface declares `a: number`.
+fn method_override_incompatible(
+  derived : @ast.TsType,
+  base : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  // A callable's source spelling can be wrapped by `CallableMeta` (an
+  // optional parameter) or `GenericFunc`; peel both before matching, the
+  // way `ffi_type_name` peels every wrapper the renderer peels.
+  fn peel(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      CallableMeta(inner, _) => peel(inner)
+      GenericFunc(_, _, inner) => peel(inner)
+      _ => t
+    }
+  }
+
+  let d = peel(derived)
+  let b = peel(resolver.unwrap(base))
+  guard d is Func(dps, dret) else { return false }
+  match b {
+    Func(bps, bret) => {
+      if dps.length() != bps.length() {
+        return false
+      }
+      for i in 0..<dps.length() {
+        let dp = resolver.unwrap(dps[i])
+        let bp = resolver.unwrap(bps[i])
+        match (dp, bp) {
+          (Any, _) | (_, Any) | (Unknown, _) | (_, Unknown) => continue
+          (Applied(_, _), _) | (_, Applied(_, _)) => return false
+          (Named(_), _) | (_, Named(_)) => return false
+          (Rest(_), _) | (_, Rest(_)) => return false
+          _ => ()
+        }
+        if !is_assignable_to_bivariant(dp, bp) {
+          return true
+        }
+      }
+      let dr = resolver.unwrap(dret)
+      let br = resolver.unwrap(bret)
+      match (dr, br) {
+        (Any, _) | (_, Any) | (Unknown, _) | (_, Unknown) => false
+        (Applied(_, _), _) | (_, Applied(_, _)) => false
+        (Named(_), _) | (_, Named(_)) => false
+        // A `void` TARGET accepts any return value, which is the one
+        // direction plain assignability gets wrong here.
+        (_, Void) => false
+        _ => !is_assignable_to(dr, br)
+      }
+    }
+    _ => is_bare_scalar_type(b)
+  }
 }
 
 ///|
@@ -13003,7 +13294,16 @@ fn target_is_projectable_record(
 ) -> Bool {
   match resolver.unwrap(ty) {
     Applied("Record", [k, v]) =>
-      resolver.unwrap(k) is (String_ | Number | Int) &&
+      // A bare keyword key is an OPEN record — no key is required and none
+      // is excess — and a CLOSED key set (a literal union, or an enum) is
+      // the opposite: every key is required and any other is excess. Both
+      // are projectable; what is not is a key this cannot enumerate, which
+      // is a type parameter (`f<K extends string>(o: Record<K, number>)`,
+      // the hazard the caller's comment records).
+      (
+        resolver.unwrap(k) is (String_ | Number | Int) ||
+        record_closed_key_names(k, resolver).length() > 0
+      ) &&
       !type_contains_unresolved_named(v, resolver) &&
       !is_in_scope_type_param(ctx, v)
     _ => false
@@ -13231,7 +13531,32 @@ fn check_object_lit_against_target(
     if name == "<computed>" || has_computed_entry {
       continue
     }
-    if is_assignable_to(@ast.TsType::Undefined, ty) {
+    // Is this declared member OPTIONAL? The `?` is not in the AST — the
+    // parser wraps `a?: T` into `T | undefined` (`wrap_optional_ts_type`,
+    // ALWAYS producing a union) — so the union IS the encoding, and asking
+    // `is_assignable_to(undefined, ty)` instead was a proxy that answered
+    // yes for five shapes the `?` can never produce. Probed one at a time:
+    // `a: any`, `a: unknown`, `a: string | undefined`, `a: undefined` and
+    // `a: void` are ALL required members tsc reports missing, and only
+    // `a?: any` is not. The union case stays suppressed because there the
+    // two spellings really are the same node; the bare ones cannot be.
+    //
+    // `Record<K, V>`'s projected members inherit `V`, so this is what made
+    // `let foo: Record<E, any> = {}` silent even once the key set was
+    // enumerable (assignmentCompatWithEnumIndexer).
+    let optional = match resolver.unwrap(ty) {
+      Union(parts) => {
+        let mut nullish = false
+        for p in parts {
+          if resolver.unwrap(p) is Undefined || resolver.unwrap(p) is Null {
+            nullish = true
+          }
+        }
+        nullish
+      }
+      _ => false
+    }
+    if optional {
       continue
     }
     record(
@@ -13270,6 +13595,247 @@ fn spread_shape_is_known(ty : @ast.TsType, resolver : Resolver) -> Bool {
     // resolver actually holds the declaration.
     _ => collect_declared_fields(ty, resolver).length() > 0
   }
+}
+
+///|
+/// The VALUE type of a class accessor member — what a read produces and a
+/// write must supply — or `None` when the member is not an accessor of a
+/// resolvable class.
+///
+/// TypeScript takes the setter's parameter type for a write and the
+/// getter's for a read; the two are the same type in every legal pair, and
+/// the setter's parameter is routinely UNANNOTATED (its type comes from the
+/// paired getter), so the getter is consulted whenever the setter cannot
+/// answer. A getter with no return annotation is read from its body via
+/// `method_sole_return_type`, which needs the parser's
+/// `<unannotated-return:NAME>` marker to know the annotation was absent.
+fn accessor_member_value_type(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  name : String,
+) -> @ast.TsType? {
+  let cname = match resolver.unwrap(recv) {
+    Named(n) | Applied(n, _) | Struct(n, _) => n
+    _ => return None
+  }
+  guard resolver.classes.get(cname) is Some(cls) else { return None }
+  let mut saw_accessor = false
+  let mut from_setter : @ast.TsType? = None
+  let mut from_getter : @ast.TsType? = None
+  for m in cls.methods {
+    if m.is_static || m.name != name {
+      continue
+    }
+    if m.accessor == "set" {
+      saw_accessor = true
+      if m.params.length() == 1 && is_checkable(m.params[0].1) {
+        from_setter = Some(m.params[0].1)
+      }
+    } else if m.accessor == "get" {
+      saw_accessor = true
+      if is_checkable(m.return_type) {
+        from_getter = Some(m.return_type)
+      } else {
+        let unannotated = match resolver.unannotated_return_members.get(cname) {
+          Some(names) => names.contains(name)
+          None => false
+        }
+        if unannotated {
+          from_getter = method_sole_return_type(m, resolver)
+        }
+      }
+    }
+  }
+  if !saw_accessor {
+    return None
+  }
+  match from_setter {
+    Some(t) => Some(t)
+    None =>
+      match from_getter {
+        Some(t) => Some(t)
+        // An accessor whose type cannot be read: `Any` abstains, which is
+        // the point — returning `None` here would fall through to
+        // `lookup_field` and compare against the getter's SIGNATURE.
+        None => Some(@ast.TsType::Any)
+      }
+  }
+}
+
+///|
+/// Does the resolvable class behind `recv` declare `name` as an instance
+/// method more than once — i.e. is it an overload set, whose type is an
+/// intersection of signatures rather than the one `lookup_field` returns?
+fn class_member_declared_more_than_once(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  name : String,
+) -> Bool {
+  let cname = match resolver.unwrap(recv) {
+    Named(n) | Applied(n, _) | Struct(n, _) => n
+    _ => return false
+  }
+  guard resolver.classes.get(cname) is Some(cls) else { return false }
+  let mut n = 0
+  for m in cls.methods {
+    if !m.is_static && m.name == name && m.accessor == "" {
+      n = n + 1
+    }
+  }
+  n > 1
+}
+
+///|
+/// May `Symbol.<wk>` as an index expression be translated to the mangled
+/// member name `@@<wk>`? Only for a stock well-known symbol, and only when
+/// the file has not declared its own `Symbol` — the guard
+/// `check_computed_key_type` applies for the same reason.
+fn well_known_symbol_index_ok(wk : String, resolver : Resolver) -> Bool {
+  is_well_known_symbol_name(wk) &&
+  resolver.declared_value_names.get("Symbol") is None &&
+  resolver.classes.get("Symbol") is None
+}
+
+///|
+/// A member name as a PERSON should read it: a parser-mangled private name
+/// (`__private_brand__0__prop`) becomes `#prop`, everything else passes
+/// through. A diagnostic naming a brand is one nobody can act on — the
+/// lesson TS7008 and batch ED's duplicate-member check both record.
+fn member_display_name(prop : String) -> String {
+  match private_brand_base_name(prop) {
+    Some(base) => "#" + base
+    None => prop
+  }
+}
+
+///|
+/// A type that provably admits neither `null` nor `undefined`. A POSITIVE
+/// list, so every shape this does not name — `any`, `unknown`, a union, a
+/// bare `Named` / `Applied` the resolver could not reduce — answers `false`
+/// and the caller keeps its wider assumption.
+fn definitely_non_nullish(t : @ast.TsType) -> Bool {
+  match t {
+    Object(_)
+    | Struct(_, _)
+    | Array(_)
+    | Tuple(_)
+    | Func(_, _)
+    | Constructor(_, _, _)
+    | NonPrimitiveObject
+    | String_
+    | Number
+    | Int
+    | Boolean
+    | BigInt
+    | Symbol
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_)
+    | BigIntLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// The property names `Record<K, V>` requires, or an EMPTY array when `K`
+/// is not a closed set. Empty is the safe answer both ways: the
+/// missing-required check has nothing to demand, and
+/// `spread_shape_is_known` reads it as "not enumerable" so the
+/// excess-property check stays off an index-signature target.
+///
+/// An ENUM key is the cell reasoning gets wrong, and it was probed:
+/// `enum E { A }` makes `Record<E, any>` require the key `"0"` — the
+/// member's VALUE — so `{ 0: 1 }` satisfies it and `{ A: 1 }` is an
+/// EXCESS property. A string enum requires its string values the same way.
+/// A member whose folded value is absent abstains for the whole enum,
+/// because guessing the auto-numbering would invent a key name.
+fn record_closed_key_names(
+  keys : @ast.TsType,
+  resolver : Resolver,
+) -> Array[String] {
+  let out : Array[String] = []
+  match resolver.unwrap(keys) {
+    Literal(s) | NumberLiteral(s) => out.push(s)
+    Union(parts) =>
+      for p in parts {
+        let names = record_closed_key_names(p, resolver)
+        if names.length() == 0 {
+          return []
+        }
+        for n in names {
+          out.push(n)
+        }
+      }
+    Named(n) =>
+      match resolver.enums.get(n) {
+        Some(decl) => {
+          // AUTO-NUMBERING has to be reproduced, because the AST keeps a
+          // folded value only for members that wrote one and `enum E { A }`
+          // — the corpus spelling — writes none. TypeScript's rule: an
+          // uninitialized member takes the previous numeric value plus one,
+          // starting at 0, and a member after a non-numeric one cannot be
+          // auto-numbered at all (tsc rejects that program), so the whole
+          // enum abstains there rather than guessing a key.
+          let mut next_auto : Int? = Some(0)
+          for m in decl.members {
+            if m.is_computed {
+              return []
+            }
+            match m.value {
+              Some(Number(s)) => {
+                out.push(s)
+                next_auto = match decimal_int_value(s) {
+                  Some(v) => Some(v + 1)
+                  None => None
+                }
+              }
+              Some(String(s)) => {
+                out.push(s)
+                next_auto = None
+              }
+              Some(BigInt(s)) => {
+                out.push(s)
+                next_auto = None
+              }
+              Some(Bool(b)) => {
+                out.push(if b { "true" } else { "false" })
+                next_auto = None
+              }
+              None =>
+                match next_auto {
+                  Some(v) => {
+                    out.push(v.to_string())
+                    next_auto = Some(v + 1)
+                  }
+                  None => return []
+                }
+            }
+          }
+        }
+        None => ()
+      }
+    _ => ()
+  }
+  out
+}
+
+///|
+/// A plain decimal integer's value, or `None` for any other spelling
+/// (`0x10`, `1e3`, `1.5`, a leading sign). Only used to continue enum
+/// auto-numbering, where an unparsed value stops the numbering instead of
+/// producing a wrong key.
+fn decimal_int_value(s : String) -> Int? {
+  if s.length() == 0 || s.length() > 9 {
+    return None
+  }
+  let mut acc = 0
+  for c in s {
+    if c < '0' || c > '9' {
+      return None
+    }
+    acc = acc * 10 + (c.to_int() - '0'.to_int())
+  }
+  Some(acc)
 }
 
 ///|
@@ -13363,6 +13929,18 @@ fn collect_declared_fields(
         if !utility_keys_include(keys, f.0) {
           out.push(f)
         }
+      }
+    // `Record<K, V>` — the one projectable utility whose fields come from
+    // its KEY argument rather than from a source shape, which is why the
+    // arms above could not cover it and `let foo: Record<E, any> = {}` was
+    // silent (assignmentCompatWithEnumIndexer). `record_closed_key_names`
+    // returns nothing for an OPEN key type (`string` / `number` / a type
+    // parameter), and that also keeps `spread_shape_is_known` answering
+    // "not enumerable" there — so `{ anything: 1 }` against
+    // `Record<string, any>` still passes the excess-property check.
+    Applied("Record", [keys, value]) =>
+      for k in record_closed_key_names(keys, resolver) {
+        out.push((k, value))
       }
     // Generic interface application: substitute type parameters before
     // returning each field type. `extends` chain isn't yet specialised —
@@ -16691,6 +17269,66 @@ fn check_iterable_class_protocol(
               path,
               "type `\{icn}` must have a `[Symbol.iterator]()` method that returns an iterator",
             )
+          } else if sym_iter_returns_this_only {
+            // TS2490: the class IS its own iterator, so its `next()` result
+            // is the iterator result — and that has to have a `value`
+            // property. Probed one cell at a time: `next() { return "" }`,
+            // `next(): string`, `next() { return 1 }`,
+            // `next() { return { done: true } }` and `next() { }` all
+            // report, while an object carrying `value` (annotated or
+            // returned), and `next(): any`, are accepted. The
+            // `[Symbol.iterator]()`-returns-`this` gate is required rather
+            // than cosmetic: when it returns something ELSE, that object's
+            // `next` is the one consulted and tsc accepts whatever this
+            // class's `next` says (probed).
+            for m in icls.methods {
+              if m.is_static || m.name != "next" || m.accessor != "" {
+                continue
+              }
+              let unannotated = match
+                ctx.resolver.unannotated_return_members.get(icn) {
+                Some(names) => names.contains("next")
+                None => false
+              }
+              let result = if unannotated && m.return_type is Any {
+                // A bodiless / multi-statement / non-literal body gives
+                // `None` and abstains.
+                match method_sole_return_type(m, ctx.resolver) {
+                  Some(t) => t
+                  None => continue
+                }
+              } else {
+                m.return_type
+              }
+              let missing_value = match ctx.resolver.unwrap(result) {
+                Object(fields) => {
+                  let mut found = false
+                  for f in fields {
+                    if f.0 is Literal("value") {
+                      found = true
+                    }
+                  }
+                  !found
+                }
+                String_
+                | Number
+                | Boolean
+                | BigInt
+                | Symbol
+                | Void
+                | Literal(_)
+                | NumberLiteral(_)
+                | BigIntLiteral(_)
+                | BooleanLiteral(_)
+                | Func(_, _) => true
+                _ => false
+              }
+              if missing_value {
+                record(
+                  ctx, path, "the type returned by the `next()` method of an iterator must have a `value` property",
+                )
+              }
+            }
           }
         }
         _ => ()
@@ -17131,7 +17769,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
                 record(
                   ctx,
                   "assign `.\{prop}`",
-                  "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+                  "property `\{member_display_name(prop)}` does not exist on `\{type_display(recv_ty)}`",
                 )
               _ => ()
             }
@@ -17159,7 +17797,26 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
               )
             _ => ()
           }
-        _ => ()
+        _ => {
+          // The same property reference spelled with BRACKETS. `PropAssign`
+          // has checked `recv.prop = value` against the member's declared
+          // type for a long time and `recv["prop"] = value` —
+          // and `recv[Symbol.hasInstance] = value`, which is
+          // `symbolProperty46` — reached nothing at all, the shape recorded
+          // for TS2790's `delete o["b"]`.
+          //
+          // The KEY resolution is not re-derived: `infer_index` is what the
+          // READ side uses, so the well-known-symbol mapping, index
+          // signatures and literal keys all answer here exactly as they do
+          // there. A key it cannot resolve comes back `Any`, which
+          // `is_checkable` declines — so an unreadable key abstains rather
+          // than guessing.
+          let idx_ty = infer_expr(env, ctx.resolver, idx)
+          let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
+          if is_checkable(target_ty) && is_checkable(recv_ty) {
+            check_expr_against(env, value, target_ty, ctx, "assign `[…]`")
+          }
+        }
       }
     }
     Return(opt) =>
@@ -18639,6 +19296,17 @@ fn check_call_args_in_expr(
                   "call `\{name}`",
                   "`\{type_display(other)}` is not callable: did you mean to include `new`?",
                 )
+              } else if intersection_reduces_to_never(ctx.resolver, other) {
+                // `record_unfiltered` rather than `record`: the permissive
+                // (conformance) filter drops the "not callable" family
+                // wholesale — the suppression batch CL had to carve TS2348
+                // out of — and the reduction proof here is exact, so it
+                // does not need the filter's protection.
+                record_unfiltered(
+                  ctx,
+                  "call `\{name}`",
+                  "`\{type_display(other)}` is not callable: the intersection reduces to `never` because a property has conflicting types in its constituents",
+                )
               } else if is_definitely_not_callable(other) {
                 record(
                   ctx,
@@ -18782,6 +19450,17 @@ fn check_call_args_in_expr(
                   ctx,
                   "call",
                   "`\{type_display(other)}` is not callable: did you mean to include `new`?",
+                )
+              } else if intersection_reduces_to_never(ctx.resolver, other) {
+                // `record_unfiltered` rather than `record`: the permissive
+                // (conformance) filter drops the "not callable" family
+                // wholesale — the suppression batch CL had to carve TS2348
+                // out of — and the reduction proof here is exact, so it
+                // does not need the filter's protection.
+                record_unfiltered(
+                  ctx,
+                  "call",
+                  "`\{type_display(other)}` is not callable: the intersection reduces to `never` because a property has conflicting types in its constituents",
                 )
               } else if is_definitely_not_callable(other) {
                 record(ctx, "call", "`\{type_display(other)}` is not callable")
@@ -19760,6 +20439,34 @@ fn check_call_args_in_expr(
               record(
                 ctx, "object spread", "spread types may only be created from object types",
               )
+            // `T & undefined` / `T & null`. Probed: tsc reports these
+            // (spreadObjectOrFalsy f1) while every UNION that keeps a
+            // non-nullish part is legal (`T | T & undefined`,
+            // `object | T`, `S | T`, `T extends object | undefined` are
+            // the file's own four legal neighbours), so the arm is on the
+            // intersection and never on a union.
+            //
+            // The bare `Undefined` / `Null` spellings tsc also reports are
+            // deliberately absent: our flow model narrows an `any`-typed
+            // binding to `Undefined` when its initializer is `undefined`,
+            // the hazard batch CY's TS2532 and batch EG's `yield*` rule
+            // both record, so an arm for it would report a type tsc calls
+            // `any`. An INTERSECTION with a nullish part cannot be
+            // produced by narrowing — it is only ever written.
+            Intersection(parts) => {
+              let mut nullish = false
+              for p in parts {
+                if ctx.resolver.unwrap(p) is Undefined ||
+                  ctx.resolver.unwrap(p) is Null {
+                  nullish = true
+                }
+              }
+              if nullish {
+                record(
+                  ctx, "object spread", "spread types may only be created from object types",
+                )
+              }
+            }
             _ => ()
           }
         }
@@ -19869,7 +20576,7 @@ fn check_call_args_in_expr(
             !is_lib_global_value(prop) {
             record_unfiltered(
               ctx,
-              "PropAccess `.\{prop}`",
+              "PropAccess `.\{member_display_name(prop)}`",
               "property `\{prop}` does not exist on `Window & typeof globalThis`",
             )
           }
@@ -19950,8 +20657,8 @@ fn check_call_args_in_expr(
                     !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
                     record(
                       ctx,
-                      "PropAccess `.\{prop}`",
-                      "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+                      "PropAccess `.\{member_display_name(prop)}`",
+                      "property `\{member_display_name(prop)}` does not exist on `\{type_display(recv_ty)}`",
                     )
                   }
                   return
@@ -20000,7 +20707,7 @@ fn check_call_args_in_expr(
       if is_nullable_type(recv_ty) {
         record(
           ctx,
-          "PropAccess `.\{prop}`",
+          "PropAccess `.\{member_display_name(prop)}`",
           "cannot access `.\{prop}` — receiver may be null or undefined",
         )
       } else if ctx.strict_null_checks &&
@@ -20020,7 +20727,7 @@ fn check_call_args_in_expr(
         // right.
         record(
           ctx,
-          "PropAccess `.\{prop}`",
+          "PropAccess `.\{member_display_name(prop)}`",
           "object is possibly `\{type_display(kind)}`",
         )
       } else if ctx.resolver.unwrap(recv_ty) is Named(lib_n) &&
@@ -20032,7 +20739,7 @@ fn check_call_args_in_expr(
         // narrowFromAnyWithInstanceof's `e.mesage`).
         record(
           ctx,
-          "PropAccess `.\{prop}`",
+          "PropAccess `.\{member_display_name(prop)}`",
           "property `\{prop}` does not exist on `\{lib_n}`",
         )
       } else if is_checkable(recv_ty) &&
@@ -20085,8 +20792,8 @@ fn check_call_args_in_expr(
         !member_recv_unmodeled(recv_ty, ctx.resolver) {
         record(
           ctx,
-          "PropAccess `.\{prop}`",
-          "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+          "PropAccess `.\{member_display_name(prop)}`",
+          "property `\{member_display_name(prop)}` does not exist on `\{type_display(recv_ty)}`",
         )
       }
     }
@@ -20642,7 +21349,7 @@ fn check_call_args_in_expr(
                 record(
                   ctx,
                   "assign `.\{prop}`",
-                  "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+                  "property `\{member_display_name(prop)}` does not exist on `\{type_display(recv_ty)}`",
                 )
               _ => ()
             }
@@ -20671,7 +21378,19 @@ fn check_call_args_in_expr(
               check_expr_against(env, v, items[i], ctx, "assign tuple[\{i}]")
             _ => ()
           }
-        _ => ()
+        // The bracketed spelling of a property write — see the same arm in
+        // the `IndexAssign` STATEMENT above. Both spellings need it because
+        // `o["p"] = 1` at the top of a statement list is a statement and
+        // the identical line inside a function body is an EXPRESSION, the
+        // parser fact recorded for batch DS's TS2565 and batch EB's
+        // `globalThis`.
+        _ => {
+          let idx_ty = infer_expr(env, ctx.resolver, idx)
+          let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
+          if is_checkable(target_ty) && is_checkable(recv_ty) {
+            check_expr_against(env, v, target_ty, ctx, "assign `[…]`")
+          }
+        }
       }
     }
     Seq(a, b) => {
@@ -20959,7 +21678,7 @@ fn check_call_args_in_expr(
             record(
               ctx,
               "PropAccess `?.\{prop}`",
-              "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+              "property `\{member_display_name(prop)}` does not exist on `\{type_display(recv_ty)}`",
             )
           }
         }
@@ -26640,7 +27359,7 @@ fn check_dot_access_to_index_signature(
   }
   record_unfiltered(
     ctx,
-    "PropAccess `.\{prop}`",
+    "PropAccess `.\{member_display_name(prop)}`",
     "property `\{prop}` comes from an index signature, so it must be accessed with brackets",
   )
 }
@@ -26677,7 +27396,7 @@ fn check_namespace_or_enum_member_access(
           if decls.contains(prop) && !exports.contains(prop) {
             record(
               ctx,
-              "PropAccess `.\{prop}`",
+              "PropAccess `.\{member_display_name(prop)}`",
               "property `\{prop}` does not exist on `typeof \{n}` (not exported)",
             )
             return
@@ -26700,13 +27419,13 @@ fn check_namespace_or_enum_member_access(
       if e.is_const {
         record(
           ctx,
-          "PropAccess `.\{prop}`",
+          "PropAccess `.\{member_display_name(prop)}`",
           "property `\{prop}` does not exist on `typeof \{n}`",
         )
       } else if object_prototype_member(prop) is None {
         record(
           ctx,
-          "PropAccess `.\{prop}`",
+          "PropAccess `.\{member_display_name(prop)}`",
           "property `\{prop}` does not exist on `typeof \{n}`",
         )
       }
@@ -29753,6 +30472,13 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // Marker, not an error: a private member declaration keyed by its
         // class brand. Consumed by `private_brand_declared_on_receiver`.
         ()
+      } else if name.has_prefix("<unannotated-return:") {
+        // Marker, not an error: a bodied instance method with no return
+        // annotation. Consumed by the TS2416 method comparison and by
+        // `check_iterable_class_protocol` (TS2490). Every non-marker entry
+        // in this channel becomes a diagnostic verbatim, so a marker
+        // without a skip arm here IS a finding.
+        ()
       } else if name.has_prefix("<private-parent:") {
         // Marker, not an error: this class body's lexically enclosing class
         // brand. Consumed by `private_brand_owner`. Every non-marker entry
@@ -31882,6 +32608,12 @@ fn check_module_function_bodies_layered(
             Some(i) =>
               resolver.private_brand_parent[body[:i].to_owned()] = body[i + 1:].to_owned()
             None => ()
+          }
+        } else if name.has_prefix("<unannotated-return:") {
+          let m = name["<unannotated-return:".length():name.length() - 1].to_owned()
+          match resolver.unannotated_return_members.get(entry.0) {
+            Some(arr) => arr.push(m)
+            None => resolver.unannotated_return_members[entry.0] = [m]
           }
         }
       }
@@ -34688,6 +35420,65 @@ fn check_class_implements(
       nonpublic[n] = ()
     }
     let accessors = class_instance_accessor_names(cls)
+    // TS2416 for a METHOD, which is the other half of the same question and
+    // had nothing: this check compared a class's data-PROPERTY type against
+    // the interface member's and its methods only ever reached the
+    // missing-member arm, so `interface I { m(): number }` beside
+    // `class C implements I { m(): string { … } }` was silent — and so were
+    // the `m: () => number` property-of-function-type spelling and a
+    // PARAMETER-type mismatch. All four are TS2416 in tsc.
+    //
+    // Three exclusions, each losing a finding rather than inventing one: an
+    // overload set (a name declared more than once in this body) has an
+    // intersection type this cannot build; a generic method needs
+    // substitution; and an accessor is not a method. An UNANNOTATED return
+    // arrives as `Any`, which `member_override_incompatible` treats as
+    // compatible with everything, so `m() { return "" }` abstains — the
+    // annotation-presence fact the AST does not carry, recorded for TS7031
+    // / TS7022 / TS2729 / TS2490 as well.
+    let method_decl_count : Map[String, Int] = Map([])
+    for m in cls.methods {
+      if !m.is_static && m.accessor == "" {
+        method_decl_count[m.name] = match method_decl_count.get(m.name) {
+          Some(n) => n + 1
+          None => 1
+        }
+      }
+    }
+    let cls_methods : Map[String, @ast.TsType] = Map([])
+    for m in cls.methods {
+      if m.is_static ||
+        m.accessor != "" ||
+        m.type_params.length() > 0 ||
+        accessors.contains(m.name) ||
+        method_decl_count.get(m.name) != Some(1) {
+        continue
+      }
+      let params : Array[@ast.TsType] = []
+      for p in m.params {
+        params.push(p.1)
+      }
+      // An unannotated return arrives as `Any`, which the comparison reads
+      // as compatible with everything. The parser's
+      // `<unannotated-return:NAME>` sentinel says the annotation was
+      // ABSENT rather than written `any`, which is what makes inferring
+      // from the body sound here — `symbolProperty24`'s
+      // `[Symbol.toPrimitive]() { return "" }` is the corpus shape.
+      let unannotated = match
+        resolver.unannotated_return_members.get(cls.name) {
+        Some(names) => names.contains(m.name)
+        None => false
+      }
+      let ret = if unannotated && m.return_type is Any {
+        match method_sole_return_type(m, resolver) {
+          Some(t) => t
+          None => m.return_type
+        }
+      } else {
+        m.return_type
+      }
+      cls_methods[m.name] = Func(params, ret)
+    }
     let cls_props : Map[String, @ast.TsType] = Map([])
     for p in cls.properties {
       if !p.is_static && !p.is_accessor && !accessors.contains(p.name) {
@@ -34759,6 +35550,56 @@ fn check_class_implements(
         continue
       }
       let mut reported = false
+      // TS2420 on the INDEX SIGNATURES. `can_check_missing` above excludes a
+      // class that declares one from the missing-member arm, and nothing
+      // then asked whether the indexer it DOES declare is compatible with
+      // the interface's — so `class B implements A { [x: string]: Base }`
+      // against `interface A { [x: number]: Derived }` was silent
+      // (subtypingWithNumericIndexer5).
+      //
+      // The coverage rule is asymmetric and was probed one cell at a time:
+      // a STRING indexer satisfies a numeric one (every numeric key is a
+      // string key) while a numeric indexer does NOT satisfy a string one,
+      // which is why the two kinds are not simply matched by key type.
+      // tsc's own wording says so — "'string' and 'number' index signatures
+      // are incompatible" for the covering case against "'number' index
+      // signatures are incompatible" for the same-kind one.
+      //
+      // Only the COMPATIBILITY half ships. tsc also reports a class that
+      // declares no covering indexer at all ("Index signature for type
+      // 'number' is missing"), and deciding that needs the base chain's
+      // index signatures, which `resolve_base_chain_members` does not
+      // carry — so a class with no indexer of its own abstains, losing a
+      // finding rather than false-flagging a class that inherits one.
+      for isig in iface.index_signatures {
+        if reported {
+          break
+        }
+        let want_number = isig.0 is Number
+        let want_string = isig.0 is String_
+        if !want_number && !want_string {
+          continue
+        }
+        for csig in cls.index_signatures {
+          let covers = if want_number {
+            csig.0 is Number || csig.0 is String_
+          } else {
+            csig.0 is String_
+          }
+          if !covers {
+            continue
+          }
+          if member_override_incompatible(csig.1, isig.1, resolver) {
+            let kind = if want_number { "number" } else { "string" }
+            issues.push({
+              path: "class \{cls.name}",
+              message: "incorrectly implements interface `\{iname}`: `\{kind}` index signature of type `\{type_display(csig.1)}` is not assignable to `\{type_display(isig.1)}`",
+            })
+            reported = true
+            break
+          }
+        }
+      }
       for f in iface.fields {
         if reported {
           break
@@ -34788,6 +35629,24 @@ fn check_class_implements(
               continue
             }
           None => ()
+        }
+        // Present public METHOD with an incompatible signature. An OPTIONAL
+        // interface member arrives as `Func | undefined`, which the
+        // comparison would read as a shape mismatch rather than as
+        // optionality, so it abstains.
+        if !type_has_undefined(f.1) {
+          match cls_methods.get(mname) {
+            Some(mtype) =>
+              if method_override_incompatible(mtype, f.1, resolver) {
+                issues.push({
+                  path: "class \{cls.name}",
+                  message: "incorrectly implements interface `\{iname}`: method `\{mname}` of type `\{type_display(mtype)}` is not assignable to `\{type_display(f.1)}`",
+                })
+                reported = true
+                continue
+              }
+            None => ()
+          }
         }
         // Required member the class does not supply by any route. An
         // optional member arrives as `T | undefined`, and a computed name

@@ -19887,3 +19887,137 @@ test "batch EG rules" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EH: nine rules for +9 conformance files, and five false positives
+/// fixed along the way — two of them found only because a NEW rule stopped
+/// another bug from hiding them.
+///
+/// Every cell below was probed against the real compiler first, and four
+/// read the opposite way from what reasoning gives:
+///
+///   - a union-typed VALUE's call requires the LARGEST minimum arity of its
+///     members (tsc's `combineUnionParameters`), not the smallest;
+///   - a STRING index signature satisfies a numeric one and a numeric one
+///     does NOT satisfy a string one;
+///   - `Record<E, any>` with `enum E { A }` requires the key `"0"`, the
+///     member's VALUE, so `{ A: 1 }` is an EXCESS property;
+///   - `filter` / `some` / `every` / `find` declare their predicate as
+///     returning `unknown`, so `names.filter(x => x)` is legal.
+test "batch EH rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // Union callee arity. The members differ in parameter COUNT, so
+      // `callable_params_narrower_than` cannot dominate and the old
+      // `min_min` fallback accepted one argument.
+      "type A1 = (a: string) => void;\ntype A2 = (a: string, b: string) => void;\ndeclare var v: A1 | A2;\nv(\"a\");",
+      "type A1 = (a: string) => void;\ntype R1 = (...rest: string[]) => void;\ndeclare var v: A1 | R1;\nv();",
+      // TS2420 on the INDEX SIGNATURES: a string indexer covers numeric
+      // keys, so its value type must satisfy the interface's.
+       "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\ninterface A { [x: number]: Derived }\nclass B implements A { [x: string]: Base }",
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\ninterface A { [x: number]: Derived }\nclass B implements A { [x: number]: Base }",
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\ninterface A { [x: string]: Derived }\nclass B implements A { [x: string]: Base }",
+      // TS2416 on a class METHOD's type, at all four spellings the check
+      // used to see nothing for.
+       "interface I { m(): number }\nclass C implements I { m(): string { return \"\" } }",
+      "interface I { m: () => number }\nclass C implements I { m(): string { return \"\" } }",
+      "interface I { m(x: number): void }\nclass C implements I { m(x: string): void { } }",
+      // ... including an UNANNOTATED return, read from the body through the
+      // parser's `<unannotated-return:>` marker.
+       "interface I { m(): number }\nclass C implements I { m() { return \"\" } }",
+      // TS2698: a spread of `T & undefined` / `T & null`.
+       "function f<T>(a: T & undefined) { return { ...a } }", "function f<T>(a: T & null) { return { ...a } }",
+      // `Record<K, V>`'s keys, and the required-member test that the old
+      // `is_assignable_to(undefined, ty)` proxy suppressed for `any`.
+       "enum E { A }\nlet foo: Record<E, any> = {}", "enum E2 { A, B }\nlet foo: Record<E2, any> = { 0: 1 }",
+      "enum S { A = \"a\" }\nlet foo: Record<S, any> = {}", "let foo: Record<\"x\" | \"y\", any> = { x: 1 }",
+      "interface I { a: any }\nlet q: I = {}", "interface I { a: unknown }\nlet q: I = {}",
+      // The bracketed spelling of a property write, and a well-known
+      // symbol as the key.
+       "class C { p: string = \"\" }\nvar c = new C();\nc[\"p\"] = 0;", "class D { get [Symbol.hasInstance](): string { return \"\" } set [Symbol.hasInstance](x: string) {} }\nvar d = new D();\nd[Symbol.hasInstance] = 0;",
+      // ... including an accessor pair whose GETTER has no annotation, which
+      // is what `symbolProperty46` writes.
+       "class D { get [Symbol.hasInstance]() { return \"\" } set [Symbol.hasInstance](x) {} }\nvar d = new D();\nd[Symbol.hasInstance] = 0;",
+      // TS2349: an intersection reduced to `never` by a conflicting member
+      // has no call signature.
+       "declare const f: { (x: string): number, a: \"\" } & { a: number };\nf();",
+      // TS2339: a spread does not copy `#private` members.
+       "class C { #prop = 1;\n  m(other: C) { const obj = { ...other }; return obj.#prop } }",
+      // TS2490: the `next()` result of a class that is its own iterator
+      // must have a `value` property.
+       "class A { next() { return \"\" } [Symbol.iterator]() { return this } }\nfor (const v of new A) { }",
+      "class B { next(): string { return \"\" } [Symbol.iterator]() { return this } }\nfor (const v of new B) { }",
+      "class G { next() { } [Symbol.iterator]() { return this } }\nfor (const v of new G) { }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // Union arity: the argument count every member accepts.
+      "type A1 = (a: string) => void;\ntype A2 = (a: string, b: string) => void;\ndeclare var v: A1 | A2;\nv(\"a\", \"b\");",
+      "type A1 = (a: string) => void;\ntype R1 = (...rest: string[]) => void;\ndeclare var v: A1 | R1;\nv(\"a\");",
+      // TS2420: a covering indexer whose value type satisfies the
+      // interface's, and the numeric-does-not-cover-string direction.
+       "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\ninterface Derived2 extends Derived { baz: string }\ninterface A { [x: number]: Derived }\nclass B implements A { [x: string]: Derived2 }",
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\ninterface A { [x: string]: Derived }\nclass B implements A { [x: number]: Derived }",
+      // TS2416's legal neighbours. A method's PARAMETERS are bivariant, so
+      // `any` on either side accepts; an OPTIONAL interface member arrives
+      // as `Func | undefined` and abstains; an overload set has an
+      // intersection type this cannot build.
+       "interface I { m(): number }\nclass C implements I { m(): number { return 1 } }",
+      "interface I { m(x: any): void }\nclass C implements I { m(x: string): void {} }",
+      "interface I { m(): void }\nclass C implements I { m(): void {} }", "interface I { m?(): number }\nclass C implements I { m(): string { return \"\" } }",
+      "interface I { m(): number }\nclass C implements I { m(x: string): string; m(x: number): string; m(x: any) { return \"\" } }",
+      // ... and an explicit `: any` return, which the marker channel is
+      // what tells apart from an absent annotation.
+       "interface I { m(): number }\nclass C implements I { m(): any { return \"\" } }",
+      // TS2698: every UNION that keeps a non-nullish part is legal.
+       "function f<T>(a: T | T & undefined) { return { ...a } }", "function f<T extends undefined>(a: object | T) { return { ...a } }",
+      "function f<S, T extends undefined>(a: S | T) { return { ...a } }", "function f<T extends object | undefined>(a: T) { return { ...a } }",
+      // `Record`: an OPEN key type requires no key and excludes none, and
+      // a closed one is satisfied by exactly its keys.
+       "let foo: Record<string, any> = { anything: 1 }", "let foo: Record<number, any> = {}",
+      "enum E { A }\nlet foo: Record<E, any> = { 0: 1 }", "enum S { A = \"a\" }\nlet foo: Record<S, any> = { a: 1 }",
+      "let foo: Record<\"x\" | \"y\", any> = { x: 1, y: 2 }",
+      // A genuinely OPTIONAL member is the one shape the union encoding
+      // of `?` cannot be told from `T | undefined`, so it abstains.
+       "interface I { a?: any }\nlet q: I = {}",
+      // The bracketed write against the member's real type.
+       "class C { p: string = \"\" }\nvar c = new C();\nc[\"p\"] = \"ok\";", "class D { get [Symbol.hasInstance]() { return \"\" } set [Symbol.hasInstance](x) {} }\nvar d = new D();\nd[Symbol.hasInstance] = \"\";",
+      // An OVERLOADED computed-key method: `lookup_field` returns the
+      // FIRST signature, so a call against a later one was reported
+      // (`symbolProperty40`).
+       "class C { [Symbol.iterator](x: string): string;\n  [Symbol.iterator](x: number): number;\n  [Symbol.iterator](x: any) { return undefined } }\nvar c = new C;\nc[Symbol.iterator](0);",
+      // TS2349: an intersection whose members agree.
+       "declare const g: { (x: string): number, a: \"\" } & { a: \"\" };\ng(\"s\");",
+      // TS2490's legal shapes, and the gate that makes the rule sound: an
+      // `[Symbol.iterator]()` returning something ELSE means that
+      // object's `next` is the one consulted.
+       "class E { next() { return { value: 1, done: true } } [Symbol.iterator]() { return this } }\nfor (const v of new E) { }",
+      "class F { next(): { value: string, done: boolean } { return { value: \"\", done: true } } [Symbol.iterator]() { return this } }\nfor (const v of new F) { }",
+      "class H { next(): any { return 1 } [Symbol.iterator]() { return this } }\nfor (const v of new H) { }",
+      "class Inner { next() { return { value: 1, done: false } } }\nclass Outer { next() { return \"\" } [Symbol.iterator]() { return new Inner() } }\nfor (const v of new Outer) { }",
+      // --- the five false positives this batch fixed. Every one is legal
+      // code tsc accepts and we reported.
+      //
+      // `?.` on a receiver that cannot be nullish does not short-circuit,
+      // so the result is not widened with `undefined`.
+       "declare const c: { p: number };\nconst n: number = c?.p;",
+      // The array predicates take `unknown`, not `boolean`.
+       "declare const names: string[];\nconst a = names.filter(x => x);\nconst b = names.some(x => x);\nconst c = names.every(x => x);\nconst d = names.find(x => x);",
+      // An ARRAY satisfies a NUMERIC index signature.
+       "interface Bar { b: string }\ndeclare const arr: Bar[];\nvar v: { [n: number]: Bar } = arr;",
+      // A spread of a class with only private members is an empty object,
+      // and reading a PUBLIC member off it is still fine.
+       "class C { pub = 1; #priv = 2;\n  m(other: C) { const obj = { ...other }; return obj.pub } }",
+      // And `?.` where the receiver CAN be nullish still widens.
+       "declare const a: { p: number } | undefined;\nconst n: number | undefined = a?.p;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

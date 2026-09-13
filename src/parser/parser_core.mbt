@@ -253,6 +253,13 @@ pub struct Parser {
   // the type cannot answer and the modifier needs its own channel.
   // Drained per class into `<optional-member:...>` sentinels.
   optional_member_names : Array[String]
+  // Bodied instance METHOD names that carried no return annotation, while
+  // parsing class bodies. `TsClassMethodDecl.return_type` is `Any` for both
+  // a missing annotation and an explicit `: any`, and TS2416 / TS2490 both
+  // infer the return from the BODY — which is right for the first and a
+  // false positive for the second. Drained per class into
+  // `<unannotated-return:...>` sentinels.
+  unannotated_return_members : Array[String]
   // TS7022, the INDIRECT form: bare `Var` names returned by an
   // un-annotated `next()` / `[Symbol.iterator]()` of the class body being
   // parsed. Accumulated here and drained per class into
@@ -410,6 +417,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    unannotated_return_members: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
     private_decl_counts: {},
@@ -679,6 +687,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    unannotated_return_members: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
     private_decl_counts: {},
