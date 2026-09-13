@@ -5014,6 +5014,47 @@ fn ExprEnv::declare_type(
 }
 
 ///|
+/// Fill a BRAND-NEW env with the bindings of an enclosing one, without
+/// journalling, for the four sites that give a nested function its own
+/// scope. `reset_narrowing` takes each name's DECLARED type instead of
+/// its narrowed one — `check_funcexpr_with_context` needs that for the
+/// parser's `<class>` IIFE lowering, since class member bodies run after
+/// the guard region ends and TypeScript does not carry control-flow
+/// narrowing into them (`typeGuardInClass`).
+///
+/// Skipping the journal here is sound, and the argument is about ORDER
+/// rather than about this env being discarded: every `mark` is the
+/// journal's length at the time it is taken, so an entry pushed BEFORE
+/// any mark exists sits below every mark that will ever be taken and can
+/// never be popped. The fill runs on a fresh env whose first `mark`
+/// comes later, from the nested body's own `check_block`. Journalling it
+/// cost the `nested-closures` axis ~20% for records nothing can reach.
+///
+/// It does NOT make this path cheap — it is still O(outer bindings) per
+/// closure, which is that axis's 2.01 and what the layered-env fix filed
+/// in TODO.md is for. This only stops the journal from making it worse.
+fn ExprEnv::fill_from(
+  self : ExprEnv,
+  outer : ExprEnv,
+  reset_narrowing~ : Bool = false,
+) -> Unit {
+  for entry in outer.full_snapshot() {
+    let ty = if reset_narrowing {
+      match outer.lookup_declared(entry.0) {
+        Some(d) => d
+        None => entry.1
+      }
+    } else {
+      entry.1
+    }
+    self.vars[entry.0] = ty
+    if !self.declared.contains(entry.0) {
+      self.declared[entry.0] = ty
+    }
+  }
+}
+
+///|
 /// Drop a binding, journalled. The one caller works on a synthetic env
 /// it discards two statements later, so it could have removed the
 /// entries directly — but "every mutation is journalled" is the
@@ -15129,9 +15170,7 @@ fn infer_arrow_body_with_params(
   match callback {
     ArrowFunc(arrow_params, declared_ret, body, is_async) => {
       let env = ExprEnv::new()
-      for entry in outer.full_snapshot() {
-        env.bind(entry.0, entry.1)
-      }
+      env.fill_from(outer)
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
@@ -15159,9 +15198,7 @@ fn infer_arrow_body_with_params(
     }
     FuncExpr(f) => {
       let env = ExprEnv::new()
-      for entry in outer.full_snapshot() {
-        env.bind(entry.0, entry.1)
-      }
+      env.fill_from(outer)
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
@@ -15266,9 +15303,7 @@ fn check_arrow_with_context(
   // Carry parent bindings into the inner scope. We don't snapshot/restore —
   // `ExprEnv` is mutable, but binding inside this synthetic env doesn't
   // touch the outer one.
-  for entry in outer.full_snapshot() {
-    env.bind(entry.0, entry.1)
-  }
+  env.fill_from(outer)
   let param_names : Array[String] = []
   let mut i = 0
   while i < arrow_params.length() {
@@ -15424,17 +15459,7 @@ fn check_funcexpr_with_context(
   // NOT carry control-flow narrowing into them (typeGuardInClass) —
   // rebind captured variables at their declared types.
   let reset_narrowing = f.name == "<class>"
-  for entry in outer.full_snapshot() {
-    let captured = if reset_narrowing {
-      match outer.lookup_declared(entry.0) {
-        Some(d) => d
-        None => entry.1
-      }
-    } else {
-      entry.1
-    }
-    env.bind(entry.0, captured)
-  }
+  env.fill_from(outer, reset_narrowing~)
   let param_names : Array[String] = []
   let mut i = 0
   while i < f.params.length() {
