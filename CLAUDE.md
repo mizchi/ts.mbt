@@ -973,6 +973,107 @@ product surfaces now.
   members of a SINGLE class and single digits is the norm, where N² is
   dozens of operations; it is declared at a gated 1.75 for the same
   reason `namespaces` is at 2.15.
+  Every axis above is SYNTHETIC, and a later round asked what a REAL
+  compile costs — where the answer is that this whole gate was watching
+  the wrong dimension, and so was I, five hypotheses in a row. The
+  headline first: on real `.ts` the CHECK is **87% of the wall clock**
+  (57.4 s against 7.5 s under `--no-check`), and the 93.4% recorded
+  above came from a published `.js` bundle. Nobody had the `.ts` number
+  because `--timing` **prints nothing when the check fails** — the CLI
+  returns before the report, and every real `.ts` in this repo's own
+  submodule fails a subset checker by design, so the profiler is blind
+  on exactly the input class that costs the most.
+  What dominates is **one file**: `typescript/src/compiler/checker.ts`
+  is **27.8 s of the 56 s** corpus by itself, at 8.82 us/byte against
+  0.27–0.38 for the ~0.5 MB sources beside it. It is essentially one
+  ~50,000-line `createTypeChecker` holding thousands of closures over a
+  shared scope, and truncating INSIDE that function (balancing braces so
+  each probe still parses) gives 0.372 s at 245 KB, 3.76 s at 1.15 MB,
+  9.14 s at 1.76 MB, 15.94 s at 2.32 MB, 28.14 s at 3.10 MB — **exponent
+  2.03 in the size of ONE function body**. The mechanism is the env
+  save/restore around each nested body: `ExprEnv::full_snapshot` copies
+  the whole `vars` map into an array and `restore_from` then makes three
+  more full passes over it (build a `kept` map, scan `vars` for names to
+  drop, rewrite every snapshot entry), so the pair is four O(enclosing
+  bindings) passes with string hashing, PER CLOSURE. callgrind on a
+  20,000-line probe: 916 `check_funcexpr_with_context` calls, and 83% of
+  self cost is String hash (29.5%), `Map[String, TsType]`
+  add/set/iter/push/rehash (24.4%) and alloc + GC (29.1%). Isolated, the
+  shape fits 1.90 against a CONTROL — the same bindings and closures
+  split into N separate small functions, at 1.4x the bytes — that fits
+  0.77: at n=1600 the nested form is 18x slower on 30% FEWER bytes,
+  which is what makes it a scope-size effect rather than a byte effect.
+  `nested-closures` is the fourteenth axis, gated at its measured 2.13,
+  and **not one of the other thirteen could see it** — `function-bodies`
+  grows N SIBLING functions (1.09), `statements` grows N statements in
+  ONE body with no closures (0.99), and the other eleven grow
+  module-wide lists. Declared rather than fixed: an undo JOURNAL makes
+  the pair O(mutations) and there are only 3 writes to `vars`, 2 removes
+  and 4 `declared` mutations to intercept, but a journal requires strict
+  LIFO nesting where an array snapshot tolerates any order, and that
+  precondition wants auditing across 21 paired call sites first.
+  **The route there is worth more than the fix, because five hypotheses
+  died and every one of them died to a measurement rather than to
+  re-reading.** A module-graph quadratic looked certain: a BARREL graph
+  (every module imports it, it re-exports every module — what
+  `./_namespaces/ts.js` is in the TypeScript sources and what an
+  `index.ts` is in most packages) fits **1.81**, `Resolver::ingest_type_module`
+  was 71.0% of a 162-module profile, and `graph_type_modules` really does
+  push a target once per EDGE, which is 2 x 161² ingests and a latent
+  interface corruption (`merge_interfaces` is NOT idempotent over
+  `extends_names` / `extends_args`, `index_signatures`,
+  `method_type_params` and `method_type_param_bounds`, so a doubly-ingested
+  module got a doubled `extends` list). All true, and **real code does not
+  hit it**: at a fixed 7 MB of real TypeScript the exponent across 8 -> 38
+  modules is **−0.15**, and the same 7 MB is 36.4 s as ONE module, 32.7 s
+  as 8 and 31.6 s as 38. The 1.81 is an artifact of 350-byte generated
+  modules, where an 18-entry constant table is comparable in size to a
+  whole module — which is also why sharing that table (52,003
+  constructions for a 162-module graph, 14.0% of that profile, its own
+  field's comment claiming "one allocation per resolver" while the
+  scratch resolver is per INGEST) is worth −25% synthetic and **−1% real**.
+  Three more died the same way: `namespaces` fits 1.36 on the barrel and
+  is not it; a cost ≈ M x corpus_bytes model is refuted by the
+  fixed-bytes control; the ambient-`.d.ts` fan-out has no instance in
+  either input. The fifth was MY OWN CONFOUND and the sharpest lesson —
+  a probe for "bindings per function body" whose return statement was
+  `v0 + … + v1999`, a 2000-term chain. Split apart, n bindings with no
+  chain fits 0.56 and the chain alone fits **1.66**, which is the
+  `a + a + … + a` shape this file records at 1.62 and calls
+  **unexplained**. So the confound handed over the missing explanation:
+  `Resolver::unwrap`'s FIRST line allocates a `Map[String, Bool]` on
+  every call, before it looks at the type, for cycle detection while
+  peeling — and only ten of its match arms can peel, so every primitive,
+  `Object`, `Struct`, `Func`, `Union`, `Array`, `Tuple` and `Literal`
+  reaches the catch-all on iteration one and is returned unchanged,
+  having allocated for nothing. `unwrap_containers` has that exact fast
+  path thirty lines above WITH THE REASON IN ITS OWN COMMENT ("this runs
+  on every assignability diagnostic ... decide that before allocating
+  anything"), and `unwrap` is the function it delegates to and the
+  hotter of the two — the applied-in-some-places family in the hottest
+  function in the checker. Worth **3.0x** on the chain shape (0.251 ->
+  0.083 s, 1.66 -> 1.19) and **nothing** on real code, because real
+  TypeScript has no 2,000-term chains.
+  Four operational lessons, three of them about my own instruments.
+  **A fit is only a fit over its range** — recorded once above for
+  `private-members`, and hit FOUR more times in one session: the barrel
+  axis reads 1.15 over 10..80 and 1.81 over 40..320; `nested-closures`
+  reads 1.90 over 200..1600 and 2.20 on the default rungs; the
+  single-module curve reads flat 0.30–0.42 us/byte up to 2 MB and 9.08 at
+  3.1 MB; and a two-point "cubic" fit turned out to span a CLIFF that
+  was a truncation artifact, not a curve at all. **A ladder must grow
+  the product, not one factor** — three graph shapes (`star` 0.70,
+  `shared` 0.76, `chain` 0.91) all read linear because the predicted
+  cost is M x (closure bytes) and each held the other factor at a value
+  making the product small. **A control must actually remove the thing
+  it controls for**: the first fixed-bytes control gave the groups no
+  barrel import, so every closure was EMPTY and it was a star wearing a
+  barrel's name, reading −0.02. And **an unstripped release binary plus
+  callgrind beats writing timers** — 1,371 checker symbols, no
+  instrumentation, so it cannot carry the overlapping-span defect this
+  file records for its own hand-rolled spans; the one thing it needs is
+  a small reproduction, since the 8 KB chain profiles in seconds where
+  the real corpus needs 45 minutes.
   Every number above ranks work by CORPUS COUNT, and
   `docs/checker-triage.md` is where that stops: `MISS 176` sums work
   worth doing now with files nobody should ever fix, so it can rank

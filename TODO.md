@@ -983,6 +983,158 @@ equivalent / 0 unsound; graph-walk, generated-fixtures, scaffolds, examples,
 mbti-dts, bridge-runtime (0 unbound, 0 runtime failures) and
 bridge-enum-returns all green.
 
+### Perf round, part 4 (2026-09-13): the axes were watching the wrong dimension, and so was I
+
+Parts 1-3 measured synthetic axes. This part measured a REAL compile, and
+the answer is that the dominant cost is in a dimension none of the
+thirteen axes grows — plus five dead hypotheses, every one killed by a
+measurement rather than by re-reading.
+
+**The check is 87% of the wall clock on real `.ts`** — `mtsc --bundle` on
+a TypeScript-compiler source is 57.4 s against 7.5 s under `--no-check`.
+CLAUDE.md's 93.4% came from a published `.js` bundle; nobody had the
+`.ts` number, and the reason is its own defect: **`--timing` prints
+nothing when the check fails**, because the CLI returns before the
+report, and every real `.ts` in this repo's own submodule fails a subset
+checker by design. The profiler is blind on the input class that costs
+the most.
+
+**The cost is ONE FILE.** `typescript/src/compiler/checker.ts` is
+**27.8 s of the 56 s** corpus by itself, at 8.82 us/byte against
+0.27-0.38 us/byte for the ~0.5 MB sources beside it. It is essentially
+one ~50,000-line `createTypeChecker` holding thousands of closures over
+a shared scope. Truncating INSIDE that function — balancing braces so
+each probe still parses, since the first attempt bisected into an
+error-recovery state and measured that instead:
+
+| lines | bytes | time | us/byte |
+| --- | --- | --- | --- |
+| 5,000 | 245 KB | 0.372 s | 1.52 |
+| 20,000 | 1.15 MB | 3.76 s | 3.27 |
+| 30,000 | 1.76 MB | 9.14 s | 5.20 |
+| 40,000 | 2.32 MB | 15.94 s | 6.86 |
+| 54,435 | 3.10 MB | 28.14 s | 9.08 |
+
+**Exponent 2.03 in the size of ONE function body.**
+
+The mechanism is the env save/restore around each nested body.
+`ExprEnv::full_snapshot` copies the whole `vars` map into an array, and
+`ExprEnv::restore_from` then makes three more full passes over it (build
+a `kept` map from the snapshot, scan `vars` for names to drop, rewrite
+every snapshot entry) — four O(enclosing bindings) passes with string
+hashing, PER CLOSURE. callgrind on a 20,000-line probe: 916
+`check_funcexpr_with_context` calls, and 83% of self cost is String hash
+(29.5%), `Map[String, TsType]` add/set/iter/push/rehash (24.4%) and
+alloc + GC (29.1%).
+
+Isolated it fits **1.90**, against a CONTROL — the same bindings and
+closures split into N separate small functions, at 1.4x the bytes —
+that fits **0.77**. At n=1600 the nested form is 18x slower on 30%
+FEWER bytes, which is what makes it a scope-size effect and not a byte
+effect. `nested-closures` is the fourteenth axis, gated at its measured
+2.13, and **none of the other thirteen could see it**:
+`function-bodies` grows N SIBLING functions (1.09), `statements` grows
+N statements in ONE body with no closures (0.99), the other eleven grow
+module-wide lists.
+
+- [ ] **FILED: replace the env snapshot/restore pair with an undo
+  JOURNAL.** Record each mutation's previous value, unwind to a mark:
+  O(mutations in the scope) instead of O(enclosing bindings). The
+  interception surface is small — **3 writes to `vars`, 2 removes, 4
+  `declared` mutations** — and the semantics match, because `declared`
+  is first-write-wins and so is unchanged for any name already in the
+  snapshot, which is exactly what `restore_from` relies on. **The
+  PRECONDITION is the work**: a journal requires strict LIFO nesting
+  where an array snapshot tolerates any order. Several of the 21 paired
+  call sites restore one snapshot twice (idempotent either way), but a
+  pair that restores an OUTER snapshot before an inner one would
+  silently differ, and that needs auditing site by site first. Worth
+  ~28 s on this repo's own primary benchmark.
+
+**Five hypotheses died, and the route is the reusable part.**
+
+1. **Module-graph quadratic — REFUTED for real code.** A BARREL graph
+   (every module imports it, it re-exports every module: what
+   `./_namespaces/ts.js` is in the TypeScript sources and what an
+   `index.ts` is in most packages) fits **1.81**, and
+   `Resolver::ingest_type_module` was 71.0% of a 162-module callgrind
+   profile. All true; real code does not hit it. At a fixed 7 MB of real
+   TypeScript the exponent across 8 -> 38 modules is **-0.15**, and the
+   same 7 MB is 36.4 s as ONE module, 32.7 s as 8, 31.6 s as 38. The
+   1.81 is an artifact of 350-byte generated modules.
+2. **`namespaces`** — fits 1.36 on the barrel. Not it.
+3. **cost ≈ M x corpus_bytes** — refuted by the fixed-bytes control.
+4. **ambient `.d.ts` fan-out** (`collect_module_graph_issues` pushes
+   every ambient module into EVERY module's `type_modules`) — no ambient
+   file exists in either input.
+5. **bindings per function body — MY OWN CONFOUND**, and the sharpest
+   lesson of the session: the probe's `return v0 + … + v1999` is a
+   2000-term chain. Split apart, n bindings with no chain fits 0.56 and
+   the chain alone fits **1.66** — the `a + a + … + a` shape part 2
+   records at 1.62 and calls UNEXPLAINED.
+
+**What shipped anyway, and what each is worth.** Three fixes, all real,
+and their honest real-world value stated rather than the synthetic one:
+
+- **`Resolver::unwrap` allocates a `Map[String, Bool]` on every call**,
+  before it looks at the type, for cycle detection while peeling — and
+  only ten of its arms can peel, so every primitive, `Object`,
+  `Struct`, `Func`, `Union`, `Array`, `Tuple` and `Literal` hits the
+  catch-all on iteration one and is returned unchanged, having
+  allocated for nothing. `unwrap_containers` has that exact fast path
+  thirty lines above WITH THE REASON IN ITS OWN COMMENT, and `unwrap`
+  is the function it delegates to and the hotter of the two: the
+  applied-in-some-places family in the hottest function in the checker.
+  **3.0x** on the chain shape (0.251 -> 0.083 s, 1.66 -> 1.19), and
+  **nothing** on real code — real TypeScript has no 2,000-term chains.
+  So hypothesis 5's confound is what handed over part 2's missing
+  explanation.
+- **`standard_utility_types()` rebuilt 52,003 times** for a 162-module
+  graph — 14.0% of that profile — because `ingest_type_module`
+  allocates a whole scratch `Resolver` as an output buffer and the
+  field's own comment claims "one allocation per resolver". Shared as a
+  top-level `let`, safe because `standard_aliases` has exactly one
+  reader in the repo and no writer. **-25% synthetic, -1% real.**
+- **`graph_type_modules` pushed a target once per EDGE** — 2 x 161²
+  ingests for a 162-module graph — plus two linear scans on top
+  (`visited_paths`, `find_graph_module`). Also a latent CORRECTNESS
+  bug: `merge_interfaces` is NOT idempotent over `extends_names` /
+  `extends_args`, `index_signatures`, `method_type_params` and
+  `method_type_param_bounds`, so a doubly-ingested module got a doubled
+  `extends` list and doubled index signatures. Two probes produced no
+  observable diagnostic difference, so it is recorded as latent
+  corruption rather than a demonstrated false positive. **-0.3% real**,
+  and shipped for the correctness half.
+
+**Four operational lessons, three about my own instruments.**
+
+- **A fit is only a fit over its range** — part 3 records this once for
+  `private-members`, and it recurred FOUR times in one session: the
+  barrel axis reads 1.15 over 10..80 and 1.81 over 40..320;
+  `nested-closures` 1.90 over 200..1600 and 2.20 on the default rungs;
+  the single-module curve flat 0.30-0.42 us/byte to 2 MB and 9.08 at
+  3.1 MB; and a two-point "cubic" fit spanned a CLIFF that was a
+  truncation artifact, not a curve.
+- **A ladder must grow the PRODUCT, not one factor.** Three graph
+  shapes (`star` 0.70, `shared` 0.76, `chain` 0.91) all read linear
+  because the predicted cost is M x (closure bytes) and each held the
+  other factor at a value making the product small.
+- **A control must actually remove the thing it controls for.** The
+  first fixed-bytes control gave its groups no barrel import, so every
+  closure was EMPTY — a star wearing a barrel's name, reading -0.02.
+- **An unstripped release binary plus callgrind beats writing timers.**
+  1,371 checker symbols, nothing to instrument, so it cannot carry the
+  overlapping-span defect part 3 records for hand-rolled spans. What it
+  needs is a SMALL reproduction: the 8 KB chain profiles in seconds
+  where the real corpus needs 45 minutes, and the 45-minute run was
+  killed once a cheaper route to the same answer existed.
+
+Gates: oracle TP 2636 / MISS in scope 79 / OUT OF SCOPE 19 / FP 0 /
+PFLEGAL 0 / TN 1750 (unchanged); mangle-safety 186/186; dce-coverage 31
+eliminated / 0 broken; graph-walk linear; scaling **14/14** axes within
+budget; `expr_check_wbtest` 688/688; generated-fixtures, scaffolds,
+examples green; `moon check --deny-warn` clean.
+
 ### Perf round (2026-09-11): nothing regressed, and the axis nobody measured is quadratic
 
 Asked "what got slower", the differential says **nothing**, and that is the

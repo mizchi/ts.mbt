@@ -3,10 +3,13 @@
 // This repo has four harnesses that could have asked, and each one asks a
 // question whose answer cannot reach this cost:
 //
-//   verify_checker_scaling.mjs  13 axes, every one of them `tscheck` over
+//   verify_checker_scaling.mjs  14 axes, every one of them `tscheck` over
 //                               ONE file -- twelve grow a module-wide
-//                               list, one grows an `extends` chain. No
-//                               module graph exists in any of them.
+//                               list, one grows an `extends` chain, one
+//                               grows closures nested in one body. No
+//                               module graph exists in any of them, and
+//                               `nested-closures` is where the cost that
+//                               actually dominates a real compile lives.
 //   verify_graph_walk.mjs       grows a module graph, and runs
 //                               `--bundle --no-check`. Correct for its
 //                               own question (the loader's 2^depth

@@ -183,8 +183,29 @@ verify-checker-scaling *ARGS:
     moon build --target native --release
     node scripts/verify_checker_scaling.mjs {{ ARGS }}
 
+# Is the CHECK superlinear in the module GRAPH?
+#
+# The sibling of `verify-checker-scaling`, for the dimension none of its
+# axes has: every one of those runs `tscheck` over ONE file, and
+# `verify-graph-walk` — the only harness that grows a module graph —
+# runs `--no-check`, so a cost that needs a graph WITH the check on was
+# invisible to both. It found `graph_type_modules` pushing a target once
+# per EDGE (2 x 161^2 ingests for a 162-module graph) and a latent
+# interface corruption behind it.
+#
+# Read its budget comment before acting on a failure: the exponent it
+# gates is a BARREL-with-small-modules artifact that real code does not
+# hit (real 7 MB, 8 -> 38 modules: -0.15). The duplicate-ingest
+# regression is the half worth having.
+#
+#   just verify-graph-check-scaling
+#   just verify-graph-check-scaling --verbose
+verify-graph-check-scaling *ARGS:
+    moon build --target native --release
+    node scripts/verify_graph_check_scaling.mjs {{ ARGS }}
+
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling verify-graph-check-scaling
 
 # Update dependencies
 update:
