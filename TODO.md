@@ -1037,19 +1037,91 @@ effect. `nested-closures` is the fourteenth axis, gated at its measured
 N statements in ONE body with no closures (0.99), the other eleven grow
 module-wide lists.
 
-- [ ] **FILED: replace the env snapshot/restore pair with an undo
-  JOURNAL.** Record each mutation's previous value, unwind to a mark:
-  O(mutations in the scope) instead of O(enclosing bindings). The
-  interception surface is small — **3 writes to `vars`, 2 removes, 4
-  `declared` mutations** — and the semantics match, because `declared`
-  is first-write-wins and so is unchanged for any name already in the
-  snapshot, which is exactly what `restore_from` relies on. **The
-  PRECONDITION is the work**: a journal requires strict LIFO nesting
-  where an array snapshot tolerates any order. Several of the 21 paired
-  call sites restore one snapshot twice (idempotent either way), but a
-  pair that restores an OUTER snapshot before an inner one would
-  silently differ, and that needs auditing site by site first. Worth
-  ~28 s on this repo's own primary benchmark.
+**The journal's precondition was audited (2026-09-13) and it HOLDS —
+and the audit corrected what the journal is FOR.** Recorded in full
+below, because the audit refuted half of what this item claimed.
+
+**`full_snapshot()` serves THREE purposes and only 17 of the 21 sites
+are saves.** That is the finding the rest follows from — one name
+answering three questions, the shape this file keeps recording:
+
+| use | sites | needs |
+| --- | --- | --- |
+| SAVE, paired with `restore_from` | 17 | the journal |
+| ENUMERATOR — copy an outer env into a fresh child, one `bind` at a time | 4 | a LAYERED env; a journal does nothing here |
+| READ-OUT — materialize the env as a `Map` to return | 2 | stays as it is, it genuinely needs every binding |
+
+The 4 enumerator sites are `infer_arrow_body_with_params` (x2),
+`check_arrow_with_context` and `check_funcexpr_with_context` — which is
+to say the CLOSURE path, the 916 calls at 97.96% inclusive that this
+item attributed to the journal. They are `let env = ExprEnv::new(); for
+entry in outer.full_snapshot() { env.bind(entry.0, entry.1) }`, and the
+site at 15186 says so in its own comment: "We don't snapshot/restore".
+So the `nested-closures` cost is an O(outer bindings) COPY per closure
+and a journal cannot touch it.
+
+**What the journal does fix is bigger than what this item thought, and
+it is `check_block`.** Every `{ }` — every `if` body, every loop body,
+every bare block — calls `check_block`, whose first act is
+`env.full_snapshot()` with a `restore_from` at the end. Isolated against
+its control (the same assignments unbraced): 0.018 / 0.045 / 0.177 /
+0.865 s braced, exponent **1.86**, against 0.008 / 0.010 / 0.015 /
+0.025 s bare, exponent 0.55. **At n=2000, wrapping each assignment in
+`{ }` is 35x slower on 8% MORE bytes.** Narrowing is not the trigger: a
+plain `if (b)` fits 2.10, the same as `if (typeof p === "string")` at
+2.04, because the block pays the snapshot whether anything narrows or
+not. `block-scopes` is the fifteenth axis, gated at 1.92; `statements`
+was already there and could not see it, because its statements are
+unbraced (0.99).
+
+**The LIFO precondition holds, and here is the audit rather than the
+verdict.** All 17 saves are `let pre` / `let snap` function-locals,
+restored in the same function, never stored in a field or array and
+never passed as a parameter — so nesting across the CALL STACK is
+automatic, since a callee can only ever restore its own local. Within a
+function:
+
+- `check_stmt` has 7 saves (While, For, ForOf, ForAwaitOf, ForIn,
+  Switch-case, Try-catch) and 7 restores. They are in mutually
+  exclusive `match` arms — the only pair that could overlap, 19084 and
+  19189, is separated by the arm boundary at 19166/19167 — so two are
+  never live at once. Its eighth `full_snapshot()` (18876) is a READ-OUT
+  building `pre_map`, which is why the count looked off by one.
+- `check_block_narrowing_exit` has one save and one restore, plus a
+  READ-OUT in between that materializes the exit state.
+- `check_expr_against` (10751) and `check_call_args_in_expr` (21442)
+  each restore one save TWICE — the ternary pattern (`narrow then_binds;
+  check; restore; narrow else_binds; check; restore`). A journal handles
+  it correctly and this is worth stating because it is the case that
+  looked dangerous: the mutations after the first unwind push NEW log
+  entries, so the second unwind pops exactly those and lands on the same
+  mark. Not an aliasing hazard at all.
+
+So the interception surface stands as filed — **3 writes to `vars`, 2
+removes, 4 `declared` mutations** — and `declared` being
+first-write-wins is what makes the semantics match for any name already
+in the snapshot.
+
+- [ ] **FILED: the undo JOURNAL for the 17 SAVE sites.** Precondition
+  audited and holding (above), so what remains is the change itself:
+  `mark()` returns the log length, each mutation pushes its previous
+  value, `unwind(mark)` pops and applies. Keeps `full_snapshot` for the
+  enumerator and read-out uses. Worth the `block-scopes` exponent, which
+  is every block in every function.
+- [ ] **FILED: a LAYERED `ExprEnv` for the 4 ENUMERATOR sites** — a
+  parent pointer consulted on lookup miss instead of copying every outer
+  binding into the child. This is the `nested-closures` fix and it is
+  what `checker.ts`'s 27.8 s is made of. **Feasibility measured rather
+  than assumed: `ExprEnv` has 8 methods and exactly ONE place outside
+  them touches the fields** (`env.vars.remove` / `env.declared.remove`
+  at 15161-15162), so the read surface is fully encapsulated. Two
+  details, both checked: that `remove` loop runs on a synthetic env that
+  is discarded two statements later, so child-vs-copy semantics cannot
+  be observed; and `check_funcexpr_with_context`'s `reset_narrowing`
+  (`f.name == "<class>"`, which rebinds captured names at their DECLARED
+  types because class member bodies run after the guard region ends)
+  becomes a flag on the child — on miss, ask the parent for
+  `lookup_declared` rather than `lookup`.
 
 **Five hypotheses died, and the route is the reusable part.**
 

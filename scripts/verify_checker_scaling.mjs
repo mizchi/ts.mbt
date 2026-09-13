@@ -79,6 +79,7 @@ const AXIS_RUNGS = {
   // quadratic, and at 4,000 this axis alone would dominate the run. It
   // fits 2.14 here in 2 s against 2.20 on the default rungs.
   "nested-closures": [250, 500, 1000, 2000],
+  "block-scopes": [250, 500, 1000, 2000],
   // A chain this long is already far past anything real (the deepest
   // `extends` chain in this repo's own node_modules is single digits), and
   // 50..400 spans the 8x that separates linear from quadratic.
@@ -146,6 +147,14 @@ const AXIS_BUDGET = {
   // restore one snapshot twice (idempotent either way), but a pair that
   // restores an OUTER snapshot before an inner one would silently differ.
   "nested-closures": 2.25,
+  // KNOWN QUADRATIC per `{ }` block, and the same root as
+  // `nested-closures` seen from the other side: `check_block` snapshots
+  // the whole env on entry and restores it on exit, so N blocks in a body
+  // with N bindings pay N x N. Measured 1.86 isolated (35x at n=2000
+  // against the unbraced control); gated here at its measured number on
+  // the axis ladder. Fixed by the same undo journal, whose precondition
+  // is audited and holds — see the axis comment.
+  "block-scopes": 2.1,
 };
 
 // One generator per axis. Each emits N declarations of ONE kind, so a
@@ -338,6 +347,45 @@ const AXES = {
       out.push(`  const f${i} = (x: number): number => x + v${i};`);
     }
     out.push(`  return f0(1);`);
+    out.push(`}`);
+    return out.join("\n") + "\n";
+  },
+  // BLOCKS inside one body, which is the other half of `nested-closures`
+  // and the commonest construct in any real function: every `if` body,
+  // every loop body and every bare `{ }` goes through `check_block`, and
+  // `check_block`'s first act is `env.full_snapshot()` with a
+  // `restore_from` at the end — O(enclosing bindings) PER BLOCK.
+  //
+  // Isolated against its control, the same assignments with no braces:
+  // 0.018 / 0.045 / 0.177 / 0.865 s braced (1.86) against
+  // 0.008 / 0.010 / 0.015 / 0.025 s bare (0.55). At n=2000, wrapping
+  // each assignment in `{ }` is 35x slower on 8% MORE bytes.
+  //
+  // `statements` below is the control that was already here and could
+  // not see it: its statements are unbraced, so it fits 0.99. Narrowing
+  // is NOT the trigger either — an `if (b)` with no type guard fits 2.10,
+  // the same as `if (typeof p === "string")` at 2.04, because the block
+  // pays the snapshot whether or not anything narrows.
+  //
+  // The fix is the undo JOURNAL filed in TODO.md, whose LIFO
+  // precondition has been audited and HOLDS: all 17 save sites are
+  // function-locals restored in the same function, the only multi-save
+  // function has them in mutually exclusive match arms, and the two
+  // double-restore sites are the ternary pattern (one mark unwound
+  // twice, which a journal handles). Note that `full_snapshot` serves
+  // three purposes and only these 17 are saves — 4 sites use it as an
+  // ENUMERATOR to copy an outer env into a fresh child (the
+  // `nested-closures` cost, which wants a layered env instead) and 2 as
+  // a READ-OUT that genuinely needs every binding.
+  "block-scopes": (n) => {
+    const out = [];
+    out.push(`export function blocks(): number {`);
+    for (let i = 0; i < n; i++) out.push(`  const v${i}: number = ${i};`);
+    out.push(`  let acc = 0;`);
+    // A bare block, not an `if`: the snapshot is the block's, and using
+    // `if` would leave "is it the narrowing?" open when it is not.
+    for (let i = 0; i < n; i++) out.push(`  { acc = acc + v${i}; }`);
+    out.push(`  return acc;`);
     out.push(`}`);
     return out.join("\n") + "\n";
   },

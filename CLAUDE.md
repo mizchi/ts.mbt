@@ -1007,11 +1007,35 @@ product surfaces now.
   and **not one of the other thirteen could see it** — `function-bodies`
   grows N SIBLING functions (1.09), `statements` grows N statements in
   ONE body with no closures (0.99), and the other eleven grow
-  module-wide lists. Declared rather than fixed: an undo JOURNAL makes
-  the pair O(mutations) and there are only 3 writes to `vars`, 2 removes
-  and 4 `declared` mutations to intercept, but a journal requires strict
-  LIFO nesting where an array snapshot tolerates any order, and that
-  precondition wants auditing across 21 paired call sites first.
+  module-wide lists.
+  Auditing the fix's precondition then corrected what the fix IS, and the
+  finding is one name answering THREE questions: `full_snapshot()` is a
+  SAVE at 17 sites (paired with `restore_from`), an ENUMERATOR at 4 —
+  `let env = ExprEnv::new(); for entry in outer.full_snapshot() {
+  env.bind(...) }`, which the site at 15186 states in its own comment as
+  "we don't snapshot/restore" — and a READ-OUT at 2, materializing the
+  env as a `Map`. The 4 enumerator sites ARE the closure path, so the
+  journal this file filed cannot touch `nested-closures` at all: that
+  cost is an O(outer bindings) COPY per closure and wants a LAYERED env
+  (a parent consulted on lookup miss), whose feasibility is measured
+  rather than assumed — `ExprEnv` has 8 methods and exactly ONE place
+  outside them touches the fields.
+  What the journal DOES fix is `check_block`, and it is bigger than the
+  shape it was filed for: every `{ }` — every `if` body, every loop
+  body, every bare block — snapshots the whole env on entry and restores
+  it on exit. Isolated against the same assignments unbraced, 0.018 /
+  0.045 / 0.177 / 0.865 s at 1.86 against 0.008 / 0.010 / 0.015 /
+  0.025 s at 0.55, so **at n=2000 wrapping each assignment in `{ }` is
+  35x slower on 8% MORE bytes**. Narrowing is not the trigger — a plain
+  `if (b)` fits 2.10 against 2.04 for a real type guard — and
+  `statements` could not see it because its statements are unbraced.
+  `block-scopes` is the fifteenth axis at a gated 1.92. The LIFO
+  precondition HOLDS: every save is a function-local restored in the
+  same function, so call-stack nesting is automatic; `check_stmt`'s
+  seven are in mutually exclusive match arms; and the two double-restore
+  sites are the ternary pattern, where the mutations after the first
+  unwind push new log entries that the second unwind pops — the case
+  that looked like an aliasing hazard and is not.
   **The route there is worth more than the fix, because five hypotheses
   died and every one of them died to a measurement rather than to
   re-reading.** A module-graph quadratic looked certain: a BARREL graph
