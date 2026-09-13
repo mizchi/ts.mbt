@@ -62,6 +62,21 @@ The lesson generalizes past this file's subject: **what the checker gets
 WRONG can be hidden by what it does not reach**, so the shapes worth
 minimizing here are not only the silent ones.
 
+Batch EL is the inverse of every note above: it bought **zero** corpus
+files and is still the batch with the largest reach into real `.d.ts`
+input, which is why a file organized by "what a user would write" has to
+be read alongside the conformance count rather than from it. `typeof C`
+did not resolve for a CLASS at all — `Resolver::unwrap`'s `TypeOf` arm
+reads `globals` and a class lives in `classes` — so every static read,
+call and construction through such a binding abstained, and `typeof C` is
+how a factory, a registry and a DI container each spell a class value.
+The corpus cannot score it because the corpus tests the CLASS-NAME
+spelling. The same batch found that the ARGUMENTS of a `new` were checked
+by nothing unless the callee was a bare class name, and fixed a
+pre-existing false positive on the shape every real `.d.ts` uses (a
+class+namespace merge read through a `typeof` binding). What it did NOT
+close is filed in G2 with a blocker that MOVED under measurement.
+
 Sections B, C, E and F were taken in batch EB — **+8 files at FP 0** — and
 each keeps its entry with what shipped and what is still missing, because
 the residue is the useful part. Batch EC then took two of section G's five
@@ -464,6 +479,54 @@ the same way TS1063 / TS1319 already work.
 
 ---
 
+## G2. A class REFERENCE as a value (TS2322) — blocked, and the blocker MOVED
+
+One file: `classes/constructorDeclarations/constructorParameters/classConstructorAccessibility3.ts`.
+
+```ts
+class Foo { protected constructor() {} }
+class Baz { protected constructor() {} }
+let a = Foo;
+a = Baz;        // tsc: TS2322, cannot assign a protected-constructor
+                //       class to a public-constructor one
+```
+
+The rule is writable and its table is probed. A 3x3 over
+`public` / `protected` / `private` constructors says the source must be
+at least as accessible as the target, and the surprising cell is that an
+identical `private` redeclaration across two UNRELATED classes is
+**ACCEPTED** here — unlike TS2415, where redeclaring a base `private`
+member in a derived class IS an error, because there the base member is
+nominal and nothing outside the declaring class can satisfy it.
+
+**Batch EK filed this as blocked on `typeof C` not resolving. Batch EL
+resolved `typeof C` and the file did not move, so the blocker was named
+wrong** — one more abstention whose stated reason did not survive being
+measured, and the first here where the measuring was done by CLOSING the
+named blocker rather than by probing it. What this needs
+is a class REFERENCE modelled as a VALUE, which is a different question
+from a `typeof C` ANNOTATION:
+
+```ts
+class Foo { }
+const n: number = Foo;   // tsc: TS2322. tscheck: silent.
+```
+
+`infer_expr` gives a bare class reference nothing usable, so a rule
+comparing two static sides' accessibility has no two sides to compare —
+`let a = Foo` infers nothing for `a`, and the later `a = Baz` has no
+target type. The `typeof C` work is the other half and is done:
+`class_static_member` answers a static MEMBER read and
+`class_construct_signature` a construction, both at the question sites
+(`lookup_field_core`, `single_construct_signature_params`) rather than in
+`unwrap`, because resolving the static side structurally would put it in
+front of ASSIGNABILITY, where `prototype` and the construct signature's
+return type are both `Named(C)` and four tsc-ACCEPTED shapes
+(`let c: typeof Base = Derived` among them) would compare nominally and
+fail.
+
+---
+
 ## H. Declared abstentions — not bugs
 
 | Shape | tsc | Why we stay silent |
@@ -474,6 +537,8 @@ the same way TS1063 / TS1319 already work.
 | `computedPropertyNames28` / `30` (`super` in an object-literal computed key) | TS2466 | Modelling the distinction ONE corpus file draws is fitting the corpus: three TS7-ACCEPTED files say an object-literal computed key may legally mention `super`, and the earlier attempt cost 6 false positives for 2 true ones. |
 | `using` / `await using` declarations | various | **Zero** of 5,697 real `.d.ts` / `.ts` files use them. Six MISS files; declared Tier 4. |
 | `i[k]` where `interface I { [k]: number }` and `declare const k: unique symbol` | TS2322 | The KEY must resolve to the member the type declares, and the parser stores a user symbol key as `<computed>` — it has no stable identity. A NAME-keyed identity would claim two same-spelled bindings in different scopes are one member, which is a false positive. The WELL-KNOWN spelling (`i[Symbol.iterator]`) does resolve, because the parser gives it a stable `@@<name>`; batch EJ wired that half. |
+| `declare const c: typeof A; new c()` where `A` is `abstract` | TS2511 | `class_construct_signature` supplies the `<new>` entry whatever the abstractness, which keeps `new c()` LEGAL rather than inventing a different diagnostic. Reporting it needs the abstractness carried alongside the signature; abstaining loses a finding, and the alternative — no `<new>` entry — would report "not constructable", which is the wrong sentence. |
+| `new B(1, 2, "string")` against `constructor(...rest: string[])` | TS2345 | A DECLARATION-style rest parameter is kept as the bare array type with no `Rest` marker (`callable_func_type_from_params` says so in its own comment; the function-TYPE syntax builds `Rest` directly). `construct_params_checkable` abstains on an array-shaped last parameter for that reason, and on a construct signature whose own generic parameters the parser does not preserve — both cost a MISS rather than the three-plus-one false positives measured without them. |
 | a template-literal type with a placeholder, against a literal | TS2322 | Still BLIND, the one row of `docs/checker-triage.md`'s capability table that no batch has closed (see A-2). Needs the placeholder matched against the source literal's text, which nothing models. |
 | `Extract<1 \| "a", 1>` | TS2322 | `Exclude` / `Extract` decide over a literal union of ONE kind and abstain over a mixed one. Found by re-probing the capability table in batch EJ rather than by a corpus file, and narrower than the retired `utility types` BLIND row implied. |
 
@@ -494,6 +559,12 @@ Two rules, both learned the hard way:
    every one of them is closed now, and not one blocker survived contact. A comment declining a rule is a lead; its REASON is a claim to be
    measured — and a blocker can also be removed by a LATER batch that was
    not aiming at it, which is what happened to both of batch EC's rows.
+   G2 adds the cheapest way to find out: **close the named blocker and
+   see whether the file moves.** Batch EL resolved `typeof C`, which is
+   what batch EK had filed the constructor-accessibility rule as waiting
+   on, and the file did not move — so the row was mis-filed, and the
+   `typeof C` work stands on its own merits rather than on the file it
+   was supposed to unblock.
 2. **Pair every rule with its LEGAL neighbour.** "Fires on the corpus file"
    and "stays silent on the legal spelling" are separate claims, and only
    the second keeps FP at zero. `scripts/tsc_probe.mjs` answers the second

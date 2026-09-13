@@ -74,6 +74,10 @@ const DEFAULT_RUNGS = [500, 1000, 2000, 4000];
 // in 2 s. `--rungs` still overrides everything.
 const AXIS_RUNGS = {
   namespaces: [125, 250, 500, 1000],
+  // A chain this long is already far past anything real (the deepest
+  // `extends` chain in this repo's own node_modules is single digits), and
+  // 50..400 spans the 8x that separates linear from quadratic.
+  "class-chain-depth": [50, 100, 200, 400],
 };
 
 // Per-axis exponent budget. Every axis is held to `--max-exponent` (1.5)
@@ -213,6 +217,32 @@ const AXES = {
   // silently, and batch CP's TS5076 is the reason a span needs its own
   // cost model. One class per rung keeps the span itself growing, which
   // is the shape that went quadratic there.
+  // `extends` CHAIN DEPTH, with a static read through the deep end. The
+  // one shape none of the other twelve axes can grow: every one of them
+  // grows a module-wide LIST, so a walk that is quadratic in the length
+  // of an inheritance chain is invisible to all of them.
+  //
+  // That is not hypothetical — it is why this axis exists. Batch EL's
+  // `class_static_member_rec` passed `[name, ..seen]`, copying the
+  // accumulated array once per level, and a hand ladder read
+  // 54 / 153 / 457 / 1673 ms at depth 50 / 100 / 200 / 400 (exponent
+  // 1.65) while the twelve axes all stayed green. The `classes` axis
+  // grows the class COUNT and reads 1.06 on a FLAT hierarchy of the same
+  // size, which is what separates the two diagnoses — the same job
+  // `same-bytes` does for bytes versus declarations.
+  //
+  // The reads are what make the walk run; a chain alone is only parsed.
+  "class-chain-depth": (n) => {
+    const out = [];
+    out.push(`class C0 { static s: number = 1 }`);
+    for (let i = 1; i < n; i++) out.push(`class C${i} extends C${i - 1} { }`);
+    out.push(`declare const c: typeof C${n - 1};`);
+    out.push(`export function f(): number {`);
+    for (let i = 0; i < 200; i++) out.push(`  const n${i}: number = c.s;`);
+    out.push(`  return n0`);
+    out.push(`}`);
+    return out.join("\n") + "\n";
+  },
   "private-members": (n) => {
     const out = [];
     out.push(`export class P {`);

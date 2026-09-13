@@ -2418,6 +2418,103 @@ product surfaces now.
   static side is its own piece of work with its own false-positive
   surface, and it is a real-world gap in its own right (`typeof C` is how
   a factory, a registry and a DI container all spell a class value).
+  Batch EL closes the `typeof C` item batch EK filed, and its conformance
+  yield is **ZERO by design** — the third batch here in that shape after
+  DX and DY, because what it buys is a capability on real `.d.ts` input
+  that the corpus does not test. `Resolver::unwrap`'s `TypeOf` arm reads
+  `globals` and a class lives in `classes`, so `typeof C` resolved to
+  nothing and every read, call and construction through such a binding
+  abstained: `declare const c: typeof Foo; c.s` was silent where `Foo.s`
+  has been typed for a long time — one question answered at one of its
+  two spellings, and the spelling a factory, a registry and a DI
+  container all write is the one that lost.
+  `class_construct_signature`'s own header is the thirteenth recorded
+  abstention naming its own fix, and the reason it gives is TRUE of the
+  approach it considered: "the constructor side of a class also carries
+  its STATIC members … so resolving `typeof C` to a bare
+  `Constructor(...)` everywhere would make every static access through
+  such a binding look like a missing property." So the static MEMBERS are
+  what had to be modelled, and the placement is the whole safety
+  argument. It is supplied at the two QUESTION sites — `lookup_field_core`
+  and `single_construct_signature_params` — and NOT in `unwrap`, because
+  resolving it structurally everywhere would put it in front of
+  ASSIGNABILITY, where the static side's `prototype` and its construct
+  signature's return type are `Named(C)`. That was measured before a line
+  was written: `let c: typeof Base = Derived`, the same with an unrelated
+  but structurally compatible class, an index-signature write and a call
+  argument are ALL accepted by tsc, and all four would have compared
+  `Named("Derived")` against `Named("Base")` nominally. `None` from
+  `class_static_member` therefore means "cannot be answered", never "no
+  such member": a class's static side is not enumerable from the
+  declaration, because a same-named `namespace` merges members in, an
+  expando adds one, and `Function.prototype` contributes `name` /
+  `length` / `call` / `apply` / `bind`.
+  The broader finding is next door and was found by probing rather than
+  by reading: **the ARGUMENTS of a `new` were checked by nothing** unless
+  the callee was a bare class NAME. A written construct signature
+  (`declare const c: new (n: number) => object`), an object type carrying
+  one, and `typeof C` all accepted `new c("s")` in silence, while the
+  CALL form has checked its arguments against a single `Func` signature
+  five hundred lines above for a long time. The fallback branch for a
+  non-class constructor existed and handled the UNION case and then the
+  overload-set case (two or more signatures), so the one shape in
+  between — exactly one construct signature — fell through both.
+  Wiring that in cost **four false positives** the corpus caught, and the
+  two causes are worth separating. Three (`newWithSpread`, `…ES5`,
+  `…ES6`) are a declaration-style REST parameter, which
+  `callable_func_type_from_params` keeps as the bare array type with no
+  `Rest` marker — its own comment says so, and says the function-TYPE
+  syntax builds `Rest` directly instead — so `check_arguments`, which
+  reads `Rest(_)`, compared `new B(1, 2, "string")`'s third argument
+  against `string[]`. The fourth (`thisTypeInObjectLiterals2`) is a
+  construct signature's own generic parameters, which the parser does not
+  preserve (the blocker this file records for
+  `unresolved_type_references`), so an object literal was compared against
+  a shape whose members are bare `Named(D)`; the class path handles that
+  by SUBSTITUTING inferred bindings and nothing here can.
+  `construct_params_checkable` abstains on all three facts, and gating it
+  at ONE of the two `new` spellings left the other three FPs standing —
+  `new (b.f)(1, 2, "string")` reaches the expression arm rather than the
+  name arm, in the very files the rest-parameter hazard comes from.
+  A pre-existing false positive turned up underneath, and it is the
+  applied-in-some-places family with the gate present and unreachable.
+  `member_recv_unmodeled` already answers `TypeOf(_) => true`, and a
+  class+namespace MERGE could never reach that arm: `parser_namespace_lower`
+  lowers `namespace Foo` to `var Foo = Foo || {}`, so `unwrap`'s `TypeOf`
+  arm finds `Foo` in `globals` and resolves to that object, whose fields do
+  not include the namespace's exports (recorded as `Foo.v` globals). So
+  `class Foo {} namespace Foo { export const v = 1 }` read through a
+  `typeof Foo` binding reported "property `v` does not exist on
+  `typeof Foo`" on code tsc accepts — the shape every real `.d.ts` uses.
+  Testing the RAW type is what makes the existing arm reachable.
+  The batch's most durable output is a COST finding about my own code and
+  a new axis for it. `class_static_member_rec` passed `[name, ..seen]`,
+  copying the accumulated array once per level — the same left-fold
+  quadratic this file records for `merge_interfaces` — so a hand ladder of
+  200 static reads through an `extends` chain read 54 / 153 / 457 /
+  1673 ms at depth 50 / 100 / 200 / 400, an exponent of **1.65**, while
+  all twelve scaling axes stayed green. They could not see it: **every one
+  of them grows a module-wide LIST and none grows a CHAIN.** The control
+  that separates the two diagnoses is a FLAT hierarchy of the same class
+  count, which is 11 / 13 / 16 / 22 ms — the job `same-bytes` does for
+  bytes versus declarations. One mutable `Map` threaded down takes it to
+  24 / 40 / 86 / 200 ms (1.02), and never popping is correct because the
+  walk returns on the first match, so a name reachable through two bases
+  gives the same answer either way. `class-chain-depth` is the thirteenth
+  asserted axis, proven by mutation rather than asserted: with the
+  per-level copy back it reports 2.03 and FAILS. Batch EK's
+  `interface_is_structurally_empty_rec` had the identical pattern and was
+  fixed with it.
+  What stays filed is narrower than the item batch EK wrote, and the
+  blocker has moved: constructor-accessibility assignment (TS2322) does
+  NOT need `typeof C` resolution, it needs a class REFERENCE modelled as
+  a VALUE. `const n: number = Foo` — assigning a class to a number — is
+  silent, so `infer_expr` gives a bare class reference nothing usable, and
+  a rule comparing two static sides' accessibility has no two sides to
+  compare. TS2511 for `new` on an abstract class through a `typeof`
+  binding is a declared MISS for a deliberate reason: the `<new>` entry is
+  supplied whatever the abstractness, which keeps `new c()` legal rather
+  than inventing a different diagnostic.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

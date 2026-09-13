@@ -20410,3 +20410,106 @@ test "batch EK rules" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EL: `typeof C` for a CLASS, and the arguments of a `new`.
+///
+/// `Resolver::unwrap`'s `TypeOf` arm reads `globals` and a class lives in
+/// `classes`, so `typeof C` resolved to nothing and every read, call and
+/// construction through such a binding abstained. Supplied at the two
+/// QUESTION sites (member lookup, construct signature) rather than in
+/// `unwrap`, because resolving it structurally everywhere would put it in
+/// front of ASSIGNABILITY — where the static side's `prototype` and its
+/// construct signature's return type are `Named(C)` — and the four legal
+/// shapes in the silent list below are all ACCEPTED by tsc.
+///
+/// Every cell was run through the real compiler before being written down.
+test "batch EL rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let strict_count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // A STATIC member read through a `typeof C` binding. `Foo.s` — the
+      // other spelling of the same question — has been typed for a long
+      // time.
+      "class Foo { static s: number = 1 }\ndeclare const c: typeof Foo;\nfunction f() { const n: string = c.s; return n }",
+      // A static METHOD's signature, a static GETTER's return type, and a
+      // static INHERITED from a base (statics are inherited).
+      "class Foo { static sm(n: number): void {} }\ndeclare const c: typeof Foo;\nfunction f() { c.sm(\"s\") }",
+      "class Foo { static get g(): number { return 1 } }\ndeclare const c: typeof Foo;\nfunction f() { const n: string = c.g; return n }",
+      "class Base { static s: number = 1 }\nclass Sub extends Base { }\ndeclare const c: typeof Sub;\nfunction f() { const n: string = c.s; return n }",
+      // The ARGUMENTS of a `new`, at all three spellings that reached
+      // nothing: `typeof C`, a written construct signature, and an object
+      // type carrying one. The bare-class-name form already worked.
+      "class Foo { constructor(n: number) {} }\ndeclare const c: typeof Foo;\nfunction f() { return new c(\"s\") }",
+      "declare const c: new (n: number) => object;\nfunction f() { return new c(\"s\") }",
+      "declare const c: { new (n: number): object };\nfunction f() { return new c(\"s\") }",
+      "class Foo { constructor(n: number) {} }\nfunction f() { return new Foo(\"s\") }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // Assignability through `typeof C` is deliberately NOT resolved, and
+      // these four are why: tsc ACCEPTS every one. A derived class, an
+      // unrelated but structurally compatible class, an index-signature
+      // write and a call argument would each compare `Named("Derived")`
+      // against `Named("Base")` nominally.
+      "class Base { static s: number = 1 }\nclass Derived extends Base { }\nlet c: typeof Base = Derived;",
+      "class Base { static s: number = 1 }\nclass Other { static s: number = 2 }\nlet c: typeof Base = Other;",
+      "class Base { }\ndeclare const reg: { [k: string]: typeof Base };\nclass Derived extends Base { }\nfunction f() { reg[\"d\"] = Derived; }",
+      "class Base { static s: number = 1 }\ndeclare function take(c: typeof Base): void;\nclass Derived extends Base { }\nfunction f() { take(Derived); }",
+      // A member this cannot see is never reported ABSENT: a class's
+      // static side is not enumerable from the declaration (a same-named
+      // namespace merges members in, an expando adds one,
+      // `Function.prototype` contributes `name` / `call` / `bind`). So
+      // `c.x` — an instance member, tsc TS2339 — is a declared MISS, and
+      // so is any name at all.
+      "class Foo { x: number = 1 }\ndeclare const c: typeof Foo;\nfunction f() { const n: string = c.x; return n }",
+      "class Foo { }\ndeclare const c: typeof Foo;\nfunction f() { return c.whatever }",
+      // A same-named NAMESPACE's member is read through `globals`, which
+      // is the more precise answer, and its type is right.
+      "class Foo { }\nnamespace Foo { export const v: number = 1 }\ndeclare const c: typeof Foo;\nfunction f() { const n: number = c.v; return n }",
+      // The three facts a construct signature's parameter list cannot
+      // carry, each of which made the first version false-positive:
+      // a declaration-style REST parameter keeps its array type with no
+      // `Rest` marker, a SPREAD argument expands to an unknown count, and
+      // a construct signature's own type PARAMETERS are not preserved by
+      // the parser.
+      "interface B { new (x: number, y: number, ...z: string[]): object }\ndeclare const b: B;\nfunction f() { return new b(1, 2, \"string\") }",
+      "declare const c: new (...xs: number[]) => object;\nfunction f() { return new c(1, 2, 3) }",
+      "declare const c: new (n: number) => object;\ndeclare const a: number[];\nfunction f() { return new c(...a) }",
+      "class Box<T> { constructor(v: T) {} }\ndeclare const c: typeof Box;\nfunction f() { return new c(1) }",
+      // An optional parameter, and a class that INHERITS its constructor
+      // (`class_construct_signature` abstains there with the reason in
+      // its own header).
+      "declare const c: new (n?: number) => object;\nfunction f() { return new c() }",
+      "class Base { constructor(n: number) {} }\nclass Derived extends Base { }\ndeclare const c: typeof Derived;\nfunction f() { return new c(1) }",
+      // An ABSTRACT class is TS2511 and a declared MISS: the `<new>` entry
+      // is supplied whatever the abstractness, which keeps `new c()` legal
+      // rather than inventing a different diagnostic.
+      "abstract class A { constructor(n: number) {} }\ndeclare const c: typeof A;\nfunction f() { return new c(1) }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // The strict path agrees on the two that the permissive filter could
+  // plausibly suppress (a construct-argument type, and a static read).
+  assert_true(
+    strict_count(
+      "declare const c: new (n: number) => object;\nfunction f() { return new c(\"s\") }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    strict_count(
+      "class Base { static s: number = 1 }\nclass Other { static s: number = 2 }\nlet c: typeof Base = Other;",
+    ),
+    0,
+  )
+}

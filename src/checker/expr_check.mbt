@@ -1989,6 +1989,112 @@ fn Resolver::class_construct_signature(
 }
 
 ///|
+/// The type of `ClassName.field` read off the class's STATIC side — the
+/// half `class_construct_signature`'s own header says is not modelled and
+/// names as the reason it answers only the construct question:
+///
+///   "The constructor side of a class also carries its STATIC members …
+///    so resolving `typeof C` to a bare `Constructor(...)` everywhere
+///    would make every static access through such a binding look like a
+///    missing property."
+///
+/// That reason is TRUE of the approach it considered and is what this
+/// removes. Statics ARE inherited, so the base chain is walked; `seen`
+/// makes a cyclic `extends` terminate.
+///
+/// `None` means "this cannot be answered here", never "no such member".
+/// Every consumer must read it that way, because the member set of a
+/// class's static side is NOT enumerable from the declaration: a
+/// same-named `namespace` merges members in (`class C {} namespace C {
+/// export const x = 1 }` — the commonest shape in a real `.d.ts`), an
+/// expando assignment (`C.foo = 1`) adds one, and `Function.prototype`
+/// contributes `name` / `length` / `call` / `apply` / `bind`. So a miss
+/// here costs a MISS and never a "property does not exist".
+fn Resolver::class_static_member(
+  self : Resolver,
+  name : String,
+  field : String,
+) -> @ast.TsType? {
+  self.class_static_member_rec(name, field, Map([]))
+}
+
+///|
+/// `seen` is ONE map threaded down the walk, not a fresh set per level,
+/// and that is a measured requirement rather than tidiness. The first
+/// version passed `[name, ..seen]`, which copies the accumulated array
+/// once per level — the same left-fold quadratic CLAUDE.md records for
+/// `merge_interfaces` — and `Array::contains` added a second O(depth)
+/// term. A hand ladder of 200 static reads through an `extends` chain
+/// went 54 / 153 / 457 / 1673 ms at depth 50 / 100 / 200 / 400, an
+/// exponent of 1.65, against 12 / 16 / 31 / 90 ms for the same file
+/// before the walk existed; a FLAT control with the same class count and
+/// no chain is 11 / 13 / 16 / 22 ms, which is what proves the cost is
+/// the DEPTH and not the class list. `verify-checker-scaling` cannot see
+/// this: every one of its axes grows a module-wide LIST, and none grows
+/// a chain.
+///
+/// Never popping is correct because the walk returns on the FIRST match:
+/// a name reachable through two bases gives the same answer either way,
+/// so pruning the second visit cannot change the result.
+fn Resolver::class_static_member_rec(
+  self : Resolver,
+  name : String,
+  field : String,
+  seen : Map[String, Bool],
+) -> @ast.TsType? {
+  if seen.contains(name) {
+    return None
+  }
+  seen[name] = true
+  guard self.classes.get(name) is Some(cls) else { return None }
+  // A same-named namespace records its members as `C.member` globals, and
+  // that spelling is more precise than anything reconstructed here.
+  match self.globals.get(name + "." + field) {
+    Some(t) => return Some(t)
+    None => ()
+  }
+  for p in cls.properties {
+    if p.name == field && p.is_static {
+      return Some(p.type_)
+    }
+  }
+  for m in cls.methods {
+    if m.name == field && m.is_static {
+      // A static ACCESSOR contributes a PROPERTY type, not a callable:
+      // a getter its return type, a setter its parameter. The same split
+      // `collect_declared_fields` and the interface member parser make.
+      return match m.accessor {
+        "get" => Some(m.return_type)
+        "set" =>
+          if m.params.length() >= 1 {
+            Some(m.params[0].1)
+          } else {
+            None
+          }
+        _ =>
+          Some(@ast.TsType::Func(method_callable_param_types(m), m.return_type))
+      }
+    }
+  }
+  // A STATIC index signature answers for any key it accepts, which is
+  // also what makes a class carrying one un-enumerable — the same reason
+  // the doc comment above gives for never reporting absence.
+  for sig in cls.static_index_signatures {
+    match sig.0 {
+      String_ => return Some(sig.1)
+      _ => ()
+    }
+  }
+  for base in cls.base_names {
+    match self.class_static_member_rec(base, field, seen) {
+      Some(t) => return Some(t)
+      None => ()
+    }
+  }
+  None
+}
+
+///|
 /// True when `name` is declared in this module as an interface with no
 /// members of any kind — no fields (the list `<call>` / `<new>` /
 /// `<computed>` sentinels also land in), no index signatures, no
@@ -2001,7 +2107,7 @@ fn Resolver::interface_is_structurally_empty(
   self : Resolver,
   name : String,
 ) -> Bool {
-  self.interface_is_structurally_empty_rec(name, [])
+  self.interface_is_structurally_empty_rec(name, Map([]))
 }
 
 ///|
@@ -2015,10 +2121,13 @@ fn Resolver::interface_is_structurally_empty(
 /// module, generic, carrying type arguments) makes the whole chain
 /// "not empty", so the type stays nominal and nothing new is accepted.
 /// `seen` makes a cyclic `extends` answer false rather than recurse.
+/// `seen` is ONE map threaded down rather than a fresh set per level, for
+/// the reason `class_static_member_rec` measures: `[name, ..seen]` copies
+/// the accumulator once per level, which is quadratic in the chain depth.
 fn Resolver::interface_is_structurally_empty_rec(
   self : Resolver,
   name : String,
-  seen : Array[String],
+  seen : Map[String, Bool],
 ) -> Bool {
   // A module alias of the same spelling wins, as everywhere else on this
   // path, and is resolved by the caller's own alias arm.
@@ -2028,6 +2137,7 @@ fn Resolver::interface_is_structurally_empty_rec(
   if seen.contains(name) {
     return false
   }
+  seen[name] = true
   match self.interfaces.get(name) {
     Some(iface) => {
       if !iface.fields.is_empty() ||
@@ -2038,7 +2148,6 @@ fn Resolver::interface_is_structurally_empty_rec(
       if iface.extends_names.is_empty() {
         return true
       }
-      let next = [name, ..seen]
       for i, base in iface.extends_names {
         // A base with type ARGUMENTS could project members in, so it is
         // not decidable here.
@@ -2046,7 +2155,7 @@ fn Resolver::interface_is_structurally_empty_rec(
           !iface.extends_args[i].is_empty() {
           return false
         }
-        if !self.interface_is_structurally_empty_rec(base, next) {
+        if !self.interface_is_structurally_empty_rec(base, seen) {
           return false
         }
       }
@@ -2916,6 +3025,31 @@ fn Resolver::lookup_field_core(
   field : String,
 ) -> @ast.TsType? {
   let unwrapped = self.unwrap(recv)
+  // `typeof C` for a CLASS: its STATIC side. `unwrap` leaves the node
+  // alone (its `TypeOf` arm reads `globals` and a class lives in
+  // `classes`), which is why every read through a `typeof C`-typed
+  // binding resolved nothing — `declare const c: typeof Foo; c.s` was
+  // silent where `Foo.s` has been typed for a long time, the same
+  // question answered at one of its two spellings.
+  //
+  // Supplied HERE rather than in `unwrap`, and that placement is the
+  // whole safety argument. Resolving `typeof C` to a structural shape
+  // everywhere would put it in front of ASSIGNABILITY, where the static
+  // side's own `prototype` and its construct signature's return type are
+  // `Named(C)` — so `let c: typeof Base = Derived`, which tsc ACCEPTS
+  // (measured, along with an unrelated but structurally compatible class,
+  // a call argument and an index-signature write), would compare
+  // `Named("Derived")` against `Named("Base")` nominally and report. The
+  // member question is the one that was asked; answering only it cannot
+  // reach those four shapes.
+  match unwrapped {
+    TypeOf(class_name) =>
+      match self.class_static_member(class_name, field) {
+        Some(t) => return Some(t)
+        None => ()
+      }
+    _ => ()
+  }
   // Try the built-in prototype dispatchers first so a `Named("Date")` /
   // `Named("RegExp")` receiver doesn't get masked by a missing-interface
   // lookup in the generic `Named(n)` arm below.
@@ -12220,6 +12354,26 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
   if shape_is_callable(ty, resolver) {
     return true
   }
+  // `typeof C` for a CLASS, tested on the RAW type. The arm below already
+  // says a `TypeOf` receiver is unmodeled, and it could not be reached
+  // for a class+namespace MERGE: `parser_namespace_lower` lowers
+  // `namespace Foo` to `var Foo = Foo || {}`, so `unwrap`'s `TypeOf` arm
+  // finds `Foo` in `globals` and resolves to that object — whose fields
+  // do not include the namespace's exports, since those are recorded as
+  // `Foo.v` globals. `class Foo {} namespace Foo { export const v: number
+  // = 1 }` then reported "property `v` does not exist on `typeof Foo`" on
+  // code tsc accepts, and the class+namespace merge is a shape every real
+  // `.d.ts` uses.
+  //
+  // A class's static side is not enumerable from the declaration for
+  // three separate reasons — that merge, an expando (`C.foo = 1`), and
+  // `Function.prototype`'s `name` / `length` / `call` / `apply` / `bind`
+  // — which is the same reason `class_static_member` documents for never
+  // answering "no such member".
+  match ty {
+    TypeOf(n) => if resolver.classes.get(n) is Some(_) { return true }
+    _ => ()
+  }
   match resolver.unwrap(ty) {
     Intersection(_) | TypeOf(_) => true
     Named(n) | Applied(n, _) =>
@@ -13149,6 +13303,18 @@ fn single_construct_signature_params(
 ) -> Array[@ast.TsType]? {
   match resolver.unwrap(t) {
     Constructor(params, _, _) => Some(params)
+    // `typeof C` for a CLASS. `unwrap` leaves the node alone — its
+    // `TypeOf` arm reads `globals` and a class lives in `classes` — and
+    // `class_construct_signature` is the function that answers exactly
+    // this question, written for the conditional-type path and reachable
+    // from nowhere else. It abstains for a class that inherits its
+    // constructor from a base and for `extends mixin(Base)`, both with
+    // the reason in its own header.
+    TypeOf(class_name) =>
+      match resolver.class_construct_signature(class_name) {
+        Some(Constructor(params, _, _)) => Some(params)
+        _ => None
+      }
     Object(fields) => {
       let mut found : Array[@ast.TsType]? = None
       let mut count = 0
@@ -13169,6 +13335,58 @@ fn single_construct_signature_params(
     }
     _ => None
   }
+}
+
+///|
+/// True when a construct signature's parameter list can be compared
+/// against `args` position by position. Three facts it cannot see make
+/// that comparison wrong, and each was a false positive the conformance
+/// gate caught the first time these arguments were checked at all:
+///
+///  - a REST parameter is not identifiable. `callable_func_type_from_params`
+///    keeps a declaration-style `...z: string[]` as the bare array type
+///    with NO `Rest` marker — its own comment says so, and says the
+///    function-TYPE syntax builds `Rest` directly instead — so
+///    `check_arguments`, which reads `Rest(_)`, compared `new B(1, 2,
+///    "string")`'s third argument against `string[]`
+///    (`newWithSpread`, `…ES5`, `…ES6`). An array-shaped LAST parameter
+///    therefore abstains, which loses a constructor genuinely taking an
+///    array last.
+///  - a SPREAD argument expands to an unknown count, so no position lines
+///    up. The overload-set branch below already refuses these for the
+///    same reason.
+///  - an unresolved TYPE PARAMETER. A construct signature's own generic
+///    parameters are not preserved by the parser (CLAUDE.md records this
+///    as what blocks `unresolved_type_references`), so `new Vue(...)`
+///    against `new <D, M, P>(options: ThisTypedOptions<D, M, P>)` compared
+///    an object literal against a shape whose members are bare `Named(D)`
+///    (`thisTypeInObjectLiterals2`). The class path handles this by
+///    SUBSTITUTING inferred bindings; nothing here can, so it abstains.
+fn construct_params_checkable(
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  resolver : Resolver,
+) -> Bool {
+  for a in args {
+    if a is Spread(_) {
+      return false
+    }
+  }
+  for p in params {
+    if type_contains_unresolved_named(p, resolver) {
+      return false
+    }
+  }
+  if params.length() > 0 {
+    match resolver.unwrap(params[params.length() - 1]) {
+      Rest(_)
+      | Array(_)
+      | Applied("Array", _)
+      | Applied("ReadonlyArray", _) => return false
+      _ => ()
+    }
+  }
+  true
 }
 
 ///|
@@ -20517,6 +20735,25 @@ fn check_call_args_in_expr(
                 None => @ast.TsType::Any
               }
           }
+          // A SINGLE construct signature, which this branch never asked
+          // about: it went straight to the UNION case
+          // (`union_common_construct_params`) and then to the
+          // overload-set case (two or more signatures), so the one shape
+          // in between — exactly one construct signature — fell through
+          // both and `new c("s")` was silent for a WRITTEN
+          // `new (n: number) => object`, for an object type carrying one,
+          // and for `typeof C`. The CALL form has checked its arguments
+          // against a single `Func` signature five hundred lines above
+          // for a long time; this is that same question at the `new`
+          // spelling.
+          match single_construct_signature_params(callee_ty, ctx.resolver) {
+            Some(params) =>
+              if construct_params_checkable(params, args, ctx.resolver) {
+                check_arguments(env, params, args, ctx, "new `\{class_name}`")
+                return
+              }
+            None => ()
+          }
           match union_common_construct_params(callee_ty, ctx.resolver) {
             Some(params) =>
               check_arguments(env, params, args, ctx, "new `\{class_name}`")
@@ -20637,6 +20874,34 @@ fn check_call_args_in_expr(
       // the distinction has to come from the tree shape.
       if callee_is_definitely_not_constructable(callee) {
         record_unfiltered(ctx, "new", "this expression is not constructable")
+      }
+      // The ARGUMENTS of a `new` through an expression were checked by
+      // NOTHING. `New(class_name, args)` — the bare-class-name spelling —
+      // has been checked for a long time, and every other way of naming a
+      // constructor reached this arm, which only descended: a WRITTEN
+      // construct signature (`declare const c: new (n: number) => object`),
+      // an object type carrying one, and `typeof C` all accepted
+      // `new c("s")` in silence. One question, checked at one of its
+      // spellings, and the CALL form has had it all along five hundred
+      // lines above.
+      //
+      // `single_construct_signature_params` is the same function the
+      // `Constructor`-typed paths already use, so an overload set (more
+      // than one `<new>`) and every shape it cannot read abstain there
+      // rather than here.
+      let new_callee_ty = infer_expr(env, ctx.resolver, callee)
+      match single_construct_signature_params(new_callee_ty, ctx.resolver) {
+        Some(params) =>
+          // Same three abstentions as the bare-name spelling above; see
+          // `construct_params_checkable`. Gating BOTH sites is the point:
+          // the first version gated only the name form, and
+          // `new (b.f)(1, 2, "string")` — the parenthesized spelling, in
+          // the very files the rest-parameter hazard comes from — still
+          // reported, because it reaches this arm instead.
+          if construct_params_checkable(params, args, ctx.resolver) {
+            check_arguments(env, params, args, ctx, "new")
+          }
+        None => ()
       }
       check_call_args_in_expr(env, callee, ctx)
       for a in args {
