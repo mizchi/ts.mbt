@@ -8256,3 +8256,48 @@ test "parser: an unused renaming in a bodiless parameter list" {
     @test.assert_eq(count(src), 0)
   }
 }
+
+///|
+// Identifier interning, and specifically the one way a direct-mapped cache
+// can fail: returning the WRONG name. `Lexer::ident_intern` keeps one
+// `String` per distinct identifier instead of one per occurrence — worth
+// -7.7% of the whole parse on a real 0.54 MB `.ts` — and its hash is O(1)
+// (length plus the first, middle and last code unit) rather than a walk over
+// every unit, because the general `StringView` hash cost 147 instructions
+// per identifier and ate half the saving.
+//
+// A cheap hash collides, which is ALLOWED here and is why this test exists:
+// the slot is overwritten on a miss and the evicted name simply copies again,
+// so the table can only ever return a string equal to the slice it was asked
+// about. `abcde` and `aQcRe` are built to collide — same length, same first,
+// middle and last unit — so they exercise exactly that path.
+test "lexer: interned identifiers survive a hash collision" {
+  // Direct, at the table: three lookups where the second evicts the first.
+  let tbl : FixedArray[String] = FixedArray::make(ident_intern_slots, "")
+  assert_eq(intern_ident(tbl, "abcde"[:]), "abcde")
+  assert_eq(intern_ident(tbl, "aQcRe"[:]), "aQcRe")
+  assert_eq(intern_ident(tbl, "abcde"[:]), "abcde")
+  assert_eq(intern_ident(tbl, "aQcRe"[:]), "aQcRe")
+  // An empty slice reaches here from the classifier's own `n == 0` arm, and
+  // the hash reads `s[0]`; it must answer before touching the table.
+  assert_eq(intern_ident(tbl, ""[:]), "")
+  // End to end, through the lexer: the two colliding names are distinct
+  // tokens, and a repeat of each still reads back as itself.
+  let tokens = Lexer::new("abcde aQcRe abcde aQcRe").tokenize()
+  assert_eq(tokens[0].kind, Ident("abcde"))
+  assert_eq(tokens[1].kind, Ident("aQcRe"))
+  assert_eq(tokens[2].kind, Ident("abcde"))
+  assert_eq(tokens[3].kind, Ident("aQcRe"))
+  // A keyword is not an identifier and never enters the table — the
+  // classifier owns the slice only on the arms that keep it.
+  let kw = Lexer::new("if x if").tokenize()
+  assert_eq(kw[0].kind, If)
+  assert_eq(kw[1].kind, Ident("x"))
+  assert_eq(kw[2].kind, If)
+  // A one-character name indexes `s[0]`, `s[n - 1]` and `s[n / 2]` at the
+  // same unit, which is the other boundary the hash has.
+  let one = Lexer::new("a a b").tokenize()
+  assert_eq(one[0].kind, Ident("a"))
+  assert_eq(one[1].kind, Ident("a"))
+  assert_eq(one[2].kind, Ident("b"))
+}

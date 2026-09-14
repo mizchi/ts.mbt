@@ -200,6 +200,21 @@ pub struct Lexer {
   // where `(` is a literal (`/[(]/` is a perfectly good regex).
   mut unbalanced_regex_group_count : Int
   src : String
+  // Identifier names, interned. `TokenKind::Ident` carries an owned
+  // `String`, so without this every OCCURRENCE of a name allocated and
+  // copied one — and a real `.ts` repeats its names enormously (a 0.54 MB
+  // source has 38,886 identifier tokens over a few thousand distinct
+  // names). Keyed by a VIEW into `src`, which is what makes the lookup
+  // allocation-free: a `Map[String, _]` could not be probed without
+  // building the very string the probe exists to avoid.
+  //
+  // Measured with callgrind: the copy was 19.47M instructions, 8.8% of the
+  // whole parse, at 501 per identifier — `FixedArray::blit_from_string`
+  // alone was 423 of that, a per-code-unit loop.
+  //
+  // Sharing is safe because MoonBit strings are immutable, and the table
+  // dies with the `Lexer`, so nothing outlives the source it views.
+  ident_intern : FixedArray[String]
   mut pos : Int
   mut allow_regex : Bool
   mut pending : Array[Token]
@@ -291,6 +306,7 @@ pub fn Lexer::new(src : String) -> Lexer {
     escaped_keyword_count: 0,
     unbalanced_regex_group_count: 0,
     src,
+    ident_intern: FixedArray::make(ident_intern_slots, ""),
     // Skip a UTF-8/UTF-16 byte-order mark. Without this the BOM reaches
     // the identifier scanner as an unknown character and error recovery
     // silently swallows the first statement of the file.
@@ -397,6 +413,25 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
     }
     // Anything else is either a comment introducer or the next real token.
     break
+  }
+  // Decide whether the slow loop below can do anything, WITHOUT entering it.
+  // Its arms are hashbang, space, tab, CR, LF and a comment introducer — and
+  // the fast loop above has already consumed every whitespace form, so the
+  // only characters that can reach a live arm are `/` and `#`; anything else
+  // takes its `_ => break` immediately. Skipping it is therefore exactly
+  // equivalent, and it is worth doing because the loop's first act is
+  // `self.peek()`, which builds an `Option[Char]` — once per token, since
+  // `skip_whitespace` runs between every pair of them.
+  //
+  // Measured (callgrind, 0.54 MB real `.ts`): 116,271 calls at 125.7
+  // instructions each, 6.55% of the whole parse, for a loop that almost
+  // always had nothing to do.
+  if self.pos >= len {
+    return
+  }
+  let after_ws = self.src[self.pos].to_int()
+  if after_ws != '/'.to_int() && after_ws != '#'.to_int() {
+    return
   }
   while true {
     match self.peek() {
@@ -877,8 +912,15 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
   if self.pos < len && self.src[self.pos].to_int() == '\\'.to_int() {
     return self.scan_ident_with_escapes(start)
   }
-  let s = self.src[start:self.pos].to_owned()
-  classify_ident_or_keyword(s)
+  // The VIEW is what gets classified, not an owned copy of it. Every
+  // identifier-shaped token reaches here — and most of them are keywords,
+  // whose `String` the classifier then throws away — so copying first made
+  // one allocation per token and handed `moonbit_drop_object` the bill.
+  // callgrind on a 0.54 MB real `.ts`: `FixedArray::blit_from_string` was
+  // 7.93% of all instructions, every one of it from `String::unsafe_substring`,
+  // and `scan_ident` was its largest caller at 24.0M. The classifier owns
+  // the slice only on the arms that actually keep it (`Ident`).
+  classify_ident_or_keyword(self.ident_intern, self.src[start:self.pos])
 }
 
 ///|
@@ -966,7 +1008,9 @@ fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
   // Keyed on the classification rather than on a name list: whatever
   // `classify_ident_or_keyword` calls a keyword is one, so the two cannot
   // drift apart.
-  let kind = classify_ident_or_keyword(buf.to_string())
+  // This path already owns a built string; a view of it costs nothing, and
+  // it runs only for an identifier carrying a `\uXXXX` escape.
+  let kind = classify_ident_or_keyword(self.ident_intern, buf.to_string()[:])
   if !(kind is Ident(_)) {
     self.escaped_keyword_count += 1
   }
@@ -978,59 +1022,62 @@ fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
 /// fall back to a plain `Ident`). Dispatching on the length and first byte
 /// first keeps the common identifier case at one or two cheap comparisons
 /// instead of the long `if`-chain it used to be.
-fn classify_ident_or_keyword(s : String) -> TokenKind {
+fn classify_ident_or_keyword(
+  intern : FixedArray[String],
+  s : StringView,
+) -> TokenKind {
   let n = s.length()
   if n == 0 {
-    return Ident(s)
+    return Ident(intern_ident(intern, s))
   }
   let c0 = s[0].to_int()
   match n {
     2 =>
       match c0 {
-        c if c == 'a'.to_int() => if s == "as" { As } else { Ident(s) }
-        c if c == 'd'.to_int() => if s == "do" { Do } else { Ident(s) }
+        c if c == 'a'.to_int() => if s == "as" { As } else { Ident(intern_ident(intern, s)) }
+        c if c == 'd'.to_int() => if s == "do" { Do } else { Ident(intern_ident(intern, s)) }
         c if c == 'i'.to_int() =>
           if s == "if" {
             If
           } else if s == "in" {
             In
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        c if c == 'o'.to_int() => if s == "of" { Of } else { Ident(s) }
-        _ => Ident(s)
+        c if c == 'o'.to_int() => if s == "of" { Of } else { Ident(intern_ident(intern, s)) }
+        _ => Ident(intern_ident(intern, s))
       }
     3 =>
       match c0 {
-        c if c == 'v'.to_int() => if s == "var" { Var } else { Ident(s) }
-        c if c == 'l'.to_int() => if s == "let" { Let } else { Ident(s) }
-        c if c == 'f'.to_int() => if s == "for" { For } else { Ident(s) }
-        c if c == 't'.to_int() => if s == "try" { Try } else { Ident(s) }
-        c if c == 'n'.to_int() => if s == "new" { New } else { Ident(s) }
-        c if c == 'i'.to_int() => if s == "int" { IntType } else { Ident(s) }
-        _ => Ident(s)
+        c if c == 'v'.to_int() => if s == "var" { Var } else { Ident(intern_ident(intern, s)) }
+        c if c == 'l'.to_int() => if s == "let" { Let } else { Ident(intern_ident(intern, s)) }
+        c if c == 'f'.to_int() => if s == "for" { For } else { Ident(intern_ident(intern, s)) }
+        c if c == 't'.to_int() => if s == "try" { Try } else { Ident(intern_ident(intern, s)) }
+        c if c == 'n'.to_int() => if s == "new" { New } else { Ident(intern_ident(intern, s)) }
+        c if c == 'i'.to_int() => if s == "int" { IntType } else { Ident(intern_ident(intern, s)) }
+        _ => Ident(intern_ident(intern, s))
       }
     4 =>
       match c0 {
-        c if c == 'c'.to_int() => if s == "case" { Case } else { Ident(s) }
-        c if c == 'e'.to_int() => if s == "else" { Else } else { Ident(s) }
-        c if c == 'f'.to_int() => if s == "from" { From } else { Ident(s) }
-        c if c == 'n'.to_int() => if s == "null" { Null } else { Ident(s) }
+        c if c == 'c'.to_int() => if s == "case" { Case } else { Ident(intern_ident(intern, s)) }
+        c if c == 'e'.to_int() => if s == "else" { Else } else { Ident(intern_ident(intern, s)) }
+        c if c == 'f'.to_int() => if s == "from" { From } else { Ident(intern_ident(intern, s)) }
+        c if c == 'n'.to_int() => if s == "null" { Null } else { Ident(intern_ident(intern, s)) }
         c if c == 't'.to_int() =>
           if s == "true" {
             Bool(true)
           } else if s == "type" {
             Type
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        c if c == 'v'.to_int() => if s == "void" { VoidType } else { Ident(s) }
-        c if c == 'w'.to_int() => if s == "with" { With } else { Ident(s) }
-        _ => Ident(s)
+        c if c == 'v'.to_int() => if s == "void" { VoidType } else { Ident(intern_ident(intern, s)) }
+        c if c == 'w'.to_int() => if s == "with" { With } else { Ident(intern_ident(intern, s)) }
+        _ => Ident(intern_ident(intern, s))
       }
     5 =>
       match c0 {
-        c if c == 'b'.to_int() => if s == "break" { Break } else { Ident(s) }
+        c if c == 'b'.to_int() => if s == "break" { Break } else { Ident(intern_ident(intern, s)) }
         c if c == 'c'.to_int() =>
           if s == "class" {
             Class
@@ -1039,41 +1086,41 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           } else if s == "const" {
             Const
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
         c if c == 'f'.to_int() =>
           if s == "false" {
             Bool(false)
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        c if c == 't'.to_int() => if s == "throw" { Throw } else { Ident(s) }
-        c if c == 'w'.to_int() => if s == "while" { While } else { Ident(s) }
-        c if c == 'y'.to_int() => if s == "yield" { Yield } else { Ident(s) }
-        _ => Ident(s)
+        c if c == 't'.to_int() => if s == "throw" { Throw } else { Ident(intern_ident(intern, s)) }
+        c if c == 'w'.to_int() => if s == "while" { While } else { Ident(intern_ident(intern, s)) }
+        c if c == 'y'.to_int() => if s == "yield" { Yield } else { Ident(intern_ident(intern, s)) }
+        _ => Ident(intern_ident(intern, s))
       }
     6 =>
       match c0 {
-        c if c == 'r'.to_int() => if s == "return" { Return } else { Ident(s) }
-        c if c == 'i'.to_int() => if s == "import" { Import } else { Ident(s) }
-        c if c == 'e'.to_int() => if s == "export" { Export } else { Ident(s) }
+        c if c == 'r'.to_int() => if s == "return" { Return } else { Ident(intern_ident(intern, s)) }
+        c if c == 'i'.to_int() => if s == "import" { Import } else { Ident(intern_ident(intern, s)) }
+        c if c == 'e'.to_int() => if s == "export" { Export } else { Ident(intern_ident(intern, s)) }
         c if c == 's'.to_int() =>
           if s == "switch" {
             Switch
           } else if s == "string" {
             StringType
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        c if c == 'd'.to_int() => if s == "delete" { Delete } else { Ident(s) }
-        c if c == 't'.to_int() => if s == "typeof" { Typeof } else { Ident(s) }
+        c if c == 'd'.to_int() => if s == "delete" { Delete } else { Ident(intern_ident(intern, s)) }
+        c if c == 't'.to_int() => if s == "typeof" { Typeof } else { Ident(intern_ident(intern, s)) }
         c if c == 'n'.to_int() =>
           if s == "number" {
             NumberType
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        _ => Ident(s)
+        _ => Ident(intern_ident(intern, s))
       }
     7 =>
       match c0 {
@@ -1083,27 +1130,27 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           } else if s == "declare" {
             Declare
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
         c if c == 'e'.to_int() =>
           if s == "extends" {
             Extends
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
         c if c == 'f'.to_int() =>
           if s == "finally" {
             Finally
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
         c if c == 'b'.to_int() =>
           if s == "boolean" {
             BooleanType
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        _ => Ident(s)
+        _ => Ident(intern_ident(intern, s))
       }
     8 =>
       match c0 {
@@ -1111,21 +1158,21 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           if s == "function" {
             Function
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
         c if c == 'c'.to_int() =>
           if s == "continue" {
             Continue
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
         c if c == 'd'.to_int() =>
           if s == "debugger" {
             Debugger
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        _ => Ident(s)
+        _ => Ident(intern_ident(intern, s))
       }
     9 =>
       match c0 {
@@ -1133,9 +1180,9 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           if s == "interface" {
             Interface
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        _ => Ident(s)
+        _ => Ident(intern_ident(intern, s))
       }
     10 =>
       match c0 {
@@ -1143,11 +1190,11 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           if s == "instanceof" {
             Instanceof
           } else {
-            Ident(s)
+            Ident(intern_ident(intern, s))
           }
-        _ => Ident(s)
+        _ => Ident(intern_ident(intern, s))
       }
-    _ => Ident(s)
+    _ => Ident(intern_ident(intern, s))
   }
 }
 
@@ -2828,3 +2875,55 @@ pub fn Lexer::tokenize(self : Lexer) -> Array[Token] {
   }
   tokens
 }
+
+///|
+/// One `String` per distinct identifier name, rather than one per
+/// occurrence. See `Lexer::ident_intern` for why this exists and what it
+/// measured; the short version is that a name's `to_owned()` cost 501
+/// instructions and a real source repeats each name many times.
+///
+/// The key is a view into the source, so a HIT allocates nothing at all —
+/// which is the whole point, and is only possible because `StringView` has
+/// both `Hash` and `Eq`. A MISS pays the copy once and keeps it.
+fn intern_ident(intern : FixedArray[String], s : StringView) -> String {
+  let n = s.length()
+  // The classifier's own `n == 0` arm reaches here, and the hash below reads
+  // `s[0]` / `s[n - 1]`. An empty slice has neither, so it is answered before
+  // the table is touched — and it is answered rather than asserted away
+  // because the callers cannot promise a non-empty slice: `scan_ident` is
+  // entered on a character the caller has classified, at four sites, and the
+  // escape path hands over whatever `\uXXXX` decoded to.
+  if n == 0 {
+    return ""
+  }
+  // An O(1) hash of length plus three code units, against a general one that
+  // walks every unit: `StringView`'s own `Hash` cost 147 instructions per
+  // identifier, which ate half of what interning saved (measured — the Map
+  // version was -3.65% where the copies alone were worth -6.8M of 227M).
+  let h = (n * 31 +
+    s[0].to_int() * 7 +
+    s[n - 1].to_int() * 131 +
+    s[n / 2].to_int() * 17) %
+    ident_intern_slots
+  let idx = if h < 0 { -h } else { h }
+  let hit = intern[idx]
+  // Direct-mapped, so a collision is a MISS rather than an error: the slot
+  // is overwritten and the next occurrence of the evicted name copies again.
+  // Correctness does not depend on the table at all — it only ever returns a
+  // string equal to the slice — which is why a cheap hash is allowed to be
+  // imperfect here.
+  if hit.length() == n && hit[:] == s {
+    hit
+  } else {
+    let owned = s.to_owned()
+    intern[idx] = owned
+    owned
+  }
+}
+
+///|
+/// Slot count for `Lexer::ident_intern`. A power of two is not required (the
+/// index is a modulo), and 4096 covers the distinct-identifier count of a
+/// large real source with room to spare: `typescript/src/compiler/parser.ts`
+/// has 38,886 identifier tokens over a few thousand names.
+let ident_intern_slots : Int = 4096
