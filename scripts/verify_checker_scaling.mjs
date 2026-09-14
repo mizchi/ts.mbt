@@ -100,24 +100,6 @@ const AXIS_BUDGET = {
   // `RootNameBackstops`) — worth -22% at n=1000 and nothing measurable
   // on any real file.
   namespaces: 2.15,
-  // KNOWN QUADRATIC in the number of `#private` members of ONE class, and
-  // the mechanism is a nested scan rather than anything structural:
-  // `private_brand_declared_on_receiver` answers "does the receiver class
-  // declare this base name under a DIFFERENT brand" by looping the
-  // receiver's `properties`, `methods` and `private_members` — per
-  // ACCESS. A class whose N members each read one `#name` therefore pays
-  // N x N. Found by this axis on its first full run after the rung cap
-  // below: at 125..1000 it fits 1.17 and looks linear, and the 2000 ->
-  // 4000 step is 111 -> 499 ms.
-  //
-  // The fix is an index (per class, base name -> the brands declaring
-  // it, filled on first use), which is ~20 lines and is filed rather
-  // than taken here because the reach is nil: the quadratic is in the
-  // members of a SINGLE class, and a class with hundreds of `#private`
-  // members does not occur — single digits is the norm, where N^2 is
-  // dozens of operations. Gated at its measured number so a regression
-  // past the accepted cost still fails.
-  "private-members": 1.75,
 };
 
 // One generator per axis. Each emits N declarations of ONE kind, so a
@@ -207,12 +189,28 @@ const AXES = {
     }
     return out.join("\n") + "\n";
   },
-  // `#private` members, each declared and read. The private rules read
-  // the class body's TOKEN SPAN rather than walking members — a span is
-  // the idiom this repo reaches for when a walker would lose findings
-  // silently, and batch CP's TS5076 is the reason a span needs its own
-  // cost model. One class per rung keeps the span itself growing, which
-  // is the shape that went quadratic there.
+  // ONE class with N `#private` members, each declared and read once from
+  // a method body. Unlike every other axis this grows a SINGLE
+  // declaration's member list, and it was added for the token-SPAN cost
+  // model the private rules need — a span is the idiom this repo reaches
+  // for where a walker would lose findings silently, and batch CP's
+  // TS5076 is why one needs a cost model at all.
+  //
+  // What it actually caught is something else, and the axis NAME is why
+  // that took three wrong turns: the checker resolved `this.x` by
+  // SCANNING `properties` then `methods` per ACCESS
+  // (`lookup_class_field`), and `inferred_primitive_field_type` scanned
+  // `instance_field_inits` the same way, so N members x N reads was
+  // N x N. The `#private` spelling is incidental — the identical shape
+  // with PUBLIC fields measured the same quadratic (0.24 s against the
+  // private 0.28 s at n=4000, before the fix), because the cost is the
+  // member lookup and not the private-name rules, which only run where a
+  // lookup already MISSED. Indexed by name now (`ClassIndex`): 8.3 s ->
+  // 1.0 s on a 16,000-member class, and this axis 1.63 -> ~1.25.
+  //
+  // So read this row as "member ACCESS against a many-membered class".
+  // The name is kept only so it stays comparable with the history in
+  // TODO.md.
   "private-members": (n) => {
     const out = [];
     out.push(`export class P {`);

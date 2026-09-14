@@ -95,6 +95,10 @@ priv struct Resolver {
   // self-limiting for a top-level class and leaves the old suppression in
   // charge wherever the parser could not record a parent.
   private_brand_parent : Map[String, String]
+  // Lazily-built name-keyed index over every known class's member lists,
+  // so resolving `this.x` is a map lookup rather than a scan. See
+  // `ClassIndex`.
+  class_index : ClassIndex
   // `class name -> bodied instance METHOD names that carried NO return
   // annotation`, from the parser's `<unannotated-return:NAME>` sentinels.
   // `TsClassMethodDecl.return_type` is `Any` for a missing annotation and
@@ -262,6 +266,123 @@ priv struct RootNameBackstops {
 }
 
 ///|
+/// Name-keyed index over the member lists of every class the resolver
+/// knows, built because the checker resolved `this.x` by SCANNING them —
+/// per ACCESS. `Resolver::lookup_class_field` walked `properties` then
+/// `methods`, and `inferred_primitive_field_type` walked
+/// `instance_field_inits`, so a class with N members whose N methods each
+/// read one of them paid N x N. A sampling profile of a 16,000-member
+/// class put 10 of 10 stacks in those two functions, both inside
+/// `memcmp`; nothing else could have found it, since the conformance
+/// corpus's files are a few dozen lines each and `verify-checker-scaling`
+/// had no axis that grows ONE declaration's member count until the
+/// `private-members` one.
+///
+/// It deliberately does NOT index the three private-brand queries, which
+/// is what this work was originally filed as: restoring their
+/// module-wide scan measures 0.14 s against 0.13 s on the same file,
+/// because `private_brand_declared_on_receiver` only runs where a
+/// private lookup already MISSED and a well-formed file never takes that
+/// path. See the perf entry in TODO.md.
+///
+/// Keyed by the RESOLVER's key for a class (`prefix + name`), never by
+/// `TsClassDecl.name` — two namespaces may each declare a `C`, and a bare
+/// name would fold them together.
+///
+/// Built lazily and dropped whenever a class is recorded, which is what
+/// keeps it from going stale: an index derived from `classes` is only
+/// sound if every write to that map invalidates it, so the writes go
+/// through `Resolver::put_class` and that function is the one place that
+/// has to remember. A direct `r.classes[...] =` added elsewhere is the
+/// way to break this.
+priv struct ClassIndex {
+  mut built : Bool
+  // class key -> member name -> index of the first NON-STATIC property /
+  // method of that name in the class's own list. Positions rather than
+  // types, so a method's `Func` type is still built only when something
+  // asks for it, and `properties` still wins over `methods` because the
+  // consumer consults them in that order.
+  inst_prop : Map[String, Map[String, Int]]
+  inst_meth : Map[String, Map[String, Int]]
+  // class key -> field name -> index of the first `instance_field_inits`
+  // entry of that name.
+  field_init : Map[String, Map[String, Int]]
+}
+
+///|
+fn ClassIndex::empty() -> ClassIndex {
+  { built: false, inst_prop: Map([]), inst_meth: Map([]), field_init: Map([]) }
+}
+
+///|
+/// The inner map for `key`, created on first use.
+fn ClassIndex::slot(
+  outer : Map[String, Map[String, Int]],
+  key : String,
+) -> Map[String, Int] {
+  match outer.get(key) {
+    Some(m) => m
+    None => {
+      let m : Map[String, Int] = Map([])
+      outer[key] = m
+      m
+    }
+  }
+}
+
+///|
+/// Record `cls` under `name`. The only writer of `classes`, so that the
+/// class index has exactly one place to be invalidated from — see
+/// `ClassIndex`.
+fn Resolver::put_class(
+  r : Resolver,
+  name : String,
+  cls : @ast.TsClassDecl,
+) -> Unit {
+  r.classes[name] = cls
+  let idx = r.class_index
+  if idx.built {
+    idx.built = false
+    idx.inst_prop.clear()
+    idx.inst_meth.clear()
+    idx.field_init.clear()
+  }
+}
+
+///|
+/// The class index, built on first use. See `ClassIndex`.
+fn Resolver::class_index(r : Resolver) -> ClassIndex {
+  let idx = r.class_index
+  if idx.built {
+    return idx
+  }
+  for class_key, cls in r.classes {
+    // First writer wins at each name, which is what the scans this
+    // replaces did by returning on their first match.
+    let props = ClassIndex::slot(idx.inst_prop, class_key)
+    for i, p in cls.properties {
+      if !p.is_static && props.get(p.name) is None {
+        props[p.name] = i
+      }
+    }
+    let meths = ClassIndex::slot(idx.inst_meth, class_key)
+    for i, m in cls.methods {
+      if !m.is_static && meths.get(m.name) is None {
+        meths[m.name] = i
+      }
+    }
+    let inits = ClassIndex::slot(idx.field_init, class_key)
+    for i, fi in cls.instance_field_inits {
+      if inits.get(fi.0) is None {
+        inits[fi.0] = i
+      }
+    }
+  }
+  idx.built = true
+  idx
+}
+
+///|
 fn Resolver::empty() -> Resolver {
   {
     interfaces: {},
@@ -284,6 +405,7 @@ fn Resolver::empty() -> Resolver {
     namespace_instantiated: {},
     template_tag_funcs: {},
     any_uninitialized_values: {},
+    class_index: ClassIndex::empty(),
     no_implicit_any: false,
     lib_lacks_es2017: false,
     lib_lacks_es2024: false,
@@ -537,7 +659,7 @@ fn Resolver::ingest_type_module(
     }
   }
   for name, class_ in types.classes {
-    r.classes[name] = class_
+    Resolver::put_class(r, name, class_)
   }
   for name, alias_ in types.type_aliases {
     r.type_aliases[name] = alias_
@@ -952,7 +1074,7 @@ fn Resolver::ingest_module(
     // resolve its base chain, which loses a finding rather than inventing
     // one.
     if !c.is_local {
-      r.classes[prefix + c.name] = c
+      Resolver::put_class(r, prefix + c.name, c)
     }
   }
   for e in module_.enums {
@@ -2722,19 +2844,19 @@ fn inferred_primitive_field_type(
     Named(name) =>
       match resolver.classes.get(name) {
         Some(cls) => {
+          let idx = Resolver::class_index(resolver)
+          guard idx.field_init.get(name) is Some(inits) else { return None }
+          guard inits.get(field) is Some(i) else { return None }
           let env = ExprEnv::new()
-          for fi in cls.instance_field_inits {
-            if fi.0 == field {
-              let t = widen_literal(
-                resolver.unwrap(infer_expr(env, resolver, fi.1)),
-              )
-              return match t {
-                Number | String_ | Boolean | BigInt => Some(t)
-                _ => None
-              }
-            }
+          let t = widen_literal(
+            resolver.unwrap(
+              infer_expr(env, resolver, cls.instance_field_inits[i].1),
+            ),
+          )
+          match t {
+            Number | String_ | Boolean | BigInt => Some(t)
+            _ => None
           }
-          None
         }
         None => None
       }
@@ -2893,10 +3015,7 @@ fn Resolver::lookup_field_core(
           index_signature_value(iface.index_signatures, field)
         }
         None =>
-          match self.classes.get(n) {
-            Some(cls) => self.lookup_class_field(cls, field)
-            None => None
-          }
+          self.lookup_class_field(n, field)
       }
     // `Applied(N, [A, B, …])` — the type instantiates a generic
     // interface (or class). Substitute type-parameter names with the
@@ -4066,22 +4185,24 @@ fn string_prototype_member(field : String) -> @ast.TsType? {
 }
 
 ///|
+/// Takes the resolver's KEY for the class rather than the decl, so the
+/// name index (`ClassIndex`, keyed the same way) and the member lists it
+/// indexes cannot be handed over as a mismatched pair.
 fn Resolver::lookup_class_field(
   self : Resolver,
-  cls : @ast.TsClassDecl,
+  class_key : String,
   field : String,
 ) -> @ast.TsType? {
-  for p in cls.properties {
-    if p.name == field && !p.is_static {
-      return Some(p.type_)
-    }
+  guard self.classes.get(class_key) is Some(cls) else { return None }
+  let idx = Resolver::class_index(self)
+  if idx.inst_prop.get(class_key) is Some(props) && props.get(field) is Some(i) {
+    return Some(cls.properties[i].type_)
   }
-  for m in cls.methods {
-    if m.name == field && !m.is_static {
-      return Some(
-        @ast.TsType::Func(method_callable_param_types(m), m.return_type),
-      )
-    }
+  if idx.inst_meth.get(class_key) is Some(meths) && meths.get(field) is Some(i) {
+    let m = cls.methods[i]
+    return Some(
+      @ast.TsType::Func(method_callable_param_types(m), m.return_type),
+    )
   }
   for base in cls.base_names {
     match self.lookup_field(@ast.TsType::Named(base), field) {

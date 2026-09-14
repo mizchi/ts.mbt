@@ -20203,3 +20203,28 @@ test "batch EI rules" {
     assert_true(issues(src) > 0)
   }
 }
+
+///|
+/// `ClassIndex` is derived from `Resolver::classes`, so a class recorded
+/// AFTER the index was built has to be visible to the next lookup. Nothing
+/// else in this suite, and no conformance file, can fail if it is not:
+/// every other path ingests a whole module before checking anything, so
+/// the stale window never opens. Hence its own test rather than an
+/// argument — see `ClassIndex` and `Resolver::put_class`.
+test "expr_check: class index sees a class ingested after a lookup" {
+  let r = Resolver::empty()
+  Resolver::ingest_module(
+    r, parse_module_or_empty("class A { ax: number = 1 }"), "",
+  )
+  // Forces the index to be built.
+  assert_true(r.lookup_class_field("A", "ax") is Some(_))
+  @test.assert_eq(r.lookup_class_field("B", "by") is Some(_), false)
+  // A second ingest into the same resolver must drop the index, or `B`'s
+  // members stay invisible and `this.by` resolves to nothing.
+  Resolver::ingest_module(
+    r, parse_module_or_empty("class B { by: string = \"s\" }"), "",
+  )
+  assert_true(r.lookup_class_field("B", "by") is Some(_))
+  // Rebuilding must not lose what the first build had.
+  assert_true(r.lookup_class_field("A", "ax") is Some(_))
+}
