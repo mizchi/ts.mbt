@@ -1070,6 +1070,107 @@ product surfaces now.
   fix — "only touch variables that actually changed in a branch" — and
   the journal now knows that set in O(changes), where the code finds it
   by scanning both exit maps against a full `pre_map`.
+  **Both of those are now DONE, and together they take `checker.ts` from
+  10.01 s to 0.75 s (13x) — the repo's own `moon bench` line for that
+  file went 15.62 s to 1.02 s per check (15.3x), at the oracle
+  unchanged.** (10.01 is the 9.55 above re-measured on the machine that
+  took the after-numbers, interleaved with them; a before and an after
+  from different machines are not a ratio.) The
+  pair is worth reading as one lesson about where a cost hides: neither
+  was a nested scan, and both were one data structure answering a
+  question in the most general way available to it.
+  The BRANCH JOIN (`changed_since`) reads the mutated set off the journal
+  instead of materializing the env three to four times per `if` —
+  `checker.ts` 10.01 -> 2.60 s, the corpus 11.35 -> 3.72 s, the `ifs`
+  ladder 2077 ms -> 48 ms at n=2000 and 2.07 -> 1.04. Two details
+  generalize. The `pre_map` copy never needed to exist AT ALL,
+  independently of the journal: both branches have unwound by the time
+  the join runs, so the env IS the pre-`if` state and `env.lookup` is
+  the pre-value lookup — a whole-env copy existed to answer a question
+  the env already answered. And the replacement is EXACTLY
+  behaviour-preserving rather than approximately, which is what made it
+  safe to ship without re-auditing every narrowing rule: the old full
+  exit map's value for a name equals `changed[k] ?? pre[k]` in all four
+  cases (mutated and present, mutated and dropped, not mutated, and
+  created-then-destroyed in a nested block — popped by that block's own
+  unwind exactly as it was absent from the exit map).
+  The CLOSURE COPY is the same observation one level up, and it
+  **overturns the conclusion of the layered-env rejection while leaving
+  its evidence intact.** A nested function's scope IS the enclosing one
+  plus its parameters, so `mark` / `unwind` on the OUTER env gives it
+  that scope for O(params) where `fill_from` was O(enclosing bindings)
+  per closure: `checker.ts` 2.60 -> 0.75 s, the corpus 3.72 -> 1.77 s,
+  `nested-closures` 1594.8 ms -> 27.5 ms and 2.13 -> **0.99**, and the
+  truncation ladder inside the one giant function 2.03 -> 1.45 -> 1.09.
+  Layering read 55x on that axis and cost the real file 9%, because it
+  turns `lookup` into 2-5 probes; a journalled scope reads 58x and wins
+  3.5x, because it touches `lookup` not at all. **So the axis could not
+  rank the two fixes it rewarded equally — only the real file could**,
+  which is the standing caution on that axis restated with a second
+  instance. Three of the four copy sites take it; the fourth is the
+  `<class>` IIFE, whose purpose is to RESET every captured name's
+  narrowing and is O(bindings) however it is spelled, so `fill_from`
+  exists for that one case. The ceiling was priced BEFORE any code, by
+  making the copy a no-op and timing it (2.60 -> 0.59 s, so the copy was
+  ~77% of what remained), which is the same "measure the ceiling first"
+  move that closed the `class-method-dce` narrowing.
+  Three things about the method are worth keeping. **A rejection is a
+  claim about the FIX, not about the cost** — the layered-env entry was
+  right in every measurement and its unstated premise was that the child
+  had to be a separate env, which is the one thing the copy and the layer
+  share; reading its own last paragraph literally is what found the
+  route, since "no site mutates `outer` after the child is created" is
+  also the precondition for not making a child at all. The one behaviour
+  change REMOVES a false positive: `fill_from` seeded the child's
+  `declared` slot from the enclosing env's NARROWED value, so assigning
+  to a captured binding inside a guard was checked against the narrowed
+  type, where tsc checks the DECLARED type (`tsc_probe.mjs` accepts
+  `if (typeof x === "string") { const g = () => { x = 5 } }` for
+  `x: string | number`) — and the corpus has no such file, so no gate
+  could see it in either direction. And the hazard the change introduces
+  was CHECKED rather than assumed: inference now mutates the outer env
+  and restores it where it used to leave it alone, so no caller may be
+  iterating the env across such a call, and `vars` is iterated in
+  exactly one place (`full_snapshot`, which materializes an array before
+  anything else runs).
+  Two scope limits, because this is easy to overclaim. It is worth
+  **nothing on a `.d.ts`** — `lib.dom.d.ts` 188 -> 182 ms,
+  `typescript.d.ts` 145 -> 141 ms — because a declaration file has no
+  function bodies, hence no closures and no `if`s, and that is the
+  BRIDGE's primary input. The wins are on real `.ts` SOURCE, which is
+  `mtsc`'s input. And the 87-93% "the check dominates" figures recorded
+  above are now stale for such a file: on `checker.ts` the check was 98%
+  of wall clock (9.83 s of 10.01) and is **75%** (0.52 s of 0.70), with
+  the 38-file corpus at 56%. The mtsc `.js` figure (93.4% on terser's
+  1.1 MB bundle) still needs its own re-measurement, and the reason the
+  naive comparison now INVERTS is a defect this file already records:
+  the check fails on a published bundle and mtsc returns early, so
+  `--no-check` (0.41 s) reads slower than checking (0.28 s).
+  `ifs` is the fifteenth axis and the only one that grows MERGE
+  POINTS — `block-scopes`' blocks are bare so nothing joins,
+  `statements`' statements are unbraced. It gets no `AXIS_BUDGET` entry
+  on purpose, and `nested-closures` LOSES the 2.25 it had: both are
+  linear now and held to the default 1.5, because a budget an axis does
+  not need is a suppression waiting to be inherited. Both keep their
+  cheaper rung ladders, which is the opposite of churn — a fixed axis's
+  ladder is sized for the regression it watches for, and at n=4,000 the
+  pre-fix `nested-closures` was ~6 s per iteration.
+  One live bug fell out of running the suite rather than one file, and
+  its SHAPE is what named the cause: `NonNullable<string|null> = null`
+  asserted an error, passed when its own file ran, and failed whenever
+  the whole checker package did. A rule does not behave that way; shared
+  state does. `standard_utility_table` is one process-wide `Map` whose
+  own comment says "a future writer would leak across every resolver in
+  the process, so add one only by giving the resolver its own copy" —
+  and `module_alias_resolver` was that writer, looping each module's
+  `type_aliases` into the shared table, so `generics_wbtest`'s
+  deliberate `NonNullable = string` override outlived its own test.
+  Pre-existing (it arrived with the sharing) and invisible in production
+  only because that function has no caller outside its tests, which is
+  the same "no caller" that let the utility table sit inert for years
+  before batch DK. Copying the eighteen entries is the fix; the sharing
+  that mattered (52,003 constructions for a 162-module graph) is
+  read-only through `standard_aliases` and untouched.
   **The route there is worth more than the fix, because five hypotheses
   died and every one of them died to a measurement rather than to
   re-reading.** A module-graph quadratic looked certain: a BARREL graph

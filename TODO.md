@@ -3,6 +3,73 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Perf round, part 5 (2026-09-14): both of part 4's filed items, and a rejection overturned
+
+**`checker.ts` 10.01 s -> 0.75 s (13x), and the repo's own bench line for
+it 15.62 s -> 1.02 s per check (15.3x).** Both changes were filed by part
+4; the round is mostly about what the numbers said once they were taken.
+Full detail sits with the filed items themselves (the two `- [x] DONE`
+entries in part 4 below), so this is the summary and the lessons.
+
+| | part 4's end | now |
+| --- | --- | --- |
+| `checker.ts` (3.1 MB real `.ts`) | 10.01 s | **0.75 s** |
+| `moon bench` line for it (debug) | 15.62 s | **1.02 s** |
+| corpus (38 files, 7.1 MB) | 11.35 s | **1.77 s** |
+| the CHECK's share of `checker.ts` | 98% | **75%** |
+| `ifs` axis | 2.07 | **1.04** |
+| `nested-closures` axis | 2.13 | **0.99** |
+| truncation ladder in ONE function | 2.03 | **1.09** |
+| `lib.dom.d.ts` (2.3 MB `.d.ts`) | 188 ms | 182 ms — **nothing** |
+
+1. **The branch join** (4d254cd) reads the mutated set off the journal
+   (`changed_since`) instead of materializing the whole env three to
+   four times per `if`. The `pre_map` copy never needed to exist at all:
+   both branches have unwound when the join runs, so `env.lookup` IS the
+   pre-value lookup.
+2. **The closure copy** (8d26847) gives a nested function a JOURNALLED
+   SCOPE on the outer env rather than a copy of it — O(params) instead
+   of O(enclosing bindings) per closure.
+3. **A shared-table leak** (504b3c5), found because the suite failed
+   where the single file passed. Pre-existing, and the fix is a copy.
+
+Four lessons, and the first is the reusable one.
+
+- **A rejection is a claim about the FIX, not about the cost.** Part 4
+  rejected a layered env for this exact axis with correct measurements
+  (55x synthetic, +9% real) and the conclusion read as "this cost is
+  structural". Its unstated premise was that the nested scope needed to
+  be a SEPARATE env — the one thing a copy and a layer share. The
+  journalled scope is 58x synthetic and 3.5x real. Record which premise
+  a rejection refutes.
+- **An axis that rewards two fixes equally cannot rank them.**
+  `nested-closures` read ~55x for both; one was a 9% regression on real
+  code and the other a 3.5x win. Only the real file separated them, and
+  that is now written on the axis with two instances rather than one.
+- **Price the ceiling before writing the fix.** Making the copy a no-op
+  took one edit and said 2.60 -> 0.59 s, so the copy was ~77% of what
+  remained. The fix landed at 0.75.
+- **A test that passes alone and fails in the suite is naming shared
+  state, not a rule.** That shape is what found the leak; nothing in the
+  failing file pointed at the polluting one.
+
+What is NOT claimed: nothing here helps a `.d.ts`, which has no function
+bodies and is the bridge's primary input. And the "check is 87-93% of a
+compile" figures elsewhere are stale for real `.ts` — the mtsc `.js`
+number still needs re-measuring, where the naive comparison inverts
+because the check FAILS on a published bundle and mtsc returns early.
+
+Gates, all green: oracle TP 2636 / MISS in scope 79 / OUT OF SCOPE 19 /
+FP 0 / PFLEGAL 0 / TN 1750 (unchanged at every step); `moon test`
+**3014/3014**, where it was 3013/3014 — the one failure being the
+pre-existing leak, confirmed by reproducing it at part 4's HEAD
+(914/915); `moon check --deny-warn` clean; 16/16 scaling axes within
+budget; graph-check-scaling 1.57 (budget 1.65); mangle-safety 186/186;
+dce-coverage 31 eliminated / 0 broken; rule-equivalence 80 equivalent /
+0 unsound; bridge-runtime 0 converter failures; bridge enum returns
+erased 0; generated-fixtures, scaffolds, examples, mbti-dts, graph-walk
+all pass.
+
 ### Batch EL (2026-09-13): `typeof C`, and the arguments of a `new`
 
 **TP 2636 / MISS in scope 79 / OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 /
