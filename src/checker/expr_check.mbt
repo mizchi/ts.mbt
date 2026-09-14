@@ -679,9 +679,6 @@ fn collect_module_value_names(
 ) -> Unit {
   for f in module_.funcs {
     out[f.name] = true
-    for p in f.params {
-      collect_param_value_names(p, out)
-    }
     collect_block_value_names(f.body, out)
   }
   for imp in module_.imports {
@@ -940,9 +937,6 @@ fn collect_expr_value_names(
       if f.name != "" && !f.name_is_member_key {
         out[f.name] = true
       }
-      for p in f.params {
-        collect_param_value_names(p, out)
-      }
       for s in f.body.stmts {
         collect_stmt_value_names(s, out)
       }
@@ -955,10 +949,7 @@ fn collect_expr_value_names(
         collect_block_value_names(blk, out)
       }
     }
-    ArrowFunc(params, _, body, _) => {
-      for p in params {
-        collect_param_value_names(p, out)
-      }
+    ArrowFunc(_, _, body, _) => {
       match body {
         ArrowExpr(e) => collect_expr_value_names(e, out)
         ArrowBlock(b) => collect_block_value_names(b, out)
@@ -5260,6 +5251,40 @@ fn check_member_accessibility(
 }
 
 ///|
+/// Following an INTERFACE's `extends` heritage to the class that declares
+/// `prop` as `private` or `protected`, or `None` when no such class is
+/// reachable. Used by `check_class_member_accessibility` to resolve a
+/// receiver whose type is an interface extending a class.
+fn interface_declaring_restricted_member(
+  ctx : CheckCtx,
+  name : String,
+  prop : String,
+  depth : Int,
+) -> String? {
+  if depth > 8 {
+    return None
+  }
+  let iface = match ctx.resolver.interfaces.get(name) {
+    Some(i) => i
+    None => return None
+  }
+  for base in iface.extends_names {
+    match ctx.resolver.classes.get(base) {
+      Some(d) =>
+        if d.private_members.contains(prop) || d.protected_members.contains(prop) {
+          return Some(base)
+        }
+      None =>
+        match interface_declaring_restricted_member(ctx, base, prop, depth + 1) {
+          Some(n) => return Some(n)
+          None => ()
+        }
+    }
+  }
+  None
+}
+
+///|
 /// The accessibility verdict itself, given a resolved class name and a
 /// member name: `private` is legal only inside the exact declaring class,
 /// `protected` inside it or a subclass.
@@ -5275,6 +5300,24 @@ fn check_class_member_accessibility(
   prop : String,
   path : String,
 ) -> Unit {
+  // An INTERFACE that extends a class inherits the class's members, and a
+  // `private` / `protected` one stays private to the declaring CLASS:
+  // `class C { private p }` beside `interface A extends C { }` makes `a.p`
+  // TS2341 and `a.q` (protected) TS2445, both probed against the real
+  // compiler, while `a.r` (public) and `a`'s own members are legal. The
+  // verdict below is keyed on the declaring class, so the only thing
+  // missing was resolving the receiver's interface name to it.
+  //
+  // The walk is depth-bounded rather than cycle-tracked: an interface
+  // heritage cycle is itself an error, and stopping short costs a MISS.
+  let class_name = if ctx.resolver.classes.get(class_name) is Some(_) {
+    class_name
+  } else {
+    match interface_declaring_restricted_member(ctx, class_name, prop, 0) {
+      Some(n) => n
+      None => return
+    }
+  }
   let decl = match ctx.resolver.classes.get(class_name) {
     Some(d) => d
     None => return
@@ -14542,8 +14585,7 @@ fn check_arrow_with_context(
         "expected `\{type_display(formal_params[i])}` but got `\{type_display(p.type_)}`",
       )
     }
-    env.bind(p.name, ty)
-    param_names.push(p.name)
+    bind_callable_param(env, ctx, p, ty, param_names)
     i = i + 1
   }
   // A parameter shadows any same-named outer binding, so the body must not
@@ -14686,8 +14728,7 @@ fn check_funcexpr_with_context(
     } else {
       p.type_
     }
-    env.bind(p.name, ty)
-    param_names.push(p.name)
+    bind_callable_param(env, ctx, p, ty, param_names)
     i = i + 1
   }
   // Prefer the function's own annotated return type when present; fall back
@@ -15900,6 +15941,46 @@ fn bind_pattern(
     Array(ab) => bind_array_pattern(env, ctx, ab, ty)
     Object(ob) => bind_object_pattern(env, ctx, ob, ty)
     Target(_) => ()
+  }
+}
+
+///|
+/// Bind ONE callable parameter into a body environment, and append every
+/// name it introduces to `names`.
+///
+/// A destructuring parameter carries its pattern in `p.binding` while
+/// `p.name` holds only `Parser::binding_first_name(binding)` — the FIRST
+/// name in the pattern. So `env.bind(p.name, ty)` binds `a` for
+/// `({ a, ...rest }) => …` and leaves `rest` unbound, and `p` for
+/// `([p, ...q]) => …` and leaves `q` unbound. Both then read as undeclared
+/// names in the body (`objectRestParameter`), and the whole parameter's
+/// type is attributed to the one name that IS bound.
+///
+/// `check_function_body` has walked the pattern for a function DECLARATION
+/// for a long time; the arrow and function-expression bodies are the two
+/// sites that had only the `p.name` line, so a pattern parameter behaved
+/// differently depending on which of the three spellings the callable used.
+/// One helper, called from all three.
+fn bind_callable_param(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  p : @ast.TsParam,
+  ty : @ast.TsType,
+  names : Array[String],
+) -> Unit {
+  match p.binding {
+    Some(b) =>
+      if b is (Object(_) | Array(_)) {
+        bind_pattern(env, ctx, b, ty)
+        collect_binding_names(b, names)
+      } else {
+        env.bind(p.name, ty)
+        names.push(p.name)
+      }
+    None => {
+      env.bind(p.name, ty)
+      names.push(p.name)
+    }
   }
 }
 
@@ -21845,7 +21926,48 @@ fn check_call_args_in_expr(
       // We only flag when both sides are concrete primitive-ish types so we
       // don't accidentally fire on generic type parameters or opaque named
       // types that we can't fully resolve here.
-      let inferred = infer_expr(env, ctx.resolver, inner)
+      // An ARROW in `as` position is CONTEXTUALLY typed by the asserted
+      // type, and that is the whole reason a cast of one can be judged at
+      // all: `(v => v) as (x: number) => string` gives `v` the target's
+      // `number`, so the arrow is `(number) => number` and its return
+      // cannot be `string` (asOperatorContextualType). Without the
+      // substitution the arrow infers `(any) => any` and every such cast
+      // is unjudgeable. Only the PARAMETERS come from the target — taking
+      // its return as well would make every cast trivially fine.
+      let inferred = match (inner, asserted) {
+        (ArrowFunc(aps, declared_ret, abody, is_async), Func(fps, _)) => {
+          let inner_env = ExprEnv::new()
+          for entry in env.full_snapshot() {
+            inner_env.bind(entry.0, entry.1)
+          }
+          let names : Array[String] = []
+          let ptys : Array[@ast.TsType] = []
+          let mut i = 0
+          while i < aps.length() {
+            let p = aps[i]
+            let ty = if is_checkable(p.type_) {
+              p.type_
+            } else if i < fps.length() {
+              fps[i]
+            } else {
+              p.type_
+            }
+            bind_callable_param(inner_env, ctx, p, ty, names)
+            ptys.push(ty)
+            i = i + 1
+          }
+          let ret = if is_checkable(declared_ret) {
+            declared_ret
+          } else {
+            match abody {
+              ArrowExpr(e) => infer_expr(inner_env, ctx.resolver, e)
+              ArrowBlock(blk) => infer_block_return(inner_env, ctx.resolver, blk)
+            }
+          }
+          @ast.TsType::Func(ptys, wrap_async_return(is_async, ret))
+        }
+        _ => infer_expr(env, ctx.resolver, inner)
+      }
       let concrete = fn(t : @ast.TsType) -> Bool {
         match t {
           Number
@@ -21961,7 +22083,8 @@ fn check_call_args_in_expr(
             ctx.resolver,
             inferred_u,
             asserted_u,
-          ) {
+          ) ||
+          func_casts_definitely_disjoint(ctx.resolver, inferred_u, asserted_u) {
           record(
             ctx,
             "as",
@@ -22476,15 +22599,9 @@ fn check_function_body_with(
   // `TsBinding::Object` / `TsBinding::Array` and need pattern walking
   // so the inner names point at the field/element types — not the
   // whole parameter type.
+  let body_param_names : Array[String] = []
   for p in func.params {
-    match p.binding {
-      Some(@ast.TsBinding::Object(_)) | Some(@ast.TsBinding::Array(_)) =>
-        match p.binding {
-          Some(b) => bind_pattern(env, ctx, b, p.type_)
-          None => env.bind(p.name, p.type_)
-        }
-      _ => env.bind(p.name, p.type_)
-    }
+    bind_callable_param(env, ctx, p, p.type_, body_param_names)
   }
   // Bind `this` to the enclosing class type for a method / constructor
   // body so `this.x` and `this.method(args)` resolve against the class's
@@ -23303,6 +23420,295 @@ fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] 
         Some(b) => scan_new_exprs_stmts(b.stmts, restricted, cls.name, issues)
         None => ()
       }
+    }
+  }
+  issues
+}
+
+///|
+/// Constructor-accessibility RANK: `public` 0, `protected` 1, `private` 2.
+/// `None` for a name that is not a top-level class in this module.
+fn constructor_visibility_rank(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Int? {
+  for cls in module_.classes {
+    if cls.name != name || cls.is_local {
+      continue
+    }
+    for n in cls.private_members {
+      if n == "constructor" {
+        return Some(2)
+      }
+    }
+    for n in cls.protected_members {
+      if n == "constructor" {
+        return Some(1)
+      }
+    }
+    return Some(0)
+  }
+  None
+}
+
+///|
+/// TS2322: "Cannot assign a 'protected' constructor type to a 'public'
+/// constructor type."
+///
+/// A class VALUE carries its constructor's accessibility, and a more
+/// restrictive constructor type is not assignable to a less restrictive one.
+/// The message text reads like a claim about matching, and it is not: the
+/// relation is one-DIRECTIONAL, and every cell was probed against the real
+/// compiler rather than reasoned about. With `let a = Pub`, assigning a
+/// `protected`- or `private`-constructor class is TS2322; with
+/// `let b = Prot`, only `private` is; with `let c = Priv`, nothing is. A
+/// SUBCLASS is no exemption (`class ProtSub extends Pub` with a protected
+/// constructor still reports), and two classes at the SAME rank get a
+/// different code entirely (TS2419, structural construct-signature
+/// incompatibility), so equal ranks stay out of this rule.
+///
+/// No inference is needed and none is available: `let a = Foo` does not
+/// produce `typeof Foo` in this checker at all (`a = 5` beside it is
+/// silent), so the fact comes off the SYNTAX — a declaration whose
+/// initializer is a bare class name, or whose annotation is `typeof C`.
+///
+/// Deliberately flat over `top_level_stmts`: tsc reports the same assignment
+/// made inside a function body, and reaching it needs a scope model, since a
+/// nested binding of the same name would make the comparison a false
+/// positive. That costs a MISS rather than inventing a finding. An
+/// annotation that is not `typeof C` is left alone for the same reason —
+/// `let d: any = Pub; d = Priv` is legal, and probed to confirm it.
+fn check_constructor_type_assignability(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // Declared rank per top-level binding, from its annotation or initializer.
+  let holder : Map[String, (String, Int)] = Map([])
+  // `<classval-decl:NAME:SRC>`: a top-level declaration with NO annotation
+  // whose initializer is the bare identifier `SRC`. The parser has to say
+  // so, because `TsStmt::Let` carries `Any` for both an absent annotation
+  // and an explicit `: any`, and only the first takes its type from the
+  // initializer — `let d: any = Pub; d = Priv` is legal.
+  let unannotated : Map[String, String] = Map([])
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<classval-decl:") && gm.has_suffix(">") {
+      let body = gm["<classval-decl:".length():gm.length() - 1].to_owned()
+      match body.find(":") {
+        Some(i) =>
+          unannotated[body[0:i].to_owned()] = body[i + 1:].to_owned()
+        None => ()
+      }
+    }
+  }
+  fn class_value_name(e : @ast.TsExpr) -> String? {
+    match e {
+      Var(n) => if constructor_visibility_rank(module_, n) is Some(_) {
+          Some(n)
+        } else {
+          None
+        }
+      _ => None
+    }
+  }
+
+  fn report(src : String, tgt : String, src_rank : Int, tgt_rank : Int) -> Unit {
+    let kind = if src_rank == 2 { "private" } else { "protected" }
+    let want = if tgt_rank == 0 { "public" } else { "protected" }
+    issues.push({
+      path: "assign `\{src}`",
+      message: "type `typeof \{src}` is not assignable to type `typeof \{tgt}` — cannot assign a `\{kind}` constructor type to a `\{want}` constructor type",
+    })
+  }
+
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(name), declared, init)
+      | Let(@ast.TsBinding::Ident(name), declared, init)
+      | Const(@ast.TsBinding::Ident(name), declared, init) => {
+        // `let f: typeof C = Other` — the annotation names the target class.
+        match declared {
+          TypeOf(target) =>
+            match
+              (
+                constructor_visibility_rank(module_, target),
+                class_value_name(init),
+              ) {
+              (Some(tgt_rank), Some(src)) => {
+                let src_rank = match constructor_visibility_rank(module_, src) {
+                  Some(r) => r
+                  None => 0
+                }
+                if src_rank > tgt_rank {
+                  report(src, target, src_rank, tgt_rank)
+                }
+                holder[name] = (target, tgt_rank)
+              }
+              _ => ()
+            }
+          // No annotation: the initializer's class fixes the declared type,
+          // and a later reassignment does NOT change it (`a = Bar; a = Baz`
+          // reports only on `Baz`, whatever `Bar` was). The parser's marker
+          // is what says the annotation was ABSENT rather than `: any`.
+          _ =>
+            if unannotated.get(name) is Some(_) {
+              match class_value_name(init) {
+                Some(src) =>
+                  match constructor_visibility_rank(module_, src) {
+                    Some(r) => holder[name] = (src, r)
+                    None => ()
+                  }
+                None => ()
+              }
+            }
+        }
+      }
+      // Two spellings of one statement: `a = Prot;` reaches the statement
+      // dispatcher as `Assign` only when `parse_expr_until_top_level`
+      // stops before the `=`; otherwise the whole thing is an assignment
+      // EXPRESSION statement. Reading one of the two is how this rule was
+      // silent on its own corpus file while the `var a: typeof Pub = Prot`
+      // spelling reported.
+      Assign(name, value) | Expr(@ast.TsExpr::AssignExpr(name, value)) =>
+        match (holder.get(name), class_value_name(value)) {
+          (Some((target, tgt_rank)), Some(src)) => {
+            let src_rank = match constructor_visibility_rank(module_, src) {
+              Some(r) => r
+              None => 0
+            }
+            if src_rank > tgt_rank {
+              report(src, target, src_rank, tgt_rank)
+            }
+          }
+          _ => ()
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// The primitive type of a literal EXPRESSION, or `None` for anything whose
+/// type this cannot decide from the syntax alone. A syntactic answer rather
+/// than `infer_expr`'s because the callers below are module-level checks with
+/// no `ExprEnv` to infer in.
+fn syntactic_primitive_type(e : @ast.TsExpr) -> @ast.TsType? {
+  match e {
+    NumberLit(_) | IntLit(_) => Some(@ast.TsType::Number)
+    StringLit(_) => Some(@ast.TsType::String_)
+    BoolLit(_) => Some(@ast.TsType::Boolean)
+    BigIntLit(_) => Some(@ast.TsType::BigInt)
+    _ => None
+  }
+}
+
+///|
+/// TS2322: a write through a NAMESPACE qualifier whose declared member type
+/// the value does not satisfy — `namespace N { export var p = 6 }` beside
+/// `N.p = false`.
+///
+/// This is the shape declaration merging produces, and the one a `.d.ts`
+/// consumer and an expando-function author both hit:
+/// `typeFromPropertyAssignment31` merges `function ExpandoMerge(n: number)`
+/// with `namespace ExpandoMerge { export var p8 = 6 }` and then writes
+/// `ExpandoMerge.p8 = false`. Probed one cell at a time against the real
+/// compiler: it reports for a `var` and a `let` member, for a namespace
+/// merged with a function and with a class as readily as a bare one, and
+/// stays silent for `export var e;` (implicit `any`). A write to a member
+/// the namespace does not declare at all is TS2339 and a write to an
+/// `export const` is TS2540 — different codes this rule does not claim.
+///
+/// Both sides must be a DEFINITE primitive, decided syntactically: an
+/// annotation the member wrote, or the literal kind of its initializer,
+/// against the literal kind of the assigned value. Everything else abstains,
+/// which loses findings rather than inventing them — a `Named` annotation
+/// could be an enum or an alias for the value's own type, and a non-literal
+/// value needs an env this check does not have.
+///
+/// Exportedness is not consulted because the AST does not record it, and it
+/// costs nothing here: a member the namespace declares WITHOUT `export` is
+/// not reachable as `N.x` at all, so such a write is an error either way and
+/// no legal program is affected.
+fn check_namespace_member_writes(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if module_.namespaces.length() == 0 {
+    return issues
+  }
+  // namespace name -> member name -> declared primitive type. Merged across
+  // every declaration of the namespace, first writer winning (which is what
+  // tsc's message names: "must be of type T", T being the first).
+  let members : Map[String, Map[String, @ast.TsType]] = Map([])
+  for ns in module_.namespaces {
+    if ns.is_declare {
+      continue
+    }
+    let slot = match members.get(ns.name) {
+      Some(m) => m
+      None => {
+        let m : Map[String, @ast.TsType] = Map([])
+        members[ns.name] = m
+        m
+      }
+    }
+    for stmt in ns.module_.top_level_stmts {
+      match stmt {
+        // `const` members are read-only: a write to one is TS2540, a
+        // different rule, so they are not collected here.
+        Var(@ast.TsBinding::Ident(n), declared, init)
+        | Let(@ast.TsBinding::Ident(n), declared, init) => {
+          if slot.get(n) is Some(_) {
+            continue
+          }
+          let ty = if is_checkable(declared) && is_definite_primitive_type(declared) {
+            Some(declared)
+          } else if is_checkable(declared) {
+            None
+          } else {
+            syntactic_primitive_type(init)
+          }
+          match ty {
+            Some(t) => slot[n] = t
+            None => ()
+          }
+        }
+        _ => ()
+      }
+    }
+    // An `export var p: number` with no initializer lands in `values`
+    // rather than in `top_level_stmts`, so both lists have to be read —
+    // the declaration and the statement are two spellings of one fact.
+    for v in ns.module_.values {
+      if slot.get(v.name) is Some(_) {
+        continue
+      }
+      if is_checkable(v.type_) && is_definite_primitive_type(v.type_) {
+        slot[v.name] = v.type_
+      }
+    }
+  }
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      // Both spellings, for the reason `check_constructor_type_assignability`
+      // records above and TS2565 / the `globalThis` rule record elsewhere:
+      // `N.p = v` is a `PropAssign` STATEMENT at the top of a list and an
+      // `Expr(PropAssignExpr(...))` everywhere else.
+      PropAssign(@ast.TsExpr::Var(holder), prop, value)
+      | Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var(holder), prop, value)) =>
+        match members.get(holder) {
+          Some(slot) =>
+            match (slot.get(prop), syntactic_primitive_type(value)) {
+              (Some(want), Some(got)) =>
+                if !is_assignable_to(got, want) {
+                  issues.push({
+                    path: "assign `\{holder}.\{prop}`",
+                    message: "type `\{type_display(got)}` is not assignable to type `\{type_display(want)}`",
+                  })
+                }
+              _ => ()
+            }
+          None => ()
+        }
+      _ => ()
     }
   }
   issues
@@ -33968,6 +34374,15 @@ fn check_module_function_bodies_layered(
   for issue in check_abstract_modifier_rules(module_) {
     all.push(issue)
   }
+  // TS2322: a more restrictive constructor type assigned to a less
+  // restrictive one (`let a = Pub; a = Prot`).
+  for issue in check_constructor_type_assignability(module_) {
+    all.push(issue)
+  }
+  // TS2322: `N.p = false` against `namespace N { export var p = 6 }`.
+  for issue in check_namespace_member_writes(module_) {
+    all.push(issue)
+  }
   // TS2673 / TS2674: `new C(...)` on a private / protected constructor.
   for issue in check_constructor_accessibility(module_) {
     all.push(issue)
@@ -34266,6 +34681,12 @@ fn check_module_function_bodies_layered(
       if gm.has_prefix("<sb-read:") || gm.has_prefix("<letconst-decl:") {
         continue
       }
+      // Marker, not an error: an un-annotated top-level declaration
+      // initialized by a bare identifier, consumed by
+      // `check_constructor_type_assignability`.
+      if gm.has_prefix("<classval-decl:") {
+        continue
+      }
       // TS2304: `export = name` over a provably undeclared value. Same
       // resolution contract as the computed-type-key check above.
       if gm.has_prefix("<export-eq>") {
@@ -34336,6 +34757,47 @@ fn check_module_function_bodies_layered(
         continue
       } else {
         all.push({ path: "grammar", message: gm })
+      }
+    }
+    // TS2304 for `export = A` inside an AMBIENT EXTERNAL MODULE
+    // (`declare module "M" { export = A }`). The parser records the same
+    // `<export-eq>` marker there as at top level, but the loop above reads
+    // only `module_.grammar_misuses`: a `declare module "spec"` body lands
+    // in `module_augmentations`, which — unlike `namespaces` — the layered
+    // recursion does not descend into, so every marker its body produced
+    // was dropped. The top-level spelling reported and this one did not
+    // (`parserExportAssignment6`).
+    //
+    // Scoped to this ONE marker rather than surfacing the whole channel:
+    // the other markers in it are decided against a module-wide name set
+    // or a compiler-option header that an augmentation body does not have,
+    // and a blanket surface is how a marker becomes a diagnostic nobody
+    // checked. Resolution takes the augmentation body's own value names
+    // UNION the outer module's, because an ambient `.d.ts` legitimately
+    // writes `declare module "x" { export = Y }` with `Y` declared on
+    // either side.
+    for aug in module_.module_augmentations {
+      let aug_module = aug.1
+      let mut names : Map[String, Bool] = Map([])
+      for gm in aug_module.grammar_misuses {
+        if !gm.has_prefix("<export-eq>") {
+          continue
+        }
+        let key = gm["<export-eq>".length():].to_owned()
+        if names.length() == 0 {
+          names = module_value_name_set(aug_module)
+          for n in module_value_name_set(module_) {
+            names[n.0] = true
+          }
+        }
+        if !names.contains(key) &&
+          !is_typeof_value_keyword(key) &&
+          !is_lib_global_value(key) {
+          all.push({
+            path: "declare module \{aug.0} > export = \{key}",
+            message: "cannot find name `\{key}`",
+          })
+        }
       }
     }
     // TS2313: a type parameter with a circular constraint (`T extends T`, or an
@@ -35150,14 +35612,25 @@ fn check_native_class_property_initializers(
     if decl.is_declare || ambient_module_classes.contains(decl.name) {
       continue
     }
-    // Abstract classes can declare `abstract x: T` fields that
-    // subclasses must implement. Our parser drops the `abstract`
-    // modifier on properties, so we can't distinguish a truly-
-    // unassigned concrete field from an abstract one. Skipping the
-    // whole abstract class is a conservative trade -- TS itself
-    // applies the check only to concrete-field shapes.
+    // An `abstract class` is NOT exempt: only its `abstract x: T` fields
+    // are, and those are named in `decl.abstract_members`, whose own doc
+    // comment says it holds `abstract x: number` as well as
+    // `abstract foo(): void`. This used to skip the whole class, on the
+    // stated reason that "our parser drops the `abstract` modifier on
+    // properties" — which is not true of that list, and is the fifth
+    // recorded abstention in this series whose reason turned out false.
+    //
+    // Probed one cell at a time against the real compiler: in an
+    // `abstract class`, a plain `x: number` IS TS2564 while
+    // `abstract y: number`, `z: number = 1`, `w!: number`, `v?: number`, a
+    // constructor-assigned field, a `static` field and every member of a
+    // `declare abstract class` are all silent — exactly the exemptions a
+    // concrete class already gets, so nothing else here needed changing.
+    let abstract_fields : Map[String, Unit] = Map([])
     if decl.is_abstract {
-      continue
+      for n in decl.abstract_members {
+        abstract_fields[n] = ()
+      }
     }
     // NOTE: an index signature does NOT exempt named fields from
     // strict-property-initialization -- `class C { [a: string]: number;
@@ -35239,6 +35712,11 @@ fn check_native_class_property_initializers(
       // for now since it's a much smaller cluster and overlaps the
       // common case.
       if prop.is_static {
+        continue
+      }
+      // `abstract x: T` declares no slot of its own — the implementing
+      // subclass initializes it.
+      if abstract_fields.get(prop.name) is Some(_) {
         continue
       }
       // Computed-key fields (`[Symbol.toPrimitive]: number;`, name
@@ -35953,6 +36431,49 @@ fn check_abstract_implementation(
 /// Every unresolvable shape abstains through `cast_shape_fields` —
 /// generics, index signatures, computed keys, an interface with generic
 /// heritage — so a shape we cannot enumerate costs a MISS.
+/// TS2352 between two FUNCTION types: identical parameter lists and return
+/// types from different primitive families, which is the one shape where
+/// neither direction is comparable and no bivariance can rescue it.
+///
+/// Every cell was probed against the real compiler, and three of them read
+/// the other way from the message text. A `void` return OVERLAPS anything
+/// (`(() => {}) as () => string` is ACCEPTED), so `equality_primitive_family`
+/// abstaining on `Void` / `Any` / `Never` is exactly right. A parameter
+/// mismatch is ALSO TS2352 (`((v: number) => v) as (x: string) => number`
+/// reports), and so is a differing arity, and so is an `any` PARAMETER on
+/// the target side — this rule takes the MISS on all three rather than
+/// model tsc's comparability relation on parameters, which is bivariant and
+/// where a difference is usually legal.
+fn func_casts_definitely_disjoint(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> Bool {
+  guard a is Func(ap, ar) && b is Func(bp, br) else { return false }
+  if ap.length() != bp.length() {
+    return false
+  }
+  let mut i = 0
+  while i < ap.length() {
+    if !is_checkable(ap[i]) || !is_checkable(bp[i]) {
+      return false
+    }
+    if !(is_assignable_to(ap[i], bp[i]) && is_assignable_to(bp[i], ap[i])) {
+      return false
+    }
+    i = i + 1
+  }
+  match
+    (
+      equality_primitive_family(resolver.unwrap(ar)),
+      equality_primitive_family(resolver.unwrap(br)),
+    ) {
+    (Some(x), Some(y)) => x != y
+    _ => false
+  }
+}
+
+///|
 fn shapes_definitely_disjoint(
   resolver : Resolver,
   a : @ast.TsType,

@@ -3,6 +3,154 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EK (2026-09-14): three abstentions, and the fifth whose stated reason was false
+
+TP 2639 -> 2642, MISS in scope 76 -> 73, FP 0, PFLEGAL 0, TN 1750.
+
+**TS2564 inside an `abstract class`.** `class A { x: number }` reported and
+`abstract class A { x: number }` did not, and the exemption was written down
+with a reason: "our parser drops the `abstract` modifier on properties, so
+we can't distinguish a truly-unassigned concrete field from an abstract
+one." `TsClassDecl.abstract_members` exists, and its own doc comment says it
+holds `abstract x: number` as well as `abstract foo(): void`. Fifth
+recorded abstention in this series whose reason turned out false, and the
+second where the list that dissolves it was sitting in the same struct.
+
+Skipping only the named fields rather than the whole class needed nothing
+else: probed one cell at a time, an `abstract class`'s exemptions are
+exactly a concrete class's — `abstract y`, `z = 1`, `w!`, `v?`, a
+constructor-assigned field, a `static` field and every member of a
+`declare abstract class` are all silent, and only the plain
+`x: number` reports.
+
+**TS2341 / TS2445 through `interface A extends C`.** An interface that
+extends a class inherits its members, and a `private` one stays private to
+the declaring CLASS: `class C { private p }` beside
+`interface A extends C { }` makes `a.p` TS2341 and `a.q` (protected) TS2445.
+Both were silent while the direct `c.p` spelling has reported for a long
+time. The verdict function is already keyed on the declaring class — batch
+BZ split it out so the destructuring spelling could share it — so the only
+thing missing was resolving the receiver's interface name to that class.
+Depth-bounded rather than cycle-tracked: an interface heritage cycle is
+itself an error, and stopping short costs a MISS.
+
+**TS2304 for `export = A` inside `declare module "M"`.** The parser records
+the same `<export-eq>` marker there as at top level, and the consumer reads
+only `module_.grammar_misuses` — a `declare module "spec"` body lands in
+`module_augmentations`, which, unlike `namespaces`, the layered recursion
+does not descend into, so every marker its body produced was dropped. The
+top-level spelling reported and this one did not
+(`parserExportAssignment6`). Scoped to that ONE marker rather than
+surfacing the whole channel: the rest are decided against a module-wide
+name set or a compiler-option header an augmentation body does not have,
+and a blanket surface is how a marker becomes a diagnostic nobody checked
+— which is exactly what TS4111's flag marker and `<module-commonjs>` each
+did once. Resolution takes the augmentation body's own value names UNION
+the outer module's, because an ambient `.d.ts` legitimately writes
+`declare module "x" { export = Y }` with `Y` declared on either side.
+
+**A harness lesson, paid for twice.** `verify-examples` and
+`verify-generated-fixtures` invoke `moon run src/cmd/ts2mbt`, which
+RECOMPILES from source — so running them while the tree is being edited
+measures whatever half-finished state the files are in. The first
+`verify-examples` failure of this batch was exactly that, and the traced
+re-run proved it by failing on a `[4014]` type error I had introduced two
+minutes earlier. A source-recompiling harness has to be run on a tree that
+compiles and is not moving; the serial order is check, test, build, oracle,
+then the recompiling harnesses.
+
+### Batch EJ (2026-09-14): a parameter is not a module binding, and three rules for MISS 79 -> 76
+
+TP 2635 -> 2639, MISS in scope 80 -> 76, FP 0, PFLEGAL 0, TN 1750.
+
+**The backstop.** `Resolver::declared_value_names` is a hoisting /
+forward-reference backstop for the TS2304 check, and it was declaring every
+PARAMETER of every function, function expression and arrow anywhere in the
+file as a module-level value name. So `function f(pname) { }` beside a bare
+`pname;` at top level was silent, and so was
+`const g = (pname) => pname; pname;`. A parameter is scoped to its own
+callable; putting it in a module-wide set is not a hoisting allowance, it is
+a hole. Removed from the three module-wide collection sites
+(`collect_module_value_names`'s `module_.funcs` loop and
+`collect_expr_value_names`'s `FuncExpr` / `ArrowFunc` arms) and kept at
+`check_function_body`, which seeds ONE function's own parameters and is
+where the fact belongs.
+
+Removing it alone is +1 file and **2 false positives**, and the false
+positives named the real bug rather than arguing for the backstop:
+`objectRestParameter` / `objectRestParameterES5` reported `rest` and
+`nested` as undeclared, because `Parser::parse_param` sets `p.name` to
+`binding_first_name(binding)` — the FIRST name in the pattern — and keeps
+the pattern in `p.binding`. `check_function_body` has walked the pattern
+with `bind_pattern` for a function DECLARATION for a long time;
+`check_arrow_with_context` and `check_funcexpr_with_context` had only the
+`env.bind(p.name, ty)` line. So `({ a, ...rest }) => …` bound `a` and left
+`rest` unbound, `([p, ...q]) => …` bound `p` and left `q`, and a pattern
+parameter behaved differently depending on which of the three spellings the
+callable used. `bind_callable_param` is one helper called from all three.
+Nineteenth instance of one rule applied in some places and not others.
+
+**TS2322, constructor-type accessibility on assignment.** A class value
+carries its constructor's accessibility and a more restrictive constructor
+type is not assignable to a less restrictive one. The message ("cannot
+assign a 'protected' constructor type to a 'public' constructor type") reads
+like a matching rule and is a one-directional RANK comparison; every cell
+was probed against the local compiler. public 0 / protected 1 / private 2,
+error iff src > tgt: with `let a = Pub` both `Prot` and `Priv` report, with
+`let b = Prot` only `Priv` does, with `let c = Priv` nothing does. A
+SUBCLASS is no exemption (`class ProtSub extends Pub` with a protected
+constructor still reports) and two classes at the SAME rank get TS2419
+instead — structural construct-signature incompatibility — so equal ranks
+stay out. No inference is available: `let a = Foo` does not produce
+`typeof Foo` in this checker at all (`a = 5` beside it is silent), so the
+fact comes off the syntax.
+
+Two things cost a draft each. The rule was SILENT on its own corpus file
+while the `var a: typeof Pub = Prot` spelling reported, because a top-level
+`a = Prot;` reaches the statement dispatcher as `Assign` only when
+`parse_expr_until_top_level` stops before the `=`; otherwise the whole thing
+is `Expr(AssignExpr(...))`. Both arms now, the same split TS2565 and the
+`globalThis` rule already record for `PropAssign`. And the un-annotated
+holder path needs a PARSER marker: `TsStmt::Let` carries `Any` for both an
+absent annotation and an explicit `: any`, and only the first takes its type
+from the initializer — `let d: any = Pub; d = Priv` is LEGAL (probed). The
+`<classval-decl:NAME:SRC>` marker is pushed where `record_tuple_index_out_of_range`
+and `record_nullish_inferred_declaration` already sit, behind the same
+`if !annotated` guard, and gated on `!self.in_function` because the consumer
+reads flat `top_level_stmts` with no scope model. The corpus never sees that
+false positive; the unit test does. Twentieth absent-versus-`: any` blocker
+in this repo, after TS7031, TS7022, TS2729, TS2448, TS2564 and TS2490.
+
+**TS2322, a write through a namespace qualifier.** `namespace N { export
+var p = 6 }` beside `N.p = false` was silent. This is what declaration
+merging produces and what an expando author hits:
+`typeFromPropertyAssignment31` merges `function ExpandoMerge(n: number)` with
+a namespace exporting `p8` and `p9` and writes `false` to both. Probed cell
+by cell: it reports for a `var` and a `let` member and for a namespace merged
+with a function or a class as readily as a bare one, and stays SILENT for
+`export var e;` (implicit `any`). A write to an undeclared member is TS2339
+and to an `export const` is TS2540 — different codes this rule does not
+claim, so `const` members are not collected. Both sides must be a definite
+primitive, decided syntactically. Exportedness is not consulted because the
+AST does not record it and it costs nothing: a member declared WITHOUT
+`export` is not reachable as `N.x` at all, so such a write is an error either
+way. Both declaration lists are read, since `export var p: number` with no
+initializer lands in `values` rather than `top_level_stmts`.
+
+**TS2352 between two function types.** `(v => v) as (x: number) => string`
+was silent, and so was the fully annotated form. Two pieces: an ARROW in
+`as` position is contextually typed by the asserted type's PARAMETERS (not
+its return — taking that would make every such cast trivially fine), which
+is what turns `(any) => any` into the `(number) => number` the rule can
+judge; and identical parameter lists with returns from different primitive
+families is the one shape where no bivariance can rescue the conversion.
+Three cells read the other way from the message text and only probing
+settled them: a `void` return OVERLAPS anything (`(() => {}) as () => string`
+is ACCEPTED), so `equality_primitive_family` abstaining on `Void` / `Any` /
+`Never` is exactly right; and a PARAMETER mismatch, a differing ARITY and an
+`any` parameter on the target side are all TS2352 in tsc, where this rule
+takes the MISS rather than model a bivariant comparability relation.
+
 ### Perf round, part 4 (2026-09-14): the filed mechanism was wrong, and the axis name is why
 
 Task #133 filed "index `#private` base name -> brands per class" off the

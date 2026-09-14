@@ -2258,6 +2258,25 @@ fn Parser::parse_var_decl_item(
     // being absent for the reason the recorder's header gives — an
     // annotated declaration has a contextual type and is legal.
     self.record_nullish_inferred_declaration(binding, init)
+    // TS2322 support: an UN-ANNOTATED declaration whose initializer is a
+    // bare identifier takes its declared type from that identifier, and
+    // when the identifier is a class the type is a constructor type whose
+    // accessibility a later assignment has to respect
+    // (`let a = Pub; a = Prot`). Recorded here rather than decided in the
+    // checker because `TsStmt::Let` carries a `TsType` in which an ABSENT
+    // annotation and an explicit `: any` are the SAME `Any` — the blocker
+    // this repo records for TS7031, TS7022, TS2729 and TS2448 — and
+    // `let d: any = Pub; d = Priv` is LEGAL (probed). Gated on
+    // `!self.in_function` because the consumer reads flat
+    // `top_level_stmts` with no scope model, so a nested declaration of
+    // the same name must not claim the outer one's type.
+    if !self.in_function {
+      match (binding, init) {
+        (@ast.TsBinding::Ident(name), @ast.TsExpr::Var(src)) =>
+          self.grammar_misuses.push("<classval-decl:\{name}:\{src}>")
+        _ => ()
+      }
+    }
   }
   self.record_self_referential_initializer(binding, init, kind, annotated)
   match kind {

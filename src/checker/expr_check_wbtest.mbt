@@ -20228,3 +20228,367 @@ test "expr_check: class index sees a class ingested after a lookup" {
   // Rebuilding must not lose what the first build had.
   assert_true(r.lookup_class_field("A", "ax") is Some(_))
 }
+
+///|
+/// A DESTRUCTURING parameter binds every name in its pattern, at all three
+/// callable spellings.
+///
+/// `Parser::parse_param` sets `p.name` to `binding_first_name(binding)` —
+/// the FIRST name in the pattern — and keeps the pattern itself in
+/// `p.binding`. `check_function_body` has walked the pattern for a function
+/// DECLARATION for a long time, while `check_arrow_with_context` and
+/// `check_funcexpr_with_context` bound only `p.name`: so `({ a, ...rest })`
+/// bound `a` and left `rest` looking undeclared, and `([p, ...q])` bound `p`
+/// and left `q`. `bind_callable_param` is now the one site for all three.
+///
+/// The module-wide `declared_value_names` backstop had been hiding this by
+/// declaring every parameter name of every function anywhere in the file,
+/// which is what the last two cases here are about: a parameter is NOT a
+/// module-level binding, so a read of one from a sibling scope is a real
+/// TS2304 and was silent.
+test "expr_check: destructuring params bind every pattern name" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  let unresolved = fn(src : String) -> Int {
+    issues(src).filter(fn(m) { m.contains("cannot find name") }).length()
+  }
+  // Object rest, at each of the three spellings.
+  @test.assert_eq(
+    unresolved(
+      "function f({ a, ...r }: { a: number, b: string }) { return a + r.b; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    unresolved(
+      "const f = function ({ a, ...r }: { a: number, b: string }) { return a + r.b; };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    unresolved("const f = ({ a, ...r }: { a: number, b: string }) => a + r.b;"),
+    0,
+  )
+  // Array rest, same three.
+  @test.assert_eq(
+    unresolved("function f([p, ...q]: number[]) { return p + q.length; }"),
+    0,
+  )
+  @test.assert_eq(
+    unresolved(
+      "const f = function ([p, ...q]: number[]) { return p + q.length; };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    unresolved("const f = ([p, ...q]: number[]) => p + q.length;"),
+    0,
+  )
+  // Nested pattern with a rest at each level, plus a renamed property.
+  @test.assert_eq(
+    unresolved(
+      "const f = ({ x: { z, ...inner }, ...outer }: { x: { z: number, w: number }, y: string }) => z + inner.w + outer.y;",
+    ),
+    0,
+  )
+  // The walk still reaches the body: a genuinely undeclared name in an
+  // arrow whose parameter is a pattern is still reported. Without this the
+  // six zeros above could be had by not walking the body at all.
+  @test.assert_eq(unresolved("const f = ({ a }: { a: number }) => zzz;"), 1)
+  @test.assert_eq(
+    unresolved("const f = ({ a, ...r }: { a: number, b: string }) => zzz;"),
+    1,
+  )
+  // A parameter name is scoped to its own callable. Both of these were
+  // silent while the module-wide backstop declared every parameter of
+  // every function in the file.
+  @test.assert_eq(unresolved("function f(pname: number) { }\npname;"), 1)
+  @test.assert_eq(
+    unresolved("const g = (pname: number) => pname;\npname;"),
+    1,
+  )
+}
+
+///|
+/// TS2322: constructor-type accessibility on ASSIGNMENT.
+///
+/// Every cell below was probed against the real compiler rather than read
+/// off the message text, which says "cannot assign a 'protected' constructor
+/// type to a 'public' constructor type" and reads like a matching rule. It
+/// is a one-directional RANK comparison: public 0, protected 1, private 2,
+/// and only src > tgt is an error. A subclass is no exemption, and two
+/// classes at the same rank get TS2419 instead — so equal ranks stay out.
+test "expr_check: constructor accessibility on class-value assignment" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  let ctor = fn(src : String) -> Int {
+    issues(src).filter(fn(m) { m.contains("constructor type") }).length()
+  }
+  let decls =
+    #|class Pub { constructor(public x: number) {} }
+    #|class Prot { protected constructor(public x: number) {} }
+    #|class Priv { private constructor(public x: number) {} }
+    #|class ProtSub extends Pub { protected constructor() { super(0) } }
+    #|
+  // Fires: a more restrictive constructor into a less restrictive holder.
+  @test.assert_eq(ctor(decls + "let a = Pub;\na = Prot;"), 1)
+  @test.assert_eq(ctor(decls + "let a = Pub;\na = Priv;"), 1)
+  @test.assert_eq(ctor(decls + "let b = Prot;\nb = Priv;"), 1)
+  // A SUBCLASS of the public-constructor class is no exemption.
+  @test.assert_eq(ctor(decls + "let a = Pub;\na = ProtSub;"), 1)
+  // `var` behaves the same as `let`, and the annotated spelling reports too.
+  @test.assert_eq(ctor(decls + "var g = Pub;\ng = Prot;"), 1)
+  @test.assert_eq(ctor(decls + "let f: typeof Pub = Prot;"), 1)
+  // Silent: less restrictive into more restrictive, in every direction.
+  @test.assert_eq(ctor(decls + "let a = Pub;\na = Pub;"), 0)
+  @test.assert_eq(ctor(decls + "let b = Prot;\nb = Pub;"), 0)
+  @test.assert_eq(ctor(decls + "let c = Priv;\nc = Pub;"), 0)
+  @test.assert_eq(ctor(decls + "let c = Priv;\nc = Prot;"), 0)
+  // Equal ranks are a DIFFERENT code (TS2419, structural construct-signature
+  // incompatibility), so this rule must stay quiet.
+  @test.assert_eq(ctor(decls + "let e = Priv;\ne = Priv;"), 0)
+  @test.assert_eq(ctor(decls + "let d = Prot;\nd = ProtSub;"), 0)
+  // An annotation that is not `typeof C` means the holder's type is not a
+  // constructor type at all: `let d: any = Pub; d = Priv` is legal, probed.
+  @test.assert_eq(ctor(decls + "let d: any = Pub;\nd = Priv;"), 0)
+  // The declared type is fixed by the DECLARATION: an intermediate legal
+  // reassignment does not change what a later one is compared against.
+  @test.assert_eq(ctor(decls + "let a = Pub;\na = Pub;\na = Priv;"), 1)
+}
+
+///|
+/// TS2322: a write through a namespace qualifier against the member type the
+/// namespace declares. Both spellings of the write statement, and both
+/// places the member declaration can land.
+test "expr_check: namespace member write type mismatch" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  let mismatch = fn(src : String) -> Int {
+    issues(src).filter(fn(m) { m.contains("is not assignable to type") }).length()
+  }
+  // Fires: an inferred member type, an annotated one, and a `let` member.
+  @test.assert_eq(
+    mismatch("namespace N { export var p = 1 }\nN.p = false;"),
+    1,
+  )
+  @test.assert_eq(
+    mismatch("namespace N { export var p: number = 1 }\nN.p = false;"),
+    1,
+  )
+  @test.assert_eq(
+    mismatch("namespace N { export var d: string = \"x\" }\nN.d = 1;"),
+    1,
+  )
+  @test.assert_eq(
+    mismatch("namespace N { export let b = 2 }\nN.b = false;"),
+    1,
+  )
+  // Merged with a function and with a class: the same write, same verdict.
+  @test.assert_eq(
+    mismatch(
+      "function F(n: number) { return n }\nnamespace F { export var p = 1 }\nF.p = false;",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    mismatch("class K { }\nnamespace K { export var q = 1 }\nK.q = false;"),
+    1,
+  )
+  // Silent: a matching type, an implicit-`any` member (`export var e;`),
+  // and a member the namespace does not declare at all (TS2339, not this).
+  @test.assert_eq(mismatch("namespace N { export var p = 1 }\nN.p = 9;"), 0)
+  @test.assert_eq(mismatch("namespace N { export var e; }\nN.e = false;"), 0)
+  @test.assert_eq(
+    mismatch("namespace N { export var p = 1 }\nN.zz = false;"),
+    0,
+  )
+}
+
+///|
+/// TS2352 between two function types, and the contextual typing that makes
+/// the corpus shape decidable at all.
+test "expr_check: function-type assertion comparability" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  let overlap = fn(src : String) -> Int {
+    issues(src)
+    .filter(fn(m) { m.contains("sufficiently overlaps") })
+    .length()
+  }
+  // The corpus shape: an UNANNOTATED arrow, contextually typed by the
+  // asserted type's parameters, so it is `(number) => number`.
+  @test.assert_eq(overlap("var x = (v => v) as (x: number) => string;"), 1)
+  @test.assert_eq(
+    overlap("var x = ((v: number) => v) as (x: number) => string;"),
+    1,
+  )
+  @test.assert_eq(
+    overlap("var x = ((v: number) => v) as (x: number) => boolean;"),
+    1,
+  )
+  // Silent: a matching return, a `void` return (which OVERLAPS anything —
+  // probed, and the cell reasoning gets wrong), an `any` return, and the
+  // identity assertion.
+  @test.assert_eq(
+    overlap("var x = ((v: number) => \"s\") as (x: number) => string;"),
+    0,
+  )
+  @test.assert_eq(overlap("var x = (() => {}) as () => string;"), 0)
+  @test.assert_eq(
+    overlap("var x = ((v: number) => v) as (x: number) => any;"),
+    0,
+  )
+  @test.assert_eq(overlap("var x = (v => v) as (x: number) => number;"), 0)
+  // Declared MISSes, recorded so a later widening is a deliberate choice:
+  // tsc reports all three, and this rule abstains on a parameter mismatch,
+  // a differing arity and an `any` parameter.
+  @test.assert_eq(
+    overlap("var x = ((v: number) => v) as (x: string) => number;"),
+    0,
+  )
+  @test.assert_eq(
+    overlap("var x = ((v: number) => v) as (x: number, y: number) => string;"),
+    0,
+  )
+  @test.assert_eq(
+    overlap("var x = ((v: number) => v) as (x: any) => string;"),
+    0,
+  )
+}
+
+///|
+/// TS2564 applies inside an `abstract class` — only its `abstract x: T`
+/// fields are exempt, and those are named in `abstract_members`.
+///
+/// The check used to skip the whole abstract class, on the stated reason
+/// that "our parser drops the `abstract` modifier on properties". That list
+/// exists and its own doc comment says it holds `abstract x: number` as
+/// well as `abstract foo(): void`. Every cell probed against the real
+/// compiler; the exemptions are exactly a concrete class's.
+test "expr_check: strict property init inside an abstract class" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("has no initializer") })
+    .length()
+  }
+  // Fires: a plain concrete field in an abstract class.
+  @test.assert_eq(issues("abstract class A { x: number; }"), 1)
+  // Silent, each for its own reason: `abstract`, an initializer, a definite
+  // assignment assertion, optional, a constructor assignment, `static`, and
+  // an ambient `declare abstract class`.
+  @test.assert_eq(issues("abstract class B { abstract y: number; }"), 0)
+  @test.assert_eq(issues("abstract class C { z: number = 1; }"), 0)
+  @test.assert_eq(issues("abstract class D { w!: number; }"), 0)
+  @test.assert_eq(issues("abstract class E { v?: number; }"), 0)
+  @test.assert_eq(
+    issues("abstract class F { u: number; constructor() { this.u = 1 } }"),
+    0,
+  )
+  @test.assert_eq(issues("abstract class G { static s: number; }"), 0)
+  @test.assert_eq(issues("declare abstract class H { t: number; }"), 0)
+  // An abstract METHOD must not exempt a same-named field — different
+  // members cannot share a name, so this only checks the list is read as
+  // field names rather than as "anything abstract".
+  @test.assert_eq(
+    issues("abstract class I { abstract m(): void; n: number; }"),
+    1,
+  )
+}
+
+///|
+/// TS2341 / TS2445 through an interface that `extends` a class: the member
+/// is inherited and its privacy still belongs to the declaring CLASS.
+test "expr_check: private member reached through an interface extends" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  let decls =
+    #|class C { private p!: number; protected q!: number; public r!: number }
+    #|interface A extends C { y: string }
+    #|declare var a: A;
+    #|
+  assert_true(
+    issues(decls + "var r1 = a.p;").any(fn(m) {
+      m.contains("`p` is private and only accessible within class `C`")
+    }),
+  )
+  assert_true(
+    issues(decls + "var r2 = a.q;").any(fn(m) {
+      m.contains("`q` is protected and only accessible within class `C`")
+    }),
+  )
+  // Public members and the interface's own members are legal.
+  @test.assert_eq(
+    issues(decls + "var r3 = a.r;")
+    .filter(fn(m) { m.contains("accessible within class") })
+    .length(),
+    0,
+  )
+  @test.assert_eq(
+    issues(decls + "var r4 = a.y;")
+    .filter(fn(m) { m.contains("accessible within class") })
+    .length(),
+    0,
+  )
+  // An interface with no class in its heritage says nothing.
+  @test.assert_eq(
+    issues("interface B { z: string }\ndeclare var b: B;\nvar r5 = b.z;")
+    .filter(fn(m) { m.contains("accessible within class") })
+    .length(),
+    0,
+  )
+  // Two interface hops still reach the class.
+  assert_true(
+    issues(
+      "class C { private p!: number }\ninterface M extends C { }\ninterface N extends M { }\ndeclare var n: N;\nvar r = n.p;",
+    ).any(fn(m) { m.contains("`p` is private") }),
+  )
+}
+
+///|
+/// TS2304 for `export = A` inside an ambient external module. The parser
+/// records the same `<export-eq>` marker there as at top level, but a
+/// `declare module "spec"` body lands in `module_augmentations`, which the
+/// layered recursion does not descend into — so the top-level spelling
+/// reported and this one did not (`parserExportAssignment6`).
+test "expr_check: export = inside declare module resolves its name" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("cannot find name `A`") })
+    .length()
+  }
+  // Fires: nothing declares `A`, on either side of the module boundary.
+  @test.assert_eq(issues("declare module \"M\" {\n    export = A;\n}"), 1)
+  // Silent: declared inside the augmentation body, and declared outside it.
+  // A real `.d.ts` writes both spellings.
+  @test.assert_eq(
+    issues(
+      "declare module \"M\" {\n    class A { }\n    export = A;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("class A { }\ndeclare module \"M\" {\n    export = A;\n}"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare module \"M\" {\n    interface A { x: number }\n    var A: A;\n    export = A;\n}",
+    ),
+    0,
+  )
+}
