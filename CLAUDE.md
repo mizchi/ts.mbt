@@ -19,6 +19,89 @@ product surfaces now.
 - `src/parser` is the foundation for parsing TypeScript / JavaScript and
   resolving module structure (npm `exports`, `typesVersions`, `node:*`,
   `@types/*`, etc.).
+  Its COST was measured for the first time once the checker stopped
+  dominating a real compile (the check went from 98% of `checker.ts`'s
+  wall clock to 75%), and the first finding is that **the parser has no
+  structural outlier**: 0.059-0.099 us/byte across every real input —
+  compiler source, a 2.3 MB `.d.ts`, a 9 MB published bundle, minified
+  JS — where the checker's worst file was 8.82 against 0.27-0.38 for its
+  neighbours. A 25x spread names a file to bisect; a 1.7x spread says
+  the cost is spread thin, so the instrument is a PROFILE and not a
+  bisect. Two things follow. Wall clock cannot measure this work at all
+  on this machine — the same binary varies 15% run to run, larger than
+  any single win available — so every number here is a callgrind
+  INSTRUCTION count, which is deterministic. And the profile's biggest
+  bucket is not scanning: allocation, GC and free were **27.7%** of the
+  parse, at 432,369 allocations for a 0.54 MB file, 3.7 per token.
+  What fed it was one line. `FixedArray::blit_from_string` was 7.93% of
+  everything, every instruction of it from `String::unsafe_substring`,
+  whose largest caller was `Lexer::scan_ident`: `scan_ident` copied the
+  slice into an owned `String` before classification, so every
+  identifier-SHAPED token allocated one and a keyword's copy was then
+  thrown away. Three changes, each measured alone, take the parse
+  **-7.71%** on real `.ts` (227.59M -> 210.04M), -4.05% on
+  `lib.dom.d.ts` and -3.47% on a minified bundle, with the output
+  verified byte-identical on each.
+  The three are worth separating because their sizes were not what
+  reading the code suggested. Making the classifier take a VIEW is only
+  **-2.0%**, and the profile says why: 38,886 of 50,321
+  identifier-shaped tokens are NOT keywords, so 77% still copied.
+  INTERNING the rest — one `String` per distinct name rather than per
+  occurrence, keyed by a view into the source, which is what makes a hit
+  allocation-free (a `Map[String, _]` cannot be probed without building
+  the very string the probe exists to avoid) — is **-3.65%** on top.
+  And then half of THAT was eaten by the lookup: `StringView`'s own
+  `Hash` walks every code unit and cost **147 instructions per
+  identifier**, so replacing it with an O(1) hash (length plus the
+  first, middle and last unit) into a direct-mapped `FixedArray` is
+  another **-4.2%**. A general hash on a hot short-string path is worth
+  suspecting.
+  A direct-mapped cache is allowed to COLLIDE, and that is the one way
+  it could fail catastrophically — returning the WRONG name, which would
+  silently rename an identifier. It cannot: a collision is a miss, the
+  slot is overwritten, the evicted name copies again, so the table only
+  ever returns a string equal to the slice it was asked about.
+  Correctness does not depend on the hash being good, which is what
+  licenses a cheap one. `abcde` and `aQcRe` are built to collide (same
+  length, same first, middle and last unit) and the test drives four
+  lookups across them plus the empty slice, a keyword, and a
+  one-character name where all three hash positions are the same unit;
+  mutation-testing it (drop the equality check) fails with exactly that
+  symptom and takes two pre-existing parser tests with it. One bug of my
+  own came from reasoning rather than from a test: the classifier's
+  `n == 0` arm reaches the hash, which reads `s[0]` and `s[n - 1]`, and
+  the callers cannot promise a non-empty slice — `scan_ident` is entered
+  at four sites on a character the CALLER classified.
+  What is left is real work spread thin, and the shape is worth writing
+  down so it is not re-derived: `moonbit_drop_object` 13.8%,
+  `Parser::peek` 8.1% (808,655 calls at 22 instructions — seven per
+  token, and it returns a heap `Token`), `Lexer::skip_whitespace` 6.4%
+  (its cost is the fast loop at ~12 instructions per whitespace
+  character, NOT the slow comment loop — guarding the entry to that,
+  which is exactly equivalent since the fast loop has already eaten
+  every whitespace form, was worth only -0.28%), and
+  `TokenKind::equal` plus `Parser::check` 9.3% together, where the
+  derived structural `Eq` costs 22.6 instructions per comparison mostly
+  in call overhead. None of those is a mistake; they are the price of a
+  boxed `Token` and a payload-carrying `TokenKind`.
+  **FILED, with its ceiling measured: a `declare module` / namespace
+  body is COPIED into a `String` and re-lexed from scratch.**
+  `parse_declaration_block_source` slices the block out of the source
+  and hands it to `Parser::from_source`, so the text is tokenized twice
+  (once by the outer lexer, which walks the tokens to find the matching
+  brace, then again by the sub-parser), `scan_source_directive_flags`
+  re-scans it, and the copy itself is O(body). On
+  `typescript.d.ts` — 7 such blocks, and the shape every real `.d.ts`
+  uses — `blit_from_string` is **9.71%** and
+  `scan_source_directive_flags` **2.99%** (7 calls, one per `Parser`
+  construction, each scanning its whole source at 1.4 instructions per
+  byte); on `parser.ts` the copy alone is 4.6% from THREE calls. The fix
+  that avoids the copy is to give the `Lexer` an end bound and lex a
+  RANGE of the shared source, which also makes positions absolute — and
+  that is the blocker to check first, since a consumer assuming
+  block-relative positions would break silently. Sharing the outer
+  TOKENS as well is the larger version and would remove the double
+  tokenize too.
 - `src/checker` is the TypeScript type-system layer: structural classification
   (`classify_optional_like_union`, `classify_transparent_intersection`),
   assignability (`is_assignable_to` and resolver / generic / bivariant /

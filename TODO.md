@@ -3,6 +3,98 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Perf round, part 6 (2026-09-14): the parser, where there is no outlier to find
+
+The first pass over the PARSER, taken because part 5 left the check at 75%
+of `checker.ts`'s wall clock instead of 98%, so the other 25% finally
+mattered. **-7.71% on real `.ts`, -4.05% on a 2.3 MB `.d.ts`, -3.47% on a
+minified bundle**, output byte-identical on each.
+
+The methodology is the finding as much as the fixes are.
+
+- **No structural outlier.** 0.059-0.099 us/byte across compiler source, a
+  `.d.ts`, a 9 MB published bundle and minified JS. The checker's worst
+  file was 8.82 against 0.27-0.38 for its neighbours; a 25x spread names a
+  file to bisect, a 1.7x spread says profile instead.
+- **Wall clock is unusable here.** The same binary varies 15% run to run
+  on this machine — larger than any single win available — so every number
+  is a callgrind instruction count. `--iters` did not rescue it; the
+  variance is the machine, not the I/O.
+- **The biggest bucket was not scanning.** Allocation, GC and free were
+  **27.7%** of the parse, 432,369 allocations for a 0.54 MB file (3.7 per
+  token), and the profile named one feeder:
+  `FixedArray::blit_from_string` at 7.93%, all of it from
+  `String::unsafe_substring`, largest caller `Lexer::scan_ident`.
+
+| change | effect |
+| --- | --- |
+| classifier takes a VIEW instead of an owned copy | **-2.0%** |
+| identifier interning, keyed by a view | **-3.65%** |
+| O(1) hash instead of `StringView`'s general one | **-4.2%** |
+| (whitespace slow-loop entry guard, kept for its own sake) | -0.28% |
+
+Three sizes that reading the code would have got wrong:
+
+1. The view classifier is small because **77% of identifier-shaped tokens
+   are not keywords** (38,886 of 50,321), so they still copy.
+2. `StringView::hash` walks every code unit and cost **147 instructions
+   per identifier**, eating half of what interning saved. A general hash
+   on a hot short-string path is worth suspecting.
+3. `skip_whitespace`'s 6.4% is the FAST loop (~12 instructions per
+   whitespace character), not the Option-allocating comment loop its
+   shape suggested — guarding the entry to that loop is exactly
+   equivalent and worth only 0.28%.
+
+A direct-mapped cache may collide, and the one catastrophic failure is
+returning the WRONG name. It cannot: a collision is a miss, so the table
+only ever returns a string equal to the slice it was asked about, and
+correctness does not depend on the hash at all — which is what licenses a
+cheap one. Pinned with `abcde` / `aQcRe`, built to collide, plus the empty
+slice, a keyword and a one-character name; mutation-tested.
+
+One bug of mine, found by reasoning: the classifier's `n == 0` arm reaches
+the hash, which indexes `s[0]` and `s[n - 1]`, and no caller can promise a
+non-empty slice.
+
+- [ ] **FILED: a `declare module` / namespace body is COPIED and re-lexed
+  from scratch.** `parse_declaration_block_source` slices the block into a
+  `String` and hands it to `Parser::from_source`, so the text is tokenized
+  TWICE (the outer lexer already walked those tokens to find the matching
+  brace), `scan_source_directive_flags` re-scans it, and the copy is
+  O(body). Measured on `typescript.d.ts`, 7 such blocks and the shape every
+  real `.d.ts` uses: `blit_from_string` **9.71%** and
+  `scan_source_directive_flags` **2.99%** (7 calls, one per `Parser`
+  construction, each scanning its whole source at 1.4 instructions/byte).
+  On `parser.ts` the copy alone is 4.6% from THREE calls.
+
+  The cheaper half is to give the `Lexer` an end bound and lex a RANGE of
+  the shared source instead of a copy. **Check the blocker first**: that
+  makes positions absolute rather than block-relative, and a consumer
+  assuming the latter breaks silently — `pure_marker_positions` and the
+  marker tables are keyed by position. Sharing the outer TOKEN array is
+  the larger version and removes the double tokenize as well.
+
+- [ ] **NOT taken: the token-dispatch cluster** (`Parser::peek` 8.1% at
+  808,655 calls, `TokenKind::equal` + `Parser::check` 9.3%). `peek`
+  returns a boxed `Token` seven times per token and the derived structural
+  `Eq` costs 22.6 instructions per comparison, mostly call overhead. Both
+  are the price of the representation (a heap `Token`, a
+  payload-carrying `TokenKind`), so the fix is a representation change
+  with a large blast radius and no measured ceiling yet. Price it before
+  attempting it.
+
+Gates, all green — and the LEXER is the most widely shared component in
+the repo, so the list is the long one: oracle TP 2636 / MISS in scope 79 /
+OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750 (unchanged); `moon test`
+**3015/3015**; `moon check --deny-warn` clean, and it earned itself back
+twice here by naming `@string.View` and `Map::new()` as deprecated
+spellings before either reached a commit; parser package 516/516;
+mangle-safety 186/186 under Node; dce-coverage 31 eliminated / 0 broken;
+rule-equivalence 80 equivalent / 0 unsound; 16/16 checker-scaling axes in
+budget; graph-check-scaling 1.53 (budget 1.65); graph-walk linear;
+generated-fixtures, scaffolds, examples, bridge-runtime and the bridge
+enum-return probe all pass.
+
 ### Perf round, part 5 (2026-09-14): both of part 4's filed items, and a rejection overturned
 
 **`checker.ts` 10.01 s -> 0.75 s (13x), and the repo's own bench line for
