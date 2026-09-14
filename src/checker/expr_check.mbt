@@ -4938,10 +4938,16 @@ fn ExprEnv::record_decl(self : ExprEnv, name : String) -> Unit {
 /// seven live in mutually exclusive `match` arms; and the two
 /// double-restore sites are the ternary pattern, where the mutations
 /// after the first unwind push new entries that the second unwind pops,
-/// landing on the same mark. `full_snapshot` STAYS for its other two
-/// uses — an enumerator that copies an outer env into a fresh child, and
-/// a read-out that materializes the env as a `Map` — both of which
-/// genuinely need every binding.
+/// landing on the same mark.
+///
+/// This entry once said `full_snapshot` STAYS for two other kinds of use
+/// — an enumerator copying an outer env into a fresh child, and "a
+/// read-out that materializes the env as a `Map`", both of which
+/// "genuinely need every binding". The second half was wrong, and both
+/// of its two sites were the `if` branch JOIN: it needs the names a
+/// branch CHANGED, which the journal knows in O(changes), not the whole
+/// env twice diffed against a third copy. See `changed_since`. Only the
+/// ENUMERATOR is left, and that one really does need every binding.
 fn ExprEnv::mark(self : ExprEnv) -> Int {
   self.journal.length()
 }
@@ -5069,6 +5075,50 @@ fn ExprEnv::unbind(self : ExprEnv, name : String) -> Unit {
 }
 
 ///|
+/// The bindings this scope MUTATED since `mark`, each paired with the
+/// value it holds right now — read off the journal instead of by scanning
+/// the env.
+///
+/// This is the other half of what `mark` / `unwind` bought. The `if`
+/// branch join needs "which variables did this branch change, and to
+/// what", and the only way to answer that from a flat map is to
+/// materialize the whole env at the branch exit and diff it against a
+/// whole-env copy taken before the branch — which is what the `If` arm
+/// did, three to four times per `if` statement, O(enclosing bindings)
+/// each. The journal already names exactly those bindings: an entry
+/// between `mark` and the end was pushed by a write, and a write is the
+/// only way a value changes.
+///
+/// Two properties make it an exact replacement for the diff rather than
+/// an approximation. It is a SUPERSET of the changed names — every
+/// mutation is journalled, and a name written and then written back to
+/// its old value simply fails the caller's `!= pre` test — and a nested
+/// block's entries are popped by its own `unwind`, so a binding created
+/// and destroyed inside the branch is absent here exactly as it was
+/// absent from the old full-env exit map. A name dropped outright
+/// (`unbind`) is skipped, which the join reads as "unchanged" through its
+/// pre-value fallback: again the answer the exit map gave.
+fn ExprEnv::changed_since(
+  self : ExprEnv,
+  mark : Int,
+) -> Map[String, @ast.TsType] {
+  let changed : Map[String, @ast.TsType] = Map([])
+  for i in mark..<self.journal.length() {
+    let name = match self.journal[i] {
+      VarSet(n, _) => n
+      VarDel(n) => n
+      DeclSet(n, _) => n
+      DeclDel(n) => n
+    }
+    match self.vars.get(name) {
+      Some(t) => changed[name] = t
+      None => ()
+    }
+  }
+  changed
+}
+
+///|
 fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
   self.vars.get(name)
 }
@@ -5085,11 +5135,15 @@ fn ExprEnv::lookup_declared(self : ExprEnv, name : String) -> @ast.TsType? {
 }
 
 ///|
-/// Capture a snapshot of `(name, type)` pairs currently in the env so we can
-/// fully restore — including overwritten bindings — when a block exits. Used
-/// for both lexical scope and narrowing. The snapshot covers `vars`
-/// only; the matching `declared` entries are walked in step on
-/// restore so a nested `let x: T;` doesn't leak its declared slot.
+/// Every `(name, type)` pair in the env, as an array. Covers `vars` only.
+///
+/// ONE caller: `fill_from`, the enumerator that copies an enclosing env
+/// into a fresh child for a nested function body. It was the save half of
+/// the save/restore pair that the journal replaced, and then the read-out
+/// the `if` branch join used — both of those are gone, and this is what
+/// is left of it. An O(bindings) walk of the env now has exactly one
+/// reason to exist, which is the `nested-closures` cost a layered env
+/// would address (measured, rejected, recorded in TODO.md).
 fn ExprEnv::full_snapshot(self : ExprEnv) -> Array[(String, @ast.TsType)] {
   let entries : Array[(String, @ast.TsType)] = []
   for entry in self.vars {
@@ -18125,9 +18179,16 @@ fn check_block(env : ExprEnv, block : @ast.TsBlock, ctx : CheckCtx) -> Unit {
 
 ///|
 /// Checks `block` with the given narrowing `binds` applied, then returns
-/// the variable types in effect at the *end* of the block (after the binds
-/// plus any in-block assignment narrowing) before restoring the outer env.
-/// The `if` handler uses this to join branch exits at the merge point.
+/// the bindings the block CHANGED — each with the type in effect at the
+/// *end* of the block (the binds plus any in-block assignment narrowing) —
+/// before restoring the outer env. The `if` handler uses this to join
+/// branch exits at the merge point.
+///
+/// It returns the changed set rather than the whole env deliberately: a
+/// branch touches a handful of names and the env can hold thousands, and
+/// the join's own question is which ones moved. The pre-branch value of
+/// everything else is still readable, because the env is back at exactly
+/// that state once this returns.
 fn check_block_narrowing_exit(
   env : ExprEnv,
   block : @ast.TsBlock,
@@ -18141,10 +18202,7 @@ fn check_block_narrowing_exit(
   for stmt in block.stmts {
     check_stmt(env, stmt, ctx)
   }
-  let exit : Map[String, @ast.TsType] = Map([])
-  for e in env.full_snapshot() {
-    exit[e.0] = e.1
-  }
+  let exit = env.changed_since(pre)
   env.unwind(pre)
   exit
 }
@@ -18980,10 +19038,6 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     If(cond, then_block, else_block) => {
       check_call_args_in_expr(env, cond, ctx)
       record_function_as_condition(env, ctx, cond)
-      let pre_map : Map[String, @ast.TsType] = Map([])
-      for e in env.full_snapshot() {
-        pre_map[e.0] = e.1
-      }
       let effect = analyze_narrowing(env, ctx.resolver, cond)
       let then_exit = check_block_narrowing_exit(
         env,
@@ -18999,12 +19053,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             block_always_exits(b),
           )
         // No `else`: the else path is the fall-through with the condition's
-        // else-narrowing applied and no statements.
+        // else-narrowing applied and no statements — so the only bindings
+        // it changes are the ones the condition narrows.
         None => {
           let m : Map[String, @ast.TsType] = Map([])
-          for k, v in pre_map {
-            m[k] = v
-          }
           for bnd in effect.else_binds {
             m[bnd.0] = bnd.1
           }
@@ -19031,25 +19083,32 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         // Union can only widen back toward the pre-`if` type, so the join
         // never over-narrows. Only touch variables that actually changed in
         // a branch.
+        //
+        // Both branches have unwound by now, so the env IS the pre-`if`
+        // state and `env.lookup` is the pre-value lookup — which is what
+        // retires the whole-env `pre_map` this arm used to build, and with
+        // it the two whole-env exit maps that had to be diffed against it.
+        // A branch reports only what it changed (`changed_since`), and a
+        // name it does not report has its pre-`if` type by definition.
         let cands : Map[String, Unit] = Map([])
         for k, v in then_exit {
-          if pre_map.get(k) != Some(v) {
+          if env.lookup(k) != Some(v) {
             cands[k] = ()
           }
         }
         for k, v in else_exit {
-          if pre_map.get(k) != Some(v) {
+          if env.lookup(k) != Some(v) {
             cands[k] = ()
           }
         }
         for k, _ in cands {
           let tt = match then_exit.get(k) {
             Some(t) => Some(t)
-            None => pre_map.get(k)
+            None => env.lookup(k)
           }
           let et = match else_exit.get(k) {
             Some(t) => Some(t)
-            None => pre_map.get(k)
+            None => env.lookup(k)
           }
           match (tt, et) {
             (Some(a), Some(b)) => env.narrow(k, narrow_union(a, b))

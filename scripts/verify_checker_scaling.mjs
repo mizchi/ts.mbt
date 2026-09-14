@@ -416,6 +416,44 @@ const AXES = {
     out.push(`}`);
     return out.join("\n") + "\n";
   },
+  // `if` statements inside one body, which is `block-scopes`' sibling and
+  // the second O(env)-per-statement cost the `If` arm carried. The journal
+  // fixed the BLOCK snapshot; the branch JOIN was separate and survived
+  // it, because it does not save and restore — it materializes the whole
+  // env three to four times per `if` (a `pre_map` copy, a full exit map
+  // per branch, plus another copy of `pre_map` on the no-else path) and
+  // diffs them to discover the handful of names a branch changed.
+  //
+  // Measured on this ladder before the fix: 118 / 474 / 2077 ms at
+  // 500/1000/2000 for an exponent of 2.07, against 14 / 24 / 48 / 86 ms
+  // and 0.87 after it — 43x at n=2000. `block-scopes` could not see it
+  // (its blocks are bare, so nothing joins) and `statements` could not
+  // either (its statements are unbraced); this is the only axis that
+  // grows the number of MERGE POINTS.
+  //
+  // Fixed by reading the changed set off the journal
+  // (`ExprEnv::changed_since`): the entries between a branch's mark and
+  // its end name exactly the bindings it mutated, so the join is
+  // O(changes) and the three materializations are gone. Deliberately NOT
+  // given an `AXIS_BUDGET` entry — it is linear, so it is held to the
+  // default 1.5 like any other axis, and a budget it does not need would
+  // be a suppression waiting to be inherited.
+  //
+  // The `else` is there because it is the more expensive half (both exit
+  // maps, 48 ms against 34 at n=2000); the no-else form pays the extra
+  // `pre_map` copy instead and fits the same exponent.
+  ifs: (n) => {
+    const out = [];
+    out.push(`export function ifs(b: boolean): number {`);
+    for (let i = 0; i < n; i++) out.push(`  const v${i}: number = ${i};`);
+    out.push(`  let acc = 0;`);
+    for (let i = 0; i < n; i++) {
+      out.push(`  if (b) { acc = acc + v${i}; } else { acc = acc - v${i}; }`);
+    }
+    out.push(`  return acc;`);
+    out.push(`}`);
+    return out.join("\n") + "\n";
+  },
   // Statements inside ONE function body: the expando (TS2565) ordered
   // pass, the `this`-region walk and every body-level check. Distinct
   // from `vars`, whose statements are at module top level, where a

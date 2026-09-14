@@ -20513,3 +20513,126 @@ test "batch EL rules" {
     0,
   )
 }
+
+///|
+// The `if` branch join, pinned at the merge point. The join used to be
+// computed by materializing the whole env three to four times per `if`
+// statement — a `pre_map` copy, a full exit map per branch, plus a copy of
+// `pre_map` on the no-else path — and diffing them to discover the handful
+// of names a branch changed. It reads the changed set off the undo journal
+// now (`ExprEnv::changed_since`), and a name a branch does not report has
+// its pre-`if` type by definition, because both branches have unwound by
+// the time the join runs.
+//
+// Every case below is a behaviour the two formulations must agree on, and
+// each FAILS if the changed-set read is wrong in one direction or the
+// other: the zeros catch a join that stops firing, the non-zeros catch a
+// join that takes one branch's answer instead of the union.
+test "expr_check: if branch join reads the changed set off the journal" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // Both branches assign a string, so the join is `string`. The join has
+  // to find `x` in BOTH branches' changed sets to get here — if it fired
+  // for neither, `x` stays `string | number` and this reports.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | number, b: boolean): void {
+        #|  if (b) { x = "a"; } else { x = "b"; }
+        #|  const s: string = x;
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Branches assigning DIFFERENT types union back to `string | number`,
+  // which the annotation rejects. A join that took the then-branch alone
+  // would accept it.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | number, b: boolean): void {
+        #|  if (b) { x = "a"; } else { x = 1; }
+        #|  const s: string = x;
+        #|}
+      ),
+    ),
+    1,
+  )
+  // No `else`: the else path is the fall-through, so the join unions the
+  // then-branch's `string` with the PRE-`if` type and `x` is still
+  // `string | number` after it. This is the arm where the pre value used
+  // to come from the `pre_map` copy and now comes from the env itself.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | number, b: boolean): void {
+        #|  if (b) { x = "a"; }
+        #|  const s: string = x;
+        #|}
+      ),
+    ),
+    1,
+  )
+  // The join's own doc example: assigning in the branch that had the
+  // nullish narrowing leaves the binding non-nullish after the `if`,
+  // because the else path carries the condition's else-narrowing.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(id: string | undefined): string {
+        #|  if (id === undefined) { id = "1"; }
+        #|  return id;
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Its negative control — without the assignment the same shape keeps
+  // `undefined` in the union, so the pair has detection power in both
+  // directions rather than only proving the join is quiet.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(id: string | undefined): string {
+        #|  if (id === undefined) { }
+        #|  return id;
+        #|}
+      ),
+    ),
+    1,
+  )
+  // The early-exit arm, which bypasses the join entirely: the then-branch
+  // always exits, so the fall-through takes the condition's
+  // else-narrowing.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined, b: boolean): number {
+        #|  if (x === undefined) { return 0; }
+        #|  return x.length;
+        #|}
+      ),
+    ),
+    0,
+  )
+  // A nested block inside a branch: its own `unwind` pops the assignment's
+  // journal entry, so the branch reports no change and the join keeps the
+  // pre type — which is exactly what the full exit map showed too, since
+  // the inner block had already restored it. Pinned because it is the one
+  // case where the changed set is narrower than "everything the branch
+  // touched", and that has to stay a deliberate agreement rather than a
+  // silent drift.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | number, b: boolean): void {
+        #|  if (b) { { x = "a"; } } else { x = "b"; }
+        #|  const s: string = x;
+        #|}
+      ),
+    ),
+    1,
+  )
+}
