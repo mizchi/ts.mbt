@@ -12,10 +12,30 @@ pub fn module_alias_resolver(
   module_ : @ast.TsModule,
   include_standard? : Bool = true,
 ) -> (String) -> AliasBinding? {
-  let table : Map[String, AliasBinding] = if include_standard {
-    standard_utility_types()
-  } else {
-    {}
+  // The standard table is COPIED, not used in place. It is one shared
+  // process-wide `Map` (see `standard_utility_table`, which says in its
+  // own comment that "a future writer would leak across every resolver in
+  // the process, so add one only by giving the resolver its own copy") —
+  // and the loop below is a writer, so using it in place wrote every
+  // module's aliases into it permanently.
+  //
+  // That was a live defect, not a hypothetical: it made
+  // `expr_check_wbtest`'s `NonNullable<string|null> = null` assertion fail
+  // whenever the whole checker package ran, because
+  // `generics_wbtest`'s "module aliases shadow stdlib on name clash" case
+  // overrides `NonNullable` to mean `string` — and that override outlived
+  // its own test. The test passed in isolation and failed in the suite,
+  // which is the signature of shared state rather than of a rule.
+  //
+  // Eighteen inserts per call, and this runs at most once per module
+  // check, so the sharing that matters (`Resolver::empty` building the
+  // table 52,003 times for a 162-module graph) is untouched — that one is
+  // read-only through `standard_aliases`.
+  let table : Map[String, AliasBinding] = Map([])
+  if include_standard {
+    for name, binding in standard_utility_types() {
+      table[name] = binding
+    }
   }
   for ta in module_.type_aliases {
     table[ta.name] = { type_params: ta.type_params, body: ta.type_ }

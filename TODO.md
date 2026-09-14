@@ -1144,19 +1144,76 @@ in the snapshot.
   now the lowest it has measured (1610 ms at the top rung against 2395
   pre-journal) and still 2.13, because the copy itself is untouched.
 
-- [ ] **FILED: the branch join's three-to-four full-env `Map`
-  materializations.** `if` keeps a SECOND O(env) cost the journal does
-  not reach, so the `ifs` shape went 3.795 -> 2.080 s and is still
-  **1.98**. The `If` arm builds `pre_map` from the whole env, then
-  `check_block_narrowing_exit` returns a full exit `Map` for each
-  branch, plus a copy on the no-else path. The join's own comment names
-  the fix — "Only touch variables that actually changed in a branch" —
-  and it finds them by scanning both exit maps against `pre_map`, which
-  is O(env) to discover a handful of names. **The journal now knows that
-  set directly**: the entries between a branch's mark and its end name
-  exactly the mutated bindings, so `check_block_narrowing_exit` can
-  return the changed pairs read off the journal before unwinding and the
-  three materializations disappear.
+- [x] **DONE: the branch join's three-to-four full-env `Map`
+  materializations** (4d254cd). Filed as above: the `If` arm built
+  `pre_map` from the whole env, `check_block_narrowing_exit` returned a
+  full exit `Map` per branch, and the no-else path copied `pre_map`
+  again — then the join scanned both exit maps against `pre_map` to
+  discover a handful of changed names. `ExprEnv::changed_since` reads
+  that set off the journal in O(changes) instead.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `checker.ts` (3.1 MB, real) | 10.01 s | **2.60 s — 3.8x** |
+  | corpus (38 files, 7.1 MB) | 11.35 s | **3.72 s — 3.05x** |
+  | `ifs` ladder, n=2000 | 2077 ms | **48 ms — 43x** |
+  | `ifs` exponent | 2.07 | **1.04** |
+
+  Two things worth keeping. **The `pre_map` copy never needed to exist
+  at all**, independent of the journal: both branches have unwound by
+  the time the join runs, so the env IS the pre-`if` state and
+  `env.lookup` is the pre-value lookup. And the replacement is EXACTLY
+  behaviour-preserving rather than approximately — the old full exit
+  map's value for a name equals `changed[k] ?? pre[k]` in all four
+  cases (mutated and present; mutated and dropped, absent from both;
+  not mutated; created-then-destroyed in a nested block, popped by that
+  block's own unwind exactly as it was absent from the exit map).
+
+  `ifs` is the fifteenth axis and the only one that grows MERGE POINTS —
+  `block-scopes`' blocks are bare so nothing joins, `statements`'
+  statements are unbraced. No `AXIS_BUDGET` entry on purpose: it is
+  linear, so the default 1.5 gates it, and a budget it does not need is
+  a suppression waiting to be inherited.
+
+- [x] **DONE: the closure copy, by a route the layered env did not have**
+  (8d26847). The rejection below stands as written — and it was a
+  rejection of THAT FIX, not of the cost it was aimed at. A nested
+  function's scope IS the enclosing one plus its parameters, so
+  `mark` / `unwind` on the OUTER env gives it that scope for O(params)
+  where `fill_from` was O(enclosing bindings) per closure. Layering paid
+  for the avoided copy in `lookup`; a journalled scope touches `lookup`
+  not at all.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `checker.ts` (3.1 MB, real) | 2.60 s | **0.75 s — 3.5x** |
+  | corpus (38 files, 7.1 MB) | 3.72 s | **1.77 s — 2.1x** |
+  | `nested-closures` top rung | 1594.8 ms | **27.5 ms — 58x** |
+  | `nested-closures` exponent | 2.13 | **0.99** |
+  | truncation ladder in ONE function | 1.45 | **1.09** |
+
+  Three of the four copy sites take it. The fourth is the `<class>`
+  IIFE, whose purpose is to RESET every captured name's narrowing
+  (typeGuardInClass) — O(bindings) however it is spelled — so it keeps
+  the copy, and `fill_from` exists for that one case. The CEILING was
+  priced before anything was written, by making the copy a no-op and
+  timing it: 2.60 -> 0.59 s, so the copy was ~77% of what was left, and
+  the fix lands at 0.75.
+
+  One behaviour change, and it removes a false positive on legal code:
+  `fill_from` seeded the child's `declared` slot from the enclosing
+  env's NARROWED value, so an assignment to a captured binding inside a
+  guard was checked against the narrowed type. tsc checks it against
+  the DECLARED type (`tsc_probe.mjs` accepts
+  `if (typeof x === "string") { const g = () => { x = 5 } }` for
+  `x: string | number`), and the corpus has no such file — so no gate
+  could see it in either direction.
+
+  The hazard it introduces is that inference now mutates the outer env
+  and restores it where it used to leave it alone, so no caller may be
+  iterating the env across such a call. Checked, not assumed: `vars` is
+  iterated in exactly one place, `full_snapshot`, which materializes an
+  array before anything else runs.
 - [x] **REJECTED with evidence: a LAYERED `ExprEnv` for the 4 ENUMERATOR
   sites.** Implemented, measured and REVERTED (5737882, reverted in
   3d690ba). A parent pointer consulted on lookup miss, instead of
@@ -1192,6 +1249,20 @@ in the snapshot.
   first-write-wins has to test the whole CHAIN to reproduce the copy's
   `declared` behaviour, since the copy filled the child's `declared` for
   every inherited name.
+
+  **POSTSCRIPT — the cost was fixable and this entry nearly closed the
+  door on it.** A journalled scope (the DONE item above) is 58x on the
+  same axis and **3.5x on the real file**, where this was 55x and -9%.
+  Everything measured here was true; what made it read as "the cost is
+  structural" was the unstated assumption that the child needed to be a
+  SEPARATE env, which is the one thing both the copy and the layer have
+  in common. The reusable form: a rejection is a claim about the FIX, so
+  record which premise it refutes. This one refutes "consult a parent on
+  lookup miss", and the conclusion it appeared to license — that the
+  `nested-closures` cost was not worth attacking — did not follow.
+  Reading the last paragraph literally is what found it: "no site
+  mutates `outer` after the child is created" is also the precondition
+  for not making a child at all.
 
 **Five hypotheses died, and the route is the reusable part.**
 

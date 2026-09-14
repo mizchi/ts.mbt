@@ -225,6 +225,22 @@ test "module_alias_resolver: module aliases shadow stdlib on name clash" {
       resolve,
     ),
   )
+  // AND the override must not outlive this module. `standard_utility_types()`
+  // is ONE shared process-wide `Map`, so a `module_alias_resolver` that
+  // wrote into it in place made this test's contrived `NonNullable = string`
+  // permanent for every later reader in the process — which is exactly what
+  // happened, and what made `expr_check_wbtest`'s
+  // `NonNullable<string|null> = null` assertion fail in a whole-package run
+  // while passing on its own. Asserted here rather than only commented at
+  // the copy, because the symptom shows up in another file and nothing
+  // pointed back to this one.
+  let fresh = module_alias_resolver({ ..m, type_aliases: [] })
+  match fresh("NonNullable") {
+    Some(binding) =>
+      // The real entry is a `Conditional`, not the `String_` above.
+      assert_true(binding.body is Conditional(_, _, _, _))
+    None => assert_true(false)
+  }
 }
 
 ///|
