@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2642 / MISS in scope 73 /
+  is a soundness bug, and there are none (TP 2649 / MISS in scope 66 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -2340,6 +2340,94 @@ product surfaces now.
   traced re-run proved it by failing on a `[4014]` type error introduced
   two minutes earlier. The serial order is check, test, build, oracle, then
   the recompiling harnesses — on a tree that is not moving.
+  Batch EL is **+7** (MISS in scope 73 -> 66) and its first move was to
+  remove a SUPPRESSION whose stated reason was false about TypeScript.
+  `is_widening_direction_mismatch` dropped every `expected "X" (string) but
+  got string` mismatch, saying "TS accepts these (the literal initializer
+  collapses to the wider type at the use site without narrowing)" —
+  TypeScript accepts no such thing, `string` is never assignable to
+  `"Hello"`. The true, weaker statement is that OUR inference sometimes
+  widens where tsc keeps a literal type, so a report there can be about our
+  gap rather than the program. Removing the arm measured +1 TP and **+1
+  FP**, and the false positive is the finding: `lookup_method_sig` reads
+  `lookup_field`, which surfaces only the FIRST declaration of a name, so
+  the argument check judged every call to an OVERLOADED method against
+  overload #1 — `c.foo('bye')` against `foo(x: 'hi'); foo(x: 'bye');
+  foo(x: string)` in `typesWithSpecializedCallSignatures`, a TS7-ACCEPTED
+  file — while `infer_expr` has had `resolve_method_overload` for the RETURN
+  type all along. The candidate collection was extracted so the argument
+  path asks the same question, and it ABSTAINS for an overload set, since
+  nothing at that site can reconstruct which signature the arguments were
+  written for; a single-signature method is still judged. The numeric and
+  boolean arms of the suppression STAY, and that is the reusable half:
+  nothing has measured them, and removing an arm whose population nobody
+  has opened is exactly how the false positive above got written. Two more
+  tests were found asserting a gap rather than a behaviour, the twelfth and
+  thirteenth here — `const c = "b"; let y: "a" = c;` asserted 0 and is
+  TS2322, and `declare var Symbol: any;` sat in a whole-file "silent" list
+  while being itself TS2403 against the lib declaration.
+  Three of the other six rules are the applied-in-some-places family.
+  TS2403 against the lib declaration fired for `var Symbol: { iterator:
+  symbol }` and not for `declare var Symbol: …`, because the module parser
+  routes `declare var` through `parse_declare_values` into `module_.values`
+  and pushes nothing onto `top_level_stmts` — one rule, two declaration
+  channels, and the ambient one is what every `.d.ts` writes. A function
+  value against a UNION of call signatures had no arm at all, though
+  TypeScript states the rule and `functionExpressionContextualTyping2`
+  quotes it in its own header (identical parameters IGNORING RETURN TYPES
+  give a contextual signature with the UNION of the returns); parameter
+  lists that DIFFER mean no contextual signature exists, so the arrow's
+  parameters are implicitly `any` and that case abstains rather than picking
+  a member. And `is_definitely_not_arithmetic` abstained on every union with
+  a reason in its own comment — a numeric-literal union like `0 | 1 | 2` IS
+  arithmetic — which is true of those and not of `number | string`: tsc
+  requires the WHOLE operand to be numeric, so one definitely-non-numeric
+  member decides it, while every member must be CONCRETE (a `Named` member
+  could be a numeric enum, and an `any` member collapses the union to `any`,
+  which tsc accepts) and a union of numerics abstains because `number |
+  bigint` is TS2365, a code this rule does not claim.
+  The remaining three each turn on one probed cell. Expando properties on a
+  function value are a TypeScript affordance requiring `const` — a function
+  DECLARATION and `const f = () => …` get them, `var f = function () {}` and
+  `let f = () => …` do not, and `typeFromPropertyAssignment29` says so in
+  its own comment — and the annotation is NOT what saves it (`declare var f:
+  (n: number) => number; f.p = 1` is TS2339) while an explicit `: any` IS,
+  so the fact rides a parse-time marker: twenty-first instance of the
+  absent-versus-`: any` blocker. TS2556 is about a spread argument having a
+  TUPLE type and a union not being one, which is the cell reasoning gets
+  wrong — `[number, number] | [number, string]` reports even though every
+  member has the same arity, while a union of IDENTICAL tuples collapses to
+  one tuple and is accepted, so the members are deduplicated before the
+  count is decided. And TS2749 for a value name in a type-ARGUMENT position
+  is the one place the name resolution `unresolved_type_references` cannot do
+  IS decidable, for a structural reason: a type argument in an EXPRESSION has
+  no binders of its own — the recorded blocker is that `check_type` loses a
+  type's own `<U>` / `infer` / mapped key — and the call site's environment is
+  the scope the name resolves in, which is what makes the function-local
+  `var b` in `a<b, b>(c + 1)` reachable.
+  Two notes that are not rules. The `globalThis` index-key rule tests the
+  KEY's CHARACTERS rather than a name set, deliberately: an ambient external
+  module's name includes its quotes so it can never be a global, and a single
+  file cannot see the globals another script file declares, so a name-set
+  test would false-positive on any real multi-file program. And
+  `typeGuardsDefeat` is FILED with the rule it is not: probing says
+  TypeScript DOES preserve a parameter's narrowing inside a closure created
+  in the narrowed region (five cells, all accepted), so "reset narrowing on
+  entering a nested function" is wrong — what defeats it there is the later
+  `x = "hello"` the closure can observe, so the fact needed is "this binding
+  is assigned somewhere other than its initializer".
+  The batch's operational finding is the third stale-measurement instance in
+  this file and the first where the instrument was a hand-run binary:
+  **`moon build --target native` builds DEBUG.** The justfile's
+  `verify-checker-soundness` runs exactly that and then the oracle, which
+  works only because the oracle picks the NEWER of the two binaries. Probing
+  `_build/native/release/.../tscheck.exe` by hand after a plain `moon build`
+  measures whatever the last `--release` build contained — and it cost most
+  of an hour here: a patch was "verified absent" by re-running that binary,
+  the conclusion "the report must come from another site" was drawn from it,
+  and twenty-one call sites were instrumented with unique markers before
+  `ls -la` showed the binary was ten minutes older than the source. The
+  build command for a hand probe is `moon build --target native --release`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

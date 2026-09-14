@@ -4328,12 +4328,17 @@ fn expr_assigns_name(expr : @ast.TsExpr, name : String) -> Bool {
 /// Returns `None` when the receiver isn't such a class, the method has a
 /// single signature, or no signature matches (callers fall back to the
 /// existing single-signature path).
-fn Resolver::resolve_method_overload(
+///
+/// Extracted from `resolve_method_overload` so the argument-CHECK path can
+/// ask the same question the return-type path asks. Two consumers, one
+/// collection: `lookup_field` surfaces only the FIRST declaration of an
+/// overloaded method, so a check written against it judges every call
+/// against overload #1.
+fn Resolver::method_overload_signatures(
   self : Resolver,
   recv : @ast.TsType,
   meth : String,
-  arg_types : Array[@ast.TsType],
-) -> @ast.TsType? {
+) -> Array[(Array[@ast.TsType], @ast.TsType)] {
   // Collect the candidate signatures of `meth` as `(params, return)` pairs,
   // in declaration order. A class method may be overloaded across several
   // declarations; an object / interface type expresses overloads as repeated
@@ -4383,6 +4388,17 @@ fn Resolver::resolve_method_overload(
       }
     _ => ()
   }
+  candidates
+}
+
+///|
+fn Resolver::resolve_method_overload(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  arg_types : Array[@ast.TsType],
+) -> @ast.TsType? {
+  let candidates = self.method_overload_signatures(recv, meth)
   // Only meaningful for an overload set: a single signature is already
   // handled by the first-match `lookup_method_sig` path.
   if candidates.length() <= 1 {
@@ -6145,22 +6161,28 @@ fn is_simple_shape_type(s : String) -> Bool {
 
 ///|
 /// A mismatch where the source is the widened primitive of the
-/// target's literal type -- e.g. `expected "ABC" (string) but got
-/// string`, `expected 123 but got number`, `expected true but got
-/// boolean`. TS accepts these (the literal initializer collapses to
-/// the wider type at the use site without narrowing), so they show
-/// up as FPs in our checker. The reverse direction (`expected
+/// target's literal type -- e.g. `expected 123 but got number`,
+/// `expected true but got boolean`. The reverse direction (`expected
 /// string but got "ABC"`) is *not* widening -- it's the kind of
 /// mismatch we *do* want to catch.
+///
+/// The header used to say TypeScript ACCEPTS these, which is false about
+/// TypeScript: `string` is never assignable to `"Hello"`. What is true is
+/// that OUR inference sometimes widens where tsc keeps a literal type, so
+/// a report here can be about our own gap rather than the program. The
+/// string arm was REMOVED on that basis and the removal measured: +1 file
+/// (`typeArgumentsWithStringLiteralTypes01`, whose real errors are five
+/// TS2345s) at FP 0 — but only after the overload abstention below it,
+/// because `lookup_method_sig` judged every call to an OVERLOADED method
+/// against overload #1 and this arm was hiding that
+/// (`typesWithSpecializedCallSignatures`). The numeric and boolean arms
+/// stay: nothing has measured them, and removing an arm whose population
+/// has not been looked at is how the FP above got written.
 fn is_widening_direction_mismatch(
   sub_path : String,
   exp : String,
   got : String,
 ) -> Bool {
-  // String literal "X" -> string
-  if got == "string" && exp.has_prefix("\"") && exp.has_suffix("\" (string)") {
-    return true
-  }
   // Numeric literal 123 -> number
   if got == "number" && is_numeric_literal_display(exp) {
     return true
@@ -6700,6 +6722,31 @@ fn is_definitely_not_arithmetic(ty : @ast.TsType) -> Bool {
     | Tuple(_)
     | TemplateLiteralType(_, _)
     | Func(_, _) => true
+    // A UNION operand is arithmetic only if EVERY member is, so ONE
+    // definitely-non-numeric member decides it: `x * x` with
+    // `x: number | string` is TS2362 + TS2363 (typeGuardsDefeat, probed).
+    // The comment above says unions abstain because of numeric-literal
+    // unions like `0 | 1 | 2` — true, and those have no bad member, so
+    // they still abstain here.
+    //
+    // Every member has to be CONCRETE: `Named` / `Applied` could be an
+    // alias to `any`, a numeric enum or a branded number, and an `any`
+    // member collapses the union to `any`, which tsc accepts. A union of
+    // numerics with no bad member abstains too, since `number | bigint`
+    // is TS2365 — a different code this rule does not claim.
+    Union(parts) => {
+      if parts.length() == 0 {
+        return false
+      }
+      let mut saw_bad = false
+      for p in parts {
+        match p {
+          Any | Unknown | Never | Named(_) | Applied(_, _) => return false
+          _ => if is_definitely_not_arithmetic(p) { saw_bad = true }
+        }
+      }
+      saw_bad
+    }
     _ => false
   }
 }
@@ -10410,6 +10457,65 @@ fn check_expr_against(
         }
         _ => ()
       }
+    _ => ()
+  }
+  // A UNION of call signatures contextually types a function value, and
+  // TypeScript states the condition exactly (functionExpressionContextual
+  // Typing2 quotes it in its own header): if every member has one
+  // non-generic call signature and all of them are identical IGNORING
+  // RETURN TYPES, the contextual signature is those parameters with the
+  // UNION of the returns. So `a1 = (foo, bar) => true` against
+  // `((n: number, s: string) => number) | ((n: number, s: string) =>
+  // string)` gives the parameters their target types and demands a return
+  // in `number | string`, which `boolean` is not.
+  //
+  // Parameter lists that DIFFER mean no contextual signature exists at
+  // all — the arrow's parameters are then implicitly `any` and its body
+  // cannot be judged — so that case abstains rather than guessing a
+  // member, which is what keeps the union arm from reporting a legal
+  // arrow written against one of several shapes.
+  match expected_shape {
+    Union(members) if members.length() >= 2 &&
+      (expr is (ArrowFunc(_, _, _, _) | FuncExpr(_))) => {
+      let mut params : Array[@ast.TsType]? = None
+      let rets : Array[@ast.TsType] = []
+      let mut uniform = true
+      for m in members {
+        match ctx.resolver.unwrap(m) {
+          Func(ps, ret) => {
+            match params {
+              None => params = Some(ps)
+              Some(p0) => if p0 != ps { uniform = false }
+            }
+            rets.push(ret)
+          }
+          _ => uniform = false
+        }
+      }
+      match (uniform, params) {
+        (true, Some(ps)) => {
+          let ret_union = if rets.length() == 1 {
+            rets[0]
+          } else {
+            @ast.TsType::Union(rets)
+          }
+          match expr {
+            ArrowFunc(arrow_params, _dr, body, is_async) => {
+              check_arrow_with_context(
+                env, arrow_params, body, is_async, ps, ret_union, ctx, sub_path,
+              )
+              return
+            }
+            FuncExpr(f) => {
+              check_funcexpr_with_context(env, f, ps, ret_union, ctx, sub_path)
+              return
+            }
+            _ => ()
+          }
+        }
+        _ => ()
+      }
+    }
     _ => ()
   }
   match (expr, expected_shape) {
@@ -14989,6 +15095,56 @@ fn check_arguments_with_sig(
                   }
                   stop = true
                 }
+                // A UNION is not a tuple type, and that is the whole rule
+                // — not a claim about lengths. `[number, number] |
+                // [number, string]` is TS2556 even though every member
+                // has the same arity (probed), while a union of
+                // IDENTICAL tuples collapses to one tuple and is
+                // ACCEPTED, so the members are deduplicated before the
+                // count is decided. A member that is not a FIXED tuple
+                // abstains, keeping the open-tuple case
+                // (`[number, number, number?]`, which tsc reports as
+                // TS2345 instead — callWithSpread5 carries both).
+                Union(members) => {
+                  let fixed : Array[@ast.TsType] = []
+                  let mut usable = members.length() > 0
+                  for m in members {
+                    match ctx.resolver.unwrap(m) {
+                      Tuple(items) => {
+                        for it in items {
+                          if it is Rest(_) {
+                            usable = false
+                          }
+                        }
+                        let mut seen = false
+                        for f in fixed {
+                          if f == Tuple(items) {
+                            seen = true
+                          }
+                        }
+                        if !seen {
+                          fixed.push(Tuple(items))
+                        }
+                      }
+                      _ => usable = false
+                    }
+                  }
+                  if !usable {
+                    stop = true
+                  } else if fixed.length() == 1 {
+                    match fixed[0] {
+                      Tuple(items) => i += items.length()
+                      _ => stop = true
+                    }
+                  } else {
+                    if i < min_args || (!has_rest && i >= param_count) {
+                      record_unfiltered(
+                        ctx, call_path, "a spread argument must either have a tuple type or be passed to a rest parameter",
+                      )
+                    }
+                    stop = true
+                  }
+                }
                 Named(n) =>
                   // A class instance (e.g. a hand-rolled iterator) is never
                   // a tuple, so the same arity formula decides.
@@ -19041,6 +19197,47 @@ fn check_explicit_type_args(
   if targs.length() == 0 {
     return
   }
+  // TS2749 ("'b' refers to a value, but is being used as a type here"): an
+  // explicit type ARGUMENT naming something that is declared as a VALUE
+  // and as nothing else. This position is where the general
+  // unresolved-type-reference check cannot go — CLAUDE.md records why,
+  // `check_type` carries one flat list of type-parameter names and loses
+  // a type's own binders — but a type ARGUMENT in an EXPRESSION has no
+  // binders of its own, and the environment at the call site is exactly
+  // the scope the name resolves in. That is what makes
+  // `function g() { var a, b, c; if (a<b, b>(c + 1)) { } }` decidable:
+  // `b` is a function-local `var` and `env.lookup` finds it
+  // (parserAmbiguityWithBinaryOperator4).
+  //
+  // Positive evidence on both sides: the name must RESOLVE as a value
+  // here, and it must not be spellable as a type by any route — a class,
+  // interface, enum, type alias or namespace gives the name a type
+  // meaning, an in-scope type parameter shadows everything, an imported
+  // binding can be either, and a lib global can be both (`Symbol` is a
+  // value and `symbol`-adjacent interfaces exist). Every one of those
+  // abstains, so a name this cannot classify costs a MISS.
+  for t in targs {
+    match t {
+      Named(n) =>
+        if is_ascii_ident_start_name(n) &&
+          !n.contains(".") &&
+          env.lookup(n) is Some(_) &&
+          !is_in_scope_type_param(ctx, t) &&
+          ctx.resolver.classes.get(n) is None &&
+          ctx.resolver.interfaces.get(n) is None &&
+          ctx.resolver.enums.get(n) is None &&
+          ctx.resolver.type_aliases.get(n) is None &&
+          !is_lib_global_type(n) &&
+          !is_lib_global_value(n) {
+          record_unfiltered(
+            ctx,
+            "type argument `\{n}`",
+            "`\{n}` refers to a value, but is being used as a type here: did you mean `typeof \{n}`?",
+          )
+        }
+      _ => ()
+    }
+  }
   // The callee's declared type-parameter names (positional), or `None` when the
   // callee can't be resolved to a declared class / function (stay silent).
   fn declared_type_params(name : String) -> Array[String]? {
@@ -19965,7 +20162,23 @@ fn check_call_args_in_expr(
             )
           } else {
             let pruned = prune_nullish(ctx.resolver, recv_ty)
+            // `lookup_method_sig` reads `lookup_field`, which surfaces only
+            // the FIRST declaration of the name — so for an OVERLOADED
+            // method the check below judges every call against overload #1.
+            // `c.foo('bye')` against `foo(x:'hi'); foo(x:'bye'); foo(x:
+            // string)` is a call TypeScript resolves to the second
+            // signature and this reported against the first
+            // (typesWithSpecializedCallSignatures). Abstain for an overload
+            // set: `resolve_method_overload` already picks the right
+            // signature for the RETURN type, and nothing here can
+            // reconstruct which one the arguments were meant for, so the
+            // trade is a MISS rather than a finding.
+            let overloaded = ctx.resolver
+              .method_overload_signatures(pruned, meth)
+              .length() >
+              1
             match ctx.resolver.lookup_method_sig(pruned, meth) {
+              Some(_) if overloaded => ()
               Some((params, _)) =>
                 // A method declared exactly once on a module-declared
                 // INTERFACE has an exact arity: interfaces can't carry
@@ -23707,6 +23920,76 @@ fn check_namespace_member_writes(module_ : @ast.TsModule) -> Array[ExprIssue] {
               _ => ()
             }
           None => ()
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// TS2339 for an expando property on a MUTABLE function binding. Attaching
+/// a property to a function value is a TypeScript affordance rather than a
+/// JavaScript one, and it requires the binding to be immutable: a function
+/// DECLARATION gets it, `const f = function () { … }` and `const f = () =>
+/// …` get it, and `var f = function () { … }` / `let f = () => …` do NOT
+/// (`typeFromPropertyAssignment29`, whose own comment says "Should not
+/// work in Typescript -- must be const"). Every cell was probed, including
+/// the annotated spelling: `declare var f: (n: number) => number; f.p = 1`
+/// is TS2339 too, so the annotation is not what saves it.
+///
+/// The parser records `<mutable-fn-value:NAME>` for exactly the un-annotated
+/// `var` / `let` shape, because an absent annotation and an explicit `: any`
+/// are the same `Any` downstream and with `: any` the write IS legal.
+///
+/// Declaration merging is the exemption: a namespace, class, interface or
+/// function of the same name can supply the property, so any name that
+/// also appears in one of those tables abstains. Only the flat top-level
+/// statement list is read, so a write inside a function body costs a MISS
+/// rather than inventing a finding.
+fn check_expando_on_mutable_function_binding(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let holders : Map[String, Unit] = Map([])
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<mutable-fn-value:") && gm.has_suffix(">") {
+      let name = gm["<mutable-fn-value:".length():gm.length() - 1].to_owned()
+      holders[name] = ()
+    }
+  }
+  if holders.length() == 0 {
+    return issues
+  }
+  for ns in module_.namespaces {
+    let _ = holders.remove(ns.name)
+  }
+  for c in module_.classes {
+    let _ = holders.remove(c.name)
+  }
+  for i in module_.interfaces {
+    let _ = holders.remove(i.name)
+  }
+  for f in module_.funcs {
+    let _ = holders.remove(f.name)
+  }
+  if holders.length() == 0 {
+    return issues
+  }
+  let reported : Map[String, Unit] = Map([])
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      // Both spellings: `f.p = 1` is a `PropAssign` STATEMENT at the top
+      // of a list and an `Expr(PropAssignExpr(...))` otherwise.
+      PropAssign(@ast.TsExpr::Var(holder), prop, _)
+      | Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var(holder), prop, _)) =>
+        if holders.get(holder) is Some(_) &&
+          reported.get(holder + "." + prop) is None {
+          reported[holder + "." + prop] = ()
+          issues.push({
+            path: "assign `\{holder}.\{prop}`",
+            message: "property `\{prop}` does not exist on a function value declared with `var` / `let` — expando properties require `const`",
+          })
         }
       _ => ()
     }
@@ -32621,27 +32904,42 @@ fn check_lib_global_redeclaration(module_ : @ast.TsModule) -> Array[ExprIssue] {
   if has_module_syntax {
     return issues
   }
+  fn judge(n : String, ty : @ast.TsType) -> Unit {
+    match lib_global_ctor_type_name(n) {
+      Some(expected) => {
+        let ok = match ty {
+          Named(t) => t == expected
+          TypeOf(_) => true
+          _ => false
+        }
+        if !ok {
+          issues.push({
+            path: "var \{n}",
+            message: "subsequent variable declaration must have the same type as the lib declaration (`\{expected}`)",
+          })
+        }
+      }
+      None => ()
+    }
+  }
+
   for stmt in module_.top_level_stmts {
     match stmt {
-      Var(@ast.TsBinding::Ident(n), ty, Var("__ts_no_init__")) =>
-        match lib_global_ctor_type_name(n) {
-          Some(expected) => {
-            let ok = match ty {
-              Named(t) => t == expected
-              TypeOf(_) => true
-              _ => false
-            }
-            if !ok {
-              issues.push({
-                path: "var \{n}",
-                message: "subsequent variable declaration must have the same type as the lib declaration (`\{expected}`)",
-              })
-            }
-          }
-          None => ()
-        }
+      Var(@ast.TsBinding::Ident(n), ty, Var("__ts_no_init__")) => judge(n, ty)
       _ => ()
     }
+  }
+  // The AMBIENT spelling — `declare var Symbol: { iterator: symbol }`,
+  // which is how a `.d.ts` and every `ES5SymbolProperty*` fixture writes
+  // it — is not a `TsStmt` at all: the module parser routes `declare var`
+  // through `parse_declare_values` into `module_.values` and pushes
+  // nothing onto `top_level_stmts`, so the loop above could never see it.
+  // One rule, two declaration channels, and it was read from one
+  // (ES5SymbolProperty5). No initializer is possible in an ambient
+  // declaration, so the `__ts_no_init__` half of the runtime condition
+  // needs no counterpart here.
+  for v in module_.values {
+    judge(v.name, v.type_)
   }
   issues
 }
@@ -33372,6 +33670,94 @@ fn member_name_duplicates(
 /// return / element positions). Method-overload and signature-sentinel
 /// exclusions match `member_name_duplicates`. Purely structural — no
 /// resolution — so no false positives on resolvable input.
+/// TS2339 for an indexed access into `typeof globalThis` whose key cannot
+/// be a global at all. `declare module "ambientModule" { … }` declares an
+/// ambient EXTERNAL module, and its name INCLUDES the quotes — so
+/// `(typeof globalThis)["\"ambientModule\""]` names no property of the
+/// global object, which is the point `globalThisAmbientModules` is making
+/// next to the `["valueModule"]` that IS legal.
+///
+/// The condition is that the key contains a character no identifier can
+/// contain, and that is deliberately narrower than "this key is not a
+/// declared global". A single file cannot see the globals another script
+/// file declares, so a name-set test would false-positive on any real
+/// program split across files; a quote can never appear in a global's
+/// name, whatever the rest of the program says.
+fn collect_globalthis_bad_index_issues(
+  ty : @ast.TsType,
+  label : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match ty {
+    IndexedAccess(TypeOf("globalThis"), Literal(key)) =>
+      if key.contains("\"") || key.contains("'") {
+        issues.push({
+          path: label,
+          message: "property `\{key}` does not exist on `typeof globalThis`",
+        })
+      }
+    Array(e) | Rest(e) | Keyof(e) =>
+      collect_globalthis_bad_index_issues(e, label, issues)
+    Tuple(items) =>
+      for it in items {
+        collect_globalthis_bad_index_issues(it, label, issues)
+      }
+    Object(fields) =>
+      for f in fields {
+        collect_globalthis_bad_index_issues(f.1, label, issues)
+      }
+    Func(params, ret) | Constructor(params, ret, _) => {
+      for p in params {
+        collect_globalthis_bad_index_issues(p, label, issues)
+      }
+      collect_globalthis_bad_index_issues(ret, label, issues)
+    }
+    CallableMeta(inner, _) | GenericFunc(_, _, inner) =>
+      collect_globalthis_bad_index_issues(inner, label, issues)
+    Union(ms) | Intersection(ms) =>
+      for m in ms {
+        collect_globalthis_bad_index_issues(m, label, issues)
+      }
+    Applied(_, args) =>
+      for a in args {
+        collect_globalthis_bad_index_issues(a, label, issues)
+      }
+    IndexedAccess(b, k) => {
+      collect_globalthis_bad_index_issues(b, label, issues)
+      collect_globalthis_bad_index_issues(k, label, issues)
+    }
+    Conditional(a, b, x, y) => {
+      collect_globalthis_bad_index_issues(a, label, issues)
+      collect_globalthis_bad_index_issues(b, label, issues)
+      collect_globalthis_bad_index_issues(x, label, issues)
+      collect_globalthis_bad_index_issues(y, label, issues)
+    }
+    _ => ()
+  }
+}
+
+///|
+fn check_globalthis_bad_index(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for ta in module_.type_aliases {
+    collect_globalthis_bad_index_issues(ta.type_, "type \{ta.name}", issues)
+  }
+  for v in module_.values {
+    collect_globalthis_bad_index_issues(v.type_, "var \{v.name}", issues)
+  }
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), ty, _)
+      | Let(@ast.TsBinding::Ident(n), ty, _)
+      | Const(@ast.TsBinding::Ident(n), ty, _) =>
+        collect_globalthis_bad_index_issues(ty, "var \{n}", issues)
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 fn collect_type_dup_issues(
   ty : @ast.TsType,
   label : String,
@@ -34383,6 +34769,14 @@ fn check_module_function_bodies_layered(
   for issue in check_namespace_member_writes(module_) {
     all.push(issue)
   }
+  // TS2339: an expando property on a `var` / `let` function value.
+  for issue in check_expando_on_mutable_function_binding(module_) {
+    all.push(issue)
+  }
+  // TS2339: `(typeof globalThis)["\"ambientModule\""]`.
+  for issue in check_globalthis_bad_index(module_) {
+    all.push(issue)
+  }
   // TS2673 / TS2674: `new C(...)` on a private / protected constructor.
   for issue in check_constructor_accessibility(module_) {
     all.push(issue)
@@ -34685,6 +35079,12 @@ fn check_module_function_bodies_layered(
       // initialized by a bare identifier, consumed by
       // `check_constructor_type_assignability`.
       if gm.has_prefix("<classval-decl:") {
+        continue
+      }
+      // Marker, not an error: an un-annotated top-level `var` / `let`
+      // bound to a function value, consumed by
+      // `check_expando_on_mutable_function_binding`.
+      if gm.has_prefix("<mutable-fn-value:") {
         continue
       }
       // TS2304: `export = name` over a provably undeclared value. Same

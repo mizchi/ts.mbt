@@ -2276,6 +2276,25 @@ fn Parser::parse_var_decl_item(
           self.grammar_misuses.push("<classval-decl:\{name}:\{src}>")
         _ => ()
       }
+      // TS2339 support: expando properties on a function VALUE are
+      // TypeScript's, not JavaScript's, and they require `const`. A
+      // function DECLARATION also gets them, and so does `const f = () =>
+      // …`, while `var f = function () { … }` / `let f = () => …` do NOT
+      // — probed one cell at a time, and the corpus file says so in its
+      // own comment ("Should not work in Typescript -- must be const",
+      // typeFromPropertyAssignment29). Recorded here for the same reason
+      // as the marker above: an ABSENT annotation and an explicit `: any`
+      // are the same `Any` downstream, and with `: any` the property
+      // assignment is legal.
+      if !(kind is Const) {
+        match (binding, init) {
+          (
+            @ast.TsBinding::Ident(name),
+            @ast.TsExpr::FuncExpr(_) | @ast.TsExpr::ArrowFunc(_, _, _, _),
+          ) => self.grammar_misuses.push("<mutable-fn-value:\{name}>")
+          _ => ()
+        }
+      }
     }
   }
   self.record_self_referential_initializer(binding, init, kind, annotated)
