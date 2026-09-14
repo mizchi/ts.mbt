@@ -74,10 +74,13 @@ const DEFAULT_RUNGS = [500, 1000, 2000, 4000];
 // in 2 s. `--rungs` still overrides everything.
 const AXIS_RUNGS = {
   namespaces: [125, 250, 500, 1000],
-  // Quadratic, so it climbs a cheaper ladder for the same reason
-  // `namespaces` does: 4x between the endpoints separates linear from
-  // quadratic, and at 4,000 this axis alone would dominate the run. It
-  // fits 2.14 here in 2 s against 2.20 on the default rungs.
+  // Both were quadratic and are linear now (0.99 and 0.97), and both KEEP
+  // the cheaper ladder on purpose: a fixed axis's ladder is sized for the
+  // regression it is watching for, not for its current cost. At 4,000 the
+  // pre-fix `nested-closures` was ~6 s per iteration, which is what a
+  // regression would restore — and a gate nobody will wait for is a gate
+  // that gets skipped. 250..2000 is the 8x that separates linear from
+  // quadratic either way.
   "nested-closures": [250, 500, 1000, 2000],
   "block-scopes": [250, 500, 1000, 2000],
   // A chain this long is already far past anything real (the deepest
@@ -128,25 +131,24 @@ const AXIS_BUDGET = {
   // dozens of operations. Gated at its measured number so a regression
   // past the accepted cost still fails.
   "private-members": 1.75,
-  // Declared at its measured number, and unlike `private-members` the
-  // reach here is NOT nil: this is the dominant cost on real input.
-  // `typescript/src/compiler/checker.ts` is one ~50,000-line function
-  // containing thousands of closures over a shared scope, and it alone is
-  // 27.8 s of a 56 s compile of this repo's own submodule — 8.82 us/byte
-  // against 0.27-0.38 for the ~0.5 MB sources beside it.
+  // `nested-closures` was here at 2.25 and is NOT any more: it reads 0.99
+  // and is held to the default 1.5 like any other linear axis. It was the
+  // dominant cost on real input for this whole series — every closure
+  // copied the enclosing env into a fresh child, O(enclosing bindings)
+  // each, and `typescript/src/compiler/checker.ts` is one ~50,000-line
+  // `createTypeChecker` holding thousands of closures over a shared
+  // scope. Fixed by giving a nested function a JOURNALLED SCOPE on the
+  // outer env (`ExprEnv::mark` / `unwind`) instead of a copy: 1594.8 ms
+  // -> 27.5 ms at the top rung, and `checker.ts` 2.60 s -> 0.75 s.
   //
-  // It is gated rather than fixed because the fix is a refactor of the
-  // checker's hottest data structure and wants its own change. The
-  // save/restore pair is O(enclosing bindings) at 21 paired call sites;
-  // replacing it with an undo JOURNAL (record each mutation's previous
-  // value, unwind to a mark) makes it O(mutations in the scope) and there
-  // are only 3 writes to `vars`, 2 removes and 4 `declared` mutations to
-  // intercept. The PRECONDITION is what needs auditing first, and it is
-  // why this is not a one-liner: a journal requires strict LIFO nesting,
-  // while an array snapshot tolerates any order — several call sites
-  // restore one snapshot twice (idempotent either way), but a pair that
-  // restores an OUTER snapshot before an inner one would silently differ.
-  "nested-closures": 2.25,
+  // Worth keeping in mind if this axis ever needs a budget again: a
+  // LAYERED env (a parent pointer consulted on lookup miss) was measured
+  // for the same axis and REVERTED, because it was 55x here and +9% on
+  // real code — it turns `lookup` into 2-5 probes. The journalled scope
+  // is 58x here and 3.5x on real code, because it touches `lookup` not
+  // at all. Two fixes for one axis, and only the real file could tell
+  // them apart. See TODO.md.
+  //
   // WAS quadratic per `{ }` block — `check_block` snapshotted the whole
   // env on entry and restored it on exit, so N blocks in a body with N
   // bindings paid N x N (1.86 isolated, 35x at n=2000 against the
@@ -339,26 +341,36 @@ const AXES = {
   // FEWER bytes, which is what makes this a scope-size effect rather than
   // a byte effect.
   //
-  // READ THIS BEFORE ACTING ON THIS AXIS: it OVERSTATES the cost, and the
-  // fix it points at was implemented, measured and REVERTED. A layered
-  // env (a parent pointer consulted on lookup miss, instead of copying
-  // the outer scope into the child) takes this axis from 2.13 to **0.98,
-  // 1610 ms -> 29 ms at the top rung, 55x** — and costs the real
-  // `checker.ts` **+9%**, reproducibly (10.29 / 10.72 / 10.72 s against a
-  // 9.55 s baseline), with the 5.26 MB corpus neutral.
+  // FIXED, and the two attempts at it are why this comment is long: this
+  // axis accepted a fix that made real code SLOWER, and the only thing
+  // that told them apart was the real file.
   //
-  // The reason is a ratio this generator gets wrong. Each closure here
-  // reads exactly ONE outer binding, so the copy is pure overhead and
-  // layering is free. Real closures do many lookups each, and chain depth
-  // in real code is small (2-5), so layering turns `lookup` — the hottest
-  // operation in the checker — into 2-5 map probes instead of one, which
-  // costs more than the avoided O(N) copy saves. The trade is structural,
-  // not a tuning problem: no threshold helps, because `checker.ts`'s
-  // outer scope is exactly the large one that would layer.
+  // 1. A LAYERED env (a parent pointer consulted on lookup miss) took the
+  //    axis from 2.13 to 0.98 — 1610 ms -> 29 ms, 55x — and cost the real
+  //    `checker.ts` +9%, reproducibly. REVERTED. Each closure HERE reads
+  //    exactly one outer binding, so the copy is pure overhead and
+  //    layering is free; real closures do many lookups each and chain
+  //    depth is small (2-5), so layering turns `lookup` — the hottest
+  //    operation in the checker — into 2-5 probes instead of one, which
+  //    costs more than the avoided copy saves.
+  // 2. A JOURNALLED SCOPE (`ExprEnv::mark` / `unwind` on the OUTER env,
+  //    so a nested function's scope is the enclosing one plus its
+  //    parameters rather than a copy of it) took the axis to 0.99 —
+  //    1594.8 ms -> 27.5 ms, 58x — and `checker.ts` 2.60 s -> 0.75 s.
+  //    SHIPPED. It touches `lookup` not at all. The truncation ladder
+  //    inside the giant function went 2.03 (0.372/3.76/9.14/15.94/28.14 s)
+  //    -> 1.45 (0.062/0.164/0.390/1.260) -> 1.09
+  //    (0.052/0.109/0.233/0.498), at identical issue counts per rung.
   //
-  // So this axis is a REGRESSION DETECTOR for the copy getting worse, not
-  // a target to drive to 1.0. Raising the lookups-per-closure ratio here
-  // would make it representative and is the honest improvement to it.
+  // Both read ~55x here. One was a 9% regression and the other a 3.5x
+  // win, so the number this axis prints cannot rank them — that is the
+  // standing caution about it, and the reason is still the ratio below:
+  // each closure reads exactly ONE outer binding, which overstates the
+  // copy relative to the lookups it feeds. Raising the
+  // lookups-per-closure ratio is the honest improvement to this
+  // generator; until then, read it as a regression detector for the
+  // remaining O(bindings) path (the `<class>` IIFE's narrowing reset) and
+  // confirm anything it rewards on `checker.ts` before believing it.
   "nested-closures": (n) => {
     const out = [];
     out.push(`export function outer(): number {`);

@@ -20636,3 +20636,118 @@ test "expr_check: if branch join reads the changed set off the journal" {
     1,
   )
 }
+
+///|
+// A nested function's scope, which is now a journalled scope on the
+// enclosing env rather than a copy of it (`ExprEnv::mark` / `unwind` at
+// the three closure sites that do not reset narrowing). The copy was
+// O(enclosing bindings) PER CLOSURE and the dominant cost on a real
+// `.ts`: `typescript/src/compiler/checker.ts` is one ~50,000-line
+// `createTypeChecker` holding thousands of closures over a shared scope,
+// and it went 2.60 s -> 0.75 s.
+//
+// Sharing the env has to reproduce the copy's scoping exactly, so each
+// case below is one of the four things that could break — a leak out, a
+// lost capture, a lost shadow, or a lost nesting level — plus the one
+// deliberate behaviour CHANGE, which is a false positive removed.
+test "expr_check: a closure's scope is journalled, not copied" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // THE BEHAVIOUR CHANGE, and it removes a false positive on legal code.
+  // `fill_from` seeded the child's `declared` slot from the enclosing
+  // env's NARROWED value, so assigning to a captured binding inside a
+  // guard was checked against the narrowed type and reported. TypeScript
+  // checks an assignment against the DECLARED type — probed with
+  // `scripts/tsc_probe.mjs`, which accepts this file — and sharing the
+  // env keeps the declared type, so it is silent now.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | number): void {
+        #|  if (typeof x === "string") {
+        #|    const g = () => { x = 5; };
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // A READ of a captured binding still sees the enclosing narrowing —
+  // the `vars` side is shared, so the closure body gets `string` here.
+  // If the scope had shared the declared type instead, this would report.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  if (x !== undefined) {
+        #|    const g = () => { const u: string = x; };
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Nothing the closure does leaks OUT of it: the assignment narrows `x`
+  // to `number` inside the arrow, and after the arrow `x` is back to
+  // `string | number`, so the annotation still reports. A missing unwind
+  // makes this silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | number): void {
+        #|  const g = () => { x = 5; };
+        #|  const n: number = x;
+        #|}
+      ),
+    ),
+    1,
+  )
+  // A parameter SHADOWING an outer binding is restored on the way out:
+  // `it` is `string` inside the callback and the outer `number` after it.
+  // A missing unwind leaves the parameter bound and this reports.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(items: string[]): void {
+        #|  const it: number = 1;
+        #|  items.forEach((it) => { const u: string = it; });
+        #|  const v: number = it;
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Two levels, so the brackets have to nest: the inner arrow's
+  // parameter shadows the outer arrow's, and both are restored.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(xs: string[], ys: number[]): void {
+        #|  xs.forEach((v) => {
+        #|    ys.forEach((v) => { const inner: number = v; });
+        #|    const outer: string = v;
+        #|  });
+        #|}
+      ),
+    ),
+    0,
+  )
+  // The `<class>` IIFE is the one site that still COPIES, because
+  // resetting every captured name's narrowing is O(bindings) however it
+  // is spelled. Class member bodies run after the guard region ends, so
+  // TypeScript does not carry the narrowing into them (typeGuardInClass)
+  // — the read inside the method sees `string | number` and reports.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | number): void {
+        #|  if (typeof x === "string") {
+        #|    const C = class { m(): string { return x; } };
+        #|  }
+        #|}
+      ),
+    ),
+    1,
+  )
+}

@@ -4943,11 +4943,37 @@ fn ExprEnv::record_decl(self : ExprEnv, name : String) -> Unit {
 /// This entry once said `full_snapshot` STAYS for two other kinds of use
 /// — an enumerator copying an outer env into a fresh child, and "a
 /// read-out that materializes the env as a `Map`", both of which
-/// "genuinely need every binding". The second half was wrong, and both
-/// of its two sites were the `if` branch JOIN: it needs the names a
-/// branch CHANGED, which the journal knows in O(changes), not the whole
-/// env twice diffed against a third copy. See `changed_since`. Only the
-/// ENUMERATOR is left, and that one really does need every binding.
+/// "genuinely need every binding". BOTH halves were wrong.
+///
+/// The read-out's two sites were the `if` branch JOIN, which needs the
+/// names a branch CHANGED — something the journal knows in O(changes),
+/// not the whole env twice diffed against a third copy. See
+/// `changed_since`.
+///
+/// NESTED SCOPE is the enumerator's answer, and it is the same
+/// observation one level up: a nested function's scope is the enclosing
+/// one plus its parameters, so a mark / unwind pair on the OUTER env
+/// gives it that scope for O(params), where copying the enclosing env
+/// into a fresh child is O(enclosing bindings) per closure. Three of the
+/// four copy sites take it (`infer_arrow_body_with_params` twice and
+/// `check_arrow_with_context`; `check_funcexpr_with_context` too, except
+/// for the `<class>` IIFE, whose whole point is to RESET every captured
+/// name's narrowing and so is O(bindings) however it is written).
+///
+/// This is what the layered env filed in TODO.md was for, and it is the
+/// better half of that trade: a parent pointer consulted on lookup miss
+/// was 55x on the synthetic axis and +9% on real input, because it makes
+/// `lookup` — the hottest operation in the checker — 2-5 probes instead
+/// of one. A journalled scope touches `lookup` not at all.
+///
+/// One behaviour difference, in the direction of tsc rather than away
+/// from it: `fill_from` seeded the child's `declared` slot from the
+/// outer's NARROWED value, so a captured binding's assignment-target
+/// type inside a closure was whatever the enclosing flow had narrowed it
+/// to. Sharing the env keeps the real declared type, which is what
+/// TypeScript checks an assignment against — `if (typeof x === "string")
+/// { const g = () => { x = 5 } }` is legal for `x: string | number` and
+/// used to be reported.
 fn ExprEnv::mark(self : ExprEnv) -> Int {
   self.journal.length()
 }
@@ -15223,8 +15249,12 @@ fn infer_arrow_body_with_params(
 ) -> @ast.TsType {
   match callback {
     ArrowFunc(arrow_params, declared_ret, body, is_async) => {
-      let env = ExprEnv::new()
-      env.fill_from(outer)
+      // The callback's scope is the enclosing one plus its parameters, so
+      // it is a JOURNALLED SCOPE on the outer env rather than a fresh env
+      // filled from it — see `nested_scope` on `ExprEnv::mark`. O(params)
+      // instead of O(enclosing bindings), per callback.
+      let env = outer
+      let scope = env.mark()
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
@@ -15248,11 +15278,13 @@ fn infer_arrow_body_with_params(
           ArrowBlock(block) => infer_block_return(env, resolver, block)
         }
       }
-      wrap_async_return(is_async, inner)
+      let out = wrap_async_return(is_async, inner)
+      env.unwind(scope)
+      out
     }
     FuncExpr(f) => {
-      let env = ExprEnv::new()
-      env.fill_from(outer)
+      let env = outer
+      let scope = env.mark()
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
@@ -15266,12 +15298,14 @@ fn infer_arrow_body_with_params(
         env.bind(p.name, ty)
         i = i + 1
       }
-      if is_checkable(f.return_type) {
+      let out = if is_checkable(f.return_type) {
         wrap_async_return(f.is_async, f.return_type)
       } else {
         let inner = infer_block_return(env, resolver, f.body)
         wrap_async_return(f.is_async, inner)
       }
+      env.unwind(scope)
+      out
     }
     _ => infer_expr(outer, resolver, callback)
   }
@@ -15353,11 +15387,12 @@ fn check_arrow_with_context(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
-  let env = ExprEnv::new()
-  // Carry parent bindings into the inner scope. We don't snapshot/restore —
-  // `ExprEnv` is mutable, but binding inside this synthetic env doesn't
-  // touch the outer one.
-  env.fill_from(outer)
+  // An arrow's scope IS the enclosing one plus its parameters — it even
+  // captures `this` lexically — so this is a journalled scope on the outer
+  // env rather than a copy of it. O(params) per arrow instead of
+  // O(enclosing bindings): see `nested_scope` on `ExprEnv::mark`.
+  let env = outer
+  let scope = env.mark()
   let param_names : Array[String] = []
   let mut i = 0
   while i < arrow_params.length() {
@@ -15436,6 +15471,7 @@ fn check_arrow_with_context(
         check_stmt(env, stmt, inner_ctx)
       }
   }
+  env.unwind(scope)
   dedup_issues_since(ctx.issues, pre_len)
 }
 
@@ -15507,13 +15543,26 @@ fn check_funcexpr_with_context(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
-  let env = ExprEnv::new()
   // `<class>` marks the parser's class-expression IIFE lowering. Class
   // member bodies execute after the guard region ends, so TypeScript does
   // NOT carry control-flow narrowing into them (typeGuardInClass) —
   // rebind captured variables at their declared types.
+  //
+  // That one case is the ONLY reason `fill_from` still exists: resetting
+  // the narrowing means touching every captured name, so it is O(enclosing
+  // bindings) however it is spelled and a copy is the honest way to spell
+  // it. Everything else takes a journalled scope on the outer env instead
+  // — O(params) per closure, and the difference is this file's dominant
+  // cost on a real `.ts` (see `nested_scope` on `ExprEnv::mark`).
   let reset_narrowing = f.name == "<class>"
-  env.fill_from(outer, reset_narrowing~)
+  let env = if reset_narrowing {
+    let fresh = ExprEnv::new()
+    fresh.fill_from(outer, reset_narrowing=true)
+    fresh
+  } else {
+    outer
+  }
+  let scope = env.mark()
   let param_names : Array[String] = []
   let mut i = 0
   while i < f.params.length() {
@@ -15589,6 +15638,11 @@ fn check_funcexpr_with_context(
   for stmt in f.body.stmts {
     check_stmt(env, stmt, inner_ctx)
   }
+  // A no-op on the `reset_narrowing` path, where `env` is the throwaway
+  // copy — but taken unconditionally, because "every scope is bracketed"
+  // is the invariant, and a conditional unwind is how the next person
+  // leaves one out.
+  env.unwind(scope)
   dedup_issues_since(ctx.issues, pre_len)
 }
 
