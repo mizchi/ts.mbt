@@ -963,16 +963,49 @@ product surfaces now.
   the round above had called linear at 1.17. That 1.17 was fitted over
   125..1000, where the curve has not turned over; a fit is only a fit
   over the range it was taken on, so "linear" asserted from a cheap
-  ladder is a claim about the cheap ladder. The mechanism is an
-  ordinary nested scan: `private_brand_declared_on_receiver` answers
-  "does the receiver class declare this base name under a DIFFERENT
-  brand" by looping the receiver's `properties`, `methods` and
-  `private_members` — **per ACCESS** — so a class whose N members each
-  read one `#name` pays N x N. The index that removes it is ~20 lines
-  and is FILED rather than taken, because the quadratic is in the
-  members of a SINGLE class and single digits is the norm, where N² is
-  dozens of operations; it is declared at a gated 1.75 for the same
-  reason `namespaces` is at 2.15.
+  ladder is a claim about the cheap ladder.
+  That entry then named the wrong MECHANISM, and part 4 is the
+  correction — worth more than the fix, because the note was written the
+  way this file keeps warning against. It blamed
+  `private_brand_declared_on_receiver`, which really does loop the
+  receiver's `properties`, `methods` and `private_members` per ACCESS;
+  the index for it was built, measured and bought **nothing** (1.66
+  against a 1.52–1.68 baseline), because that function is reached only
+  where a private lookup has already MISSED and a well-formed file never
+  takes that path. Restoring its module-wide scan afterwards costs
+  0.14 s against 0.13 s. "Is this loop quadratic" and "does this loop
+  RUN" are different questions and only the second predicts time.
+  Three steps found the real one, and none of them was reading code.
+  `--parse` is linear where the full run is not, so the cost is in the
+  CHECK. Then four files at identical member counts: the axis 0.28 s,
+  the same with bodies that read nothing **0.07 s**, the same with
+  PUBLIC fields and `this.a{i}` reads **0.24 s** — which refutes "it is
+  about private names" outright. Then sampling, with no `perf` in the
+  image: `gdb -p <pid> -batch -ex bt` in a loop over a 16,000-member
+  class puts **10 of 10** samples in two leaves, both in `memcmp` —
+  `Resolver::lookup_class_field` (7) and
+  `inferred_primitive_field_type` (3). Both resolve a member by NAME
+  with a linear scan per access, over `properties` + `methods` and over
+  `instance_field_inits`. `ClassIndex` indexes them lazily by name and
+  stores POSITIONS rather than types, so a method's `Func` type is still
+  built only when asked and `properties` still wins over `methods`;
+  `lookup_class_field` takes the resolver's class KEY instead of the
+  decl, so the index and the member lists cannot arrive as a mismatched
+  pair, and a bare `TsClassDecl.name` would have folded two namespaces'
+  `C` together. **8.32 s -> 0.98 s** on that class, the axis 1.63 ->
+  1.21, and `lib.dom.d.ts` 0.21 -> 0.18 s — a real file, which is what
+  makes it more than a synthetic win. The oracle is identical on both
+  binaries (TP 2635 / MISS in scope 80 / FP 0 / PFLEGAL 0 / TN 1750),
+  measured by swapping the baseline binary into the release path rather
+  than assumed from "it is only a refactor". The `AXIS_BUDGET` entry is
+  REMOVED rather than retuned, since 1.21 sits under the default 1.50
+  and a budget above the measured number is slack a regression can hide
+  in. The private-brand index is REJECTED with its number. And the axis
+  NAME is the reason the wrong suspect looked right: `private-members`
+  measures member ACCESS against a many-membered class, which is
+  ordinary large-class code rather than a rare `#private` pile-up —
+  eleventh instance here of a label standing in for the objective, and
+  the first where the label was mine.
   Every number above ranks work by CORPUS COUNT, and
   `docs/checker-triage.md` is where that stops: `MISS 176` sums work
   worth doing now with files nobody should ever fix, so it can rank

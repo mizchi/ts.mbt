@@ -3,6 +3,103 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Perf round, part 4 (2026-09-14): the filed mechanism was wrong, and the axis name is why
+
+Task #133 filed "index `#private` base name -> brands per class" off the
+`private-members` axis reading 1.67. **The index was built, measured, and
+bought nothing** — 1.66 against a 1.52-1.68 baseline — because the
+mechanism in the note was not the cost. The note was written by reading
+the three private-brand queries and seeing three per-access scans over a
+class's `properties` + `methods` + `private_members`. All three are real
+scans. None of them runs: `private_brand_declared_on_receiver` is
+reached only where a private lookup has already MISSED, which is the
+error path, and a well-formed file never takes it. Restoring the
+module-wide scan after the fact measures **0.14 s against 0.13 s** on the
+same file. Reading a loop and asking "is this quadratic" is not the same
+question as "does this execute", and only the second one predicts time.
+
+What found the real mechanism, in the order that worked:
+
+1. **Split parse from check.** `--parse` is linear (0.01/0.02/0.05 s at
+   n=1000/2000/4000) and the full run is not (0.03/0.07/0.26). The
+   quadratic is in the check.
+2. **Bisect by input SHAPE, not by reading.** Four files at the same
+   member counts: the axis (N `#private` fields + N methods reading
+   them) 0.28 s; the same with bodies that read nothing **0.07 s**;
+   the same with PUBLIC fields and `this.a{i}` reads **0.24 s**; private
+   fields with no methods 0.04 s. The public spelling is as slow as the
+   private one, which refutes "it is about private names" outright and
+   says the cost is per member ACCESS.
+3. **Sample the stacks.** No `perf` here, but `gdb -p <pid> -batch -ex
+   "bt"` in a loop over a 16,000-member class is enough: **10 of 10
+   samples** in two leaves, both inside `memcmp` —
+   `Resolver::lookup_class_field` (7) and
+   `inferred_primitive_field_type` (3).
+
+Both resolve a member by NAME with a linear scan, per access:
+`lookup_class_field` walks `properties` then `methods`, and
+`inferred_primitive_field_type` walks `instance_field_inits`. N members
+with N reads is N x N. `ClassIndex` indexes all three lists by name,
+lazily, storing POSITIONS rather than types so a method's `Func` type is
+still built only when asked for and `properties` still wins over
+`methods`. `lookup_class_field` now takes the resolver's class KEY
+instead of the decl, so the index (keyed the same way) and the member
+lists cannot be handed over as a mismatched pair — and a bare
+`TsClassDecl.name` would have folded two namespaces' `C` together.
+
+Measured, same toolchain, baseline vs fix:
+
+| | baseline | fix |
+|---|---|---|
+| 16,000-member class | 8.32 s | **0.98 s** (8.5x) |
+| axis exponent | 1.63 | **1.21** (1.16-1.33 over 5 runs) |
+| axis n=4000 | 277.0 ms | **105.8 ms** |
+| `lib.dom.d.ts` | 0.21 s | **0.18 s** |
+| `typescript.d.ts` | 0.11 s | 0.10 s |
+
+The real-file numbers are the point: this is not a synthetic-only win,
+because `lib.dom.d.ts` is full of many-membered declarations. Oracle is
+byte-identical on both binaries (TP 2635 / MISS in scope 80 / OUT OF
+SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750), which is what a pure lookup
+refactor should be, and it was measured rather than assumed by swapping
+the baseline binary into the release path and re-running.
+
+**The `AXIS_BUDGET` entry is REMOVED, not retuned.** 1.21 is under the
+default 1.50, so the special case is gone rather than left as slack a
+regression could hide in.
+
+Two labels to stop trusting. The axis is named `private-members` and
+measures member ACCESS against a many-membered class; the name is what
+made the private-brand code look like the suspect, and I wrote both the
+name and the wrong note. Eleventh instance in this repo of a label
+standing in for the objective, and the first where the label was mine.
+And part 1 of this round called this axis "linear (1.17)" off a 125..1000
+ladder — a fit is only a fit over the range it was taken on.
+
+**REJECTED with its number**: the private-brand index, which is what the
+task asked for. It costs 0.01 s of 0.13 s, i.e. nothing, for a struct
+field, an invalidation path and three rewritten queries. Dropped; the
+scans are back exactly as they were, with only the duplicated `brand_of`
+factored out into `private_brand_key`.
+
+Two process findings, both about the toolchain rather than the code.
+**`main` did not build locally at all**: commit `344fd99` ("compile
+warning-free on the latest MoonBit") uses `Array(capacity=)`, which needs
+a newer moonc than the pinned 0.1.20260819, so `moon build` exited 255 —
+and the scaling harness then measured a STALE release binary from before
+`main` moved and reported a confident 1.52. That is the stale-binary trap
+CLAUDE.md already records for the oracle, arriving at a second harness;
+my own `moon ... | tail -5; echo "exit=$?"` made it worse by capturing
+`tail`'s status instead of `moon`'s. Upgraded to 0.1.20260904 (moonc
+v0.10.12), which is what `main` needs.
+**Do not run repo-wide `moon fmt` after a toolchain bump**: the newer
+formatter rewrote **64 unrelated files**. CI's fmt step is
+`continue-on-error: true` and its comment explains exactly this — the two
+formatters actively disagree and no state of the source satisfies both —
+so the churn was reverted and the change re-applied to a pristine tree.
+The tree is also warning-free now, which retires CLAUDE.md's "450+
+pre-existing warnings" note.
+
 ### Batch EI (2026-09-13): MISS 99 -> 80, and an optionality PROXY at two more sites
 
 **+19 files at FP 0** (TP 2616 -> 2635, MISS in scope 99 -> **80**,
