@@ -130,6 +130,25 @@ priv struct Resolver {
   // literal fails every overload (the `raw` member only exists on
   // engine-created template objects), which is TS2769/TS2345.
   template_tag_funcs : Map[String, Bool]
+  // TS2684 evidence, keyed `INTERFACE.MEMBER` (a call signature is keyed
+  // by its `<call>` member name): true when the member declares a leading
+  // `this` parameter whose type is NOT `void` / `any` / `unknown`, false
+  // when it declares one that is. An ABSENT entry means no `this`
+  // parameter was written at all, which is the third answer and why this
+  // is not a name set — a plain call supplies `void`, so `this: void` and
+  // no declaration are both fine while `this: number` is not.
+  //
+  // The parser records it because the fact does not survive into the
+  // type: a leading `this` parameter occupies no argument position and
+  // `callable_func_type_from_params` drops it.
+  this_param_members : Map[String, Bool]
+  // Every name declared as a TYPE in a block or function body
+  // (`<local-type-name>` markers), whether or not the module-wide
+  // interface / alias pools registered it — they take a block-local
+  // declaration only when the name is declared once. A rule asking "is
+  // this name spellable as a type anywhere in the file" needs all of
+  // them; the answer is deliberately scope-free, so it over-abstains.
+  local_type_names : Map[String, Bool]
   // Module-level `noImplicitAny` effective flag (strict directives),
   // threaded through the resolver so expression-level rules (TS7053)
   // can gate without widening `CheckCtx`.
@@ -404,6 +423,8 @@ fn Resolver::empty() -> Resolver {
     namespace_exports: {},
     namespace_instantiated: {},
     template_tag_funcs: {},
+    this_param_members: {},
+    local_type_names: {},
     any_uninitialized_values: {},
     class_index: ClassIndex::empty(),
     no_implicit_any: false,
@@ -1286,6 +1307,42 @@ fn Resolver::ingest_module(
       r.template_tag_funcs[prefix + name] = true
     }
   }
+  // TS2684 evidence off the parser's `<this-param>` marker (see the field
+  // doc). Prefixed like every other name this loop ingests, so a
+  // namespace-scoped interface keys under its own prefix.
+  // Every TYPE-PARAMETER name the parser saw, on the channel that already
+  // records them: `parse_type_param_names_bounds_and_const_flags` pushes
+  // `<type-param-name>` for exactly this kind of abstention, and its own
+  // comment says so ("a bare `Named(X)` that is also a type-parameter name
+  // might be an in-scope type parameter"). The corpus proved it necessary
+  // here: `var b = { new<T>(x: T) { return new C<T>(x) } }` is an
+  // object-literal METHOD whose own `<T>` reaches no `ctx`
+  // `in_scope_type_params`, and an ARROW's type parameters are not in the
+  // AST at all, so four TS7-accepted files were false positives before
+  // this loop existed.
+  for member_ in module_.interface_member_modifier_misuses {
+    if member_.has_prefix("<type-param-name>") {
+      r.local_type_names[member_["<type-param-name>".length():].to_owned()] = true
+    }
+  }
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<local-type-name>") {
+      // Unprefixed: the question is whether the spelling names a type
+      // somewhere in the file, which no namespace prefix narrows.
+      r.local_type_names[gm["<local-type-name>".length():].to_owned()] = true
+    }
+    if gm.has_prefix("<this-param>") {
+      let payload = gm["<this-param>".length():].to_owned()
+      match payload.rev_find("=") {
+        Some(i) => {
+          let key = payload[:i].to_owned()
+          let kind = payload[i + 1:].to_owned()
+          r.this_param_members[prefix + key] = kind == "other"
+        }
+        None => ()
+      }
+    }
+  }
   for ns in module_.namespaces {
     // `<global>` is the synthetic namespace emitted for `declare global {}`
     // augmentation blocks. Its declarations belong to the global scope so
@@ -1450,7 +1507,16 @@ fn method_callable_param_types(
   m : @ast.TsClassMethodDecl,
 ) -> Array[@ast.TsType] {
   let out : Array[@ast.TsType] = []
+  // A leading `this` parameter (`class K { m(this: K, n: number) {} }`)
+  // types the receiver and is not an argument position, so it is dropped
+  // here for the same reason `callable_func_type_from_params` drops it for
+  // an interface member and the `module_.imports` ingest drops it by name:
+  // `k.m(1)` was reported as `arg[0] expected K but got number` on a file
+  // tsc accepts. `param_defaults` stays indexed by the ORIGINAL position.
   for i, p in m.params {
+    if i == 0 && p.0 == "this" {
+      continue
+    }
     let has_default = i < m.param_defaults.length() &&
       m.param_defaults[i] is Some(_)
     if has_default && !type_accepts_undefined_param(p.1) {
@@ -12894,6 +12960,169 @@ fn check_overload_set_no_match(
 /// A bounded maximum is still the largest member maximum. Members with rest
 /// parameters lift that bound; any non-callable member or spread argument
 /// abstains.
+/// The NAMES a value's type could be looking a member up on: the type
+/// itself when it is a nominal reference or its structural expansion, and
+/// each union member's. Used by the TS2684 rules, which key
+/// `resolver.this_param_members` by `INTERFACE.MEMBER`.
+fn this_context_candidate_names(
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> Array[String] {
+  let out : Array[String] = []
+  fn add(t : @ast.TsType) -> Unit {
+    match t {
+      Named(n) | Struct(n, _) | Applied(n, _) => out.push(n)
+      _ => ()
+    }
+  }
+
+  add(ty)
+  match resolver.unwrap(ty) {
+    Union(members) =>
+      for m in members {
+        add(m)
+        add(resolver.unwrap(m))
+      }
+    other => add(other)
+  }
+  out
+}
+
+///|
+/// TS2684 for a PLAIN call — no receiver, so the `this` context is `void`.
+/// A call signature declaring `this: <non-void>` can never be satisfied
+/// that way, and for a union callee one such member is enough: every
+/// constituent has to accept the call.
+///
+/// Probed cell by cell rather than reasoned, because two of the five read
+/// the other way round from the message text. `{ (this: void, b?: number):
+/// void }` called plainly is ACCEPTED (`void` IS what a plain call
+/// supplies) and so is a union of that with a signature declaring no
+/// `this` at all; `{ (this: number, …) }` alone, unioned with the `void`
+/// one, or unioned with a `this`-less one all report — and the union cases
+/// are why tsc's message there says the required `this` is `never`, the
+/// intersection of the members'.
+fn check_plain_call_this_context(
+  ctx : CheckCtx,
+  callee_ty : @ast.TsType,
+  call_path : String,
+) -> Unit {
+  for n in this_context_candidate_names(ctx.resolver, callee_ty) {
+    if ctx.resolver.this_param_members.get(n + ".<call>") is Some(true) {
+      record_unfiltered(
+        ctx,
+        call_path,
+        "the `this` context of type `void` is not assignable to the call signature's declared `this`",
+      )
+      return
+    }
+  }
+}
+
+///|
+/// TS2684 for a METHOD call on a UNION receiver whose members declare a
+/// `this` parameter. The required `this` is the INTERSECTION of the
+/// members' — `Real & Fake` in `unionThisTypeInFunctions` — and a value of
+/// the union type satisfies that only when the members are mutually
+/// compatible, so definitely-disjoint shapes make the call an error
+/// whatever the `this` type is written as.
+///
+/// Three neighbours stay silent and each is the reason for one condition:
+/// a SINGLE receiver satisfies its own `this` (`r: Real`), a union of
+/// COMPATIBLE shapes has an inhabitable intersection (`Real | Same`, where
+/// only `data`'s type differs between the disjoint pair), and a method
+/// with no declared `this` parameter carries no obligation at all.
+fn check_union_receiver_this_context(
+  ctx : CheckCtx,
+  recv_ty : @ast.TsType,
+  meth : String,
+  call_path : String,
+) -> Unit {
+  guard ctx.resolver.unwrap(recv_ty) is Union(members) else { return }
+  if members.length() < 2 {
+    return
+  }
+  // Every member must declare the `this` parameter: a member without one
+  // contributes no constraint, so the intersection is not what the call
+  // has to satisfy.
+  for m in members {
+    let mut declared = false
+    for n in this_context_candidate_names(ctx.resolver, m) {
+      if ctx.resolver.this_param_members.get(n + "." + meth) is Some(_) {
+        declared = true
+      }
+    }
+    if !declared {
+      return
+    }
+  }
+  for i in 0..<members.length() {
+    for j in (i + 1)..<members.length() {
+      // Two ways two members can fail to have an inhabitable
+      // intersection, and the corpus file needs the SECOND one.
+      // `shapes_definitely_disjoint` is a property-PRESENCE test ("each
+      // side requires a property the other lacks"), which is exactly
+      // what `Real` / `Fake` do not do — they declare the same two
+      // member names and differ only in `data`'s TYPE, so the first
+      // draft of this rule was silent on the file it was written for.
+      // A shared member whose types definitely differ is the other
+      // half, and it is the one tsc's own message walks down to
+      // ("Types of property 'data' are incompatible").
+      let disjoint = shapes_definitely_disjoint(
+                ctx.resolver,
+                members[i],
+                members[j],
+              ) ||
+        shared_member_types_differ(ctx.resolver, members[i], members[j])
+      if disjoint {
+        record_unfiltered(
+          ctx,
+          call_path,
+          "the `this` context of type `\{type_display(ctx.resolver.unwrap(recv_ty))}` is not assignable to the method's declared `this`",
+        )
+        return
+      }
+    }
+  }
+}
+
+///|
+/// True when `a` and `b` declare a member of the same name whose types
+/// definitely differ — so no value can inhabit `a & b`. Both sides must
+/// enumerate (an index signature, a generic interface or anything
+/// `collect_declared_fields` cannot project abstains), and a callable
+/// member is skipped: a method's type is a `Func` whose comparison is
+/// bivariant here, where `types_definitely_differ` is an identity test.
+fn shared_member_types_differ(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> Bool {
+  let af = collect_declared_fields(a, resolver)
+  let bf = collect_declared_fields(b, resolver)
+  if af.length() == 0 || bf.length() == 0 {
+    return false
+  }
+  for ae in af {
+    if ae.0.has_prefix("<") || ae.0.has_prefix("@@") {
+      continue
+    }
+    if ae.1 is Func(_, _) || ae.1 is Constructor(_, _, _) {
+      continue
+    }
+    for be in bf {
+      if be.0 == ae.0 &&
+        !(be.1 is Func(_, _)) &&
+        !(be.1 is Constructor(_, _, _)) &&
+        types_definitely_differ(resolver, ae.1, be.1) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
 fn check_union_callee_arity(
   ctx : CheckCtx,
   callee_ty : @ast.TsType,
@@ -14722,9 +14951,7 @@ fn infer_arrow_body_with_params(
   match callback {
     ArrowFunc(arrow_params, declared_ret, body, is_async) => {
       let env = ExprEnv::new()
-      for entry in outer.full_snapshot() {
-        env.bind(entry.0, entry.1)
-      }
+      copy_env_into_closure(outer, env)
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
@@ -14752,9 +14979,7 @@ fn infer_arrow_body_with_params(
     }
     FuncExpr(f) => {
       let env = ExprEnv::new()
-      for entry in outer.full_snapshot() {
-        env.bind(entry.0, entry.1)
-      }
+      copy_env_into_closure(outer, env)
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
@@ -14846,6 +15071,140 @@ fn infer_block_return(
 }
 
 ///|
+/// The literal type of an assignment's right-hand side, for the
+/// unstable-narrowing record. `null` / `undefined` are deliberately absent:
+/// our flow model narrows an `any`-typed binding to `Undefined` when its
+/// initializer is `undefined`, the hazard `check_computed_key_type` and
+/// batch CY's TS2532 both record, so a nullish verdict here would not be
+/// trustworthy.
+fn literal_assigned_type(e : @ast.TsExpr) -> @ast.TsType? {
+  match e {
+    StringLit(s) => Some(@ast.TsType::Literal(s))
+    NumberLit(_) | IntLit(_) => Some(@ast.TsType::Number)
+    BoolLit(_) => Some(@ast.TsType::Boolean)
+    BigIntLit(_) => Some(@ast.TsType::BigInt)
+    _ => None
+  }
+}
+
+///|
+/// `(name, literal type)` for every `name = <literal>` in `stmts`.
+///
+/// Deliberately does NOT descend into a nested function or arrow body: an
+/// assignment there is one the enclosing narrowing need not fear (tsc
+/// ACCEPTS `function h() { x = 10 }` beside a narrowed read OUTSIDE a
+/// closure), and collecting fewer names can only make the un-narrowing
+/// quieter.
+fn collect_literal_reassignments(
+  stmts : Array[@ast.TsStmt],
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  fn expr(e : @ast.TsExpr) -> Unit {
+    match e {
+      AssignExpr(n, v) =>
+        match literal_assigned_type(v) {
+          Some(t) => out.push((n, t))
+          None => ()
+        }
+      Seq(a, b) => {
+        expr(a)
+        expr(b)
+      }
+      _ => ()
+    }
+  }
+
+  fn block(b : @ast.TsBlock) -> Unit {
+    for s in collect_literal_reassignments(b.stmts) {
+      out.push(s)
+    }
+  }
+
+  for s in stmts {
+    match s {
+      Assign(n, v) =>
+        match literal_assigned_type(v) {
+          Some(t) => out.push((n, t))
+          None => ()
+        }
+      Expr(e) | Return(Some(e)) | Throw(e) => expr(e)
+      Block(b) => block(b)
+      Label(_, inner) =>
+        for s2 in collect_literal_reassignments([inner]) {
+          out.push(s2)
+        }
+      If(_, a, b) => {
+        block(a)
+        match b {
+          Some(blk) => block(blk)
+          None => ()
+        }
+      }
+      While(_, b) | DoWhile(_, b) | With(_, b) => block(b)
+      For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => block(b)
+      Switch(_, cases) =>
+        for c in cases {
+          block(c.body)
+        }
+      Try(a, _, c, f) => {
+        block(a)
+        match c {
+          Some(blk) => block(blk)
+          None => ()
+        }
+        match f {
+          Some(blk) => block(blk)
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Copy the enclosing env into a closure's scope, then UN-NARROW every
+/// binding whose narrowing the closure cannot rely on — see the
+/// `<unstable-assign>` record in `check_function_body_with` for why a
+/// literal reassignment is what decides it.
+///
+/// The declared type has to be read from `outer`: a closure env is filled
+/// through `bind`, whose first write also becomes the `declared` slot, so
+/// inside the closure `lookup_declared` answers with the NARROWED type and
+/// the real annotation is unrecoverable there.
+fn copy_env_into_closure(outer : ExprEnv, env : ExprEnv) -> Unit {
+  for entry in outer.full_snapshot() {
+    env.bind(entry.0, entry.1)
+  }
+  unnarrow_unstable_bindings(outer, env)
+}
+
+///|
+/// The un-narrowing half of `copy_env_into_closure`, separate because
+/// `check_funcexpr_with_context` copies with its own per-entry rule.
+fn unnarrow_unstable_bindings(outer : ExprEnv, env : ExprEnv) -> Unit {
+  for entry in outer.full_snapshot() {
+    if entry.0.has_prefix("<unstable-assign>") {
+      let n = entry.0["<unstable-assign>".length():].to_owned()
+      match (outer.lookup(n), outer.lookup_declared(n)) {
+        (Some(narrowed), Some(declared)) =>
+          // Nothing to undo when the binding is not narrowed, and the
+          // narrowing stands when the assigned literal can inhabit it.
+          if !is_assignable_to(declared, narrowed) &&
+            !is_assignable_to(entry.1, narrowed) {
+            env.bind(n, declared)
+          }
+        _ => ()
+      }
+    }
+  }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -14860,9 +15219,7 @@ fn check_arrow_with_context(
   // Carry parent bindings into the inner scope. We don't snapshot/restore —
   // `ExprEnv` is mutable, but binding inside this synthetic env doesn't
   // touch the outer one.
-  for entry in outer.full_snapshot() {
-    env.bind(entry.0, entry.1)
-  }
+  copy_env_into_closure(outer, env)
   let param_names : Array[String] = []
   let mut i = 0
   while i < arrow_params.length() {
@@ -15028,6 +15385,14 @@ fn check_funcexpr_with_context(
       entry.1
     }
     env.bind(entry.0, captured)
+  }
+  // And the narrowings this closure cannot rely on even when it is not a
+  // class-expression body: `reset_narrowing` above answers the same
+  // question for ONE shape (`typeGuardInClass`), where the region is what
+  // decides; here it is the binding, and an unstable one is unstable in
+  // any closure.
+  if !reset_narrowing {
+    unnarrow_unstable_bindings(outer, env)
   }
   let param_names : Array[String] = []
   let mut i = 0
@@ -19577,6 +19942,55 @@ fn check_explicit_type_args(
       _ => ()
     }
   }
+  // TS2304 ("Cannot find name 'A'") in the SAME position, for a name that
+  // resolves as NOTHING -- neither a value nor a type. `new Date<A>`
+  // (parserConstructorAmbiguity3). This is the other half of the arm
+  // above and shares its whole argument for why the position is
+  // decidable: a type argument in an EXPRESSION has no binders of its
+  // own, so the call site's scope is the only scope the name could
+  // resolve in.
+  //
+  // The two arms are mutually exclusive by construction — that one needs
+  // `env.lookup` to SUCCEED, this one needs it to fail — and every
+  // abstention there is repeated here, plus the channels a value lookup
+  // alone cannot answer: a namespace (which gives the name a type meaning
+  // through `N.T`), the module-wide hoisting backstop, and
+  // `local_type_names`.
+  //
+  // That last one is why this arm exists at all. Its first version was
+  // REVERTED for a false positive on legal code the corpus cannot see —
+  // `function f() { interface T { x: number } g<T>() }` — and the cause
+  // was a parser gap rather than the rule: `parse_module` merged
+  // block-level type ALIASES into the module-wide pool and did the same
+  // for INTERFACES nowhere. That merge exists now, but it registers a
+  // block-local name only when the name is declared ONCE (one slot per
+  // name cannot answer for two scopes), so the NAMES ride their own
+  // marker and this arm reads both.
+  for t in targs {
+    match t {
+      Named(n) =>
+        if is_ascii_ident_start_name(n) &&
+          !n.contains(".") &&
+          env.lookup(n) is None &&
+          !is_in_scope_type_param(ctx, t) &&
+          ctx.resolver.classes.get(n) is None &&
+          ctx.resolver.interfaces.get(n) is None &&
+          ctx.resolver.enums.get(n) is None &&
+          ctx.resolver.type_aliases.get(n) is None &&
+          ctx.resolver.standard_aliases.get(n) is None &&
+          ctx.resolver.globals.get(n) is None &&
+          ctx.resolver.signatures.get(n) is None &&
+          ctx.resolver.declared_value_names.get(n) is None &&
+          ctx.resolver.namespace_value_decls.get(n) is None &&
+          ctx.resolver.namespace_exports.get(n) is None &&
+          ctx.resolver.local_type_names.get(n) is None &&
+          !is_lib_global_type(n) &&
+          !is_lib_global_value(n) {
+          record_unfiltered(ctx, "type argument `\{n}`", "cannot find name `\{n}`")
+        }
+      _ => ()
+    }
+  }
   // The callee's declared type-parameter names (positional), or `None` when the
   // callee can't be resolved to a declared class / function (stay silent).
   fn declared_type_params(name : String) -> Array[String]? {
@@ -20211,6 +20625,8 @@ fn check_call_args_in_expr(
               if ctx.resolver.signatures.get(name) is None {
                 check_union_callee_arity(ctx, other, args, "call `\{name}`")
               }
+              // TS2684: a plain call supplies `this: void`.
+              check_plain_call_this_context(ctx, other, "call `\{name}`")
               // Unlike the every-member arity rule above, this one is
               // sound for an overload set AND for a union-typed value,
               // so it is not gated on `signatures`: it fires only when
@@ -20344,6 +20760,7 @@ fn check_call_args_in_expr(
           // can have identical widened parameter types while differing in
           // whether that parameter was written with `?`.
           check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          check_plain_call_this_context(ctx, raw_callee_ty, "call")
           check_overload_set_no_match(env, ctx, raw_callee_ty, args, "call")
           match union_common_call_params(callee_ty, ctx.resolver) {
             Some(params) => check_arguments(env, params, args, ctx, "call")
@@ -20474,6 +20891,11 @@ fn check_call_args_in_expr(
           check_arguments(env, params, args, ctx, "call `\{meth}`")
         None => {
           let recv_ty = infer_expr(env, ctx.resolver, receiver)
+          // TS2684: a method declaring a `this` parameter, called on a
+          // union receiver whose members are definitely disjoint.
+          check_union_receiver_this_context(
+            ctx, recv_ty, meth, "call `\{meth}`",
+          )
           if is_nullable_type(recv_ty) {
             record(
               ctx,
@@ -23237,6 +23659,27 @@ fn check_function_body_with(
     return issues
   }
   check_generator_yield_implicit_any(func, ctx)
+  // TS2362 / TS2363 evidence: a narrowing does NOT survive into a closure
+  // when the binding is REASSIGNED with a value the narrowed type cannot
+  // hold, because the closure runs later and observes the write. Recorded
+  // here, at the one place a function body is entered, as `<unstable-
+  // assign>NAME` env entries — the env is what `check_arrow_with_context`
+  // and `check_funcexpr_with_context` copy into the closure scope, so the
+  // fact travels with the bindings it is about and needs no new `CheckCtx`
+  // field (which would want the save / clear / restore discipline
+  // `self.labels` needs at fifteen sites).
+  //
+  // Only LITERAL right-hand sides participate, and the reason is the cell
+  // probing settles: it is not "assigned anywhere". `x = 1` before a
+  // `typeof x === "number"` guard leaves the narrowing intact (tsc
+  // ACCEPTS `x * x` in a closure there), while `x = "hello"` after it
+  // does not — so what matters is whether the assigned value can inhabit
+  // the narrowed type, which a literal answers and an arbitrary
+  // expression does not. An unclassified right-hand side records nothing
+  // and costs a MISS.
+  for entry in collect_literal_reassignments(func.body.stmts) {
+    env.bind("<unstable-assign>" + entry.0, entry.1)
+  }
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
   }
@@ -27368,6 +27811,20 @@ fn check_enum_init_name_types(
     }
   }
 
+  // The BLOCK-scoped half, decided entirely in the parser: the name
+  // resolves, at the enum's own position, to a block binding whose
+  // initializer is syntactically non-numeric. No env lookup can answer
+  // this one — see `record_enum_init_name` for why — so the marker IS the
+  // verdict.
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<enum-init-shadowed:") {
+      let name = gm["<enum-init-shadowed:".length():gm.length() - 1].to_owned()
+      issues.push({
+        path: "enum member initializer `\{name}`",
+        message: "type of `\{name}` is not assignable to type `number` as required for computed enum member values",
+      })
+    }
+  }
   for gm in module_.grammar_misuses {
     if !gm.has_prefix("<enum-init-name:") {
       continue

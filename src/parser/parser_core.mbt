@@ -312,6 +312,20 @@ pub struct Parser {
   // escape analysis resolves a `const x: I` annotation through this to
   // decide whether `I`'s key set is closed.
   collected_interfaces : Array[@ast.TsInterface]
+  // Per-BLOCK map of `name -> is definitely non-numeric`, innermost
+  // last, for the TS18033 enum-initializer rule. `enum En { X = Infinity }`
+  // inside a block that declares `let Infinity = {}` is an error and the
+  // CHECKER cannot see it: an enum is hoisted into `module_.enums` with no
+  // record of the block it came from, so the binding that shadows the
+  // numeric lib global is not in any env the rule can read. The parser
+  // does see both, in order, in the same statement list.
+  //
+  // Only syntactically classifiable initializers go in, and a numeric one
+  // is recorded as `false` rather than omitted so an inner numeric
+  // shadow MASKS an outer non-numeric binding. An unclassifiable
+  // initializer records `false` for the same reason — every abstention
+  // here loses a finding rather than inventing one.
+  block_binding_nonnumeric : Array[Map[String, Bool]]
   // `(field name, declared type)` for every runtime class parsed in
   // this module. See `TsModuleBlock.class_fields`.
   collected_class_fields : Array[(String, @ast.TsType)]
@@ -431,6 +445,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_type_aliases: [],
     collected_interfaces: [],
     collected_local_classes: [],
+    block_binding_nonnumeric: [],
     collected_class_fields: [],
     collected_type_only_exports: {},
     collected_export_equals: false,
@@ -701,6 +716,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_type_aliases: [],
     collected_interfaces: [],
     collected_local_classes: [],
+    block_binding_nonnumeric: [],
     collected_class_fields: [],
     collected_type_only_exports: {},
     collected_export_equals: false,

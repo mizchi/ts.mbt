@@ -3,6 +3,59 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batches EP-ET (2026-09-15): MISS in scope 58 -> 50, the target, at FP 0
+
+`TP 2657 -> 2665 | MISS in scope 58 -> 50 | OUT OF SCOPE 19 | FP 0 |
+PFLEGAL 0 | TN 1750`
+
+Eight rules and **four false positives on legal code the conformance gate
+structurally cannot see**, every one found by probing a legal neighbour.
+
+**Rules that shipped**
+
+| code | shape | note |
+|---|---|---|
+| TS2322 | a function value against an INDEX SIGNATURE | probed: `{}`, `Object`, `Function`, `{ call }`, `{ length }`, `{ name }` all ACCEPT a function; the general rule needs a complete `Function` member list, the indexer half needs nothing |
+| TS2307 | an import TYPE's specifier past the declaration-bundle abstention | that abstention is about a bundle's import STATEMENTS; `import("fo")` beside `declare module "foo"` is a typo either way |
+| TS2466 | `super()` in an OBJECT-LITERAL computed key, once a function boundary intervenes | `crossed` is a walk PARAMETER, not the Parser field the earlier note filed |
+| TS2684 | the `this` CONTEXT of a call — a plain call, and a union receiver | two facts the type cannot carry, so a marker; eight cells probed |
+| TS2362/2363 | a closure cannot rely on a narrowing a reassignment outlives | the filed fact ("assigned anywhere") was too wide |
+| TS18033 | an enum initializer shadowed by a BLOCK binding | decided in the parser: the checker's env cannot see the block |
+| TS2304 | an undeclared name in a type-ARGUMENT position | reverted once, then reverted four corpus FPs, before the abstention was complete |
+| — | a uniquely-declared block-local `interface` resolves at all | the mirror of a merge `parse_module` had for type aliases only |
+
+**False positives fixed (the corpus scores none of these)**
+
+- A leading `this` parameter is not an argument. Four places in this repo
+  already knew that and said so in their own comments;
+  `callable_func_type_from_params` and `method_callable_param_types` were
+  the two without the rule, so `i.p(1)` and `k.m(1)` were reported on
+  files tsc accepts. Cost ONE true positive —
+  `looseThisTypeInFunctions` was flagged only by the bogus arity report.
+- The block-local type merge must not pick a winner among several
+  declarations of one name. The ALIAS half had that bug already and it
+  was reachable from ordinary code: two functions each declaring a local
+  `type W` gave three false positives on a file tsc accepts.
+
+**Rejected, with the measurement**
+
+- TS2684 for a CLASS method's declared `this` type.
+  `class C<E, A> { m1(this: C<never, A>, x: number) {} }` with a
+  `C<number, string>` receiver is **ACCEPTED**: `E` appears in no member,
+  TypeScript is structural, and a phantom type parameter makes every
+  `C<X, A>` mutually assignable. `applied_generic_mismatch` compares type
+  arguments nominally, so the naive rule false-positives on five
+  hand-written cells.
+- `class C implements String {}` (TS2420) needs the merged lib member
+  list. The corpus file declares 20+ members and misses the es2015
+  additions, so no "declares nothing" shortcut reaches it, and a crude
+  scan finds 173 EMPTY lib interface declarations — `class C implements
+  WebGLProgram {}` is legal — so the blunt version is unsound.
+
+**Operational**: the branch's PR was merged by its author at the head of
+batch EP while EQ onward were still local, so the follow-up was REBASED
+onto the new default branch rather than stacked on merged history.
+
 ### Batch EO (2026-09-15): 85 false positives on zod for one shadowing test
 
 TP 2657 / MISS in scope 58 / FP 0 — the conformance numbers do not move at

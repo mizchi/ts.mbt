@@ -2779,6 +2779,10 @@ fn Parser::is_generic_arrow_function(self : Parser) -> Bool {
 fn Parser::parse_generic_arrow_function(
   self : Parser,
 ) -> @ast.TsExpr raise ParseError {
+  // A generic ARROW's type parameters are not in the AST at all
+  // (`ArrowFunc` has no slot for them), so record the names before the
+  // skip eats them — the only place an arrow's `<T>` is visible.
+  self.record_type_param_names_ahead()
   self.skip_type_args()
   let _ = self.expect(LParen)
   let params = self.parse_params()

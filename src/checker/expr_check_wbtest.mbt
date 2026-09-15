@@ -21599,3 +21599,240 @@ test "expr_check: index signatures, import types, super in object keys (batch EP
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EQ: two false positives on legal code that the conformance gate
+/// cannot see, both found by probing a legal neighbour.
+///
+/// A leading `this` parameter types the RECEIVER and occupies no argument
+/// position. Four places in this repo already know that and say so in
+/// their own comments; `callable_func_type_from_params` (interface and
+/// object-type members) and `method_callable_param_types` (class methods)
+/// were the two that did not, so `i.p(1)` and `k.m(1)` were reported as
+/// wrong-arity / wrong-argument on files tsc accepts outright.
+///
+/// And a block-local type declared more than once across scopes may not
+/// pick a winner: the module-wide pool has one slot per name, so
+/// registering the first made its shape answer for every other scope's.
+test "expr_check: a `this` parameter is not an argument, local types do not collide (batch EQ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- stays silent (all of these tsc ACCEPTS)
+  for
+    src in [
+      // An interface method: the shape that was reported twice.
+      "// @target: es2015\ninterface I { p(this: I, n: number): void }\ndeclare var i: I;\ni.p(1);",
+      // An object-type member, the other caller of the same helper.
+      "// @target: es2015\ndeclare var o: { p(this: object, n: number): void };\no.p(1);",
+      // A class method.
+      "// @target: es2015\nclass K { m(this: K, n: number) { } }\ndeclare var k: K;\nk.m(1);",
+      // The three spellings that were already right, kept so the fix
+      // cannot regress into dropping a real parameter.
+      "// @target: es2015\nfunction f(this: void, n: number) { }\nf(1);",
+      "// @target: es2015\ndeclare function g(this: void, n: number): void;\ng(1);",
+      "// @target: es2015\ntype FT = (this: void, n: number) => void;\ndeclare var ft: FT;\nft(1);",
+      // A block-local type alias declared in TWO function scopes: the
+      // pre-existing first-wins bug reported three issues here.
+      "// @target: es2015\nfunction a() { type W = { x: number }; var p: W = { x: 1 }; return p.x; }\nfunction b() { type W = { y: number }; var q: W = { y: 1 }; return q.y; }",
+      // The interface spelling of the same collision.
+      "// @target: es2015\nfunction a() { interface W { x: number } var p: W = { x: 1 }; return p.x; }\nfunction b() { interface W { y: number } var q: W = { y: 1 }; return q.y; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires
+  for
+    src in [
+      // The real arity error is still reported once the `this` parameter
+      // is out of the count: `p` takes one argument, not zero.
+      "// @target: es2015\ninterface I { p(this: I, n: number): void }\ndeclare var i: I;\ni.p();",
+      // A UNIQUELY declared block-local interface now resolves, which is
+      // the recall half: `parse_module` merged block-level type ALIASES
+      // into the module pool with a comment explaining why the checker
+      // needs them, and did the same for interfaces nowhere.
+      "// @target: es2015\nfunction b2() { interface Q { x: number } var q: Q = { x: 1 }; return q.nope; }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}
+
+///|
+/// Batch ER: TS2684, the `this` CONTEXT of a call.
+///
+/// A leading `this` parameter is dropped from the member's callable type
+/// (it occupies no argument position), so both halves of this rule ride a
+/// parser marker: whether one was declared, and whether its type is
+/// `void`. All eight cells were probed against the real compiler, and two
+/// read the other way round from the message text — a plain call supplies
+/// `this: void`, so `this: void` is ACCEPTED where `this: number` is not,
+/// and a union with a `this`-less member is accepted while one with a
+/// non-void member is an error on the whole union.
+test "expr_check: the `this` context of a call (batch ER)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("`this` context") })
+    .length()
+  }
+  let sigs =
+    #|interface A { (this: void, b?: number): void }
+    #|interface B { (this: number, b?: number): void }
+    #|interface C { (i: number): void }
+    #|
+  let shapes =
+    #|interface Real { method(this: this, n: number): void; data: string }
+    #|interface Fake { method(this: this, n: number): void; data: number }
+    #|interface Same { method(this: this, n: number): void; data: string }
+    #|interface Plain { method(n: number): void; data: string }
+    #|interface Plain2 { method(n: number): void; data: number }
+    #|
+  // --- fires
+  // A non-void `this` can never be satisfied by a plain call, alone or
+  // as one member of a union (tsc's message there names the required
+  // `this` as `never` — the intersection of the members').
+  assert_true(issues(sigs + "declare const b: B; b(0);") > 0)
+  assert_true(issues(sigs + "declare const ab: A | B; ab(0);") > 0)
+  assert_true(issues(sigs + "declare const bc: B | C; bc(0);") > 0)
+  // A method declaring `this: this`, called on a union of definitely
+  // disjoint shapes: the required `this` is `Real & Fake`, which no value
+  // inhabits because `data`'s types differ.
+  assert_true(
+    issues(shapes + "function t(r: Real | Fake) { r.method(12); }") > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // `this: void` IS what a plain call supplies.
+      sigs + "declare const a: A; a(0);",
+      // A member with no `this` parameter contributes no constraint, so a
+      // union of it with the `void` one is fine.
+      sigs + "declare const ac: A | C; ac(0);",
+      // A single receiver satisfies its own `this`.
+      shapes + "function t(r: Real) { r.method(12); }",
+      // A union of COMPATIBLE shapes has an inhabitable intersection.
+      shapes + "function t(r: Real | Same) { r.method(12); }",
+      // And a method with no declared `this` carries no obligation even
+      // when the union members ARE disjoint.
+      shapes + "function t(r: Plain | Plain2) { r.method(12); }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch ES: a narrowing does not survive into a closure the reassignment
+/// can outlive (TS2362 / TS2363 in `typeGuardsDefeat`).
+///
+/// Every cell was probed against the real compiler, and the boundary is
+/// NOT "assigned anywhere" — which is what an earlier note in CLAUDE.md
+/// had filed as the fact needed. An assignment BEFORE the guard leaves the
+/// narrowing intact; one the closure could observe does not. What decides
+/// it is whether the assigned value can inhabit the narrowed type, which a
+/// literal right-hand side answers and an arbitrary expression does not.
+test "expr_check: a closure cannot rely on an unstable narrowing (batch ES)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("valid number type") })
+    .length()
+  }
+  // --- fires: the closure outlives `x = "hello"`, so its `x` is the
+  // declared `number | string` and `x * x` is TS2362 / TS2363.
+  assert_true(
+    issues(
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { var f = () => x * x; }\n  x = \"hello\";\n  return 0;\n}",
+    ) > 0,
+  )
+  // The same through a function EXPRESSION, whose env copy has its own
+  // per-entry rule.
+  assert_true(
+    issues(
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { var f = function () { return x * x; }; }\n  x = \"hello\";\n  return 0;\n}",
+    ) > 0,
+  )
+  // And for a `let`, not only a parameter.
+  assert_true(
+    issues(
+      "function c(y: number | string) {\n  let x: number | string = y;\n  if (typeof x === \"number\") { var g = () => x * x; }\n  x = \"hello\";\n  return 0;\n}",
+    ) > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // No reassignment at all: TypeScript DOES preserve a narrowing in a
+      // closure created in the narrowed region.
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { const f = () => x * x; return f(); }\n  return 0;\n}",
+      // A reassignment the narrowed type CAN hold leaves it intact — this
+      // is the cell that rules out \"assigned anywhere\".
+      "function c(x: number | string) {\n  x = 1;\n  if (typeof x === \"number\") { const f = () => x * x; return f(); }\n  return 0;\n}",
+      // A narrowed read that is NOT in a closure keeps the narrowing
+      // however the binding is reassigned later.
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { return x * x; }\n  x = \"hello\";\n  return 0;\n}",
+      // An assignment from INSIDE a closure is not one the enclosing
+      // narrowed region has to fear.
+      "function c(x: number | string) {\n  function h() { x = 10; }\n  if (typeof x === \"number\") { h(); return x * x; }\n  return 0;\n}",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch ET: TS18033 through a block-scoped shadow, and TS2304 in a
+/// type-ARGUMENT position.
+///
+/// The second rule was REVERTED once in this series for a false positive
+/// on legal code the corpus cannot see, and the corpus then caught four
+/// more of its own. Both halves of the abstention it needed now exist, so
+/// the legal spellings are pinned here: a name is unreportable when it is
+/// spellable as a type ANYWHERE in the file, including as a block-local
+/// interface declared twice (which the module-wide pool skips) and as the
+/// type parameter of an object-literal method or a generic arrow (neither
+/// of which reaches the AST).
+test "expr_check: shadowed enum initializers and undeclared type arguments (batch ET)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS18033: the enum member's initializer resolves, at the enum's
+      // own position, to a block binding that cannot hold a number.
+      "// @target: es2015\n{ let Infinity = {}; enum E1 { X = Infinity } }",
+      "// @target: es2015\n{ let s = \"a\"; enum E4 { X = s } }",
+      // TS2304: a type argument naming nothing at all.
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction h() { g<Nope>(); }",
+      "// @target: es2015\nnew Date<A>",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // No shadow: the enum member reads the numeric lib global.
+      "// @target: es2015\n{ enum E2 { X = Infinity } }",
+      // A numeric shadow.
+      "// @target: es2015\n{ let n = 5; enum E3 { X = n } }",
+      // Top level, where the lib global is what the name means.
+      "// @target: es2015\nenum E5 { X = Infinity }",
+      // An INNER numeric shadow masks the outer non-numeric one, which is
+      // the lookup order the language uses.
+      "// @target: es2015\n{ let Infinity = {}; { let Infinity = 5; enum E6 { X = Infinity } } }",
+      // An unclassifiable initializer records nothing.
+      "// @target: es2015\ndeclare function f(): any;\n{ let q = f(); enum E7 { X = q } }",
+      // Every way a type argument's name can be spellable as a type.
+      "// @target: es2015\ndeclare function g<X>(): void;\ninterface Top { x: number }\ng<Top>();",
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { interface Inner { x: number } g<Inner>(); }",
+      // Declared twice across block scopes, so the module-wide pool skips
+      // it and only the NAME channel can answer.
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { interface Dup { x: number } g<Dup>(); }\nfunction b() { interface Dup { y: number } g<Dup>(); }",
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { type Al = number; g<Al>(); }",
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a<V>() { g<V>(); }",
+      // An OBJECT-LITERAL method's own type parameter, which reaches no
+      // `in_scope_type_params` — the corpus's last false positive.
+      "// @target: es2015\ndeclare function g<X>(): void;\nvar b = { new<A>(x: A) { g<A>(); return x; } };",
+      // A generic ARROW's, which is not in the AST at all.
+      "// @target: es2015\ndeclare function g<X>(): void;\nconst f2 = <B,>(x: B) => { g<B>(); return x; };",
+      // And an enum / class / builtin name.
+      "// @target: es2015\ndeclare function g<X>(): void;\nenum En { A }\ng<En>();\nclass Cl {}\ng<Cl>();\ng<string>();",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
