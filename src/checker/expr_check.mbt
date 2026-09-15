@@ -11516,6 +11516,38 @@ fn check_expr_against(
       _ => ()
     }
   }
+  // A callable value never satisfies an INDEX SIGNATURE, and that is the
+  // one thing about a function-to-object-type assignment decidable without
+  // modelling `Function`'s own members. Every cell was probed rather than
+  // reasoned: `{}`, `Object`, `Function`, `{ call: any }`, `{ length:
+  // number }` and `{ name: string }` all ACCEPT a function (the last three
+  // because `Function` really declares them), while a NUMBER index
+  // signature and a STRING one both report TS2322 and a required member
+  // `Function` does not declare reports as well. So the general rule needs
+  // a complete member list for `Function` — where a name missing from the
+  // list is a false positive, the direction the budget forbids — and the
+  // indexer half needs nothing: `augmentedTypeAssignmentCompatIndexSignature`
+  // augments `interface Function` with exactly such an indexer and tsc
+  // reports it anyway.
+  //
+  // This has to run BEFORE the callable bail below, which returns for any
+  // callable side, and it excludes a callable TARGET: `interface I { ():
+  // void; [k: string]: any }` accepts a function through its call
+  // signature. Inline `Object` targets only — an interface arrives as
+  // `Struct` and the named form is left as a MISS rather than guessed at.
+  match (inferred_u, expected_u) {
+    (Func(_, _) | Constructor(_, _, _), Object(entries)) =>
+      if !shape_is_callable(expected_u, ctx.resolver) &&
+        entries.iter().any(fn(e) { is_index_signature_key(e.0) }) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`: a function value has no index signature",
+        )
+        return
+      }
+    _ => ()
+  }
   // Callable / constructable interfaces & objects (`<call>` / `<new>`
   // signatures, often `extends Function`, with overloaded methods like
   // `foo("hi"): Derived1; foo("bye"): Derived2`) match other call signatures
@@ -25787,6 +25819,179 @@ fn computed_key_mentions_super(e : @ast.TsExpr) -> Bool {
 }
 
 ///|
+/// TS2466 for a `super(…)` CALL inside an OBJECT-LITERAL computed property
+/// name, once a function boundary lies between it and the class member
+/// body.
+///
+/// `expr_mentions_super` deliberately refuses to descend into an object
+/// literal or an arrow, and that abstention is load-bearing: an
+/// object-literal computed key may legally mention `super`, which is why
+/// batch CL's attempt to extend the CLASS rule to object literals cost 6
+/// false positives for 2 true ones. What is decidable is the BOUNDARY, and
+/// every cell was probed against the real compiler rather than reasoned:
+///
+///   - `super()` in such a key DIRECTLY in the constructor is ACCEPTED
+///     (computedPropertyNames28).
+///   - the same inside an ARROW in the constructor is TS2466
+///     (computedPropertyNames30_ES5 / _ES6, this rule's targets).
+///   - `super.bar()` in such a key inside an ARROW is ACCEPTED
+///     (computedPropertyNames31): an arrow inherits `super`, so a property
+///     access through it is legal and only a CALL counts here.
+///   - `super.bar()` inside a FUNCTION EXPRESSION is TS2466, and stays a
+///     MISS — same boundary, but the property half's legal neighbours are
+///     the 11 accepted object-literal-`super` files above.
+///
+/// `crossed` is a walk PARAMETER, which is the whole reason this is small:
+/// the alternative filed in CLAUDE.md was a new Parser field needing the
+/// save / clear / restore discipline `self.labels` needs at fifteen
+/// function-body sites. A node kind missing from the walk loses a finding;
+/// only an arrow / function arm that forgot to SET the flag could invent
+/// one, and there are exactly two of those.
+fn objlit_super_key_expr(e : @ast.TsExpr, crossed : Bool) -> Bool {
+  let rec = fn(x) { objlit_super_key_expr(x, crossed) }
+  match e {
+    // The two boundary arms. Everything below them is `crossed`.
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(x) => objlit_super_key_expr(x, true)
+        ArrowBlock(b) => objlit_super_key_block(b, true)
+      }
+    // `TsFunc.body` is not optional — the fact CLAUDE.md records as the
+    // blocker for TS2393 / TS2394 — so a function expression always has a
+    // block to descend into.
+    FuncExpr(f) => objlit_super_key_block(f.body, true)
+    ObjectLit(entries) => {
+      for en in entries {
+        match en.1 {
+          ComputedProp(key, value) => {
+            if crossed && expr_mentions_super(key, CallOnly) {
+              return true
+            }
+            if rec(key) || rec(value) {
+              return true
+            }
+          }
+          other => if rec(other) { return true }
+        }
+      }
+      false
+    }
+    PropAccess(a, _) | UnaryOp(_, a) | Spread(a) | PureCall(a) | Await(a) =>
+      rec(a)
+    TypeArgs(_, a) | NonNull(a) | OptionalChain(a) | As(a, _) | Satisfies(a, _) =>
+      rec(a)
+    IndexAccess(a, b) | BinOp(_, a, b) | Seq(a, b) => rec(a) || rec(b)
+    CallExpr(c, args) | NewExpr(c, args) =>
+      rec(c) || args.iter().any(fn(a) { rec(a) })
+    Call(_, args) | New(_, args) => args.iter().any(fn(a) { rec(a) })
+    MethodCall(r, _, args) => rec(r) || args.iter().any(fn(a) { rec(a) })
+    ArrayLit(items) => items.iter().any(fn(i) { rec(i) })
+    Cond(a, b, c) => rec(a) || rec(b) || rec(c)
+    AssignExpr(_, v) => rec(v)
+    PropAssignExpr(r, _, v) => rec(r) || rec(v)
+    CompoundAssignExpr(t, _, v) => rec(t) || rec(v)
+    ComputedProp(key, value) => rec(key) || rec(value)
+    _ => false
+  }
+}
+
+///|
+fn objlit_super_key_block(b : @ast.TsBlock, crossed : Bool) -> Bool {
+  b.stmts.iter().any(fn(s) { objlit_super_key_stmt(s, crossed) })
+}
+
+///|
+fn objlit_super_key_stmt(s : @ast.TsStmt, crossed : Bool) -> Bool {
+  let rec = fn(e) { objlit_super_key_expr(e, crossed) }
+  let recb = fn(b) { objlit_super_key_block(b, crossed) }
+  match s {
+    Expr(e) | Throw(e) | Assign(_, e) | CompoundAssign(_, _, e) => rec(e)
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => rec(e)
+    IndexAssign(a, b, c) => rec(a) || rec(b) || rec(c)
+    PropAssign(a, _, c) => rec(a) || rec(c)
+    Return(Some(e)) => rec(e)
+    Block(b) => recb(b)
+    Label(_, inner) => objlit_super_key_stmt(inner, crossed)
+    If(c, a, b) =>
+      rec(c) ||
+      recb(a) ||
+      (match b {
+        Some(blk) => recb(blk)
+        None => false
+      })
+    While(c, b) | DoWhile(c, b) | With(c, b) => rec(c) || recb(b)
+    For(init, cond, upd, body) =>
+      (match init {
+        Some(st) => objlit_super_key_stmt(st, crossed)
+        None => false
+      }) ||
+      (match cond {
+        Some(e) => rec(e)
+        None => false
+      }) ||
+      (match upd {
+        Some(st) => objlit_super_key_stmt(st, crossed)
+        None => false
+      }) ||
+      recb(body)
+    ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) =>
+      rec(e) || recb(b)
+    Switch(e, cases) =>
+      rec(e) || cases.iter().any(fn(c) { recb(c.body) })
+    Try(a, _, c, f) =>
+      recb(a) ||
+      (match c {
+        Some(blk) => recb(blk)
+        None => false
+      }) ||
+      (match f {
+        Some(blk) => recb(blk)
+        None => false
+      })
+    _ => false
+  }
+}
+
+///|
+fn check_super_in_objlit_computed_keys(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // Same whole-file abstention as `check_this_in_computed_keys`: without
+  // line-anchored issues a `@ts-ignore` on the offending line cannot be
+  // honoured at any finer granularity.
+  if module_.grammar_misuses.contains("<ts-suppression-present>") {
+    return issues
+  }
+  for cls in module_.classes {
+    // Only a DERIVED class can write `super(…)` at all; in a base class
+    // the call is a different error that already fires.
+    if cls.base_names.length() == 0 {
+      continue
+    }
+    let mut hit = match cls.constructor_body {
+      Some(b) => objlit_super_key_block(b, false)
+      None => false
+    }
+    if !hit {
+      for m in cls.methods {
+        match m.body {
+          Some(b) => if objlit_super_key_block(b, false) { hit = true }
+          None => ()
+        }
+      }
+    }
+    if hit {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "`super` cannot be referenced in a computed property name",
+      })
+    }
+  }
+  issues
+}
+
+///|
 fn check_this_in_computed_keys(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -35009,6 +35214,11 @@ fn check_module_function_bodies_layered(
   for issue in check_this_in_computed_keys(module_, resolver) {
     all.push(issue)
   }
+  // TS2466: a `super(…)` call in an OBJECT-LITERAL computed key, once a
+  // function boundary lies between it and the class member body.
+  for issue in check_super_in_objlit_computed_keys(module_) {
+    all.push(issue)
+  }
   // TS2683: implicit-any `this` in plain functions (permissive path
   // only — strict unit-test snippets use bare functions freely).
   if permissive {
@@ -35341,6 +35551,30 @@ fn check_module_function_bodies_layered(
             path: "import `\{spec}`",
             message: "cannot find module `\{spec}`",
           })
+        }
+      }
+      // An import TYPE's specifier rides its own `<import-type-spec>`
+      // marker and is judged WITHOUT the declaration-bundle abstention.
+      // That abstention is about a bundle's IMPORT STATEMENTS resolving
+      // against sibling package files; an `import("...")` TYPE in a file
+      // that declares its own ambient modules can still name a module
+      // nothing provides, and `importTypeAmbientMissing` is that exact
+      // shape -- `import("fo")` one line under `declare module "foo"`.
+      // Every other condition is shared, `ambient_specs` included, so a
+      // correctly spelled `import("foo")` stays quiet.
+      for gm in module_.grammar_misuses {
+        if gm.has_prefix("<import-type-spec>") {
+          let spec = gm["<import-type-spec>".length():].to_owned()
+          if spec != "tslib" &&
+            !is_node_builtin_spec(spec) &&
+            !ambient_specs.contains(spec) &&
+            !reported.contains(spec) {
+            reported[spec] = ()
+            all.push({
+              path: "import type `\{spec}`",
+              message: "cannot find module `\{spec}`",
+            })
+          }
         }
       }
     }

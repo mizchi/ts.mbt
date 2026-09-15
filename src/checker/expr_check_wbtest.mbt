@@ -21535,3 +21535,67 @@ test "expr_check: a local binding shadows an abstract class" {
     1,
   )
 }
+
+///|
+/// Batch EP: a function value against an index signature, an import
+/// TYPE's specifier past the declaration-bundle abstention, and
+/// TS2466 for a `super()` call in an object-literal computed key.
+///
+/// Each rule is paired with the legal neighbour that decides it, because
+/// "fires on the corpus file" and "stays silent on the legal spelling"
+/// are separate claims and only the second keeps the gate at zero.
+test "expr_check: index signatures, import types, super in object keys (batch EP)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // A function value has no index signature, numeric or string.
+      // `augmentedTypeAssignmentCompatIndexSignature` augments
+      // `interface Function` with exactly such an indexer and tsc
+      // reports it anyway.
+      "// @target: es2015\ninterface Bar { b: number }\ndeclare var fd: () => void;\nvar w1: { [n: number]: Bar } = fd;",
+      "// @target: es2015\nvar w2: { [k: string]: number } = () => {};",
+      // An import TYPE naming a module nothing provides, in a file that
+      // declares its OWN ambient module — `importTypeAmbientMissing`'s
+      // typo. The declaration-bundle abstention is about a bundle's
+      // IMPORT STATEMENTS, so the import-type channel is judged past it.
+      "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst x: import(\"fo\") = { x: 0 };",
+      // TS2466: a `super()` CALL in an object-literal computed key,
+      // inside an arrow in the constructor (computedPropertyNames30).
+      "// @target: es6\nclass Base { }\nclass C extends Base {\n  constructor() { super(); () => { var o = { [(super(), \"p\")]() {} }; } }\n}",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // Every object target a function DOES satisfy. The last three are
+      // members `Function` itself declares, which is why the general
+      // rule needs a complete member list and this one is restricted to
+      // the index-signature shape.
+      "// @target: es2015\nvar a1: {} = () => {};",
+      "// @target: es2015\nvar a2: Object = () => {};",
+      "// @target: es2015\nvar a3: Function = () => {};",
+      "// @target: es2015\nvar a4: { length: number } = () => {};",
+      // A callable TARGET accepts a function through its call signature,
+      // index signature or not.
+      "// @target: es2015\ninterface I { (): void; [k: string]: any }\ndeclare var g: () => void;\nvar a5: I = g;",
+      // The correctly spelled import type still resolves against the
+      // file's own ambient module.
+      "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst y: import(\"foo\") = { x: 0 };",
+      // `super()` in such a key DIRECTLY in the constructor is ACCEPTED
+      // (computedPropertyNames28) — the boundary is the whole rule.
+      "// @target: es6\nclass Base { }\nclass C extends Base {\n  constructor() { super(); var o = { [(super(), \"p\")]() {} }; }\n}",
+      // `super.bar()` through an ARROW is ACCEPTED as well
+      // (computedPropertyNames31): an arrow inherits `super`, so only a
+      // CALL counts here.
+      "// @target: es6\nclass Base { bar() { return 0 } }\nclass C extends Base {\n  foo() { () => { var o = { [super.bar()]() {} }; }; return 0 }\n}",
+      // And the same key with no function boundary at all
+      // (computedPropertyNames25).
+      "// @target: es6\nclass Base { bar() { return 0 } }\nclass C extends Base {\n  foo() { var o = { [super.bar()]() {} }; return 0 }\n}",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

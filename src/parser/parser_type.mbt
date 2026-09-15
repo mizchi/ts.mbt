@@ -1528,6 +1528,17 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
           Str(spec) =>
             if !self.multi_file_source {
               self.import_module_specs.push(spec)
+              // Same specifier on a second channel, because the two are
+              // suppressed by different things. A file that declares ANY
+              // ambient external module is treated as a declaration
+              // bundle whose IMPORT STATEMENTS resolve against sibling
+              // package files a single-file check cannot see -- and an
+              // import TYPE in such a file can still be a typo of a
+              // module the file declares itself, which is exactly
+              // `importTypeAmbientMissing` (`import("fo")` beside
+              // `declare module "foo"`). The check reads this channel
+              // past the bundle abstention and nothing else.
+              self.grammar_misuses.push("<import-type-spec>" + spec)
             }
           _ => ()
         }
