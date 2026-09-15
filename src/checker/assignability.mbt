@@ -667,6 +667,20 @@ fn is_assignable_to_inner(
   // per-component fallback below cannot express. Both checks only ever
   // return `true`; a definite `false` is deferred to the end, so neither
   // rule can introduce a false positive.
+  //
+  // The per-component fallback IS unsound against an index-signature
+  // target — an indexer is constrained by every property the source has,
+  // so `{ a: string } & { b: number }` is not assignable to
+  // `{ [k: string]: string }` (tsc says TS2322) while its `{ a: string }`
+  // component alone is, and the fallback answers `true`. Dropping the
+  // fallback when the merge succeeds was implemented and MEASURED, and it
+  // changes nothing: `{ b: number } & { a: string }` against that target
+  // is still silent while the identical single-object source
+  // `{ a: string, b: number }` reports, so this arm is never reached for
+  // an intersection-typed VALUE at all — something above it abstains
+  // first, and finding what is the actual work. Reverted rather than
+  // shipped, because a fix that provably changes nothing is dead code
+  // that reads like live code.
   match source {
     Intersection(members) => {
       match merge_object_intersection(members) {
@@ -845,6 +859,17 @@ fn is_assignable_to_inner(
       let t_obj = struct_fields_to_object(t_fields)
       is_object_assignable_inner(s_fields, t_obj, bivariant_params)
     }
+    // `Struct(n, fields)` is the structural EXPANSION of `Named(n)`: the
+    // resolver produces the first where it could expand an interface /
+    // class reference and the second where it could not, so the two
+    // spellings of one type meet whenever a comparison crosses that
+    // boundary. Without this arm they fell to the `_ => false` catch-all —
+    // which is what `Bar[]` against `{ [n: number]: Bar }` did the moment
+    // the index signature started carrying its real value type, while
+    // `Array<Bar>` and `string[]` were both fine. Only an EQUAL name
+    // matches; a `Struct` against a different `Named` stays nominal.
+    (Struct(s_name, _), Named(t_name)) | (Named(t_name), Struct(s_name, _)) =>
+      s_name == t_name
     // An ARRAY satisfies a NUMERIC index signature: every numeric key
     // yields the element type. `var v: { [n: number]: Bar } = arr` is
     // ACCEPTED by tsc and reached the `_ => false` catch-all below, which
@@ -988,6 +1013,36 @@ fn literal_key_index_bucket(key : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+/// The union `T` with its `undefined` member removed, or `None` when
+/// there is nothing to remove or nothing would be left. Used for the one
+/// place the `k1?: T` / `k1: T | undefined` ambiguity has to be resolved
+/// in the permissive direction — a source property against a STRING index
+/// signature.
+fn without_undefined_member(ty : @ast.TsType) -> @ast.TsType? {
+  match ty {
+    Union(members) => {
+      let kept : Array[@ast.TsType] = []
+      let mut saw_undefined = false
+      for m in members {
+        if m is Undefined {
+          saw_undefined = true
+        } else {
+          kept.push(m)
+        }
+      }
+      if !saw_undefined || kept.length() == 0 {
+        None
+      } else if kept.length() == 1 {
+        Some(kept[0])
+      } else {
+        Some(Union(kept))
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 fn is_object_assignable_inner(
   s_fields : Array[(@ast.TsType, @ast.TsType)],
   t_fields : Array[(@ast.TsType, @ast.TsType)],
@@ -1005,10 +1060,35 @@ fn is_object_assignable_inner(
           literal_key_index_bucket(s_key)
         }
         match bucket {
-          Some(k) if k == t_key =>
-            if !is_assignable_to_inner(s_type, t_type, bivariant_params) {
+          Some(k) if k == t_key => {
+            // An OPTIONAL source property satisfies a STRING index
+            // signature of its base type: `{ k1?: string }` is assignable
+            // to `{ [k: string]: string }` (probed) while
+            // `{ k1: string | undefined }` is TS2322 — and those two are
+            // the SAME node here, since the type parser wraps `k1?: T`
+            // into `Union([T, Undefined])` always. The same trade the
+            // `target_field_optional` comment at the bottom of this
+            // function records: tolerating the union costs the explicit
+            // `| undefined` spelling as a MISS and is the only direction
+            // that cannot invent a finding.
+            //
+            // A NUMBER index signature does NOT get this — `{ 1?: string }`
+            // against `{ [k: number]: string }` IS TS2322, probed — so the
+            // exemption is keyed on the target's key kind, not applied to
+            // both. And stripping is skipped when it would leave nothing,
+            // so `{ k1?: undefined }` still reports.
+            let effective = if t_key is String_ {
+              match without_undefined_member(s_type) {
+                Some(stripped) => stripped
+                None => s_type
+              }
+            } else {
+              s_type
+            }
+            if !is_assignable_to_inner(effective, t_type, bivariant_params) {
               return false
             }
+          }
           _ => ()
         }
       }

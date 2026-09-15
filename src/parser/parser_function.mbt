@@ -3268,6 +3268,25 @@ fn Parser::parse_declare_class_member_name(
     match self.peek().kind {
       Ident(key) if self.peek_at(1).kind == RBracket && !self.in_function =>
         self.grammar_misuses.push("<computed-type-key>" + key)
+      // A DOTTED `Symbol.<name>` key. `check_computed_key_type` has judged
+      // this shape for a runtime class body and an object literal for as
+      // long as it existed — a `Symbol.*` static that is not a well-known
+      // symbol has a function / object type and can never be a valid key —
+      // and a `declare class` member key never reached it, because this
+      // function brace-matches past the key and keeps nothing. The NAME is
+      // spelled out in the tokens, which is what makes a marker enough
+      // here (the same argument batch EE's TS1308 makes for reading an
+      // `await` out of a skipped decorator). The three gates that keep the
+      // rule sound — well-known-ness, a user `Symbol` declaration, and a
+      // `SymbolConstructor` augmentation — are module facts, so they stay
+      // on the checker side.
+      Ident("Symbol") if self.peek_at(1).kind == Dot &&
+        self.peek_at(3).kind == RBracket =>
+        match self.peek_at(2).kind {
+          Ident(sym) =>
+            self.grammar_misuses.push("<symbol-type-key>" + sym)
+          _ => ()
+        }
       _ => ()
     }
     let mut depth = 1
