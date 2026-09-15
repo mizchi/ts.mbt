@@ -2387,6 +2387,32 @@ pub fn Parser::parse_interface(
       )
       let method_params = self.parse_params()
       let _ = self.expect(RParen)
+      // TS2684 evidence. A leading `this` parameter is dropped from the
+      // member's callable TYPE (`callable_func_type_from_params` says
+      // why: it occupies no argument position), so the fact that one was
+      // DECLARED, and whether its type is `void`, is not recoverable
+      // downstream. Both halves are needed and neither is a type:
+      //
+      //   - `declare const b: { (this: number): void }; b(0)` is TS2684,
+      //     while the same call with `this: void` is ACCEPTED -- a plain
+      //     call supplies `void`, so only a non-void declaration fails.
+      //   - `r.method(12)` where `method` declares `this: this` and `r`
+      //     is a union of definitely-disjoint shapes is TS2684, because
+      //     the required `this` is the INTERSECTION of the members.
+      //
+      // Keyed by `INTERFACE.MEMBER` (a call signature's member name is
+      // its `<call>` key), which is what both rules look up. An
+      // object-type LITERAL member has no interface name to key on and
+      // stays a MISS.
+      if method_params.length() > 0 && method_params[0].name == "this" {
+        let kind = match method_params[0].type_ {
+          @ast.TsType::Void | @ast.TsType::Any | @ast.TsType::Unknown => "void"
+          _ => "other"
+        }
+        self.grammar_misuses.push(
+          "<this-param>\{name}.\{field_name}=\{kind}",
+        )
+      }
       // TS2842: an interface / object-type member signature never has a
       // body. This site does not go through
       // `record_bodiless_param_initializers` (it reports TS2371 per

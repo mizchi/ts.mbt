@@ -21655,3 +21655,65 @@ test "expr_check: a `this` parameter is not an argument, local types do not coll
     assert_true(issues(src) > 0)
   }
 }
+
+///|
+/// Batch ER: TS2684, the `this` CONTEXT of a call.
+///
+/// A leading `this` parameter is dropped from the member's callable type
+/// (it occupies no argument position), so both halves of this rule ride a
+/// parser marker: whether one was declared, and whether its type is
+/// `void`. All eight cells were probed against the real compiler, and two
+/// read the other way round from the message text — a plain call supplies
+/// `this: void`, so `this: void` is ACCEPTED where `this: number` is not,
+/// and a union with a `this`-less member is accepted while one with a
+/// non-void member is an error on the whole union.
+test "expr_check: the `this` context of a call (batch ER)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("`this` context") })
+    .length()
+  }
+  let sigs =
+    #|interface A { (this: void, b?: number): void }
+    #|interface B { (this: number, b?: number): void }
+    #|interface C { (i: number): void }
+    #|
+  let shapes =
+    #|interface Real { method(this: this, n: number): void; data: string }
+    #|interface Fake { method(this: this, n: number): void; data: number }
+    #|interface Same { method(this: this, n: number): void; data: string }
+    #|interface Plain { method(n: number): void; data: string }
+    #|interface Plain2 { method(n: number): void; data: number }
+    #|
+  // --- fires
+  // A non-void `this` can never be satisfied by a plain call, alone or
+  // as one member of a union (tsc's message there names the required
+  // `this` as `never` — the intersection of the members').
+  assert_true(issues(sigs + "declare const b: B; b(0);") > 0)
+  assert_true(issues(sigs + "declare const ab: A | B; ab(0);") > 0)
+  assert_true(issues(sigs + "declare const bc: B | C; bc(0);") > 0)
+  // A method declaring `this: this`, called on a union of definitely
+  // disjoint shapes: the required `this` is `Real & Fake`, which no value
+  // inhabits because `data`'s types differ.
+  assert_true(
+    issues(shapes + "function t(r: Real | Fake) { r.method(12); }") > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // `this: void` IS what a plain call supplies.
+      sigs + "declare const a: A; a(0);",
+      // A member with no `this` parameter contributes no constraint, so a
+      // union of it with the `void` one is fine.
+      sigs + "declare const ac: A | C; ac(0);",
+      // A single receiver satisfies its own `this`.
+      shapes + "function t(r: Real) { r.method(12); }",
+      // A union of COMPATIBLE shapes has an inhabitable intersection.
+      shapes + "function t(r: Real | Same) { r.method(12); }",
+      // And a method with no declared `this` carries no obligation even
+      // when the union members ARE disjoint.
+      shapes + "function t(r: Plain | Plain2) { r.method(12); }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

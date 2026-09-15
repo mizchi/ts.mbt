@@ -130,6 +130,18 @@ priv struct Resolver {
   // literal fails every overload (the `raw` member only exists on
   // engine-created template objects), which is TS2769/TS2345.
   template_tag_funcs : Map[String, Bool]
+  // TS2684 evidence, keyed `INTERFACE.MEMBER` (a call signature is keyed
+  // by its `<call>` member name): true when the member declares a leading
+  // `this` parameter whose type is NOT `void` / `any` / `unknown`, false
+  // when it declares one that is. An ABSENT entry means no `this`
+  // parameter was written at all, which is the third answer and why this
+  // is not a name set — a plain call supplies `void`, so `this: void` and
+  // no declaration are both fine while `this: number` is not.
+  //
+  // The parser records it because the fact does not survive into the
+  // type: a leading `this` parameter occupies no argument position and
+  // `callable_func_type_from_params` drops it.
+  this_param_members : Map[String, Bool]
   // Module-level `noImplicitAny` effective flag (strict directives),
   // threaded through the resolver so expression-level rules (TS7053)
   // can gate without widening `CheckCtx`.
@@ -404,6 +416,7 @@ fn Resolver::empty() -> Resolver {
     namespace_exports: {},
     namespace_instantiated: {},
     template_tag_funcs: {},
+    this_param_members: {},
     any_uninitialized_values: {},
     class_index: ClassIndex::empty(),
     no_implicit_any: false,
@@ -1284,6 +1297,22 @@ fn Resolver::ingest_module(
   for name, g in tag_groups {
     if g.0 >= 2 && g.1 <= 1 && g.2 {
       r.template_tag_funcs[prefix + name] = true
+    }
+  }
+  // TS2684 evidence off the parser's `<this-param>` marker (see the field
+  // doc). Prefixed like every other name this loop ingests, so a
+  // namespace-scoped interface keys under its own prefix.
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<this-param>") {
+      let payload = gm["<this-param>".length():].to_owned()
+      match payload.rev_find("=") {
+        Some(i) => {
+          let key = payload[:i].to_owned()
+          let kind = payload[i + 1:].to_owned()
+          r.this_param_members[prefix + key] = kind == "other"
+        }
+        None => ()
+      }
     }
   }
   for ns in module_.namespaces {
@@ -12903,6 +12932,169 @@ fn check_overload_set_no_match(
 /// A bounded maximum is still the largest member maximum. Members with rest
 /// parameters lift that bound; any non-callable member or spread argument
 /// abstains.
+/// The NAMES a value's type could be looking a member up on: the type
+/// itself when it is a nominal reference or its structural expansion, and
+/// each union member's. Used by the TS2684 rules, which key
+/// `resolver.this_param_members` by `INTERFACE.MEMBER`.
+fn this_context_candidate_names(
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> Array[String] {
+  let out : Array[String] = []
+  fn add(t : @ast.TsType) -> Unit {
+    match t {
+      Named(n) | Struct(n, _) | Applied(n, _) => out.push(n)
+      _ => ()
+    }
+  }
+
+  add(ty)
+  match resolver.unwrap(ty) {
+    Union(members) =>
+      for m in members {
+        add(m)
+        add(resolver.unwrap(m))
+      }
+    other => add(other)
+  }
+  out
+}
+
+///|
+/// TS2684 for a PLAIN call — no receiver, so the `this` context is `void`.
+/// A call signature declaring `this: <non-void>` can never be satisfied
+/// that way, and for a union callee one such member is enough: every
+/// constituent has to accept the call.
+///
+/// Probed cell by cell rather than reasoned, because two of the five read
+/// the other way round from the message text. `{ (this: void, b?: number):
+/// void }` called plainly is ACCEPTED (`void` IS what a plain call
+/// supplies) and so is a union of that with a signature declaring no
+/// `this` at all; `{ (this: number, …) }` alone, unioned with the `void`
+/// one, or unioned with a `this`-less one all report — and the union cases
+/// are why tsc's message there says the required `this` is `never`, the
+/// intersection of the members'.
+fn check_plain_call_this_context(
+  ctx : CheckCtx,
+  callee_ty : @ast.TsType,
+  call_path : String,
+) -> Unit {
+  for n in this_context_candidate_names(ctx.resolver, callee_ty) {
+    if ctx.resolver.this_param_members.get(n + ".<call>") is Some(true) {
+      record_unfiltered(
+        ctx,
+        call_path,
+        "the `this` context of type `void` is not assignable to the call signature's declared `this`",
+      )
+      return
+    }
+  }
+}
+
+///|
+/// TS2684 for a METHOD call on a UNION receiver whose members declare a
+/// `this` parameter. The required `this` is the INTERSECTION of the
+/// members' — `Real & Fake` in `unionThisTypeInFunctions` — and a value of
+/// the union type satisfies that only when the members are mutually
+/// compatible, so definitely-disjoint shapes make the call an error
+/// whatever the `this` type is written as.
+///
+/// Three neighbours stay silent and each is the reason for one condition:
+/// a SINGLE receiver satisfies its own `this` (`r: Real`), a union of
+/// COMPATIBLE shapes has an inhabitable intersection (`Real | Same`, where
+/// only `data`'s type differs between the disjoint pair), and a method
+/// with no declared `this` parameter carries no obligation at all.
+fn check_union_receiver_this_context(
+  ctx : CheckCtx,
+  recv_ty : @ast.TsType,
+  meth : String,
+  call_path : String,
+) -> Unit {
+  guard ctx.resolver.unwrap(recv_ty) is Union(members) else { return }
+  if members.length() < 2 {
+    return
+  }
+  // Every member must declare the `this` parameter: a member without one
+  // contributes no constraint, so the intersection is not what the call
+  // has to satisfy.
+  for m in members {
+    let mut declared = false
+    for n in this_context_candidate_names(ctx.resolver, m) {
+      if ctx.resolver.this_param_members.get(n + "." + meth) is Some(_) {
+        declared = true
+      }
+    }
+    if !declared {
+      return
+    }
+  }
+  for i in 0..<members.length() {
+    for j in (i + 1)..<members.length() {
+      // Two ways two members can fail to have an inhabitable
+      // intersection, and the corpus file needs the SECOND one.
+      // `shapes_definitely_disjoint` is a property-PRESENCE test ("each
+      // side requires a property the other lacks"), which is exactly
+      // what `Real` / `Fake` do not do — they declare the same two
+      // member names and differ only in `data`'s TYPE, so the first
+      // draft of this rule was silent on the file it was written for.
+      // A shared member whose types definitely differ is the other
+      // half, and it is the one tsc's own message walks down to
+      // ("Types of property 'data' are incompatible").
+      let disjoint = shapes_definitely_disjoint(
+                ctx.resolver,
+                members[i],
+                members[j],
+              ) ||
+        shared_member_types_differ(ctx.resolver, members[i], members[j])
+      if disjoint {
+        record_unfiltered(
+          ctx,
+          call_path,
+          "the `this` context of type `\{type_display(ctx.resolver.unwrap(recv_ty))}` is not assignable to the method's declared `this`",
+        )
+        return
+      }
+    }
+  }
+}
+
+///|
+/// True when `a` and `b` declare a member of the same name whose types
+/// definitely differ — so no value can inhabit `a & b`. Both sides must
+/// enumerate (an index signature, a generic interface or anything
+/// `collect_declared_fields` cannot project abstains), and a callable
+/// member is skipped: a method's type is a `Func` whose comparison is
+/// bivariant here, where `types_definitely_differ` is an identity test.
+fn shared_member_types_differ(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> Bool {
+  let af = collect_declared_fields(a, resolver)
+  let bf = collect_declared_fields(b, resolver)
+  if af.length() == 0 || bf.length() == 0 {
+    return false
+  }
+  for ae in af {
+    if ae.0.has_prefix("<") || ae.0.has_prefix("@@") {
+      continue
+    }
+    if ae.1 is Func(_, _) || ae.1 is Constructor(_, _, _) {
+      continue
+    }
+    for be in bf {
+      if be.0 == ae.0 &&
+        !(be.1 is Func(_, _)) &&
+        !(be.1 is Constructor(_, _, _)) &&
+        types_definitely_differ(resolver, ae.1, be.1) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
 fn check_union_callee_arity(
   ctx : CheckCtx,
   callee_ty : @ast.TsType,
@@ -20244,6 +20436,8 @@ fn check_call_args_in_expr(
               if ctx.resolver.signatures.get(name) is None {
                 check_union_callee_arity(ctx, other, args, "call `\{name}`")
               }
+              // TS2684: a plain call supplies `this: void`.
+              check_plain_call_this_context(ctx, other, "call `\{name}`")
               // Unlike the every-member arity rule above, this one is
               // sound for an overload set AND for a union-typed value,
               // so it is not gated on `signatures`: it fires only when
@@ -20377,6 +20571,7 @@ fn check_call_args_in_expr(
           // can have identical widened parameter types while differing in
           // whether that parameter was written with `?`.
           check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          check_plain_call_this_context(ctx, raw_callee_ty, "call")
           check_overload_set_no_match(env, ctx, raw_callee_ty, args, "call")
           match union_common_call_params(callee_ty, ctx.resolver) {
             Some(params) => check_arguments(env, params, args, ctx, "call")
@@ -20507,6 +20702,11 @@ fn check_call_args_in_expr(
           check_arguments(env, params, args, ctx, "call `\{meth}`")
         None => {
           let recv_ty = infer_expr(env, ctx.resolver, receiver)
+          // TS2684: a method declaring a `this` parameter, called on a
+          // union receiver whose members are definitely disjoint.
+          check_union_receiver_this_context(
+            ctx, recv_ty, meth, "call `\{meth}`",
+          )
           if is_nullable_type(recv_ty) {
             record(
               ctx,
