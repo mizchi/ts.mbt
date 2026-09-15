@@ -21003,3 +21003,162 @@ test "expr_check: an unspellable globalThis index key" {
     0,
   )
 }
+
+///|
+/// TS2559, the WEAK TYPE check: a target whose every member is optional
+/// accepts any shape structurally, so TypeScript adds the separate
+/// requirement that the source share at least one property name with it.
+/// Eleven cells probed against the real compiler
+/// (intersectionAsWeakTypeSource).
+test "expr_check: weak type with no properties in common" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("no properties in common") })
+    .length()
+  }
+  let z = "interface Z { z?: boolean }\n"
+  // Fires: an interface source, an INTERSECTION source (the corpus
+  // shape), a call argument, and a source whose only member is a METHOD —
+  // a method counts as a property on both sides.
+  @test.assert_eq(
+    issues(z + "interface X { x: string }\ndeclare const xv: X;\nconst z1: Z = xv;"),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "interface X { x: string }\ninterface Y { y: number }\ntype XY = X & Y;\ndeclare const xy: XY;\n" +
+      z +
+      "const z1: Z = xy;",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(z + "declare function f(o: Z): void;\ndeclare const xv: { x: string };\nf(xv);"),
+    1,
+  )
+  @test.assert_eq(
+    issues(z + "interface S { m(): void }\ndeclare const s: S;\nconst z1: Z = s;"),
+    1,
+  )
+  // Silent: one shared property is enough, including an optional one on
+  // both sides.
+  @test.assert_eq(
+    issues(z + "declare const xv: { x: string, z?: boolean };\nconst z1: Z = xv;"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface Z { z?(): void }\ninterface S { z(): void }\ndeclare const s: S;\nconst z1: Z = s;",
+    ),
+    0,
+  )
+  // Silent: an EMPTY source, an object literal, an index signature and
+  // `any` are all accepted by tsc, and every one of those shapes is a
+  // `cast_shape_fields` decline or an empty field set rather than a
+  // special case here.
+  @test.assert_eq(issues(z + "declare const e: {};\nconst z1: Z = e;"), 0)
+  @test.assert_eq(issues(z + "const z1: Z = {};"), 0)
+  @test.assert_eq(
+    issues(z + "declare const m: { [k: string]: number };\nconst z1: Z = m;"),
+    0,
+  )
+  @test.assert_eq(issues(z + "declare const xv: any;\nconst z1: Z = xv;"), 0)
+  // A target with a REQUIRED member is not a weak type: tsc reports
+  // TS2741 there, which the pre-existing missing-property rule already
+  // covers, so this one must not claim it.
+  @test.assert_eq(
+    issues(
+      "interface Z2 { z?: boolean, w: number }\ndeclare const xv: { x: string };\nconst z1: Z2 = xv;",
+    ),
+    0,
+  )
+}
+
+///|
+/// An object-type index signature's VALUE type is kept by the parser now.
+/// It used to be widened to `Any` with a stated reason — value-assignability
+/// checks driven off an anonymous index signature would false-positive
+/// through our object-literal getter modelling — and that reason was
+/// measured rather than re-argued: keeping it is MISS in scope 65 -> 63 at
+/// FP 0. An INTERFACE's index signatures always kept their values, so this
+/// also stops the two spellings of one declaration from disagreeing.
+///
+/// The optional-property exemption is the cell reasoning gets wrong.
+/// `{ k1?: string }` IS assignable to `{ [k: string]: string }` while
+/// `{ k1: string | undefined }` is TS2322 — the same node here, since the
+/// type parser wraps `k1?: T` into `Union([T, Undefined])` always — so the
+/// union is tolerated and the explicit spelling is the MISS that buys it.
+/// A NUMBER index signature gets no exemption: `{ 1?: string }` against
+/// `{ [k: number]: string }` really is TS2322. All six cells probed.
+test "expr_check: an object-type index signature's value type" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("but got") })
+    .length()
+  }
+  let strict = "// @strict: true\n"
+  // Fires: a numeric indexer is strict about the optional spelling, a
+  // property whose type is exactly `undefined`, and a plain type mismatch.
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { 1?: string };\ndeclare let d: { [k: number]: string };\nd = o;",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { k1?: undefined };\ndeclare let d: { [k: string]: string };\nd = o;",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { k1?: number };\ndeclare let d: { [k: string]: string };\nd = o;",
+    ),
+    1,
+  )
+  // The value type reaching the checker at all is what makes the three
+  // above decidable: with the old `Any` value every one of them was
+  // silent. This one is the plain non-optional mismatch.
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { k1: number };\ndeclare let d: { [k: string]: string };\nd = o;",
+    ),
+    1,
+  )
+  // Silent: an optional property against a STRING indexer of its base
+  // type, and against a wider one.
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { k1?: string };\ndeclare let d: { [k: string]: string };\nd = o;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { k1?: string };\ndeclare let d: { [k: string]: string | number };\nd = o;",
+    ),
+    0,
+  )
+  // Silent: an exact match, and an indexer-to-indexer assignment.
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { k1: string };\ndeclare let d: { [k: string]: string };\nd = o;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let o: { [k: string]: string };\ndeclare let d: { [k: string]: string };\nd = o;",
+    ),
+    0,
+  )
+}

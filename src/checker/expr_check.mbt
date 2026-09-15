@@ -10992,6 +10992,56 @@ fn check_expr_against(
     )
     return
   }
+  // TS2559 ("Type 'X' has no properties in common with type 'Y'"): the WEAK
+  // TYPE check. A target whose every member is optional accepts any shape
+  // structurally — that is what makes an options-object typo silent — so
+  // TypeScript adds the separate requirement that the source share at
+  // least one property name with it. `const z1: Z = xy` with
+  // `interface Z { z?: boolean }` and `xy: X & Y` is the corpus shape
+  // (intersectionAsWeakTypeSource), and the same rule applies at a call
+  // argument.
+  //
+  // Both sides go through `cast_shape_fields`, which declines outright for
+  // an index signature, a generic interface, a class and anything it
+  // cannot enumerate — every one of those is a shape where a property
+  // might be present without being listed, which is the only direction
+  // that could invent a finding. Probed cell by cell: an EMPTY source is
+  // accepted (`declare const e: {}; const z1: Z = e`), a source with a
+  // string index signature is accepted, `any` is accepted, a target with
+  // one REQUIRED member gets TS2741 instead (a different code this rule
+  // does not claim), and a method counts as a property on both sides.
+  match cast_shape_fields(ctx.resolver, expected_u, 0) {
+    Some(tf) if tf.length() > 0 => {
+      let mut all_optional = true
+      for _, required in tf {
+        if required {
+          all_optional = false
+        }
+      }
+      if all_optional {
+        match cast_shape_fields(ctx.resolver, inferred_u, 0) {
+          Some(sf) if sf.length() > 0 => {
+            let mut shared = false
+            for k, _ in sf {
+              if tf.contains(k) {
+                shared = true
+              }
+            }
+            if !shared {
+              record(
+                ctx,
+                sub_path,
+                "type `\{type_display(inferred_u)}` has no properties in common with type `\{type_display(expected_u)}`",
+              )
+              return
+            }
+          }
+          _ => ()
+        }
+      }
+    }
+    _ => ()
+  }
   // Under strict null checks, a literal `null` / `undefined` is *not*
   // assignable to a bare in-scope type parameter (`function f<T>(...)` body /
   // a generic call's `T`): `T` could be instantiated to a non-nullable type,
@@ -20907,7 +20957,19 @@ fn check_call_args_in_expr(
                   !member_recv_unmodeled(recv_ty, ctx.resolver) {
                   match ctx.resolver.lookup_field(recv_ty, prop) {
                     Some(ft) =>
-                      if is_checkable(ft) && !type_has_undefined(ft) {
+                      // A member reached only through an INDEX SIGNATURE is
+                      // not a declared property, so `delete o["b"]` on
+                      // `{ [k: string]: string }` is legal (probed). The
+                      // rule used to be silent there for the wrong reason —
+                      // the parser widened an object-type index signature's
+                      // value to `Any`, so `type_has_undefined` was false
+                      // and `is_checkable` was too. With the real value type
+                      // the exemption has to be stated.
+                      if is_checkable(ft) &&
+                        !type_has_undefined(ft) &&
+                        !reached_only_through_index_signature(
+                          ctx.resolver, recv_ty, prop,
+                        ) {
                         record(
                           ctx, "delete", "the operand of a `delete` operator must be optional",
                         )
@@ -33755,6 +33817,42 @@ fn check_globalthis_bad_index(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
   issues
+}
+
+///|
+/// True when `prop` resolves on `recv` ONLY through an index signature —
+/// no declaration names it. `lookup_field` answers "what type does this
+/// key have", which an index signature satisfies for every key, and that
+/// is the wrong question for any rule that needs a DECLARED member:
+/// `delete o["b"]` on `{ [k: string]: string }` is legal.
+///
+/// Defaults to `false` for every shape it cannot enumerate, so a rule
+/// gated on it keeps whatever it did before rather than going quiet.
+fn reached_only_through_index_signature(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  prop : String,
+) -> Bool {
+  let fields = match resolver.unwrap(recv) {
+    Object(fs) => fs
+    Struct(_, fs) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in fs {
+        out.push((@ast.TsType::Literal(f.0), f.1))
+      }
+      out
+    }
+    _ => return false
+  }
+  let mut has_indexer = false
+  for f in fields {
+    match f.0 {
+      Literal(k) => if k == prop { return false }
+      String_ | Number | Int | Symbol => has_indexer = true
+      _ => ()
+    }
+  }
+  has_indexer
 }
 
 ///|

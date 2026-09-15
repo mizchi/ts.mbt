@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2649 / MISS in scope 66 /
+  is a soundness bug, and there are none (TP 2652 / MISS in scope 63 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -2428,6 +2428,55 @@ product surfaces now.
   and twenty-one call sites were instrumented with unique markers before
   `ls -la` showed the binary was ten minutes older than the source. The
   build command for a hand probe is `moon build --target native --release`.
+  Batch EM is **+3** (MISS in scope 66 -> 63) and is another recorded
+  abstention whose stated reason was measured instead of re-argued. An
+  object-type index signature's VALUE type was consumed and recorded as
+  `Any`, the comment at the site naming the hazard: value-assignability
+  checks driven off an anonymous index signature would false-positive
+  through our object-literal getter modelling (`get x()` rendered as
+  `() => T`). Keeping the value is **+2 files at FP 0**, and the two are
+  exactly the ones this file had named as blocked on it —
+  `arrayLiterals`'s TS2353 and
+  `optionalPropertyAssignableToStringIndexSignature`. An INTERFACE's index
+  signatures always kept their values, so the change also stops the two
+  spellings of one declaration from disagreeing.
+  Three things had been leaning on that `Any`, and NONE of them was the
+  getter hazard the comment named. The first is a cell reasoning gets
+  wrong: an OPTIONAL source property satisfies a STRING index signature of
+  its base type (`{ k1?: string }` into `{ [k: string]: string }`) while
+  `{ k1: string | undefined }` is TS2322, and those are the same node here
+  — so the union is tolerated and the explicit spelling is the MISS that
+  buys it, the same trade `is_object_assignable_inner`'s own
+  `target_field_optional` comment records twenty lines below. A NUMBER
+  index signature gets no such exemption, `{ 1?: string }` against
+  `{ [k: number]: string }` being real TS2322, so it is keyed on the
+  target's key KIND rather than applied to both. The second is a
+  pre-existing hole: `Struct(n, …)` and `Named(n)` had NO arm in
+  `is_assignable_to_inner` even though `Struct` is the structural
+  expansion of `Named` — the resolver produces one where it could expand
+  an interface reference and the other where it could not, so the two
+  spellings of one type meet whenever a comparison crosses that boundary
+  and fell to the `_ => false` catch-all. `Bar[]` against
+  `{ [n: number]: Bar }` broke while `Array<Bar>` and `string[]` were
+  fine, and that asymmetry is what exposed it — found by INSTRUMENTING
+  rather than reading, after two rounds of tracing arm order got nowhere
+  and one `println` printed `elem=Struct("Bar", …)` against
+  `val=Named("Bar")` on its first run. The third is `delete o["b"]` on
+  `{ [k: string]: string }`, LEGAL and silent for the wrong reason: a
+  member reached ONLY through an index signature is not a declared
+  property, which is now stated rather than implied by a widened type.
+  **Both false positives were caught by UNIT TESTS and not by the
+  corpus**, which is batch CS's lesson once more:
+  `optionalPropertyAssignableToStringIndexSignature` has real errors on
+  three lines, so the two `// ok` lines we were also reporting left it
+  scored a TP either way. The batch's other rule is TS2559, the weak-type
+  check — a target whose every member is optional accepts any shape
+  structurally, which is what makes an options-object typo silent, so
+  TypeScript adds the separate requirement that the source share one
+  property name with it; both sides go through `cast_shape_fields`, which
+  declines for an index signature, a generic interface, a class and
+  anything it cannot enumerate, since each of those is a shape where a
+  property might be present without being listed.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

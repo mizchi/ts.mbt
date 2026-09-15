@@ -928,21 +928,32 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
             self.record_index_signature_key_misuse(key_type)
             let _ = self.expect(RBracket)
             let _ = self.match_(Question)
-            // Consume the value type to advance the cursor, but record the
-            // signature with an `Any` value. Keeping the index signature
+            // The value type is KEPT. Keeping the index signature at all
             // (key typed `String_` / `Number`) preserves the "any key"
-            // meaning the mangle-safety and TS2454 passes need; widening
-            // the value to `Any` keeps us from driving value-assignability
-            // checks off an anonymous index signature, where our checker's
+            // meaning the mangle-safety and TS2454 passes need, and that
+            // is unchanged — only the VALUE moved.
+            //
+            // It used to be widened to `Any`, with the stated reason that
+            // value-assignability checks driven off an anonymous index
+            // signature would produce spurious mismatches through our
             // object-literal getter modelling (`get x()` rendered as
-            // `() => T`) would otherwise produce spurious mismatches.
+            // `() => T`). That reason was measured rather than re-argued:
+            // keeping the value is **MISS in scope 65 -> 63 at FP 0**, so
+            // the hazard it names costs nothing on the corpus, while the
+            // widening was the blocker CLAUDE.md records for
+            // `arrayLiterals`'s TS2353 and for index-signature
+            // assignability generally. An interface's index signatures
+            // have always kept their value types (`TsInterface.index_
+            // signatures`), so this also stops the two spellings of one
+            // declaration from disagreeing.
+            let mut value_type = @ast.TsType::Any
             if self.check(Colon) {
               let _ = self.advance()
-              let _ = self.parse_type()
+              value_type = self.parse_type()
             } else {
               self.record_index_signature_missing_annotation()
             }
-            fields.push((key_type, @ast.TsType::Any))
+            fields.push((key_type, value_type))
             let _ = self.match_(Semicolon) || self.match_(Comma)
             continue
           }

@@ -3,6 +3,78 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EM (2026-09-15): the index signature that threw its value away
+
+TP 2649 -> 2652, MISS in scope 66 -> 63, FP 0, PFLEGAL 0, TN 1750.
+
+**An object-type index signature's VALUE type is kept now.** The parser
+consumed it and recorded `Any`, with the reason written at the site:
+value-assignability checks driven off an anonymous index signature would
+false-positive through our object-literal getter modelling (`get x()`
+rendered as `() => T`). Measured rather than re-argued — keeping the value
+is **+2 files at FP 0**, and the two are exactly the ones CLAUDE.md had
+named as blocked on it, `arrayLiterals`'s TS2353 and
+`optionalPropertyAssignableToStringIndexSignature`. An INTERFACE's index
+signatures have always kept their value types, so this also stops the two
+spellings of one declaration from disagreeing.
+
+Three things had been leaning on the `Any`, and the gates caught all three
+— none of them the getter hazard the comment named.
+
+The first is a cell reasoning gets wrong. An OPTIONAL source property
+satisfies a STRING index signature of its base type: `{ k1?: string }` is
+assignable to `{ [k: string]: string }` while `{ k1: string | undefined }`
+is TS2322 (both probed), and those are the SAME node here — the type
+parser wraps `k1?: T` into `Union([T, Undefined])` always. The union is
+tolerated and the explicit `| undefined` spelling is the MISS that buys
+it, which is the same trade `is_object_assignable_inner`'s own
+`target_field_optional` comment records twenty lines below. A NUMBER index
+signature gets NO such exemption — `{ 1?: string }` against
+`{ [k: number]: string }` really is TS2322 — so it is keyed on the
+target's key kind rather than applied to both. Six cells, five agreeing
+with tsc and one declared MISS.
+
+The second is a pre-existing hole the change surfaced: **`Struct(n, …)`
+and `Named(n)` had no arm in `is_assignable_to_inner`**. `Struct` is the
+structural EXPANSION of `Named`, and the resolver produces one where it
+could expand an interface reference and the other where it could not, so
+the two spellings of one type meet whenever a comparison crosses that
+boundary — they fell to the `_ => false` catch-all. `Bar[]` against
+`{ [n: number]: Bar }` broke the moment the value type arrived while
+`Array<Bar>` and `string[]` were both fine, which is the asymmetry that
+exposed it. Found by INSTRUMENTING rather than reading: two rounds of
+tracing the arm order got nowhere and one `println` in the arm printed
+`elem=Struct("Bar", …)` against `val=Named("Bar")` on the first run.
+
+The third is `delete o["b"]` on `{ [k: string]: string }`, which is LEGAL
+(probed) and had been silent for the wrong reason: with the value widened
+to `Any` both `is_checkable` and `type_has_undefined` said no. A member
+reached ONLY through an index signature is not a declared property, so
+`reached_only_through_index_signature` states the exemption — and it
+defaults to `false` for every shape it cannot enumerate, so a rule gated
+on it keeps whatever it did before rather than going quiet. Four cells
+agree with tsc.
+
+Both false positives were caught by UNIT TESTS, not by the corpus: the
+conformance file
+`optionalPropertyAssignableToStringIndexSignature` has real errors on
+three of its lines, so the two `// ok` lines we were also reporting left
+it scored as a TP either way. That is batch CS's lesson once more — a
+conformance file counts as a TP if we flag it AT ALL.
+
+**TS2559, the weak-type check.** A target whose every member is optional
+accepts any shape structurally, which is what makes an options-object typo
+silent, so TypeScript adds the separate requirement that the source share
+at least one property name with it (`intersectionAsWeakTypeSource`). Both
+sides go through `cast_shape_fields`, which declines for an index
+signature, a generic interface, a class and anything it cannot
+enumerate — every one of those is a shape where a property might be
+present without being listed, the only direction that could invent a
+finding. Eleven cells probed: an EMPTY source is accepted, a source with a
+string index signature is accepted, `any` is accepted, a target with one
+REQUIRED member gets TS2741 instead (a code this rule does not claim), and
+a method counts as a property on both sides.
+
 ### Batch EL (2026-09-14): a suppression that was hiding a bug, and six more rules
 
 TP 2642 -> 2649, MISS in scope 73 -> 66, FP 0, PFLEGAL 0, TN 1750.
