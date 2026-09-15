@@ -2572,6 +2572,50 @@ product surfaces now.
   `moon check` runs stacked behind one stale build and every log read
   empty for minutes. One script per measurement — check, build, oracle —
   and `ps -o etime` is what tells a queue from a hang.
+  Batch EO moves the conformance numbers by ZERO and is the most
+  valuable checker change in this run, because it is measured on a real
+  package. **`mtsc` does not type-check zod**: the shipping flags produce
+  **272 diagnostics** on `zod@4.4.3`, and tsc accepts zod, so every one is
+  a false positive — `FP 0` over 4,484 conformance files never meant FP 0
+  on real code, and the corpus does not contain the shapes. Zod RUNS fine
+  through the whole pipeline (bundle + treeshake + fold + mangle +
+  property mangling, 0.5 s, 279 KB, correct object / union / array
+  schemas, `.min()`, `safeParse`, issue codes and `.email()` under Node),
+  so the split is exactly: the optimizer is sound on it and the CHECKER
+  rejects it.
+  **85 of the 272 — 31% — were one missing shadowing test.** zod's
+  `v4/core/util.ts` declares `export abstract class Class` and ALSO has
+  helpers taking a `Class:` PARAMETER, so every `new Class({…})` inside
+  them named the parameter while `check_abstract_instantiation` resolved
+  it against `ctx.resolver.classes`. That is the scope-narrowing family
+  this file records for `as_const_inline`, `const_enum_inline`,
+  `predicate_inline`, `switch_fold` and `type_fold` — five transform
+  passes, each fixed in turn — arriving in the checker, where the
+  question had never been asked. The fact was available and used **four
+  lines below one of the two call sites**: the TS2350 `Symbol` / `BigInt`
+  rule already reads `env.lookup(class_name) is None` for the same
+  reason, which makes this the applied-in-some-places family as well.
+  Measured: zod 272 -> 187, the abstract-class family to 0, and the
+  oracle IDENTICAL on both binaries (TP 2657 / MISS in scope 58 / FP 0 /
+  PFLEGAL 0 / TN 1750) — the 85 cost no true positive.
+  The other 187 rank the next work and none is a single missing test: 40
+  are a `switch` over an indexed access into a union
+  (`$ZodTypeDef["type"]`), 28 are a derived interface narrowing a member
+  whose type is a named interface extending the base's GENERIC
+  instantiation (`$ZodCheckRegexInternals extends
+  $ZodCheckInternals<string>`), which our structural assignability cannot
+  follow through a generic base, and the rest are assignability,
+  strict-null and member-existence modelling gaps. The operational
+  finding is the missing GATE: every harness here either compiles
+  fixtures we wrote or scores a corpus whose FP budget is already zero,
+  so 272 false positives on a package sitting in `_build/type-aware/`
+  were invisible — and zod is cloned there already, dropped from that
+  corpus for an unrelated reason (it answers the type-aware question with
+  a permanent zero). A real-package FP gate needs no new download, only a
+  checked run over the targets the corpus checks out, with the count
+  declared per package the way `scripts/bridge_struct_enum_fields.txt`
+  declares its budgets so growth fails and a drop follows the budget
+  down.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

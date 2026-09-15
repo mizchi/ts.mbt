@@ -21486,3 +21486,52 @@ test "expr_check: a Symbol member key in a declare class body" {
     0,
   )
 }
+
+///|
+/// A LOCAL BINDING shadowing an abstract class suppresses TS2511.
+///
+/// `check_abstract_instantiation` resolved the name against
+/// `ctx.resolver.classes` with no shadowing test, so a helper taking a
+/// `Class:` PARAMETER beside a module-level `abstract class Class` had
+/// every `new Class(…)` in it reported. That is zod's `util.ts` exactly,
+/// and it was 85 of the 272 false positives mtsc produced on zod. The
+/// same question is already asked four lines below the `New` call site by
+/// the TS2350 `Symbol` / `BigInt` rule.
+///
+/// Both directions are asserted so the fix cannot be "stop checking":
+/// the unshadowed `new Abstract()` must still report, at both the `New`
+/// and the `NewExpr` spelling.
+test "expr_check: a local binding shadows an abstract class" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("instance of abstract class") })
+    .length()
+  }
+  let decl = "abstract class Class { }\n"
+  // Silent: a PARAMETER of the same name — zod's shape.
+  @test.assert_eq(
+    issues(
+      decl +
+      "declare type Ctor = new (o: object) => object;\nfunction make(Class: Ctor) { return new Class({}); }",
+    ),
+    0,
+  )
+  // Silent: a `const` / `let` binding of the same name.
+  @test.assert_eq(
+    issues(
+      decl +
+      "declare const Sub: new () => object;\nfunction make2() { const Class = Sub; return new Class(); }",
+    ),
+    0,
+  )
+  // Fires: the unshadowed reference, which is the real TS2511.
+  @test.assert_eq(issues(decl + "function m() { return new Class(); }"), 1)
+  // Fires: the same at top level, with nothing binding the name.
+  @test.assert_eq(issues(decl + "var v = new Class();"), 1)
+  // Fires: a DIFFERENT local name leaves the class reference alone, so
+  // the suppression is keyed on the name rather than on being in a body.
+  @test.assert_eq(
+    issues(decl + "function m3() { const Other = 1; return new Class(); }"),
+    1,
+  )
+}

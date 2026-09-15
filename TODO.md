@@ -3,6 +3,64 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EO (2026-09-15): 85 false positives on zod for one shadowing test
+
+TP 2657 / MISS in scope 58 / FP 0 — the conformance numbers do not move at
+all, which is the point: **this batch is measured on a real package, not on
+the corpus.**
+
+`mtsc` does not type-check zod. The shipping flags produce **272
+diagnostics** on `zod@4.4.3`, and since tsc accepts zod every one of them is
+a false positive — so `FP 0` on 4,484 conformance files never meant FP 0 on
+real code. The corpus simply does not contain the shapes.
+
+**85 of the 272 — 31%, for one missing test.** zod's `v4/core/util.ts`
+declares `export abstract class Class` at line 1058 and ALSO has helpers
+taking a `Class: SchemaClass<…>` parameter (lines 764, 818), so every
+`new Class({…})` inside them named the parameter and
+`check_abstract_instantiation` resolved it against `ctx.resolver.classes`
+with no shadowing test. That is the scope-narrowing family this repo records
+for `as_const_inline`, `const_enum_inline`, `predicate_inline`,
+`switch_fold` and `type_fold` — five passes, each fixed in turn — arriving in
+the CHECKER, where nobody had asked the question.
+
+The fact was available and used **four lines below one of the two call
+sites**: the TS2350 `Symbol` / `BigInt` rule already reads
+`env.lookup(class_name) is None` for exactly this reason. So the fix is
+`env` threaded into the check and one early return, applied at both the
+`New` and the `NewExpr` spelling rather than at the one that happened to
+be noticed.
+
+Measured: zod **272 -> 187** diagnostics, abstract-class family **0**, and
+the oracle IDENTICAL on both binaries (TP 2657 / MISS in scope 58 / FP 0 /
+PFLEGAL 0 / TN 1750) — so the 85 cost no true positive. The suppression is
+keyed on the NAME, which the test pins in both directions: a parameter and
+a `const` of the same name are silent, while the unshadowed `new Class()`
+still reports at both spellings, and an unrelated local (`const Other = 1`)
+leaves the class reference alone.
+
+What the batch does NOT fix is the other 187, and they rank the next work
+rather than this one. By cause: 40 `case value … can never match
+scrutinee` (zod's `visit.ts` switches on an indexed access into a union of
+`$ZodTypeDef["type"]`), 34 assignability mismatches, 28 `interface X
+incorrectly extends Y` (all of them a derived interface narrowing a member
+whose type is a named interface extending the base's generic instantiation —
+`$ZodCheckRegexInternals extends $ZodCheckInternals<string>` — which our
+structural assignability cannot follow through a generic base), 27 `object
+is possibly undefined`, 18 member-existence, and a 40-item tail across
+eight shapes. None is a single missing test; each is a modelling gap.
+
+The operational finding is the gate that is missing. Every harness here
+either compiles fixtures we wrote or scores a corpus whose FP budget is
+already zero, so 272 false positives on a package in `_build/type-aware/`
+were invisible — and zod is CLONED there, one command away, because the
+type-aware corpus dropped it for an unrelated reason (it answers that
+harness's question with a permanent zero). A real-package FP gate is filed:
+it needs no new download, only a `--no-check`-free run over the targets the
+corpus already checks out, with the count declared per package the way
+`scripts/bridge_struct_enum_fields.txt` declares its budgets, so growth
+fails and a drop follows the budget down.
+
 ### Batch EN (2026-09-15): four rules, one rejection with numbers, and an abstention confirmed twice
 
 TP 2652 -> 2657, MISS in scope 63 -> 58, FP 0, PFLEGAL 0, TN 1750.

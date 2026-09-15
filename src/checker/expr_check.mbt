@@ -5872,7 +5872,32 @@ fn new_callee_class_name(callee : @ast.TsExpr) -> String? {
 /// illegal. Only fires on a direct class reference -- constructing a
 /// `typeof AbstractClass`-typed value is a separate (legal) case TS
 /// allows, and we don't resolve those here.
-fn check_abstract_instantiation(ctx : CheckCtx, class_name : String) -> Unit {
+fn check_abstract_instantiation(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  class_name : String,
+) -> Unit {
+  // A LOCAL BINDING of the same name shadows the class, and then `new X`
+  // constructs whatever that binding holds — which is the legal
+  // `typeof AbstractClass` case the header names, arriving through a
+  // parameter rather than through a type annotation.
+  //
+  // zod's `util.ts` is the shape that matters: it declares
+  // `export abstract class Class` and ALSO has helpers taking a
+  // `Class: SchemaClass<…>` parameter, so every `new Class({…})` inside
+  // them was reported. That was **85 of the 272 false positives** mtsc
+  // produced on zod — 31% of them, for one missing test — and the same
+  // scope-narrowing family this repo records for `as_const_inline`,
+  // `const_enum_inline`, `predicate_inline`, `switch_fold` and
+  // `type_fold`, here in the checker instead of a transform pass.
+  //
+  // `env.lookup` is exactly what the TS2350 `Symbol` / `BigInt` rule four
+  // lines below the `New` call site already consults for the same
+  // question, so the fact was available and used in one of the two
+  // places.
+  if env.lookup(class_name) is Some(_) {
+    return
+  }
   let decl = match ctx.resolver.classes.get(class_name) {
     Some(d) => d
     None =>
@@ -20534,7 +20559,7 @@ fn check_call_args_in_expr(
       }
     }
     New(class_name, args) => {
-      check_abstract_instantiation(ctx, class_name)
+      check_abstract_instantiation(env, ctx, class_name)
       check_new_over_call_signature(env, ctx, class_name)
       // TS2350 for the one lib global people actually get wrong: `Symbol`
       // and `BigInt` are functions and NOT constructors — `new Symbol()`
@@ -20778,7 +20803,7 @@ fn check_call_args_in_expr(
     }
     NewExpr(callee, args) => {
       match new_callee_class_name(callee) {
-        Some(name) => check_abstract_instantiation(ctx, name)
+        Some(name) => check_abstract_instantiation(env, ctx, name)
         None => ()
       }
       // TS2351: `new (a ** b)` -- the value of an arithmetic or bitwise
