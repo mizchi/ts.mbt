@@ -4123,18 +4123,83 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   // runtime but the checker needs them to resolve Named(T) references inside
   // those bodies. Module-level declarations (already in `type_aliases`) take
   // priority: only add a collected alias if the name isn't already registered.
+  // Same uniqueness condition as the interface loop below, and for the
+  // same reason -- this loop had the first-wins bug too, and it was
+  // PRE-EXISTING and reachable from ordinary code: two functions each
+  // declaring a local `type W` made the first one's shape answer for the
+  // second, so `function a() { type W = { x: number }; … }` beside
+  // `function b() { type W = { y: number }; var q: W = { y: 1 }; return
+  // q.y }` produced THREE false positives on a file tsc accepts outright
+  // (a missing required `x`, an excess `y`, and `.y` not existing). A
+  // name declared more than once across block scopes is left
+  // unregistered: abstaining costs a MISS, guessing a winner costs wrong
+  // member answers.
+  let local_alias_counts : Map[String, Int] = Map([])
+  for ta in self.collected_type_aliases {
+    local_alias_counts[ta.name] = match local_alias_counts.get(ta.name) {
+      Some(n) => n + 1
+      None => 1
+    }
+  }
   let seen_aliases : Map[String, Bool] = Map([])
   for ta in type_aliases {
     seen_aliases[ta.name] = true
   }
   for ta in self.collected_type_aliases {
-    if !seen_aliases.contains(ta.name) {
+    if !seen_aliases.contains(ta.name) &&
+      local_alias_counts.get(ta.name) is Some(1) {
       type_aliases.push(ta)
       seen_aliases[ta.name] = true
       match type_alias_to_interface(ta) {
         Some(iface) => interfaces.push(iface)
         None => ()
       }
+    }
+  }
+  // The mirror of the loop above, for INTERFACES. `parse_stmt` collects a
+  // block-level `interface T { … }` and a block-level `type T = …` from
+  // arms ten lines apart, and only the alias half was merged here -- so a
+  // function-body interface reached the checker nowhere, and `q.nope` on
+  // one was silent while the identical top-level spelling reported
+  // (measured). Same priority rule as the aliases: a module-level
+  // declaration of the name wins, so a block-local interface is
+  // registered only when nothing at module level claims the name, which
+  // also keeps two same-named declarations from being read as a
+  // declaration merge across scopes.
+  //
+  // The trade is the one the alias loop already accepted in writing: a
+  // block-local type becomes visible module-wide, so a reference from
+  // OUTSIDE its scope stops being reported. That direction costs a MISS.
+  //
+  // What it must NOT do is pick a winner among SEVERAL block-local
+  // declarations of one name, and the first draft did -- it registered
+  // the first and skipped the rest, which is how `localTypes4` came to
+  // report "property `x` does not exist on `T`" three times on lines tsc
+  // ACCEPTS: that file declares an empty `interface T { }` in one
+  // function and `interface T { x: number }` in another, so the empty one
+  // won and every `v.x` in the second function looked wrong. The file is
+  // an error file, so the conformance gate scored the wrong-reason report
+  // as a true positive -- the trap this repo keeps recording. A name
+  // declared more than once across block scopes is therefore left
+  // unregistered: the shapes genuinely differ per scope and nothing here
+  // knows which scope a reference is in, so abstaining costs a MISS where
+  // guessing costs a false property error.
+  let local_iface_counts : Map[String, Int] = Map([])
+  for iface in self.collected_interfaces {
+    local_iface_counts[iface.name] = match local_iface_counts.get(iface.name) {
+      Some(n) => n + 1
+      None => 1
+    }
+  }
+  let seen_ifaces : Map[String, Bool] = Map([])
+  for iface in interfaces {
+    seen_ifaces[iface.name] = true
+  }
+  for iface in self.collected_interfaces {
+    if !seen_ifaces.contains(iface.name) &&
+      local_iface_counts.get(iface.name) is Some(1) {
+      interfaces.push(iface)
+      seen_ifaces[iface.name] = true
     }
   }
   // Shared leading window for the directive detectors below (one slice

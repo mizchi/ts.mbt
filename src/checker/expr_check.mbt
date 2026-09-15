@@ -1450,7 +1450,16 @@ fn method_callable_param_types(
   m : @ast.TsClassMethodDecl,
 ) -> Array[@ast.TsType] {
   let out : Array[@ast.TsType] = []
+  // A leading `this` parameter (`class K { m(this: K, n: number) {} }`)
+  // types the receiver and is not an argument position, so it is dropped
+  // here for the same reason `callable_func_type_from_params` drops it for
+  // an interface member and the `module_.imports` ingest drops it by name:
+  // `k.m(1)` was reported as `arg[0] expected K but got number` on a file
+  // tsc accepts. `param_defaults` stays indexed by the ORIGINAL position.
   for i, p in m.params {
+    if i == 0 && p.0 == "this" {
+      continue
+    }
     let has_default = i < m.param_defaults.length() &&
       m.param_defaults[i] is Some(_)
     if has_default && !type_accepts_undefined_param(p.1) {
@@ -19577,6 +19586,30 @@ fn check_explicit_type_args(
       _ => ()
     }
   }
+  // REJECTED, with the cause measured rather than argued: the same
+  // position also decides TS2304 ("Cannot find name 'A'") for a name that
+  // resolves as NOTHING -- `new Date<A>`
+  // (parserConstructorAmbiguity3) -- and it was written, built and
+  // REVERTED, because probing a legal neighbour produced a false
+  // positive on legal code that the conformance corpus cannot see.
+  //
+  // `function f() { interface T { x: number } g<T>() }` is legal and was
+  // reported, and the reason is a parser gap rather than anything about
+  // this rule: `parse_module` merges type aliases collected from
+  // function-body / block-level declarations into the module's alias
+  // pool -- its own comment says why, "the checker needs them to resolve
+  // Named(T) references inside those bodies" -- and does the identical
+  // thing for INTERFACES nowhere, though `parse_stmt` collects both from
+  // arms ten lines apart. So a block-local `interface` is invisible to
+  // the resolver (`q.nope` on one is silent while the top-level spelling
+  // reports, measured), and every abstention channel this rule could
+  // consult says the name is undeclared.
+  //
+  // Gating on "top level" does not rescue it either: a block at top
+  // level can declare an interface too. The sound version needs the
+  // block-local interface NAMES on a channel the resolver can read,
+  // which is a new parse-time field for one corpus file that batch BY
+  // correctly classified as broken syntax nobody writes.
   // The callee's declared type-parameter names (positional), or `None` when the
   // callee can't be resolved to a declared class / function (stay silent).
   fn declared_type_params(name : String) -> Array[String]? {
