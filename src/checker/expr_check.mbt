@@ -14923,9 +14923,7 @@ fn infer_arrow_body_with_params(
   match callback {
     ArrowFunc(arrow_params, declared_ret, body, is_async) => {
       let env = ExprEnv::new()
-      for entry in outer.full_snapshot() {
-        env.bind(entry.0, entry.1)
-      }
+      copy_env_into_closure(outer, env)
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
@@ -14953,9 +14951,7 @@ fn infer_arrow_body_with_params(
     }
     FuncExpr(f) => {
       let env = ExprEnv::new()
-      for entry in outer.full_snapshot() {
-        env.bind(entry.0, entry.1)
-      }
+      copy_env_into_closure(outer, env)
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
@@ -15047,6 +15043,140 @@ fn infer_block_return(
 }
 
 ///|
+/// The literal type of an assignment's right-hand side, for the
+/// unstable-narrowing record. `null` / `undefined` are deliberately absent:
+/// our flow model narrows an `any`-typed binding to `Undefined` when its
+/// initializer is `undefined`, the hazard `check_computed_key_type` and
+/// batch CY's TS2532 both record, so a nullish verdict here would not be
+/// trustworthy.
+fn literal_assigned_type(e : @ast.TsExpr) -> @ast.TsType? {
+  match e {
+    StringLit(s) => Some(@ast.TsType::Literal(s))
+    NumberLit(_) | IntLit(_) => Some(@ast.TsType::Number)
+    BoolLit(_) => Some(@ast.TsType::Boolean)
+    BigIntLit(_) => Some(@ast.TsType::BigInt)
+    _ => None
+  }
+}
+
+///|
+/// `(name, literal type)` for every `name = <literal>` in `stmts`.
+///
+/// Deliberately does NOT descend into a nested function or arrow body: an
+/// assignment there is one the enclosing narrowing need not fear (tsc
+/// ACCEPTS `function h() { x = 10 }` beside a narrowed read OUTSIDE a
+/// closure), and collecting fewer names can only make the un-narrowing
+/// quieter.
+fn collect_literal_reassignments(
+  stmts : Array[@ast.TsStmt],
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  fn expr(e : @ast.TsExpr) -> Unit {
+    match e {
+      AssignExpr(n, v) =>
+        match literal_assigned_type(v) {
+          Some(t) => out.push((n, t))
+          None => ()
+        }
+      Seq(a, b) => {
+        expr(a)
+        expr(b)
+      }
+      _ => ()
+    }
+  }
+
+  fn block(b : @ast.TsBlock) -> Unit {
+    for s in collect_literal_reassignments(b.stmts) {
+      out.push(s)
+    }
+  }
+
+  for s in stmts {
+    match s {
+      Assign(n, v) =>
+        match literal_assigned_type(v) {
+          Some(t) => out.push((n, t))
+          None => ()
+        }
+      Expr(e) | Return(Some(e)) | Throw(e) => expr(e)
+      Block(b) => block(b)
+      Label(_, inner) =>
+        for s2 in collect_literal_reassignments([inner]) {
+          out.push(s2)
+        }
+      If(_, a, b) => {
+        block(a)
+        match b {
+          Some(blk) => block(blk)
+          None => ()
+        }
+      }
+      While(_, b) | DoWhile(_, b) | With(_, b) => block(b)
+      For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => block(b)
+      Switch(_, cases) =>
+        for c in cases {
+          block(c.body)
+        }
+      Try(a, _, c, f) => {
+        block(a)
+        match c {
+          Some(blk) => block(blk)
+          None => ()
+        }
+        match f {
+          Some(blk) => block(blk)
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Copy the enclosing env into a closure's scope, then UN-NARROW every
+/// binding whose narrowing the closure cannot rely on — see the
+/// `<unstable-assign>` record in `check_function_body_with` for why a
+/// literal reassignment is what decides it.
+///
+/// The declared type has to be read from `outer`: a closure env is filled
+/// through `bind`, whose first write also becomes the `declared` slot, so
+/// inside the closure `lookup_declared` answers with the NARROWED type and
+/// the real annotation is unrecoverable there.
+fn copy_env_into_closure(outer : ExprEnv, env : ExprEnv) -> Unit {
+  for entry in outer.full_snapshot() {
+    env.bind(entry.0, entry.1)
+  }
+  unnarrow_unstable_bindings(outer, env)
+}
+
+///|
+/// The un-narrowing half of `copy_env_into_closure`, separate because
+/// `check_funcexpr_with_context` copies with its own per-entry rule.
+fn unnarrow_unstable_bindings(outer : ExprEnv, env : ExprEnv) -> Unit {
+  for entry in outer.full_snapshot() {
+    if entry.0.has_prefix("<unstable-assign>") {
+      let n = entry.0["<unstable-assign>".length():].to_owned()
+      match (outer.lookup(n), outer.lookup_declared(n)) {
+        (Some(narrowed), Some(declared)) =>
+          // Nothing to undo when the binding is not narrowed, and the
+          // narrowing stands when the assigned literal can inhabit it.
+          if !is_assignable_to(declared, narrowed) &&
+            !is_assignable_to(entry.1, narrowed) {
+            env.bind(n, declared)
+          }
+        _ => ()
+      }
+    }
+  }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -15061,9 +15191,7 @@ fn check_arrow_with_context(
   // Carry parent bindings into the inner scope. We don't snapshot/restore —
   // `ExprEnv` is mutable, but binding inside this synthetic env doesn't
   // touch the outer one.
-  for entry in outer.full_snapshot() {
-    env.bind(entry.0, entry.1)
-  }
+  copy_env_into_closure(outer, env)
   let param_names : Array[String] = []
   let mut i = 0
   while i < arrow_params.length() {
@@ -15229,6 +15357,14 @@ fn check_funcexpr_with_context(
       entry.1
     }
     env.bind(entry.0, captured)
+  }
+  // And the narrowings this closure cannot rely on even when it is not a
+  // class-expression body: `reset_narrowing` above answers the same
+  // question for ONE shape (`typeGuardInClass`), where the region is what
+  // decides; here it is the binding, and an unstable one is unstable in
+  // any closure.
+  if !reset_narrowing {
+    unnarrow_unstable_bindings(outer, env)
   }
   let param_names : Array[String] = []
   let mut i = 0
@@ -23470,6 +23606,27 @@ fn check_function_body_with(
     return issues
   }
   check_generator_yield_implicit_any(func, ctx)
+  // TS2362 / TS2363 evidence: a narrowing does NOT survive into a closure
+  // when the binding is REASSIGNED with a value the narrowed type cannot
+  // hold, because the closure runs later and observes the write. Recorded
+  // here, at the one place a function body is entered, as `<unstable-
+  // assign>NAME` env entries — the env is what `check_arrow_with_context`
+  // and `check_funcexpr_with_context` copy into the closure scope, so the
+  // fact travels with the bindings it is about and needs no new `CheckCtx`
+  // field (which would want the save / clear / restore discipline
+  // `self.labels` needs at fifteen sites).
+  //
+  // Only LITERAL right-hand sides participate, and the reason is the cell
+  // probing settles: it is not "assigned anywhere". `x = 1` before a
+  // `typeof x === "number"` guard leaves the narrowing intact (tsc
+  // ACCEPTS `x * x` in a closure there), while `x = "hello"` after it
+  // does not — so what matters is whether the assigned value can inhabit
+  // the narrowed type, which a literal answers and an arbitrary
+  // expression does not. An unclassified right-hand side records nothing
+  // and costs a MISS.
+  for entry in collect_literal_reassignments(func.body.stmts) {
+    env.bind("<unstable-assign>" + entry.0, entry.1)
+  }
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
   }

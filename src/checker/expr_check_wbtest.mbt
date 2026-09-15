@@ -21717,3 +21717,59 @@ test "expr_check: the `this` context of a call (batch ER)" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch ES: a narrowing does not survive into a closure the reassignment
+/// can outlive (TS2362 / TS2363 in `typeGuardsDefeat`).
+///
+/// Every cell was probed against the real compiler, and the boundary is
+/// NOT "assigned anywhere" — which is what an earlier note in CLAUDE.md
+/// had filed as the fact needed. An assignment BEFORE the guard leaves the
+/// narrowing intact; one the closure could observe does not. What decides
+/// it is whether the assigned value can inhabit the narrowed type, which a
+/// literal right-hand side answers and an arbitrary expression does not.
+test "expr_check: a closure cannot rely on an unstable narrowing (batch ES)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("valid number type") })
+    .length()
+  }
+  // --- fires: the closure outlives `x = "hello"`, so its `x` is the
+  // declared `number | string` and `x * x` is TS2362 / TS2363.
+  assert_true(
+    issues(
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { var f = () => x * x; }\n  x = \"hello\";\n  return 0;\n}",
+    ) > 0,
+  )
+  // The same through a function EXPRESSION, whose env copy has its own
+  // per-entry rule.
+  assert_true(
+    issues(
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { var f = function () { return x * x; }; }\n  x = \"hello\";\n  return 0;\n}",
+    ) > 0,
+  )
+  // And for a `let`, not only a parameter.
+  assert_true(
+    issues(
+      "function c(y: number | string) {\n  let x: number | string = y;\n  if (typeof x === \"number\") { var g = () => x * x; }\n  x = \"hello\";\n  return 0;\n}",
+    ) > 0,
+  )
+  // --- stays silent
+  for
+    src in [
+      // No reassignment at all: TypeScript DOES preserve a narrowing in a
+      // closure created in the narrowed region.
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { const f = () => x * x; return f(); }\n  return 0;\n}",
+      // A reassignment the narrowed type CAN hold leaves it intact — this
+      // is the cell that rules out \"assigned anywhere\".
+      "function c(x: number | string) {\n  x = 1;\n  if (typeof x === \"number\") { const f = () => x * x; return f(); }\n  return 0;\n}",
+      // A narrowed read that is NOT in a closure keeps the narrowing
+      // however the binding is reassigned later.
+      "function c(x: number | string) {\n  if (typeof x === \"number\") { return x * x; }\n  x = \"hello\";\n  return 0;\n}",
+      // An assignment from INSIDE a closure is not one the enclosing
+      // narrowed region has to fear.
+      "function c(x: number | string) {\n  function h() { x = 10; }\n  if (typeof x === \"number\") { h(); return x * x; }\n  return 0;\n}",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
