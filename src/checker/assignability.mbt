@@ -667,6 +667,20 @@ fn is_assignable_to_inner(
   // per-component fallback below cannot express. Both checks only ever
   // return `true`; a definite `false` is deferred to the end, so neither
   // rule can introduce a false positive.
+  //
+  // The per-component fallback IS unsound against an index-signature
+  // target — an indexer is constrained by every property the source has,
+  // so `{ a: string } & { b: number }` is not assignable to
+  // `{ [k: string]: string }` (tsc says TS2322) while its `{ a: string }`
+  // component alone is, and the fallback answers `true`. Dropping the
+  // fallback when the merge succeeds was implemented and MEASURED, and it
+  // changes nothing: `{ b: number } & { a: string }` against that target
+  // is still silent while the identical single-object source
+  // `{ a: string, b: number }` reports, so this arm is never reached for
+  // an intersection-typed VALUE at all — something above it abstains
+  // first, and finding what is the actual work. Reverted rather than
+  // shipped, because a fix that provably changes nothing is dead code
+  // that reads like live code.
   match source {
     Intersection(members) => {
       match merge_object_intersection(members) {

@@ -2737,11 +2737,24 @@ fn Resolver::enumerable_object_shape(
   }
   match self.unwrap(ty) {
     Struct(_, _) => true
-    // NOTE: `Object` type literals (`{ a } | { b }`) are intentionally NOT
-    // enumerated here. Enabling them flags object-literal unions discriminated
-    // by forms the narrowing engine doesn't yet cover (`=== undefined`
-    // discriminants, `"k" in obj` membership), producing false positives that
-    // outweigh the small object-literal recall gain. See docs/checker-priority.md.
+    // `Object` type literals (`{ a } | { b }`) are deliberately NOT
+    // enumerated, and this is the second time the abstention has been
+    // probed. The note that used to sit here cited
+    // `docs/checker-priority.md` — the strategy document CLAUDE.md
+    // records as RETIRED — so the reason looked like a claim with an
+    // expired date on it. It was tried: enumerating them (declining only
+    // on an index-signature key) buys **ZERO** corpus files and costs
+    // **three** false positives, all three of them discriminated unions
+    // whose discriminant our narrowing cannot decide —
+    // `discriminatedUnionTypes4` tags with a template-literal type
+    // (`` `${AnimalType.cat}` `` against `AnimalType.cat`),
+    // `discriminatedUnionTypes3` discriminates on `.err === undefined`
+    // against a `` `${string} is wrong!` `` sibling, and
+    // `controlFlowWithTemplateLiterals` narrows `{ test: string } | {}`.
+    // A named interface or class union reaches the arms below and is
+    // enumerated; an inline object union stays silent until those three
+    // narrowing forms are modelled. So the abstention is CONFIRMED with
+    // a number, where the old note only had an argument.
     Named(n) | Applied(n, _) =>
       match self.interfaces.get(n) {
         Some(iface) => {
@@ -2837,6 +2850,44 @@ fn inferred_primitive_field_type(
         Some(cls) => {
           let idx = Resolver::class_index(resolver)
           guard idx.field_init.get(name) is Some(inits) else { return None }
+          // An INHERITED unannotated field's initializer lives on the
+          // BASE class, and `field_init` is indexed per declaring class —
+          // so `class C { c = new C() }` beside
+          // `class D extends C { d = new D(); m() { this.d = this.c } }`
+          // recovered `d` (D's own field) and not `c`, which left the
+          // VALUE side `Any` and an `Any` value satisfies any target. One
+          // step up the chain per level, depth-bounded rather than
+          // cycle-tracked: a heritage cycle is itself an error and
+          // stopping short costs a MISS.
+          guard inits.get(field) is Some(_) else {
+            let mut cur = cls
+            let mut depth = 0
+            while depth < 8 {
+              depth += 1
+              let mut next : @ast.TsClassDecl? = None
+              for b in cur.base_names {
+                if next is None {
+                  next = resolver.classes.get(b)
+                }
+              }
+              guard next is Some(base) else { return None }
+              match idx.field_init.get(base.name) {
+                Some(binits) =>
+                  match binits.get(field) {
+                    Some(_) =>
+                      return inferred_primitive_field_type(
+                        resolver,
+                        @ast.TsType::Named(base.name),
+                        field,
+                      )
+                    None => ()
+                  }
+                None => ()
+              }
+              cur = base
+            }
+            return None
+          }
           guard inits.get(field) is Some(i) else { return None }
           let env = ExprEnv::new()
           let t = widen_literal(
@@ -2846,6 +2897,27 @@ fn inferred_primitive_field_type(
           )
           match t {
             Number | String_ | Boolean | BigInt => Some(t)
+            // A CLASS instance is the other shape an unannotated field's
+            // initializer settles completely: `class C { c = new C() }`
+            // gives `c` the type `C`, exactly as tsc does, and without it
+            // `class D extends C { d = new D(); m() { this.d = this.c } }`
+            // — TS2739, C is missing D's members — was silent while the
+            // annotated spelling (`c: C` / `d: D`) reported. The name
+            // must resolve to a declared class, so an unresolved or
+            // structural shape still abstains.
+            //
+            // Safe against an annotation because this whole function is a
+            // FALLBACK: every caller reaches it only when `lookup_field`
+            // came back non-checkable, which is what an unannotated field
+            // reads as. A later assignment in a method does not widen the
+            // type in tsc either, so the initializer really is the whole
+            // answer.
+            Named(n) | Applied(n, _) | Struct(n, _) =>
+              if resolver.classes.get(n) is Some(_) {
+                Some(t)
+              } else {
+                None
+              }
             _ => None
           }
         }
@@ -4684,6 +4756,13 @@ priv struct CheckCtx {
   // `Any` when not in a generator or when the type isn't statically
   // extractable — the yield check skips in that case.
   yield_type : @ast.TsType
+  // The `TNext` slot of the enclosing generator's own
+  // `Generator<Y, R, TNext>` annotation — the type a `yield` EXPRESSION
+  // evaluates to, and therefore the type a `yield*` forwards to the
+  // iterator it delegates to. `Any` outside a generator and for a
+  // generator whose annotation writes fewer than three arguments, which
+  // is what makes `check_iterator_next_sends` abstain there (TS2766).
+  yield_next_type : @ast.TsType
   // True inside a generator body whose `TReturn` slot was extracted into
   // `return_type`: tsc does NOT contextually type generator `return`
   // values (#35995), so fresh literals widen before the TReturn check.
@@ -13865,8 +13944,27 @@ fn check_object_lit_against_target(
     !arg_callee_non_generic
   // Per-field type checks for each provided key.
   for entry in entries {
-    let key = entry.0
-    let value = entry.1
+    // A computed key spelled `[Symbol.<well-known>]` resolves to a STABLE
+    // member name, so it is not really computed for our purposes: the
+    // type parser already encodes `[Symbol.unscopables]: T` in an
+    // interface or object type as the member `@@unscopables`, which is
+    // why the MISSING-required direction already reports
+    // (`foo({})` against `interface I { [Symbol.unscopables]: boolean }`
+    // is flagged) while the object literal's own key stayed
+    // `@@computed:N` and matched nothing. Rewriting it here gives the
+    // excess-property check and the value-type check the same key both
+    // sides use, and needs no evaluation — the name is in the source.
+    //
+    // Only the STANDARD well-known symbols participate, the same set and
+    // the same reason as the parser's `is_standard_well_known_symbol`: a
+    // user-augmented `Symbol.foo` has no stable encoding, so it stays a
+    // computed key and costs a MISS.
+    let (key, value) = match (entry.0.has_prefix("@@computed:"), entry.1) {
+      (true, ComputedProp(PropAccess(Var("Symbol"), wk), vexpr)) if is_well_known_symbol_name(
+        wk,
+      ) => ("@@" + wk, vexpr)
+      _ => (entry.0, entry.1)
+    }
     // Spread entries (`@@spread:N`) are not individual properties — skip them
     // in the excess-property check; their fields are checked via infer_expr.
     if key.has_prefix("@@spread:") {
@@ -14753,6 +14851,7 @@ fn check_arrow_with_context(
     script_top_level: ctx.script_top_level,
     return_type: unwrap_async_return(is_async, formal_ret),
     yield_type: @ast.TsType::Any,
+    yield_next_type: @ast.TsType::Any,
     widen_generator_return: false,
     resolver: ctx.resolver,
     issues: ctx.issues,
@@ -14899,6 +14998,7 @@ fn check_funcexpr_with_context(
     script_top_level: ctx.script_top_level,
     return_type: body_return,
     yield_type: @ast.TsType::Any,
+    yield_next_type: @ast.TsType::Any,
     widen_generator_return: false,
     resolver: ctx.resolver,
     issues: ctx.issues,
@@ -16894,7 +16994,12 @@ fn collect_narrowing(
           }
           match (key_opt, right) {
             (Some(key), Var(name)) => {
-              let cur = env_lookup_full(env, resolver, name)
+              // Unwrap type aliases first so a `type M = A | B` receiver
+              // becomes the underlying union before we split it -- the same
+              // reason `narrow_by_discriminant` unwraps. Without this an
+              // alias is one opaque variant, `lookup_field` answers for the
+              // whole alias, and `"a" in m` narrows nothing.
+              let cur = resolver.unwrap(env_lookup_full(env, resolver, name))
               let then_ty = narrow_keep(cur, fn(v) {
                 resolver.lookup_field(v, key) is Some(_)
               })
@@ -17976,6 +18081,107 @@ fn check_forof_object_literal(
 }
 
 ///|
+/// The `TNext` slot of a written `Generator<Y, R, N>` /
+/// `AsyncGenerator<Y, R, N>` annotation — the type its `next()` method
+/// REQUIRES as an argument. `None` for every other shape.
+///
+/// All THREE arguments have to be written: with two the `TNext` default
+/// (`unknown`) applies and accepts anything, which is why
+/// `Generator<number, void>` is ACCEPTED (probed) while
+/// `Generator<number, void, string>` is not. `Iterator<Y, R, N>` is
+/// deliberately excluded — it has no `[Symbol.iterator]()`, so iterating
+/// one is TS2488, a code this rule does not claim (probed:
+/// `for (_ of iter)` over an `Iterator<number, void, string>` reports
+/// TS2488 and never TS2763).
+fn iterator_declared_next_type(
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType? {
+  match resolver.unwrap(ty) {
+    Applied("Generator", args) | Applied("AsyncGenerator", args) =>
+      if args.length() == 3 {
+        Some(args[2])
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+/// True for a type that can hold neither `undefined` nor anything else —
+/// a concrete primitive or literal. Used as an ALLOWLIST by the rule
+/// below, so `any` / `unknown` / a union carrying `undefined` / a bare
+/// type parameter / an unresolved name all abstain: the fail direction
+/// this buys is a MISS, where a denylist ("not obviously nullable")
+/// would invent findings on every type the checker cannot compute.
+fn definitely_concrete_scalar(ty : @ast.TsType) -> Bool {
+  match ty {
+    String_
+    | Number
+    | Int
+    | Boolean
+    | BigInt
+    | Symbol
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// TS2763 / TS2764 / TS2766: the iterated value's `next()` declares a
+/// REQUIRED parameter type that this iteration position can never supply.
+/// A `for-of`, an array spread and a destructuring pattern all call
+/// `next()` with no argument, so they send `undefined`; a `yield*`
+/// forwards whatever the CONTAINING generator is sent, which that
+/// generator's own `Generator<Y, R, TNext>` annotation names. Either way,
+/// when the sent type is not assignable to the iterator's declared
+/// `TNext`, every `next()` the position performs passes the wrong
+/// argument — which is a property of the two ANNOTATIONS and needs no
+/// inference.
+///
+/// `strictNullChecks` is required: without it `undefined` flows into
+/// `string` and tsc accepts the identical file (probed). The sent type
+/// must itself be `undefined` or a concrete scalar, so a `yield*` inside
+/// an unannotated generator abstains rather than reading `Any` as a
+/// mismatch.
+fn check_iterator_next_sends(
+  ctx : CheckCtx,
+  iter_ty : @ast.TsType,
+  sent : @ast.TsType,
+  path : String,
+  what : String,
+) -> Unit {
+  if !ctx.strict_null_checks {
+    return
+  }
+  match iterator_declared_next_type(ctx.resolver, iter_ty) {
+    Some(next_ty) => {
+      let n = ctx.resolver.unwrap(next_ty)
+      if !definitely_concrete_scalar(n) {
+        return
+      }
+      let s = ctx.resolver.unwrap(sent)
+      if !(s is Undefined) && !definitely_concrete_scalar(s) {
+        return
+      }
+      if is_assignable_to(s, n) {
+        return
+      }
+      record(
+        ctx,
+        path,
+        "the `next` method of this iterator expects type `\{type_display(n)}`, but \{what} will always send `\{type_display(s)}`",
+      )
+    }
+    None => ()
+  }
+}
+
+///|
 fn check_forof_non_iterable(
   ctx : CheckCtx,
   iter_ty : @ast.TsType,
@@ -18627,6 +18833,17 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // spreads and assignment-form destructuring).
       check_iterable_class_protocol(ctx, iter_ty, "for-of iterable")
       check_forof_non_iterable(ctx, iter_ty, "for-of iterable")
+      // TS2763: a `for-of` head calls `next()` with no argument, so it
+      // always sends `undefined` — an error when the iterator's declared
+      // `TNext` rejects it. Covers `for await` at the same site, which
+      // tsc reports identically.
+      check_iterator_next_sends(
+        ctx,
+        iter_ty,
+        @ast.TsType::Undefined,
+        "for-of iterable",
+        "for-of",
+      )
       check_forof_object_literal(ctx, iter, false)
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
@@ -18778,6 +18995,21 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, iter, ctx)
       let iter_ty = infer_expr(env, ctx.resolver, iter)
       check_forof_object_literal(ctx, iter, true)
+      // TS2763, as at the `for-of` head: `for await` calls `next()` with
+      // no argument too, so it sends `undefined`. tsc reports it for an
+      // `AsyncGenerator` and for a SYNC `Generator` alike, which is why
+      // the check reads `iter_ty` rather than the awaited unwrapping
+      // below. This arm is a second copy of the `for-of` arm and does
+      // NOT call `check_iterable_class_protocol` /
+      // `check_forof_non_iterable` — that TS2488 gap is filed separately
+      // rather than folded in unmeasured.
+      check_iterator_next_sends(
+        ctx,
+        iter_ty,
+        @ast.TsType::Undefined,
+        "for-await-of iterable",
+        "for-await-of",
+      )
       let unwrapped = unwrap_async_return(true, iter_ty)
       let inferred_elem = for_of_element_type(ctx.resolver, unwrapped)
       let elem_ty = if is_checkable(declared) {
@@ -21983,7 +22215,25 @@ fn check_call_args_in_expr(
         _ => ()
       }
     }
-    Spread(v) | Await(v) => check_call_args_in_expr(env, v, ctx)
+    Spread(v) | Await(v) => {
+      check_call_args_in_expr(env, v, ctx)
+      // TS2764: a spread obtains an iterator and calls `next()` with no
+      // argument, so it always sends `undefined`. This arm is where BOTH
+      // spread spellings arrive — an array-literal element and a call
+      // argument — so the rule lands at every spread position from one
+      // place rather than at the one that happened to be noticed.
+      match expr {
+        Spread(inner) =>
+          check_iterator_next_sends(
+            ctx,
+            infer_expr(env, ctx.resolver, inner),
+            @ast.TsType::Undefined,
+            "spread",
+            "a spread",
+          )
+        _ => ()
+      }
+    }
     PropAssignExpr(recv, prop, v) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
@@ -22114,6 +22364,18 @@ fn check_call_args_in_expr(
       let operand_ty = infer_expr(env, ctx.resolver, operand)
       check_iterable_class_protocol(ctx, operand_ty, "yield* iterable")
       check_forof_non_iterable(ctx, operand_ty, "yield* iterable")
+      // TS2766: `yield*` does NOT send `undefined` — it forwards whatever
+      // the CONTAINING generator is sent, which its own
+      // `Generator<Y, R, TNext>` annotation names (`ctx.yield_next_type`).
+      // An unannotated container leaves that `Any`, which the helper
+      // abstains on.
+      check_iterator_next_sends(
+        ctx,
+        operand_ty,
+        ctx.yield_next_type,
+        "yield* iterable",
+        "the containing generator",
+      )
       // `yield* iter` delegates to another iterable. Validate against
       // `Iterable<T>` / `Generator<T, ...>` of the same element type.
       if is_checkable(ctx.yield_type) {
@@ -22805,6 +23067,19 @@ fn check_function_body_with(
   } else {
     @ast.TsType::Any
   }
+  // The `TNext` slot, for TS2766. Only `Generator` / `AsyncGenerator`
+  // written with all THREE arguments carry it; everything else leaves
+  // `Any` so the `yield*` check abstains rather than reading an
+  // unannotated container as a mismatch.
+  let yield_next_type : @ast.TsType = if func.is_generator {
+    match func.return_type {
+      Applied("Generator", args) | Applied("AsyncGenerator", args) if args.length() ==
+        3 => args[2]
+      _ => @ast.TsType::Any
+    }
+  } else {
+    @ast.TsType::Any
+  }
   // For a generator, a `return x` statement yields the iterator's
   // `TReturn` slot, not the declared iterator type itself: checking the
   // returned value against `Generator<T, TReturn, ...>` / `IterableIterator<T>`
@@ -22858,6 +23133,7 @@ fn check_function_body_with(
     script_top_level: false,
     return_type: effective_return,
     yield_type,
+    yield_next_type,
     widen_generator_return: generator_treturn,
     resolver,
     issues,
@@ -28129,6 +28405,55 @@ fn check_interface_extends_member_compat(
           _ => false
         }
         if callable {
+          continue
+        }
+        // A BARE, UNCONSTRAINED type parameter as the redeclared member's
+        // type is TS2430 against any concrete base member type. The
+        // general comparison below abstains whenever either side mentions
+        // one of the interface's own type parameters, which is right for
+        // every composite shape and too coarse for this one: an
+        // unconstrained `T` is effectively `unknown`, so it is assignable
+        // to almost nothing — the same argument `type_param_bounds`
+        // already carries for the TS2322 assignment rule.
+        //
+        // Probed cell by cell, because the boundary is narrower than it
+        // reads. `foo: T` against `{ [k: string]: any }`, `string`,
+        // `{ a: number }`, `{}`, `object` and `number | undefined` all
+        // report; a CONSTRAINED `T`, a base member typed `any` or
+        // `unknown`, and a composite `T[]` are all ACCEPTED. And
+        // `interface Base<U> { foo: U }` beside
+        // `interface E1<T> extends Base<T> { foo: T }` is legal, which
+        // falls out for free: substitution makes the base type the bare
+        // `T` too, and a bare type parameter is not concrete.
+        let bare_unconstrained_tp = match fty {
+          Named(tp) => {
+            let mut declared = false
+            for p in iface.type_params {
+              if p == tp {
+                declared = true
+              }
+            }
+            let mut bounded = false
+            for b in iface.type_param_bounds {
+              if b.0 == tp {
+                bounded = true
+              }
+            }
+            declared && !bounded
+          }
+          _ => false
+        }
+        if bare_unconstrained_tp &&
+          is_checkable(bty) &&
+          !(bty is Unknown) &&
+          !func_type_mentions_type_param_names(bty, iface.type_params) &&
+          !type_contains_unresolved_named(bty, resolver) &&
+          !type_deeply_contains_unmodeled(bty, resolver) &&
+          !type_has_call_signature(bty, resolver) {
+          issues.push({
+            path: "interface \{iface.name}",
+            message: "interface `\{iface.name}` incorrectly extends interface `\{base_name}`: types of property `\{fname}` are incompatible",
+          })
           continue
         }
         if is_checkable(fty) &&
@@ -34380,6 +34705,7 @@ fn check_module_function_bodies_layered(
       script_top_level: false,
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
+      yield_next_type: @ast.TsType::Any,
       widen_generator_return: false,
       resolver,
       issues: [],
@@ -34449,6 +34775,7 @@ fn check_module_function_bodies_layered(
       script_top_level: false,
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
+      yield_next_type: @ast.TsType::Any,
       widen_generator_return: false,
       resolver,
       issues: [],
@@ -34500,6 +34827,7 @@ fn check_module_function_bodies_layered(
       script_top_level: outer_modules.length() == 0,
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
+      yield_next_type: @ast.TsType::Any,
       widen_generator_return: false,
       resolver,
       issues: [],
@@ -35110,6 +35438,49 @@ fn check_module_function_bodies_layered(
           all.push({
             path: "computed key `[\{key}]`",
             message: "cannot find name `\{key}`",
+          })
+        }
+        continue
+      }
+      // TS2339 for a `[Symbol.<name>]` member key in a `declare class`
+      // body where `<name>` is not a well-known symbol. The judgement is
+      // `check_computed_key_type`'s — a `Symbol.*` static that is not a
+      // well-known symbol has a function / object type, so it is neither
+      // a valid key nor, in fact, a member of `SymbolConstructor` at all —
+      // and this is the one member-key site that could not reach it,
+      // because `parse_declare_class_member_name` brace-matches past the
+      // key and keeps no expression. The three gates are the same three,
+      // for the same reasons: a user-declared `Symbol` value, a `Symbol`
+      // class, or an `interface SymbolConstructor` augmentation
+      // (symbolProperty61 legally does the last) can each give the name a
+      // meaning the stock lib does not.
+      if gm.has_prefix("<symbol-type-key>") {
+        let sym = gm["<symbol-type-key>".length():].to_owned()
+        let mut shadowed = false
+        for c in module_.classes {
+          if c.name == "Symbol" {
+            shadowed = true
+          }
+        }
+        for i in module_.interfaces {
+          if i.name == "SymbolConstructor" || i.name == "Symbol" {
+            shadowed = true
+          }
+        }
+        let values = match computed_key_values {
+          Some(v) => v
+          None => {
+            let v = module_value_name_set(module_)
+            computed_key_values = Some(v)
+            v
+          }
+        }
+        if !is_well_known_symbol_name(sym) &&
+          !shadowed &&
+          !values.contains("Symbol") {
+          all.push({
+            path: "computed key `[Symbol.\{sym}]`",
+            message: "property `\{sym}` does not exist on type `SymbolConstructor`",
           })
         }
         continue

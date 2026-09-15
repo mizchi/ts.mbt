@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2652 / MISS in scope 63 /
+  is a soundness bug, and there are none (TP 2657 / MISS in scope 58 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -2477,6 +2477,101 @@ product surfaces now.
   declines for an index signature, a generic interface, a class and
   anything it cannot enumerate, since each of those is a shape where a
   property might be present without being listed.
+  Batch EN is **+5** (MISS in scope 63 -> 58) and its most useful outputs
+  are two changes MEASUREMENT retired. The first is the SECOND probe of
+  one abstention and the second time the answer was "leave it":
+  `enumerable_object_shape` declines `Object` type literals, and the note
+  that used to sit there cited `docs/checker-priority.md`, the strategy
+  document this file records as RETIRED — so the stated reason looked like
+  a claim whose date had passed, the lead this series has cashed five
+  times. Enumerating them (declining only on an index-signature key) buys
+  **ZERO** corpus files for **THREE** false positives, all three
+  discriminated unions whose discriminant our narrowing cannot decide: a
+  template-literal tag (`` `${AnimalType.cat}` `` against
+  `AnimalType.cat`), an `.err === undefined` discriminant against a
+  `` `${string} is wrong!` `` sibling, and `{ test: string } | {}`. A
+  NAMED interface or class union is enumerated and an inline object union
+  stays silent, so the abstention is now CONFIRMED with a number where the
+  old note had an argument. The second is the intersection /
+  index-signature fallback: `is_assignable_to_inner` merges `{a} & {b}`
+  and then, when the merged shape fails, falls back to "some component
+  alone satisfies the target" — genuinely unsound against an indexer,
+  since `{ a: string } & { b: number }` is TS2322 against
+  `{ [k: string]: string }` while its `{ a: string }` component is fine.
+  Dropping the fallback changes NOTHING, and the proof is a pair:
+  `{ b: number } & { a: string }` against that target is still silent
+  while the identical single-object source `{ a: string, b: number }`
+  reports, so the arm is never reached for an intersection-typed VALUE at
+  all and something above it abstains first. Reverted with the
+  measurement at the site, because a fix that provably changes nothing is
+  dead code that reads like live code.
+  Of the rules that did ship, two are the applied-in-some-places family
+  and one is a result FILTER rather than a missing site. `narrow_keep` /
+  `narrow_remove` call `union_components` with no resolver, so a
+  `type M = A | B` receiver reached the `"a" in m` guard as ONE opaque
+  variant, `lookup_field` answered for the whole alias, and the guarded
+  access was reported — while the sibling `narrow_by_discriminant`
+  unwraps for exactly this reason and says so in its own comment. It is
+  corpus-NEUTRAL at FP 0, which is the point: a narrowing improvement the
+  conformance corpus cannot score, and the change that proves the
+  rejected enumeration above was worth zero rather than blocked on this.
+  `check_computed_key_type` has judged a `[Symbol.<non-well-known>]` key
+  for a runtime class body and an object literal for as long as it
+  existed, and `parse_declare_class_member_name` brace-matches past the
+  key and keeps no expression — so the name rides a marker, the same
+  argument batch EE's TS1308 makes for reading an `await` out of a
+  skipped decorator, with the three gates COPIED from that function
+  rather than re-derived.
+  The filter is `inferred_primitive_field_type`, the fallback every
+  unannotated-field read goes through: it infers the field's type from
+  its initializer and admitted only
+  `number` / `string` / `boolean` / `bigint`, so `class C { c = new C() }`
+  left `c` as `Any` while the ANNOTATED spelling reported. Widening it
+  measured NOTHING, and the second half is the finding — `field_init` is
+  indexed per DECLARING class, so `class D extends C` recovered `d` and
+  not the INHERITED `c`, leaving the VALUE side `Any`, and an `Any` value
+  satisfies any target. The READ side had been working from the filter
+  alone (`this.c.nope` reports), which is what separated the two halves:
+  the filter was necessary and not sufficient, and only measuring the
+  ASSIGNMENT showed which.
+  Two more rules and one retired plan. TS2763 / TS2764 / TS2766 is an
+  iterator whose `next()` declares a required parameter the position
+  cannot supply: a `for-of`, a `for await`, an array spread and a
+  destructuring pattern all call `next()` with NO argument and so send
+  `undefined`, while `yield*` forwards whatever the CONTAINING generator
+  is sent — which needed a `yield_next_type` beside the `yield_type`
+  extracted from the same annotation ten lines away. The generic
+  `Spread(v) | Await(v)` arm is where BOTH spread spellings arrive, an
+  array-literal element and a call argument, so the rule lands at every
+  spread position from one place; `for await` turned out to be a separate
+  arm carrying NONE of the TS2488 apparatus either, and that gap is filed
+  rather than folded in unmeasured. Three cells decide its shape and all
+  were probed: `Generator<number, void>` — two type arguments, `TNext`
+  left at its `unknown` default — is ACCEPTED, `Iterator<Y, R, N>` is
+  TS2488 instead, and the identical file with `strictNullChecks` off is
+  accepted too. TS2430 for a bare UNCONSTRAINED type parameter
+  redeclaring a base member is the same shape as the TS2322 rule
+  `type_param_bounds` already carries, and its boundary is narrower than
+  it reads — `foo: T` against `{ [k: string]: any }`, `string`,
+  `{ a: number }`, `{}`, `object` and `number | undefined` all report,
+  while a CONSTRAINED `T`, an `any` or `unknown` base member and a
+  composite `T[]` are all ACCEPTED, and `interface Base<U> { foo: U }`
+  beside `interface E1<T> extends Base<T> { foo: T }` is legal for free
+  because substitution makes the base type the bare `T` too. The retired
+  plan is batch DX's `callee_non_generic` gate: `symbolProperty21`'s
+  callee IS generic, so the filed fix was to test the WRITTEN target
+  rather than `resolver.unwrap(target)`, and probing says the
+  excess-property check at a call argument ALREADY fires for a named
+  interface target with a generic callee. The computed key was the whole
+  blocker — a `[Symbol.<well-known>]` object-literal key stayed
+  `@@computed:N` while the type parser had encoded the interface side as
+  `@@unscopables` all along, which is why the MISSING-required direction
+  already reported and the excess direction did not.
+  The operational note is batch EL's one level up: a killed `moon build`
+  leaves its queued siblings waiting on `_build/.moon-lock`, so three
+  `moon check` runs stacked behind one stale build and every log read
+  empty for minutes. One script per measurement — check, build, oracle —
+  and `ps -o etime` is what tells a queue from a hang.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -21162,3 +21162,327 @@ test "expr_check: an object-type index signature's value type" {
     0,
   )
 }
+
+///|
+/// Batch EN. `"a" in m` narrows a type ALIAS to a union.
+///
+/// `narrow_keep` / `narrow_remove` call `union_components` with no
+/// resolver, so a `type M = A | B` receiver arrived as ONE opaque variant
+/// and `lookup_field` answered for the whole alias — `then_ty` came out
+/// `Never`, nothing was bound, and the guarded access was reported. The
+/// sibling `narrow_by_discriminant` unwraps for exactly this reason and
+/// says so in its own comment; this is that one place it had not been
+/// applied. Both spellings of the receiver are asserted, so the fix
+/// cannot be "stop narrowing".
+test "expr_check: `in` narrowing unwraps a type alias to its union" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("does not exist") })
+    .length()
+  }
+  let decls = "// @strict: true\ninterface A { a: number }\ninterface B { b: string }\ntype M = A | B;\ndeclare const m: M;\n"
+  // Silent: the `in` guard proves the member is there.
+  @test.assert_eq(issues(decls + "if (\"a\" in m) { m.a; }"), 0)
+  // Fires: the same access with no guard. Without this half the test
+  // would pass with the narrowing switched off entirely.
+  @test.assert_eq(issues(decls + "m.a;"), 1)
+  // The direct (non-alias) union spelling, both ways.
+  let direct = "// @strict: true\ninterface A { a: number }\ninterface B { b: string }\ndeclare const m: A | B;\n"
+  @test.assert_eq(issues(direct + "if (\"a\" in m) { m.a; }"), 0)
+  @test.assert_eq(issues(direct + "m.a;"), 1)
+}
+
+///|
+/// Batch EN. TS2763 / TS2764 / TS2766: the iterated value's `next()`
+/// declares a required parameter type the position cannot supply.
+///
+/// Every cell below was probed against the real compiler. The two that
+/// decide the shape of the rule: `Generator<number, void>` — two type
+/// arguments, `TNext` left at its `unknown` default — is ACCEPTED, so all
+/// three arguments must be WRITTEN; and the identical file with
+/// `strictNullChecks` off is ACCEPTED too, because `undefined` flows into
+/// `string` there. `yield*` is the one position that does not send
+/// `undefined`: it forwards the CONTAINING generator's own `TNext`, so an
+/// unannotated container abstains and a container whose `TNext` matches is
+/// legal.
+test "expr_check: an iterator's declared next() parameter type" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("`next` method") })
+    .length()
+  }
+  let strict = "// @strict: true\n"
+  let g = "declare const g1: Generator<number, void, string>;\n"
+  // Fires: for-of, for-await-of, an array-literal spread, a spread in a
+  // call argument, and a `yield*` whose container sends `boolean`.
+  @test.assert_eq(issues(strict + "declare let _: any;\n" + g + "for (_ of g1);"), 1)
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let _: any;\ndeclare const g4: AsyncGenerator<number, void, string>;\nasync function m() { for await (_ of g4); }",
+    ),
+    1,
+  )
+  @test.assert_eq(issues(strict + g + "const xs = [...g1];"), 1)
+  @test.assert_eq(
+    issues(strict + g + "declare function h(...xs: number[]): void;\nh(...g1);"),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      strict + g + "function* f(): Generator<number, void, boolean> { yield* g1; }",
+    ),
+    1,
+  )
+  // Silent: `TNext` is `undefined`, or admits it, or is `any`.
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let _: any;\ndeclare const g2: Generator<number, void, undefined>;\nfor (_ of g2);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let _: any;\ndeclare const g7: Generator<number, void, string | undefined>;\nfor (_ of g7);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let _: any;\ndeclare const g8: Generator<number, void, any>;\nfor (_ of g8);",
+    ),
+    0,
+  )
+  // Silent: only TWO type arguments, so `TNext` is the `unknown` default.
+  @test.assert_eq(
+    issues(
+      strict +
+      "declare let _: any;\ndeclare const g9: Generator<number, void>;\nfor (_ of g9);",
+    ),
+    0,
+  )
+  // Silent: without `strictNullChecks` `undefined` is assignable to
+  // `string`, and tsc accepts the identical file.
+  @test.assert_eq(
+    issues("// @strict: false\ndeclare let _: any;\n" + g + "for (_ of g1);"),
+    0,
+  )
+  // Silent: `yield*` in a container with no annotation, and in one whose
+  // `TNext` is the same `string`.
+  @test.assert_eq(issues(strict + g + "function* f() { yield* g1; }"), 0)
+  @test.assert_eq(
+    issues(
+      strict + g + "function* f(): Generator<number, void, string> { yield* g1; }",
+    ),
+    0,
+  )
+}
+
+
+///|
+/// Batch EN. A `[Symbol.<well-known>]` object-literal key resolves to the
+/// same `@@name` member the type parser already records on the target.
+///
+/// The asymmetry is what showed the gap: `foo({})` against
+/// `interface I { [Symbol.unscopables]: boolean }` was already reported
+/// MISSING the member, so the interface side had the name all along —
+/// only the literal's own key stayed `@@computed:N` and matched nothing.
+/// Both directions the rewrite unlocks are asserted (an excess symbol key
+/// and a symbol key whose VALUE is wrong), and so is the legal spelling.
+/// A user-augmented `Symbol.foo` has no stable encoding and stays a
+/// computed key, which is a MISS rather than a finding.
+test "expr_check: a well-known symbol key in an object literal" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) {
+      i.message.contains("does not exist on target type") ||
+      i.message.contains("but got")
+    })
+    .length()
+  }
+  let decls = "//@target: ES6\ninterface I { [Symbol.unscopables]: boolean; }\ndeclare function foo(p: I): void;\n"
+  // Fires: an excess symbol key alongside the declared one.
+  @test.assert_eq(
+    issues(decls + "foo({ [Symbol.unscopables]: true, [Symbol.toPrimitive]: 0 });"),
+    1,
+  )
+  // Fires: the declared symbol key with the wrong value type.
+  @test.assert_eq(issues(decls + "foo({ [Symbol.unscopables]: 0 });"), 1)
+  // Silent: the declared symbol key with the right value.
+  @test.assert_eq(issues(decls + "foo({ [Symbol.unscopables]: true });"), 0)
+  // Silent: a key that is not a standard well-known symbol keeps the
+  // computed encoding, so nothing is claimed about it either way.
+  @test.assert_eq(
+    issues(decls + "foo({ [Symbol.unscopables]: true, [Symbol.nope]: 0 });"),
+    0,
+  )
+}
+
+///|
+/// Batch EN. An unannotated class field initialized with a class instance
+/// gets that class's type.
+///
+/// `inferred_primitive_field_type` is the fallback every unannotated-field
+/// read goes through, and its result filter admitted only
+/// `number` / `string` / `boolean` / `bigint` — so `class C { c = new C() }`
+/// left `c` as `Any` and `this.d = this.c` in a subclass was silent, while
+/// the ANNOTATED spelling of the same two fields reported. Both spellings
+/// are asserted here, in both directions, so a regression in either one
+/// fails.
+test "expr_check: an unannotated field initialized with a class instance" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("but got") })
+    .length()
+  }
+  // Fires: assigning the BASE-typed field into the DERIVED-typed one.
+  @test.assert_eq(
+    issues(
+      "class C { c = new C(); }\nclass D extends C { d = new D(); bar() { this.d = this.c; } }",
+    ),
+    1,
+  )
+  // Silent: the other direction — a `D` satisfies `C`.
+  @test.assert_eq(
+    issues(
+      "class C { c = new C(); }\nclass D extends C { d = new D(); bar() { this.c = this.d; } }",
+    ),
+    0,
+  )
+  // The annotated spelling, which already worked, both ways.
+  @test.assert_eq(
+    issues(
+      "class C { c: C = null as any; }\nclass D extends C { d: D = null as any; bar() { this.d = this.c; } }",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { c: C = null as any; }\nclass D extends C { d: D = null as any; bar() { this.c = this.d; } }",
+    ),
+    0,
+  )
+  // Silent: an initializer whose type is not a declared class still
+  // abstains, so nothing new is claimed for `{ … }` or a call result.
+  @test.assert_eq(
+    issues(
+      "class C { c = { a: 1 }; }\nclass D extends C { d = new D(); bar() { this.d = this.c; } }",
+    ),
+    0,
+  )
+}
+
+///|
+/// Batch EN. TS2430 for a bare, UNCONSTRAINED type parameter redeclaring a
+/// base interface member.
+///
+/// `check_interface_extends_member_compat` abstains whenever either side
+/// mentions one of the interface's own type parameters — correct for every
+/// composite shape, and too coarse for a BARE one: an unconstrained `T` is
+/// effectively `unknown` and assignable to almost nothing. Every cell below
+/// was probed against the real compiler, and the boundary is narrower than
+/// the rule reads: a constrained `T`, an `any` or `unknown` base member,
+/// and a composite `T[]` are all ACCEPTED.
+test "expr_check: a bare type parameter redeclaring a base member" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(d) { d.message.contains("incorrectly extends interface") })
+    .length()
+  }
+  // Fires: an index-signature, primitive, object, `{}`, `object` and
+  // nullable-union base member type.
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: { [key: string]: any }; }\ninterface E1<T> extends Base { foo: T; }",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues("interface Base { foo: string; }\ninterface E1<T> extends Base { foo: T; }"),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: { a: number }; }\ninterface E1<T> extends Base { foo: T; }",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues("interface Base { foo: object; }\ninterface E1<T> extends Base { foo: T; }"),
+    1,
+  )
+  // Silent: a CONSTRAINED type parameter.
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: { [key: string]: any }; }\ninterface E1<T extends { [key: string]: any }> extends Base { foo: T; }",
+    ),
+    0,
+  )
+  // Silent: `any` and `unknown` base member types accept anything.
+  @test.assert_eq(
+    issues("interface Base { bar: any; }\ninterface E1<T> extends Base { bar: T; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("interface Base { bar: unknown; }\ninterface E1<T> extends Base { bar: T; }"),
+    0,
+  )
+  // Silent: a COMPOSITE type mentioning the parameter is not a bare one.
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: { [key: string]: any }; }\ninterface E1<T> extends Base { foo: T[]; }",
+    ),
+    0,
+  )
+  // Silent: a generic base instantiated with the same parameter — the
+  // substituted base type is the bare `T` too, so it is not concrete.
+  @test.assert_eq(
+    issues(
+      "interface Base<U> { foo: U; }\ninterface E1<T> extends Base<T> { foo: T; }",
+    ),
+    0,
+  )
+}
+
+///|
+/// Batch EN. A `[Symbol.<name>]` member key in a `declare class` body.
+///
+/// `check_computed_key_type` has judged this shape for a runtime class body
+/// and an object literal for as long as it existed, and this was the one
+/// member-key site that could not reach it —
+/// `parse_declare_class_member_name` brace-matches past the key and keeps
+/// no expression, so the name rides a marker instead. The three gates are
+/// copied from that function rather than re-derived, which is also why
+/// `declare var Symbol: any` abstains here: tsc still reports (the ambient
+/// declaration MERGES with the lib's rather than replacing it), so that
+/// cell is a declared MISS.
+test "expr_check: a Symbol member key in a declare class body" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(d) {
+      d.message.contains("does not exist on type `SymbolConstructor`")
+    })
+    .length()
+  }
+  // Fires: not a well-known symbol.
+  @test.assert_eq(
+    issues("declare class C {\n    [Symbol.isRegExp]: string;\n}"),
+    1,
+  )
+  // Silent: a well-known symbol.
+  @test.assert_eq(
+    issues("declare class C {\n    [Symbol.iterator]: string;\n}"),
+    0,
+  )
+  // Silent: the file augments `SymbolConstructor`, which can add a member
+  // of any name (symbolProperty61 legally does this).
+  @test.assert_eq(
+    issues(
+      "interface SymbolConstructor { isRegExp: symbol }\ndeclare class C {\n    [Symbol.isRegExp]: string;\n}",
+    ),
+    0,
+  )
+}
