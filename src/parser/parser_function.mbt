@@ -1399,10 +1399,74 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
 
 ///|
 /// Skip generic type parameters <T, U extends Foo, V = Default>
+/// Record every TYPE-PARAMETER name in the `<...>` clause at the current
+/// position, by LOOKAHEAD — nothing is consumed.
+///
+/// The skips below discard the names by design (they exist for the
+/// positions that only need the tokens gone), but a rule asking "is this
+/// spelling a type parameter anywhere in the file" needs them, and they
+/// are readable out of the same tokens: the completeness-by-construction
+/// argument the `await`-in-a-decorator and `[Symbol.x]` member-key
+/// markers make. It writes the `<type-param-name>` channel
+/// `parse_type_param_names_bounds_and_const_flags` already fills for
+/// exactly this kind of abstention.
+///
+/// A name is the identifier directly after `<` or a depth-1 `,`, with the
+/// `const` / `in` / `out` modifiers skipped — a BOUND's names are not
+/// recorded, so the channel stays a statement about declarations. This is
+/// a lookahead rather than a hook inside the skip loop because the two
+/// callers consume differently and only ONE of the two `<...>` forms in
+/// the expression grammar is a declaration: `skip_type_args` also runs for
+/// a type ARGUMENT list (`f<number>()`), where the identifiers are
+/// references, and recording those would make the rule this feeds abstain
+/// on its own subject.
+fn Parser::record_type_param_names_ahead(self : Parser) -> Unit {
+  if !self.check(Lt) {
+    return
+  }
+  let mut i = 1
+  let mut depth = 1
+  let mut at_name = true
+  while depth > 0 {
+    let k = self.peek_at(i).kind
+    if k is Eof {
+      break
+    }
+    if depth == 1 {
+      match k {
+        Ident(n) =>
+          if at_name {
+            if n == "out" || n == "in" {
+              ()
+            } else {
+              self.interface_member_modifier_misuses.push(
+                "<type-param-name>\{n}",
+              )
+              at_name = false
+            }
+          }
+        Const | In => ()
+        Comma => at_name = true
+        _ => at_name = false
+      }
+    }
+    match k {
+      Lt => depth += 1
+      Gt => depth -= 1
+      GtGt => depth -= 2
+      GtGtGt => depth -= 3
+      _ => ()
+    }
+    i += 1
+  }
+}
+
+///|
 fn Parser::skip_type_params(self : Parser) -> Unit {
   if !self.check(Lt) {
     return
   }
+  self.record_type_param_names_ahead()
   let _ = self.advance() // consume <
   let mut depth = 1
   while depth > 0 && !self.check(Eof) {

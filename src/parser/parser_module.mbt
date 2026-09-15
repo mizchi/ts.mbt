@@ -423,8 +423,69 @@ fn Parser::scan_skipped_enum_initializer(
 /// resolution this does not do.
 fn Parser::record_enum_init_name(self : Parser, e : @ast.TsExpr) -> Unit {
   match e {
-    Var(n) => self.grammar_misuses.push("<enum-init-name:\{n}>")
+    Var(n) => {
+      self.grammar_misuses.push("<enum-init-name:\{n}>")
+      // The checker's half of this rule resolves NAME against the
+      // module-level env, which is why `enumShadowedInfinityNaN` was a
+      // MISS: its `let Infinity = {}` is BLOCK-scoped, and an enum is
+      // hoisted into `module_.enums` with no record of the block it came
+      // from, so the binding that shadows the numeric lib global is in no
+      // env that rule can read. Here both are in hand — the innermost
+      // enclosing block frame that declares the name decides, which is
+      // the same lookup order the language uses, so a numeric shadow
+      // nearer the enum correctly masks a non-numeric one further out.
+      let frames = self.block_binding_nonnumeric
+      let mut i = frames.length() - 1
+      while i >= 0 {
+        match frames[i].get(n) {
+          Some(nonnumeric) => {
+            if nonnumeric {
+              self.grammar_misuses.push("<enum-init-shadowed:\{n}>")
+            }
+            break
+          }
+          None => i -= 1
+        }
+      }
+    }
     _ => ()
+  }
+}
+
+///|
+/// Record each `let` / `const` / `var` declarator of `stmts` in the
+/// innermost block frame as `name -> is definitely non-numeric`, for the
+/// TS18033 rule above. Only a syntactically classifiable initializer
+/// decides; everything else records `false`, so an unclassifiable
+/// initializer MASKS an outer non-numeric binding rather than inheriting
+/// it — every abstention here loses a finding.
+fn Parser::record_block_binding_numericness(
+  self : Parser,
+  stmts : Array[@ast.TsStmt],
+) -> Unit {
+  if self.block_binding_nonnumeric.length() == 0 {
+    return
+  }
+  let frame = self.block_binding_nonnumeric[self.block_binding_nonnumeric.length() -
+    1]
+  for st in stmts {
+    let pair = match st {
+      @ast.TsStmt::Let(@ast.TsBinding::Ident(n), _, init)
+      | @ast.TsStmt::Const(@ast.TsBinding::Ident(n), _, init)
+      | @ast.TsStmt::Var(@ast.TsBinding::Ident(n), _, init) => Some((n, init))
+      _ => None
+    }
+    match pair {
+      Some((n, init)) =>
+        frame[n] = match init {
+          @ast.TsExpr::ObjectLit(_)
+          | @ast.TsExpr::ArrayLit(_)
+          | @ast.TsExpr::StringLit(_)
+          | @ast.TsExpr::BoolLit(_) => true
+          _ => false
+        }
+      None => ()
+    }
   }
 }
 

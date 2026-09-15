@@ -21773,3 +21773,66 @@ test "expr_check: a closure cannot rely on an unstable narrowing (batch ES)" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch ET: TS18033 through a block-scoped shadow, and TS2304 in a
+/// type-ARGUMENT position.
+///
+/// The second rule was REVERTED once in this series for a false positive
+/// on legal code the corpus cannot see, and the corpus then caught four
+/// more of its own. Both halves of the abstention it needed now exist, so
+/// the legal spellings are pinned here: a name is unreportable when it is
+/// spellable as a type ANYWHERE in the file, including as a block-local
+/// interface declared twice (which the module-wide pool skips) and as the
+/// type parameter of an object-literal method or a generic arrow (neither
+/// of which reaches the AST).
+test "expr_check: shadowed enum initializers and undeclared type arguments (batch ET)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS18033: the enum member's initializer resolves, at the enum's
+      // own position, to a block binding that cannot hold a number.
+      "// @target: es2015\n{ let Infinity = {}; enum E1 { X = Infinity } }",
+      "// @target: es2015\n{ let s = \"a\"; enum E4 { X = s } }",
+      // TS2304: a type argument naming nothing at all.
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction h() { g<Nope>(); }",
+      "// @target: es2015\nnew Date<A>",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // No shadow: the enum member reads the numeric lib global.
+      "// @target: es2015\n{ enum E2 { X = Infinity } }",
+      // A numeric shadow.
+      "// @target: es2015\n{ let n = 5; enum E3 { X = n } }",
+      // Top level, where the lib global is what the name means.
+      "// @target: es2015\nenum E5 { X = Infinity }",
+      // An INNER numeric shadow masks the outer non-numeric one, which is
+      // the lookup order the language uses.
+      "// @target: es2015\n{ let Infinity = {}; { let Infinity = 5; enum E6 { X = Infinity } } }",
+      // An unclassifiable initializer records nothing.
+      "// @target: es2015\ndeclare function f(): any;\n{ let q = f(); enum E7 { X = q } }",
+      // Every way a type argument's name can be spellable as a type.
+      "// @target: es2015\ndeclare function g<X>(): void;\ninterface Top { x: number }\ng<Top>();",
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { interface Inner { x: number } g<Inner>(); }",
+      // Declared twice across block scopes, so the module-wide pool skips
+      // it and only the NAME channel can answer.
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { interface Dup { x: number } g<Dup>(); }\nfunction b() { interface Dup { y: number } g<Dup>(); }",
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { type Al = number; g<Al>(); }",
+      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a<V>() { g<V>(); }",
+      // An OBJECT-LITERAL method's own type parameter, which reaches no
+      // `in_scope_type_params` — the corpus's last false positive.
+      "// @target: es2015\ndeclare function g<X>(): void;\nvar b = { new<A>(x: A) { g<A>(); return x; } };",
+      // A generic ARROW's, which is not in the AST at all.
+      "// @target: es2015\ndeclare function g<X>(): void;\nconst f2 = <B,>(x: B) => { g<B>(); return x; };",
+      // And an enum / class / builtin name.
+      "// @target: es2015\ndeclare function g<X>(): void;\nenum En { A }\ng<En>();\nclass Cl {}\ng<Cl>();\ng<string>();",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

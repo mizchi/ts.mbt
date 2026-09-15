@@ -142,6 +142,13 @@ priv struct Resolver {
   // type: a leading `this` parameter occupies no argument position and
   // `callable_func_type_from_params` drops it.
   this_param_members : Map[String, Bool]
+  // Every name declared as a TYPE in a block or function body
+  // (`<local-type-name>` markers), whether or not the module-wide
+  // interface / alias pools registered it — they take a block-local
+  // declaration only when the name is declared once. A rule asking "is
+  // this name spellable as a type anywhere in the file" needs all of
+  // them; the answer is deliberately scope-free, so it over-abstains.
+  local_type_names : Map[String, Bool]
   // Module-level `noImplicitAny` effective flag (strict directives),
   // threaded through the resolver so expression-level rules (TS7053)
   // can gate without widening `CheckCtx`.
@@ -417,6 +424,7 @@ fn Resolver::empty() -> Resolver {
     namespace_instantiated: {},
     template_tag_funcs: {},
     this_param_members: {},
+    local_type_names: {},
     any_uninitialized_values: {},
     class_index: ClassIndex::empty(),
     no_implicit_any: false,
@@ -1302,7 +1310,27 @@ fn Resolver::ingest_module(
   // TS2684 evidence off the parser's `<this-param>` marker (see the field
   // doc). Prefixed like every other name this loop ingests, so a
   // namespace-scoped interface keys under its own prefix.
+  // Every TYPE-PARAMETER name the parser saw, on the channel that already
+  // records them: `parse_type_param_names_bounds_and_const_flags` pushes
+  // `<type-param-name>` for exactly this kind of abstention, and its own
+  // comment says so ("a bare `Named(X)` that is also a type-parameter name
+  // might be an in-scope type parameter"). The corpus proved it necessary
+  // here: `var b = { new<T>(x: T) { return new C<T>(x) } }` is an
+  // object-literal METHOD whose own `<T>` reaches no `ctx`
+  // `in_scope_type_params`, and an ARROW's type parameters are not in the
+  // AST at all, so four TS7-accepted files were false positives before
+  // this loop existed.
+  for member_ in module_.interface_member_modifier_misuses {
+    if member_.has_prefix("<type-param-name>") {
+      r.local_type_names[member_["<type-param-name>".length():].to_owned()] = true
+    }
+  }
   for gm in module_.grammar_misuses {
+    if gm.has_prefix("<local-type-name>") {
+      // Unprefixed: the question is whether the spelling names a type
+      // somewhere in the file, which no namespace prefix narrows.
+      r.local_type_names[gm["<local-type-name>".length():].to_owned()] = true
+    }
     if gm.has_prefix("<this-param>") {
       let payload = gm["<this-param>".length():].to_owned()
       match payload.rev_find("=") {
@@ -19914,30 +19942,55 @@ fn check_explicit_type_args(
       _ => ()
     }
   }
-  // REJECTED, with the cause measured rather than argued: the same
-  // position also decides TS2304 ("Cannot find name 'A'") for a name that
-  // resolves as NOTHING -- `new Date<A>`
-  // (parserConstructorAmbiguity3) -- and it was written, built and
-  // REVERTED, because probing a legal neighbour produced a false
-  // positive on legal code that the conformance corpus cannot see.
+  // TS2304 ("Cannot find name 'A'") in the SAME position, for a name that
+  // resolves as NOTHING -- neither a value nor a type. `new Date<A>`
+  // (parserConstructorAmbiguity3). This is the other half of the arm
+  // above and shares its whole argument for why the position is
+  // decidable: a type argument in an EXPRESSION has no binders of its
+  // own, so the call site's scope is the only scope the name could
+  // resolve in.
   //
-  // `function f() { interface T { x: number } g<T>() }` is legal and was
-  // reported, and the reason is a parser gap rather than anything about
-  // this rule: `parse_module` merges type aliases collected from
-  // function-body / block-level declarations into the module's alias
-  // pool -- its own comment says why, "the checker needs them to resolve
-  // Named(T) references inside those bodies" -- and does the identical
-  // thing for INTERFACES nowhere, though `parse_stmt` collects both from
-  // arms ten lines apart. So a block-local `interface` is invisible to
-  // the resolver (`q.nope` on one is silent while the top-level spelling
-  // reports, measured), and every abstention channel this rule could
-  // consult says the name is undeclared.
+  // The two arms are mutually exclusive by construction — that one needs
+  // `env.lookup` to SUCCEED, this one needs it to fail — and every
+  // abstention there is repeated here, plus the channels a value lookup
+  // alone cannot answer: a namespace (which gives the name a type meaning
+  // through `N.T`), the module-wide hoisting backstop, and
+  // `local_type_names`.
   //
-  // Gating on "top level" does not rescue it either: a block at top
-  // level can declare an interface too. The sound version needs the
-  // block-local interface NAMES on a channel the resolver can read,
-  // which is a new parse-time field for one corpus file that batch BY
-  // correctly classified as broken syntax nobody writes.
+  // That last one is why this arm exists at all. Its first version was
+  // REVERTED for a false positive on legal code the corpus cannot see —
+  // `function f() { interface T { x: number } g<T>() }` — and the cause
+  // was a parser gap rather than the rule: `parse_module` merged
+  // block-level type ALIASES into the module-wide pool and did the same
+  // for INTERFACES nowhere. That merge exists now, but it registers a
+  // block-local name only when the name is declared ONCE (one slot per
+  // name cannot answer for two scopes), so the NAMES ride their own
+  // marker and this arm reads both.
+  for t in targs {
+    match t {
+      Named(n) =>
+        if is_ascii_ident_start_name(n) &&
+          !n.contains(".") &&
+          env.lookup(n) is None &&
+          !is_in_scope_type_param(ctx, t) &&
+          ctx.resolver.classes.get(n) is None &&
+          ctx.resolver.interfaces.get(n) is None &&
+          ctx.resolver.enums.get(n) is None &&
+          ctx.resolver.type_aliases.get(n) is None &&
+          ctx.resolver.standard_aliases.get(n) is None &&
+          ctx.resolver.globals.get(n) is None &&
+          ctx.resolver.signatures.get(n) is None &&
+          ctx.resolver.declared_value_names.get(n) is None &&
+          ctx.resolver.namespace_value_decls.get(n) is None &&
+          ctx.resolver.namespace_exports.get(n) is None &&
+          ctx.resolver.local_type_names.get(n) is None &&
+          !is_lib_global_type(n) &&
+          !is_lib_global_value(n) {
+          record_unfiltered(ctx, "type argument `\{n}`", "cannot find name `\{n}`")
+        }
+      _ => ()
+    }
+  }
   // The callee's declared type-parameter names (positional), or `None` when the
   // callee can't be resolved to a declared class / function (stay silent).
   fn declared_type_params(name : String) -> Array[String]? {
@@ -27758,6 +27811,20 @@ fn check_enum_init_name_types(
     }
   }
 
+  // The BLOCK-scoped half, decided entirely in the parser: the name
+  // resolves, at the enum's own position, to a block binding whose
+  // initializer is syntactically non-numeric. No env lookup can answer
+  // this one — see `record_enum_init_name` for why — so the marker IS the
+  // verdict.
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<enum-init-shadowed:") {
+      let name = gm["<enum-init-shadowed:".length():gm.length() - 1].to_owned()
+      issues.push({
+        path: "enum member initializer `\{name}`",
+        message: "type of `\{name}` is not assignable to type `number` as required for computed enum member values",
+      })
+    }
+  }
   for gm in module_.grammar_misuses {
     if !gm.has_prefix("<enum-init-name:") {
       continue
