@@ -475,6 +475,29 @@ pub fn collect_module_graph_issues(
         })
     }
   }
+  collect_parsed_graph_issues(parsed_modules, graph.edges, issues)
+  issues
+}
+
+///|
+/// Check an already-parsed graph, appending to `issues`.
+///
+/// Split out of `collect_module_graph_issues` so the host-driven loader
+/// in `service.mbt` can hand over modules it has ALREADY parsed. It has
+/// to parse them to discover their imports at all, and re-parsing every
+/// file to re-derive a graph the loader just built would be a third pass
+/// over every source — `parse_graph_module` already costs two, one for
+/// the module and one for its block.
+///
+/// Extraction only: the body below is what `collect_module_graph_issues`
+/// ran, and that function still produces the same diagnostics in the
+/// same order. `checker_wbtest.mbt` pins that, and so does the
+/// `checkModuleGraph` string ABI built on top of it.
+fn collect_parsed_graph_issues(
+  parsed_modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  issues : Array[MtscGraphIssue],
+) -> Unit {
   // Ambient declaration files are part of every module's scope: that is
   // what makes `declare const MyGlobal: …` in an `env.d.ts` visible from
   // a source file that never imports it. Only script-shaped `.d.ts`
@@ -493,9 +516,7 @@ pub fn collect_module_graph_issues(
   }
   for module_ in parsed_modules {
     let (globals, import_diagnostics) = graph_import_globals(
-      module_,
-      parsed_modules,
-      graph.edges,
+      module_, parsed_modules, edges,
     )
     for entry in ambient_globals {
       globals.push(entry)
@@ -507,7 +528,7 @@ pub fn collect_module_graph_issues(
         message: diagnostic,
       })
     }
-    let type_modules = graph_type_modules(module_, parsed_modules, graph.edges)
+    let type_modules = graph_type_modules(module_, parsed_modules, edges)
     for ambient in ambient_modules {
       type_modules.push(ambient)
     }
@@ -529,7 +550,6 @@ pub fn collect_module_graph_issues(
         }
     }
   }
-  issues
 }
 
 ///|

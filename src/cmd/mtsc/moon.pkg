@@ -1,7 +1,20 @@
+// The CLI builds for every backend, `js` included, so `mtsc` runs under
+// Node as well as natively. There is deliberately NO
+// `supported_targets` here: an earlier revision declared `"all-js"` to
+// make `moon build --target js` skip this package instead of failing
+// inside it, and that traded the capability away rather than fixing it.
+// What the JS build needs is three per-target arms — `mtsc_argv`,
+// `mtsc_watch_stamp` and the `mtsc_exit` / `mtsc_flush_stdout` pair
+// that already existed — and `just verify-cli-node` is the differential
+// that keeps the two backends answering the same way.
 import {
   "moonbitlang/async",
-  // `@async_fs.mtime` is what `--watch` polls. `mizchi/x/fs` has no
-  // stat call, so this is the only source of a modification time.
+  // `@async_fs.mtime` is what `--watch` polls on every backend but
+  // `js`, where the package does not exist (see `mtsc_watch_stamp`,
+  // which reads `node:fs` instead and names the one symbol this
+  // dependency does expose there, so the import is not unused).
+  // `mizchi/x/fs` has no stat call, so this is the only source of a
+  // modification time.
   "moonbitlang/async/fs" @async_fs,
   "moonbitlang/core/bench",
   "moonbitlang/core/env",

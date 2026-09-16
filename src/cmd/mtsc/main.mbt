@@ -1128,6 +1128,55 @@ fn mtsc_flush_stdout() -> Unit {
 }
 
 ///|
+/// The command line, with the first user argument at index 1.
+///
+/// `@env.args()` does NOT have the same shape on every backend, and
+/// `driver.mbt` reads that shape at six places (`argv[1]` as the verb,
+/// `mtsc_parse_args(argv, 1)`, `mtsc_run_check(argv, 2)` and its three
+/// siblings). Normalizing once here is what keeps those six from each
+/// needing to know — the alternative is the one-offset-assumed-in-
+/// several-places defect, and it would be found the way this one was:
+/// by the CLI type-checking its own 19 MB bundle.
+#cfg(not(target="js"))
+fn mtsc_argv() -> Array[String] {
+  @env.args()
+}
+
+///|
+/// The same list on the JavaScript backend, where it is shaped
+/// differently.
+///
+/// `moonbitlang/core/env` returns `process.argv` VERBATIM on `js`, and
+/// Node puts two entries in front of the user's: the Node executable
+/// and the script. The native runtime's argv has one, the program. So
+/// dropping the Node executable makes the script the program name and
+/// lands the first user argument on index 1 — the shape the rest of the
+/// CLI already assumes.
+///
+/// This was a real bug rather than a hypothetical: without it
+/// `mtsc ok.ts --noEmit` under Node read the script path as a second
+/// entry and compiled `mtsc.js` — its own bundle — reporting
+/// `ParseError("Unexpected token: Gt")` against itself and exiting 1 on
+/// a clean file.
+///
+/// `node -e '…' a b` has no script path, so the drop would eat `a`
+/// there. That is stated rather than guarded: a built bundle is never
+/// run through `-e`, and under `-e` there is no script for argv[0] to
+/// mean anyway.
+#cfg(target="js")
+fn mtsc_argv() -> Array[String] {
+  let argv = @env.args()
+  if argv.is_empty() {
+    return argv
+  }
+  let out : Array[String] = []
+  for index in 1..<argv.length() {
+    out.push(argv[index])
+  }
+  out
+}
+
+///|
 /// Compile one entry. `true` when the entry produced its output (or was
 /// checked clean under `--noEmit`), `false` when anything stopped it.
 ///

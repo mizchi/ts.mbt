@@ -27,6 +27,93 @@ fmt:
 info:
     moon info
 
+# Build the JavaScript backend and put the LIBRARY artifact beside its
+# facade.
+#
+# `moon build --target js` builds everything the `js` backend supports,
+# which is now the whole module including the CLI — see `build-cli-js`
+# for that half. The copy here is only about the library: it is what
+# lets `js/language-service.mjs` be importable without knowing a build
+# profile, since it looks for `js/mtsc.js` first. Release, not debug:
+# the facade falls back to a debug artifact if that is all there is, and
+# measuring a debug build while a release one exists is the
+# stale-artifact trap this repo keeps paying for.
+build-js:
+    moon build --target js --release
+    cp _build/js/release/build/mtsc/mtsc.js js/mtsc.js
+
+# Does the JavaScript language service actually work?
+#
+# `moon test` covers the service on native through `MtscMemoryHost` — the
+# same generic code, 35 cases. This covers what only Node can: the
+# `extern "js"` host calls, the value marshalling across them, a real
+# filesystem host, a `ts.LanguageServiceHost`-shaped host, and the
+# facade. Mutation-proven: dropping the `.js` -> `.ts` remap, swallowing
+# parse errors, or removing the `getScriptSnapshot` fallback each fail it.
+verify-language-service *ARGS:
+    just build-js
+    node scripts/verify_language_service.mjs {{ ARGS }}
+
+# Does the shipped `js/language-service.d.ts` still describe the API?
+#
+# A declaration file nobody compiles is one that drifts, so a consumer
+# file uses every exported name under `tsc --strict`. It also pins the
+# documented absence of `start` / `length` on a diagnostic — with a
+# `keyof` assertion rather than `@ts-expect-error`, which is the spelling
+# that cannot fail (see the fixture's header; adding the field left `tsc`
+# green). Mutation-proven in both directions.
+verify-language-service-types:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ROOT="_build/language_service_types"
+    rm -rf "$ROOT"
+    mkdir -p "$ROOT"
+
+    cat <<'EOF' > "$ROOT/tsconfig.json"
+    {
+      "compilerOptions": {
+        "strict": true,
+        "noEmit": true,
+        "noUnusedLocals": true,
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "target": "es2022",
+        "ignoreDeprecations": "6.0",
+        "lib": ["es2022"],
+        "skipLibCheck": false
+      },
+      "files": ["../../fixtures/language-service/types_consumer.ts"]
+    }
+    EOF
+
+    pnpm exec tsc -p "$ROOT/tsconfig.json" --pretty false
+
+# Build the CLI for Node.
+#
+# `mtsc` is a native executable first; this is the same CLI on the `js`
+# backend, runnable as `node <the path printed below>`. Nothing is
+# copied out of `_build`: unlike the library facade, which imports
+# `./mtsc.js` statically and so needs the artifact beside it, the CLI
+# bundle is a self-contained IIFE that Node runs where it is.
+build-cli-js:
+    moon build --target js --release
+    @echo "run it with:  node _build/js/release/build/cmd/mtsc/mtsc.js --help"
+
+# Does the CLI behave the same under Node as it does natively?
+#
+# A differential against the native binary over 16 cases plus a
+# `--watch` round trip on both backends — same source, different backend
+# and a different runtime for every syscall, so it is a real oracle
+# rather than a self-comparison. Mutation-proven: reverting the argv
+# normalization fails eight cases, and reverting the mtime probe to
+# `require("node:fs")` fails the watch round trip, which is the one
+# failure mode that otherwise looks exactly like success.
+verify-cli-node *ARGS:
+    moon build --target native --release
+    moon build --target js --release
+    node scripts/verify_cli_node.mjs {{ ARGS }}
+
 # Verify emitted TypeScript declarations from pkg.generated.mbti files
 verify-mbti-dts:
     #!/usr/bin/env bash
@@ -171,7 +258,28 @@ verify-checker-scaling *ARGS:
     node scripts/verify_checker_scaling.mjs {{ ARGS }}
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
+ci: fmt check check-js test verify-mbti-dts verify-language-service verify-language-service-types verify-cli-node verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
+
+# `moon check --deny-warn` for the JavaScript backend.
+#
+# Not redundant with `check`: the `js`-only files — `src/mtsc`'s
+# `host_js.mbt` and `service_js.mbt`, plus the `#cfg(target="js")` arms
+# in the CLI — are never compiled by the native check at all, so without
+# this step the whole FFI layer is unchecked until somebody runs a JS
+# build.
+#
+# WHOLE MODULE, and it used to be scoped to `src/mtsc` because the root
+# package's `moonbitlang/async/fs` import reads as unused on `js`: the
+# dependency says in its own source that it "does not support JavaScript
+# backend", and moon has no per-target `import` syntax. That is fixed
+# rather than excluded now — both packages that need the dependency
+# only on native name its `unimplemented` symbol, which is the one thing
+# it exposes on `js` and exists for exactly this, so the import is
+# genuinely referenced on every backend. No `warnings = "-0029"`
+# anywhere: a package-wide suppression would also hide a dead import, on
+# every target.
+check-js:
+    moon check --deny-warn --target js
 
 # Update dependencies
 update:

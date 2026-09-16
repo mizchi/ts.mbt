@@ -35,13 +35,118 @@ const MTSC_WATCH_INTERVAL_MS : Int = 300
 /// A file that disappears reads as `None` and so differs from its
 /// recorded stamp, which is the behaviour wanted: deleting an imported
 /// file should trigger a rebuild that reports the broken import.
+#cfg(not(target="js"))
 async fn mtsc_watch_stamp(path : String) -> (Int64, Int)? {
   let v = @async_fs.mtime(path) catch { _ => return None }
   Some(v)
 }
 
 ///|
+/// `mtime` for the JavaScript backend.
+///
+/// `moonbitlang/async/fs` states in its own `unimplemented.mbt` that it
+/// "does not support JavaScript backend" and restricts every source
+/// file but that one to `native` / `wasm`, so `@async_fs.mtime` does
+/// not exist here and this is why the CLI could not build for `js` at
+/// all.
+///
+/// SYNCHRONOUS, unlike the native arm, and that is a deliberate choice
+/// between two costs. `node:fs/promises`' `stat` would keep the
+/// signature `async` and match `mizchi/x/fs`'s own JS backend — but
+/// awaiting a JS promise needs `moonbitlang/async/js_async` imported,
+/// which is then unused on native, and `moon check --deny-warn` on
+/// native is THE gate. `statSync` needs no import, so the cost lands as
+/// one suppressed diagnostic on the caller below instead of two
+/// warnings on the gate.
+#cfg(target="js")
+fn mtsc_watch_stamp(path : String) -> (Int64, Int)? {
+  // Keep the `moonbitlang/async/fs` import referenced on this backend.
+  // It exists for the `@async_fs.mtime` in the arm above, and moon has
+  // no per-target `import` syntax, so on `js` the dependency reads as
+  // unused and warning 0029 fails `--deny-warn --target js` on a
+  // package that is otherwise clean. `unimplemented` is the ONE symbol
+  // that package exposes here — declared `#cfg(not(target="native"))`
+  // under the doc comment "This package currently does not support
+  // JavaScript backend", i.e. it exists to be named in exactly this
+  // situation. Deliberately not `warnings = "-0029"`: a package-wide
+  // suppression would also hide a genuinely dead import, on every
+  // target, which is how a gate stops being a gate. A standalone
+  // function was tried first and is worse — it is itself unused
+  // (warning 0001), so the reference has to sit in live code.
+  ignore(@async_fs.unimplemented)
+  let stamp = mtsc_js_stat_mtime(path)
+  if stamp.length() < 2 {
+    return None
+  }
+  Some((stamp[0].to_int64(), stamp[1].to_int()))
+}
+
+///|
+/// `[seconds, nanos]` for `path`, or `[]` when it cannot be stat'd.
+///
+/// An empty array rather than a thrown error, because a watched file
+/// disappearing is an ordinary answer the caller turns into "changed",
+/// and a directory is stat'able but is not a file we can compile.
+///
+/// `mtime` comes back in whole seconds plus nanoseconds to match the
+/// native arm's `(Int64, Int)` exactly — `mtimeMs` alone loses
+/// sub-millisecond resolution, and a rebuild triggered by an editor
+/// that writes twice inside one millisecond is the case that needs it.
+/// `mtimeNs` is a BigInt, so the nanosecond remainder is taken from it
+/// when present and derived from `mtimeMs` when it is not.
+///
+/// `process.getBuiltinModule` is how the module is obtained, and that
+/// is not a style choice. This bundle is an IIFE in a `.js` file, and
+/// the repo's own `package.json` says `"type": "module"`, so Node loads
+/// it as ESM — where `require` is NOT defined. Measured: the first
+/// version of this body used `require("node:fs")` and a probe under ESM
+/// gives `ReferenceError: require is not defined`, which the `catch`
+/// below would have swallowed into `[]` for every file, leaving
+/// `--watch` polling forever and never detecting a change. That is the
+/// fail-open direction, so it is the one worth a measurement rather
+/// than an assumption. `getBuiltinModule` is sync and works from both
+/// module systems (Node 22.3 / 20.16 and up); `require` stays as the
+/// fallback for an older Node loading this as CommonJS.
+#cfg(target="js")
+extern "js" fn mtsc_js_stat_mtime(path : String) -> FixedArray[Double] =
+  #| function(path) {
+  #|   try {
+  #|     let fs = globalThis.__mtsc_node_fs;
+  #|     if (fs === undefined) {
+  #|       fs =
+  #|         (typeof process !== "undefined" &&
+  #|          typeof process.getBuiltinModule === "function")
+  #|           ? process.getBuiltinModule("node:fs")
+  #|           : (typeof require === "function" ? require("node:fs") : null);
+  #|       globalThis.__mtsc_node_fs = fs;
+  #|     }
+  #|     if (!fs) return [];
+  #|     const st = fs.statSync(path);
+  #|     if (!st.isFile()) return [];
+  #|     const seconds = Math.floor(st.mtimeMs / 1000);
+  #|     const nanos = (st.mtimeNs !== undefined && st.mtimeNs !== null)
+  #|       ? Number(BigInt(st.mtimeNs) % 1000000000n)
+  #|       : Math.round((st.mtimeMs - seconds * 1000) * 1e6);
+  #|     return [seconds, nanos];
+  #|   } catch (e) {
+  #|     return [];
+  #|   }
+  #| }
+
+///|
 /// Stamp every path in `paths`.
+///
+/// ONE definition rather than a per-target pair, and the annotation is
+/// the price. On `js` the stamp read above is synchronous, so nothing in
+/// this body awaits and the compiler correctly calls the `async` here
+/// useless (warning 0067) — but the signature has to match the native
+/// arm or every caller up the chain needs its own per-target variant,
+/// which is the one-rule-in-several-places defect this repo keeps
+/// paying for. Suppressing that one diagnostic at this one declaration
+/// is the smaller cost than duplicating the loop; it is emphatically
+/// not the package-wide `warnings = "-00.."` that CLAUDE.md records as
+/// the way a gate stops being a gate.
+#warnings("-unused_async")
 async fn mtsc_watch_stamps(paths : Array[String]) -> Map[String, (Int64, Int)?] {
   let out : Map[String, (Int64, Int)?] = Map([])
   for p in paths {

@@ -105,8 +105,41 @@ jobs:
         # as errors flakes CI on toolchain churn.
         run: moon check
 
+      - name: Moon check (js backend)
+        # The whole module builds for `js` now — the library surface
+        # (`src/mtsc`) and the CLI. This step exists because the
+        # `js`-only files are never compiled by the native check above:
+        # `src/mtsc/host_js.mbt` and `service_js.mbt` are restricted by
+        # `targets` in `moon.pkg`, and the CLI's `#cfg(target="js")` arms
+        # are compiled out. Without it the whole MoonBit/JavaScript
+        # boundary is unchecked until something builds it.
+        #
+        # `--deny-warn` is left to local `just check-js` for the same
+        # reason the step above gives — CI's toolchain is bleeding-edge
+        # and fresh deprecations should not red the build. The tree IS
+        # clean under it on both backends.
+        run: moon check --target js
+
       - name: Moon test
         run: moon test --target native
+
+      - name: Verify language service
+        # Builds the library for `js` and runs it under Node: the
+        # `extern "js"` host calls, a real filesystem host, a
+        # `ts.LanguageServiceHost`-shaped host, and the facade. None of
+        # that is reachable from `moon test`, which runs on native.
+        run: just verify-language-service
+
+      - name: Verify language service types
+        run: just verify-language-service-types
+
+      - name: Verify the CLI under Node
+        # A differential against the native binary: the same CLI on two
+        # backends must answer the same way. It also drives `--watch`
+        # through an edit on both, which is the only way to see the
+        # failure mode where the mtime probe returns nothing and the
+        # watcher silently never rebuilds.
+        run: just verify-cli-node
 
       - name: Verify mbti -> .d.ts
         run: just verify-mbti-dts

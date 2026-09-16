@@ -5,9 +5,33 @@ import {
 }
 
 options(
+  // `host_js.mbt` is `extern "js"` end to end and `service_js.mbt` names
+  // the external host type, so neither can compile for a non-JS backend.
+  // The service itself is backend-independent and is covered on native
+  // through `MtscMemoryHost` — which means `moon check --deny-warn` does
+  // NOT see these two files, and `moon check --deny-warn --target js` is
+  // the run that does.
+  targets: { "host_js.mbt": [ "js" ], "service_js.mbt": [ "js" ] },
   link: {
     "js": {
-      "exports": [ "check_module_graph:checkModuleGraph" ],
+      // `checkModuleGraph` is the original ABI and stays exactly as it
+      // was: a caller pre-resolves the program and gets one string back.
+      // It predates the host and has consumers outside this repo, so it
+      // is not re-shaped, and it now runs through the same
+      // `collect_parsed_graph_issues` the host path uses.
+      //
+      // The rest is the language-service surface, named after the
+      // `ts.LanguageService` methods they correspond to. They return
+      // arrays of plain objects rather than strings, which the string
+      // ABI could not do and which is what an editor or overlay needs.
+      "exports": [
+        "check_module_graph:checkModuleGraph",
+        "js_get_program_diagnostics:getProgramDiagnostics",
+        "js_get_semantic_diagnostics:getSemanticDiagnostics",
+        "js_get_syntactic_diagnostics:getSyntacticDiagnostics",
+        "js_get_program_file_names:getProgramFileNames",
+        "js_resolve_module_name:resolveModuleName",
+      ],
       "format": "esm",
     },
   },
