@@ -448,7 +448,7 @@ async fn load_decl_module_info(
     }
     _ => ()
   }
-  { record, module_ }
+  { record, module_, }
 }
 
 ///|
@@ -474,7 +474,12 @@ fn new_exported_const_value_set(
   for entry in direct_values {
     explicit_names.push(entry.0)
   }
-  { values: direct_values, explicit_names, star_names: [], ambiguous_names: [] }
+  {
+    values: direct_values,
+    explicit_names,
+    star_names: [],
+    ambiguous_names: [],
+  }
 }
 
 ///|
@@ -2056,13 +2061,13 @@ fn resolve_decl_from_local_name(
     Some(info) =>
       match find_interface_decl(info.module_, local_name) {
         Some(iface) =>
-          Interface({ source_path, local_name, export_name, iface })
+          Interface({ source_path, local_name, export_name, iface, })
         None =>
           match find_enum_decl(info.module_, local_name) {
             Some(enum_) =>
               match enum_decl_unsupported_reason(enum_) {
                 Some(reason) => Unsupported(export_name, reason)
-                None => Enum({ source_path, local_name, export_name, enum_ })
+                None => Enum({ source_path, local_name, export_name, enum_, })
               }
             None =>
               match find_type_alias_decl(info.module_, local_name) {
@@ -2091,7 +2096,7 @@ fn resolve_decl_from_local_name(
                   }
                   match enum_lowering_type_alias_enum_decl(lowered_alias) {
                     Some(enum_) =>
-                      Enum({ source_path, local_name, export_name, enum_ })
+                      Enum({ source_path, local_name, export_name, enum_, })
                     None =>
                       match tagged_union_type_alias_decl(lowered_alias) {
                         Some(decl) =>
@@ -2455,7 +2460,7 @@ fn append_exported_value_call_signature(
       type_param_bounds: [],
       params,
       return_type,
-      body: { stmts: [], stmt_positions: [] },
+      body: { stmts: [], stmt_positions: [], },
       is_generator: false,
       is_async: false,
       name_is_member_key: false,
@@ -2535,7 +2540,7 @@ fn append_exported_value_interface_methods(
         type_param_bounds: [],
         params,
         return_type,
-        body: { stmts: [], stmt_positions: [] },
+        body: { stmts: [], stmt_positions: [], },
         is_generator: false,
         is_async: false,
         name_is_member_key: false,
@@ -2953,7 +2958,7 @@ fn resolve_class_origin(
   surface_cache : Map[String, Array[ResolvedExport]],
 ) -> ResolvedClassOrigin? {
   match find_class_decl_recursive(info.module_, name) {
-    Some(class_) => Some({ info, local_name_prefix: "", class_ })
+    Some(class_) => Some({ info, local_name_prefix: "", class_, })
     None =>
       match resolve_imported_type_origin(info, name) {
         Some((source_path, imported_name)) =>
@@ -2962,7 +2967,7 @@ fn resolve_class_origin(
               match
                 find_class_decl_recursive(source_info.module_, imported_name) {
                 Some(class_) =>
-                  Some({ info: source_info, local_name_prefix: "", class_ })
+                  Some({ info: source_info, local_name_prefix: "", class_, })
                 None =>
                   resolve_class_origin_from_export_name(
                     name, source_path, imported_name, graph, modules, surface_cache,
@@ -4512,7 +4517,7 @@ fn type_alias_utility_to_interface(
     _ => None
   }
   match spec {
-    Some(iface) => Some({ ..iface, name: type_alias.name })
+    Some(iface) => Some({ ..iface, name: type_alias.name, })
     None => None
   }
 }
@@ -9226,7 +9231,7 @@ fn clone_exported_interface(
   let internal_members : Array[String] = []
   let deprecated_members : Array[String] = []
   append_interface_origin_fields(
-    { info, export_name: exported.export_name, iface: exported.iface },
+    { info, export_name: exported.export_name, iface: exported.iface, },
     decl_this_owner_type(exported.export_name, exported.iface.type_params),
     modules,
     canonical_types,
@@ -9240,7 +9245,7 @@ fn clone_exported_interface(
     exported.iface.type_params.length() == 0,
   )
   let (unflattened_bases, unflattened_args) = decl_unflattened_interface_bases(
-    { info, export_name: exported.export_name, iface: exported.iface },
+    { info, export_name: exported.export_name, iface: exported.iface, },
     modules,
     canonical_types,
   )
@@ -9262,7 +9267,7 @@ fn clone_exported_interface(
 
 ///|
 fn clone_exported_enum(exported : ExportedEnumDecl) -> @ast.TsEnumDecl {
-  { ..exported.enum_, name: exported.export_name }
+  { ..exported.enum_, name: exported.export_name, }
 }
 
 ///|
@@ -11584,7 +11589,7 @@ fn decl_infer_literal_property_type(
   }
   match inferred {
     Number | Int | Boolean | String_ | BigInt =>
-      { ..class_property, type_: inferred }
+      { ..class_property, type_: inferred, }
     _ => class_property
   }
 }
@@ -11976,7 +11981,7 @@ fn append_class_method_once(
           for j, t in merged {
             merged_params.push((longer_names[j].0, t))
           }
-          methods[i] = { ..existing, params: merged_params }
+          methods[i] = { ..existing, params: merged_params, }
         }
         None => ()
       }

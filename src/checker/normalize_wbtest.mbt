@@ -35,7 +35,7 @@ test "equivalent_with: resolves aliases on both sides" {
 test "equivalent_with_generics: alias-aware bidirectional check" {
   // type Maybe<T> = T | undefined;
   let table : Map[String, AliasBinding] = {
-    "Maybe": { type_params: ["T"], body: Union([Named("T"), Undefined]) },
+    "Maybe": { type_params: ["T"], body: Union([Named("T"), Undefined]), },
   }
   let resolve = fn(name) { table.get(name) }
   // Maybe<string> ≡ string | undefined

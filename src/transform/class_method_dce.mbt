@@ -378,7 +378,7 @@ pub fn class_method_dce_block(
   for s in block.stmts {
     new_stmts.push(dce_stmt(s, accessed))
   }
-  { stmts: new_stmts, stmt_positions: block.stmt_positions }
+  { stmts: new_stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -1739,7 +1739,7 @@ fn prune_iife_methods(
       new_positions.push(body.stmt_positions[i])
     }
   }
-  { stmts: new_stmts, stmt_positions: new_positions }
+  { stmts: new_stmts, stmt_positions: new_positions, }
 }
 
 ///|
@@ -1829,7 +1829,7 @@ fn dce_stmt(stmt : @ast.TsStmt, accessed : Map[String, Bool]) -> @ast.TsStmt {
           new_methods.push(m)
         }
       }
-      NativeClassStmt({ ..decl, methods: new_methods }, ctor_body)
+      NativeClassStmt({ ..decl, methods: new_methods, }, ctor_body)
     }
     // IIFE-lowered class: `let Name = function () { … }();`.
     // Strip unused `Name.prototype.METHOD = …` assignments (and
@@ -1844,7 +1844,7 @@ fn dce_stmt(stmt : @ast.TsStmt, accessed : Map[String, Bool]) -> @ast.TsStmt {
         ) =>
           if args.length() == 0 {
             let pruned_body = prune_iife_methods(f.body, n, accessed)
-            let new_fn = @ast.TsExpr::FuncExpr({ ..f, body: pruned_body })
+            let new_fn = @ast.TsExpr::FuncExpr({ ..f, body: pruned_body, })
             Var(b, t, @ast.TsExpr::CallExpr(new_fn, []))
           } else {
             Var(b, t, dce_expr(e, accessed))
@@ -1859,7 +1859,7 @@ fn dce_stmt(stmt : @ast.TsStmt, accessed : Map[String, Bool]) -> @ast.TsStmt {
         ) =>
           if args.length() == 0 {
             let pruned_body = prune_iife_methods(f.body, n, accessed)
-            let new_fn = @ast.TsExpr::FuncExpr({ ..f, body: pruned_body })
+            let new_fn = @ast.TsExpr::FuncExpr({ ..f, body: pruned_body, })
             Let(b, t, @ast.TsExpr::CallExpr(new_fn, []))
           } else {
             Let(b, t, dce_expr(e, accessed))
@@ -1874,7 +1874,7 @@ fn dce_stmt(stmt : @ast.TsStmt, accessed : Map[String, Bool]) -> @ast.TsStmt {
         ) =>
           if args.length() == 0 {
             let pruned_body = prune_iife_methods(f.body, n, accessed)
-            let new_fn = @ast.TsExpr::FuncExpr({ ..f, body: pruned_body })
+            let new_fn = @ast.TsExpr::FuncExpr({ ..f, body: pruned_body, })
             Const(b, t, @ast.TsExpr::CallExpr(new_fn, []))
           } else {
             Const(b, t, dce_expr(e, accessed))
@@ -1970,7 +1970,7 @@ fn dce_block(
   for s in block.stmts {
     stmts.push(dce_stmt(s, accessed))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -1983,7 +1983,7 @@ fn dce_expr(expr : @ast.TsExpr, accessed : Map[String, Bool]) -> @ast.TsExpr {
           new_methods.push(m)
         }
       }
-      NativeClassExpr({ ..decl, methods: new_methods }, ctor_body)
+      NativeClassExpr({ ..decl, methods: new_methods, }, ctor_body)
     }
     BinOp(op, l, r) => BinOp(op, dce_expr(l, accessed), dce_expr(r, accessed))
     UnaryOp(op, inner) => UnaryOp(op, dce_expr(inner, accessed))
@@ -2067,7 +2067,7 @@ fn dce_expr(expr : @ast.TsExpr, accessed : Map[String, Bool]) -> @ast.TsExpr {
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
-    FuncExpr(f) => FuncExpr({ ..f, body: dce_block(f.body, accessed) })
+    FuncExpr(f) => FuncExpr({ ..f, body: dce_block(f.body, accessed), })
     DynamicImport(spec, opts) =>
       DynamicImport(
         dce_expr(spec, accessed),

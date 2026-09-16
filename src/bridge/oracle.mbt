@@ -279,7 +279,7 @@ pub fn apply_oracle_resolutions(
     for f in iface.fields {
       new_fields.push((f.0, substitute_named_types(f.1, resolutions)))
     }
-    module_.interfaces[i] = { ..iface, fields: new_fields }
+    module_.interfaces[i] = { ..iface, fields: new_fields, }
   }
   for i, func in module_.funcs {
     let new_params : Array[@ast.TsParam] = []

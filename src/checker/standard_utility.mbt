@@ -70,13 +70,13 @@ pub fn standard_utility_types() -> Map[String, AliasBinding] {
   // an object literal's contextual type so methods see `T` as `this`.
   // Without a contextual-inference engine the alias is the identity at
   // the type level, which matches what every other consumer sees too.
-  table["ThisType"] = { type_params: ["T"], body: Named("T") }
+  table["ThisType"] = { type_params: ["T"], body: Named("T"), }
 
   // type NoInfer<T> = T — added in TS 5.4 as an inference-blocking marker.
   // We don't model contextual inference, so structurally `NoInfer<T>` is
   // the identity. Recording it as an alias keeps `is_assignable_to`
   // transparent and lets bridge passes unwrap it directly.
-  table["NoInfer"] = { type_params: ["T"], body: Named("T") }
+  table["NoInfer"] = { type_params: ["T"], body: Named("T"), }
 
   // type ThisParameterType<F> = F extends (this: infer U, ...args: any[]) => any
   //   ? U : unknown

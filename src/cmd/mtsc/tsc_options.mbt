@@ -462,7 +462,10 @@ fn mtsc_apply_jsx_setting(opts : MtscOptions, value : String) -> Unit {
       opts.jsx_runtime = Some("automatic")
       opts.ignored.push("--jsx \{value} (mtsc always lowers JSX)")
     }
-    _ => opts.ignored.push("--jsx \{value} (unrecognized; using the automatic runtime)")
+    _ =>
+      opts.ignored.push(
+        "--jsx \{value} (unrecognized; using the automatic runtime)",
+      )
   }
 }
 
@@ -643,14 +646,13 @@ fn mtsc_parse_args(
       "nowarnreflection" => opts.warn_reflection = Some(false)
       "external" =>
         match need_value() {
-          Ok(v) => {
+          Ok(v) =>
             for part in v.split(",") {
               let spec = part.to_owned().trim().to_owned()
               if spec != "" {
                 opts.externals[spec] = true
               }
             }
-          }
           Err(e) => return Err(e)
         }
       "mangle" => opts.mangle = true
@@ -682,14 +684,13 @@ fn mtsc_parse_args(
       "verify" => opts.verify = true
       "disablephase" =>
         match need_value() {
-          Ok(v) => {
+          Ok(v) =>
             for part in v.split(",") {
               let phase = part.to_owned().trim().to_owned()
               if phase != "" {
                 opts.disabled_phases[phase] = true
               }
             }
-          }
           Err(e) => return Err(e)
         }
       "timing" => {
@@ -748,16 +749,16 @@ fn mtsc_print_usage() -> Unit {
   println(
     "  --project, -p <path>      Compile the project at <path> (a directory or a tsconfig.json)",
   )
-  println(
-    "  --noEmit                  Type-check and write nothing",
-  )
+  println("  --noEmit                  Type-check and write nothing")
   println(
     "  --noCheck                 Skip type-checking entirely (also spelled --no-check)",
   )
   println(
     "  --outFile, --out, -o <f>  Write JavaScript to <f> (default: stdout)",
   )
-  println("  --outDir <dir>            Write each input's JavaScript under <dir>")
+  println(
+    "  --outDir <dir>            Write each input's JavaScript under <dir>",
+  )
   println(
     "  --declaration, -d         Emit a companion .d.ts (also spelled --dts)",
   )
@@ -766,14 +767,14 @@ fn mtsc_print_usage() -> Unit {
   println(
     "  --jsx <mode>              react | react-jsx | react-jsxdev (preserve is lowered)",
   )
-  println(
-    "  --jsxImportSource <pkg>   Override the jsx-runtime import source",
-  )
+  println("  --jsxImportSource <pkg>   Override the jsx-runtime import source")
   println("  --jsxFactory <fn>         Classic-runtime element factory")
   println("  --jsxFragmentFactory <fn> Classic-runtime fragment factory")
   println("  --watch, -w               Recompile when an input changes")
   println("  --init                    Write a starter tsconfig.json")
-  println("  --showConfig              Print the resolved configuration and exit")
+  println(
+    "  --showConfig              Print the resolved configuration and exit",
+  )
   println("  --listFiles               Name every file in the program")
   println("  --listFilesOnly           Name every file in the program and stop")
   println("  --version, -v             Print the version")

@@ -7,7 +7,7 @@ import {
   "moonbitlang/core/env",
   "moonbitlang/core/string",
   "mizchi/x/fs",
-  "mizchi/ts" @ts,
+  "mizchi/ts",
   "mizchi/ts/ast",
   "mizchi/ts/checker",
   "mizchi/ts/mtsc" @mtsc_core,

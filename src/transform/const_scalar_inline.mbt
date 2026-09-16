@@ -233,10 +233,10 @@ pub fn const_scalar_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // a no-op; the top-level statements are walked directly (not through
   // `rewrite_block`) because narrowing by the top-level block's own
   // bindings would drop every candidate.
-  let tables : AsConstTables = { shapes: Map([]), scalars: chosen }
+  let tables : AsConstTables = { shapes: Map([]), scalars: chosen, }
   let out : Array[@ast.TsStmt] = []
   for s in block.stmts {
     out.push(rewrite_stmt(s, tables))
   }
-  { stmts: out, stmt_positions: block.stmt_positions }
+  { stmts: out, stmt_positions: block.stmt_positions, }
 }

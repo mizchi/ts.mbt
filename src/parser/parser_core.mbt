@@ -728,9 +728,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
 // / currentget
 fn Parser::peek(self : Parser) -> Token {
   if self.pending_gt > 0 {
-    { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+    { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false, }
   } else if self.pos >= self.tokens.length() {
-    { kind: Eof, pos: 0, has_newline_before: false }
+    { kind: Eof, pos: 0, has_newline_before: false, }
   } else {
     self.tokens[self.pos]
   }
@@ -741,7 +741,7 @@ fn Parser::peek(self : Parser) -> Token {
 fn Parser::advance(self : Parser) -> Token {
   if self.pending_gt > 0 {
     self.pending_gt -= 1
-    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false, }
   }
   let tok = self.peek()
   // `is Eof` rather than `!= Eof`: the derived `TokenKind::equal` is an
@@ -777,11 +777,11 @@ fn Parser::check(self : Parser, kind : TokenKind) -> Bool {
 // / get
 fn Parser::peek_at(self : Parser, offset : Int) -> Token {
   if offset < self.pending_gt {
-    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false, }
   }
   let idx = self.pos + offset - self.pending_gt
   if idx >= self.tokens.length() {
-    { kind: Eof, pos: 0, has_newline_before: false }
+    { kind: Eof, pos: 0, has_newline_before: false, }
   } else {
     self.tokens[idx]
   }
@@ -790,7 +790,7 @@ fn Parser::peek_at(self : Parser, offset : Int) -> Token {
 ///|
 // / functioncheck (currentposition `(` )
 fn Parser::is_arrow_function(self : Parser) -> Bool {
-  let temp = { ..self, pos: self.pos + 1 }
+  let temp = { ..self, pos: self.pos + 1, }
   // The struct-spread copy shares the recording arrays with `self`, so a
   // speculative `parse_params` here would leak misuse recordings for
   // expressions that merely *look* like parameter lists (`(yield 0)` in a

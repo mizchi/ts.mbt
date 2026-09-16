@@ -206,7 +206,7 @@ pub fn inline_const_enums(
   for s in block.stmts {
     stmts.push(inline_const_enums_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -362,7 +362,7 @@ fn inline_const_enums_stmt(
           Some(b) => Some(inline_const_enums_block(b, method_table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -397,7 +397,7 @@ fn inline_const_enums_block(
   for s in block.stmts {
     stmts.push(inline_const_enums_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -557,7 +557,7 @@ fn inline_const_enums_expr(
         narrow_const_enum_table(table, [f.name])
       }
       let new_body = inline_const_enums_block(f.body, table)
-      FuncExpr({ ..f, body: new_body })
+      FuncExpr({ ..f, body: new_body, })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
@@ -593,7 +593,7 @@ fn inline_const_enums_expr(
     OptionalChain(inner) => OptionalChain(inline_const_enums_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: inline_const_enums_block(f.body, table) })
+        Some(f) => Some({ ..f, body: inline_const_enums_block(f.body, table), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -602,7 +602,7 @@ fn inline_const_enums_expr(
           Some(b) => Some(inline_const_enums_block(b, table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -699,7 +699,7 @@ pub fn imported_const_enum_table(
             resolve_spec,
             {},
           ) {
-          let renamed : @ast.TsEnumDecl = { ..pair.1, name: pair.0 }
+          let renamed : @ast.TsEnumDecl = { ..pair.1, name: pair.0, }
           let table = build_const_enum_table([renamed])
           for entry in table {
             out[ns + "." + entry.0] = entry.1
@@ -727,7 +727,7 @@ pub fn imported_const_enum_table(
         Some(decl) => {
           // Re-key the decl's members under the local name so
           // `import { ArchType as A }` substitutes `A.Array` too.
-          let renamed : @ast.TsEnumDecl = { ..decl, name: local_ }
+          let renamed : @ast.TsEnumDecl = { ..decl, name: local_, }
           let table = build_const_enum_table([renamed])
           for entry in table {
             out[entry.0] = entry.1

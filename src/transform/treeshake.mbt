@@ -314,7 +314,7 @@ fn treeshake_flat_block(
       }
     }
   }
-  { stmts: kept, stmt_positions: kept_positions }
+  { stmts: kept, stmt_positions: kept_positions, }
 }
 
 ///|

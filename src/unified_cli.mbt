@@ -105,7 +105,7 @@ fn parse_mbt2ts_pkg_options(
     }
     idx += 1
   }
-  (Some({ out, import_rewrite_path, strict, facade }), None)
+  (Some({ out, import_rewrite_path, strict, facade, }), None)
 }
 
 ///|
@@ -1077,7 +1077,7 @@ async fn mbt2ts_pkg_collect_commands_from_dir(
         println("Error: --pkg found duplicate or empty command name \{name}")
         return false
       }
-      commands.push({ name, source_relative_dir })
+      commands.push({ name, source_relative_dir, })
     }
   }
   let entries = @fs.readdir(

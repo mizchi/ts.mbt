@@ -60,7 +60,9 @@ pub fn pkg_help_lines() -> Array[String] {
 
 ///|
 fn bridge_print_usage() -> Unit {
-  println("Usage: mtsc bridge [--input <ts-entry> --out <dir>] [<verb> args...]")
+  println(
+    "Usage: mtsc bridge [--input <ts-entry> --out <dir>] [<verb> args...]",
+  )
   println("")
   println("Generate MoonBit bridge artifacts from a TypeScript entrypoint.")
   println("")

@@ -134,7 +134,7 @@ test "checker: generic substitution works on parser-produced bindings" {
   }
   let table : Map[String, @checker.AliasBinding] = Map([])
   for ta in module_.type_aliases {
-    table[ta.name] = { type_params: ta.type_params, body: ta.type_ }
+    table[ta.name] = { type_params: ta.type_params, body: ta.type_, }
   }
   let resolve = fn(name) { table.get(name) }
   // string flows into Maybe<string>
@@ -220,7 +220,7 @@ test "checker: standard utility types resolve through real-parsed input" {
   }
   let table = @checker.standard_utility_types()
   for ta in module_.type_aliases {
-    table[ta.name] = { type_params: ta.type_params, body: ta.type_ }
+    table[ta.name] = { type_params: ta.type_params, body: ta.type_, }
   }
   let resolve = fn(name) { table.get(name) }
   // NonNullable<string | null> ⇨ string

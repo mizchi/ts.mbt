@@ -89,7 +89,9 @@ test "mtsc flags: --mangle-properties selects the analyzed path" {
 ///|
 test "mtsc flags: --no-check is off unless asked for" {
   assert_false(mtsc_parse_args(["mtsc", "in.ts"], 1).unwrap().no_check)
-  assert_true(mtsc_parse_args(["mtsc", "in.ts", "--no-check"], 1).unwrap().no_check)
+  assert_true(
+    mtsc_parse_args(["mtsc", "in.ts", "--no-check"], 1).unwrap().no_check,
+  )
 }
 
 ///|

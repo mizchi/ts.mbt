@@ -113,7 +113,7 @@ fn fold_guard_return(block : @ast.TsBlock) -> @ast.TsBlock {
     // of stopping at `if (!a) { b || g() }` — and it is why the `||`
     // form applies at all here, since the recursion is what makes the
     // inner tail a single expression statement.
-    let tail = fold_guard_return({ stmts: raw_tail, stmt_positions: [] }).stmts
+    let tail = fold_guard_return({ stmts: raw_tail, stmt_positions: [], }).stmts
     let replacement : @ast.TsStmt? = if tail.is_empty() {
       // `if (c) return;` with nothing after it: the return is the
       // fall-through, so only `c` itself can still matter.
@@ -140,7 +140,7 @@ fn fold_guard_return(block : @ast.TsBlock) -> @ast.TsBlock {
       Some(
         @ast.TsStmt::If(
           fold_expr(UnaryOp(Not, cond)),
-          { stmts: tail, stmt_positions: [] },
+          { stmts: tail, stmt_positions: [], },
           None,
         ),
       )
@@ -163,7 +163,7 @@ fn fold_guard_return(block : @ast.TsBlock) -> @ast.TsBlock {
       }
       None => ()
     }
-    return { stmts, stmt_positions: pos }
+    return { stmts, stmt_positions: pos, }
   }
   block
 }
@@ -316,7 +316,7 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
               }
               pos.push(block.stmt_positions[n - 1])
             }
-            Some(({ stmts: prefix, stmt_positions: pos } : @ast.TsBlock))
+            Some(({ stmts: prefix, stmt_positions: pos, } : @ast.TsBlock))
           }
           _ => None
         }
@@ -342,7 +342,7 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
                     }
                     pos.push(block.stmt_positions[n - 1])
                   }
-                  Some(({ stmts: prefix, stmt_positions: pos } : @ast.TsBlock))
+                  Some(({ stmts: prefix, stmt_positions: pos, } : @ast.TsBlock))
                 }
                 None => None
               }
@@ -378,7 +378,7 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
           pos.push(block.stmt_positions[i])
         }
       }
-      { stmts: trimmed, stmt_positions: pos }
+      { stmts: trimmed, stmt_positions: pos, }
     }
     _ => block
   }
@@ -451,10 +451,10 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
       result.push(st)
     }
     let merged = merge_consecutive_decls(result)
-    return { stmts: merged, stmt_positions: [] }
+    return { stmts: merged, stmt_positions: [], }
   }
   let merged = merge_consecutive_decls(stmts)
-  { stmts: merged, stmt_positions: positions }
+  { stmts: merged, stmt_positions: positions, }
 }
 
 ///|
@@ -1056,7 +1056,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           Some(te) => Some(fold_expr(te))
           None => None
         }
-        folded_cases.push({ test_expr: t, body: fold_block(c.body) })
+        folded_cases.push({ test_expr: t, body: fold_block(c.body), })
       }
       // When the discriminant is a literal, try to find the matching case.
       // If found and the case body ends with `break` (no fallthrough), splice
@@ -1115,7 +1115,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         // `label: { ...; ... }` — fall back to wrapping the spliced
         // stmts in a block so the label still targets exactly one
         // statement.
-        out.push(Label(name, Block({ stmts: tmp, stmt_positions: [] })))
+        out.push(Label(name, Block({ stmts: tmp, stmt_positions: [], })))
       }
     }
     Block(b) =>
@@ -1137,7 +1137,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     NativeClassStmt(decl, ctor) => {
       // Fold + strip trailing `return;` from constructor and method bodies.
       let folded_ctor : @ast.TsFunc? = match ctor {
-        Some(f) => Some({ ..f, body: fold_func_body(fold_block(f.body)) })
+        Some(f) => Some({ ..f, body: fold_func_body(fold_block(f.body)), })
         None => None
       }
       // Drop a no-op constructor (`constructor() {}` with no params, empty
@@ -1158,7 +1158,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           Some(b) => Some(fold_func_body(fold_block(b)))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -1982,7 +1982,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     }
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: fold_block(f.body) })
+        Some(f) => Some({ ..f, body: fold_block(f.body), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -1991,7 +1991,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           Some(b) => Some(fold_block(b))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -3161,7 +3161,7 @@ fn try_lower_single_case_switch(
       match stmts.length() {
         0 => return Some(Empty)
         1 => return Some(stmts[0])
-        _ => return Some(Block({ stmts, stmt_positions: [] }))
+        _ => return Some(Block({ stmts, stmt_positions: [], }))
       }
     }
     return None
@@ -3178,7 +3178,7 @@ fn try_lower_single_case_switch(
   if then_stmts.is_empty() && !the_case.body.stmts.is_empty() {
     return None
   }
-  let then_block : @ast.TsBlock = { stmts: then_stmts, stmt_positions: [] }
+  let then_block : @ast.TsBlock = { stmts: then_stmts, stmt_positions: [], }
   let cond = @ast.TsExpr::BinOp(@ast.TsBinOp::BinEq, disc, case_test)
   let else_block : @ast.TsBlock? = match default_cases.length() {
     0 => None
@@ -3187,7 +3187,7 @@ fn try_lower_single_case_switch(
       if ds.is_empty() {
         None
       } else {
-        Some(({ stmts: ds, stmt_positions: [] } : @ast.TsBlock))
+        Some(({ stmts: ds, stmt_positions: [], } : @ast.TsBlock))
       }
     }
     _ => return None

@@ -999,7 +999,7 @@ fn mtsc_typecheck_graph(
     }
   }
   let reported : Array[@mtsc_core.MtscGraphIssue] = []
-  for issue in @mtsc_core.collect_module_graph_issues({ modules, edges }) {
+  for issue in @mtsc_core.collect_module_graph_issues({ modules, edges, }) {
     // Import-resolution diagnostics are dropped here. They are part of
     // the stricter contract the Vite integration wants, but this CLI
     // cannot tell a type-only use of a value-form import
@@ -1117,7 +1117,6 @@ extern "c" fn mtsc_native_fflush(stream : Int64) -> Int = "fflush"
 #cfg(any(target="native", target="llvm"))
 fn mtsc_flush_stdout() -> Unit {
   let _ = mtsc_native_fflush(0L)
-
 }
 
 ///|
@@ -1282,7 +1281,7 @@ async fn mtsc_compile_entry(
         } noraise {
           v => Ok(v)
         }).or({
-          block: { stmts: [], stmt_positions: [] },
+          block: { stmts: [], stmt_positions: [], },
           imports: [],
           exports: [],
           reexports: [],
@@ -1365,7 +1364,7 @@ async fn mtsc_compile_entry(
       // Hand the loader's parses over rather than have the bundler
       // repeat them.
       .with_parsed_blocks(parsed_blocks)
-    let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
+    let bundle_opts = { ..bundle_opts, jsx: jsx_cfg, }
     let bundle_started = @bench.monotonic_clock_start()
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
     let bundle_micros = @bench.monotonic_clock_end(bundle_started)
@@ -1477,7 +1476,7 @@ async fn mtsc_compile_entry(
           } noraise {
             v => Ok(v)
           }).or({
-            block: { stmts: [], stmt_positions: [] },
+            block: { stmts: [], stmt_positions: [], },
             imports: [],
             exports: [],
             reexports: [],

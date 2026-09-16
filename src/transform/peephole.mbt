@@ -575,7 +575,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
               }
               new_cases[n_cases - 1] = {
                 ..last,
-                body: { stmts: trimmed, stmt_positions: [] },
+                body: { stmts: trimmed, stmt_positions: [], },
               }
             }
             _ => ()
@@ -614,7 +614,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // so fall-through is impossible. The resulting if/else can then
       // collapse further via the `if (c) return a; return b;` rule.
       match final_cases[:] {
-        [{ test_expr: Some(case_e), body: case_body }] => {
+        [{ test_expr: Some(case_e), body: case_body, }] => {
           // A `break` terminator is only valid inside a switch / loop, so
           // don't lift a single-case switch to `if` when the body ends with
           // `break` or contains an internal bare break — the resulting
@@ -636,8 +636,8 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           }
         }
         [
-          { test_expr: Some(case_e), body: case_body },
-          { test_expr: None, body: default_body },
+          { test_expr: Some(case_e), body: case_body, },
+          { test_expr: None, body: default_body, },
         ] => {
           let has_bare_break2 = block_has_bare_break(case_body)
           let last_is_term2 = match case_body.stmts.last() {
@@ -722,7 +722,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             // Build the if-else chain from right to left.
             // Start from the default (if any) or None.
             let default_block : @ast.TsBlock? = match final_cases.last() {
-              Some({ test_expr: None, body: db }) => Some(db)
+              Some({ test_expr: None, body: db, }) => Some(db)
               _ => None
             }
             let named : Array[@ast.TsSwitchCase] = []
@@ -745,7 +745,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
                 If(BinOp(@ast.TsBinOp::BinEq, ep, test_e), c.body, else_block),
                 ctx,
               )
-              else_block = Some({ stmts: [new_if], stmt_positions: [] })
+              else_block = Some({ stmts: [new_if], stmt_positions: [], })
               i = i - 1
             }
             match else_block {
@@ -791,7 +791,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
-          Some({ ..f, body: elim_ctor_void_inits(peep_block(f.body, ctx)) })
+          Some({ ..f, body: elim_ctor_void_inits(peep_block(f.body, ctx)), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -800,7 +800,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           Some(b) => Some(peep_block(b, ctx))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -1171,7 +1171,7 @@ fn peep_decl_rhs(
       // `let f = function() {}` — fold the body but keep it as FuncExpr.
       @ast.TsExpr::FuncExpr(f) => {
         let folded = peep_block(f.body, ctx)
-        return @ast.TsExpr::FuncExpr({ ..f, body: folded })
+        return @ast.TsExpr::FuncExpr({ ..f, body: folded, })
       }
       _ => ()
     }
@@ -1577,7 +1577,7 @@ fn collapse_loop_body(b : @ast.TsBlock) -> @ast.TsBlock {
     // into, and a declaration cannot be brace-less anyway.
     _ => return b
   }
-  { stmts: [merged], stmt_positions: [] }
+  { stmts: [merged], stmt_positions: [], }
 }
 
 ///|
@@ -1862,9 +1862,9 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
       }
       result.push(st)
     }
-    return { stmts: result, stmt_positions: [] }
+    return { stmts: result, stmt_positions: [], }
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -2937,7 +2937,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         }
         ArrowFunc(f.params, f.return_type, arrow_body, f.is_async)
       } else {
-        FuncExpr({ ..f, body: folded })
+        FuncExpr({ ..f, body: folded, })
       }
     }
     DynamicImport(spec, opts) => {
@@ -2989,7 +2989,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
-          Some({ ..f, body: elim_ctor_void_inits(peep_block(f.body, ctx)) })
+          Some({ ..f, body: elim_ctor_void_inits(peep_block(f.body, ctx)), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -2998,7 +2998,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           Some(b) => Some(peep_block(b, ctx))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {

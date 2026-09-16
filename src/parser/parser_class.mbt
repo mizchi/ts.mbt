@@ -232,7 +232,7 @@ fn runtime_class_method_params(
       positions.push(pos)
     }
   }
-  (params, param_defaults, param_is_rest, { stmts, stmt_positions: positions })
+  (params, param_defaults, param_is_rest, { stmts, stmt_positions: positions, })
 }
 
 ///|
@@ -1186,7 +1186,7 @@ fn Parser::take_last_runtime_class_decl(self : Parser) -> @ast.TsClassDecl? {
 /// module-level class parse happened to overwrite it.
 fn Parser::record_local_class(self : Parser) -> Unit {
   match self.take_last_runtime_class_decl() {
-    Some(decl) => self.collected_local_classes.push({ ..decl, is_local: true })
+    Some(decl) => self.collected_local_classes.push({ ..decl, is_local: true, })
     None => ()
   }
 }
@@ -1226,7 +1226,7 @@ fn Parser::record_local_class_expr(
   } else {
     decl.name
   }
-  self.collected_local_classes.push({ ..decl, name, is_local: true })
+  self.collected_local_classes.push({ ..decl, name, is_local: true, })
 }
 
 ///|
@@ -1804,7 +1804,7 @@ fn inject_assigns_after_super_in_block(
       stmts.push(es)
     }
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: [], }
 }
 
 ///|
@@ -2137,7 +2137,7 @@ fn Parser::inject_instance_field_assigns(
     type_params: func.type_params,
     params: func.params,
     return_type: func.return_type,
-    body: { stmts: new_stmts, stmt_positions: [] },
+    body: { stmts: new_stmts, stmt_positions: [], },
     const_type_params: [],
     type_param_bounds: func.type_param_bounds,
     is_generator: func.is_generator,
@@ -3368,13 +3368,13 @@ fn Parser::parse_class_body(
         )
       }
       let body = if consumed_semi {
-        @ast.TsBlock::{ stmts: [], stmt_positions: [] }
+        @ast.TsBlock::{ stmts: [], stmt_positions: [], }
       } else if !self.check(LBrace) {
         // Overload signature with no body and no trailing `;` (relying on
         // ASI) — e.g. `constructor(y: any)` followed on the next line by the
         // implementation `constructor(x: number) {}`. Treat it as a bodyless
         // signature; we don't enforce overload/implementation pairing.
-        @ast.TsBlock::{ stmts: [], stmt_positions: [] }
+        @ast.TsBlock::{ stmts: [], stmt_positions: [], }
       } else {
         // Save and set function context for method body. Assign (not
         // just set-when-true): a non-generator method of a class declared
@@ -3414,7 +3414,12 @@ fn Parser::parse_class_body(
               match insert_after_super_in(p, tb.stmts) {
                 Some(new_inner) => {
                   out.push(
-                    Try({ stmts: new_inner, stmt_positions: [] }, cb, cbody, fb),
+                    Try(
+                      { stmts: new_inner, stmt_positions: [], },
+                      cb,
+                      cbody,
+                      fb,
+                    ),
                   )
                   inserted = true
                 }
@@ -3464,9 +3469,9 @@ fn Parser::parse_class_body(
           for s in new_stmts {
             prepended.push(s)
           }
-          @ast.TsBlock::{ stmts: prepended, stmt_positions: [] }
+          @ast.TsBlock::{ stmts: prepended, stmt_positions: [], }
         } else {
-          @ast.TsBlock::{ stmts: new_stmts, stmt_positions: [] }
+          @ast.TsBlock::{ stmts: new_stmts, stmt_positions: [], }
         }
       } else {
         body
@@ -3795,7 +3800,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       class_name = n
       self.advance()
     }
-    _ => { kind: Eof, pos: 0, has_newline_before: false }
+    _ => { kind: Eof, pos: 0, has_newline_before: false, }
   }
   let mut class_type_params : Array[String] = []
   let mut class_type_param_bounds : Array[(String, @ast.TsType)] = []
@@ -4120,7 +4125,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
                 },
               ],
               return_type: @ast.TsType::Any,
-              body: { stmts: body_stmts, stmt_positions: [] },
+              body: { stmts: body_stmts, stmt_positions: [], },
               const_type_params: [],
               is_generator: false,
               is_async: false,
@@ -4332,7 +4337,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
         None => {
-          let empty_body : @ast.TsBlock = { stmts: [], stmt_positions: [] }
+          let empty_body : @ast.TsBlock = { stmts: [], stmt_positions: [], }
           {
             name: tmp_name,
             type_params: [],
@@ -4623,7 +4628,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       name: "<class>",
       params: [],
       return_type: @ast.TsType::Any,
-      body: @ast.TsBlock::{ stmts, stmt_positions: [] },
+      body: @ast.TsBlock::{ stmts, stmt_positions: [], },
       const_type_params: [],
       is_generator: false,
       is_async: false,
@@ -4969,7 +4974,7 @@ fn Parser::parse_class_decl_with_abstract(
                 },
               ],
               return_type: @ast.TsType::Any,
-              body: { stmts: body_stmts, stmt_positions: [] },
+              body: { stmts: body_stmts, stmt_positions: [], },
               const_type_params: [],
               is_generator: false,
               is_async: false,
@@ -4985,7 +4990,7 @@ fn Parser::parse_class_decl_with_abstract(
               type_param_bounds: [],
               params: [],
               return_type: @ast.TsType::Any,
-              body: { stmts: [], stmt_positions: [] },
+              body: { stmts: [], stmt_positions: [], },
               const_type_params: [],
               is_generator: false,
               is_async: false,
@@ -5158,7 +5163,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
         None => {
-          let empty_body : @ast.TsBlock = { stmts: [], stmt_positions: [] }
+          let empty_body : @ast.TsBlock = { stmts: [], stmt_positions: [], }
           {
             name,
             type_params: [],
@@ -5450,7 +5455,7 @@ fn Parser::parse_class_decl_with_abstract(
         name: "<class>",
         params: [],
         return_type: @ast.TsType::Any,
-        body: @ast.TsBlock::{ stmts: internal_stmts, stmt_positions: [] },
+        body: @ast.TsBlock::{ stmts: internal_stmts, stmt_positions: [], },
         const_type_params: [],
         is_generator: false,
         is_async: false,

@@ -330,10 +330,10 @@ fn upsert_marker_trait_decl(
   match decls.get(name) {
     Some(existing) =>
       if arity > existing.arity {
-        decls[name] = { name, arity }
+        decls[name] = { name, arity, }
       }
     None => {
-      decls[name] = { name, arity }
+      decls[name] = { name, arity, }
       order.push(name)
     }
   }
@@ -569,7 +569,7 @@ fn parse_mbti_import_line(line : String) -> ParsedMbtiImportLine? {
       if alias_name == "" {
         None
       } else {
-        Some({ alias_name, module_spec })
+        Some({ alias_name, module_spec, })
       }
     }
     None => None
@@ -877,9 +877,9 @@ fn parse_type_params(
           )
         }
         let extends_ty = rendered_bounds.join(" & ")
-        normalized.push({ name, extends_ty: Some(extends_ty) })
+        normalized.push({ name, extends_ty: Some(extends_ty), })
       }
-      None => normalized.push({ name: trimmed, extends_ty: None })
+      None => normalized.push({ name: trimmed, extends_ty: None, })
     }
   }
   normalized
@@ -912,12 +912,12 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
     }
     let line = trim_trailing_comma_or_semicolon(trimmed)
     match parse_mbti_import_line(line) {
-      Some({ alias_name, module_spec }) => {
+      Some({ alias_name, module_spec, }) => {
         let mut ts_alias = sanitize_ts_namespace_alias(alias_name, "pkg")
         while imports.any(fn(existing) { existing.ts_alias == ts_alias }) {
           ts_alias += "_"
         }
-        imports.push({ alias_name, ts_alias, module_spec })
+        imports.push({ alias_name, ts_alias, module_spec, })
       }
       None => ()
     }
@@ -1273,7 +1273,7 @@ fn parse_mbti_raw_facade_params(
           trimmed[colon_idx + 1:trimmed.length()].trim().to_owned(),
           owner_name,
         )
-        params.push({ name, ty_src, optional })
+        params.push({ name, ty_src, optional, })
       }
       None => {
         // Raw facade params are also consumed by the MoonBit-side
@@ -1288,7 +1288,7 @@ fn parse_mbti_raw_facade_params(
           "arg\{idx}"
         }
         let ty_src = replace_mbti_self_refs(trimmed, owner_name)
-        params.push({ name, ty_src, optional: false })
+        params.push({ name, ty_src, optional: false, })
       }
     }
     idx += 1
@@ -2740,7 +2740,7 @@ async fn load_mbti_package_sources(
       }
     }
   }
-  { root_package_name, ordered_packages, package_sources }
+  { root_package_name, ordered_packages, package_sources, }
 }
 
 ///|
@@ -3106,7 +3106,11 @@ fn parse_mbti_params(
           sanitize_ts_identifier(name, "arg\{idx}")
         }
         used_names.push(param_name)
-        params.push({ name: param_name, ty, optional: raw_name.has_suffix("?") })
+        params.push({
+          name: param_name,
+          ty,
+          optional: raw_name.has_suffix("?"),
+        })
       }
       None => {
         let ty = translate_mbti_type(
@@ -3122,7 +3126,7 @@ fn parse_mbti_params(
           )
         }
         used_names.push(param_name)
-        params.push({ name: param_name, ty, optional: false })
+        params.push({ name: param_name, ty, optional: false, })
       }
     }
     idx += 1
@@ -3611,7 +3615,7 @@ fn parse_struct_block_decl(
           name,
           owner_type_param_names,
         ) {
-        Some(fields) => return { name, type_params, fields }
+        Some(fields) => return { name, type_params, fields, }
         None => ()
       }
       let field_lines : Array[String] = []
@@ -3644,7 +3648,7 @@ fn parse_struct_block_decl(
           None => ()
         }
       }
-      { name, type_params, fields: field_lines }
+      { name, type_params, fields: field_lines, }
     }
     None =>
       raise MbtiTypescriptDeclError::ParseError(
@@ -3996,12 +4000,12 @@ fn parse_type_alias_decl_source(
           )
       }
       let rendered = translate_mbti_type(right, imports, used_aliases, None, [])
-      { name, type_params, body: rendered, is_opaque: false }
+      { name, type_params, body: rendered, is_opaque: false, }
     }
     None =>
       match parse_mbti_type_name_and_params(decl_src, imports, used_aliases) {
         Some((name, type_params)) =>
-          { name, type_params, body: "unknown", is_opaque: true }
+          { name, type_params, body: "unknown", is_opaque: true, }
         None =>
           raise MbtiTypescriptDeclError::ParseError(
             "invalid type alias: \{original_line}",
@@ -4133,7 +4137,7 @@ fn parse_trait_block_decl(
           None => ()
         }
       }
-      { name, type_params, methods }
+      { name, type_params, methods, }
     }
     None =>
       raise MbtiTypescriptDeclError::ParseError(
@@ -4970,7 +4974,7 @@ fn parse_mbti_impl_decl(line : String) -> MbtiImplDecl? {
         Some(idx) => owner_src[:idx].trim().to_owned()
         None => owner_src
       }
-      Some({ trait_name, owner_name })
+      Some({ trait_name, owner_name, })
     }
     None => None
   }
@@ -5017,9 +5021,9 @@ fn parse_local_marker_trait_decl(
       }
       let args_src = raw_trait_name[idx + 1:raw_trait_name.length() - 1].to_owned()
       let arity = split_top_level_items(args_src).length()
-      Some({ name, arity })
+      Some({ name, arity, })
     }
-    _ => Some({ name: raw_trait_name, arity: 0 })
+    _ => Some({ name: raw_trait_name, arity: 0, })
   }
 }
 
@@ -5180,7 +5184,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
           struct_decls[name] = struct_decl
           for derive_line in block {
             for trait_name in parse_mbti_derive_trait_names(derive_line) {
-              impl_decls.push({ trait_name, owner_name: name })
+              impl_decls.push({ trait_name, owner_name: name, })
             }
           }
         }
@@ -5203,7 +5207,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
           enum_like_decls[name] = enum_decl
           for derive_line in block {
             for trait_name in parse_mbti_derive_trait_names(derive_line) {
-              impl_decls.push({ trait_name, owner_name: name })
+              impl_decls.push({ trait_name, owner_name: name, })
             }
           }
         }
@@ -5227,7 +5231,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
           enum_like_decls[name] = enum_decl
           for derive_line in block {
             for trait_name in parse_mbti_derive_trait_names(derive_line) {
-              impl_decls.push({ trait_name, owner_name: name })
+              impl_decls.push({ trait_name, owner_name: name, })
             }
           }
         }
@@ -5244,7 +5248,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
       type_params_by_name[name] = alias_decl.type_params
       type_alias_decls[name] = alias_decl
       for trait_name in parse_mbti_derive_trait_names(trimmed) {
-        impl_decls.push({ trait_name, owner_name: name })
+        impl_decls.push({ trait_name, owner_name: name, })
       }
       idx += 1
       continue

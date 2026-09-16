@@ -42,9 +42,7 @@ async fn mtsc_watch_stamp(path : String) -> (Int64, Int)? {
 
 ///|
 /// Stamp every path in `paths`.
-async fn mtsc_watch_stamps(
-  paths : Array[String],
-) -> Map[String, (Int64, Int)?] {
+async fn mtsc_watch_stamps(paths : Array[String]) -> Map[String, (Int64, Int)?] {
   let out : Map[String, (Int64, Int)?] = Map([])
   for p in paths {
     out[p] = mtsc_watch_stamp(p)

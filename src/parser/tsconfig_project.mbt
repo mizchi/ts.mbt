@@ -97,7 +97,7 @@ async fn load_tsconfig_project_in(
         Some(inherited) =>
           // The loaded config is still the one the caller named; only
           // the path set and its root come from the base.
-          Some({ ..inherited, config_path })
+          Some({ ..inherited, config_path, })
         None =>
           Some({
             config_path,
@@ -154,7 +154,13 @@ fn tsconfig_extends_target(src : String, dir : String) -> String? {
       match parse_json_string_at(src, start_) {
         Some(parent) => {
           let joined = normalize_path(join_path(dir, parent))
-          Some(if joined.has_suffix(".json") { joined } else { joined + ".json" })
+          Some(
+            if joined.has_suffix(".json") {
+              joined
+            } else {
+              joined + ".json"
+            },
+          )
         }
         None => None
       }

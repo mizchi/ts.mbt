@@ -330,7 +330,7 @@ priv struct ClassIndex {
 
 ///|
 fn ClassIndex::empty() -> ClassIndex {
-  { built: false, inst_prop: Map([]), inst_meth: Map([]), field_init: Map([]) }
+  { built: false, inst_prop: Map([]), inst_meth: Map([]), field_init: Map([]), }
 }
 
 ///|
@@ -440,7 +440,11 @@ fn Resolver::empty() -> Resolver {
 /// than fresh maps, so a nested namespace check inherits them instead of
 /// re-deriving them from the root. See `RootNameBackstops`.
 fn Resolver::empty_with_backstops(b : RootNameBackstops) -> Resolver {
-  { ..Resolver::empty(), declared_value_names: b.declared_value_names, any_uninitialized_values: b.any_uninitialized_values }
+  {
+    ..Resolver::empty(),
+    declared_value_names: b.declared_value_names,
+    any_uninitialized_values: b.any_uninitialized_values,
+  }
 }
 
 ///|
@@ -970,12 +974,11 @@ fn collect_expr_value_names(
         collect_block_value_names(blk, out)
       }
     }
-    ArrowFunc(_, _, body, _) => {
+    ArrowFunc(_, _, body, _) =>
       match body {
         ArrowExpr(e) => collect_expr_value_names(e, out)
         ArrowBlock(b) => collect_block_value_names(b, out)
       }
-    }
     Call(_, args) | New(_, args) =>
       for a in args {
         collect_expr_value_names(a, out)
@@ -1106,7 +1109,7 @@ fn Resolver::ingest_module(
             merged_members.push(m)
           }
         }
-        r.enums[prefix + e.name] = { ..e, members: merged_members }
+        r.enums[prefix + e.name] = { ..e, members: merged_members, }
       }
       None => r.enums[prefix + e.name] = e
     }
@@ -3143,8 +3146,7 @@ fn Resolver::lookup_field_core(
           // `V` (and likewise for numeric keys).
           index_signature_value(iface.index_signatures, field)
         }
-        None =>
-          self.lookup_class_field(n, field)
+        None => self.lookup_class_field(n, field)
       }
     // `Applied(N, [A, B, …])` — the type instantiates a generic
     // interface (or class). Substitute type-parameter names with the
@@ -4711,7 +4713,7 @@ priv struct ExprEnv {
 
 ///|
 fn ExprEnv::new() -> ExprEnv {
-  { vars: {}, declared: {} }
+  { vars: {}, declared: {}, }
 }
 
 ///|
@@ -5432,11 +5434,13 @@ fn interface_declaring_restricted_member(
   for base in iface.extends_names {
     match ctx.resolver.classes.get(base) {
       Some(d) =>
-        if d.private_members.contains(prop) || d.protected_members.contains(prop) {
+        if d.private_members.contains(prop) ||
+          d.protected_members.contains(prop) {
           return Some(base)
         }
       None =>
-        match interface_declaring_restricted_member(ctx, base, prop, depth + 1) {
+        match
+          interface_declaring_restricted_member(ctx, base, prop, depth + 1) {
           Some(n) => return Some(n)
           None => ()
         }
@@ -5682,7 +5686,7 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
   } else {
     ctx.path_prefix + " > " + sub_path
   }
-  ctx.issues.push({ path, message })
+  ctx.issues.push({ path, message, })
 }
 
 ///|
@@ -5912,7 +5916,7 @@ fn record_unfiltered(
   } else {
     ctx.path_prefix + " > " + sub_path
   }
-  ctx.issues.push({ path, message })
+  ctx.issues.push({ path, message, })
 }
 
 ///|
@@ -6931,6 +6935,7 @@ fn is_definitely_not_arithmetic(ty : @ast.TsType) -> Bool {
 // "not callable" diagnostic stays free of false positives. Permissive for
 // Named / Applied (interfaces may carry call signatures), Union / Intersection
 // (overload sets), and unresolved type-level forms.
+
 ///|
 /// TS2349 for an INTERSECTION that TypeScript reduces to `never`: when two
 /// constituents declare the same member with definitely-conflicting types,
@@ -6975,6 +6980,7 @@ fn intersection_reduces_to_never(resolver : Resolver, ty : @ast.TsType) -> Bool 
   false
 }
 
+///|
 fn is_definitely_not_callable(ty : @ast.TsType) -> Bool {
   match ty {
     Number
@@ -10646,7 +10652,7 @@ fn check_expr_against(
   // arrow written against one of several shapes.
   match expected_shape {
     Union(members) if members.length() >= 2 &&
-      (expr is (ArrowFunc(_, _, _, _) | FuncExpr(_))) => {
+      expr is (ArrowFunc(_, _, _, _) | FuncExpr(_)) => {
       let mut params : Array[@ast.TsType]? = None
       let rets : Array[@ast.TsType] = []
       let mut uniform = true
@@ -13010,9 +13016,7 @@ fn check_plain_call_this_context(
   for n in this_context_candidate_names(ctx.resolver, callee_ty) {
     if ctx.resolver.this_param_members.get(n + ".<call>") is Some(true) {
       record_unfiltered(
-        ctx,
-        call_path,
-        "the `this` context of type `void` is not assignable to the call signature's declared `this`",
+        ctx, call_path, "the `this` context of type `void` is not assignable to the call signature's declared `this`",
       )
       return
     }
@@ -13069,10 +13073,10 @@ fn check_union_receiver_this_context(
       // half, and it is the one tsc's own message walks down to
       // ("Types of property 'data' are incompatible").
       let disjoint = shapes_definitely_disjoint(
-                ctx.resolver,
-                members[i],
-                members[j],
-              ) ||
+          ctx.resolver,
+          members[i],
+          members[j],
+        ) ||
         shared_member_types_differ(ctx.resolver, members[i], members[j])
       if disjoint {
         record_unfiltered(
@@ -14247,8 +14251,8 @@ fn check_object_lit_against_target(
     // computed key and costs a MISS.
     let (key, value) = match (entry.0.has_prefix("@@computed:"), entry.1) {
       (true, ComputedProp(PropAccess(Var("Symbol"), wk), vexpr)) if is_well_known_symbol_name(
-        wk,
-      ) => ("@@" + wk, vexpr)
+          wk,
+        ) => ("@@" + wk, vexpr)
       _ => (entry.0, entry.1)
     }
     // Spread entries (`@@spread:N`) are not individual properties — skip them
@@ -17247,7 +17251,7 @@ fn analyze_narrowing(
   let then_binds : Array[(String, @ast.TsType)] = []
   let else_binds : Array[(String, @ast.TsType)] = []
   collect_narrowing(env, resolver, cond, then_binds, else_binds, true)
-  { then_binds, else_binds }
+  { then_binds, else_binds, }
 }
 
 ///|
@@ -18497,7 +18501,11 @@ fn check_forof_object_literal(
   let kind = if is_await { "an async iterator" } else { "an iterator" }
   record(
     ctx,
-    if is_await { "for-await-of iterable" } else { "for-of iterable" },
+    if is_await {
+      "for-await-of iterable"
+    } else {
+      "for-of iterable"
+    },
     "type `{}` must have a `[\{sym}]()` method that returns \{kind}",
   )
 }
@@ -19986,7 +19994,11 @@ fn check_explicit_type_args(
           ctx.resolver.local_type_names.get(n) is None &&
           !is_lib_global_type(n) &&
           !is_lib_global_value(n) {
-          record_unfiltered(ctx, "type argument `\{n}`", "cannot find name `\{n}`")
+          record_unfiltered(
+            ctx,
+            "type argument `\{n}`",
+            "cannot find name `\{n}`",
+          )
         }
       _ => ()
     }
@@ -20894,7 +20906,10 @@ fn check_call_args_in_expr(
           // TS2684: a method declaring a `this` parameter, called on a
           // union receiver whose members are definitely disjoint.
           check_union_receiver_this_context(
-            ctx, recv_ty, meth, "call `\{meth}`",
+            ctx,
+            recv_ty,
+            meth,
+            "call `\{meth}`",
           )
           if is_nullable_type(recv_ty) {
             record(
@@ -21679,7 +21694,9 @@ fn check_call_args_in_expr(
                       if is_checkable(ft) &&
                         !type_has_undefined(ft) &&
                         !reached_only_through_index_signature(
-                          ctx.resolver, recv_ty, prop,
+                          ctx.resolver,
+                          recv_ty,
+                          prop,
                         ) {
                         record(
                           ctx, "delete", "the operand of a `delete` operator must be optional",
@@ -22977,7 +22994,8 @@ fn check_call_args_in_expr(
           } else {
             match abody {
               ArrowExpr(e) => infer_expr(inner_env, ctx.resolver, e)
-              ArrowBlock(blk) => infer_block_return(inner_env, ctx.resolver, blk)
+              ArrowBlock(blk) =>
+                infer_block_return(inner_env, ctx.resolver, blk)
             }
           }
           @ast.TsType::Func(ptys, wrap_async_return(is_async, ret))
@@ -24133,7 +24151,7 @@ fn record_priv_method_assign(
   issues : Array[ExprIssue],
 ) -> Unit {
   match targets.get(name) {
-    Some(msg) => issues.push({ path: "class \{owner}", message: msg })
+    Some(msg) => issues.push({ path: "class \{owner}", message: msg, })
     None => ()
   }
 }
@@ -24479,10 +24497,7 @@ fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] 
 ///|
 /// Constructor-accessibility RANK: `public` 0, `protected` 1, `private` 2.
 /// `None` for a name that is not a top-level class in this module.
-fn constructor_visibility_rank(
-  module_ : @ast.TsModule,
-  name : String,
-) -> Int? {
+fn constructor_visibility_rank(module_ : @ast.TsModule, name : String) -> Int? {
   for cls in module_.classes {
     if cls.name != name || cls.is_local {
       continue
@@ -24545,15 +24560,15 @@ fn check_constructor_type_assignability(
     if gm.has_prefix("<classval-decl:") && gm.has_suffix(">") {
       let body = gm["<classval-decl:".length():gm.length() - 1].to_owned()
       match body.find(":") {
-        Some(i) =>
-          unannotated[body[0:i].to_owned()] = body[i + 1:].to_owned()
+        Some(i) => unannotated[body[0:i].to_owned()] = body[i + 1:].to_owned()
         None => ()
       }
     }
   }
   fn class_value_name(e : @ast.TsExpr) -> String? {
     match e {
-      Var(n) => if constructor_visibility_rank(module_, n) is Some(_) {
+      Var(n) =>
+        if constructor_visibility_rank(module_, n) is Some(_) {
           Some(n)
         } else {
           None
@@ -24562,7 +24577,12 @@ fn check_constructor_type_assignability(
     }
   }
 
-  fn report(src : String, tgt : String, src_rank : Int, tgt_rank : Int) -> Unit {
+  fn report(
+    src : String,
+    tgt : String,
+    src_rank : Int,
+    tgt_rank : Int,
+  ) -> Unit {
     let kind = if src_rank == 2 { "private" } else { "protected" }
     let want = if tgt_rank == 0 { "public" } else { "protected" }
     issues.push({
@@ -24575,7 +24595,7 @@ fn check_constructor_type_assignability(
     match stmt {
       Var(@ast.TsBinding::Ident(name), declared, init)
       | Let(@ast.TsBinding::Ident(name), declared, init)
-      | Const(@ast.TsBinding::Ident(name), declared, init) => {
+      | Const(@ast.TsBinding::Ident(name), declared, init) =>
         // `let f: typeof C = Other` — the annotation names the target class.
         match declared {
           TypeOf(target) =>
@@ -24612,7 +24632,6 @@ fn check_constructor_type_assignability(
               }
             }
         }
-      }
       // Two spellings of one statement: `a = Prot;` reaches the statement
       // dispatcher as `Assign` only when `parse_expr_until_top_level`
       // stops before the `=`; otherwise the whole thing is an assignment
@@ -24710,7 +24729,8 @@ fn check_namespace_member_writes(module_ : @ast.TsModule) -> Array[ExprIssue] {
           if slot.get(n) is Some(_) {
             continue
           }
-          let ty = if is_checkable(declared) && is_definite_primitive_type(declared) {
+          let ty = if is_checkable(declared) &&
+            is_definite_primitive_type(declared) {
             Some(declared)
           } else if is_checkable(declared) {
             None
@@ -26321,8 +26341,11 @@ fn objlit_super_key_expr(e : @ast.TsExpr, crossed : Bool) -> Bool {
     }
     PropAccess(a, _) | UnaryOp(_, a) | Spread(a) | PureCall(a) | Await(a) =>
       rec(a)
-    TypeArgs(_, a) | NonNull(a) | OptionalChain(a) | As(a, _) | Satisfies(a, _) =>
-      rec(a)
+    TypeArgs(_, a)
+    | NonNull(a)
+    | OptionalChain(a)
+    | As(a, _)
+    | Satisfies(a, _) => rec(a)
     IndexAccess(a, b) | BinOp(_, a, b) | Seq(a, b) => rec(a) || rec(b)
     CallExpr(c, args) | NewExpr(c, args) =>
       rec(c) || args.iter().any(fn(a) { rec(a) })
@@ -26379,8 +26402,7 @@ fn objlit_super_key_stmt(s : @ast.TsStmt, crossed : Bool) -> Bool {
       recb(body)
     ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) =>
       rec(e) || recb(b)
-    Switch(e, cases) =>
-      rec(e) || cases.iter().any(fn(c) { recb(c.body) })
+    Switch(e, cases) => rec(e) || cases.iter().any(fn(c) { recb(c.body) })
     Try(a, _, c, f) =>
       recb(a) ||
       (match c {
@@ -26997,7 +27019,7 @@ fn check_misplaced_type_predicates(module_ : @ast.TsModule) -> Array[ExprIssue] 
     match stmt {
       Var(_, ty, _) | Let(_, ty, _) | Const(_, ty, _) =>
         if ty is TypePredicate(_, _) {
-          issues.push({ path: "top-level", message: msg })
+          issues.push({ path: "top-level", message: msg, })
         }
       _ => ()
     }
@@ -27005,27 +27027,27 @@ fn check_misplaced_type_predicates(module_ : @ast.TsModule) -> Array[ExprIssue] 
   for f in module_.funcs {
     for p in f.params {
       if p.type_ is TypePredicate(_, _) {
-        issues.push({ path: "function \{f.name}", message: msg })
+        issues.push({ path: "function \{f.name}", message: msg, })
       }
     }
   }
   for imp in module_.imports {
     for p in imp.params {
       if p.1 is TypePredicate(_, _) {
-        issues.push({ path: "function \{imp.name}", message: msg })
+        issues.push({ path: "function \{imp.name}", message: msg, })
       }
     }
   }
   for iface in module_.interfaces {
     for fld in iface.fields {
       if fld.1 is TypePredicate(_, _) {
-        issues.push({ path: "interface \{iface.name}", message: msg })
+        issues.push({ path: "interface \{iface.name}", message: msg, })
       }
     }
   }
   for ta in module_.type_aliases {
     if ta.type_ is TypePredicate(_, _) {
-      issues.push({ path: "type \{ta.name}", message: msg })
+      issues.push({ path: "type \{ta.name}", message: msg, })
     }
   }
   issues
@@ -27324,14 +27346,16 @@ fn check_non_local_exports(
       continue
     }
     if name != "globalThis" &&
-      (resolver.declared_value_names.get(name) is Some(_) ||
-      resolver.interfaces.get(name) is Some(_) ||
-      resolver.type_aliases.get(name) is Some(_) ||
-      resolver.classes.get(name) is Some(_) ||
-      resolver.enums.get(name) is Some(_) ||
-      imported.contains(name) ||
-      is_lib_global_value(name) ||
-      is_lib_global_type(name)) {
+      (
+        resolver.declared_value_names.get(name) is Some(_) ||
+        resolver.interfaces.get(name) is Some(_) ||
+        resolver.type_aliases.get(name) is Some(_) ||
+        resolver.classes.get(name) is Some(_) ||
+        resolver.enums.get(name) is Some(_) ||
+        imported.contains(name) ||
+        is_lib_global_value(name) ||
+        is_lib_global_type(name)
+      ) {
       continue
     }
     reported[name] = ()
@@ -29260,7 +29284,7 @@ fn check_unresolved_signature_type_refs(
 
   fn note(name : String, scope : Array[String], where_ : String) -> Unit {
     if !resolved(name, scope) {
-      issues.push({ path: where_, message: "cannot find name `\{name}`" })
+      issues.push({ path: where_, message: "cannot find name `\{name}`", })
     }
   }
 
@@ -29616,7 +29640,13 @@ fn resolve_base_chain_members(
   let static_ : Map[String, Unit] = Map([])
   let abstract_ : Map[String, Unit] = Map([])
   if cls.base_names.length() == 0 && cls.base_expr is None {
-    return { instance, static_, abstract_, resolvable: true, has_opaque: false }
+    return {
+      instance,
+      static_,
+      abstract_,
+      resolvable: true,
+      has_opaque: false,
+    }
   }
   if cls.base_expr is Some(_) || cls.base_names.length() != 1 {
     return {
@@ -29709,7 +29739,7 @@ fn resolve_base_chain_members(
     }
     cursor = next
   }
-  { instance, static_, abstract_, resolvable, has_opaque }
+  { instance, static_, abstract_, resolvable, has_opaque, }
 }
 
 ///|
@@ -31030,9 +31060,7 @@ fn collect_infer_declarations(
 /// `namespace_is_instantiated`, and which at script top level has been
 /// lowered to `var M = M || {}` so the name really is a variable here) and
 /// the interface target (TS2693, "only refers to a type").
-fn check_assignment_to_declaration(
-  module_ : @ast.TsModule,
-) -> Array[ExprIssue] {
+fn check_assignment_to_declaration(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let kinds : Map[String, String] = Map([])
   for c in module_.classes {
@@ -31949,7 +31977,7 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for iface in module_.interfaces {
     let ipath = "interface \{iface.name}"
     for name in member_name_duplicates(iface.fields) {
-      issues.push({ path: ipath, message: "duplicate identifier `\{name}`" })
+      issues.push({ path: ipath, message: "duplicate identifier `\{name}`", })
     }
     // Nested object type-literals inside field types.
     for f in iface.fields {
@@ -32781,7 +32809,7 @@ fn check_type_undeclared_tps(
     if is_single_upper_letter(n) &&
       !scope.contains(n) &&
       !(declared.get(n) is Some(_)) {
-      issues.push({ path, message: "cannot find name `\{n}`" })
+      issues.push({ path, message: "cannot find name `\{n}`", })
     }
   }
 
@@ -34883,7 +34911,7 @@ fn collect_type_dup_issues(
         }
       }
       for name in member_name_duplicates(named) {
-        issues.push({ path: label, message: "duplicate identifier `\{name}`" })
+        issues.push({ path: label, message: "duplicate identifier `\{name}`", })
       }
       for f in fields {
         collect_type_dup_issues(f.1, label, issues)
@@ -35024,7 +35052,7 @@ fn parser_channel_issues(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "a required element cannot follow an optional element",
       })
     } else if member_ == "<object-member-no-separator>" {
-      all.push({ path: "object type", message: "`;` expected" })
+      all.push({ path: "object type", message: "`;` expected", })
     } else if member_.has_prefix("<generic-noarg-required>") ||
       member_.has_prefix("<generic-min-arity>") ||
       member_.has_prefix("<type-param-name>") {
@@ -35056,7 +35084,7 @@ fn check_module_function_bodies_layered(
   permissive : Bool,
   type_modules : Array[@ast.TsModule],
   extra_globals : Array[(String, @ast.TsType)],
-  backstops~ : RootNameBackstops? = None,
+  backstops? : RootNameBackstops? = None,
 ) -> Array[ExprIssue] {
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
@@ -35112,7 +35140,7 @@ fn check_module_function_bodies_layered(
         merged.push(c)
       }
     }
-    { ..module_, classes: merged }
+    { ..module_, classes: merged, }
   }
   // A nested call inherits the root-wide backstops when the caller has
   // them (see `RootNameBackstops`); every other resolver starts empty.
@@ -35146,7 +35174,10 @@ fn check_module_function_bodies_layered(
     // come through the namespace loop below, which keeps this path exact
     // rather than merely unreachable.
     if backstops is None {
-      collect_module_value_names(outer_modules[0], resolver.declared_value_names)
+      collect_module_value_names(
+        outer_modules[0],
+        resolver.declared_value_names,
+      )
       collect_any_uninitialized_values(
         outer_modules[0],
         resolver.any_uninitialized_values,
@@ -35247,7 +35278,7 @@ fn check_module_function_bodies_layered(
       // checks defaults first and then bails on the empty body.
       let body = match meth.body {
         Some(b) => b
-        None => { stmts: [], stmt_positions: [] }
+        None => { stmts: [], stmt_positions: [], }
       }
       let params : Array[@ast.TsParam] = []
       for i, p in meth.params {
@@ -35329,7 +35360,7 @@ fn check_module_function_bodies_layered(
     }
     let body : @ast.TsBlock = match cls.constructor_body {
       Some(b) => b
-      None => { stmts: [], stmt_positions: [] }
+      None => { stmts: [], stmt_positions: [], }
     }
     if cparams.length() == 0 && body.stmts.length() == 0 {
       continue
@@ -36341,7 +36372,7 @@ fn check_module_function_bodies_layered(
         // human-readable sentence and never begins with `<`.
         continue
       } else {
-        all.push({ path: "grammar", message: gm })
+        all.push({ path: "grammar", message: gm, })
       }
     }
     // TS2304 for `export = A` inside an AMBIENT EXTERNAL MODULE
@@ -36418,7 +36449,7 @@ fn check_module_function_bodies_layered(
         _ => false
       }
       if keep {
-        all.push({ path: issue.name, message: issue.detail })
+        all.push({ path: issue.name, message: issue.detail, })
       }
     }
     // TS2304 for `typeof X` over an undefined value name. Distinct from the
@@ -36426,7 +36457,7 @@ fn check_module_function_bodies_layered(
     // *value* namespace against the comprehensive lib-globals registry, so it
     // is false-positive-free — only a provably undeclared `typeof` base fires.
     for n in unresolved_typeof_references(module_) {
-      all.push({ path: "typeof \{n}", message: "cannot find name `\{n}`" })
+      all.push({ path: "typeof \{n}", message: "cannot find name `\{n}`", })
     }
   }
   // Recurse into namespace bodies. Each level threads its own ancestor
@@ -36468,7 +36499,7 @@ fn check_module_function_bodies_layered(
       "namespace \{ns.name}"
     }
     for issue in issues {
-      all.push({ path: "\{prefix} > \{issue.path}", message: issue.message })
+      all.push({ path: "\{prefix} > \{issue.path}", message: issue.message, })
     }
     // The grammar-misuse emission loop above runs only at the top level
     // (its markers must not double-process), so surface a nested
@@ -36477,7 +36508,7 @@ fn check_module_function_bodies_layered(
     // entries (`<…>`-prefixed) stay internal.
     for gm in ns.module_.grammar_misuses {
       if !gm.has_prefix("<") {
-        all.push({ path: "\{prefix} > grammar", message: gm })
+        all.push({ path: "\{prefix} > grammar", message: gm, })
       }
     }
   }
@@ -40450,7 +40481,7 @@ fn check_dup_type_params(
     if seen.contains(name) {
       if !reported.contains(name) {
         reported.push(name)
-        issues.push({ path, message: "duplicate type parameter `\{name}`" })
+        issues.push({ path, message: "duplicate type parameter `\{name}`", })
       }
     } else {
       seen.push(name)
@@ -40479,7 +40510,7 @@ fn check_dup_param_names(
     if seen.contains(name) {
       if !reported.contains(name) {
         reported.push(name)
-        issues.push({ path, message: "duplicate parameter name `\{name}`" })
+        issues.push({ path, message: "duplicate parameter name `\{name}`", })
       }
     } else {
       seen.push(name)

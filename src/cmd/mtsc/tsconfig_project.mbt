@@ -143,7 +143,10 @@ fn mtsc_expand_include_pattern(pattern : String) -> String {
   if pattern.contains("*") || pattern.contains("?") {
     return pattern
   }
-  for ext in [".ts", ".tsx", ".mts", ".cts", ".d.ts", ".js", ".jsx", ".mjs", ".cjs"] {
+  for
+    ext in [
+      ".ts", ".tsx", ".mts", ".cts", ".d.ts", ".js", ".jsx", ".mjs", ".cjs",
+    ] {
     if pattern.has_suffix(ext) {
       return pattern
     }
@@ -181,7 +184,9 @@ fn mtsc_is_program_source(path : String) -> Bool {
 /// previous output sits under `dist/` would otherwise read its own
 /// emitted `.d.ts` files back in as sources.
 fn mtsc_default_excludes(out_dir : String?) -> Array[String] {
-  let out = ["**/node_modules/**", "**/bower_components/**", "**/jspm_packages/**"]
+  let out = [
+    "**/node_modules/**", "**/bower_components/**", "**/jspm_packages/**",
+  ]
   match out_dir {
     Some(d) => {
       let trimmed = if d.has_suffix("/") {
@@ -334,14 +339,18 @@ async fn mtsc_apply_project_compiler_options(
   match @parser.tsconfig_compiler_option_at(config_path, "outDir") {
     Some(d) =>
       if opts.out_dir is None && opts.out is None {
-        opts.out_dir = Some(mtsc_normalize(mtsc_join_path(mtsc_dirname(config_path), d)))
+        opts.out_dir = Some(
+          mtsc_normalize(mtsc_join_path(mtsc_dirname(config_path), d)),
+        )
       }
     None => ()
   }
   match @parser.tsconfig_compiler_option_at(config_path, "outFile") {
     Some(f) =>
       if opts.out is None && opts.out_dir is None {
-        opts.out = Some(mtsc_normalize(mtsc_join_path(mtsc_dirname(config_path), f)))
+        opts.out = Some(
+          mtsc_normalize(mtsc_join_path(mtsc_dirname(config_path), f)),
+        )
       }
     None => ()
   }
@@ -444,25 +453,13 @@ fn mtsc_print_show_config(
 /// options this compiler accepts and ignores.
 fn mtsc_init_tsconfig_text() -> String {
   let lines = [
-    "{",
-    "  \"compilerOptions\": {",
-    "    // mtsc always type-checks strictly and always emits",
-    "    // current-syntax ESM, so `strict`, `target` and `module` are",
-    "    // accepted for tsc compatibility and have no effect.",
-    "    \"strict\": true,",
-    "    \"target\": \"es2022\",",
-    "    \"module\": \"esnext\",",
-    "    \"moduleResolution\": \"bundler\",",
-    "    // Honoured by mtsc:",
-    "    \"outDir\": \"dist\",",
-    "    \"declaration\": true,",
-    "    \"sourceMap\": false,",
-    "    \"jsx\": \"react-jsx\"",
-    "  },",
-    "  \"include\": [\"src\"],",
-    "  \"exclude\": [\"node_modules\", \"dist\"]",
-    "}",
-    "",
+    "{", "  \"compilerOptions\": {", "    // mtsc always type-checks strictly and always emits",
+    "    // current-syntax ESM, so `strict`, `target` and `module` are", "    // accepted for tsc compatibility and have no effect.",
+    "    \"strict\": true,", "    \"target\": \"es2022\",", "    \"module\": \"esnext\",",
+    "    \"moduleResolution\": \"bundler\",", "    // Honoured by mtsc:", "    \"outDir\": \"dist\",",
+    "    \"declaration\": true,", "    \"sourceMap\": false,", "    \"jsx\": \"react-jsx\"",
+    "  },", "  \"include\": [\"src\"],", "  \"exclude\": [\"node_modules\", \"dist\"]",
+    "}", "",
   ]
   lines.join("\n")
 }

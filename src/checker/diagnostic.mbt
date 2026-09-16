@@ -271,7 +271,7 @@ fn check_at(
         }
       }
       if !found {
-        acc.push({ path, message: "tuple elements not assignable" })
+        acc.push({ path, message: "tuple elements not assignable", })
       }
       return
     }
@@ -300,7 +300,7 @@ fn check_at(
         }
       }
       if !found {
-        acc.push({ path, message: "object shapes incompatible" })
+        acc.push({ path, message: "object shapes incompatible", })
       }
       return
     }
@@ -325,7 +325,7 @@ fn check_at(
         found = true
       }
       if !found {
-        acc.push({ path, message: "function shapes incompatible" })
+        acc.push({ path, message: "function shapes incompatible", })
       }
       return
     }
@@ -336,7 +336,7 @@ fn check_at(
     _ => ()
   }
   // Fall through: report the rejection at the current path.
-  acc.push({ path, message: "type mismatch" })
+  acc.push({ path, message: "type mismatch", })
 }
 
 ///|

@@ -280,7 +280,7 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
               }
             }
           }
-          Some({ public_name, params_src, arg_names, return_type })
+          Some({ public_name, params_src, arg_names, return_type, })
         }
         None => None
       }
@@ -337,7 +337,7 @@ fn parse_bridge_pub_extern_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? 
               }
             }
           }
-          Some({ public_name, params_src, arg_names, return_type })
+          Some({ public_name, params_src, arg_names, return_type, })
         }
         None => None
       }
@@ -361,7 +361,7 @@ fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
         let type_name = trimmed[index + 1:].to_owned().trim().to_owned()
         decls.push({ type_name, })
       }
-      None => decls.push({ type_name: "" })
+      None => decls.push({ type_name: "", })
     }
   }
   decls

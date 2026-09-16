@@ -43,7 +43,11 @@ fn callable_func_type_from_params(
   //
   // Only at index 0: a `this` parameter anywhere else is TS2680, which
   // `parse_params` reports from the list it still sees in full.
-  let start = if params.length() > 0 && params[0].name == "this" { 1 } else { 0 }
+  let start = if params.length() > 0 && params[0].name == "this" {
+    1
+  } else {
+    0
+  }
   let mut pi = start
   while pi < params.length() {
     let param = params[pi]

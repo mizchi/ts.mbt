@@ -45,12 +45,12 @@ priv struct TypeScope {
 
 ///|
 fn TypeScope::root() -> TypeScope {
-  { own: {}, hidden: {}, parent: None }
+  { own: {}, hidden: {}, parent: None, }
 }
 
 ///|
 fn TypeScope::child(self : TypeScope) -> TypeScope {
-  { own: {}, hidden: {}, parent: Some(self) }
+  { own: {}, hidden: {}, parent: Some(self), }
 }
 
 ///|
@@ -713,7 +713,7 @@ fn type_fold_block_in(
   for s in block.stmts {
     stmts.push(type_fold_stmt(s, local_, aliases))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -885,7 +885,7 @@ fn type_fold_stmt(
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
-          Some({ ..f, body: type_fold_block_in(f.body, scope, aliases) })
+          Some({ ..f, body: type_fold_block_in(f.body, scope, aliases), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -894,7 +894,7 @@ fn type_fold_stmt(
           Some(b) => Some(type_fold_block_in(b, scope, aliases))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -1097,7 +1097,7 @@ fn type_fold_expr(
           local_.set(p.name, p.type_)
         }
       }
-      FuncExpr({ ..f, body: type_fold_block_in(f.body, local_, aliases) })
+      FuncExpr({ ..f, body: type_fold_block_in(f.body, local_, aliases), })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
@@ -1134,7 +1134,7 @@ fn type_fold_expr(
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
-          Some({ ..f, body: type_fold_block_in(f.body, scope, aliases) })
+          Some({ ..f, body: type_fold_block_in(f.body, scope, aliases), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -1143,7 +1143,7 @@ fn type_fold_expr(
           Some(b) => Some(type_fold_block_in(b, scope, aliases))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {

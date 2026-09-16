@@ -359,7 +359,7 @@ fn sg_new_scope(
   kind : ScopeKind,
 ) -> ScopeId {
   let id = g.scopes.length()
-  g.scopes.push({ id, parent, kind, declared: [] })
+  g.scopes.push({ id, parent, kind, declared: [], })
   id
 }
 
@@ -731,7 +731,7 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       // `throw x` — caller sees the value; any property
       // (.message / .stack / .code) could be inspected.
       w.scoped_sinks.push(
-        ({ expr: e, observation: Recursive }, w.current_scope),
+        ({ expr: e, observation: Recursive, }, w.current_scope),
       )
       sg_visit_expr(w, e)
     }
@@ -741,7 +741,7 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
         Some(fid) => {
           let srcs = expr_immediate_sources(w, e)
           for src in srcs {
-            w.g.flow_edges.push({ from: src, to: FuncReturn(fid) })
+            w.g.flow_edges.push({ from: src, to: FuncReturn(fid), })
           }
           // The returned EXPRESSION, for the same reason
           // `sg_record_write_into` records a written one: an object
@@ -814,7 +814,7 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       // it as a DirectKeys sink in the enclosing scope (before
       // we open the per-iteration block).
       w.scoped_sinks.push(
-        ({ expr: iter, observation: DirectKeys }, w.current_scope),
+        ({ expr: iter, observation: DirectKeys, }, w.current_scope),
       )
       sg_visit_expr(w, iter)
       let outer = w.current_scope
@@ -979,7 +979,7 @@ fn sg_visit_arrow(
     param_ids.push(pid)
   }
   match self_id {
-    Some(fid) => w.g.funcs[fid] = { params: param_ids, returns: [] }
+    Some(fid) => w.g.funcs[fid] = { params: param_ids, returns: [], }
     None => ()
   }
   match body {
@@ -994,7 +994,7 @@ fn sg_visit_arrow(
         Some(fid) => {
           let srcs = expr_immediate_sources(w, e)
           for src in srcs {
-            w.g.flow_edges.push({ from: src, to: FuncReturn(fid) })
+            w.g.flow_edges.push({ from: src, to: FuncReturn(fid), })
           }
           w.g.symbols[fid].written_values.push(e)
           match w.g.funcs.get(fid) {
@@ -1027,7 +1027,7 @@ fn sg_visit_decl(w : SgWalker, b : @ast.TsBinding, init : @ast.TsExpr) -> Unit {
   let lhs_id = binding_simple_ident(w, b)
   match lhs_id {
     Some(id) => {
-      w.g.symbols[id].defs.push({ init: Some(init) })
+      w.g.symbols[id].defs.push({ init: Some(init), })
       let prev = w.enclosing_def
       w.enclosing_def = Some(id)
       // `const f = (x) => …` — the declared name is the arrow's
@@ -1042,7 +1042,7 @@ fn sg_visit_decl(w : SgWalker, b : @ast.TsBinding, init : @ast.TsExpr) -> Unit {
       w.enclosing_def = prev
       // Direct RHS sources flow to the LHS binding.
       for src in expr_immediate_sources(w, init) {
-        w.g.flow_edges.push({ from: src, to: SymVal(id) })
+        w.g.flow_edges.push({ from: src, to: SymVal(id), })
       }
     }
     None =>
@@ -1089,7 +1089,7 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
             _ => abort("unreachable")
           }
           w.scoped_sinks.push(
-            ({ expr: recv, observation: DirectKeys }, w.current_scope),
+            ({ expr: recv, observation: DirectKeys, }, w.current_scope),
           )
         }
       }
@@ -1107,13 +1107,13 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
               "keys" =>
                 for a in args {
                   w.scoped_sinks.push(
-                    ({ expr: a, observation: DirectKeys }, w.current_scope),
+                    ({ expr: a, observation: DirectKeys, }, w.current_scope),
                   )
                 }
               "values" | "entries" | "fromEntries" =>
                 for a in args {
                   w.scoped_sinks.push(
-                    ({ expr: a, observation: Recursive }, w.current_scope),
+                    ({ expr: a, observation: Recursive, }, w.current_scope),
                   )
                 }
               // `Object.assign(target, …sources)` copies each source's own
@@ -1124,7 +1124,7 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
                 for i, a in args {
                   if i > 0 {
                     w.scoped_sinks.push(
-                      ({ expr: a, observation: Recursive }, w.current_scope),
+                      ({ expr: a, observation: Recursive, }, w.current_scope),
                     )
                   }
                 }
@@ -1142,7 +1142,7 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
                     _ =>
                       w.scoped_sinks.push(
                         (
-                          { expr: args[0], observation: DirectKeys },
+                          { expr: args[0], observation: DirectKeys, },
                           w.current_scope,
                         ),
                       )
@@ -1153,13 +1153,13 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
           } else if name == "JSON" && m == "stringify" {
             for a in args {
               w.scoped_sinks.push(
-                ({ expr: a, observation: Recursive }, w.current_scope),
+                ({ expr: a, observation: Recursive, }, w.current_scope),
               )
             }
           } else if name == "console" {
             for a in args {
               w.scoped_sinks.push(
-                ({ expr: a, observation: Recursive }, w.current_scope),
+                ({ expr: a, observation: Recursive, }, w.current_scope),
               )
             }
           }
@@ -1179,7 +1179,7 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     PropAssignExpr(target, _prop, rhs) =>
       if is_external_chain_for_sink(target, w.externals) {
         w.scoped_sinks.push(
-          ({ expr: rhs, observation: ExternalPropWrite }, w.current_scope),
+          ({ expr: rhs, observation: ExternalPropWrite, }, w.current_scope),
         )
       }
     _ => ()
@@ -1213,7 +1213,7 @@ fn sg_record_foreign_call_args(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     Some(args) =>
       for a in args {
         w.scoped_sinks.push(
-          ({ expr: a, observation: ExternalCallArg }, w.current_scope),
+          ({ expr: a, observation: ExternalCallArg, }, w.current_scope),
         )
       }
     None => ()
@@ -1295,7 +1295,7 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
             // Already recorded the receiver use above; here we add
             // the arg-flow edge into the callee's parameter slot.
             for src in expr_immediate_sources(w, a) {
-              w.g.flow_edges.push({ from: src, to: FuncArg(id, i) })
+              w.g.flow_edges.push({ from: src, to: FuncArg(id, i), })
             }
             sg_visit_expr(w, a)
           }
@@ -1467,7 +1467,7 @@ fn sg_visit_expr_as_arg(
   match sg_lookup(w.g, w.current_scope, callee_name) {
     Some(id) =>
       for src in expr_immediate_sources(w, arg) {
-        w.g.flow_edges.push({ from: src, to: FuncArg(id, arg_index) })
+        w.g.flow_edges.push({ from: src, to: FuncArg(id, arg_index), })
       }
     None => ()
   }
@@ -1506,7 +1506,7 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
   // functions (no `self_id`) get no entry and Phase 4 treats
   // their return as Unknown.
   match self_id {
-    Some(fid) => w.g.funcs[fid] = { params: param_ids, returns: [] }
+    Some(fid) => w.g.funcs[fid] = { params: param_ids, returns: [], }
     None => ()
   }
   sg_declare_block_bindings(w.g, f.body, w.current_scope, {})
@@ -1522,7 +1522,7 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
 fn sg_record_use(w : SgWalker, name : String, context : UseContext) -> Unit {
   match sg_lookup(w.g, w.current_scope, name) {
     Some(id) => {
-      w.g.symbols[id].uses.push({ scope_id: w.current_scope, context })
+      w.g.symbols[id].uses.push({ scope_id: w.current_scope, context, })
       if w.in_closure_depth > 0 {
         let sym = w.g.symbols[id]
         // Compare: was the binding declared OUTSIDE the current
@@ -1683,7 +1683,7 @@ fn sg_record_written_value(
   val : @ast.TsExpr,
 ) -> Unit {
   for src in expr_flow_sources(w, val) {
-    w.g.flow_edges.push({ from: src, to: SymVal(id) })
+    w.g.flow_edges.push({ from: src, to: SymVal(id), })
   }
   // The edge covers what the value REFERS to. An object literal
   // written here also introduces keys of its own — `g7` in

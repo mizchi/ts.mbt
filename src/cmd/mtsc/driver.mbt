@@ -64,10 +64,7 @@ fn mtsc_entry_output_path(opts : MtscOptions, input_path : String) -> String? {
 /// All of them are attempted even after one fails, because `tsc` reports
 /// every file's diagnostics rather than stopping at the first, and a
 /// caller fixing a build wants the whole list.
-async fn mtsc_compile_all(
-  opts : MtscOptions,
-  entries : Array[String],
-) -> Int {
+async fn mtsc_compile_all(opts : MtscOptions, entries : Array[String]) -> Int {
   let mut failed = 0
   for entry in entries {
     // `--out` names ONE file, so it cannot serve several entries. Using
@@ -118,7 +115,9 @@ async fn mtsc_resolve_entries(opts : MtscOptions) -> (Array[String], String?)? {
           return None
         }
         None => {
-          println("mtsc: no input files, and no tsconfig.json in this directory")
+          println(
+            "mtsc: no input files, and no tsconfig.json in this directory",
+          )
           return None
         }
       }

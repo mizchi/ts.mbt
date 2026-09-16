@@ -121,9 +121,28 @@ product surfaces now.
   than silently left: ~1,080 `Array`-in-JS-FFI deprecations and ~450
   phantom type parameters are a `FixedArray` migration and a generated-
   API question, not warning cleanup.
-  `moon fmt` is still not run, and now has a number: it rewrites 63 files
-  at HEAD on this toolchain, which is the drift CI's own
-  `continue-on-error` comment documents.
+  `moon fmt` HAS now been run, and the drift it had accumulated was 73
+  files / 828 insertions. Most of it is one rule — this formatter wants a
+  trailing comma inside a single-line record literal, so
+  `{ ..self, census: out }` becomes `{ ..self, census: out, }` — which is
+  exactly the disagreement CI's `continue-on-error` comment documents,
+  resolved in the direction CI wanted because the tree was formatted with
+  `latest` (moon 0.1.20260915 / moonc v0.10.13), the same formatter that
+  step runs. Four things were checked before taking it, and the first is
+  the one that mattered: **`fmt` touched not one `#|` line**, so the
+  TypeScript sources embedded in the whitebox tests are byte-identical —
+  a formatter that re-indented those would have changed what the tests
+  assert, silently. It is IDEMPOTENT on its own output (a second pass
+  diffs identically, measured rather than assumed), every change is under
+  `src/` so no checked-in fixture moved, and all 36 golden CLI cases are
+  byte-identical across the reformat. `moon fmt --check` passes now, and
+  the step stays `continue-on-error` anyway: the comma was never what made
+  it unenforceable — CI tracks `latest` while contributors pin, so the
+  next formatter change re-opens the gap whichever way it moves. The
+  direction of the risk has flipped, though, and the CI comment now says
+  so: a contributor on an older pinned toolchain can reformat the tree
+  back, and the fix for that is to re-run `moon fmt` on `latest` rather
+  than to hand-edit commas.
   Two lessons repeat across the batches and are worth stating once. First,
   a rule's LEGAL neighbour is the thing to test: "fires on the corpus file"
   and "stays silent on the legal spelling" are separate claims, and only

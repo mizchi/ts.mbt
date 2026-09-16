@@ -316,7 +316,7 @@ pub fn transform_source_full(
     for s in lowered_jsx.stmts {
       combined.push(s)
     }
-    let with_enums : @ast.TsBlock = { stmts: combined, stmt_positions: [] }
+    let with_enums : @ast.TsBlock = { stmts: combined, stmt_positions: [], }
     let table = build_enum_inline_table(enums, include_non_const=true)
     inline_const_enums(with_enums, table)
   } else {
@@ -417,7 +417,7 @@ pub fn transform_source_full(
     Some(b) => Some(b.to_json(source~, source_path~, output_path~))
     None => None
   }
-  Ok({ js: e.to_string(), sourcemap: sm_json })
+  Ok({ js: e.to_string(), sourcemap: sm_json, })
 }
 
 ///|

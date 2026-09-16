@@ -1999,7 +1999,7 @@ test "tag-rewrite: no boundary facts means no rewrite" {
   let fired = tag_rewrite_block(
     block,
     aliases,
-    Some({ exported: {}, externals: {} }),
+    Some({ exported: {}, externals: {}, }),
   )
   let mut renumbered = false
   for s in fired.stmts {

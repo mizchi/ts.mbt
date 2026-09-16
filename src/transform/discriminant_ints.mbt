@@ -94,7 +94,7 @@ pub fn plan_discriminant_ints(
     declines.push(
       "every tag: the escape analysis reserved the wildcard, which suppresses this pass along with property mangling",
     )
-    return { maps: {} }
+    return { maps: {}, }
   }
   let scan : DiscScan = {
     writes: {},
@@ -518,7 +518,7 @@ fn disc_rewrite_block(
   for s in block.stmts {
     stmts.push(disc_rewrite_stmt(s, plan))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -666,9 +666,9 @@ fn disc_rewrite_stmt(
         statics.push((sf.0, disc_rewrite_expr(sf.1, plan)))
       }
       NativeClassStmt(
-        { ..decl, methods, static_field_inits: statics },
+        { ..decl, methods, static_field_inits: statics, },
         match ctor {
-          Some(f) => Some({ ..f, body: disc_rewrite_block(f.body, plan) })
+          Some(f) => Some({ ..f, body: disc_rewrite_block(f.body, plan), })
           None => None
         },
       )
@@ -819,7 +819,7 @@ fn disc_rewrite_expr(
         },
         is_async,
       )
-    FuncExpr(f) => FuncExpr({ ..f, body: disc_rewrite_block(f.body, plan) })
+    FuncExpr(f) => FuncExpr({ ..f, body: disc_rewrite_block(f.body, plan), })
     NativeClassExpr(decl, ctor) => {
       let methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
@@ -834,7 +834,7 @@ fn disc_rewrite_expr(
       NativeClassExpr(
         { ..decl, methods, },
         match ctor {
-          Some(f) => Some({ ..f, body: disc_rewrite_block(f.body, plan) })
+          Some(f) => Some({ ..f, body: disc_rewrite_block(f.body, plan), })
           None => None
         },
       )
