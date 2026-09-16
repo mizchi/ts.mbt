@@ -27,6 +27,68 @@ fmt:
 info:
     moon info
 
+# Build the JavaScript backend.
+#
+# This is the LIBRARY build: `src/cmd/mtsc` declares
+# `supported_targets = "all-js"` and is skipped, so what comes out is the
+# type checker (`src/mtsc`) and what it needs. The CLI stays native.
+#
+# The copy is what lets `js/language-service.mjs` be importable without
+# knowing a build profile — it looks for `js/mtsc.js` first. Release, not
+# debug: the facade falls back to a debug artifact if that is all there
+# is, and measuring a debug build while a release one exists is the
+# stale-artifact trap this repo keeps paying for.
+build-js:
+    moon build --target js --release
+    cp _build/js/release/build/mtsc/mtsc.js js/mtsc.js
+
+# Does the JavaScript language service actually work?
+#
+# `moon test` covers the service on native through `MtscMemoryHost` — the
+# same generic code, 35 cases. This covers what only Node can: the
+# `extern "js"` host calls, the value marshalling across them, a real
+# filesystem host, a `ts.LanguageServiceHost`-shaped host, and the
+# facade. Mutation-proven: dropping the `.js` -> `.ts` remap, swallowing
+# parse errors, or removing the `getScriptSnapshot` fallback each fail it.
+verify-language-service *ARGS:
+    just build-js
+    node scripts/verify_language_service.mjs {{ ARGS }}
+
+# Does the shipped `js/language-service.d.ts` still describe the API?
+#
+# A declaration file nobody compiles is one that drifts, so a consumer
+# file uses every exported name under `tsc --strict`. It also pins the
+# documented absence of `start` / `length` on a diagnostic — with a
+# `keyof` assertion rather than `@ts-expect-error`, which is the spelling
+# that cannot fail (see the fixture's header; adding the field left `tsc`
+# green). Mutation-proven in both directions.
+verify-language-service-types:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ROOT="_build/language_service_types"
+    rm -rf "$ROOT"
+    mkdir -p "$ROOT"
+
+    cat <<'EOF' > "$ROOT/tsconfig.json"
+    {
+      "compilerOptions": {
+        "strict": true,
+        "noEmit": true,
+        "noUnusedLocals": true,
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "target": "es2022",
+        "ignoreDeprecations": "6.0",
+        "lib": ["es2022"],
+        "skipLibCheck": false
+      },
+      "files": ["../../fixtures/language-service/types_consumer.ts"]
+    }
+    EOF
+
+    pnpm exec tsc -p "$ROOT/tsconfig.json" --pretty false
+
 # Verify emitted TypeScript declarations from pkg.generated.mbti files
 verify-mbti-dts:
     #!/usr/bin/env bash
@@ -171,7 +233,24 @@ verify-checker-scaling *ARGS:
     node scripts/verify_checker_scaling.mjs {{ ARGS }}
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
+ci: fmt check check-js test verify-mbti-dts verify-language-service verify-language-service-types verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
+
+# `moon check --deny-warn` for the JavaScript backend.
+#
+# Not redundant with `check`: `src/mtsc/host_js.mbt` and
+# `service_js.mbt` are `js`-only (see `targets` in `src/mtsc/moon.pkg`),
+# so the native check never compiles them at all. Without this step the
+# whole FFI layer is unchecked until somebody runs a JS build.
+#
+# Scoped to the package rather than the module because `src/`'s
+# `moonbitlang/async/fs` import is unused on `js` — the dependency
+# documents in its own source that it "does not support JavaScript
+# backend", and moon has no per-target import syntax, so that warning
+# cannot be removed without either suppressing it or declaring the root
+# package native-only, which would be untrue. `moon build --target js`
+# is clean; this keeps the new code that way too.
+check-js:
+    moon check --deny-warn --target js src/mtsc
 
 # Update dependencies
 update:

@@ -2,6 +2,8 @@
 package "mizchi/ts/mtsc"
 
 // Values
+pub fn check_files(Map[String, String], jsx? : Bool) -> Array[MtscDiagnostic]
+
 pub fn check_module_graph(MtscModuleGraph) -> String
 
 pub fn check_module_sources(Array[MtscModuleSource]) -> String
@@ -12,14 +14,44 @@ pub fn collect_module_graph_issues(MtscModuleGraph) -> Array[MtscGraphIssue]
 
 pub fn collect_type_issues(String, Bool) -> Result[Array[MtscTypeIssue], String]
 
+pub fn[H : MtscHost] get_program_diagnostics(H) -> Array[MtscDiagnostic]
+
+pub fn[H : MtscHost] get_program_file_names(H) -> Array[String]
+
+pub fn[H : MtscHost] get_semantic_diagnostics(H, String) -> Array[MtscDiagnostic]
+
+pub fn[H : MtscHost] get_syntactic_diagnostics(H, String) -> Array[MtscDiagnostic]
+
+pub fn[H : MtscHost] resolve_module_name(H, String, String) -> MtscResolvedModule
+
 // Errors
 
 // Types and methods
+pub(all) struct MtscCompilerOptions {
+  jsx : Bool
+}
+
+pub(all) struct MtscDiagnostic {
+  file : String
+  category : String
+  source : String
+  messageText : String
+  context : String
+}
+
 pub(all) struct MtscGraphIssue {
   modulePath : String
   path : String
   message : String
 }
+
+pub(all) struct MtscMemoryHost {
+  files : Map[String, String]
+  roots : Array[String]
+  cwd : String
+  options : MtscCompilerOptions
+}
+pub fn MtscMemoryHost::over(Map[String, String], jsx? : Bool) -> Self
 
 pub(all) struct MtscModuleEdge {
   importerPath : String
@@ -38,6 +70,11 @@ pub(all) struct MtscModuleSource {
   allowJsx : Bool
 }
 
+pub(all) struct MtscResolvedModule {
+  resolvedFileName : String
+  isExternal : Bool
+}
+
 pub(all) struct MtscTypeIssue {
   path : String
   message : String
@@ -46,3 +83,9 @@ pub(all) struct MtscTypeIssue {
 // Type aliases
 
 // Traits
+pub trait MtscHost {
+  fn read_file(Self, String) -> String?
+  fn script_file_names(Self) -> Array[String]
+  fn current_directory(Self) -> String
+  fn compilation_settings(Self) -> MtscCompilerOptions
+}

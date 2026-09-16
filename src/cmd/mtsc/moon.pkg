@@ -1,3 +1,32 @@
+// The CLI is a native executable and cannot be a JS one, so
+// `moon build --target js` skips this package entirely rather than
+// failing in it.
+//
+// The blocker is not incidental. `--watch` polls `@async_fs.mtime`, and
+// `moonbitlang/async/fs` states in its own `unimplemented.mbt` that the
+// package "currently does not support JavaScript backend": on JS it
+// restricts every source file except that one to `native` / `wasm`, so
+// `mtime` and `rename` are both absent and the import buys nothing. A
+// per-target `#cfg` arm for the one call is not enough either, because
+// the native arm is `async` only by virtue of that call — a sync JS arm
+// makes the `async` on `mtsc_watch_stamp` AND `mtsc_watch_stamps`
+// useless (warning 0067), so the workaround spreads across a function
+// per caller, which is the one-rule-in-several-places defect this repo
+// keeps paying for.
+//
+// `all-js` rather than `native`: the wasm arms of `mtsc_exit` are real,
+// `async/fs` does ship `mtime` for `wasm`, and narrowing this to one
+// backend would drop targets nothing has shown to be broken. Measured —
+// the package builds on native and is absent from `_build/js`.
+//
+// Nothing was lost that anything used: `--target js` appears in this
+// repo only in `verify_examples.sh`, which builds GENERATED example
+// packages (none of which import `mizchi/ts`), and no harness ever
+// built this CLI for JS. The type checker reaches JavaScript through
+// `mizchi/ts/mtsc` instead, which is IO-free by construction and takes
+// its filesystem from an injected host.
+supported_targets = "all-js"
+
 import {
   "moonbitlang/async",
   // `@async_fs.mtime` is what `--watch` polls. `mizchi/x/fs` has no

@@ -4473,7 +4473,135 @@ product surfaces now.
   `ffi_func_type_name`'s missing direction parameter is untouched by this:
   "can a JS value arrive as this STRUCT" and "which way does this function
   TYPE cross" are different questions.
-- `src/cmd/mtsc` is the ONLY binary. `ts2mbt`, `mbt2ts`, `tscheck` and
+- `src/mtsc` is the type checker's LIBRARY surface — the one thing here
+  that is not reached through the CLI. It is IO-free by construction, and
+  it used to take that to its limit: `checkModuleGraph` made the caller
+  pre-resolve the whole program and hand over module sources plus the
+  import edges between them. That is exactly right for a bundler plugin,
+  which already holds every source, and wrong for anybody else, because
+  it makes module resolution a prerequisite for type-checking one file.
+  So resolution moved IN and the IO moved OUT, behind the `MtscHost`
+  trait — TypeScript's own split, where `LanguageServiceHost` supplies
+  file access and the service resolves. Three questions (what are the
+  roots, what text is at this path, what are the options) and four
+  implementations: an in-memory map, Node's `fs`, a bundler's virtual
+  filesystem, a test fixture.
+  Four things about that boundary were settled by PROBING rather than
+  reasoning, because the whole design depended on them and none is
+  documented anywhere. A JS object crosses in as an `#external type` and
+  a trait can be implemented FOR it, so generic dispatch over
+  `MtscHost` monomorphizes on the JS backend. A JS `undefined` arrives
+  as `None` for a `String?` return, which is what lets `read_file`
+  double as the existence check. A `pub(all) struct` leaves as a plain
+  object whose keys are the field names, so diagnostics can be
+  structured rather than the string the old ABI flattened them into.
+  And `Array` in an `extern "js"` SIGNATURE is deprecated while
+  `FixedArray` is not — a distinction that does not apply to an exported
+  function's return type, where `Array[MtscDiagnostic]` is fine.
+  A TRAIT rather than a struct of closures, for the property this file
+  records twenty-plus instances of paying for: MoonBit requires an
+  `impl` to supply every method, so a new host cannot inherit a default
+  that fails open. Same compiler-driven completeness as `TsFunc`'s
+  `name_is_member_key`, which enumerated its 32 construction sites
+  instead of leaving them to a grep.
+  It is deliberately SYNCHRONOUS, and that is why the trait does NOT
+  live in `src/parser` beside the resolver that already does filesystem
+  IO. That resolver is `async` throughout — 26 `async fn`s over an async
+  filesystem — so a sync trait cannot serve it and an async one cannot
+  serve a `LanguageServiceHost`, whose `readFile` is sync by design. A
+  shared interface today would be a guess that fits neither consumer;
+  the two boundaries stay separate until something crosses both. The
+  resolution this one does is relative specifiers only, with the
+  `Types`-mode candidate ordering lifted from `module_resolver.mbt`
+  (`.d.ts` before the implementation; `./util.js` probing `./util.ts`
+  first, because in ESM TypeScript that specifier means the source and
+  probing the written extension checks an emitted artifact instead).
+  Bare specifiers are NOT resolved, and `MtscResolvedModule.isExternal`
+  is what keeps that from being reported as a failure — "no such file"
+  and "not this resolver's job" are different answers, and conflating
+  them sends a caller looking for a file that was never meant to exist.
+  An unresolved RELATIVE import is a diagnostic, and no rule was written
+  for it: `graph_import_globals` already reports exactly that and
+  already stays silent on a bare one, so the loader adds no edge and
+  says nothing, which is one judgement in one place instead of two that
+  can disagree.
+  The checking itself is untouched. `collect_parsed_graph_issues` was
+  EXTRACTED from `collect_module_graph_issues` — the body after the
+  parse loop, verbatim — so a program loaded from a host lands in the
+  same representation a caller of the old ABI would have built by hand
+  and is checked by the same code. The host path cannot drift into
+  answering differently from the pre-resolved path, and the extraction
+  is regression-checked from both ends (`checkModuleGraph` in the Node
+  harness, and the CLI's `--bundle --noEmit`, which is the other
+  consumer).
+  `start` and `length` are ABSENT from `MtscDiagnostic`, and that is a
+  fact about the checker rather than a shortcut: `@checker.ExprIssue`
+  carries a message and a breadcrumb, `@parser.ParseError` carries a
+  message, and neither carries an offset. `ts.Diagnostic` declares both
+  optional for precisely this case, so a consumer that checks first
+  keeps working; inventing them would put a squiggle under the wrong
+  code. The breadcrumb ships as `context` instead, which is what makes
+  the diagnostic actionable without a span.
+  Pinning that absence is where I made the mistake this file keeps
+  warning about, and caught it only by mutating. The obvious spelling,
+  `// @ts-expect-error` over `const n: number = d.start`, **passes
+  whether or not the field exists** — add `start?: number` and the
+  expression is `number | undefined`, still an error under `strict`, so
+  the expectation still has something to suppress. Measured: adding the
+  field left `tsc` green. The assertion is on `keyof` now, which is the
+  claim being made, and it fails when the field is added. A test that
+  cannot fail while the thing it checks is broken is coverage-shaped,
+  and the only way I found out was breaking it on purpose.
+  Two harnesses, because neither covers the other.
+  `moon test --target native src/mtsc` drives the service through
+  `MtscMemoryHost` — 35 cases over the same generic code JavaScript
+  reaches, which is what makes the memory host more than a test double.
+  `just verify-language-service` covers what only Node can see: the
+  `extern "js"` host calls, the marshalling across them, a REAL
+  filesystem under a temp directory, a `ts.LanguageServiceHost`-shaped
+  host with `getScriptSnapshot` and no `readFile`, and the facade.
+  Mutation-proven on its first run, which is the only reason to believe
+  22/22 on a fresh harness: dropping the `.js` -> `.ts` remap, swallowing
+  parse errors, and removing the `getScriptSnapshot` fallback each fail
+  it. The second of those was a bug I actually shipped into the first
+  draft and it is worth the note — `mtsc_load_program` looked for parse
+  failures in `program.modules`, which holds exactly the files that
+  PARSED, so the check could never fire and every syntax error in a
+  program would have been reported as nothing at all. The loader records
+  them at the point of failure now.
+  `just check-js` is a separate gate for a structural reason: `targets`
+  in `moon.pkg` restricts `host_js.mbt` and `service_js.mbt` to the `js`
+  backend, so `moon check --deny-warn` never compiles the FFI layer at
+  all. Without that step the whole boundary is unchecked until somebody
+  runs a JS build. It is scoped to the package rather than the module
+  because `src/`'s `moonbitlang/async/fs` import is unused on `js` and
+  moon has no per-target import syntax — the two warnings that leaves
+  cannot be removed without either suppressing them (the defect that
+  retired `docs/checker-priority.md`, in a `moon.pkg`) or declaring the
+  root package native-only, which would be untrue since its `#cfg` split
+  exists to keep it JS-buildable. `moon build --target js` is clean.
+- `src/cmd/mtsc` is the ONLY binary, and NATIVE only: it declares
+  `supported_targets = "all-js"`, so `moon build --target js` skips it
+  instead of failing inside it. That build was broken and the cause was
+  not incidental — `--watch` polls `@async_fs.mtime`, and
+  `moonbitlang/async/fs` says in its own `unimplemented.mbt` that the
+  package "currently does not support JavaScript backend", restricting
+  every other source file to `native` / `wasm` so both `mtime` and
+  `rename` are absent and the import buys nothing. A per-target `#cfg`
+  arm for the one call is not enough: the native arm is `async` only by
+  virtue of that call, so a sync JS arm makes the `async` on
+  `mtsc_watch_stamp` AND `mtsc_watch_stamps` useless (warning 0067) and
+  the workaround spreads a function at a time up the call chain — the
+  one-rule-in-several-places shape this file records twenty-odd times.
+  `all-js` rather than `native` because the wasm arms of `mtsc_exit` are
+  real and `async/fs` does ship `mtime` for `wasm`. Nothing was lost
+  that anything used: `--target js` appears in this repo only in
+  `verify_examples.sh`, which builds GENERATED example packages (none of
+  which import `mizchi/ts`), and no harness ever built this CLI for JS —
+  which is exactly why a whole-module JS build was broken without anyone
+  noticing. `moon check --target js` still covers all 42 packages, so
+  nothing stopped being CHECKED; only `moon build`'s link reachability
+  changed. `ts2mbt`, `mbt2ts`, `tscheck` and
   `tsacc` were four more, and they are now four verbs —
   `mtsc bridge`, `mtsc pkg`, `mtsc check`, `mtsc conformance` — with the
   compile path staying the default, positional mode. The dispatch rule is
@@ -4590,18 +4718,27 @@ product surfaces now.
 ```
 typescript.mbt/
 ├── moon.mod
+├── js/                      # The JS library surface (see `src/mtsc`)
+│   ├── language-service.mjs # `createLanguageService` facade + hosts
+│   └── language-service.d.ts
 └── src/
     ├── ast/                 # Shared AST types
     ├── parser/              # TypeScript / JavaScript parser + module resolver
     ├── checker/             # Declaration-level TS type system
     ├── transform/           # mtsc pipeline: bundle / fold / treeshake / mangle
-    ├── mtsc/                # Checker entry points for the mtsc CLI + JS ABI
+    ├── mtsc/                # Checker entry points + the injectable-host API
+    │   ├── checker.mbt      # `checkModuleGraph`: caller pre-resolves
+    │   ├── host.mbt         # `MtscHost` trait + `MtscMemoryHost`
+    │   ├── resolve.mbt      # sync host-driven module resolution
+    │   ├── service.mbt      # the language service (target-independent)
+    │   ├── host_js.mbt      # `extern "js"` host — `js` target only
+    │   └── service_js.mbt   # the JS entry points — `js` target only
     ├── bridge/              # Bridge code generation (both directions)
     ├── main.mbt             # `mizchi/ts` library: bridge entry helpers
     ├── unified_cli.mbt      # `--input ... --out ...` unified driver
     ├── bridge_cli.mbt       # `mtsc bridge` / `mtsc pkg` verb dispatch
     └── cmd/
-        └── mtsc/            # THE binary. One executable package.
+        └── mtsc/            # THE binary. Native only (`supported_targets`).
             ├── main.mbt             # compile pipeline + graph loader
             ├── driver.mbt           # verb dispatch, entry resolution, run loop
             ├── tsc_options.mbt      # the tsc-superset option layer
@@ -4655,10 +4792,26 @@ moon info
 
 # Validate `--mangle-properties` against the mangle-safety corpus
 just verify-mangle-safety
+
+# The JavaScript library surface. `moon check --deny-warn` does NOT see
+# `src/mtsc/host_js.mbt` or `service_js.mbt` — `targets` in `moon.pkg`
+# restricts them to the `js` backend — so this is the run that checks
+# the whole FFI boundary, and it is a gate of its own.
+just check-js
+
+# Build the library for JS and run it under Node. `just build-js` alone
+# builds and copies the artifact next to the facade.
+just verify-language-service
+just verify-language-service-types
 ```
 
 ## Notes
 
-- Target: `native`.
+- Target: `native` for the CLI and every harness. `js` is a SECOND
+  target now, and only for the library: `src/mtsc` plus what it needs
+  (`ast`, `parser`, `checker`) build for it, the CLI declares
+  `supported_targets = "all-js"` and does not. Both are gated —
+  `moon check --deny-warn` for native, `just check-js` for the FFI layer
+  the native check structurally cannot see.
 - The repo no longer ships a JS interpreter or wasm codegen; entry-point
   parsing is read-only and produces declarations / bridge code only.

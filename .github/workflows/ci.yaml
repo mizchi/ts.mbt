@@ -105,8 +105,35 @@ jobs:
         # as errors flakes CI on toolchain churn.
         run: moon check
 
+      - name: Moon check (js backend)
+        # The library surface builds for `js` (`src/mtsc` and what it
+        # needs); the CLI declares `supported_targets = "all-js"` and is
+        # skipped. This step exists because `src/mtsc/host_js.mbt` and
+        # `service_js.mbt` are restricted to the `js` backend by
+        # `targets` in `moon.pkg`, so the native check above never
+        # compiles the FFI layer at all — without this the whole
+        # MoonBit/JavaScript boundary is unchecked until something builds
+        # it.
+        #
+        # `--deny-warn` is left to local `just check-js` for the same
+        # reason the step above gives: `src/`'s `moonbitlang/async/fs`
+        # import is unused on `js` (that dependency documents in its own
+        # source that it does not support the JavaScript backend) and
+        # moon has no per-target import syntax.
+        run: moon check --target js
+
       - name: Moon test
         run: moon test --target native
+
+      - name: Verify language service
+        # Builds the library for `js` and runs it under Node: the
+        # `extern "js"` host calls, a real filesystem host, a
+        # `ts.LanguageServiceHost`-shaped host, and the facade. None of
+        # that is reachable from `moon test`, which runs on native.
+        run: just verify-language-service
+
+      - name: Verify language service types
+        run: just verify-language-service-types
 
       - name: Verify mbti -> .d.ts
         run: just verify-mbti-dts
