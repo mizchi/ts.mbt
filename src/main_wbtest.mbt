@@ -6124,10 +6124,12 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
 async test "emit_moonbit_decl_text handles neverthrow-like package entry from tmp path" {
   let root = wbtest_tmp_neverthrow_like_root("decl")
   @async.with_task_group(async fn(group) {
-    group.add_defer(async fn() {
-      @fs.rmdir(root, recursive=true) catch {
-        _ => ()
-      }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => {
+        @fs.rmdir(root, recursive=true) catch {
+          _ => ()
+        }
+      })
     })
     let entry_path = wbtest_prepare_tmp_neverthrow_like_fixture(root) catch {
       _ => {
@@ -6156,10 +6158,12 @@ async test "emit_moonbit_decl_text handles neverthrow-like package entry from tm
 async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry from tmp path" {
   let root = wbtest_tmp_neverthrow_like_root("ffi")
   @async.with_task_group(async fn(group) {
-    group.add_defer(async fn() {
-      @fs.rmdir(root, recursive=true) catch {
-        _ => ()
-      }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => {
+        @fs.rmdir(root, recursive=true) catch {
+          _ => ()
+        }
+      })
     })
     let entry_path = wbtest_prepare_tmp_neverthrow_like_fixture(root) catch {
       _ => {
@@ -6188,10 +6192,12 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry from
 async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry from tmp path" {
   let root = wbtest_tmp_neverthrow_like_root("bridge_package")
   @async.with_task_group(async fn(group) {
-    group.add_defer(async fn() {
-      @fs.rmdir(root, recursive=true) catch {
-        _ => ()
-      }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => {
+        @fs.rmdir(root, recursive=true) catch {
+          _ => ()
+        }
+      })
     })
     let entry_path = wbtest_prepare_tmp_neverthrow_like_fixture(root) catch {
       _ => {
