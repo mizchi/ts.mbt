@@ -53,52 +53,49 @@ jobs:
         run: bash scripts/patch_async_dep.sh
 
       - name: Moon fmt check
-        # Reported, not enforced, for the same reason `--deny-warn` is left
-        # to local `just check` below: the formatter's output depends on the
-        # toolchain version, and `latest` is the only stable URL on
-        # `cli.moonbitlang.com`, so CI's formatter drifts away from every
-        # contributor's pinned one.
+        # ENFORCED. `latest` is the reference formatter, and that is the
+        # settled policy rather than a compromise: the two steps around
+        # this one exist to track `latest` so real toolchain breakage
+        # surfaces early, and the tree is formatted to it, so the same
+        # `latest` decides this check. A contributor's pinned toolchain is
+        # not a second reference that has to be reconciled with.
         #
-        # This is not a hypothetical. CI's formatter wanted a trailing comma
-        # in three files nobody had touched since June —
-        # `src/bridge/oracle.mbt`, `moonbit_js_ffi.mbt` and
-        # `tagged_union_lowering.mbt` (`Some({ name: type_alias.name, cases })`
-        # at tagged_union_lowering.mbt:800) — and moon 0.1.20260819 REMOVED
+        # It was reported-and-not-enforced for a while, and the reason has
+        # gone away. CI's formatter wanted a trailing comma in three files
+        # nobody had touched since June — `src/bridge/oracle.mbt`,
+        # `moonbit_js_ffi.mbt` and `tagged_union_lowering.mbt`
+        # (`Some({ name: type_alias.name, cases })` at
+        # tagged_union_lowering.mbt:800) — and moon 0.1.20260819 REMOVED
         # that comma again on the next local `moon fmt`. The two formatters
         # actively disagreed, so no state of the source satisfied both:
         # adding the commas was not a fix that could hold, it just moved
-        # which side was red.
+        # which side was red. A check that is red on every pull request for
+        # a reason unrelated to any of them has stopped being able to say
+        # anything about them, which is why it was not a gate then.
         #
-        # THAT DISAGREEMENT IS OVER, in the direction CI wanted. The tree was
-        # formatted with moon 0.1.20260915 / moonc v0.10.13 — `latest` at the
-        # time, so the same formatter this step runs — which put the trailing
-        # comma in, across 73 files. `moon fmt --check` passes as of that
-        # commit, and the formatter is idempotent on the result (a second
-        # `moon fmt` changes nothing, verified by diffing both passes).
+        # THAT DISAGREEMENT IS OVER, in the direction CI wanted. The tree
+        # was formatted with moon 0.1.20260915 / moonc v0.10.13 — `latest`
+        # at the time, so the same formatter this step runs — which put the
+        # trailing comma in, across 73 files. `moon fmt --check` passes as
+        # of that commit, and the formatter is idempotent on the result (a
+        # second `moon fmt` changes nothing, verified by diffing both
+        # passes).
         #
-        # So the step is green rather than permanently red, and it is STILL
-        # not enforced, because what made it unenforceable was never that one
-        # comma: it is that this job tracks `latest` while contributors pin,
-        # so the next formatter change re-opens the same gap in whichever
-        # direction it moves. A hard-failing check here costs the thing a
-        # check is for — it was red on every pull request for a reason
-        # unrelated to any of them, which means it stopped being able to say
-        # anything about them, and a signal that is always red is a signal
-        # people learn to merge past. Reporting it keeps the drift visible
-        # without that.
+        # So both ways this can now go red are ACTIONABLE, which is the
+        # condition a gate needs and the thing that was missing:
+        #   - `latest`'s formatter changed: re-run `moon fmt` on `latest`
+        #     and commit the result. Never hand-edit the commas.
+        #   - somebody reformatted the tree with an older pinned
+        #     toolchain: same fix.
         #
-        # What HAS changed is the direction of the risk. The tree now matches
-        # `latest`, so a contributor on an older pinned toolchain can
-        # reformat it back and turn this step red again. The fix if that
-        # happens is to re-run `moon fmt` on `latest`, not to hand-edit the
-        # commas.
-        #
-        # The alternative is pinning CI's MoonBit to the version
-        # contributors run. That is the stronger fix and deliberately not
-        # taken here: the two steps around this one exist to keep tracking
-        # `latest` so real toolchain breakage surfaces early, and pinning
-        # would trade that away for a formatting check.
-        continue-on-error: true
+        # The cost that accepts, stated rather than discovered: the next
+        # time `latest`'s formatter changes, every open pull request goes
+        # red until someone runs `moon fmt` on `latest`. The
+        # 20260819 -> 20260915 comma change suggests that is months apart,
+        # not days. If it ever becomes the wrong trade, `continue-on-error:
+        # true` on this step is a one-line revert — but pinning CI's
+        # MoonBit is not the answer, because it trades away the early
+        # warning the surrounding steps are here for.
         run: moon fmt --check
 
       - name: Moon check
