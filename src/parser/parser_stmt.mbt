@@ -1153,7 +1153,7 @@ fn Parser::parse_if(self : Parser) -> @ast.TsStmt raise ParseError {
   let else_block : @ast.TsBlock? = if self.match_(Else) {
     if self.check(If) {
       // else if
-      Some(@ast.TsBlock::{ stmts: [self.parse_if()], stmt_positions: [] })
+      Some(@ast.TsBlock::{ stmts: [self.parse_if()], stmt_positions: [], })
     } else {
       Some(self.parse_block_or_stmt_no_lexical())
     }
@@ -1235,7 +1235,7 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     cases.push({
       test_expr: case_test,
-      body: { stmts, stmt_positions: case_stmt_positions },
+      body: { stmts, stmt_positions: case_stmt_positions, },
     })
   }
   self.in_switch = prev_switch
@@ -1994,7 +1994,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       )
       stmts.push(
         @ast.TsStmt::Try(
-          { stmts: rest_stmts, stmt_positions: rest_positions },
+          { stmts: rest_stmts, stmt_positions: rest_positions, },
           None,
           None,
           Some(finally_block),
@@ -2018,7 +2018,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
   let _ = self.block_binding_nonnumeric.pop()
-  { stmts, stmt_positions }
+  { stmts, stmt_positions, }
 }
 
 ///|
@@ -2028,7 +2028,7 @@ fn Parser::parse_block_or_stmt_no_lexical(
   if self.check(LBrace) {
     self.parse_block()
   } else {
-    { stmts: [self.parse_stmt_no_lexical(true)], stmt_positions: [] }
+    { stmts: [self.parse_stmt_no_lexical(true)], stmt_positions: [], }
   }
 }
 
@@ -2199,7 +2199,7 @@ fn Parser::merge_decl_stmts(
     // `DECL_GROUP_POSITION` marks this as `let a = 1, b = 2` rather than
     // a real block. See the constant's comment: recording it as "no
     // positions" let every later rebuild erase the distinction.
-    Block({ stmts, stmt_positions: [@ast.DECL_GROUP_POSITION] })
+    Block({ stmts, stmt_positions: [@ast.DECL_GROUP_POSITION], })
   }
 }
 
@@ -2307,7 +2307,8 @@ fn Parser::parse_var_decl_item(
         match (binding, init) {
           (
             @ast.TsBinding::Ident(name),
-            @ast.TsExpr::FuncExpr(_) | @ast.TsExpr::ArrowFunc(_, _, _, _),
+            @ast.TsExpr::FuncExpr(_)
+            | @ast.TsExpr::ArrowFunc(_, _, _, _),
           ) => self.grammar_misuses.push("<mutable-fn-value:\{name}>")
           _ => ()
         }
@@ -2415,7 +2416,7 @@ fn apply_jsdoc_func_init_overlay(
     @ast.TsExpr::FuncExpr(f) => {
       let p2 = apply_jsdoc_param_overlay(jsdoc_at_pos, kw_pos, f.params)
       let r2 = apply_jsdoc_return_overlay(jsdoc_at_pos, kw_pos, f.return_type)
-      @ast.TsExpr::FuncExpr({ ..f, params: p2, return_type: r2 })
+      @ast.TsExpr::FuncExpr({ ..f, params: p2, return_type: r2, })
     }
     _ => init
   }

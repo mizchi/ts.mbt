@@ -51,7 +51,7 @@ pub fn iife_class_lift_block(block : @ast.TsBlock) -> @ast.TsBlock {
       }
     }
   }
-  { stmts: new_stmts, stmt_positions: new_positions }
+  { stmts: new_stmts, stmt_positions: new_positions, }
 }
 
 ///|
@@ -204,7 +204,7 @@ fn try_lift_iife_value(
   // in the constructor body to `super(a, b)` so the lifted native
   // class emits valid ES6.
   let ctor_func = match (ctor_func, super_param) {
-    (Some(f), Some(sp)) => Some({ ..f, body: rewrite_super_calls(f.body, sp) })
+    (Some(f), Some(sp)) => Some({ ..f, body: rewrite_super_calls(f.body, sp), })
     _ => ctor_func
   }
   // Promote `ClassName.key = val` Extra stmts to static_field_inits so
@@ -263,14 +263,14 @@ fn try_lift_iife_value(
         Some(b) => Some(rename_var_in_block(b, inner_name, name))
         None => None
       }
-      { ..m, body: new_body }
+      { ..m, body: new_body, }
     })
     let renamed_ctor = match ctor_func {
       Some(f) =>
-        Some({ ..f, body: rename_var_in_block(f.body, inner_name, name) })
+        Some({ ..f, body: rename_var_in_block(f.body, inner_name, name), })
       None => None
     }
-    ({ ..decl, methods: renamed_methods }, renamed_ctor)
+    ({ ..decl, methods: renamed_methods, }, renamed_ctor)
   } else {
     (decl, ctor_func)
   }
@@ -331,7 +331,7 @@ fn classify_iife_body_stmt(
       if n == class_name {
         // Promote the function expression to a constructor candidate.
         // Rename to "constructor" so emit produces the correct keyword.
-        Ctor({ ..f, name: "constructor" })
+        Ctor({ ..f, name: "constructor", })
       } else if n.has_prefix("__get_") || n.has_prefix("__set_") {
         // Accessor helper functions emitted by the parser for `get`/`set`
         // methods. These are consumed by the `@@get:` / `@@set:` PropAssign
@@ -803,7 +803,7 @@ fn lifted_method_params(
       positions.push(pos)
     }
   }
-  (params, param_defaults, param_is_rest, { stmts, stmt_positions: positions })
+  (params, param_defaults, param_is_rest, { stmts, stmt_positions: positions, })
 }
 
 ///|
@@ -1002,7 +1002,7 @@ fn rename_var_in_block(
   from : String,
   to : String,
 ) -> @ast.TsBlock {
-  { ..block, stmts: block.stmts.map(s => rename_var_in_stmt(s, from, to)) }
+  { ..block, stmts: block.stmts.map(s => rename_var_in_stmt(s, from, to)), }
 }
 
 ///|

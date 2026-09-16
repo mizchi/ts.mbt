@@ -1,7 +1,0 @@
-import {
-  "moonbitlang/async",
-  "moonbitlang/core/env",
-  "mizchi/ts",
-}
-
-pkgtype(kind: "executable")

@@ -639,7 +639,7 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
     Break(_) | Continue(_) | Debugger | Empty => stmt
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: lower_jsx_in_block(cfg, f.body) })
+        Some(f) => Some({ ..f, body: lower_jsx_in_block(cfg, f.body), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -648,7 +648,7 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
           Some(b) => Some(lower_jsx_in_block(cfg, b))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -684,7 +684,7 @@ pub fn lower_jsx_in_block(
   // generator can still map each lowered top-level stmt back to its
   // input position. (JSX lowering doesn't change the count or order
   // of top-level statements.)
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -789,10 +789,10 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     // bundle was not JavaScript, which Node reports as a syntax error and
     // no test in this repo was asking about. Excalidraw had one, in a
     // fragment inside a function expression.
-    FuncExpr(f) => FuncExpr({ ..f, body: lower_jsx_in_block(cfg, f.body) })
+    FuncExpr(f) => FuncExpr({ ..f, body: lower_jsx_in_block(cfg, f.body), })
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: lower_jsx_in_block(cfg, f.body) })
+        Some(f) => Some({ ..f, body: lower_jsx_in_block(cfg, f.body), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -801,7 +801,7 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
           Some(b) => Some(lower_jsx_in_block(cfg, b))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {

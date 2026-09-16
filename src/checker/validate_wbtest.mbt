@@ -53,7 +53,7 @@ fn iface(
 
 ///|
 fn ta_(name : String, body : @ast.TsType) -> @ast.TsTypeAlias {
-  { name, type_params: [], type_param_bounds: [], type_: body }
+  { name, type_params: [], type_param_bounds: [], type_: body, }
 }
 
 ///|
@@ -205,7 +205,7 @@ test "validate_module: lib.d.ts ambient type aliases resolve (PropertyKey)" {
           },
         ],
         return_type: @ast.TsType::Applied("ThisType", [@ast.TsType::String_]),
-        body: { stmts: [], stmt_positions: [] },
+        body: { stmts: [], stmt_positions: [], },
         is_generator: false,
         is_async: false,
         name_is_member_key: false,

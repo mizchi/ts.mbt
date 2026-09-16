@@ -2407,7 +2407,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
     None => ()
   }
   match self.advance() {
-    None => { kind: Eof, pos, has_newline_before: has_newline }
+    None => { kind: Eof, pos, has_newline_before: has_newline, }
     Some(c) => {
       let kind : TokenKind = match c {
         '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
@@ -2804,7 +2804,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           }
       }
       self.allow_regex = next_allow_regex(self.allow_regex, kind)
-      { kind, pos, has_newline_before: has_newline }
+      { kind, pos, has_newline_before: has_newline, }
     }
   }
 }

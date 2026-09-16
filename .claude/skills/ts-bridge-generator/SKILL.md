@@ -1,13 +1,13 @@
 ---
 name: ts-bridge-generator
-description: Use when modifying the TypeScript-to-MoonBit bridge generator in this repo — `src/bridge/`, the `ts2mbt` CLI (generate / vendor / scaffold / package / bridge / ffi / decl), `bridge.mbti` / `bridge.mbt` / `bridge.js` synthesis, or the companion vite-plugin-moonbit integration.
+description: Use when modifying the TypeScript-to-MoonBit bridge generator in this repo — `src/bridge/`, the `mtsc bridge` CLI namespace (generate / vendor / scaffold / package / all / ffi / decl, formerly the `ts2mbt` binary), `bridge.mbti` / `bridge.mbt` / `bridge.js` synthesis, or the companion vite-plugin-moonbit integration.
 ---
 
 # TS Bridge Generator
 
 Use this skill when changing how `.ts` / `.tsx` / `.d.ts` entrypoints
 become MoonBit bridge packages, or when extending the consumer-facing
-`ts2mbt` CLI.
+`mtsc bridge` CLI namespace.
 
 ## Start here
 
@@ -23,8 +23,10 @@ Read these files first:
   shapes and the inline pass-through fallback
 - `src/main.mbt` — CLI emit_* entry helpers (return `Bool`, route exit
   through cmd dispatchers)
-- `src/vendor.mbt` — `ts2mbt generate` / `ts2mbt vendor` workflow
-- `src/cmd/ts2mbt/main.mbt` — dispatcher + per-subcommand flag parsing
+- `src/vendor.mbt` — `mtsc bridge generate` / `mtsc bridge vendor` workflow
+- `src/bridge_cli.mbt` — dispatcher + per-verb flag parsing for both
+  `mtsc bridge` and `mtsc pkg`
+- `src/cmd/mtsc/driver.mbt` — the verb dispatch that reaches it
 - `src/main_wbtest.mbt` — end-to-end fixture coverage
 
 If the local companion plugin repo exists, also read:
@@ -35,21 +37,24 @@ If the local companion plugin repo exists, also read:
 
 ## Current contract
 
-CLI surface (TypeScript -> MoonBit only; `mbt2ts` is the reverse
-direction and lives in `src/cmd/mbt2ts/main.mbt`):
+CLI surface (TypeScript -> MoonBit only; `mtsc pkg` is the reverse
+direction and shares `src/bridge_cli.mbt`):
 
-- `ts2mbt --input <ts-entry> --out <dir> [--module-spec <spec>]
+- `mtsc bridge --input <ts-entry> --out <dir> [--module-spec <spec>]
   [--diagnostics <path>] [--strict]` — high-level unified flow
-- `ts2mbt vendor <pkg> [--module-spec <spec>] [--out <dir>]` —
+- `mtsc bridge vendor <pkg> [--module-spec <spec>] [--out <dir>]` —
   resolve a single npm package via `node_modules` and emit a sub-package
   under `<moon source>/internal/generated/<safe>/`
-- `ts2mbt generate [--package-json <path>] [--out <dir>]` — generate every
+- `mtsc bridge generate [--package-json <path>] [--out <dir>]` — generate every
   dependency / devDependency listed in `package.json`
-- `ts2mbt scaffold <ts-entry> <module-spec> <out-dir>` — low-level
+- `mtsc bridge scaffold <ts-entry> <module-spec> <out-dir>` — low-level
   package writer (always emits `SCAFFOLD_DIAGNOSTICS.md`)
-- `ts2mbt package <ts-entry> <module-spec> <out-dir>` — package
+- `mtsc bridge package <ts-entry> <module-spec> <out-dir>` — package
   writer without the diagnostics file
-- `ts2mbt bridge / ffi / decl` — individual generation stages
+- `mtsc bridge all / ffi / decl` — individual generation stages. `all`
+  was spelled `bridge` when this was its own binary, which under the
+  namespace read as `mtsc bridge bridge`; the old spelling is still an
+  accepted alias.
 
 Generated package layout:
 
@@ -84,7 +89,7 @@ Vendor naming:
   Keep the leading "if not a tagged value, pass through" guard so
   `unsafeCast`-style call sites work.
 - Every `emit_*` entry returns `Bool`; cmd dispatchers route failures
-  through `@ts.cli_fail("ts2mbt")` so CI sees a non-zero exit.
+  through `cli_fail("mtsc")` so CI sees a non-zero exit.
 - Tree-shake behaviour matters. If adapter exports change, update the
   companion plugin binding parser and tree-shake test.
 
@@ -104,7 +109,7 @@ just verify-realworld-typescript        # optional, requires npm corpus
 Smoke the vendor flow when changing `src/vendor.mbt`:
 
 ```bash
-moon run src/cmd/ts2mbt -- sync --out /tmp/vendor_smoke
+moon run src/cmd/mtsc -- bridge generate --out /tmp/vendor_smoke
 ```
 
 In the companion plugin repo when present:

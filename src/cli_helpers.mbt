@@ -1,5 +1,5 @@
 ///|
-/// Shared CLI exit helpers used by `src/cmd/ts2mbt` and `src/cmd/mbt2ts`.
+/// Shared CLI exit helpers used by the `mtsc` verb dispatchers.
 /// Each cmd binary owns its own `print_usage` callback and binary name; the
 /// library only owns the exit + error-print pieces so the dispatchers stay
 /// thin.
@@ -40,10 +40,15 @@ pub fn cli_bail(message : String) -> Unit {
 }
 
 ///|
-/// `mizchi/ts` package version reported by `--version` / `-V` from each
-/// cmd binary. Sourced from `moon.mod.json` and bumped together with it
-/// at release time.
-pub const CLI_VERSION : String = "0.4.0"
+/// `mizchi/ts` package version reported by `--version` / `-V`. Sourced
+/// from `moon.mod` and bumped together with it at release time.
+///
+/// It had drifted to `0.4.0` against a `moon.mod` reading `0.5.2`, which
+/// nothing noticed because the only consumer was a banner nobody
+/// asserted. `mtsc --version` is a tsc-compatible surface now — `tsc -v`
+/// prints a version people act on — so a stale number here is a wrong
+/// answer rather than a cosmetic one.
+pub const CLI_VERSION : String = "0.5.2"
 
 ///|
 /// Print the version banner for the given binary name and exit with

@@ -76,7 +76,7 @@ fn SwitchFoldTable::narrow(
   self : SwitchFoldTable,
   names : Array[String],
 ) -> SwitchFoldTable {
-  { entries: narrow_trivial_fns(self.entries, names) }
+  { entries: narrow_trivial_fns(self.entries, names), }
 }
 
 ///|
@@ -412,7 +412,7 @@ fn try_extract_switch_fold(
         }
       }
   }
-  Ok({ param_names, switch_param_index: 0, arms })
+  Ok({ param_names, switch_param_index: 0, arms, })
 }
 
 ///|
@@ -581,7 +581,7 @@ pub fn switch_fold(
   for s in block.stmts {
     stmts.push(switch_fold_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -596,7 +596,7 @@ fn switch_fold_block(
   for s in block.stmts {
     stmts.push(switch_fold_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -733,7 +733,7 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
           Some(b) => Some(switch_fold_block(b, method_table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -885,7 +885,7 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
       let table = table.narrow_params(f.params)
       let table = if f.name == "" { table } else { table.narrow([f.name]) }
       let new_body = switch_fold_block(f.body, table)
-      FuncExpr({ ..f, body: new_body })
+      FuncExpr({ ..f, body: new_body, })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
@@ -916,7 +916,7 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
     PureCall(inner) => PureCall(switch_fold_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: switch_fold_block(f.body, table) })
+        Some(f) => Some({ ..f, body: switch_fold_block(f.body, table), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -925,7 +925,7 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
           Some(b) => Some(switch_fold_block(b, table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {

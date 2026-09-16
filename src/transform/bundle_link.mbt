@@ -327,11 +327,13 @@ fn link_module_graph(
   // dedicated walker that rewrites `ns.X` / `ns["X"]` / `ns.X(...)`
   // into a bare reference.
   let import_subs : Map[String, Map[String, String]] = Map([])
-  let namespace_subs_per_module : Map[String, Map[String, Map[String, String]]] = Map([])
+  let namespace_subs_per_module : Map[String, Map[String, Map[String, String]]] = Map([],
+  )
   // CJS property-access substitutions: for named imports from CJS-wrapped modules
   // that have no export_specs, substitute `localAlias` with `cjsVar.importedName`.
   // `cjs_prop_subs_per_module[path] = [(localAlias, cjsVar, importedName)]`
-  let cjs_prop_subs_per_module : Map[String, Array[(String, String, String)]] = Map([])
+  let cjs_prop_subs_per_module : Map[String, Array[(String, String, String)]] = Map([],
+  )
   for path in order {
     let m = match modules.get(path) {
       Some(node) => node
@@ -691,9 +693,9 @@ fn link_module_graph(
       for p in new_block.stmt_positions {
         merged_positions.push(p)
       }
-      { stmts: merged_stmts, stmt_positions: merged_positions }
+      { stmts: merged_stmts, stmt_positions: merged_positions, }
     }
-    modules[path] = { ..m, block: final_block }
+    modules[path] = { ..m, block: final_block, }
   }
   {
     locals: rename_per_module,
@@ -1451,7 +1453,7 @@ fn substitute_var_names_in_block(
   for s in block.stmts {
     new_stmts.push(substitute_var_names_in_stmt(s, map, ns))
   }
-  { stmts: new_stmts, stmt_positions: block.stmt_positions }
+  { stmts: new_stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -1626,7 +1628,7 @@ fn substitute_var_names_in_stmt(
           Some(e) => Some(substitute_var_names_in_expr(e, map, ns))
           None => None
         }
-        new_methods.push({ ..mth, body: new_body, key_expr: new_key_expr })
+        new_methods.push({ ..mth, body: new_body, key_expr: new_key_expr, })
       }
       let new_decorators : Array[@ast.TsExpr] = []
       for d in decl.decorators {
@@ -1840,7 +1842,7 @@ fn substitute_var_names_in_expr(
       let inner_map = shadow_map_for_params(f.params, map)
       let inner_ns = shadow_ns_for_params(f.params, ns)
       let new_body = substitute_var_names_in_block(f.body, inner_map, inner_ns)
-      FuncExpr({ ..f, params: new_params, body: new_body })
+      FuncExpr({ ..f, params: new_params, body: new_body, })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
@@ -1887,7 +1889,7 @@ fn substitute_var_names_in_expr(
           }
           None => None
         }
-        new_methods.push({ ..mth, body: new_body })
+        new_methods.push({ ..mth, body: new_body, })
       }
       let new_decorators : Array[@ast.TsExpr] = []
       for d in decl.decorators {
@@ -2081,7 +2083,7 @@ fn substitute_var_names_in_params(
       Some(b) => Some(substitute_var_names_in_binding(b, map, ns))
       None => None
     }
-    out.push({ ..p, default: new_default, binding: new_binding })
+    out.push({ ..p, default: new_default, binding: new_binding, })
   }
   out
 }
@@ -2108,7 +2110,7 @@ fn substitute_var_names_in_binding(
               Some(d) => Some(substitute_var_names_in_expr(d, map, ns))
               None => None
             }
-            new_items.push(Some({ binding: new_inner, default: new_default }))
+            new_items.push(Some({ binding: new_inner, default: new_default, }))
           }
           None => new_items.push(None)
         }
@@ -2117,7 +2119,7 @@ fn substitute_var_names_in_binding(
         Some(r) => Some(substitute_var_names_in_binding(r, map, ns))
         None => None
       }
-      Array({ items: new_items, rest: new_rest })
+      Array({ items: new_items, rest: new_rest, })
     }
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
@@ -2138,7 +2140,7 @@ fn substitute_var_names_in_binding(
           default: new_default,
         })
       }
-      Object({ props: new_props, rest: ob.rest })
+      Object({ props: new_props, rest: ob.rest, })
     }
     Target(e) => Target(substitute_var_names_in_expr(e, map, ns))
   }
@@ -2174,14 +2176,17 @@ fn link_rename_binding_lhs(
         Some(r) => Some(link_rename_binding_lhs(r, map))
         None => None
       }
-      Array({ items: new_items, rest: new_rest })
+      Array({ items: new_items, rest: new_rest, })
     }
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
       for p in ob.props {
-        new_props.push({ ..p, binding: link_rename_binding_lhs(p.binding, map) })
+        new_props.push({
+          ..p,
+          binding: link_rename_binding_lhs(p.binding, map),
+        })
       }
-      Object({ props: new_props, rest: ob.rest })
+      Object({ props: new_props, rest: ob.rest, })
     }
     Target(_) => binding
   }

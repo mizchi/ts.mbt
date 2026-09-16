@@ -2757,7 +2757,7 @@ verify_package() {
     cd "$project"
     run_logged "$repo_root/$log_root/${module_name}_generate.log" \
       "${generate_env[@]}" \
-      moon run "$repo_root/src/cmd/ts2mbt" -- \
+      moon run "$repo_root/src/cmd/mtsc" -- bridge \
       --input "$package_spec" \
       --out "dist/$module_name"
   )
@@ -2913,7 +2913,7 @@ verify_node_sqlite() {
   mkdir -p "$out"
 
   run_logged "$log_root/${module_name}_generate.log" \
-    moon run src/cmd/ts2mbt -- \
+    moon run src/cmd/mtsc -- bridge \
     --input "$types_path" \
     --out "$out" \
     --module-spec node:sqlite
@@ -2958,7 +2958,7 @@ verify_node_fs() {
   mkdir -p "$out"
 
   run_logged "$log_root/${module_name}_generate.log" \
-    moon run src/cmd/ts2mbt -- \
+    moon run src/cmd/mtsc -- bridge \
     --input "$types_path" \
     --out "$out" \
     --module-spec node:fs
@@ -3006,7 +3006,7 @@ verify_node_builtin() {
   mkdir -p "$out"
 
   run_logged "$log_root/${module_name}_generate.log" \
-    moon run src/cmd/ts2mbt -- \
+    moon run src/cmd/mtsc -- bridge \
     --input "$types_path" \
     --out "$out" \
     --module-spec "$package_spec"
@@ -3098,9 +3098,9 @@ EOF
   (
     cd "$app"
     run_logged "$repo_root/$log_root/async_integration_vendor_axios.log" \
-      moon run "$repo_root/src/cmd/ts2mbt" -- vendor axios --out src/bridges
+      moon run "$repo_root/src/cmd/mtsc" -- bridge vendor axios --out src/bridges
     run_logged "$repo_root/$log_root/async_integration_vendor_hono.log" \
-      moon run "$repo_root/src/cmd/ts2mbt" -- vendor hono --out src/bridges
+      moon run "$repo_root/src/cmd/mtsc" -- bridge vendor hono --out src/bridges
   )
 
   # Integration-mode markers must be present in the generated packages.
@@ -3439,7 +3439,7 @@ EOF
   (
     cd "$app"
     run_logged "$repo_root/$log_root/async_callback_${mode}_vendor.log" \
-      moon run "$repo_root/src/cmd/ts2mbt" -- vendor state-action --out src/bridges
+      moon run "$repo_root/src/cmd/mtsc" -- bridge vendor state-action --out src/bridges
   )
 
   local bridge="$app/src/bridges/state_action/bridge.mbt"

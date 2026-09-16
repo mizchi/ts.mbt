@@ -604,7 +604,9 @@ fn Parser::record_object_rest_binding_pattern(
   for f in fields {
     if f.0.has_prefix("@@spread:") &&
       (f.1 is ObjectLit(_) || f.1 is ArrayLit(_)) {
-      self.grammar_misuses.push("a rest element cannot contain a binding pattern")
+      self.grammar_misuses.push(
+        "a rest element cannot contain a binding pattern",
+      )
     }
   }
 }
@@ -1369,7 +1371,7 @@ fn Parser::parse_parenthesized_expr(
   self : Parser,
 ) -> @ast.TsExpr raise ParseError {
   if self.allow_jsx && self.peek_at(1).kind == Lt {
-    let temp = { ..self, pos: self.pos + 1 }
+    let temp = { ..self, pos: self.pos + 1, }
     if temp.is_jsx_element_start() {
       let jsx_expr = temp.parse_jsx_element_expr()
       if temp.check(RParen) {
@@ -2767,7 +2769,7 @@ fn Parser::is_generic_arrow_function(self : Parser) -> Bool {
   if !self.check(Lt) {
     return false
   }
-  let temp = { ..self }
+  let temp = { ..self, }
   temp.skip_type_args()
   if !temp.check(LParen) {
     return false
@@ -3215,7 +3217,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         @ast.TsExpr::JsxElement("", [], paren_embeds)
         // functioncheck
       } else if self.allow_jsx && self.peek_at(1).kind == Lt {
-        let temp = { ..self, pos: self.pos + 1 }
+        let temp = { ..self, pos: self.pos + 1, }
         if temp.is_jsx_element_start() {
           let jsx_expr = temp.parse_jsx_element_expr()
           if temp.check(RParen) {
@@ -4451,7 +4453,7 @@ fn Parser::is_async_arrow_function(self : Parser) -> Bool {
     _ => ()
   }
   if self.peek_at(1).kind == Lt {
-    let temp = { ..self, pos: self.pos + 1 }
+    let temp = { ..self, pos: self.pos + 1, }
     temp.skip_type_args()
     if !temp.check(LParen) {
       return false
@@ -4460,7 +4462,7 @@ fn Parser::is_async_arrow_function(self : Parser) -> Bool {
   }
   // Check for async (params) => ...
   if self.peek_at(1).kind == LParen {
-    let temp = { ..self, pos: self.pos + 2 }
+    let temp = { ..self, pos: self.pos + 2, }
     return try {
       let _ = temp.parse_params()
       if !temp.check(RParen) {

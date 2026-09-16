@@ -24,12 +24,12 @@ pub(all) struct PhaseTimer {
 
 ///|
 pub fn PhaseTimer::new() -> PhaseTimer {
-  { enabled: true, entries: [] }
+  { enabled: true, entries: [], }
 }
 
 ///|
 pub fn PhaseTimer::disabled() -> PhaseTimer {
-  { enabled: false, entries: [] }
+  { enabled: false, entries: [], }
 }
 
 ///|

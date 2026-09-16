@@ -112,7 +112,7 @@ test "extends_decision_with: resolves names then decides" {
 test "extends_decision_with_generics: resolves Applied bindings" {
   // type Maybe<T> = T | undefined; Maybe<string> extends string | undefined?
   let table : Map[String, AliasBinding] = {
-    "Maybe": { type_params: ["T"], body: Union([Named("T"), Undefined]) },
+    "Maybe": { type_params: ["T"], body: Union([Named("T"), Undefined]), },
   }
   let resolve = fn(name) { table.get(name) }
   @test.assert_eq(

@@ -85,7 +85,7 @@ pub fn ManglerConfig::with_census(
   self : ManglerConfig,
   out : Array[String]?,
 ) -> ManglerConfig {
-  { ..self, census: out }
+  { ..self, census: out, }
 }
 
 ///|
@@ -93,7 +93,7 @@ pub fn ManglerConfig::with_mangle_properties_shape_color(
   self : ManglerConfig,
   enabled : Bool,
 ) -> ManglerConfig {
-  { ..self, mangle_properties_shape_color: enabled }
+  { ..self, mangle_properties_shape_color: enabled, }
 }
 
 ///|
@@ -108,7 +108,7 @@ pub fn ManglerConfig::with_reserved(
   for n in names {
     merged.push(n)
   }
-  { ..self, reserved: merged }
+  { ..self, reserved: merged, }
 }
 
 ///|
@@ -116,7 +116,7 @@ pub fn ManglerConfig::with_preserve_top_level(
   self : ManglerConfig,
   preserve : Bool,
 ) -> ManglerConfig {
-  { ..self, preserve_top_level: preserve }
+  { ..self, preserve_top_level: preserve, }
 }
 
 ///|
@@ -124,7 +124,7 @@ pub fn ManglerConfig::with_mangle_properties(
   self : ManglerConfig,
   enable : Bool,
 ) -> ManglerConfig {
-  { ..self, mangle_properties: enable }
+  { ..self, mangle_properties: enable, }
 }
 
 ///|
@@ -139,7 +139,7 @@ pub fn ManglerConfig::with_reserved_properties(
   for n in names {
     merged.push(n)
   }
-  { ..self, reserved_properties: merged }
+  { ..self, reserved_properties: merged, }
 }
 
 // ---------------------------------------------------------------------------
@@ -2723,7 +2723,7 @@ fn rename_block_inline_in(
   for s in block.stmts {
     stmts.push(rename_stmt(s, scope, reserved))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -2762,7 +2762,7 @@ fn rename_binding_decl(
               Some(d) => Some(rename_expr(d, scope))
               None => None
             }
-            new_items.push(Some({ binding: new_inner, default: new_default }))
+            new_items.push(Some({ binding: new_inner, default: new_default, }))
           }
           None => new_items.push(None)
         }
@@ -2771,7 +2771,7 @@ fn rename_binding_decl(
         Some(r) => Some(rename_binding_decl(r, scope, reserved))
         None => None
       }
-      Array({ items: new_items, rest: new_rest })
+      Array({ items: new_items, rest: new_rest, })
     }
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
@@ -2803,7 +2803,7 @@ fn rename_binding_decl(
         Some(n) => Some(scope.bind(n, reserved))
         None => None
       }
-      Object({ props: new_props, rest: new_rest })
+      Object({ props: new_props, rest: new_rest, })
     }
     Target(e) => Target(rename_expr(e, scope))
   }
@@ -3029,7 +3029,7 @@ fn rename_binding_lhs(
               Some(d) => Some(rename_expr(d, scope))
               None => None
             }
-            new_items.push(Some({ binding: new_inner, default: new_default }))
+            new_items.push(Some({ binding: new_inner, default: new_default, }))
           }
           None => new_items.push(None)
         }
@@ -3038,7 +3038,7 @@ fn rename_binding_lhs(
         Some(r) => Some(rename_binding_lhs(r, scope))
         None => None
       }
-      Array({ items: new_items, rest: new_rest })
+      Array({ items: new_items, rest: new_rest, })
     }
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
@@ -3065,7 +3065,7 @@ fn rename_binding_lhs(
         Some(n) => Some(scope.resolve(n))
         None => None
       }
-      Object({ props: new_props, rest: new_rest })
+      Object({ props: new_props, rest: new_rest, })
     }
     Target(e) => Target(rename_expr(e, scope))
   }
@@ -3231,7 +3231,7 @@ fn rename_object_entry_value(
   match value {
     FuncExpr(f) if is_method_shorthand_worth_keeping(key, f) => {
       let renamed = rename_function_expr(f, scope)
-      FuncExpr({ ..renamed, name: key })
+      FuncExpr({ ..renamed, name: key, })
     }
     _ => rename_expr(value, scope)
   }
@@ -3422,7 +3422,7 @@ fn rename_properties_in_block(
   for s in block.stmts {
     stmts.push(rename_properties_in_stmt(s, prop_map))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -3570,7 +3570,7 @@ fn rename_properties_in_stmt(
         rename_properties_in_class_decl(decl, prop_map),
         match ctor_body {
           Some(f) =>
-            Some({ ..f, body: rename_properties_in_block(f.body, prop_map) })
+            Some({ ..f, body: rename_properties_in_block(f.body, prop_map), })
           None => None
         },
       )
@@ -3595,7 +3595,7 @@ fn rename_properties_in_class_decl(
       Some(b) => Some(rename_properties_in_block(b, prop_map))
       None => None
     }
-    new_methods.push({ ..m, name: renamed_name, body: new_body })
+    new_methods.push({ ..m, name: renamed_name, body: new_body, })
   }
   let new_props : Array[@ast.TsClassPropertyDecl] = []
   for p in decl.properties {
@@ -3603,7 +3603,7 @@ fn rename_properties_in_class_decl(
       Some(short) => short
       None => p.name
     }
-    new_props.push({ ..p, name: renamed_name })
+    new_props.push({ ..p, name: renamed_name, })
   }
   // Field-initializer KEYS are property-name sites too. They were not
   // renamed here, which is invisible for a name that stays reserved and
@@ -3728,7 +3728,7 @@ fn rename_properties_in_expr(
         // `oldname` a self-binding inside the body.
         let synced = match new_value {
           FuncExpr(f) if f.name == ent.0 && ent.0 != "" =>
-            @ast.TsExpr::FuncExpr({ ..f, name: new_key })
+            @ast.TsExpr::FuncExpr({ ..f, name: new_key, })
           _ => new_value
         }
         out.push((new_key, synced))
@@ -3920,7 +3920,7 @@ fn rename_properties_in_expr(
         rename_properties_in_class_decl(decl, prop_map),
         match ctor_body {
           Some(f) =>
-            Some({ ..f, body: rename_properties_in_block(f.body, prop_map) })
+            Some({ ..f, body: rename_properties_in_block(f.body, prop_map), })
           None => None
         },
       )
@@ -3950,7 +3950,7 @@ fn rename_properties_in_binding(
               Some(d) => Some(rename_properties_in_expr(d, prop_map))
               None => None
             }
-            new_items.push(Some({ binding: new_inner, default: new_default }))
+            new_items.push(Some({ binding: new_inner, default: new_default, }))
           }
           None => new_items.push(None)
         }
@@ -3959,7 +3959,7 @@ fn rename_properties_in_binding(
         Some(r) => Some(rename_properties_in_binding(r, prop_map))
         None => None
       }
-      Array({ items: new_items, rest: new_rest })
+      Array({ items: new_items, rest: new_rest, })
     }
     Object(ob) => {
       // Object-destructure key: rename the key, but preserve the
@@ -3994,7 +3994,7 @@ fn rename_properties_in_binding(
           default: new_default,
         })
       }
-      Object({ props: new_props, rest: ob.rest })
+      Object({ props: new_props, rest: ob.rest, })
     }
     Target(e) => Target(rename_properties_in_expr(e, prop_map))
   }

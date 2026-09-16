@@ -139,7 +139,7 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
     }
     declares_per_stmt.push(d)
     let m : Map[String, Bool] = Map([])
-    collect_property_names({ stmts: [st], stmt_positions: [] }, m)
+    collect_property_names({ stmts: [st], stmt_positions: [], }, m)
     for n in m.keys() {
       mentioned_anywhere[n] = true
     }

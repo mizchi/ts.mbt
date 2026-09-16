@@ -27,7 +27,7 @@ pub(all) struct Position {
 
 ///|
 pub fn Position::new(line : Int, column : Int) -> Position {
-  { line, column }
+  { line, column, }
 }
 
 ///|
@@ -60,7 +60,7 @@ pub fn LineIndex::new(source : String) -> LineIndex {
     }
     i = i + 1
   }
-  { line_starts: starts }
+  { line_starts: starts, }
 }
 
 ///|
@@ -69,7 +69,7 @@ pub fn LineIndex::new(source : String) -> LineIndex {
 pub fn LineIndex::position(self : LineIndex, offset : Int) -> Position {
   let starts = self.line_starts
   if starts.length() == 0 {
-    return { line: 0, column: 0 }
+    return { line: 0, column: 0, }
   }
   // Binary search for the largest start <= offset.
   let mut lo = 0
@@ -84,7 +84,7 @@ pub fn LineIndex::position(self : LineIndex, offset : Int) -> Position {
   }
   let line = lo
   let column = offset - starts[lo]
-  { line, column }
+  { line, column, }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ pub(all) struct SourceMapBuilder {
 
 ///|
 pub fn SourceMapBuilder::new() -> SourceMapBuilder {
-  { lines: [[]], last_out_line: 0, current_source: 0 }
+  { lines: [[]], last_out_line: 0, current_source: 0, }
 }
 
 ///|

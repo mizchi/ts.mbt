@@ -20060,66 +20060,65 @@ test "batch EI rules" {
       "const enum E { a = -Infinity }", "const enum E { a = 2 / 0.0 }", "const enum E { a = 0.0 / 0.0 }",
       "declare const enum E { a = 1 / 0 }",
       // TS2501: an object-rest element whose target is a binding pattern.
-      "({...{}} = {});", "({...({})} = {});", "({...[]} = {});",
+       "({...{}} = {});", "({...({})} = {});", "({...[]} = {});",
       // TS2523: `yield` in a generator's own parameter initializer.
-      "function* bar() { function* foo(a = yield) { } }",
-      "function* bar() { function* foo(a = { b: yield }) { } }",
+       "function* bar() { function* foo(a = yield) { } }", "function* bar() { function* foo(a = { b: yield }) { } }",
       // TS2463: an optional binding-pattern parameter in an
       // IMPLEMENTATION, at a function and at a class method, both
       // pattern kinds.
-      "function foo({ x }?: { x: string }) { }", "function foo([a]?: number[]) { }",
+       "function foo({ x }?: { x: string }) { }", "function foo([a]?: number[]) { }",
       "class K { m({ x }?: { x: string }) { } }",
       // TS2661: `export { globalThis }`, both spellings.
-      "export { globalThis as global };", "export { globalThis };",
+       "export { globalThis as global };", "export { globalThis };",
       // TS1433 / TS2680: a decorated or modified `this` parameter, and a
       // `this` parameter that is not first.
-      "class C { constructor(private this: C) { } }", "class C { m(a: number, this: C) { } }",
+       "class C { constructor(private this: C) { } }", "class C { m(a: number, this: C) { } }",
       "function f(a: number, this: Window) { }",
       // TS2754: `super` with type arguments.
-      "class B { constructor(x?: number) { } }\nclass D extends B { constructor() { super<number>(1) } }",
+       "class B { constructor(x?: number) { } }\nclass D extends B { constructor() { super<number>(1) } }",
       // TS2629 / TS2628 / TS2630: assignment to a class, an enum or a
       // function declaration — including the ambient spellings.
-      "class C { }\nC = null;", "enum E { A }\nE = null;", "function f() { }\nf = null;",
+       "class C { }\nC = null;", "enum E { A }\nE = null;", "function f() { }\nf = null;",
       "declare class C { }\nC = null;",
       // TS1005: a private name as an indexed-access type key.
-      "class C { foo = 3; #bar = 3;\n  m() { const v: C[#bar] = 3; return v } }",
+       "class C { foo = 3; #bar = 3;\n  m() { const v: C[#bar] = 3; return v } }",
       // TS1338: `infer` outside any conditional's extends clause — at the
       // alias top level, inside a template literal type, and in a
       // conditional's check / then / else positions.
-      "type T = infer U;", "type T = `${infer X}`;", "type T<A> = (infer B) extends infer C ? infer D : infer E;",
+       "type T = infer U;", "type T = `${infer X}`;", "type T<A> = (infer B) extends infer C ? infer D : infer E;",
       // TS2838: one `infer` name declared twice with DIFFERENT written
       // constraints in the same extends clause.
-      "type X<T> = T extends { a: infer U extends string, b: infer U extends number } ? U : never;",
+       "type X<T> = T extends { a: infer U extends string, b: infer U extends number } ? U : never;",
       // TS2488 / TS2504: an object literal as a `for-of` / `for await`
       // source.
-      "for (const x of {}) { }", "async function f() { for await (const x of {}) { } }",
+       "for (const x of {}) { }", "async function f() { for await (const x of {}) { } }",
       // TS2341 / TS2445: a private / protected member reached by
       // DESTRUCTURING rather than by property access.
-      "class K { private priv = 1; protected prot = 2 }\nlet k = new K();\nlet { priv } = k;",
+       "class K { private priv = 1; protected prot = 2 }\nlet k = new K();\nlet { priv } = k;",
       "class K { private priv = 1; protected prot = 2 }\nlet k = new K();\nlet { prot } = k;",
       "class K { private priv = 1 }\nfunction f({ priv }: K) { }",
       // TS2855 / TS2340: a `super` access reaching a base DATA FIELD, at
       // every visibility and through an ambient base.
-      "class B { private priv: string = \"\" }\nclass D extends B { m() { return super.priv } }",
+       "class B { private priv: string = \"\" }\nclass D extends B { m() { return super.priv } }",
       "class B { protected prot: string = \"\" }\nclass D extends B { m() { return super.prot } }",
       "class B { pub: string = \"\" }\nclass D extends B { m() { return super.pub } }",
       "declare class B { pub: string }\nclass D extends B { m() { return super.pub } }",
       // TS2456: a circular alias through a mapped type's SOURCE, direct
       // and mutual, and through a bare `keyof`.
-      "type R = { [K in keyof R]: string };", "type A = { [K in keyof B]: string };\ntype B = { [K in keyof A]: string };",
+       "type R = { [K in keyof R]: string };", "type A = { [K in keyof B]: string };\ntype B = { [K in keyof A]: string };",
       "type K = keyof K;",
       // TS2503: an `import =` alias to an undeclared namespace — the
       // SINGLE-segment spelling, which the dotted-only recorder missed.
-      "import f = NonExistent;",
+       "import f = NonExistent;",
       // The optionality PROXY: an `any`-typed required member (explicit,
       // or the unannotated field that becomes one) no longer excuses a
       // source that lacks it.
-      "class Bar { x: any }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
+       "class Bar { x: any }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
       "class Bar { x }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
       "interface I { x: any }\nclass Other { y: string = \"\" }\nfunction f(a: I) { }\nf(new Other());",
       // TS2411 with an INTERFACE index value, which the class-only arm
       // could never reach.
-      "interface SI { data: SA; [x: string]: SB }\nclass SA { foo: string = \"\" }\nclass SB { bar: string = \"\" }",
+       "interface SI { data: SA; [x: string]: SB }\nclass SA { foo: string = \"\" }\nclass SB { bar: string = \"\" }",
     ] {
     assert_true(issues(src) > 0)
   }
@@ -20131,83 +20130,80 @@ test "batch EI rules" {
       "enum P { a = 1 / 0, b = NaN, c = Infinity, d = -Infinity }", "const enum P { a = 1 / 2, b = -1, c = 0x10, d = 1 + 2 }",
       // Every object-rest target real code writes, and the ARRAY pattern
       // spelling, which tsc ACCEPTS.
-      "declare let rest: any;\n({...rest} = {});", "declare let o: any;\n({...o.p} = {});",
+       "declare let rest: any;\n({...rest} = {});", "declare let o: any;\n({...o.p} = {});",
       "declare let o: any;\n({...o[0]} = {});", "declare let a: any;\n[...[a]] = [1];",
       // `yield` in a generator BODY, and a plain default. (Spelled as a
       // statement rather than `let a = yield`, which is a real TS7057
       // under the noImplicitAny default and would measure that rule.)
-      "function* g() { yield 1; }", "function* g(a = 1) { }",
+       "function* g() { yield 1; }", "function* g(a = 1) { }",
       // ... and an ARROW inside the default: its body is its own scope, so
       // the `yield` there is an identifier and tsc does not report TS2523.
-      "function* outer() { function* f(a = () => 1) { } }",
+       "function* outer() { function* f(a = () => 1) { } }",
       // TS2463's bodiless positions — all five accepted by tsc.
-      "declare function f({ x }?: { x: string }): void;", "interface I { m({ x }?: { x: string }): void }",
+       "declare function f({ x }?: { x: string }): void;", "interface I { m({ x }?: { x: string }): void }",
       "declare class D { m({ x }?: { x: string }): void }", "type F = ({ x }?: { x: string }) => void;",
       "function f({ x }: { x: string }) { }", "function f({ x } = { x: \"\" }) { }",
       "function f(x?: number) { }",
       // A `this` parameter with no decorator and no modifier, in every
       // position that has one.
-      "class C { m(this: C) { } }", "function f(this: Window, a: number) { }",
-      "interface I { m(this: I): void }",
+       "class C { m(this: C) { } }", "function f(this: Window, a: number) { }", "interface I { m(this: I): void }",
       // `super` with no type arguments.
-      "class B { constructor() { } m(): void { } }\nclass D extends B { constructor() { super() } n() { super.m() } }",
+       "class B { constructor() { } m(): void { } }\nclass D extends B { constructor() { super() } n() { super.m() } }",
       // The five legal assignment targets from the corpus file.
-      "var v;\nv = null;", "function f(p: any) { p = null; }", "let C = class { };\nC = null;",
+       "var v;\nv = null;", "function f(p: any) { p = null; }", "let C = class { };\nC = null;",
       "let f = function () { };\nf = null;",
       // An ordinary indexed-access type key.
-      "class C { foo = 3 }\ndeclare const v: C[\"foo\"];",
+       "class C { foo = 3 }\ndeclare const v: C[\"foo\"];",
       // TS1338's legal shapes. The third is the one the corpus caught: a
       // nested conditional INSIDE an extends clause inherits the
       // permission, so `infer U` in its check position is accepted.
-      "type U<T> = T extends (infer A)[] ? A : T;", "type P<T> = T extends Promise<infer A> ? A : T;",
+       "type U<T> = T extends (infer A)[] ? A : T;", "type P<T> = T extends Promise<infer A> ? A : T;",
       "type X<T> = T extends ((infer U) extends number ? 1 : 0) ? 1 : 0;",
       // TS2838: identical constraints, and the ABSENT one — a missing
       // constraint is inherited rather than contradicting, which
       // inferTypesWithExtends1 states in its own comments.
-      "type X<T> = T extends { a: infer U, b: infer U } ? U : never;",
-      "type X<T> = T extends { a: infer U extends string, b: infer U extends string } ? U : never;",
+       "type X<T> = T extends { a: infer U, b: infer U } ? U : never;", "type X<T> = T extends { a: infer U extends string, b: infer U extends string } ? U : never;",
       "type X<T> = T extends { a: infer U extends string, b: infer U } ? U : never;",
       "type X<T> = T extends { a: infer U, b: infer U extends string } ? U : never;",
       // A `for-of` source that IS iterable, and an object literal
       // carrying a computed key — the one shape that can hide the
       // protocol method, so it abstains.
-      "for (const x of [1, 2]) { }", "for (const x of { [Symbol.iterator]() { return [][Symbol.iterator]() } }) { }",
+       "for (const x of [1, 2]) { }", "for (const x of { [Symbol.iterator]() { return [][Symbol.iterator]() } }) { }",
       // Destructuring a private / protected member from INSIDE the class,
       // and a protected one from a subclass.
-      "class K { private priv = 1; protected prot = 2;\n  m() { let { priv: a, prot: b } = this; return [a, b] } }",
+       "class K { private priv = 1; protected prot = 2;\n  m() { let { priv: a, prot: b } = this; return [a, b] } }",
       "class K { protected prot = 2 }\nclass C extends K { m() { let { prot } = this; return prot } }",
       // `super` reaching a base METHOD or ACCESSOR — both live on the
       // prototype — and a base PARAMETER PROPERTY, which tsc accepts.
-      "class B { m() { } get g(): string { return \"\" } }\nclass D extends B { t() { return super.m() } u() { return super.g } }",
+       "class B { m() { } get g(): string { return \"\" } }\nclass D extends B { t() { return super.m() } u() { return super.g } }",
       "class B { constructor(public pub: string) { } }\nclass D extends B { constructor() { super(\"\"); } t() { return super.pub } }",
       // A STATIC base member of the same name: there `super` is the base
       // CONSTRUCTOR, where a static field really does live.
-      "declare class B { static a: any; a: number }\nclass C extends B { static z = super.a }",
+       "declare class B { static a: any; a: number }\nclass C extends B { static z = super.a }",
       // Recursion through a mapped type's VALUE, or an object member, is
       // a structural barrier — and a GENERIC alias's `keyof T` source
       // names a type parameter, not the alias.
-      "type A = { x: A };", "type C<T> = { [P in keyof T]: C<T> };", "type T<X> = { [P in keyof X]: T<X[P]> };",
+       "type A = { x: A };", "type C<T> = { [P in keyof T]: C<T> };", "type T<X> = { [P in keyof X]: T<X[P]> };",
       "type E = { [K in \"a\" | \"b\"]: E };",
       // An `import =` alias whose target IS declared.
-      "namespace NS { export const v = 1 }\nimport a = NS;", "enum NE { A }\nimport a = NE;",
+       "namespace NS { export const v = 1 }\nimport a = NS;", "enum NE { A }\nimport a = NE;",
       // The UNION optionality case stays tolerated: there `x?: T` and
       // `x: T | undefined` really are the same node.
-      "class Bar { x?: string }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
+       "class Bar { x?: string }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
       "class Bar { x: string | undefined }\nclass Other { y: string = \"\" }\nfunction f(a: Bar) { }\nf(new Other());",
       // TS2411 with an interface index value the member DOES satisfy.
-      "interface SI { data: SB; [x: string]: SB }\nclass SB { bar: string = \"\" }",
+       "interface SI { data: SB; [x: string]: SB }\nclass SB { bar: string = \"\" }",
       // --- the accessor-pair false positive this batch fixed, which the
       // corpus structurally cannot see (no TS7-ACCEPTED file has the
       // shape). TypeScript 4.3 lets a get/set pair's ANNOTATED types
       // diverge; the error, if any, lands where the value is read.
-      "class C { get p(): string { return \"\" } set p(x: number) { } }",
-      "class C { get p(): boolean { return true } set p(x: number) { } }",
+       "class C { get p(): string { return \"\" } set p(x: number) { } }", "class C { get p(): boolean { return true } set p(x: number) { } }",
       "class F { x: string = \"\" }\nclass F2 { x: string = \"\"; y: string = \"\" }\nclass C { get p(): F { return new F() } set p(v: F2) { } }",
       "interface I { get p(): boolean; set p(x: number); }",
       // And a computed key that is not a late-bound name of LITERAL type
       // (`1 << 6` has type `number`, not `64`) pairs nothing, which tsc
       // agrees with.
-      "class C { get [1 << 6]() { return true } set [1 << 6](x: number) { } }",
+       "class C { get [1 << 6]() { return true } set [1 << 6](x: number) { } }",
     ] {
     @test.assert_eq(issues(src), 0)
   }
@@ -20215,8 +20211,7 @@ test "batch EI rules" {
   // type comes contextually from the setter.
   for
     src in [
-      "class C { get p() { return true } set p(x: number) { } }",
-      "enum G { B = \"b\" }\nclass C { get [G.B]() { return true } set [G.B](x: number) { } }",
+      "class C { get p() { return true } set p(x: number) { } }", "enum G { B = \"b\" }\nclass C { get [G.B]() { return true } set [G.B](x: number) { } }",
       "class F { x: string = \"\" }\nclass F2 { x: string = \"\"; y: string = \"\" }\nclass C { get p() { return new F() } set p(v: F2) { } }",
     ] {
     assert_true(issues(src) > 0)
@@ -20233,7 +20228,9 @@ test "batch EI rules" {
 test "expr_check: class index sees a class ingested after a lookup" {
   let r = Resolver::empty()
   Resolver::ingest_module(
-    r, parse_module_or_empty("class A { ax: number = 1 }"), "",
+    r,
+    parse_module_or_empty("class A { ax: number = 1 }"),
+    "",
   )
   // Forces the index to be built.
   assert_true(r.lookup_class_field("A", "ax") is Some(_))
@@ -20241,7 +20238,9 @@ test "expr_check: class index sees a class ingested after a lookup" {
   // A second ingest into the same resolver must drop the index, or `B`'s
   // members stay invisible and `this.by` resolves to nothing.
   Resolver::ingest_module(
-    r, parse_module_or_empty("class B { by: string = \"s\" }"), "",
+    r,
+    parse_module_or_empty("class B { by: string = \"s\" }"),
+    "",
   )
   assert_true(r.lookup_class_field("B", "by") is Some(_))
   // Rebuilding must not lose what the first build had.
@@ -20325,10 +20324,7 @@ test "expr_check: destructuring params bind every pattern name" {
   // silent while the module-wide backstop declared every parameter of
   // every function in the file.
   @test.assert_eq(unresolved("function f(pname: number) { }\npname;"), 1)
-  @test.assert_eq(
-    unresolved("const g = (pname: number) => pname;\npname;"),
-    1,
-  )
+  @test.assert_eq(unresolved("const g = (pname: number) => pname;\npname;"), 1)
 }
 
 ///|
@@ -20392,13 +20388,12 @@ test "expr_check: namespace member write type mismatch" {
     })
   }
   let mismatch = fn(src : String) -> Int {
-    issues(src).filter(fn(m) { m.contains("is not assignable to type") }).length()
+    issues(src)
+    .filter(fn(m) { m.contains("is not assignable to type") })
+    .length()
   }
   // Fires: an inferred member type, an annotated one, and a `let` member.
-  @test.assert_eq(
-    mismatch("namespace N { export var p = 1 }\nN.p = false;"),
-    1,
-  )
+  @test.assert_eq(mismatch("namespace N { export var p = 1 }\nN.p = false;"), 1)
   @test.assert_eq(
     mismatch("namespace N { export var p: number = 1 }\nN.p = false;"),
     1,
@@ -20407,10 +20402,7 @@ test "expr_check: namespace member write type mismatch" {
     mismatch("namespace N { export var d: string = \"x\" }\nN.d = 1;"),
     1,
   )
-  @test.assert_eq(
-    mismatch("namespace N { export let b = 2 }\nN.b = false;"),
-    1,
-  )
+  @test.assert_eq(mismatch("namespace N { export let b = 2 }\nN.b = false;"), 1)
   // Merged with a function and with a class: the same write, same verdict.
   @test.assert_eq(
     mismatch(
@@ -20442,9 +20434,7 @@ test "expr_check: function-type assertion comparability" {
     })
   }
   let overlap = fn(src : String) -> Int {
-    issues(src)
-    .filter(fn(m) { m.contains("sufficiently overlaps") })
-    .length()
+    issues(src).filter(fn(m) { m.contains("sufficiently overlaps") }).length()
   }
   // The corpus shape: an UNANNOTATED arrow, contextually typed by the
   // asserted type's parameters, so it is `(number) => number`.
@@ -20595,9 +20585,7 @@ test "expr_check: export = inside declare module resolves its name" {
   // Silent: declared inside the augmentation body, and declared outside it.
   // A real `.d.ts` writes both spellings.
   @test.assert_eq(
-    issues(
-      "declare module \"M\" {\n    class A { }\n    export = A;\n}",
-    ),
+    issues("declare module \"M\" {\n    class A { }\n    export = A;\n}"),
     0,
   )
   @test.assert_eq(
@@ -20621,8 +20609,11 @@ test "expr_check: export = inside declare module resolves its name" {
 /// file this reported). A single-signature method must keep reporting.
 test "expr_check: an overloaded method's arguments are not judged against overload #1" {
   let issues = fn(src : String) -> Array[String] {
-    check_module_function_bodies_permissive(parse_module_or_empty(src))
-    .map(fn(i) { i.message })
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).map(fn(
+      i,
+    ) {
+      i.message
+    })
   }
   let overloaded =
     #|class Base { foo: string }
@@ -20638,11 +20629,12 @@ test "expr_check: an overloaded method's arguments are not judged against overlo
     #|
   // Every one of the three spellings is legal — the overload set covers
   // them all — so nothing may be reported.
-  for call in ["var r1 = c.foo('hi');", "var r2 = c.foo('bye');", "var r3 = c.foo('hm');"] {
+  for
+    call in [
+      "var r1 = c.foo('hi');", "var r2 = c.foo('bye');", "var r3 = c.foo('hm');",
+    ] {
     @test.assert_eq(
-      issues(overloaded + call)
-      .filter(fn(m) { m.contains("but got") })
-      .length(),
+      issues(overloaded + call).filter(fn(m) { m.contains("but got") }).length(),
       0,
     )
   }
@@ -20681,7 +20673,9 @@ test "expr_check: lib-global redeclaration at the ambient spelling" {
   @test.assert_eq(issues("declare var Promise: PromiseConstructor;"), 0)
   @test.assert_eq(issues("declare var other: { iterator: symbol };"), 0)
   @test.assert_eq(
-    issues("declare var src: SymbolConstructor;\ndeclare var Symbol: typeof src;"),
+    issues(
+      "declare var src: SymbolConstructor;\ndeclare var Symbol: typeof src;",
+    ),
     0,
   )
   // A MODULE file declares a fresh module-local binding rather than
@@ -20700,8 +20694,11 @@ test "expr_check: lib-global redeclaration at the ambient spelling" {
 /// unjudged.
 test "expr_check: a function value against a union of call signatures" {
   let issues = fn(src : String) -> Array[String] {
-    check_module_function_bodies_permissive(parse_module_or_empty(src))
-    .map(fn(i) { i.message })
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).map(fn(
+      i,
+    ) {
+      i.message
+    })
   }
   // Fires: `boolean` is in neither member's return type.
   assert_true(
@@ -20883,9 +20880,7 @@ test "expr_check: a spread argument of union-of-tuples type" {
     0,
   )
   @test.assert_eq(
-    issues(
-      "declare const u: [number, number, number?]\n" + fn3 + "fn(...u, 1)",
-    ),
+    issues("declare const u: [number, number, number?]\n" + fn3 + "fn(...u, 1)"),
     0,
   )
 }
@@ -20908,10 +20903,7 @@ test "expr_check: a value name in a type-argument position" {
   // Fires: a module-level value and a FUNCTION-LOCAL one, the latter
   // being the corpus shape (`var a, b, c; if (a<b, b>(c + 1)) { }`).
   @test.assert_eq(issues(f + "declare var vv: number;\nf<vv>();"), 1)
-  @test.assert_eq(
-    issues(f + "function g() { var b; f<b>(); }"),
-    1,
-  )
+  @test.assert_eq(issues(f + "function g() { var b; f<b>(); }"), 1)
   // Silent: every route that gives the name a TYPE meaning — a class, an
   // enum, a type alias, an interface merged with a same-named value, an
   // in-scope type parameter, a keyword type, and a lib global.
@@ -20928,10 +20920,7 @@ test "expr_check: a value name in a type-argument position" {
   // Silent by abstention: a QUALIFIED name is TS2749 in tsc
   // (`f<N.q>()`) and is skipped here — resolving a dotted path to a
   // namespace member is a different lookup, so it costs a MISS.
-  @test.assert_eq(
-    issues(f + "namespace N { export var q = 1; }\nf<N.q>();"),
-    0,
-  )
+  @test.assert_eq(issues(f + "namespace N { export var q = 1; }\nf<N.q>();"), 0)
 }
 
 ///|
@@ -20950,7 +20939,10 @@ test "expr_check: arithmetic on a union operand" {
   // Fires, on whichever side carries the union.
   @test.assert_eq(issues("function b(x: number | string) { return x * x; }"), 2)
   @test.assert_eq(issues("function b(x: number | string) { return x - 1; }"), 1)
-  @test.assert_eq(issues("function b(x: number | boolean) { return x * 2; }"), 1)
+  @test.assert_eq(
+    issues("function b(x: number | boolean) { return x * 2; }"),
+    1,
+  )
   // Silent: `any` collapses the union and tsc accepts it; a union with no
   // non-numeric member is TS2365, a different code; a numeric-literal
   // union is the case the abstention was written for; and a named member
@@ -20976,7 +20968,9 @@ test "expr_check: arithmetic on a union operand" {
 test "expr_check: an unspellable globalThis index key" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
-    .filter(fn(i) { i.message.contains("does not exist on `typeof globalThis`") })
+    .filter(fn(i) {
+      i.message.contains("does not exist on `typeof globalThis`")
+    })
     .length()
   }
   // Fires in both an alias and an annotation.
@@ -20996,12 +20990,12 @@ test "expr_check: an unspellable globalThis index key" {
     ),
     0,
   )
-  @test.assert_eq(issues("type G = (typeof globalThis)[\"declaredElsewhere\"]"), 0)
-  // Silent: an index into something other than `typeof globalThis`.
   @test.assert_eq(
-    issues("interface I { \"a\": number }\ntype G = I[\"a\"]"),
+    issues("type G = (typeof globalThis)[\"declaredElsewhere\"]"),
     0,
   )
+  // Silent: an index into something other than `typeof globalThis`.
+  @test.assert_eq(issues("interface I { \"a\": number }\ntype G = I[\"a\"]"), 0)
 }
 
 ///|
@@ -21021,7 +21015,9 @@ test "expr_check: weak type with no properties in common" {
   // shape), a call argument, and a source whose only member is a METHOD —
   // a method counts as a property on both sides.
   @test.assert_eq(
-    issues(z + "interface X { x: string }\ndeclare const xv: X;\nconst z1: Z = xv;"),
+    issues(
+      z + "interface X { x: string }\ndeclare const xv: X;\nconst z1: Z = xv;",
+    ),
     1,
   )
   @test.assert_eq(
@@ -21033,17 +21029,24 @@ test "expr_check: weak type with no properties in common" {
     1,
   )
   @test.assert_eq(
-    issues(z + "declare function f(o: Z): void;\ndeclare const xv: { x: string };\nf(xv);"),
+    issues(
+      z +
+      "declare function f(o: Z): void;\ndeclare const xv: { x: string };\nf(xv);",
+    ),
     1,
   )
   @test.assert_eq(
-    issues(z + "interface S { m(): void }\ndeclare const s: S;\nconst z1: Z = s;"),
+    issues(
+      z + "interface S { m(): void }\ndeclare const s: S;\nconst z1: Z = s;",
+    ),
     1,
   )
   // Silent: one shared property is enough, including an optional one on
   // both sides.
   @test.assert_eq(
-    issues(z + "declare const xv: { x: string, z?: boolean };\nconst z1: Z = xv;"),
+    issues(
+      z + "declare const xv: { x: string, z?: boolean };\nconst z1: Z = xv;",
+    ),
     0,
   )
   @test.assert_eq(
@@ -21215,7 +21218,10 @@ test "expr_check: an iterator's declared next() parameter type" {
   let g = "declare const g1: Generator<number, void, string>;\n"
   // Fires: for-of, for-await-of, an array-literal spread, a spread in a
   // call argument, and a `yield*` whose container sends `boolean`.
-  @test.assert_eq(issues(strict + "declare let _: any;\n" + g + "for (_ of g1);"), 1)
+  @test.assert_eq(
+    issues(strict + "declare let _: any;\n" + g + "for (_ of g1);"),
+    1,
+  )
   @test.assert_eq(
     issues(
       strict +
@@ -21230,7 +21236,9 @@ test "expr_check: an iterator's declared next() parameter type" {
   )
   @test.assert_eq(
     issues(
-      strict + g + "function* f(): Generator<number, void, boolean> { yield* g1; }",
+      strict +
+      g +
+      "function* f(): Generator<number, void, boolean> { yield* g1; }",
     ),
     1,
   )
@@ -21275,12 +21283,13 @@ test "expr_check: an iterator's declared next() parameter type" {
   @test.assert_eq(issues(strict + g + "function* f() { yield* g1; }"), 0)
   @test.assert_eq(
     issues(
-      strict + g + "function* f(): Generator<number, void, string> { yield* g1; }",
+      strict +
+      g +
+      "function* f(): Generator<number, void, string> { yield* g1; }",
     ),
     0,
   )
 }
-
 
 ///|
 /// Batch EN. A `[Symbol.<well-known>]` object-literal key resolves to the
@@ -21306,7 +21315,9 @@ test "expr_check: a well-known symbol key in an object literal" {
   let decls = "//@target: ES6\ninterface I { [Symbol.unscopables]: boolean; }\ndeclare function foo(p: I): void;\n"
   // Fires: an excess symbol key alongside the declared one.
   @test.assert_eq(
-    issues(decls + "foo({ [Symbol.unscopables]: true, [Symbol.toPrimitive]: 0 });"),
+    issues(
+      decls + "foo({ [Symbol.unscopables]: true, [Symbol.toPrimitive]: 0 });",
+    ),
     1,
   )
   // Fires: the declared symbol key with the wrong value type.
@@ -21401,7 +21412,9 @@ test "expr_check: a bare type parameter redeclaring a base member" {
     1,
   )
   @test.assert_eq(
-    issues("interface Base { foo: string; }\ninterface E1<T> extends Base { foo: T; }"),
+    issues(
+      "interface Base { foo: string; }\ninterface E1<T> extends Base { foo: T; }",
+    ),
     1,
   )
   @test.assert_eq(
@@ -21411,7 +21424,9 @@ test "expr_check: a bare type parameter redeclaring a base member" {
     1,
   )
   @test.assert_eq(
-    issues("interface Base { foo: object; }\ninterface E1<T> extends Base { foo: T; }"),
+    issues(
+      "interface Base { foo: object; }\ninterface E1<T> extends Base { foo: T; }",
+    ),
     1,
   )
   // Silent: a CONSTRAINED type parameter.
@@ -21423,11 +21438,15 @@ test "expr_check: a bare type parameter redeclaring a base member" {
   )
   // Silent: `any` and `unknown` base member types accept anything.
   @test.assert_eq(
-    issues("interface Base { bar: any; }\ninterface E1<T> extends Base { bar: T; }"),
+    issues(
+      "interface Base { bar: any; }\ninterface E1<T> extends Base { bar: T; }",
+    ),
     0,
   )
   @test.assert_eq(
-    issues("interface Base { bar: unknown; }\ninterface E1<T> extends Base { bar: T; }"),
+    issues(
+      "interface Base { bar: unknown; }\ninterface E1<T> extends Base { bar: T; }",
+    ),
     0,
   )
   // Silent: a COMPOSITE type mentioning the parameter is not a bare one.
@@ -21561,10 +21580,10 @@ test "expr_check: index signatures, import types, super in object keys (batch EP
       // declares its OWN ambient module — `importTypeAmbientMissing`'s
       // typo. The declaration-bundle abstention is about a bundle's
       // IMPORT STATEMENTS, so the import-type channel is judged past it.
-      "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst x: import(\"fo\") = { x: 0 };",
+       "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst x: import(\"fo\") = { x: 0 };",
       // TS2466: a `super()` CALL in an object-literal computed key,
       // inside an arrow in the constructor (computedPropertyNames30).
-      "// @target: es6\nclass Base { }\nclass C extends Base {\n  constructor() { super(); () => { var o = { [(super(), \"p\")]() {} }; } }\n}",
+       "// @target: es6\nclass Base { }\nclass C extends Base {\n  constructor() { super(); () => { var o = { [(super(), \"p\")]() {} }; } }\n}",
     ] {
     assert_true(issues(src) > 0)
   }
@@ -21575,26 +21594,24 @@ test "expr_check: index signatures, import types, super in object keys (batch EP
       // members `Function` itself declares, which is why the general
       // rule needs a complete member list and this one is restricted to
       // the index-signature shape.
-      "// @target: es2015\nvar a1: {} = () => {};",
-      "// @target: es2015\nvar a2: Object = () => {};",
-      "// @target: es2015\nvar a3: Function = () => {};",
-      "// @target: es2015\nvar a4: { length: number } = () => {};",
+      "// @target: es2015\nvar a1: {} = () => {};", "// @target: es2015\nvar a2: Object = () => {};",
+      "// @target: es2015\nvar a3: Function = () => {};", "// @target: es2015\nvar a4: { length: number } = () => {};",
       // A callable TARGET accepts a function through its call signature,
       // index signature or not.
-      "// @target: es2015\ninterface I { (): void; [k: string]: any }\ndeclare var g: () => void;\nvar a5: I = g;",
+       "// @target: es2015\ninterface I { (): void; [k: string]: any }\ndeclare var g: () => void;\nvar a5: I = g;",
       // The correctly spelled import type still resolves against the
       // file's own ambient module.
-      "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst y: import(\"foo\") = { x: 0 };",
+       "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst y: import(\"foo\") = { x: 0 };",
       // `super()` in such a key DIRECTLY in the constructor is ACCEPTED
       // (computedPropertyNames28) — the boundary is the whole rule.
-      "// @target: es6\nclass Base { }\nclass C extends Base {\n  constructor() { super(); var o = { [(super(), \"p\")]() {} }; }\n}",
+       "// @target: es6\nclass Base { }\nclass C extends Base {\n  constructor() { super(); var o = { [(super(), \"p\")]() {} }; }\n}",
       // `super.bar()` through an ARROW is ACCEPTED as well
       // (computedPropertyNames31): an arrow inherits `super`, so only a
       // CALL counts here.
-      "// @target: es6\nclass Base { bar() { return 0 } }\nclass C extends Base {\n  foo() { () => { var o = { [super.bar()]() {} }; }; return 0 }\n}",
+       "// @target: es6\nclass Base { bar() { return 0 } }\nclass C extends Base {\n  foo() { () => { var o = { [super.bar()]() {} }; }; return 0 }\n}",
       // And the same key with no function boundary at all
       // (computedPropertyNames25).
-      "// @target: es6\nclass Base { bar() { return 0 } }\nclass C extends Base {\n  foo() { var o = { [super.bar()]() {} }; return 0 }\n}",
+       "// @target: es6\nclass Base { bar() { return 0 } }\nclass C extends Base {\n  foo() { var o = { [super.bar()]() {} }; return 0 }\n}",
     ] {
     @test.assert_eq(issues(src), 0)
   }
@@ -21624,19 +21641,18 @@ test "expr_check: a `this` parameter is not an argument, local types do not coll
       // An interface method: the shape that was reported twice.
       "// @target: es2015\ninterface I { p(this: I, n: number): void }\ndeclare var i: I;\ni.p(1);",
       // An object-type member, the other caller of the same helper.
-      "// @target: es2015\ndeclare var o: { p(this: object, n: number): void };\no.p(1);",
+       "// @target: es2015\ndeclare var o: { p(this: object, n: number): void };\no.p(1);",
       // A class method.
-      "// @target: es2015\nclass K { m(this: K, n: number) { } }\ndeclare var k: K;\nk.m(1);",
+       "// @target: es2015\nclass K { m(this: K, n: number) { } }\ndeclare var k: K;\nk.m(1);",
       // The three spellings that were already right, kept so the fix
       // cannot regress into dropping a real parameter.
-      "// @target: es2015\nfunction f(this: void, n: number) { }\nf(1);",
-      "// @target: es2015\ndeclare function g(this: void, n: number): void;\ng(1);",
+       "// @target: es2015\nfunction f(this: void, n: number) { }\nf(1);", "// @target: es2015\ndeclare function g(this: void, n: number): void;\ng(1);",
       "// @target: es2015\ntype FT = (this: void, n: number) => void;\ndeclare var ft: FT;\nft(1);",
       // A block-local type alias declared in TWO function scopes: the
       // pre-existing first-wins bug reported three issues here.
-      "// @target: es2015\nfunction a() { type W = { x: number }; var p: W = { x: 1 }; return p.x; }\nfunction b() { type W = { y: number }; var q: W = { y: 1 }; return q.y; }",
+       "// @target: es2015\nfunction a() { type W = { x: number }; var p: W = { x: 1 }; return p.x; }\nfunction b() { type W = { y: number }; var q: W = { y: 1 }; return q.y; }",
       // The interface spelling of the same collision.
-      "// @target: es2015\nfunction a() { interface W { x: number } var p: W = { x: 1 }; return p.x; }\nfunction b() { interface W { y: number } var q: W = { y: 1 }; return q.y; }",
+       "// @target: es2015\nfunction a() { interface W { x: number } var p: W = { x: 1 }; return p.x; }\nfunction b() { interface W { y: number } var q: W = { y: 1 }; return q.y; }",
     ] {
     @test.assert_eq(issues(src), 0)
   }
@@ -21650,7 +21666,7 @@ test "expr_check: a `this` parameter is not an argument, local types do not coll
       // the recall half: `parse_module` merged block-level type ALIASES
       // into the module pool with a comment explaining why the checker
       // needs them, and did the same for interfaces nowhere.
-      "// @target: es2015\nfunction b2() { interface Q { x: number } var q: Q = { x: 1 }; return q.nope; }",
+       "// @target: es2015\nfunction b2() { interface Q { x: number } var q: Q = { x: 1 }; return q.nope; }",
     ] {
     assert_true(issues(src) > 0)
   }
@@ -21739,20 +21755,23 @@ test "expr_check: a closure cannot rely on an unstable narrowing (batch ES)" {
   assert_true(
     issues(
       "function c(x: number | string) {\n  if (typeof x === \"number\") { var f = () => x * x; }\n  x = \"hello\";\n  return 0;\n}",
-    ) > 0,
+    ) >
+    0,
   )
   // The same through a function EXPRESSION, whose env copy has its own
   // per-entry rule.
   assert_true(
     issues(
       "function c(x: number | string) {\n  if (typeof x === \"number\") { var f = function () { return x * x; }; }\n  x = \"hello\";\n  return 0;\n}",
-    ) > 0,
+    ) >
+    0,
   )
   // And for a `let`, not only a parameter.
   assert_true(
     issues(
       "function c(y: number | string) {\n  let x: number | string = y;\n  if (typeof x === \"number\") { var g = () => x * x; }\n  x = \"hello\";\n  return 0;\n}",
-    ) > 0,
+    ) >
+    0,
   )
   // --- stays silent
   for
@@ -21762,13 +21781,13 @@ test "expr_check: a closure cannot rely on an unstable narrowing (batch ES)" {
       "function c(x: number | string) {\n  if (typeof x === \"number\") { const f = () => x * x; return f(); }\n  return 0;\n}",
       // A reassignment the narrowed type CAN hold leaves it intact — this
       // is the cell that rules out \"assigned anywhere\".
-      "function c(x: number | string) {\n  x = 1;\n  if (typeof x === \"number\") { const f = () => x * x; return f(); }\n  return 0;\n}",
+       "function c(x: number | string) {\n  x = 1;\n  if (typeof x === \"number\") { const f = () => x * x; return f(); }\n  return 0;\n}",
       // A narrowed read that is NOT in a closure keeps the narrowing
       // however the binding is reassigned later.
-      "function c(x: number | string) {\n  if (typeof x === \"number\") { return x * x; }\n  x = \"hello\";\n  return 0;\n}",
+       "function c(x: number | string) {\n  if (typeof x === \"number\") { return x * x; }\n  x = \"hello\";\n  return 0;\n}",
       // An assignment from INSIDE a closure is not one the enclosing
       // narrowed region has to fear.
-      "function c(x: number | string) {\n  function h() { x = 10; }\n  if (typeof x === \"number\") { h(); return x * x; }\n  return 0;\n}",
+       "function c(x: number | string) {\n  function h() { x = 10; }\n  if (typeof x === \"number\") { h(); return x * x; }\n  return 0;\n}",
     ] {
     @test.assert_eq(issues(src), 0)
   }
@@ -21795,10 +21814,9 @@ test "expr_check: shadowed enum initializers and undeclared type arguments (batc
     src in [
       // TS18033: the enum member's initializer resolves, at the enum's
       // own position, to a block binding that cannot hold a number.
-      "// @target: es2015\n{ let Infinity = {}; enum E1 { X = Infinity } }",
-      "// @target: es2015\n{ let s = \"a\"; enum E4 { X = s } }",
+      "// @target: es2015\n{ let Infinity = {}; enum E1 { X = Infinity } }", "// @target: es2015\n{ let s = \"a\"; enum E4 { X = s } }",
       // TS2304: a type argument naming nothing at all.
-      "// @target: es2015\ndeclare function g<X>(): void;\nfunction h() { g<Nope>(); }",
+       "// @target: es2015\ndeclare function g<X>(): void;\nfunction h() { g<Nope>(); }",
       "// @target: es2015\nnew Date<A>",
     ] {
     assert_true(issues(src) > 0)
@@ -21809,29 +21827,29 @@ test "expr_check: shadowed enum initializers and undeclared type arguments (batc
       // No shadow: the enum member reads the numeric lib global.
       "// @target: es2015\n{ enum E2 { X = Infinity } }",
       // A numeric shadow.
-      "// @target: es2015\n{ let n = 5; enum E3 { X = n } }",
+       "// @target: es2015\n{ let n = 5; enum E3 { X = n } }",
       // Top level, where the lib global is what the name means.
-      "// @target: es2015\nenum E5 { X = Infinity }",
+       "// @target: es2015\nenum E5 { X = Infinity }",
       // An INNER numeric shadow masks the outer non-numeric one, which is
       // the lookup order the language uses.
-      "// @target: es2015\n{ let Infinity = {}; { let Infinity = 5; enum E6 { X = Infinity } } }",
+       "// @target: es2015\n{ let Infinity = {}; { let Infinity = 5; enum E6 { X = Infinity } } }",
       // An unclassifiable initializer records nothing.
-      "// @target: es2015\ndeclare function f(): any;\n{ let q = f(); enum E7 { X = q } }",
+       "// @target: es2015\ndeclare function f(): any;\n{ let q = f(); enum E7 { X = q } }",
       // Every way a type argument's name can be spellable as a type.
-      "// @target: es2015\ndeclare function g<X>(): void;\ninterface Top { x: number }\ng<Top>();",
+       "// @target: es2015\ndeclare function g<X>(): void;\ninterface Top { x: number }\ng<Top>();",
       "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { interface Inner { x: number } g<Inner>(); }",
       // Declared twice across block scopes, so the module-wide pool skips
       // it and only the NAME channel can answer.
-      "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { interface Dup { x: number } g<Dup>(); }\nfunction b() { interface Dup { y: number } g<Dup>(); }",
+       "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { interface Dup { x: number } g<Dup>(); }\nfunction b() { interface Dup { y: number } g<Dup>(); }",
       "// @target: es2015\ndeclare function g<X>(): void;\nfunction a() { type Al = number; g<Al>(); }",
       "// @target: es2015\ndeclare function g<X>(): void;\nfunction a<V>() { g<V>(); }",
       // An OBJECT-LITERAL method's own type parameter, which reaches no
       // `in_scope_type_params` — the corpus's last false positive.
-      "// @target: es2015\ndeclare function g<X>(): void;\nvar b = { new<A>(x: A) { g<A>(); return x; } };",
+       "// @target: es2015\ndeclare function g<X>(): void;\nvar b = { new<A>(x: A) { g<A>(); return x; } };",
       // A generic ARROW's, which is not in the AST at all.
-      "// @target: es2015\ndeclare function g<X>(): void;\nconst f2 = <B,>(x: B) => { g<B>(); return x; };",
+       "// @target: es2015\ndeclare function g<X>(): void;\nconst f2 = <B,>(x: B) => { g<B>(); return x; };",
       // And an enum / class / builtin name.
-      "// @target: es2015\ndeclare function g<X>(): void;\nenum En { A }\ng<En>();\nclass Cl {}\ng<Cl>();\ng<string>();",
+       "// @target: es2015\ndeclare function g<X>(): void;\nenum En { A }\ng<En>();\nclass Cl {}\ng<Cl>();\ng<string>();",
     ] {
     @test.assert_eq(issues(src), 0)
   }

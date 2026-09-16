@@ -768,7 +768,7 @@ fn Parser::parse_enum_decl_after_enum_keyword(
     } else {
       (None, false)
     }
-    members.push({ name: member_name, value, is_computed })
+    members.push({ name: member_name, value, is_computed, })
     if self.match_(Comma) || self.match_(Semicolon) {
       continue
     }
@@ -776,7 +776,7 @@ fn Parser::parse_enum_decl_after_enum_keyword(
   let _ = self.expect(RBrace)
   self.in_const_enum = prev_const_enum
   self.consume_semicolon()
-  { name, members, is_const, is_declare }
+  { name, members, is_const, is_declare, }
 }
 
 ///|
@@ -1032,28 +1032,28 @@ fn append_ambient_external_module_exports(
   exports : Array[@ast.TsExportSpec],
 ) -> Unit {
   for func in module_.funcs {
-    exports.push({ local_name: func.name, export_name: func.name })
+    exports.push({ local_name: func.name, export_name: func.name, })
   }
   for iface in module_.interfaces {
-    exports.push({ local_name: iface.name, export_name: iface.name })
+    exports.push({ local_name: iface.name, export_name: iface.name, })
   }
   for type_alias in module_.type_aliases {
-    exports.push({ local_name: type_alias.name, export_name: type_alias.name })
+    exports.push({ local_name: type_alias.name, export_name: type_alias.name, })
   }
   for import_ in module_.imports {
-    exports.push({ local_name: import_.name, export_name: import_.name })
+    exports.push({ local_name: import_.name, export_name: import_.name, })
   }
   for value in module_.values {
-    exports.push({ local_name: value.name, export_name: value.name })
+    exports.push({ local_name: value.name, export_name: value.name, })
   }
   for class_ in module_.classes {
-    exports.push({ local_name: class_.name, export_name: class_.name })
+    exports.push({ local_name: class_.name, export_name: class_.name, })
   }
   for namespace_ in module_.namespaces {
-    exports.push({ local_name: namespace_.name, export_name: namespace_.name })
+    exports.push({ local_name: namespace_.name, export_name: namespace_.name, })
   }
   for enum_ in module_.enums {
-    exports.push({ local_name: enum_.name, export_name: enum_.name })
+    exports.push({ local_name: enum_.name, export_name: enum_.name, })
   }
 }
 
@@ -1186,7 +1186,7 @@ fn Parser::parse_namespace_decl_with_mode(
   }
   let value = match name {
     Some(name) => {
-      let next_value : @ast.TsValueDecl = { name, type_: @ast.TsType::Any }
+      let next_value : @ast.TsValueDecl = { name, type_: @ast.TsType::Any, }
       Some(next_value)
     }
     None => None
@@ -2535,7 +2535,7 @@ fn collect_value_decls_from_binding(
 ) -> Unit {
   let source_type = value_decl_resolve_type(type_, init)
   match binding {
-    @ast.TsBinding::Ident(name) => values.push({ name, type_: source_type })
+    @ast.TsBinding::Ident(name) => values.push({ name, type_: source_type, })
     @ast.TsBinding::Array(arr_binding) => {
       for i, item in arr_binding.items {
         match item {
@@ -2841,7 +2841,7 @@ fn Parser::parse_export_decl_for_module(
         temp
       }
     }
-    exports.push({ local_name, export_name: "default" })
+    exports.push({ local_name, export_name: "default", })
     self.consume_semicolon()
     return (stmts, exports, reexports)
   }
@@ -2883,14 +2883,14 @@ fn Parser::parse_export_decl_for_module(
           // local or imported name. It has no runtime value.
           self.collected_type_only_exports[local_name] = true
           self.collected_type_only_exports[export_name] = true
-          exports.push({ local_name, export_name })
+          exports.push({ local_name, export_name, })
         }
       }
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
     let type_alias = self.parse_type_alias_after_type_keyword()
-    exports.push({ local_name: type_alias.name, export_name: type_alias.name })
+    exports.push({ local_name: type_alias.name, export_name: type_alias.name, })
     self.collected_type_aliases.push(type_alias)
     return (stmts, exports, reexports)
   }
@@ -2901,11 +2901,11 @@ fn Parser::parse_export_decl_for_module(
       self.in_async = false
       if func.name != "<anon>" {
         stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
-        exports.push({ local_name: func.name, export_name: "default" })
+        exports.push({ local_name: func.name, export_name: "default", })
       } else {
         let temp = self.next_temp("__export_default__")
         stmts.push(Const(@ast.TsBinding::Ident(temp), Any, FuncExpr(func)))
-        exports.push({ local_name: temp, export_name: "default" })
+        exports.push({ local_name: temp, export_name: "default", })
       }
       self.consume_semicolon()
       return (stmts, exports, reexports)
@@ -2930,11 +2930,11 @@ fn Parser::parse_export_decl_for_module(
         if !(is_named && self.last_function_bodiless) {
           stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
         }
-        exports.push({ local_name: func.name, export_name: "default" })
+        exports.push({ local_name: func.name, export_name: "default", })
       } else {
         let temp = self.next_temp("__export_default__")
         stmts.push(Const(@ast.TsBinding::Ident(temp), Any, FuncExpr(func)))
-        exports.push({ local_name: temp, export_name: "default" })
+        exports.push({ local_name: temp, export_name: "default", })
       }
       self.consume_semicolon()
       return (stmts, exports, reexports)
@@ -2948,13 +2948,13 @@ fn Parser::parse_export_decl_for_module(
         Some(class_name) => {
           let stmt = self.parse_class_decl()
           stmts.push(stmt)
-          exports.push({ local_name: class_name, export_name: "default" })
+          exports.push({ local_name: class_name, export_name: "default", })
         }
         None => {
           let temp = self.next_temp("__export_default__")
           let expr = self.parse_class_stub()
           stmts.push(Const(@ast.TsBinding::Ident(temp), Any, expr))
-          exports.push({ local_name: temp, export_name: "default" })
+          exports.push({ local_name: temp, export_name: "default", })
         }
       }
       self.consume_semicolon()
@@ -2982,7 +2982,7 @@ fn Parser::parse_export_decl_for_module(
         temp
       }
     }
-    exports.push({ local_name, export_name: "default" })
+    exports.push({ local_name, export_name: "default", })
     self.consume_semicolon()
     return (stmts, exports, reexports)
   }
@@ -3021,7 +3021,7 @@ fn Parser::parse_export_decl_for_module(
     } else {
       for item in items {
         let (local_name, export_name) = item
-        exports.push({ local_name, export_name })
+        exports.push({ local_name, export_name, })
       }
     }
     self.consume_semicolon()
@@ -3031,7 +3031,7 @@ fn Parser::parse_export_decl_for_module(
     let name = self.parse_binding_ident()
     let _ = self.expect(Eq)
     self.skip_until_semicolon()
-    exports.push({ local_name: name, export_name: name })
+    exports.push({ local_name: name, export_name: name, })
     return (stmts, exports, reexports)
   }
   if self.check(Function) {
@@ -3045,7 +3045,7 @@ fn Parser::parse_export_decl_for_module(
     if !self.last_function_bodiless {
       stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
     }
-    exports.push({ local_name: func.name, export_name: func.name })
+    exports.push({ local_name: func.name, export_name: func.name, })
     return (stmts, exports, reexports)
   }
   if self.match_ident("abstract") && self.check(Class) {
@@ -3054,7 +3054,7 @@ fn Parser::parse_export_decl_for_module(
     let names : Array[String] = []
     collect_decl_names_from_stmt(stmt, names)
     for name in names {
-      exports.push({ local_name: name, export_name: name })
+      exports.push({ local_name: name, export_name: name, })
     }
     return (stmts, exports, reexports)
   }
@@ -3069,14 +3069,14 @@ fn Parser::parse_export_decl_for_module(
       if !self.last_function_bodiless {
         stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
       }
-      exports.push({ local_name: func.name, export_name: func.name })
+      exports.push({ local_name: func.name, export_name: func.name, })
       return (stmts, exports, reexports)
     }
     _ => ()
   }
   if self.is_const_enum_decl_start() {
     let enum_ = self.parse_const_enum_decl(false)
-    exports.push({ local_name: enum_.name, export_name: enum_.name })
+    exports.push({ local_name: enum_.name, export_name: enum_.name, })
     return (stmts, exports, reexports)
   }
   if (match self.peek().kind {
@@ -3084,7 +3084,7 @@ fn Parser::parse_export_decl_for_module(
       _ => false
     }) {
     let enum_ = self.parse_enum_decl_after_enum_keyword(false, false)
-    exports.push({ local_name: enum_.name, export_name: enum_.name })
+    exports.push({ local_name: enum_.name, export_name: enum_.name, })
     return (stmts, exports, reexports)
   }
   let is_declare = match self.peek().kind {
@@ -3096,26 +3096,26 @@ fn Parser::parse_export_decl_for_module(
     let _ = self.advance()
     if self.is_const_enum_decl_start() {
       let enum_ = self.parse_const_enum_decl(true)
-      exports.push({ local_name: enum_.name, export_name: enum_.name })
+      exports.push({ local_name: enum_.name, export_name: enum_.name, })
       return (stmts, exports, reexports)
     }
     if self.is_enum_keyword_at(0) {
       let enum_ = self.parse_enum_decl_after_enum_keyword(false, true)
-      exports.push({ local_name: enum_.name, export_name: enum_.name })
+      exports.push({ local_name: enum_.name, export_name: enum_.name, })
       return (stmts, exports, reexports)
     }
     match self.peek().kind {
       Function => {
         let _ = self.advance()
         let import_ = self.parse_declare_function()
-        exports.push({ local_name: import_.name, export_name: import_.name })
+        exports.push({ local_name: import_.name, export_name: import_.name, })
         return (stmts, exports, reexports)
       }
       Interface => {
         let iface = self.parse_interface()
         self.record_exported_type_name(iface.name)
         self.collected_interfaces.push(iface)
-        exports.push({ local_name: iface.name, export_name: iface.name })
+        exports.push({ local_name: iface.name, export_name: iface.name, })
         return (stmts, exports, reexports)
       }
       Type => {
@@ -3132,7 +3132,7 @@ fn Parser::parse_export_decl_for_module(
         let _ = self.advance()
         let values = self.parse_declare_values()
         for value in values {
-          exports.push({ local_name: value.name, export_name: value.name })
+          exports.push({ local_name: value.name, export_name: value.name, })
         }
         return (stmts, exports, reexports)
       }
@@ -3141,19 +3141,19 @@ fn Parser::parse_export_decl_for_module(
         let _ = self.advance()
         let values = self.parse_declare_values()
         for value in values {
-          exports.push({ local_name: value.name, export_name: value.name })
+          exports.push({ local_name: value.name, export_name: value.name, })
         }
         return (stmts, exports, reexports)
       }
       Class => {
         let class_ = self.parse_declare_class(false)
-        exports.push({ local_name: class_.name, export_name: class_.name })
+        exports.push({ local_name: class_.name, export_name: class_.name, })
         return (stmts, exports, reexports)
       }
       Ident(name) =>
         if name == "abstract" && self.peek_at(1).kind == Class {
           let class_ = self.parse_declare_class_with_optional_abstract()
-          exports.push({ local_name: class_.name, export_name: class_.name })
+          exports.push({ local_name: class_.name, export_name: class_.name, })
           return (stmts, exports, reexports)
         } else if name == "module" &&
           (match self.peek_at(1).kind {
@@ -3172,7 +3172,7 @@ fn Parser::parse_export_decl_for_module(
           name == "class" {
           match self.parse_namespace_decl_value() {
             Some(value) =>
-              exports.push({ local_name: value.name, export_name: value.name })
+              exports.push({ local_name: value.name, export_name: value.name, })
             None => self.skip_declaration_block()
           }
           return (stmts, exports, reexports)
@@ -3190,7 +3190,7 @@ fn Parser::parse_export_decl_for_module(
       match self.parse_lowered_namespace() {
         Some(lowered) => {
           stmts.push(lowered.stmt)
-          exports.push({ local_name: lowered.name, export_name: lowered.name })
+          exports.push({ local_name: lowered.name, export_name: lowered.name, })
         }
         None => self.skip_declaration_block()
       }
@@ -3198,7 +3198,7 @@ fn Parser::parse_export_decl_for_module(
     }
     Ident(name) if name == "abstract" && self.peek_at(1).kind == Class => {
       let class_ = self.parse_declare_class_with_optional_abstract()
-      exports.push({ local_name: class_.name, export_name: class_.name })
+      exports.push({ local_name: class_.name, export_name: class_.name, })
       return (stmts, exports, reexports)
     }
     _ => ()
@@ -3209,7 +3209,7 @@ fn Parser::parse_export_decl_for_module(
     let names : Array[String] = []
     collect_decl_names_from_stmt(stmt, names)
     for name in names {
-      exports.push({ local_name: name, export_name: name })
+      exports.push({ local_name: name, export_name: name, })
     }
     return (stmts, exports, reexports)
   }
@@ -3218,7 +3218,7 @@ fn Parser::parse_export_decl_for_module(
       let _ = self.advance()
       let parsed_values = self.parse_declare_values()
       for value in parsed_values {
-        exports.push({ local_name: value.name, export_name: value.name })
+        exports.push({ local_name: value.name, export_name: value.name, })
       }
       return (stmts, exports, reexports)
     }
@@ -3228,7 +3228,7 @@ fn Parser::parse_export_decl_for_module(
     let names : Array[String] = []
     collect_decl_names_from_stmt(stmt, names)
     for name in names {
-      exports.push({ local_name: name, export_name: name })
+      exports.push({ local_name: name, export_name: name, })
     }
     return (stmts, exports, reexports)
   }
@@ -3240,7 +3240,7 @@ fn Parser::parse_export_decl_for_module(
     // object guessed "value" and emitted `{ AlsoType: AlsoType, … }`,
     // which is a load-time ReferenceError.
     self.collected_interfaces.push(iface)
-    exports.push({ local_name: iface.name, export_name: iface.name })
+    exports.push({ local_name: iface.name, export_name: iface.name, })
     return (stmts, exports, reexports)
   }
   raise ParseError("Unsupported export statement")
@@ -3557,7 +3557,7 @@ fn Parser::parse_export_stmt(
           let temp = self.next_temp("__export_default__")
           let _ = self.parse_class_stub()
           match self.take_last_runtime_class_decl() {
-            Some(class_) => classes.push({ ..class_, name: temp })
+            Some(class_) => classes.push({ ..class_, name: temp, })
             None => ()
           }
         }
@@ -4104,7 +4104,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       }
       self.parse_import_stmt()
       match import_equals_alias {
-        Some(n) => values.push({ name: n, type_: @ast.TsType::Any })
+        Some(n) => values.push({ name: n, type_: @ast.TsType::Any, })
         None => ()
       }
     } else if self.check(Import) {
@@ -4533,7 +4533,7 @@ fn Parser::parse_module_block_with_const_values(
       match self.parse_export_enum_decl_for_module_block() {
         Some(enum_) => {
           enums.push(enum_)
-          exports.push({ local_name: enum_.name, export_name: enum_.name })
+          exports.push({ local_name: enum_.name, export_name: enum_.name, })
           if is_internal {
             self.collected_internal_names[enum_.name] = true
           }
@@ -4711,7 +4711,7 @@ fn Parser::parse_module_block_with_const_values(
   }
   (
     {
-      block: { stmts, stmt_positions },
+      block: { stmts, stmt_positions, },
       imports,
       exports,
       reexports,
@@ -4783,7 +4783,7 @@ pub fn parse_block_from_source(
     stmt_positions.push(parser.peek().pos)
     stmts.push(parser.parse_stmt())
   }
-  { stmts, stmt_positions }
+  { stmts, stmt_positions, }
 }
 
 ///|
@@ -4828,7 +4828,7 @@ pub fn parse_block_from_source_strict(
     stmt_positions.push(parser.peek().pos)
     stmts.push(parser.parse_stmt())
   }
-  { stmts, stmt_positions }
+  { stmts, stmt_positions, }
 }
 
 ///|

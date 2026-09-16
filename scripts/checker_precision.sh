@@ -17,12 +17,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-TSCHECK="_build/native/release/build/cmd/tscheck/tscheck.exe"
+TSCHECK="_build/native/release/build/cmd/mtsc/mtsc.exe"
 if [ ! -x "$TSCHECK" ]; then
-  TSCHECK="_build/native/debug/build/cmd/tscheck/tscheck.exe"
+  TSCHECK="_build/native/debug/build/cmd/mtsc/mtsc.exe"
 fi
 if [ ! -x "$TSCHECK" ]; then
-  echo "tscheck binary not found — run \`moon build --target native\`" >&2
+  echo "mtsc binary not found — run \`moon build --target native\`" >&2
   exit 1
 fi
 
@@ -59,7 +59,7 @@ for dir in "${CORPUS_DIRS[@]}"; do
   while IFS= read -r -d '' f; do
     # Skip ambient-only .d.ts (checker can't report function-body issues)
     [[ "$f" == *.d.ts ]] && continue
-    out=$("$TSCHECK" "$f" 2>&1 || true)
+    out=$("$TSCHECK" check "$f" 2>&1 || true)
     if echo "$out" | grep -q "parse error:"; then
       parse_errors=$((parse_errors + 1))
       COUNTS["$f"]=-1  # -1 = parse error
@@ -69,7 +69,24 @@ for dir in "${CORPUS_DIRS[@]}"; do
       COUNTS["$f"]=${issues:-0}
     fi
     total=$((total + 1))
-  done < <(find "$dir" -maxdepth 3 -name "*.ts" -o -name "*.tsx" | sort -z 2>/dev/null || true)
+    # Two bugs in the old spelling of this line, both pre-existing and
+    # both fatal, which is why this script could never produce output:
+    #
+    #   find … | sort -z      `sort -z` reads NUL-separated records and
+    #                         `find` without `-print0` writes
+    #                         newline-separated ones, so the whole list
+    #                         arrived as ONE record. `read -d ''` bound
+    #                         `$f` to that multi-line blob, `COUNTS` got
+    #                         a single key, and the later
+    #                         `${!COUNTS[@]} | tr ' ' '\n'` split it back
+    #                         into paths that are not keys — `COUNTS[$f]:
+    #                         unbound variable` under `set -u`.
+    #   -maxdepth 3 -name A -o -name B
+    #                         `-o` binds looser than the implicit `-a`,
+    #                         so this is `(depth<=3 AND *.ts) OR *.tsx`
+    #                         and `.tsx` files were collected at any
+    #                         depth.
+  done < <(find "$dir" -maxdepth 3 \( -name "*.ts" -o -name "*.tsx" \) -print0 2>/dev/null | sort -z || true)
 done
 
 if [ "$total" -eq 0 ]; then

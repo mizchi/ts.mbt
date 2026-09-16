@@ -280,7 +280,12 @@ fn enum_lowering_type_alias_string_enum_decl(
   }
   match enum_lowering_type_alias_string_enum_members(type_alias.type_) {
     Some(members) =>
-      Some({ name: type_alias.name, members, is_const: false, is_declare: true })
+      Some({
+        name: type_alias.name,
+        members,
+        is_const: false,
+        is_declare: true,
+      })
     None => None
   }
 }
@@ -337,7 +342,12 @@ fn enum_lowering_type_alias_number_enum_decl(
   }
   match enum_lowering_type_alias_number_enum_members(type_alias.type_) {
     Some(members) =>
-      Some({ name: type_alias.name, members, is_const: false, is_declare: true })
+      Some({
+        name: type_alias.name,
+        members,
+        is_const: false,
+        is_declare: true,
+      })
     None => None
   }
 }
@@ -561,7 +571,7 @@ fn enum_lowering_anonymous_string_literal_enum_decl(
       _ => return None
     }
   }
-  Some({ name, members, is_const: false, is_declare: true })
+  Some({ name, members, is_const: false, is_declare: true, })
 }
 
 ///|
@@ -859,7 +869,7 @@ fn enum_lowering_rewrite_anonymous_enum_surfaces(
       enums,
       used_type_names,
     )
-    imports[i] = { ..import_, params, return_type }
+    imports[i] = { ..import_, params, return_type, }
   }
   for i, func in funcs {
     let params : Array[@ast.TsParam] = []
@@ -885,7 +895,7 @@ fn enum_lowering_rewrite_anonymous_enum_surfaces(
       enums,
       used_type_names,
     )
-    funcs[i] = { ..func, params, return_type }
+    funcs[i] = { ..func, params, return_type, }
   }
   for i, value in values {
     values[i] = {
@@ -965,9 +975,9 @@ fn enum_lowering_rewrite_anonymous_enum_surfaces(
         enums,
         used_type_names,
       )
-      methods.push({ ..class_method, params, return_type })
+      methods.push({ ..class_method, params, return_type, })
     }
-    classes[i] = { ..class_, constructor_params, properties, methods }
+    classes[i] = { ..class_, constructor_params, properties, methods, }
   }
 }
 

@@ -18,7 +18,7 @@ pub fn module_alias_resolver(
     {}
   }
   for ta in module_.type_aliases {
-    table[ta.name] = { type_params: ta.type_params, body: ta.type_ }
+    table[ta.name] = { type_params: ta.type_params, body: ta.type_, }
   }
   fn(name) { table.get(name) }
 }

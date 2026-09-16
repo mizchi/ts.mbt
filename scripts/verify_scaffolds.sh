@@ -44,7 +44,7 @@ verify_typescript_scaffold_fixture() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/mbt2ts -- scaffold \
+  moon run src/cmd/mtsc -- pkg scaffold \
     "$mbti_path" \
     "$root/out" >/dev/null
 
@@ -123,7 +123,7 @@ verify_typescript_facade_scaffold_fixture() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/mbt2ts -- facade-scaffold \
+  moon run src/cmd/mtsc -- pkg facade-scaffold \
     "$mbti_path" \
     "$root/out" >/dev/null
 
@@ -196,7 +196,7 @@ verify_typescript_async_facade_scaffold_fixture() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/mbt2ts -- facade-scaffold \
+  moon run src/cmd/mtsc -- pkg facade-scaffold \
     "$mbti_path" \
     "$root/out" >/dev/null
 
@@ -259,7 +259,7 @@ verify_typescript_reverse_edge_scaffold_fixture() {
   rm -rf "$root"
   mkdir -p "$root/moonbitlang/core"
 
-  moon run src/cmd/mbt2ts -- scaffold \
+  moon run src/cmd/mtsc -- pkg scaffold \
     "$mbti_path" \
     "$root/out" >/dev/null
 
@@ -446,7 +446,7 @@ verify_moonbit_scaffold_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     "$fixture_path" "./runtime/double.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/double.js"
 
@@ -483,7 +483,7 @@ verify_moonbit_scaffold_external_package_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     "$fixture_path" "./runtime/neverthrow-like.js" "$root" >/dev/null
 
   cat > "$root/runtime/neverthrow-like.js" <<'EOF'
@@ -534,7 +534,7 @@ verify_moonbit_scaffold_react_like_jsx_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts \
     ./runtime/react-like.js \
     "$root" >/dev/null
@@ -582,7 +582,7 @@ verify_moonbit_scaffold_react_package_fixture() {
   rm -rf "$root"
   mkdir -p "$root/node_modules"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/node_modules/react/index.d.ts \
     react \
     "$root" >/dev/null
@@ -696,7 +696,7 @@ verify_moonbit_scaffold_react_jsx_runtime_fixture() {
   rm -rf "$root"
   mkdir -p "$root/node_modules"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/node_modules/react/jsx-runtime.d.ts \
     react/jsx-runtime \
     "$root" >/dev/null
@@ -745,7 +745,7 @@ verify_moonbit_scaffold_react_jsx_dev_runtime_fixture() {
   rm -rf "$root"
   mkdir -p "$root/node_modules"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/node_modules/react/jsx-dev-runtime.d.ts \
     react/jsx-dev-runtime \
     "$root" >/dev/null
@@ -824,7 +824,7 @@ verify_moonbit_scaffold_hono_jsx_fixture() {
   rm -rf "$root"
   mkdir -p "$root/node_modules"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/node_modules/hono/dist/types/jsx/index.d.ts \
     hono/jsx \
     "$root" >/dev/null
@@ -879,7 +879,7 @@ verify_moonbit_scaffold_hono_options_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/types/hono-options-entry.d.ts \
     ./runtime/hono.js \
     "$root" >/dev/null
@@ -939,7 +939,7 @@ verify_moonbit_scaffold_namespace_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/types/ns-entry.d.ts \
     ./runtime/ns.js \
     "$root" >/dev/null
@@ -980,7 +980,7 @@ verify_moonbit_scaffold_heterogeneous_union_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/types/heterogeneous-union-alias-entry.d.ts \
     ./runtime/hires.js \
     "$root" >/dev/null
@@ -1043,7 +1043,7 @@ verify_moonbit_scaffold_handles_ambiguous_surface() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/ts2mbt -- scaffold \
+  moon run src/cmd/mtsc -- bridge scaffold \
     fixtures/resolver/project/types/ambiguous-entry.d.ts \
     ./runtime/ambiguous.js \
     "$root" >/dev/null

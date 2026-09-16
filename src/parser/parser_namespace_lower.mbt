@@ -86,7 +86,7 @@ fn Parser::parse_lowered_namespace(
   let body_source = self.parse_declaration_block_source()
   if body_source.trim() == "" {
     // An empty namespace still declares the object.
-    return Some({ name, stmt: namespace_object_decl(name), enums: [] })
+    return Some({ name, stmt: namespace_object_decl(name), enums: [], })
   }
   let parsed = try
     Parser::from_source_with_jsx(body_source, self.allow_jsx).parse_module_block()
@@ -95,7 +95,7 @@ fn Parser::parse_lowered_namespace(
   } noraise {
     block => block
   }
-  Some({ name, stmt: lower_namespace_block(name, parsed), enums: parsed.enums })
+  Some({ name, stmt: lower_namespace_block(name, parsed), enums: parsed.enums, })
 }
 
 ///|
@@ -169,7 +169,7 @@ fn lower_namespace_block(
       },
     ],
     return_type: @ast.TsType::Void,
-    body: { stmts: inner, stmt_positions: [] },
+    body: { stmts: inner, stmt_positions: [], },
     is_generator: false,
     is_async: false,
     name_is_member_key: false,

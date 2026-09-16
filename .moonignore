@@ -10,10 +10,19 @@
 # are carried so a regenerated `dist/` or glue directory cannot leak
 # either.
 #
-# The bottom three are what `moon.mod`'s `options(exclude: ...)` carried
-# until the toolchain deprecated that key: the fixture corpus, the
-# TypeScript conformance submodule and the `tscheck` development binary
-# are none of them part of the library.
+# The bottom two are what `moon.mod`'s `options(exclude: ...)` carried
+# until the toolchain deprecated that key: the fixture corpus and the
+# TypeScript conformance submodule are neither of them part of the
+# library.
+#
+# `src/cmd/tscheck` used to be a third entry, and it is gone because the
+# path is: `tscheck` and `tsacc` became the `mtsc check` and
+# `mtsc conformance` verbs, inside the published CLI's own package. So the
+# two development entry points now SHIP, which is the one cost of the
+# consolidation worth writing down — there is no longer a package
+# boundary to exclude them at. They are inert unless invoked by name and
+# add no dependency the compile path did not already link (`parser` and
+# `checker` both arrive through `transform`).
 
 # Build outputs and fetched dependencies
 _build/
@@ -26,4 +35,3 @@ examples/**/__tsmbt_glue__*/
 # Development-only trees
 fixtures
 typescript
-src/cmd/tscheck

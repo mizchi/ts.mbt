@@ -586,7 +586,7 @@ fn surface_escape_expr(
           surface_escape_func_body(
             w,
             params,
-            { stmts: [@ast.TsStmt::Return(Some(e))], stmt_positions: [] },
+            { stmts: [@ast.TsStmt::Return(Some(e))], stmt_positions: [], },
             depth + 1,
           )
         ArrowBlock(b) => surface_escape_func_body(w, params, b, depth + 1)
@@ -1354,7 +1354,7 @@ fn collect_own_returns_block(
       | ForIn(_, _, _, _, b) => collect_own_returns_block(b, out)
       For(_, _, _, b) => collect_own_returns_block(b, out)
       Label(_, inner) =>
-        collect_own_returns_block({ stmts: [inner], stmt_positions: [] }, out)
+        collect_own_returns_block({ stmts: [inner], stmt_positions: [], }, out)
       Try(b, _, c, f) => {
         collect_own_returns_block(b, out)
         match c {

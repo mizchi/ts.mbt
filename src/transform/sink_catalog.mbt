@@ -138,7 +138,7 @@ fn collect_sinks_stmt(
       // `throw x` — the error reaches the caller as a value;
       // any property of x (notably `.message` / `.stack` / `.code`)
       // could be inspected. Treat as Recursive for safety.
-      out.push({ expr: e, observation: Recursive })
+      out.push({ expr: e, observation: Recursive, })
       collect_sinks_expr(e, externals, out)
     }
     Assign(_, e) | CompoundAssign(_, _, e) =>
@@ -152,7 +152,7 @@ fn collect_sinks_stmt(
       // `external.prop = v` — the assigned value escapes through
       // the external object's prop ABI.
       if is_external_receiver(t, externals) {
-        out.push({ expr: v, observation: ExternalPropWrite })
+        out.push({ expr: v, observation: ExternalPropWrite, })
       }
       collect_sinks_expr(t, externals, out)
       collect_sinks_expr(v, externals, out)
@@ -192,7 +192,7 @@ fn collect_sinks_stmt(
     ForIn(_, _, _, iter, body) => {
       // `for (k in iter)` enumerates iter's own + inherited
       // property names. Record iter as a DirectKeys sink.
-      out.push({ expr: iter, observation: DirectKeys })
+      out.push({ expr: iter, observation: DirectKeys, })
       collect_sinks_expr(iter, externals, out)
       collect_sinks_block(body, externals, out)
     }
@@ -262,7 +262,7 @@ fn collect_sinks_expr(
             match m {
               "keys" | "values" | "entries" | "fromEntries" =>
                 for a in args {
-                  out.push({ expr: a, observation: DirectKeys })
+                  out.push({ expr: a, observation: DirectKeys, })
                 }
               "assign" =>
                 // Object.assign(target, ...sources) — every source
@@ -271,20 +271,20 @@ fn collect_sinks_expr(
                 // surface is then determined by those sources.
                 for i, a in args {
                   if i > 0 {
-                    out.push({ expr: a, observation: DirectKeys })
+                    out.push({ expr: a, observation: DirectKeys, })
                   }
                 }
               _ => ()
             }
           } else if name == "JSON" && m == "stringify" {
             for a in args {
-              out.push({ expr: a, observation: Recursive })
+              out.push({ expr: a, observation: Recursive, })
             }
           } else if name == "console" {
             // console.log / .error / .warn / .info / .debug all
             // print `inspect()`-formatted values for objects.
             for a in args {
-              out.push({ expr: a, observation: Recursive })
+              out.push({ expr: a, observation: Recursive, })
             }
           }
         _ => ()
@@ -299,7 +299,7 @@ fn collect_sinks_expr(
       // the args escape with all properties observable.
       if externals.contains(callee) {
         for a in args {
-          out.push({ expr: a, observation: ExternalCallArg })
+          out.push({ expr: a, observation: ExternalCallArg, })
         }
       }
       for a in args {
@@ -315,7 +315,7 @@ fn collect_sinks_expr(
       }
       if is_external_callee {
         for a in args {
-          out.push({ expr: a, observation: ExternalCallArg })
+          out.push({ expr: a, observation: ExternalCallArg, })
         }
       }
       collect_sinks_expr(callee, externals, out)
@@ -326,7 +326,7 @@ fn collect_sinks_expr(
     New(name, args) => {
       if externals.contains(name) {
         for a in args {
-          out.push({ expr: a, observation: ExternalCallArg })
+          out.push({ expr: a, observation: ExternalCallArg, })
         }
       }
       for a in args {
@@ -340,7 +340,7 @@ fn collect_sinks_expr(
       }
       if is_external_callee {
         for a in args {
-          out.push({ expr: a, observation: ExternalCallArg })
+          out.push({ expr: a, observation: ExternalCallArg, })
         }
       }
       collect_sinks_expr(callee, externals, out)
@@ -386,7 +386,7 @@ fn collect_sinks_expr(
     }
     PropAssignExpr(target, _prop, rhs) => {
       if is_external_receiver(target, externals) {
-        out.push({ expr: rhs, observation: ExternalPropWrite })
+        out.push({ expr: rhs, observation: ExternalPropWrite, })
       }
       collect_sinks_expr(target, externals, out)
       collect_sinks_expr(rhs, externals, out)
@@ -594,7 +594,7 @@ pub fn reserve_props_from_sink(
       // chain (`a.b.c`) keeps `b` and `c` alive too.
       out[prop] = true
       reserve_props_from_sink(
-        { expr: recv, observation: sink.observation },
+        { expr: recv, observation: sink.observation, },
         scope,
         graph,
         external_bindings,
@@ -607,7 +607,7 @@ pub fn reserve_props_from_sink(
       // wildcard; but `recv`'s own prop surface is more limited,
       // so still recurse on it.
       reserve_props_from_sink(
-        { expr: recv, observation: Recursive },
+        { expr: recv, observation: Recursive, },
         scope,
         graph,
         external_bindings,
@@ -625,14 +625,14 @@ pub fn reserve_props_from_sink(
     Cond(_, t, e) => {
       // `Object.keys(c ? a : b)` — observe both branches.
       reserve_props_from_sink(
-        { expr: t, observation: sink.observation },
+        { expr: t, observation: sink.observation, },
         scope,
         graph,
         external_bindings,
         out,
       )
       reserve_props_from_sink(
-        { expr: e, observation: sink.observation },
+        { expr: e, observation: sink.observation, },
         scope,
         graph,
         external_bindings,
@@ -644,7 +644,7 @@ pub fn reserve_props_from_sink(
       // observable one in falsy / nullish cases. Recurse on the
       // right side conservatively.
       reserve_props_from_sink(
-        { expr: r, observation: sink.observation },
+        { expr: r, observation: sink.observation, },
         scope,
         graph,
         external_bindings,
@@ -658,7 +658,7 @@ pub fn reserve_props_from_sink(
     | TypeArgs(_, inner)
     | Await(inner) =>
       reserve_props_from_sink(
-        { expr: inner, observation: sink.observation },
+        { expr: inner, observation: sink.observation, },
         scope,
         graph,
         external_bindings,

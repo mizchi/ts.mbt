@@ -66,10 +66,10 @@ const opt = (name, dflt) => {
 // this is the second consumer of the same rule, so it says which it picked.
 function tscheckBin() {
   const found = ["release", "debug"]
-    .map((mode) => path.join(ROOT, `_build/native/${mode}/build/cmd/tscheck/tscheck.exe`))
+    .map((mode) => path.join(ROOT, `_build/native/${mode}/build/cmd/mtsc/mtsc.exe`))
     .filter((p) => fs.existsSync(p));
   if (found.length === 0) {
-    console.error("tscheck binary not found — run `moon build --target native`");
+    console.error("mtsc binary not found — run `moon build --target native`");
     process.exit(1);
   }
   found.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
@@ -106,7 +106,7 @@ async function classify(files, ran, errs) {
   let next = 0;
   const runOne = (file) =>
     new Promise((resolve) => {
-      const child = spawn(bin, [file], { encoding: "utf8" });
+      const child = spawn(bin, ["check", file], { encoding: "utf8" });
       let buf = "";
       child.stdout.on("data", (d) => (buf += d));
       child.stderr.on("data", (d) => (buf += d));

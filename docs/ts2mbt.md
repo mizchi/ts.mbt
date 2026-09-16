@@ -1,29 +1,33 @@
-# `ts2mbt`: TypeScript を MoonBit から使う
+# `mtsc bridge`: TypeScript を MoonBit から使う
 
-`ts2mbt` は TypeScript の宣言またはソースを読み、MoonBit から JavaScript
+> この namespace は `ts2mbt` binary でした。`ts2mbt X` は `mtsc bridge X`
+> に対応します（唯一の例外は `ts2mbt bridge` → `mtsc bridge all`。旧名も
+> alias として残しています）。
+
+`mtsc bridge` は TypeScript の宣言またはソースを読み、MoonBit から JavaScript
 ライブラリを呼ぶための bridge package を生成します。生成物は再生成可能な出力です。
 手編集せず、入力の型定義または生成オプションを変更して再実行してください。
 
 ## Install
 
 ```sh
-moon install mizchi/ts/cmd/ts2mbt
+moon install mizchi/ts/cmd/mtsc
 ```
 
-開発中はリポジトリから `moon run src/cmd/ts2mbt -- ...` として実行できます。
+開発中はリポジトリから `moon run src/cmd/mtsc -- bridge ...` として実行できます。
 
 ## 最短の使い方
 
 1つの npm パッケージを MoonBit module 内へ vendor します。
 
 ```sh
-ts2mbt vendor hono
+mtsc bridge vendor hono
 ```
 
 `package.json` の `dependencies` と `devDependencies` をまとめて処理するには:
 
 ```sh
-ts2mbt generate
+mtsc bridge generate
 ```
 
 出力先の既定値は `<moon source>/internal/generated/<package>/` です。各 bridge
@@ -48,10 +52,10 @@ import {
 
 ```sh
 # Installed package の型を bridge package にする
-ts2mbt --input neverthrow --out dist
+mtsc bridge --input neverthrow --out dist
 
 # ファイル入力では runtime module specifier も与える
-ts2mbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist
+mtsc bridge --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist
 ```
 
 `--diagnostics <path>` は `SCAFFOLD_DIAGNOSTICS.md` の出力先を変更します。
@@ -65,18 +69,18 @@ ts2mbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist
 tooling には以下もあります。
 
 ```sh
-ts2mbt scaffold path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
-ts2mbt package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+mtsc bridge scaffold path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+mtsc bridge package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
 # runtime validator を public API に追加する opt-in variant
-ts2mbt package-validated path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
-ts2mbt bridge path/to/entry.d.ts /runtime/module.js
-ts2mbt ffi path/to/entry.d.ts /runtime/module.js
-ts2mbt decl path/to/entry.d.ts
+mtsc bridge package-validated path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+mtsc bridge all path/to/entry.d.ts /runtime/module.js
+mtsc bridge ffi path/to/entry.d.ts /runtime/module.js
+mtsc bridge decl path/to/entry.d.ts
 ```
 
 `vendor` は `--module-spec <specifier>` と `--out <dir>` を、`generate` は
 `--package-json <path>` と `--out <dir>` を受けます。完全なオプションは
-`ts2mbt --help` を参照してください。
+`mtsc bridge --help` を参照してください。
 
 ## 型境界と diagnostics
 
@@ -92,6 +96,6 @@ fallback budget と品質確認は `just bridge-quality` および
 
 ## Generated output の扱い
 
-`internal/generated/` は cache です。`ts2mbt generate` / `vendor` は `.gitignore`
+`internal/generated/` は cache です。`mtsc bridge generate` / `vendor` は `.gitignore`
 と `AGENTS.md` を置き、生成ファイルには `AUTO-GENERATED` ヘッダーを付けます。
 upstream typings が変わったら同じコマンドを再実行してください。

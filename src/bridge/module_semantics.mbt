@@ -261,7 +261,7 @@ async fn load_module_record(
       _ => ()
     }
   }
-  loaded[path] = { path, module_block, imports, reexports, references }
+  loaded[path] = { path, module_block, imports, reexports, references, }
   let _ = visiting.pop()
 }
 
@@ -284,7 +284,7 @@ async fn load_type_module_graph(
       None => ()
     }
   }
-  { entry_path, modules }
+  { entry_path, modules, }
 }
 
 ///|

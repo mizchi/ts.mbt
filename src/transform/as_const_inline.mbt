@@ -145,7 +145,7 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     match stmt {
       Const(@ast.TsBinding::Ident(name), _, e) =>
         match extract_as_const_shape(e) {
-          Some(shape) => candidates[name] = { shape, disqualified: false }
+          Some(shape) => candidates[name] = { shape, disqualified: false, }
           None => ()
         }
       _ => ()
@@ -172,12 +172,12 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     return block
   }
   // 4. Rewrite every safe access.
-  let tables : AsConstTables = { shapes: survivors, scalars: Map([]) }
+  let tables : AsConstTables = { shapes: survivors, scalars: Map([]), }
   let new_stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     new_stmts.push(rewrite_stmt(s, tables))
   }
-  { stmts: new_stmts, stmt_positions: block.stmt_positions }
+  { stmts: new_stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -847,7 +847,7 @@ fn rewrite_stmt(stmt : @ast.TsStmt, table : AsConstTables) -> @ast.TsStmt {
           Some(b) => Some(rewrite_block(b, method_table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -886,7 +886,7 @@ fn rewrite_block(block : @ast.TsBlock, table : AsConstTables) -> @ast.TsBlock {
   for s in block.stmts {
     stmts.push(rewrite_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -1072,7 +1072,7 @@ fn rewrite_expr(expr : @ast.TsExpr, table : AsConstTables) -> @ast.TsExpr {
       // body.
       let table = table.narrow_params(f.params)
       let table = if f.name == "" { table } else { table.narrow([f.name]) }
-      FuncExpr({ ..f, body: rewrite_block(f.body, table) })
+      FuncExpr({ ..f, body: rewrite_block(f.body, table), })
     }
     DynamicImport(spec, opts) =>
       DynamicImport(
@@ -1104,7 +1104,7 @@ fn rewrite_expr(expr : @ast.TsExpr, table : AsConstTables) -> @ast.TsExpr {
     PureCall(inner) => PureCall(rewrite_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: rewrite_block(f.body, table) })
+        Some(f) => Some({ ..f, body: rewrite_block(f.body, table), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -1113,7 +1113,7 @@ fn rewrite_expr(expr : @ast.TsExpr, table : AsConstTables) -> @ast.TsExpr {
           Some(b) => Some(rewrite_block(b, table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {

@@ -63,7 +63,7 @@ fn PredicateTable::narrow(
   self : PredicateTable,
   names : Array[String],
 ) -> PredicateTable {
-  { entries: narrow_trivial_fns(self.entries, names) }
+  { entries: narrow_trivial_fns(self.entries, names), }
 }
 
 ///|
@@ -509,7 +509,7 @@ pub fn inline_predicates(
   for s in block.stmts {
     stmts.push(inline_predicates_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -662,7 +662,7 @@ fn inline_predicates_stmt(
           Some(b) => Some(inline_predicates_block(b, method_table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -698,7 +698,7 @@ fn inline_predicates_block(
   for s in block.stmts {
     stmts.push(inline_predicates_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -862,7 +862,7 @@ fn inline_predicates_expr(
       // A named function expression binds its own name in the body.
       let table = if f.name == "" { table } else { table.narrow([f.name]) }
       let new_body = inline_predicates_block(f.body, table)
-      FuncExpr({ ..f, body: new_body })
+      FuncExpr({ ..f, body: new_body, })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
@@ -893,7 +893,7 @@ fn inline_predicates_expr(
     PureCall(inner) => PureCall(inline_predicates_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: inline_predicates_block(f.body, table) })
+        Some(f) => Some({ ..f, body: inline_predicates_block(f.body, table), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -902,7 +902,7 @@ fn inline_predicates_expr(
           Some(b) => Some(inline_predicates_block(b, table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {

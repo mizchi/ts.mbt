@@ -28,7 +28,7 @@ pub fn drop_dead_properties_block(
   for s in block.stmts {
     stmts.push(drop_dead_props_stmt(s, reserved, read_props))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -577,7 +577,7 @@ fn drop_dead_props_stmt(
           Some(b) => Some(drop_dead_props_block(b, reserved, read_props))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -816,7 +816,7 @@ fn drop_dead_props_expr(
     }
     FuncExpr(f) => {
       let new_body = drop_dead_props_block(f.body, reserved, read_props)
-      FuncExpr({ ..f, body: new_body })
+      FuncExpr({ ..f, body: new_body, })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
@@ -869,7 +869,7 @@ fn drop_dead_props_expr(
           Some(b) => Some(drop_dead_props_block(b, reserved, read_props))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -1014,7 +1014,7 @@ pub fn explain_dead_fields(
           for c in cases {
             walk(c.body)
           }
-        Label(_, inner) => walk({ stmts: [inner], stmt_positions: [] })
+        Label(_, inner) => walk({ stmts: [inner], stmt_positions: [], })
         NativeClassStmt(decl, ctor) => {
           match ctor {
             Some(f) => walk(f.body)

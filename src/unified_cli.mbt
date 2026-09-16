@@ -105,7 +105,7 @@ fn parse_mbt2ts_pkg_options(
     }
     idx += 1
   }
-  (Some({ out, import_rewrite_path, strict, facade }), None)
+  (Some({ out, import_rewrite_path, strict, facade, }), None)
 }
 
 ///|
@@ -1077,7 +1077,7 @@ async fn mbt2ts_pkg_collect_commands_from_dir(
         println("Error: --pkg found duplicate or empty command name \{name}")
         return false
       }
-      commands.push({ name, source_relative_dir })
+      commands.push({ name, source_relative_dir, })
     }
   }
   let entries = @fs.readdir(
@@ -1812,7 +1812,7 @@ async fn run_unified_cli_with_direction(
 
 ///|
 /// Public entry: run the unified TS -> MoonBit scaffold driver with the
-/// direction locked to `ts-to-mbt`. Used by `src/cmd/ts2mbt`.
+/// direction locked to `ts-to-mbt`. Used by `mtsc bridge`.
 pub async fn run_ts_to_mbt_unified_cli(
   args : Array[String],
   start : Int,
@@ -1828,7 +1828,7 @@ pub async fn run_ts_to_mbt_unified_cli(
 
 ///|
 /// Public entry: run the unified MoonBit -> TypeScript scaffold driver with
-/// the direction locked to `mbt-to-ts`. Used by `src/cmd/mbt2ts`.
+/// the direction locked to `mbt-to-ts`. Used by `mtsc pkg`.
 pub async fn run_mbt_to_ts_unified_cli(
   args : Array[String],
   start : Int,
@@ -1843,7 +1843,7 @@ pub async fn run_mbt_to_ts_unified_cli(
 }
 
 ///|
-/// Public entry for `mbt2ts --pkg`. It discovers the enclosing MoonBit module
+/// Public entry for `mtsc pkg npm`. It discovers the enclosing MoonBit module
 /// from the caller's working directory and leaves all package policy to the
 /// project-level generator above.
 pub async fn run_mbt_to_ts_pkg_cli(

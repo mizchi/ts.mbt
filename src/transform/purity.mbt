@@ -230,7 +230,7 @@ pub fn analyze_purity_with(
           ArrowExpr(e) =>
             // Wrap the single-expression body so the same
             // analysis walks both forms.
-            funcs[name] = { stmts: [Return(Some(e))], stmt_positions: [] }
+            funcs[name] = { stmts: [Return(Some(e))], stmt_positions: [], }
         }
       _ => ()
     }
@@ -341,7 +341,7 @@ pub fn analyze_purity_with(
   // Also scan the desugar IIFE form for `Object.defineProperty(
   //   proto, "name", { get: fn })` patterns and check the `fn`.
   scan_iife_classes_for_impure_getters(block, getter_warnings, assumed_pure)
-  { pure_functions: pure, impure_getters: getter_warnings }
+  { pure_functions: pure, impure_getters: getter_warnings, }
 }
 
 ///|
@@ -704,7 +704,7 @@ fn scan_stmt_for_impure_getters(
                   let reason = check_getter_purity(getter_fn, assumed_pure)
                   match reason {
                     Some(r) =>
-                      out.push({ class_name: name, getter_name, reason: r })
+                      out.push({ class_name: name, getter_name, reason: r, })
                     None => ()
                   }
                 }
@@ -784,7 +784,7 @@ fn check_getter_purity(
     FuncExpr(f) => f.body
     ArrowFunc(_, _, @ast.TsArrowBody::ArrowBlock(b), _) => b
     ArrowFunc(_, _, @ast.TsArrowBody::ArrowExpr(e), _) =>
-      { stmts: [Return(Some(e))], stmt_positions: [] }
+      { stmts: [Return(Some(e))], stmt_positions: [], }
     _ => return None
   }
   let mut reason : String? = None

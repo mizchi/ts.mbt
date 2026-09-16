@@ -680,7 +680,7 @@ fn Parser::record_nullish_pattern_elements(
         for ent in entries {
           if ent.0 == p.key {
             self.record_nullish_binding_elem(
-              { binding: p.binding, default: p.default },
+              { binding: p.binding, default: p.default, },
               ent.1,
             )
             break
@@ -983,7 +983,7 @@ fn Parser::parse_binding_element(
   } else {
     None
   }
-  { binding, default }
+  { binding, default, }
 }
 
 ///|
@@ -1038,7 +1038,7 @@ fn Parser::parse_binding_array(
     }
   }
   let _ = self.expect(RBracket)
-  @ast.TsBinding::Array({ items, rest })
+  @ast.TsBinding::Array({ items, rest, })
 }
 
 ///|
@@ -1179,7 +1179,7 @@ fn Parser::parse_binding_object(
     }
   }
   let _ = self.expect(RBrace)
-  @ast.TsBinding::Object({ props, rest })
+  @ast.TsBinding::Object({ props, rest, })
 }
 
 ///|
@@ -1231,7 +1231,7 @@ fn Parser::parse_assignment_binding_element(
   } else {
     None
   }
-  { binding, default }
+  { binding, default, }
 }
 
 ///|
@@ -1275,7 +1275,7 @@ fn Parser::parse_assignment_binding_array(
     }
   }
   let _ = self.expect(RBracket)
-  @ast.TsBinding::Array({ items, rest })
+  @ast.TsBinding::Array({ items, rest, })
 }
 
 ///|
@@ -1337,7 +1337,7 @@ fn Parser::parse_assignment_binding_object(
     }
   }
   let _ = self.expect(RBrace)
-  @ast.TsBinding::Object({ props, rest })
+  @ast.TsBinding::Object({ props, rest, })
 }
 
 ///|

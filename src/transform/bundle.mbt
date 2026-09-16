@@ -131,7 +131,7 @@ pub fn BundleOptions::with_parsed_blocks(
   self : BundleOptions,
   parsed : Map[String, @ast.TsModuleBlock],
 ) -> BundleOptions {
-  { ..self, parsed_blocks: parsed }
+  { ..self, parsed_blocks: parsed, }
 }
 
 ///|
@@ -139,7 +139,7 @@ pub fn BundleOptions::with_timing(
   self : BundleOptions,
   t : Bool,
 ) -> BundleOptions {
-  { ..self, timing: t }
+  { ..self, timing: t, }
 }
 
 ///|
@@ -157,7 +157,7 @@ pub fn BundleOptions::with_disabled_phases(
   self : BundleOptions,
   names : Map[String, Bool],
 ) -> BundleOptions {
-  { ..self, disabled_phases: names }
+  { ..self, disabled_phases: names, }
 }
 
 ///|
@@ -175,7 +175,7 @@ pub fn BundleOptions::with_allow_unresolved_imports(
   self : BundleOptions,
   v : Bool,
 ) -> BundleOptions {
-  { ..self, allow_unresolved_imports: v }
+  { ..self, allow_unresolved_imports: v, }
 }
 
 ///|
@@ -183,7 +183,7 @@ pub fn BundleOptions::with_explain(
   self : BundleOptions,
   e : Bool,
 ) -> BundleOptions {
-  { ..self, explain: e }
+  { ..self, explain: e, }
 }
 
 ///|
@@ -191,7 +191,7 @@ pub fn BundleOptions::with_extra_reserved_props(
   self : BundleOptions,
   props : Array[String],
 ) -> BundleOptions {
-  { ..self, extra_reserved_props: props }
+  { ..self, extra_reserved_props: props, }
 }
 
 ///|
@@ -199,7 +199,7 @@ pub fn BundleOptions::with_aliases(
   self : BundleOptions,
   a : Map[String, String],
 ) -> BundleOptions {
-  { ..self, aliases: a }
+  { ..self, aliases: a, }
 }
 
 ///|
@@ -207,7 +207,7 @@ pub fn BundleOptions::with_minify(
   self : BundleOptions,
   m : Bool,
 ) -> BundleOptions {
-  { ..self, minify: m }
+  { ..self, minify: m, }
 }
 
 ///|
@@ -215,7 +215,7 @@ pub fn BundleOptions::with_fold(
   self : BundleOptions,
   f : Bool,
 ) -> BundleOptions {
-  { ..self, fold: f }
+  { ..self, fold: f, }
 }
 
 ///|
@@ -223,7 +223,7 @@ pub fn BundleOptions::with_mangle(
   self : BundleOptions,
   m : Bool,
 ) -> BundleOptions {
-  { ..self, mangle: m }
+  { ..self, mangle: m, }
 }
 
 ///|
@@ -231,7 +231,7 @@ pub fn BundleOptions::with_mangle_properties(
   self : BundleOptions,
   m : Bool,
 ) -> BundleOptions {
-  { ..self, mangle_properties: m, mangle: self.mangle || m }
+  { ..self, mangle_properties: m, mangle: self.mangle || m, }
 }
 
 ///|
@@ -254,7 +254,7 @@ pub fn BundleOptions::with_sourcemap(
   self : BundleOptions,
   s : Bool,
 ) -> BundleOptions {
-  { ..self, with_sourcemap: s }
+  { ..self, with_sourcemap: s, }
 }
 
 ///|
@@ -262,7 +262,7 @@ pub fn BundleOptions::with_treeshake(
   self : BundleOptions,
   t : Bool,
 ) -> BundleOptions {
-  { ..self, treeshake: t }
+  { ..self, treeshake: t, }
 }
 
 ///|
@@ -594,7 +594,7 @@ pub fn bundle_modules(
       (from, spec) => modules.get(from).bind(n => n.resolved_imports.get(spec)),
     )
     if table.length() > 0 {
-      modules[path] = { ..m, block: inline_const_enums(m.block, table) }
+      modules[path] = { ..m, block: inline_const_enums(m.block, table), }
     }
   }
   // Lift IIFE-lowered classes to native `class Name { … }` syntax on
@@ -610,7 +610,7 @@ pub fn bundle_modules(
       None => continue
     }
     let lifted = iife_class_lift_block(m.block)
-    modules[path] = { ..m, block: lifted }
+    modules[path] = { ..m, block: lifted, }
   }
   // Run the cross-module linker before any pass that operates on
   // the combined block. Phase 1 gives each module's top-level
@@ -720,7 +720,7 @@ pub fn bundle_modules(
       }
     }
     let report = analyze_purity_with(
-      { stmts: combined_for_analysis, stmt_positions: [] },
+      { stmts: combined_for_analysis, stmt_positions: [], },
       assumed_pure,
     )
     for g in report.impure_getters {
@@ -1622,7 +1622,7 @@ pub fn bundle_modules(
     let export_surface : Map[String, Bool] = Map([])
     for
       n in exported_surface_props(
-        { stmts: all_stmts, stmt_positions: [] },
+        { stmts: all_stmts, stmt_positions: [], },
         export_roots,
       ) {
       export_surface[n] = true
@@ -2053,7 +2053,7 @@ fn load_module_graph(
     for s in lowered_jsx.stmts {
       combined.push(s)
     }
-    @ast.TsBlock::{ stmts: combined, stmt_positions: [] }
+    @ast.TsBlock::{ stmts: combined, stmt_positions: [], }
   } else {
     lowered_jsx
   }
@@ -2626,7 +2626,10 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
       Let(
         b,
         t,
-        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
+        CallExpr(
+          FuncExpr({ ..f, body: strip_super_proto_stmts(f.body), }),
+          args,
+        ),
       )
     @ast.TsStmt::Const(
       b,
@@ -2636,7 +2639,10 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
       Const(
         b,
         t,
-        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
+        CallExpr(
+          FuncExpr({ ..f, body: strip_super_proto_stmts(f.body), }),
+          args,
+        ),
       )
     @ast.TsStmt::Var(
       b,
@@ -2646,7 +2652,10 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
       Var(
         b,
         t,
-        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
+        CallExpr(
+          FuncExpr({ ..f, body: strip_super_proto_stmts(f.body), }),
+          args,
+        ),
       )
     _ => s
   }

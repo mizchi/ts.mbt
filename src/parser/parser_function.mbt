@@ -391,9 +391,11 @@ fn expr_yields_outside_function(e : @ast.TsExpr) -> Bool {
     Call(_, args) | New(_, args) =>
       args.iter().any(expr_yields_outside_function)
     CallExpr(f, args) | NewExpr(f, args) =>
-      expr_yields_outside_function(f) || args.iter().any(expr_yields_outside_function)
+      expr_yields_outside_function(f) ||
+      args.iter().any(expr_yields_outside_function)
     MethodCall(r, _, args) =>
-      expr_yields_outside_function(r) || args.iter().any(expr_yields_outside_function)
+      expr_yields_outside_function(r) ||
+      args.iter().any(expr_yields_outside_function)
     ArrayLit(items) => items.iter().any(expr_yields_outside_function)
     ObjectLit(fields) =>
       fields.iter().any(fn(f) { expr_yields_outside_function(f.1) })
@@ -694,7 +696,7 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
     self.param_optional_initializer_misuses.push(name)
   }
   self.param_decorator_owner = prev_pdo
-  { name, binding: Some(binding), is_rest, is_optional, type_, default }
+  { name, binding: Some(binding), is_rest, is_optional, type_, default, }
 }
 
 ///|
@@ -819,7 +821,9 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
   // method, a free function and a function TYPE all report; probed).
   for i, p in params {
     if i > 0 && p.name == "this" {
-      self.grammar_misuses.push("a `this` parameter must be the first parameter")
+      self.grammar_misuses.push(
+        "a `this` parameter must be the first parameter",
+      )
       break
     }
   }
@@ -1005,7 +1009,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       type_param_bounds,
       params,
       return_type,
-      body: { stmts: [], stmt_positions: [] },
+      body: { stmts: [], stmt_positions: [], },
       is_generator,
       is_async,
       name_is_member_key: false,
@@ -1023,7 +1027,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       type_param_bounds,
       params,
       return_type,
-      body: { stmts: [], stmt_positions: [] },
+      body: { stmts: [], stmt_positions: [], },
       is_generator,
       is_async,
       name_is_member_key: false,
@@ -1135,7 +1139,7 @@ fn apply_jsdoc_param_overlay(
     match by_name.get(p.name) {
       Some(raw) =>
         match try_parse_jsdoc_type(raw) {
-          Some(ty) => out.push({ ..p, type_: ty })
+          Some(ty) => out.push({ ..p, type_: ty, })
           None => out.push(p)
         }
       None => out.push(p)
@@ -2473,9 +2477,7 @@ pub fn Parser::parse_interface(
           @ast.TsType::Void | @ast.TsType::Any | @ast.TsType::Unknown => "void"
           _ => "other"
         }
-        self.grammar_misuses.push(
-          "<this-param>\{name}.\{field_name}=\{kind}",
-        )
+        self.grammar_misuses.push("<this-param>\{name}.\{field_name}=\{kind}")
       }
       // TS2842: an interface / object-type member signature never has a
       // body. This site does not go through
@@ -2839,7 +2841,7 @@ fn Parser::parse_type_alias_after_type_keyword(
   let _ = self.expect(Eq)
   let alias_type = self.parse_type()
   self.consume_semicolon()
-  { name, type_params, type_param_bounds, type_: alias_type }
+  { name, type_params, type_param_bounds, type_: alias_type, }
 }
 
 ///|
@@ -2970,7 +2972,7 @@ pub fn Parser::parse_declare_function(
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
-  { name, module_: "env", type_params, params, param_is_rest, return_type }
+  { name, module_: "env", type_params, params, param_is_rest, return_type, }
 }
 
 ///|
@@ -3195,7 +3197,7 @@ fn Parser::parse_declare_values(
     let _ = self.parse_expr()
   }
   record_ambient_implicit_any(self, name, annotated, initialised)
-  values.push({ name, type_ })
+  values.push({ name, type_, })
   while self.match_(Comma) {
     let next_name = self.parse_binding_ident()
     let next_annotated = self.check(Colon)
@@ -3207,7 +3209,7 @@ fn Parser::parse_declare_values(
     record_ambient_implicit_any(
       self, next_name, next_annotated, next_initialised,
     )
-    values.push({ name: next_name, type_: next_type })
+    values.push({ name: next_name, type_: next_type, })
   }
   self.consume_semicolon()
   values
@@ -3373,8 +3375,7 @@ fn Parser::parse_declare_class_member_name(
       Ident("Symbol") if self.peek_at(1).kind == Dot &&
         self.peek_at(3).kind == RBracket =>
         match self.peek_at(2).kind {
-          Ident(sym) =>
-            self.grammar_misuses.push("<symbol-type-key>" + sym)
+          Ident(sym) => self.grammar_misuses.push("<symbol-type-key>" + sym)
           _ => ()
         }
       _ => ()

@@ -23,7 +23,7 @@ verify_moonbit_to_typescript_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/mbt2ts -- \
+  moon run src/cmd/mtsc -- pkg \
     --input examples/counter \
     --out "$root/dist" >/dev/null
 
@@ -88,7 +88,7 @@ verify_typescript_to_moonbit_example() {
 
   cp examples/typescript-to-moonbit/runtime/greetings.js "$root/runtime/greetings.js"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input examples/typescript-to-moonbit/src/index.d.ts \
     --out "$out" \
     --module-spec ../runtime/greetings.js >/dev/null
@@ -244,7 +244,7 @@ verify_typescript_to_moonbit_hono_example() {
 
   cp examples/typescript-to-moonbit/hono/runtime/hono.js "$root/runtime/hono.js"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input examples/typescript-to-moonbit/hono/src/index.d.ts \
     --out "$out" \
     --module-spec ../runtime/hono.js >/dev/null
@@ -303,7 +303,7 @@ verify_typescript_to_moonbit_hono_real_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input node_modules/hono/dist/types/index.d.ts \
     --out "$out" \
     --module-spec hono >/dev/null
@@ -382,7 +382,7 @@ verify_typescript_to_moonbit_react_example() {
 
   cp examples/typescript-to-moonbit/react/runtime/react-like.js "$root/runtime/react-like.js"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input examples/typescript-to-moonbit/react/src/index.d.ts \
     --out "$out" \
     --module-spec ../runtime/react-like.js >/dev/null
@@ -431,7 +431,7 @@ verify_typescript_to_moonbit_react_types_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input node_modules/@types/react/index.d.ts \
     --out "$out" \
     --module-spec react >/dev/null
@@ -537,7 +537,7 @@ verify_typescript_to_moonbit_vitest_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input node_modules/vitest/dist/index.d.ts \
     --out "$out" \
     --module-spec vitest >/dev/null
@@ -628,7 +628,7 @@ verify_typescript_to_moonbit_result_example() {
 
   cp examples/typescript-to-moonbit/result/runtime/result.js "$root/runtime/result.js"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input examples/typescript-to-moonbit/result/src/index.d.ts \
     --out "$out" \
     --module-spec ../runtime/result.js >/dev/null
@@ -679,7 +679,7 @@ verify_typescript_to_moonbit_reducer_example() {
 
   cp examples/typescript-to-moonbit/reducer/runtime/reducer.js "$root/runtime/reducer.js"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input examples/typescript-to-moonbit/reducer/src/index.d.ts \
     --out "$out" \
     --module-spec ../runtime/reducer.js >/dev/null
@@ -760,7 +760,7 @@ verify_typescript_to_moonbit_default_class_example() {
 
   cp examples/typescript-to-moonbit/default-class/runtime/counter.js "$root/runtime/counter.js"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input examples/typescript-to-moonbit/default-class/src/index.ts \
     --out "$out" \
     --module-spec ../runtime/counter.js >/dev/null
@@ -822,7 +822,7 @@ verify_typescript_to_moonbit_const_table_example() {
   cp examples/typescript-to-moonbit/const-table/runtime/index.js "$root/runtime/index.js"
   cp examples/typescript-to-moonbit/const-table/runtime/table.js "$root/runtime/table.js"
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input examples/typescript-to-moonbit/const-table/src/index.ts \
     --out "$out" \
     --module-spec ../runtime/index.js >/dev/null
@@ -874,7 +874,7 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   mkdir -p "$root"
 
   echo "Generating TypeScript AST bridge"
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     --input node_modules/typescript/lib/typescript.d.ts \
     --out "$out" \
     --module-spec typescript
@@ -944,11 +944,11 @@ verify_typescript_node_imports_example() {
 
   (
     cd "$root"
-    moon run "$repo_root/src/cmd/ts2mbt" -- \
+    moon run "$repo_root/src/cmd/mtsc" -- bridge \
       --input "$repo_root/node_modules/typescript/lib/typescript.d.ts" \
       --out src/internal/generated/typescript \
       --module-spec typescript
-    moon run "$repo_root/src/cmd/ts2mbt" -- \
+    moon run "$repo_root/src/cmd/mtsc" -- bridge \
       --input "$node_fs_types" \
       --out src/internal/generated/node_fs \
       --module-spec node:fs
@@ -1013,7 +1013,7 @@ EOF
 EOF
 
   echo "Generating Hono server bridges"
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     generate --package-json "$root/package.json" \
     --out "$root/internal/generated"
 
@@ -1111,7 +1111,7 @@ EOF
 }
 EOF
 
-  moon run src/cmd/ts2mbt -- \
+  moon run src/cmd/mtsc -- bridge \
     generate --package-json "$root/package.json" \
     --out "$root/internal/generated" >/dev/null
 

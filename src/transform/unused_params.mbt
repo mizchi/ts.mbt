@@ -106,7 +106,7 @@ pub fn plan_unused_params(
   }
   index_param_candidates(scan, block)
   if scan.params.is_empty() {
-    return { keep_count: {} }
+    return { keep_count: {}, }
   }
   scan_param_uses(scan, block)
   let keep_count : Map[String, Int] = Map([])
@@ -249,7 +249,7 @@ pub fn drop_unused_params_block(
   for s in block.stmts {
     stmts.push(trim_params_stmt(s, plan))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +274,7 @@ fn index_param_candidates(scan : ParamScan, block : @ast.TsBlock) -> Unit {
             scan.bodies[n] = match body {
               ArrowBlock(b) => b
               ArrowExpr(e) =>
-                { stmts: [@ast.TsStmt::Return(Some(e))], stmt_positions: [] }
+                { stmts: [@ast.TsStmt::Return(Some(e))], stmt_positions: [], }
             }
           }
           _ => ()
@@ -347,7 +347,7 @@ fn scan_param_writes(scan : ParamScan, block : @ast.TsBlock) -> Unit {
           scan_param_writes(scan, case_.body)
         }
       Label(_, inner) =>
-        scan_param_writes(scan, { stmts: [inner], stmt_positions: [] })
+        scan_param_writes(scan, { stmts: [inner], stmt_positions: [], })
       _ => ()
     }
   }
@@ -494,7 +494,8 @@ fn trim_params_stmt(stmt : @ast.TsStmt, plan : ArityPlan) -> @ast.TsStmt {
       NativeClassStmt(
         trim_params_class(decl, plan),
         match ctor {
-          Some(f) => Some({ ..f, body: drop_unused_params_block(f.body, plan) })
+          Some(f) =>
+            Some({ ..f, body: drop_unused_params_block(f.body, plan), })
           None => None
         },
       )
@@ -554,7 +555,7 @@ fn trim_params_class(
   for sf in decl.static_field_inits {
     statics.push((sf.0, trim_params_expr(sf.1, plan)))
   }
-  { ..decl, methods, static_field_inits: statics }
+  { ..decl, methods, static_field_inits: statics, }
 }
 
 ///|
@@ -631,12 +632,13 @@ fn trim_params_expr(expr : @ast.TsExpr, plan : ArityPlan) -> @ast.TsExpr {
         is_async,
       )
     FuncExpr(f) =>
-      FuncExpr({ ..f, body: drop_unused_params_block(f.body, plan) })
+      FuncExpr({ ..f, body: drop_unused_params_block(f.body, plan), })
     NativeClassExpr(decl, ctor) =>
       NativeClassExpr(
         trim_params_class(decl, plan),
         match ctor {
-          Some(f) => Some({ ..f, body: drop_unused_params_block(f.body, plan) })
+          Some(f) =>
+            Some({ ..f, body: drop_unused_params_block(f.body, plan), })
           None => None
         },
       )

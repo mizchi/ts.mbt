@@ -61,8 +61,12 @@ cd "$(dirname "$0")/.."
 # was running a binary from before the change. CI never sees it (a fresh
 # checkout has neither binary until the recipe builds one), which is exactly
 # why it survived.
-TSCHECK_RELEASE="_build/native/release/build/cmd/tscheck/tscheck.exe"
-TSCHECK_DEBUG="_build/native/debug/build/cmd/tscheck/tscheck.exe"
+# `tscheck` became the `mtsc check` verb, so the binary is `mtsc.exe` and
+# the verb rides at the front of every invocation. Its stdout is
+# unchanged — that was the constraint the fold was done under, since the
+# summary line below is parsed rather than read.
+TSCHECK_RELEASE="_build/native/release/build/cmd/mtsc/mtsc.exe"
+TSCHECK_DEBUG="_build/native/debug/build/cmd/mtsc/mtsc.exe"
 TSCHECK=""
 if [ -x "$TSCHECK_RELEASE" ] && [ -x "$TSCHECK_DEBUG" ]; then
   if [ "$TSCHECK_DEBUG" -nt "$TSCHECK_RELEASE" ]; then
@@ -76,7 +80,7 @@ elif [ -x "$TSCHECK_DEBUG" ]; then
   TSCHECK="$TSCHECK_DEBUG"
 fi
 if [ -z "$TSCHECK" ]; then
-  echo "tscheck binary not found — run \`moon build --target native\`" >&2
+  echo "mtsc binary not found — run \`moon build --target native\`" >&2
   exit 1
 fi
 
@@ -156,7 +160,7 @@ while IFS= read -r f; do
     continue
   fi
   if grep -qxF "$base" "$ERRORS_SET"; then has=1; else has=0; fi
-  out=$("$TSCHECK" "$f" 2>&1 | tail -1)
+  out=$("$TSCHECK" check "$f" 2>&1 | tail -1)
   if echo "$out" | grep -q "error:"; then
     # A parse rejection of a compiler-rejected file is agreement; of a
     # compiler-accepted file it is a parser soundness bug.

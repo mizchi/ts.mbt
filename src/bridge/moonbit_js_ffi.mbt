@@ -1397,7 +1397,7 @@ fn ffi_synthesize_inline_union(
   }
   let name = ffi_inline_union_synthesized_name(cases)
   if !state.synthesized_inline_unions.contains(name) {
-    let decl : BridgeTaggedUnionDecl = { name, cases }
+    let decl : BridgeTaggedUnionDecl = { name, cases, }
     state.synthesized_inline_unions[name] = decl
     state.tagged_union_decls_by_name[name] = decl
   }
@@ -1762,7 +1762,7 @@ fn ffi_output_union_decl(
           let name = ffi_inline_union_synthesized_name(cases)
           match state.tagged_union_decls_by_name.get(name) {
             Some(decl) => Some(decl)
-            None => Some({ name, cases })
+            None => Some({ name, cases, })
           }
         }
         None => None

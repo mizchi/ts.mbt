@@ -11,18 +11,18 @@ traffic. Mirrors the smoke under
   shipped after 2026-04-09 works).
 - Node.js 24+ and `pnpm`.
 
-## 1. Install the CLIs
+## 1. Install the CLI
 
 ```bash
-moon install mizchi/ts/cmd/ts2mbt   # TypeScript -> MoonBit
-moon install mizchi/ts/cmd/mbt2ts   # MoonBit -> TypeScript (optional)
+moon install mizchi/ts/cmd/mtsc   # TypeScript -> MoonBit
+moon install mizchi/ts/cmd/mtsc   # MoonBit -> TypeScript (optional)
 ```
 
 Verify:
 
 ```bash
-ts2mbt --version
-# ts2mbt 0.4.0 (mizchi/ts)
+mtsc --version
+# Version 0.5.2 (mtsc, mizchi/ts)
 ```
 
 `~/.moon/bin` must be on `$PATH`.
@@ -60,7 +60,7 @@ pnpm add hono @hono/node-server
 ## 4. Generate the bridges
 
 ```bash
-ts2mbt generate
+mtsc bridge generate
 ```
 
 Output:
@@ -134,7 +134,7 @@ internal/
 ```
 
 Treat `internal/generated/` as a regenerable cache. Re-run
-`ts2mbt generate` whenever you bump npm versions or add new
+`mtsc bridge generate` whenever you bump npm versions or add new
 dependencies.
 
 ## 6. Add the bridge imports to your `moon.pkg` files
@@ -240,13 +240,13 @@ curl -i http://localhost:3000/missing
 
 ## Re-generation
 
-Whenever the upstream typings change, just rerun `ts2mbt generate`.
+Whenever the upstream typings change, just rerun `mtsc bridge generate`.
 The `.gitignore` and `AGENTS.md` markers are idempotently
 overwritten, so the regen surface stays the same shape every time.
 For one-off testing of a single package:
 
 ```bash
-ts2mbt vendor hono
+mtsc bridge vendor hono
 ```
 
 ## Where to go next

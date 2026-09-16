@@ -113,7 +113,7 @@ priv struct DeferSeek {
 /// Is the single use of `name` in `stmt` reached unconditionally, once,
 /// and before any other effect?
 fn use_accepts_impure_init(stmt : @ast.TsStmt, name : String) -> Bool {
-  let s = DeferSeek::{ name, effect_seen: false, done: false, refused: false }
+  let s = DeferSeek::{ name, effect_seen: false, done: false, refused: false, }
   defer_seek_stmt(s, stmt)
   s.done && !s.refused
 }

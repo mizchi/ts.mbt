@@ -26,7 +26,7 @@ verify_mbti_fixture_typescript() {
   for fixture in "${fixtures[@]}"; do
     local base
     base="$(basename "$fixture" .pkg.generated.mbti)"
-    moon run src/cmd/mbt2ts -- decl "$fixture" "$root/fixtures/$base.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl "$fixture" "$root/fixtures/$base.d.ts" >/dev/null
   done
 
   cat > "$root/mizchi/ts/ast.d.ts" <<'EOF'
@@ -107,7 +107,7 @@ verify_bridge_smoke_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/double.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/double.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/double.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -137,7 +137,7 @@ verify_bridge_enum_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/enum.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/enum.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/enum.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -185,7 +185,7 @@ verify_bridge_literal_union_alias_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/literal-union-alias.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/literal-union-alias.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/literal-union-alias.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -227,7 +227,7 @@ verify_bridge_numeric_enum_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/numeric-enum.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/numeric-enum.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/numeric-enum.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -269,7 +269,7 @@ verify_bridge_numeric_literal_union_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/numeric-literal-union.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/numeric-literal-union.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/numeric-literal-union.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -311,7 +311,7 @@ verify_bridge_boolean_literal_union_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/boolean-literal-union.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/boolean-literal-union.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/boolean-literal-union.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -351,7 +351,7 @@ verify_bridge_realworld_literal_options_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/realworld-literal-options.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/realworld-literal-options.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/realworld-literal-options.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -441,7 +441,7 @@ verify_bridge_stable_constructor_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/stable-constructor.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/stable-constructor.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/stable-constructor.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -490,7 +490,7 @@ verify_bridge_default_export_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/default-export.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/default-export.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/default-export.js"
 
   cat > "$root/moon.mod.json" <<EOF
@@ -526,7 +526,7 @@ verify_bridge_declaration_merge_namespace_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/declaration-merge-namespace.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/declaration-merge-namespace.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/declaration-merge-namespace.js"
 
   cat > "$root/moon.mod.json" <<EOF
@@ -570,7 +570,7 @@ verify_bridge_promise_return_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/promise-return.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/promise-return.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/promise-return.js"
 
   cat > "$root/moon.mod.json" <<EOF
@@ -614,7 +614,7 @@ verify_bridge_callback_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/callback.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/callback.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/callback.js"
 
   cat > "$root/moon.mod.json" <<EOF
@@ -664,7 +664,7 @@ verify_bridge_cjs_export_equals_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/cjs-export-equals.cjs" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/cjs-export-equals.cjs" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/cjs-export-equals.cjs"
 
   cat > "$root/moon.mod.json" <<EOF
@@ -697,7 +697,7 @@ verify_bridge_node_path_namespace_import_fixture() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "node:path" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "node:path" "$root" >/dev/null
 
   cat > "$root/moon.mod.json" <<EOF
 {
@@ -729,7 +729,7 @@ verify_bridge_parent_relative_default_function_fixture() {
   rm -rf "$root"
   mkdir -p "$pkg_root" "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "../runtime/default-function.js" "$pkg_root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "../runtime/default-function.js" "$pkg_root" >/dev/null
   cp "$runtime_path" "$root/runtime/default-function.js"
 
   cat > "$pkg_root/moon.mod.json" <<'EOF'
@@ -758,7 +758,7 @@ verify_bridge_bare_cjs_default_function_fixture() {
   rm -rf "$root"
   mkdir -p "$root/node_modules/pkg-default-fn"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "pkg-default-fn" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "pkg-default-fn" "$root" >/dev/null
 
   cat > "$root/node_modules/pkg-default-fn/package.json" <<'EOF'
 {
@@ -801,7 +801,7 @@ verify_bridge_class_property_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/class-property.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/class-property.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/class-property.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -841,7 +841,7 @@ verify_bridge_rooted_class_property_reexport_fixture() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "$runtime_spec" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "$runtime_spec" "$root" >/dev/null
 
   cat > "$root/moon.mod.json" <<'EOF'
 {
@@ -880,7 +880,7 @@ verify_bridge_bare_class_property_reexport_fixture() {
   mkdir -p "$root/node_modules"
   cp -R "$runtime_pkg_src" "$runtime_pkg_dst"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "pkg-class-property" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "pkg-class-property" "$root" >/dev/null
 
   cat > "$root/moon.mod.json" <<'EOF'
 {
@@ -919,7 +919,7 @@ verify_bridge_bare_default_class_reexport_fixture() {
   mkdir -p "$root/node_modules"
   cp -R "$runtime_pkg_src" "$runtime_pkg_dst"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "pkg-default-class" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "pkg-default-class" "$root" >/dev/null
 
   cat > "$root/moon.mod.json" <<'EOF'
 {
@@ -954,7 +954,7 @@ verify_bridge_subpath_class_reexport_fixture() {
   mkdir -p "$root/node_modules"
   cp -R "$runtime_pkg_src" "$runtime_pkg_dst"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "pkg-class-subpath/state" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "pkg-class-subpath/state" "$root" >/dev/null
 
   cat > "$root/moon.mod.json" <<'EOF'
 {
@@ -986,7 +986,7 @@ verify_bridge_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1017,7 +1017,7 @@ verify_bridge_destructured_nested_rest_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/destructured-nested-rest-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/destructured-nested-rest-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/destructured-nested-rest-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1053,7 +1053,7 @@ verify_bridge_object_rest_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/object-rest-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/object-rest-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/object-rest-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1086,7 +1086,7 @@ verify_bridge_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1119,7 +1119,7 @@ verify_bridge_template_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/template-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/template-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/template-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1152,7 +1152,7 @@ verify_bridge_concat_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/concat-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/concat-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/concat-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1185,7 +1185,7 @@ verify_bridge_primitive_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/primitive-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/primitive-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/primitive-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1220,7 +1220,7 @@ verify_bridge_void_bigint_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/void-bigint-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/void-bigint-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/void-bigint-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1253,7 +1253,7 @@ verify_bridge_const_ref_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/const-ref-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/const-ref-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/const-ref-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1286,7 +1286,7 @@ verify_bridge_destructured_const_ref_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/destructured-const-ref-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/destructured-const-ref-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/destructured-const-ref-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1319,7 +1319,7 @@ verify_bridge_const_object_access_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/const-object-access-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/const-object-access-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/const-object-access-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1352,7 +1352,7 @@ verify_bridge_nested_const_object_access_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/nested-const-object-access-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/nested-const-object-access-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/nested-const-object-access-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1385,7 +1385,7 @@ verify_bridge_const_array_access_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/const-array-access-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/const-array-access-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/const-array-access-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1418,7 +1418,7 @@ verify_bridge_nested_const_array_access_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/nested-const-array-access-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/nested-const-array-access-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/nested-const-array-access-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1451,7 +1451,7 @@ verify_bridge_const_index_alias_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/const-index-alias-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/const-index-alias-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/const-index-alias-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1484,7 +1484,7 @@ verify_bridge_const_index_table_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/const-index-table-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/const-index-table-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/const-index-table-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1517,7 +1517,7 @@ verify_bridge_nested_index_table_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/nested-index-table-computed-destructured-value.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/nested-index-table-computed-destructured-value.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/nested-index-table-computed-destructured-value.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -1551,7 +1551,7 @@ verify_bridge_imported_const_table_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-const-table.js"
 
@@ -1586,7 +1586,7 @@ verify_bridge_imported_namespace_const_table_computed_destructured_value_fixture
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-namespace-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-namespace-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-namespace-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-const-table.js"
 
@@ -1621,7 +1621,7 @@ verify_bridge_imported_default_const_table_computed_destructured_value_fixture()
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-default-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-default-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-default-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-default-const-table.js"
 
@@ -1656,7 +1656,7 @@ verify_bridge_imported_inline_default_const_table_computed_destructured_value_fi
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-inline-default-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-inline-default-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-inline-default-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-inline-default-const-table.js"
 
@@ -1691,7 +1691,7 @@ verify_bridge_imported_inline_default_const_table_as_const_computed_destructured
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-inline-default-const-table-as-const-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-inline-default-const-table-as-const-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-inline-default-const-table-as-const-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-inline-default-const-table-as-const.js"
 
@@ -1726,7 +1726,7 @@ verify_bridge_imported_iife_default_const_table_computed_destructured_value_fixt
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-iife-default-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-iife-default-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-iife-default-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-iife-default-const-table.js"
 
@@ -1761,7 +1761,7 @@ verify_bridge_imported_iife_local_const_table_computed_destructured_value_fixtur
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-iife-local-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-iife-local-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-iife-local-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-iife-local-const-table.js"
 
@@ -1796,7 +1796,7 @@ verify_bridge_imported_function_iife_local_const_table_computed_destructured_val
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-function-iife-local-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-function-iife-local-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-function-iife-local-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-function-iife-local-const-table.js"
 
@@ -1831,7 +1831,7 @@ verify_bridge_imported_iife_local_let_table_computed_destructured_value_fixture(
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-iife-local-let-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-iife-local-let-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-iife-local-let-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-iife-local-let-table.js"
 
@@ -1866,7 +1866,7 @@ verify_bridge_imported_function_iife_local_let_table_computed_destructured_value
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-function-iife-local-let-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-function-iife-local-let-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-function-iife-local-let-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-function-iife-local-let-table.js"
 
@@ -1904,7 +1904,7 @@ verify_bridge_imported_reassigned_local_let_table_computed_destructured_value_fi
   abs_root="$(cd "$root" && pwd)"
   local helper_js_path="$abs_root/test_helpers.js"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-iife-reassigned-let-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-iife-reassigned-let-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-iife-reassigned-let-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-iife-reassigned-let-table.js"
 
@@ -1965,7 +1965,7 @@ verify_bridge_imported_prop_mutated_local_let_table_computed_destructured_value_
   abs_root="$(cd "$root" && pwd)"
   local helper_js_path="$abs_root/test_helpers.js"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-iife-prop-mutated-let-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-iife-prop-mutated-let-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-iife-prop-mutated-let-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-iife-prop-mutated-let-table.js"
 
@@ -2026,7 +2026,7 @@ verify_bridge_imported_index_mutated_local_let_table_computed_destructured_value
   abs_root="$(cd "$root" && pwd)"
   local helper_js_path="$abs_root/test_helpers.js"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-function-iife-index-mutated-let-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-function-iife-index-mutated-let-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-function-iife-index-mutated-let-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-function-iife-index-mutated-let-table.js"
 
@@ -2084,7 +2084,7 @@ verify_bridge_imported_reexported_const_table_computed_destructured_value_fixtur
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-reexported-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-reexported-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-reexported-const-table-entry.js"
   cp "$runtime_consts_path" "$root/runtime/imported-reexported-const-table.js"
 
@@ -2120,7 +2120,7 @@ verify_bridge_imported_chained_const_table_computed_destructured_value_fixture()
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-chained-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-chained-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-chained-const-table-entry.js"
   cp "$runtime_reexport_path" "$root/runtime/imported-chained-const-table.js"
   cp "$runtime_source_path" "$root/runtime/imported-chained-const-table-source.js"
@@ -2157,7 +2157,7 @@ verify_bridge_imported_star_const_table_computed_destructured_value_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-star-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-star-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-star-const-table-entry.js"
   cp "$runtime_barrel_path" "$root/runtime/imported-star-const-table.js"
   cp "$runtime_source_path" "$root/runtime/imported-star-const-table-source.js"
@@ -2195,7 +2195,7 @@ verify_bridge_imported_deep_star_const_table_computed_destructured_value_fixture
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-deep-star-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-deep-star-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-deep-star-const-table-entry.js"
   cp "$runtime_barrel_path" "$root/runtime/imported-deep-star-const-table.js"
   cp "$runtime_level1_path" "$root/runtime/imported-deep-star-const-table-level1.js"
@@ -2234,7 +2234,7 @@ verify_bridge_imported_mixed_barrel_const_table_computed_destructured_value_fixt
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-mixed-barrel-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-mixed-barrel-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-mixed-barrel-const-table-entry.js"
   cp "$runtime_barrel_path" "$root/runtime/imported-mixed-barrel-const-table.js"
   cp "$runtime_source_path" "$root/runtime/imported-mixed-barrel-const-table-source.js"
@@ -2278,7 +2278,7 @@ verify_bridge_imported_conflicting_star_const_table_computed_destructured_value_
   local bridge_js_path="$abs_root/bridge.js"
   local helper_js_path="$abs_root/test_helpers.js"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/imported-conflicting-star-const-table-entry.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/imported-conflicting-star-const-table-entry.js" "$root" >/dev/null
   cp "$runtime_entry_path" "$root/runtime/imported-conflicting-star-const-table-entry.js"
   cp "$runtime_barrel_path" "$root/runtime/imported-conflicting-star-const-table.js"
   cp "$runtime_keys_a_path" "$root/runtime/imported-conflicting-star-const-table-keys-a.js"
@@ -2338,7 +2338,7 @@ verify_bridge_default_class_fixture() {
   rm -rf "$root"
   mkdir -p "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "./runtime/default-class.js" "$root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "./runtime/default-class.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/default-class.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
@@ -2375,7 +2375,7 @@ verify_bridge_deep_parent_relative_default_class_mixed_fixture() {
   rm -rf "$root"
   mkdir -p "$pkg_root" "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "../../runtime/default-class-mixed.js" "$pkg_root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "../../runtime/default-class-mixed.js" "$pkg_root" >/dev/null
   cp "$runtime_path" "$root/runtime/default-class-mixed.js"
 
   cat > "$pkg_root/moon.mod.json" <<'EOF'
@@ -2409,7 +2409,7 @@ verify_bridge_deep_parent_relative_default_class_mixed_reexport_fixture() {
   rm -rf "$root"
   mkdir -p "$pkg_root" "$root/runtime"
 
-  moon run src/cmd/ts2mbt -- package "$fixture_path" "../../runtime/default-class-mixed.js" "$pkg_root" >/dev/null
+  moon run src/cmd/mtsc -- bridge package "$fixture_path" "../../runtime/default-class-mixed.js" "$pkg_root" >/dev/null
   cp "$runtime_path" "$root/runtime/default-class-mixed.js"
 
   cat > "$pkg_root/moon.mod.json" <<'EOF'

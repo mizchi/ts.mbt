@@ -17,7 +17,7 @@ test-filter filter:
 
 # Run the development-only TypeScript checker on a source file
 tscheck *ARGS:
-    moon run --target native src/cmd/tscheck -- {{ ARGS }}
+    moon run --target native src/cmd/mtsc -- check {{ ARGS }}
 
 # Format code
 fmt:
@@ -39,11 +39,11 @@ verify-mbti-dts:
     rm -rf "$ROOT"
     mkdir -p "$TS_ROOT" "$MOONBIT_ROOT"
 
-    moon run src/cmd/mbt2ts -- decl src/ast/pkg.generated.mbti "$TS_ROOT/ast.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/parser/pkg.generated.mbti "$TS_ROOT/parser.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/bridge/pkg.generated.mbti "$TS_ROOT/bridge.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/ast/pkg.generated.mbti "$TS_ROOT/ast.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/parser/pkg.generated.mbti "$TS_ROOT/parser.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/bridge/pkg.generated.mbti "$TS_ROOT/bridge.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
 
     cat <<'EOF' > "$MOONBIT_ROOT/debug.d.ts"
     export interface Debug {}
@@ -130,7 +130,7 @@ checker-conformance-oracle *ARGS:
 checker-miss-buckets *ARGS:
     node scripts/checker_miss_buckets.mjs {{ ARGS }}
 
-# Soundness gate: build the native binary and fail if the checker reports
+# Soundness gate: build the release native binary and fail if the checker reports
 # more conformance false positives than the current budget. The oracle
 # script skips cleanly when the `typescript` submodule isn't populated, so
 # this is safe to run anywhere. The budget is 0: the checker reports no
@@ -143,7 +143,7 @@ checker-miss-buckets *ARGS:
 # remainder, `docs/checker-triage.md` the argument) — lower it whenever a
 # batch improves it, the same way the FP budget only ever tightened.
 verify-checker-soundness:
-    moon build --target native
+    moon build --target native --release
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 50
 
 # Is any checker rule superlinear in the size of a module-wide list?
@@ -165,7 +165,7 @@ verify-checker-soundness:
 #
 #   just verify-checker-scaling
 #   just verify-checker-scaling --axis interfaces
-#   just verify-checker-scaling --baseline path/to/old/tscheck.exe
+#   just verify-checker-scaling --baseline path/to/old/mtsc.exe
 verify-checker-scaling *ARGS:
     moon build --target native --release
     node scripts/verify_checker_scaling.mjs {{ ARGS }}

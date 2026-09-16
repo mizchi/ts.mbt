@@ -5886,8 +5886,8 @@ test "bridge: an unbuildable tagged-union output widens through every wrapper" {
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     tagged_union_decls_by_name: {
-      "ServerType": { name: "ServerType", cases: unbuildable_cases },
-      "PathLike": { name: "PathLike", cases: buildable_cases },
+      "ServerType": { name: "ServerType", cases: unbuildable_cases, },
+      "PathLike": { name: "PathLike", cases: buildable_cases, },
     },
     synthesized_inline_unions: {},
     read_reachable_struct_names: {},

@@ -67,7 +67,7 @@ fn collect_type_issues_from_module(
       module_, globals, type_modules,
     ) {
     if !is_unresolved_import_binding(issue, module_.imported_binding_names) {
-      issues.push({ path: issue.path, message: issue.message })
+      issues.push({ path: issue.path, message: issue.message, })
     }
   }
   Ok(issues)
@@ -135,7 +135,7 @@ fn parse_graph_module(
   ).parse_module_block() catch {
     e => return Err("\{e}")
   }
-  Ok({ source, module_, module_block })
+  Ok({ source, module_, module_block, })
 }
 
 ///|

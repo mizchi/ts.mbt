@@ -335,7 +335,7 @@ fn inline_into_stmt(
             )
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -376,7 +376,7 @@ fn inline_into_expr(
     FuncExpr(f) => {
       let inner = narrow_for_func(tbl, f)
       let new_body = inline_nested_block(f.body, inner, {})
-      FuncExpr({ ..f, body: new_body })
+      FuncExpr({ ..f, body: new_body, })
     }
     ArrowFunc(params, ret, body, is_async) => {
       let inner = narrow_for_params(tbl, params)
@@ -512,7 +512,7 @@ fn inline_into_expr(
             )
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -619,7 +619,7 @@ fn inline_pass(
       }
     }
   }
-  { stmts: out, stmt_positions: out_positions }
+  { stmts: out, stmt_positions: out_positions, }
 }
 
 ///|
@@ -766,7 +766,7 @@ fn substitute_stmt(
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
-        new_cases.push({ ..c, body: substitute_block(c.body, name, rhs) })
+        new_cases.push({ ..c, body: substitute_block(c.body, name, rhs), })
       }
       Switch(substitute_expr(e, name, rhs), new_cases)
     }
@@ -806,7 +806,7 @@ fn substitute_stmt(
         None => None
       }
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: substitute_block(f.body, name, rhs) })
+        Some(f) => Some({ ..f, body: substitute_block(f.body, name, rhs), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -815,7 +815,7 @@ fn substitute_stmt(
           Some(b) => Some(substitute_block(b, name, rhs))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -849,7 +849,7 @@ fn substitute_block(
   for s in block.stmts {
     stmts.push(substitute_stmt(s, name, rhs))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -1006,7 +1006,7 @@ fn substitute_expr(
         None => None
       }
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: substitute_block(f.body, name, rhs) })
+        Some(f) => Some({ ..f, body: substitute_block(f.body, name, rhs), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -1015,7 +1015,7 @@ fn substitute_expr(
           Some(b) => Some(substitute_block(b, name, rhs))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {

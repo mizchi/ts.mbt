@@ -716,9 +716,9 @@ fn parse_export_interface_block(block : String) -> InterfaceExpansion? {
               let name = header[:lt_idx].trim().to_owned()
               let params_src = header[lt_idx + 1:header.length() - 1].to_owned()
               let params = split_top_level_type_args(params_src)
-              Some({ name, type_params: params, extends_refs, body })
+              Some({ name, type_params: params, extends_refs, body, })
             }
-            _ => Some({ name: header, type_params: [], extends_refs, body })
+            _ => Some({ name: header, type_params: [], extends_refs, body, })
           }
         }
         _ => None
@@ -1191,7 +1191,7 @@ fn normalize_moonbit_generated_typescript_decl_text(
 ) -> String {
   let mut normalized = source
   for import_rule in import_rules {
-    let state = { named_imports: [] }
+    let state = { named_imports: [], }
     normalized = replace_prefixed_type_refs(
       normalized,
       import_rule.ns_alias,
@@ -1230,7 +1230,7 @@ pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(
         )
       None => default_normalization_rules()
     }
-    import_rules.push({ ns_alias, module_spec, rules })
+    import_rules.push({ ns_alias, module_spec, rules, })
   }
   let normalized = normalize_moonbit_generated_typescript_decl_text(
     content, import_rules,

@@ -1,6 +1,6 @@
 ---
 name: moonbit-dts-normalization
-description: Use when modifying `mbt2ts normalize` (the MoonBit-generated `.d.ts` rewriter), `src/bridge/typescript_decl.mbt`, or the experimental normalizedDts integration in vite-plugin-moonbit.
+description: Use when modifying `mtsc pkg normalize` (the MoonBit-generated `.d.ts` rewriter, formerly `mbt2ts normalize`), `src/bridge/typescript_decl.mbt`, or the experimental normalizedDts integration in vite-plugin-moonbit.
 ---
 
 # MoonBit DTS Normalization
@@ -17,7 +17,7 @@ This is intentionally narrow.
   alias layer.
 - It is a readability pass, not a general-purpose `.d.ts`
   pretty-printer.
-- Public CLI surface: `mbt2ts normalize <ts> [out]`. The library entry
+- Public CLI surface: `mtsc pkg normalize <ts> [out]`. The library entry
   is `pub async fn emit_typescript_decl` in `src/main.mbt`.
 
 ## Start here
@@ -29,7 +29,7 @@ Read these files first:
 - `src/main.mbt` — the `emit_typescript_decl` library entry
 - `src/main_wbtest.mbt` — end-to-end "MoonBit-generated d.ts in,
   normalized d.ts out" tests
-- `src/cmd/mbt2ts/main.mbt` — dispatcher arm for `normalize`
+- `src/bridge_cli.mbt` — dispatcher arm for `normalize`, under `mtsc pkg`
 
 If the companion plugin repo exists, also read:
 
@@ -45,7 +45,7 @@ If the companion plugin repo exists, also read:
   visible to the user.
 - Document the manual fallback command for workflows that call
   `moon build` directly.
-- The CLI invocation is `moon run src/cmd/mbt2ts -- normalize <ts>` —
+- The CLI invocation is `moon run src/cmd/mtsc -- pkg normalize <ts>` —
   not the old `normalize-moonbit-dts` verb.
 
 ## Validation

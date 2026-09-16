@@ -998,7 +998,7 @@ pub fn tagged_union_type_alias_decl(
     _ => return None
   }
   match tagged_union_cases(union_members) {
-    Some(cases) => Some({ name: type_alias.name, cases })
+    Some(cases) => Some({ name: type_alias.name, cases, })
     None => None
   }
 }

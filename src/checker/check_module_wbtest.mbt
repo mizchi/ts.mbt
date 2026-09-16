@@ -57,7 +57,7 @@ fn alias_for_check(
   type_params : Array[String],
   body : @ast.TsType,
 ) -> @ast.TsTypeAlias {
-  { name, type_params, type_param_bounds: [], type_: body }
+  { name, type_params, type_param_bounds: [], type_: body, }
 }
 
 ///|
@@ -267,9 +267,9 @@ test "check_module: detects duplicate enum members" {
     is_const: false,
     is_declare: false,
     members: [
-      { name: "Read", value: None, is_computed: false },
-      { name: "Write", value: None, is_computed: false },
-      { name: "Read", value: None, is_computed: false },
+      { name: "Read", value: None, is_computed: false, },
+      { name: "Write", value: None, is_computed: false, },
+      { name: "Read", value: None, is_computed: false, },
     ],
   })
   let report = check_module(m)
@@ -457,7 +457,7 @@ fn alias_with_bounds_for_check(
   bounds : Array[(String, @ast.TsType)],
   body : @ast.TsType,
 ) -> @ast.TsTypeAlias {
-  { name, type_params, type_param_bounds: bounds, type_: body }
+  { name, type_params, type_param_bounds: bounds, type_: body, }
 }
 
 ///|

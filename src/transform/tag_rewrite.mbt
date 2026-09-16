@@ -234,7 +234,7 @@ pub fn tag_rewrite_block(
   for s in block.stmts {
     new_stmts.push(tag_rewrite_stmt(s, candidates))
   }
-  { stmts: new_stmts, stmt_positions: block.stmt_positions }
+  { stmts: new_stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -2699,7 +2699,7 @@ fn tag_rewrite_stmt(
     Block(b) => Block(tag_rewrite_block_inner(b, table))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: tag_rewrite_block_inner(f.body, table) })
+        Some(f) => Some({ ..f, body: tag_rewrite_block_inner(f.body, table), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -2708,7 +2708,7 @@ fn tag_rewrite_stmt(
           Some(b) => Some(tag_rewrite_block_inner(b, table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
@@ -2740,7 +2740,7 @@ fn tag_rewrite_block_inner(
   for s in block.stmts {
     stmts.push(tag_rewrite_stmt(s, table))
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  { stmts, stmt_positions: block.stmt_positions, }
 }
 
 ///|
@@ -2867,7 +2867,7 @@ fn tag_rewrite_expr(
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) =>
-      FuncExpr({ ..f, body: tag_rewrite_block_inner(f.body, table) })
+      FuncExpr({ ..f, body: tag_rewrite_block_inner(f.body, table), })
     DynamicImport(spec, opts) =>
       DynamicImport(
         tag_rewrite_expr(spec, table),
@@ -2898,7 +2898,7 @@ fn tag_rewrite_expr(
     PureCall(inner) => PureCall(tag_rewrite_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: tag_rewrite_block_inner(f.body, table) })
+        Some(f) => Some({ ..f, body: tag_rewrite_block_inner(f.body, table), })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -2907,7 +2907,7 @@ fn tag_rewrite_expr(
           Some(b) => Some(tag_rewrite_block_inner(b, table))
           None => None
         }
-        new_methods.push({ ..m, body: new_body })
+        new_methods.push({ ..m, body: new_body, })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
