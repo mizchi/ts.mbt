@@ -4573,35 +4573,95 @@ product surfaces now.
   in `moon.pkg` restricts `host_js.mbt` and `service_js.mbt` to the `js`
   backend, so `moon check --deny-warn` never compiles the FFI layer at
   all. Without that step the whole boundary is unchecked until somebody
-  runs a JS build. It is scoped to the package rather than the module
-  because `src/`'s `moonbitlang/async/fs` import is unused on `js` and
-  moon has no per-target import syntax — the two warnings that leaves
-  cannot be removed without either suppressing them (the defect that
-  retired `docs/checker-priority.md`, in a `moon.pkg`) or declaring the
-  root package native-only, which would be untrue since its `#cfg` split
-  exists to keep it JS-buildable. `moon build --target js` is clean.
-- `src/cmd/mtsc` is the ONLY binary, and NATIVE only: it declares
-  `supported_targets = "all-js"`, so `moon build --target js` skips it
-  instead of failing inside it. That build was broken and the cause was
-  not incidental — `--watch` polls `@async_fs.mtime`, and
-  `moonbitlang/async/fs` says in its own `unimplemented.mbt` that the
-  package "currently does not support JavaScript backend", restricting
-  every other source file to `native` / `wasm` so both `mtime` and
-  `rename` are absent and the import buys nothing. A per-target `#cfg`
-  arm for the one call is not enough: the native arm is `async` only by
-  virtue of that call, so a sync JS arm makes the `async` on
-  `mtsc_watch_stamp` AND `mtsc_watch_stamps` useless (warning 0067) and
-  the workaround spreads a function at a time up the call chain — the
-  one-rule-in-several-places shape this file records twenty-odd times.
-  `all-js` rather than `native` because the wasm arms of `mtsc_exit` are
-  real and `async/fs` does ship `mtime` for `wasm`. Nothing was lost
-  that anything used: `--target js` appears in this repo only in
-  `verify_examples.sh`, which builds GENERATED example packages (none of
-  which import `mizchi/ts`), and no harness ever built this CLI for JS —
-  which is exactly why a whole-module JS build was broken without anyone
-  noticing. `moon check --target js` still covers all 42 packages, so
-  nothing stopped being CHECKED; only `moon build`'s link reachability
-  changed. `ts2mbt`, `mbt2ts`, `tscheck` and
+  runs a JS build. It covers the WHOLE MODULE — it was scoped to this
+  package while the root's `moonbitlang/async/fs` import read as unused
+  on `js`, and that is fixed at the source rather than excluded (see the
+  `src/cmd/mtsc` entry: the dependency's own `unimplemented` symbol is
+  named from the live `js` arm, so nothing is suppressed anywhere).
+- `src/cmd/mtsc` is the ONLY binary, and it runs on Node as well as
+  natively — `moon build --target js` produces the same CLI as a
+  self-contained IIFE Node executes directly (`just build-cli-js`
+  prints the path, `just verify-cli-node` is the gate). An earlier
+  revision declared `supported_targets = "all-js"` so that build would
+  SKIP this package instead of failing inside it; that fixed the build
+  by trading the capability away, and the trade was unnecessary. Only
+  ONE symbol was actually missing (`@async_fs.mtime`) and the rest of
+  the CLI compiled for `js` untouched.
+  The blocker is real and worth stating: `moonbitlang/async/fs` says in
+  its own `unimplemented.mbt` that it "does not support JavaScript
+  backend" and restricts every source file but that one to `native` /
+  `wasm`, so both `mtime` and `rename` are absent there. What makes the
+  per-target arm cheap is that the native arm is `async` ONLY by virtue
+  of that call, so a sync JS arm makes the `async` on
+  `mtsc_watch_stamps` useless (warning 0067) — and the fix for THAT is
+  one `#warnings("-unused_async")` at that one declaration, not a
+  per-target duplicate of a six-line loop. The alternative was
+  genuinely worse: `node:fs/promises` would keep the signature `async`
+  and match `mizchi/x/fs`'s own JS backend, but awaiting a JS promise
+  needs `moonbitlang/async/js_async`, which is then unused on NATIVE,
+  and that is the gate.
+  The unused-import problem those two dependencies create has a fix
+  that needs no suppression at all, and it is the dependency's own:
+  `@async_fs.unimplemented` is the ONE symbol the package exposes on
+  `js`, declared `#cfg(not(target="native"))` under that doc comment,
+  i.e. it exists to be named in exactly this situation. Naming it from
+  the live `js` arm in each of the two packages that need the
+  dependency only on native makes the import genuinely referenced on
+  every backend, so `moon check --deny-warn --target js` is clean for
+  the WHOLE MODULE and `just check-js` widened from `src/mtsc` to
+  everything. Deliberately not `warnings = "-0029"`, which
+  `mizchi/x/fs` itself uses for this: a package-wide suppression also
+  hides a genuinely dead import, on every target, which is how a gate
+  stops being a gate. A standalone `#cfg(target="js")` function holding
+  the reference was tried first and is worse — it is itself unused
+  (warning 0001), so the reference has to sit in live code.
+  Two bugs were found by RUNNING it, and neither is reachable by
+  building. The first is the one that matters: **`@env.args()` does not
+  have the same shape on every backend.** `moonbitlang/core/env` returns
+  `process.argv` VERBATIM on `js`, which has TWO leading entries (the
+  Node executable and the script) where the native runtime's argv has
+  one (the program). `driver.mbt` reads that shape at six places, so
+  under Node the CLI took its own 19 MB bundle as a second input file
+  and reported `ParseError("Unexpected token: Gt")` against ITSELF,
+  turning `mtsc ok.ts --noEmit` on a clean file into exit 1. Normalized
+  once in `mtsc_argv` rather than patched at the six sites — the
+  offset-assumed-in-several-places defect, avoided in its own fix. The
+  `-e` case is declared rather than guarded: `node -e '…' a b` has no
+  script path so the drop would eat `a`, and a built bundle is never run
+  that way.
+  The second was SILENT, and is the reason the watch round trip is in
+  the harness rather than left to a smoke test. The mtime probe first
+  read `require("node:fs")`, and this bundle is a `.js` IIFE under a
+  `package.json` saying `"type": "module"`, so Node loads it as ESM —
+  where `require` is not defined. Measured: a probe under ESM gives
+  `ReferenceError: require is not defined`, which the body's own `catch`
+  turned into "no stamp" for EVERY file; "no stamp" compares equal to
+  the previous "no stamp", so `--watch` would have polled forever and
+  never rebuilt, looking exactly like a watcher with nothing to do.
+  `process.getBuiltinModule` is the sync builtin accessor that works
+  from either module system (Node 22.3 / 20.16 up), with `require` kept
+  as the CommonJS fallback.
+  `just verify-cli-node` is a differential against the NATIVE binary —
+  same source, a different backend and a different runtime for every
+  syscall the CLI makes — over 16 cases plus a `--watch` round trip on
+  both backends, comparing stdout, the exit code, and for the emit cases
+  the FILE written (a backend whose `write_file` silently did nothing
+  would otherwise pass on a matching empty stdout). Mutation-proven:
+  reverting the argv normalization fails eight cases and reverting the
+  mtime probe fails the watch round trip with the diagnostic written for
+  it. Exactly ONE case is allowed to diverge and it says why — a missing
+  entry file, where `mizchi/x/fs` relays the OS error text and the two
+  backends word it differently (`@fs.open(): "nope.ts": No such file or
+  directory` against `ENOENT: no such file or directory, open
+  'nope.ts'`); the case asserts what must be true of both and still
+  requires the exit codes to match exactly, and it FAILS if the two ever
+  become identical, so the allowance cannot outlive its reason. Two
+  measurement notes, both this file's recurring shape: `node … | tail`
+  reports `tail`'s exit code, which made a correct exit 1 read as 0 and
+  sent me looking for a bug that was not there; and the ESM `require`
+  finding came from probing the extracted body under `.mjs` rather than
+  from reasoning about the bundle's format.
+  `ts2mbt`, `mbt2ts`, `tscheck` and
   `tsacc` were four more, and they are now four verbs —
   `mtsc bridge`, `mtsc pkg`, `mtsc check`, `mtsc conformance` — with the
   compile path staying the default, positional mode. The dispatch rule is
@@ -4738,7 +4798,7 @@ typescript.mbt/
     ├── unified_cli.mbt      # `--input ... --out ...` unified driver
     ├── bridge_cli.mbt       # `mtsc bridge` / `mtsc pkg` verb dispatch
     └── cmd/
-        └── mtsc/            # THE binary. Native only (`supported_targets`).
+        └── mtsc/            # THE binary. Native + Node (`just build-cli-js`).
             ├── main.mbt             # compile pipeline + graph loader
             ├── driver.mbt           # verb dispatch, entry resolution, run loop
             ├── tsc_options.mbt      # the tsc-superset option layer
@@ -4793,25 +4853,33 @@ moon info
 # Validate `--mangle-properties` against the mangle-safety corpus
 just verify-mangle-safety
 
-# The JavaScript library surface. `moon check --deny-warn` does NOT see
-# `src/mtsc/host_js.mbt` or `service_js.mbt` — `targets` in `moon.pkg`
-# restricts them to the `js` backend — so this is the run that checks
-# the whole FFI boundary, and it is a gate of its own.
+# The JavaScript backend. `moon check --deny-warn` does NOT see the
+# `js`-only files — `src/mtsc/host_js.mbt` and `service_js.mbt` are
+# restricted by `targets` in `moon.pkg`, and the CLI's
+# `#cfg(target="js")` arms are compiled out — so this is the run that
+# checks the whole FFI boundary, and it is a gate of its own. Clean for
+# the whole module.
 just check-js
 
 # Build the library for JS and run it under Node. `just build-js` alone
 # builds and copies the artifact next to the facade.
 just verify-language-service
 just verify-language-service-types
+
+# The CLI on Node: build it, then diff its behaviour against the native
+# binary (16 cases plus a `--watch` round trip on both backends).
+just build-cli-js
+just verify-cli-node
 ```
 
 ## Notes
 
-- Target: `native` for the CLI and every harness. `js` is a SECOND
-  target now, and only for the library: `src/mtsc` plus what it needs
-  (`ast`, `parser`, `checker`) build for it, the CLI declares
-  `supported_targets = "all-js"` and does not. Both are gated —
-  `moon check --deny-warn` for native, `just check-js` for the FFI layer
-  the native check structurally cannot see.
+- Target: `native` for every harness, and `js` is a SECOND target for
+  the WHOLE module — the library (`src/mtsc`, consumed through
+  `js/language-service.mjs`) and the CLI, which Node runs directly. Both
+  backends are gated: `moon check --deny-warn` for native,
+  `just check-js` (whole module) for the `js`-only files the native
+  check structurally cannot see, `just verify-language-service` and
+  `just verify-cli-node` for what only Node can observe.
 - The repo no longer ships a JS interpreter or wasm codegen; entry-point
   parsing is read-only and produces declarations / bridge code only.

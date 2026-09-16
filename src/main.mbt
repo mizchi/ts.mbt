@@ -555,6 +555,18 @@ async fn publish_staged_bridge_file(
   stage_path : String,
   output_path : String,
 ) -> Bool {
+  // Keep the `moonbitlang/async/fs` import referenced on this backend.
+  // The import exists for the `@async_fs.rename` above, and moon has no
+  // per-target `import` syntax, so on `js` the dependency reads as
+  // unused and warning 0029 fails `--deny-warn --target js` on a
+  // package that is otherwise clean. `unimplemented` is the ONE symbol
+  // that package exposes here — declared `#cfg(not(target="native"))`
+  // under the doc comment "This package currently does not support
+  // JavaScript backend", i.e. it exists to be named in exactly this
+  // situation. Deliberately not `warnings = "-0029"`: a package-wide
+  // suppression would also hide a genuinely dead import, on every
+  // target, which is how a gate stops being a gate.
+  ignore(@async_fs.unimplemented)
   let bytes = @fs.read_file(stage_path) catch {
     e => {
       println("Write error: could not read staged file \{stage_path}: \{e}")

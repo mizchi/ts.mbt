@@ -157,18 +157,25 @@ consumer がいるので形を変えていません。中身は host 経路と�
 **型チェックの前に呼び出し側が解決を済ませておく**必要があり、それが
 一番面倒な部分です。
 
-## CLI は JS では動きません
+## CLI も Node で動きます
 
-`src/cmd/mtsc` は `supported_targets = "all-js"` を宣言しているので
-`moon build --target js` では skip されます。`--watch` が
-`@async_fs.mtime` を叩き、`moonbitlang/async/fs` は自身の
-`unimplemented.mbt` で "currently does not support JavaScript backend" と
-宣言していて、JS では `mtime` も `rename` も存在しません。
+このライブラリ API とは別に、`mtsc` CLI 自体も `js` backend でビルドでき、
+Node がそのまま実行できます。
 
-CLI はネイティブの実行ファイルで、型チェッカは `src/mtsc` 経由で
-JavaScript に届きます。この分担が `moon build --target js` を壊れない
-ものにしています — ネイティブ IO を CLI に足しても JS ビルドには
-影響しません。
+```sh
+just build-cli-js     # moon build --target js --release
+node _build/js/release/build/cmd/mtsc/mtsc.js entry.ts --bundle --noEmit
+just verify-cli-node  # native バイナリとの差分 (16 cases + --watch 往復)
+```
+
+`--watch` を含めて動きます。詳細と、実際に動かして初めて出た 2 つのバグ
+(`@env.args()` のバックエンド間の形の違い、ESM で `require` が無いこと)
+は CLAUDE.md の `src/cmd/mtsc` の項に記録してあります。
+
+**どちらを使うかは用途で分かれます。** バンドラのプラグインや
+エディタ統合のように「既にソースを持っていて、診断を構造化データで
+受け取りたい」場合はこのライブラリ API です。CLI はプロセス境界越しに
+テキストを返すので、その用途には向きません。
 
 ## テストの構成
 

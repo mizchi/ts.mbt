@@ -152,7 +152,7 @@ fn mtsc_is_verb(token : String) -> Bool {
 
 ///|
 async fn main {
-  let argv = @env.args()
+  let argv = mtsc_argv()
   if argv.length() < 2 {
     // A bare `mtsc` in a directory with a tsconfig.json is a compile,
     // the way a bare `tsc` is. With no config it is a help request,

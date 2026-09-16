@@ -27,16 +27,16 @@ fmt:
 info:
     moon info
 
-# Build the JavaScript backend.
+# Build the JavaScript backend and put the LIBRARY artifact beside its
+# facade.
 #
-# This is the LIBRARY build: `src/cmd/mtsc` declares
-# `supported_targets = "all-js"` and is skipped, so what comes out is the
-# type checker (`src/mtsc`) and what it needs. The CLI stays native.
-#
-# The copy is what lets `js/language-service.mjs` be importable without
-# knowing a build profile — it looks for `js/mtsc.js` first. Release, not
-# debug: the facade falls back to a debug artifact if that is all there
-# is, and measuring a debug build while a release one exists is the
+# `moon build --target js` builds everything the `js` backend supports,
+# which is now the whole module including the CLI — see `build-cli-js`
+# for that half. The copy here is only about the library: it is what
+# lets `js/language-service.mjs` be importable without knowing a build
+# profile, since it looks for `js/mtsc.js` first. Release, not debug:
+# the facade falls back to a debug artifact if that is all there is, and
+# measuring a debug build while a release one exists is the
 # stale-artifact trap this repo keeps paying for.
 build-js:
     moon build --target js --release
@@ -88,6 +88,31 @@ verify-language-service-types:
     EOF
 
     pnpm exec tsc -p "$ROOT/tsconfig.json" --pretty false
+
+# Build the CLI for Node.
+#
+# `mtsc` is a native executable first; this is the same CLI on the `js`
+# backend, runnable as `node <the path printed below>`. Nothing is
+# copied out of `_build`: unlike the library facade, which imports
+# `./mtsc.js` statically and so needs the artifact beside it, the CLI
+# bundle is a self-contained IIFE that Node runs where it is.
+build-cli-js:
+    moon build --target js --release
+    @echo "run it with:  node _build/js/release/build/cmd/mtsc/mtsc.js --help"
+
+# Does the CLI behave the same under Node as it does natively?
+#
+# A differential against the native binary over 16 cases plus a
+# `--watch` round trip on both backends — same source, different backend
+# and a different runtime for every syscall, so it is a real oracle
+# rather than a self-comparison. Mutation-proven: reverting the argv
+# normalization fails eight cases, and reverting the mtime probe to
+# `require("node:fs")` fails the watch round trip, which is the one
+# failure mode that otherwise looks exactly like success.
+verify-cli-node *ARGS:
+    moon build --target native --release
+    moon build --target js --release
+    node scripts/verify_cli_node.mjs {{ ARGS }}
 
 # Verify emitted TypeScript declarations from pkg.generated.mbti files
 verify-mbti-dts:
@@ -233,24 +258,28 @@ verify-checker-scaling *ARGS:
     node scripts/verify_checker_scaling.mjs {{ ARGS }}
 
 # Full CI check
-ci: fmt check check-js test verify-mbti-dts verify-language-service verify-language-service-types verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
+ci: fmt check check-js test verify-mbti-dts verify-language-service verify-language-service-types verify-cli-node verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
 
 # `moon check --deny-warn` for the JavaScript backend.
 #
-# Not redundant with `check`: `src/mtsc/host_js.mbt` and
-# `service_js.mbt` are `js`-only (see `targets` in `src/mtsc/moon.pkg`),
-# so the native check never compiles them at all. Without this step the
-# whole FFI layer is unchecked until somebody runs a JS build.
+# Not redundant with `check`: the `js`-only files — `src/mtsc`'s
+# `host_js.mbt` and `service_js.mbt`, plus the `#cfg(target="js")` arms
+# in the CLI — are never compiled by the native check at all, so without
+# this step the whole FFI layer is unchecked until somebody runs a JS
+# build.
 #
-# Scoped to the package rather than the module because `src/`'s
-# `moonbitlang/async/fs` import is unused on `js` — the dependency
-# documents in its own source that it "does not support JavaScript
-# backend", and moon has no per-target import syntax, so that warning
-# cannot be removed without either suppressing it or declaring the root
-# package native-only, which would be untrue. `moon build --target js`
-# is clean; this keeps the new code that way too.
+# WHOLE MODULE, and it used to be scoped to `src/mtsc` because the root
+# package's `moonbitlang/async/fs` import reads as unused on `js`: the
+# dependency says in its own source that it "does not support JavaScript
+# backend", and moon has no per-target `import` syntax. That is fixed
+# rather than excluded now — both packages that need the dependency
+# only on native name its `unimplemented` symbol, which is the one thing
+# it exposes on `js` and exists for exactly this, so the import is
+# genuinely referenced on every backend. No `warnings = "-0029"`
+# anywhere: a package-wide suppression would also hide a dead import, on
+# every target.
 check-js:
-    moon check --deny-warn --target js src/mtsc
+    moon check --deny-warn --target js
 
 # Update dependencies
 update:

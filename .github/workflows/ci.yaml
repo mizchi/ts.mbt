@@ -106,20 +106,18 @@ jobs:
         run: moon check
 
       - name: Moon check (js backend)
-        # The library surface builds for `js` (`src/mtsc` and what it
-        # needs); the CLI declares `supported_targets = "all-js"` and is
-        # skipped. This step exists because `src/mtsc/host_js.mbt` and
-        # `service_js.mbt` are restricted to the `js` backend by
-        # `targets` in `moon.pkg`, so the native check above never
-        # compiles the FFI layer at all — without this the whole
-        # MoonBit/JavaScript boundary is unchecked until something builds
-        # it.
+        # The whole module builds for `js` now — the library surface
+        # (`src/mtsc`) and the CLI. This step exists because the
+        # `js`-only files are never compiled by the native check above:
+        # `src/mtsc/host_js.mbt` and `service_js.mbt` are restricted by
+        # `targets` in `moon.pkg`, and the CLI's `#cfg(target="js")` arms
+        # are compiled out. Without it the whole MoonBit/JavaScript
+        # boundary is unchecked until something builds it.
         #
         # `--deny-warn` is left to local `just check-js` for the same
-        # reason the step above gives: `src/`'s `moonbitlang/async/fs`
-        # import is unused on `js` (that dependency documents in its own
-        # source that it does not support the JavaScript backend) and
-        # moon has no per-target import syntax.
+        # reason the step above gives — CI's toolchain is bleeding-edge
+        # and fresh deprecations should not red the build. The tree IS
+        # clean under it on both backends.
         run: moon check --target js
 
       - name: Moon test
@@ -134,6 +132,14 @@ jobs:
 
       - name: Verify language service types
         run: just verify-language-service-types
+
+      - name: Verify the CLI under Node
+        # A differential against the native binary: the same CLI on two
+        # backends must answer the same way. It also drives `--watch`
+        # through an edit on both, which is the only way to see the
+        # failure mode where the mtime probe returns nothing and the
+        # watcher silently never rebuilds.
+        run: just verify-cli-node
 
       - name: Verify mbti -> .d.ts
         run: just verify-mbti-dts
