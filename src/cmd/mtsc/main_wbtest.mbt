@@ -74,13 +74,13 @@ test "mtsc flags: --mangle-properties selects the analyzed path" {
     flag in [
       "--mangle-properties", "--explain-mangle", "--mangle-properties-shape-color",
     ] {
-    let opts = mtsc_parse_args(["in.ts", flag]).unwrap()
+    let opts = mtsc_parse_args(["mtsc", "in.ts", flag], 1).unwrap()
     assert_true(opts.mangle_properties)
     assert_true(opts.bundle)
   }
   // `--mangle` alone only renames locals, and the single-file path
   // reserves every top-level name, so it stays where it was.
-  let plain = mtsc_parse_args(["in.ts", "--mangle"]).unwrap()
+  let plain = mtsc_parse_args(["mtsc", "in.ts", "--mangle"], 1).unwrap()
   assert_true(plain.mangle)
   assert_false(plain.mangle_properties)
   assert_false(plain.bundle)
@@ -88,8 +88,8 @@ test "mtsc flags: --mangle-properties selects the analyzed path" {
 
 ///|
 test "mtsc flags: --no-check is off unless asked for" {
-  assert_false(mtsc_parse_args(["in.ts"]).unwrap().no_check)
-  assert_true(mtsc_parse_args(["in.ts", "--no-check"]).unwrap().no_check)
+  assert_false(mtsc_parse_args(["mtsc", "in.ts"], 1).unwrap().no_check)
+  assert_true(mtsc_parse_args(["mtsc", "in.ts", "--no-check"], 1).unwrap().no_check)
 }
 
 ///|

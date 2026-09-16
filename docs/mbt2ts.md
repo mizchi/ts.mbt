@@ -1,23 +1,27 @@
-# `mbt2ts`: MoonBit package を TypeScript / npm として公開する
+# `mtsc pkg`: MoonBit package を TypeScript / npm として公開する
 
-`mbt2ts` は MoonBit の `pkg.generated.mbti` と JavaScript build output から、
+> この namespace は `mbt2ts` binary でした。`mbt2ts X` は `mtsc pkg X` に
+> 対応します（唯一の例外は `mbt2ts --pkg` → `mtsc pkg npm`。旧 flag も
+> alias として残しています）。
+
+`mtsc pkg` は MoonBit の `pkg.generated.mbti` と JavaScript build output から、
 `.d.ts` と runtime JS を持つ TypeScript package を生成します。生成物は毎回
 再生成する publish artifact です。
 
 ## Install
 
 ```sh
-moon install mizchi/ts/cmd/mbt2ts
+moon install mizchi/ts/cmd/mtsc
 ```
 
-開発中は `moon run src/cmd/mbt2ts -- ...` を使えます。
+開発中は `moon run src/cmd/mtsc -- pkg ...` を使えます。
 
-## npm package を生成する: `--pkg`
+## npm package を生成する: `npm`
 
 MoonBit module root で実行します。
 
 ```sh
-mbt2ts --pkg
+mtsc pkg npm
 cd npm
 npm pack --dry-run
 npm publish --access public
@@ -52,23 +56,23 @@ npx --package=@mizchi/ts mtsc --help
 
 ```sh
 # Recursive .d.ts package と build-backed runtime scaffold
-mbt2ts scaffold src/pkg.generated.mbti out/ts-pkg
+mtsc pkg scaffold src/pkg.generated.mbti out/ts-pkg
 
 # External MoonBit import を npm specifier へ置き換える
-mbt2ts scaffold src/pkg.generated.mbti out/ts-pkg import-rewrites.json
+mtsc pkg scaffold src/pkg.generated.mbti out/ts-pkg import-rewrites.json
 
 # Local method / constructor の facade を opt-in
-mbt2ts facade-scaffold src/pkg.generated.mbti out/ts-pkg
+mtsc pkg facade-scaffold src/pkg.generated.mbti out/ts-pkg
 
 # 個別段階
-mbt2ts link-config src/pkg.generated.mbti
-mbt2ts package src/pkg.generated.mbti out/ts-pkg
-mbt2ts decl src/pkg.generated.mbti
+mtsc pkg link-config src/pkg.generated.mbti
+mtsc pkg package src/pkg.generated.mbti out/ts-pkg
+mtsc pkg decl src/pkg.generated.mbti
 ```
 
 `--input <pkg-or-mbti> --out <dir>` は project-oriented lower-level flow です。
 `--diagnostics <path>` で `AUTOLINK_DIAGNOSTICS.md` の出力先を変えられます。
-完全な引数は `mbt2ts --help` を参照してください。
+完全な引数は `mtsc pkg --help` を参照してください。
 
 ## 公開 API の契約
 

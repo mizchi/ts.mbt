@@ -1,14 +1,31 @@
-// Minimal CLI for benchmarking the parse + check pipeline against a
-// real `.ts` file. Designed to be invoked under `hyperfine` /
-// `/usr/bin/time -v` so external tools can measure wall-clock and peak
-// RSS without going through the full bridge-generation path.
+// `mtsc check` — single-file checker diagnostics, and the checker's own
+// measurement harness.
 //
-//   tscheck <file.ts>            # parse + check, exits 0
-//   tscheck --parse <file.ts>    # parse only (compares against the
-//                                # full pipeline so the checker's
-//                                # marginal cost is visible)
-//   tscheck --iters N <file.ts>  # repeat N times so memory tools see
-//                                # the steady-state heap
+//   mtsc check <file.ts>            # parse + check, exits 0
+//   mtsc check --parse <file.ts>    # parse only (compares against the
+//                                   # full pipeline so the checker's
+//                                   # marginal cost is visible)
+//   mtsc check --iters N <file.ts>  # repeat N times so memory tools see
+//                                   # the steady-state heap
+//
+// This was the `tscheck` binary, and it is NOT the same thing as
+// `mtsc --noEmit`. The difference is the program: `--noEmit` walks the
+// import graph and checks it as one program, the way `tsc` does, while
+// this checks ONE file with a single-file model — which is what the
+// conformance corpus wants, since each of its 4,484 cases is a program
+// of one file.
+//
+// Three properties of this output are an interface, not a style:
+//
+//   * the summary line's exact wording. `checker_conformance_oracle.sh`,
+//     `checker_precision.sh`, `verify_checker_scaling.mjs` and
+//     `checker_miss_buckets.mjs` all parse it.
+//   * `-v` means VERBOSE here, where the top-level `mtsc -v` is `tsc`'s
+//     version flag. The two do not collide because they are in different
+//     scopes, which is the one thing the verb layout buys for free.
+//   * it exits 0 whatever it finds, including on a read or parse error.
+//     It is a measurement tool, and the oracle scripts that drive it
+//     over thousands of files run under `set -e`.
 
 ///|
 /// True when `spec`, imported from `file_path`, resolves on disk. Used to
@@ -79,10 +96,11 @@ async fn module_spec_resolves_on_disk(
 }
 
 ///|
-async fn main {
-  let argv = @env.args()
-  if argv.length() < 2 {
-    println("Usage: tscheck [--parse] [--iters N] <file.ts>")
+/// `start` is the index of the first option, so the verb dispatch in
+/// `driver.mbt` passes `2`.
+async fn mtsc_run_check(argv : Array[String], start : Int) -> Unit {
+  if start >= argv.length() {
+    println("Usage: mtsc check [--parse] [--iters N] [--strict] <file.ts>")
     return
   }
   let mut parse_only = false
@@ -90,7 +108,7 @@ async fn main {
   let mut strict = false
   let mut iters = 1
   let mut path = ""
-  let mut i = 1
+  let mut i = start
   while i < argv.length() {
     let arg = argv[i]
     if arg == "--parse" {
@@ -113,7 +131,7 @@ async fn main {
     i = i + 1
   }
   if path == "" {
-    println("Usage: tscheck [--parse] [--iters N] <file.ts>")
+    println("Usage: mtsc check [--parse] [--iters N] [--strict] <file.ts>")
     return
   }
   let text = @fs.read_file(path).text() catch {

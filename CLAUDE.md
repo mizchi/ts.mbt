@@ -2334,7 +2334,8 @@ product surfaces now.
   `<module-commonjs>` each did once.
   The batch's operational finding cost two wasted runs and generalizes:
   `verify-examples` and `verify-generated-fixtures` invoke
-  `moon run src/cmd/ts2mbt`, which RECOMPILES from source, so running them
+  `moon run src/cmd/mtsc` (spelled `src/cmd/ts2mbt` when this was
+  written), which RECOMPILES from source, so running them
   while the tree is being edited measures whatever half-finished state the
   files are in. The first failure of this batch was exactly that, and the
   traced re-run proved it by failing on a `[4014]` type error introduced
@@ -2421,7 +2422,8 @@ product surfaces now.
   **`moon build --target native` builds DEBUG.** The justfile's
   `verify-checker-soundness` runs exactly that and then the oracle, which
   works only because the oracle picks the NEWER of the two binaries. Probing
-  `_build/native/release/.../tscheck.exe` by hand after a plain `moon build`
+  `_build/native/release/.../mtsc.exe` by hand (`tscheck.exe` when this was
+  written; it is `mtsc check` now) after a plain `moon build`
   measures whatever the last `--release` build contained — and it cost most
   of an hour here: a patch was "verified absent" by re-running that binary,
   the conclusion "the report must come from another site" was drawn from it,
@@ -4444,12 +4446,123 @@ product surfaces now.
   `ffi_func_type_name`'s missing direction parameter is untouched by this:
   "can a JS value arrive as this STRUCT" and "which way does this function
   TYPE cross" are different questions.
+- `src/cmd/mtsc` is the ONLY binary. `ts2mbt`, `mbt2ts`, `tscheck` and
+  `tsacc` were four more, and they are now four verbs —
+  `mtsc bridge`, `mtsc pkg`, `mtsc check`, `mtsc conformance` — with the
+  compile path staying the default, positional mode. The dispatch rule is
+  that a VERB wins over a same-named file, so `mtsc check` does not depend
+  on whether a directory called `check` happens to exist; `mtsc ./check`
+  still names the file. `TODO.md` records the opposite move ("the `tsmbt`
+  binary was split into per-direction `ts2mbt` / `mbt2ts` binaries"), and
+  what makes the re-merge different is that the split was about a
+  `--direction` FLAG, where the verbs are about one entry point.
+  The compile mode's command line is a SUPERSET of `tsc` / `tsgo`, and the
+  claim rests on three tiers rather than on a flag table.
+  **HONOURED** is the set with real behaviour behind it. **ACCEPTED** is
+  the set mtsc parses and has no behaviour for — `--target`, `--module`,
+  `--strict` and ~90 more — and it reports them in one line rather than
+  obeying or refusing them. That middle tier is the whole design: a
+  pipeline built around `tsc` passes `--target es2020 --strict` as a
+  matter of course, so refusing means the vocabulary can never be shared,
+  and accepting silently means `--strict false` looks obeyed while the
+  checker runs strictly anyway. **REJECTED** is everything else, and it
+  now exits NON-ZERO — mtsc used to print "unknown option" and exit 0, so
+  a typo in a build script was invisible. `--build` / `-b` is rejected
+  with its own sentence, because `tsc -b` on a solution file is not a
+  request to compile that file.
+  Option NAMES match ignoring case, `-` and `_`, which is a strict
+  superset of what `tsc` does (it lowercases and stops). That is what
+  lets mtsc's kebab-case history (`--no-check`) and `tsc`'s camelCase
+  (`--noCheck`) be ONE option rather than two tables that can disagree —
+  and `--noCheck` turning out to be `tsc`'s own name for a flag mtsc had
+  already invented is the reason the merge is free rather than a
+  compromise.
+  Four findings are worth more than the plumbing. **The two check paths
+  are different questions and both are kept**: `mtsc --noEmit` walks the
+  import graph and checks it as one program, which is what CI asks `tsc`
+  for, while `mtsc check` checks ONE file with a single-file model, which
+  is what the conformance corpus needs (each of its 4,484 cases is a
+  one-file program). Folding the second into the first would have
+  retargeted the checker's own gate. Its output is an INTERFACE for the
+  same reason — `checker_conformance_oracle.sh`, `checker_precision.sh`,
+  `verify_checker_scaling.mjs` and `checker_miss_buckets.mjs` all parse
+  the summary line, and it exits 0 whatever it finds because those
+  scripts run under `set -e`. Verified by capturing 36 cases from the five
+  old binaries and diffing: **23 are byte-identical**, and the 13 that
+  differ are help text, the version string and that one deliberate exit
+  code. The oracle itself was then run end to end on a synthetic
+  five-file corpus (the `typescript/` submodule is not checked out here),
+  which classified 3 TP / 2 TN correctly through `mtsc check`.
+  Second, **`-v` stopped being a conflict by being in two scopes**.
+  `tscheck -v` is verbose and `tsc -v` is version; as verbs they never
+  meet, which is the one thing the layout buys for free.
+  Third, **a watcher never exits, so nothing ever flushes stdout**. C
+  stdio block-buffers a pipe, so `mtsc --watch > build.log` produced an
+  EMPTY log while compiling correctly — every line arrived at once when
+  the process was killed. It is fixed with `fflush(NULL)`, bound as
+  `extern "c" fn(Int64)` and passed `0L` because MoonBit has no pointer
+  type and both target ABIs pass a 64-bit integer and a pointer in the
+  same register — the same assumption the existing `exit` binding already
+  makes. Proven by measurement rather than by reading: a probe printing,
+  flushing, then sleeping 4 s puts its first line in a redirected log at
+  t=2 s, and without the flush nothing lands until exit. A one-shot
+  compile needs none of this, because exiting flushes.
+  Fourth, **`--watch` watches the resolved PROGRAM, not the entry list**,
+  and it reuses the loader to get it. An independent walk could disagree
+  with the compiler's, and a watcher that disagrees misses rebuilds.
+  Two limits are declared rather than left to be discovered: a file ADDED
+  under an `include` pattern is not seen until something already in the
+  program changes (a new path has no previous mtime to differ from), and
+  the resolution caches in `main.mbt` have to be CLEARED per pass — their
+  own comment says "a compile is one process over a snapshot of the tree,
+  so nothing here can go stale within a run", and watch mode is the one
+  caller for which that is false.
+  `tsconfig` reading went into the PARSER, next to the scanner it reuses,
+  rather than into the CLI. `tsconfig_compiler_option` answers for STRING
+  options only — `parse_json_string_at` returns `None` for `true`, so
+  every boolean in a tsconfig was invisible — and `-p` also needs the file
+  sets. tsconfig is JSONC, so a second reader in the CLI would have been
+  the one-rule-in-several-places defect with comments as the first thing
+  the two copies disagree about. The FILESYSTEM half stayed in the CLI:
+  the parser says what a config means, the CLI says which files that is.
+  `node_modules` is pruned during the walk and not filtered after it,
+  because a project with dependencies installed has two or three orders
+  of magnitude more files there than in its own tree.
+  Two pre-existing defects surfaced and are fixed, both stated here so
+  they are not re-attributed to the merge. `CLI_VERSION` read `0.4.0`
+  against a `moon.mod` reading `0.5.2` — harmless while the only consumer
+  was a banner nobody asserted, and a wrong answer once `mtsc --version`
+  became a `tsc`-compatible surface. And `checker_precision.sh` could
+  never produce output: `find … | sort -z` fed newline-separated records
+  to a NUL-separated reader, so the entire file list arrived as ONE
+  record, `COUNTS` got a single multi-line key, and the later
+  `${!COUNTS[@]} | tr ' ' '\n'` split it back into paths that were not
+  keys — `unbound variable` under `set -u`. Its `find` also read
+  `(depth<=3 AND *.ts) OR *.tsx`, collecting `.tsx` at any depth, since
+  `-o` binds looser than the implicit `-a`. Proven pre-existing by
+  running HEAD's version with only the binary path swapped; it now
+  reports 160 files, 0 parse errors, 277 issues, which is its first real
+  output. `moon check --deny-warn` was also not clean on this toolchain
+  (moonc v0.10.13 against the v0.10.12 the file records) — four
+  `unused_package` warnings, two of which vanished with `tsacc` and
+  `tscheck` and two of which were genuinely unused `for "wbtest"` imports
+  of `moonbitlang/core/debug`. It is clean again, and it IS the gate.
+  `src/parser/pkg.generated.mbti` was stale too, missing a `Parser` field
+  that HEAD's source already had; `moon info` corrects it.
+  The one cost of the consolidation is written into `.moonignore`, which
+  used to exclude `src/cmd/tscheck` from the published archive. The two
+  development verbs now SHIP, because there is no longer a package
+  boundary to exclude them at. They are inert unless invoked by name and
+  add no dependency the compile path did not already link — `parser` and
+  `checker` both arrive through `transform`, which is also why `tsacc`'s
+  original reason for being a separate binary (a fast link of just those
+  two) no longer existed.
 
 ## Project Structure
 
 ```
 typescript.mbt/
-├── moon.mod.json
+├── moon.mod
 └── src/
     ├── ast/                 # Shared AST types
     ├── parser/              # TypeScript / JavaScript parser + module resolver
@@ -4459,10 +4572,16 @@ typescript.mbt/
     ├── bridge/              # Bridge code generation (both directions)
     ├── main.mbt             # `mizchi/ts` library: bridge entry helpers
     ├── unified_cli.mbt      # `--input ... --out ...` unified driver
+    ├── bridge_cli.mbt       # `mtsc bridge` / `mtsc pkg` verb dispatch
     └── cmd/
-        ├── ts2mbt/main.mbt  # CLI binary: TypeScript -> MoonBit
-        ├── mbt2ts/main.mbt  # CLI binary: MoonBit -> TypeScript
-        └── mtsc/main.mbt    # CLI binary: TypeScript -> JavaScript
+        └── mtsc/            # THE binary. One executable package.
+            ├── main.mbt             # compile pipeline + graph loader
+            ├── driver.mbt           # verb dispatch, entry resolution, run loop
+            ├── tsc_options.mbt      # the tsc-superset option layer
+            ├── tsconfig_project.mbt # -p: include/exclude globbing
+            ├── watch.mbt            # --watch (mtime polling)
+            ├── check_cmd.mbt        # `mtsc check`      (was `tscheck`)
+            └── conformance_cmd.mbt  # `mtsc conformance` (was `tsacc`)
 ```
 
 ## Dependencies
@@ -4472,12 +4591,19 @@ typescript.mbt/
 ## Commands
 
 ```bash
-# Check for errors AND warnings. This is clean as of the latest
-# toolchain (moon 0.1.20260904 / moonc v0.10.12) and is the gate — an
+# Check for errors AND warnings. This is clean and is the gate — an
 # earlier note here said it could not be, which was true of a tree
 # carrying 450+ warnings and is not true now. Keep it at zero: the way
 # it stopped being a gate the first time was a `warnings = "-00.."`
 # line in one package's moon.pkg, not a decision anyone made.
+#
+# Clean on moon 0.1.20260915 / moonc v0.10.13. It was NOT clean when
+# that toolchain first ran against a tree last verified on v0.10.12 —
+# four `unused_package` warnings appeared, which is the second way this
+# gate stops being one: a newer compiler reports more. Two of the four
+# were real dead imports and are gone. So "clean" is a claim about a
+# toolchain as much as about the tree, and bumping the toolchain means
+# re-running this before trusting it.
 moon check --deny-warn
 
 # Run tests. Takes about an hour, and most of that is NOT tests: the

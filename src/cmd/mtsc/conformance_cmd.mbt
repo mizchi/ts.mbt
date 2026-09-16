@@ -1,15 +1,20 @@
-// Fast corpus-accuracy CLI: replicates the parser package's
-// "checker: accuracy against TypeScript conformance baselines" whitebox
-// test as a standalone `cmd` binary. The whitebox test bundles every
-// parser test (a ~25 MB generated C unit that `tcc` can take many minutes
-// to build); this binary pulls in only `parser` + `checker`, so it
-// compiles quickly and lets the conformance recall / false-positive
-// numbers be measured without paying that cost.
+// `mtsc conformance` — corpus accuracy, without the test harness.
 //
-//   tsacc                       # walks the pinned conformance dirs, prints the 2x2 table
-//   tsacc --list-misses         # also print every recall miss (`RECALL_MISS <case>`)
-//                               # and every false positive (`FALSE_POS <case> :: <path> :: <message>`)
-//   tsacc --list-misses <substr> # ...restricted to paths containing <substr>
+// It replicates the parser package's "checker: accuracy against
+// TypeScript conformance baselines" whitebox test. That test bundles
+// every parser test into a ~25 MB generated C unit `tcc` can take many
+// minutes to build; running the same measurement from the CLI lets the
+// recall / false-positive numbers be read without paying that cost.
+//
+//   mtsc conformance                       # walks the pinned conformance dirs, prints the 2x2 table
+//   mtsc conformance --list-misses         # also print every recall miss (`RECALL_MISS <case>`)
+//                                          # and every false positive (`FALSE_POS <case> :: <path> :: <message>`)
+//   mtsc conformance --list-misses <substr> # ...restricted to paths containing <substr>
+//
+// This was the `tsacc` binary. Its reason for being separate was build
+// cost — it linked only `parser` + `checker` — and that reason is gone:
+// `mtsc` already links both through `transform`, so the separate binary
+// was paying for a link of its own and buying nothing.
 
 ///|
 fn ts_case_basename(path : String) -> String {
@@ -93,16 +98,23 @@ async fn collect_ts_source_files_recursive(dir : String) -> Array[String] {
 }
 
 ///|
-async fn main {
+/// `mtsc conformance` — the checker's accuracy against the pinned
+/// TypeScript conformance baselines.
+///
+/// `start` is the index of the first option, so the verb dispatch in
+/// `driver.mbt` passes `2`. Every line it prints is unchanged from the
+/// `tsacc` binary this replaces: the 2x2 table and the per-directory
+/// breakdown are read by hand and by `docs/tsacc.md`, and a reworded
+/// summary would invalidate every number recorded against it.
+async fn mtsc_run_conformance(argv : Array[String], start : Int) -> Unit {
   // `--list-misses [substr]`: in addition to the 2x2 table, print one
   // `RECALL_MISS <case>` line per baseline-positive file we fail to flag
   // (a recall miss), optionally filtered to paths containing `substr`.
   // Handy for triaging which conformance cases to target next without
   // ad-hoc instrumentation.
-  let argv = @env.args()
   let mut list_misses = false
   let mut miss_filter = ""
-  for i in 0..<argv.length() {
+  for i in start..<argv.length() {
     if argv[i] == "--list-misses" {
       list_misses = true
       if i + 1 < argv.length() && !argv[i + 1].has_prefix("--") {

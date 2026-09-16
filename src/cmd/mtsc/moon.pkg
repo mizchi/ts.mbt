@@ -1,9 +1,15 @@
 import {
   "moonbitlang/async",
+  // `@async_fs.mtime` is what `--watch` polls. `mizchi/x/fs` has no
+  // stat call, so this is the only source of a modification time.
+  "moonbitlang/async/fs" @async_fs,
   "moonbitlang/core/bench",
   "moonbitlang/core/env",
+  "moonbitlang/core/string",
   "mizchi/x/fs",
+  "mizchi/ts" @ts,
   "mizchi/ts/ast",
+  "mizchi/ts/checker",
   "mizchi/ts/mtsc" @mtsc_core,
   "mizchi/ts/parser",
   "mizchi/ts/transform",

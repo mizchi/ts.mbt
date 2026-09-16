@@ -16,7 +16,11 @@
 
 set -u
 
-BIN="_build/native/release/build/cmd/tscheck/tscheck.exe"
+# `tscheck` is the `mtsc check` verb now, so every invocation below
+# carries it. `CHK` keeps binary-plus-verb together: splitting them
+# would mean nine call sites that each have to remember the verb.
+BIN="_build/native/release/build/cmd/mtsc/mtsc.exe"
+CHK="$BIN check"
 if [[ ! -x "$BIN" ]]; then
   echo "build $BIN first: moon build --target native --release" >&2
   exit 1
@@ -53,7 +57,7 @@ for f in "${FILES[@]}"; do
   fi
   size=$(stat -c %s "$f")
   size_kb=$(( size / 1024 ))
-  out=$(/usr/bin/time -f "%e %M" "$BIN" "$f" 2>&1 >/dev/null)
+  out=$(/usr/bin/time -f "%e %M" $CHK "$f" 2>&1 >/dev/null)
   elapsed=$(echo "$out" | awk '{print $1}')
   rss=$(echo "$out" | awk '{print $2}')
   elapsed_ms=$(awk "BEGIN { printf \"%.0f\", $elapsed * 1000 }")
@@ -71,7 +75,7 @@ for f in "${FILES[@]}"; do
   fi
   size=$(stat -c %s "$f")
   size_kb=$(( size / 1024 ))
-  rss=$(/usr/bin/time -f "%M" "$BIN" "$f" 2>&1 >/dev/null | tail -1)
+  rss=$(/usr/bin/time -f "%M" $CHK "$f" 2>&1 >/dev/null | tail -1)
   ratio=$(awk "BEGIN { printf \"%.2f\", $size_kb / $rss }")
   printf "%-50s %12d %10d %12s\n" "$f" "$size_kb" "$rss" "$ratio"
 done
@@ -85,8 +89,8 @@ for f in "${FILES[@]}"; do
   if [[ ! -f "$f" ]]; then
     continue
   fi
-  rss_p=$(/usr/bin/time -f "%M" "$BIN" --parse "$f" 2>&1 >/dev/null | tail -1)
-  rss_c=$(/usr/bin/time -f "%M" "$BIN"         "$f" 2>&1 >/dev/null | tail -1)
+  rss_p=$(/usr/bin/time -f "%M" $CHK --parse "$f" 2>&1 >/dev/null | tail -1)
+  rss_c=$(/usr/bin/time -f "%M" $CHK         "$f" 2>&1 >/dev/null | tail -1)
   delta=$(( rss_c - rss_p ))
   printf "%-50s %12d %12d %12d\n" "$f" "$rss_p" "$rss_c" "$delta"
 done
@@ -98,8 +102,8 @@ echo "================================================================"
 TARGET="${FILES[-1]}"
 printf "%-8s %14s %14s\n" "iters" "parse RSS(KB)" "+check RSS(KB)"
 for n in 1 5 10 20; do
-  rss_p=$(/usr/bin/time -f "%M" "$BIN" --parse --iters "$n" "$TARGET" 2>&1 >/dev/null | tail -1)
-  rss_c=$(/usr/bin/time -f "%M" "$BIN"         --iters "$n" "$TARGET" 2>&1 >/dev/null | tail -1)
+  rss_p=$(/usr/bin/time -f "%M" $CHK --parse --iters "$n" "$TARGET" 2>&1 >/dev/null | tail -1)
+  rss_c=$(/usr/bin/time -f "%M" $CHK         --iters "$n" "$TARGET" 2>&1 >/dev/null | tail -1)
   printf "%-8d %14s %14s\n" "$n" "$rss_p" "$rss_c"
 done
 
@@ -108,5 +112,5 @@ echo "================================================================"
 echo "5. hyperfine: parse-only vs parse+check (5 iterations each, scanner.ts)"
 echo "================================================================"
 hyperfine --warmup 2 --runs 10 --shell=none \
-  "$BIN --parse --iters 5 typescript/src/compiler/scanner.ts" \
-  "$BIN         --iters 5 typescript/src/compiler/scanner.ts"
+  "$CHK --parse --iters 5 typescript/src/compiler/scanner.ts" \
+  "$CHK         --iters 5 typescript/src/compiler/scanner.ts"

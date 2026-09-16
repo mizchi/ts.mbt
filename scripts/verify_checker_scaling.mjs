@@ -42,7 +42,7 @@
 //   node scripts/verify_checker_scaling.mjs
 //   node scripts/verify_checker_scaling.mjs --axis interfaces
 //   node scripts/verify_checker_scaling.mjs --max-exponent 1.4
-//   node scripts/verify_checker_scaling.mjs --baseline path/to/tscheck.exe
+//   node scripts/verify_checker_scaling.mjs --baseline path/to/mtsc.exe
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -54,8 +54,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WORK = path.join(ROOT, "_build", "checker-scaling");
 
 const CANDIDATES = [
-  path.join(ROOT, "_build/native/release/build/cmd/tscheck/tscheck.exe"),
-  path.join(ROOT, "_build/native/debug/build/cmd/tscheck/tscheck.exe"),
+  path.join(ROOT, "_build/native/release/build/cmd/mtsc/mtsc.exe"),
+  path.join(ROOT, "_build/native/debug/build/cmd/mtsc/mtsc.exe"),
 ];
 
 // The rungs. 4x between the first and last is enough to separate linear
@@ -322,7 +322,7 @@ function findBinary(explicit) {
   // was in the DEBUG one.
   const found = CANDIDATES.filter((p) => fs.existsSync(p));
   if (found.length === 0) {
-    console.error("no tscheck binary — run `moon build --target native --release` first");
+    console.error("no mtsc binary — run `moon build --target native --release` first");
     process.exit(2);
   }
   found.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
@@ -337,7 +337,7 @@ function timeFile(bin, file, iters, repeats) {
   let best = Infinity;
   for (let r = 0; r < repeats; r++) {
     const t0 = process.hrtime.bigint();
-    const res = spawnSync(bin, ["--iters", String(iters), file], { stdio: "ignore" });
+    const res = spawnSync(bin, ["check", "--iters", String(iters), file], { stdio: "ignore" });
     const t1 = process.hrtime.bigint();
     if (res.status !== 0 && res.status !== null) {
       return { ms: NaN, error: `exit ${res.status}` };

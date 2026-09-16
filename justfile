@@ -17,7 +17,7 @@ test-filter filter:
 
 # Run the development-only TypeScript checker on a source file
 tscheck *ARGS:
-    moon run --target native src/cmd/tscheck -- {{ ARGS }}
+    moon run --target native src/cmd/mtsc -- check {{ ARGS }}
 
 # Format code
 fmt:
@@ -39,11 +39,11 @@ verify-mbti-dts:
     rm -rf "$ROOT"
     mkdir -p "$TS_ROOT" "$MOONBIT_ROOT"
 
-    moon run src/cmd/mbt2ts -- decl src/ast/pkg.generated.mbti "$TS_ROOT/ast.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/parser/pkg.generated.mbti "$TS_ROOT/parser.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/bridge/pkg.generated.mbti "$TS_ROOT/bridge.d.ts" >/dev/null
-    moon run src/cmd/mbt2ts -- decl src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/ast/pkg.generated.mbti "$TS_ROOT/ast.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/parser/pkg.generated.mbti "$TS_ROOT/parser.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/bridge/pkg.generated.mbti "$TS_ROOT/bridge.d.ts" >/dev/null
+    moon run src/cmd/mtsc -- pkg decl src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
 
     cat <<'EOF' > "$MOONBIT_ROOT/debug.d.ts"
     export interface Debug {}
@@ -165,7 +165,7 @@ verify-checker-soundness:
 #
 #   just verify-checker-scaling
 #   just verify-checker-scaling --axis interfaces
-#   just verify-checker-scaling --baseline path/to/old/tscheck.exe
+#   just verify-checker-scaling --baseline path/to/old/mtsc.exe
 verify-checker-scaling *ARGS:
     moon build --target native --release
     node scripts/verify_checker_scaling.mjs {{ ARGS }}

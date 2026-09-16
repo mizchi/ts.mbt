@@ -8,6 +8,5 @@ import {
   "mizchi/x/fs",
   "moonbitlang/async",
   "moonbitlang/core/bench",
-  "moonbitlang/core/debug",
   "moonbitlang/core/test",
 } for "wbtest"

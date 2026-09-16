@@ -1,6 +1,6 @@
-# `tsacc`: checker conformance accuracy の計測
+# `mtsc conformance`: checker conformance accuracy の計測
 
-`tsacc` は contributor 用の measurement CLI です。pinned TypeScript conformance
+`mtsc conformance` は contributor 用の measurement CLI です。pinned TypeScript conformance
 corpus を走査し、checker の recall と false positive 数を素早く集計します。アプリケーション
 利用者向けの bridge generator ではありません。
 
@@ -8,9 +8,9 @@ corpus を走査し、checker の recall と false positive 数を素早く集�
 corpus 更新や checker 実装で変わるため、変更時には以下の command で再計測します。
 
 ```sh
-moon run src/cmd/tsacc
-moon run src/cmd/tsacc --list-misses
-moon run src/cmd/tsacc --list-misses controlFlow
+moon run src/cmd/mtsc -- conformance
+moon run src/cmd/mtsc -- conformance --list-misses
+moon run src/cmd/mtsc -- conformance --list-misses controlFlow
 ```
 
 前提として `typescript/` corpus と baseline が checkout 済みである必要があります。

@@ -1,344 +1,36 @@
-// mtsc — minimal TypeScript → JavaScript compiler driver.
+// mtsc — the single entry point of this toolchain.
 //
-// Wraps `@transform.transform_source_full` so a TS / TSX file can be
-// lowered to plain JavaScript on the command line. The pipeline is:
+// It is two things at once, and the dispatch in `main` is where they
+// meet:
 //
-//   parse → JSX-runtime lowering → (optional) identifier mangling →
-//   emit
+//   * a TypeScript -> JavaScript compiler whose command line is a
+//     SUPERSET of `tsc` / `tsgo` (see `tsc_options.mbt` for the three
+//     tiers that claim rests on, and `tsconfig_project.mbt` for `-p`);
+//   * four verbs that used to be four separate binaries —
+//     `mtsc check` (was `tscheck`), `mtsc conformance` (was `tsacc`),
+//     `mtsc bridge` (was `ts2mbt`) and `mtsc pkg` (was `mbt2ts`).
 //
-// Usage:
+// A verb wins over a file of the same name. That is the one place the
+// two halves can collide, and resolving it toward the verb is what keeps
+// `mtsc check` from depending on whether a directory called `check`
+// happens to exist; a source file is spelled `x.ts`, so nothing real is
+// shadowed. `mtsc ./check` still names the file.
 //
-//   mtsc <input.ts> [--out <file.js>] [--mangle]
-//                   [--mangle-properties] [--sourcemap]
-//                   [--jsx-runtime automatic|classic]
-//                   [--jsx-import-source <pkg>]
-//                   [--jsx-dev]
+// The compile pipeline itself is unchanged:
 //
-// When `--out` is omitted the JS is written to stdout. With
-// `--sourcemap`, a v3 map is also written next to the output file
-// (`<out>.map`); a `//# sourceMappingURL=` footer is appended to the
-// JS so loaders can pick it up. Mangling and source-maps are
-// mutually exclusive for now — the source position table doesn't
+//   parse → JSX-runtime lowering → (optional) identifier mangling → emit
+//
+// When neither `--out` nor `--outDir` is given the JS is written to
+// stdout. With `--sourceMap`, a v3 map is also written next to the
+// output file (`<out>.map`); a `//# sourceMappingURL=` footer is
+// appended to the JS so loaders can pick it up. Mangling and source-maps
+// are mutually exclusive for now — the source position table doesn't
 // survive the rename pass yet.
-
+//
 // Every input is type-checked before it is transformed. `mtsc` uses the
-// checker’s strict entry point so diagnostics match `tscheck --strict`, and
-// never writes JavaScript when the checker finds an issue.
-
-///|
-priv struct MtscOptions {
-  mut input : String?
-  mut out : String?
-  mut bundle : Bool
-  mut treeshake : Bool
-  mut fold : Bool
-  mut minify : Bool
-  // Library-mode opt-in. When `true`, every property name that
-  // appears in an interface / type alias / class declaration is
-  // added to the mangler's reserved set so downstream consumers
-  // can still type-check against the emitted bundle. Off by
-  // default because plain `--bundle` is self-contained.
-  mut reserve_typed_props : Bool
-  // Selective library mode: reserve only the property names
-  // reachable from the ENTRY module's `export` declarations.
-  // Internal helper types declared in the entry (or elsewhere)
-  // are still fair game to mangle. External IO surface
-  // (`console`, `fetch`, `JSON`, etc.) stays reserved via the
-  // built-in globals list in `mangle_safety.mbt`. Off by default;
-  // takes precedence over `--reserve-typed-props` when both are set.
-  mut reserve_entry_exports : Bool
-  // Emit a companion `.d.ts` next to the JS output. Contains only
-  // the entry module's exported type surface — internal helper
-  // types are omitted. Requires `--bundle`.
-  mut dts : Bool
-  // Print a warning when a getter's body contains a direct side
-  // effect (assignment, call to an impure function, `++` / `--`,
-  // etc). Getters in JS are conventionally pure; an impure one
-  // is almost always a bug. Off by default to keep output quiet.
-  mut warn_impure_getters : Bool
-  // Report reflection in the input that no optimization can see
-  // through — `Reflect.ownKeys` and friends enumerate NON-enumerable
-  // properties, which is exactly what a class prototype method is, so
-  // one call anywhere keeps every method of every class in the bundle.
-  //
-  // On by default, unlike `--warn-impure-getters`, because the author
-  // is the only one who can act on it and should not have to know a
-  // flag exists to find out. Suppressed when the JS itself is going to
-  // stdout: there the diagnostic would land inside the program.
-  // `--warn-reflection` forces it on even then, `--no-warn-reflection`
-  // off.
-  mut warn_reflection : Bool?
-  // Bare specifiers the user wants left as `import … from "<spec>"`
-  // in the emitted bundle. Anything not on this list is resolved
-  // through node_modules / tsconfig paths and inlined when found.
-  externals : Map[String, Bool]
-  mut mangle : Bool
-  mut mangle_properties : Bool
-  // `--explain-mangle`: print why each minify decision went the way it
-  // did instead of only doing it. Implies the mangle passes, since a
-  // decision has to be made before it can be explained.
-  mut explain_mangle : Bool
-  // `--verify`: re-parse the emitted bundle and report any name it
-  // reads that nothing declares. See `docs/type-aware-dce.md` (E1).
-  mut verify : Bool
-  // `--disable-phase <name>`: run without a named pipeline phase, so a
-  // size delta can be attributed to it. `--timing` names every phase.
-  disabled_phases : Map[String, Bool]
-  mut mangle_properties_shape_color : Bool
-  // `--no-check`: skip type-checking. The gate exists because a type
-  // error usually means the program is wrong, but it also makes the
-  // whole pipeline unreachable for input that is not TypeScript in the
-  // first place — a published `.js` bundle, where an object literal
-  // grows properties at runtime and every such site reads as an error.
-  //
-  // It SKIPS rather than demotes. The checker is ~95% of a large
-  // compile (29.4 s of 30.6 s on `checker.ts`), and once the caller has
-  // said diagnostics must not stop the emit, running it buys output
-  // nobody acts on. `tscheck` is the way to see diagnostics without an
-  // abort.
-  mut no_check : Bool
-  // `--timing`: report wall time per pipeline phase. The compile is
-  // superlinear in input size and a twenty-pass pipeline gives a guess
-  // nothing to stand on, so the passes report instead.
-  mut timing : Bool
-  mut sourcemap : Bool
-  mut jsx_runtime : String?
-  mut jsx_import_source : String?
-  mut jsx_dev : Bool
-  mut help : Bool
-}
-
-///|
-fn mtsc_options_new() -> MtscOptions {
-  {
-    input: None,
-    out: None,
-    bundle: false,
-    treeshake: false,
-    fold: false,
-    minify: false,
-    reserve_typed_props: false,
-    reserve_entry_exports: false,
-    dts: false,
-    warn_impure_getters: false,
-    warn_reflection: None,
-    externals: {},
-    mangle: false,
-    mangle_properties: false,
-    explain_mangle: false,
-    verify: false,
-    disabled_phases: {},
-    mangle_properties_shape_color: false,
-    no_check: false,
-    timing: false,
-    sourcemap: false,
-    jsx_runtime: None,
-    jsx_import_source: None,
-    jsx_dev: false,
-    help: false,
-  }
-}
-
-///|
-fn mtsc_print_usage() -> Unit {
-  println("Usage: mtsc <input.ts> [options]")
-  println("")
-  println("Compile a single TypeScript / TSX entrypoint to JavaScript.")
-  println("Type errors are reported and prevent JavaScript output.")
-  println("")
-  println("Options:")
-  println("  --out, -o <file>          Write JS to <file> (default: stdout)")
-  println(
-    "  --bundle                  Follow relative imports from <input.ts> and emit one bundle",
-  )
-  println(
-    "  --treeshake               Drop top-level declarations unreached from any live stmt (implies --bundle)",
-  )
-  println(
-    "  --minify                  Suppress indentation / newlines / optional whitespace",
-  )
-  println(
-    "  --fold                    Constant-fold identity arithmetic and dead branches (implies --bundle)",
-  )
-  println(
-    "  --external <spec>         Keep this bare-specifier import external (repeatable; comma-separated also OK)",
-  )
-  println(
-    "  --reserve-typed-props     Reserve every property declared in an interface / type alias / class (library mode)",
-  )
-  println(
-    "  --reserve-entry-exports   Reserve only property names reachable from the entry's exports (library mode, selective)",
-  )
-  println(
-    "  --dts                     Emit a companion <out>.d.ts with the entry's exported type surface",
-  )
-  println(
-    "  --warn-impure-getters     Warn when a class getter body has a direct side effect (assign, call, mutation)",
-  )
-  println("  --mangle                  Rename non-exported local identifiers")
-  println(
-    "  --mangle-properties       Also rename non-reserved property keys (implies --bundle)",
-  )
-  println(
-    "  --warn-reflection         Report reflection that blocks an optimization (default on when -o is given)",
-  )
-  println("  --no-warn-reflection      Silence the reflection report")
-  println(
-    "  --explain-mangle          Report why each minify decision went the way it did",
-  )
-  println(
-    "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
-  )
-  println(
-    "  --verify                  Re-parse the emitted bundle and report any name nothing declares",
-  )
-  println(
-    "  --disable-phase <name>    Run without a named pipeline phase, to attribute bytes to it (repeatable; --timing lists the names)",
-  )
-  println(
-    "  --no-check                Skip type-checking entirely (non-TypeScript input; the check is ~95% of a large compile)",
-  )
-  println(
-    "  --timing                  Report wall time per pipeline phase (implies --bundle)",
-  )
-  println("  --sourcemap               Emit <out>.map alongside the JS output")
-  println("  --jsx-runtime <mode>      `automatic` (default) or `classic`")
-  println("  --jsx-import-source <pkg> Override the jsx-runtime import source")
-  println("  --jsx-dev                 Use the development JSX runtime")
-  println("  --help, -h                Show this help")
-}
-
-///|
-fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
-  let opts = mtsc_options_new()
-  let mut i = 1
-  while i < argv.length() {
-    let arg = argv[i]
-    match arg {
-      "--help" | "-h" => {
-        opts.help = true
-        return Ok(opts)
-      }
-      "--out" | "-o" => {
-        if i + 1 >= argv.length() {
-          return Err("missing value for \{arg}")
-        }
-        opts.out = Some(argv[i + 1])
-        i = i + 2
-        continue
-      }
-      "--bundle" => opts.bundle = true
-      "--treeshake" => {
-        opts.treeshake = true
-        opts.bundle = true
-      }
-      "--minify" => opts.minify = true
-      "--fold" => {
-        opts.fold = true
-        opts.bundle = true
-      }
-      "--reserve-typed-props" => opts.reserve_typed_props = true
-      "--reserve-entry-exports" => opts.reserve_entry_exports = true
-      "--dts" => {
-        opts.dts = true
-        opts.bundle = true
-      }
-      "--warn-impure-getters" => opts.warn_impure_getters = true
-      "--warn-reflection" => opts.warn_reflection = Some(true)
-      "--no-warn-reflection" => opts.warn_reflection = Some(false)
-      "--external" => {
-        if i + 1 >= argv.length() {
-          return Err("missing value for --external")
-        }
-        for raw in argv[i + 1].split(",") {
-          let spec = raw.to_owned().trim().to_owned()
-          if spec != "" {
-            opts.externals[spec] = true
-          }
-        }
-        i = i + 2
-        continue
-      }
-      "--mangle" => opts.mangle = true
-      // Property mangling implies `--bundle`, the way `--treeshake` and
-      // `--fold` already do — and for a stronger reason than they have.
-      // The escape analysis (both doors, the wildcard, the whole safety
-      // story) lives in `bundle_modules`. The single-file path has none
-      // of it, so `--mangle-properties` there renamed whatever it liked,
-      // including a CJS module's `exports.foo` and the keys of an
-      // exported object. A flag whose only safe form is one path should
-      // select that path rather than trust the user to.
-      "--mangle-properties" => {
-        opts.mangle = true
-        opts.mangle_properties = true
-        opts.bundle = true
-      }
-      "--explain-mangle" => {
-        opts.mangle = true
-        opts.mangle_properties = true
-        opts.explain_mangle = true
-        opts.bundle = true
-      }
-      "--verify" => opts.verify = true
-      "--disable-phase" => {
-        if i + 1 >= argv.length() {
-          return Err("missing value for --disable-phase")
-        }
-        for raw in argv[i + 1].split(",") {
-          let name = raw.to_owned().trim().to_owned()
-          if name != "" {
-            opts.disabled_phases[name] = true
-          }
-        }
-        i = i + 2
-        continue
-      }
-      "--no-check" => opts.no_check = true
-      "--timing" => {
-        opts.timing = true
-        opts.bundle = true
-      }
-      "--mangle-properties-shape-color" => {
-        opts.mangle = true
-        opts.mangle_properties = true
-        opts.mangle_properties_shape_color = true
-        opts.bundle = true
-      }
-      "--sourcemap" => opts.sourcemap = true
-      "--jsx-runtime" => {
-        if i + 1 >= argv.length() {
-          return Err("missing value for --jsx-runtime")
-        }
-        opts.jsx_runtime = Some(argv[i + 1])
-        i = i + 2
-        continue
-      }
-      "--jsx-import-source" => {
-        if i + 1 >= argv.length() {
-          return Err("missing value for --jsx-import-source")
-        }
-        opts.jsx_import_source = Some(argv[i + 1])
-        i = i + 2
-        continue
-      }
-      "--jsx-dev" => opts.jsx_dev = true
-      _ =>
-        if arg.has_prefix("--") {
-          return Err("unknown option: \{arg}")
-        } else {
-          match opts.input {
-            None => opts.input = Some(arg)
-            Some(prev) =>
-              return Err(
-                "unexpected extra positional argument: \{arg} (already have \{prev})",
-              )
-          }
-        }
-    }
-    i = i + 1
-  }
-  Ok(opts)
-}
+// checker's strict entry point so diagnostics match `mtsc check
+// --strict`, and never writes JavaScript when the checker finds an
+// issue.
 
 ///|
 async fn mtsc_build_jsx_config(
@@ -388,6 +80,19 @@ async fn mtsc_build_jsx_config(
   }
   match opts.jsx_import_source {
     Some(s) => cfg = cfg.with_import_source(s)
+    None => ()
+  }
+  // `--jsxFactory` / `--jsxFragmentFactory` had no command-line spelling
+  // at all: the two settings were read from tsconfig above and from the
+  // per-file pragma inside the transform, and the flags `tsc` offers for
+  // them fell through to "unknown option". The CLI sits above tsconfig
+  // in the same precedence order as the other two.
+  match opts.jsx_factory {
+    Some(f) => cfg = cfg.with_pragma_jsx(f)
+    None => ()
+  }
+  match opts.jsx_fragment_factory {
+    Some(f) => cfg = cfg.with_pragma_jsx_frag(f)
     None => ()
   }
   if opts.jsx_dev {
@@ -1120,6 +825,20 @@ let mtsc_regular_files : Map[String, Bool] = Map([])
 let mtsc_resolved_paths : Map[String, String] = Map([])
 
 ///|
+/// Drop everything the three caches above hold.
+///
+/// Their stated premise is that "a compile is one process over a
+/// snapshot of the tree, so nothing here can go stale within a run", and
+/// `--watch` is the one caller for which that is false: a rebuild exists
+/// because the tree changed. Without this, a file created after the
+/// first pass stays cached as absent and the rebuild cannot see it.
+fn mtsc_clear_resolution_caches() -> Unit {
+  mtsc_dir_entries.clear()
+  mtsc_regular_files.clear()
+  mtsc_resolved_paths.clear()
+}
+
+///|
 /// The names directly inside `dir`, read once. A directory that cannot
 /// be read caches as empty: that is the same answer every candidate
 /// under it would have got, and it stops a missing directory from being
@@ -1338,66 +1057,105 @@ fn mtsc_wasm_exit(code : Int) -> Unit = "wasi_snapshot_preview1" "proc_exit"
 fn mtsc_wasm_gc_exit(code : Int) -> Unit = "__moonbit_sys_unstable" "exit"
 
 ///|
+/// Leave the process with `code`. See `MTSC_EXIT_*` in
+/// `tsc_options.mbt` for what each value means to a caller.
+///
+/// This used to be `mtsc_exit_type_error()`, hard-wired to 1 and called
+/// from inside the compile. Both properties had to go: `tsc`
+/// distinguishes "diagnostics, nothing written" (1) from "diagnostics,
+/// written anyway" (2), and a compile that exits the process cannot be
+/// re-run, which is the whole of `--watch`.
 #cfg(any(target="native", target="llvm"))
-fn mtsc_exit_type_error() -> Unit {
-  mtsc_native_exit(1)
+fn mtsc_exit(code : Int) -> Unit {
+  mtsc_native_exit(code)
 }
 
 ///|
 #cfg(target="js")
-fn mtsc_exit_type_error() -> Unit {
-  if !mtsc_js_try_exit(1) {
+fn mtsc_exit(code : Int) -> Unit {
+  if !mtsc_js_try_exit(code) {
     panic()
   }
 }
 
 ///|
 #cfg(target="wasm")
-fn mtsc_exit_type_error() -> Unit {
-  mtsc_wasm_exit(1)
+fn mtsc_exit(code : Int) -> Unit {
+  mtsc_wasm_exit(code)
 }
 
 ///|
 #cfg(target="wasm-gc")
-fn mtsc_exit_type_error() -> Unit {
-  mtsc_wasm_gc_exit(1)
+fn mtsc_exit(code : Int) -> Unit {
+  mtsc_wasm_gc_exit(code)
 }
 
 ///|
-async fn main {
-  let argv = @env.args()
-  if argv.length() < 2 {
-    mtsc_print_usage()
-    return
-  }
-  let opts = match mtsc_parse_args(argv) {
-    Ok(o) => o
-    Err(e) => {
-      println("mtsc: \{e}")
-      mtsc_print_usage()
-      return
-    }
-  }
-  if opts.help {
-    mtsc_print_usage()
-    return
-  }
-  let input_path = match opts.input {
-    Some(p) => p
-    None => {
-      println("mtsc: no input file")
-      mtsc_print_usage()
-      return
-    }
+/// `fflush(NULL)`, which flushes every open output stream.
+///
+/// The argument is declared `Int64` and passed `0L` because `fflush`
+/// takes a `FILE*` and MoonBit has no pointer type to hand it. On both
+/// ABIs this targets (x86-64 SysV and aarch64 AAPCS) a 64-bit integer
+/// and a pointer are passed in the same register, so `0L` arrives as
+/// `NULL` — the same assumption the `exit` binding above already makes
+/// about an `Int` argument.
+#cfg(any(target="native", target="llvm"))
+extern "c" fn mtsc_native_fflush(stream : Int64) -> Int = "fflush"
+
+///|
+/// Push anything buffered in stdout out to the terminal or pipe.
+///
+/// Only `--watch` needs it, and it needs it badly: C stdio block-buffers
+/// stdout when it is not a terminal, and a watcher never exits, so
+/// `mtsc --watch > build.log` produced an EMPTY log while it was working
+/// correctly — every line appeared at once when the process was finally
+/// killed. Measured before and after: with the flush, the first pass's
+/// summary lands in a redirected log while the watcher is still idling;
+/// without it, nothing does.
+///
+/// A one-shot compile does not need this, because exiting flushes.
+#cfg(any(target="native", target="llvm"))
+fn mtsc_flush_stdout() -> Unit {
+  let _ = mtsc_native_fflush(0L)
+
+}
+
+///|
+/// Nothing to flush: `console.log` is unbuffered, and the wasm targets
+/// have no stdio layer of their own.
+#cfg(not(any(target="native", target="llvm")))
+fn mtsc_flush_stdout() -> Unit {
+
+}
+
+///|
+/// Compile one entry. `true` when the entry produced its output (or was
+/// checked clean under `--noEmit`), `false` when anything stopped it.
+///
+/// Every failure path reports and returns rather than exiting, so
+/// `--watch` can compile the same entry again and a multi-entry run can
+/// report on all of its inputs instead of the first that fails.
+async fn mtsc_compile_entry(
+  opts : MtscOptions,
+  input_path : String,
+  // Where this entry's JavaScript goes, when the caller derived it
+  // rather than the command line naming it. `--outDir` and a
+  // multi-entry run both need a per-entry path, and `opts.out` is shared
+  // across entries, so the choice is a parameter rather than a field.
+  out_override : String?,
+) -> Bool {
+  let effective_out = match out_override {
+    Some(p) => Some(p)
+    None => opts.out
   }
   if opts.mangle && opts.sourcemap {
     println(
       "mtsc: --mangle and --sourcemap can't be combined yet (source positions don't survive the rename pass)",
     )
-    return
+    return false
   }
   let jsx_cfg = mtsc_build_jsx_config(opts, input_path)
-  let output_path = match opts.out {
+  let output_path = match effective_out {
     Some(p) => p
     None => "output.js"
   }
@@ -1433,7 +1191,7 @@ async fn main {
       Ok(_) => ()
       Err(e) => {
         println("mtsc: \{e}")
-        return
+        return false
       }
     }
     // Report the lexer and the recursive descent separately, and keep
@@ -1474,9 +1232,27 @@ async fn main {
         @bench.monotonic_clock_end(check_started),
       )
       if !check_ok {
-        mtsc_exit_type_error()
-        return
+        return false
       }
+    }
+    // `--listFiles` names the program; `--listFilesOnly` stops there.
+    // Both read the loader's `files` map rather than re-walking, and
+    // both filter it the way the type-check does: the loader keys a
+    // module by BOTH its resolved path and the extension-less form a
+    // specifier spelled, so an unfiltered dump names half the files
+    // twice.
+    if opts.list_files {
+      mtsc_list_program_files(files)
+    }
+    if opts.list_files_only {
+      return true
+    }
+    // `--noEmit` stops after the check. Deliberately here and not
+    // before the load: the graph walk is what makes the check a
+    // PROGRAM check rather than a per-file one, which is the thing
+    // `tsc --noEmit` is asked for in CI.
+    if opts.no_emit {
+      return true
     }
     // `type_props` collects every property name declared in an
     // interface / type alias / class across the input. We DON'T
@@ -1597,7 +1373,7 @@ async fn main {
       Ok(o) => o
       Err(e) => {
         println("mtsc: \{e}")
-        return
+        return false
       }
     }
     if opts.warn_impure_getters {
@@ -1609,7 +1385,7 @@ async fn main {
     // the JS is going to stdout and the line would land in the program.
     let want_reflection = match opts.warn_reflection {
       Some(v) => v
-      None => opts.out is Some(_)
+      None => effective_out is Some(_)
     }
     if want_reflection && out.reflection_warnings.length() > 0 {
       println(
@@ -1659,7 +1435,7 @@ async fn main {
         println(line)
       }
     }
-    match opts.out {
+    match effective_out {
       Some(path) => {
         let js = match out.sourcemap {
           Some(_) => {
@@ -1672,7 +1448,7 @@ async fn main {
           None => out.js
         }
         if !write_text(path, js) {
-          return
+          return false
         }
         match out.sourcemap {
           Some(map_json) => {
@@ -1770,17 +1546,27 @@ async fn main {
       }
       None => println(out.js)
     }
-    return
+    return true
   }
   let source = @fs.read_file(input_path).text() catch {
     e => {
       println("mtsc: read error \{input_path}: \{e}")
-      return
+      return false
     }
   }
   if !mtsc_typecheck_source(source, input_path) && !opts.no_check {
-    mtsc_exit_type_error()
-    return
+    return false
+  }
+  // The single-file path's program is the one file, so the two list
+  // options degenerate to printing it.
+  if opts.list_files {
+    println(input_path)
+  }
+  if opts.list_files_only {
+    return true
+  }
+  if opts.no_emit {
+    return true
   }
   let result = @transform.transform_source_full(
     source,
@@ -1796,10 +1582,10 @@ async fn main {
     Ok(o) => o
     Err(e) => {
       println("mtsc: \{e}")
-      return
+      return false
     }
   }
-  let js = match (out.sourcemap, opts.out) {
+  let js = match (out.sourcemap, effective_out) {
     (Some(_), Some(p)) => {
       let base = match p.rev_find("/") {
         Some(i) => p[i + 1:p.length()].to_owned()
@@ -1809,10 +1595,10 @@ async fn main {
     }
     _ => out.js
   }
-  match opts.out {
+  match effective_out {
     Some(path) => {
       if !write_text(path, js) {
-        return
+        return false
       }
       match out.sourcemap {
         Some(map_json) => {
@@ -1823,4 +1609,5 @@ async fn main {
     }
     None => println(js)
   }
+  true
 }

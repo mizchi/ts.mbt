@@ -9,7 +9,6 @@ import {
 
 import {
   "moonbitlang/async",
-  "moonbitlang/core/debug",
   "moonbitlang/core/test",
   "mizchi/ts/ast",
   "mizchi/ts/checker",

@@ -11,16 +11,16 @@ MoonBit と TypeScript の間で bridge package を生成する toolchain です
 TypeScript dependencies を MoonBit から使う場合:
 
 ```sh
-moon install mizchi/ts/cmd/ts2mbt
-ts2mbt generate
+moon install mizchi/ts/cmd/mtsc
+mtsc bridge generate
 ```
 
 MoonBit package を npm package にする場合:
 
 ```sh
-moon install mizchi/ts/cmd/mbt2ts
+moon install mizchi/ts/cmd/mtsc
 cd my-moonbit-library
-mbt2ts --pkg
+mtsc pkg npm
 cd npm && npm publish --access public
 ```
 
@@ -42,31 +42,41 @@ Hono を MoonBit から使う完全な手順は [Quick start](./docs/quick-start
 ## Install
 
 ```sh
-moon install mizchi/ts/cmd/ts2mbt
-moon install mizchi/ts/cmd/mbt2ts
-
-# 両方を一度に install
-moon install mizchi/ts/...
+moon install mizchi/ts/cmd/mtsc
 ```
 
 install 後は `~/.moon/bin/` を `$PATH` に追加します。source checkout から実行する
-場合は `moon run src/cmd/{ts2mbt,mbt2ts} -- ...` を使います。
+場合は `moon run src/cmd/mtsc -- ...` を使います。
 
 ## Tools
 
-| Tool     | 概要                                                           | 詳細                                 |
-| -------- | -------------------------------------------------------------- | ------------------------------------ |
-| `ts2mbt` | TypeScript declaration / npm package を MoonBit bridge に変換  | [`docs/ts2mbt.md`](./docs/ts2mbt.md) |
-| `mbt2ts` | MoonBit package を TypeScript declaration / npm package に変換 | [`docs/mbt2ts.md`](./docs/mbt2ts.md) |
-| `mtsc`   | TypeScript / TSX を型検査して JavaScript に変換                | [`docs/mtsc.md`](./docs/mtsc.md)     |
+binary は `mtsc` 1 つだけです。TypeScript の compile は default の位置引数で、
+それ以外の機能は verb で分かれています。
 
-`tscheck` と `tsacc` は開発用 command であり、公開 tool には含めません。
+| Command            | 概要                                                           | 詳細                                 |
+| ------------------ | -------------------------------------------------------------- | ------------------------------------ |
+| `mtsc [files...]`  | TypeScript / TSX を型検査して JavaScript に変換                | [`docs/mtsc.md`](./docs/mtsc.md)     |
+| `mtsc bridge`      | TypeScript declaration / npm package を MoonBit bridge に変換  | [`docs/ts2mbt.md`](./docs/ts2mbt.md) |
+| `mtsc pkg`         | MoonBit package を TypeScript declaration / npm package に変換 | [`docs/mbt2ts.md`](./docs/mbt2ts.md) |
+| `mtsc check`       | 1 file の checker 診断（開発用）                               | [`docs/mtsc.md`](./docs/mtsc.md)     |
+| `mtsc conformance` | TypeScript conformance corpus に対する精度集計（開発用）       | [`docs/tsacc.md`](./docs/tsacc.md)   |
+
+compile mode の command line は `tsc` / `tsgo` の **superset** です。`tsc` の
+option 名はそのまま通り、`-p` / `tsconfig.json` の読み取り、`--noEmit`、
+`--watch`、`tsc` 準拠の exit code に対応します。mtsc が動作を持たない option
+（`--target`、`--module`、`--strict` など）は受け取ったうえで「honour していない」
+と 1 行報告します。黙って無視はしません。
+
+`ts2mbt` / `mbt2ts` / `tscheck` / `tsacc` の 4 binary は `mtsc` に集約されました。
+対応は `ts2mbt X` → `mtsc bridge X`、`mbt2ts X` → `mtsc pkg X`、
+`mbt2ts --pkg` → `mtsc pkg npm`、`tscheck` → `mtsc check`、
+`tsacc` → `mtsc conformance` です。
 
 ## Generated package contract
 
-- `ts2mbt` の output は consumer module の `internal/generated/` に置く bridge package
+- `mtsc bridge` の output は consumer module の `internal/generated/` に置く bridge package
   です。`SCAFFOLD_DIAGNOSTICS.md` で widen / omit した surface を確認します。
-- `mbt2ts --pkg` の output は `npm/` です。`moon.mod` の version と metadata を使い、
+- `mtsc pkg npm` の output は `npm/` です。`moon.mod` の version と metadata を使い、
   `package.json`、`index.js`、`.d.ts`、subpath export、必要なら npm `bin` を生成します。
 - どちらも output を手編集せず、入力と option から再生成してください。
 
@@ -75,8 +85,8 @@ install 後は `~/.moon/bin/` を `$PATH` に追加します。source checkout �
 
 ## Diagnostics and examples
 
-- [`docs/ts2mbt.md`](./docs/ts2mbt.md) — `SCAFFOLD_DIAGNOSTICS.md`、vendor と bridge。
-- [`docs/mbt2ts.md`](./docs/mbt2ts.md) — `AUTOLINK_DIAGNOSTICS.md`、npm publish。
+- [`docs/ts2mbt.md`](./docs/ts2mbt.md) — `mtsc bridge`: `SCAFFOLD_DIAGNOSTICS.md`、vendor と bridge。
+- [`docs/mbt2ts.md`](./docs/mbt2ts.md) — `mtsc pkg`: `AUTOLINK_DIAGNOSTICS.md`、npm publish。
 - [`docs/mtsc.md`](./docs/mtsc.md) — checker の CLI、ABI、既知ギャップ。
 - [`docs/mangle-safety.md`](./docs/mangle-safety.md) — 型追跡による安全な property mangling と、その検証 corpus。
 - [`docs/minify-patterns.md`](./docs/minify-patterns.md) — minify / mangle パターンの一覧と、各パターンの証明義務。
@@ -99,7 +109,7 @@ checker の TypeScript conformance gate は次を使います。
 just checker-conformance-oracle --max-fp 0 --max-legal-parsefail 1
 ```
 
-軽量な conformance 集計には [tsacc guide](./docs/tsacc.md) を参照してください。
+軽量な conformance 集計には [`mtsc conformance` guide](./docs/tsacc.md) を参照してください。
 
 優先度と既知の制約は [checker priority](./docs/checker-priority.md) を参照してください。
 

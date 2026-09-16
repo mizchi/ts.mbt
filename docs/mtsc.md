@@ -18,24 +18,109 @@ directory を current working directory にした Node/npm は `uv_cwd` で開�
 ## CLI
 
 ```sh
-mtsc <input.ts> [options]
+mtsc [options] [files...]          # compile（default mode）
+mtsc -p <tsconfig.json|dir>        # project を compile
+mtsc                               # cwd の tsconfig.json を読む
+mtsc <command> [args...]           # verb
 ```
 
-主なオプション:
+`mtsc` はこの toolchain の唯一の binary です。`ts2mbt` / `mbt2ts` /
+`tscheck` / `tsacc` の 4 binary は verb として集約されました:
+
+| Verb               | 旧 binary | 用途                                                   |
+| ------------------ | --------- | ------------------------------------------------------ |
+| `mtsc bridge`      | `ts2mbt`  | TypeScript → MoonBit bridge 生成                       |
+| `mtsc pkg`         | `mbt2ts`  | MoonBit → TypeScript / npm package 生成                |
+| `mtsc check`       | `tscheck` | 1 file の checker 診断（開発用、常に exit 0）          |
+| `mtsc conformance` | `tsacc`   | conformance corpus に対する精度集計（開発用）          |
+
+verb は同名の file よりも優先されます。`mtsc check` が「`check` という
+directory があるかどうか」に依存しないためで、source file は `x.ts` と
+書かれるので実害はありません。file を指したいときは `mtsc ./check` です。
+
+`mtsc check` と `mtsc --noEmit` は別物です。違いは **program** の単位で、
+`--noEmit` は `tsc` と同じく import graph をたどって 1 つの program として
+検査し、`mtsc check` は 1 file を単一 file model で検査します。後者は
+conformance corpus が求める形（4,484 件それぞれが 1 file の program）で、
+`checker_conformance_oracle.sh` などが出力行を parse するので、その 1 行の
+文面は interface として固定されています。`mtsc check` は何を見つけても
+exit 0 です（corpus を回す script が `set -e` で動くため）。
+
+### `tsc` / `tsgo` compatibility
+
+compile mode の command line は `tsc` の **superset** です。option 名は
+大文字小文字と `-` / `_` を無視して照合するので、`--noEmit`、`--no-emit`、
+`--noemit`、`--NoEmit` は同じ option です（`tsc` 自身は小文字化のみ）。
+
+`tsc` の option は 3 つの tier に分かれます。
+
+1. **honour する** — `-p` / `--project`、`--noEmit`、`--noCheck`、
+   `--outFile` / `--out` / `-o`、`--outDir`、`--declaration` / `-d`、
+   `--emitDeclarationOnly`、`--sourceMap`、`--jsx`、`--jsxImportSource`、
+   `--jsxFactory`、`--jsxFragmentFactory`、`--watch` / `-w`、`--init`、
+   `--showConfig`、`--listFiles`、`--listFilesOnly`、`--version` / `-v`。
+2. **受け取るが動作しない** — `--target`、`--module`、`--strict`、
+   `--incremental` など。1 行だけ「honour していない」と報告します。
+   `tsc` を前提にした pipeline が `--target es2020 --strict` を渡すのは
+   普通なので、ここで hard-fail すると superset を名乗る意味がなく、
+   黙って受け取ると `--strict false` が効いたように見えてしまいます。
+   報告するのはその 2 つを避けるためです。
+3. **拒否する** — `tsc` の option でも mtsc の option でもないもの。
+   `tsc` と同じく diagnostic を出して non-zero で終了します（以前の
+   `mtsc` は unknown option で exit 0 だったので、build script の typo が
+   見えませんでした）。
+
+`--build` / `-b` は拒否側です。project reference と up-to-date 判定が
+必要で mtsc にはどちらもなく、`tsc -b` を solution file に対して実行する
+のは「その file を compile してほしい」という要求ではないからです。
+
+exit code は `tsc` 準拠で、0 が成功、1 が「診断があり output を書かな
+かった」です。`tsc` の 2（診断はあるが output は書いた）には到達しません
+— 検査が失敗すれば emit は止まり、`--noCheck` は検査を降格ではなく
+skip するので、報告する診断が存在しません。
+
+### Project mode
+
+引数に file を並べた場合は `tsc` と同じく `tsconfig.json` を完全に無視
+します。file を並べなかった場合のみ `-p` の指す config、あるいは cwd の
+`tsconfig.json` を読み、`files` / `include` / `exclude` を展開します。
+glob は `tsc` の 3 形式（`*`、`?`、`**/`）だけです。config からは
+`outDir` / `outFile` / `noEmit` / `declaration` / `emitDeclarationOnly` /
+`sourceMap` / `noCheck` を読み、いずれも command line の下に置きます。
+
+`node_modules` は走査中に枝刈りします。依存を install した project では
+自分の source tree より 2〜3 桁多い file がそこにあるので、走査後に
+exclude で落とすのでは読む cost を払ってしまいます。
+
+### Watch mode
+
+`--watch` は polling です。`mizchi/x/fs` にも `moonbitlang/async/fs` にも
+watch syscall がないので、`mtime` を 300ms 間隔で比較します。監視対象は
+entry list ではなく **解決済みの program** で、bundle では import graph を
+たどった結果です。よって import された file の変更でも rebuild します。
+
+限界を 2 つ明示します。`include` が覆う directory に **追加** された file
+は、既存 file が変わるまで気づきません（新しい path には比較対象の mtime
+が無く、poll は既に持っている集合を比較するからです）。もう 1 つは
+間隔そのもので、短くすれば大きな program で CPU を食い、長くすれば壊れて
+いるように見えます。
+
+### mtsc 固有のオプション
 
 - `--out`, `-o <file.js>` — 出力先。指定しなければ stdout。
+- `--outDir <dir>` — 入力ごとの JavaScript を `<dir>` 直下に置く。
 - `--bundle` — relative import をたどり単一 bundle を出力。
 - `--treeshake` / `--fold` / `--minify` — bundle を最適化。
-- `--dts` — `--bundle` と併用して entry の `.d.ts` を出力。
-- `--sourcemap` — output の隣に v3 source map を出力。
+- `--dts` — `tsc` の `--declaration` と同じ。`--bundle` を含意。
+- `--sourcemap` / `--sourceMap` — output の隣に v3 source map を出力。
 - `--mangle`、`--mangle-properties` — internal name / property の rename。
 - `--explain-mangle` — `--mangle-properties` が「なぜその名前を rename しな
   かったか」を出力（下記）。
-- `--no-check` — 型エラーを報告するが JavaScript は出力する。TypeScript
-  ではない入力（公開済みの `.js` bundle など）向け。
-
+- `--no-check` / `--noCheck` — 型検査を skip して JavaScript を出力。
+  TypeScript ではない入力（公開済みの `.js` bundle など）向け。
 - `--jsx-runtime automatic|classic`、`--jsx-import-source <pkg>`、`--jsx-dev` — JSX
-  transform の設定。
+  transform の設定。`tsc` の `--jsx` / `--jsxImportSource` /
+  `--jsxFactory` / `--jsxFragmentFactory` も同じ設定に入ります。
 
 すべてのオプションは `mtsc --help` で確認できます。
 
@@ -151,7 +236,7 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 
 ## TypeScript compatibility snapshot
 
-2026-07-28 に `moon run src/cmd/tsacc` で測定した pinned TypeScript conformance
+2026-07-28 に `moon run src/cmd/mtsc -- conformance` で測定した pinned TypeScript conformance
 subset の結果です。
 
 | Metric             | Result                |
@@ -161,12 +246,12 @@ subset の結果です。
 | TS-clean precision | 411 / 414 (99.3%)     |
 | False positives    | 3                     |
 
-これは `tsacc` の permissive checker による限定 corpus の互換性計測であり、完全な
+これは `mtsc conformance` の permissive checker による限定 corpus の互換性計測であり、完全な
 `tsc` 互換性や `mtsc` CLI の strict mode を保証する数値ではありません。再計測方法と
-対象ディレクトリは [tsacc guide](./tsacc.md) に記載しています。
+対象ディレクトリは [`mtsc conformance` guide](./tsacc.md) に記載しています。
 
 構文受理はこれとは別に、TypeScript 7 conformance corpus の単一ファイルケースで測定して
-います。`tscheck` と `mtsc` は同じ parser を使い、TS7 が合法とする 1,750 件を 1,750 件
+います。`mtsc check` と `mtsc` は同じ parser を使い、TS7 が合法とする 1,750 件を 1,750 件
 受理しています（PFLEGAL: 0）。TS7 が構文エラーとする 389 件は parser が rejection します。
 上表で parse できなかった 40 件も、意図的に不正な構文を含む conformance fixture であり、
 有効な TypeScript 構文の未対応を意味しません。

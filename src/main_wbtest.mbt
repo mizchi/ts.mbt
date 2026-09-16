@@ -6482,3 +6482,57 @@ test "npm runtime boundary wraps generated MoonBit exports" {
     ),
   )
 }
+
+///|
+/// The `mtsc pkg` verb list is the public CLI contract of the
+/// MoonBit -> TypeScript direction, so it is asserted rather than left
+/// to drift. This test moved here with the dispatcher when the `mbt2ts`
+/// binary became `mtsc pkg`; the two renames it records are the flow
+/// selector (`--pkg` became the verb `npm`, since a flag that picks a
+/// whole mode is a verb wearing a flag's spelling) and nothing else.
+test "mtsc pkg keeps the unified package generator as its public CLI contract" {
+  let help = pkg_help_lines()
+  assert_eq(
+    help[0],
+    "  npm [--out <dir>] [--strict] [--no-facade] [--import-rewrites <json>] Build current MoonBit library packages and write an npm-publishable package to ./npm",
+  )
+  assert_eq(
+    help[1],
+    "  --input <pkg-or-mbti> --out <dir> [--diagnostics <path>] [--strict] [--no-facade] [--import-rewrites <json>] Generate a complete build-backed TypeScript package from a MoonBit pkg.generated.mbti",
+  )
+  assert_true(
+    help.contains(
+      "  scaffold <mbti> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold from a MoonBit package interface",
+    ),
+  )
+  assert_true(
+    help.contains(
+      "  facade-scaffold <mbti> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold plus facade wrappers for omitted local methods",
+    ),
+  )
+}
+
+///|
+/// The `mtsc bridge` verb list, for the same reason.
+///
+/// `all` is the one rename: the `ts2mbt` binary spelled it `bridge`,
+/// which under a `bridge` namespace reads as `mtsc bridge bridge`. The
+/// old spelling stays an accepted alias, so the assertion covers the
+/// help surface rather than the dispatch.
+test "mtsc bridge keeps its generation stages as its public CLI contract" {
+  let help = bridge_help_lines()
+  assert_eq(
+    help[0],
+    "  --input <ts-entry> --out <dir> [--module-spec <spec>] [--diagnostics <path>] [--strict] Generate a complete build-backed MoonBit bridge scaffold from a TypeScript entrypoint",
+  )
+  assert_true(
+    help.contains(
+      "  vendor <pkg> [--module-spec <spec>] [--out <dir>] Resolve a single <pkg> from node_modules and write its bridge sub-package",
+    ),
+  )
+  assert_true(
+    help.contains(
+      "  all <ts-entry> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TypeScript entrypoint",
+    ),
+  )
+}

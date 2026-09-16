@@ -19,6 +19,8 @@ pub fn emit_moonbit_decl_with_sections_and_types(@ast.TsModule, Array[String], A
 
 pub fn emit_moonbit_decl_with_sections_types_and_arities(@ast.TsModule, Array[String], Array[String], Map[String, Int], Bool) -> String
 
+pub async fn load_tsconfig_project(String) -> TsconfigProject?
+
 pub fn lower_enum_decl_to_runtime_stmts(@ast.TsEnumDecl) -> Array[@ast.TsStmt]
 
 pub fn moonbit_async_callback_glue_expr(String, AsyncCallbackLowering) -> String
@@ -56,6 +58,12 @@ pub async fn resolve_runtime_module_specifier(String, String) -> String?
 pub async fn resolve_type_module_specifier(String, String) -> String?
 
 pub async fn tsconfig_compiler_option(String, String) -> String?
+
+pub async fn tsconfig_compiler_option_at(String, String) -> String?
+
+pub async fn tsconfig_compiler_option_bool(String, String) -> Bool?
+
+pub async fn tsconfig_compiler_option_bool_at(String, String) -> Bool?
 
 pub fn value_identifier_needs_suffix(String) -> Bool
 
@@ -201,6 +209,7 @@ pub struct Parser {
   collected_pure_declarations : Map[String, Bool]
   collected_type_aliases : Array[@ast.TsTypeAlias]
   collected_interfaces : Array[@ast.TsInterface]
+  block_binding_nonnumeric : Array[Map[String, Bool]]
   collected_class_fields : Array[(String, @ast.TsType)]
   collected_local_classes : Array[@ast.TsClassDecl]
   collected_type_only_exports : Map[String, Bool]
@@ -343,6 +352,15 @@ pub enum TokenKind {
   Eof
 } derive(Eq, @debug.Debug)
 pub impl Show for TokenKind
+
+pub(all) struct TsconfigProject {
+  config_path : String
+  root_dir : String
+  files : Array[String]
+  include_ : Array[String]
+  exclude : Array[String]
+  has_file_set : Bool
+}
 
 // Type aliases
 
