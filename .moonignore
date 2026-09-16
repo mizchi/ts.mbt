@@ -29,6 +29,7 @@ _build/
 target
 .mooncakes/
 node_modules/
+npm/
 examples/**/dist/
 examples/**/__tsmbt_glue__*/
 
