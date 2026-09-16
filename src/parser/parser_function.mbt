@@ -1399,10 +1399,74 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
 
 ///|
 /// Skip generic type parameters <T, U extends Foo, V = Default>
+/// Record every TYPE-PARAMETER name in the `<...>` clause at the current
+/// position, by LOOKAHEAD — nothing is consumed.
+///
+/// The skips below discard the names by design (they exist for the
+/// positions that only need the tokens gone), but a rule asking "is this
+/// spelling a type parameter anywhere in the file" needs them, and they
+/// are readable out of the same tokens: the completeness-by-construction
+/// argument the `await`-in-a-decorator and `[Symbol.x]` member-key
+/// markers make. It writes the `<type-param-name>` channel
+/// `parse_type_param_names_bounds_and_const_flags` already fills for
+/// exactly this kind of abstention.
+///
+/// A name is the identifier directly after `<` or a depth-1 `,`, with the
+/// `const` / `in` / `out` modifiers skipped — a BOUND's names are not
+/// recorded, so the channel stays a statement about declarations. This is
+/// a lookahead rather than a hook inside the skip loop because the two
+/// callers consume differently and only ONE of the two `<...>` forms in
+/// the expression grammar is a declaration: `skip_type_args` also runs for
+/// a type ARGUMENT list (`f<number>()`), where the identifiers are
+/// references, and recording those would make the rule this feeds abstain
+/// on its own subject.
+fn Parser::record_type_param_names_ahead(self : Parser) -> Unit {
+  if !self.check(Lt) {
+    return
+  }
+  let mut i = 1
+  let mut depth = 1
+  let mut at_name = true
+  while depth > 0 {
+    let k = self.peek_at(i).kind
+    if k is Eof {
+      break
+    }
+    if depth == 1 {
+      match k {
+        Ident(n) =>
+          if at_name {
+            if n == "out" || n == "in" {
+              ()
+            } else {
+              self.interface_member_modifier_misuses.push(
+                "<type-param-name>\{n}",
+              )
+              at_name = false
+            }
+          }
+        Const | In => ()
+        Comma => at_name = true
+        _ => at_name = false
+      }
+    }
+    match k {
+      Lt => depth += 1
+      Gt => depth -= 1
+      GtGt => depth -= 2
+      GtGtGt => depth -= 3
+      _ => ()
+    }
+    i += 1
+  }
+}
+
+///|
 fn Parser::skip_type_params(self : Parser) -> Unit {
   if !self.check(Lt) {
     return
   }
+  self.record_type_param_names_ahead()
   let _ = self.advance() // consume <
   let mut depth = 1
   while depth > 0 && !self.check(Eof) {
@@ -2387,6 +2451,32 @@ pub fn Parser::parse_interface(
       )
       let method_params = self.parse_params()
       let _ = self.expect(RParen)
+      // TS2684 evidence. A leading `this` parameter is dropped from the
+      // member's callable TYPE (`callable_func_type_from_params` says
+      // why: it occupies no argument position), so the fact that one was
+      // DECLARED, and whether its type is `void`, is not recoverable
+      // downstream. Both halves are needed and neither is a type:
+      //
+      //   - `declare const b: { (this: number): void }; b(0)` is TS2684,
+      //     while the same call with `this: void` is ACCEPTED -- a plain
+      //     call supplies `void`, so only a non-void declaration fails.
+      //   - `r.method(12)` where `method` declares `this: this` and `r`
+      //     is a union of definitely-disjoint shapes is TS2684, because
+      //     the required `this` is the INTERSECTION of the members.
+      //
+      // Keyed by `INTERFACE.MEMBER` (a call signature's member name is
+      // its `<call>` key), which is what both rules look up. An
+      // object-type LITERAL member has no interface name to key on and
+      // stays a MISS.
+      if method_params.length() > 0 && method_params[0].name == "this" {
+        let kind = match method_params[0].type_ {
+          @ast.TsType::Void | @ast.TsType::Any | @ast.TsType::Unknown => "void"
+          _ => "other"
+        }
+        self.grammar_misuses.push(
+          "<this-param>\{name}.\{field_name}=\{kind}",
+        )
+      }
       // TS2842: an interface / object-type member signature never has a
       // body. This site does not go through
       // `record_bodiless_param_initializers` (it reports TS2371 per

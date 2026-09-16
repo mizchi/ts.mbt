@@ -27,13 +27,33 @@ fn callable_func_type_from_params(
 ) -> @ast.TsType {
   let types : Array[@ast.TsType] = []
   let optional : Array[Bool] = []
-  for param in params {
+  // A leading `this` parameter (`interface I { p(this: I, n: number): void }`)
+  // declares the receiver's type and occupies no argument position, so it
+  // must not enter the callable TYPE. Every other place that turns a
+  // parameter list into a signature already knows this and says so in its
+  // own comment -- `parse_declare_signature_params` and the ambient
+  // function parser both drop it, the function-TYPE parser never records
+  // it, and the checker's `module_.imports` ingest skips it by name. This
+  // helper, the one that builds interface and object-type member types,
+  // was the site without the rule: `i.p(1)` on that interface reported
+  // "expected 2 argument(s), got 1" AND "arg[0] expected I but got
+  // number" on a file tsc accepts outright. Neither was visible to the
+  // conformance gate, because a `this`-parameter file that TS7 errors on
+  // scores a TP whichever diagnostic fires.
+  //
+  // Only at index 0: a `this` parameter anywhere else is TS2680, which
+  // `parse_params` reports from the list it still sees in full.
+  let start = if params.length() > 0 && params[0].name == "this" { 1 } else { 0 }
+  let mut pi = start
+  while pi < params.length() {
+    let param = params[pi]
     // Declaration-style rest parameters already carry their array-shaped
     // element type (`...checks: string[]` -> `Array[String]`). Keep the
     // existing representation used by interface/object members; function
     // *type* syntax builds `Rest` directly in `parse_paren_or_function_type`.
     types.push(param.type_)
     optional.push(param.is_optional)
+    pi += 1
   }
   callable_type_with_optionality(
     @ast.TsType::Func(types, return_type),

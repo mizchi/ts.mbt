@@ -457,7 +457,15 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // Erased at runtime, collected for the same reason type aliases
       // are: a later pass has to be able to resolve an annotation that
       // names this interface.
-      self.collected_interfaces.push(self.parse_interface())
+      let iface = self.parse_interface()
+      // The NAME, separately, because the module-wide pool registers a
+      // block-local declaration only when the name is declared once
+      // (`parse_module` explains why: one slot per name cannot answer for
+      // two scopes). A rule that has to know whether a name is spellable
+      // as a type AT ALL needs every one of them, and over-approximating
+      // there costs it a MISS.
+      self.grammar_misuses.push("<local-type-name>" + iface.name)
+      self.collected_interfaces.push(iface)
       Empty
     }
     Type if self.peek_at(1).kind is Ident(_) => {
@@ -467,7 +475,9 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // Other follow-ups (`type.foo = …`, `type[i] = …`, `type()`,
       // `type;`) leave `type` as a plain identifier so the
       // expression-statement parser below picks it up.
-      self.collected_type_aliases.push(self.parse_type_alias())
+      let alias_ = self.parse_type_alias()
+      self.grammar_misuses.push("<local-type-name>" + alias_.name)
+      self.collected_type_aliases.push(alias_)
       Empty
     }
     _ if self.is_namespace_decl_start() =>
@@ -755,6 +765,7 @@ fn Parser::parse_var_like(
   let first_decl_annotated = self.check(Colon)
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
+  self.record_block_binding_numericness(stmts)
   // `using` / `await using` grammar constraints (recorded per declarator):
   //   TS1492 — a binding pattern is never allowed;
   //   TS2850/2851 — an object-LITERAL initializer with fully-known plain
@@ -1852,6 +1863,11 @@ fn Parser::parse_assign_or_expr(self : Parser) -> @ast.TsStmt raise ParseError {
 // / block
 pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let _ = self.expect(LBrace)
+  // One frame per block for the TS18033 shadowing record (see
+  // `block_binding_nonnumeric`). Popped at the single exit below; a
+  // ParseError escaping leaves it unbalanced, which does not matter
+  // because a raise abandons the whole parse.
+  self.block_binding_nonnumeric.push(Map([]))
   let stmts : Array[@ast.TsStmt] = []
   let stmt_positions : Array[Int] = []
   let prev_strict = self.in_strict
@@ -2001,6 +2017,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   }
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
+  let _ = self.block_binding_nonnumeric.pop()
   { stmts, stmt_positions }
 }
 

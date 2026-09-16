@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2657 / MISS in scope 58 /
+  is a soundness bug, and there are none (TP 2665 / MISS in scope 50 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -2616,6 +2616,117 @@ product surfaces now.
   declared per package the way `scripts/bridge_struct_enum_fields.txt`
   declares its budgets so growth fails and a drop follows the budget
   down.
+  Batches EP-ET take **MISS in scope 58 -> 50** (TP 2657 -> 2665, FP 0)
+  and their more useful half is **four false positives on legal code the
+  conformance gate structurally cannot see**, every one found by probing a
+  legal neighbour rather than by the corpus.
+  Two were the applied-in-some-places family around one fact: a leading
+  `this` parameter types the RECEIVER and occupies no argument position.
+  FOUR places in this repo already knew that and said so in their own
+  comments — the two ambient signature parsers drop it, the function-TYPE
+  parser never records it, and the `module_.imports` ingest skips it by
+  name — while `callable_func_type_from_params` (interface and
+  object-type members) and `method_callable_param_types` (class methods)
+  were the two sites without the rule. So `interface I { p(this: I, n:
+  number): void }` with `i.p(1)`, and `class K { m(this: K, n: number)
+  {} }` with `k.m(1)`, reported "expected 2 argument(s), got 1" and
+  "arg[0] expected K but got number" on files tsc ACCEPTS outright.
+  Fixing it cost one TP, and that is batch CS's lesson with the sign
+  flipped: `looseThisTypeInFunctions` was flagged ONLY by the bogus arity
+  report while its real errors are three TS2339s on `this.n.length`, so
+  -1 TP is not evidence a fix is wrong.
+  The other two are the SAME first-wins bug in two loops ten lines apart.
+  `parse_module` merges block-level type ALIASES into the module-wide
+  pool — its own comment says why, "the checker needs them to resolve
+  Named(T) references inside those bodies" — and did the same for
+  INTERFACES nowhere, though `parse_stmt` collects both from adjacent
+  arms. That asymmetry is what made a block-local `interface` invisible
+  to the resolver (`q.nope` on one silent while the top-level spelling
+  reports). But the merge must NOT pick a winner among SEVERAL
+  block-local declarations of one name, and both halves did: the alias
+  half's bug was pre-existing and reachable from ordinary code — two
+  functions each declaring a local `type W` made the first one's shape
+  answer for the second, THREE false positives on a file tsc accepts —
+  and the interface half's first draft reproduced it on `localTypes4`,
+  whose empty `interface T { }` in one function outvoted
+  `interface T { x: number }` in another. The gate scored that as a TRUE
+  POSITIVE, because the file errors for unrelated reasons. A name
+  declared more than once across block scopes is left unregistered now:
+  abstaining costs a MISS, guessing costs wrong member answers.
+  Of the rules, three needed a fact the TYPE cannot carry and two of
+  those are the same shape as the `this` parameter above — a leading
+  `this` parameter is dropped from the callable type, so TS2684 needs a
+  marker to know one was DECLARED and whether it is `void`. Every cell
+  was probed and two read the other way round from the message text: a
+  PLAIN call supplies `this: void`, so `{ (this: void, b?: number):
+  void }` called plainly is ACCEPTED while `{ (this: number, …) }` is
+  TS2684, and for a UNION one non-void member is enough (tsc's message
+  there names the required `this` as `never`, the intersection of the
+  members') while a union of the `void` one with a signature declaring no
+  `this` at all is accepted. The METHOD half is the union receiver, and
+  its first draft was SILENT on the file it was written for:
+  `shapes_definitely_disjoint` is a property-PRESENCE test ("each side
+  requires a property the other lacks"), and `Real` / `Fake` declare the
+  same two member names and differ only in `data`'s TYPE. A shared member
+  whose types definitely differ is the other half, and it is the one
+  tsc's own message walks down to.
+  TS18033 through a BLOCK-SCOPED shadow is the second, and the recorded
+  blocker was exact and unfixable where it was stated: an enum is hoisted
+  into `module_.enums` with no record of the block it came from, so the
+  `let Infinity = {}` that shadows the numeric lib global is in no env
+  the checker's half of that rule can read. The PARSER sees both, in
+  order, in the same statement list, so the verdict is decided there over
+  one frame per block and the marker IS the finding. An INNER numeric
+  shadow masks an outer non-numeric one, which is the lookup order the
+  language uses.
+  The third is the closure-narrowing rule, and CLAUDE.md had filed it
+  with the rule it is NOT. Probing had already refuted "reset narrowing
+  on entering a nested function" (TypeScript preserves a parameter's
+  narrowing in a closure created in the narrowed region) and the note
+  concluded the fact needed was "this binding is assigned somewhere other
+  than its initializer". That is still too wide: `x = 1` BEFORE a
+  `typeof x === "number"` guard leaves the narrowing intact, while
+  `x = "hi"` after it does not. What decides it is whether the assigned
+  value can inhabit the narrowed type — position-free, and a LITERAL
+  right-hand side answers it where an arbitrary expression does not. The
+  fact rides the ENV rather than `CheckCtx`, as `<unstable-assign>NAME`
+  entries written where a function body is entered: the env is what the
+  closure-entry functions copy into the inner scope, so it travels with
+  the bindings it is about and needs no ctx field with the save / clear /
+  restore discipline `self.labels` needs at fifteen sites.
+  `check_funcexpr_with_context` already had HALF of it — `reset_narrowing`
+  resets every narrowing for a class-expression body, where the REGION
+  decides; here the BINDING does.
+  Two rules landed only because their FIRST version was reverted with a
+  measured cause, which is the series' recurring shape. TS2304 for an
+  undeclared name in a type-ARGUMENT position (`new Date<A>`) was written,
+  built and REVERTED for a false positive on legal code, and the corpus
+  then caught four more of its own — all the same missing fact, "is this
+  spelling a type ANYWHERE in the file". A block-local interface declared
+  twice, an OBJECT-LITERAL method's own `<A>` (which reaches no
+  `in_scope_type_params`) and a generic ARROW's type parameters (not in
+  the AST at all) are three ways to spell a type the rule could not see.
+  All three go on the `<type-param-name>` channel
+  `parse_type_param_names_bounds_and_const_flags` already fills for
+  exactly this kind of abstention, and the two paths that DISCARD the
+  names get a LOOKAHEAD recorder rather than a hook inside the skip loop,
+  because only one of the two `<...>` forms in the expression grammar is a
+  declaration: `skip_type_args` also runs for a type ARGUMENT list, where
+  the identifiers are references, and recording those would make the rule
+  abstain on its own subject.
+  And a TS2684 for a CLASS method's declared `this` type was REJECTED with
+  its probe: `class C<E, A> { m1(this: C<never, A>, x: number) {} }` with a
+  `C<number, string>` receiver is ACCEPTED, because `E` appears in no
+  member and TypeScript is structural — a phantom type parameter makes
+  every `C<X, A>` mutually assignable. `applied_generic_mismatch` compares
+  type arguments nominally, so the naive rule is a false positive on five
+  hand-written cells and the general version needs real structural
+  assignability of `Applied` types.
+  One operational finding, and it is the merge-state rule this file had
+  not had to state: the branch's PR was merged by its author at the head
+  of batch EP while batches EQ onward were still local, so the follow-up
+  work was REBASED onto the new default branch rather than stacked on
+  merged history.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
