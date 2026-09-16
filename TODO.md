@@ -3,6 +3,53 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Docs round (2026-09-16): the checker gap documents re-measured at MISS 50
+
+No checker change. `TP 2665 / MISS in scope 50 / OUT OF SCOPE 19 / FP 0 /
+PFLEGAL 0 / TN 1750`, re-run on a fresh checkout, and the four documents
+describing the backlog were between one and thirty files behind it.
+
+- `src/checker/UNSUPPORTED.md` was measured at MISS 80 and kept eight
+  sections, six of them closed. Re-probing every snippet against
+  `tscheck` and tsc 6.0.3 found four documented "still missing" shapes
+  that are CAUGHT now and were never marked: contextual typing from a
+  union of call signatures (batch EL), `never` from a conflicting
+  intersection is not callable, the `globalThis` ambient-module key in a
+  TYPE position, and TS18033 through a block-scoped shadow (batch ET).
+  It now lists all 50 in-scope MISS files by machinery with tsc's own
+  diagnostic, keeps the declared abstentions with their legal neighbour,
+  and carries a one-table ledger of where the old sections went.
+- The capability probe (formerly in the triage doc) was re-run at the
+  common shape and moved beside the shapes it measures. Five rows were
+  wrong in the old table: conditional-via-generic-alias, the utility
+  table and overload selection read BLIND and are CAUGHT; "strictNullChecks
+  (`o.a` where `a?:`)" and "index signature value type" read CAUGHT and are
+  BLIND at the spelling written there — the strict-null check is gated to a
+  bare `Var` receiver (batch DO, deliberate), and an index-signature READ
+  through an ANONYMOUS object type yields no type at all while the
+  interface spelling, the literal-assignment direction and the write are
+  handled or measured. The two anonymous-index-signature rows are in no
+  conformance file.
+- `docs/checker-triage.md` still opened with "MISS 176" and a Tier 1 that
+  batches DI–DM and EB had emptied. Every remaining family is Tier 3 now
+  and the document says so, with the six files carrying a recorded
+  rejection named so they are not re-attacked as written.
+- `justfile`'s `--max-miss` was 80 against a measured 50; tightened, and
+  the gate passes at 50. `README.md` and `docs/tsacc.md` linked the RETIRED
+  `docs/checker-priority.md` as the place to read about priorities; both
+  point at the two live documents now. `docs/mtsc.md`'s compatibility
+  snapshot was the 2026-07-28 `tsacc` table (recall 719/815) — re-measured
+  at 771/815 and placed under the TS7 oracle numbers, with the note that
+  its "false positives" are against TS6 baselines and not the FP 0 the gate
+  measures.
+
+One toolchain observation, not acted on: `moon 0.1.20260915` (what the
+installer hands out today) reports two `unused_package` warnings in
+`src/cmd/tscheck/moon.pkg` (`moonbitlang/core/string`, `mizchi/ts/ast`)
+during `moon build`, where CLAUDE.md records `moon check --deny-warn`
+clean on `0.1.20260904` — so the gate is toolchain-version-sensitive and
+the two imports are worth removing when the toolchain is next bumped.
+
 ### Batches EP-ET (2026-09-15): MISS in scope 58 -> 50, the target, at FP 0
 
 `TP 2657 -> 2665 | MISS in scope 58 -> 50 | OUT OF SCOPE 19 | FP 0 |

@@ -96,12 +96,16 @@ just verify-examples
 checker の TypeScript conformance gate は次を使います。
 
 ```sh
-just checker-conformance-oracle --max-fp 0 --max-legal-parsefail 1
+just verify-checker-soundness   # FP 0 / PFLEGAL 0 / MISS in scope <= budget をゲート
 ```
 
 軽量な conformance 集計には [tsacc guide](./docs/tsacc.md) を参照してください。
 
-優先度と既知の制約は [checker priority](./docs/checker-priority.md) を参照してください。
+checker が検出しない構文と、その優先度・スコープ外の判断は
+[checker triage](./docs/checker-triage.md)（方針と tier）と
+[`src/checker/UNSUPPORTED.md`](./src/checker/UNSUPPORTED.md)（残り MISS
+ファイルの一覧と、実測したコード形状）を参照してください。
+`docs/checker-priority.md` は TS6 オラクル時代の文書で、結論は棄却済みです。
 
 ## License
 
