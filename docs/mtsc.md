@@ -151,23 +151,40 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 
 ## TypeScript compatibility snapshot
 
-2026-07-28 に `moon run src/cmd/tsacc` で測定した pinned TypeScript conformance
-subset の結果です。
+ゲートになっている数値は TypeScript 7（tsgo）の conformance 結果との照合です
+（`just verify-checker-soundness`、2026-09-16 測定）。
+
+| Metric                    | Result                                   |
+| ------------------------- | ---------------------------------------- |
+| TP（TS7 error & 検出）    | 2,665（うち parse rejection 経由 390）   |
+| MISS in scope（未検出）   | 50                                       |
+| OUT OF SCOPE（宣言済み）  | 19（`scripts/checker_out_of_scope.txt`） |
+| FP（TS7 accept & 検出）   | 0                                        |
+| PFLEGAL（合法構文の拒否） | 0                                        |
+| TN（TS7 accept & 沈黙）   | 1,750                                    |
+
+残り 50 件の内訳（必要な機構ごと）と、実測した未対応のコード形状は
+[`src/checker/UNSUPPORTED.md`](../src/checker/UNSUPPORTED.md) に、tier と
+スコープ外の判断は [checker triage](./checker-triage.md) にあります。
+
+参考として、2026-09-16 に `moon run src/cmd/tsacc` で測定した pinned subset
+（TS6 時代の `.errors.txt` baseline を正解とする軽量計測）の結果も残します。
 
 | Metric             | Result                |
 | ------------------ | --------------------- |
 | Parsed files       | 1,189 / 1,229 (96.7%) |
-| Error recall       | 719 / 815 (88.2%)     |
-| TS-clean precision | 411 / 414 (99.3%)     |
-| False positives    | 3                     |
+| Error recall       | 771 / 815 (94.6%)     |
+| TS-clean precision | 409 / 414 (98.8%)     |
+| False positives    | 5                     |
 
 これは `tsacc` の permissive checker による限定 corpus の互換性計測であり、完全な
-`tsc` 互換性や `mtsc` CLI の strict mode を保証する数値ではありません。再計測方法と
-対象ディレクトリは [tsacc guide](./tsacc.md) に記載しています。
+`tsc` 互換性や `mtsc` CLI の strict mode を保証する数値ではありません。この表の
+「false positive」は TS6 baseline に対するもので、TS7 オラクル（上表、FP 0）とは
+正解が異なります。再計測方法と対象ディレクトリは [tsacc guide](./tsacc.md) に記載しています。
 
 構文受理はこれとは別に、TypeScript 7 conformance corpus の単一ファイルケースで測定して
 います。`tscheck` と `mtsc` は同じ parser を使い、TS7 が合法とする 1,750 件を 1,750 件
-受理しています（PFLEGAL: 0）。TS7 が構文エラーとする 389 件は parser が rejection します。
+受理しています（PFLEGAL: 0）。TS7 が構文エラーとする 390 件は parser が rejection します。
 上表で parse できなかった 40 件も、意図的に不正な構文を含む conformance fixture であり、
 有効な TypeScript 構文の未対応を意味しません。
 
