@@ -271,7 +271,7 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 構文受理はこれとは別に、TypeScript 7 conformance corpus の単一ファイルケースで測定して
 います。`mtsc check` と `mtsc` は同じ parser を使い、TS7 が合法とする 1,750 件を 1,750 件
 受理しています（PFLEGAL: 0）。TS7 が構文エラーとする 390 件は parser が rejection します。
-上表で parse できなかった 40 件も、意図的に不正な構文を含む conformance fixture であり、
+下表で parse できなかった 40 件も、意図的に不正な構文を含む conformance fixture であり、
 有効な TypeScript 構文の未対応を意味しません。
 
 構文受理後にも source-level の型情報を保持します。callable parameter の `?` は
