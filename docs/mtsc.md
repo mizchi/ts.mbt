@@ -241,14 +241,14 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 
 | Metric                    | Result                                   |
 | ------------------------- | ---------------------------------------- |
-| TP（TS7 error & 検出）    | 2,669（うち parse rejection 経由 390）   |
-| MISS in scope（未検出）   | 46                                       |
+| TP（TS7 error & 検出）    | 2,670（うち parse rejection 経由 390）   |
+| MISS in scope（未検出）   | 45                                       |
 | OUT OF SCOPE（宣言済み）  | 19（`scripts/checker_out_of_scope.txt`） |
 | FP（TS7 accept & 検出）   | 0                                        |
 | PFLEGAL（合法構文の拒否） | 0                                        |
 | TN（TS7 accept & 沈黙）   | 1,750                                    |
 
-残り 46 件の内訳（必要な機構ごと）と、実測した未対応のコード形状は
+残り 45 件の内訳（必要な機構ごと）と、実測した未対応のコード形状は
 [`src/checker/UNSUPPORTED.md`](../src/checker/UNSUPPORTED.md) に、tier と
 スコープ外の判断は [checker triage](./checker-triage.md) にあります。
 

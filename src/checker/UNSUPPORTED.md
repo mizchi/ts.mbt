@@ -1,10 +1,10 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-18, after batches EU–EY:
+Measured on 2026-09-18, after batches EU–EZ:
 
 ```
-TP  err+flag  : 2669   (of which via parse rejection: 390)
-MISS in scope : 46     (the backlog — this one can reach zero)
+TP  err+flag  : 2670   (of which via parse rejection: 390)
+MISS in scope : 45     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -21,7 +21,7 @@ file is the code a user would write and what happens to it.
 
 ```sh
 moon build --target native --release
-bash scripts/checker_conformance_oracle.sh --miss-list /tmp/miss.txt   # the numbers + the 46 paths
+bash scripts/checker_conformance_oracle.sh --miss-list /tmp/miss.txt   # the numbers + the 45 paths
 node scripts/checker_miss_rank.mjs /tmp/miss.txt --json /tmp/rank.json # tsc's codes per file
 node scripts/tsc_probe.mjs some-probe.ts                                # the legal neighbour
 ```
@@ -37,7 +37,7 @@ Two rules for reading the output, both learned the hard way:
 
 ---
 
-## 1. The 46 in-scope MISS files, by machinery
+## 1. The 45 in-scope MISS files, by machinery
 
 Paths are relative to `typescript/tests/cases/conformance/`. The code is
 what the local compiler reports on the file; where a rule was already
@@ -95,7 +95,7 @@ function f<A extends object>(a: A, sa: Something<A>) {
 | `types/conditional/conditionalTypesExcessProperties` | TS2322 | a conditional left UNRESOLVED inside an intersection cannot be projected to a field shape, so the excess-property check has no target. Batches DI–DM made a conditional resolve through a generic alias; the composition with `&` still abstains |
 | `types/conditional/inferTypesInvalidExtendsDeclaration` | TS2304 | **REJECTED after instrumenting** (batch EI): the type parser REDUCES `T extends infer A extends B ? …` when it can decide the relation, so the checker receives the bare `Number` and neither `A` nor its bound `B` survives to be resolved |
 
-### 1c. Object literals, contextual typing, widening — 10 files
+### 1c. Object literals, contextual typing, widening — 9 files
 
 | file | tsc | what is needed |
 |---|---|---|
@@ -106,7 +106,6 @@ function f<A extends object>(a: A, sa: Something<A>) {
 | `types/union/unionTypeWithIndexSignature` | TS2339, TS2540, TS7053 | member resolution on a union where one member is an index signature (`{ foo: number } \| { [s: string]: string }`) |
 | `expressions/contextualTyping/taggedTemplateContextualTyping2` | TS2345 | a tagged template's substitutions checked against the tag function's parameter types |
 | `expressions/contextualTyping/superCallParameterContextualTyping2` | TS2349 | the parameter of an arrow passed to `super(...)` typed contextually from the base constructor, so `new Number()` inside it is not callable |
-| `expressions/optionalChaining/callChain/callChain.3` | TS2322 | an optional CALL chain (`a?.m?.(…)`) whose receiver is nullable yields `T \| undefined`. Batch EH removed the unconditional `\| undefined` on a non-nullable receiver; the nullable-receiver call form is what remains |
 | `statements/for-ofStatements/ES5For-of8` | TS2322 | return-type inference from a function BODY: `function foo() { return { x: 0 } }` has no resolved return type here at all (`const bad: string = foo().x` is silent too) |
 | `types/tuple/wideningTuples7` | TS7010 | TS7010 on a function EXPRESSION at a `var` initializer; the same shape reports for a function DECLARATION |
 
@@ -185,6 +184,9 @@ measured gap.
 | generic METHOD call (`i.m(12)` where `m<T>(x: T): T`, on an interface / class / object type / function-type property) | CAUGHT (batch EV) |
 | INTERSECTION source against an index signature (`{a: string} & {b: number}` into `{ [k: string]: string }`) | CAUGHT (batch EY) |
 | `var` redeclared with a different type inside a FUNCTION scope, and the polymorphic `this` | CAUGHT (batch EU) |
+| optional chain PAST the guarded link (`g?.p.q`, `b?.m(1)`, `u?.a[0]` against a non-nullable annotation) | CAUGHT (batch EZ) |
+| optional METHOD, called and optional-called (`a.m?.(1)` / `e.m({…})` where `m?(…)`; `m?<T>(…)` did not PARSE) | CAUGHT (batch EZ) |
+| an INTERFACE's overload set (`interface O { m(x: string): number; m(x: number): string }`, `p.m(1)`) | CAUGHT (batch EZ) — it reported the wrong return AND a false argument error before |
 | **strictNullChecks on a member-chain receiver** (`o.a.b` with `a?:`) | **BLIND — deliberate**: the check is gated to a bare `Var` receiver because those are the bindings the narrowing engine rewrites precisely (batch DO) |
 | **variadic tuple** (`[...T]`, `[string, ...number[]]`) | **BLIND** |
 | **computed `unique symbol` key** (`interface I { [k]: number }`, `i[k]` against `string`) | **BLIND** |
@@ -196,10 +198,15 @@ all: neither is in any conformance file, both were found only by this
 probe, and batch EW closed the read for ZERO conformance files. The
 write row is the other half of the lesson — it read BLIND for two
 revisions and was already handled in all four spellings, so a table
-nobody re-measures is a table that ranks the wrong work. FP 0 and MISS 46
-are statements about 4,484 files and not about real code (batch EO
-measured zod at 272 diagnostics with tsc accepting all of them; 187
-remain after the shadowing fix).
+nobody re-measures is a table that ranks the wrong work. The three
+batch-EZ rows are the third half of it: optional chaining is 144
+occurrences in real application source against ONE conformance file, and
+the interface-overload row was a false positive on legal code —
+`p.m(1)` against `m(x: string): number; m(x: number): string` reported
+`expected string but got number`, measured against the pre-batch binary.
+FP 0 and MISS 45 are statements about 4,484 files and not about real code
+(batch EO measured zod at 272 diagnostics with tsc accepting all of them;
+187 remain after the shadowing fix).
 
 ---
 
@@ -254,19 +261,37 @@ history is not re-derived from TODO.md.
 | G. "Blocked on a mechanical fact" (TS7031/7018, TS1308, TS2331, TS2708 `typeof`, TS2393) | All five DONE in batches EC and EE. Not one recorded blocker survived being probed: two had been dissolved by later unrelated work, one named only one of two routes to the fact, one was true of an approach nobody had to take, and TS2393's consumer had simply thrown the count away. The `import a = A` half of TS2708 is still open (§1g) |
 | H. Declared abstentions | §3, with three rows retired (the `super`-in-computed-key row is now the exact tsc boundary, the aliased `this` and the class-method TS2684 rows are new) |
 
-Batches EU–EY then took four more files (MISS 50 -> 46) and none of them
+Batches EU–EZ then took five more files (MISS 50 -> 45) and none of them
 was a machinery gap the classification could see, which is §6.3 once
 more: an `import a = A` alias's TS2708 (the recorded blocker was true of
 what the target MEANS and false of what it SPELLS), TS2403 inside a
 FUNCTION scope plus the polymorphic `this`, a mapped type over an
-infinite key set, and an intersection against an index signature — the
-last being exactly what batch EN measured as unreachable and recorded as
-"finding what abstains first is the actual work". Three of the five
-batches bought ZERO conformance files and are in §2 instead, and the
-round also fixed a SEGFAULT (`types_definitely_differ` recursed with no
-depth bound; a self-referential `typeof` ended the process, at HEAD, from
-the module level) and two false positives on legal code the gate cannot
-see.
+infinite key set, an intersection against an index signature — the last
+being exactly what batch EN measured as unreachable and recorded as
+"finding what abstains first is the actual work" — and `callChain.3`.
+Three of the six batches bought ZERO conformance files and are in §2
+instead, and the round also fixed a SEGFAULT
+(`types_definitely_differ` recursed with no depth bound; a
+self-referential `typeof` ended the process, at HEAD, from the module
+level) and three false positives on legal code the gate cannot see.
+
+`callChain.3` is worth reading as a unit, because ONE conformance file
+carried FOUR independent defects and the classification saw none of
+them — it is filed under "object literals, contextual typing, widening",
+which is not what any of the four is. The optional chain short-circuits
+for the WHOLE chain and the parser puts only the guarded link inside the
+`OptionalChain` node, so `g?.p.q`'s outer `.q` pruned the nullish
+receiver and handed back a bare `number`. `m?<T>(x)` did not PARSE at
+either member parser, because both read the type parameters before the
+`?` where the grammar (`PropertyName ?opt CallSignature`) has it the
+other way round — and the object-type parser's failure was total, so the
+whole literal fell back to `Any` and every member of it became
+unknowable. An OPTIONAL method is stored as `Union([callable,
+Undefined])`, which every consumer matching the callable SHAPE read as
+opaque. And `unwrap` PEELS a `GenericFunc` — it says so at the site —
+so a generic member of a union callee reached `infer_call` with its
+binders already gone. Each was found by probing the NEXT thing the
+previous fix exposed, and only the four together move the file.
 
 ---
 
@@ -284,11 +309,14 @@ see.
    and "stays silent on the legal spelling" are separate claims, and only
    the second keeps FP at zero. `scripts/tsc_probe.mjs` answers the second
    one; the conformance oracle cannot, because no baseline covers a
-   hand-written legal case. The eleven false positives fixed in batches
-   EH, EM and EP–ET were all found this way or by a unit test, and none
-   by the corpus.
+   hand-written legal case. The twelve false positives fixed in batches
+   EH, EM, EP–ET and EZ were all found this way or by a unit test, and
+   none by the corpus. EZ's is the one to read: it was found while
+   writing the legal neighbour for a DIFFERENT rule, and confirmed
+   pre-existing by rebuilding the stashed tree rather than argued to be
+   so.
 3. **A rule can already exist.** Many of the 34 files that left this list
-   between MISS 80 and MISS 46 needed no new machinery: a check wired into
+   between MISS 80 and MISS 45 needed no new machinery: a check wired into
    one of the places that produce a shape and not the others (`for-of`
    but not `yield*`; dotted access but not destructuring; the class base
    but not `declare class`; a `this` parameter dropped by four renderers

@@ -1024,8 +1024,18 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
       // which is what the type parser already builds for the PROPERTY
       // spelling of the same thing (`m: <T>(x: T) => T`), so the two
       // spellings of one declaration stop disagreeing.
-      let (m_tp_names, m_tp_bounds) = self.parse_type_param_names_and_bounds()
+      //
+      // The `?` comes FIRST. The grammar is `PropertyName ?opt
+      // CallSignature`, and a CallSignature BEGINS with its type
+      // parameter list, so `m?<T>(o)` puts the question mark before the
+      // `<`. Reading the binders first made that spelling fail to parse
+      // as an object type AT ALL — the `<` was still the next token when
+      // the method arm tested for `(`, nothing else matched, and the
+      // whole literal fell back to `Any`, so every member of it became
+      // unknowable rather than just the generic one. `m<T>?(o)` is not
+      // TypeScript, so the swap loses no spelling.
       let is_optional = self.match_(Question)
+      let (m_tp_names, m_tp_bounds) = self.parse_type_param_names_and_bounds()
       if self.check(LParen) {
         // Method / call / construct signature.
         let _ = self.advance()

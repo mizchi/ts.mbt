@@ -22156,3 +22156,136 @@ test "checker: intersection source against an index signature (batch EY)" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EZ: an optional chain's result, and the two things that made an
+/// optional METHOD unreadable.
+///
+/// Four findings, and the parser one is the reason the other three could
+/// not be seen on the shape the conformance file uses.
+///
+/// 1. The chain short-circuits for the WHOLE chain, and the parser puts
+///    only the guarded link inside the `OptionalChain` node — `g?.p.q` is
+///    `PropAccess(OptionalChain(PropAccess(g, p)), q)` — so that outer
+///    `.q` pruned the nullish receiver and handed back a bare `number`
+///    where tsc says `number | undefined`. Propagated one level, off the
+///    chain node's own RESULT rather than by re-deciding its guard.
+/// 2. `m?<T>(x)` did not PARSE. The grammar is `PropertyName ?opt
+///    CallSignature` and a CallSignature begins with its type parameter
+///    list, so the `?` comes first; both member parsers read the binders
+///    first, and the object-type one then fell back to `Any` for the
+///    whole literal. Two sites, one order.
+/// 3. An OPTIONAL method is stored as `Union([callable, Undefined])` —
+///    the parser wraps `a?: T` into `T | undefined` and a method
+///    signature is no different — so every consumer matching the callable
+///    SHAPE read the member as opaque and `a.m?.(1)` came back `Any`.
+/// 4. `unwrap` PEELS a `GenericFunc`, so a generic member of a union
+///    callee reached `infer_call`'s union loop with its binders already
+///    gone and `c?.m({ x: 12 })` came back with `T` unsolved, where the
+///    same member reached directly is solved.
+///
+/// Together they are `callChain.3`. Every fires/silent pair below was
+/// run through the real compiler first.
+test "checker: optional chain result and optional methods (batch EZ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // (1) the link AFTER the guarded one, for each access shape.
+      "declare const g: { p: { q: number } } | undefined;\nconst r: number = g?.p.q;",
+      "declare const b: { m(n: number): number } | undefined;\nconst r: number = b?.m(1);",
+      "declare const u: { a: number[] } | undefined;\nconst r: number = u?.a[0];",
+      // (3) the optional-CALL form, where the `?.` guards the METHOD
+      // VALUE and not the receiver — `a` is not optional, `a.m` is.
+       "declare const a: { m?(n: number): number };\nconst r: number = a.m?.(1);",
+      // (2) + (3): the generic optional method, at both spellings of a
+      // member list. Neither parsed at all before.
+       "declare const e: { m?<T>(o: { x: T }): T };\nconst r: string = e.m({ x: 12 });",
+      "interface I { m?<T>(o: { x: T }): T }\ndeclare const i: I;\nconst r: string = i.m?.({ x: 12 });",
+      // (4) a generic member of a union callee, solved from the
+      // arguments — and the whole of `callChain.3`.
+       "declare const c: { m<T>(o: { x: T }): T } | undefined;\nconst r: number = c?.m({ x: 12 });",
+      "declare const a: { m?<T>(o: { x: T }): T } | undefined;\nconst r: number = a?.m?.({ x: 12 });",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // Writing `?.` on a NON-nullable receiver is redundant, not wrong,
+      // so nothing downstream of it is widened either.
+      "declare const c: { p: { q: number } };\nconst r: number = c?.p.q;", "declare const d: { m(n: number): number };\nconst r: number = d?.m(1);",
+      "declare const v: { a: number[] };\nconst r: number = v?.a[0];",
+      // The optional-CALL form on a non-optional member, and on a
+      // non-nullable callee (the false positive batch EH's three arms
+      // did not cover).
+       "declare const d: { m(n: number): number };\nconst r: number = d.m?.(1);",
+      "declare const c: (n: number) => number;\nconst r: number = c?.(1);",
+      // The widened value IS the annotation, at every shape above.
+       "declare const g: { p: { q: number } } | undefined;\nconst r: number | undefined = g?.p.q;",
+      "declare const b: { m(n: number): number } | undefined;\nconst r: number | undefined = b?.m(1);",
+      "declare const a: { m?(n: number): number };\nconst r: number | undefined = a.m?.(1);",
+      "declare const a: { m?<T>(o: { x: T }): T } | undefined;\nconst r: number | undefined = a?.m?.({ x: 12 });",
+      // (2)'s neighbour: the non-optional generic method and the
+      // optional non-generic one both still resolve.
+       "declare const d: { m<T>(o: { x: T }): T };\nconst r: number = d.m({ x: 12 });",
+      "declare const f: { m?(o: { x: number }): number };\nconst r: number | undefined = f.m?.({ x: 12 });",
+      // (3)'s neighbour: a member whose type is a union of TWO
+      // callables is an overload set, not an optional one, so nothing
+      // picks an arm for it here.
+       "interface O { m(x: string): number; m(x: number): string }\ndeclare const p: O;\nconst r: string = p.m(1);",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EZ: an INTERFACE's overload set was invisible to
+/// `method_overload_signatures`.
+///
+/// That function had arms for a class, an `Object` type literal and a
+/// `Struct` — the three shapes that are NOT how a `.d.ts` declares
+/// overloads. With no candidates, two things went wrong at once:
+/// `resolve_method_overload` fell through to `lookup_method_sig`, whose
+/// own comment says it surfaces only the FIRST declaration, so
+/// `p.m(1)` came back `number`; and the argument check's abstention is
+/// gated on `> 1` candidate, so it judged the call against overload #1
+/// and reported `expected string but got number` on a line tsc ACCEPTS.
+/// A false positive on legal code that the conformance corpus cannot
+/// see — measured against the pre-batch binary, not assumed.
+test "checker: interface overload resolution (batch EZ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let iface = "interface O { m(x: string): number; m(x: number): string }\n"
+  // --- fires: each call resolves to the overload its ARGUMENT selects,
+  // so the return type is the other one from first-wins.
+  for
+    src in [
+      iface + "declare const p: O;\nconst r: number = p.m(1);",
+      iface + "declare const p: O;\nconst r: string = p.m(\"s\");",
+      // …through an optional chain too, where the `| undefined` rides on
+      // top of the selected overload's return.
+      iface + "declare const o: O | undefined;\nconst r: string = o?.m(1);",
+      iface + "declare const o: O | undefined;\nconst r: number = o?.m(\"s\");",
+      // An argument matching NO overload is still an error.
+      iface + "declare const p: O;\nconst r: string = p.m(true);",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent
+  for
+    src in [
+      iface + "declare const p: O;\nconst r: string = p.m(1);",
+      iface + "declare const p: O;\nconst r: number = p.m(\"s\");",
+      iface +
+      "declare const o: O | undefined;\nconst r: string | undefined = o?.m(1);",
+      // A single-signature interface method keeps its argument check:
+      // the abstention is for an overload SET.
+      "interface S { m(x: string): number }\ndeclare const q: S;\nconst r: number = q.m(\"s\");",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

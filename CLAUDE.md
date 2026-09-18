@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2669 / MISS in scope 46 /
+  is a soundness bug, and there are none (TP 2670 / MISS in scope 45 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -2877,6 +2877,62 @@ product surfaces now.
   re-measures ranks the wrong work — the same defect, one level up, that
   retired `docs/checker-priority.md`, and the argument for keeping §2
   beside §1 rather than folding them together.
+  Batch EZ is **46 -> 45** and is ONE conformance file carrying FOUR
+  independent defects, none of which the triage could see — `callChain.3`
+  is filed under "object literals, contextual typing, widening", which is
+  not what any of the four is, the twelfth instance here of a label
+  standing in for the objective. Each was found by probing the next thing
+  the previous fix exposed. An optional chain short-circuits for the
+  WHOLE chain and the parser puts only the guarded link inside the
+  `OptionalChain` node, so `g?.p.q` is
+  `PropAccess(OptionalChain(PropAccess(g, p)), q)` and that outer `.q`
+  pruned the nullish receiver and handed back a bare `number`; the
+  propagation reads the chain node's own RESULT rather than re-deciding
+  its guard, because that arm has already decided and a second copy is
+  how two halves come to disagree. `is_nullable_type` is NOT that
+  predicate and the first draft fired on nothing — it answers "is this
+  type ENTIRELY nullish", so `{ q: number } | undefined`, the exact shape
+  a short-circuiting chain produces, reads false there. `m?<T>(x)` did
+  not PARSE at either member parser, because the grammar is
+  `PropertyName ?opt CallSignature` and a CallSignature BEGINS with its
+  type parameters, so the `?` comes first — the applied-in-some-places
+  family with a token ORDER as the axis, and the object-type parser's
+  failure was TOTAL, so the whole literal fell back to `Any` and every
+  member of it became unknowable rather than just the generic one. An
+  OPTIONAL method is stored as `Union([callable, Undefined])` — the
+  parser wraps `a?: T` into `T | undefined` and a method signature is no
+  different — so every consumer matching the callable SHAPE read it as
+  opaque and `a.m?.(1)` came back `Any`. And `unwrap` PEELS a
+  `GenericFunc`, which it says at its own site, so a generic member of a
+  union callee reached `infer_call` with its binders already gone and
+  `c?.m({ x: 12 })` came back with `T` unsolved where the same member
+  reached directly is solved ten lines above.
+  The batch's more valuable half is a FALSE POSITIVE on legal code found
+  while writing the legal neighbour for a different rule, and it is the
+  applied-in-some-places family at its widest yet:
+  `method_overload_signatures` had arms for a class, an `Object` type
+  literal and a `Struct` — the three shapes that are NOT how a `.d.ts`
+  declares an overload set. With no candidates two things went wrong at
+  once, because two consumers read that one count:
+  `resolve_method_overload` fell through to `lookup_method_sig`, whose
+  own comment says it surfaces only the FIRST declaration, so
+  `interface O { m(x: string): number; m(x: number): string }` with
+  `p.m(1)` came back `number`; and batch EL's argument-check abstention,
+  which exists for exactly this, is gated on `> 1` candidate, so it
+  judged the call against overload #1 and reported `expected string but
+  got number` on a line tsc ACCEPTS. Confirmed pre-existing by stashing
+  the branch and rebuilding HEAD rather than argued to be, and
+  corpus-NEUTRAL when fixed — no TP lost, no FP gained, which is the
+  ideal shape for a real-code fix the gate cannot score. The same probe
+  found one more: the IndexAccess arm passed its receiver to
+  `infer_index` raw where the PropAccess arm has pruned a nullable
+  receiver and retried for a long time with its comment saying why, so
+  `u?.a[0]` was `Any` while `u?.a.length` resolved.
+  What makes the round worth more than its one file is the OTHER axis of
+  `docs/checker-triage.md`: optional chaining is **144 occurrences in
+  real application source**, the second commonest feature in that column,
+  against one conformance file. Reading the corpus count alone ranks it
+  last; reading the two together is what said to open it.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

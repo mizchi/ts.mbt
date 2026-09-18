@@ -4576,7 +4576,7 @@ fn Resolver::method_type_params_of(
   // A member written as a generic function TYPE carries its own binders
   // on the wrapper, wherever it was declared — so this answers for an
   // inline object type too, which the declaration tables below cannot.
-  match self.lookup_field(recv, meth) {
+  match self.lookup_callable_field(recv, meth) {
     Some(GenericFunc(names, _, _))
     | Some(CallableMeta(GenericFunc(names, _, _), _)) =>
       if names.length() > 0 {
@@ -4611,6 +4611,61 @@ fn Resolver::method_type_params_of(
 }
 
 ///|
+/// The single callable a member type offers once its nullish part is
+/// removed, or `None`.
+///
+/// An OPTIONAL method (`m?(x): T`) is stored as `Union([callable,
+/// Undefined])` — the parser wraps `a?: T` into `T | undefined` and a
+/// method signature is no different — so every consumer that matches the
+/// callable SHAPE saw a union and read the member as opaque. That is why
+/// `declare const a: { m?(n: number): number }; a.m?.(1)` came back `Any`
+/// while the identical non-optional member resolves.
+///
+/// Returns `None` unless exactly ONE non-nullish member remains, so a
+/// genuine union of two callables (an overload set) keeps going to the
+/// overload path rather than having one arm picked for it here.
+fn optional_member_callable(t : @ast.TsType) -> @ast.TsType? {
+  match t {
+    Union(parts) => {
+      let mut found : @ast.TsType? = None
+      for p in parts {
+        match p {
+          Undefined | Null => ()
+          other =>
+            match found {
+              None => found = Some(other)
+              Some(_) => return None
+            }
+        }
+      }
+      found
+    }
+    _ => None
+  }
+}
+
+///|
+/// `lookup_field` with an optional member's nullish wrapper removed. The
+/// callers are the ones asking "what CALLABLE is this member", where the
+/// `| undefined` is the optionality rather than part of the signature;
+/// every other consumer keeps the union, since that is what makes `a.m`
+/// itself possibly-undefined.
+fn Resolver::lookup_callable_field(
+  self : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  match self.lookup_field(recv, field) {
+    Some(t) =>
+      match optional_member_callable(t) {
+        Some(inner) => Some(inner)
+        None => Some(t)
+      }
+    None => None
+  }
+}
+
+///|
 /// Look up a method's `(params, return)` signature. Returns `None` when the
 /// receiver shape is opaque.
 fn Resolver::lookup_method_sig(
@@ -4618,7 +4673,7 @@ fn Resolver::lookup_method_sig(
   recv : @ast.TsType,
   meth : String,
 ) -> (Array[@ast.TsType], @ast.TsType)? {
-  match self.lookup_field(recv, meth) {
+  match self.lookup_callable_field(recv, meth) {
     Some(CallableMeta(Func(ps, ret), _)) => Some((ps, ret))
     Some(Func(ps, ret)) => Some((ps, ret))
     // A member written as a generic function TYPE (`m: <T>(x: T) => T`)
@@ -4729,7 +4784,27 @@ fn Resolver::method_overload_signatures(
   // fields of the same name.
   let candidates : Array[(Array[@ast.TsType], @ast.TsType)] = []
   match self.unwrap(recv) {
-    Named(n) | Applied(n, _) =>
+    Named(n) | Applied(n, _) => {
+      // An INTERFACE is how a `.d.ts` declares an overload set, and this
+      // function had arms for a class, an `Object` type literal and a
+      // `Struct` — the three that are NOT it. So `interface O { m(x:
+      // string): number; m(x: number): string }` produced no candidates
+      // at all, which is two wrong answers at once: `resolve_method_
+      // overload` fell through to `lookup_method_sig`, whose own comment
+      // says it surfaces only the FIRST declaration, so `p.m(1)` came
+      // back `number`; and the argument check's abstention is gated on
+      // `> 1` candidate, so it judged the call against overload #1 and
+      // reported `expected string but got number` on a line tsc accepts.
+      // A false positive on legal code, on the commonest shape there is,
+      // which the conformance corpus cannot see.
+      //
+      // Consulted only when the CLASS lookup found nothing: a class and
+      // an interface of one name are a declaration merge, and collecting
+      // both would double-count a member, which is the one direction
+      // that can turn a single signature into a fake "overload set" and
+      // silence the argument check. Repeated `fields` entries are how
+      // the parser records an interface's overloads —
+      // `interface_method_arity_reliable` says so at its own site.
       match self.classes.get(n) {
         Some(cls) => {
           // Overload *signatures* (no body) are the callable surface in TS;
@@ -4756,6 +4831,24 @@ fn Resolver::method_overload_signatures(
         }
         None => ()
       }
+      if candidates.length() == 0 {
+        match self.interfaces.get(n) {
+          Some(iface) =>
+            for f in iface.fields {
+              // Only the bare callable shape, exactly as the `Object`
+              // arm below takes it. A generic (`GenericFunc`) or
+              // optional (`Union([Func, Undefined])`) member abstains
+              // and keeps the single-signature path, losing a finding
+              // rather than picking an arm for a caller.
+              match f.1 {
+                Func(ps, ret) => if f.0 == meth { candidates.push((ps, ret)) }
+                _ => ()
+              }
+            }
+          None => ()
+        }
+      }
+    }
     Object(fields) =>
       for f in fields {
         match (f.0, f.1) {
@@ -8341,6 +8434,75 @@ fn infer_expr(
   resolver : Resolver,
   expr : @ast.TsExpr,
 ) -> @ast.TsType {
+  let ty = infer_expr_inner(env, resolver, expr)
+  // An optional chain short-circuits for the WHOLE chain, so every link
+  // downstream of the `?.` yields `| undefined` too — and the parser
+  // puts only the guarded link inside the `OptionalChain` node, leaving
+  // the rest as ordinary accesses ON it. `g?.p.q` is
+  // `PropAccess(OptionalChain(PropAccess(g, p)), q)`, and that outer
+  // `.q` pruned the nullish receiver and handed back a bare `number`
+  // where tsc says `number | undefined` (probed); `b?.m(1)` and
+  // `u?.arr[0]` are the same shape with a call and an index on top.
+  //
+  // Gated on the receiver being SYNTACTICALLY an `OptionalChain`, which
+  // is what makes this a propagation rather than a new judgement: that
+  // node has already decided its guard can be nullish, and a `?.` on a
+  // non-nullable receiver still returns a non-nullish type, so
+  // `declare const c: { p: { q: number } }; const r: number = c?.p.q`
+  // stays silent. It is also what keeps the cost flat — one extra
+  // sub-inference at the one link per chain whose receiver is the chain
+  // node, where a "does the spine contain a `?.`" walk would be O(d²)
+  // on a member chain, the shape `verify-checker-scaling` exists to
+  // catch.
+  //
+  // Only ONE level: `w?.p.q.r` loses the `undefined` at `.r`, because
+  // its receiver is an ordinary `PropAccess` whose TYPE is nullish, and
+  // reading a nullish type as evidence of a chain would widen every
+  // unguarded access too. That costs a MISS.
+  //
+  // The test is on the chain node's own RESULT rather than on its guard:
+  // that arm has already decided whether the guard can be nullish, and
+  // `undefined` in what it hands back IS that decision. Re-deriving it
+  // here would be a second copy of one judgement, which is how the two
+  // halves come to disagree. `is_nullable_type` is emphatically not the
+  // predicate — it answers "is this type ENTIRELY nullish", so
+  // `{ q: number } | undefined`, the exact shape a short-circuiting
+  // chain produces, reads as false there and the rule fired on nothing.
+  match chain_guarded_receiver(expr) {
+    Some(recv) => {
+      if type_has_undefined(ty) {
+        return ty
+      }
+      if type_has_undefined(infer_expr(env, resolver, recv)) {
+        narrow_union(ty, @ast.TsType::Undefined)
+      } else {
+        ty
+      }
+    }
+    None => ty
+  }
+}
+
+///|
+/// The receiver / callee of `expr` when it is an ordinary access or call
+/// sitting directly ON an optional chain, and `None` otherwise. See
+/// `infer_expr`.
+fn chain_guarded_receiver(expr : @ast.TsExpr) -> @ast.TsExpr? {
+  match expr {
+    PropAccess(r, _)
+    | IndexAccess(r, _)
+    | MethodCall(r, _, _)
+    | CallExpr(r, _) => if r is OptionalChain(_) { Some(r) } else { None }
+    _ => None
+  }
+}
+
+///|
+fn infer_expr_inner(
+  env : ExprEnv,
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+) -> @ast.TsType {
   match expr {
     // Explicit type arguments are erased for inference: the call's value
     // type is the inner call's type.
@@ -8598,7 +8760,19 @@ fn infer_expr(
       // parameters accept the argument types before falling back to the
       // first-signature `infer_call` path.
       match callee {
-        PropAccess(recv, meth) => {
+        // The optional spelling is the SAME member call: `x?.m(args)` is
+        // `CallExpr(OptionalChain(PropAccess(x, m)), args)` — the parser
+        // leaves the call OUTSIDE the chain node — so this path, gated on
+        // a bare `PropAccess`, never ran for it and the call fell through
+        // to `infer_call`, which is handed the member's TYPE alone and
+        // cannot reach the binders a generic method records on its
+        // DECLARATION. `declare const c: { m<T>(o: { x: T }): T } |
+        // undefined; c?.m({ x: 12 })` therefore came back with `T`
+        // unsolved. `prune_nullish` on the receiver was already here, so
+        // the nullable half needs nothing extra, and the `| undefined`
+        // the chain owes is added afterwards by `infer_expr`'s chain
+        // propagation, which sees this same node.
+        PropAccess(recv, meth) | OptionalChain(PropAccess(recv, meth)) => {
           let recv_ty = infer_expr(env, resolver, recv)
           let arg_types : Array[@ast.TsType] = []
           for a in args {
@@ -9037,7 +9211,31 @@ fn infer_expr(
       }
       let recv_ty = infer_expr(env, resolver, receiver)
       let idx_ty = infer_expr(env, resolver, index_expr)
-      infer_index(resolver, recv_ty, idx_ty, index_expr)
+      let direct = infer_index(resolver, recv_ty, idx_ty, index_expr)
+      // Nullable receiver: strip the null / undefined members and retry.
+      // The PropAccess arm above has done this for a long time, with its
+      // own comment ("`lookup_field` requires ALL members to have the
+      // field"), and the INDEX spelling of the same access had nothing —
+      // so `declare const u: { a: number[] } | undefined; u?.a[0]` came
+      // back `Any` while `u?.a.length` resolved. Only when the direct
+      // answer is `Any`, so nothing that already decides can change, and
+      // only when the receiver really is a union carrying a nullish
+      // member, so this cannot widen a receiver that had none.
+      match direct {
+        Any =>
+          if type_has_undefined(resolver.unwrap(recv_ty)) ||
+            type_has_null(resolver.unwrap(recv_ty)) {
+            infer_index(
+              resolver,
+              prune_nullish(resolver, recv_ty),
+              idx_ty,
+              index_expr,
+            )
+          } else {
+            direct
+          }
+        _ => direct
+      }
     }
     ObjectLit(entries) => {
       let fields : Array[(@ast.TsType, @ast.TsType)] = []
@@ -9168,7 +9366,17 @@ fn infer_expr(
       let inner_ty = infer_expr(env, resolver, inner)
       let base = prune_nullish(resolver, inner_ty)
       let recv = match inner {
-        PropAccess(r, _) | IndexAccess(r, _) | MethodCall(r, _, _) => Some(r)
+        // `X.m?.(args)` is `OptionalChain(MethodCall(X, m, args))` — the
+        // `?.` sits before the `(`, so what it guards is the METHOD
+        // VALUE and not `X`. Asking about `X` made `declare const a: {
+        // m?(n: number): number }; const r: number = a.m?.(1)` come back
+        // non-nullish, because `a` is not optional; the optional member
+        // is. The receiver spelling `X?.m(args)` is a DIFFERENT shape —
+        // the parser puts the chain around the PROPERTY ACCESS there and
+        // leaves the call outside (probed, both ways) — so this arm sees
+        // only the optional-call form.
+        MethodCall(r, m, _) => Some(@ast.TsExpr::PropAccess(r, m))
+        PropAccess(r, _) | IndexAccess(r, _) => Some(r)
         // `x?.(args)` — the OPTIONAL CALL form, where what the `?.`
         // guards is the CALLEE rather than a receiver. It had no arm, so
         // every such call took the "shape this cannot read" default and
@@ -9827,7 +10035,29 @@ fn infer_call(
         arg_types.push(resolver.unwrap(infer_expr(env, resolver, a)))
       }
       let rets : Array[@ast.TsType] = []
+      // GENERIC members are set aside and instantiated only after every
+      // concrete one has failed to match — TypeScript's own overload
+      // order, and the same discipline `func_overload_type_params` uses,
+      // so a call a concrete member accepts keeps the answer it had.
+      let generics : Array[(Array[String], Array[@ast.TsType], @ast.TsType)] = []
       for part in parts {
+        // `unwrap` PEELS a `GenericFunc`: it says so at the site, because
+        // the wrapper erases to its underlying callable for every
+        // value-shape decision. That erasure also throws away the binders
+        // this call has to SOLVE, so the member must be read before it —
+        // `declare const c: { m<T>(o: { x: T }): T } | undefined;
+        // c?.m({ x: 12 })` reached the arm below as `Func([{x: T}], T)`
+        // and came back with `T` unsolved, where the same member reached
+        // directly (`d.m({ x: 12 })`) is solved by the `GenericFunc` arm
+        // above. One question, two answers.
+        match part {
+          GenericFunc(names, _, Func(gps, gret))
+          | GenericFunc(names, _, CallableMeta(Func(gps, gret), _)) => {
+            generics.push((names, gps, gret))
+            continue
+          }
+          _ => ()
+        }
         match resolver.unwrap(part) {
           Func(params, ret) => {
             let r = match ret {
@@ -9861,6 +10091,32 @@ fn infer_call(
           Undefined | Null => ()
           _ => return @ast.TsType::Any
         }
+      }
+      for g in generics {
+        let (names, gps, gret) = g
+        let bindings = solve_generic_bindings(
+          env,
+          resolver,
+          names,
+          gps,
+          args,
+          None,
+        )
+        let r = reduce_conditional(substitute_params(gret, bindings))
+        let sps = substitute_params_array(gps, bindings)
+        if sps.length() == arg_types.length() {
+          let mut ok = true
+          for i in 0..<sps.length() {
+            if !is_assignable_to(arg_types[i], sps[i]) {
+              ok = false
+              break
+            }
+          }
+          if ok {
+            return r
+          }
+        }
+        rets.push(r)
       }
       if rets.length() == 1 {
         rets[0]

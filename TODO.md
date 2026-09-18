@@ -3,6 +3,114 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch EZ (2026-09-18): MISS in scope 46 -> 45 at FP 0
+
+`TP 2669 -> 2670 | MISS in scope 46 -> 45 | OUT OF SCOPE 19 | FP 0 |
+PFLEGAL 0 | TN 1750`
+
+One conformance file (`callChain.3`) carrying FOUR independent defects,
+plus a false positive on legal code the corpus structurally cannot see.
+The file is filed in the triage under "object literals, contextual
+typing, widening", which is not what any of the four is — a reminder that
+the classification says what a file LOOKS like from its diagnostic, not
+what it needs. Each defect was found by probing the next thing the
+previous fix exposed, and only the four together move the file.
+
+**1. An optional chain's result, one link past the guard.** The chain
+short-circuits for the WHOLE chain, and the parser puts only the guarded
+link inside the `OptionalChain` node — `g?.p.q` is
+`PropAccess(OptionalChain(PropAccess(g, p)), q)` — so the outer `.q`
+pruned the nullish receiver and handed back a bare `number` where tsc
+says `number | undefined`. Propagated one level, off the chain node's own
+RESULT (`type_has_undefined`) rather than by re-deciding its guard: that
+arm has already made the decision, and a second copy of it is how the two
+halves come to disagree. `is_nullable_type` is emphatically NOT the
+predicate — it answers "is this type ENTIRELY nullish", so
+`{ q: number } | undefined`, the exact shape a short-circuiting chain
+produces, reads as false there and the first draft fired on nothing.
+Gated on the receiver being SYNTACTICALLY the chain node, which keeps the
+cost flat: one extra sub-inference at the one link per chain, where a
+"does the spine contain a `?.`" walk would be O(d²) on a member chain,
+the shape `verify-checker-scaling` exists to catch. Only ONE level —
+`w?.p.q.r` loses it at `.r`, because reading a nullish TYPE as evidence
+of a chain would widen every unguarded access too.
+
+**2. `m?<T>(x)` did not PARSE.** The grammar is
+`PropertyName ?opt CallSignature` and a CallSignature BEGINS with its
+type parameter list, so the `?` comes first. Both member parsers read the
+binders first, at two sites with one order — the applied-in-some-places
+family with the axis being a token ORDER rather than a site. The
+object-type parser's failure was TOTAL: the `<` was still the next token
+when the method arm tested for `(`, nothing else matched, and the whole
+literal fell back to `Any`, so every member of it became unknowable and
+not just the generic one. `m<T>?(x)` is not TypeScript, so the swap loses
+no spelling.
+
+**3. An OPTIONAL method is `Union([callable, Undefined])`.** The parser
+wraps `a?: T` into `T | undefined` and a method signature is no
+different, so every consumer matching the callable SHAPE read the member
+as opaque and `declare const a: { m?(n: number): number }; a.m?.(1)` came
+back `Any`. `lookup_callable_field` removes the nullish wrapper for the
+two callers that ask "what CALLABLE is this member"
+(`lookup_method_sig`, `method_type_params_of`); every other consumer
+keeps the union, since that is what makes `a.m` itself
+possibly-undefined. It returns `None` unless exactly ONE non-nullish
+member remains, so a genuine union of two callables — an overload set —
+keeps going to the overload path rather than having an arm picked for it.
+
+**4. `unwrap` PEELS a `GenericFunc`.** It says so at the site (the
+wrapper "erases to its underlying callable for every value-shape
+decision"), and that erasure also throws away the binders a call has to
+SOLVE — so a generic member of a union callee reached `infer_call`'s
+union loop as a bare `Func` and `c?.m({ x: 12 })` came back with `T`
+unsolved, where the same member reached directly is solved by the
+`GenericFunc` arm ten lines above. One question, two answers. Generic
+members are set aside and instantiated only after every concrete one has
+failed — TypeScript's own overload order, and the discipline batch EB's
+`func_overload_type_params` already uses.
+
+**The false positive: an INTERFACE's overload set was invisible.**
+`method_overload_signatures` had arms for a class, an `Object` type
+literal and a `Struct` — the three shapes that are NOT how a `.d.ts`
+declares overloads. With no candidates, two things went wrong at once:
+`resolve_method_overload` fell through to `lookup_method_sig`, whose own
+comment says it surfaces only the FIRST declaration, so
+`interface O { m(x: string): number; m(x: number): string }` with
+`p.m(1)` came back `number`; and the argument check's abstention (batch
+EL's, which exists for exactly this) is gated on `> 1` candidate, so it
+judged the call against overload #1 and reported
+`expected string but got number` on a line tsc ACCEPTS. **Confirmed
+pre-existing by stashing the branch and rebuilding HEAD**, not argued to
+be. Corpus-NEUTRAL when fixed — no TP lost, no FP gained — which is the
+ideal shape for a real-code fix the gate cannot score. Consulted only
+when the CLASS lookup found nothing, since a class and an interface of
+one name are a declaration merge and double-counting is the one direction
+that can turn a single signature into a fake overload set and silence the
+argument check.
+
+**One more, found the same way.** The IndexAccess arm passed its receiver
+to `infer_index` raw, where the PropAccess arm has pruned a nullable
+receiver and retried for a long time with its own comment saying why — so
+`u?.a[0]` came back `Any` while `u?.a.length` resolved. Retried only when
+the direct answer is `Any` and the receiver really is a union carrying a
+nullish member, so nothing that already decides can change.
+
+Two things NOT taken, with their reasons. `a.m(1)` on an optional method
+is TS2722 in tsc ("cannot invoke an object which is possibly undefined")
+and stays a MISS: a different code, and the call now types correctly.
+`w?.p.q.r` loses the `| undefined` two links past the guard, per (1).
+
+Gates: `moon fmt --check`, `moon check --deny-warn` (native and `js`),
+`moon info`, every `*_wbtest.mbt` file individually (2,853 tests across
+checker / parser / bridge / mtsc / transform), the oracle,
+`verify-checker-scaling` (12 axes in budget), `verify-generated-fixtures`,
+`verify-scaffolds`, `verify-examples`, `verify-mbti-dts`,
+`verify-bridge-runtime` (14,630 converter calls, 0 failures),
+`verify-bridge-enum-returns`, `verify-mangle-safety` (186/186),
+`verify-dce-coverage` (31 eliminated / 0 broken), `verify-graph-walk`,
+`verify-language-service` (22/22), `verify-cli-node` (21/21).
+`--max-miss` lowered to 45.
+
 ### Batches EU-EY (2026-09-18): MISS in scope 50 -> 46 at FP 0
 
 `TP 2665 -> 2669 | MISS in scope 50 -> 46 | OUT OF SCOPE 19 | FP 0 |
