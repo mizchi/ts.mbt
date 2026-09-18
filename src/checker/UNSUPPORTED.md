@@ -1,6 +1,6 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-18, after batches EU–EZ:
+Measured on 2026-09-18, after batches EU–FA:
 
 ```
 TP  err+flag  : 2670   (of which via parse rejection: 390)
@@ -187,9 +187,10 @@ measured gap.
 | optional chain PAST the guarded link (`g?.p.q`, `b?.m(1)`, `u?.a[0]` against a non-nullable annotation) | CAUGHT (batch EZ) |
 | optional METHOD, called and optional-called (`a.m?.(1)` / `e.m({…})` where `m?(…)`; `m?<T>(…)` did not PARSE) | CAUGHT (batch EZ) |
 | an INTERFACE's overload set (`interface O { m(x: string): number; m(x: number): string }`, `p.m(1)`) | CAUGHT (batch EZ) — it reported the wrong return AND a false argument error before |
+| a member keyed by a string-literal `const` (`const kk = "hello"`, `interface I { [kk]: number }`, `i.hello`) | **ABSTAINS — deliberate (batch FA)**: neither member parser can evaluate a key that depends on another declaration, and reading the undecidable name as "no member called `hello`" reported a line tsc ACCEPTS. A well-known key is decided statically and keeps its existence check |
 | **strictNullChecks on a member-chain receiver** (`o.a.b` with `a?:`) | **BLIND — deliberate**: the check is gated to a bare `Var` receiver because those are the bindings the narrowing engine rewrites precisely (batch DO) |
 | **variadic tuple** (`[...T]`, `[string, ...number[]]`) | **BLIND** |
-| **computed `unique symbol` key** (`interface I { [k]: number }`, `i[k]` against `string`) | **BLIND** |
+| computed `unique symbol` key (`interface I { [k]: number }` / `{ [k]: number }`, `i[k]` against `string`) | CAUGHT (batch FA) — the ANONYMOUS spelling did not PARSE at all, so every member of such a type was lost |
 | **`this` inside an object-literal `function` property** (`{ n: 101, f: function () { this.n.length } }`) | **BLIND — measured and not taken**, see §3 |
 | template-literal type with a placeholder (`` `${T}-x` `` against `"c-x"`) | CAUGHT at the error shape, and the type it computes is `string` rather than the evaluated literal — the legal neighbours (`"c-x"`, `string`) are silent, measured |
 
@@ -204,9 +205,12 @@ occurrences in real application source against ONE conformance file, and
 the interface-overload row was a false positive on legal code —
 `p.m(1)` against `m(x: string): number; m(x: number): string` reported
 `expected string but got number`, measured against the pre-batch binary.
-FP 0 and MISS 45 are statements about 4,484 files and not about real code
-(batch EO measured zod at 272 diagnostics with tsc accepting all of them;
-187 remain after the shadowing fix).
+Batch FA is the fourth half: `unique symbol` was the top BLIND row at
+**183 occurrences across 3,000 real `.d.ts` files**, and opening it found
+three defects and two more false positives on legal code, for ZERO
+conformance files. FP 0 and MISS 45 are statements about 4,484 files and
+not about real code (batch EO measured zod at 272 diagnostics with tsc
+accepting all of them; 187 remain after the shadowing fix).
 
 ---
 

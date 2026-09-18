@@ -917,12 +917,42 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
               is_standard_well_known_symbol(sym) => Some(sym)
             _ => None
           }
+          // A LATE-BOUND member key: `[k]` over a `const k: unique
+          // symbol`, which is how a `.d.ts` declares a symbol-keyed
+          // member (183 occurrences across 3,000 real ones). It got no
+          // name at all — the arm below FELL BACK, abandoning the whole
+          // object type, so `{ [k]: number; plain: number }` was `Any`
+          // and every member of it was lost, not just the computed one.
+          //
+          // The shape is exactly `[ Ident ]`, which is what keeps this
+          // off the two things that must still fall back: a MAPPED type
+          // (`[K in keyof T]`) has an `in` follower and a dotted key
+          // (`[E.A]`) a `.`, so neither matches and the mapped-type
+          // parser downstream still gets its turn. That `return None` is
+          // load-bearing for mapped types, which is why this is a
+          // positive shape test rather than a widened fallback.
+          let late_bound_key : String? = match self.peek().kind {
+            Ident(key) if self.peek_at(1).kind == RBracket => Some(key)
+            _ => None
+          }
           if well_known_sym is Some(sym) {
             let _ = self.advance()
             let _ = self.advance()
             let _ = self.advance()
             let _ = self.advance()
             "@@" + sym
+          } else if late_bound_key is Some(key) {
+            // The two misuse recorders both ABSTAIN on this shape — each
+            // says so in its own comment — so they run exactly as before
+            // and only the NAME changes.
+            self.record_index_signature_shape_misuse()
+            self.record_computed_member_key_misuse("a type literal")
+            if !self.in_function {
+              self.grammar_misuses.push("<computed-type-key>" + key)
+            }
+            let _ = self.advance()
+            let _ = self.expect(RBracket)
+            "@@unique:" + key
           } else {
             let is_index_sig = match self.peek().kind {
               Ident(_) => self.peek_at(1).kind == Colon

@@ -2210,6 +2210,26 @@ pub fn Parser::parse_interface(
           }
           _ => ()
         }
+        // A LATE-BOUND member key: `[k]` over a `const k: unique
+        // symbol`. It used to come out `<computed>`, a name no lookup can
+        // ever match, so `interface I { [k]: number }` declared a member
+        // the checker could not reach — while the sibling WELL-KNOWN
+        // spelling twenty lines above has had a stable `@@name` for a
+        // long time. One question, two answers. The shape is exactly
+        // `[ Ident ]`, so a dotted or expression key still goes opaque.
+        let late_bound_key : String? = if symbol_name is None {
+          match self.peek().kind {
+            Ident(key) if self.peek_at(1).kind == RBracket => Some(key)
+            _ => None
+          }
+        } else {
+          None
+        }
+        if late_bound_key is Some(key) {
+          let _ = self.advance()
+          let _ = self.expect(RBracket)
+          symbol_name = Some("@@unique:" + key)
+        }
         match symbol_name {
           Some(sn) => sn
           None => {

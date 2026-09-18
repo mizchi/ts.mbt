@@ -2933,6 +2933,49 @@ product surfaces now.
   real application source**, the second commonest feature in that column,
   against one conformance file. Reading the corpus count alone ranks it
   last; reading the two together is what said to open it.
+  Batch FA takes that ranking one row further and buys **ZERO**
+  conformance files on purpose. `unique symbol` is **183 occurrences
+  across 3,000 real `.d.ts` files** — the third commonest feature in that
+  column — and was the top BLIND row of the `UNSUPPORTED.md` §2
+  capability table, with no corpus file anywhere. It held three defects.
+  The ANONYMOUS spelling did not PARSE AT ALL:
+  `try_parse_object_type_with_members`'s bracket arm falls back for
+  anything that is not an index signature, so `{ [k]: number; plain:
+  number }` was `Any` and EVERY member of it was lost, not just the
+  computed one — the batch EZ `m?<T>` shape again, a member spelling
+  that takes the whole literal down with it. That fall-back is
+  load-bearing for a MAPPED type, which reaches the same arm, so the fix
+  is a positive shape test (exactly `[ Ident ]`, where a mapped type has
+  an `in` follower and a dotted key a `.`) rather than a widened
+  fallback — the one direction that would have broken a feature to fix a
+  feature. The INTERFACE spelling named the member `<computed>`, a name
+  no lookup can match, while the sibling WELL-KNOWN spelling twenty
+  lines above has had a stable `@@name` for years: one question, two
+  answers. And nothing translated the index EXPRESSION back, so `i[k]`
+  was `Any` even once the member had a name; that went in at BOTH read
+  arms, since writing it at one is how the two spellings came to
+  disagree in the first place.
+  Its two FALSE POSITIVES are pre-existing and were found the way this
+  file keeps recommending — by probing a legal neighbour of the rule
+  being written. A computed key can also be a string-literal `const`
+  (`const kk = "hello"; interface I { [kk]: number }`), which tsc names
+  `hello` and neither member parser can evaluate, since the value lives
+  in another declaration. Reading the undecidable name as "this shape
+  has no member called `hello`" reported `i.hello` on a line tsc
+  ACCEPTS — measured against the baseline binary, since the
+  `<computed>` half predates the `@@unique:` name entirely.
+  `member_recv_unmodeled` is where it belongs, beside the index-signature
+  abstention it already makes for the same reason (a member might be
+  present without being listed), and a WELL-KNOWN key is excluded because
+  it IS decided statically — `w.nope` on an `@@iterator`-carrying
+  interface still reports, probed. The cost is that a genuinely absent
+  property of a late-bound-key interface stops being reported, which is
+  the affordable direction and corpus-NEUTRAL: no TP lost, FP still 0.
+  The name-keyed match is the one approximation stated rather than
+  hidden — tsc keys a late-bound member by SYMBOL where this keys it by
+  spelling, so two `unique symbol` bindings sharing a name across scopes
+  resolve to one member; that costs a wrong member rather than a report
+  on legal code, since tsc calls the same program TS2339.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

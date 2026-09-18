@@ -167,23 +167,28 @@ row.
 
 Against that table, the capability probe in `UNSUPPORTED.md` §2 says
 which features are still BLIND at the shape real code writes, and after
-batches EU–EZ the list is down to three: variadic tuples, a computed
-`unique symbol` key, and `this` inside an object-literal `function`
-property (that last one measured and not taken, with its blocker). A
-strict-null member-chain receiver is a fourth and is deliberate.
+batches EU–FA the list is down to two: variadic tuples, and `this` inside
+an object-literal `function` property (that last one measured and not
+taken, with its blocker). A strict-null member-chain receiver is a third
+and is deliberate.
 Conditional types, the utility table, mapped types, `keyof`, overload
 selection, generic inference, generic METHOD calls, index-signature
 reads through an anonymous object type, a mapped type over an infinite
 key set, an intersection against an indexer, an optional chain's
-`| undefined` past the guarded link, an optional METHOD and an
-INTERFACE's overload set are all CAUGHT at the common shape now.
+`| undefined` past the guarded link, an optional METHOD, an INTERFACE's
+overload set and a computed `unique symbol` key are all CAUGHT at the
+common shape now.
 
 The optional-chaining row is the argument for reading the two axes
 TOGETHER rather than either alone. It is 144 occurrences in real
 application source — the second commonest feature in that column — and
 ONE conformance file, and what the probe found there was four separate
 defects stacked on one shape, including a member spelling (`m?<T>()`)
-that did not parse at all.
+that did not parse at all. Batch FA is the same read one row up:
+`unique symbol` is 183 real `.d.ts` occurrences against ZERO conformance
+files, and the anonymous spelling of ITS member key (`{ [k]: number }`)
+did not parse either — which cost every member of such a type, not just
+the computed one.
 
 Two rows of that table were wrong in the direction that matters, and
 both were found by re-measuring rather than by reading: the

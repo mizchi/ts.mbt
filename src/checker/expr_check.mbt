@@ -10252,6 +10252,26 @@ fn infer_index(
                 }
               }
           }
+        // A LATE-BOUND symbol index (`i[k]` over `const k: unique
+        // symbol`), the sibling of the well-known arm above and the
+        // read half of the `@@unique:` key both member_name parsers record.
+        // The accessor-pair and overload-set abstentions are the same
+        // two that arm makes, and for the same reasons.
+        _ if late_bound_index_member_name(idx, idx_expr) is Some(member_name) =>
+          match accessor_member_value_type(resolver, recv, member_name) {
+            Some(t) => t
+            None =>
+              if class_member_declared_more_than_once(
+                  resolver, recv, member_name,
+                ) {
+                @ast.TsType::Any
+              } else {
+                match resolver.lookup_field(recv, member_name) {
+                  Some(t) => t
+                  None => @ast.TsType::Any
+                }
+              }
+          }
         StringLit(key) =>
           match resolver.lookup_field(recv, key) {
             Some(t) => t
@@ -10289,6 +10309,15 @@ fn infer_index(
     // there.
     Object(_) =>
       match idx_expr {
+        // The same late-bound key, at the ANONYMOUS spelling. Writing it
+        // at one of the two arms is how `interface I { [k]: number }` and
+        // `{ [k]: number }` would come to answer differently, which is
+        // what the two member_name parsers already did before this batch.
+        _ if late_bound_index_member_name(idx, idx_expr) is Some(member_name) =>
+          match resolver.lookup_field(recv, member_name) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
         StringLit(key) =>
           match resolver.lookup_field(recv, key) {
             Some(t) => t
@@ -10314,6 +10343,37 @@ fn infer_index(
           }
       }
     _ => @ast.TsType::Any
+  }
+}
+
+///|
+/// The stable member name a LATE-BOUND computed key resolves to, or
+/// `None`.
+///
+/// `declare const k: unique symbol; interface I { [k]: number }` is how a
+/// `.d.ts` declares a symbol-keyed member — 183 occurrences across 3,000
+/// real ones, the third commonest feature in `docs/checker-triage.md`'s
+/// real-code column — and both member parsers now record it as
+/// `@@unique:<k>`, the same convention the WELL-KNOWN spelling has used
+/// for a long time. This is the other half: translating the index
+/// EXPRESSION back, which nothing did, so `i[k]` came back `Any`.
+///
+/// Gated on the index's TYPE being a `unique symbol`, which is what makes
+/// the name-keyed match sound enough to ship: a plain `symbol`, a string
+/// or any other binding spelled `k` does not reach it, and TypeScript
+/// only late-binds a key whose type is `unique symbol` in the first
+/// place. What it cannot tell apart is two DIFFERENT `unique symbol`
+/// bindings that share a spelling across scopes — tsc keys the member by
+/// SYMBOL where this keys it by name — and that direction costs a wrong
+/// member rather than a report on legal code, since tsc calls the same
+/// program TS2339.
+fn late_bound_index_member_name(
+  idx : @ast.TsType,
+  idx_expr : @ast.TsExpr,
+) -> String? {
+  match (idx_expr, idx) {
+    (Var(name), UniqueSymbol(_)) => Some("@@unique:" + name)
+    _ => None
   }
 }
 
@@ -13072,6 +13132,25 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
   }
   if shape_is_callable(ty, resolver) {
     return true
+  }
+  // A member whose NAME could not be decided statically. `interface I {
+  // [kk]: number }` over `const kk = "hello"` declares a member tsc calls
+  // `hello`, and neither member parser can evaluate the key — it depends
+  // on another declaration — so it lands as `<computed>` or, for the
+  // late-bound spelling, `@@unique:kk`. Reading either as "this shape has
+  // no member called `hello`" reported `i.hello` on a line tsc ACCEPTS.
+  // Measured pre-existing against the baseline binary, not assumed: the
+  // `<computed>` half predates the `@@unique:` name entirely.
+  //
+  // A WELL-KNOWN `@@iterator` is decided statically and stays modeled,
+  // which is the whole point of giving it a stable name; only the two
+  // undecidable spellings abstain. That costs a MISS on a genuinely
+  // absent property of an interface carrying a computed key, which is the
+  // affordable direction.
+  for f in collect_declared_fields(ty, resolver) {
+    if f.0 == "<computed>" || f.0.has_prefix("@@unique:") {
+      return true
+    }
   }
   match resolver.unwrap(ty) {
     Intersection(_) | TypeOf(_) => true

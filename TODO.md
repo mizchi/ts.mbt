@@ -3,6 +3,80 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FA (2026-09-18): a late-bound `unique symbol` member key, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL by design.
+
+`unique symbol` is **183 occurrences across 3,000 real `.d.ts` files**,
+the third commonest feature in `docs/checker-triage.md`'s real-code
+column, and it was the top BLIND row of `UNSUPPORTED.md` §2 with no
+conformance file anywhere. That ranking is the batch: the corpus count
+alone puts it last. Three defects and two false positives on legal code.
+
+**1. The ANONYMOUS spelling did not PARSE.**
+`try_parse_object_type_with_members`'s bracket arm falls back for
+anything that is not an index signature, so `{ [k]: number; plain:
+number }` came out `Any` and EVERY member of it was lost — not just the
+computed one. Same shape as batch EZ's `m?<T>`: one member spelling takes
+the whole type literal down with it. The fall-back is LOAD-BEARING for a
+mapped type (`[K in keyof T]` reaches the same arm and must reach its own
+parser downstream), so the fix is a positive shape test — exactly
+`[ Ident ]`, where a mapped type has an `in` follower and a dotted key a
+`.` — rather than a widened fallback, which would have broken one feature
+to fix another.
+
+**2. The INTERFACE spelling named the member `<computed>`**, a name no
+lookup can ever match, while the sibling WELL-KNOWN spelling twenty lines
+above has had a stable `@@name` for a long time. One question, two
+answers. Both now record `@@unique:<k>`.
+
+**3. Nothing translated the index EXPRESSION back**, so `i[k]` was `Any`
+even once the member had a name. `late_bound_index_member_name` is wired
+at BOTH `infer_index` arms — the `Named`/`Applied` one and the anonymous
+`Object` one — because writing it at one is exactly how the two spellings
+came to disagree in the first place. It gates on the index's TYPE being a
+`unique symbol`, so a plain `symbol`, a string key or any other binding
+spelled `k` does not reach it.
+
+**The false positives are pre-existing and were found by probing a legal
+neighbour.** A computed key can also be a string-literal `const` —
+`const kk = "hello"; interface I { [kk]: number }` — which tsc names
+`hello` and which neither member parser can evaluate, the value living in
+another declaration. Reading the undecidable name as "this shape has no
+member called `hello`" reported `i.hello` on a line tsc ACCEPTS.
+**Confirmed pre-existing by stashing the branch and rebuilding HEAD**:
+the `<computed>` half predates the `@@unique:` name entirely. The
+abstention goes in `member_recv_unmodeled`, beside the index-signature
+one it already makes for the same reason — a member might be present
+without being listed. A WELL-KNOWN key is excluded because it IS decided
+statically, and that exclusion is measured rather than asserted: `w.nope`
+on an `@@iterator`-carrying interface still reports, matching tsc. The
+price is that a genuinely absent property of a late-bound-key interface
+stops being reported, which is the affordable direction and cost no TP.
+
+**The one approximation, stated rather than hidden.** tsc keys a
+late-bound member by SYMBOL; this keys it by spelling, so two
+`unique symbol` bindings sharing a name across scopes resolve to one
+member. That costs a wrong member rather than a report on legal code,
+since tsc calls the same program TS2339.
+
+Declared MISSes, each probed: the CLASS spelling (`class C { [k]: number }`,
+`c[k]`) is untouched — `class_key_name` has its own naming and a class
+computed key may legally be an arbitrary expression; `i[s2]` over a plain
+`symbol` and `i["k"]` are TS7053, a code this rule does not claim; and
+`i.nope` on a late-bound-key interface is the cost of the abstention
+above.
+
+Gates: `moon fmt --check`, `moon check --deny-warn` (native and `js`),
+`moon info`, every `*_wbtest.mbt` file individually (2,854 tests), the
+oracle, `verify-checker-scaling` (12 axes in budget),
+`verify-generated-fixtures`, `verify-scaffolds`, `verify-examples`,
+`verify-bridge-runtime` (14,630 converter calls, 0 failures),
+`verify-bridge-enum-returns`, `verify-mangle-safety` (186/186),
+`verify-dce-coverage` (31 eliminated / 0 broken), `verify-graph-walk`,
+`verify-language-service` (22/22), `verify-cli-node` (21/21).
+
 ### Batch EZ (2026-09-18): MISS in scope 46 -> 45 at FP 0
 
 `TP 2669 -> 2670 | MISS in scope 46 -> 45 | OUT OF SCOPE 19 | FP 0 |

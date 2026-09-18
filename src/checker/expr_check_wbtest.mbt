@@ -22289,3 +22289,84 @@ test "checker: interface overload resolution (batch EZ)" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch FA: a LATE-BOUND computed member key (`[k]` over a
+/// `const k: unique symbol`).
+///
+/// `unique symbol` is 183 occurrences across 3,000 real `.d.ts` files —
+/// the third commonest feature in `docs/checker-triage.md`'s real-code
+/// column — and the capability probe in `UNSUPPORTED.md` §2 had it BLIND.
+/// Opening it found three defects, none of which the corpus can score.
+///
+/// 1. The ANONYMOUS spelling did not parse AT ALL.
+///    `try_parse_object_type_with_members`'s bracket arm fell back for
+///    anything that is not an index signature, so `{ [k]: number; plain:
+///    number }` was `Any` and EVERY member of it was lost, not just the
+///    computed one. The fall-back is load-bearing for a MAPPED type
+///    (`[K in keyof T]`, which reaches the same arm), so the fix is a
+///    positive shape test — exactly `[ Ident ]` — rather than a widened
+///    fallback.
+/// 2. The INTERFACE spelling named the member `<computed>`, which no
+///    lookup can ever match, while the sibling WELL-KNOWN spelling twenty
+///    lines above has had a stable `@@name` for a long time. One
+///    question, two answers.
+/// 3. Nothing translated the index EXPRESSION back, so `i[k]` was `Any`
+///    even once the member had a name. Wired at BOTH read arms, since
+///    writing it at one is how the two spellings came to disagree in the
+///    first place.
+test "checker: late-bound unique-symbol member key (batch FA)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let uk = "declare const k: unique symbol;\n"
+  // --- fires
+  for
+    src in [
+      // The read resolves, at both spellings of a member list.
+      uk +
+      "interface I { [k]: number }\ndeclare const i: I;\nconst r: string = i[k];",
+      uk + "declare const j: { [k]: number };\nconst r: string = j[k];",
+      // (1): the object type parses at all, so its ORDINARY members are
+      // reachable again — the half of that bug with nothing to do with
+      // symbols.
+      uk +
+      "declare const m: { [k]: number; plain: number };\nconst r: string = m.plain;",
+      uk +
+      "declare const m: { [k]: number; plain: number };\nconst r: { a: number } = m;",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The value really is a `number`.
+      uk +
+      "interface I { [k]: number }\ndeclare const i: I;\nconst r: number = i[k];",
+      uk + "declare const j: { [k]: number };\nconst r: number = j[k];",
+      // A plain `symbol` is not late-bound, and neither is the string
+      // "k" — both are TS7053 in tsc, a code this rule does not claim, so
+      // both stay MISSes rather than resolving to the symbol member.
+      uk +
+      "declare const s2: symbol;\ninterface I { [k]: number }\ndeclare const i: I;\nconst r: string = i[s2];",
+      uk +
+      "interface I { [k]: number }\ndeclare const i: I;\nconst r: string = i[\"k\"];",
+      // (1)'s neighbour: a MAPPED type reaches the same bracket arm and
+      // must still fall back to its own parser.
+      "type MT<T> = { [K in keyof T]: T[K] };\ndeclare const m: MT<{ a: number }>;\nconst r: number = m.a;",
+      // …and a WELL-KNOWN key keeps the stable name it always had.
+      "interface W { [Symbol.iterator](): Iterator<number> }\ndeclare const w: W;\nconst r = w[Symbol.iterator]();",
+      // A computed key whose value we cannot decide names a member tsc
+      // CAN name, so the shape stops being enumerable for existence
+      // purposes. `const kk = \"hello\"` makes `i.hello` legal and it was
+      // reported — measured pre-existing, since the `<computed>` half
+      // predates the `@@unique:` name entirely.
+      "const kk = \"hello\";\ninterface I { [kk]: number }\ndeclare const i: I;\nconst r: number = i.hello;",
+      "const kk = \"hello\";\ninterface I { [kk]: number }\ndeclare const i: I;\nconst r = i.anything;",
+      // A well-known key does NOT buy that abstention: it is decided
+      // statically, so a genuinely absent property is still reported.
+      "interface W { [Symbol.iterator](): Iterator<number>; a: number }\ndeclare const w: W;\nconst r: number = w.a;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
