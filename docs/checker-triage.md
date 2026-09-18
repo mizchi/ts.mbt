@@ -174,10 +174,11 @@ third. `satisfies` (238) and `as const` (108) are the two commonest
 features in the real-`.ts` column and neither had a row at all, nor did
 `infer` (156 in `.d.ts`): a table with a stale row ranks the wrong work,
 and a table with a MISSING row cannot rank it at all. Measured
-2026-09-18: `satisfies` and `infer` are CAUGHT, and `as const` on an
-OBJECT LITERAL is BLIND with its cause written down in §3 — the
-widening-direction suppression is right and `as const` failing to keep
-its members' literal types is the bug. A strict-null member-chain
+2026-09-18: `satisfies` and `infer` are CAUGHT, and a `string` source
+against a string-LITERAL target is BLIND — `as const` turned out to be a
+red herring for it, and the row in §3 records the six-cell matrix rather
+than a diagnosis, because the first two causes guessed at were both
+refuted by reading the code they named. A strict-null member-chain
 receiver is a fourth and is deliberate.
 Conditional types, the utility table, mapped types, `keyof`, overload
 selection, generic inference, generic METHOD calls, index-signature
