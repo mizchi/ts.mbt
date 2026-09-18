@@ -2210,6 +2210,26 @@ pub fn Parser::parse_interface(
           }
           _ => ()
         }
+        // A LATE-BOUND member key: `[k]` over a `const k: unique
+        // symbol`. It used to come out `<computed>`, a name no lookup can
+        // ever match, so `interface I { [k]: number }` declared a member
+        // the checker could not reach — while the sibling WELL-KNOWN
+        // spelling twenty lines above has had a stable `@@name` for a
+        // long time. One question, two answers. The shape is exactly
+        // `[ Ident ]`, so a dotted or expression key still goes opaque.
+        let late_bound_key : String? = if symbol_name is None {
+          match self.peek().kind {
+            Ident(key) if self.peek_at(1).kind == RBracket => Some(key)
+            _ => None
+          }
+        } else {
+          None
+        }
+        if late_bound_key is Some(key) {
+          let _ = self.advance()
+          let _ = self.expect(RBracket)
+          symbol_name = Some("@@unique:" + key)
+        }
         match symbol_name {
           Some(sn) => sn
           None => {
@@ -2439,9 +2459,16 @@ pub fn Parser::parse_interface(
     // on properties, which never carry `<...>`.) Constraint bounds are
     // kept alongside so the bridge can substitute them at the FFI
     // boundary (`pipe<T extends $ZodType>` types its param as `$ZodType`).
-    let (m_type_params, m_type_param_bounds) = self.parse_type_param_names_and_bounds()
-    // Check for optional marker ?
+    //
+    // Read the `?` FIRST: the grammar is `PropertyName ?opt
+    // CallSignature` and a CallSignature begins with its type parameter
+    // list, so `m?<T>(x)` puts the question mark before the `<`. Taking
+    // the binders first left the `<` in place when the method arm tested
+    // for `(`, so `interface I { m?<T>(o: { x: T }): T }` did not record
+    // a method signature at all. Second of the two member parsers that
+    // had this order; `m<T>?(x)` is not TypeScript, so nothing is lost.
     let is_optional = self.match_(Question)
+    let (m_type_params, m_type_param_bounds) = self.parse_type_param_names_and_bounds()
     // Method signature: name(...): T or name<T>(...): U
     if self.check(LParen) {
       let _ = self.advance()

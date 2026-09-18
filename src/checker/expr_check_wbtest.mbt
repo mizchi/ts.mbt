@@ -16203,6 +16203,22 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
       // both the ambient and the ordinary spelling, and through a
       // type-only nested namespace.
        "namespace M { export interface Point { x: number } }\nvar m = M;", "declare namespace M { interface Point { x: number } }\nvar m = M;",
+      // The nested case was in the SILENT list until this batch, with a
+      // comment saying "tsc reports TS2708 there" — an assertion
+      // measuring a gap rather than a behaviour, and the reason
+      // `importStatementsInterfaces` was a MISS. The gap was that
+      // `parse_namespace_decl_with_mode` gives a nested namespace's own
+      // value entry to the enclosing body whatever its body holds, so
+      // the outer namespace read as instantiated; an EMPTY inner
+      // namespace is the same answer (probed).
+       "namespace A { export namespace inA { export interface P { x: number } } }\nvar a = A;",
+      "namespace A { export namespace inA { } }\nvar a = A;",
+      // The alias half: `import a = A` binds a value exactly when its
+      // TARGET does, nested and through a chain, at a `typeof` type
+      // position.
+       "namespace A { export interface P { x: number } }\nnamespace C { import a = A; var m: typeof a; }",
+      "namespace A { export namespace inA { export interface Q { y: number } } }\nnamespace C { import a = A.inA; var m: typeof a; }",
+      "namespace A { export namespace inA { export interface Q { y: number } } }\nnamespace C { import a = A; import b = a.inA; var m: typeof b; }",
       // TS2350: `new` over a call signature that returns a value, and over
       // the two lib functions that are not constructors.
        "declare var cf: { (): string };\nvar r = new cf();", "new Symbol();", "new BigInt(1);",
@@ -16230,14 +16246,6 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
     src in [
       // TS2583: the lib that declares it, and a user declaration.
       "// @lib: es2017\nvar foge = new SharedArrayBuffer(1024);", "// @lib: es5\ndeclare var SharedArrayBuffer: any;\nvar foge = new SharedArrayBuffer(1024);",
-      // A type-only namespace nested inside another is NOT covered, and
-      // the reason is a lowering artifact rather than a judgement:
-      // `export namespace inA { … }` records a VALUE for `inA` (the
-      // namespace object `parser_namespace_lower` synthesizes), so the
-      // outer namespace reads as instantiated whatever its nested body
-      // holds. tsc reports TS2708 there; `importStatementsInterfaces`
-      // stays a MISS for it.
-       "namespace A { export namespace inA { export interface P { x: number } } }\nvar a = A;",
       // TS2708: an INSTANTIATED namespace is a value; so is one whose only
       // member is an `import` alias, because an alias to an instantiated
       // namespace emits `var a = A` (exportImportAlias — the one false
@@ -16246,6 +16254,16 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
       // body alone does not show.
        "namespace M { export var v = 1; }\nvar m = M;", "namespace A { export var x = 1; }\nnamespace C { export import a = A; }\nvar z = C.a.x;",
       "namespace M { export interface Point { x: number } }\nclass M { }\nvar m = M;",
+      // An INSTANTIATED nested namespace makes the outer one a value, at
+      // one level and at two.
+       "namespace A { export namespace inA { export var v = 1 } }\nvar a = A;", "namespace A { export namespace inA { export namespace j { export const c = 1 } } }\nvar a = A;",
+      // The alias rule is judged against its TARGET, so an instantiated
+      // target is silent — and an enum, a class and a function target
+      // are silent because tsc gives TS2503 / TS2693 / TS2702 there,
+      // codes this rule does not claim (probed one cell at a time).
+       "namespace A { export var v = 1 }\nnamespace C { import a = A; var m: typeof a; }",
+      "enum E { X }\nnamespace C { import a = E; var m: typeof a; }", "class K { }\nnamespace C { import a = K; var m: typeof a; }",
+      "namespace A { export interface P { x: number } }\nnamespace C { import a = A.P; var m: typeof a; }",
       // A local binding shadowing a type-only namespace name.
        "namespace M { export interface P { x: number } }\nfunction f() { const M = 1; return M; }",
       // TS2350: a construct signature and an ordinary class.
@@ -21850,6 +21868,504 @@ test "expr_check: shadowed enum initializers and undeclared type arguments (batc
        "// @target: es2015\ndeclare function g<X>(): void;\nconst f2 = <B,>(x: B) => { g<B>(); return x; };",
       // And an enum / class / builtin name.
        "// @target: es2015\ndeclare function g<X>(): void;\nenum En { A }\ng<En>();\nclass Cl {}\ng<Cl>();\ng<string>();",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EU: TS2403 inside a FUNCTION scope, and the polymorphic `this`.
+///
+/// The rule and its identity comparison had existed for as long as
+/// `check_var_redeclaration_types`, at the MODULE level and nowhere
+/// else — so `function f() { var b: number; var b: string }`, the same
+/// mistake one scope in, was silent, and so was every class method,
+/// constructor, arrow and function expression. The comparison itself is
+/// shared rather than copied, which is why the cells below read the same
+/// either side of the boundary.
+///
+/// Every cell was probed against tsc 6.0.3 one at a time. The three it
+/// reports and we do not are recorded as the silent cases they are: an
+/// UNANNOTATED `var b` is `any` to tsc and abstains here (the
+/// absent-versus-`: any` blocker), a DESTRUCTURED parameter's `p.type_`
+/// is the whole pattern's type while `p.name` is only its first name, and
+/// a STATIC method's `this` is `typeof C` rather than the polymorphic
+/// `this`.
+test "checker: TS2403 in a function scope and the polymorphic `this` (batch EU)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .iter()
+    .filter(fn(i) { i.message.contains("subsequent variable declaration") })
+    .count()
+  }
+  // --- fires
+  for
+    src in [
+      // The three callable spellings, plus a class method, a constructor
+      // and a namespace-scoped function.
+      "function f() { var b: number; var b: string; }", "class C { m() { var b: number; var b: string; } }",
+      "class C { constructor() { var b: number; var b: string; } }", "var f = () => { var b: number; var b: string; };",
+      "var f = function () { var b: number; var b: string; };", "namespace N { function f() { var b: number; var b: string; } } ",
+      // `var` is FUNCTION-scoped, so a nested block, an `if` arm, a `for`
+      // head, a `switch` case and a `try` block are all one group.
+       "function f() { var b: number; { var b: string; } }", "function f() { var b: number; if (1) { var b: string; } }",
+      "function f() { var b: number; for (var b: string;;) { } }", "function f(v: number) { var b: number; switch (v) { default: var b: string; } }",
+      "function f() { var b: number; try { var b: string; } catch (e) { } }",
+      // A PARAMETER participates, including the optional spelling, where
+      // `b?: number` is `number | undefined` — the union our parser
+      // already builds, so no special case is needed for it.
+       "function f(b: number) { var b: string; }", "function f(b?: number) { var b: number; }",
+      "function f(b: number = 1) { var b: string; }",
+      // The polymorphic `this` type of an INSTANCE member is not the
+      // enclosing class's own name, in the annotated spelling and
+      // through an unannotated `var p = this`.
+       "class C { m() { var p: this; var p!: C; } }", "class C { m() { var p = this; var p!: C; } }",
+      "class C { get g() { var p = this; var p!: C; return this; } }", "class C { constructor() { var p = this; var p!: C; } }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // Identical types, a different name, and `let` (a different
+      // diagnostic entirely).
+      "function f() { var b: number; var b: number; }", "function f() { var b: number; var c: string; }",
+      "function f() { let b: number; let c: string; }",
+      // A nested FUNCTION is its own `var` scope, in all three
+      // spellings.
+       "function f() { var b: number; function g() { var b: string; } }", "function f() { var b: number; var g = () => { var b: string; }; }",
+      "function f() { var b: number; var g = function () { var b: string; }; }",
+      // `b?: number` against the union it actually is.
+       "function f(b?: number) { var b: number | undefined; }",
+      // A rest parameter against its own array type.
+       "function f(...b: number[]) { var b: number[]; }",
+      // `this` against `this`, and a STATIC `this`, which is `typeof C`
+      // — tsc reports `var p = this; var p!: C` there for a DIFFERENT
+      // reason and this abstains rather than guess which.
+       "class C { m() { var p = this; var p!: this; } }", "class C { static m() { var p = this; var p!: typeof C; } }",
+      "class C { static m() { var p = this; var p!: C; } }",
+      // An UNANNOTATED `var` is `any` to tsc and a conflict there; ours
+      // abstains, which is the absent-versus-`: any` blocker and a MISS
+      // rather than a finding.
+       "function f() { var b: number; var b; }", "function f() { var b; var b: string; }",
+      // A DESTRUCTURED parameter carries the whole pattern's type under
+      // its first name, so comparing it would report legal code.
+       "function f({ b }: { b: string }) { var b: string; }",
+      // A self-referential `typeof` used to recurse forever here and end
+      // the process with a SEGFAULT — the module-level spelling could
+      // reach it too, at HEAD, and no corpus file had it.
+       "function fnArg1(x: typeof fnArg1, y: number) { var x: (n: typeof fnArg1, m: number) => void; }",
+      "declare function fa(x: typeof fa, y: number): void;\nvar x: typeof fa;\nvar x: (n: typeof fa, m: number) => void;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EV: a generic METHOD's type parameters are solved at the call
+/// site, and the optional-CALL form of a chain.
+///
+/// A generic FUNCTION's type arguments have been inferred from the
+/// arguments for as long as `infer_call` existed; a generic METHOD's
+/// never were, so `interface I { m<T>(x: T): T }` with `i.m(12)` came
+/// back carrying an unresolved `T` that every downstream check reads as
+/// unknowable. Four spellings of one declaration were involved and each
+/// lost the binder in its own way: an interface and a class record it on
+/// the DECLARATION (`method_type_params` / `TsClassMethodDecl.type_params`),
+/// a member written as a function TYPE carries it on the `GenericFunc`
+/// wrapper that `lookup_method_sig` had no arm for, and an inline object
+/// type's method signature threw it away in the parser with a comment
+/// saying so.
+///
+/// The optional-call half is a false positive on legal code that the
+/// conformance corpus structurally cannot see: `c?.(1)` on a
+/// non-nullable callee is ACCEPTED by tsc and was reported, because the
+/// chain's "is the guarded thing nullish" test had arms for a property,
+/// an index and a method call and none for the CALL form — the same
+/// false positive batch EH fixed at the three shapes it did cover.
+test "checker: generic method inference and the optional-call chain (batch EV)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // The four spellings of a generic method, each inferring `T` from
+      // the argument and failing the annotation.
+      "interface I { m<T>(x: T): T }\ndeclare const i: I;\nconst r: string = i.m(12);",
+      "class K { m<T>(x: T): T { return x } }\ndeclare const k: K;\nconst r: string = k.m(12);",
+      "declare const o: { m<T>(x: T): T };\nconst r: string = o.m(12);", "declare const o: { m: <T>(x: T) => T };\nconst r: string = o.m(12);",
+      // Inference through a nested position, which is what a real
+      // generic method usually looks like.
+       "interface I { m<T>(obj: { x: T }): T }\ndeclare const i: I;\nconst r: string = i.m({ x: 12 });",
+      // A generic method on a GENERIC interface keeps its own binder
+      // rather than the interface's instantiated one.
+       "interface I<U> { u: U; m<T>(x: T): T }\ndeclare const i: I<boolean>;\nconst r: string = i.m(12);",
+      // The optional-call form still widens when the callee really can
+      // be nullish.
+       "declare const d: ((n: number) => number) | undefined;\nconst r: number = d?.(1);",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The inferred type is what the annotation asks for.
+      "interface I { m<T>(x: T): T }\ndeclare const i: I;\nconst r: number = i.m(12);",
+      "declare const o: { m<T>(x: T): T };\nconst r: number = o.m(12);", "declare const o: { m: <T>(x: T) => T };\nconst r: number = o.m(12);",
+      "class K { m<T>(x: T): T { return x } }\ndeclare const k: K;\nconst r: number = k.m(12);",
+      // `?.` on a NON-nullable callee is redundant rather than wrong —
+      // tsc accepts all three, and the call form is the one that was
+      // being reported.
+       "declare const c: (n: number) => number;\nconst r: number = c?.(1);", "declare const o: { p: number };\nconst r: number = o?.p;",
+      "declare const m: { f(n: number): number };\nconst r: number = m?.f(1);",
+      // A CONSTRUCT signature's binders are deliberately NOT carried:
+      // wrapping them cost a true positive outright, and nothing reads
+      // them.
+       "declare var b: { new <T>(x: T, y: T): string };\nvar q = b;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EW: an index-signature READ through an ANONYMOUS object type.
+///
+/// One of the two BLIND rows `UNSUPPORTED.md`'s capability probe found by
+/// asking the common shape rather than the corpus — which contains
+/// neither, so no conformance file moves. `infer_index`'s
+/// `Named` / `Applied` arm has resolved the same read for a long time
+/// and the anonymous spelling had no arm at all, and neither did
+/// `collect_index_sigs`, so the signature was invisible to every
+/// consumer of that list while the INTERFACE spelling of one declaration
+/// was not.
+test "checker: index-signature read through an anonymous object type (batch EW)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // A string key, a numeric key and a variable key, each yielding
+      // the signature's VALUE type rather than nothing.
+      "type D = { v: string };\ndeclare let m: { [k: string]: D };\nlet x = m[\"a\"].nope;",
+      "type D = { v: string };\ndeclare let m: { [k: number]: D };\nlet x = m[0].nope;",
+      "type D = { v: string };\ndeclare let m: { [k: string]: D };\ndeclare let i: string;\nlet x = m[i].nope;",
+      // Through an alias.
+       "type D = { v: string };\ntype M = { [k: string]: D };\ndeclare let m: M;\nlet x = m[\"a\"].nope;",
+      // Through `Record`, which has its own projecting arm.
+       "type D = { v: string };\ndeclare let m: Record<string, D>;\nlet x = m[\"a\"].nope;",
+      // The WRITE direction, which the same list feeds. (Already
+      // reported before this batch; kept so the pair cannot drift.)
+       "declare let m: { [k: string]: number };\nm[\"x\"] = \"s\";",
+      // A MAPPED type over an INFINITE key set IS an index signature,
+      // written directly and through `keyof any` — the latter being the
+      // shape `mappedTypeWithAny` uses. Both need the value to be
+      // independent of the key; see the silent list.
+       "type D = { v: string };\ndeclare let m: { [P in string]: D };\nlet x = m[\"a\"].nope;",
+      "type D = { v: string };\ntype M<T> = { [P in keyof T]: D };\ndeclare let m: M<any>;\nlet x = m[\"a\"].nope;",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The member the signature actually declares.
+      "type D = { v: string };\ndeclare let m: { [k: string]: D };\nlet x = m[\"a\"].v;",
+      "declare let m: { [k: string]: number };\nm[\"x\"] = 1;",
+      // A NAMED field wins over the signature, as it does for the
+      // interface spelling.
+       "type D = { v: string };\ndeclare let m: { a: { w: number }, [k: string]: D };\nlet x = m[\"a\"].w;",
+      // No index signature at all: the read stays unmodelled rather than
+      // inventing a value type.
+       "declare let m: { a: number };\ndeclare let i: string;\nlet x = m[i];",
+      // A NUMERIC key against a string-only signature is not covered by
+      // it in the other direction either — `{ [k: number]: V }` does not
+      // answer a string key.
+       "type D = { v: string };\ndeclare let m: { [k: number]: D };\ndeclare let s: string;\nlet x = m[s];",
+      // A HOMOMORPHIC mapped type whose value DEPENDS on the key is not
+      // an index signature: `{ [P in keyof T]: Box<T[P]> }` at `T = any`
+      // is `any`, not a shape, and rendering it as one reported two
+      // TS7-ACCEPTED files (`mappedTypesArraysTuples`,
+      // `thisTypeInObjectLiterals2`) before the guard existed.
+       "type Box<T> = { v: T };\ntype B<T> = { [P in keyof T]: Box<T[P]> };\ndeclare let m: B<any>;\nlet x = m[\"a\"].nope;",
+      // `{ [P in string]: P }` is the MISS the same guard costs — the
+      // value mentions the binder, and nobody writes it.
+       "declare let m: { [P in string]: P };\nlet x: number = m[\"a\"];",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EY: an INTERSECTION source against an index-signature target.
+///
+/// `check_expr_against` had `(Intersection(_), _) => return` under a
+/// comment saying the modelling was "too coarse", and the abstention was
+/// TOTAL: an intersection-typed value was invisible in every assignment,
+/// against every target, a `string` included. That is what batch EN went
+/// looking for and did not find — it measured
+/// `is_assignable_to_inner`'s merge arm as unreachable for an
+/// intersection-typed VALUE and recorded that finding what abstains
+/// first "is the actual work".
+///
+/// Restricted to an index-signature target, and the restriction is
+/// measured. Asking `is_assignable_to(merged, target)` for ANY target is
+/// +1 corpus file and FOUR false positives on hand-written legal
+/// code — `A & B` into `A` among them — because that entry point is
+/// resolver-free and cannot expand a `Named` target to compare
+/// structurally, which is what "too coarse" meant. The corpus has none
+/// of those shapes, so FP 0 stayed 0 with the wrong rule in.
+test "checker: intersection source against an index signature (batch EY)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // An indexer is constrained by EVERY property the source has, so
+      // one incompatible member decides it — in both the assignment and
+      // the annotated-binding position.
+      "declare let s: { a: string } & { b: number };\ndeclare let t: { [k: string]: string };\nt = s;",
+      "declare let s: { a: string } & { b: number };\nconst t: { [k: string]: string } = s;",
+      // Three components, and the numeric-key spelling.
+       "declare let s: { a: string } & { b: string } & { c: number };\nconst t: { [k: string]: string } = s;",
+      "declare let s: { 0: string } & { 1: number };\nconst t: { [k: number]: string } = s;",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // Every member satisfies the indexer.
+      "declare let s: { a: string } & { b: string };\nconst t: { [k: string]: string } = s;",
+      "declare let s: { a: string } & { b: number };\nconst t: { [k: string]: string | number } = s;",
+      "declare let s: { a: string } & { b: string };\nconst t: { [k: string]: any } = s;",
+      "type Al = { a: string };\ndeclare let s: Al & { b: string };\nconst t: { [k: string]: string } = s;",
+      // A component that is not object-like does not merge, so the whole
+      // comparison abstains rather than guessing.
+       "declare let s: { a: string } & (() => void);\nconst t: { [k: string]: string } = s;",
+      // NO index signature on the target: the four shapes the blunt
+      // version reported, every one of them legal.
+       "interface A { a: string }\ninterface B { b: number }\ndeclare let s: A & B;\nconst t: A = s;",
+      "interface A { a: string }\ninterface B { b: number }\ndeclare let s: A & B;\nconst t: B = s;",
+      "interface A { a: string }\ndeclare let s: A & { [k: string]: string };\nconst t: A = s;",
+      "interface A { a: string }\ntype R = A & { self?: R };\ndeclare let s: R;\nconst t: A = s;",
+      "interface A { a: string }\ninterface B { b: number }\ndeclare let s: A & B;\nconst t: { a: string, b: number } = s;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EZ: an optional chain's result, and the two things that made an
+/// optional METHOD unreadable.
+///
+/// Four findings, and the parser one is the reason the other three could
+/// not be seen on the shape the conformance file uses.
+///
+/// 1. The chain short-circuits for the WHOLE chain, and the parser puts
+///    only the guarded link inside the `OptionalChain` node — `g?.p.q` is
+///    `PropAccess(OptionalChain(PropAccess(g, p)), q)` — so that outer
+///    `.q` pruned the nullish receiver and handed back a bare `number`
+///    where tsc says `number | undefined`. Propagated one level, off the
+///    chain node's own RESULT rather than by re-deciding its guard.
+/// 2. `m?<T>(x)` did not PARSE. The grammar is `PropertyName ?opt
+///    CallSignature` and a CallSignature begins with its type parameter
+///    list, so the `?` comes first; both member parsers read the binders
+///    first, and the object-type one then fell back to `Any` for the
+///    whole literal. Two sites, one order.
+/// 3. An OPTIONAL method is stored as `Union([callable, Undefined])` —
+///    the parser wraps `a?: T` into `T | undefined` and a method
+///    signature is no different — so every consumer matching the callable
+///    SHAPE read the member as opaque and `a.m?.(1)` came back `Any`.
+/// 4. `unwrap` PEELS a `GenericFunc`, so a generic member of a union
+///    callee reached `infer_call`'s union loop with its binders already
+///    gone and `c?.m({ x: 12 })` came back with `T` unsolved, where the
+///    same member reached directly is solved.
+///
+/// Together they are `callChain.3`. Every fires/silent pair below was
+/// run through the real compiler first.
+test "checker: optional chain result and optional methods (batch EZ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // (1) the link AFTER the guarded one, for each access shape.
+      "declare const g: { p: { q: number } } | undefined;\nconst r: number = g?.p.q;",
+      "declare const b: { m(n: number): number } | undefined;\nconst r: number = b?.m(1);",
+      "declare const u: { a: number[] } | undefined;\nconst r: number = u?.a[0];",
+      // (3) the optional-CALL form, where the `?.` guards the METHOD
+      // VALUE and not the receiver — `a` is not optional, `a.m` is.
+       "declare const a: { m?(n: number): number };\nconst r: number = a.m?.(1);",
+      // (2) + (3): the generic optional method, at both spellings of a
+      // member list. Neither parsed at all before.
+       "declare const e: { m?<T>(o: { x: T }): T };\nconst r: string = e.m({ x: 12 });",
+      "interface I { m?<T>(o: { x: T }): T }\ndeclare const i: I;\nconst r: string = i.m?.({ x: 12 });",
+      // (4) a generic member of a union callee, solved from the
+      // arguments — and the whole of `callChain.3`.
+       "declare const c: { m<T>(o: { x: T }): T } | undefined;\nconst r: number = c?.m({ x: 12 });",
+      "declare const a: { m?<T>(o: { x: T }): T } | undefined;\nconst r: number = a?.m?.({ x: 12 });",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // Writing `?.` on a NON-nullable receiver is redundant, not wrong,
+      // so nothing downstream of it is widened either.
+      "declare const c: { p: { q: number } };\nconst r: number = c?.p.q;", "declare const d: { m(n: number): number };\nconst r: number = d?.m(1);",
+      "declare const v: { a: number[] };\nconst r: number = v?.a[0];",
+      // The optional-CALL form on a non-optional member, and on a
+      // non-nullable callee (the false positive batch EH's three arms
+      // did not cover).
+       "declare const d: { m(n: number): number };\nconst r: number = d.m?.(1);",
+      "declare const c: (n: number) => number;\nconst r: number = c?.(1);",
+      // The widened value IS the annotation, at every shape above.
+       "declare const g: { p: { q: number } } | undefined;\nconst r: number | undefined = g?.p.q;",
+      "declare const b: { m(n: number): number } | undefined;\nconst r: number | undefined = b?.m(1);",
+      "declare const a: { m?(n: number): number };\nconst r: number | undefined = a.m?.(1);",
+      "declare const a: { m?<T>(o: { x: T }): T } | undefined;\nconst r: number | undefined = a?.m?.({ x: 12 });",
+      // (2)'s neighbour: the non-optional generic method and the
+      // optional non-generic one both still resolve.
+       "declare const d: { m<T>(o: { x: T }): T };\nconst r: number = d.m({ x: 12 });",
+      "declare const f: { m?(o: { x: number }): number };\nconst r: number | undefined = f.m?.({ x: 12 });",
+      // (3)'s neighbour: a member whose type is a union of TWO
+      // callables is an overload set, not an optional one, so nothing
+      // picks an arm for it here.
+       "interface O { m(x: string): number; m(x: number): string }\ndeclare const p: O;\nconst r: string = p.m(1);",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EZ: an INTERFACE's overload set was invisible to
+/// `method_overload_signatures`.
+///
+/// That function had arms for a class, an `Object` type literal and a
+/// `Struct` — the three shapes that are NOT how a `.d.ts` declares
+/// overloads. With no candidates, two things went wrong at once:
+/// `resolve_method_overload` fell through to `lookup_method_sig`, whose
+/// own comment says it surfaces only the FIRST declaration, so
+/// `p.m(1)` came back `number`; and the argument check's abstention is
+/// gated on `> 1` candidate, so it judged the call against overload #1
+/// and reported `expected string but got number` on a line tsc ACCEPTS.
+/// A false positive on legal code that the conformance corpus cannot
+/// see — measured against the pre-batch binary, not assumed.
+test "checker: interface overload resolution (batch EZ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let iface = "interface O { m(x: string): number; m(x: number): string }\n"
+  // --- fires: each call resolves to the overload its ARGUMENT selects,
+  // so the return type is the other one from first-wins.
+  for
+    src in [
+      iface + "declare const p: O;\nconst r: number = p.m(1);",
+      iface + "declare const p: O;\nconst r: string = p.m(\"s\");",
+      // …through an optional chain too, where the `| undefined` rides on
+      // top of the selected overload's return.
+      iface + "declare const o: O | undefined;\nconst r: string = o?.m(1);",
+      iface + "declare const o: O | undefined;\nconst r: number = o?.m(\"s\");",
+      // An argument matching NO overload is still an error.
+      iface + "declare const p: O;\nconst r: string = p.m(true);",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent
+  for
+    src in [
+      iface + "declare const p: O;\nconst r: string = p.m(1);",
+      iface + "declare const p: O;\nconst r: number = p.m(\"s\");",
+      iface +
+      "declare const o: O | undefined;\nconst r: string | undefined = o?.m(1);",
+      // A single-signature interface method keeps its argument check:
+      // the abstention is for an overload SET.
+      "interface S { m(x: string): number }\ndeclare const q: S;\nconst r: number = q.m(\"s\");",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch FA: a LATE-BOUND computed member key (`[k]` over a
+/// `const k: unique symbol`).
+///
+/// `unique symbol` is 183 occurrences across 3,000 real `.d.ts` files —
+/// the third commonest feature in `docs/checker-triage.md`'s real-code
+/// column — and the capability probe in `UNSUPPORTED.md` §2 had it BLIND.
+/// Opening it found three defects, none of which the corpus can score.
+///
+/// 1. The ANONYMOUS spelling did not parse AT ALL.
+///    `try_parse_object_type_with_members`'s bracket arm fell back for
+///    anything that is not an index signature, so `{ [k]: number; plain:
+///    number }` was `Any` and EVERY member of it was lost, not just the
+///    computed one. The fall-back is load-bearing for a MAPPED type
+///    (`[K in keyof T]`, which reaches the same arm), so the fix is a
+///    positive shape test — exactly `[ Ident ]` — rather than a widened
+///    fallback.
+/// 2. The INTERFACE spelling named the member `<computed>`, which no
+///    lookup can ever match, while the sibling WELL-KNOWN spelling twenty
+///    lines above has had a stable `@@name` for a long time. One
+///    question, two answers.
+/// 3. Nothing translated the index EXPRESSION back, so `i[k]` was `Any`
+///    even once the member had a name. Wired at BOTH read arms, since
+///    writing it at one is how the two spellings came to disagree in the
+///    first place.
+test "checker: late-bound unique-symbol member key (batch FA)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let uk = "declare const k: unique symbol;\n"
+  // --- fires
+  for
+    src in [
+      // The read resolves, at both spellings of a member list.
+      uk +
+      "interface I { [k]: number }\ndeclare const i: I;\nconst r: string = i[k];",
+      uk + "declare const j: { [k]: number };\nconst r: string = j[k];",
+      // (1): the object type parses at all, so its ORDINARY members are
+      // reachable again — the half of that bug with nothing to do with
+      // symbols.
+      uk +
+      "declare const m: { [k]: number; plain: number };\nconst r: string = m.plain;",
+      uk +
+      "declare const m: { [k]: number; plain: number };\nconst r: { a: number } = m;",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The value really is a `number`.
+      uk +
+      "interface I { [k]: number }\ndeclare const i: I;\nconst r: number = i[k];",
+      uk + "declare const j: { [k]: number };\nconst r: number = j[k];",
+      // A plain `symbol` is not late-bound, and neither is the string
+      // "k" — both are TS7053 in tsc, a code this rule does not claim, so
+      // both stay MISSes rather than resolving to the symbol member.
+      uk +
+      "declare const s2: symbol;\ninterface I { [k]: number }\ndeclare const i: I;\nconst r: string = i[s2];",
+      uk +
+      "interface I { [k]: number }\ndeclare const i: I;\nconst r: string = i[\"k\"];",
+      // (1)'s neighbour: a MAPPED type reaches the same bracket arm and
+      // must still fall back to its own parser.
+      "type MT<T> = { [K in keyof T]: T[K] };\ndeclare const m: MT<{ a: number }>;\nconst r: number = m.a;",
+      // …and a WELL-KNOWN key keeps the stable name it always had.
+      "interface W { [Symbol.iterator](): Iterator<number> }\ndeclare const w: W;\nconst r = w[Symbol.iterator]();",
+      // A computed key whose value we cannot decide names a member tsc
+      // CAN name, so the shape stops being enumerable for existence
+      // purposes. `const kk = \"hello\"` makes `i.hello` legal and it was
+      // reported — measured pre-existing, since the `<computed>` half
+      // predates the `@@unique:` name entirely.
+      "const kk = \"hello\";\ninterface I { [kk]: number }\ndeclare const i: I;\nconst r: number = i.hello;",
+      "const kk = \"hello\";\ninterface I { [kk]: number }\ndeclare const i: I;\nconst r = i.anything;",
+      // A well-known key does NOT buy that abstention: it is decided
+      // statically, so a genuinely absent property is still reported.
+      "interface W { [Symbol.iterator](): Iterator<number>; a: number }\ndeclare const w: W;\nconst r: number = w.a;",
     ] {
     @test.assert_eq(issues(src), 0)
   }

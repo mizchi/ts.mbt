@@ -1323,10 +1323,34 @@ fn Parser::parse_import_equals_decl(
     // CLASS or INTERFACE target is TS2702 ("only refers to a type") — a
     // different code the consumer abstains on, since both are declared
     // names.
+    //
+    // The WHOLE dotted target rides a second marker. TS2708 asks whether
+    // the alias binds a VALUE, and an alias binds one exactly when its
+    // target does — so the root alone cannot answer it: `import a = A.inA`
+    // is legal when `A.inA` is instantiated and `A` is not, and
+    // `namespace_instantiated` is keyed by the dotted path. Recorded here
+    // rather than resolved here for the reason the note below already
+    // gives: what the target MEANS is not decidable at parse time.
     match self.peek().kind {
       Ident(root) =>
         if self.peek_at(1).kind == Dot || self.peek_at(1).kind == Semicolon {
           self.grammar_misuses.push("<import-eq-root>" + root)
+          let path = StringBuilder()
+          path.write_string(root)
+          let mut i = 1
+          while self.peek_at(i).kind == Dot {
+            match self.peek_at(i + 1).kind {
+              Ident(seg) => {
+                path.write_string(".")
+                path.write_string(seg)
+                i = i + 2
+              }
+              _ => break
+            }
+          }
+          self.grammar_misuses.push(
+            "<import-eq-alias>" + local_name + "=" + path.to_string(),
+          )
         }
       _ => ()
     }
