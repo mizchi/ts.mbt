@@ -12013,9 +12013,51 @@ fn check_expr_against(
       } else {
         return
       }
-    // Intersection *source*: still modelled too coarsely structurally — stay
-    // silent.
-    (Intersection(_), _) => return
+    // Intersection *SOURCE*. `{a} & {b}` IS the merged shape `{a, b}` —
+    // which is what `is_assignable_to_inner`'s own source-intersection
+    // arm has always compared — and this returned before ever asking,
+    // under a comment saying the modelling was "too coarse". That is the
+    // thing batch EN went looking for and did not find: it measured the
+    // merge arm as unreachable for an intersection-typed VALUE and wrote
+    // that finding what abstains first "is the actual work". This is it,
+    // and the abstention was total — `t = s` reported nothing for an
+    // intersection source against ANY target, a `string` included.
+    //
+    // Restricted to an INDEX-SIGNATURE target, and the restriction was
+    // measured rather than chosen for caution. Asking
+    // `is_assignable_to(merged, target)` for ANY target is +1 corpus file
+    // and FOUR false positives on hand-written legal code — `A & B` into
+    // `A` among them — because that entry point is resolver-free and
+    // cannot expand a `Named` target to compare structurally, which is
+    // what the old comment's "too coarse" meant. The corpus contains
+    // none of those shapes, so FP 0 stayed 0 with the wrong rule in.
+    //
+    // An index-signature target needs no such expansion: an indexer is
+    // constrained by EVERY property the source has, so the merged shape
+    // is the exact question, and it is the case the corpus and real code
+    // both hit (`tt = ss` where `ss: { a: string } & { b: number }` and
+    // `tt: { [k: string]: string }` — TS2322). A component that is not
+    // object-like does not merge and still abstains.
+    (Intersection(parts), _) =>
+      if ctx.resolver.lookup_index_sig(expected_u, @ast.TsType::String_)
+        is Some(_) ||
+        ctx.resolver.lookup_index_sig(expected_u, @ast.TsType::Number)
+        is Some(_) {
+        match merge_object_intersection(parts) {
+          Some(merged) =>
+            if !is_assignable_to(merged, expected_u) {
+              record(
+                ctx,
+                sub_path,
+                "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+              )
+            }
+          None => ()
+        }
+        return
+      } else {
+        return
+      }
     // Bare callable / constructable shapes match other call signatures
     // structurally in ways we don't model — stay silent.
     (Func(_, _), _)

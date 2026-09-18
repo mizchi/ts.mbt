@@ -22096,3 +22096,63 @@ test "checker: index-signature read through an anonymous object type (batch EW)"
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EY: an INTERSECTION source against an index-signature target.
+///
+/// `check_expr_against` had `(Intersection(_), _) => return` under a
+/// comment saying the modelling was "too coarse", and the abstention was
+/// TOTAL: an intersection-typed value was invisible in every assignment,
+/// against every target, a `string` included. That is what batch EN went
+/// looking for and did not find — it measured
+/// `is_assignable_to_inner`'s merge arm as unreachable for an
+/// intersection-typed VALUE and recorded that finding what abstains
+/// first "is the actual work".
+///
+/// Restricted to an index-signature target, and the restriction is
+/// measured. Asking `is_assignable_to(merged, target)` for ANY target is
+/// +1 corpus file and FOUR false positives on hand-written legal
+/// code — `A & B` into `A` among them — because that entry point is
+/// resolver-free and cannot expand a `Named` target to compare
+/// structurally, which is what "too coarse" meant. The corpus has none
+/// of those shapes, so FP 0 stayed 0 with the wrong rule in.
+test "checker: intersection source against an index signature (batch EY)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // An indexer is constrained by EVERY property the source has, so
+      // one incompatible member decides it — in both the assignment and
+      // the annotated-binding position.
+      "declare let s: { a: string } & { b: number };\ndeclare let t: { [k: string]: string };\nt = s;",
+      "declare let s: { a: string } & { b: number };\nconst t: { [k: string]: string } = s;",
+      // Three components, and the numeric-key spelling.
+       "declare let s: { a: string } & { b: string } & { c: number };\nconst t: { [k: string]: string } = s;",
+      "declare let s: { 0: string } & { 1: number };\nconst t: { [k: number]: string } = s;",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // Every member satisfies the indexer.
+      "declare let s: { a: string } & { b: string };\nconst t: { [k: string]: string } = s;",
+      "declare let s: { a: string } & { b: number };\nconst t: { [k: string]: string | number } = s;",
+      "declare let s: { a: string } & { b: string };\nconst t: { [k: string]: any } = s;",
+      "type Al = { a: string };\ndeclare let s: Al & { b: string };\nconst t: { [k: string]: string } = s;",
+      // A component that is not object-like does not merge, so the whole
+      // comparison abstains rather than guessing.
+       "declare let s: { a: string } & (() => void);\nconst t: { [k: string]: string } = s;",
+      // NO index signature on the target: the four shapes the blunt
+      // version reported, every one of them legal.
+       "interface A { a: string }\ninterface B { b: number }\ndeclare let s: A & B;\nconst t: A = s;",
+      "interface A { a: string }\ninterface B { b: number }\ndeclare let s: A & B;\nconst t: B = s;",
+      "interface A { a: string }\ndeclare let s: A & { [k: string]: string };\nconst t: A = s;",
+      "interface A { a: string }\ntype R = A & { self?: R };\ndeclare let s: R;\nconst t: A = s;",
+      "interface A { a: string }\ninterface B { b: number }\ndeclare let s: A & B;\nconst t: { a: string, b: number } = s;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
