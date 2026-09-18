@@ -166,11 +166,19 @@ taken because they were the applied-in-some-places family, not for this
 row.
 
 Against that table, the capability probe in `UNSUPPORTED.md` §2 says
-which features are still BLIND at the shape real code writes, and after
-batches EU–FA the list is down to two: variadic tuples, and `this` inside
-an object-literal `function` property (that last one measured and not
-taken, with its blocker). A strict-null member-chain receiver is a third
-and is deliberate.
+which features are still BLIND at the shape real code writes. After
+batches EU–FA it was down to two — variadic tuples, and `this` inside an
+object-literal `function` property (that one measured and not taken, with
+its blocker) — and then probing the rows the table did not HAVE added a
+third. `satisfies` (238) and `as const` (108) are the two commonest
+features in the real-`.ts` column and neither had a row at all, nor did
+`infer` (156 in `.d.ts`): a table with a stale row ranks the wrong work,
+and a table with a MISSING row cannot rank it at all. Measured
+2026-09-18: `satisfies` and `infer` are CAUGHT, and `as const` on an
+OBJECT LITERAL is BLIND with its cause written down in §3 — the
+widening-direction suppression is right and `as const` failing to keep
+its members' literal types is the bug. A strict-null member-chain
+receiver is a fourth and is deliberate.
 Conditional types, the utility table, mapped types, `keyof`, overload
 selection, generic inference, generic METHOD calls, index-signature
 reads through an anonymous object type, a mapped type over an infinite
