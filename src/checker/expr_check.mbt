@@ -4399,6 +4399,68 @@ fn interface_pure_array_element(
 }
 
 ///|
+/// The METHOD-level type parameters `meth` declares on `recv`, or an
+/// empty list when there are none or the receiver's shape cannot answer.
+///
+/// A free function's type parameters have been solved at the call site
+/// for as long as `infer_call` existed, and a METHOD's never were — so
+/// `declare function f<T>(x: T): T; const q: string = f(12)` reported
+/// while `interface I { m<T>(x: T): T }` with `i.m(12)` came back
+/// carrying an unresolved `T` that every downstream check reads as
+/// unknowable. The fact was already recorded on both declaration kinds,
+/// under different names: an interface keeps it in `method_type_params`
+/// (where `scoped_bindings_for_method` reads it so the interface's own
+/// `T` cannot capture a method's shadowing one), and a class method in
+/// `TsClassMethodDecl.type_params`.
+///
+/// An inline object type is NOT covered, and the blocker is the
+/// parser's: its member loop builds the same `method_type_params` list
+/// and an object-TYPE caller has nowhere to put it, so the binder is
+/// lost before any checker sees it — the same gap CLAUDE.md records for
+/// an object type's CALL signature. That costs a MISS.
+fn Resolver::method_type_params_of(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> Array[String] {
+  // A member written as a generic function TYPE carries its own binders
+  // on the wrapper, wherever it was declared — so this answers for an
+  // inline object type too, which the declaration tables below cannot.
+  match self.lookup_field(recv, meth) {
+    Some(GenericFunc(names, _, _))
+    | Some(CallableMeta(GenericFunc(names, _, _), _)) =>
+      if names.length() > 0 {
+        return names
+      }
+    _ => ()
+  }
+  let name = match self.unwrap(recv) {
+    Named(n) => n
+    Applied(n, _) => n
+    _ => return []
+  }
+  match self.interfaces.get(name) {
+    Some(iface) =>
+      for entry in iface.method_type_params {
+        if entry.0 == meth {
+          return entry.1
+        }
+      }
+    None => ()
+  }
+  match self.classes.get(name) {
+    Some(cls) =>
+      for m in cls.methods {
+        if m.name == meth && m.type_params.length() > 0 {
+          return m.type_params
+        }
+      }
+    None => ()
+  }
+  []
+}
+
+///|
 /// Look up a method's `(params, return)` signature. Returns `None` when the
 /// receiver shape is opaque.
 fn Resolver::lookup_method_sig(
@@ -4409,6 +4471,15 @@ fn Resolver::lookup_method_sig(
   match self.lookup_field(recv, meth) {
     Some(CallableMeta(Func(ps, ret), _)) => Some((ps, ret))
     Some(Func(ps, ret)) => Some((ps, ret))
+    // A member written as a generic function TYPE (`m: <T>(x: T) => T`)
+    // arrives wrapped, and the wrapper had no arm here — so the whole
+    // member read as opaque and its call came back `Any`. Eighth
+    // fail-open wrapper-node arm in this repo's ledger. Both nestings
+    // occur: the type parser wraps a `CallableMeta` when the callable
+    // has an optional parameter.
+    Some(GenericFunc(_, _, Func(ps, ret)))
+    | Some(GenericFunc(_, _, CallableMeta(Func(ps, ret), _)))
+    | Some(CallableMeta(GenericFunc(_, _, Func(ps, ret)), _)) => Some((ps, ret))
     _ => None
   }
 }
@@ -8625,16 +8696,38 @@ fn infer_expr(
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
       match resolver.lookup_method_sig(pruned_recv, meth) {
-        Some((_params, ret)) => {
+        Some((params, ret)) => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
+          }
+          // A generic METHOD's type parameters are solved from the
+          // arguments exactly as a generic FUNCTION's are in the `Call`
+          // arm above — the same `solve_generic_bindings`, so the two
+          // cannot answer differently. Without it the return came back
+          // as a bare `Named("T")`, which every downstream check reads
+          // as unknowable.
+          let method_tps = resolver.method_type_params_of(pruned_recv, meth)
+          let instantiated = if method_tps.length() > 0 {
+            substitute_params(
+              ret,
+              solve_generic_bindings(
+                env,
+                resolver,
+                method_tps,
+                params,
+                args,
+                None,
+              ),
+            )
+          } else {
+            ret
           }
           // `this`-typed return: when an interface / class method is
           // declared as `m(): this` (or wrapped in `this & T` etc.),
           // substitute the receiver in for `this` so the chain
           // `t.self().me()` keeps the receiver shape instead of leaking
           // a bare `Named("this")` reference into downstream checks.
-          substitute_this_type(ret, recv_ty)
+          substitute_this_type(instantiated, recv_ty)
         }
         None => {
           for a in args {
@@ -8926,6 +9019,17 @@ fn infer_expr(
       let base = prune_nullish(resolver, inner_ty)
       let recv = match inner {
         PropAccess(r, _) | IndexAccess(r, _) | MethodCall(r, _, _) => Some(r)
+        // `x?.(args)` — the OPTIONAL CALL form, where what the `?.`
+        // guards is the CALLEE rather than a receiver. It had no arm, so
+        // every such call took the "shape this cannot read" default and
+        // was widened unconditionally: `declare const c: (n: number) =>
+        // number; const r: number = c?.(1)` is ACCEPTED by tsc and was
+        // reported here — the same false positive batch EH fixed for
+        // `c?.p`, at the one chain form its three arms did not cover.
+        // The corpus has no file of this shape, which is why FP 0 never
+        // caught it.
+        CallExpr(callee, _) => Some(callee)
+        Call(name, _) => Some(@ast.TsExpr::Var(name))
         _ => None
       }
       let receiver_non_nullish = match recv {
@@ -9548,6 +9652,20 @@ fn infer_call(
     // Reduce conditional types in the return position so `NonNullable<T>`,
     // `Awaited<T>` etc. evaluate to concrete types when possible.
     Func(_, ret) => reduce_conditional(ret)
+    // A GENERIC callable value. The wrapper had no arm, so the whole
+    // call fell to the `Any` catch-all below — which is how
+    // `declare const o: { m: <T>(x: T) => T }; o.m(12)` lost its type.
+    // Solved here the same way the `Call` arm solves a generic function
+    // declaration, so a callee that arrives as a VALUE and one that
+    // arrives by NAME cannot answer differently.
+    GenericFunc(names, _, Func(params, ret))
+    | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) =>
+      reduce_conditional(
+        substitute_params(
+          ret,
+          solve_generic_bindings(env, resolver, names, params, args, None),
+        ),
+      )
     // Union of callable types (overload set): resolve to the overload whose
     // arity and parameter types accept the supplied arguments, and return that
     // overload's return type. Falls back to the union of every branch's return
@@ -9583,6 +9701,14 @@ fn infer_call(
               }
             }
           }
+          // A NULLISH member is not a callable the union offers, it is
+          // the reason the call needs a `?.` — so it contributes no
+          // return type and must not collapse the answer to `Any`.
+          // Invoking a possibly-nullish value without `?.` is TS2722,
+          // a diagnostic of its own; an OPTIONAL call adds the
+          // `| undefined` back at the chain node. Either way the
+          // callable half's return is the more precise answer.
+          Undefined | Null => ()
           _ => return @ast.TsType::Any
         }
       }

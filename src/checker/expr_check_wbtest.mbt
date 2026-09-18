@@ -21960,3 +21960,70 @@ test "checker: TS2403 in a function scope and the polymorphic `this` (batch EU)"
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EV: a generic METHOD's type parameters are solved at the call
+/// site, and the optional-CALL form of a chain.
+///
+/// A generic FUNCTION's type arguments have been inferred from the
+/// arguments for as long as `infer_call` existed; a generic METHOD's
+/// never were, so `interface I { m<T>(x: T): T }` with `i.m(12)` came
+/// back carrying an unresolved `T` that every downstream check reads as
+/// unknowable. Four spellings of one declaration were involved and each
+/// lost the binder in its own way: an interface and a class record it on
+/// the DECLARATION (`method_type_params` / `TsClassMethodDecl.type_params`),
+/// a member written as a function TYPE carries it on the `GenericFunc`
+/// wrapper that `lookup_method_sig` had no arm for, and an inline object
+/// type's method signature threw it away in the parser with a comment
+/// saying so.
+///
+/// The optional-call half is a false positive on legal code that the
+/// conformance corpus structurally cannot see: `c?.(1)` on a
+/// non-nullable callee is ACCEPTED by tsc and was reported, because the
+/// chain's "is the guarded thing nullish" test had arms for a property,
+/// an index and a method call and none for the CALL form — the same
+/// false positive batch EH fixed at the three shapes it did cover.
+test "checker: generic method inference and the optional-call chain (batch EV)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // The four spellings of a generic method, each inferring `T` from
+      // the argument and failing the annotation.
+      "interface I { m<T>(x: T): T }\ndeclare const i: I;\nconst r: string = i.m(12);",
+      "class K { m<T>(x: T): T { return x } }\ndeclare const k: K;\nconst r: string = k.m(12);",
+      "declare const o: { m<T>(x: T): T };\nconst r: string = o.m(12);", "declare const o: { m: <T>(x: T) => T };\nconst r: string = o.m(12);",
+      // Inference through a nested position, which is what a real
+      // generic method usually looks like.
+       "interface I { m<T>(obj: { x: T }): T }\ndeclare const i: I;\nconst r: string = i.m({ x: 12 });",
+      // A generic method on a GENERIC interface keeps its own binder
+      // rather than the interface's instantiated one.
+       "interface I<U> { u: U; m<T>(x: T): T }\ndeclare const i: I<boolean>;\nconst r: string = i.m(12);",
+      // The optional-call form still widens when the callee really can
+      // be nullish.
+       "declare const d: ((n: number) => number) | undefined;\nconst r: number = d?.(1);",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The inferred type is what the annotation asks for.
+      "interface I { m<T>(x: T): T }\ndeclare const i: I;\nconst r: number = i.m(12);",
+      "declare const o: { m<T>(x: T): T };\nconst r: number = o.m(12);", "declare const o: { m: <T>(x: T) => T };\nconst r: number = o.m(12);",
+      "class K { m<T>(x: T): T { return x } }\ndeclare const k: K;\nconst r: number = k.m(12);",
+      // `?.` on a NON-nullable callee is redundant rather than wrong —
+      // tsc accepts all three, and the call form is the one that was
+      // being reported.
+       "declare const c: (n: number) => number;\nconst r: number = c?.(1);", "declare const o: { p: number };\nconst r: number = o?.p;",
+      "declare const m: { f(n: number): number };\nconst r: number = m?.f(1);",
+      // A CONSTRUCT signature's binders are deliberately NOT carried:
+      // wrapping them cost a true positive outright, and nothing reads
+      // them.
+       "declare var b: { new <T>(x: T, y: T): string };\nvar q = b;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

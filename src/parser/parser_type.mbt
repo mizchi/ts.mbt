@@ -1015,9 +1015,16 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
           return None
         }
       }
-      // Generic method type parameters `<T>` — recorded nowhere on an
-      // anonymous object, so just skip them.
-      let _ = self.parse_type_param_names_and_bounds()
+      // Generic method type parameters `<T>`. An anonymous object has no
+      // `method_type_params` list to put them in — that list belongs to
+      // `TsInterfaceDecl` and only `parse_interface` fills it — so they
+      // used to be skipped outright, with the result that
+      // `declare const o: { m<T>(x: T): T }; o.m(12)` came back carrying
+      // an unresolved `T`. They ride the `GenericFunc` wrapper instead,
+      // which is what the type parser already builds for the PROPERTY
+      // spelling of the same thing (`m: <T>(x: T) => T`), so the two
+      // spellings of one declaration stop disagreeing.
+      let (m_tp_names, m_tp_bounds) = self.parse_type_param_names_and_bounds()
       let is_optional = self.match_(Question)
       if self.check(LParen) {
         // Method / call / construct signature.
@@ -1057,9 +1064,23 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
         if !had_return_annotation {
           implicit_any_return_members.push(field_name)
         }
-        let field_type = callable_func_type_from_params(
+        let callable = callable_func_type_from_params(
           method_params, return_type,
         )
+        // NAMED members only. A `<call>` / `<new>` sentinel's binders
+        // have never been carried and nothing reads them yet, while the
+        // wrapper is visible to every consumer that matches the member's
+        // shape — wrapping them cost a true positive outright
+        // (`genericCallWithOverloadedConstructorTypedArguments2`, whose
+        // members are all `new <T>(…)`), which is the same reason
+        // CLAUDE.md records for not walking those binders elsewhere.
+        let field_type = if m_tp_names.length() > 0 &&
+          field_name != "<call>" &&
+          field_name != "<new>" {
+          @ast.TsType::GenericFunc(m_tp_names, m_tp_bounds, callable)
+        } else {
+          callable
+        }
         fields.push(
           (
             Literal(field_name),
