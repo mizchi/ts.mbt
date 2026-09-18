@@ -3586,6 +3586,25 @@ fn collect_index_sigs(
           }
       }
     }
+    // An ANONYMOUS object type (`{ [k: string]: V }`) had no arm, so its
+    // index signature was invisible to every consumer of this list while
+    // the INTERFACE spelling of the same declaration was not. The parser
+    // keys such a member by its KEY TYPE rather than by a name, which is
+    // exactly what `is_index_signature_key` recognises.
+    Object(fields) =>
+      for f in fields {
+        if is_index_signature_key(f.0) {
+          out.push((f.0, f.1))
+        }
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        match f.0 {
+          "string" => out.push((@ast.TsType::String_, f.1))
+          "number" => out.push((@ast.TsType::Number, f.1))
+          _ => ()
+        }
+      }
     Union(items) =>
       for it in items {
         collect_index_sigs(resolver, it, out, seen)
@@ -9868,6 +9887,40 @@ fn infer_index(
           }
         _ =>
           // Variable index: consult the index signature of the interface/class.
+          match resolver.lookup_index_sig(recv, idx) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
+      }
+    // An ANONYMOUS object type. The `Named` / `Applied` arm above has
+    // resolved an index-signature READ for a long time and this one had
+    // no arm at all, so `declare let m: { [k: string]: V }; m["a"].nope`
+    // yielded no type and every check downstream of it abstained — one
+    // of the two BLIND rows `UNSUPPORTED.md`'s capability probe found by
+    // asking the common shape rather than the corpus, which contains
+    // neither. A named field still wins over the signature, as it does
+    // there.
+    Object(_) =>
+      match idx_expr {
+        StringLit(key) =>
+          match resolver.lookup_field(recv, key) {
+            Some(t) => t
+            None =>
+              match resolver.lookup_index_sig(recv, @ast.TsType::String_) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
+          }
+        IntLit(i) =>
+          match resolver.lookup_field(recv, i.to_string()) {
+            Some(t) => t
+            None =>
+              match resolver.lookup_index_sig(recv, @ast.TsType::Number) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
+          }
+        _ =>
           match resolver.lookup_index_sig(recv, idx) {
             Some(t) => t
             None => @ast.TsType::Any

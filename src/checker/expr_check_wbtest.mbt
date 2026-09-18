@@ -22027,3 +22027,62 @@ test "checker: generic method inference and the optional-call chain (batch EV)" 
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch EW: an index-signature READ through an ANONYMOUS object type.
+///
+/// One of the two BLIND rows `UNSUPPORTED.md`'s capability probe found by
+/// asking the common shape rather than the corpus — which contains
+/// neither, so no conformance file moves. `infer_index`'s
+/// `Named` / `Applied` arm has resolved the same read for a long time
+/// and the anonymous spelling had no arm at all, and neither did
+/// `collect_index_sigs`, so the signature was invisible to every
+/// consumer of that list while the INTERFACE spelling of one declaration
+/// was not.
+test "checker: index-signature read through an anonymous object type (batch EW)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // A string key, a numeric key and a variable key, each yielding
+      // the signature's VALUE type rather than nothing.
+      "type D = { v: string };\ndeclare let m: { [k: string]: D };\nlet x = m[\"a\"].nope;",
+      "type D = { v: string };\ndeclare let m: { [k: number]: D };\nlet x = m[0].nope;",
+      "type D = { v: string };\ndeclare let m: { [k: string]: D };\ndeclare let i: string;\nlet x = m[i].nope;",
+      // Through an alias.
+       "type D = { v: string };\ntype M = { [k: string]: D };\ndeclare let m: M;\nlet x = m[\"a\"].nope;",
+      // Through `Record`, which has its own projecting arm.
+       "type D = { v: string };\ndeclare let m: Record<string, D>;\nlet x = m[\"a\"].nope;",
+      // The WRITE direction, which the same list feeds. (Already
+      // reported before this batch; kept so the pair cannot drift.)
+       "declare let m: { [k: string]: number };\nm[\"x\"] = \"s\";",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The member the signature actually declares.
+      "type D = { v: string };\ndeclare let m: { [k: string]: D };\nlet x = m[\"a\"].v;",
+      "declare let m: { [k: string]: number };\nm[\"x\"] = 1;",
+      // A NAMED field wins over the signature, as it does for the
+      // interface spelling.
+       "type D = { v: string };\ndeclare let m: { a: { w: number }, [k: string]: D };\nlet x = m[\"a\"].w;",
+      // No index signature at all: the read stays unmodelled rather than
+      // inventing a value type.
+       "declare let m: { a: number };\ndeclare let i: string;\nlet x = m[i];",
+      // A NUMERIC key against a string-only signature is not covered by
+      // it in the other direction either — `{ [k: number]: V }` does not
+      // answer a string key.
+       "type D = { v: string };\ndeclare let m: { [k: number]: D };\ndeclare let s: string;\nlet x = m[s];",
+      // A declared MISS rather than a legal case: a MAPPED type is not
+      // reduced to an index signature, so `{ [P in string]: D }` yields
+      // nothing where the `{ [k: string]: D }` spelling of the same type
+      // now resolves. tsc reports it; measured, not assumed.
+       "type D = { v: string };\ndeclare let m: { [P in string]: D };\nlet x = m[\"a\"].nope;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
