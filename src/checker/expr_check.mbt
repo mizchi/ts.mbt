@@ -213,12 +213,35 @@ priv struct Resolver {
 /// must produce no import at all.
 fn namespace_is_instantiated(m : @ast.TsModule) -> Bool {
   if m.funcs.length() > 0 ||
-    m.values.length() > 0 ||
     m.enums.length() > 0 ||
     m.classes.length() > 0 ||
     m.imports.length() > 0 ||
     m.type_aliases.length() > 0 {
     return true
+  }
+  // A nested namespace contributes its OWN name to the enclosing body's
+  // `values` — the namespace object — whatever its body holds, because
+  // `parse_namespace_decl_with_mode` builds that value before it has
+  // parsed one. Counting it made every namespace with a nested one read
+  // as instantiated, so `namespace A { export namespace inA { export
+  // interface P {} } }` looked like it exists at runtime. It does not:
+  // TypeScript erases the whole tree, and tsc reports `typeof A` as
+  // TS2708 (probed, alongside an EMPTY inner namespace, which is the
+  // same answer). The recursion below is what decides a nested
+  // namespace, so its value entry is skipped here rather than trusted.
+  //
+  // Only that one entry is skipped. A plain `import a = A` inside the
+  // body pushes a value too and still counts, which over-abstains for a
+  // type-only alias target and costs a MISS rather than inventing a
+  // finding — the same direction as the `type_aliases` test above.
+  let nested_namespace_names : Map[String, Unit] = Map([])
+  for inner in m.namespaces {
+    nested_namespace_names[inner.name] = ()
+  }
+  for v in m.values {
+    if !nested_namespace_names.contains(v.name) {
+      return true
+    }
   }
   for stmt in m.top_level_stmts {
     match stmt {
@@ -15295,12 +15318,25 @@ fn check_arrow_with_context(
         check_expr_against(env, e, want, inner_ctx, "\{sub_path} arrow body")
       }
     }
-    ArrowBlock(block) =>
+    ArrowBlock(block) => {
       // Recheck the block with the new env and the formal_ret as the
       // expected return type.
       for stmt in block.stmts {
         check_stmt(env, stmt, inner_ctx)
       }
+      // TS2403 over the arrow's own `var` scope — the same rule
+      // `check_function_body_with` applies to a function declaration and
+      // a class method. Third of the three callable spellings, taken in
+      // the same batch rather than a batch later.
+      for
+        issue in check_var_redeclaration_in_scope(
+          arrow_params,
+          block,
+          ctx.resolver,
+        ) {
+        record_unfiltered(inner_ctx, issue.path, issue.message)
+      }
+    }
   }
   dedup_issues_since(ctx.issues, pre_len)
 }
@@ -15472,6 +15508,11 @@ fn check_funcexpr_with_context(
   let pre_len = ctx.issues.length()
   for stmt in f.body.stmts {
     check_stmt(env, stmt, inner_ctx)
+  }
+  // TS2403 over the function expression's own `var` scope; see the arrow
+  // site above.
+  for issue in check_var_redeclaration_in_scope(f.params, f.body, ctx.resolver) {
+    record_unfiltered(inner_ctx, issue.path, issue.message)
   }
   dedup_issues_since(ctx.issues, pre_len)
 }
@@ -23701,6 +23742,23 @@ fn check_function_body_with(
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
   }
+  // TS2403 over this function's own `var` scope. Sited here rather than
+  // inside the statement walk because the group is the whole SCOPE: a
+  // `var` in a nested block belongs to this function, and the walk that
+  // collects them stops at a nested function of its own accord.
+  for
+    issue in check_var_redeclaration_in_scope(
+      func.params,
+      func.body,
+      resolver,
+      // `this` is the polymorphic type only where the caller bound one,
+      // which is exactly an INSTANCE member. A static method's `this` is
+      // `typeof C` and a free function's is `any` — both real TS2403
+      // sources on their own, and both a MISS here rather than a guess.
+      polymorphic_this=this_type is Some(_),
+    ) {
+    issues.push(issue)
+  }
   // Missing-return analysis: when the declared (body-level) return type is
   // concrete and doesn't accept `undefined` / `void`, every path through the
   // body must end in `return` or `throw`. Skip for generators — their body
@@ -27394,11 +27452,37 @@ fn check_non_local_exports(
 /// Everything else abstains: a `Named` pair, an `Any` on either side,
 /// object types whose member sets differ (a missing member is not proof,
 /// since an optional one may be absent), differing parameter counts.
+///
+/// DEPTH-BOUNDED, and that is not a precaution: the three descending
+/// arms recurse on types that `unwrap` has already resolved, so a
+/// self-referential `typeof` closes the loop with nothing to notice it.
+/// `function f(x: typeof f) { var x: (n: typeof f) => void }` unwraps
+/// both sides to `f`'s own signature, aligns them as `Func` pairs, and
+/// recurses on the parameter — which is `typeof f` again, forever, until
+/// the stack ends the process. Found as a SEGFAULT on `witness.ts` after
+/// the function-scope TS2403 sweep first fed the shape in; the module
+/// level could always reach it (`var x: typeof f; var x: (n: typeof f)
+/// => void` crashes the binary at HEAD too — measured, not assumed), and
+/// no corpus file had that spelling at top level. Running out of depth
+/// abstains, which is this function's own fail direction.
 fn types_definitely_differ(
   resolver : Resolver,
   a : @ast.TsType,
   b : @ast.TsType,
 ) -> Bool {
+  types_definitely_differ_at(resolver, a, b, 0)
+}
+
+///|
+fn types_definitely_differ_at(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+  depth : Int,
+) -> Bool {
+  if depth > 16 {
+    return false
+  }
   let ua = resolver.unwrap(a)
   let ub = resolver.unwrap(b)
   // A union of >= 2 members is identical only to a union.
@@ -27425,6 +27509,21 @@ fn types_definitely_differ(
     (Some(_), None) | (None, Some(_)) => return true
     _ => ()
   }
+  // The polymorphic `this` type against a NAMED one. `identity_key`
+  // already settles `this` against anything it can key, and a class name
+  // has no key (`structural_named_key` declines it), which is exactly
+  // the pair TS2403 needs — `var p = this` beside `var p!: C`. Probed in
+  // both directions and in both rules: tsc reports the var pair, and
+  // `interface D extends A, B` with `A.m(): this` against `B.m(): A` is
+  // TS2320, while two bases that BOTH say `this` are legal, which is
+  // what the `other != "this"` guard keeps silent.
+  match (ua, ub) {
+    (Named("this"), Named(other)) | (Named(other), Named("this")) =>
+      if other != "this" {
+        return true
+      }
+    _ => ()
+  }
   // Two definite primitives of different kinds.
   if is_definite_primitive_type(ua) && is_definite_primitive_type(ub) {
     return type_display(ua) != type_display(ub)
@@ -27436,17 +27535,18 @@ fn types_definitely_differ(
       if pa.length() != pb.length() {
         return false
       }
-      if types_definitely_differ(resolver, ra, rb) {
+      if types_definitely_differ_at(resolver, ra, rb, depth + 1) {
         return true
       }
       for i in 0..<pa.length() {
-        if types_definitely_differ(resolver, pa[i], pb[i]) {
+        if types_definitely_differ_at(resolver, pa[i], pb[i], depth + 1) {
           return true
         }
       }
       false
     }
-    (Array(ea), Array(eb)) => types_definitely_differ(resolver, ea, eb)
+    (Array(ea), Array(eb)) =>
+      types_definitely_differ_at(resolver, ea, eb, depth + 1)
     (Object(fa), Object(fb)) => {
       // An object type's entries are `(key, value)` where the KEY is
       // itself a type -- a `Literal` for a property name -- so members
@@ -27460,7 +27560,7 @@ fn types_definitely_differ(
         for other in fb {
           let (kb, tb) = other
           if type_display(kb) == ka_s &&
-            types_definitely_differ(resolver, ta, tb) {
+            types_definitely_differ_at(resolver, ta, tb, depth + 1) {
             return true
           }
         }
@@ -31439,6 +31539,51 @@ fn collect_typeof_query_bases(ty : @ast.TsType, out : Array[String]) -> Unit {
 }
 
 ///|
+/// `import a = A` records `<import-eq-alias>a=A`, and the alias binds a
+/// VALUE exactly when its target does — so TS2708 on `typeof a` is the
+/// same question asked one hop further out.
+///
+/// Read off the module's OWN markers rather than through the resolver,
+/// which keeps the question local: the alias and the `typeof` that names
+/// it sit in one body, so no namespace prefix has to be reconstructed.
+/// An alias declared in an ENCLOSING body is therefore not followed,
+/// which loses a finding rather than inventing one.
+///
+/// The root segment is substituted through the map so a CHAINED alias
+/// resolves: `import a = A; import b = a.inA` makes `b`'s target
+/// `A.inA`, which is the key `namespace_instantiated` holds. Bounded
+/// rather than cycle-tracked, since `import a = a` is its own error and
+/// stopping short only costs a finding.
+fn import_equals_alias_targets(module_ : @ast.TsModule) -> Map[String, String] {
+  let direct : Map[String, String] = Map([])
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<import-eq-alias>") {
+      let payload = gm["<import-eq-alias>".length():].to_owned()
+      match payload.find("=") {
+        Some(i) => direct[payload[:i].to_owned()] = payload[i + 1:].to_owned()
+        None => ()
+      }
+    }
+  }
+  let out : Map[String, String] = Map([])
+  for alias_name, target in direct {
+    let mut cur = target
+    for _ in 0..<8 {
+      let (root, rest) = match cur.find(".") {
+        Some(i) => (cur[:i].to_owned(), cur[i:].to_owned())
+        None => (cur, "")
+      }
+      match direct.get(root) {
+        Some(next) => if next != cur { cur = next + rest } else { break }
+        None => break
+      }
+    }
+    out[alias_name] = cur
+  }
+  out
+}
+
+///|
 /// TS2708 ("Cannot use namespace 'M' as a value") at a `typeof` TYPE
 /// position. `check_undefined_name` has judged the VALUE spelling
 /// (`var q = A`) for some time and a `typeof` type never reaches it at
@@ -31462,11 +31607,17 @@ fn collect_typeof_query_bases(ty : @ast.TsType, out : Array[String]) -> Unit {
 /// body all report, while a namespace carrying a runtime
 /// `export var v = 1` is ACCEPTED — that one is instantiated and the
 /// value exists. `namespace C { import a = A; var m: typeof a }` is
-/// TS2708 in tsc and stays a MISS: whether an `import a = A` alias binds
-/// a value depends on the TARGET, which is not resolved at parse time,
-/// and `namespace_is_instantiated` reads the fact off `type_aliases` —
-/// the second channel `importStatementsInterfaces` needs, recorded where
-/// the parser note already explains it.
+/// TS2708 too, and is the second channel `importStatementsInterfaces`
+/// needs. The recorded blocker was that the alias TARGET "is not
+/// resolved at parse time", which is true of what the target MEANS and
+/// not of what it SPELLS — the spelling is all this needs, since an
+/// alias binds a value exactly when its target does, so the same four
+/// exclusions decide it against the TARGET rather than against the
+/// alias. Probed one cell at a time: a type-only namespace target
+/// reports at the top level, nested (`A.inA`), and through a chained
+/// alias, while an INSTANTIATED target, an enum, a class and a function
+/// are all silent — the last three because tsc gives TS2702 / TS2503 /
+/// TS2693 there, codes this rule does not claim.
 fn check_typeof_namespace_value_types(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -31501,15 +31652,22 @@ fn check_typeof_namespace_value_types(
   }
   let issues : Array[ExprIssue] = []
   let seen : Map[String, Unit] = Map([])
+  let aliases = import_equals_alias_targets(module_)
   for name in found {
     if seen.contains(name) {
       continue
     }
     seen[name] = ()
-    if resolver.namespace_instantiated.get(name) is Some(false) &&
-      resolver.classes.get(name) is None &&
-      resolver.enums.get(name) is None &&
-      resolver.signatures.get(name) is None {
+    // An import-equals alias is judged by its TARGET; every other name
+    // is its own target.
+    let target = match aliases.get(name) {
+      Some(t) => t
+      None => name
+    }
+    if resolver.namespace_instantiated.get(target) is Some(false) &&
+      resolver.classes.get(target) is None &&
+      resolver.enums.get(target) is None &&
+      resolver.signatures.get(target) is None {
       issues.push({
         path: "typeof `\{name}`",
         message: "cannot use namespace `\{name}` as a value",
@@ -33144,6 +33302,11 @@ fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int) -> String? {
     NumberLiteral(s) => Some("nlit:" + s)
     BigIntLiteral(s) => Some("blit:" + s)
     BooleanLiteral(b) => Some(if b { "true" } else { "false" })
+    // The polymorphic `this` type. `this` is a reserved word, so no
+    // declaration can claim the name and it is unambiguous here — and it
+    // is never identical to the enclosing class's own name, which is the
+    // whole of `var p: this` beside `var p!: C` (TS2403, probed).
+    Named("this") => Some("this")
     Named(n) =>
       // tsc's identity relation is structural for interfaces and classes
       // (a class instance type IS identical to a spelled-out object
@@ -33868,6 +34031,28 @@ fn check_var_redeclaration_types(
   module_ : @ast.TsModule,
   resolver : Resolver,
 ) -> Array[ExprIssue] {
+  let decls : Array[(String, @ast.TsType)] = []
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), ty, _) => decls.push((n, ty))
+      _ => ()
+    }
+  }
+  for v in module_.values {
+    decls.push((v.name, v.type_))
+  }
+  var_redeclaration_issues(decls, resolver)
+}
+
+///|
+/// The TS2403 identity comparison over ONE scope's ordered declaration
+/// group. Extracted so the module-level sweep above and the
+/// per-function one below cannot decide the same question differently —
+/// which is exactly what a second copy of this loop would eventually do.
+fn var_redeclaration_issues(
+  decls : Array[(String, @ast.TsType)],
+  resolver : Resolver,
+) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let first_key : Map[String, String] = Map([])
   // The first declaration's TYPE as well as its key, because
@@ -33875,9 +34060,10 @@ fn check_var_redeclaration_types(
   // fallback below can still decide some of them.
   let first_type : Map[String, @ast.TsType] = Map([])
   let reported : Map[String, Unit] = Map([])
-  fn consider(name : String, ty : @ast.TsType) -> Unit {
+  for decl in decls {
+    let (name, ty) = decl
     if !is_checkable(ty) {
-      return
+      continue
     }
     let key = identity_key(ty, resolver, 0)
     let prev_type = first_type.get(name)
@@ -33903,7 +34089,7 @@ fn check_var_redeclaration_types(
         path: "var \{name}",
         message: "subsequent variable declaration must have the same type",
       })
-      return
+      continue
     }
     if prev_type is None {
       first_type[name] = ty
@@ -33913,17 +34099,119 @@ fn check_var_redeclaration_types(
       }
     }
   }
+  issues
+}
 
-  for stmt in module_.top_level_stmts {
+///|
+/// Every `var` reachable from `block` without crossing a nested FUNCTION
+/// boundary, in source order. `var` is function-scoped, so that set is
+/// exactly one TS2403 group.
+///
+/// Statement forms only, and that is what makes it complete rather than
+/// best-effort: a `var` can be introduced only by a declaration
+/// STATEMENT, so an expression walk would add nothing — and the
+/// boundaries this must not cross are all expressions (an arrow, a
+/// function expression, a class expression) or `NativeClassStmt`, none
+/// of which it descends into because it never walks an expression at
+/// all. A statement form missing from the match loses a finding rather
+/// than inventing one.
+fn collect_function_scoped_vars(
+  block : @ast.TsBlock,
+  out : Array[(String, @ast.TsType)],
+  polymorphic_this : Bool,
+) -> Unit {
+  fn walk_stmt(stmt : @ast.TsStmt) -> Unit {
     match stmt {
-      Var(@ast.TsBinding::Ident(n), ty, _) => consider(n, ty)
+      // An UNANNOTATED `var p = this` in an instance member takes the
+      // polymorphic `this` type — not the enclosing class's name, which
+      // is why `var p = this; var p!: C` is TS2403 and `var p!: this` is
+      // not. Only the bare `this` expression qualifies; anything else
+      // stays unannotated and is skipped, as `var` initializers are
+      // everywhere else here.
+      Var(@ast.TsBinding::Ident(n), ty, @ast.TsExpr::Var("this")) if polymorphic_this &&
+        !is_checkable(ty) => out.push((n, @ast.TsType::Named("this")))
+      Var(@ast.TsBinding::Ident(n), ty, _) => out.push((n, ty))
+      Block(b) => collect_function_scoped_vars(b, out, polymorphic_this)
+      If(_, then_, else_) => {
+        collect_function_scoped_vars(then_, out, polymorphic_this)
+        match else_ {
+          Some(b) => collect_function_scoped_vars(b, out, polymorphic_this)
+          None => ()
+        }
+      }
+      While(_, b) | DoWhile(_, b) | With(_, b) =>
+        collect_function_scoped_vars(b, out, polymorphic_this)
+      For(init, _, update, b) => {
+        match init {
+          Some(st) => walk_stmt(st)
+          None => ()
+        }
+        match update {
+          Some(st) => walk_stmt(st)
+          None => ()
+        }
+        collect_function_scoped_vars(b, out, polymorphic_this)
+      }
+      ForOf(_, _, _, _, b) | ForAwaitOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
+        collect_function_scoped_vars(b, out, polymorphic_this)
+      Switch(_, cases) =>
+        for c in cases {
+          collect_function_scoped_vars(c.body, out, polymorphic_this)
+        }
+      Try(b, _, catch_, finally_) => {
+        collect_function_scoped_vars(b, out, polymorphic_this)
+        match catch_ {
+          Some(cb) => collect_function_scoped_vars(cb, out, polymorphic_this)
+          None => ()
+        }
+        match finally_ {
+          Some(fb) => collect_function_scoped_vars(fb, out, polymorphic_this)
+          None => ()
+        }
+      }
+      Label(_, inner) => walk_stmt(inner)
       _ => ()
     }
   }
-  for v in module_.values {
-    consider(v.name, v.type_)
+
+  for stmt in block.stmts {
+    walk_stmt(stmt)
   }
-  issues
+}
+
+///|
+/// TS2403 inside a function scope. The rule and its identity comparison
+/// have existed for as long as `check_var_redeclaration_types`, at the
+/// MODULE level and nowhere else, so `function f() { var b: number; var
+/// b: string }` — the same mistake one scope in — was silent, and so was
+/// every class method and constructor body.
+///
+/// Parameters participate, which is tsc's rule and not an extension of
+/// it: `function f(b: number) { var b: string }` is TS2403, and so is
+/// the optional spelling, where `b?: number` makes the first type
+/// `number | undefined` — the union our parser already builds, so the
+/// two agree without a special case. A DESTRUCTURED parameter is
+/// excluded, and that one is about this parser: `parse_param` sets
+/// `p.name` to `binding_first_name(binding)` while `p.type_` stays the
+/// WHOLE pattern's type, so `({ b }: { b: string })` would be compared
+/// as `{ b: string }` against `string` and reported on legal code.
+fn check_var_redeclaration_in_scope(
+  params : Array[@ast.TsParam],
+  body : @ast.TsBlock,
+  resolver : Resolver,
+  polymorphic_this? : Bool = false,
+) -> Array[ExprIssue] {
+  let decls : Array[(String, @ast.TsType)] = []
+  for p in params {
+    if p.binding is Some(@ast.TsBinding::Ident(_)) || p.binding is None {
+      decls.push((p.name, p.type_))
+    }
+  }
+  collect_function_scoped_vars(body, decls, polymorphic_this)
+  if decls.length() < 2 {
+    return []
+  }
+  var_redeclaration_issues(decls, resolver)
 }
 
 ///|
@@ -36323,6 +36611,15 @@ fn check_module_function_bodies_layered(
             message: "cannot find name `\{key}`",
           })
         }
+        continue
+      }
+      // Marker, not an error: the alias's whole dotted target, consumed
+      // by `check_typeof_namespace_value_types`. It needs the explicit
+      // skip because every entry of this channel that is not skipped
+      // becomes a diagnostic VERBATIM — batch CO shipped exactly that
+      // bug once, reporting a compiler-option marker as an error on
+      // every file carrying it.
+      if gm.has_prefix("<import-eq-alias>") {
         continue
       }
       // TS2503: the ROOT of an entity-reference import alias

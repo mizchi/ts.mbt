@@ -16203,6 +16203,22 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
       // both the ambient and the ordinary spelling, and through a
       // type-only nested namespace.
        "namespace M { export interface Point { x: number } }\nvar m = M;", "declare namespace M { interface Point { x: number } }\nvar m = M;",
+      // The nested case was in the SILENT list until this batch, with a
+      // comment saying "tsc reports TS2708 there" — an assertion
+      // measuring a gap rather than a behaviour, and the reason
+      // `importStatementsInterfaces` was a MISS. The gap was that
+      // `parse_namespace_decl_with_mode` gives a nested namespace's own
+      // value entry to the enclosing body whatever its body holds, so
+      // the outer namespace read as instantiated; an EMPTY inner
+      // namespace is the same answer (probed).
+       "namespace A { export namespace inA { export interface P { x: number } } }\nvar a = A;",
+      "namespace A { export namespace inA { } }\nvar a = A;",
+      // The alias half: `import a = A` binds a value exactly when its
+      // TARGET does, nested and through a chain, at a `typeof` type
+      // position.
+       "namespace A { export interface P { x: number } }\nnamespace C { import a = A; var m: typeof a; }",
+      "namespace A { export namespace inA { export interface Q { y: number } } }\nnamespace C { import a = A.inA; var m: typeof a; }",
+      "namespace A { export namespace inA { export interface Q { y: number } } }\nnamespace C { import a = A; import b = a.inA; var m: typeof b; }",
       // TS2350: `new` over a call signature that returns a value, and over
       // the two lib functions that are not constructors.
        "declare var cf: { (): string };\nvar r = new cf();", "new Symbol();", "new BigInt(1);",
@@ -16230,14 +16246,6 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
     src in [
       // TS2583: the lib that declares it, and a user declaration.
       "// @lib: es2017\nvar foge = new SharedArrayBuffer(1024);", "// @lib: es5\ndeclare var SharedArrayBuffer: any;\nvar foge = new SharedArrayBuffer(1024);",
-      // A type-only namespace nested inside another is NOT covered, and
-      // the reason is a lowering artifact rather than a judgement:
-      // `export namespace inA { … }` records a VALUE for `inA` (the
-      // namespace object `parser_namespace_lower` synthesizes), so the
-      // outer namespace reads as instantiated whatever its nested body
-      // holds. tsc reports TS2708 there; `importStatementsInterfaces`
-      // stays a MISS for it.
-       "namespace A { export namespace inA { export interface P { x: number } } }\nvar a = A;",
       // TS2708: an INSTANTIATED namespace is a value; so is one whose only
       // member is an `import` alias, because an alias to an instantiated
       // namespace emits `var a = A` (exportImportAlias — the one false
@@ -16246,6 +16254,16 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
       // body alone does not show.
        "namespace M { export var v = 1; }\nvar m = M;", "namespace A { export var x = 1; }\nnamespace C { export import a = A; }\nvar z = C.a.x;",
       "namespace M { export interface Point { x: number } }\nclass M { }\nvar m = M;",
+      // An INSTANTIATED nested namespace makes the outer one a value, at
+      // one level and at two.
+       "namespace A { export namespace inA { export var v = 1 } }\nvar a = A;", "namespace A { export namespace inA { export namespace j { export const c = 1 } } }\nvar a = A;",
+      // The alias rule is judged against its TARGET, so an instantiated
+      // target is silent — and an enum, a class and a function target
+      // are silent because tsc gives TS2503 / TS2693 / TS2702 there,
+      // codes this rule does not claim (probed one cell at a time).
+       "namespace A { export var v = 1 }\nnamespace C { import a = A; var m: typeof a; }",
+      "enum E { X }\nnamespace C { import a = E; var m: typeof a; }", "class K { }\nnamespace C { import a = K; var m: typeof a; }",
+      "namespace A { export interface P { x: number } }\nnamespace C { import a = A.P; var m: typeof a; }",
       // A local binding shadowing a type-only namespace name.
        "namespace M { export interface P { x: number } }\nfunction f() { const M = 1; return M; }",
       // TS2350: a construct signature and an ordinary class.
@@ -21850,6 +21868,94 @@ test "expr_check: shadowed enum initializers and undeclared type arguments (batc
        "// @target: es2015\ndeclare function g<X>(): void;\nconst f2 = <B,>(x: B) => { g<B>(); return x; };",
       // And an enum / class / builtin name.
        "// @target: es2015\ndeclare function g<X>(): void;\nenum En { A }\ng<En>();\nclass Cl {}\ng<Cl>();\ng<string>();",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch EU: TS2403 inside a FUNCTION scope, and the polymorphic `this`.
+///
+/// The rule and its identity comparison had existed for as long as
+/// `check_var_redeclaration_types`, at the MODULE level and nowhere
+/// else — so `function f() { var b: number; var b: string }`, the same
+/// mistake one scope in, was silent, and so was every class method,
+/// constructor, arrow and function expression. The comparison itself is
+/// shared rather than copied, which is why the cells below read the same
+/// either side of the boundary.
+///
+/// Every cell was probed against tsc 6.0.3 one at a time. The three it
+/// reports and we do not are recorded as the silent cases they are: an
+/// UNANNOTATED `var b` is `any` to tsc and abstains here (the
+/// absent-versus-`: any` blocker), a DESTRUCTURED parameter's `p.type_`
+/// is the whole pattern's type while `p.name` is only its first name, and
+/// a STATIC method's `this` is `typeof C` rather than the polymorphic
+/// `this`.
+test "checker: TS2403 in a function scope and the polymorphic `this` (batch EU)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .iter()
+    .filter(fn(i) { i.message.contains("subsequent variable declaration") })
+    .count()
+  }
+  // --- fires
+  for
+    src in [
+      // The three callable spellings, plus a class method, a constructor
+      // and a namespace-scoped function.
+      "function f() { var b: number; var b: string; }", "class C { m() { var b: number; var b: string; } }",
+      "class C { constructor() { var b: number; var b: string; } }", "var f = () => { var b: number; var b: string; };",
+      "var f = function () { var b: number; var b: string; };", "namespace N { function f() { var b: number; var b: string; } } ",
+      // `var` is FUNCTION-scoped, so a nested block, an `if` arm, a `for`
+      // head, a `switch` case and a `try` block are all one group.
+       "function f() { var b: number; { var b: string; } }", "function f() { var b: number; if (1) { var b: string; } }",
+      "function f() { var b: number; for (var b: string;;) { } }", "function f(v: number) { var b: number; switch (v) { default: var b: string; } }",
+      "function f() { var b: number; try { var b: string; } catch (e) { } }",
+      // A PARAMETER participates, including the optional spelling, where
+      // `b?: number` is `number | undefined` — the union our parser
+      // already builds, so no special case is needed for it.
+       "function f(b: number) { var b: string; }", "function f(b?: number) { var b: number; }",
+      "function f(b: number = 1) { var b: string; }",
+      // The polymorphic `this` type of an INSTANCE member is not the
+      // enclosing class's own name, in the annotated spelling and
+      // through an unannotated `var p = this`.
+       "class C { m() { var p: this; var p!: C; } }", "class C { m() { var p = this; var p!: C; } }",
+      "class C { get g() { var p = this; var p!: C; return this; } }", "class C { constructor() { var p = this; var p!: C; } }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // Identical types, a different name, and `let` (a different
+      // diagnostic entirely).
+      "function f() { var b: number; var b: number; }", "function f() { var b: number; var c: string; }",
+      "function f() { let b: number; let c: string; }",
+      // A nested FUNCTION is its own `var` scope, in all three
+      // spellings.
+       "function f() { var b: number; function g() { var b: string; } }", "function f() { var b: number; var g = () => { var b: string; }; }",
+      "function f() { var b: number; var g = function () { var b: string; }; }",
+      // `b?: number` against the union it actually is.
+       "function f(b?: number) { var b: number | undefined; }",
+      // A rest parameter against its own array type.
+       "function f(...b: number[]) { var b: number[]; }",
+      // `this` against `this`, and a STATIC `this`, which is `typeof C`
+      // — tsc reports `var p = this; var p!: C` there for a DIFFERENT
+      // reason and this abstains rather than guess which.
+       "class C { m() { var p = this; var p!: this; } }", "class C { static m() { var p = this; var p!: typeof C; } }",
+      "class C { static m() { var p = this; var p!: C; } }",
+      // An UNANNOTATED `var` is `any` to tsc and a conflict there; ours
+      // abstains, which is the absent-versus-`: any` blocker and a MISS
+      // rather than a finding.
+       "function f() { var b: number; var b; }", "function f() { var b; var b: string; }",
+      // A DESTRUCTURED parameter carries the whole pattern's type under
+      // its first name, so comparing it would report legal code.
+       "function f({ b }: { b: string }) { var b: string; }",
+      // A self-referential `typeof` used to recurse forever here and end
+      // the process with a SEGFAULT — the module-level spelling could
+      // reach it too, at HEAD, and no corpus file had it.
+       "function fnArg1(x: typeof fnArg1, y: number) { var x: (n: typeof fnArg1, m: number) => void; }",
+      "declare function fa(x: typeof fa, y: number): void;\nvar x: typeof fa;\nvar x: (n: typeof fa, m: number) => void;",
     ] {
     @test.assert_eq(issues(src), 0)
   }
