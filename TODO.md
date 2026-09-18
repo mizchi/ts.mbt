@@ -3,6 +3,120 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batches EU-EY (2026-09-18): MISS in scope 50 -> 46 at FP 0
+
+`TP 2665 -> 2669 | MISS in scope 50 -> 46 | OUT OF SCOPE 19 | FP 0 |
+PFLEGAL 0 | TN 1750`
+
+Four conformance files, three capabilities the corpus cannot score, two
+false positives on legal code, and a SEGFAULT. Five batches; three of
+them bought zero files each and were taken for the capability, which is
+what this tier looks like.
+
+**EU — TS2708 through an alias, TS2403 in a function scope, and a crash.**
+The `import a = A` blocker was recorded as "whether the alias binds a
+value depends on the TARGET, which is not resolved at parse time" — true
+of what the target MEANS and false of what it SPELLS, and the spelling is
+all the rule needs, since an alias binds a value exactly when its target
+does. Its other half was `namespace_is_instantiated` counting a nested
+namespace's own value entry, which `parse_namespace_decl_with_mode`
+builds before it has parsed the body. **A test in the SILENT list said
+in its own comment that tsc reports TS2708 there** — the fourteenth test
+in this repo found asserting a gap rather than a behaviour.
+
+TS2403 had run over `module_.top_level_stmts` and nowhere else, so
+`function f() { var b: number; var b: string }` was silent, and so was
+every class method, constructor, arrow and function expression. The
+identity comparison is extracted and shared rather than copied; `var` is
+function-scoped, so a nested block / `if` arm / `for` head / `switch`
+case / `try` block are one group and a nested function is not.
+Parameters participate as they do in tsc, a DESTRUCTURED one does not
+(`p.name` is only the pattern's first name while `p.type_` is the whole
+pattern's type). The polymorphic `this` then falls out of one more fact
+and flips `typeOfThisGeneral`.
+
+The crash is the batch's most useful output and predates it:
+`types_definitely_differ` recurses on types `unwrap` has already
+resolved, with no depth bound, so a self-referential `typeof` closes the
+loop and `witness.ts` ended the process. **Measured by stashing the
+branch, rebuilding HEAD and running the module-level spelling**, not
+assumed.
+
+**EV — generic METHOD inference (zero files).** A generic FUNCTION's type
+arguments have been inferred at the call site for as long as
+`infer_call` existed; a generic METHOD's never were. FOUR spellings were
+involved and each lost the binder its own way: an interface and a class
+record it on the declaration and no call site read it; a member written
+as a function TYPE carries it on the `GenericFunc` wrapper that
+`lookup_method_sig` had no arm for (eighth fail-open wrapper arm in the
+ledger, and it made the member OPAQUE rather than merely
+un-instantiated); `infer_call` had the same hole; and an inline object
+type's method signature threw the binders away in the parser under a
+comment saying so. A CONSTRUCT / CALL signature's binders are NOT
+carried — wrapping them cost a true positive outright
+(`genericCallWithOverloadedConstructorTypedArguments2`).
+
+Its false positive was found by probing the legal neighbour of that
+work: `x?.(args)` has no receiver — what the `?.` guards is the
+CALLEE — so it took the "shape this cannot read" default and was widened
+unconditionally, and `declare const c: (n: number) => number; const r:
+number = c?.(1)` is ACCEPTED by tsc. Batch EH fixed the same false
+positive at the three chain forms that DO have a receiver.
+
+**EW — index-signature reads through an anonymous object type (zero
+files).** `infer_index`'s `Named` / `Applied` arm has resolved the read
+for a long time and the anonymous spelling had no arm at all; neither did
+`collect_index_sigs`. One of the two BLIND rows the capability probe
+found by asking the common shape rather than the corpus. The other one,
+the WRITE, turns out **not to be blind at all** and had been handled in
+all four spellings — a table nobody re-measures ranks the wrong work.
+
+**EX — a mapped type over an infinite key set (+1).** `{ [P in string]:
+V }` IS `{ [k: string]: V }`, and so is the `keyof any` spelling, but
+neither evaluator could ENUMERATE that key set so the type stayed
+unresolved and read as unmodelled. The guard cost TWO false positives
+first: a HOMOMORPHIC mapped type over `any` yields `any` and not a
+shape, and the first attempt to test "does the value depend on the key"
+was defeated by a SHAPE rather than an argument — `type_references_any`
+has no `IndexedAccess` arm, so `Box<T[P]>` reads through it as
+independent of `P`.
+
+**EY — an intersection against an index signature (+1).**
+`check_expr_against` carried `(Intersection(_), _) => return` under a
+comment saying the modelling was "too coarse", and the abstention was
+TOTAL: an intersection-typed value was invisible in every assignment
+against every target. **That is what batch EN went looking for and could
+not find** — it measured the merge arm as unreachable and wrote that
+finding what abstains first "is the actual work". Restricted to an
+index-signature target, and the restriction is measured rather than
+cautious: the unrestricted version is the same +1 file and FOUR false
+positives on hand-written legal code (`A & B` into `A` among them),
+because `is_assignable_to` is resolver-free and cannot expand a `Named`
+target structurally — which is what "too coarse" actually meant.
+
+REJECTED with its blockers: `this` inside an object-literal `function`
+property (`looseThisTypeInFunctions`). Binding it around the entries
+works and was instrumented — the binding arrives as `{ n: number; f: ()
+=> any }` — but `check_funcexpr_with_context` then rebinds `this` to
+`Any`, deliberately, with its reason at the site (a parser-lowered
+nested class becomes a prototype-assigned function expression whose
+`this` is the inner instance). Undoing it needs the type threaded past
+that AND a `noImplicitThis` flag the checker does not carry: probed, the
+shape is TS2339 with the flag and ACCEPTED without it.
+
+Also rejected: `typeof x === "object"` narrowing `unknown` to
+`object | null` (`controlFlowTypeofObject`).
+`typeof_string_to_type` maps `"object"` to `Any`, and changing it is not
+enough — the same file's legal neighbours need `if (!x) return` and
+`if (x === null) return` to narrow `unknown` too, which our engine does
+not do, so the narrow rule alone is two false positives in the file it
+would flip.
+
+The gate is tightened to `--max-miss 46`, and the four documents are
+re-measured rather than edited: `UNSUPPORTED.md` §1 lists 46 by
+machinery, §2 is re-probed one file per row, §3 gains four declared
+abstentions with their numbers.
+
 ### Docs round (2026-09-16): the checker gap documents re-measured at MISS 50
 
 No checker change. `TP 2665 / MISS in scope 50 / OUT OF SCOPE 19 / FP 0 /

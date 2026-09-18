@@ -1,10 +1,10 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-16 at HEAD (`99f8c08`):
+Measured on 2026-09-18, after batches EU–EY:
 
 ```
-TP  err+flag  : 2665   (of which via parse rejection: 390)
-MISS in scope : 50     (the backlog — this one can reach zero)
+TP  err+flag  : 2669   (of which via parse rejection: 390)
+MISS in scope : 46     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -21,7 +21,7 @@ file is the code a user would write and what happens to it.
 
 ```sh
 moon build --target native --release
-bash scripts/checker_conformance_oracle.sh --miss-list /tmp/miss.txt   # the numbers + the 50 paths
+bash scripts/checker_conformance_oracle.sh --miss-list /tmp/miss.txt   # the numbers + the 46 paths
 node scripts/checker_miss_rank.mjs /tmp/miss.txt --json /tmp/rank.json # tsc's codes per file
 node scripts/tsc_probe.mjs some-probe.ts                                # the legal neighbour
 ```
@@ -37,7 +37,7 @@ Two rules for reading the output, both learned the hard way:
 
 ---
 
-## 1. The 50 in-scope MISS files, by machinery
+## 1. The 46 in-scope MISS files, by machinery
 
 Paths are relative to `typescript/tests/cases/conformance/`. The code is
 what the local compiler reports on the file; where a rule was already
@@ -63,7 +63,7 @@ of the call, and generic signatures compared against each other.
 | `classes/mixinWithBaseDependingOnSelfNoCrash1` | TS2345 | `typeof BaseItem` against the mixin constraint `new (...args: any[]) => any` when the base's constructor is not so typed |
 | `decorators/decoratorCallGeneric` | TS1238 | a class decorator whose parameter is a generic interface `I<C>` instantiated with the decorated class |
 
-### 1b. Type-level machinery — 7 files
+### 1b. Type-level machinery — 6 files
 
 ```ts
 function f<T extends any[], P extends any[]>(): [...T, ...P] {
@@ -92,7 +92,6 @@ function f<A extends object>(a: A, sa: Something<A>) {
 | `types/literal/templateLiteralTypes4` | TS2345 | `` `${T}` `` distributed over `T`'s constraint to produce a literal union — the parser carries `TemplateLiteralType` and nothing evaluates it against a type parameter |
 | `types/literal/templateLiteralTypes7` | TS2322 | same machinery, at the assignability of two generic signatures |
 | `types/mapped/mappedTypeErrors2` | TS2322, TS2536 | TS2536 "cannot be used to index": a key type parameter checked against the indexed type's key set |
-| `types/mapped/mappedTypeWithAny` | TS2322, TS2339, TS2740 | a homomorphic mapped type over `any` yields `any`, not a shape — so `Objectish<any>` must not satisfy `any[]` |
 | `types/conditional/conditionalTypesExcessProperties` | TS2322 | a conditional left UNRESOLVED inside an intersection cannot be projected to a field shape, so the excess-property check has no target. Batches DI–DM made a conditional resolve through a generic alias; the composition with `&` still abstains |
 | `types/conditional/inferTypesInvalidExtendsDeclaration` | TS2304 | **REJECTED after instrumenting** (batch EI): the type parser REDUCES `T extends infer A extends B ? …` when it can decide the relation, so the checker receives the bare `Number` and neither `A` nor its bound `B` survives to be resolved |
 
@@ -128,14 +127,13 @@ try { } catch (e) {
 | `expressions/typeGuards/typeGuardsInRightOperandOfOrOrOperator` | TS2339 | narrowing to `never` in the right operand of `\|\|` after a guard chain exhausts the union. The common shape (`typeof x !== "string" \|\| x.length`) is already handled |
 | `statements/for-ofStatements/ES5For-of7` | TS2403, TS2454 | `[]` inferring `never[]` so two `var x` declarations conflict, plus definite-assignment analysis for TS2454 |
 
-### 1e. Classes, `this`, mixins — 8 files
+### 1e. Classes, `this`, mixins — 7 files
 
 | file | tsc | what is needed |
 |---|---|---|
 | `classes/mixinAbstractClasses.2` | TS2797, TS2515, TS2511 | a class extending a TYPE VARIABLE with an abstract construct signature (`T & typeof AbstractBase`) must itself be `abstract`; needs the intersection base's construct signatures |
 | `classes/mixinAccessors3` | TS2611 | TS2611 through a mixin intersection base (`Mixin & BaseClass`); the direct-base spelling is already flagged |
 | `override/override19` | TS4113, TS4117 | `override` against an INTERSECTION base `A & { context: Context }`; the class-base version ships, gated on "the base chain declares NOTHING" (see §3) |
-| `expressions/thisKeyword/typeOfThisGeneral` | TS2403 | the polymorphic `this` type of a `var t = this` inside a method, so a redeclaration `var t: MyTestClass` conflicts |
 | `types/specifyingTypes/typeQueries/typeofThis` | TS2331, TS2683, TS18048 | `typeof this.no` in a TYPE position: `parse_typeof_type_query` has no `This` arm, `skip_typeof_operand` eats it, and the annotation collapses to `Any`. The VALUE-position TS2331 shipped in batch EC |
 | `types/thisType/looseThisTypeInFunctions` | TS2322, TS2339, TS2684 | a `(this: C, …) => …` value against a `(this: void, …) => …` type, and `this.n.length` where `n: number` inside such a function |
 | `async/es2017/await_incorrectThisType` | TS2684, TS1320 | **REJECTED with a probe** (batch ET): `class C<E, A> { m1(this: C<never, A>) {} }` with a `C<number, string>` receiver is ACCEPTED by tsc because `E` is a phantom parameter and the comparison is structural; `applied_generic_mismatch` is nominal and false-positives on five hand-written cells |
@@ -150,14 +148,12 @@ try { } catch (e) {
 | `async/es5/asyncAwaitNestedClasses_es5` | TS2345 | `new Promise<void>(resolve => resolve(null))` under `strictNullChecks`: the `resolve` callback's parameter type from the lib `PromiseConstructor` |
 | `es6/yieldExpressions/generatorTypeCheck8` | TS2322 | structural comparison of `Generator<string, any, any>` against a hand-written `BadGenerator` through the lib iterator interfaces (`IteratorResult<T>`) |
 
-### 1g. Name resolution and declarations — 5 files
+### 1g. Name resolution and declarations — 3 files
 
 | file | tsc | what is needed |
 |---|---|---|
 | `types/localTypes/localTypes4` | TS2304, TS2300 | a block-local `interface T` declared in two different functions. **Deliberately unregistered** (batch ET): the block-local type merge must not pick a winner among several declarations of one name — its first draft made the empty `interface T { }` in one function answer for the other and the gate scored that as a TP because the file errors for unrelated reasons |
-| `internalModules/codeGeneration/importStatementsInterfaces` | TS2708 | `var m: typeof a` through an `import a = A` alias: whether the alias binds a VALUE depends on the target, which the parser does not resolve. The direct `typeof A` type position shipped in batch EE |
 | `es6/Symbols/symbolProperty3` | TS2464 | **REJECTED with evidence**: `var s = Symbol; ({ [s]: 0 })` — `s` infers as `Any`, and catching it needs the `Symbol` CONSTRUCTOR modelled as a value type. Nobody writes that |
-| `types/intersection/intersectionWithIndexSignatures` | TS2322, TS2339 | an INTERSECTION source against an index-signature target. Batch EN measured that the arm which would decide it is never reached for an intersection-typed VALUE — something above it abstains first — so dropping the unsound "some component alone satisfies" fallback changed nothing and was reverted with the number |
 | `decorators/class/decoratorChecksFunctionBodies` | TS2345 | the BODY of an arrow written inline as a member decorator (`@((x, p, d) => { func(3) })`). Member decorator expressions never reach the AST (`skip_param_decorators` / the class-body decorator skip); batches EE and EG read what they need off the skipped TOKENS, which cannot type-check a body |
 
 ---
@@ -166,8 +162,9 @@ try { } catch (e) {
 
 The classification above says what a FILE needs. This says what the
 checker HAS, probed at the shape real code writes (inside a function
-body, `--strict` where the rule needs it). Re-probed on 2026-09-16;
-every row is a real tsc error, so a BLIND row is a measured gap.
+body, `--strict` where the rule needs it). Re-probed on 2026-09-18,
+one file per row; every row is a real tsc error, so a BLIND row is a
+measured gap.
 
 | common shape | verdict |
 |---|---|
@@ -182,19 +179,27 @@ every row is a real tsc error, so a BLIND row is a measured gap.
 | strictNullChecks on a bare binding or an aliased one (`a.b` with `a: T \| undefined`; `const x = o.a; x.b`) | CAUGHT |
 | an object literal against an index signature (`{ x: "s" }` against `{ [k: string]: number }`) | CAUGHT (batch EM) |
 | index-signature read through an INTERFACE (`interface M { [k: string]: number }`, `o["x"]` / `o.x` against `string`) | CAUGHT |
+| index-signature read through an ANONYMOUS object type (`o["x"]` / `o[0]` on `{ [k: string]: number }`) | CAUGHT (batch EW) |
+| index-signature write of the wrong type (`o["x"] = "s"` on `{ [k: string]: number }`) | CAUGHT — this row read BLIND until it was re-probed, and it was already handled in all four spellings |
+| mapped type over an INFINITE key set (`{ [P in string]: D }`, `{ [P in keyof any]: D }`) | CAUGHT (batch EX) |
+| generic METHOD call (`i.m(12)` where `m<T>(x: T): T`, on an interface / class / object type / function-type property) | CAUGHT (batch EV) |
+| INTERSECTION source against an index signature (`{a: string} & {b: number}` into `{ [k: string]: string }`) | CAUGHT (batch EY) |
+| `var` redeclared with a different type inside a FUNCTION scope, and the polymorphic `this` | CAUGHT (batch EU) |
 | **strictNullChecks on a member-chain receiver** (`o.a.b` with `a?:`) | **BLIND — deliberate**: the check is gated to a bare `Var` receiver because those are the bindings the narrowing engine rewrites precisely (batch DO) |
-| **index-signature read through an ANONYMOUS object type** (`o["x"]` / `o[0]` on `{ [k: string]: number }`) | **BLIND** — the write and the literal-assignment directions are caught; the read yields no type |
-| **index-signature write of the wrong type** (`o["x"] = "s"` on `{ [k: string]: number }`) | **BLIND** |
 | **variadic tuple** (`[...T]`, `[string, ...number[]]`) | **BLIND** |
-| **template-literal type with a placeholder** (`` `${T}-x` `` against `"c-x"`) | **BLIND** |
 | **computed `unique symbol` key** (`interface I { [k]: number }`, `i[k]` against `string`) | **BLIND** |
+| **`this` inside an object-literal `function` property** (`{ n: 101, f: function () { this.n.length } }`) | **BLIND — measured and not taken**, see §3 |
+| template-literal type with a placeholder (`` `${T}-x` `` against `"c-x"`) | CAUGHT at the error shape, and the type it computes is `string` rather than the evaluated literal — the legal neighbours (`"c-x"`, `string`) are silent, measured |
 
-Two of the BLIND rows (the anonymous index-signature read and write) are
-not in any conformance file and were found only by this probe — the same
-lesson the false-positive rounds keep teaching: the corpus does not
-contain the shapes, so FP 0 and MISS 50 are statements about 4,484 files
-and not about real code (batch EO measured zod at 272 diagnostics with tsc
-accepting all of them; 187 remain after the shadowing fix).
+The two index-signature rows are the argument for keeping this table at
+all: neither is in any conformance file, both were found only by this
+probe, and batch EW closed the read for ZERO conformance files. The
+write row is the other half of the lesson — it read BLIND for two
+revisions and was already handled in all four spellings, so a table
+nobody re-measures is a table that ranks the wrong work. FP 0 and MISS 46
+are statements about 4,484 files and not about real code (batch EO
+measured zod at 272 diagnostics with tsc accepting all of them; 187
+remain after the shadowing fix).
 
 ---
 
@@ -214,6 +219,10 @@ Each entry names the LEGAL neighbour that decides it. None is a bug.
 | `using` / `await using` declarations | TS2850 / TS2851 and the for-of binding grammar | **Zero** of 5,697 real `.d.ts` / `.ts` files use them. Five files declared out of scope; the sixth (`usingDeclarationsWithObjectLiterals2`) was TS7018 on `value: null` and is a TP since batch EC |
 | `switch (12) { case 5: }` on a `const` scrutinee | TS2678 | `infer_expr` widens a numeric literal to `number`; the literal-vs-literal syntactic form is reported (batch CW), a `const` scrutinee is not |
 | `o.b` through an index signature only (`delete o["b"]` on `{ [k: string]: string }`) | — | LEGAL and silent for the stated reason: a member reached only through an index signature is not a declared property |
+| `this` inside an object-literal `function` property | TS2339 | **MEASURED AND NOT TAKEN.** `this` there is the LITERAL's type, and binding it around the entries works — instrumented, the binding arrives as `{ n: number; f: () => any }` — but `check_funcexpr_with_context` then rebinds `this` to `Any`, deliberately and with its reason stated at the site (a parser-lowered nested class becomes a prototype-assigned function expression whose `this` is the inner instance). Undoing that needs the type threaded past it AND a `noImplicitThis` flag the checker does not carry: probed, `{ n: 101, f: function () { this.n.length } }` is TS2339 with the flag and ACCEPTED without it. Three pieces of plumbing for one conformance file (`looseThisTypeInFunctions`) |
+| `{ [P in string]: P }` — a mapped type whose VALUE mentions the binder | — | The infinite-key reduction (batch EX) requires the value to be independent of the key, because a HOMOMORPHIC mapped type over `any` yields `any` and not a shape. Reporting it cost two TS7-accepted files before the guard existed |
+| `A & B` assigned to `A` | — | LEGAL, and the reason the intersection-source rule (batch EY) is restricted to an index-signature target: `is_assignable_to` is resolver-free and cannot expand a `Named` target structurally, so the unrestricted version reported four legal shapes at the same +1 conformance file |
+| a CONSTRUCT / CALL signature's own type parameters in an object type | — | Not carried. Wrapping them in `GenericFunc` cost a true positive outright (`genericCallWithOverloadedConstructorTypedArguments2`, all `new <T>(…)` members) and nothing reads them; the named-method binders that batch EV does carry are read at the call site |
 
 ## 4. Out of scope — 19 files
 
@@ -245,6 +254,20 @@ history is not re-derived from TODO.md.
 | G. "Blocked on a mechanical fact" (TS7031/7018, TS1308, TS2331, TS2708 `typeof`, TS2393) | All five DONE in batches EC and EE. Not one recorded blocker survived being probed: two had been dissolved by later unrelated work, one named only one of two routes to the fact, one was true of an approach nobody had to take, and TS2393's consumer had simply thrown the count away. The `import a = A` half of TS2708 is still open (§1g) |
 | H. Declared abstentions | §3, with three rows retired (the `super`-in-computed-key row is now the exact tsc boundary, the aliased `this` and the class-method TS2684 rows are new) |
 
+Batches EU–EY then took four more files (MISS 50 -> 46) and none of them
+was a machinery gap the classification could see, which is §6.3 once
+more: an `import a = A` alias's TS2708 (the recorded blocker was true of
+what the target MEANS and false of what it SPELLS), TS2403 inside a
+FUNCTION scope plus the polymorphic `this`, a mapped type over an
+infinite key set, and an intersection against an index signature — the
+last being exactly what batch EN measured as unreachable and recorded as
+"finding what abstains first is the actual work". Three of the five
+batches bought ZERO conformance files and are in §2 instead, and the
+round also fixed a SEGFAULT (`types_definitely_differ` recursed with no
+depth bound; a self-referential `typeof` ended the process, at HEAD, from
+the module level) and two false positives on legal code the gate cannot
+see.
+
 ---
 
 ## 6. Keeping this file honest
@@ -264,10 +287,17 @@ history is not re-derived from TODO.md.
    hand-written legal case. The eleven false positives fixed in batches
    EH, EM and EP–ET were all found this way or by a unit test, and none
    by the corpus.
-3. **A rule can already exist.** Many of the 30 files that left this list
-   between MISS 80 and MISS 50 needed no new machinery: a check wired into
+3. **A rule can already exist.** Many of the 34 files that left this list
+   between MISS 80 and MISS 46 needed no new machinery: a check wired into
    one of the places that produce a shape and not the others (`for-of`
    but not `yield*`; dotted access but not destructuring; the class base
    but not `declare class`; a `this` parameter dropped by four renderers
-   and counted by two). A machinery classification cannot see that kind,
-   which is why §1 names the FILE and tsc's message rather than a feature.
+   and counted by two; TS2403 at module scope and in no function body).
+   A machinery classification cannot see that kind, which is why §1 names
+   the FILE and tsc's message rather than a feature.
+4. **A capability is worth taking at zero files.** Three of batches
+   EU–EY bought no conformance file each and are in §2: a generic METHOD
+   call, an index-signature read through an anonymous object type, and
+   the false positives fixed alongside them. The corpus cannot score
+   them because it does not contain the shapes — which is the same
+   sentence as §2's, and the reason both halves of this file exist.

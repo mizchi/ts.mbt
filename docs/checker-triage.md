@@ -1,10 +1,10 @@
 # What the checker supports, what it will not, and why
 
-Status on 2026-09-16 (`just verify-checker-soundness`):
+Status on 2026-09-18 (`just verify-checker-soundness`):
 
 ```
-TP  err+flag  : 2665   (of which via parse rejection: 390)
-MISS in scope : 50     (the backlog — this one can reach zero)
+TP  err+flag  : 2669   (of which via parse rejection: 390)
+MISS in scope : 46     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -46,7 +46,7 @@ next?". The oracle therefore splits the bucket:
 The asymmetry is deliberate. A MISS is expected because we model a subset
 of TypeScript; an FP never is.
 
-## 2. The 50 in-scope MISS files, by machinery
+## 2. The 46 in-scope MISS files, by machinery
 
 From `node scripts/checker_miss_rank.mjs` over the oracle's `--miss-list`
 — every file run through the local compiler under its own `// @option:`
@@ -59,32 +59,34 @@ have exactly one file each.
 |---|---|---|---|
 | generic inference and generic assignability | 12 | 3 | type arguments inferred from arguments, then checked against the rest of the call; generic signatures compared with each other |
 | object literals, contextual typing, widening | 10 | 3 | union normalization on widening, spread of a union, `(x \|\| {}).a`, tagged-template substitutions, return-type inference from a body |
-| classes, `this`, mixins | 8 | 3 | mixin over an intersection or type-variable base, polymorphic `this` as a value type, `typeof this.x` in a type position |
-| type-level machinery | 7 | 3 | variadic tuples, template-literal placeholders, TS2536 key checks, a conditional left unresolved inside `&` |
-| name resolution and declarations | 5 | 3 / declared | three of the five are recorded rejections or abstentions with a probe; `import a = A` needs the alias target resolved |
+| classes, `this`, mixins | 7 | 3 | mixin over an intersection or type-variable base, `typeof this.x` in a type position, `this` in an object-literal `function` property |
+| type-level machinery | 6 | 3 | variadic tuples, template-literal placeholders, TS2536 key checks, a conditional left unresolved inside `&` |
 | narrowing and control flow | 4 | 3 | aliased guards (fail direction is an FP), `typeof x === "object"` to `object \| null`, narrowing to `never`, definite assignment |
 | lib and host shapes | 4 | 3 | `Intl` members by lib version, the `Promise` constructor's callback parameter, structural `Generator` comparison |
+| name resolution and declarations | 3 | 3 / declared | all three are recorded rejections or abstentions with a probe |
 
-Every row is Tier 3, and that is the honest reading of MISS 50: **there is
+Every row is Tier 3, and that is the honest reading of MISS 46: **there is
 no Tier 1 or Tier 2 left.** Tier 1 (conditional through a generic alias,
 the utility-type table, overload selection, computed `unique symbol` keys
 as a cluster) was taken in batches DI–DM and EB, or opened and found to be
 eleven unrelated codes rather than a feature. Tier 2 (the grammar and
 declaration rules, the implicit-any family, the strict-null bucket) was
-taken in batches DN through ET. The thirty files between MISS 80 and
-MISS 50 took six batches and roughly one rule per file, which is the
-rate this tier now has.
+taken in batches DN through ET. The thirty-four files between MISS 80 and
+MISS 46 took eleven batches and roughly one rule per file, which is the
+rate this tier now has — and five of those batches (EU–EY) also bought
+three CAPABILITIES the corpus cannot score at all, fixed two false
+positives on legal code, and found a segfault.
 
 ### Tier 3 — DEFER: real but expensive
 
-All 50. Every one is a genuine TypeScript behaviour and none is reachable
+All 46. Every one is a genuine TypeScript behaviour and none is reachable
 without machinery we would have to build — real generic inference,
 contextual typing, spread-type computation, a flow graph, lib interface
 merging. Do not take these for the MISS count. Take an individual file
 only when a real bridge input or `mtsc` target demands it, and record
 which one did; the measured rate here is about one file per investigation.
 
-Six of the 50 carry a **recorded rejection or abstention with a probe**,
+Five of the 46 carry a **recorded rejection or abstention with a probe**,
 so they should not be re-attacked as written (details in
 `UNSUPPORTED.md` §1 and §3): `inferTypesInvalidExtendsDeclaration` (the
 parser reduces the conditional before the checker sees it),
@@ -92,9 +94,15 @@ parser reduces the conditional before the checker sees it),
 parameter makes the naive rule unsound), `stringLiteralTypeIsSubtypeOfString`
 (173 lib interfaces are declared empty), `symbolProperty3` (needs the
 `Symbol` constructor as a value type, for a spelling nobody writes),
-`localTypes4` (a block-local type declared twice is deliberately left
-unregistered) and `intersectionWithIndexSignatures` (the deciding arm is
-never reached, measured).
+and `localTypes4` (a block-local type declared twice is deliberately left
+unregistered). `intersectionWithIndexSignatures` was the sixth and is a
+TP since batch EY: batch EN had measured the deciding arm as unreachable
+for an intersection-typed VALUE and written that finding what abstains
+first "is the actual work" — it was an explicit
+`(Intersection(_), _) => return` in `check_expr_against`, under a comment
+saying the modelling was too coarse. A recorded abstention is a lead and
+its REASON has a date on it; that is §6.1 of `UNSUPPORTED.md` and this is
+its sixth instance.
 
 ### Tier 4 — WON'T SUPPORT: 19 files, declared out of scope
 
@@ -158,13 +166,26 @@ taken because they were the applied-in-some-places family, not for this
 row.
 
 Against that table, the capability probe in `UNSUPPORTED.md` §2 says
-which features are still BLIND at the shape real code writes: variadic
-tuples, a template-literal placeholder, a computed `unique symbol` key,
-an anonymous index-signature READ, and a strict-null member-chain
-receiver (the last one deliberate). Conditional types, the utility table,
-mapped types, `keyof`, overload selection and generic inference are all
-CAUGHT at the common shape now — the four rows the first version of this
-document called blind "at the shape real code actually writes".
+which features are still BLIND at the shape real code writes, and after
+batches EU–EY the list is down to three: variadic tuples, a computed
+`unique symbol` key, and `this` inside an object-literal `function`
+property (that last one measured and not taken, with its blocker). A
+strict-null member-chain receiver is a fourth and is deliberate.
+Conditional types, the utility table, mapped types, `keyof`, overload
+selection, generic inference, generic METHOD calls, index-signature
+reads through an anonymous object type, a mapped type over an infinite
+key set and an intersection against an indexer are all CAUGHT at the
+common shape now.
+
+Two rows of that table were wrong in the direction that matters, and
+both were found by re-measuring rather than by reading: the
+index-signature WRITE read BLIND for two revisions and had been handled
+in all four spellings the whole time, and the template-literal
+placeholder row read BLIND while the error shape reports (the type it
+computes is `string` rather than the evaluated literal, and both legal
+neighbours are silent). A capability table nobody re-probes ranks the
+wrong work, which is the same defect, one level up, that retired
+`docs/checker-priority.md`.
 
 ## 4. What the conformance number cannot see
 
