@@ -22058,6 +22058,12 @@ test "checker: index-signature read through an anonymous object type (batch EW)"
       // The WRITE direction, which the same list feeds. (Already
       // reported before this batch; kept so the pair cannot drift.)
        "declare let m: { [k: string]: number };\nm[\"x\"] = \"s\";",
+      // A MAPPED type over an INFINITE key set IS an index signature,
+      // written directly and through `keyof any` — the latter being the
+      // shape `mappedTypeWithAny` uses. Both need the value to be
+      // independent of the key; see the silent list.
+       "type D = { v: string };\ndeclare let m: { [P in string]: D };\nlet x = m[\"a\"].nope;",
+      "type D = { v: string };\ntype M<T> = { [P in keyof T]: D };\ndeclare let m: M<any>;\nlet x = m[\"a\"].nope;",
     ] {
     assert_true(issues(src) > 0)
   }
@@ -22077,11 +22083,15 @@ test "checker: index-signature read through an anonymous object type (batch EW)"
       // it in the other direction either — `{ [k: number]: V }` does not
       // answer a string key.
        "type D = { v: string };\ndeclare let m: { [k: number]: D };\ndeclare let s: string;\nlet x = m[s];",
-      // A declared MISS rather than a legal case: a MAPPED type is not
-      // reduced to an index signature, so `{ [P in string]: D }` yields
-      // nothing where the `{ [k: string]: D }` spelling of the same type
-      // now resolves. tsc reports it; measured, not assumed.
-       "type D = { v: string };\ndeclare let m: { [P in string]: D };\nlet x = m[\"a\"].nope;",
+      // A HOMOMORPHIC mapped type whose value DEPENDS on the key is not
+      // an index signature: `{ [P in keyof T]: Box<T[P]> }` at `T = any`
+      // is `any`, not a shape, and rendering it as one reported two
+      // TS7-ACCEPTED files (`mappedTypesArraysTuples`,
+      // `thisTypeInObjectLiterals2`) before the guard existed.
+       "type Box<T> = { v: T };\ntype B<T> = { [P in keyof T]: Box<T[P]> };\ndeclare let m: B<any>;\nlet x = m[\"a\"].nope;",
+      // `{ [P in string]: P }` is the MISS the same guard costs — the
+      // value mentions the binder, and nobody writes it.
+       "declare let m: { [P in string]: P };\nlet x: number = m[\"a\"];",
     ] {
     @test.assert_eq(issues(src), 0)
   }

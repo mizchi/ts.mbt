@@ -2171,6 +2171,122 @@ fn Resolver::class_construct_signature(
 }
 
 ///|
+/// True when `ty` contains an indexed access anywhere. Used by
+/// `mapped_infinite_key_signature` to decide whether a mapped type's
+/// VALUE depends on the key: `type_references_any` walks the structural
+/// variants and has NO `IndexedAccess` arm, so `Box<T[P]>` reads as
+/// independent of `P` through it — which is what let a homomorphic
+/// mapped type over `any` be rendered as an index signature and report
+/// two TS7-accepted files. Answered separately rather than by widening
+/// that walk, whose other consumers ask a different question.
+fn type_contains_indexed_access(ty : @ast.TsType) -> Bool {
+  fn any_of(parts : Array[@ast.TsType]) -> Bool {
+    for p in parts {
+      if type_contains_indexed_access(p) {
+        return true
+      }
+    }
+    false
+  }
+
+  match ty {
+    IndexedAccess(_, _) => true
+    Applied(_, args) => any_of(args)
+    Array(inner) | Rest(inner) | Keyof(inner) | CallableMeta(inner, _) =>
+      type_contains_indexed_access(inner)
+    Union(parts) | Intersection(parts) | Tuple(parts) => any_of(parts)
+    Func(params, ret) => any_of(params) || type_contains_indexed_access(ret)
+    Constructor(params, ret, _) =>
+      any_of(params) || type_contains_indexed_access(ret)
+    GenericFunc(_, _, inner) => type_contains_indexed_access(inner)
+    Object(fields) => {
+      for f in fields {
+        if type_contains_indexed_access(f.0) ||
+          type_contains_indexed_access(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for f in fields {
+        if type_contains_indexed_access(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// A mapped type whose key set is INFINITE, rendered as the index
+/// signature it denotes: `{ [P in string]: V }` is `{ [k: string]: V }`,
+/// and `keyof any` (the union of the three key primitives) is the same
+/// with a string key, which `lookup_index_sig` already lets answer a
+/// numeric index. Returns `None` for every other source, including an
+/// enumerable one — those are expanded into named fields before this is
+/// reached, and answering here would erase their members.
+///
+/// The binder is substituted by the key type in the VALUE, which is what
+/// makes `{ [P in string]: P }` come out `{ [k: string]: string }`
+/// rather than leaving a free `P` behind.
+fn mapped_infinite_key_signature(
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType? {
+  let (binder, source, value) = match ty {
+    MappedType(b, src, v, _) => (b, src, v)
+    // A REMAPPED key (`as`) can rename or drop keys, so an infinite
+    // source says nothing about the result's shape.
+    _ => return None
+  }
+  // The VALUE must not depend on the binder, and that is the line
+  // TypeScript itself draws rather than a precaution. A HOMOMORPHIC
+  // mapped type over `any` — `{ [P in keyof T]: Box<T[P]> }` at
+  // `T = any` — yields `any`, not a shape, which is the whole subject
+  // of `mappedTypeWithAny`; rendering it as an index signature produced
+  // `{ string: Box<any[string]> }` and reported two TS7-ACCEPTED files
+  // (`mappedTypesArraysTuples`, `thisTypeInObjectLiterals2`). Where the
+  // value is INDEPENDENT of the key there is nothing to distribute and
+  // the index signature is exact: `StrictDataMap<any>` is
+  // `{ [P in keyof any]: Data }`, and tsc resolves `z[id]` to `Data`.
+  // `{ [P in string]: P }` is a MISS this costs, and nobody writes it.
+  if type_references_any(value, [binder]) || type_contains_indexed_access(value) {
+    return None
+  }
+  let key : @ast.TsType = match resolver.unwrap(source) {
+    String_ => String_
+    Number | Int => Number
+    Symbol => Symbol
+    // `keyof any` is the union of the three key primitives, and a string
+    // index signature answers a numeric index through
+    // `lookup_index_sig`'s own `is_stringy` test. Every OTHER union is
+    // declined: a `keyof T` for an unresolved `T` can reach one, and
+    // there the key set is not infinite, it is unknown.
+    Union(parts) =>
+      if parts.length() == 3 &&
+        parts.iter().any(fn(p) { resolver.unwrap(p) is String_ }) &&
+        parts.iter().any(fn(p) { resolver.unwrap(p) is (Number | Int) }) &&
+        parts.iter().any(fn(p) { resolver.unwrap(p) is Symbol }) {
+        String_
+      } else {
+        return None
+      }
+    _ => return None
+  }
+  let bindings : Map[String, @ast.TsType] = Map([])
+  bindings[binder] = key
+  // The substituted value is REDUCED before it is stored. A homomorphic
+  // source leaves `T[P]` behind, and with the binder replaced that is
+  // `any[string]` — which `unwrap` reduces to `any` at the top level and
+  // nothing reduced inside a type ARGUMENT, so the shape came out
+  // `PropDesc<any[string]>` and reported two TS7-ACCEPTED files.
+  Some(Object([(key, simplify_type(substitute_params(value, bindings)))]))
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = Map([])
   let mut cur = ty
@@ -2350,7 +2466,22 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
             let simplified = simplify_type(cur)
             match simplified {
               MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
-                keep_going = false // couldn't resolve — leave as-is
+                // Neither evaluator could ENUMERATE the key set, and for
+                // one family that is the right answer rather than a
+                // failure: a mapped type over an INFINITE key set IS an
+                // index signature. `{ [P in string]: V }` is
+                // `{ [k: string]: V }` — TypeScript says so — and so is
+                // the `keyof any` spelling, which is the union of the
+                // three key primitives. Left unresolved, the type read as
+                // unmodelled and every member check downstream abstained,
+                // while the `{ [k: string]: V }` spelling of the same
+                // declaration resolved. An ENUMERABLE source (a literal
+                // union, `keyof I`) never reaches here — the evaluation
+                // above expands it into named fields.
+                match mapped_infinite_key_signature(self, simplified) {
+                  Some(obj) => cur = obj
+                  None => keep_going = false // couldn't resolve — leave as-is
+                }
               _ => cur = simplified
             }
           }
