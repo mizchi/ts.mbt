@@ -3,6 +3,93 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FD (2026-09-20): a declaration file is ambient — 1,193 false positives, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL again, which is the sanity check that matters
+here: the conformance corpus has no `.d.ts` at all, so an unchanged
+oracle says the exemption really is keyed on the FILE and not a weakened
+rule.
+
+The family batch FC ranked and filed. A declaration file makes every
+declaration in it ambient whether or not it writes `declare`, and four
+bodiless-declaration rules did not know that:
+
+```ts
+// a .d.ts — tsc accepts this outright
+export class C {
+  constructor(m: number);   // TS2390 "constructor implementation is missing"
+  blen: number;             // TS2564 "has no initializer"
+  get t(): string;          // TS2378 "a get accessor must return a value"
+  m(x: number): void;       // TS2391 "function implementation is missing"
+}
+```
+
+**The cause is that `in_ambient_module` is a WHOLE-PARSE mode nothing
+sets for a FILE.** Only a `declare module "spec" { … }` body and
+`global { … }` ever turn it on; `Parser::parse_module` — the entry every
+`.d.ts` goes through — passes `false`. Five of its six gates name `.d.ts`
+in their own comments and one says so literally ("Ambient mode (`.d.ts` /
+ambient external module body) treats every `export var/let/const X;`
+without initializer as type-only"). The ambient exemption each rule
+already has is keyed on the `declare` KEYWORD, and a declaration FILE is
+the other spelling of the same fact — so `export class C` there goes
+through the RUNTIME class parser and sets every sentinel.
+
+**A SECOND Parser field, not a flip of the existing one**, and that is
+the whole design decision. Exactly one rule needs the old question alone:
+TS1038 fires for `declare namespace M { declare function f(); }` and NOT
+for a `.d.ts` file's own top-level `declare function f(): void` — which
+is how every declaration file in existence is written. Probed against
+6.0.3, and we already agreed with tsc on both cells. Flipping the
+whole-parse flag would have false-positived on all of them.
+
+Scope, stated rather than left to be discovered. The new field is read by
+the four DIAGNOSTIC gates and nothing else. It is deliberately NOT read
+by `is_ambient_export_value_decl`, which decides whether `export var X;`
+emits a runtime binding: that is an AST question the bridge and the
+transform passes consume, not a diagnostic, and widening it is a separate
+change with its own measurement.
+
+Three mechanical facts the implementation needed:
+
+1. **A namespace body re-parses with a fresh `Parser`**, so the fact — a
+   property of the SOURCE — has to be carried across, or the rules go
+   back to reporting one level in. `typescript.d.ts` is where that shows:
+   its remaining false positives were all on
+   `namespace ts > namespace server > class Project`.
+2. **The three CHECKER-side rules cannot see an extension.**
+   `check_dts_top_level_modifiers` states that blocker in its own comment
+   ("keyed off the file extension, which the general check pipeline can't
+   see"), so the parse pushes a `<declaration-file>` marker, with a skip
+   entry in the grammar-misuse loop — a marker without one IS a
+   diagnostic, which TS4111's flag marker did once.
+3. **`--noEmit` does not go through the graph loader for a single file.**
+   It calls `mtsc_typecheck_source` -> `collect_type_issues`, which takes
+   `(source, allow_jsx)` and no path. Found by INSTRUMENTING rather than
+   reading: the first wiring touched `parse_graph_module`, and a `println`
+   there produced NO output on the `--noEmit` path at all. The fact rides
+   a labelled argument with a default, so the JavaScript ABI and every
+   existing caller are unchanged.
+
+Measured: **preact 4 -> 0** (all four of its diagnostics), `typescript.d.ts`
+15 -> **7** (and 88 -> 7 across FC and FD), the 4,085-file `mtsc check`
+sweep 17,881 -> **16,688** with **0 added**, zod unchanged at 108 (it is
+`.ts` source), the oracle identical on every metric, and all 12 scaling
+axes within budget.
+
+Every source in the new test is asserted BOTH ways — 0 as a `.d.ts` and
+`> 0` as a `.ts` — which is what proves the exemption is keyed on the
+file, plus the TS1038 pair that keeps the two fields separate.
+
+NOT wired, with the reason: `src/bridge`'s two parse sites
+(`typescript_decl.mbt`, `moonbit_decl.mbt`). The bridge runs
+`check_module` over real `.d.ts` input, so it would benefit, but a parser
+change that moves what the GENERATOR sees needs its own measurement —
+`verify-generated-fixtures` / `verify-scaffolds` / `verify-examples` are
+all byte-identical under this batch precisely because those sites were
+left alone.
+
 ### Batch FC (2026-09-20): TS2430 on a real `.d.ts` — 80 false positives, ZERO files
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |

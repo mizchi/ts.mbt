@@ -27456,6 +27456,13 @@ fn check_this_in_computed_keys(
 /// clusters, computedPropertyNames2_ES5).
 fn check_getter_returns_value(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // A getter in a DECLARATION FILE (`get x(): T;`) has no body at all,
+  // so "the body falls off its end" is not a statement about it. Same
+  // ambient exemption as TS2390 / TS2564, keyed on the file rather than
+  // on the `declare` keyword.
+  if module_.grammar_misuses.contains("<declaration-file>") {
+    return issues
+  }
   fn stmts_have_throw_or_loop(stmts : Array[@ast.TsStmt]) -> Bool {
     for st in stmts {
       match st {
@@ -34023,10 +34030,18 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // needs no body) and the parser does not set the sentinel there;
         // an ABSTRACT class is NOT exempt, which the probe had to settle
         // because "abstract members have no bodies" suggests otherwise.
-        issues.push({
-          path: "class \{cls_name}",
-          message: "constructor implementation is missing",
-        })
+        //
+        // A DECLARATION FILE is the other spelling of that same
+        // exemption: `export class C { constructor(m: number); }` in a
+        // `.d.ts` writes no `declare`, so it goes through the RUNTIME
+        // class parser and does set the sentinel — and tsc accepts it.
+        // Keyed on the file marker rather than the keyword.
+        if !module_.grammar_misuses.contains("<declaration-file>") {
+          issues.push({
+            path: "class \{cls_name}",
+            message: "constructor implementation is missing",
+          })
+        }
       } else if name == "<index-sig-modifier>" {
         issues.push({
           path: "class \{cls_name}",
@@ -34043,10 +34058,17 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           message: "function overload signatures must not mix static and instance",
         })
       } else if name == "<overload-no-impl>" {
-        issues.push({
-          path: "class \{cls_name}",
-          message: "function implementation is missing or not immediately following the declaration",
-        })
+        // Same declaration-file exemption as `<ctor-no-impl>` above: in a
+        // `.d.ts` a class member is bodiless by construction, and
+        // `export class C { m(x: number): void; }` writes no `declare`,
+        // so it goes through the RUNTIME class parser and does set the
+        // sentinel. tsc accepts it.
+        if !module_.grammar_misuses.contains("<declaration-file>") {
+          issues.push({
+            path: "class \{cls_name}",
+            message: "function implementation is missing or not immediately following the declaration",
+          })
+        }
       } else if name == "<overload-accessibility-mix>" {
         issues.push({
           path: "class \{cls_name}",
@@ -37507,6 +37529,11 @@ fn check_module_function_bodies_layered(
       if gm == "<const-assertion>" {
         continue
       }
+      // Marker, not an error: the source is a declaration file, consumed
+      // by the bodiless-declaration exemptions (TS2390 / TS2564 / TS2378).
+      if gm == "<declaration-file>" {
+        continue
+      }
       // Markers, not errors: lib-set / target directive evidence and
       // decorator mode, consumed by `check_lib_directive_globals` and the
       // decorator signature checks. (`<nolib>` IS the error condition
@@ -38462,6 +38489,16 @@ fn check_native_class_property_initializers(
   // (per a `// @strict: false` / `// @strictPropertyInitialization:
   // false` header directive). Skip TS2564 entirely.
   if !strict_property_init {
+    return issues
+  }
+  // A DECLARATION FILE makes every class member ambient whether or not
+  // it writes `declare`, and an ambient field needs no initializer. The
+  // exemption this rule already has is keyed on the `declare` KEYWORD
+  // (`parse_declare_class` routes elsewhere), and `export class C { x:
+  // number }` in a `.d.ts` is the other spelling of the same fact — so
+  // `mtsc --noEmit` reported it on preact's and TypeScript's own
+  // declaration files, which tsc accepts outright.
+  if module_.grammar_misuses.contains("<declaration-file>") {
     return issues
   }
   // Classes written inside a `declare module "spec" { ... }` body are

@@ -300,6 +300,15 @@ test "expr_check: check_module_function_bodies walks all top-level funcs" {
 }
 
 ///|
+fn parse_declaration_module_or_empty(src : String) -> @ast.TsModule {
+  let parser = @parser.Parser::from_source(src)
+  parser.mark_declaration_file()
+  parser.parse_module() catch {
+    _ => parse_module_or_empty("")
+  }
+}
+
+///|
 fn parse_module_or_empty(src : String) -> @ast.TsModule {
   try @parser.parse_module_from_source_with_const_values(src, {}) catch {
     _ =>
@@ -22535,4 +22544,64 @@ test "checker: TS2430 nominal and aliased member compatibility (batch FC)" {
     ] {
     assert_true(issues(src) > 0)
   }
+}
+
+///|
+/// Batch FD: a DECLARATION FILE makes every declaration in it ambient
+/// whether or not it writes `declare`, and four bodiless-declaration
+/// rules did not know that.
+///
+/// `in_ambient_module` is a WHOLE-PARSE mode that only a
+/// `declare module "spec" { … }` body and `global { … }` ever set —
+/// `Parser::parse_module` passes `false` — while five of its six gates
+/// name `.d.ts` in their own comments and one says so literally
+/// ("Ambient mode (`.d.ts` / ambient external module body)"). So
+/// `export class C { constructor(m: number); x: number; get t(): string;
+/// m(): void }` in a `.d.ts` — which writes no `declare` and therefore
+/// goes through the RUNTIME class parser — drew TS2390, TS2564, TS2378
+/// and TS2391 on a file tsc accepts outright. Measured before the fix:
+/// preact 4 of 4 diagnostics, `typescript.d.ts` 8, and 1,193 across a
+/// 4,085-file sweep.
+///
+/// A SECOND Parser field rather than flipping the existing one, because
+/// exactly one rule needs the old question alone: TS1038 fires for
+/// `declare namespace M { declare function f(); }` and NOT for a `.d.ts`
+/// file's own top-level `declare function f(): void`, which is how every
+/// declaration file is written. Probed against 6.0.3 — flipping the
+/// whole-parse flag would have false-positived on all of them.
+test "checker: a declaration file is ambient (batch FD)" {
+  let dts = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(
+      parse_declaration_module_or_empty(src),
+    ).length()
+  }
+  let ts = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Every one of these is ACCEPTED by tsc in a `.d.ts` and REJECTED in a
+  // `.ts` — so each source is asserted BOTH ways, which is what proves
+  // the exemption is keyed on the file rather than a weakened rule.
+  for
+    src in [
+      // TS2390 + TS2564 + TS2378 + TS2391, the shape `lib0` and preact
+      // both write.
+      "export class C {\n  constructor(m: number);\n  blen: number;\n  get t(): string;\n  m(x: number): void;\n}",
+      // Each on its own.
+       "export class C { constructor(m: number); }", "export class C { blen: number; }",
+      "export class C { get t(): string; }", "export class C { m(x: number): void; }",
+      // …and a top-level bodiless function, which is the parser half.
+       "export function f(x: number): void;",
+    ] {
+    @test.assert_eq(dts(src), 0)
+    assert_true(ts(src) > 0)
+  }
+  // The LEGAL NEIGHBOUR that keeps the two fields separate: TS1038 is
+  // about being inside a `declare X { }` BODY, not about the file, and
+  // it must still fire in a `.d.ts`.
+  assert_true(
+    dts("declare namespace M { declare function inner(): void; }") > 0,
+  )
+  // …while the same file's own top-level `declare` is legal.
+  @test.assert_eq(dts("declare function topLevel(): void;"), 0)
+  @test.assert_eq(dts("declare class K { m(): void; }"), 0)
 }

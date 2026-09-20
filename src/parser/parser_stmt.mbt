@@ -300,10 +300,17 @@ fn Parser::note_function_declaration(
   // Ambient bodiless declarations are excluded for the same reason as
   // below: in a `declare module` body a bodiless declaration asserts an
   // implementation elsewhere and no local one exists to compare against.
-  if module_level && !bodiless && !self.in_ambient_module {
+  // `in_declaration_file` rides along with `in_ambient_module` at both
+  // gates: a `.d.ts` makes every declaration ambient whether or not it
+  // writes `declare`, so `export function f(): void;` there asserts an
+  // implementation elsewhere exactly as `declare function f(): void;`
+  // does. Without it, `mtsc --noEmit` reported TS2391 on preact's and
+  // TypeScript's own declaration files, which tsc accepts outright.
+  let ambient = self.in_ambient_module || self.in_declaration_file
+  if module_level && !bodiless && !ambient {
     self.grammar_misuses.push("<fn-impl:\{name}>")
   }
-  if !bodiless || self.in_ambient_module {
+  if !bodiless || ambient {
     return
   }
   // Offset of the follower's NAME token, or `None` when the follower is

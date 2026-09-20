@@ -3091,6 +3091,40 @@ product surfaces now.
   channel to the three checker-side rules —
   `check_dts_top_level_modifiers` states that blocker in its own comment
   ("keyed off the file extension, which the general check pipeline can't
+  Batch FD takes exactly that, and it is corpus-NEUTRAL in the way that
+  MATTERS here: the conformance corpus holds no `.d.ts` at all, so an
+  unchanged oracle is the check that the exemption is keyed on the FILE
+  rather than a weakened rule. **preact 4 -> 0** (every diagnostic it
+  had), `typescript.d.ts` 15 -> **7**, the 4,085-file sweep 17,881 ->
+  **16,688** with 0 added. The design decision is the second FIELD: the
+  new one answers "is the SOURCE a declaration file" and the old one "are
+  we inside a `declare X { }` BODY", and they must stay separate because
+  TS1038 needs the second alone — probed, and flipping the whole-parse
+  flag would have false-positived on every `.d.ts` in existence. Its
+  scope is stated rather than discovered: the four DIAGNOSTIC gates read
+  it and `is_ambient_export_value_decl` deliberately does not, because
+  whether `export var X;` emits a runtime binding is an AST question the
+  bridge and the transform passes consume. Three mechanical facts came
+  with it. A namespace body re-parses with a FRESH parser, so the fact
+  has to be carried across or the rules report one level in — which is
+  exactly where `typescript.d.ts`'s residue was
+  (`namespace ts > namespace server > class Project`). The three
+  checker-side rules cannot see an extension, so the parse pushes a
+  `<declaration-file>` marker WITH a skip entry, a marker without one
+  being a diagnostic (TS4111's flag marker did that once). And
+  **`--noEmit` on a single file does not go through the graph loader at
+  all** — it calls `collect_type_issues`, which takes `(source,
+  allow_jsx)` and no path. That was found by INSTRUMENTING rather than
+  reading: the first wiring went into `parse_graph_module` and a
+  `println` there produced NO output on the `--noEmit` path, which is the
+  fourth time in this file that a "this cannot be happening" gap was
+  settled in one run by a print rather than by another pass over the
+  source. `src/bridge`'s two parse sites are left UNWIRED with the
+  reason: the bridge runs `check_module` over real `.d.ts` input and
+  would benefit, but a parser change that moves what the GENERATOR sees
+  needs its own measurement, and `verify-generated-fixtures` /
+  `verify-scaffolds` / `verify-examples` are byte-identical under this
+  batch precisely because those sites were left alone.
   see").
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and

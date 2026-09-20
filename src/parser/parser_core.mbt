@@ -30,6 +30,27 @@ pub struct Parser {
   // sources (`.js` / `.ts`) flip this off so the declarations emit
   // a real binding.
   mut in_ambient_module : Bool
+  // The SOURCE is a declaration file (`.d.ts`), which makes every
+  // declaration in it ambient whether or not it writes `declare`.
+  //
+  // A separate field from `in_ambient_module`, which answers the
+  // different question "are we inside a `declare X { … }` BODY" — and
+  // the two must stay separate because exactly one rule needs the second
+  // alone: TS1038 (`a 'declare' modifier cannot be used in an already
+  // ambient context`) fires for `declare namespace M { declare function
+  // f(); }` and NOT for a `.d.ts` file's own top-level `declare function
+  // f(): void`, which is how every declaration file in existence is
+  // written. Probed against 6.0.3. Folding this into the existing flag
+  // would have false-positived on all of them.
+  //
+  // Only the bodiless-declaration rules read it, and only to go SILENT,
+  // so a caller that does not set it keeps today's behaviour exactly.
+  // Deliberately NOT read by `is_ambient_export_value_decl`, which
+  // decides whether `export var X;` emits a runtime binding: that is an
+  // AST question the bridge and the transform passes consume, not a
+  // diagnostic, and widening it is a separate change with its own
+  // measurement.
+  mut in_declaration_file : Bool
   // True while parsing a class STATIC BLOCK body. A static block is
   // neither a function nor module top level, and `in_function` /
   // `in_async` cannot say so: a top-level class's static block leaves
@@ -388,6 +409,7 @@ pub fn Parser::new_with_strict_and_jsx(
     in_iteration: false,
     in_switch: false,
     in_ambient_module: false,
+    in_declaration_file: false,
     in_static_block: false,
     last_var_decl_annotated: false,
     in_const_enum: false,
@@ -461,6 +483,21 @@ pub fn Parser::new_with_strict_and_jsx(
 // / create
 pub fn Parser::from_source(src : String) -> Parser {
   Parser::from_source_with_jsx(src, true)
+}
+
+///|
+/// Mark this parse as reading a DECLARATION FILE (`.d.ts`), which makes
+/// its declarations ambient whether or not they write `declare`.
+///
+/// A setter rather than a constructor parameter because the callers that
+/// can answer are the ones holding a PATH — the CLI, the bridge, the
+/// language-service loader — while the seventeen other `Parser::from_source`
+/// sites (the transform passes, the verifier, the mangle analysis) parse
+/// emitted JavaScript and have nothing to say. A caller that does not
+/// call this keeps today's behaviour exactly, since every consumer of
+/// the flag reads it only to go SILENT.
+pub fn Parser::mark_declaration_file(self : Parser) -> Unit {
+  self.in_declaration_file = true
 }
 
 ///|
@@ -659,6 +696,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_iteration: false,
     in_switch: false,
     in_ambient_module: false,
+    in_declaration_file: false,
     in_static_block: false,
     last_var_decl_annotated: false,
     in_const_enum: false,

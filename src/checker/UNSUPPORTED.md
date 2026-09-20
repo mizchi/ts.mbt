@@ -1,6 +1,6 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FC:
+Measured on 2026-09-20, after batches EU–FD:
 
 ```
 TP  err+flag  : 2670   (of which via parse rejection: 390)
@@ -35,6 +35,15 @@ ranking — grouping the sweep by message shape put a different family on
 top at 1,192 occurrences, which is the SWEEP's unit (one line per file
 per diagnostic, over 3,723 mostly tiny hand-written shims) and not the
 user's: on `mtsc --noEmit` that family is 8 against TS2430's 80.
+
+Batch FD then took that family anyway, since it was the largest left on
+the real path once TS2430 was fixed: a DECLARATION FILE makes every
+declaration in it ambient whether or not it writes `declare`, and
+`in_ambient_module` is a whole-parse mode `Parser::parse_module` never
+sets. preact 4 -> 0, `typescript.d.ts` 15 -> 7, the sweep 17,881 ->
+16,688 with 0 added. Corpus-NEUTRAL in the way that matters: the corpus
+holds no `.d.ts`, so an unchanged oracle is the check that the exemption
+is keyed on the FILE rather than a weakened rule.
 
 ## Regenerating this file
 

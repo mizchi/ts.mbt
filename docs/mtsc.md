@@ -260,7 +260,11 @@ false positive を 5 件消しました（118 → 113 diagnostics）。`node_mod
 `.d.ts` 4,085 件のスイープは前後でバイト一致です。batch FC はこれをさらに大きな
 実入力に向けたもので、`typescript.d.ts`（tsc がそのまま受理する、最大の宣言
 ファイル）に対する **88 件の diagnostics は全部 false positive、うち 80 件が
-1 つのルール**（TS2430）でした。conformance の数値を一切動かさずに 88 → 15 です。
+1 つのルール**（TS2430）でした。conformance の数値を一切動かさずに 88 → 15、続く
+batch FD（`.d.ts` は `declare` の有無によらず全宣言が ambient）でさらに 7 まで下がり、
+preact は 4 → 0 になりました。conformance corpus に `.d.ts` は 1 つも無いので、
+oracle が動かないことがそのまま「ファイル単位の免除であってルールの弱体化ではない」
+ことの確認になっています。
 
 参考として、2026-09-16 に `moon run src/cmd/mtsc -- conformance` で測定した pinned subset
 （TS6 時代の `.errors.txt` baseline を正解とする軽量計測）の結果も残します。
