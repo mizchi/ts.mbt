@@ -1,6 +1,6 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-18, after batches EU–FA:
+Measured on 2026-09-20, after batches EU–FB:
 
 ```
 TP  err+flag  : 2670   (of which via parse rejection: 390)
@@ -16,6 +16,15 @@ real compiler (`node scripts/tsc_probe.mjs`, TypeScript 6.0.3), so each
 entry is a measured gap and not a guess. `docs/checker-triage.md` is the
 strategy half (tiers, real-code frequency, what the gate reports); this
 file is the code a user would write and what happens to it.
+
+One thing this file CANNOT rank, and batch FB is the instance: the
+numbers above come from 4,484 single files of a few dozen lines each, so
+a false positive reachable only from real code is invisible to them.
+That batch is corpus-NEUTRAL on every metric above and removes six
+reports on legal lines, five of them in zod's own sources. When a row here moves off
+BLIND, run the change over real packages too — `mtsc --noEmit --bundle
+node_modules/<pkg>/src/index.ts`, and a sweep of `mtsc check` over
+`node_modules`'s `.d.ts` files, diffed against the baseline binary.
 
 ## Regenerating this file
 
@@ -190,8 +199,9 @@ measured gap.
 | a member keyed by a string-literal `const` (`const kk = "hello"`, `interface I { [kk]: number }`, `i.hello`) | **ABSTAINS — deliberate (batch FA)**: neither member parser can evaluate a key that depends on another declaration, and reading the undecidable name as "no member called `hello`" reported a line tsc ACCEPTS. A well-known key is decided statically and keeps its existence check |
 | `satisfies` (excess property, a member of the wrong type, and the narrowed type surviving the read) | CAUGHT — probed 2026-09-18, all three cells |
 | `infer` through a conditional alias (`type El<T> = T extends Array<infer U> ? U : never`) | CAUGHT |
-| **a PRIMITIVE source against a LITERAL or literal-union target** (`declare const s: string; const a: "other" = s`, `const b: "a" \| "b" = s`, `f(s)` against `(x: "a" \| "b")`, and the numeric `const c: 1 = n`) | **BLIND, and the widest gap this probe has found — see §3.** Silent at the binding, the assignment AND the call argument; only a syntactically LITERAL source reports |
-| `as const` (`"hello" as const`, a tuple index, a DECLARED literal member) | CAUGHT at the verdict; the message names `string` where tsc names `"hello"` |
+| **a `string` source against a LITERAL or literal-union target** (`declare const s: string; const a: "other" = s`, `const b: "a" \| "b" = s`, `f(s)` against `(x: "a" \| "b")`, `const c: Mode = s`) | CAUGHT (batch FB) at all five spellings — the binding, the assignment, the union, the named alias and the call argument. A file carrying an ERASED `as const` abstains wholesale, since the parser drops the assertion and the object literal's property really does widen to `string` here |
+| the same with a NUMERIC / BOOLEAN / BIGINT source (`declare const n: number; const a: 1 = n`, `const q = 789; const b: 1 = q`) | **BLIND — deliberate (batch FB)**: `infer_expr` erases those literals at the source (`NumberLit(_) => Number`), so a `const` really is widened here and reporting would be about OUR widening. The string arm survives because `Literal(s)` does not get erased |
+| `as const` (`"hello" as const`, a tuple index, a DECLARED literal member) | CAUGHT at the verdict; the message names `string` where tsc names `"hello"`. Since batch FB a file carrying one also turns OFF the literal-target rule, because the parser erases the assertion — see §3 |
 | **strictNullChecks on a member-chain receiver** (`o.a.b` with `a?:`) | **BLIND — deliberate**: the check is gated to a bare `Var` receiver because those are the bindings the narrowing engine rewrites precisely (batch DO) |
 | **variadic tuple** (`[...T]`, `[string, ...number[]]`) | **BLIND** |
 | computed `unique symbol` key (`interface I { [k]: number }` / `{ [k]: number }`, `i[k]` against `string`) | CAUGHT (batch FA) — the ANONYMOUS spelling did not PARSE at all, so every member of such a type was lost |
@@ -224,7 +234,8 @@ Each entry names the LEGAL neighbour that decides it. None is a bug.
 
 | shape | tsc | why we stay silent |
 |---|---|---|
-| `declare const s: string; const a: "other" = s` — and five siblings | TS2322 / TS2345 | **A primitive source against a literal target is accepted.** Seven cells, all probed: the binding (`const a: "other" = s`), the ASSIGNMENT (`a2 = s`), a literal UNION (`const b: "a" \| "b" = s`), a named alias of one (`const c: Mode = m`), a CALL ARGUMENT (`f(s)` against `(x: "a" \| "b")` — TS2345) and the NUMERIC form (`const d: 1 = n`) are all silent; only a syntactically literal source (`const e: "other" = "lit"`) reports. This is the commonest real TS2322 there is — every options-string and discriminated-union API produces it.<br><br>Three candidate causes were named and all three REFUTED by reading the code they named: `is_widening_direction_mismatch` lost its string arm in batch EL; `is_assignable_to(String_, Literal("foo"))` is correctly `false` (`assignability_wbtest.mbt`); and the `(String_, Literal(_))` arm at `expr_check.mbt:7950` is an OVERLAP predicate for `==`, right as written. **Instrumenting settled it in one run**: `check_expr_against` receives exactly `src=String_ exp=Literal(other)` and emits nothing, and the STRICT entry point reports the same three issues as the permissive one — so the mismatch is never DECIDED, and no filter is involved.<br><br>The blocker a sound fix needs is this file's most-recorded shape: our inference widens a literal to `string` where tsc keeps it, so reporting every `string` → literal would be about OUR widening rather than the program. The fact required is "this type came from a WRITTEN annotation", the same absent-versus-`: any` channel recorded for TS7031, TS7022, TS2729, TS2448, TS2564, TS2490 and the expando marker. Worth a batch with the corpus as the gate; `type_display`'s `widen_literal(inferred_u)` at the message site (deliberate, with its reason) is the neighbouring half |
+| `declare const n: number; const a: 1 = n` — the NUMERIC / BOOLEAN / BIGINT half | TS2322 / TS2345 | The STRING half shipped in batch FB and this half did not, for a reason that is about our own inference rather than about the rule: `infer_expr` erases a numeric, boolean and bigint literal to its primitive at the source (`NumberLit(_) => Number`, `BoolLit(_) => Boolean`) and keeps a STRING one (`StringLit(s) => Literal(s)`). So `const q = 789` genuinely is `number` here where tsc says `789`, and reporting `number` against `1` would be a report on OUR widening. Undoing the erasure is a change at every consumer of a numeric literal's type, not a gate |
+| a read off an erased `as const`, in a file that carries one | TS2322 | `parse_asserted_relational` drops the `as const` wrapper, with its reason at the site (the transform passes want the raw expression), so `{ k: "a" } as const` reaches the checker as the plain object literal whose property really does widen to `string`. Measured across fifteen spellings, this is the ONLY place our string widening diverges from tsc's — every other shape tsc keeps narrow (a template literal, an `as` assertion, a call returning a literal, a narrowed union member, a string enum member, an annotated `const`) we keep narrow too. So the parser records a file-level `<const-assertion>` marker and the literal-target rule abstains wholesale in such a file: a MISS there, never a report. Propagating const-ness through reads and re-bindings would be a new channel at every hop |
 | `type T = { m(): this }` | TS2526 | The rule is writable, but `src/bridge` runs `check_module` over real `.d.ts` input, where a false positive costs GENERATION rather than a conformance file. No corpus file needs it; class-side and constructor-parameter positions ARE reported (batch EA) |
 | `type F = ({ a: b = 1 }) => void` | TS2842 | The function-TYPE half reads TOKENS and must stop at the `=`, or an object literal inside a default (`{ a: b = { c: d } }`) reads as a pattern. The interface / object-type / class-member sites have a real `TsBinding` and DO report |
 | `class D extends B { override [prop]() {} }` | TS4113 | A `const` string key is late-bindable, so `override [prop]()` is LEGAL when the base declares what `prop` resolves to. Only a base chain declaring NOTHING is decidable, and that ships; `override19`'s intersection base is §1e |

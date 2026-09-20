@@ -166,6 +166,17 @@ priv struct Resolver {
   // `"use strict"` prologue stops being legal in a function with a
   // non-simple parameter list (TS1346 / TS1347).
   mut target_reaches_es2016 : Bool
+  // The file contains an `as const` the parser ERASED (its own comment
+  // says why: the transform passes want the raw expression). That erasure
+  // is the one place our string widening diverges from tsc's — measured
+  // across fifteen shapes, every other spelling that tsc keeps narrow we
+  // keep narrow too — so `{ k: "a" } as const` arrives here as the plain
+  // object literal, whose property genuinely does widen to `string`.
+  // A literal-target rule that trusts our widening has to abstain in such
+  // a file; a file-level fact costs MISSes there and invents nothing,
+  // where propagating const-ness through reads and re-bindings would be a
+  // new channel at every hop.
+  mut has_const_assertion : Bool
   // Top-level `var`/`let` names declared with NO initializer whose
   // annotation is `any` (written or absent). The type of such a binding
   // is `any` in the real compiler too, which is what separates it from
@@ -455,6 +466,7 @@ fn Resolver::empty() -> Resolver {
     lib_lacks_es2024: false,
     no_property_access_from_index_signature: false,
     target_reaches_es2016: false,
+    has_const_assertion: false,
   }
 }
 
@@ -1352,6 +1364,13 @@ fn Resolver::ingest_module(
     }
   }
   for gm in module_.grammar_misuses {
+    if gm == "<const-assertion>" {
+      // Set here rather than beside the other directive flags at the check
+      // entry point, which reads only the ROOT module's markers: a
+      // namespace body re-parses with a fresh Parser, so its `as const`
+      // lands on its own `TsModule` and only this recursion sees it.
+      r.has_const_assertion = true
+    }
     if gm.has_prefix("<local-type-name>") {
       // Unprefixed: the question is whether the spelling names a type
       // somewhere in the file, which no namespace prefix narrows.
@@ -12135,13 +12154,39 @@ fn check_expr_against(
       }
     _ => ()
   }
-  // Const-widening gap: a literal-union target with the source widened to the
-  // primitive those literals share (`const c2: 123 | 456 = c` where `c` is a
-  // `const` we widened to `number`). TypeScript keeps the const literal narrow.
+  // Const-widening gap: a literal-union target with the source widened to
+  // the primitive those literals share (`const c2: 123 | 456 = c` where `c`
+  // is a `const` we widened to `number`). TypeScript keeps the const
+  // literal narrow, so reporting would be about OUR widening rather than
+  // the program.
+  //
+  // That reason is a claim with a date on it, and it is no longer true for
+  // STRINGS. Probed one spelling at a time against the current binary: a
+  // string `const` keeps its literal type here (`const c = "z"; const c2:
+  // "a" | "b" = c` already reports), and so do a template literal with no
+  // substitution, an `as` assertion, a call to a function returning a
+  // literal, a narrowed union member, a string enum member and an
+  // annotated `const` — while a NUMBER, BOOLEAN and BIGINT `const` are all
+  // still widened (`const q = 789; const q1: 1 = q` is silent because `q`
+  // arrives as `number`). So the suppression is load-bearing for three of
+  // the four bases and dead weight for the fourth, where it was blocking
+  // the commonest real-world TS2322 / TS2345 there is: a `string`-typed
+  // value assigned into a string-literal union (`const m: Mode = s`,
+  // `f(s)` against `f(x: "a" | "b")`).
+  //
+  // The one measured divergence from tsc on the string side is an erased
+  // `as const` — `{ k: "a" } as const` reaches us as the plain object
+  // literal, whose property widens to `string` here and stays `"a"` in
+  // tsc — so a file carrying one abstains wholesale. That is a MISS in
+  // such a file and never a report on legal code.
   match literal_union_members(expected_u) {
     Some(exp_lits) =>
       match common_literal_base(exp_lits) {
-        Some(base) => if inferred_u == base { return }
+        Some(base) =>
+          if inferred_u == base &&
+            (base != @ast.TsType::String_ || ctx.resolver.has_const_assertion) {
+            return
+          }
         None => ()
       }
     None => ()
@@ -13364,6 +13409,75 @@ fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
 }
 
 ///|
+/// The type an unannotated `var` / `let` / `const` binding takes from its
+/// initializer.
+///
+/// TypeScript widens a FRESH literal type when the location it lands in is
+/// mutable, so `let s = "a"` is `string` while `const s = "a"` is `"a"` —
+/// and an object / array / tuple literal's CONTENTS widen either way,
+/// because the object itself is mutable (`const o = { k: "a" }` is
+/// `{ k: string }`).
+///
+/// Only the composite half was applied here before, and the scalar half was
+/// missing because `infer_expr` erases a numeric / boolean / bigint literal
+/// to its primitive at the source (`NumberLit(_) => Number`) and keeps a
+/// STRING one — so `let s = "a"` stayed `"a"` while `let n = 1` was already
+/// `number`, and the asymmetry showed up as a report on legal code the
+/// moment a `string` source could be judged against a literal target
+/// (`effect`'s `let moduleVersion = "3.21.2"` reassigned from a
+/// `version: string` parameter).
+///
+/// `mutable_` is `var` / `let`, and `fresh` is what makes the widening
+/// correct rather than merely wider: TypeScript widens a literal type only
+/// where it is FRESH — written as a literal right there — and a literal type
+/// that arrived from an annotation keeps its narrowness through a mutable
+/// binding. Ignoring that costs a false positive on legal code, and the
+/// corpus named the file: `let a: "foo" = "foo"; let b = a || "foo";
+/// let c: "foo" = b` is TS7-ACCEPTED, because `a`'s `"foo"` is not fresh and
+/// neither, therefore, is the `||`'s result. So the test is on the
+/// INITIALIZER's syntax (`is_fresh_literal_expr`) and not on the type it
+/// produced, and an unclassified spelling keeps the narrow type — a MISS
+/// rather than a report.
+fn binding_init_type(
+  mutable_ : Bool,
+  fresh : Bool,
+  inferred : @ast.TsType,
+) -> @ast.TsType {
+  match inferred {
+    Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
+      widen_literal_deep(inferred)
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+      if mutable_ && fresh {
+        widen_literal(inferred)
+      } else {
+        inferred
+      }
+    _ => inferred
+  }
+}
+
+///|
+/// The initializer spellings that produce a FRESH literal type: a literal
+/// token (including the negated numeric form `precise_literal_type` already
+/// normalizes) and a template literal. Everything else — a name, a call, an
+/// `as` assertion, an operator — yields a literal type that is already
+/// fixed, and answering `false` there keeps it narrow.
+///
+/// A template literal counts whether or not it carries substitutions, and
+/// the substitution-bearing case is the one that needs saying: tsc types
+/// `` `a${0}` `` as `string` outright, while batch AU FOLDS a constant
+/// substitution here to the literal `"a0"` so TS2367 can decide it. That
+/// fold must not make a `var` holding it narrower than the same string
+/// written as a plain literal — a pre-existing parity pin says so, and it
+/// is the case that caught this.
+fn is_fresh_literal_expr(e : @ast.TsExpr) -> Bool {
+  match e {
+    TemplateLiteral(_, _) => true
+    _ => precise_literal_type(e) is Some(_)
+  }
+}
+
+///|
 fn widen_literal(t : @ast.TsType) -> @ast.TsType {
   match t {
     Literal(_) => @ast.TsType::String_
@@ -14379,7 +14493,27 @@ fn widen_literal_deep(t : @ast.TsType) -> @ast.TsType {
     BooleanLiteral(_) => Boolean
     Array(elem) => Array(widen_literal_deep(elem))
     Tuple(items) => Tuple(items.map(widen_literal_deep))
-    Union(members) => Union(members.map(widen_literal_deep))
+    Union(members) => {
+      // Dedup after widening, which is the whole point of doing it here:
+      // `["a", "b"]`'s element type is `"a" | "b"` and its widened form is
+      // `string`, not `string | string`. Leaving the duplicate in produced
+      // a message nobody can act on (`expected "a" but got string |
+      // string`) AND defeated the const-widening abstention, which tests
+      // `inferred_u == base` — so `const arr = ["a", "b"] as const;
+      // const y: "a" = arr[0]` reported on a line tsc ACCEPTS.
+      let out : Array[@ast.TsType] = []
+      for m in members {
+        let w = widen_literal_deep(m)
+        if !out.iter().any(fn(e) { equivalent(e, w) }) {
+          out.push(w)
+        }
+      }
+      if out.length() == 1 {
+        out[0]
+      } else {
+        Union(out)
+      }
+    }
     Object(fields) =>
       Object(fields.map(fn(f) { (f.0, widen_literal_deep(f.1)) }))
     Struct(name, fields) =>
@@ -15749,7 +15883,15 @@ fn infer_block_return(
           let ty = if is_checkable(declared) {
             declared
           } else {
-            infer_expr(env, resolver, init)
+            // Same widening the declaration checker applies, through the
+            // same helper rather than a second copy of the rule: a `let`
+            // holding a fresh literal is `string` here too, so a `return s`
+            // reading it infers what tsc infers.
+            binding_init_type(
+              !(stmt is Const(_, _, _)),
+              is_fresh_literal_expr(init),
+              infer_expr(env, resolver, init),
+            )
           }
           if is_checkable(ty) {
             env.bind(name, ty)
@@ -18922,6 +19064,7 @@ fn check_ident_binding_decl(
   declared : @ast.TsType,
   init : @ast.TsExpr,
   block_scoped : Bool,
+  mutable_ : Bool,
 ) -> Unit {
   // TS2322 for `var AA: typeof A = B`: an abstract constructor type is
   // never assignable to a non-abstract one. Purely syntactic — a `typeof
@@ -18950,18 +19093,14 @@ fn check_ident_binding_decl(
   let bound_type = if is_checkable(declared) {
     declared
   } else {
-    // No annotation: infer from the initializer. TypeScript widens the
-    // field types of an object / array / tuple literal (their contents
-    // are mutable), so `var a = { foo: '' }` is `{ foo: string }`, not
-    // `{ foo: '' }`. Apply that to composite inferred shapes so a later
-    // `a = b` field comparison isn't over-narrow. Top-level scalars are
-    // left to the existing primitive-widening behaviour.
-    let inferred = infer_expr(env, ctx.resolver, init)
-    match inferred {
-      Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
-        widen_literal_deep(inferred)
-      _ => inferred
-    }
+    // No annotation: infer from the initializer, widening what TypeScript
+    // widens. See `binding_init_type` — a composite literal's contents
+    // always, a scalar literal only for a MUTABLE binding.
+    binding_init_type(
+      mutable_,
+      is_fresh_literal_expr(init),
+      infer_expr(env, ctx.resolver, init),
+    )
   }
   env.bind(name, bound_type)
   // Make sure the *declared* slot reflects the source annotation
@@ -19525,10 +19664,14 @@ fn collect_binding_names(b : @ast.TsBinding, out : Array[String]) -> Unit {
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
-      check_ident_binding_decl(env, ctx, name, declared, init, false)
-    Let(@ast.TsBinding::Ident(name), declared, init)
-    | Const(@ast.TsBinding::Ident(name), declared, init) =>
-      check_ident_binding_decl(env, ctx, name, declared, init, true)
+      check_ident_binding_decl(env, ctx, name, declared, init, false, true)
+    // `let` and `const` share every rule below except the one the last
+    // argument carries: a fresh literal initializer widens into a MUTABLE
+    // binding and stays narrow in a `const`.
+    Let(@ast.TsBinding::Ident(name), declared, init) =>
+      check_ident_binding_decl(env, ctx, name, declared, init, true, true)
+    Const(@ast.TsBinding::Ident(name), declared, init) =>
+      check_ident_binding_decl(env, ctx, name, declared, init, true, false)
     Var(@ast.TsBinding::Array(ab), declared, init)
     | Let(@ast.TsBinding::Array(ab), declared, init)
     | Const(@ast.TsBinding::Array(ab), declared, init) => {
@@ -37236,6 +37379,11 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: the @allowUnreachableCode directive flag,
       // consumed by the TS2695 comma-operator suppression below.
       if gm == "<allowunreachable-on>" {
+        continue
+      }
+      // Marker, not an error: an erased `as const`, consumed by the
+      // literal-target assignability abstention.
+      if gm == "<const-assertion>" {
         continue
       }
       // Markers, not errors: lib-set / target directive evidence and

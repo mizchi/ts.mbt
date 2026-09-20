@@ -66,8 +66,19 @@ fn Parser::consume_trailing_assertions_wrap(
         // inferred type but leaves the runtime value untouched. Downstream
         // passes (const-value collection, value lowering) expect the raw
         // expression, so do not wrap with `As(...)` in this case.
+        //
+        // Dropping the wrapper is information loss for the CHECKER, which
+        // is why the fact is recorded here as a file-level marker: with
+        // the assertion erased, `{ k: "a" } as const` is indistinguishable
+        // from the plain object literal, whose property really does widen
+        // to `string`. The literal-target assignability rule reads this to
+        // abstain in such a file rather than report a widening that is
+        // ours rather than the program's. Pushed per occurrence (no dedup)
+        // because a `contains` guard would be O(occurrences x markers) and
+        // the duplicates only add a linear term to the marker scans.
         if self.check(Const) {
           let _ = self.advance()
+          self.grammar_misuses.push("<const-assertion>")
         } else {
           let ty = self.parse_type()
           wrapped = @ast.TsExpr::As(wrapped, ty)

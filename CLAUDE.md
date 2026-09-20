@@ -2976,6 +2976,65 @@ product surfaces now.
   spelling, so two `unique symbol` bindings sharing a name across scopes
   resolve to one member; that costs a wrong member rather than a report
   on legal code, since tsc calls the same program TS2339.
+  Batch FB is the same ranking one row further and the first batch whose
+  whole case rests on REAL packages: it is corpus-NEUTRAL (TP 2670 / MISS
+  45 / FP 0, identical) and on real code it both gains the diagnostic and
+  **removes five false positives**. `UNSUPPORTED.md` called a PRIMITIVE
+  source against a LITERAL target the widest gap its probe had found —
+  `declare const s: string; const a: "other" = s` and four siblings all
+  silent, which is the commonest real TS2322 / TS2345 there is — and it
+  is ONE abstention whose stated reason had a date on it. The gate
+  suppresses any mismatch whose source is exactly the primitive base of
+  the target's literals, because "TypeScript keeps the const literal
+  narrow" where we widen; probed one base at a time that is TRUE for
+  number, boolean and bigint and FALSE for string, because `infer_expr`
+  erases the first three at the source (`NumberLit(_) => Number`) and
+  keeps `Literal(s)`. So `const c = "z"; const c2: "a" | "b" = c`
+  already reported while the `string`-source form never could. Fifteen
+  string spellings were probed before the arm came out and every one tsc
+  keeps narrow we keep narrow, with ONE divergence: an erased `as const`,
+  which `parse_asserted_relational` drops for a reason stated at the site
+  (the transform passes want the raw expression), so `{ k: "a" } as
+  const` arrives as the plain object literal whose property really does
+  widen here. A file carrying one abstains wholesale through a new
+  file-level marker, read in `ingest_module` rather than beside the other
+  directive flags at the check entry — that site reads only the ROOT
+  module's markers and a namespace body re-parses with a fresh Parser.
+  **The relaxation EXPOSED a latent false positive rather than creating
+  one**, and that is the batch's more valuable half: a mutable binding's
+  fresh literal initializer widens in tsc (`let s = "a"` is `string`,
+  `const s = "a"` is `"a"`) and did not here, because only the COMPOSITE
+  half of that rule had ever been written — an object / array / tuple
+  literal's contents widened and a scalar did not. Invisible while no
+  `string` source could be judged against a literal target, and five
+  reports on legal lines the moment one could (zod's `bg.ts` has `let
+  invalid_adj = "Невалиден"` reassigned five times). Two gates then
+  caught two wrong versions of that fix in turn. The CORPUS caught the
+  first: TypeScript widens only a FRESH literal type, so in `let a:
+  "foo" = "foo"; let b = a || "foo"; let c: "foo" = b` — a conformance
+  file — `a`'s literal came from an annotation and neither it nor the
+  `||` over it widens, and tsc ACCEPTS `c`; the test is on the
+  INITIALIZER's syntax now, where an unclassified spelling keeps the
+  narrow type. A TEST caught the second: a template literal with a
+  constant substitution FOLDS to a literal here (batch AU, for TS2367)
+  while tsc calls it `string` outright, and a pre-existing parity pin
+  requires a `var` holding one to behave exactly like the same string
+  written plainly — so a template counts as fresh whatever it carries.
+  One more test was asserting the gap, the fourteenth found doing that
+  here: `f(s)` against `f(x: "a" | "b")` with `s: string` asserted 0
+  under a comment calling it an over-widening guard, and 6.0.3 gives
+  TS2345. What did not ship is stated with its blocker rather than a
+  verdict: the numeric half needs `infer_expr` to stop erasing those
+  literals at the source, which is a change at every consumer of a
+  numeric literal's type rather than a gate. A SIXTH false positive came
+  out of probing the same neighbours and was pre-existing and one line
+  deep — `widen_literal_deep`'s union arm mapped its members without
+  DEDUPING them, so `["a", "b"]`'s widened element type was
+  `string | string`, which is a message nobody can act on and is not
+  equal to the base the abstention tests, so `const arr = ["a", "b"] as
+  const; const y: "a" = arr[0]` reported on a line tsc accepts even in an
+  `as const` file. Corpus-, sweep- and zod-neutral, with the non-`as
+  const` neighbour still reporting.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -237,7 +237,7 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 ## TypeScript compatibility snapshot
 
 ゲートになっている数値は TypeScript 7（tsgo）の conformance 結果との照合です
-（`just verify-checker-soundness`、2026-09-18 測定）。
+（`just verify-checker-soundness`、2026-09-20 測定）。
 
 | Metric                    | Result                                   |
 | ------------------------- | ---------------------------------------- |
@@ -251,6 +251,13 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 残り 45 件の内訳（必要な機構ごと）と、実測した未対応のコード形状は
 [`src/checker/UNSUPPORTED.md`](../src/checker/UNSUPPORTED.md) に、tier と
 スコープ外の判断は [checker triage](./checker-triage.md) にあります。
+
+この表だけでは見えないものがある点に注意してください。corpus の 4,484 件は
+どれも数十行の単一ファイルなので、**実コードでしか踏まない false positive は
+FP 0 のままでも存在しえます**。batch FB はその実例で、conformance の数値は
+一切動かさずに（TP 2,670 / MISS 45 / FP 0 のまま）、zod のソースに出ていた
+false positive を 5 件消しました（118 → 113 diagnostics）。`node_modules` 配下の
+`.d.ts` 4,085 件のスイープは前後でバイト一致です。
 
 参考として、2026-09-16 に `moon run src/cmd/mtsc -- conformance` で測定した pinned subset
 （TS6 時代の `.errors.txt` baseline を正解とする軽量計測）の結果も残します。

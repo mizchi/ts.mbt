@@ -3,6 +3,92 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FB (2026-09-20): a `string` source against a literal target, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL, identical to the batch before it. Measured on
+REAL packages instead: **zod 118 -> 113 diagnostics** (five false
+positives on legal code removed, none added), and byte-identical over a
+4,085-file sweep of every `.d.ts` under `node_modules` plus effect's 362
+`.ts` sources.
+
+The gap was `UNSUPPORTED.md` §3's widest row: `declare const s: string;
+const a: "other" = s` and four siblings were all silent, which is the
+commonest real TS2322 / TS2345 there is — every options-string and
+discriminated-union API produces it.
+
+**1. The gate is ONE abstention and its stated reason had a date on it.**
+`check_expr_against` suppresses any mismatch whose source is exactly the
+primitive base of the target's literals, because "TypeScript keeps the
+const literal narrow" where we widen. Probed one base at a time against
+the shipping binary, that is true for NUMBER, BOOLEAN and BIGINT and
+false for STRING: `infer_expr` erases the first three at the source
+(`NumberLit(_) => Number`) and keeps `Literal(s)`. So `const c = "z";
+const c2: "a" | "b" = c` already reported while the `string`-source form
+never could. Fifteen string spellings were probed before the arm came
+out — a template literal, an `as` assertion, a call returning a literal,
+a narrowed union member, a string enum member, an annotated `const`, a
+generic call — and every one that tsc keeps narrow, we keep narrow.
+
+**2. The ONE divergence is an erased `as const`**, and the parser says so
+in its own comment: `parse_asserted_relational` drops the wrapper because
+the transform passes want the raw expression, so `{ k: "a" } as const`
+arrives as the plain object literal whose property genuinely does widen
+to `string` here. A file carrying one abstains wholesale, through a new
+file-level `<const-assertion>` marker read in `Resolver::ingest_module`
+(not beside the other directive flags at the check entry, which sees only
+the ROOT module's markers — a namespace body re-parses with a fresh
+Parser). That costs MISSes in such a file and invents nothing; the
+alternative, propagating const-ness through reads and re-bindings, is a
+new channel at every hop.
+
+**3. The relaxation EXPOSED a latent false positive rather than creating
+one, and that is the batch's most valuable half.** A mutable binding's
+fresh literal initializer widens in tsc (`let s = "a"` is `string`,
+`const s = "a"` is `"a"`) and did not here, because only the COMPOSITE
+half of that rule had been written — an object / array / tuple literal's
+contents widened and a scalar did not. Invisible while no `string` source
+could be judged against a literal target, and five reports on legal lines
+the moment one could: zod's `bg.ts` has `let invalid_adj = "Невалиден"`
+reassigned five times. Fixed at the binding site through one helper both
+binding paths call, with `Let` and `Const` split apart in the dispatch
+(they shared an arm).
+
+**4. The corpus caught the first version of that fix**, which is the
+legal-neighbour lesson again. Widening every literal a mutable binding
+holds is too wide: TypeScript widens only a FRESH literal type, so in
+`let a: "foo" = "foo"; let b = a || "foo"; let c: "foo" = b` — a
+conformance file — `a`'s literal came from an annotation, is not fresh,
+and neither is the `||` over it, so tsc ACCEPTS `c`. The test is on the
+INITIALIZER's syntax now, and an unclassified spelling keeps the narrow
+type (a MISS, never a report). A TEST then caught the second version: a
+template literal with a constant substitution folds to a literal here
+(batch AU, for TS2367) while tsc calls it `string` outright, and a
+pre-existing parity pin requires ``var x = `a${0}` `` to behave exactly
+like `var x = "a0"` — so a template counts as fresh whether or not it carries
+substitutions.
+
+**5. One test was asserting the gap**, the fourteenth found doing that
+here: `function f(x: "a" | "b") {} declare const s: string; f(s)`
+asserted 0 under a comment calling it an over-widening guard, and the
+real compiler gives TS2345 (probed).
+
+**6. A sixth false positive came out of probing the same neighbours**,
+and it was pre-existing and one line deep. `widen_literal_deep`'s union
+arm mapped its members and did not DEDUP them, so `["a", "b"]`'s widened
+element type was `string | string` — a message nobody can act on, and
+not equal to the `base` the const-widening abstention tests, so
+`const arr = ["a", "b"] as const; const y: "a" = arr[0]` reported on a
+line tsc ACCEPTS even in an `as const` file. Measured against the
+baseline binary before and after: corpus-neutral, sweep-neutral,
+zod-neutral, and the non-`as const` neighbour (`const arr = ["x", "y"]`,
+which tsc types `string[]`) still reports.
+
+What did NOT ship, with the reason rather than a verdict: the numeric /
+boolean / bigint half, which needs `infer_expr` to stop erasing those
+literals at the source — a change at every consumer of a numeric
+literal's type, not a gate.
+
 ### Batch FA (2026-09-18): a late-bound `unique symbol` member key, ZERO files
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |

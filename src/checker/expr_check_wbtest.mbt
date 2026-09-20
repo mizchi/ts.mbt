@@ -10560,12 +10560,17 @@ test "expr_check: string literal vs string-literal union, call args (TS2345)" {
   assert_true(issues("const x: \"a\" | \"b\" = \"c\";") > 0)
   // A literal that IS in the union is fine.
   @test.assert_eq(issues("function f(x: \"a\" | \"b\"): void {} f(\"a\");"), 0)
-  // A widened `string` source stays silent (could be a valid member; matches
-  // the over-widening guard, no false positive).
-  @test.assert_eq(
+  // A `string` source is REPORTED: `string` is not assignable to
+  // `"a" | "b"`, and the real compiler gives TS2345 here (probed). This
+  // assertion read 0 until batch FB, with a comment calling it an
+  // over-widening guard — it was pinning the const-widening abstention,
+  // which suppressed every `string` source against a literal target. The
+  // fourteenth test in this repo found asserting a gap rather than a
+  // behaviour.
+  assert_true(
     issues(
       "function f(x: \"a\" | \"b\"): void {} declare const s: string; f(s);",
-    ),
+    ) >
     0,
   )
 }
@@ -22366,6 +22371,96 @@ test "checker: late-bound unique-symbol member key (batch FA)" {
       // A well-known key does NOT buy that abstention: it is decided
       // statically, so a genuinely absent property is still reported.
       "interface W { [Symbol.iterator](): Iterator<number>; a: number }\ndeclare const w: W;\nconst r: number = w.a;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch FB: a `string`-typed source against a string-LITERAL target, and
+/// the `let` widening that had to be fixed to make it sound.
+///
+/// `check_expr_against`'s const-widening abstention suppressed every
+/// mismatch whose source is exactly the primitive base of the target's
+/// literals, for a stated reason — our inference widens a `const`'s
+/// literal initializer where tsc keeps it narrow. Probed one base at a
+/// time, that reason is true for NUMBER, BOOLEAN and BIGINT (where
+/// `infer_expr` erases the literal at the source: `NumberLit(_) =>
+/// Number`) and false for STRING, where `Literal(s)` survives. So the
+/// arm was dead weight for the one base that carries the commonest
+/// real-world TS2322 / TS2345 there is.
+///
+/// Relaxing it exposed a latent false positive rather than creating one:
+/// a MUTABLE binding's fresh literal initializer widens in tsc
+/// (`let s = "a"` is `string`, `const s = "a"` is `"a"`) and did not
+/// here, which is five reports on legal code in zod's own locale files
+/// (`let invalid_adj = "Невалиден"` reassigned five times). Fixed at the
+/// binding site, gated on FRESHNESS because the corpus named the file
+/// where it matters: in `let a: "foo" = "foo"; let b = a || "foo"`, `a`'s
+/// literal type came from an annotation and is not fresh, so `b` keeps
+/// `"foo"` and `let c: "foo" = b` is TS7-ACCEPTED.
+test "checker: string source against a literal target (batch FB)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // The six cells that were silent, one per spelling of the
+      // assignment: an initializer, an assignment, a union target, a
+      // call argument, an ALIAS naming the union.
+      "declare const s: string;\nconst a: \"other\" = s;", "declare const s: string;\nlet a: \"other\";\na = s;",
+      "declare const s: string;\nconst a: \"a\" | \"b\" = s;", "declare const s: string;\nfunction f(x: \"a\" | \"b\") {}\nf(s);",
+      "type Mode = \"r\" | \"w\";\ndeclare const s: string;\nconst a: Mode = s;",
+      // A `const` still keeps its literal, so a WRONG literal reports.
+       "const c = \"z\";\nconst a: \"a\" | \"b\" = c;",
+      // …and so does a `let` whose fresh literal widened: `string` is
+      // not assignable to `\"b\"` either.
+       "let c = \"a\";\nconst a: \"b\" = c;",
+      // An object literal's members widen whatever the binding kind,
+      // which is what tsc does (the object is mutable).
+       "const o = { k: \"a\" };\nconst a: { k: \"b\" } = o;",
+      // …and the same array WITHOUT the assertion: tsc types it
+      // `string[]`, so the read really is `string` and the report stands.
+       "const arr = [\"x\", \"y\"];\nconst y: \"x\" = arr[0];",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The widening a mutable binding gets is the whole point: the
+      // reassignment is legal and was reported before.
+      "let m = \"3.21.2\";\ndeclare const v: string;\nm = v;", "let m = \"a\";\nm = \"b\";",
+      // FRESHNESS: `a`'s literal type came from an annotation, so
+      // neither it nor the `||` over it widens.
+       "let a: \"foo\" = \"foo\";\nlet b = a || \"foo\";\nlet c: \"foo\" = b;", "declare const d: \"a\";\nlet x = d;\nconst y: \"a\" = x;",
+      // A `const` keeps its literal, so the RIGHT literal is accepted.
+       "const c = \"a\";\nconst a: \"a\" | \"b\" = c;",
+      // Every other string spelling tsc keeps narrow, we keep narrow.
+       "declare function g(): \"a\";\nconst a: \"a\" = g();", "const v = \"a\" as \"a\";\nconst a: \"a\" = v;",
+      "declare let u: \"a\" | \"b\";\nif (u === \"a\") { const a: \"a\" = u; }",
+      // An erased `as const` makes the file abstain wholesale: the
+      // parser drops the assertion, so `{ k: \"a\" } as const` arrives as
+      // the plain object literal whose property really does widen here.
+       "const o = { k: \"a\" } as const;\nconst a: \"a\" = o.k;", "const o = { a: { b: \"x\" } } as const;\nconst r: \"x\" = o.a.b;",
+      // …and it reaches a NAMESPACE body, whose markers live on its own
+      // `TsModule` because that body re-parses with a fresh Parser. That
+      // is why the flag is set in `ingest_module`'s recursion rather than
+      // beside the directive flags at the check entry, which reads only
+      // the root module's markers.
+       "namespace N { export const o = { k: \"a\" } as const; }\ndeclare const s: string;\nconst y: \"a\" = s;",
+      // An `as const` ARRAY read: `["a", "b"]`'s widened element type is
+      // `string`, not `string | string`, and the duplicate defeated the
+      // abstention (which tests `inferred_u == base`) as well as printing
+      // a message nobody can act on. Pre-existing, measured against the
+      // baseline binary, and fixed in `widen_literal_deep`'s union arm.
+       "const arr = [\"a\", \"b\"] as const;\nconst y: \"a\" = arr[0];",
+      // The three bases whose literal `infer_expr` erases at the source
+      // keep their abstention, so the const-widening gap stays silent
+      // rather than reporting our own widening.
+       "const q = 789;\nconst a: 1 = q;", "const r = true;\nconst a: false = r;",
+      "const b = 5n;\nconst a: 1n = b;",
     ] {
     @test.assert_eq(issues(src), 0)
   }

@@ -179,10 +179,27 @@ the widest gap it has found — **a PRIMITIVE source against a LITERAL or
 literal-union target is accepted**, at the binding, the assignment and
 the call argument, for strings and numbers alike. `as const` was a red
 herring for it and so were the next two causes guessed at, each refuted
-by reading the code it named; INSTRUMENTING settled it in one run, and
-§3 carries the seven-cell matrix plus the blocker a sound fix needs. A
-strict-null member-chain receiver is a fourth BLIND row and is
+by reading the code it named; INSTRUMENTING settled it in one run. Batch
+FB then took the STRING half — all five spellings report now — and left
+the numeric one, and the split is not where the first reading put it:
+one abstention was blocking both, and its stated reason (our inference
+widens a `const`'s literal where tsc keeps it) is TRUE for numbers,
+booleans and bigints and FALSE for strings, because `infer_expr` erases
+those three literals at the source and keeps `Literal(s)`. `as const`
+was a red herring for the CAUSE and is the real residual: with the
+assertion erased by the parser, a file carrying one abstains wholesale.
+A strict-null member-chain receiver is a fourth BLIND row and is
 deliberate.
+
+That batch is also the clearest case here for measuring a checker change
+on REAL packages rather than on the corpus, which batch EO argued for
+and this is the first batch to need: it is **corpus-NEUTRAL** (TP 2670 /
+MISS 45 / FP 0, identical), and on real code it both gains the
+diagnostic and REMOVES five false positives — the relaxation exposed a
+latent `let` widening bug (`let s = "a"` is `string` in tsc and stayed
+`"a"` here), which is five reports on legal lines in zod's own locale
+files. 118 -> 113 on zod, and byte-identical over a 4,085-file sweep of
+every `.d.ts` in `node_modules` plus effect's 362 sources.
 Conditional types, the utility table, mapped types, `keyof`, overload
 selection, generic inference, generic METHOD calls, index-signature
 reads through an anonymous object type, a mapped type over an infinite
