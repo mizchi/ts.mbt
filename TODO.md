@@ -3,6 +3,58 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FG (2026-09-20): `typescript.d.ts` to ZERO
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL. The last diagnostic on the biggest declaration
+file in the ecosystem, and **88 -> 0** across FC, FD, FF and FG.
+
+Three more shapes the nominal reach could not express, and all three come
+from ONE declaration — `type EndOfFileToken =
+Token<SyntaxKind.EndOfFileToken> & JSDocContainer`, the eighteenth arm of
+the 64-member `HasJSDoc` union that `JSDoc.parent` is typed as.
+
+**How it was found matters more than the rule.** Four guesses at the
+cause were each refuted by a probe that reproduced clean (a recursive
+alias union, an alias-in-alias union, an optional member, a two-level
+nest). BISECTING the real union settled it in seven runs: patch
+`parent: HasJSDoc` to a subset of the arms in a copy of the 4 MB file,
+halve, repeat.
+
+1. **A CLASS in the union.** `named_iface_extends_reaches` read
+   `resolver.interfaces` alone, and batch FC filed the class case as a
+   MISS. It is a REPORT rather than a MISS, because the caller requires
+   EVERY union member to be accepted, so one unprovable member keeps the
+   whole diagnostic — a distinction worth recording, since "this costs a
+   MISS" was written in good faith and was wrong about its own direction.
+   Measured pre-existing on every binary back to before this batch
+   series. A class reaches an interface through `implements` and another
+   class through `extends`.
+
+2. **An INTERSECTION member.** An intersection is a subtype of each of
+   its components, so reaching the base through ANY one is enough — the
+   opposite quantifier from the union, which is why it is not folded into
+   the flattening batch FF added.
+
+3. **An `Applied(n, _)` reaching an ancestor by NAME**, which is sound
+   only when the base member is NON-GENERIC: `interface Token<K> extends
+   Node` makes every instantiation a `Node` whatever `K` is, while
+   `Token<A>` against `Token<B>` depends on the arguments. So the generic
+   spelling is admitted on the DERIVED side only, and only against a bare
+   name — the `Token<string>` / `Token<number>` pair still reports,
+   probed.
+
+Measured: **`typescript.d.ts` 1 -> 0**, the 4,085-file sweep unchanged at
+16,647 with 0 added, zod unchanged at 108, the oracle identical, all 12
+scaling axes within budget.
+
+Ten cells probed and all ten agree with tsc. Accepted: a class in the
+union; an intersection with one reaching component; a generic against a
+bare base member; and the `EndOfFileToken` shape itself (a generic AND an
+intersection at once). Rejected: an intersection none of whose components
+reaches; a generic whose NAME does not reach; a GENERIC base member with
+mismatched arguments; a class implementing nothing relevant.
+
 ### Batch FF (2026-09-20): the last two TS2430 shapes — `typescript.d.ts` to 1
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |

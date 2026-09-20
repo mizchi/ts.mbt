@@ -30013,6 +30013,52 @@ fn member_covariant_by_iface_extends(
     }
   }
 
+  // One derived member against one base member. Split out because two
+  // shapes need more than a name comparison, and both come from the same
+  // `typescript.d.ts` declaration:
+  // `type EndOfFileToken = Token<SyntaxKind.EndOfFileToken> & JSDocContainer`.
+  //
+  // An INTERSECTION is a subtype of each of its components, so reaching
+  // the base through ANY one of them is enough — the opposite quantifier
+  // from the union above, which is why it is not folded into `parts`.
+  //
+  // An `Applied(n, _)` reaches an ancestor by NAME, and that is sound
+  // only when the base member is NON-generic: `interface Token<K>
+  // extends Node` makes every instantiation a `Node` whatever `K` is,
+  // while `Token<A>` against `Token<B>` depends on the arguments and is
+  // left to the ordinary test. So the generic spelling is admitted on
+  // the DERIVED side only, and only against a bare name.
+  fn member_reaches(dt : @ast.TsType, bt : @ast.TsType, depth : Int) -> Bool {
+    if depth > 4 {
+      return false
+    }
+    match dt {
+      Intersection(cs) => {
+        for c in cs {
+          if member_reaches(c, bt, depth + 1) {
+            return true
+          }
+        }
+        return false
+      }
+      _ => ()
+    }
+    let bn = iface_name(bt)
+    let dn = match iface_name(dt) {
+      Some(n) => Some(n)
+      None =>
+        match dt {
+          Applied(n, _) => if bn is Some(_) { Some(n) } else { None }
+          _ => None
+        }
+    }
+    match (dn, bn) {
+      (Some(dname), Some(bname)) =>
+        named_iface_extends_reaches(resolver, dname, bname)
+      _ => is_assignable_to(dt, bt)
+    }
+  }
+
   let dm = parts(d)
   let bm = parts(b)
   // A bare pair is the common case and must still go through the
@@ -30023,12 +30069,8 @@ fn member_covariant_by_iface_extends(
       if ok {
         continue
       }
-      match (iface_name(dt), iface_name(bt)) {
-        (Some(dn), Some(bn)) =>
-          if named_iface_extends_reaches(resolver, dn, bn) {
-            ok = true
-          }
-        _ => if is_assignable_to(dt, bt) { ok = true }
+      if member_reaches(dt, bt, 0) {
+        ok = true
       }
     }
     if !ok {
@@ -30076,6 +30118,34 @@ fn named_iface_extends_reaches(
             }
             next.push(en)
           }
+        None => ()
+      }
+      // A CLASS reaches an interface through `implements`, and another
+      // class through `extends`. Both are heritage the same way an
+      // interface's `extends` is, and both are what a union mixing the
+      // two needs: `type U = SomeInterface | SomeClass` against a base
+      // member typed as the interface those two share is legal, and was
+      // reported — measured pre-existing, on every binary back to before
+      // this batch series. The first version of this walk read
+      // `interfaces` alone and filed the class case as a MISS; it is a
+      // REPORT rather than a MISS, because the caller requires EVERY
+      // union member to be accepted, so one unprovable member keeps the
+      // whole diagnostic.
+      match resolver.classes.get(n) {
+        Some(c) => {
+          for bn in c.base_names {
+            if bn == to {
+              return true
+            }
+            next.push(bn)
+          }
+          for im in c.implements_names {
+            if im == to {
+              return true
+            }
+            next.push(im)
+          }
+        }
         None => ()
       }
     }

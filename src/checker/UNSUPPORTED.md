@@ -1,6 +1,6 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FF:
+Measured on 2026-09-20, after batches EU–FG:
 
 ```
 TP  err+flag  : 2670   (of which via parse rejection: 390)
@@ -56,7 +56,11 @@ added, at TP / MISS / FP unchanged throughout. What is left on
 follow (`SuperExpression` against `LeftHandSideExpression`,
 `JsonMinusNumericLiteral.operand`) — batch FF then took those too,
 through a flattened union and the nominal disjunct the SIBLING TS2430
-rule never had, leaving `typescript.d.ts` at **1** (`JSDoc.parent`).
+rule never had; batch FG then took the last one — a CLASS in the
+union, an INTERSECTION member and a generic instantiation reaching an
+ancestor by name, all three in one arm of the 64-member `HasJSDoc`
+union, found by BISECTING it rather than by reading. **`typescript.d.ts`
+is at ZERO**, 88 -> 0.
 
 ## Regenerating this file
 

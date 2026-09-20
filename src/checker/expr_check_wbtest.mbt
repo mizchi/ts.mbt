@@ -22719,3 +22719,72 @@ test "checker: TS2430 nominal reach through brands and nested unions (batch FF)"
     assert_true(issues(src) > 0)
   }
 }
+
+///|
+/// Batch FG: `typescript.d.ts` to ZERO — three more shapes the nominal
+/// reach could not express.
+///
+/// 1. A CLASS in the union. `named_iface_extends_reaches` read
+///    `resolver.interfaces` alone, and the first version filed the class
+///    case as a MISS. It is a REPORT rather than a MISS, because the
+///    caller requires EVERY union member to be accepted, so one
+///    unprovable member keeps the whole diagnostic. Measured
+///    pre-existing on every binary back to before this batch series. A
+///    class reaches an interface through `implements` and another class
+///    through `extends`, both heritage the same way.
+///
+/// 2. An INTERSECTION member. An intersection is a subtype of each of
+///    its components, so reaching the base through ANY one is enough —
+///    the opposite quantifier from the union, which is why it is not
+///    folded into the flattening.
+///
+/// 3. An `Applied(n, _)` reaching an ancestor by NAME, which is sound
+///    only when the base member is NON-generic: `interface Token<K>
+///    extends Node` makes every instantiation a `Node` whatever `K` is,
+///    while `Token<A>` against `Token<B>` depends on the arguments.
+///
+/// All three come from one declaration:
+/// `type EndOfFileToken = Token<SyntaxKind.EndOfFileToken> & JSDocContainer`,
+/// a member of the 64-arm `HasJSDoc` union that `JSDoc.parent` is typed
+/// as. It was found by BISECTING that union against the real file rather
+/// than by reading — seven runs, and the culprit was the eighteenth arm.
+test "checker: TS2430 nominal reach through classes, intersections, generics (batch FG)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("incorrectly extends") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- silent: legal, each probed against 6.0.3
+  for
+    src in [
+      // (1) a CLASS in the union, reached through `implements`.
+      "interface N { k: number }\ninterface A extends N { a: number }\ndeclare class Cl implements N { k: number; c: number }\ntype U = A | Cl\ninterface Nd { parent: N }\ninterface J extends Nd { parent: U }",
+      // (2) an INTERSECTION, one component of which reaches.
+       "interface N { k: number }\ninterface T extends N { t: number }\ninterface JD { j: number }\ntype EOF = T & JD\ninterface Nd { parent: N }\ninterface J extends Nd { parent: EOF }",
+      // (3) a generic instantiation against a BARE base member.
+       "interface N { k: number }\ninterface T<K> extends N { t: K }\ninterface Nd { parent: N }\ninterface J extends Nd { parent: T<number> }",
+      // …and the `EndOfFileToken` shape itself: both at once.
+       "interface N { k: number }\ninterface T<K> extends N { t: K }\ninterface JD { j: number }\ntype EOF = T<number> & JD\ninterface Nd { parent: N }\ninterface J extends Nd { parent: EOF }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: the LEGAL NEIGHBOUR of each accept. All real TS2430.
+  for
+    src in [
+      // No component of the intersection reaches the base.
+      "interface N { k: number }\ninterface X { x: number }\ninterface JD { j: number }\ntype EOF = X & JD\ninterface Nd { parent: N }\ninterface J extends Nd { parent: EOF }",
+      // The generic's NAME does not reach the base.
+       "interface N { k: number }\ninterface T<K> { t: K }\ninterface Nd { parent: N }\ninterface J extends Nd { parent: T<number> }",
+      // A GENERIC base member: name reachability says nothing there, so
+      // the ordinary comparison decides and the argument mismatch stands.
+       "interface T<K> { t: K }\ninterface Nd { parent: T<string> }\ninterface J extends Nd { parent: T<number> }",
+      // A class in the union that implements nothing relevant.
+       "interface N { k: number }\ninterface A extends N { a: number }\ndeclare class Cl { c: number }\ntype U = A | Cl\ninterface Nd { parent: N }\ninterface J extends Nd { parent: U }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}

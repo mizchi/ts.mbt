@@ -3163,6 +3163,24 @@ product surfaces now.
   the two tables answer the same question is its own measurement, and
   using the copy already there changes nothing about which one this rule
   reads. Nine cells probed, all agreeing with tsc.
+  Batch FG takes that file to **ZERO** — 88 -> 0 across FC, FD, FF and
+  FG — and its method is worth more than its rule. FOUR guesses at the
+  last diagnostic's cause were each refuted by a probe that reproduced
+  clean; BISECTING the real 64-arm `HasJSDoc` union against the 4 MB file
+  settled it in seven runs, and the culprit was one arm:
+  `type EndOfFileToken = Token<SyntaxKind.EndOfFileToken> & JSDocContainer`.
+  Three shapes the nominal reach could not express, all in that one
+  declaration. A CLASS in the union — and the correction matters, because
+  FC had filed that case as a MISS in good faith and it is a REPORT: the
+  caller requires EVERY union member to be accepted, so one unprovable
+  member keeps the whole diagnostic, measured pre-existing on every
+  binary back to before the series. An INTERSECTION member, accepted
+  through ANY component, which is the opposite quantifier from the union
+  and so cannot be folded into FF's flattening. And an `Applied(n, _)`
+  reaching an ancestor by NAME, sound only against a NON-GENERIC base
+  member (`interface Token<K> extends Node` makes every instantiation a
+  `Node`, while `Token<A>` against `Token<B>` depends on the arguments —
+  that pair still reports, probed). Ten cells, all agreeing with tsc.
   see").
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
