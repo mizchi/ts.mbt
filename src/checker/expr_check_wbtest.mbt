@@ -22658,3 +22658,64 @@ test "checker: a namespace may re-export a file-level import (batch FE)" {
     assert_true(issues(src) > 0)
   }
 }
+
+///|
+/// Batch FF: the last two TS2430 shapes `typescript.d.ts` reported.
+///
+/// 1. `parts` in `member_covariant_by_iface_extends` split ONE level,
+///    and `unwrap_containers` expands an alias IN PLACE — so
+///    `parent: InterfaceDeclaration | ClassLikeDeclaration`, where
+///    `ClassLikeDeclaration` is itself a union alias, arrived as a union
+///    whose second member is a union, opaque to every `Named` test. A
+///    union of unions is the same union; it is flattened now.
+///
+/// 2. The SIBLING TS2430 rule (the one whose message reads "property X
+///    of type T is not assignable to the base type B") decides through
+///    `struct_assignable_named_rec`, which cannot recover a relation
+///    where the base carries a BRAND the derived only inherits:
+///    `SuperExpression extends PrimaryExpression extends MemberExpression
+///    extends LeftHandSideExpression`, and only the last declares
+///    `_leftHandSideExpressionBrand`. The nominal walk it needed was
+///    ALREADY defined in that same function — a THIRD copy of the BFS,
+///    keyed on a local `iface_by_name` rather than `resolver.interfaces`
+///    — and consulted only for the RETURN-type comparison, never for the
+///    member type.
+test "checker: TS2430 nominal reach through brands and nested unions (batch FF)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("incorrectly extends") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- silent: legal, each probed against 6.0.3
+  for
+    src in [
+      // (1) a derived union one of whose members is an ALIAS to a union.
+      "interface N { k: number }\ninterface ID extends N { i: number }\ninterface CD extends N { c: number }\ninterface CE extends N { e: number }\ntype CLD = CD | CE\ninterface Nd { parent: N }\ninterface HC extends Nd { parent: ID | CLD }",
+      // (2) the base member's type carries a brand the derived only
+      // INHERITS, three levels up.
+       "interface L { _b: any }\ninterface M extends L { _m: any }\ninterface P extends M { _p: any }\ninterface SE extends P { k: number }\ninterface PA { expression: L }\ninterface SPA extends PA { expression: SE }",
+      // …and the same through an optional member.
+       "interface L { _b: any }\ninterface SE extends L { k: number }\ninterface PA { expression?: L }\ninterface SPA extends PA { expression?: SE }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: the LEGAL NEIGHBOUR of each accept. All real TS2430.
+  for
+    src in [
+      // Nominally unrelated.
+      "interface L { _b: any }\ninterface SE { k: number }\ninterface PA { expression: L }\ninterface SPA extends PA { expression: SE }",
+      // The chain walked the WRONG WAY — a base member may not be
+      // widened to its own supertype.
+       "interface L { _b: any }\ninterface SE extends L { k: number }\ninterface PA { expression: SE }\ninterface SPA extends PA { expression: L }",
+      // A scalar over an object-shaped base member.
+       "interface L { _b: any }\ninterface PA { expression: L }\ninterface SPA extends PA { expression: number }",
+      // A nested union none of whose members reaches the base.
+       "interface N { k: number }\ninterface X { x: number }\ninterface Y { y: number }\ntype XY = X | Y\ninterface Nd { parent: N }\ninterface HC extends Nd { parent: XY }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}

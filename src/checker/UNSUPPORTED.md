@@ -1,6 +1,6 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FE:
+Measured on 2026-09-20, after batches EU–FF:
 
 ```
 TP  err+flag  : 2670   (of which via parse rejection: 390)
@@ -54,7 +54,9 @@ preact 4 -> 0, vitest 6 -> 0, hono 0, zod 118 -> 108, and the sweep
 added, at TP / MISS / FP unchanged throughout. What is left on
 `typescript.d.ts` is 7 TS2430 shapes the assignability still cannot
 follow (`SuperExpression` against `LeftHandSideExpression`,
-`JsonMinusNumericLiteral.operand`).
+`JsonMinusNumericLiteral.operand`) — batch FF then took those too,
+through a flattened union and the nominal disjunct the SIBLING TS2430
+rule never had, leaving `typescript.d.ts` at **1** (`JSDoc.parent`).
 
 ## Regenerating this file
 

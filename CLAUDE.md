@@ -3143,6 +3143,26 @@ product surfaces now.
   6 -> 0, hono 0, zod 118 -> 108, and the 4,085-file sweep 17,885 ->
   16,648 — **1,243 false positives on legal real code, none added**, at
   TP / MISS / FP unchanged throughout.
+  Batch FF then opened the five `typescript.d.ts` had left and found two
+  more causes behind FC's rule, taking it to **1**. `parts` in
+  `member_covariant_by_iface_extends` split ONE level while
+  `unwrap_containers` expands an alias IN PLACE, so
+  `parent: InterfaceDeclaration | ClassLikeDeclaration` — the second a
+  union alias — arrived as a union whose member is a union, opaque to
+  every `Named` test; a union of unions is the same union. And the
+  SIBLING TS2430 rule, the one whose message reads "property X of type T
+  is not assignable to the base type B", never got the nominal disjunct
+  at all: it decides through `struct_assignable_named_rec`, which cannot
+  recover a relation where the base carries a BRAND the derived only
+  INHERITS (`SuperExpression` reaches `LeftHandSideExpression` three
+  levels up, and only the last declares `_leftHandSideExpressionBrand`).
+  The walk it needed sits THIRTY LINES ABOVE the comparison in its own
+  function, consulted only for the RETURN type — and it is a **THIRD
+  copy** of the same BFS, keyed on a local `iface_by_name` rather than
+  `resolver.interfaces`. Recorded rather than unified: establishing that
+  the two tables answer the same question is its own measurement, and
+  using the copy already there changes nothing about which one this rule
+  reads. Nine cells probed, all agreeing with tsc.
   see").
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and

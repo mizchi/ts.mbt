@@ -266,7 +266,8 @@ preact は 4 → 0 になりました。conformance corpus に `.d.ts` は 1 つ
 oracle が動かないことがそのまま「ファイル単位の免除であってルールの弱体化ではない」
 ことの確認になっています。batch FE（namespace からファイル先頭の import を
 re-export できる）で vitest も 6 → 0 になり、FB〜FE 合計で実コードの
-false positive を **1,243 件削除・追加 0**、その間 TP / MISS / FP はすべて不変です。
+false positive を **1,244 件削除・追加 0**、その間 TP / MISS / FP はすべて不変です。
+batch FF で `typescript.d.ts` は **88 → 1** になりました（残り 1 件は `JSDoc.parent`）。
 
 参考として、2026-09-16 に `moon run src/cmd/mtsc -- conformance` で測定した pinned subset
 （TS6 時代の `.errors.txt` baseline を正解とする軽量計測）の結果も残します。

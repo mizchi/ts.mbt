@@ -29964,11 +29964,38 @@ fn member_covariant_by_iface_extends(
   b : @ast.TsType,
   resolver : Resolver,
 ) -> Bool {
+  // FLATTENED, because `unwrap_containers` expands an alias IN PLACE:
+  // `parent: ID | CLD` with `type CLD = CD | CE` becomes a union whose
+  // second member is itself a union, and splitting one level leaves that
+  // inner union as a single opaque member no `Named` test can match.
+  // `typescript.d.ts`'s `HeritageClause.parent: InterfaceDeclaration |
+  // ClassLikeDeclaration` is exactly that, and a union of unions is the
+  // same union anyway. Bounded, since a pathological alias could nest
+  // deeply; running out of depth keeps the member unsplit, which costs a
+  // MISS rather than inventing an accept.
   fn parts(t : @ast.TsType) -> Array[@ast.TsType] {
-    match t {
-      Union(ms) => ms
-      _ => [t]
+    let out : Array[@ast.TsType] = []
+    let mut frontier : Array[@ast.TsType] = [t]
+    for _ in 0..<8 {
+      let next : Array[@ast.TsType] = []
+      for m in frontier {
+        match m {
+          Union(ms) =>
+            for x in ms {
+              next.push(x)
+            }
+          _ => out.push(m)
+        }
+      }
+      if next.length() == 0 {
+        break
+      }
+      frontier = next
     }
+    for m in frontier {
+      out.push(m)
+    }
+    out
   }
 
   // A nominal reference arrives spelled EITHER way: `unwrap_containers`
@@ -40128,7 +40155,29 @@ fn check_interface_extends_compat(
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
             } else if both_plain_named &&
-              !struct_assignable_named_rec(d_payload, b_payload, resolver, []) {
+              !struct_assignable_named_rec(d_payload, b_payload, resolver, []) &&
+              // …and not related NOMINALLY either. `named_reaches` is
+              // already defined in this function and was consulted only
+              // for the RETURN-type comparison above, never for the
+              // member type — the applied-in-some-places family, with
+              // the same walk sitting thirty lines up.
+              //
+              // `struct_assignable_named_rec` cannot recover the relation
+              // when the base carries a BRAND the derived only inherits:
+              // `SuperExpression extends PrimaryExpression extends
+              // MemberExpression extends LeftHandSideExpression`, and
+              // only the last declares `_leftHandSideExpressionBrand`.
+              // `typescript.d.ts` writes that three times
+              // (`SuperPropertyAccessExpression`, `SuperElementAccess-
+              // Expression`, `SuperCall`) and tsc accepts the file.
+              !(match
+                (
+                  strip_nullish(resolver.unwrap(d_payload)),
+                  strip_nullish(resolver.unwrap(b_payload)),
+                ) {
+                (Named(dn), Named(bn)) => named_reaches(dn, bn)
+                _ => false
+              }) {
               issues.push({
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",

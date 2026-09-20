@@ -3,6 +3,52 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FF (2026-09-20): the last two TS2430 shapes — `typescript.d.ts` to 1
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL. Two more causes behind the rule batch FC took,
+found by opening the five `typescript.d.ts` had left.
+
+**1. `parts` split ONE level and `unwrap_containers` expands in place.**
+`HeritageClause.parent: InterfaceDeclaration | ClassLikeDeclaration`,
+where `ClassLikeDeclaration` is itself a union alias, arrived as a union
+whose second member is a UNION — opaque to every `Named` test, so no arm
+of it could be matched against the base. A union of unions is the same
+union; it is flattened now, bounded at 8 levels (running out keeps the
+member unsplit, a MISS rather than an invented accept).
+
+**2. The SIBLING TS2430 rule never got the nominal disjunct**, and the
+walk it needed was already defined in its own function. That rule — the
+one whose message reads "property `X` of type `T` is not assignable to
+the base type `B`" — decides through `struct_assignable_named_rec`, which
+cannot recover a relation where the base carries a BRAND the derived only
+INHERITS: `SuperExpression extends PrimaryExpression extends
+MemberExpression extends LeftHandSideExpression`, and only the last
+declares `_leftHandSideExpressionBrand`. `typescript.d.ts` writes that
+three times and tsc accepts the file.
+
+`named_reaches` sits thirty lines above the comparison, and was consulted
+only for the RETURN-type check. It is a **THIRD copy** of the same BFS —
+batch FC hoisted one out of `tuple_covariant_by_extends` into
+`named_iface_extends_reaches`, and this one is keyed on a local
+`iface_by_name` rather than `resolver.interfaces`. Left as it is and
+recorded rather than unified: the two maps may not hold the same thing,
+and establishing that they answer the same question is its own
+measurement. Using the copy that is already there changes nothing about
+which table this rule reads.
+
+Measured: **`typescript.d.ts` 7 -> 1** (88 -> 1 across FC, FD and FF —
+the one left is `JSDoc.parent`), the 4,085-file sweep 16,648 -> 16,647
+with 0 added, zod unchanged at 108, the oracle identical, all 12 scaling
+axes within budget.
+
+Nine cells probed and all nine agree with tsc. Accepted: a derived union
+whose member is a union ALIAS; a base member's brand inherited three
+levels up; the same through an optional member. Rejected: a nominally
+unrelated pair; the chain walked the WRONG WAY; a scalar over an
+object-shaped base member; a nested union none of whose members reaches
+the base.
+
 ### Batch FE (2026-09-20): a namespace may re-export a file-level import, ZERO files
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
