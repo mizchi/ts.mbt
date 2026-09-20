@@ -3,6 +3,99 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FC (2026-09-20): TS2430 on a real `.d.ts` — 80 false positives, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL again. Found by pointing batch FB's real-package
+axis at the LARGEST real input there is.
+
+`node_modules/typescript/lib/typescript.d.ts` is the biggest declaration
+file in the ecosystem and tsc accepts it outright, so every one of the **88
+diagnostics `mtsc --noEmit` reported on it was a false positive** — and
+**80 were one rule**, `check_interface_extends_member_compat` (TS2430).
+Two independent causes, both of them this file's recurring shapes.
+
+**1. `resolver.unwrap` where `unwrap_containers` was needed.**
+`is_assignable_to` is the RESOLVER-FREE entry point and `unwrap` peels the
+OUTERMOST type only, so a base member typed as an alias to a union
+(`type U = A | B; interface P { name?: U }`) arrived as
+`Union([Named("U"), Undefined])` — the union is outermost, `U` was never
+resolved, and `Named("A")` against `Named("U")` is nominal. The guards
+directly above had already proven both sides RESOLVABLE with
+`type_contains_unresolved_named`; nothing resolved them.
+`unwrap_containers` is the helper written for exactly this hazard and says
+so in its own header ("the resolver-free `is_assignable_to` can't resolve
+a `Named` it finds nested inside `Array` / `Tuple` / `Rest`"), with `Union`
+in its fast-path list. Applied to both sides. 80 -> 29.
+
+**2. A NOMINAL `extends` relation, which structure cannot recover.**
+`interface Node { readonly parent: Node }` beside
+`interface CaseBlock extends Node { readonly parent: SwitchStatement }` is
+legal, and `SwitchStatement` reaches `Node` only through `Statement` — a
+relation the structural comparison cannot follow when the whole hierarchy
+is mutually recursive and `Node` is declaration-merged. The walk for that
+question ALREADY EXISTED as a local `fn` inside
+`tuple_covariant_by_extends`; it is HOISTED to
+`named_iface_extends_reaches` and both callers share it, since a second
+walk is how two answers to one question come to disagree. The new
+disjunct is SUFFICIENT and never necessary — every member of the derived
+type must be accepted by some member of the base's, so it can only ever
+ACCEPT and a shape it cannot decide falls through to the report exactly as
+before. 29 -> 7.
+
+**3. The last cell needed batch EM's `Named` / `Struct` split.**
+`unwrap_containers` expands an interface reference it CAN resolve into
+`Struct(name, …)` and leaves one it cannot as `Named(name)`, so
+`parent: N | Q` expanded its members while the bare `parent: N` did not —
+a `Named`-only match worked for the bare pair and failed for the union.
+Matching either spelling closes it.
+
+Measured: `typescript.d.ts` **88 -> 15**, zod **113 -> 108** (five more
+false positives, zero added), the 4,085-file `mtsc check` sweep
+17,885 -> 17,881 with **0 added**, the oracle IDENTICAL on every metric,
+and the `interfaces` axis still 1.00 — the new BFS sits behind three
+failed checks, so it almost never runs.
+
+Eight legal-neighbour cells probed against 6.0.3 and all eight agree: the
+aliased-union subset, a one- and a three-level `extends` chain and
+reaching one arm of a union base member are ACCEPTED, while a non-arm of
+the aliased union, a nominally unrelated pair, the chain walked the WRONG
+WAY (a base member may not be narrowed to its own supertype), a union
+whose arms are all unreachable, and ordinary primitive / literal
+incompatibility all still report.
+
+**The batch's other output is a correction to its own first ranking**, the
+eleventh instance here of a count standing in for the objective and the
+first where the substituted count was a HARNESS's unit rather than a
+label. Grouping batch FB's sweep by message shape put an "ambient
+declaration file" family on top at **1,192** occurrences — `mtsc check`
+reports TS2390 / TS2391 / TS2564 / TS2378 on a `.d.ts`, where every member
+is bodiless by construction. That is real: `in_ambient_module` is a
+WHOLE-PARSE mode that only `declare module "spec" { … }` and `global { … }`
+bodies ever set, `Parser::parse_module` passes `false`, and five of its
+six gates name `.d.ts` in their own comments (one says "Ambient mode
+(`.d.ts` / ambient external module body)" literally). It is NOT the
+ranking it looked like: the sweep's unit is (file, diagnostic) over 3,723
+mostly tiny hand-written `.d.ts` shims, and on the path a user runs,
+`typescript.d.ts` yields **8** of that family against 80 of TS2430.
+
+Filed with what a fix needs, so it is not attempted as a one-line flag
+flip. The sixth gate is TS1038, where flipping the whole-parse flag would
+be WRONG and would false-positive on essentially every `.d.ts` in
+existence: `declare function f(): void` at a declaration file's top level
+is legal, only the NESTED spelling
+(`declare namespace M { declare function inner(): void }`) is the error —
+probed, and we already agree with tsc on both. So it needs a SECOND
+Parser field ("this is a declaration FILE") beside the existing one
+("we are inside a `declare X { }` body"), which are two different
+questions; the five bodiless gates test the disjunction and TS1038 keeps
+testing the original. The three checker-side rules (TS2390, TS2564,
+TS2378) need the fact too, and `check_dts_top_level_modifiers` states that
+blocker in its own comment: "keyed off the file extension, which the
+general check pipeline can't see". A module-level marker pushed by the
+parse is the channel; the parse entry has to learn the extension from its
+caller, and 17 call sites construct a Parser.
+
 ### Batch FB (2026-09-20): a `string` source against a literal target, ZERO files
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |

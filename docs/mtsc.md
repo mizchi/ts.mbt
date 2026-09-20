@@ -257,7 +257,10 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 FP 0 のままでも存在しえます**。batch FB はその実例で、conformance の数値は
 一切動かさずに（TP 2,670 / MISS 45 / FP 0 のまま）、zod のソースに出ていた
 false positive を 5 件消しました（118 → 113 diagnostics）。`node_modules` 配下の
-`.d.ts` 4,085 件のスイープは前後でバイト一致です。
+`.d.ts` 4,085 件のスイープは前後でバイト一致です。batch FC はこれをさらに大きな
+実入力に向けたもので、`typescript.d.ts`（tsc がそのまま受理する、最大の宣言
+ファイル）に対する **88 件の diagnostics は全部 false positive、うち 80 件が
+1 つのルール**（TS2430）でした。conformance の数値を一切動かさずに 88 → 15 です。
 
 参考として、2026-09-16 に `moon run src/cmd/mtsc -- conformance` で測定した pinned subset
 （TS6 時代の `.errors.txt` baseline を正解とする軽量計測）の結果も残します。

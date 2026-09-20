@@ -3035,6 +3035,63 @@ product surfaces now.
   const; const y: "a" = arr[0]` reported on a line tsc accepts even in an
   `as const` file. Corpus-, sweep- and zod-neutral, with the non-`as
   const` neighbour still reporting.
+  Batch FC is what that axis finds the moment it is pointed at the
+  LARGEST real input rather than at a corpus, and it is again
+  corpus-NEUTRAL (TP 2670 / MISS 45 / FP 0). `typescript.d.ts` is the
+  biggest declaration file there is, tsc accepts it outright, so its **88
+  diagnostics were all false positives — and 80 of them were ONE rule**,
+  TS2430's derived-interface member comparison. Two independent causes,
+  both shapes this file already records. `is_assignable_to` is the
+  RESOLVER-FREE entry point and the comparison called `resolver.unwrap`,
+  which peels the OUTERMOST type only — so a base member typed as an
+  alias to a union (`type U = A | B; interface P { name?: U }`) arrived
+  as `Union([Named("U"), Undefined])`, where the union is outermost and
+  `U` was never resolved, making `Named("A")` against `Named("U")`
+  nominal. `unwrap_containers` is the helper written for exactly that
+  hazard and says so in its own header; the guards above had already
+  proven both sides RESOLVABLE and nothing resolved them. And a NOMINAL
+  `extends` relation cannot be recovered structurally when the hierarchy
+  is mutually recursive: `interface Node { readonly parent: Node }`
+  beside `interface CaseBlock extends Node { readonly parent:
+  SwitchStatement }` is legal, and `SwitchStatement` reaches `Node` only
+  through `Statement`. The walk for that question already existed as a
+  LOCAL function inside `tuple_covariant_by_extends` and is HOISTED
+  rather than copied. The last cell needed batch EM's `Named` / `Struct`
+  split as well: `unwrap_containers` expands an interface reference it
+  can resolve into `Struct(name, …)` and leaves one it cannot as
+  `Named(name)`, so `parent: N | Q` expanded its members while
+  `parent: N` did not, and a `Named`-only match worked for the bare pair
+  and failed for the union. Measured: `typescript.d.ts` **88 -> 15**,
+  zod 113 -> 108, the 4,085-file sweep 17,885 -> 17,881 with **0 added**,
+  the oracle identical, and `interfaces` still 1.00 on the scaling ladder
+  (the new walk sits behind three failed checks, so it almost never
+  runs — "is this loop quadratic" and "does this loop RUN" again).
+  The batch's other output is a correction to its own first ranking, and
+  it is the ELEVENTH instance here of a count standing in for the
+  objective — the first where the substituted count was a HARNESS's unit
+  rather than a label. Grouping the batch-FB sweep by message shape put
+  an "ambient declaration file" family on top at **1,192** occurrences:
+  `mtsc check` reports TS2390 / TS2391 / TS2564 / TS2378 on a `.d.ts`,
+  where every member is bodiless by construction, because
+  `in_ambient_module` is a WHOLE-PARSE mode that `parse_module` never
+  sets — five of its six gates name `.d.ts` in their own comments and one
+  says so literally. Real and worth fixing; NOT the ranking it looked
+  like. The sweep's unit is (file, diagnostic) over 3,723 mostly tiny
+  hand-written `.d.ts` shims, and on the path a user actually runs
+  (`mtsc --noEmit`) `typescript.d.ts` yields **8** of that family against
+  80 of TS2430. Recorded so the fix is not attempted as a one-line flag
+  flip: the sixth gate is TS1038, where flipping the whole-parse flag
+  would be WRONG and would false-positive on essentially every `.d.ts` in
+  existence — `declare function f(): void` at a declaration file's top
+  level is legal and only the NESTED spelling
+  (`declare namespace M { declare function inner(): void }`) is the
+  error, probed, and we already agree with tsc on both. So the fix needs
+  a SECOND field (a declaration FILE) beside the existing one (inside a
+  `declare X { }` body), which are two different questions, plus a
+  channel to the three checker-side rules —
+  `check_dts_top_level_modifiers` states that blocker in its own comment
+  ("keyed off the file extension, which the general check pipeline can't
+  see").
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

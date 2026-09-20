@@ -29915,6 +29915,129 @@ fn check_accessor_pair_types(
 }
 
 ///|
+/// A SUFFICIENT accept for TS2430's member comparison: every member of the
+/// derived type is accepted by some member of the base's, where a pair of
+/// `Named` interfaces may also be related NOMINALLY through the `extends`
+/// chain rather than structurally.
+///
+/// That nominal route is what `typescript.d.ts` needs twenty-nine times:
+/// `interface Node { readonly parent: Node }` with
+/// `interface CaseBlock extends Node { readonly parent: SwitchStatement }`
+/// is legal, and `SwitchStatement` reaches `Node` only through
+/// `Statement` — a relation the structural comparison cannot recover,
+/// because `Node` is declared twice (merged) and the whole AST hierarchy
+/// is mutually recursive.
+///
+/// Sufficient, never necessary: it is used only as a disjunct that can
+/// ACCEPT, so a shape it cannot decide falls through to the report exactly
+/// as before. Every derived member must be accepted, which is what makes a
+/// union source sound; a member that is not a `Named` pair is decided by
+/// the ordinary resolver-free test, so nothing is accepted here that
+/// `is_assignable_to` would have refused for a reason other than
+/// nominality. `named_iface_extends_reaches` walks `interfaces` only, so a
+/// class heritage relation costs a MISS rather than a wrong accept.
+fn member_covariant_by_iface_extends(
+  d : @ast.TsType,
+  b : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  fn parts(t : @ast.TsType) -> Array[@ast.TsType] {
+    match t {
+      Union(ms) => ms
+      _ => [t]
+    }
+  }
+
+  // A nominal reference arrives spelled EITHER way: `unwrap_containers`
+  // expands an interface reference it can resolve into `Struct(name, …)`
+  // and leaves one it cannot as `Named(name)`, so the two spellings of
+  // one type meet whenever a comparison crosses that boundary. Matching
+  // `Named` alone made the bare pair work and the union case fail —
+  // `parent: N | Q` expands its members, `parent: N` does not. The same
+  // asymmetry batch EM found in `is_assignable_to_inner`.
+  fn iface_name(t : @ast.TsType) -> String? {
+    match t {
+      Named(n) => Some(n)
+      Struct(n, _) => Some(n)
+      _ => None
+    }
+  }
+
+  let dm = parts(d)
+  let bm = parts(b)
+  // A bare pair is the common case and must still go through the
+  // extends walk, so no fast path: `parts` already made both singletons.
+  for dt in dm {
+    let mut ok = false
+    for bt in bm {
+      if ok {
+        continue
+      }
+      match (iface_name(dt), iface_name(bt)) {
+        (Some(dn), Some(bn)) =>
+          if named_iface_extends_reaches(resolver, dn, bn) {
+            ok = true
+          }
+        _ => if is_assignable_to(dt, bt) { ok = true }
+      }
+    }
+    if !ok {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Does interface `from` reach interface `to` through its declared
+/// `extends` chain? A NOMINAL relation, and the one thing a structural
+/// comparison cannot recover when two interfaces are mutually recursive
+/// (`interface Node { parent: Node }` with
+/// `interface CaseBlock extends Node { parent: SwitchStatement }`, where
+/// `SwitchStatement` reaches `Node` only through `Statement`).
+///
+/// Breadth-first with a visited set and a depth bound of 16: an interface
+/// heritage cycle is itself an error, and stopping short costs a MISS.
+/// Lived as a local `fn` inside `tuple_covariant_by_extends` until TS2430's
+/// member comparison needed the same question — hoisted rather than copied,
+/// since a second walk is how two answers to one question come to disagree.
+fn named_iface_extends_reaches(
+  resolver : Resolver,
+  from : String,
+  to : String,
+) -> Bool {
+  if from == to {
+    return true
+  }
+  let mut frontier = [from]
+  let visited : Map[String, Unit] = Map([])
+  for _ in 0..<16 {
+    let next : Array[String] = []
+    for n in frontier {
+      if visited.contains(n) {
+        continue
+      }
+      visited[n] = ()
+      match resolver.interfaces.get(n) {
+        Some(i) =>
+          for en in i.extends_names {
+            if en == to {
+              return true
+            }
+            next.push(en)
+          }
+        None => ()
+      }
+    }
+    if next.length() == 0 {
+      break
+    }
+    frontier = next
+  }
+  false
+}
+
+///|
 /// TS accepts a derived interface member that narrows a base tuple element
 /// covariantly through the declared `extends` chain --
 /// `"stream": [ClientHttp2Stream, ...]` over `"stream": [Http2Stream, ...]`
@@ -29929,35 +30052,7 @@ fn tuple_covariant_by_extends(
   resolver : Resolver,
 ) -> Bool {
   fn named_extends_reaches(from : String, to : String) -> Bool {
-    if from == to {
-      return true
-    }
-    let mut frontier = [from]
-    let visited : Map[String, Unit] = Map([])
-    for _ in 0..<16 {
-      let next : Array[String] = []
-      for n in frontier {
-        if visited.contains(n) {
-          continue
-        }
-        visited[n] = ()
-        match resolver.interfaces.get(n) {
-          Some(i) =>
-            for en in i.extends_names {
-              if en == to {
-                return true
-              }
-              next.push(en)
-            }
-          None => ()
-        }
-      }
-      if next.length() == 0 {
-        break
-      }
-      frontier = next
-    }
-    false
+    named_iface_extends_reaches(resolver, from, to)
   }
 
   match (d, b) {
@@ -30107,8 +30202,34 @@ fn check_interface_extends_member_compat(
           !type_deeply_contains_unmodeled(bty, resolver) &&
           !type_has_call_signature(fty, resolver) &&
           !type_has_call_signature(bty, resolver) &&
-          !is_assignable_to(resolver.unwrap(fty), resolver.unwrap(bty)) &&
+          // `unwrap_containers`, not `unwrap`. `is_assignable_to` is the
+          // RESOLVER-FREE entry point, and `unwrap` peels the outermost
+          // type only — so a base member typed as an ALIAS TO A UNION
+          // (`type U = A | B; interface P { name?: U }`) reached the
+          // comparison as `Union([Named("U"), Undefined])`, where the
+          // union is the outermost layer and `U` was never resolved.
+          // `Named("A")` against `Named("U")` is nominal, so narrowing an
+          // optional member to a subset of its base's union — legal
+          // TypeScript, and the shape `typescript.d.ts` uses eighty times
+          // for `name?: DeclarationName` — was reported. The guards above
+          // already prove both sides RESOLVABLE
+          // (`type_contains_unresolved_named`); nothing resolved them.
+          //
+          // `unwrap_containers` is the helper written for exactly this
+          // hazard — its own header says the resolver-free comparison
+          // "can't resolve a `Named` it finds nested inside" a container
+          // layer, and `Union` is in its fast-path list. Applied to BOTH
+          // sides, since the derived member can be an aliased union too.
+          !is_assignable_to(
+            resolver.unwrap_containers(fty),
+            resolver.unwrap_containers(bty),
+          ) &&
           !is_structurally_assignable_named(fty, bty, resolver) &&
+          !member_covariant_by_iface_extends(
+            resolver.unwrap_containers(fty),
+            resolver.unwrap_containers(bty),
+            resolver,
+          ) &&
           !tuple_covariant_by_extends(fty, bty, resolver) {
           issues.push({
             path: "interface \{iface.name}",

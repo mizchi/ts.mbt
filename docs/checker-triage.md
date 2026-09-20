@@ -200,6 +200,22 @@ latent `let` widening bug (`let s = "a"` is `string` in tsc and stayed
 `"a"` here), which is five reports on legal lines in zod's own locale
 files. 118 -> 113 on zod, and byte-identical over a 4,085-file sweep of
 every `.d.ts` in `node_modules` plus effect's 362 sources.
+
+Batch FC, one row later, is the sharper version of the same move: pointed
+at `typescript.d.ts` — the biggest declaration file there is, and one tsc
+accepts outright — the checker reported **88 diagnostics, 80 of them one
+rule** (TS2430's derived-interface member comparison), and the fix took
+it to 15 with every conformance number unchanged. Read that beside the
+family table: neither axis of this document ranks it, because the corpus
+has no file of the shape at all.
+
+One caution FC paid for, worth stating beside the real-code column:
+**the sweep's unit is not the user's.** Grouping a `mtsc check` sweep of
+3,723 mostly tiny `.d.ts` shims by message shape put a DIFFERENT family
+on top at 1,192 occurrences; on the path a user actually runs
+(`mtsc --noEmit`, one program) that family is 8 and the one worth taking
+is 80. A per-file count over a corpus of shims is the same substitution
+this document warns about with a label, one level out.
 Conditional types, the utility table, mapped types, `keyof`, overload
 selection, generic inference, generic METHOD calls, index-signature
 reads through an anonymous object type, a mapped type over an infinite

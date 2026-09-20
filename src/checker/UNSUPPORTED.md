@@ -1,6 +1,6 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FB:
+Measured on 2026-09-20, after batches EU–FC:
 
 ```
 TP  err+flag  : 2670   (of which via parse rejection: 390)
@@ -25,6 +25,16 @@ reports on legal lines, five of them in zod's own sources. When a row here moves
 BLIND, run the change over real packages too — `mtsc --noEmit --bundle
 node_modules/<pkg>/src/index.ts`, and a sweep of `mtsc check` over
 `node_modules`'s `.d.ts` files, diffed against the baseline binary.
+
+Batch FC is the sharper version of the same point and the reason to run
+the BIGGEST real input rather than many small ones: `typescript.d.ts` is
+accepted by tsc outright, so all **88** diagnostics `mtsc --noEmit`
+reported on it were false positives and **80 were one rule** (TS2430).
+88 -> 15, at TP / MISS / FP unchanged. It also corrected its own first
+ranking — grouping the sweep by message shape put a different family on
+top at 1,192 occurrences, which is the SWEEP's unit (one line per file
+per diagnostic, over 3,723 mostly tiny hand-written shims) and not the
+user's: on `mtsc --noEmit` that family is 8 against TS2430's 80.
 
 ## Regenerating this file
 

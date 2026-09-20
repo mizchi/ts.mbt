@@ -22465,3 +22465,74 @@ test "checker: string source against a literal target (batch FB)" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch FC: TS2430's member comparison could not see a nominal relation.
+///
+/// Found on the axis batch FB opened — running the checker over real
+/// packages rather than the corpus. `typescript.d.ts` is the largest
+/// declaration file there is and tsc accepts it outright, so its 88
+/// diagnostics were all false positives, and **80 of them were this one
+/// rule**. Two independent causes, both of them this file's recurring
+/// shapes.
+///
+/// 1. `is_assignable_to` is the RESOLVER-FREE entry point and the
+///    comparison called `resolver.unwrap`, which peels the OUTERMOST type
+///    only. A base member typed as an alias to a union
+///    (`type U = A | B; interface P { name?: U }`) arrives as
+///    `Union([Named("U"), Undefined])` — the union is outermost, so `U`
+///    was never resolved and `Named("A")` against `Named("U")` is
+///    nominal. `unwrap_containers` is the helper written for exactly this
+///    hazard, and its own header says so.
+///
+/// 2. A NOMINAL `extends` relation between two interfaces cannot be
+///    recovered structurally when the hierarchy is mutually recursive:
+///    `interface Node { readonly parent: Node }` beside
+///    `interface CaseBlock extends Node { readonly parent: SwitchStatement }`
+///    is legal, and `SwitchStatement` reaches `Node` only through
+///    `Statement`. The walk for that question already existed as a LOCAL
+///    function inside `tuple_covariant_by_extends`; it is hoisted rather
+///    than copied.
+///
+/// The last cell needed the `Named` / `Struct` split batch EM recorded:
+/// `unwrap_containers` expands an interface reference it can resolve into
+/// `Struct(name, …)` and leaves one it cannot as `Named(name)`, so
+/// `parent: N | Q` expanded its members while `parent: N` did not, and a
+/// `Named`-only match worked for the bare pair and failed for the union.
+test "checker: TS2430 nominal and aliased member compatibility (batch FC)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- silent: legal narrowings tsc accepts (all probed against 6.0.3)
+  for
+    src in [
+      // (1) the base member is an ALIAS to a union; the derived member is
+      // one of its arms. `typescript.d.ts`'s `name?: DeclarationName`.
+      "interface A{a:number}\ninterface B{b:number}\ntype U=A|B\ninterface P{name?:U}\ninterface D extends P{name?:A}",
+      // (2) a nominal `extends` chain, one level and three.
+       "interface N{k:number}\ninterface S extends N{s:number}\ninterface P{parent:N}\ninterface D extends P{parent:S}",
+      "interface N{k:number}\ninterface M extends N{m:number}\ninterface S extends M{s:number}\ninterface P{parent:N}\ninterface D extends P{parent:S}",
+      // …and reaching ONE arm of a union base member, which is the cell
+      // that needed the `Struct` spelling as well as the `Named` one.
+       "interface N{k:number}\ninterface S extends N{s:number}\ninterface Q{q:number}\ninterface P{parent:N|Q}\ninterface D extends P{parent:S}",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: the LEGAL NEIGHBOUR of each accept above. Every one is a
+  // real TS2430 in tsc, so the widened accept gives up nothing.
+  for
+    src in [
+      // Not an arm of the aliased union.
+      "interface A{a:number}\ninterface B{b:number}\ninterface C{c:string}\ntype U=A|B\ninterface P{name?:U}\ninterface D extends P{name?:C}",
+      // Nominally unrelated, and the chain walked the WRONG way (a base
+      // member may not be narrowed to its own supertype).
+       "interface N{k:number}\ninterface S{s:number}\ninterface P{parent:N}\ninterface D extends P{parent:S}",
+      "interface N{k:number}\ninterface S extends N{s:number}\ninterface P{parent:S}\ninterface D extends P{parent:N}",
+      // No arm of the union base member is reached.
+       "interface N{k:number}\ninterface S{s:number}\ninterface Q{q:number}\ninterface P{parent:N|Q}\ninterface D extends P{parent:S}",
+      // Ordinary incompatible members still report.
+       "interface P{v:number}\ninterface D extends P{v:string}", "interface P{v:\"a\"}\ninterface D extends P{v:string}",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}
