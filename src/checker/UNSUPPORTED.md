@@ -1,10 +1,10 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FG:
+Measured on 2026-09-20, after batches EU–FH:
 
 ```
-TP  err+flag  : 2670   (of which via parse rejection: 390)
-MISS in scope : 45     (the backlog — this one can reach zero)
+TP  err+flag  : 2671   (of which via parse rejection: 390)
+MISS in scope : 44     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -82,7 +82,7 @@ Two rules for reading the output, both learned the hard way:
 
 ---
 
-## 1. The 45 in-scope MISS files, by machinery
+## 1. The 44 in-scope MISS files, by machinery
 
 Paths are relative to `typescript/tests/cases/conformance/`. The code is
 what the local compiler reports on the file; where a rule was already
@@ -192,11 +192,10 @@ try { } catch (e) {
 | `async/es5/asyncAwaitNestedClasses_es5` | TS2345 | `new Promise<void>(resolve => resolve(null))` under `strictNullChecks`: the `resolve` callback's parameter type from the lib `PromiseConstructor` |
 | `es6/yieldExpressions/generatorTypeCheck8` | TS2322 | structural comparison of `Generator<string, any, any>` against a hand-written `BadGenerator` through the lib iterator interfaces (`IteratorResult<T>`) |
 
-### 1g. Name resolution and declarations — 3 files
+### 1g. Name resolution and declarations — 2 files
 
 | file | tsc | what is needed |
 |---|---|---|
-| `types/localTypes/localTypes4` | TS2304, TS2300 | a block-local `interface T` declared in two different functions. **Deliberately unregistered** (batch ET): the block-local type merge must not pick a winner among several declarations of one name — its first draft made the empty `interface T { }` in one function answer for the other and the gate scored that as a TP because the file errors for unrelated reasons |
 | `es6/Symbols/symbolProperty3` | TS2464 | **REJECTED with evidence**: `var s = Symbol; ({ [s]: 0 })` — `s` infers as `Any`, and catching it needs the `Symbol` CONSTRUCTOR modelled as a value type. Nobody writes that |
 | `decorators/class/decoratorChecksFunctionBodies` | TS2345 | the BODY of an arrow written inline as a member decorator (`@((x, p, d) => { func(3) })`). Member decorator expressions never reach the AST (`skip_param_decorators` / the class-body decorator skip); batches EE and EG read what they need off the skipped TOKENS, which cannot type-check a body |
 
@@ -278,7 +277,8 @@ Each entry names the LEGAL neighbour that decides it. None is a bug.
 | `computedPropertyNames28` — `super()` in an object-literal computed key DIRECTLY in the constructor | TS2466 | tsc itself ACCEPTS the direct form and reports it only once an arrow or function expression intervenes; batch ET ships exactly that boundary (`30` is a TP now), and `28` is the cell tsc accepts |
 | `class C<E, A> { m(this: C<never, A>) {} }` called on a `C<number, string>` | TS2684 | ACCEPTED by tsc: `E` is a phantom type parameter and TypeScript is structural. The plain-call and union-receiver forms of TS2684 DO report (batch ET) |
 | `class C implements String {}` | TS2420 | Needs the merged lib member list; 173 lib interfaces are declared empty, so any "declares nothing" shortcut is unsound |
-| `interface T {}` in two different function bodies | TS2300 | The block-local type merge registers a name only when it is declared ONCE across block scopes; guessing costs wrong member answers, abstaining costs a MISS |
+| `interface T {}` in two different function bodies | TS2300 | The block-local type merge registers a name only when it is declared ONCE across block scopes; guessing costs wrong member answers, abstaining costs a MISS. Still true, and batch FH is the reason it is worth reading twice: `localTypes4`, the file this row was protecting, is a TP now for an unrelated reason (a callable's type parameters against a type at its own body's top level, decided in the parser with no registration involved). An abstention can be accurate about its own route and silent about the one that works |
+| `function f(x: T): T { interface T { } }` — a body-local type named in the same function's SIGNATURE | TS2304 | The other half of `localTypes4`. Deciding it needs the name to be absent from every outer scope, from the lib and from the module, which is `unresolved_type_references` — rejected three times here with a measured cause (a type's own binders — a call signature's `<U>`, an `infer`, a mapped key — are lost by the PARSER, so wiring it in is 40+ false positives). The TS2300 half flips the file |
 | `using` / `await using` declarations | TS2850 / TS2851 and the for-of binding grammar | **Zero** of 5,697 real `.d.ts` / `.ts` files use them. Five files declared out of scope; the sixth (`usingDeclarationsWithObjectLiterals2`) was TS7018 on `value: null` and is a TP since batch EC |
 | `switch (12) { case 5: }` on a `const` scrutinee | TS2678 | `infer_expr` widens a numeric literal to `number`; the literal-vs-literal syntactic form is reported (batch CW), a `const` scrutinee is not |
 | `o.b` through an index signature only (`delete o["b"]` on `{ [k: string]: string }`) | — | LEGAL and silent for the stated reason: a member reached only through an index signature is not a declared property |
@@ -317,7 +317,19 @@ history is not re-derived from TODO.md.
 | G. "Blocked on a mechanical fact" (TS7031/7018, TS1308, TS2331, TS2708 `typeof`, TS2393) | All five DONE in batches EC and EE. Not one recorded blocker survived being probed: two had been dissolved by later unrelated work, one named only one of two routes to the fact, one was true of an approach nobody had to take, and TS2393's consumer had simply thrown the count away. The `import a = A` half of TS2708 is still open (§1g) |
 | H. Declared abstentions | §3, with three rows retired (the `super`-in-computed-key row is now the exact tsc boundary, the aliased `this` and the class-method TS2684 rows are new) |
 
-Batches EU–EZ then took five more files (MISS 50 -> 45) and none of them
+Batch FH then took a sixth (MISS 45 -> 44) and is the cleanest instance
+of §6.3 in the file: the target was not a family in this table at all but
+batch CA's `let x; let x` rule, whose own comment named its four
+uncovered shapes and whose "local TYPE declarations" is `localTypes4`. A
+callable's type parameters and the type declarations at its own body's
+top level are one declaration space — no type information, decided in the
+parser. Thirty-three cells probed, and the three that shaped it are in
+TODO.md: `enum T { }` is TS2567 rather than TS2300, a CLASS's type
+parameters do NOT reach a method body's local type, and a parameter
+DEFAULT can hold a body (which is why the fact is read at the body site
+rather than through a pending field).
+
+Batches EU–EZ before it took five files (MISS 50 -> 45) and none of them
 was a machinery gap the classification could see, which is §6.3 once
 more: an `import a = A` alias's TS2708 (the recorded blocker was true of
 what the target MEANS and false of what it SPELLS), TS2403 inside a

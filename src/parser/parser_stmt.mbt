@@ -450,14 +450,18 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     // `TsModule.classes` cannot: `record_local_class` collects them for
     // the checker's class rules, which were silent one scope in.
     Class => {
+      let before = self.collected_local_classes.length()
       let stmt = self.parse_class_decl()
       self.record_local_class()
+      self.record_block_local_class_name(before)
       stmt
     }
     Ident("abstract") if self.peek_at(1).kind == Class => {
       let _ = self.advance()
+      let before = self.collected_local_classes.length()
       let stmt = self.parse_class_decl_with_abstract(true)
       self.record_local_class()
+      self.record_block_local_class_name(before)
       stmt
     }
     Interface => {
@@ -472,6 +476,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // as a type AT ALL needs every one of them, and over-approximating
       // there costs it a MISS.
       self.grammar_misuses.push("<local-type-name>" + iface.name)
+      self.record_block_local_type_name(iface.name)
       self.collected_interfaces.push(iface)
       Empty
     }
@@ -484,6 +489,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // expression-statement parser below picks it up.
       let alias_ = self.parse_type_alias()
       self.grammar_misuses.push("<local-type-name>" + alias_.name)
+      self.record_block_local_type_name(alias_.name)
       self.collected_type_aliases.push(alias_)
       Empty
     }
@@ -1875,6 +1881,9 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   // ParseError escaping leaves it unbalanced, which does not matter
   // because a raise abandons the whole parse.
   self.block_binding_nonnumeric.push(Map([]))
+  // Parallel frame for the TS2300 declaration-space rule; see
+  // `Parser::block_local_type_names`. Popped at the same single exit.
+  self.block_local_type_names.push([])
   let stmts : Array[@ast.TsStmt] = []
   let stmt_positions : Array[Int] = []
   let prev_strict = self.in_strict
@@ -2025,6 +2034,10 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
   let _ = self.block_binding_nonnumeric.pop()
+  self.last_block_local_type_names = match self.block_local_type_names.pop() {
+    Some(frame) => frame
+    None => []
+  }
   { stmts, stmt_positions, }
 }
 
@@ -2457,5 +2470,90 @@ fn apply_jsdoc_var_func_overlay(
         apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
       )
     _ => stmt
+  }
+}
+
+///|
+/// Record a type declaration made at the top level of the block being
+/// parsed, for the TS2300 declaration-space rule.
+///
+/// A callable's type parameters and the top-level local types of its body
+/// share one declaration space, so `function f<T>() { interface T { } }`
+/// is a duplicate identifier and tsc reports it on BOTH. The three kinds
+/// that participate were probed one at a time: `interface`, a `type`
+/// alias and a `class` all report, and an `enum` does NOT — it gets
+/// TS2567 ("enum declarations can only merge with namespace or other enum
+/// declarations"), a different error this rule does not claim, so the
+/// enum arm is deliberately absent. A `namespace` inside a function body
+/// is TS1235 before this question is reachable.
+///
+/// Appends to the INNERMOST frame, which is the block currently being
+/// parsed: a class body's own method bodies have pushed and popped their
+/// frames by the time the `Class` arm runs.
+fn Parser::record_block_local_type_name(self : Parser, name : String) -> Unit {
+  let depth = self.block_local_type_names.length()
+  if depth == 0 || name == "" {
+    return
+  }
+  self.block_local_type_names[depth - 1].push(name)
+}
+
+///|
+/// The `class T { }` spelling of `record_block_local_type_name`.
+///
+/// Takes the pre-parse length of `collected_local_classes` rather than a
+/// name, because `record_local_class` consumes the parser's stash and may
+/// legitimately push NOTHING (a class the parser lowered instead). Reading
+/// the last element unconditionally would then name a PREVIOUS class.
+fn Parser::record_block_local_class_name(self : Parser, before : Int) -> Unit {
+  let after = self.collected_local_classes.length()
+  if after <= before {
+    return
+  }
+  self.record_block_local_type_name(
+    self.collected_local_classes[after - 1].name,
+  )
+}
+
+///|
+/// TS2300 for a callable's type parameter redeclared as a type at the top
+/// level of its own body.
+///
+/// Called at a callable's body site IMMEDIATELY after its own
+/// `parse_block()`, which is what makes `last_block_local_type_names` that
+/// body's frame — the same shape as `last_function_bodiless`. A site that
+/// does not call it takes a MISS, which is the affordable direction; there
+/// is no ambient field to get stale, so a missed site cannot invent a
+/// finding.
+///
+/// Every boundary was probed against the real compiler and each one is
+/// LEGAL, so none of them is reachable from here by construction:
+///
+///   - a nested block — `if`, `try`, `for`, a bare `{ }` — has its own
+///     frame, so its names never enter this one;
+///   - a nested function's body likewise;
+///   - a VALUE binding of the same name (`let T = 1`, `const T = 1`,
+///     `var T = 1`, `function T() { }`, a parameter named `T`) is in the
+///     other declaration space and is never recorded here;
+///   - a CLASS's own type parameters against a method body's local type
+///     (`class L<T> { m() { interface T { } } }`) — only a callable's own
+///     list is ever passed in;
+///   - a class EXPRESSION's name (`const c = class T { }`) is scoped to
+///     the expression, and `parse_stmt`'s `Class` arm never sees it.
+fn Parser::record_type_param_body_collisions(
+  self : Parser,
+  type_params : Array[String],
+) -> Unit {
+  if type_params.length() == 0 {
+    return
+  }
+  let locals = self.last_block_local_type_names
+  if locals.length() == 0 {
+    return
+  }
+  for name in type_params {
+    if name != "" && locals.contains(name) {
+      self.grammar_misuses.push("Duplicate identifier '\{name}'.")
+    }
   }
 }

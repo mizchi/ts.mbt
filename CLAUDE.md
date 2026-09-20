@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2670 / MISS in scope 45 /
+  is a soundness bug, and there are none (TP 2671 / MISS in scope 44 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -3181,7 +3181,52 @@ product surfaces now.
   member (`interface Token<K> extends Node` makes every instantiation a
   `Node`, while `Token<A>` against `Token<B>` depends on the arguments —
   that pair still reports, probed). Ten cells, all agreeing with tsc.
-  see").
+  Batch FH is the first in this run to aim back at the CONFORMANCE
+  backlog, and it takes **MISS in scope 45 -> 44** at FP 0 with real code
+  byte-identical (`typescript.d.ts`, preact, vitest and hono all still 0,
+  zod still 108, and a 3,982-file sweep 16,635 on both binaries with no
+  file differing). The target was a filed abstention with a STATED SCOPE
+  rather than a bucket ranking: batch CA's `let x; let x` rule named its
+  four uncovered shapes in writing, and "local TYPE declarations" is one
+  of them. A callable's type parameters and the type declarations at its
+  own body's top level are ONE declaration space, so
+  `function f<T>() { interface T { } }` is TS2300 — decidable in the
+  parser, since both facts are in hand at the same moment.
+  Thirty-three cells were probed before anything was written and three of
+  them decided the design. `enum T { }` is **TS2567**, a different error
+  this rule does not claim, so the enum arm is deliberately absent while
+  `interface`, a `type` alias and a `class` participate.
+  `class L<T> { m() { interface T { } } }` is **LEGAL** — a CLASS's own
+  type parameters do not share the space with a method body's local type,
+  so only the METHOD's list is passed at that site, and a rule written
+  from "the enclosing generic declaration" would have false-positived on
+  every generic class with a local type in a method. And
+  `function f<T>(cb = () => { interface T { } }) { }` is **LEGAL**, which
+  is the cell that rules out the cheap implementation: setting a pending
+  field inside `parse_type_param_names_bounds_and_const_flags` and
+  consuming it in `parse_block` is one site instead of six, and a
+  parameter DEFAULT can hold a body that would consume it. So the fact is
+  read at the BODY site, right after that body's own `parse_block()`, in
+  the `last_function_bodiless` shape.
+  The fail direction is what makes the nested-scope neighbours legal by
+  CONSTRUCTION rather than by a condition. `parse_block` keeps one frame
+  per block beside the `block_binding_nonnumeric` frame it already pushes
+  and pops at the same single exit, and stashes it on the way out; a
+  nested block, a nested function's body, a `try`, a `for` and a bare
+  `{ }` each have their own frame, and a VALUE binding of the same name
+  is never recorded in one. A callable site that does not ask takes a
+  MISS, and there is no ambient field to go stale, so a missed site
+  cannot invent a finding — the opposite of the wrapper-node default arms
+  this file's ledger counts eight of. Two of the six sites DISCARD the
+  list they need (a generic arrow's `<T>` is in no AST node and an
+  object-literal method's goes through `skip_type_params`), and both read
+  `type_param_names_ahead`, extracted from the
+  `record_type_param_names_ahead` walk batch EP wrote for exactly those
+  two positions: one walk, two consumers. The file's OTHER error, TS2304
+  for a body-local type referenced from the same function's SIGNATURE, is
+  left alone with its blocker — it needs the name to be absent from every
+  outer scope and from the lib, which is `unresolved_type_references`,
+  rejected three times here with a measured cause.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

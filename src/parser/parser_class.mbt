@@ -3385,6 +3385,12 @@ fn Parser::parse_class_body(
         self.in_generator = is_generator
         self.in_function = true
         let body = self.parse_block()
+        // TS2300: a METHOD's own type parameters share a declaration space
+        // with its body's top-level local types. The enclosing CLASS's type
+        // parameters do NOT — `class L<T> { m() { interface T { } } }` is
+        // legal, probed — which is why only `method_type_param_names` is
+        // passed here.
+        self.record_type_param_body_collisions(method_type_param_names)
         self.in_generator = prev_generator
         self.in_function = prev_function
         body

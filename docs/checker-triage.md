@@ -1,10 +1,10 @@
 # What the checker supports, what it will not, and why
 
-Status on 2026-09-18 (`just verify-checker-soundness`):
+Status on 2026-09-20 (`just verify-checker-soundness`):
 
 ```
-TP  err+flag  : 2670   (of which via parse rejection: 390)
-MISS in scope : 45     (the backlog — this one can reach zero)
+TP  err+flag  : 2671   (of which via parse rejection: 390)
+MISS in scope : 44     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -46,7 +46,7 @@ next?". The oracle therefore splits the bucket:
 The asymmetry is deliberate. A MISS is expected because we model a subset
 of TypeScript; an FP never is.
 
-## 2. The 45 in-scope MISS files, by machinery
+## 2. The 44 in-scope MISS files, by machinery
 
 From `node scripts/checker_miss_rank.mjs` over the oracle's `--miss-list`
 — every file run through the local compiler under its own `// @option:`
@@ -63,39 +63,47 @@ have exactly one file each.
 | type-level machinery | 6 | 3 | variadic tuples, template-literal placeholders, TS2536 key checks, a conditional left unresolved inside `&` |
 | narrowing and control flow | 4 | 3 | aliased guards (fail direction is an FP), `typeof x === "object"` to `object \| null`, narrowing to `never`, definite assignment |
 | lib and host shapes | 4 | 3 | `Intl` members by lib version, the `Promise` constructor's callback parameter, structural `Generator` comparison |
-| name resolution and declarations | 3 | 3 / declared | all three are recorded rejections or abstentions with a probe |
+| name resolution and declarations | 2 | 3 / declared | both are recorded rejections with a probe |
 
-Every row is Tier 3, and that is the honest reading of MISS 45: **there is
+Every row is Tier 3, and that is the honest reading of MISS 44: **there is
 no Tier 1 or Tier 2 left.** Tier 1 (conditional through a generic alias,
 the utility-type table, overload selection, computed `unique symbol` keys
 as a cluster) was taken in batches DI–DM and EB, or opened and found to be
 eleven unrelated codes rather than a feature. Tier 2 (the grammar and
 declaration rules, the implicit-any family, the strict-null bucket) was
 taken in batches DN through ET. The thirty-four files between MISS 80 and
-MISS 45 took twelve batches and roughly one rule per file, which is the
+MISS 44 took twelve batches and roughly one rule per file, which is the
 rate this tier now has — and six of those batches (EU–EZ) also bought
 four CAPABILITIES the corpus cannot score at all, fixed three false
 positives on legal code, and found a segfault.
 
 ### Tier 3 — DEFER: real but expensive
 
-All 45. Every one is a genuine TypeScript behaviour and none is reachable
+All 44. Every one is a genuine TypeScript behaviour and none is reachable
 without machinery we would have to build — real generic inference,
 contextual typing, spread-type computation, a flow graph, lib interface
 merging. Do not take these for the MISS count. Take an individual file
 only when a real bridge input or `mtsc` target demands it, and record
 which one did; the measured rate here is about one file per investigation.
 
-Five of the 45 carry a **recorded rejection or abstention with a probe**,
+Four of the 44 carry a **recorded rejection or abstention with a probe**,
 so they should not be re-attacked as written (details in
 `UNSUPPORTED.md` §1 and §3): `inferTypesInvalidExtendsDeclaration` (the
 parser reduces the conditional before the checker sees it),
 `await_incorrectThisType` (structural assignability of a phantom type
 parameter makes the naive rule unsound), `stringLiteralTypeIsSubtypeOfString`
-(173 lib interfaces are declared empty), `symbolProperty3` (needs the
-`Symbol` constructor as a value type, for a spelling nobody writes),
-and `localTypes4` (a block-local type declared twice is deliberately left
-unregistered). `intersectionWithIndexSignatures` was the sixth and is a
+(173 lib interfaces are declared empty), and `symbolProperty3` (needs the
+`Symbol` constructor as a value type, for a spelling nobody writes).
+
+`localTypes4` was the fifth and is a TP since batch FH, and the way it
+flipped is the point: the recorded abstention — a block-local type
+declared twice is deliberately left unregistered — is still TRUE and was
+never what the file needed. Its TS2300 is a callable's type parameters
+colliding with a type declared at its own body's top level, decidable in
+the parser with no registration involved. So an abstention can be
+accurate about its own route and silent about the one that works, which
+is a different failure from the "its REASON has a date on it" lead below.
+`intersectionWithIndexSignatures` was the sixth and is a
 TP since batch EY: batch EN had measured the deciding arm as unreachable
 for an intersection-typed VALUE and written that finding what abstains
 first "is the actual work" — it was an explicit

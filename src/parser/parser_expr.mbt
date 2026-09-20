@@ -629,6 +629,9 @@ fn Parser::parse_object_method_value(
   is_generator : Bool,
   is_async : Bool,
 ) -> @ast.TsExpr raise ParseError {
+  // `skip_type_params` discards the names; the TS2300 declaration-space
+  // rule needs them, so read them with the shared lookahead first.
+  let method_type_params = self.type_param_names_ahead()
   self.skip_type_params()
   let _ = self.expect(LParen)
   let params = self.parse_params()
@@ -649,6 +652,7 @@ fn Parser::parse_object_method_value(
   self.in_function = true
   self.in_async = is_async
   let body = self.parse_block()
+  self.record_type_param_body_collisions(method_type_params)
   self.in_generator = prev_generator
   self.in_function = prev_function
   self.in_async = prev_async
@@ -2796,6 +2800,10 @@ fn Parser::parse_generic_arrow_function(
   // (`ArrowFunc` has no slot for them), so record the names before the
   // skip eats them — the only place an arrow's `<T>` is visible.
   self.record_type_param_names_ahead()
+  // Same names again, as a list, for the TS2300 declaration-space rule
+  // below — `ArrowFunc` has no type-parameter slot, so this lookahead is
+  // the only place a generic arrow's `<T>` is visible.
+  let arrow_type_params = self.type_param_names_ahead()
   self.skip_type_args()
   let _ = self.expect(LParen)
   let params = self.parse_params()
@@ -2824,6 +2832,10 @@ fn Parser::parse_generic_arrow_function(
     let prev_generator = self.in_generator
     self.in_generator = false
     let block = self.parse_block()
+    // TS2300: a generic arrow's type parameters and its body's top-level
+    // type declarations are one declaration space, exactly as for a
+    // `function` — probed.
+    self.record_type_param_body_collisions(arrow_type_params)
     self.in_generator = prev_generator
     self.in_function = prev_function
     self.in_iteration = prev_iteration
@@ -4582,6 +4594,7 @@ fn Parser::parse_async_arrow_function(
     }
   }
 
+  let async_arrow_type_params = self.type_param_names_ahead()
   if self.check(Lt) {
     self.skip_type_args()
   }
@@ -4622,6 +4635,7 @@ fn Parser::parse_async_arrow_function(
     let prev_generator = self.in_generator
     self.in_generator = false
     let block = self.parse_block()
+    self.record_type_param_body_collisions(async_arrow_type_params)
     self.in_generator = prev_generator
     self.in_function = prev_function
     self.in_iteration = prev_iteration

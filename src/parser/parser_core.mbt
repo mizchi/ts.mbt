@@ -347,6 +347,26 @@ pub struct Parser {
   // initializer records `false` for the same reason — every abstention
   // here loses a finding rather than inventing one.
   block_binding_nonnumeric : Array[Map[String, Bool]]
+  // One frame per `parse_block`, holding the names of the TYPE
+  // declarations (`interface` / `type` alias / `class`) that block
+  // declared at ITS OWN top level. TS2300: a callable's type parameters
+  // and the top-level local types of its body share one declaration
+  // space, so `function f<T>() { interface T { } }` is a duplicate
+  // identifier — probed, and the boundary is exact: a nested block
+  // (`if`, `try`, `for`, a bare `{ }`), a nested function's body, a
+  // VALUE binding of the same name, and a CLASS's own type parameters
+  // against a method body's local type are all LEGAL.
+  //
+  // A frame rather than a flat list because the rule is about the body's
+  // TOP LEVEL; `grammar_misuses` is scope-blind, which is why the
+  // existing `<local-type-name>` marker cannot answer this.
+  block_local_type_names : Array[Array[String]]
+  // The frame `parse_block` just popped. Read by
+  // `record_type_param_body_collisions` at the callable body sites,
+  // immediately after their own `parse_block()` — the same shape as
+  // `last_function_bodiless`. A site that does not call it takes a MISS,
+  // which is the affordable direction.
+  mut last_block_local_type_names : Array[String]
   // `(field name, declared type)` for every runtime class parsed in
   // this module. See `TsModuleBlock.class_fields`.
   collected_class_fields : Array[(String, @ast.TsType)]
@@ -468,6 +488,8 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_interfaces: [],
     collected_local_classes: [],
     block_binding_nonnumeric: [],
+    block_local_type_names: [],
+    last_block_local_type_names: [],
     collected_class_fields: [],
     collected_type_only_exports: {},
     collected_export_equals: false,
@@ -755,6 +777,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_interfaces: [],
     collected_local_classes: [],
     block_binding_nonnumeric: [],
+    block_local_type_names: [],
+    last_block_local_type_names: [],
     collected_class_fields: [],
     collected_type_only_exports: {},
     collected_export_equals: false,

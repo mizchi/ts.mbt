@@ -3,6 +3,80 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FH (2026-09-20): back to the MISS axis — a declaration space nobody owned
+
+`TP 2670 -> 2671 | MISS in scope 45 -> **44** | OUT OF SCOPE 19 | FP 0 |
+PFLEGAL 0 | TN 1750`, and byte-identical on real code: `typescript.d.ts`,
+preact, vitest and hono all stay at 0, zod stays at 108, and a 3,982-file
+`mtsc check` sweep over every `.d.ts` under `node_modules` plus effect's
+sources reports **16,635 on both binaries with no file differing**.
+
+The first batch in this series aimed back at the CONFORMANCE backlog
+rather than at real-package false positives, and the target was a filed
+abstention with a stated scope rather than a ranking. Batch CA's
+`let x; let x` rule named its four uncovered shapes in writing, and one of
+them is "local TYPE declarations" — `localTypes4`, which is still a MISS.
+
+**The rule.** A callable's TYPE PARAMETERS and the TYPE declarations at
+the top level of its own body are one declaration space, so
+
+    function f<T>() { interface T { } }
+
+is TS2300 and tsc reports it on both. No type information anywhere: the
+parser has the type-parameter list and the body's own declarations at the
+same moment.
+
+**Thirty-three cells were probed against 6.0.3 before anything was
+written, and three of them decided the design.**
+
+1. `enum T { }` is **TS2567** ("enum declarations can only merge with
+   namespace or other enum declarations"), a different error this rule
+   does not claim, so the enum arm is deliberately absent — `interface`,
+   a `type` alias and a `class` are the three that participate. A
+   `namespace` in a function body is TS1235 before the question is even
+   reachable.
+
+2. `class L<T> { m() { interface T { } } }` is **LEGAL**. A class's own
+   type parameters do NOT share the space with a method body's local
+   type, which is why only the METHOD's list is passed at that site. A
+   rule written from "the enclosing generic declaration" would have been
+   a false positive on every generic class with a local type in a method.
+
+3. `function f<T>(cb = () => { interface T { } }) { }` is **LEGAL**, and
+   it is the cell that rules out the cheap implementation. Setting a
+   "pending type parameters" field inside
+   `parse_type_param_names_bounds_and_const_flags` and consuming it in
+   `parse_block` is one site instead of six — and a parameter DEFAULT can
+   hold a body, which would have consumed the field and reported this.
+   The fact is therefore read at the BODY site, immediately after that
+   body's own `parse_block()`, in the shape `last_function_bodiless`
+   already uses.
+
+**Fail direction.** `parse_block` keeps one frame per block (beside the
+`block_binding_nonnumeric` frame it already pushes and pops at the same
+single exit) and stashes it into `last_block_local_type_names` on the way
+out. A callable site that does not ask takes a MISS; there is no ambient
+field to go stale, so a missed site cannot invent a finding. That is also
+what makes every nested-scope neighbour legal by CONSTRUCTION rather than
+by a condition: a nested block, a nested function's body, a `try`, a
+`for`, a bare `{ }` each have their own frame, and a VALUE binding of the
+same name (`let T`, `const T`, `var T`, `function T`, a parameter `T`) is
+never recorded in one.
+
+Six sites, and two of them DISCARD the list they need. A generic arrow's
+`<T>` is in no AST node at all and an object-literal method's goes
+through `skip_type_params`, so both read `type_param_names_ahead` — the
+walk extracted from `record_type_param_names_ahead`, which batch EP wrote
+for exactly these two positions. One walk with two consumers rather than
+a second copy of it.
+
+Not covered, and stated rather than left to be discovered: the file's
+other error is TS2304 for a type declared in a body being referenced from
+that same function's SIGNATURE (`function f(x: T): T { interface T { } }`).
+That needs the name to be absent from every outer scope and from the lib,
+which is `unresolved_type_references` — rejected three times in this
+series with a measured cause. The file flips on the TS2300 half alone.
+
 ### Batch FG (2026-09-20): `typescript.d.ts` to ZERO
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
