@@ -1,6 +1,6 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FD:
+Measured on 2026-09-20, after batches EU–FE:
 
 ```
 TP  err+flag  : 2670   (of which via parse rejection: 390)
@@ -44,6 +44,17 @@ sets. preact 4 -> 0, `typescript.d.ts` 15 -> 7, the sweep 17,881 ->
 16,688 with 0 added. Corpus-NEUTRAL in the way that matters: the corpus
 holds no `.d.ts`, so an unchanged oracle is the check that the exemption
 is keyed on the FILE rather than a weakened rule.
+
+Batch FE closed the last family that re-ranking left: a namespace may
+re-export a file-level IMPORT, and `check_non_local_exports` could not
+see one because a namespace body is its own `TsModule`. vitest 6 -> 0.
+Across FB-FE the four real `.d.ts` entries go `typescript.d.ts` 88 -> 7,
+preact 4 -> 0, vitest 6 -> 0, hono 0, zod 118 -> 108, and the sweep
+17,885 -> 16,648 — 1,243 false positives on legal real code, none
+added, at TP / MISS / FP unchanged throughout. What is left on
+`typescript.d.ts` is 7 TS2430 shapes the assignability still cannot
+follow (`SuperExpression` against `LeftHandSideExpression`,
+`JsonMinusNumericLiteral.operand`).
 
 ## Regenerating this file
 

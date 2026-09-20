@@ -3125,6 +3125,24 @@ product surfaces now.
   needs its own measurement, and `verify-generated-fixtures` /
   `verify-scaffolds` / `verify-examples` are byte-identical under this
   batch precisely because those sites were left alone.
+  Batch FE is the last family FC's re-ranking left and the smallest fix
+  of the four: `check_non_local_exports` ALREADY consults
+  `imported_binding_names` — it was written to — but a NAMESPACE body is
+  its own `TsModule` and the `import` sits at the FILE's top level, so
+  that list is empty one scope in, and `declare namespace N { export
+  { A } }`, the standard `.d.ts` grouping idiom, read as exporting a
+  name the module does not declare. vitest's `index.d.ts` does it six
+  times. The outer chain was already threaded down for other reasons, so
+  the fix is to read it. What made the gap look like a WORKING rule is
+  the sibling case: a name DECLARED at file level and re-exported from a
+  namespace was always silent, because the resolver's tables span the
+  whole chain — only the imported half was module-local, so the rule was
+  right for three of its four inputs. vitest 6 -> 0, the sweep
+  16,688 -> 16,648 with 0 added, oracle identical. Across FB-FE the real
+  `.d.ts` entries go `typescript.d.ts` 88 -> 7, preact 4 -> 0, vitest
+  6 -> 0, hono 0, zod 118 -> 108, and the 4,085-file sweep 17,885 ->
+  16,648 — **1,243 false positives on legal real code, none added**, at
+  TP / MISS / FP unchanged throughout.
   see").
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and

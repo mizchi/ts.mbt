@@ -3,6 +3,50 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FE (2026-09-20): a namespace may re-export a file-level import, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL. The other family batch FC's re-ranking left on
+the real path, and the smallest fix of the four.
+
+```ts
+import { A, B } from './chunks/browser.js';
+declare namespace Experimental {
+	export { A, B };          // TS2661 "only local declarations can be exported"
+}
+```
+
+vitest's `index.d.ts` does that six times and tsc accepts the file. It is
+the standard `.d.ts` grouping idiom.
+
+`check_non_local_exports` ALREADY consults `imported_binding_names` — it
+was written to, with a `Map` built for the scan cost — but a NAMESPACE
+body is its own `TsModule` and the `import` sits at the FILE's top level,
+so that list is empty one scope in. The outer chain was already threaded
+down for other reasons (`next_outers`), so the fix is to read it.
+
+What made the gap look like a working rule is the SIBLING case: a name
+DECLARED at file level and re-exported from a namespace was always
+silent, because the resolver's tables span the whole chain already. Only
+the imported half was module-local, so the rule was right for three of
+its four inputs.
+
+Measured: **vitest 6 -> 0**, the 4,085-file sweep 16,688 -> **16,648**
+with 0 added, the oracle identical, all 12 scaling axes within budget.
+Three of the four real `.d.ts` entries now report ZERO
+(`preact`, `vitest`, `hono`); `typescript.d.ts` is at 7, all of them
+TS2430 shapes our assignability still cannot follow
+(`SuperExpression` against `LeftHandSideExpression`, and
+`JsonMinusNumericLiteral.operand`).
+
+Eight cells probed. The accepts are the vitest shape at one level and
+nested, a file-level declaration re-exported from a namespace, and a
+default import; the rejects are a name neither imported nor declared, at
+top level and inside a namespace, and a mixed clause where only one name
+resolves. One difference from tsc is pre-existing and recorded rather
+than fixed: it reports TS2304 ("Cannot find name") where we report
+TS2661 — a different code for the same rejected program.
+
 ### Batch FD (2026-09-20): a declaration file is ambient — 1,193 false positives, ZERO files
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |

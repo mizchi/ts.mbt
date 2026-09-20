@@ -22605,3 +22605,56 @@ test "checker: a declaration file is ambient (batch FD)" {
   @test.assert_eq(dts("declare function topLevel(): void;"), 0)
   @test.assert_eq(dts("declare class K { m(): void; }"), 0)
 }
+
+///|
+/// Batch FE: TS2661 could not see an import from inside a namespace.
+///
+/// `check_non_local_exports` already consults `imported_binding_names` —
+/// it was written to — but a NAMESPACE body is its own `TsModule` and the
+/// `import { A } from "./dep"` sits at the FILE's top level, so that list
+/// is empty one scope in. `declare namespace N { export { A } }` is the
+/// standard `.d.ts` grouping idiom and vitest's `index.d.ts` does it six
+/// times; tsc accepts the file and we reported all six.
+///
+/// The outer chain is already threaded down (`next_outers`), so the fix
+/// is to read it. The sibling case — a name DECLARED at file level and
+/// re-exported from a namespace — was always silent, because the
+/// resolver's tables span the whole chain already; only the imported
+/// half was module-local, which is exactly what made the gap look like
+/// a rule that works.
+test "checker: a namespace may re-export a file-level import (batch FE)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("only local declarations") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- silent: legal, and each probed against 6.0.3
+  for
+    src in [
+      // The shape vitest writes, at one level and nested.
+      "import { A } from \"./dep.js\";\ndeclare namespace N { export { A }; }\nexport { N };",
+      "import { A } from \"./dep.js\";\ndeclare namespace O { export namespace I { export { A }; } }\nexport { O };",
+      // The sibling that always worked: a file-level DECLARATION
+      // re-exported from a namespace. Kept so the two halves cannot
+      // drift apart again.
+       "declare interface L { x: number }\ndeclare namespace N { export { L }; }\nexport { N };",
+      // A default import and a namespace import bind names too.
+       "import D from \"./dep.js\";\ndeclare namespace N { export { D }; }\nexport { N };",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: a name neither imported nor declared anywhere, at both
+  // scopes. tsc rejects each (TS2304 there, TS2661 here — a different
+  // code for the same program, which predates this batch).
+  for
+    src in [
+      "declare namespace N { export { Nope }; }\nexport { N };", "declare interface L { x: number }\nexport { L, Missing };",
+      "import { A } from \"./dep.js\";\ndeclare namespace N { export { A, Nope }; }\nexport { N };",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}

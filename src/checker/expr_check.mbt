@@ -28221,6 +28221,7 @@ fn callee_is_definitely_not_constructable(callee : @ast.TsExpr) -> Bool {
 /// `export { globalThis }` both report.
 fn check_non_local_exports(
   module_ : @ast.TsModule,
+  outer_modules : Array[@ast.TsModule],
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
@@ -28228,9 +28229,24 @@ fn check_non_local_exports(
   // `imported_binding_names` is an Array, so `.contains` is a scan; a
   // barrel module re-exporting what it imports has many of both, and the
   // product is the one superlinear term in an otherwise linear check.
+  //
+  // The OUTER chain counts too, and that is the whole of this batch: an
+  // `import { A } from "./dep"` sits at the FILE's top level, while a
+  // namespace body is its own `TsModule` whose `imported_binding_names`
+  // is empty — so `declare namespace N { export { A } }`, the standard
+  // `.d.ts` grouping idiom, read as exporting a name the module does not
+  // declare. vitest's `index.d.ts` does it six times and tsc accepts the
+  // file. The resolver already covers names DECLARED at file level (the
+  // sibling `export { Local }` case was always silent), which is exactly
+  // why only the imported half was missing.
   let imported : Map[String, Unit] = Map([])
   for n in module_.imported_binding_names {
     imported[n] = ()
+  }
+  for om in outer_modules {
+    for n in om.imported_binding_names {
+      imported[n] = ()
+    }
   }
   for gm in module_.grammar_misuses {
     if !gm.has_prefix("<export-local>") {
@@ -36990,7 +37006,7 @@ fn check_module_function_bodies_layered(
   for issue in check_merged_export_modifiers(module_, resolver) {
     all.push(issue)
   }
-  for issue in check_non_local_exports(module_, resolver) {
+  for issue in check_non_local_exports(module_, outer_modules, resolver) {
     all.push(issue)
   }
   for issue in check_member_accessibility_mismatch(module_, resolver) {

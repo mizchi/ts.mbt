@@ -264,7 +264,9 @@ false positive を 5 件消しました（118 → 113 diagnostics）。`node_mod
 batch FD（`.d.ts` は `declare` の有無によらず全宣言が ambient）でさらに 7 まで下がり、
 preact は 4 → 0 になりました。conformance corpus に `.d.ts` は 1 つも無いので、
 oracle が動かないことがそのまま「ファイル単位の免除であってルールの弱体化ではない」
-ことの確認になっています。
+ことの確認になっています。batch FE（namespace からファイル先頭の import を
+re-export できる）で vitest も 6 → 0 になり、FB〜FE 合計で実コードの
+false positive を **1,243 件削除・追加 0**、その間 TP / MISS / FP はすべて不変です。
 
 参考として、2026-09-16 に `moon run src/cmd/mtsc -- conformance` で測定した pinned subset
 （TS6 時代の `.errors.txt` baseline を正解とする軽量計測）の結果も残します。
