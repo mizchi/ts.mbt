@@ -948,14 +948,20 @@ async fn mtsc_file_exists(path : String) -> Bool {
 fn mtsc_collect_type_issues(
   source : String,
   allow_jsx : Bool,
+  declaration_file? : Bool = false,
 ) -> Result[Array[@mtsc_core.MtscTypeIssue], String] {
-  @mtsc_core.collect_type_issues(source, allow_jsx)
+  @mtsc_core.collect_type_issues(source, allow_jsx, declaration_file~)
 }
 
 ///|
 /// Print checker diagnostics for one input and return whether it is clean.
 fn mtsc_typecheck_source(source : String, path : String) -> Bool {
-  let issues = match mtsc_collect_type_issues(source, path.has_suffix(".tsx")) {
+  let issues = match
+    mtsc_collect_type_issues(
+      source,
+      path.has_suffix(".tsx"),
+      declaration_file=path.has_suffix(".d.ts"),
+    ) {
     Ok(issues) => issues
     Err(e) => {
       println("mtsc: parse error in \{path}: \{e}")

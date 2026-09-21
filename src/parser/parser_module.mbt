@@ -1201,6 +1201,15 @@ fn Parser::parse_namespace_decl_with_mode(
         // type assertions inside a `.ts` (non-JSX) source don't get
         // misread as JSX element starts.
         let parser = Parser::from_source_with_jsx(body_source, self.allow_jsx)
+        // A namespace body re-parses with a FRESH parser, so the
+        // declaration-file fact — a property of the SOURCE, not of any
+        // one declaration — has to be carried across or every rule that
+        // reads it goes back to reporting one level in. `typescript.d.ts`
+        // is where that shows: its false positives are on
+        // `namespace ts > namespace server > class Project`.
+        if self.in_declaration_file {
+          parser.mark_declaration_file()
+        }
         parser.parse_module_with_seeded_const_values_internal({}, true)
       } else {
         // Runtime first, ambient fallback. This lets us parse runtime
@@ -1211,6 +1220,9 @@ fn Parser::parse_namespace_decl_with_mode(
           body_source,
           self.allow_jsx,
         )
+        if self.in_declaration_file {
+          runtime_parser.mark_declaration_file()
+        }
         try
           runtime_parser.parse_module_with_seeded_const_values_internal(
             {},
@@ -1222,6 +1234,9 @@ fn Parser::parse_namespace_decl_with_mode(
               body_source,
               self.allow_jsx,
             )
+            if self.in_declaration_file {
+              ambient_parser.mark_declaration_file()
+            }
             ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
               true,
@@ -3898,6 +3913,15 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   ambient_decls : Bool,
 ) -> @ast.TsModule raise ParseError {
   self.in_ambient_module = ambient_decls
+  // The checker-side half of the same fact. TS2390 / TS2564 / TS2378 all
+  // key their ambient exemption on the `declare` KEYWORD and cannot see
+  // the file's extension — `check_dts_top_level_modifiers` states that
+  // blocker in its own comment ("keyed off the file extension, which the
+  // general check pipeline can't see") — so the parse records it where
+  // every layer of the recursion will carry it.
+  if self.in_declaration_file {
+    self.grammar_misuses.push("<declaration-file>")
+  }
   let funcs : Array[@ast.TsFunc] = []
   let interfaces : Array[@ast.TsInterface] = []
   let type_aliases : Array[@ast.TsTypeAlias] = []

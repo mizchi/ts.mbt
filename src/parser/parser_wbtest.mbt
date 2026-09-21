@@ -8256,3 +8256,89 @@ test "parser: an unused renaming in a bodiless parameter list" {
     @test.assert_eq(count(src), 0)
   }
 }
+
+///|
+/// TS2300 — a callable's type parameters and the top-level local TYPE
+/// declarations of its own body are one declaration space (batch FH).
+///
+/// `localTypes4` is the conformance file, and CLAUDE.md's batch CA had
+/// filed exactly this as out of scope ("local TYPE declarations" is one
+/// of the four shapes that batch's `let x; let x` rule does not cover).
+///
+/// Every cell below was measured against the real compiler, and three of
+/// them are the reason the rule is written where it is:
+///
+///   - `enum T { }` is TS2567, a DIFFERENT error, so the enum arm is
+///     deliberately absent;
+///   - `class L<T> { m() { interface T { } } }` is LEGAL — a class's own
+///     type parameters do not share the space with a method body's local
+///     type, which is why only the METHOD's list is passed at that site;
+///   - `function f<T>(cb = () => { interface T { } }) { }` is LEGAL, and
+///     is the hazard that rules out setting an ambient "pending type
+///     params" field in the type-parameter parser: a parameter DEFAULT
+///     can hold a body, and it would have consumed the field.
+test "parser: TS2300 type parameter vs a local type in the same body (batch FH)" {
+  // --- fires: real TS2300, every spelling of a callable.
+  for
+    src in [
+      "function a1<T>() { interface T { } }", "function a2<T>() { type T = number; }",
+      "function a3<T>() { class T { } }",
+      // a generic arrow — its `<T>` is in no AST node at all
+       "const b1 = <T,>() => { interface T { } };",
+      // a class method, a static method, an abstract class's method
+       "class K { m<T>() { interface T { } } }", "class M { static m<T>() { interface T { } } }",
+      "abstract class N { m<T>() { interface T { } } }",
+      // a function EXPRESSION, an object-literal method, an async arrow
+       "const b3 = function <T>() { interface T { } };", "const c1 = { m<T>() { interface T { } } };",
+      "const c2 = async <T,>() => { interface T { } };",
+      // a generator and an async function
+       "function* c8<T>() { interface T { } }", "async function c9<T>() { interface T { } }",
+      // the SECOND type parameter, and a nested function's own list
+       "function c7<A, B>() { interface B { } }", "function c10<T>() { function g<T>() { interface T { } } }",
+    ] {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    let mut n = 0
+    for gm in m.grammar_misuses {
+      if gm.has_prefix("Duplicate identifier") {
+        n += 1
+      }
+    }
+    if n == 0 {
+      fail("expected a duplicate identifier for `\{src}`")
+    }
+  }
+  // --- silent: every one of these is TS7-ACCEPTED, probed against 6.0.3.
+  for
+    src in [
+      // a different error entirely (TS2567), not this one
+      "function a4<T>() { enum T { X } }",
+      // nested blocks have their own frame: `if`, `try`, `for`, bare `{ }`
+       "function a6<T>() { if (true) { interface T { } } }", "function b7<T>() { try { interface T { } } catch { } }",
+      "function b8<T>() { for (;;) { interface T { } } }", "function b9<T>() { { interface T { } } }",
+      // a nested function's body is its own space
+       "function a7<T>() { function g() { interface T { } } }", "function b4() { interface T { } function g<T>() { } }",
+      // the VALUE declaration space is a different one
+       "function a8<T>() { let T = 1; }", "function a9<T>() { const T = 1; }", "function a10<T>() { var T = 1; }",
+      "function a12<T>() { function T() { } }", "function b5<T>(T: number) { }",
+      "function b6(T: number) { interface T { } }",
+      // a CLASS's type parameters against a method body's local type
+       "class L<T> { m() { interface T { } } }",
+      // a class EXPRESSION's name is scoped to the expression
+       "function b12<T>() { const c = class T { }; }",
+      // a parameter DEFAULT holding a body — the field-based design's trap
+       "function c3<T>(cb = () => { interface T { } }) { }",
+      // a different name
+       "function a11<T>() { interface U { } }",
+    ] {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.has_prefix("Duplicate identifier") {
+        fail("`\{src}` is legal TypeScript and must not record a duplicate")
+      }
+    }
+  }
+}

@@ -300,6 +300,15 @@ test "expr_check: check_module_function_bodies walks all top-level funcs" {
 }
 
 ///|
+fn parse_declaration_module_or_empty(src : String) -> @ast.TsModule {
+  let parser = @parser.Parser::from_source(src)
+  parser.mark_declaration_file()
+  parser.parse_module() catch {
+    _ => parse_module_or_empty("")
+  }
+}
+
+///|
 fn parse_module_or_empty(src : String) -> @ast.TsModule {
   try @parser.parse_module_from_source_with_const_values(src, {}) catch {
     _ =>
@@ -10560,12 +10569,17 @@ test "expr_check: string literal vs string-literal union, call args (TS2345)" {
   assert_true(issues("const x: \"a\" | \"b\" = \"c\";") > 0)
   // A literal that IS in the union is fine.
   @test.assert_eq(issues("function f(x: \"a\" | \"b\"): void {} f(\"a\");"), 0)
-  // A widened `string` source stays silent (could be a valid member; matches
-  // the over-widening guard, no false positive).
-  @test.assert_eq(
+  // A `string` source is REPORTED: `string` is not assignable to
+  // `"a" | "b"`, and the real compiler gives TS2345 here (probed). This
+  // assertion read 0 until batch FB, with a comment calling it an
+  // over-widening guard — it was pinning the const-widening abstention,
+  // which suppressed every `string` source against a literal target. The
+  // fourteenth test in this repo found asserting a gap rather than a
+  // behaviour.
+  assert_true(
     issues(
       "function f(x: \"a\" | \"b\"): void {} declare const s: string; f(s);",
-    ),
+    ) >
     0,
   )
 }
@@ -22368,5 +22382,409 @@ test "checker: late-bound unique-symbol member key (batch FA)" {
       "interface W { [Symbol.iterator](): Iterator<number>; a: number }\ndeclare const w: W;\nconst r: number = w.a;",
     ] {
     @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch FB: a `string`-typed source against a string-LITERAL target, and
+/// the `let` widening that had to be fixed to make it sound.
+///
+/// `check_expr_against`'s const-widening abstention suppressed every
+/// mismatch whose source is exactly the primitive base of the target's
+/// literals, for a stated reason — our inference widens a `const`'s
+/// literal initializer where tsc keeps it narrow. Probed one base at a
+/// time, that reason is true for NUMBER, BOOLEAN and BIGINT (where
+/// `infer_expr` erases the literal at the source: `NumberLit(_) =>
+/// Number`) and false for STRING, where `Literal(s)` survives. So the
+/// arm was dead weight for the one base that carries the commonest
+/// real-world TS2322 / TS2345 there is.
+///
+/// Relaxing it exposed a latent false positive rather than creating one:
+/// a MUTABLE binding's fresh literal initializer widens in tsc
+/// (`let s = "a"` is `string`, `const s = "a"` is `"a"`) and did not
+/// here, which is five reports on legal code in zod's own locale files
+/// (`let invalid_adj = "Невалиден"` reassigned five times). Fixed at the
+/// binding site, gated on FRESHNESS because the corpus named the file
+/// where it matters: in `let a: "foo" = "foo"; let b = a || "foo"`, `a`'s
+/// literal type came from an annotation and is not fresh, so `b` keeps
+/// `"foo"` and `let c: "foo" = b` is TS7-ACCEPTED.
+test "checker: string source against a literal target (batch FB)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // The six cells that were silent, one per spelling of the
+      // assignment: an initializer, an assignment, a union target, a
+      // call argument, an ALIAS naming the union.
+      "declare const s: string;\nconst a: \"other\" = s;", "declare const s: string;\nlet a: \"other\";\na = s;",
+      "declare const s: string;\nconst a: \"a\" | \"b\" = s;", "declare const s: string;\nfunction f(x: \"a\" | \"b\") {}\nf(s);",
+      "type Mode = \"r\" | \"w\";\ndeclare const s: string;\nconst a: Mode = s;",
+      // A `const` still keeps its literal, so a WRONG literal reports.
+       "const c = \"z\";\nconst a: \"a\" | \"b\" = c;",
+      // …and so does a `let` whose fresh literal widened: `string` is
+      // not assignable to `\"b\"` either.
+       "let c = \"a\";\nconst a: \"b\" = c;",
+      // An object literal's members widen whatever the binding kind,
+      // which is what tsc does (the object is mutable).
+       "const o = { k: \"a\" };\nconst a: { k: \"b\" } = o;",
+      // …and the same array WITHOUT the assertion: tsc types it
+      // `string[]`, so the read really is `string` and the report stands.
+       "const arr = [\"x\", \"y\"];\nconst y: \"x\" = arr[0];",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // The widening a mutable binding gets is the whole point: the
+      // reassignment is legal and was reported before.
+      "let m = \"3.21.2\";\ndeclare const v: string;\nm = v;", "let m = \"a\";\nm = \"b\";",
+      // FRESHNESS: `a`'s literal type came from an annotation, so
+      // neither it nor the `||` over it widens.
+       "let a: \"foo\" = \"foo\";\nlet b = a || \"foo\";\nlet c: \"foo\" = b;", "declare const d: \"a\";\nlet x = d;\nconst y: \"a\" = x;",
+      // A `const` keeps its literal, so the RIGHT literal is accepted.
+       "const c = \"a\";\nconst a: \"a\" | \"b\" = c;",
+      // Every other string spelling tsc keeps narrow, we keep narrow.
+       "declare function g(): \"a\";\nconst a: \"a\" = g();", "const v = \"a\" as \"a\";\nconst a: \"a\" = v;",
+      "declare let u: \"a\" | \"b\";\nif (u === \"a\") { const a: \"a\" = u; }",
+      // An erased `as const` makes the file abstain wholesale: the
+      // parser drops the assertion, so `{ k: \"a\" } as const` arrives as
+      // the plain object literal whose property really does widen here.
+       "const o = { k: \"a\" } as const;\nconst a: \"a\" = o.k;", "const o = { a: { b: \"x\" } } as const;\nconst r: \"x\" = o.a.b;",
+      // …and it reaches a NAMESPACE body, whose markers live on its own
+      // `TsModule` because that body re-parses with a fresh Parser. That
+      // is why the flag is set in `ingest_module`'s recursion rather than
+      // beside the directive flags at the check entry, which reads only
+      // the root module's markers.
+       "namespace N { export const o = { k: \"a\" } as const; }\ndeclare const s: string;\nconst y: \"a\" = s;",
+      // An `as const` ARRAY read: `["a", "b"]`'s widened element type is
+      // `string`, not `string | string`, and the duplicate defeated the
+      // abstention (which tests `inferred_u == base`) as well as printing
+      // a message nobody can act on. Pre-existing, measured against the
+      // baseline binary, and fixed in `widen_literal_deep`'s union arm.
+       "const arr = [\"a\", \"b\"] as const;\nconst y: \"a\" = arr[0];",
+      // The three bases whose literal `infer_expr` erases at the source
+      // keep their abstention, so the const-widening gap stays silent
+      // rather than reporting our own widening.
+       "const q = 789;\nconst a: 1 = q;", "const r = true;\nconst a: false = r;",
+      "const b = 5n;\nconst a: 1n = b;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch FC: TS2430's member comparison could not see a nominal relation.
+///
+/// Found on the axis batch FB opened — running the checker over real
+/// packages rather than the corpus. `typescript.d.ts` is the largest
+/// declaration file there is and tsc accepts it outright, so its 88
+/// diagnostics were all false positives, and **80 of them were this one
+/// rule**. Two independent causes, both of them this file's recurring
+/// shapes.
+///
+/// 1. `is_assignable_to` is the RESOLVER-FREE entry point and the
+///    comparison called `resolver.unwrap`, which peels the OUTERMOST type
+///    only. A base member typed as an alias to a union
+///    (`type U = A | B; interface P { name?: U }`) arrives as
+///    `Union([Named("U"), Undefined])` — the union is outermost, so `U`
+///    was never resolved and `Named("A")` against `Named("U")` is
+///    nominal. `unwrap_containers` is the helper written for exactly this
+///    hazard, and its own header says so.
+///
+/// 2. A NOMINAL `extends` relation between two interfaces cannot be
+///    recovered structurally when the hierarchy is mutually recursive:
+///    `interface Node { readonly parent: Node }` beside
+///    `interface CaseBlock extends Node { readonly parent: SwitchStatement }`
+///    is legal, and `SwitchStatement` reaches `Node` only through
+///    `Statement`. The walk for that question already existed as a LOCAL
+///    function inside `tuple_covariant_by_extends`; it is hoisted rather
+///    than copied.
+///
+/// The last cell needed the `Named` / `Struct` split batch EM recorded:
+/// `unwrap_containers` expands an interface reference it can resolve into
+/// `Struct(name, …)` and leaves one it cannot as `Named(name)`, so
+/// `parent: N | Q` expanded its members while `parent: N` did not, and a
+/// `Named`-only match worked for the bare pair and failed for the union.
+test "checker: TS2430 nominal and aliased member compatibility (batch FC)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- silent: legal narrowings tsc accepts (all probed against 6.0.3)
+  for
+    src in [
+      // (1) the base member is an ALIAS to a union; the derived member is
+      // one of its arms. `typescript.d.ts`'s `name?: DeclarationName`.
+      "interface A{a:number}\ninterface B{b:number}\ntype U=A|B\ninterface P{name?:U}\ninterface D extends P{name?:A}",
+      // (2) a nominal `extends` chain, one level and three.
+       "interface N{k:number}\ninterface S extends N{s:number}\ninterface P{parent:N}\ninterface D extends P{parent:S}",
+      "interface N{k:number}\ninterface M extends N{m:number}\ninterface S extends M{s:number}\ninterface P{parent:N}\ninterface D extends P{parent:S}",
+      // …and reaching ONE arm of a union base member, which is the cell
+      // that needed the `Struct` spelling as well as the `Named` one.
+       "interface N{k:number}\ninterface S extends N{s:number}\ninterface Q{q:number}\ninterface P{parent:N|Q}\ninterface D extends P{parent:S}",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: the LEGAL NEIGHBOUR of each accept above. Every one is a
+  // real TS2430 in tsc, so the widened accept gives up nothing.
+  for
+    src in [
+      // Not an arm of the aliased union.
+      "interface A{a:number}\ninterface B{b:number}\ninterface C{c:string}\ntype U=A|B\ninterface P{name?:U}\ninterface D extends P{name?:C}",
+      // Nominally unrelated, and the chain walked the WRONG way (a base
+      // member may not be narrowed to its own supertype).
+       "interface N{k:number}\ninterface S{s:number}\ninterface P{parent:N}\ninterface D extends P{parent:S}",
+      "interface N{k:number}\ninterface S extends N{s:number}\ninterface P{parent:S}\ninterface D extends P{parent:N}",
+      // No arm of the union base member is reached.
+       "interface N{k:number}\ninterface S{s:number}\ninterface Q{q:number}\ninterface P{parent:N|Q}\ninterface D extends P{parent:S}",
+      // Ordinary incompatible members still report.
+       "interface P{v:number}\ninterface D extends P{v:string}", "interface P{v:\"a\"}\ninterface D extends P{v:string}",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}
+
+///|
+/// Batch FD: a DECLARATION FILE makes every declaration in it ambient
+/// whether or not it writes `declare`, and four bodiless-declaration
+/// rules did not know that.
+///
+/// `in_ambient_module` is a WHOLE-PARSE mode that only a
+/// `declare module "spec" { … }` body and `global { … }` ever set —
+/// `Parser::parse_module` passes `false` — while five of its six gates
+/// name `.d.ts` in their own comments and one says so literally
+/// ("Ambient mode (`.d.ts` / ambient external module body)"). So
+/// `export class C { constructor(m: number); x: number; get t(): string;
+/// m(): void }` in a `.d.ts` — which writes no `declare` and therefore
+/// goes through the RUNTIME class parser — drew TS2390, TS2564, TS2378
+/// and TS2391 on a file tsc accepts outright. Measured before the fix:
+/// preact 4 of 4 diagnostics, `typescript.d.ts` 8, and 1,193 across a
+/// 4,085-file sweep.
+///
+/// A SECOND Parser field rather than flipping the existing one, because
+/// exactly one rule needs the old question alone: TS1038 fires for
+/// `declare namespace M { declare function f(); }` and NOT for a `.d.ts`
+/// file's own top-level `declare function f(): void`, which is how every
+/// declaration file is written. Probed against 6.0.3 — flipping the
+/// whole-parse flag would have false-positived on all of them.
+test "checker: a declaration file is ambient (batch FD)" {
+  let dts = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(
+      parse_declaration_module_or_empty(src),
+    ).length()
+  }
+  let ts = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Every one of these is ACCEPTED by tsc in a `.d.ts` and REJECTED in a
+  // `.ts` — so each source is asserted BOTH ways, which is what proves
+  // the exemption is keyed on the file rather than a weakened rule.
+  for
+    src in [
+      // TS2390 + TS2564 + TS2378 + TS2391, the shape `lib0` and preact
+      // both write.
+      "export class C {\n  constructor(m: number);\n  blen: number;\n  get t(): string;\n  m(x: number): void;\n}",
+      // Each on its own.
+       "export class C { constructor(m: number); }", "export class C { blen: number; }",
+      "export class C { get t(): string; }", "export class C { m(x: number): void; }",
+      // …and a top-level bodiless function, which is the parser half.
+       "export function f(x: number): void;",
+    ] {
+    @test.assert_eq(dts(src), 0)
+    assert_true(ts(src) > 0)
+  }
+  // The LEGAL NEIGHBOUR that keeps the two fields separate: TS1038 is
+  // about being inside a `declare X { }` BODY, not about the file, and
+  // it must still fire in a `.d.ts`.
+  assert_true(
+    dts("declare namespace M { declare function inner(): void; }") > 0,
+  )
+  // …while the same file's own top-level `declare` is legal.
+  @test.assert_eq(dts("declare function topLevel(): void;"), 0)
+  @test.assert_eq(dts("declare class K { m(): void; }"), 0)
+}
+
+///|
+/// Batch FE: TS2661 could not see an import from inside a namespace.
+///
+/// `check_non_local_exports` already consults `imported_binding_names` —
+/// it was written to — but a NAMESPACE body is its own `TsModule` and the
+/// `import { A } from "./dep"` sits at the FILE's top level, so that list
+/// is empty one scope in. `declare namespace N { export { A } }` is the
+/// standard `.d.ts` grouping idiom and vitest's `index.d.ts` does it six
+/// times; tsc accepts the file and we reported all six.
+///
+/// The outer chain is already threaded down (`next_outers`), so the fix
+/// is to read it. The sibling case — a name DECLARED at file level and
+/// re-exported from a namespace — was always silent, because the
+/// resolver's tables span the whole chain already; only the imported
+/// half was module-local, which is exactly what made the gap look like
+/// a rule that works.
+test "checker: a namespace may re-export a file-level import (batch FE)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("only local declarations") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- silent: legal, and each probed against 6.0.3
+  for
+    src in [
+      // The shape vitest writes, at one level and nested.
+      "import { A } from \"./dep.js\";\ndeclare namespace N { export { A }; }\nexport { N };",
+      "import { A } from \"./dep.js\";\ndeclare namespace O { export namespace I { export { A }; } }\nexport { O };",
+      // The sibling that always worked: a file-level DECLARATION
+      // re-exported from a namespace. Kept so the two halves cannot
+      // drift apart again.
+       "declare interface L { x: number }\ndeclare namespace N { export { L }; }\nexport { N };",
+      // A default import and a namespace import bind names too.
+       "import D from \"./dep.js\";\ndeclare namespace N { export { D }; }\nexport { N };",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: a name neither imported nor declared anywhere, at both
+  // scopes. tsc rejects each (TS2304 there, TS2661 here — a different
+  // code for the same program, which predates this batch).
+  for
+    src in [
+      "declare namespace N { export { Nope }; }\nexport { N };", "declare interface L { x: number }\nexport { L, Missing };",
+      "import { A } from \"./dep.js\";\ndeclare namespace N { export { A, Nope }; }\nexport { N };",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}
+
+///|
+/// Batch FF: the last two TS2430 shapes `typescript.d.ts` reported.
+///
+/// 1. `parts` in `member_covariant_by_iface_extends` split ONE level,
+///    and `unwrap_containers` expands an alias IN PLACE — so
+///    `parent: InterfaceDeclaration | ClassLikeDeclaration`, where
+///    `ClassLikeDeclaration` is itself a union alias, arrived as a union
+///    whose second member is a union, opaque to every `Named` test. A
+///    union of unions is the same union; it is flattened now.
+///
+/// 2. The SIBLING TS2430 rule (the one whose message reads "property X
+///    of type T is not assignable to the base type B") decides through
+///    `struct_assignable_named_rec`, which cannot recover a relation
+///    where the base carries a BRAND the derived only inherits:
+///    `SuperExpression extends PrimaryExpression extends MemberExpression
+///    extends LeftHandSideExpression`, and only the last declares
+///    `_leftHandSideExpressionBrand`. The nominal walk it needed was
+///    ALREADY defined in that same function — a THIRD copy of the BFS,
+///    keyed on a local `iface_by_name` rather than `resolver.interfaces`
+///    — and consulted only for the RETURN-type comparison, never for the
+///    member type.
+test "checker: TS2430 nominal reach through brands and nested unions (batch FF)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("incorrectly extends") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- silent: legal, each probed against 6.0.3
+  for
+    src in [
+      // (1) a derived union one of whose members is an ALIAS to a union.
+      "interface N { k: number }\ninterface ID extends N { i: number }\ninterface CD extends N { c: number }\ninterface CE extends N { e: number }\ntype CLD = CD | CE\ninterface Nd { parent: N }\ninterface HC extends Nd { parent: ID | CLD }",
+      // (2) the base member's type carries a brand the derived only
+      // INHERITS, three levels up.
+       "interface L { _b: any }\ninterface M extends L { _m: any }\ninterface P extends M { _p: any }\ninterface SE extends P { k: number }\ninterface PA { expression: L }\ninterface SPA extends PA { expression: SE }",
+      // …and the same through an optional member.
+       "interface L { _b: any }\ninterface SE extends L { k: number }\ninterface PA { expression?: L }\ninterface SPA extends PA { expression?: SE }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: the LEGAL NEIGHBOUR of each accept. All real TS2430.
+  for
+    src in [
+      // Nominally unrelated.
+      "interface L { _b: any }\ninterface SE { k: number }\ninterface PA { expression: L }\ninterface SPA extends PA { expression: SE }",
+      // The chain walked the WRONG WAY — a base member may not be
+      // widened to its own supertype.
+       "interface L { _b: any }\ninterface SE extends L { k: number }\ninterface PA { expression: SE }\ninterface SPA extends PA { expression: L }",
+      // A scalar over an object-shaped base member.
+       "interface L { _b: any }\ninterface PA { expression: L }\ninterface SPA extends PA { expression: number }",
+      // A nested union none of whose members reaches the base.
+       "interface N { k: number }\ninterface X { x: number }\ninterface Y { y: number }\ntype XY = X | Y\ninterface Nd { parent: N }\ninterface HC extends Nd { parent: XY }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+}
+
+///|
+/// Batch FG: `typescript.d.ts` to ZERO — three more shapes the nominal
+/// reach could not express.
+///
+/// 1. A CLASS in the union. `named_iface_extends_reaches` read
+///    `resolver.interfaces` alone, and the first version filed the class
+///    case as a MISS. It is a REPORT rather than a MISS, because the
+///    caller requires EVERY union member to be accepted, so one
+///    unprovable member keeps the whole diagnostic. Measured
+///    pre-existing on every binary back to before this batch series. A
+///    class reaches an interface through `implements` and another class
+///    through `extends`, both heritage the same way.
+///
+/// 2. An INTERSECTION member. An intersection is a subtype of each of
+///    its components, so reaching the base through ANY one is enough —
+///    the opposite quantifier from the union, which is why it is not
+///    folded into the flattening.
+///
+/// 3. An `Applied(n, _)` reaching an ancestor by NAME, which is sound
+///    only when the base member is NON-generic: `interface Token<K>
+///    extends Node` makes every instantiation a `Node` whatever `K` is,
+///    while `Token<A>` against `Token<B>` depends on the arguments.
+///
+/// All three come from one declaration:
+/// `type EndOfFileToken = Token<SyntaxKind.EndOfFileToken> & JSDocContainer`,
+/// a member of the 64-arm `HasJSDoc` union that `JSDoc.parent` is typed
+/// as. It was found by BISECTING that union against the real file rather
+/// than by reading — seven runs, and the culprit was the eighteenth arm.
+test "checker: TS2430 nominal reach through classes, intersections, generics (batch FG)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("incorrectly extends") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- silent: legal, each probed against 6.0.3
+  for
+    src in [
+      // (1) a CLASS in the union, reached through `implements`.
+      "interface N { k: number }\ninterface A extends N { a: number }\ndeclare class Cl implements N { k: number; c: number }\ntype U = A | Cl\ninterface Nd { parent: N }\ninterface J extends Nd { parent: U }",
+      // (2) an INTERSECTION, one component of which reaches.
+       "interface N { k: number }\ninterface T extends N { t: number }\ninterface JD { j: number }\ntype EOF = T & JD\ninterface Nd { parent: N }\ninterface J extends Nd { parent: EOF }",
+      // (3) a generic instantiation against a BARE base member.
+       "interface N { k: number }\ninterface T<K> extends N { t: K }\ninterface Nd { parent: N }\ninterface J extends Nd { parent: T<number> }",
+      // …and the `EndOfFileToken` shape itself: both at once.
+       "interface N { k: number }\ninterface T<K> extends N { t: K }\ninterface JD { j: number }\ntype EOF = T<number> & JD\ninterface Nd { parent: N }\ninterface J extends Nd { parent: EOF }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+  // --- fires: the LEGAL NEIGHBOUR of each accept. All real TS2430.
+  for
+    src in [
+      // No component of the intersection reaches the base.
+      "interface N { k: number }\ninterface X { x: number }\ninterface JD { j: number }\ntype EOF = X & JD\ninterface Nd { parent: N }\ninterface J extends Nd { parent: EOF }",
+      // The generic's NAME does not reach the base.
+       "interface N { k: number }\ninterface T<K> { t: K }\ninterface Nd { parent: N }\ninterface J extends Nd { parent: T<number> }",
+      // A GENERIC base member: name reachability says nothing there, so
+      // the ordinary comparison decides and the argument mismatch stands.
+       "interface T<K> { t: K }\ninterface Nd { parent: T<string> }\ninterface J extends Nd { parent: T<number> }",
+      // A class in the union that implements nothing relevant.
+       "interface N { k: number }\ninterface A extends N { a: number }\ndeclare class Cl { c: number }\ntype U = A | Cl\ninterface Nd { parent: N }\ninterface J extends Nd { parent: U }",
+    ] {
+    assert_true(issues(src) > 0)
   }
 }

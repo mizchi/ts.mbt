@@ -12,7 +12,7 @@ pub fn check_source(String, Bool) -> String
 
 pub fn collect_module_graph_issues(MtscModuleGraph) -> Array[MtscGraphIssue]
 
-pub fn collect_type_issues(String, Bool) -> Result[Array[MtscTypeIssue], String]
+pub fn collect_type_issues(String, Bool, declaration_file? : Bool) -> Result[Array[MtscTypeIssue], String]
 
 pub fn[H : MtscHost] get_program_diagnostics(H) -> Array[MtscDiagnostic]
 

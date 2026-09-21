@@ -3,6 +3,488 @@
 The wasm interpreter / codegen / AOT compiler that originally lived in this
 repo has been removed. Items below are scoped to the bridge generator only.
 
+### Batch FH (2026-09-20): back to the MISS axis — a declaration space nobody owned
+
+`TP 2670 -> 2671 | MISS in scope 45 -> **44** | OUT OF SCOPE 19 | FP 0 |
+PFLEGAL 0 | TN 1750`, and byte-identical on real code: `typescript.d.ts`,
+preact, vitest and hono all stay at 0, zod stays at 108, and a 3,982-file
+`mtsc check` sweep over every `.d.ts` under `node_modules` plus effect's
+sources reports **16,635 on both binaries with no file differing**.
+
+The first batch in this series aimed back at the CONFORMANCE backlog
+rather than at real-package false positives, and the target was a filed
+abstention with a stated scope rather than a ranking. Batch CA's
+`let x; let x` rule named its four uncovered shapes in writing, and one of
+them is "local TYPE declarations" — `localTypes4`, which is still a MISS.
+
+**The rule.** A callable's TYPE PARAMETERS and the TYPE declarations at
+the top level of its own body are one declaration space, so
+
+    function f<T>() { interface T { } }
+
+is TS2300 and tsc reports it on both. No type information anywhere: the
+parser has the type-parameter list and the body's own declarations at the
+same moment.
+
+**Thirty-three cells were probed against 6.0.3 before anything was
+written, and three of them decided the design.**
+
+1. `enum T { }` is **TS2567** ("enum declarations can only merge with
+   namespace or other enum declarations"), a different error this rule
+   does not claim, so the enum arm is deliberately absent — `interface`,
+   a `type` alias and a `class` are the three that participate. A
+   `namespace` in a function body is TS1235 before the question is even
+   reachable.
+
+2. `class L<T> { m() { interface T { } } }` is **LEGAL**. A class's own
+   type parameters do NOT share the space with a method body's local
+   type, which is why only the METHOD's list is passed at that site. A
+   rule written from "the enclosing generic declaration" would have been
+   a false positive on every generic class with a local type in a method.
+
+3. `function f<T>(cb = () => { interface T { } }) { }` is **LEGAL**, and
+   it is the cell that rules out the cheap implementation. Setting a
+   "pending type parameters" field inside
+   `parse_type_param_names_bounds_and_const_flags` and consuming it in
+   `parse_block` is one site instead of six — and a parameter DEFAULT can
+   hold a body, which would have consumed the field and reported this.
+   The fact is therefore read at the BODY site, immediately after that
+   body's own `parse_block()`, in the shape `last_function_bodiless`
+   already uses.
+
+**Fail direction.** `parse_block` keeps one frame per block (beside the
+`block_binding_nonnumeric` frame it already pushes and pops at the same
+single exit) and stashes it into `last_block_local_type_names` on the way
+out. A callable site that does not ask takes a MISS; there is no ambient
+field to go stale, so a missed site cannot invent a finding. That is also
+what makes every nested-scope neighbour legal by CONSTRUCTION rather than
+by a condition: a nested block, a nested function's body, a `try`, a
+`for`, a bare `{ }` each have their own frame, and a VALUE binding of the
+same name (`let T`, `const T`, `var T`, `function T`, a parameter `T`) is
+never recorded in one.
+
+Six sites, and two of them DISCARD the list they need. A generic arrow's
+`<T>` is in no AST node at all and an object-literal method's goes
+through `skip_type_params`, so both read `type_param_names_ahead` — the
+walk extracted from `record_type_param_names_ahead`, which batch EP wrote
+for exactly these two positions. One walk with two consumers rather than
+a second copy of it.
+
+Not covered, and stated rather than left to be discovered: the file's
+other error is TS2304 for a type declared in a body being referenced from
+that same function's SIGNATURE (`function f(x: T): T { interface T { } }`).
+That needs the name to be absent from every outer scope and from the lib,
+which is `unresolved_type_references` — rejected three times in this
+series with a measured cause. The file flips on the TS2300 half alone.
+
+### Batch FG (2026-09-20): `typescript.d.ts` to ZERO
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL. The last diagnostic on the biggest declaration
+file in the ecosystem, and **88 -> 0** across FC, FD, FF and FG.
+
+Three more shapes the nominal reach could not express, and all three come
+from ONE declaration — `type EndOfFileToken =
+Token<SyntaxKind.EndOfFileToken> & JSDocContainer`, the eighteenth arm of
+the 64-member `HasJSDoc` union that `JSDoc.parent` is typed as.
+
+**How it was found matters more than the rule.** Four guesses at the
+cause were each refuted by a probe that reproduced clean (a recursive
+alias union, an alias-in-alias union, an optional member, a two-level
+nest). BISECTING the real union settled it in seven runs: patch
+`parent: HasJSDoc` to a subset of the arms in a copy of the 4 MB file,
+halve, repeat.
+
+1. **A CLASS in the union.** `named_iface_extends_reaches` read
+   `resolver.interfaces` alone, and batch FC filed the class case as a
+   MISS. It is a REPORT rather than a MISS, because the caller requires
+   EVERY union member to be accepted, so one unprovable member keeps the
+   whole diagnostic — a distinction worth recording, since "this costs a
+   MISS" was written in good faith and was wrong about its own direction.
+   Measured pre-existing on every binary back to before this batch
+   series. A class reaches an interface through `implements` and another
+   class through `extends`.
+
+2. **An INTERSECTION member.** An intersection is a subtype of each of
+   its components, so reaching the base through ANY one is enough — the
+   opposite quantifier from the union, which is why it is not folded into
+   the flattening batch FF added.
+
+3. **An `Applied(n, _)` reaching an ancestor by NAME**, which is sound
+   only when the base member is NON-GENERIC: `interface Token<K> extends
+   Node` makes every instantiation a `Node` whatever `K` is, while
+   `Token<A>` against `Token<B>` depends on the arguments. So the generic
+   spelling is admitted on the DERIVED side only, and only against a bare
+   name — the `Token<string>` / `Token<number>` pair still reports,
+   probed.
+
+Measured: **`typescript.d.ts` 1 -> 0**, the 4,085-file sweep unchanged at
+16,647 with 0 added, zod unchanged at 108, the oracle identical, all 12
+scaling axes within budget.
+
+Ten cells probed and all ten agree with tsc. Accepted: a class in the
+union; an intersection with one reaching component; a generic against a
+bare base member; and the `EndOfFileToken` shape itself (a generic AND an
+intersection at once). Rejected: an intersection none of whose components
+reaches; a generic whose NAME does not reach; a GENERIC base member with
+mismatched arguments; a class implementing nothing relevant.
+
+### Batch FF (2026-09-20): the last two TS2430 shapes — `typescript.d.ts` to 1
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL. Two more causes behind the rule batch FC took,
+found by opening the five `typescript.d.ts` had left.
+
+**1. `parts` split ONE level and `unwrap_containers` expands in place.**
+`HeritageClause.parent: InterfaceDeclaration | ClassLikeDeclaration`,
+where `ClassLikeDeclaration` is itself a union alias, arrived as a union
+whose second member is a UNION — opaque to every `Named` test, so no arm
+of it could be matched against the base. A union of unions is the same
+union; it is flattened now, bounded at 8 levels (running out keeps the
+member unsplit, a MISS rather than an invented accept).
+
+**2. The SIBLING TS2430 rule never got the nominal disjunct**, and the
+walk it needed was already defined in its own function. That rule — the
+one whose message reads "property `X` of type `T` is not assignable to
+the base type `B`" — decides through `struct_assignable_named_rec`, which
+cannot recover a relation where the base carries a BRAND the derived only
+INHERITS: `SuperExpression extends PrimaryExpression extends
+MemberExpression extends LeftHandSideExpression`, and only the last
+declares `_leftHandSideExpressionBrand`. `typescript.d.ts` writes that
+three times and tsc accepts the file.
+
+`named_reaches` sits thirty lines above the comparison, and was consulted
+only for the RETURN-type check. It is a **THIRD copy** of the same BFS —
+batch FC hoisted one out of `tuple_covariant_by_extends` into
+`named_iface_extends_reaches`, and this one is keyed on a local
+`iface_by_name` rather than `resolver.interfaces`. Left as it is and
+recorded rather than unified: the two maps may not hold the same thing,
+and establishing that they answer the same question is its own
+measurement. Using the copy that is already there changes nothing about
+which table this rule reads.
+
+Measured: **`typescript.d.ts` 7 -> 1** (88 -> 1 across FC, FD and FF —
+the one left is `JSDoc.parent`), the 4,085-file sweep 16,648 -> 16,647
+with 0 added, zod unchanged at 108, the oracle identical, all 12 scaling
+axes within budget.
+
+Nine cells probed and all nine agree with tsc. Accepted: a derived union
+whose member is a union ALIAS; a base member's brand inherited three
+levels up; the same through an optional member. Rejected: a nominally
+unrelated pair; the chain walked the WRONG WAY; a scalar over an
+object-shaped base member; a nested union none of whose members reaches
+the base.
+
+### Batch FE (2026-09-20): a namespace may re-export a file-level import, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL. The other family batch FC's re-ranking left on
+the real path, and the smallest fix of the four.
+
+```ts
+import { A, B } from './chunks/browser.js';
+declare namespace Experimental {
+	export { A, B };          // TS2661 "only local declarations can be exported"
+}
+```
+
+vitest's `index.d.ts` does that six times and tsc accepts the file. It is
+the standard `.d.ts` grouping idiom.
+
+`check_non_local_exports` ALREADY consults `imported_binding_names` — it
+was written to, with a `Map` built for the scan cost — but a NAMESPACE
+body is its own `TsModule` and the `import` sits at the FILE's top level,
+so that list is empty one scope in. The outer chain was already threaded
+down for other reasons (`next_outers`), so the fix is to read it.
+
+What made the gap look like a working rule is the SIBLING case: a name
+DECLARED at file level and re-exported from a namespace was always
+silent, because the resolver's tables span the whole chain already. Only
+the imported half was module-local, so the rule was right for three of
+its four inputs.
+
+Measured: **vitest 6 -> 0**, the 4,085-file sweep 16,688 -> **16,648**
+with 0 added, the oracle identical, all 12 scaling axes within budget.
+Three of the four real `.d.ts` entries now report ZERO
+(`preact`, `vitest`, `hono`); `typescript.d.ts` is at 7, all of them
+TS2430 shapes our assignability still cannot follow
+(`SuperExpression` against `LeftHandSideExpression`, and
+`JsonMinusNumericLiteral.operand`).
+
+Eight cells probed. The accepts are the vitest shape at one level and
+nested, a file-level declaration re-exported from a namespace, and a
+default import; the rejects are a name neither imported nor declared, at
+top level and inside a namespace, and a mixed clause where only one name
+resolves. One difference from tsc is pre-existing and recorded rather
+than fixed: it reports TS2304 ("Cannot find name") where we report
+TS2661 — a different code for the same rejected program.
+
+### Batch FD (2026-09-20): a declaration file is ambient — 1,193 false positives, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL again, which is the sanity check that matters
+here: the conformance corpus has no `.d.ts` at all, so an unchanged
+oracle says the exemption really is keyed on the FILE and not a weakened
+rule.
+
+The family batch FC ranked and filed. A declaration file makes every
+declaration in it ambient whether or not it writes `declare`, and four
+bodiless-declaration rules did not know that:
+
+```ts
+// a .d.ts — tsc accepts this outright
+export class C {
+  constructor(m: number);   // TS2390 "constructor implementation is missing"
+  blen: number;             // TS2564 "has no initializer"
+  get t(): string;          // TS2378 "a get accessor must return a value"
+  m(x: number): void;       // TS2391 "function implementation is missing"
+}
+```
+
+**The cause is that `in_ambient_module` is a WHOLE-PARSE mode nothing
+sets for a FILE.** Only a `declare module "spec" { … }` body and
+`global { … }` ever turn it on; `Parser::parse_module` — the entry every
+`.d.ts` goes through — passes `false`. Five of its six gates name `.d.ts`
+in their own comments and one says so literally ("Ambient mode (`.d.ts` /
+ambient external module body) treats every `export var/let/const X;`
+without initializer as type-only"). The ambient exemption each rule
+already has is keyed on the `declare` KEYWORD, and a declaration FILE is
+the other spelling of the same fact — so `export class C` there goes
+through the RUNTIME class parser and sets every sentinel.
+
+**A SECOND Parser field, not a flip of the existing one**, and that is
+the whole design decision. Exactly one rule needs the old question alone:
+TS1038 fires for `declare namespace M { declare function f(); }` and NOT
+for a `.d.ts` file's own top-level `declare function f(): void` — which
+is how every declaration file in existence is written. Probed against
+6.0.3, and we already agreed with tsc on both cells. Flipping the
+whole-parse flag would have false-positived on all of them.
+
+Scope, stated rather than left to be discovered. The new field is read by
+the four DIAGNOSTIC gates and nothing else. It is deliberately NOT read
+by `is_ambient_export_value_decl`, which decides whether `export var X;`
+emits a runtime binding: that is an AST question the bridge and the
+transform passes consume, not a diagnostic, and widening it is a separate
+change with its own measurement.
+
+Three mechanical facts the implementation needed:
+
+1. **A namespace body re-parses with a fresh `Parser`**, so the fact — a
+   property of the SOURCE — has to be carried across, or the rules go
+   back to reporting one level in. `typescript.d.ts` is where that shows:
+   its remaining false positives were all on
+   `namespace ts > namespace server > class Project`.
+2. **The three CHECKER-side rules cannot see an extension.**
+   `check_dts_top_level_modifiers` states that blocker in its own comment
+   ("keyed off the file extension, which the general check pipeline can't
+   see"), so the parse pushes a `<declaration-file>` marker, with a skip
+   entry in the grammar-misuse loop — a marker without one IS a
+   diagnostic, which TS4111's flag marker did once.
+3. **`--noEmit` does not go through the graph loader for a single file.**
+   It calls `mtsc_typecheck_source` -> `collect_type_issues`, which takes
+   `(source, allow_jsx)` and no path. Found by INSTRUMENTING rather than
+   reading: the first wiring touched `parse_graph_module`, and a `println`
+   there produced NO output on the `--noEmit` path at all. The fact rides
+   a labelled argument with a default, so the JavaScript ABI and every
+   existing caller are unchanged.
+
+Measured: **preact 4 -> 0** (all four of its diagnostics), `typescript.d.ts`
+15 -> **7** (and 88 -> 7 across FC and FD), the 4,085-file `mtsc check`
+sweep 17,881 -> **16,688** with **0 added**, zod unchanged at 108 (it is
+`.ts` source), the oracle identical on every metric, and all 12 scaling
+axes within budget.
+
+Every source in the new test is asserted BOTH ways — 0 as a `.d.ts` and
+`> 0` as a `.ts` — which is what proves the exemption is keyed on the
+file, plus the TS1038 pair that keeps the two fields separate.
+
+NOT wired, with the reason: `src/bridge`'s two parse sites
+(`typescript_decl.mbt`, `moonbit_decl.mbt`). The bridge runs
+`check_module` over real `.d.ts` input, so it would benefit, but a parser
+change that moves what the GENERATOR sees needs its own measurement —
+`verify-generated-fixtures` / `verify-scaffolds` / `verify-examples` are
+all byte-identical under this batch precisely because those sites were
+left alone.
+
+### Batch FC (2026-09-20): TS2430 on a real `.d.ts` — 80 false positives, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL again. Found by pointing batch FB's real-package
+axis at the LARGEST real input there is.
+
+`node_modules/typescript/lib/typescript.d.ts` is the biggest declaration
+file in the ecosystem and tsc accepts it outright, so every one of the **88
+diagnostics `mtsc --noEmit` reported on it was a false positive** — and
+**80 were one rule**, `check_interface_extends_member_compat` (TS2430).
+Two independent causes, both of them this file's recurring shapes.
+
+**1. `resolver.unwrap` where `unwrap_containers` was needed.**
+`is_assignable_to` is the RESOLVER-FREE entry point and `unwrap` peels the
+OUTERMOST type only, so a base member typed as an alias to a union
+(`type U = A | B; interface P { name?: U }`) arrived as
+`Union([Named("U"), Undefined])` — the union is outermost, `U` was never
+resolved, and `Named("A")` against `Named("U")` is nominal. The guards
+directly above had already proven both sides RESOLVABLE with
+`type_contains_unresolved_named`; nothing resolved them.
+`unwrap_containers` is the helper written for exactly this hazard and says
+so in its own header ("the resolver-free `is_assignable_to` can't resolve
+a `Named` it finds nested inside `Array` / `Tuple` / `Rest`"), with `Union`
+in its fast-path list. Applied to both sides. 80 -> 29.
+
+**2. A NOMINAL `extends` relation, which structure cannot recover.**
+`interface Node { readonly parent: Node }` beside
+`interface CaseBlock extends Node { readonly parent: SwitchStatement }` is
+legal, and `SwitchStatement` reaches `Node` only through `Statement` — a
+relation the structural comparison cannot follow when the whole hierarchy
+is mutually recursive and `Node` is declaration-merged. The walk for that
+question ALREADY EXISTED as a local `fn` inside
+`tuple_covariant_by_extends`; it is HOISTED to
+`named_iface_extends_reaches` and both callers share it, since a second
+walk is how two answers to one question come to disagree. The new
+disjunct is SUFFICIENT and never necessary — every member of the derived
+type must be accepted by some member of the base's, so it can only ever
+ACCEPT and a shape it cannot decide falls through to the report exactly as
+before. 29 -> 7.
+
+**3. The last cell needed batch EM's `Named` / `Struct` split.**
+`unwrap_containers` expands an interface reference it CAN resolve into
+`Struct(name, …)` and leaves one it cannot as `Named(name)`, so
+`parent: N | Q` expanded its members while the bare `parent: N` did not —
+a `Named`-only match worked for the bare pair and failed for the union.
+Matching either spelling closes it.
+
+Measured: `typescript.d.ts` **88 -> 15**, zod **113 -> 108** (five more
+false positives, zero added), the 4,085-file `mtsc check` sweep
+17,885 -> 17,881 with **0 added**, the oracle IDENTICAL on every metric,
+and the `interfaces` axis still 1.00 — the new BFS sits behind three
+failed checks, so it almost never runs.
+
+Eight legal-neighbour cells probed against 6.0.3 and all eight agree: the
+aliased-union subset, a one- and a three-level `extends` chain and
+reaching one arm of a union base member are ACCEPTED, while a non-arm of
+the aliased union, a nominally unrelated pair, the chain walked the WRONG
+WAY (a base member may not be narrowed to its own supertype), a union
+whose arms are all unreachable, and ordinary primitive / literal
+incompatibility all still report.
+
+**The batch's other output is a correction to its own first ranking**, the
+eleventh instance here of a count standing in for the objective and the
+first where the substituted count was a HARNESS's unit rather than a
+label. Grouping batch FB's sweep by message shape put an "ambient
+declaration file" family on top at **1,192** occurrences — `mtsc check`
+reports TS2390 / TS2391 / TS2564 / TS2378 on a `.d.ts`, where every member
+is bodiless by construction. That is real: `in_ambient_module` is a
+WHOLE-PARSE mode that only `declare module "spec" { … }` and `global { … }`
+bodies ever set, `Parser::parse_module` passes `false`, and five of its
+six gates name `.d.ts` in their own comments (one says "Ambient mode
+(`.d.ts` / ambient external module body)" literally). It is NOT the
+ranking it looked like: the sweep's unit is (file, diagnostic) over 3,723
+mostly tiny hand-written `.d.ts` shims, and on the path a user runs,
+`typescript.d.ts` yields **8** of that family against 80 of TS2430.
+
+Filed with what a fix needs, so it is not attempted as a one-line flag
+flip. The sixth gate is TS1038, where flipping the whole-parse flag would
+be WRONG and would false-positive on essentially every `.d.ts` in
+existence: `declare function f(): void` at a declaration file's top level
+is legal, only the NESTED spelling
+(`declare namespace M { declare function inner(): void }`) is the error —
+probed, and we already agree with tsc on both. So it needs a SECOND
+Parser field ("this is a declaration FILE") beside the existing one
+("we are inside a `declare X { }` body"), which are two different
+questions; the five bodiless gates test the disjunction and TS1038 keeps
+testing the original. The three checker-side rules (TS2390, TS2564,
+TS2378) need the fact too, and `check_dts_top_level_modifiers` states that
+blocker in its own comment: "keyed off the file extension, which the
+general check pipeline can't see". A module-level marker pushed by the
+parse is the channel; the parse entry has to learn the extension from its
+caller, and 17 call sites construct a Parser.
+
+### Batch FB (2026-09-20): a `string` source against a literal target, ZERO files
+
+`TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |
+TN 1750` — corpus-NEUTRAL, identical to the batch before it. Measured on
+REAL packages instead: **zod 118 -> 113 diagnostics** (five false
+positives on legal code removed, none added), and byte-identical over a
+4,085-file sweep of every `.d.ts` under `node_modules` plus effect's 362
+`.ts` sources.
+
+The gap was `UNSUPPORTED.md` §3's widest row: `declare const s: string;
+const a: "other" = s` and four siblings were all silent, which is the
+commonest real TS2322 / TS2345 there is — every options-string and
+discriminated-union API produces it.
+
+**1. The gate is ONE abstention and its stated reason had a date on it.**
+`check_expr_against` suppresses any mismatch whose source is exactly the
+primitive base of the target's literals, because "TypeScript keeps the
+const literal narrow" where we widen. Probed one base at a time against
+the shipping binary, that is true for NUMBER, BOOLEAN and BIGINT and
+false for STRING: `infer_expr` erases the first three at the source
+(`NumberLit(_) => Number`) and keeps `Literal(s)`. So `const c = "z";
+const c2: "a" | "b" = c` already reported while the `string`-source form
+never could. Fifteen string spellings were probed before the arm came
+out — a template literal, an `as` assertion, a call returning a literal,
+a narrowed union member, a string enum member, an annotated `const`, a
+generic call — and every one that tsc keeps narrow, we keep narrow.
+
+**2. The ONE divergence is an erased `as const`**, and the parser says so
+in its own comment: `parse_asserted_relational` drops the wrapper because
+the transform passes want the raw expression, so `{ k: "a" } as const`
+arrives as the plain object literal whose property genuinely does widen
+to `string` here. A file carrying one abstains wholesale, through a new
+file-level `<const-assertion>` marker read in `Resolver::ingest_module`
+(not beside the other directive flags at the check entry, which sees only
+the ROOT module's markers — a namespace body re-parses with a fresh
+Parser). That costs MISSes in such a file and invents nothing; the
+alternative, propagating const-ness through reads and re-bindings, is a
+new channel at every hop.
+
+**3. The relaxation EXPOSED a latent false positive rather than creating
+one, and that is the batch's most valuable half.** A mutable binding's
+fresh literal initializer widens in tsc (`let s = "a"` is `string`,
+`const s = "a"` is `"a"`) and did not here, because only the COMPOSITE
+half of that rule had been written — an object / array / tuple literal's
+contents widened and a scalar did not. Invisible while no `string` source
+could be judged against a literal target, and five reports on legal lines
+the moment one could: zod's `bg.ts` has `let invalid_adj = "Невалиден"`
+reassigned five times. Fixed at the binding site through one helper both
+binding paths call, with `Let` and `Const` split apart in the dispatch
+(they shared an arm).
+
+**4. The corpus caught the first version of that fix**, which is the
+legal-neighbour lesson again. Widening every literal a mutable binding
+holds is too wide: TypeScript widens only a FRESH literal type, so in
+`let a: "foo" = "foo"; let b = a || "foo"; let c: "foo" = b` — a
+conformance file — `a`'s literal came from an annotation, is not fresh,
+and neither is the `||` over it, so tsc ACCEPTS `c`. The test is on the
+INITIALIZER's syntax now, and an unclassified spelling keeps the narrow
+type (a MISS, never a report). A TEST then caught the second version: a
+template literal with a constant substitution folds to a literal here
+(batch AU, for TS2367) while tsc calls it `string` outright, and a
+pre-existing parity pin requires ``var x = `a${0}` `` to behave exactly
+like `var x = "a0"` — so a template counts as fresh whether or not it carries
+substitutions.
+
+**5. One test was asserting the gap**, the fourteenth found doing that
+here: `function f(x: "a" | "b") {} declare const s: string; f(s)`
+asserted 0 under a comment calling it an over-widening guard, and the
+real compiler gives TS2345 (probed).
+
+**6. A sixth false positive came out of probing the same neighbours**,
+and it was pre-existing and one line deep. `widen_literal_deep`'s union
+arm mapped its members and did not DEDUP them, so `["a", "b"]`'s widened
+element type was `string | string` — a message nobody can act on, and
+not equal to the `base` the const-widening abstention tests, so
+`const arr = ["a", "b"] as const; const y: "a" = arr[0]` reported on a
+line tsc ACCEPTS even in an `as const` file. Measured against the
+baseline binary before and after: corpus-neutral, sweep-neutral,
+zod-neutral, and the non-`as const` neighbour (`const arr = ["x", "y"]`,
+which tsc types `string[]`) still reports.
+
+What did NOT ship, with the reason rather than a verdict: the numeric /
+boolean / bigint half, which needs `infer_expr` to stop erasing those
+literals at the source — a change at every consumer of a numeric
+literal's type, not a gate.
+
 ### Batch FA (2026-09-18): a late-bound `unique symbol` member key, ZERO files
 
 `TP 2670 | MISS in scope 45 | OUT OF SCOPE 19 | FP 0 | PFLEGAL 0 |

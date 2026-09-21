@@ -74,13 +74,23 @@ fn collect_type_issues_from_module(
 }
 
 ///|
+/// `declaration_file~` says the source is a `.d.ts`, which makes every
+/// declaration in it ambient whether or not it writes `declare`. A
+/// labelled argument with a default, because this is the JavaScript ABI
+/// and every existing caller must keep compiling and answering exactly
+/// as before — and because the fact lives in the PATH, which a caller
+/// holding only `source` genuinely cannot supply. The parse flag is read
+/// only to go SILENT, so `false` is today's behaviour.
 pub fn collect_type_issues(
   source : String,
   allow_jsx : Bool,
+  declaration_file? : Bool = false,
 ) -> Result[Array[MtscTypeIssue], String] {
-  let module_ = @parser.Parser::from_source_with_jsx(source, allow_jsx).parse_module() catch {
-    e => return Err("\{e}")
+  let parser = @parser.Parser::from_source_with_jsx(source, allow_jsx)
+  if declaration_file {
+    parser.mark_declaration_file()
   }
+  let module_ = parser.parse_module() catch { e => return Err("\{e}") }
   collect_type_issues_from_module(module_, [], [])
 }
 
@@ -123,18 +133,20 @@ pub fn check_module_sources(modules : Array[MtscModuleSource]) -> String {
 fn parse_graph_module(
   source : MtscModuleSource,
 ) -> Result[ParsedMtscModule, String] {
-  let module_ = @parser.Parser::from_source_with_jsx(
-    source.source,
-    source.allowJsx,
-  ).parse_module() catch {
-    e => return Err("\{e}")
+  // A declaration file makes every declaration in it ambient whether or
+  // not it writes `declare`; the PATH is the only place that fact lives,
+  // and the bodiless-declaration rules read it only to go silent.
+  let is_dts = source.path.has_suffix(".d.ts")
+  let p1 = @parser.Parser::from_source_with_jsx(source.source, source.allowJsx)
+  if is_dts {
+    p1.mark_declaration_file()
   }
-  let module_block = @parser.Parser::from_source_with_jsx(
-    source.source,
-    source.allowJsx,
-  ).parse_module_block() catch {
-    e => return Err("\{e}")
+  let module_ = p1.parse_module() catch { e => return Err("\{e}") }
+  let p2 = @parser.Parser::from_source_with_jsx(source.source, source.allowJsx)
+  if is_dts {
+    p2.mark_declaration_file()
   }
+  let module_block = p2.parse_module_block() catch { e => return Err("\{e}") }
   Ok({ source, module_, module_block, })
 }
 

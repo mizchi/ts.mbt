@@ -144,7 +144,14 @@ async fn mtsc_run_check(argv : Array[String], start : Int) -> Unit {
   let mut module_count = 0
   let mut issue_count = 0
   for _ in 0..<iters {
-    let module_ = @parser.Parser::from_source_with_jsx(text, allow_jsx).parse_module() catch {
+    let parser = @parser.Parser::from_source_with_jsx(text, allow_jsx)
+    // A `.d.ts` makes every declaration in it ambient whether or not it
+    // writes `declare`. The extension is the only place that fact
+    // exists, and this site already keys TS1046 off it below.
+    if path.has_suffix(".d.ts") {
+      parser.mark_declaration_file()
+    }
+    let module_ = parser.parse_module() catch {
       e => {
         println("parse error: \{e}")
         return

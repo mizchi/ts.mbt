@@ -1,10 +1,10 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-18, after batches EU–FA:
+Measured on 2026-09-20, after batches EU–FH:
 
 ```
-TP  err+flag  : 2670   (of which via parse rejection: 390)
-MISS in scope : 45     (the backlog — this one can reach zero)
+TP  err+flag  : 2671   (of which via parse rejection: 390)
+MISS in scope : 44     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -16,6 +16,51 @@ real compiler (`node scripts/tsc_probe.mjs`, TypeScript 6.0.3), so each
 entry is a measured gap and not a guess. `docs/checker-triage.md` is the
 strategy half (tiers, real-code frequency, what the gate reports); this
 file is the code a user would write and what happens to it.
+
+One thing this file CANNOT rank, and batch FB is the instance: the
+numbers above come from 4,484 single files of a few dozen lines each, so
+a false positive reachable only from real code is invisible to them.
+That batch is corpus-NEUTRAL on every metric above and removes six
+reports on legal lines, five of them in zod's own sources. When a row here moves off
+BLIND, run the change over real packages too — `mtsc --noEmit --bundle
+node_modules/<pkg>/src/index.ts`, and a sweep of `mtsc check` over
+`node_modules`'s `.d.ts` files, diffed against the baseline binary.
+
+Batch FC is the sharper version of the same point and the reason to run
+the BIGGEST real input rather than many small ones: `typescript.d.ts` is
+accepted by tsc outright, so all **88** diagnostics `mtsc --noEmit`
+reported on it were false positives and **80 were one rule** (TS2430).
+88 -> 15, at TP / MISS / FP unchanged. It also corrected its own first
+ranking — grouping the sweep by message shape put a different family on
+top at 1,192 occurrences, which is the SWEEP's unit (one line per file
+per diagnostic, over 3,723 mostly tiny hand-written shims) and not the
+user's: on `mtsc --noEmit` that family is 8 against TS2430's 80.
+
+Batch FD then took that family anyway, since it was the largest left on
+the real path once TS2430 was fixed: a DECLARATION FILE makes every
+declaration in it ambient whether or not it writes `declare`, and
+`in_ambient_module` is a whole-parse mode `Parser::parse_module` never
+sets. preact 4 -> 0, `typescript.d.ts` 15 -> 7, the sweep 17,881 ->
+16,688 with 0 added. Corpus-NEUTRAL in the way that matters: the corpus
+holds no `.d.ts`, so an unchanged oracle is the check that the exemption
+is keyed on the FILE rather than a weakened rule.
+
+Batch FE closed the last family that re-ranking left: a namespace may
+re-export a file-level IMPORT, and `check_non_local_exports` could not
+see one because a namespace body is its own `TsModule`. vitest 6 -> 0.
+Across FB-FE the four real `.d.ts` entries go `typescript.d.ts` 88 -> 7,
+preact 4 -> 0, vitest 6 -> 0, hono 0, zod 118 -> 108, and the sweep
+17,885 -> 16,648 — 1,243 false positives on legal real code, none
+added, at TP / MISS / FP unchanged throughout. What is left on
+`typescript.d.ts` is 7 TS2430 shapes the assignability still cannot
+follow (`SuperExpression` against `LeftHandSideExpression`,
+`JsonMinusNumericLiteral.operand`) — batch FF then took those too,
+through a flattened union and the nominal disjunct the SIBLING TS2430
+rule never had; batch FG then took the last one — a CLASS in the
+union, an INTERSECTION member and a generic instantiation reaching an
+ancestor by name, all three in one arm of the 64-member `HasJSDoc`
+union, found by BISECTING it rather than by reading. **`typescript.d.ts`
+is at ZERO**, 88 -> 0.
 
 ## Regenerating this file
 
@@ -37,7 +82,7 @@ Two rules for reading the output, both learned the hard way:
 
 ---
 
-## 1. The 45 in-scope MISS files, by machinery
+## 1. The 44 in-scope MISS files, by machinery
 
 Paths are relative to `typescript/tests/cases/conformance/`. The code is
 what the local compiler reports on the file; where a rule was already
@@ -147,11 +192,10 @@ try { } catch (e) {
 | `async/es5/asyncAwaitNestedClasses_es5` | TS2345 | `new Promise<void>(resolve => resolve(null))` under `strictNullChecks`: the `resolve` callback's parameter type from the lib `PromiseConstructor` |
 | `es6/yieldExpressions/generatorTypeCheck8` | TS2322 | structural comparison of `Generator<string, any, any>` against a hand-written `BadGenerator` through the lib iterator interfaces (`IteratorResult<T>`) |
 
-### 1g. Name resolution and declarations — 3 files
+### 1g. Name resolution and declarations — 2 files
 
 | file | tsc | what is needed |
 |---|---|---|
-| `types/localTypes/localTypes4` | TS2304, TS2300 | a block-local `interface T` declared in two different functions. **Deliberately unregistered** (batch ET): the block-local type merge must not pick a winner among several declarations of one name — its first draft made the empty `interface T { }` in one function answer for the other and the gate scored that as a TP because the file errors for unrelated reasons |
 | `es6/Symbols/symbolProperty3` | TS2464 | **REJECTED with evidence**: `var s = Symbol; ({ [s]: 0 })` — `s` infers as `Any`, and catching it needs the `Symbol` CONSTRUCTOR modelled as a value type. Nobody writes that |
 | `decorators/class/decoratorChecksFunctionBodies` | TS2345 | the BODY of an arrow written inline as a member decorator (`@((x, p, d) => { func(3) })`). Member decorator expressions never reach the AST (`skip_param_decorators` / the class-body decorator skip); batches EE and EG read what they need off the skipped TOKENS, which cannot type-check a body |
 
@@ -190,8 +234,9 @@ measured gap.
 | a member keyed by a string-literal `const` (`const kk = "hello"`, `interface I { [kk]: number }`, `i.hello`) | **ABSTAINS — deliberate (batch FA)**: neither member parser can evaluate a key that depends on another declaration, and reading the undecidable name as "no member called `hello`" reported a line tsc ACCEPTS. A well-known key is decided statically and keeps its existence check |
 | `satisfies` (excess property, a member of the wrong type, and the narrowed type surviving the read) | CAUGHT — probed 2026-09-18, all three cells |
 | `infer` through a conditional alias (`type El<T> = T extends Array<infer U> ? U : never`) | CAUGHT |
-| **a PRIMITIVE source against a LITERAL or literal-union target** (`declare const s: string; const a: "other" = s`, `const b: "a" \| "b" = s`, `f(s)` against `(x: "a" \| "b")`, and the numeric `const c: 1 = n`) | **BLIND, and the widest gap this probe has found — see §3.** Silent at the binding, the assignment AND the call argument; only a syntactically LITERAL source reports |
-| `as const` (`"hello" as const`, a tuple index, a DECLARED literal member) | CAUGHT at the verdict; the message names `string` where tsc names `"hello"` |
+| **a `string` source against a LITERAL or literal-union target** (`declare const s: string; const a: "other" = s`, `const b: "a" \| "b" = s`, `f(s)` against `(x: "a" \| "b")`, `const c: Mode = s`) | CAUGHT (batch FB) at all five spellings — the binding, the assignment, the union, the named alias and the call argument. A file carrying an ERASED `as const` abstains wholesale, since the parser drops the assertion and the object literal's property really does widen to `string` here |
+| the same with a NUMERIC / BOOLEAN / BIGINT source (`declare const n: number; const a: 1 = n`, `const q = 789; const b: 1 = q`) | **BLIND — deliberate (batch FB)**: `infer_expr` erases those literals at the source (`NumberLit(_) => Number`), so a `const` really is widened here and reporting would be about OUR widening. The string arm survives because `Literal(s)` does not get erased |
+| `as const` (`"hello" as const`, a tuple index, a DECLARED literal member) | CAUGHT at the verdict; the message names `string` where tsc names `"hello"`. Since batch FB a file carrying one also turns OFF the literal-target rule, because the parser erases the assertion — see §3 |
 | **strictNullChecks on a member-chain receiver** (`o.a.b` with `a?:`) | **BLIND — deliberate**: the check is gated to a bare `Var` receiver because those are the bindings the narrowing engine rewrites precisely (batch DO) |
 | **variadic tuple** (`[...T]`, `[string, ...number[]]`) | **BLIND** |
 | computed `unique symbol` key (`interface I { [k]: number }` / `{ [k]: number }`, `i[k]` against `string`) | CAUGHT (batch FA) — the ANONYMOUS spelling did not PARSE at all, so every member of such a type was lost |
@@ -224,14 +269,16 @@ Each entry names the LEGAL neighbour that decides it. None is a bug.
 
 | shape | tsc | why we stay silent |
 |---|---|---|
-| `declare const s: string; const a: "other" = s` — and five siblings | TS2322 / TS2345 | **A primitive source against a literal target is accepted.** Seven cells, all probed: the binding (`const a: "other" = s`), the ASSIGNMENT (`a2 = s`), a literal UNION (`const b: "a" \| "b" = s`), a named alias of one (`const c: Mode = m`), a CALL ARGUMENT (`f(s)` against `(x: "a" \| "b")` — TS2345) and the NUMERIC form (`const d: 1 = n`) are all silent; only a syntactically literal source (`const e: "other" = "lit"`) reports. This is the commonest real TS2322 there is — every options-string and discriminated-union API produces it.<br><br>Three candidate causes were named and all three REFUTED by reading the code they named: `is_widening_direction_mismatch` lost its string arm in batch EL; `is_assignable_to(String_, Literal("foo"))` is correctly `false` (`assignability_wbtest.mbt`); and the `(String_, Literal(_))` arm at `expr_check.mbt:7950` is an OVERLAP predicate for `==`, right as written. **Instrumenting settled it in one run**: `check_expr_against` receives exactly `src=String_ exp=Literal(other)` and emits nothing, and the STRICT entry point reports the same three issues as the permissive one — so the mismatch is never DECIDED, and no filter is involved.<br><br>The blocker a sound fix needs is this file's most-recorded shape: our inference widens a literal to `string` where tsc keeps it, so reporting every `string` → literal would be about OUR widening rather than the program. The fact required is "this type came from a WRITTEN annotation", the same absent-versus-`: any` channel recorded for TS7031, TS7022, TS2729, TS2448, TS2564, TS2490 and the expando marker. Worth a batch with the corpus as the gate; `type_display`'s `widen_literal(inferred_u)` at the message site (deliberate, with its reason) is the neighbouring half |
+| `declare const n: number; const a: 1 = n` — the NUMERIC / BOOLEAN / BIGINT half | TS2322 / TS2345 | The STRING half shipped in batch FB and this half did not, for a reason that is about our own inference rather than about the rule: `infer_expr` erases a numeric, boolean and bigint literal to its primitive at the source (`NumberLit(_) => Number`, `BoolLit(_) => Boolean`) and keeps a STRING one (`StringLit(s) => Literal(s)`). So `const q = 789` genuinely is `number` here where tsc says `789`, and reporting `number` against `1` would be a report on OUR widening. Undoing the erasure is a change at every consumer of a numeric literal's type, not a gate |
+| a read off an erased `as const`, in a file that carries one | TS2322 | `parse_asserted_relational` drops the `as const` wrapper, with its reason at the site (the transform passes want the raw expression), so `{ k: "a" } as const` reaches the checker as the plain object literal whose property really does widen to `string`. Measured across fifteen spellings, this is the ONLY place our string widening diverges from tsc's — every other shape tsc keeps narrow (a template literal, an `as` assertion, a call returning a literal, a narrowed union member, a string enum member, an annotated `const`) we keep narrow too. So the parser records a file-level `<const-assertion>` marker and the literal-target rule abstains wholesale in such a file: a MISS there, never a report. Propagating const-ness through reads and re-bindings would be a new channel at every hop |
 | `type T = { m(): this }` | TS2526 | The rule is writable, but `src/bridge` runs `check_module` over real `.d.ts` input, where a false positive costs GENERATION rather than a conformance file. No corpus file needs it; class-side and constructor-parameter positions ARE reported (batch EA) |
 | `type F = ({ a: b = 1 }) => void` | TS2842 | The function-TYPE half reads TOKENS and must stop at the `=`, or an object literal inside a default (`{ a: b = { c: d } }`) reads as a pattern. The interface / object-type / class-member sites have a real `TsBinding` and DO report |
 | `class D extends B { override [prop]() {} }` | TS4113 | A `const` string key is late-bindable, so `override [prop]()` is LEGAL when the base declares what `prop` resolves to. Only a base chain declaring NOTHING is decidable, and that ships; `override19`'s intersection base is §1e |
 | `computedPropertyNames28` — `super()` in an object-literal computed key DIRECTLY in the constructor | TS2466 | tsc itself ACCEPTS the direct form and reports it only once an arrow or function expression intervenes; batch ET ships exactly that boundary (`30` is a TP now), and `28` is the cell tsc accepts |
 | `class C<E, A> { m(this: C<never, A>) {} }` called on a `C<number, string>` | TS2684 | ACCEPTED by tsc: `E` is a phantom type parameter and TypeScript is structural. The plain-call and union-receiver forms of TS2684 DO report (batch ET) |
 | `class C implements String {}` | TS2420 | Needs the merged lib member list; 173 lib interfaces are declared empty, so any "declares nothing" shortcut is unsound |
-| `interface T {}` in two different function bodies | TS2300 | The block-local type merge registers a name only when it is declared ONCE across block scopes; guessing costs wrong member answers, abstaining costs a MISS |
+| `interface T {}` in two different function bodies | TS2300 | The block-local type merge registers a name only when it is declared ONCE across block scopes; guessing costs wrong member answers, abstaining costs a MISS. Still true, and batch FH is the reason it is worth reading twice: `localTypes4`, the file this row was protecting, is a TP now for an unrelated reason (a callable's type parameters against a type at its own body's top level, decided in the parser with no registration involved). An abstention can be accurate about its own route and silent about the one that works |
+| `function f(x: T): T { interface T { } }` — a body-local type named in the same function's SIGNATURE | TS2304 | The other half of `localTypes4`. Deciding it needs the name to be absent from every outer scope, from the lib and from the module, which is `unresolved_type_references` — rejected three times here with a measured cause (a type's own binders — a call signature's `<U>`, an `infer`, a mapped key — are lost by the PARSER, so wiring it in is 40+ false positives). The TS2300 half flips the file |
 | `using` / `await using` declarations | TS2850 / TS2851 and the for-of binding grammar | **Zero** of 5,697 real `.d.ts` / `.ts` files use them. Five files declared out of scope; the sixth (`usingDeclarationsWithObjectLiterals2`) was TS7018 on `value: null` and is a TP since batch EC |
 | `switch (12) { case 5: }` on a `const` scrutinee | TS2678 | `infer_expr` widens a numeric literal to `number`; the literal-vs-literal syntactic form is reported (batch CW), a `const` scrutinee is not |
 | `o.b` through an index signature only (`delete o["b"]` on `{ [k: string]: string }`) | — | LEGAL and silent for the stated reason: a member reached only through an index signature is not a declared property |
@@ -270,7 +317,19 @@ history is not re-derived from TODO.md.
 | G. "Blocked on a mechanical fact" (TS7031/7018, TS1308, TS2331, TS2708 `typeof`, TS2393) | All five DONE in batches EC and EE. Not one recorded blocker survived being probed: two had been dissolved by later unrelated work, one named only one of two routes to the fact, one was true of an approach nobody had to take, and TS2393's consumer had simply thrown the count away. The `import a = A` half of TS2708 is still open (§1g) |
 | H. Declared abstentions | §3, with three rows retired (the `super`-in-computed-key row is now the exact tsc boundary, the aliased `this` and the class-method TS2684 rows are new) |
 
-Batches EU–EZ then took five more files (MISS 50 -> 45) and none of them
+Batch FH then took a sixth (MISS 45 -> 44) and is the cleanest instance
+of §6.3 in the file: the target was not a family in this table at all but
+batch CA's `let x; let x` rule, whose own comment named its four
+uncovered shapes and whose "local TYPE declarations" is `localTypes4`. A
+callable's type parameters and the type declarations at its own body's
+top level are one declaration space — no type information, decided in the
+parser. Thirty-three cells probed, and the three that shaped it are in
+TODO.md: `enum T { }` is TS2567 rather than TS2300, a CLASS's type
+parameters do NOT reach a method body's local type, and a parameter
+DEFAULT can hold a body (which is why the fact is read at the body site
+rather than through a pending field).
+
+Batches EU–EZ before it took five files (MISS 50 -> 45) and none of them
 was a machinery gap the classification could see, which is §6.3 once
 more: an `import a = A` alias's TS2708 (the recorded blocker was true of
 what the target MEANS and false of what it SPELLS), TS2403 inside a

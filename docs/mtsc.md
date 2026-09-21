@@ -237,7 +237,7 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 ## TypeScript compatibility snapshot
 
 ゲートになっている数値は TypeScript 7（tsgo）の conformance 結果との照合です
-（`just verify-checker-soundness`、2026-09-18 測定）。
+（`just verify-checker-soundness`、2026-09-20 測定）。
 
 | Metric                    | Result                                   |
 | ------------------------- | ---------------------------------------- |
@@ -251,6 +251,23 @@ name、`namespace A.B { … }` の dotted path、`declare global`）は従来ど
 残り 45 件の内訳（必要な機構ごと）と、実測した未対応のコード形状は
 [`src/checker/UNSUPPORTED.md`](../src/checker/UNSUPPORTED.md) に、tier と
 スコープ外の判断は [checker triage](./checker-triage.md) にあります。
+
+この表だけでは見えないものがある点に注意してください。corpus の 4,484 件は
+どれも数十行の単一ファイルなので、**実コードでしか踏まない false positive は
+FP 0 のままでも存在しえます**。batch FB はその実例で、conformance の数値は
+一切動かさずに（TP 2,670 / MISS 45 / FP 0 のまま）、zod のソースに出ていた
+false positive を 5 件消しました（118 → 113 diagnostics）。`node_modules` 配下の
+`.d.ts` 4,085 件のスイープは前後でバイト一致です。batch FC はこれをさらに大きな
+実入力に向けたもので、`typescript.d.ts`（tsc がそのまま受理する、最大の宣言
+ファイル）に対する **88 件の diagnostics は全部 false positive、うち 80 件が
+1 つのルール**（TS2430）でした。conformance の数値を一切動かさずに 88 → 15、続く
+batch FD（`.d.ts` は `declare` の有無によらず全宣言が ambient）でさらに 7 まで下がり、
+preact は 4 → 0 になりました。conformance corpus に `.d.ts` は 1 つも無いので、
+oracle が動かないことがそのまま「ファイル単位の免除であってルールの弱体化ではない」
+ことの確認になっています。batch FE（namespace からファイル先頭の import を
+re-export できる）で vitest も 6 → 0 になり、FB〜FE 合計で実コードの
+false positive を **1,244 件削除・追加 0**、その間 TP / MISS / FP はすべて不変です。
+batch FF / FG で `typescript.d.ts` は **88 → 0**（tsc と完全一致）になりました。
 
 参考として、2026-09-16 に `moon run src/cmd/mtsc -- conformance` で測定した pinned subset
 （TS6 時代の `.errors.txt` baseline を正解とする軽量計測）の結果も残します。

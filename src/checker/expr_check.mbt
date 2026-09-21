@@ -166,6 +166,17 @@ priv struct Resolver {
   // `"use strict"` prologue stops being legal in a function with a
   // non-simple parameter list (TS1346 / TS1347).
   mut target_reaches_es2016 : Bool
+  // The file contains an `as const` the parser ERASED (its own comment
+  // says why: the transform passes want the raw expression). That erasure
+  // is the one place our string widening diverges from tsc's — measured
+  // across fifteen shapes, every other spelling that tsc keeps narrow we
+  // keep narrow too — so `{ k: "a" } as const` arrives here as the plain
+  // object literal, whose property genuinely does widen to `string`.
+  // A literal-target rule that trusts our widening has to abstain in such
+  // a file; a file-level fact costs MISSes there and invents nothing,
+  // where propagating const-ness through reads and re-bindings would be a
+  // new channel at every hop.
+  mut has_const_assertion : Bool
   // Top-level `var`/`let` names declared with NO initializer whose
   // annotation is `any` (written or absent). The type of such a binding
   // is `any` in the real compiler too, which is what separates it from
@@ -455,6 +466,7 @@ fn Resolver::empty() -> Resolver {
     lib_lacks_es2024: false,
     no_property_access_from_index_signature: false,
     target_reaches_es2016: false,
+    has_const_assertion: false,
   }
 }
 
@@ -1352,6 +1364,13 @@ fn Resolver::ingest_module(
     }
   }
   for gm in module_.grammar_misuses {
+    if gm == "<const-assertion>" {
+      // Set here rather than beside the other directive flags at the check
+      // entry point, which reads only the ROOT module's markers: a
+      // namespace body re-parses with a fresh Parser, so its `as const`
+      // lands on its own `TsModule` and only this recursion sees it.
+      r.has_const_assertion = true
+    }
     if gm.has_prefix("<local-type-name>") {
       // Unprefixed: the question is whether the spelling names a type
       // somewhere in the file, which no namespace prefix narrows.
@@ -12135,13 +12154,39 @@ fn check_expr_against(
       }
     _ => ()
   }
-  // Const-widening gap: a literal-union target with the source widened to the
-  // primitive those literals share (`const c2: 123 | 456 = c` where `c` is a
-  // `const` we widened to `number`). TypeScript keeps the const literal narrow.
+  // Const-widening gap: a literal-union target with the source widened to
+  // the primitive those literals share (`const c2: 123 | 456 = c` where `c`
+  // is a `const` we widened to `number`). TypeScript keeps the const
+  // literal narrow, so reporting would be about OUR widening rather than
+  // the program.
+  //
+  // That reason is a claim with a date on it, and it is no longer true for
+  // STRINGS. Probed one spelling at a time against the current binary: a
+  // string `const` keeps its literal type here (`const c = "z"; const c2:
+  // "a" | "b" = c` already reports), and so do a template literal with no
+  // substitution, an `as` assertion, a call to a function returning a
+  // literal, a narrowed union member, a string enum member and an
+  // annotated `const` — while a NUMBER, BOOLEAN and BIGINT `const` are all
+  // still widened (`const q = 789; const q1: 1 = q` is silent because `q`
+  // arrives as `number`). So the suppression is load-bearing for three of
+  // the four bases and dead weight for the fourth, where it was blocking
+  // the commonest real-world TS2322 / TS2345 there is: a `string`-typed
+  // value assigned into a string-literal union (`const m: Mode = s`,
+  // `f(s)` against `f(x: "a" | "b")`).
+  //
+  // The one measured divergence from tsc on the string side is an erased
+  // `as const` — `{ k: "a" } as const` reaches us as the plain object
+  // literal, whose property widens to `string` here and stays `"a"` in
+  // tsc — so a file carrying one abstains wholesale. That is a MISS in
+  // such a file and never a report on legal code.
   match literal_union_members(expected_u) {
     Some(exp_lits) =>
       match common_literal_base(exp_lits) {
-        Some(base) => if inferred_u == base { return }
+        Some(base) =>
+          if inferred_u == base &&
+            (base != @ast.TsType::String_ || ctx.resolver.has_const_assertion) {
+            return
+          }
         None => ()
       }
     None => ()
@@ -13364,6 +13409,75 @@ fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
 }
 
 ///|
+/// The type an unannotated `var` / `let` / `const` binding takes from its
+/// initializer.
+///
+/// TypeScript widens a FRESH literal type when the location it lands in is
+/// mutable, so `let s = "a"` is `string` while `const s = "a"` is `"a"` —
+/// and an object / array / tuple literal's CONTENTS widen either way,
+/// because the object itself is mutable (`const o = { k: "a" }` is
+/// `{ k: string }`).
+///
+/// Only the composite half was applied here before, and the scalar half was
+/// missing because `infer_expr` erases a numeric / boolean / bigint literal
+/// to its primitive at the source (`NumberLit(_) => Number`) and keeps a
+/// STRING one — so `let s = "a"` stayed `"a"` while `let n = 1` was already
+/// `number`, and the asymmetry showed up as a report on legal code the
+/// moment a `string` source could be judged against a literal target
+/// (`effect`'s `let moduleVersion = "3.21.2"` reassigned from a
+/// `version: string` parameter).
+///
+/// `mutable_` is `var` / `let`, and `fresh` is what makes the widening
+/// correct rather than merely wider: TypeScript widens a literal type only
+/// where it is FRESH — written as a literal right there — and a literal type
+/// that arrived from an annotation keeps its narrowness through a mutable
+/// binding. Ignoring that costs a false positive on legal code, and the
+/// corpus named the file: `let a: "foo" = "foo"; let b = a || "foo";
+/// let c: "foo" = b` is TS7-ACCEPTED, because `a`'s `"foo"` is not fresh and
+/// neither, therefore, is the `||`'s result. So the test is on the
+/// INITIALIZER's syntax (`is_fresh_literal_expr`) and not on the type it
+/// produced, and an unclassified spelling keeps the narrow type — a MISS
+/// rather than a report.
+fn binding_init_type(
+  mutable_ : Bool,
+  fresh : Bool,
+  inferred : @ast.TsType,
+) -> @ast.TsType {
+  match inferred {
+    Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
+      widen_literal_deep(inferred)
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+      if mutable_ && fresh {
+        widen_literal(inferred)
+      } else {
+        inferred
+      }
+    _ => inferred
+  }
+}
+
+///|
+/// The initializer spellings that produce a FRESH literal type: a literal
+/// token (including the negated numeric form `precise_literal_type` already
+/// normalizes) and a template literal. Everything else — a name, a call, an
+/// `as` assertion, an operator — yields a literal type that is already
+/// fixed, and answering `false` there keeps it narrow.
+///
+/// A template literal counts whether or not it carries substitutions, and
+/// the substitution-bearing case is the one that needs saying: tsc types
+/// `` `a${0}` `` as `string` outright, while batch AU FOLDS a constant
+/// substitution here to the literal `"a0"` so TS2367 can decide it. That
+/// fold must not make a `var` holding it narrower than the same string
+/// written as a plain literal — a pre-existing parity pin says so, and it
+/// is the case that caught this.
+fn is_fresh_literal_expr(e : @ast.TsExpr) -> Bool {
+  match e {
+    TemplateLiteral(_, _) => true
+    _ => precise_literal_type(e) is Some(_)
+  }
+}
+
+///|
 fn widen_literal(t : @ast.TsType) -> @ast.TsType {
   match t {
     Literal(_) => @ast.TsType::String_
@@ -14379,7 +14493,27 @@ fn widen_literal_deep(t : @ast.TsType) -> @ast.TsType {
     BooleanLiteral(_) => Boolean
     Array(elem) => Array(widen_literal_deep(elem))
     Tuple(items) => Tuple(items.map(widen_literal_deep))
-    Union(members) => Union(members.map(widen_literal_deep))
+    Union(members) => {
+      // Dedup after widening, which is the whole point of doing it here:
+      // `["a", "b"]`'s element type is `"a" | "b"` and its widened form is
+      // `string`, not `string | string`. Leaving the duplicate in produced
+      // a message nobody can act on (`expected "a" but got string |
+      // string`) AND defeated the const-widening abstention, which tests
+      // `inferred_u == base` — so `const arr = ["a", "b"] as const;
+      // const y: "a" = arr[0]` reported on a line tsc ACCEPTS.
+      let out : Array[@ast.TsType] = []
+      for m in members {
+        let w = widen_literal_deep(m)
+        if !out.iter().any(fn(e) { equivalent(e, w) }) {
+          out.push(w)
+        }
+      }
+      if out.length() == 1 {
+        out[0]
+      } else {
+        Union(out)
+      }
+    }
     Object(fields) =>
       Object(fields.map(fn(f) { (f.0, widen_literal_deep(f.1)) }))
     Struct(name, fields) =>
@@ -15749,7 +15883,15 @@ fn infer_block_return(
           let ty = if is_checkable(declared) {
             declared
           } else {
-            infer_expr(env, resolver, init)
+            // Same widening the declaration checker applies, through the
+            // same helper rather than a second copy of the rule: a `let`
+            // holding a fresh literal is `string` here too, so a `return s`
+            // reading it infers what tsc infers.
+            binding_init_type(
+              !(stmt is Const(_, _, _)),
+              is_fresh_literal_expr(init),
+              infer_expr(env, resolver, init),
+            )
           }
           if is_checkable(ty) {
             env.bind(name, ty)
@@ -18922,6 +19064,7 @@ fn check_ident_binding_decl(
   declared : @ast.TsType,
   init : @ast.TsExpr,
   block_scoped : Bool,
+  mutable_ : Bool,
 ) -> Unit {
   // TS2322 for `var AA: typeof A = B`: an abstract constructor type is
   // never assignable to a non-abstract one. Purely syntactic — a `typeof
@@ -18950,18 +19093,14 @@ fn check_ident_binding_decl(
   let bound_type = if is_checkable(declared) {
     declared
   } else {
-    // No annotation: infer from the initializer. TypeScript widens the
-    // field types of an object / array / tuple literal (their contents
-    // are mutable), so `var a = { foo: '' }` is `{ foo: string }`, not
-    // `{ foo: '' }`. Apply that to composite inferred shapes so a later
-    // `a = b` field comparison isn't over-narrow. Top-level scalars are
-    // left to the existing primitive-widening behaviour.
-    let inferred = infer_expr(env, ctx.resolver, init)
-    match inferred {
-      Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
-        widen_literal_deep(inferred)
-      _ => inferred
-    }
+    // No annotation: infer from the initializer, widening what TypeScript
+    // widens. See `binding_init_type` — a composite literal's contents
+    // always, a scalar literal only for a MUTABLE binding.
+    binding_init_type(
+      mutable_,
+      is_fresh_literal_expr(init),
+      infer_expr(env, ctx.resolver, init),
+    )
   }
   env.bind(name, bound_type)
   // Make sure the *declared* slot reflects the source annotation
@@ -19525,10 +19664,14 @@ fn collect_binding_names(b : @ast.TsBinding, out : Array[String]) -> Unit {
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
-      check_ident_binding_decl(env, ctx, name, declared, init, false)
-    Let(@ast.TsBinding::Ident(name), declared, init)
-    | Const(@ast.TsBinding::Ident(name), declared, init) =>
-      check_ident_binding_decl(env, ctx, name, declared, init, true)
+      check_ident_binding_decl(env, ctx, name, declared, init, false, true)
+    // `let` and `const` share every rule below except the one the last
+    // argument carries: a fresh literal initializer widens into a MUTABLE
+    // binding and stays narrow in a `const`.
+    Let(@ast.TsBinding::Ident(name), declared, init) =>
+      check_ident_binding_decl(env, ctx, name, declared, init, true, true)
+    Const(@ast.TsBinding::Ident(name), declared, init) =>
+      check_ident_binding_decl(env, ctx, name, declared, init, true, false)
     Var(@ast.TsBinding::Array(ab), declared, init)
     | Let(@ast.TsBinding::Array(ab), declared, init)
     | Const(@ast.TsBinding::Array(ab), declared, init) => {
@@ -27313,6 +27456,13 @@ fn check_this_in_computed_keys(
 /// clusters, computedPropertyNames2_ES5).
 fn check_getter_returns_value(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // A getter in a DECLARATION FILE (`get x(): T;`) has no body at all,
+  // so "the body falls off its end" is not a statement about it. Same
+  // ambient exemption as TS2390 / TS2564, keyed on the file rather than
+  // on the `declare` keyword.
+  if module_.grammar_misuses.contains("<declaration-file>") {
+    return issues
+  }
   fn stmts_have_throw_or_loop(stmts : Array[@ast.TsStmt]) -> Bool {
     for st in stmts {
       match st {
@@ -28071,6 +28221,7 @@ fn callee_is_definitely_not_constructable(callee : @ast.TsExpr) -> Bool {
 /// `export { globalThis }` both report.
 fn check_non_local_exports(
   module_ : @ast.TsModule,
+  outer_modules : Array[@ast.TsModule],
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
@@ -28078,9 +28229,24 @@ fn check_non_local_exports(
   // `imported_binding_names` is an Array, so `.contains` is a scan; a
   // barrel module re-exporting what it imports has many of both, and the
   // product is the one superlinear term in an otherwise linear check.
+  //
+  // The OUTER chain counts too, and that is the whole of this batch: an
+  // `import { A } from "./dep"` sits at the FILE's top level, while a
+  // namespace body is its own `TsModule` whose `imported_binding_names`
+  // is empty — so `declare namespace N { export { A } }`, the standard
+  // `.d.ts` grouping idiom, read as exporting a name the module does not
+  // declare. vitest's `index.d.ts` does it six times and tsc accepts the
+  // file. The resolver already covers names DECLARED at file level (the
+  // sibling `export { Local }` case was always silent), which is exactly
+  // why only the imported half was missing.
   let imported : Map[String, Unit] = Map([])
   for n in module_.imported_binding_names {
     imported[n] = ()
+  }
+  for om in outer_modules {
+    for n in om.imported_binding_names {
+      imported[n] = ()
+    }
   }
   for gm in module_.grammar_misuses {
     if !gm.has_prefix("<export-local>") {
@@ -29772,6 +29938,226 @@ fn check_accessor_pair_types(
 }
 
 ///|
+/// A SUFFICIENT accept for TS2430's member comparison: every member of the
+/// derived type is accepted by some member of the base's, where a pair of
+/// `Named` interfaces may also be related NOMINALLY through the `extends`
+/// chain rather than structurally.
+///
+/// That nominal route is what `typescript.d.ts` needs twenty-nine times:
+/// `interface Node { readonly parent: Node }` with
+/// `interface CaseBlock extends Node { readonly parent: SwitchStatement }`
+/// is legal, and `SwitchStatement` reaches `Node` only through
+/// `Statement` — a relation the structural comparison cannot recover,
+/// because `Node` is declared twice (merged) and the whole AST hierarchy
+/// is mutually recursive.
+///
+/// Sufficient, never necessary: it is used only as a disjunct that can
+/// ACCEPT, so a shape it cannot decide falls through to the report exactly
+/// as before. Every derived member must be accepted, which is what makes a
+/// union source sound; a member that is not a `Named` pair is decided by
+/// the ordinary resolver-free test, so nothing is accepted here that
+/// `is_assignable_to` would have refused for a reason other than
+/// nominality. `named_iface_extends_reaches` walks `interfaces` only, so a
+/// class heritage relation costs a MISS rather than a wrong accept.
+fn member_covariant_by_iface_extends(
+  d : @ast.TsType,
+  b : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  // FLATTENED, because `unwrap_containers` expands an alias IN PLACE:
+  // `parent: ID | CLD` with `type CLD = CD | CE` becomes a union whose
+  // second member is itself a union, and splitting one level leaves that
+  // inner union as a single opaque member no `Named` test can match.
+  // `typescript.d.ts`'s `HeritageClause.parent: InterfaceDeclaration |
+  // ClassLikeDeclaration` is exactly that, and a union of unions is the
+  // same union anyway. Bounded, since a pathological alias could nest
+  // deeply; running out of depth keeps the member unsplit, which costs a
+  // MISS rather than inventing an accept.
+  fn parts(t : @ast.TsType) -> Array[@ast.TsType] {
+    let out : Array[@ast.TsType] = []
+    let mut frontier : Array[@ast.TsType] = [t]
+    for _ in 0..<8 {
+      let next : Array[@ast.TsType] = []
+      for m in frontier {
+        match m {
+          Union(ms) =>
+            for x in ms {
+              next.push(x)
+            }
+          _ => out.push(m)
+        }
+      }
+      if next.length() == 0 {
+        break
+      }
+      frontier = next
+    }
+    for m in frontier {
+      out.push(m)
+    }
+    out
+  }
+
+  // A nominal reference arrives spelled EITHER way: `unwrap_containers`
+  // expands an interface reference it can resolve into `Struct(name, …)`
+  // and leaves one it cannot as `Named(name)`, so the two spellings of
+  // one type meet whenever a comparison crosses that boundary. Matching
+  // `Named` alone made the bare pair work and the union case fail —
+  // `parent: N | Q` expands its members, `parent: N` does not. The same
+  // asymmetry batch EM found in `is_assignable_to_inner`.
+  fn iface_name(t : @ast.TsType) -> String? {
+    match t {
+      Named(n) => Some(n)
+      Struct(n, _) => Some(n)
+      _ => None
+    }
+  }
+
+  // One derived member against one base member. Split out because two
+  // shapes need more than a name comparison, and both come from the same
+  // `typescript.d.ts` declaration:
+  // `type EndOfFileToken = Token<SyntaxKind.EndOfFileToken> & JSDocContainer`.
+  //
+  // An INTERSECTION is a subtype of each of its components, so reaching
+  // the base through ANY one of them is enough — the opposite quantifier
+  // from the union above, which is why it is not folded into `parts`.
+  //
+  // An `Applied(n, _)` reaches an ancestor by NAME, and that is sound
+  // only when the base member is NON-generic: `interface Token<K>
+  // extends Node` makes every instantiation a `Node` whatever `K` is,
+  // while `Token<A>` against `Token<B>` depends on the arguments and is
+  // left to the ordinary test. So the generic spelling is admitted on
+  // the DERIVED side only, and only against a bare name.
+  fn member_reaches(dt : @ast.TsType, bt : @ast.TsType, depth : Int) -> Bool {
+    if depth > 4 {
+      return false
+    }
+    match dt {
+      Intersection(cs) => {
+        for c in cs {
+          if member_reaches(c, bt, depth + 1) {
+            return true
+          }
+        }
+        return false
+      }
+      _ => ()
+    }
+    let bn = iface_name(bt)
+    let dn = match iface_name(dt) {
+      Some(n) => Some(n)
+      None =>
+        match dt {
+          Applied(n, _) => if bn is Some(_) { Some(n) } else { None }
+          _ => None
+        }
+    }
+    match (dn, bn) {
+      (Some(dname), Some(bname)) =>
+        named_iface_extends_reaches(resolver, dname, bname)
+      _ => is_assignable_to(dt, bt)
+    }
+  }
+
+  let dm = parts(d)
+  let bm = parts(b)
+  // A bare pair is the common case and must still go through the
+  // extends walk, so no fast path: `parts` already made both singletons.
+  for dt in dm {
+    let mut ok = false
+    for bt in bm {
+      if ok {
+        continue
+      }
+      if member_reaches(dt, bt, 0) {
+        ok = true
+      }
+    }
+    if !ok {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Does interface `from` reach interface `to` through its declared
+/// `extends` chain? A NOMINAL relation, and the one thing a structural
+/// comparison cannot recover when two interfaces are mutually recursive
+/// (`interface Node { parent: Node }` with
+/// `interface CaseBlock extends Node { parent: SwitchStatement }`, where
+/// `SwitchStatement` reaches `Node` only through `Statement`).
+///
+/// Breadth-first with a visited set and a depth bound of 16: an interface
+/// heritage cycle is itself an error, and stopping short costs a MISS.
+/// Lived as a local `fn` inside `tuple_covariant_by_extends` until TS2430's
+/// member comparison needed the same question — hoisted rather than copied,
+/// since a second walk is how two answers to one question come to disagree.
+fn named_iface_extends_reaches(
+  resolver : Resolver,
+  from : String,
+  to : String,
+) -> Bool {
+  if from == to {
+    return true
+  }
+  let mut frontier = [from]
+  let visited : Map[String, Unit] = Map([])
+  for _ in 0..<16 {
+    let next : Array[String] = []
+    for n in frontier {
+      if visited.contains(n) {
+        continue
+      }
+      visited[n] = ()
+      match resolver.interfaces.get(n) {
+        Some(i) =>
+          for en in i.extends_names {
+            if en == to {
+              return true
+            }
+            next.push(en)
+          }
+        None => ()
+      }
+      // A CLASS reaches an interface through `implements`, and another
+      // class through `extends`. Both are heritage the same way an
+      // interface's `extends` is, and both are what a union mixing the
+      // two needs: `type U = SomeInterface | SomeClass` against a base
+      // member typed as the interface those two share is legal, and was
+      // reported — measured pre-existing, on every binary back to before
+      // this batch series. The first version of this walk read
+      // `interfaces` alone and filed the class case as a MISS; it is a
+      // REPORT rather than a MISS, because the caller requires EVERY
+      // union member to be accepted, so one unprovable member keeps the
+      // whole diagnostic.
+      match resolver.classes.get(n) {
+        Some(c) => {
+          for bn in c.base_names {
+            if bn == to {
+              return true
+            }
+            next.push(bn)
+          }
+          for im in c.implements_names {
+            if im == to {
+              return true
+            }
+            next.push(im)
+          }
+        }
+        None => ()
+      }
+    }
+    if next.length() == 0 {
+      break
+    }
+    frontier = next
+  }
+  false
+}
+
+///|
 /// TS accepts a derived interface member that narrows a base tuple element
 /// covariantly through the declared `extends` chain --
 /// `"stream": [ClientHttp2Stream, ...]` over `"stream": [Http2Stream, ...]`
@@ -29786,35 +30172,7 @@ fn tuple_covariant_by_extends(
   resolver : Resolver,
 ) -> Bool {
   fn named_extends_reaches(from : String, to : String) -> Bool {
-    if from == to {
-      return true
-    }
-    let mut frontier = [from]
-    let visited : Map[String, Unit] = Map([])
-    for _ in 0..<16 {
-      let next : Array[String] = []
-      for n in frontier {
-        if visited.contains(n) {
-          continue
-        }
-        visited[n] = ()
-        match resolver.interfaces.get(n) {
-          Some(i) =>
-            for en in i.extends_names {
-              if en == to {
-                return true
-              }
-              next.push(en)
-            }
-          None => ()
-        }
-      }
-      if next.length() == 0 {
-        break
-      }
-      frontier = next
-    }
-    false
+    named_iface_extends_reaches(resolver, from, to)
   }
 
   match (d, b) {
@@ -29964,8 +30322,34 @@ fn check_interface_extends_member_compat(
           !type_deeply_contains_unmodeled(bty, resolver) &&
           !type_has_call_signature(fty, resolver) &&
           !type_has_call_signature(bty, resolver) &&
-          !is_assignable_to(resolver.unwrap(fty), resolver.unwrap(bty)) &&
+          // `unwrap_containers`, not `unwrap`. `is_assignable_to` is the
+          // RESOLVER-FREE entry point, and `unwrap` peels the outermost
+          // type only — so a base member typed as an ALIAS TO A UNION
+          // (`type U = A | B; interface P { name?: U }`) reached the
+          // comparison as `Union([Named("U"), Undefined])`, where the
+          // union is the outermost layer and `U` was never resolved.
+          // `Named("A")` against `Named("U")` is nominal, so narrowing an
+          // optional member to a subset of its base's union — legal
+          // TypeScript, and the shape `typescript.d.ts` uses eighty times
+          // for `name?: DeclarationName` — was reported. The guards above
+          // already prove both sides RESOLVABLE
+          // (`type_contains_unresolved_named`); nothing resolved them.
+          //
+          // `unwrap_containers` is the helper written for exactly this
+          // hazard — its own header says the resolver-free comparison
+          // "can't resolve a `Named` it finds nested inside" a container
+          // layer, and `Union` is in its fast-path list. Applied to BOTH
+          // sides, since the derived member can be an aliased union too.
+          !is_assignable_to(
+            resolver.unwrap_containers(fty),
+            resolver.unwrap_containers(bty),
+          ) &&
           !is_structurally_assignable_named(fty, bty, resolver) &&
+          !member_covariant_by_iface_extends(
+            resolver.unwrap_containers(fty),
+            resolver.unwrap_containers(bty),
+            resolver,
+          ) &&
           !tuple_covariant_by_extends(fty, bty, resolver) {
           issues.push({
             path: "interface \{iface.name}",
@@ -33759,10 +34143,18 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // needs no body) and the parser does not set the sentinel there;
         // an ABSTRACT class is NOT exempt, which the probe had to settle
         // because "abstract members have no bodies" suggests otherwise.
-        issues.push({
-          path: "class \{cls_name}",
-          message: "constructor implementation is missing",
-        })
+        //
+        // A DECLARATION FILE is the other spelling of that same
+        // exemption: `export class C { constructor(m: number); }` in a
+        // `.d.ts` writes no `declare`, so it goes through the RUNTIME
+        // class parser and does set the sentinel — and tsc accepts it.
+        // Keyed on the file marker rather than the keyword.
+        if !module_.grammar_misuses.contains("<declaration-file>") {
+          issues.push({
+            path: "class \{cls_name}",
+            message: "constructor implementation is missing",
+          })
+        }
       } else if name == "<index-sig-modifier>" {
         issues.push({
           path: "class \{cls_name}",
@@ -33779,10 +34171,17 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           message: "function overload signatures must not mix static and instance",
         })
       } else if name == "<overload-no-impl>" {
-        issues.push({
-          path: "class \{cls_name}",
-          message: "function implementation is missing or not immediately following the declaration",
-        })
+        // Same declaration-file exemption as `<ctor-no-impl>` above: in a
+        // `.d.ts` a class member is bodiless by construction, and
+        // `export class C { m(x: number): void; }` writes no `declare`,
+        // so it goes through the RUNTIME class parser and does set the
+        // sentinel. tsc accepts it.
+        if !module_.grammar_misuses.contains("<declaration-file>") {
+          issues.push({
+            path: "class \{cls_name}",
+            message: "function implementation is missing or not immediately following the declaration",
+          })
+        }
       } else if name == "<overload-accessibility-mix>" {
         issues.push({
           path: "class \{cls_name}",
@@ -36704,7 +37103,7 @@ fn check_module_function_bodies_layered(
   for issue in check_merged_export_modifiers(module_, resolver) {
     all.push(issue)
   }
-  for issue in check_non_local_exports(module_, resolver) {
+  for issue in check_non_local_exports(module_, outer_modules, resolver) {
     all.push(issue)
   }
   for issue in check_member_accessibility_mismatch(module_, resolver) {
@@ -37236,6 +37635,16 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: the @allowUnreachableCode directive flag,
       // consumed by the TS2695 comma-operator suppression below.
       if gm == "<allowunreachable-on>" {
+        continue
+      }
+      // Marker, not an error: an erased `as const`, consumed by the
+      // literal-target assignability abstention.
+      if gm == "<const-assertion>" {
+        continue
+      }
+      // Marker, not an error: the source is a declaration file, consumed
+      // by the bodiless-declaration exemptions (TS2390 / TS2564 / TS2378).
+      if gm == "<declaration-file>" {
         continue
       }
       // Markers, not errors: lib-set / target directive evidence and
@@ -38193,6 +38602,16 @@ fn check_native_class_property_initializers(
   // (per a `// @strict: false` / `// @strictPropertyInitialization:
   // false` header directive). Skip TS2564 entirely.
   if !strict_property_init {
+    return issues
+  }
+  // A DECLARATION FILE makes every class member ambient whether or not
+  // it writes `declare`, and an ambient field needs no initializer. The
+  // exemption this rule already has is keyed on the `declare` KEYWORD
+  // (`parse_declare_class` routes elsewhere), and `export class C { x:
+  // number }` in a `.d.ts` is the other spelling of the same fact — so
+  // `mtsc --noEmit` reported it on preact's and TypeScript's own
+  // declaration files, which tsc accepts outright.
+  if module_.grammar_misuses.contains("<declaration-file>") {
     return issues
   }
   // Classes written inside a `declare module "spec" { ... }` body are
@@ -39806,7 +40225,29 @@ fn check_interface_extends_compat(
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
             } else if both_plain_named &&
-              !struct_assignable_named_rec(d_payload, b_payload, resolver, []) {
+              !struct_assignable_named_rec(d_payload, b_payload, resolver, []) &&
+              // …and not related NOMINALLY either. `named_reaches` is
+              // already defined in this function and was consulted only
+              // for the RETURN-type comparison above, never for the
+              // member type — the applied-in-some-places family, with
+              // the same walk sitting thirty lines up.
+              //
+              // `struct_assignable_named_rec` cannot recover the relation
+              // when the base carries a BRAND the derived only inherits:
+              // `SuperExpression extends PrimaryExpression extends
+              // MemberExpression extends LeftHandSideExpression`, and
+              // only the last declares `_leftHandSideExpressionBrand`.
+              // `typescript.d.ts` writes that three times
+              // (`SuperPropertyAccessExpression`, `SuperElementAccess-
+              // Expression`, `SuperCall`) and tsc accepts the file.
+              !(match
+                (
+                  strip_nullish(resolver.unwrap(d_payload)),
+                  strip_nullish(resolver.unwrap(b_payload)),
+                ) {
+                (Named(dn), Named(bn)) => named_reaches(dn, bn)
+                _ => false
+              }) {
               issues.push({
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",

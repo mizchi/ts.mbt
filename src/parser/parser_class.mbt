@@ -3328,7 +3328,7 @@ fn Parser::parse_class_body(
         !has_body_block &&
         !is_abstract_member &&
         !has_declare &&
-        !self.in_ambient_module &&
+        !(self.in_ambient_module || self.in_declaration_file) &&
         method_name != "constructor" {
         self.grammar_misuses.push(
           "a decorator can only decorate a method implementation, not an overload",
@@ -3385,6 +3385,12 @@ fn Parser::parse_class_body(
         self.in_generator = is_generator
         self.in_function = true
         let body = self.parse_block()
+        // TS2300: a METHOD's own type parameters share a declaration space
+        // with its body's top-level local types. The enclosing CLASS's type
+        // parameters do NOT — `class L<T> { m() { interface T { } } }` is
+        // legal, probed — which is why only `method_type_param_names` is
+        // passed here.
+        self.record_type_param_body_collisions(method_type_param_names)
         self.in_generator = prev_generator
         self.in_function = prev_function
         body
@@ -3666,8 +3672,13 @@ fn Parser::parse_class_body(
       // plain one. An ambient class is exempt and needs no gate here,
       // because `declare class` is parsed by `parse_declare_class` and
       // never reaches this function.
+      // `in_declaration_file` too: the comment above is right that a
+      // `declare class` never reaches this function, and a `.d.ts`
+      // writes `export class C { x; }` WITHOUT `declare`, which does —
+      // so the ambient exemption was keyed on the KEYWORD and a
+      // declaration FILE is the other spelling of the same fact.
       if self.no_implicit_any &&
-        !self.in_ambient_module &&
+        !(self.in_ambient_module || self.in_declaration_file) &&
         !had_annotation &&
         init is None &&
         !has_declare {

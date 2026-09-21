@@ -152,6 +152,7 @@ pub struct Parser {
   mut in_iteration : Bool
   mut in_switch : Bool
   mut in_ambient_module : Bool
+  mut in_declaration_file : Bool
   mut in_static_block : Bool
   mut last_var_decl_annotated : Bool
   mut in_const_enum : Bool
@@ -210,6 +211,8 @@ pub struct Parser {
   collected_type_aliases : Array[@ast.TsTypeAlias]
   collected_interfaces : Array[@ast.TsInterface]
   block_binding_nonnumeric : Array[Map[String, Bool]]
+  block_local_type_names : Array[Array[String]]
+  mut last_block_local_type_names : Array[String]
   collected_class_fields : Array[(String, @ast.TsType)]
   collected_local_classes : Array[@ast.TsClassDecl]
   collected_type_only_exports : Map[String, Bool]
@@ -218,6 +221,7 @@ pub struct Parser {
 } derive(@debug.Debug)
 pub fn Parser::from_source(String) -> Self
 pub fn Parser::from_source_with_jsx(String, Bool) -> Self
+pub fn Parser::mark_declaration_file(Self) -> Unit
 pub fn Parser::new(Array[Token]) -> Self
 pub fn Parser::new_with_strict(Array[Token], Bool) -> Self
 pub fn Parser::new_with_strict_and_jsx(Array[Token], Bool, Bool) -> Self

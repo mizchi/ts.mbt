@@ -1063,6 +1063,10 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     let _ = self.labels.pop()
   }
   let body = self.parse_block()
+  // TS2300: this function's type parameters and its body's top-level type
+  // declarations are one declaration space. Read here, right after this
+  // body's own `parse_block()`.
+  self.record_type_param_body_collisions(type_params)
   self.in_generator = prev_generator
   self.in_async = prev_async
   self.in_function = prev_function
@@ -1375,6 +1379,10 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     let _ = self.labels.pop()
   }
   let body = self.parse_block()
+  // TS2300: this function's type parameters and its body's top-level type
+  // declarations are one declaration space. Read here, right after this
+  // body's own `parse_block()`.
+  self.record_type_param_body_collisions(type_params)
   self.in_generator = prev_generator
   self.in_async = prev_async
   self.in_function = prev_function
@@ -1425,8 +1433,24 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
 /// references, and recording those would make the rule this feeds abstain
 /// on its own subject.
 fn Parser::record_type_param_names_ahead(self : Parser) -> Unit {
+  for n in self.type_param_names_ahead() {
+    self.interface_member_modifier_misuses.push("<type-param-name>\{n}")
+  }
+}
+
+///|
+/// The type-parameter names of the `<...>` list starting at the cursor,
+/// WITHOUT consuming it.
+///
+/// Extracted from `record_type_param_names_ahead` so the TS2300
+/// declaration-space rule can read the same names at the two sites that
+/// DISCARD a type-parameter list — a generic arrow (`ArrowFunc` has no
+/// slot for them) and an object-literal method (`skip_type_params`). One
+/// walk with two consumers rather than a second copy of it.
+fn Parser::type_param_names_ahead(self : Parser) -> Array[String] {
+  let names : Array[String] = []
   if !self.check(Lt) {
-    return
+    return names
   }
   let mut i = 1
   let mut depth = 1
@@ -1443,9 +1467,7 @@ fn Parser::record_type_param_names_ahead(self : Parser) -> Unit {
             if n == "out" || n == "in" {
               ()
             } else {
-              self.interface_member_modifier_misuses.push(
-                "<type-param-name>\{n}",
-              )
+              names.push(n)
               at_name = false
             }
           }
@@ -1463,6 +1485,7 @@ fn Parser::record_type_param_names_ahead(self : Parser) -> Unit {
     }
     i += 1
   }
+  names
 }
 
 ///|
