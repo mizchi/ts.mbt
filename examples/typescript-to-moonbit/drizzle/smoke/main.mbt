@@ -47,25 +47,45 @@ extern "js" fn build_insert_sql_js(
 #module("#drizzle-smoke/helpers")
 extern "js" fn open_db_js(schema_sql : String) -> @sut.JSValue = "openDb"
 
-extern "js" fn db_run_js(
+extern "js" fn db_run_js_ffi(
   db : @sut.JSValue,
   sql : String,
-  params : Array[@sut.JSValue],
+  params : FixedArray[@sut.JSValue],
 ) -> Unit =
   #| (db, sql, params) => { db.prepare(sql).run(...params); }
 
-extern "js" fn db_all_js(
+fn db_run_js(
   db : @sut.JSValue,
   sql : String,
   params : Array[@sut.JSValue],
+) -> Unit {
+  db_run_js_ffi(db, sql, FixedArray::from_array(params))
+}
+
+extern "js" fn db_all_js_ffi(
+  db : @sut.JSValue,
+  sql : String,
+  params : FixedArray[@sut.JSValue],
 ) -> @sut.JSValue =
   #| (db, sql, params) => db.prepare(sql).all(...params)
+
+fn db_all_js(
+  db : @sut.JSValue,
+  sql : String,
+  params : Array[@sut.JSValue],
+) -> @sut.JSValue {
+  db_all_js_ffi(db, sql, FixedArray::from_array(params))
+}
 
 extern "js" fn js_query_sql(query : @sut.JSValue) -> String =
   #| (q) => q.sql
 
-extern "js" fn js_query_params(query : @sut.JSValue) -> Array[@sut.JSValue] =
+extern "js" fn js_query_params_ffi(query : @sut.JSValue) -> FixedArray[@sut.JSValue] =
   #| (q) => q.params
+
+fn js_query_params(query : @sut.JSValue) -> Array[@sut.JSValue] {
+  Array::from_fixed_array(js_query_params_ffi(query))
+}
 
 extern "js" fn rows_length(rows : @sut.JSValue) -> Int =
   #| (r) => r.length
