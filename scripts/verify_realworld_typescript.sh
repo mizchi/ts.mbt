@@ -1779,18 +1779,23 @@ EOF
       ;;
     zod)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_zod_success(r : @sut.Parse_ZodSafeParseResult) -> Bool =
+  #| (r) => r.success === true
+
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 fn main {
   let _ = @sut.number(None)
   let _ = @sut.boolean(None)
   let s = @sut.string(None)
-  if !s.safeParse(@sut.unsafeCast("hello"), None).success {
+  if !realworld_zod_success(s.safeParse(unsafeCast("hello"), None)) {
     abort("expected zod safeParse success")
   }
-  if s.safeParse(@sut.unsafeCast(42), None).success {
+  if realworld_zod_success(s.safeParse(unsafeCast(42), None)) {
     abort("expected zod safeParse failure")
   }
   let obj = @sut.as_schema(@sut.object(None, None))
-  if obj.safeParse(@sut.unsafeCast("nope"), None).success {
+  if realworld_zod_success(obj.safeParse(unsafeCast("nope"), None)) {
     abort("expected zod object failure")
   }
 }
@@ -1899,6 +1904,8 @@ EOF
       ;;
     react)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_react_vnode(
   elem : @sut.DetailedReactHTMLElement[
     @sut.InputHTMLAttributes[@sut.HTMLInputElement],
@@ -1914,7 +1921,7 @@ fn main {
   }
   let counter = fn(_props : @sut.JSValue) -> @sut.JSValue {
     let (count, _set_count) = @sut.use_state_typed(41)
-    @sut.unsafeCast(@sut.createElement("div", None, [@sut.unsafeCast(count)]))
+    unsafeCast(@sut.createElement("div", None, [unsafeCast(count)]))
   }
   let _ = @sut.element_of_component(counter, None, [])
 }
@@ -1982,23 +1989,27 @@ EOF
       ;;
     superstruct)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ss_string_value() -> @sut.JSValue =
   #| () => "hello"
 
 fn main {
-  let s : @sut.Struct[@sut.JSValue, @sut.JSValue] = @sut.unsafeCast(@sut.string())
+  let s : @sut.Struct[@sut.JSValue, @sut.JSValue] = unsafeCast(@sut.string())
   @sut.assert_(realworld_ss_string_value(), s, None)
 }
 EOF
       ;;
     eventemitter3)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ee3_event() -> @sut.EventEmitter_EventNames =
   #| () => "ping"
 
 fn main {
   let ee : @sut.Default[@sut.JSValue, @sut.JSValue] = @sut.new_default()
-  let listener : @sut.EventEmitter_EventListener = @sut.unsafeCast(fn(_args : Array[@sut.JSValue]) -> Unit {  })
+  let listener : @sut.EventEmitter_EventListener = unsafeCast(fn(_args : Array[@sut.JSValue]) -> Unit {  })
   let _ = ee.on(realworld_ee3_event(), listener, None)
   if ee.listener_count(realworld_ee3_event()) != 1 {
     abort("unexpected listener count")
@@ -2032,9 +2043,11 @@ EOF
       ;;
     marked)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 fn main {
   let html = @sut.marked_string_marked_options_optional("# hello", None)
-  let rendered : String = @sut.unsafeCast(html)
+  let rendered : String = unsafeCast(html)
   if !rendered.contains("<h1>hello</h1>") {
     abort("unexpected marked output")
   }
@@ -2043,11 +2056,13 @@ EOF
       ;;
     semver)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 fn main {
-  if @sut.valid(Some(@sut.unsafeCast("1.2.3")), None) != Some("1.2.3") {
+  if @sut.valid(Some(unsafeCast("1.2.3")), None) != Some("1.2.3") {
     abort("unexpected semver valid")
   }
-  if @sut.major(@sut.unsafeCast("2.4.6"), None) != 2 {
+  if @sut.major(unsafeCast("2.4.6"), None) != 2 {
     abort("unexpected semver major")
   }
 }
@@ -2055,11 +2070,13 @@ EOF
       ;;
     picomatch)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_pm_match(m : @sut.Picomatch_Matcher, input : String) -> Bool =
   #| (m, input) => m(input)
 
 fn main {
-  let matcher = @sut.default(@sut.unsafeCast("*.ts"), None, None)
+  let matcher = @sut.default(unsafeCast("*.ts"), None, None)
   if !realworld_pm_match(matcher, "a.ts") {
     abort("expected *.ts to match a.ts")
   }
@@ -2087,6 +2104,8 @@ EOF
       ;;
     axios)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_axios_config() -> @sut.AxiosRequestConfig[@sut.JSValue] =
   #| () => ({ url: "/users/1", baseURL: "https://example.test" })
 
@@ -2103,7 +2122,7 @@ extern "js" fn realworld_intercepted_count() -> Int =
   #| () => globalThis.__tsmbt_intercepted || 0
 
 fn main {
-  let axios_core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
+  let axios_core : @sut.Axios = unsafeCast(@sut.get_default())
   if axios_core.get_uri(Some(realworld_axios_config())) != "https://example.test/users/1" {
     abort("unexpected axios uri")
   }
@@ -2129,16 +2148,16 @@ fn main {
     if awaited.length() != 3 {
       abort("unexpected awaited axios.all count")
     }
-    let core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
+    let core : @sut.Axios = unsafeCast(@sut.get_default())
     let mut rejected = false
     let resp : @sut.JSValue = core
       .get("http://127.0.0.1:1/unreachable", None)
       .wait() catch {
       @sut.JsRejection(_) => {
         rejected = true
-        @sut.unsafeCast(0)
+        unsafeCast(0)
       }
-      _ => @sut.unsafeCast(0)
+      _ => unsafeCast(0)
     }
     ignore(resp)
     if !rejected {
@@ -2162,14 +2181,14 @@ fn main {
       None,
       None,
     )
-    let instance_core : @sut.Axios = @sut.unsafeCast(instance)
+    let instance_core : @sut.Axios = unsafeCast(instance)
     let mut intercepted_rejected = false
     let iresp : @sut.JSValue = instance_core
       .get("http://127.0.0.1:1/unreachable", None)
       .wait() catch {
       _ => {
         intercepted_rejected = true
-        @sut.unsafeCast(0)
+        unsafeCast(0)
       }
     }
     ignore(iresp)
@@ -2209,8 +2228,10 @@ EOF
       ;;
     debug)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 fn main {
-  let dbg : @sut.Debug = @sut.unsafeCast(@sut.get_default())
+  let dbg : @sut.Debug = unsafeCast(@sut.get_default())
   dbg.enable("tsmbt:*")
   if !dbg.enabled("tsmbt:probe") {
     abort("expected namespace to be enabled")
@@ -2253,8 +2274,10 @@ EOF
       ;;
     uuid)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 fn main {
-  if !@sut.validate(@sut.unsafeCast("00000000-0000-0000-0000-000000000000")) {
+  if !@sut.validate(unsafeCast("00000000-0000-0000-0000-000000000000")) {
     abort("expected NIL uuid to validate")
   }
 }
