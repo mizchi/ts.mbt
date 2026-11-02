@@ -662,9 +662,7 @@ source = "."
 preferred_target = "js"
 EOF
 
-  cat > "$root/_stubs/mizchi_js/core/moon.pkg.json" <<'EOF'
-{}
-EOF
+  : > "$root/_stubs/mizchi_js/core/moon.pkg"
 
   cat > "$root/_stubs/mizchi_js/core/core.mbt" <<'EOF'
 ///|
@@ -1684,13 +1682,12 @@ write_build_smoke_main() {
   rm -rf "$smoke_dir" "$out/_build/js/debug/build"
   mkdir -p "$smoke_dir"
 
-  cat > "$smoke_dir/moon.pkg.json" <<EOF
-{
-  "is-main": true,
-  "import": [
-    { "path": "realworld_typescript/$module_name", "alias": "sut" }
-  ]
+  cat > "$smoke_dir/moon.pkg" <<EOF
+import {
+  "realworld_typescript/$module_name" @sut,
 }
+
+pkgtype(kind: "executable")
 EOF
 
   case "$module_name" in
