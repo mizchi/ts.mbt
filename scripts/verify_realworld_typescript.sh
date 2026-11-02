@@ -324,7 +324,7 @@ jsvalue_function_budget() {
     chalk) printf '3\n' ;;
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
-    hono) printf '5\n' ;;
+    hono) printf '1\n' ;;
     zod) printf '484\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
@@ -416,7 +416,7 @@ jsvalue_cause_budget() {
     # 2026-07-20 union-return normalization: two hono signatures moved
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
-    hono) printf '86|14|6|24|6|28|8\n' ;;
+    hono) printf '81|12|8|20|4|28|9\n' ;;
     zod) printf '1493|333|8|206|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
