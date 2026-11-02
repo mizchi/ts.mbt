@@ -5,17 +5,21 @@ pub suberror MbtiJsLinkConfigError {
 } derive(@debug.Debug)
 
 ///|
-fn mbti_js_link_char_at(s : String, idx : Int) -> Char {
+#deprecated
+pub extend MbtiJsLinkConfigError with @debug.Debug::{to_repr}
+
+///|
+fn mbti_js_link_char_at(s : String, idx : Int32) -> Char {
   s[idx].to_int().unsafe_to_char()
 }
 
 ///|
 fn mbti_js_link_find_matching(
   source : String,
-  open_idx : Int,
+  open_idx : Int32,
   open_char : Char,
   close_char : Char,
-) -> Int? {
+) -> Int32? {
   let mut depth = 0
   let mut idx = open_idx
   while idx < source.length() {

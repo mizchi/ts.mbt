@@ -245,7 +245,7 @@ fn empty_ts_module() -> @ast.TsModule {
 }
 
 ///|
-fn Parser::is_enum_keyword_at(self : Parser, offset : Int) -> Bool {
+fn Parser::is_enum_keyword_at(self : Parser, offset : Int32) -> Bool {
   match self.peek_at(offset).kind {
     Ident(name) => name == "enum"
     _ => false
@@ -380,7 +380,7 @@ fn Parser::record_enum_string_arith(self : Parser, e : @ast.TsExpr) -> Unit {
 /// this is observation-only.
 fn Parser::scan_skipped_enum_initializer(
   self : Parser,
-  start_pos : Int,
+  start_pos : Int32,
 ) -> Unit {
   self.pos = start_pos
   let gm_len = self.grammar_misuses.length()
@@ -806,7 +806,7 @@ pub fn lower_enum_decl_to_runtime_stmts(
   out.push(
     Var(@ast.TsBinding::Ident(decl.name), @ast.TsType::Any, ObjectLit([])),
   )
-  let mut next_numeric : Int = 0
+  let mut next_numeric : Int32 = 0
   for mem in decl.members {
     let value_expr : @ast.TsExpr? = match mem.value {
       Some(@ast.TsEnumMemberValue::Number(s)) =>
@@ -1442,7 +1442,7 @@ fn collect_static_local_exprs_from_stmt(
 fn value_decl_static_return_expr_from_block_with_depth(
   block : @ast.TsBlock,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsExpr? {
   if depth <= 0 {
     return None
@@ -1473,7 +1473,7 @@ fn value_decl_static_return_expr_from_block_with_depth(
 fn value_decl_static_resolve_expr_with_depth(
   expr : @ast.TsExpr,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsExpr? {
   if depth <= 0 {
     return None
@@ -1551,7 +1551,7 @@ fn value_decl_static_resolve_expr_with_depth(
 fn value_decl_static_zero_arg_call_result_expr_with_depth(
   callee : @ast.TsExpr,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsExpr? {
   if depth <= 0 {
     return None
@@ -1605,7 +1605,7 @@ fn value_decl_static_object_prop_expr_with_depth(
   expr : @ast.TsExpr,
   key : String,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsExpr? {
   if depth <= 0 {
     return None
@@ -1734,7 +1734,7 @@ fn value_decl_static_object_prop_expr_with_depth(
 }
 
 ///|
-fn value_decl_parse_nonnegative_int_string(text : String) -> Int? {
+fn value_decl_parse_nonnegative_int_string(text : String) -> Int32? {
   if text == "" {
     return None
   }
@@ -1760,9 +1760,9 @@ fn value_decl_static_object_prop_expr(
 ///|
 fn value_decl_static_array_item_expr_with_depth(
   expr : @ast.TsExpr,
-  index : Int,
+  index : Int32,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsExpr? {
   if depth <= 0 {
     return None
@@ -1894,7 +1894,7 @@ fn value_decl_static_array_item_expr_with_depth(
 ///|
 fn value_decl_static_array_item_expr(
   expr : @ast.TsExpr,
-  index : Int,
+  index : Int32,
   const_values : Map[String, @ast.TsExpr],
 ) -> @ast.TsExpr? {
   value_decl_static_array_item_expr_with_depth(expr, index, const_values, 16)
@@ -1903,9 +1903,9 @@ fn value_decl_static_array_item_expr(
 ///|
 fn value_decl_static_array_rest_expr_with_depth(
   expr : @ast.TsExpr,
-  start_index : Int,
+  start_index : Int32,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsExpr? {
   if depth <= 0 {
     return None
@@ -1962,7 +1962,7 @@ fn value_decl_static_array_rest_expr_with_depth(
 ///|
 fn value_decl_static_array_rest_expr(
   expr : @ast.TsExpr,
-  start_index : Int,
+  start_index : Int32,
   const_values : Map[String, @ast.TsExpr],
 ) -> @ast.TsExpr? {
   value_decl_static_array_rest_expr_with_depth(
@@ -1975,7 +1975,7 @@ fn value_decl_static_object_rest_expr_with_depth(
   expr : @ast.TsExpr,
   obj_binding : @ast.TsObjectBinding,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsExpr? {
   if depth <= 0 {
     return None
@@ -2259,7 +2259,7 @@ fn value_decl_resolve_type(
 fn value_decl_static_key_from_expr_with_depth(
   expr : @ast.TsExpr,
   const_values : Map[String, @ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> String? {
   if depth <= 0 {
     return None
@@ -2470,7 +2470,10 @@ fn value_decl_object_prop_type(
 }
 
 ///|
-fn value_decl_array_item_type(type_ : @ast.TsType, index : Int) -> @ast.TsType {
+fn value_decl_array_item_type(
+  type_ : @ast.TsType,
+  index : Int32,
+) -> @ast.TsType {
   match type_ {
     @ast.TsType::Tuple(items) =>
       match items.get(index) {
@@ -2485,7 +2488,7 @@ fn value_decl_array_item_type(type_ : @ast.TsType, index : Int) -> @ast.TsType {
 ///|
 fn value_decl_tuple_rest_item_type(
   items : Array[@ast.TsType],
-  start_index : Int,
+  start_index : Int32,
 ) -> @ast.TsType {
   let mut rest_item_type = @ast.TsType::Any
   let mut found = false
@@ -2512,7 +2515,7 @@ fn value_decl_tuple_rest_item_type(
 ///|
 fn value_decl_array_rest_type(
   type_ : @ast.TsType,
-  start_index : Int,
+  start_index : Int32,
 ) -> @ast.TsType {
   match type_ {
     @ast.TsType::Tuple(items) =>
@@ -4243,7 +4246,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   // name declared more than once across block scopes is left
   // unregistered: abstaining costs a MISS, guessing a winner costs wrong
   // member answers.
-  let local_alias_counts : Map[String, Int] = Map([])
+  let local_alias_counts : Map[String, Int32] = Map([])
   for ta in self.collected_type_aliases {
     local_alias_counts[ta.name] = match local_alias_counts.get(ta.name) {
       Some(n) => n + 1
@@ -4293,7 +4296,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   // unregistered: the shapes genuinely differ per scope and nothing here
   // knows which scope a reference is in, so abstaining costs a MISS where
   // guessing costs a false property error.
-  let local_iface_counts : Map[String, Int] = Map([])
+  let local_iface_counts : Map[String, Int32] = Map([])
   for iface in self.collected_interfaces {
     local_iface_counts[iface.name] = match local_iface_counts.get(iface.name) {
       Some(n) => n + 1
@@ -4533,7 +4536,7 @@ fn Parser::parse_module_block_with_const_values(
   seeded_const_values : Map[String, @ast.TsExpr],
 ) -> (@ast.TsModuleBlock, Map[String, @ast.TsExpr]) raise ParseError {
   let stmts : Array[@ast.TsStmt] = []
-  let stmt_positions : Array[Int] = []
+  let stmt_positions : Array[Int32] = []
   let imports : Array[@ast.TsImportDecl] = []
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
@@ -4826,7 +4829,7 @@ pub fn parse_block_from_source(
 ) -> @ast.TsBlock raise ParseError {
   let parser = Parser::from_source(source)
   let stmts : Array[@ast.TsStmt] = []
-  let stmt_positions : Array[Int] = []
+  let stmt_positions : Array[Int32] = []
   while !parser.check(Eof) {
     stmt_positions.push(parser.peek().pos)
     stmts.push(parser.parse_stmt())
@@ -4842,7 +4845,7 @@ pub fn parse_block_from_source(
 /// to their position in the original source.
 pub fn parse_block_from_source_with_positions(
   source : String,
-) -> (@ast.TsBlock, Array[Int]) raise ParseError {
+) -> (@ast.TsBlock, Array[Int32]) raise ParseError {
   let block = parse_block_from_source(source)
   (block, block.stmt_positions)
 }
@@ -4871,7 +4874,7 @@ pub fn parse_block_from_source_strict(
     trimmed.has_prefix("'use strict';")
   let parser = Parser::new_with_strict(tokens, inherit_strict || source_strict)
   let stmts : Array[@ast.TsStmt] = []
-  let stmt_positions : Array[Int] = []
+  let stmt_positions : Array[Int32] = []
   while !parser.check(Eof) {
     stmt_positions.push(parser.peek().pos)
     stmts.push(parser.parse_stmt())

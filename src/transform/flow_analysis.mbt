@@ -48,6 +48,14 @@ pub(all) enum Observability {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend Observability with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend Observability with @debug.Debug::{to_repr}
+
+///|
 /// Can this function's recorded return set be trusted as COMPLETE?
 ///
 /// `g.funcs[fid].returns` is what lets the analysis look through a call
@@ -79,7 +87,7 @@ fn obs_join(a : Observability, b : Observability) -> Observability {
 }
 
 ///|
-fn obs_rank(o : Observability) -> Int {
+fn obs_rank(o : Observability) -> Int32 {
   match o {
     Hidden => 0
     ViaStringify => 1
@@ -415,12 +423,12 @@ fn bump_obs(
 pub fn reserved_props_from_observability(
   g : SymbolGraph,
   obs_map : Map[SymbolId, Observability],
-  type_env? : Map[String, @ast.TsType] = {},
+  type_env~ : Map[String, @ast.TsType] = {},
   // Class name -> its own member names, from `class_member_names`. A
   // `ClassDecl` symbol has no initializer for `collect_direct_props` to
   // read, so without this an observed class contributes nothing and its
   // fields are deleted as dead.
-  class_members? : Map[String, Array[String]] = {},
+  class_members~ : Map[String, Array[String]] = {},
   // `--explain-mangle` attribution: `name -> the facts that reserved
   // it`. The report's section for this set is labelled "reaches a
   // side-effect sink", which is what the biggest contributor does but
@@ -430,12 +438,12 @@ pub fn reserved_props_from_observability(
   // 340 names and the label explains none of them, which is why
   // narrowing the wildcard next door bought zero bytes: nobody could see
   // which fact was doing the work. Filled only when asked.
-  provenance? : Map[String, Array[String]]? = None,
+  provenance~ : Map[String, Array[String]]? = None,
   // Binding names the LINKER synthesized as namespace objects, from
   // `LinkRenames.synthesized_namespaces`. `None` means the caller does
   // not know, and then the structural guess below is used — it
   // over-reserves, so not knowing is the safe direction.
-  synthesized_namespaces? : Map[String, Bool]? = None,
+  synthesized_namespaces~ : Map[String, Bool]? = None,
 ) -> Map[String, Bool] {
   let out : Map[String, Bool] = Map([])
   // One `out[k] = true` plus one attribution, so the two cannot drift.
@@ -564,8 +572,8 @@ pub fn reserved_props_from_observability(
 // the wildcard.
 fn type_observed_keys(
   t : @ast.TsType,
-  type_env? : Map[String, @ast.TsType] = {},
-  seen? : Map[String, Bool] = {},
+  type_env~ : Map[String, @ast.TsType] = {},
+  seen~ : Map[String, Bool] = {},
 ) -> Array[String]? {
   match t {
     Struct(_, fields) => {

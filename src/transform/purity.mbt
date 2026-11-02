@@ -52,7 +52,7 @@ pub(all) struct ImpureGetter {
 /// `argc` matters for the array factories: `Array.from(xs)` allocates,
 /// but `Array.from(xs, fn)` invokes `fn`, whose effects are not ours to
 /// discard.
-fn is_effect_free_static_call(ns : String, meth : String, argc : Int) -> Bool {
+fn is_effect_free_static_call(ns : String, meth : String, argc : Int32) -> Bool {
   match ns {
     // Every member takes and returns numbers.
     "Math" => true

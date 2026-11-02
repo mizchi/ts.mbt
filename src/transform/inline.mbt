@@ -46,7 +46,7 @@ pub fn inline_block(
   // which is a SyntaxError, so the module does not load at all. The
   // treeshake call below this one in `bundle.mbt` has taken export roots
   // since a similar bug on hono; this pass never did.
-  keep? : Map[String, Bool] = {},
+  keep~ : Map[String, Bool] = {},
 ) -> @ast.TsBlock {
   inline_block_in(block, collect_trivial_fns(block), keep)
 }
@@ -95,7 +95,7 @@ fn inline_block_in(
   // these multi-decl Blocks into the parent's stmt list before the
   // single-use pass runs.
   let flattened : Array[@ast.TsStmt] = []
-  let flat_positions : Array[Int] = []
+  let flat_positions : Array[Int32] = []
   let has_positions = positions.length() == stmts.length()
   for i, s in stmts {
     match s {
@@ -542,7 +542,7 @@ fn inline_into_expr(
 /// each pass sees an already-inlined inner scope.
 fn inline_pass(
   input : Array[@ast.TsStmt],
-  input_positions : Array[Int],
+  input_positions : Array[Int32],
   keep : Map[String, Bool],
 ) -> @ast.TsBlock {
   // Reassignment / closure-capture tracking is per-scope, so we
@@ -556,7 +556,7 @@ fn inline_pass(
     collect_captured_stmt(s, captured)
   }
   let out : Array[@ast.TsStmt] = []
-  let out_positions : Array[Int] = []
+  let out_positions : Array[Int32] = []
   let has_positions = input_positions.length() == input.length()
   let mut i = 0
   while i < input.length() {
@@ -627,7 +627,7 @@ fn try_inline(
   name : String,
   rhs : @ast.TsExpr,
   input : Array[@ast.TsStmt],
-  i : Int,
+  i : Int32,
   reassigned : Map[String, Bool],
   captured : Map[String, Bool],
   keep : Map[String, Bool],
@@ -1046,10 +1046,10 @@ fn substitute_expr(
 fn count_var_uses_binding(
   binding : @ast.TsBinding,
   name : String,
-  local_ : Int,
-  nested : Int,
+  local_ : Int32,
+  nested : Int32,
   inside_func : Bool,
-) -> (Int, Int) {
+) -> (Int32, Int32) {
   let mut l = local_
   let mut n = nested
   match binding {
@@ -1129,10 +1129,10 @@ fn count_var_uses_binding(
 fn count_var_uses_stmt(
   stmt : @ast.TsStmt,
   name : String,
-  local_ : Int,
-  nested : Int,
+  local_ : Int32,
+  nested : Int32,
   inside_func : Bool,
-) -> (Int, Int) {
+) -> (Int32, Int32) {
   let mut l = local_
   let mut n = nested
   match stmt {
@@ -1360,7 +1360,7 @@ fn count_var_uses_block(
   block : @ast.TsBlock,
   name : String,
   inside_func : Bool,
-) -> (Int, Int) {
+) -> (Int32, Int32) {
   let mut l = 0
   let mut n = 0
   for s in block.stmts {
@@ -1375,10 +1375,10 @@ fn count_var_uses_block(
 fn count_var_uses_expr(
   expr : @ast.TsExpr,
   name : String,
-  local_ : Int,
-  nested : Int,
+  local_ : Int32,
+  nested : Int32,
   inside_func : Bool,
-) -> (Int, Int) {
+) -> (Int32, Int32) {
   let mut l = local_
   let mut n = nested
   match expr {

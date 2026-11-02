@@ -106,7 +106,7 @@ async fn collect_ts_source_files_recursive(dir : String) -> Array[String] {
 /// `tsacc` binary this replaces: the 2x2 table and the per-directory
 /// breakdown are read by hand and by `docs/tsacc.md`, and a reworded
 /// summary would invalidate every number recorded against it.
-async fn mtsc_run_conformance(argv : Array[String], start : Int) -> Unit {
+async fn mtsc_run_conformance(argv : Array[String], start : Int32) -> Unit {
   // `--list-misses [substr]`: in addition to the 2x2 table, print one
   // `RECALL_MISS <case>` line per baseline-positive file we fail to flag
   // (a recall miss), optionally filtered to paths containing `substr`.
@@ -146,7 +146,7 @@ async fn mtsc_run_conformance(argv : Array[String], start : Int) -> Unit {
   let mut recall_miss = 0
   let mut precision_hit = 0
   let mut precision_miss = 0
-  let per_dir : Map[String, (Int, Int, Int, Int)] = Map([])
+  let per_dir : Map[String, (Int32, Int32, Int32, Int32)] = Map([])
   for dir in dirs {
     let files = collect_ts_source_files_recursive(dir)
     let mut d_rh = 0

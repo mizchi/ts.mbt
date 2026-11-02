@@ -107,10 +107,10 @@ fn pkg_print_usage() -> Unit {
 /// the command the user actually typed.
 async fn bridge_cli_dispatch(
   args : Array[String],
-  start : Int,
+  start : Int32,
   namespace_ : String,
   verb : String,
-  min_args : Int,
+  min_args : Int32,
   usage : String,
   print_help : () -> Unit,
   handler : async (Array[String]) -> Bool,
@@ -133,7 +133,7 @@ async fn bridge_cli_dispatch(
 /// `(pkg_spec, module_spec_override, vendor_root_override)`.
 fn bridge_parse_vendor_args(
   args : Array[String],
-  start : Int,
+  start : Int32,
 ) -> (String?, String?, String?) {
   let mut pkg_spec : String? = None
   let mut module_spec : String? = None
@@ -180,7 +180,7 @@ fn bridge_parse_vendor_args(
 }
 
 ///|
-async fn bridge_run_vendor(args : Array[String], start : Int) -> Unit {
+async fn bridge_run_vendor(args : Array[String], start : Int32) -> Unit {
   if start < args.length() && cli_subcommand_is_help(args[start]) {
     bridge_print_usage()
     return
@@ -208,7 +208,7 @@ async fn bridge_run_vendor(args : Array[String], start : Int) -> Unit {
 /// Parse `generate`'s flag arguments into `(package_json_path?, vendor_root?)`.
 fn bridge_parse_generate_args(
   args : Array[String],
-  start : Int,
+  start : Int32,
 ) -> (String?, String?) {
   let mut pkg_json : String? = None
   let mut out_dir : String? = None
@@ -247,7 +247,7 @@ fn bridge_parse_generate_args(
 }
 
 ///|
-async fn bridge_run_generate(args : Array[String], start : Int) -> Unit {
+async fn bridge_run_generate(args : Array[String], start : Int32) -> Unit {
   if start < args.length() && cli_subcommand_is_help(args[start]) {
     bridge_print_usage()
     return
@@ -266,7 +266,7 @@ async fn bridge_run_generate(args : Array[String], start : Int) -> Unit {
 ///
 /// `start` is the index of the verb (or of the first `--input`-style flag
 /// for the unified flow), so `mtsc bridge decl x.d.ts` passes `2`.
-pub async fn run_bridge_cli(args : Array[String], start : Int) -> Unit {
+pub async fn run_bridge_cli(args : Array[String], start : Int32) -> Unit {
   if start >= args.length() {
     bridge_print_usage()
     return
@@ -423,7 +423,7 @@ pub async fn run_bridge_cli(args : Array[String], start : Int) -> Unit {
 /// `mtsc pkg …` — the MoonBit -> TypeScript direction.
 ///
 /// `start` is the index of the verb, so `mtsc pkg decl x.mbti` passes `2`.
-pub async fn run_pkg_cli(args : Array[String], start : Int) -> Unit {
+pub async fn run_pkg_cli(args : Array[String], start : Int32) -> Unit {
   if start >= args.length() {
     pkg_print_usage()
     return

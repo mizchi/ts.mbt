@@ -41,7 +41,7 @@
 /// `tsc` reports a bad command line as a diagnostic and exits 1 as well,
 /// which is why there is no separate usage code. mtsc used to exit 0 on
 /// an unknown option, so a typo in a build script was invisible.
-const MTSC_EXIT_DIAGNOSTICS : Int = 1
+const MTSC_EXIT_DIAGNOSTICS : Int32 = 1
 
 ///|
 /// Canonical form of an option name: leading dashes stripped, ASCII
@@ -430,7 +430,7 @@ fn mtsc_options_new() -> MtscOptions {
 /// (`--strict false`), and the token is optional. So the value can only
 /// be consumed when it IS one of those two words — consuming
 /// unconditionally would eat the input file in `mtsc --noEmit a.ts`.
-fn mtsc_read_bool_value(argv : Array[String], next : Int) -> (Bool, Bool) {
+fn mtsc_read_bool_value(argv : Array[String], next : Int32) -> (Bool, Bool) {
   if next < argv.length() {
     match argv[next] {
       "true" => return (true, true)
@@ -476,7 +476,7 @@ fn mtsc_apply_jsx_setting(opts : MtscOptions, value : String) -> Unit {
 /// an argv whose leading elements it has already consumed.
 fn mtsc_parse_args(
   argv : Array[String],
-  start : Int,
+  start : Int32,
 ) -> Result[MtscOptions, String] {
   let opts = mtsc_options_new()
   let mut i = start

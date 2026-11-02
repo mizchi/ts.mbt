@@ -129,7 +129,7 @@ pub(all) struct SwitchFoldEntry {
   param_names : Array[String]
   // Index of the parameter that the switch tests. First param
   // for now, but the field makes the call-site code uniform.
-  switch_param_index : Int
+  switch_param_index : Int32
   // Literal value -> matched arm's `return EXPR` body.
   arms : Map[String, @ast.TsExpr]
 }
@@ -159,7 +159,7 @@ pub fn build_switch_fold_table(
   // bundle declares the shape (nothing to fix) or that the shape is
   // there and a gate refused it (the reason names the fix). The byte
   // count cannot tell those apart.
-  explain? : Array[String]? = None,
+  explain~ : Array[String]? = None,
 ) -> SwitchFoldTable {
   let entries : Map[String, SwitchFoldEntry] = Map([])
   for stmt in block.stmts {
@@ -260,7 +260,7 @@ fn explain_switch_fold_candidates(
   // Group the rejections by reason, and NAME them. A count says how
   // many; only the names say what to look at, and the whole point of
   // this report is that "0 bytes" was never actionable on its own.
-  let counts : Map[String, Int] = Map([])
+  let counts : Map[String, Int32] = Map([])
   let named : Map[String, Array[String]] = Map([])
   for entry in all_shaped {
     match entry.1 {

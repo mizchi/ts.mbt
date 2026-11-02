@@ -285,6 +285,14 @@ pub(all) struct BridgeTaggedUnionDecl {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend BridgeTaggedUnionDecl with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend BridgeTaggedUnionDecl with @debug.Debug::{to_repr}
+
+///|
 /// Try to lower a `type X = A | B | C` alias to a tagged-union declaration.
 ///
 /// Currently rejects:
@@ -449,6 +457,14 @@ pub(all) enum TaggedUnionCaseDiscriminator {
   StrictEqualsBigInt(String)
   StrictEqualsBool(Bool)
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend TaggedUnionCaseDiscriminator with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TaggedUnionCaseDiscriminator with @debug.Debug::{to_repr}
 
 ///|
 pub fn tagged_union_case_discriminator(
@@ -627,7 +643,7 @@ pub fn tagged_union_to_js_expression_with_nested(
   decl : BridgeTaggedUnionDecl,
   expr : String,
   nested : Map[String, BridgeTaggedUnionDecl],
-  struct_converter_names? : Array[String] = [],
+  struct_converter_names~ : Array[String] = [],
 ) -> String {
   let mut body = "(() => { "
   // Allow `@sut.unsafeCast(rawValue)` callers to pass primitives or
@@ -718,7 +734,7 @@ pub fn tagged_union_from_js_expression(
   decl : BridgeTaggedUnionDecl,
   expr : String,
 ) -> String? {
-  let undiscriminable : Array[Int] = []
+  let undiscriminable : Array[Int32] = []
   for i, entry in decl.cases {
     let (_, inner) = entry
     if tagged_union_case_runtime_discriminator(inner) is None {
@@ -733,7 +749,7 @@ pub fn tagged_union_from_js_expression(
   } else {
     None
   }
-  fn case_return(i : Int, inner : @ast.TsType) -> String {
+  fn case_return(i : Int32, inner : @ast.TsType) -> String {
     if tagged_union_case_is_no_payload(inner) {
       "return { \"$tag\": " + i.to_string() + " }; "
     } else {
@@ -940,7 +956,7 @@ pub fn tagged_union_bridge_js_converter_decls(
 pub fn tagged_union_bridge_js_converter_decls_with_nested(
   decl : BridgeTaggedUnionDecl,
   nested : Map[String, BridgeTaggedUnionDecl],
-  struct_converter_names? : Array[String] = [],
+  struct_converter_names~ : Array[String] = [],
 ) -> String? {
   let to_js_body = tagged_union_to_js_expression_with_nested(
     decl,

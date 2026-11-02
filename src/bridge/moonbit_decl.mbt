@@ -353,7 +353,7 @@ fn tuple_result_interface_name(export_name : String) -> String {
 ///|
 fn tuple_result_field_names(
   export_name : String,
-  item_count : Int,
+  item_count : Int32,
 ) -> Array[String] {
   match export_name {
     "useState" if item_count == 2 => ["state", "setState"]
@@ -4266,7 +4266,7 @@ fn typeof_func_decl_to_func_type(
 fn typeof_value_type_is_stable(
   info : DeclModuleInfo,
   type_ : @ast.TsType,
-  allow_widened? : Bool = false,
+  allow_widened~ : Bool = false,
 ) -> Bool {
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, _)) =>
@@ -4335,7 +4335,7 @@ fn typeof_value_type_is_stable(
 fn typeof_named_type_is_stable(
   info : DeclModuleInfo,
   name : String,
-  allow_widened? : Bool = false,
+  allow_widened~ : Bool = false,
 ) -> Bool {
   if name == "Array" ||
     name == "ReadonlyArray" ||
@@ -5360,7 +5360,7 @@ fn decl_collect_interface_field_names_recursive(
   info : DeclModuleInfo,
   name : String,
   acc : Map[String, Unit],
-  depth : Int,
+  depth : Int32,
 ) -> Bool {
   if depth > 8 {
     return false
@@ -5646,7 +5646,7 @@ fn decl_member_ancestor_names(
   canonical_types : Map[String, String],
   member_ : @ast.TsType,
   out : Array[String],
-  depth : Int,
+  depth : Int32,
 ) -> Bool {
   if depth > 4 {
     return false
@@ -5702,7 +5702,7 @@ fn decl_collect_ancestor_names(
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
   out : Array[String],
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   if depth > 8 {
     return
@@ -8434,7 +8434,7 @@ fn decl_eval_bound_indexed_access(
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
   t : @ast.TsType,
-  depth : Int,
+  depth : Int32,
 ) -> @ast.TsType {
   if depth > 8 {
     return t
@@ -8533,7 +8533,7 @@ fn decl_eval_indexed_chain(
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
   t : @ast.TsType,
-  depth : Int,
+  depth : Int32,
 ) -> (@ast.TsType, DeclModuleInfo)? {
   if depth > 8 {
     return None
@@ -9380,7 +9380,7 @@ fn decl_is_react_factory_name(name : String) -> Bool {
 fn decl_specialize_generated_api_param_type(
   export_name : String,
   param_name : String,
-  param_index : Int,
+  param_index : Int32,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   match export_name {
@@ -9816,7 +9816,7 @@ fn decl_is_crypto_subtle_owner(owner_name : String) -> Bool {
 fn decl_crypto_subtle_algorithm_param_type(
   owner_name : String,
   method_name : String,
-  param_index : Int,
+  param_index : Int32,
 ) -> @ast.TsType? {
   if !decl_is_crypto_subtle_owner(owner_name) {
     return None
@@ -10313,7 +10313,7 @@ fn decl_specialize_generated_class_method_param_type(
   class_name : String,
   method_name : String,
   _param_name : String,
-  param_index : Int,
+  param_index : Int32,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   if class_name == "Hono" && decl_is_hono_route_method(method_name) {
@@ -10624,7 +10624,7 @@ fn decl_specialize_generated_value_type(
 ///|
 fn decl_widen_react_factory_tag_param(
   export_name : String,
-  param_index : Int,
+  param_index : Int32,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   if param_index != 0 || !decl_is_react_factory_name(export_name) {
@@ -10641,7 +10641,7 @@ fn decl_widen_react_factory_tag_param(
 fn decl_inline_callback_type_name(
   owner_name : String,
   param_name : String,
-  param_index : Int,
+  param_index : Int32,
 ) -> String {
   let safe_param_name = if param_name == "" {
     "arg" + param_index.to_string()
@@ -10723,7 +10723,7 @@ fn decl_collect_synthetic_callback_type_names(
 fn decl_synthetic_callback_type_for_param(
   owner_name : String,
   param_name : String,
-  param_index : Int,
+  param_index : Int32,
 ) -> @ast.TsType? {
   if owner_name.length() > 10 && owner_name != "useActionState" {
     return None
@@ -10755,7 +10755,7 @@ fn decl_callback_return_is_promise_like(return_type : @ast.TsType) -> Bool {
 fn decl_rewrite_inline_callback_param_type(
   owner_name : String,
   param_name : String,
-  param_index : Int,
+  param_index : Int32,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   match @checker.classify_optional_like_union(type_) {
@@ -10826,7 +10826,7 @@ fn decl_rewrite_inline_callback_params_in_func_type(
 // aggressive than the old decl-local version and matches the parser/ffi side.
 
 ///|
-fn decl_type_widening_score(type_ : @ast.TsType) -> Int {
+fn decl_type_widening_score(type_ : @ast.TsType) -> Int32 {
   match @checker.classify_optional_like_union(type_) {
     Some((inner, _)) => return decl_type_widening_score(inner)
     None => ()
@@ -10892,7 +10892,7 @@ fn decl_type_widening_score(type_ : @ast.TsType) -> Int {
 }
 
 ///|
-fn decl_import_widening_score(import_ : @ast.TsImport) -> Int {
+fn decl_import_widening_score(import_ : @ast.TsImport) -> Int32 {
   let mut score = decl_type_widening_score(import_.return_type)
   for param in import_.params {
     score += decl_type_widening_score(param.1)
@@ -10901,7 +10901,7 @@ fn decl_import_widening_score(import_ : @ast.TsImport) -> Int {
 }
 
 ///|
-fn decl_func_widening_score(func : @ast.TsFunc) -> Int {
+fn decl_func_widening_score(func : @ast.TsFunc) -> Int32 {
   let mut score = decl_type_widening_score(func.return_type)
   for param in func.params {
     score += decl_type_widening_score(param.type_)
@@ -12525,7 +12525,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // `recordArtifact(task : Test, ...)` widen to bare `Test` while the
   // FFI side emits `pub type Test[ExtraContext]`, hitting `[4040]`
   // arity-mismatch.
-  let cross_module_arities : Map[String, Int] = Map([])
+  let cross_module_arities : Map[String, Int32] = Map([])
   collect_cross_module_iface_arities(modules, cross_module_arities)
   for class_ in exported_classes {
     if class_.class_.type_params.length() > 0 &&
@@ -12542,7 +12542,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
 ///|
 fn collect_cross_module_iface_arities(
   modules : Map[String, DeclModuleInfo],
-  out : Map[String, Int],
+  out : Map[String, Int32],
 ) -> Unit {
   for entry in modules {
     let (_, info) = entry
@@ -12553,7 +12553,7 @@ fn collect_cross_module_iface_arities(
 ///|
 fn collect_arities_in_ts_module(
   module_ : @ast.TsModule,
-  out : Map[String, Int],
+  out : Map[String, Int32],
 ) -> Unit {
   for iface in module_.interfaces {
     if iface.type_params.length() > 0 && !out.contains(iface.name) {

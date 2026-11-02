@@ -41,7 +41,7 @@ priv struct Mbt2tsPkgCommand {
 ///|
 fn parse_mbt2ts_pkg_options(
   args : Array[String],
-  start : Int,
+  start : Int32,
 ) -> (Mbt2tsPkgOptions?, String?) {
   let mut out : String? = None
   let mut import_rewrite_path : String? = None
@@ -121,7 +121,7 @@ fn parse_tsmbt_direction(value : String) -> TsmbtDirection? {
 ///|
 fn parse_unified_tsmbt_options(
   args : Array[String],
-  start : Int,
+  start : Int32,
 ) -> (UnifiedTsmbtOptions?, String?) {
   let mut input : String? = None
   let mut out : String? = None
@@ -733,8 +733,8 @@ async fn emit_unified_tsmbt_scaffold(
   direction~ : TsmbtDirection,
   module_spec~ : String?,
   import_rewrite_path~ : String?,
-  diagnostics_path? : String? = None,
-  strict? : Bool = false,
+  diagnostics_path~ : String? = None,
+  strict~ : Bool = false,
   facade~ : Bool,
 ) -> Bool {
   let resolved_direction = match direction {
@@ -1747,7 +1747,7 @@ async fn emit_typescript_npm_package_from_project(
 /// errors so each cmd module owns its own help banner.
 async fn run_unified_cli_with_direction(
   args : Array[String],
-  start : Int,
+  start : Int32,
   forced_direction~ : TsmbtDirection,
   print_help~ : () -> Unit,
 ) -> Bool {
@@ -1815,7 +1815,7 @@ async fn run_unified_cli_with_direction(
 /// direction locked to `ts-to-mbt`. Used by `mtsc bridge`.
 pub async fn run_ts_to_mbt_unified_cli(
   args : Array[String],
-  start : Int,
+  start : Int32,
   print_help~ : () -> Unit,
 ) -> Bool {
   run_unified_cli_with_direction(
@@ -1831,7 +1831,7 @@ pub async fn run_ts_to_mbt_unified_cli(
 /// the direction locked to `mbt-to-ts`. Used by `mtsc pkg`.
 pub async fn run_mbt_to_ts_unified_cli(
   args : Array[String],
-  start : Int,
+  start : Int32,
   print_help~ : () -> Unit,
 ) -> Bool {
   run_unified_cli_with_direction(
@@ -1848,7 +1848,7 @@ pub async fn run_mbt_to_ts_unified_cli(
 /// project-level generator above.
 pub async fn run_mbt_to_ts_pkg_cli(
   args : Array[String],
-  start : Int,
+  start : Int32,
   print_help~ : () -> Unit,
 ) -> Bool {
   let options = match parse_mbt2ts_pkg_options(args, start) {

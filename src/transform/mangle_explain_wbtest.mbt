@@ -258,8 +258,8 @@ fn escaping_with_types(
 fn iface(
   name : String,
   fields : Array[(String, @ast.TsType)],
-  extends? : Array[String] = [],
-  index_sig? : Bool = false,
+  extends~ : Array[String] = [],
+  index_sig~ : Bool = false,
 ) -> @ast.TsInterface {
   {
     name,

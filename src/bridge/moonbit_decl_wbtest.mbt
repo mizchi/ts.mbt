@@ -1,5 +1,8 @@
 ///|
-fn count_occurrences_in_decl_output(haystack : String, needle : String) -> Int {
+fn count_occurrences_in_decl_output(
+  haystack : String,
+  needle : String,
+) -> Int32 {
   let mut count = 0
   for _ in haystack.split(needle) {
     count += 1

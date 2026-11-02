@@ -5,8 +5,8 @@
 pub enum TokenKind {
   // literal
   Number(Double)
-  Int(Int)
-  LegacyOctal(Int) // legacy octal (e.g., 01, 07) - forbidden in strict mode
+  Int(Int32)
+  LegacyOctal(Int32) // legacy octal (e.g., 01, 07) - forbidden in strict mode
   BigInt(String)
   Bool(Bool)
   Str(String) // stringliteral
@@ -125,15 +125,27 @@ pub enum TokenKind {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend TokenKind with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TokenKind with @debug.Debug::{to_repr}
+
+///|
 // /
 pub struct Token {
   kind : TokenKind
-  pos : Int // position
+  pos : Int32 // position
   has_newline_before : Bool // true if there was a newline before this token
 } derive(Debug)
 
 ///|
-fn write_codepoint(buf : StringBuilder, code : Int) -> Unit {
+#deprecated
+pub extend Token with @debug.Debug::{to_repr}
+
+///|
+fn write_codepoint(buf : StringBuilder, code : Int32) -> Unit {
   if code < 0 || code > 0x10ffff {
     buf.write_char('\ufffd')
   } else {
@@ -146,30 +158,30 @@ fn write_codepoint(buf : StringBuilder, code : Int) -> Unit {
 pub struct Lexer {
   // TS1127: count of genuinely-unknown ASCII characters the tokenizer had
   // to skip (a stray `\` not starting a unicode escape, control chars, ...).
-  mut invalid_char_count : Int
+  mut invalid_char_count : Int32
   // TS1177/TS1178-family: a binary / octal literal ran into a decimal
   // digit outside its radix (`0b1102110`, `0o13334823`). tsc surfaces
   // parser-recovery errors there; one count per offending literal.
-  mut invalid_radix_digit_count : Int
+  mut invalid_radix_digit_count : Int32
   // TS1125: a `\u{...}` / `\uXXXX` escape in a STRING literal with a
   // missing / non-hex digit (`"\u{}"`, `"\u{-DDDD}"`, `"\u{"`).
   // Template literals are NOT counted here — tagged templates accept
   // invalid escapes (ES2018), so the parser decides those.
-  mut invalid_unicode_escape_count : Int
+  mut invalid_unicode_escape_count : Int32
   // TS1198: a `\u{...}` escape whose value exceeds 0x10FFFF.
-  mut unicode_escape_overflow_count : Int
+  mut unicode_escape_overflow_count : Int32
   // TS1121: a legacy octal integer literal (`01`) — banned in TS.
-  mut legacy_octal_literal_count : Int
+  mut legacy_octal_literal_count : Int32
   // TS1489: a leading-zero literal that is NOT a legacy octal because an
   // `8` or `9` appears in it (`09`, `019`). The two are the same branch
   // below and only the octal half was recorded; this is the other exit.
   // Target-independent — probed at es5 and esnext alike.
-  mut leading_zero_decimal_count : Int
+  mut leading_zero_decimal_count : Int32
   // Absolute source positions of invalid `\u` / `\x` escapes inside
   // TEMPLATE literals. Tagged templates accept invalid escapes (ES2018)
   // and taggedness is a parse-time fact, so the lexer only records —
   // the parser counts entries inside each UNTAGGED template's span.
-  template_invalid_escape_positions : Array[Int]
+  template_invalid_escape_positions : Array[Int32]
   // TS1160: a template literal ran to EOF without its closing backtick.
   mut unterminated_template : Bool
   // TS1010: a `/*` block comment ran to EOF without its closing `*/`
@@ -190,20 +202,20 @@ pub struct Lexer {
   // The existing `invalid_radix_digit_count` answers a different
   // question ("a digit outside this radix"), so `0x` alone slipped
   // between them (`scannerS7.8.3_A6.1_T1`).
-  mut empty_radix_literal_count : Int
+  mut empty_radix_literal_count : Int32
   // TS1260: a keyword spelled with a unicode escape (`\u0076ar x = 1`).
   // The escape decodes to a legal identifier, so the identifier scanner
   // has no reason to object — but a KEYWORD may not be written that way.
-  mut escaped_keyword_count : Int
+  mut escaped_keyword_count : Int32
   // TS1005: a regular-expression literal whose groups do not balance
   // (`/fo(o/` — parser579071). Counted outside a character class only,
   // where `(` is a literal (`/[(]/` is a perfectly good regex).
-  mut unbalanced_regex_group_count : Int
+  mut unbalanced_regex_group_count : Int32
   src : String
-  mut pos : Int
+  mut pos : Int32
   mut allow_regex : Bool
   mut pending : Array[Token]
-  mut pending_index : Int
+  mut pending_index : Int32
   mut newline_before_next : Bool // Set when whitespace skipping encounters a newline
   // JSDoc / annotation tracking. The lexer skips block comments
   // for parsing purposes, but it also peeks inside each one for a
@@ -219,13 +231,17 @@ pub struct Lexer {
   // a declaration we keep the LAST one — that's the convention
   // tsc and IDE tooltips follow.
   mut pending_jsdoc : JsdocBlock?
-  pure_marker_positions : Map[Int, Bool]
-  internal_marker_positions : Map[Int, Bool]
+  pure_marker_positions : Map[Int32, Bool]
+  internal_marker_positions : Map[Int32, Bool]
   // Per-token-position parsed JSDoc block (when a `/** … */`
   // comment immediately preceded the token). Parser consults
   // through `Parser.jsdoc_at_pos`.
-  jsdoc_at_pos : Map[Int, JsdocBlock]
+  jsdoc_at_pos : Map[Int32, JsdocBlock]
 } derive(Debug)
+
+///|
+#deprecated
+pub extend Lexer with @debug.Debug::{to_repr}
 
 ///|
 /// Latin-1 Supplement code points that are symbols or punctuation rather
@@ -253,7 +269,7 @@ fn is_word_like_char(c : Char) -> Bool {
 
 ///|
 // / 161( advance )
-fn Lexer::read_hex_digit(self : Lexer) -> Int? {
+fn Lexer::read_hex_digit(self : Lexer) -> Int32? {
   match self.peek() {
     Some(c) =>
       if c >= '0' && c <= '9' {
@@ -882,7 +898,7 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
 }
 
 ///|
-fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
+fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int32) -> TokenKind {
   let buf = StringBuilder()
   buf.write_string(self.src[start:self.pos].to_owned())
   while true {
@@ -2041,7 +2057,7 @@ fn Lexer::scan_template_parts_with_raw(
 }
 
 ///|
-fn Lexer::enqueue_template_tokens(self : Lexer, pos : Int) -> Unit {
+fn Lexer::enqueue_template_tokens(self : Lexer, pos : Int32) -> Unit {
   let has_newline = self.newline_before_next
   let (cooked_parts, raw_parts, exprs) = self.scan_template_parts_with_raw()
   // Create a single Template token containing all parts and expression sources
@@ -2719,7 +2735,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
         '@' => At
         '.' =>
           match self.peek() {
-            Some('0'..='9') => {
+            Some('0'..<='9') => {
               self.pos -= 1
               self.scan_number()
             }

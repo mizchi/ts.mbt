@@ -31,9 +31,9 @@ fn types_package_hint(pkg_spec : String) -> String {
 ///|
 pub async fn ts2mbt_vendor_package(
   pkg_spec : String,
-  module_spec_override? : String? = None,
-  vendor_root_override? : String? = None,
-  print_import_hint? : Bool = true,
+  module_spec_override~ : String? = None,
+  vendor_root_override~ : String? = None,
+  print_import_hint~ : Bool = true,
 ) -> Bool {
   let vendor_root = match vendor_root_override {
     Some(root) => root
@@ -465,8 +465,8 @@ async fn print_vendor_module_type_hint() -> Unit {
 ///
 /// `package_json_path_override` defaults to `./package.json`.
 pub async fn ts2mbt_generate_from_package_json(
-  package_json_path_override? : String? = None,
-  vendor_root_override? : String? = None,
+  package_json_path_override~ : String? = None,
+  vendor_root_override~ : String? = None,
 ) -> Bool {
   let package_json_path = match package_json_path_override {
     Some(path) => path

@@ -13,7 +13,7 @@ priv enum JsonFieldValue {
 }
 
 ///|
-fn char_at(s : String, idx : Int) -> Char {
+fn char_at(s : String, idx : Int32) -> Char {
   s[idx].to_int().unsafe_to_char()
 }
 
@@ -23,7 +23,7 @@ fn is_json_space(c : Char) -> Bool {
 }
 
 ///|
-fn skip_json_space(src : String, start : Int) -> Int {
+fn skip_json_space(src : String, start : Int32) -> Int32 {
   let mut i = start
   while i < src.length() && is_json_space(char_at(src, i)) {
     i += 1
@@ -32,7 +32,7 @@ fn skip_json_space(src : String, start : Int) -> Int {
 }
 
 ///|
-fn json_parse_string(src : String, start : Int) -> (String, Int) {
+fn json_parse_string(src : String, start : Int32) -> (String, Int32) {
   let mut i = start + 1
   let buf = StringBuilder()
   while i < src.length() {
@@ -74,10 +74,10 @@ fn json_parse_string(src : String, start : Int) -> (String, Int) {
 ///|
 fn scan_json_compound(
   src : String,
-  start : Int,
+  start : Int32,
   open : Char,
   close : Char,
-) -> Int {
+) -> Int32 {
   let mut depth = 0
   let mut i = start
   while i < src.length() {
@@ -114,7 +114,7 @@ fn scan_json_compound(
 }
 
 ///|
-fn scan_json_value(src : String, start : Int) -> (JsonFieldValue, Int) {
+fn scan_json_value(src : String, start : Int32) -> (JsonFieldValue, Int32) {
   let i = skip_json_space(src, start)
   if i >= src.length() {
     return (Other, i)
@@ -144,7 +144,7 @@ fn scan_json_value(src : String, start : Int) -> (JsonFieldValue, Int) {
 }
 
 ///|
-fn scan_json_value_end(src : String, start : Int) -> Int {
+fn scan_json_value_end(src : String, start : Int32) -> Int32 {
   let i = skip_json_space(src, start)
   if i >= src.length() {
     return i
@@ -274,10 +274,10 @@ fn parse_json_array_values(src : String) -> Array[JsonFieldValue] {
 ///|
 fn find_object_field_value_range(
   src : String,
-  object_start : Int,
-  object_end : Int,
+  object_start : Int32,
+  object_end : Int32,
   field_name : String,
-) -> (Int, Int)? {
+) -> (Int32, Int32)? {
   let mut i = skip_json_space(src, object_start)
   if i >= object_end || char_at(src, i) != '{' {
     return None
@@ -317,7 +317,10 @@ fn find_object_field_value_range(
 }
 
 ///|
-fn find_named_object_range(src : String, field_name : String) -> (Int, Int)? {
+fn find_named_object_range(
+  src : String,
+  field_name : String,
+) -> (Int32, Int32)? {
   match find_object_field_value_range(src, 0, src.length(), field_name) {
     Some((start, end_)) =>
       if char_at(src, start) == '{' {
@@ -332,10 +335,10 @@ fn find_named_object_range(src : String, field_name : String) -> (Int, Int)? {
 ///|
 fn find_named_object_range_in_object(
   src : String,
-  object_start : Int,
-  object_end : Int,
+  object_start : Int32,
+  object_end : Int32,
   field_name : String,
-) -> (Int, Int)? {
+) -> (Int32, Int32)? {
   match
     find_object_field_value_range(src, object_start, object_end, field_name) {
     Some((start, end_)) =>
@@ -349,7 +352,7 @@ fn find_named_object_range_in_object(
 }
 
 ///|
-fn parse_json_string_at(src : String, start : Int) -> String? {
+fn parse_json_string_at(src : String, start : Int32) -> String? {
   if start >= src.length() || char_at(src, start) != '"' {
     return None
   }
@@ -360,8 +363,8 @@ fn parse_json_string_at(src : String, start : Int) -> String? {
 ///|
 fn parse_json_string_array_at(
   src : String,
-  start : Int,
-  end_ : Int,
+  start : Int32,
+  end_ : Int32,
 ) -> Array[String] {
   if start >= end_ || char_at(src, start) != '[' {
     return []
@@ -372,8 +375,8 @@ fn parse_json_string_array_at(
 ///|
 fn parse_string_targets_from_range(
   src : String,
-  start : Int,
-  end_ : Int,
+  start : Int32,
+  end_ : Int32,
 ) -> Array[String] {
   if start >= end_ {
     return []
@@ -394,8 +397,8 @@ fn parse_string_targets_from_range(
 ///|
 fn resolve_string_array_mapping_in_object(
   src : String,
-  object_start : Int,
-  object_end : Int,
+  object_start : Int32,
+  object_end : Int32,
   specifier : String,
 ) -> Array[String] {
   match
@@ -528,7 +531,11 @@ fn split_slash_parts(path : String) -> Array[String] {
 }
 
 ///|
-fn join_slash_parts(parts : Array[String], start : Int, end_ : Int) -> String {
+fn join_slash_parts(
+  parts : Array[String],
+  start : Int32,
+  end_ : Int32,
+) -> String {
   if start >= end_ {
     return ""
   }
@@ -1078,7 +1085,7 @@ async fn resolve_tsconfig_specifier_in(
   tsconfig_path : String,
   specifier : String,
   mode : ModuleResolutionMode,
-  depth : Int,
+  depth : Int32,
 ) -> String? {
   if depth > 8 {
     return None
@@ -1541,7 +1548,7 @@ pub async fn tsconfig_compiler_option(
 async fn tsconfig_compiler_option_in(
   tsconfig_path : String,
   name : String,
-  depth : Int,
+  depth : Int32,
 ) -> String? {
   if depth > 8 {
     return None

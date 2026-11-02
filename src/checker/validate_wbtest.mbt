@@ -223,7 +223,7 @@ test "validate: a .d.ts top-level namespace needs declare or export" {
   // TS1046 in a .d.ts, `declare` and `export` are both clean, and a
   // namespace nested inside an ambient one is clean (only the top level
   // reaches `module_.namespaces`).
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_dts_top_level_modifiers(parse_module_or_empty(src)) {
       if i.message.contains("declare` or `export") {

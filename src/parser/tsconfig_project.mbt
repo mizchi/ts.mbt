@@ -61,7 +61,7 @@ pub async fn load_tsconfig_project(config_path : String) -> TsconfigProject? {
 ///|
 async fn load_tsconfig_project_in(
   config_path : String,
-  depth : Int,
+  depth : Int32,
 ) -> TsconfigProject? {
   // Same bound as `tsconfig_compiler_option_in`, for the same reason: a
   // config that extends itself.
@@ -213,7 +213,7 @@ pub async fn tsconfig_compiler_option_at(
 async fn tsconfig_compiler_option_bool_in(
   config_path : String,
   name : String,
-  depth : Int,
+  depth : Int32,
 ) -> Bool? {
   if depth > 8 {
     return None
@@ -243,7 +243,7 @@ async fn tsconfig_compiler_option_bool_in(
 ///|
 /// `true` / `false` at `start_`. `None` for anything else, so a
 /// `"declaration": "yes"` typo abstains rather than reading as true.
-fn tsconfig_parse_bool_at(src : String, start_ : Int, end_ : Int) -> Bool? {
+fn tsconfig_parse_bool_at(src : String, start_ : Int32, end_ : Int32) -> Bool? {
   let text = if start_ < end_ && end_ <= src.length() {
     src[start_:end_].to_owned().trim().to_owned()
   } else {

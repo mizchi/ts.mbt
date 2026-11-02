@@ -111,13 +111,13 @@ pub fn tag_rewrite_block(
   // without this table every one of those reads as "not an object" and
   // the union is rejected before any safety gate runs. Defaults to
   // empty, which only ever makes the pass find FEWER candidates.
-  interfaces? : Array[@ast.TsInterface] = [],
+  interfaces~ : Array[@ast.TsInterface] = [],
   // `--explain-mangle`: one line per reason the pass did nothing. The
   // pass moved zero bytes on all ten type-aware corpus targets and the
   // size number cannot say whether that is "no bundle declares the
   // shape" or "the shape is there and a gate refused it" — those want
   // opposite fixes, so the pass has to name which one it hit.
-  explain? : Array[String]? = None,
+  explain~ : Array[String]? = None,
 ) -> @ast.TsBlock {
   // 0. The boundary question, before anything else. An unanswered one
   //    means no tag may be renumbered.
@@ -171,7 +171,7 @@ pub fn tag_rewrite_block(
     block, exported,
   )
   // 3. For each candidate K, verify the safety gates.
-  let candidates : Map[String, Map[String, Int]] = Map([])
+  let candidates : Map[String, Map[String, Int32]] = Map([])
   for entry in unions {
     let (k, literals) = entry
     if k_type_name_is_exported(k, alias_to_k, shapes, exported_type_names)
@@ -220,7 +220,7 @@ pub fn tag_rewrite_block(
       }
       continue
     }
-    let id_map : Map[String, Int] = Map([])
+    let id_map : Map[String, Int32] = Map([])
     for i in 0..<literals.length() {
       id_map[literals[i]] = i
     }
@@ -566,7 +566,7 @@ fn explain_no_union_found(
   // `shapes` cannot resolve is a variant declared outside the bundle
   // (an ambient `.d.ts`, a dependency's types) — that is a different
   // problem from a variant that is genuinely not an object.
-  let labels : Map[String, Int] = Map([])
+  let labels : Map[String, Int32] = Map([])
   for ta in type_aliases {
     match ta.type_ {
       Union(parts) => {
@@ -2565,7 +2565,7 @@ fn object_literals_safe_expr(
 ///|
 fn tag_rewrite_stmt(
   stmt : @ast.TsStmt,
-  table : Map[String, Map[String, Int]],
+  table : Map[String, Map[String, Int32]],
 ) -> @ast.TsStmt {
   match stmt {
     Var(b, t, e) => Var(b, t, tag_rewrite_expr(e, table))
@@ -2734,7 +2734,7 @@ fn tag_rewrite_stmt(
 ///|
 fn tag_rewrite_block_inner(
   block : @ast.TsBlock,
-  table : Map[String, Map[String, Int]],
+  table : Map[String, Map[String, Int32]],
 ) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
@@ -2746,7 +2746,7 @@ fn tag_rewrite_block_inner(
 ///|
 fn tag_rewrite_expr(
   expr : @ast.TsExpr,
-  table : Map[String, Map[String, Int]],
+  table : Map[String, Map[String, Int32]],
 ) -> @ast.TsExpr {
   match expr {
     ObjectLit(entries) => {
@@ -2935,7 +2935,7 @@ fn tag_rewrite_expr(
 fn try_rewrite_eq(
   l : @ast.TsExpr,
   r : @ast.TsExpr,
-  table : Map[String, Map[String, Int]],
+  table : Map[String, Map[String, Int32]],
 ) -> (@ast.TsExpr, @ast.TsExpr)? {
   match (l, r) {
     (@ast.TsExpr::PropAccess(recv, name), @ast.TsExpr::StringLit(s)) =>

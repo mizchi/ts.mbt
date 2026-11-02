@@ -21,7 +21,7 @@
 ///|
 priv struct Emitter {
   buf : StringBuilder
-  mut indent : Int
+  mut indent : Int32
   // When `true`, the emitter inserts whitespace + newlines that make
   // the output diffable. With `false`, indentation/newlines/optional
   // spaces drop out and statement terminators take a "lazy" path so
@@ -31,8 +31,8 @@ priv struct Emitter {
   // source-map builder can attribute each emitted statement back to
   // its position in the original source. Updated by `write`, `nl`,
   // and `space`.
-  mut out_line : Int
-  mut out_col : Int
+  mut out_line : Int32
+  mut out_col : Int32
   // Source-map builder; when `None` the emitter never records
   // mappings (fast path for callers that don't need sourcemaps).
   mut smap : SourceMapBuilder?
@@ -49,7 +49,7 @@ priv struct Emitter {
 }
 
 ///|
-fn Emitter::new(pretty? : Bool = true) -> Emitter {
+fn Emitter::new(pretty~ : Bool = true) -> Emitter {
   {
     buf: StringBuilder(),
     indent: 0,
@@ -273,12 +273,12 @@ pub(all) struct TransformOutput {
 pub fn transform_source_full(
   source : String,
   base : JsxConfig,
-  with_sourcemap? : Bool = false,
-  source_path? : String = "input.ts",
-  output_path? : String = "output.js",
-  mangle? : Bool = false,
-  mangle_properties? : Bool = false,
-  minify? : Bool = false,
+  with_sourcemap~ : Bool = false,
+  source_path~ : String = "input.ts",
+  output_path~ : String = "output.js",
+  mangle~ : Bool = false,
+  mangle_properties~ : Bool = false,
+  minify~ : Bool = false,
 ) -> Result[TransformOutput, String] {
   // Parse via the module-block entry so we can inline `const enum`
   // use sites — the side list `mb.enums` carries the original
@@ -1985,10 +1985,10 @@ fn emit_binding(e : Emitter, binding : @ast.TsBinding) -> Unit {
 /// exactly this reason; the declaration paths did not.
 ///
 /// Found by `just fuzz-mangle`, shrunk to four nodes.
-let declarator_init_prec : Int = 2
+let declarator_init_prec : Int32 = 2
 
 ///|
-fn emit_expr(e : Emitter, expr : @ast.TsExpr, parent_prec : Int) -> Unit {
+fn emit_expr(e : Emitter, expr : @ast.TsExpr, parent_prec : Int32) -> Unit {
   // `new Foo` with the argument list omitted (the minify-mode saving in
   // the `New` arm) is NOT a member-expression head: `new C().f` written
   // that way becomes `new C.f`, which parses as `new (C.f)` and throws
@@ -3822,7 +3822,7 @@ fn coalesce_mix_needs_paren(op : @ast.TsBinOp, operand : @ast.TsExpr) -> Bool {
 }
 
 ///|
-fn binop_precedence(op : @ast.TsBinOp) -> Int {
+fn binop_precedence(op : @ast.TsBinOp) -> Int32 {
   match op {
     Coalesce => 4
     Or => 5
@@ -3904,7 +3904,7 @@ fn compound_op_str(op : @ast.TsCompoundOp) -> String {
 }
 
 ///|
-fn expr_precedence(expr : @ast.TsExpr) -> Int {
+fn expr_precedence(expr : @ast.TsExpr) -> Int32 {
   match expr {
     TypeArgs(_, inner) => expr_precedence(inner)
     NumberLit(_)

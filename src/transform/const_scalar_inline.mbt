@@ -37,7 +37,7 @@
 /// Printed length of a literal in minify mode, used to price the
 /// substitution. Only the shapes `scalar_inline_value` admits appear
 /// here; anything else returns a length that fails every budget.
-fn scalar_literal_bytes(e : @ast.TsExpr) -> Int {
+fn scalar_literal_bytes(e : @ast.TsExpr) -> Int32 {
   match e {
     // `true` / `false` emit as `!0` / `!1`.
     BoolLit(_) => 2
@@ -91,7 +91,7 @@ fn scalar_inline_value(e : @ast.TsExpr) -> @ast.TsExpr? {
 /// This deliberately prices the substitution alone and claims nothing
 /// about what `fold` will do with it — an unpriced upside, not a
 /// justification for a bigger budget.
-fn scalar_inline_pays(bytes : Int, refs : Int) -> Bool {
+fn scalar_inline_pays(bytes : Int32, refs : Int32) -> Bool {
   if refs == 0 {
     return false
   }
@@ -177,7 +177,7 @@ fn scalar_assigned_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit 
 /// Propagate top-level scalar `const` bindings to their read sites.
 pub fn const_scalar_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let values : Map[String, @ast.TsExpr] = Map([])
-  let bytes : Map[String, Int] = Map([])
+  let bytes : Map[String, Int32] = Map([])
   for stmt in block.stmts {
     match stmt {
       Const(@ast.TsBinding::Ident(name), _, e) =>
@@ -195,7 +195,7 @@ pub fn const_scalar_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     return block
   }
   // Reads, and writes that rule a candidate out.
-  let refs : Map[String, Int] = Map([])
+  let refs : Map[String, Int32] = Map([])
   surface_visit_exprs_block(block, e => {
     match e {
       Var(n) => if values.contains(n) { refs[n] = refs.get(n).unwrap_or(0) + 1 }

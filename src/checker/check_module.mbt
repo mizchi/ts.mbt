@@ -18,11 +18,27 @@ pub(all) enum TypeIssueKind {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend TypeIssueKind with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TypeIssueKind with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct TypeIssue {
   kind : TypeIssueKind
   name : String
   detail : String
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend TypeIssue with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TypeIssue with @debug.Debug::{to_repr}
 
 ///|
 pub(all) struct TypeCheckReport {
@@ -56,7 +72,7 @@ pub fn TypeCheckReport::of_kind(
 pub fn TypeCheckReport::count_of_kind(
   self : TypeCheckReport,
   kind : TypeIssueKind,
-) -> Int {
+) -> Int32 {
   let mut n = 0
   for i in self.issues {
     if i.kind == kind {
@@ -238,12 +254,12 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   //    non-generic cases enums / 0-parameter decls (TS2315 "type is not
   //    generic"). Restricted to locally-declared names, so lib / cross-file
   //    references (`Array<T>`, `Promise<T>`) are never flagged.
-  let arities : Map[String, Int] = Map([])
+  let arities : Map[String, Int32] = Map([])
   // A name declared at two different arities (illegal declaration merging,
   // or an interface/namespace name clash) is ambiguous -- drop it so the
   // arity check never mis-fires on a shape we can't pin down.
   let arity_conflict : Map[String, Unit] = Map([])
-  fn record_arity(name : String, n : Int) -> Unit {
+  fn record_arity(name : String, n : Int32) -> Unit {
     match arities.get(name) {
       Some(prev) => if prev != n { arity_conflict[name] = () }
       None => arities[name] = n
@@ -297,7 +313,7 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   // without a default). Merged declarations keep the smallest K --
   // TypeScript merges type-parameter defaults across declarations, so the
   // most permissive minimum is the sound choice for an FP-free check.
-  let min_arities : Map[String, Int] = Map([])
+  let min_arities : Map[String, Int32] = Map([])
   for entry in module_.interface_member_modifier_misuses {
     if entry.has_prefix("<generic-min-arity>") {
       let rest = entry["<generic-min-arity>".length():].to_owned()
@@ -839,9 +855,9 @@ fn iface_extends_reaches(
 fn check_arity(
   type_ : @ast.TsType,
   scope : Array[String],
-  arities : Map[String, Int],
+  arities : Map[String, Int32],
   noarg_required : Map[String, Unit],
-  min_arities : Map[String, Int],
+  min_arities : Map[String, Int32],
   issues : Array[TypeIssue],
 ) -> Unit {
   match type_ {

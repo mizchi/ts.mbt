@@ -5299,6 +5299,18 @@ typescript.mbt/
 # were real dead imports and are gone. So "clean" is a claim about a
 # toolchain as much as about the tree, and bumping the toolchain means
 # re-running this before trusting it.
+#
+# Re-verified clean on moon 0.1.20261029 / moonc v0.10.19. That bump
+# needed four things: `moonbitlang/regexp@0.3.7` pinned in `moon.mod`
+# (mizchi/x@0.6.1 asks for 0.3.5, whose `moon.mod.json` the toolchain
+# no longer loads — MVS picks the higher pin), 140
+# `implicit_impl_as_method` sites given an explicit `pub extend` (Show,
+# whose `to_string` is called as a method) or a `#deprecated pub extend`
+# (derived Eq / Debug, whose methods nothing calls), `.or` ->
+# `.unwrap_or` and iterator `.length()` -> `.count()`, and a `moon fmt`
+# pass that rewrites `Int` -> `Int32` and `x? : T = d` -> `x~ : T = d`
+# (no `#|` line touched). The "depends on experimental package" lines
+# come from `moonbitlang/async`'s own packages and do not fail the gate.
 moon check --deny-warn
 
 # Run tests. Takes about an hour, and most of that is NOT tests: the

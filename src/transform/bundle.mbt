@@ -747,7 +747,7 @@ pub fn bundle_modules(
     // so the existing position-as-int representation survives 1:1
     // transforms verbatim. `combined_source_count` is the next free
     // source-id slot.
-    let combined_positions : Array[Int] = []
+    let combined_positions : Array[Int32] = []
     let combined_line_indices : Array[LineIndex] = []
     let mut combined_source_count = 0
     for path in order {
@@ -2441,12 +2441,12 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
 /// the bench drives; when a project hits that wall we can switch
 /// to a wider encoding, but a parallel side-array would be the
 /// cleaner answer at that point.
-fn encode_combined_position(offset : Int, source_id : Int) -> Int {
+fn encode_combined_position(offset : Int32, source_id : Int32) -> Int32 {
   offset * 256 + source_id % 256
 }
 
 ///|
-fn decode_combined_position(encoded : Int) -> (Int, Int) {
+fn decode_combined_position(encoded : Int32) -> (Int32, Int32) {
   let source_id = encoded % 256
   let offset = encoded / 256
   (offset, source_id)

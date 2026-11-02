@@ -230,8 +230,8 @@ pub fn numeric_name_set(
 pub fn numeric_name_census(
   g : SymbolGraph,
   numeric : Map[SymbolId, Bool],
-) -> Map[String, (Int, Int)] {
-  let out : Map[String, (Int, Int)] = Map([])
+) -> Map[String, (Int32, Int32)] {
+  let out : Map[String, (Int32, Int32)] = Map([])
   for s in g.symbols {
     let cur = out.get(s.name).unwrap_or((0, 0))
     out[s.name] = (

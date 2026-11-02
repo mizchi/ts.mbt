@@ -41,7 +41,7 @@
 ///|
 /// Per-property numbering: property name -> (string literal -> integer).
 pub(all) struct DiscriminantPlan {
-  maps : Map[String, Map[String, Int]]
+  maps : Map[String, Map[String, Int32]]
 }
 
 ///|
@@ -55,7 +55,7 @@ priv struct DiscScan {
   blocked : Map[String, Bool]
   // Names that have at least one approved read, so a candidate with
   // writes but no reads at all isn't renumbered for nothing.
-  read_count : Map[String, Int]
+  read_count : Map[String, Int32]
 }
 
 ///|
@@ -88,7 +88,7 @@ fn disc_note_compared(scan : DiscScan, name : String, lit : String) -> Unit {
 pub fn plan_discriminant_ints(
   block : @ast.TsBlock,
   reserved : Map[String, Bool],
-  declines? : Array[String] = [],
+  declines~ : Array[String] = [],
 ) -> DiscriminantPlan {
   if reserved.contains("*") {
     declines.push(
@@ -103,7 +103,7 @@ pub fn plan_discriminant_ints(
     read_count: {},
   }
   disc_scan_block(scan, block)
-  let maps : Map[String, Map[String, Int]] = Map([])
+  let maps : Map[String, Map[String, Int32]] = Map([])
   for entry in scan.writes {
     let (name, literals) = entry
     if scan.blocked.contains(name) {
@@ -157,7 +157,7 @@ pub fn plan_discriminant_ints(
       )
       continue
     }
-    let numbering : Map[String, Int] = Map([])
+    let numbering : Map[String, Int32] = Map([])
     for i, lit in literals {
       numbering[lit] = i
     }

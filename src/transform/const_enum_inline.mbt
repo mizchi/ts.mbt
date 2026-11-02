@@ -39,7 +39,7 @@ pub fn build_const_enum_table(
 /// members is a TS error anyway in the non-const case.
 pub fn build_enum_inline_table(
   enums : Array[@ast.TsEnumDecl],
-  include_non_const? : Bool = false,
+  include_non_const~ : Bool = false,
 ) -> Map[String, @ast.TsExpr] {
   let out : Map[String, @ast.TsExpr] = Map([])
   for decl in enums {
@@ -64,7 +64,7 @@ pub fn build_enum_inline_table(
         continue
       }
     }
-    let mut next_numeric : Int = 0
+    let mut next_numeric : Int32 = 0
     for member_ in decl.members {
       let value_expr : @ast.TsExpr? = match member_.value {
         Some(@ast.TsEnumMemberValue::Number(s)) =>

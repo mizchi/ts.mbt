@@ -126,11 +126,19 @@ pub(all) enum TsType {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend TsType with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsType with @debug.Debug::{to_repr}
+
+///|
 // / typedexpression
 pub(all) enum TsExpr {
   // literal
   NumberLit(Double)
-  IntLit(Int)
+  IntLit(Int32)
   BigIntLit(String)
   BoolLit(Bool)
   StringLit(String)
@@ -307,11 +315,19 @@ pub(all) enum TsExpr {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsExpr with @debug.Debug::{to_repr}
+
+///|
 // / function
 pub(all) enum TsArrowBody {
   ArrowExpr(TsExpr) // () => expr
   ArrowBlock(TsBlock) // () => { ... }
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsArrowBody with @debug.Debug::{to_repr}
 
 ///|
 // / binaryoperator
@@ -348,6 +364,14 @@ pub(all) enum TsBinOp {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend TsBinOp with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsBinOp with @debug.Debug::{to_repr}
+
+///|
 // / unaryoperator
 pub(all) enum TsUnaryOp {
   Neg // -
@@ -362,6 +386,14 @@ pub(all) enum TsUnaryOp {
   PostInc // x++
   PostDec // x--
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend TsUnaryOp with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsUnaryOp with @debug.Debug::{to_repr}
 
 ///|
 // / compoundassignmentoperator
@@ -385,6 +417,14 @@ pub(all) enum TsCompoundOp {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend TsCompoundOp with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsCompoundOp with @debug.Debug::{to_repr}
+
+///|
 // / for...of binding kind
 pub(all) enum TsForOfKind {
   Var
@@ -392,6 +432,14 @@ pub(all) enum TsForOfKind {
   Const
   Assign
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend TsForOfKind with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsForOfKind with @debug.Debug::{to_repr}
 
 ///|
 // / statement
@@ -454,6 +502,10 @@ pub(all) enum TsStmt {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsStmt with @debug.Debug::{to_repr}
+
+///|
 // / block (statementarray)
 //
 // `stmt_positions` is positionally aligned with `stmts`: when the
@@ -464,14 +516,22 @@ pub(all) enum TsStmt {
 // back to "no mapping" when the array is shorter than `stmts`.
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
-  stmt_positions : Array[Int]
+  stmt_positions : Array[Int32]
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsBlock with @debug.Debug::{to_repr}
 
 ///|
 pub(all) struct TsSwitchCase {
   test_expr : TsExpr?
   body : TsBlock
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsSwitchCase with @debug.Debug::{to_repr}
 
 ///|
 // / functionparameter
@@ -487,6 +547,10 @@ pub(all) struct TsParam {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsParam with @debug.Debug::{to_repr}
+
+///|
 // /
 pub(all) enum TsBinding {
   Ident(String)
@@ -496,16 +560,28 @@ pub(all) enum TsBinding {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsBinding with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct TsBindingElem {
   binding : TsBinding
   default : TsExpr?
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsBindingElem with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct TsArrayBinding {
   items : Array[TsBindingElem?]
   rest : TsBinding?
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsArrayBinding with @debug.Debug::{to_repr}
 
 ///|
 pub(all) struct TsObjectBindingProp {
@@ -516,10 +592,18 @@ pub(all) struct TsObjectBindingProp {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsObjectBindingProp with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct TsObjectBinding {
   props : Array[TsObjectBindingProp]
   rest : String?
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsObjectBinding with @debug.Debug::{to_repr}
 
 ///|
 // / functiondefine
@@ -567,6 +651,10 @@ pub(all) struct TsFunc {
   // distinct rather than be collapsed to whichever is shorter.
   name_is_member_key : Bool
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsFunc with @debug.Debug::{to_repr}
 
 ///|
 // / interface (structtype)
@@ -617,6 +705,10 @@ pub(all) struct TsInterface {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsInterface with @debug.Debug::{to_repr}
+
+///|
 // / type alias declaration
 pub(all) struct TsTypeAlias {
   name : String
@@ -628,6 +720,10 @@ pub(all) struct TsTypeAlias {
   type_param_bounds : Array[(String, TsType)]
   type_ : TsType
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsTypeAlias with @debug.Debug::{to_repr}
 
 ///|
 // / externalfunctionimport
@@ -647,11 +743,19 @@ pub(all) struct TsImport {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsImport with @debug.Debug::{to_repr}
+
+///|
 // / ambient value declaration
 pub(all) struct TsValueDecl {
   name : String
   type_ : TsType
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsValueDecl with @debug.Debug::{to_repr}
 
 ///|
 // / class property declaration
@@ -678,6 +782,10 @@ pub(all) struct TsClassPropertyDecl {
   // when there is no initializer or constructor assignment.
   has_definite_assertion : Bool
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsClassPropertyDecl with @debug.Debug::{to_repr}
 
 ///|
 // / class method declaration
@@ -726,6 +834,10 @@ pub(all) struct TsClassMethodDecl {
   is_async : Bool
   is_generator : Bool
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsClassMethodDecl with @debug.Debug::{to_repr}
 
 ///|
 // / class declaration
@@ -859,6 +971,10 @@ pub(all) struct TsClassDecl {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsClassDecl with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct TsNamespaceDecl {
   name : String
   module_ : TsModule
@@ -874,6 +990,10 @@ pub(all) struct TsNamespaceDecl {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsNamespaceDecl with @debug.Debug::{to_repr}
+
+///|
 // / enum member initializer literal
 pub(all) enum TsEnumMemberValue {
   String(String)
@@ -881,6 +1001,14 @@ pub(all) enum TsEnumMemberValue {
   BigInt(String)
   Bool(Bool)
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend TsEnumMemberValue with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsEnumMemberValue with @debug.Debug::{to_repr}
 
 ///|
 // / enum member declaration
@@ -891,6 +1019,14 @@ pub(all) struct TsEnumMember {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend TsEnumMember with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsEnumMember with @debug.Debug::{to_repr}
+
+///|
 // / enum declaration
 pub(all) struct TsEnumDecl {
   name : String
@@ -898,6 +1034,14 @@ pub(all) struct TsEnumDecl {
   is_const : Bool
   is_declare : Bool
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend TsEnumDecl with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend TsEnumDecl with @debug.Debug::{to_repr}
 
 ///|
 // / ()
@@ -1024,6 +1168,10 @@ pub(all) struct TsModule {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsModule with @debug.Debug::{to_repr}
+
+///|
 // / module import declaration
 pub(all) struct TsImportDecl {
   module_spec : String
@@ -1045,11 +1193,19 @@ pub(all) struct TsImportDecl {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsImportDecl with @debug.Debug::{to_repr}
+
+///|
 // / module export specifier
 pub(all) struct TsExportSpec {
   local_name : String
   export_name : String
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsExportSpec with @debug.Debug::{to_repr}
 
 ///|
 // / module re-export kind
@@ -1060,12 +1216,20 @@ pub(all) enum TsReExportKind {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TsReExportKind with @debug.Debug::{to_repr}
+
+///|
 // / module re-export specifier
 pub(all) struct TsReExportSpec {
   module_spec : String
   kind : TsReExportKind
   type_only : Bool
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TsReExportSpec with @debug.Debug::{to_repr}
 
 ///|
 // / module block with import/export metadata
@@ -1157,6 +1321,10 @@ pub(all) struct TsModuleBlock {
   has_export_equals : Bool
 } derive(Debug)
 
+///|
+#deprecated
+pub extend TsModuleBlock with @debug.Debug::{to_repr}
+
 // ============================================
 // Typed AST (type-resolved)
 // ============================================
@@ -1169,11 +1337,19 @@ pub(all) struct TypedExpr {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TypedExpr with @debug.Debug::{to_repr}
+
+///|
 // / typedstatement
 pub(all) struct TypedStmt {
   stmt : TsStmt
   // add
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TypedStmt with @debug.Debug::{to_repr}
 
 ///|
 // / typedfunction
@@ -1184,10 +1360,18 @@ pub(all) struct TypedFunc {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend TypedFunc with @debug.Debug::{to_repr}
+
+///|
 // / typed
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
 } derive(Debug)
+
+///|
+#deprecated
+pub extend TypedModule with @debug.Debug::{to_repr}
 
 ///|
 /// The single `stmt_positions` entry that marks a `TsBlock` as the
@@ -1210,4 +1394,4 @@ pub(all) struct TypedModule {
 ///
 /// Real positions are source byte offsets, so a negative value cannot
 /// collide with one.
-pub const DECL_GROUP_POSITION : Int = -1
+pub const DECL_GROUP_POSITION : Int32 = -1

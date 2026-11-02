@@ -679,7 +679,7 @@ fn render_async_js_export_wrappers(
 fn rewrite_async_js_exports(
   source : String,
   async_modes : Map[String, Bool],
-  adapt_public_values? : Bool = false,
+  adapt_public_values~ : Bool = false,
 ) -> String {
   if async_modes.length() == 0 {
     return source
@@ -856,7 +856,7 @@ async fn rewrite_runtime_boundary_js_exports_file(
 async fn rewrite_async_js_exports_file(
   path : String,
   async_modes : Map[String, Bool],
-  adapt_public_values? : Bool = false,
+  adapt_public_values~ : Bool = false,
 ) -> Bool {
   if async_modes.length() == 0 {
     return true
@@ -1200,9 +1200,9 @@ pub async fn emit_moonbit_bridge_package(
   file_path : String,
   module_spec : String,
   output_dir : String,
-  bare_module_specifier? : String? = None,
-  moonbitlang_async_integration? : Bool = false,
-  runtime_validation? : Bool = false,
+  bare_module_specifier~ : String? = None,
+  moonbitlang_async_integration~ : Bool = false,
+  runtime_validation~ : Bool = false,
 ) -> Bool {
   let bundle = emit_moonbit_bridge_package_texts(file_path, module_spec) catch {
     @bridge.ModuleGraphError::ReadError(msg)
@@ -1435,8 +1435,8 @@ pub async fn emit_moonbit_scaffold_from_ts(
   file_path : String,
   module_spec : String,
   output_dir : String,
-  write_diagnostics? : Bool = true,
-  bare_module_specifier? : String? = None,
+  write_diagnostics~ : Bool = true,
+  bare_module_specifier~ : String? = None,
 ) -> Bool {
   let unsupported_exports = collect_moonbit_ts_scaffold_unsupported_exports(
     file_path,
@@ -1842,10 +1842,10 @@ fn add_bridge_runtime_validation(
 }
 
 ///|
-let bridge_package_split_line_threshold : Int = 2000
+let bridge_package_split_line_threshold : Int32 = 2000
 
 ///|
-fn bridge_package_mbt_line_count(source : String) -> Int {
+fn bridge_package_mbt_line_count(source : String) -> Int32 {
   if source == "" {
     0
   } else {
@@ -2072,15 +2072,15 @@ fn string_to_bytes(s : String) -> Bytes {
         }
       }
       // Unpaired high surrogate: encode the Unicode replacement character.
-      arr.push((0xEF : Int).to_byte())
-      arr.push((0xBF : Int).to_byte())
-      arr.push((0xBD : Int).to_byte())
+      arr.push((0xEF : Int32).to_byte())
+      arr.push((0xBF : Int32).to_byte())
+      arr.push((0xBD : Int32).to_byte())
       i += 1
     } else if unit >= 0xDC00 && unit < 0xE000 {
       // Stray low surrogate: encode the Unicode replacement character.
-      arr.push((0xEF : Int).to_byte())
-      arr.push((0xBF : Int).to_byte())
-      arr.push((0xBD : Int).to_byte())
+      arr.push((0xEF : Int32).to_byte())
+      arr.push((0xBF : Int32).to_byte())
+      arr.push((0xBD : Int32).to_byte())
       i += 1
     } else {
       arr.push(((unit >> 12) | 0xE0).to_byte())

@@ -122,23 +122,23 @@ pub fn class_method_dce_block(
   // caller cannot answer and the pass does nothing; `Some(f)` is forced
   // only if the result is read — see the note above.
   off_bundle : (() -> Array[String])?,
-  keep? : Map[String, Bool] = {},
+  keep~ : Map[String, Bool] = {},
   // The whole bundle, when `block` is one module of it. Defaults to
   // `block`, which is right for a caller that hands over everything.
-  scope? : @ast.TsBlock? = None,
+  scope~ : @ast.TsBlock? = None,
   // `(field name, declared type)` for every runtime class in the
   // bundle. Needed because the class lowering drops the annotation —
   // a field with an initializer becomes a constructor assignment, so
   // the `NativeClassStmt` this pass walks carries no `properties` at
   // all. Without it `this.#cache[k]` reads as an unbounded member
   // access and one such read turns the whole pass off.
-  class_fields? : Array[(String, @ast.TsType)] = [],
+  class_fields~ : Array[(String, @ast.TsType)] = [],
   // `type X = …` declarations in the bundle. An alias to a keyed
   // container is one — `type MatcherMap<T> = Record<string, Matcher<T>>`
   // is how real code spells the field whose computed reads otherwise
   // gate the pass.
-  type_aliases? : Array[@ast.TsTypeAlias] = [],
-  explain? : Array[String]? = None,
+  type_aliases~ : Array[@ast.TsTypeAlias] = [],
+  explain~ : Array[String]? = None,
   // Reflection the scan met, deduplicated with a count, for the
   // compiler to warn about. Unlike `explain` this is not a debugging
   // aid: `Reflect.ownKeys` in one file keeps every method of every
@@ -147,12 +147,12 @@ pub fn class_method_dce_block(
   // find out. Filled whether or not the pass ends up blocked — a
   // reflection sink that co-occurs with an unprovable computed key is
   // still a reflection sink the author would want to know about.
-  reflection? : Array[String]? = None,
+  reflection~ : Array[String]? = None,
   // Sub-phase attribution. This pass is 18% of the compile on the 9 MB
   // TypeScript bundle and was one opaque number; the internal steps
   // have very different costs and only a measurement says which.
   // Defaults to disabled, so it costs one branch per step.
-  timer? : PhaseTimer = PhaseTimer::disabled(),
+  timer~ : PhaseTimer = PhaseTimer::disabled(),
 ) -> @ast.TsBlock {
   // 0. The off-bundle question, before anything else. An unanswered one
   //    means no method may be dropped. Only the PRESENCE of an answer is
@@ -340,7 +340,7 @@ pub fn class_method_dce_block(
           // statement, so the count is a lower bound on the occurrences
           // rather than an exact tally — enough to rank them, not
           // enough to quote as a total.
-          let seen : Map[String, Int] = Map([])
+          let seen : Map[String, Int32] = Map([])
           let order : Array[String] = []
           for r in facts.reflection {
             if !seen.contains(r) {
@@ -387,11 +387,11 @@ pub fn class_method_dce_block(
 /// arbitrary occurrence. Capped — a bundle with fifty variations of
 /// the same shape has nothing more to say after the first dozen.
 fn rank_sink_reasons(reasons : Array[String]) -> Array[String] {
-  let counts : Map[String, Int] = Map([])
+  let counts : Map[String, Int32] = Map([])
   for r in reasons {
     counts[r] = counts.get(r).unwrap_or(0) + 1
   }
-  let ranked : Array[(String, Int)] = []
+  let ranked : Array[(String, Int32)] = []
   for r, n in counts {
     ranked.push((r, n))
   }
@@ -510,7 +510,7 @@ priv struct SniffFacts {
   /// blocks this pass: one unprovable `i` anywhere disqualifies every
   /// `arr[i]`. The census says how close the name came, which separates
   /// "one polluting declaration" from "genuinely ambiguous".
-  numeric_census : Map[String, (Int, Int)]
+  numeric_census : Map[String, (Int32, Int32)]
   /// Bindings whose declared type is a keyed container rather than an
   /// object with members — an array, a tuple, a string, a `Record`.
   keyed_containers : Map[String, Bool]
@@ -1728,7 +1728,7 @@ fn prune_iife_methods(
   accessed : Map[String, Bool],
 ) -> @ast.TsBlock {
   let new_stmts : Array[@ast.TsStmt] = []
-  let new_positions : Array[Int] = []
+  let new_positions : Array[Int32] = []
   let has_positions = body.stmt_positions.length() == body.stmts.length()
   for i, s in body.stmts {
     if iife_method_assignment_is_dead(s, class_name, accessed) {

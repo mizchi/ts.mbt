@@ -27,7 +27,7 @@
 /// about; with no notification to debounce, this is the whole latency, so
 /// it is the largest value that still feels immediate rather than the
 /// smallest one that is cheap.
-const MTSC_WATCH_INTERVAL_MS : Int = 300
+const MTSC_WATCH_INTERVAL_MS : Int32 = 300
 
 ///|
 /// `(seconds, nanos)` for `path`, or `None` when it cannot be read.
@@ -36,7 +36,7 @@ const MTSC_WATCH_INTERVAL_MS : Int = 300
 /// recorded stamp, which is the behaviour wanted: deleting an imported
 /// file should trigger a rebuild that reports the broken import.
 #cfg(not(target="js"))
-async fn mtsc_watch_stamp(path : String) -> (Int64, Int)? {
+async fn mtsc_watch_stamp(path : String) -> (Int64, Int32)? {
   let v = @async_fs.mtime(path) catch { _ => return None }
   Some(v)
 }
@@ -59,7 +59,7 @@ async fn mtsc_watch_stamp(path : String) -> (Int64, Int)? {
 /// one suppressed diagnostic on the caller below instead of two
 /// warnings on the gate.
 #cfg(target="js")
-fn mtsc_watch_stamp(path : String) -> (Int64, Int)? {
+fn mtsc_watch_stamp(path : String) -> (Int64, Int32)? {
   // Keep the `moonbitlang/async/fs` import referenced on this backend.
   // It exists for the `@async_fs.mtime` in the arm above, and moon has
   // no per-target `import` syntax, so on `js` the dependency reads as
@@ -147,8 +147,10 @@ extern "js" fn mtsc_js_stat_mtime(path : String) -> FixedArray[Double] =
 /// not the package-wide `warnings = "-00.."` that CLAUDE.md records as
 /// the way a gate stops being a gate.
 #warnings("-unused_async")
-async fn mtsc_watch_stamps(paths : Array[String]) -> Map[String, (Int64, Int)?] {
-  let out : Map[String, (Int64, Int)?] = Map([])
+async fn mtsc_watch_stamps(
+  paths : Array[String],
+) -> Map[String, (Int64, Int32)?] {
+  let out : Map[String, (Int64, Int32)?] = Map([])
   for p in paths {
     out[p] = mtsc_watch_stamp(p)
   }
@@ -158,8 +160,8 @@ async fn mtsc_watch_stamps(paths : Array[String]) -> Map[String, (Int64, Int)?] 
 ///|
 /// Has any watched file changed since `previous`?
 fn mtsc_watch_changed(
-  previous : Map[String, (Int64, Int)?],
-  current : Map[String, (Int64, Int)?],
+  previous : Map[String, (Int64, Int32)?],
+  current : Map[String, (Int64, Int32)?],
 ) -> Bool {
   if previous.length() != current.length() {
     return true
@@ -255,7 +257,7 @@ async fn mtsc_watch_loop(opts : MtscOptions, entries : Array[String]) -> Unit {
   // changes. So every pass clears them, and the cost is per pass rather
   // than per run.
   let mut first = true
-  let mut stamps : Map[String, (Int64, Int)?] = Map([])
+  let mut stamps : Map[String, (Int64, Int32)?] = Map([])
   while true {
     if !first {
       let watched : Array[String] = []

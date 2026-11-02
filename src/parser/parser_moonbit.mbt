@@ -9,7 +9,7 @@ priv struct MoonBitDeclState {
   // Arity of each generic-preserved type, keyed by interface name. Used
   // to widen bare references (`Ref` ⇒ `Ref[JSValue]`) and arity-mismatched
   // references to a syntactically valid form matching the struct decl.
-  generic_preserved_type_arity_by_name : Map[String, Int]
+  generic_preserved_type_arity_by_name : Map[String, Int32]
   mut needs_jsvalue : Bool
   // Track whether `Applied("Promise"|"PromiseLike", ...)` was emitted so
   // the declarations file can append a self-contained
@@ -19,7 +19,10 @@ priv struct MoonBitDeclState {
 }
 
 ///|
-fn generic_preserved_type_arity(state : MoonBitDeclState, name : String) -> Int {
+fn generic_preserved_type_arity(
+  state : MoonBitDeclState,
+  name : String,
+) -> Int32 {
   match state.generic_preserved_type_arity_by_name.get(name) {
     Some(arity) => arity
     None => 0
@@ -27,7 +30,7 @@ fn generic_preserved_type_arity(state : MoonBitDeclState, name : String) -> Int 
 }
 
 ///|
-let moonbit_function_field_method_wrapper_limit : Int = 128
+let moonbit_function_field_method_wrapper_limit : Int32 = 128
 
 ///|
 fn is_ascii_letter(c : Char) -> Bool {
@@ -327,7 +330,7 @@ fn mark_referenced_type(state : MoonBitDeclState, name : String) -> Unit {
 fn push_local_type_params(
   state : MoonBitDeclState,
   names : Array[String],
-) -> Int {
+) -> Int32 {
   let old_len = state.local_type_param_names.length()
   for name in names {
     if !state.local_type_param_names.contains(name) {
@@ -338,7 +341,7 @@ fn push_local_type_params(
 }
 
 ///|
-fn restore_local_type_params(state : MoonBitDeclState, old_len : Int) -> Unit {
+fn restore_local_type_params(state : MoonBitDeclState, old_len : Int32) -> Unit {
   while state.local_type_param_names.length() > old_len {
     let _ = state.local_type_param_names.pop()
   }
@@ -1138,7 +1141,7 @@ fn interface_function_field_method_decl(
   receiver_type_params : Array[String],
   field_name : String,
   field_type : @ast.TsType,
-  method_type_params? : Array[String] = [],
+  method_type_params~ : Array[String] = [],
 ) -> String? {
   // A member's own generic binder (`map<U>(fn: (item: T) => U):
   // CollectionChain<U>`) survives on the pure-MoonBit wrapper: render
@@ -1766,19 +1769,19 @@ pub fn emit_moonbit_decl_with_sections_types_and_arities(
   module_ : @ast.TsModule,
   extra_sections : Array[String],
   extra_declared_type_names : Array[String],
-  extra_generic_arities : Map[String, Int],
+  extra_generic_arities : Map[String, Int32],
   force_jsvalue : Bool,
 ) -> String {
   let declared_type_names : Array[String] = []
   let generic_preserved_type_names : Array[String] = []
-  let generic_preserved_type_arity_by_name : Map[String, Int] = Map([])
+  let generic_preserved_type_arity_by_name : Map[String, Int32] = Map([])
   // When a class and an interface share a name (TS declaration merging) the
   // class drives the emitted shape: `class_decl_to_moonbit_sections` emits
   // `declare pub type ClassName[T, U]` with the class's type-params, and the
   // interface emission is skipped below. Pre-collect class names + their
   // arities so interface registration aligns with the class.
   let class_decl_names : Array[String] = []
-  let class_arity_by_name : Map[String, Int] = Map([])
+  let class_arity_by_name : Map[String, Int32] = Map([])
   for class_ in module_.classes {
     class_decl_names.push(class_.name)
     if moonbit_should_preserve_class_type_params(class_) {

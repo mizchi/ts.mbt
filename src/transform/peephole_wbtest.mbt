@@ -2001,7 +2001,7 @@ test "peephole: a block-body arrow is not rewritten to a function" {
   )
   assert_false(many.contains("function"))
   // One `let` for the three arrows, not three.
-  let lets = many.split("let ").length() - 1
+  let lets = many.split("let ").count() - 1
   assert_eq(lets, 1)
   // `this` in the body was always excluded, and still is: an arrow's
   // `this` is lexical, so the conversion would have changed meaning.

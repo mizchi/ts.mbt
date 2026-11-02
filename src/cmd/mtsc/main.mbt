@@ -143,16 +143,16 @@ fn string_to_utf8_bytes(s : String) -> Bytes {
       }
       if !done {
         // Unpaired high surrogate → U+FFFD replacement (`EF BF BD`).
-        arr.push((0xEF : Int).to_byte())
-        arr.push((0xBF : Int).to_byte())
-        arr.push((0xBD : Int).to_byte())
+        arr.push((0xEF : Int32).to_byte())
+        arr.push((0xBF : Int32).to_byte())
+        arr.push((0xBD : Int32).to_byte())
         i = i + 1
       }
     } else if unit >= 0xDC00 && unit < 0xE000 {
       // Stray low surrogate → U+FFFD.
-      arr.push((0xEF : Int).to_byte())
-      arr.push((0xBF : Int).to_byte())
-      arr.push((0xBD : Int).to_byte())
+      arr.push((0xEF : Int32).to_byte())
+      arr.push((0xBF : Int32).to_byte())
+      arr.push((0xBD : Int32).to_byte())
       i = i + 1
     } else {
       arr.push(((unit >> 12) | 0xE0).to_byte())
@@ -948,7 +948,7 @@ async fn mtsc_file_exists(path : String) -> Bool {
 fn mtsc_collect_type_issues(
   source : String,
   allow_jsx : Bool,
-  declaration_file? : Bool = false,
+  declaration_file~ : Bool = false,
 ) -> Result[Array[@mtsc_core.MtscTypeIssue], String] {
   @mtsc_core.collect_type_issues(source, allow_jsx, declaration_file~)
 }
@@ -1041,11 +1041,11 @@ fn mtsc_is_module_path(path : String) -> Bool {
 
 ///|
 #cfg(any(target="native", target="llvm"))
-extern "c" fn mtsc_native_exit(code : Int) = "exit"
+extern "c" fn mtsc_native_exit(code : Int32) = "exit"
 
 ///|
 #cfg(target="js")
-extern "js" fn mtsc_js_try_exit(code : Int) -> Bool =
+extern "js" fn mtsc_js_try_exit(code : Int32) -> Bool =
   #| function(code) {
   #|   if (typeof process !== "undefined" && typeof process.exit === "function") {
   #|     process.exit(code);
@@ -1056,11 +1056,11 @@ extern "js" fn mtsc_js_try_exit(code : Int) -> Bool =
 
 ///|
 #cfg(target="wasm")
-fn mtsc_wasm_exit(code : Int) -> Unit = "wasi_snapshot_preview1" "proc_exit"
+fn mtsc_wasm_exit(code : Int32) -> Unit = "wasi_snapshot_preview1" "proc_exit"
 
 ///|
 #cfg(target="wasm-gc")
-fn mtsc_wasm_gc_exit(code : Int) -> Unit = "__moonbit_sys_unstable" "exit"
+fn mtsc_wasm_gc_exit(code : Int32) -> Unit = "__moonbit_sys_unstable" "exit"
 
 ///|
 /// Leave the process with `code`. See `MTSC_EXIT_*` in
@@ -1072,13 +1072,13 @@ fn mtsc_wasm_gc_exit(code : Int) -> Unit = "__moonbit_sys_unstable" "exit"
 /// written anyway" (2), and a compile that exits the process cannot be
 /// re-run, which is the whole of `--watch`.
 #cfg(any(target="native", target="llvm"))
-fn mtsc_exit(code : Int) -> Unit {
+fn mtsc_exit(code : Int32) -> Unit {
   mtsc_native_exit(code)
 }
 
 ///|
 #cfg(target="js")
-fn mtsc_exit(code : Int) -> Unit {
+fn mtsc_exit(code : Int32) -> Unit {
   if !mtsc_js_try_exit(code) {
     panic()
   }
@@ -1086,13 +1086,13 @@ fn mtsc_exit(code : Int) -> Unit {
 
 ///|
 #cfg(target="wasm")
-fn mtsc_exit(code : Int) -> Unit {
+fn mtsc_exit(code : Int32) -> Unit {
   mtsc_wasm_exit(code)
 }
 
 ///|
 #cfg(target="wasm-gc")
-fn mtsc_exit(code : Int) -> Unit {
+fn mtsc_exit(code : Int32) -> Unit {
   mtsc_wasm_gc_exit(code)
 }
 
@@ -1106,7 +1106,7 @@ fn mtsc_exit(code : Int) -> Unit {
 /// `NULL` — the same assumption the `exit` binding above already makes
 /// about an `Int` argument.
 #cfg(any(target="native", target="llvm"))
-extern "c" fn mtsc_native_fflush(stream : Int64) -> Int = "fflush"
+extern "c" fn mtsc_native_fflush(stream : Int64) -> Int32 = "fflush"
 
 ///|
 /// Push anything buffered in stdout out to the terminal or pipe.
@@ -1335,7 +1335,7 @@ async fn mtsc_compile_entry(
           e => Err(e)
         } noraise {
           v => Ok(v)
-        }).or({
+        }).unwrap_or({
           block: { stmts: [], stmt_positions: [], },
           imports: [],
           exports: [],
@@ -1357,7 +1357,7 @@ async fn mtsc_compile_entry(
           e => Err(e)
         } noraise {
           v => Ok(v)
-        }).or(@ast.TsModule::{
+        }).unwrap_or(@ast.TsModule::{
           funcs: [],
           interfaces: [],
           type_aliases: [],
@@ -1530,7 +1530,7 @@ async fn mtsc_compile_entry(
             e => Err(e)
           } noraise {
             v => Ok(v)
-          }).or({
+          }).unwrap_or({
             block: { stmts: [], stmt_positions: [], },
             imports: [],
             exports: [],
@@ -1552,7 +1552,7 @@ async fn mtsc_compile_entry(
             e => Err(e)
           } noraise {
             v => Ok(v)
-          }).or(@ast.TsModule::{
+          }).unwrap_or(@ast.TsModule::{
             funcs: [],
             interfaces: [],
             type_aliases: [],

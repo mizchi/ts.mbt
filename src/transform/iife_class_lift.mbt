@@ -39,7 +39,7 @@
 ///|
 pub fn iife_class_lift_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let new_stmts : Array[@ast.TsStmt] = []
-  let new_positions : Array[Int] = []
+  let new_positions : Array[Int32] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   for i, s in block.stmts {
     let lifted : Array[@ast.TsStmt] = []
@@ -793,7 +793,7 @@ fn lifted_method_params(
   // Positions survive only when the body already had a full set; the
   // synthesized statements borrow the first real one so a source-map
   // entry points inside the method rather than at offset 0.
-  let positions : Array[Int] = []
+  let positions : Array[Int32] = []
   if f.body.stmt_positions.length() == f.body.stmts.length() &&
     f.body.stmt_positions.length() > 0 {
     for _ in prologue {

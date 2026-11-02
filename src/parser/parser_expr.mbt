@@ -673,8 +673,8 @@ fn Parser::parse_object_method_value(
 ///|
 fn Parser::parse_object_member_name(
   self : Parser,
-  computed_idx : Int,
-) -> (String, Bool, @ast.TsExpr?, Int) raise ParseError {
+  computed_idx : Int32,
+) -> (String, Bool, @ast.TsExpr?, Int32) raise ParseError {
   if self.match_(LBracket) {
     let key_expr = self.parse_assignment()
     let _ = self.expect(RBracket)
@@ -945,7 +945,7 @@ fn Parser::parse_ternary(self : Parser) -> @ast.TsExpr raise ParseError {
 /// know where the expression began, and a span starting mid-expression
 /// would report against tokens it cannot see. That costs a MISS on
 /// `(a ?? b as T) || c`-shaped code and cannot false-positive.
-fn Parser::record_nullish_logical_mixing(self : Parser, start : Int) -> Unit {
+fn Parser::record_nullish_logical_mixing(self : Parser, start : Int32) -> Unit {
   let mut depth = 0
   let mut has_coalesce = false
   let mut has_logical = false
@@ -1639,7 +1639,7 @@ fn Parser::skip_jsx_element_tokens(self : Parser) -> Unit {
 }
 
 ///|
-fn Parser::advance_to_source_pos(self : Parser, source_pos : Int) -> Unit {
+fn Parser::advance_to_source_pos(self : Parser, source_pos : Int32) -> Unit {
   while self.pos < self.tokens.length() &&
         self.tokens[self.pos].pos < source_pos {
     self.pos += 1
@@ -1649,8 +1649,8 @@ fn Parser::advance_to_source_pos(self : Parser, source_pos : Int) -> Unit {
 ///|
 fn Parser::scan_type_assertion_source_end(
   self : Parser,
-  start : Int,
-) -> Int raise ParseError {
+  start : Int32,
+) -> Int32 raise ParseError {
   let mut i = start
   let mut depth = 0
   while i < self.src.length() {
@@ -1706,8 +1706,8 @@ fn Parser::scan_type_assertion_source_end(
 /// `JsxElement(tag, attrs, embeds)` AST node.
 fn Parser::scan_jsx_source_end_with_structure(
   self : Parser,
-  start : Int,
-) -> (Int, String, Array[(String, @ast.TsExpr?)], Array[@ast.TsExpr]) {
+  start : Int32,
+) -> (Int32, String, Array[(String, @ast.TsExpr?)], Array[@ast.TsExpr]) {
   let (end, embeds) = self.scan_jsx_source_end_with_embeds(start)
   let (tag, attrs, attr_embed_count) = self.parse_jsx_opening_tag(start)
   // The first `attr_embed_count` embeds came from attribute values;
@@ -1730,8 +1730,8 @@ fn Parser::scan_jsx_source_end_with_structure(
 /// Falls back to empty results when the opening shape is malformed.
 fn Parser::parse_jsx_opening_tag(
   self : Parser,
-  start : Int,
-) -> (String, Array[(String, @ast.TsExpr?)], Int) {
+  start : Int32,
+) -> (String, Array[(String, @ast.TsExpr?)], Int32) {
   let attrs : Array[(String, @ast.TsExpr?)] = []
   let mut attr_embeds = 0
   let mut i = start
@@ -1898,8 +1898,8 @@ fn Parser::parse_jsx_opening_tag(
 /// validates calls / type mismatches inside braces.
 fn Parser::scan_jsx_source_end_with_embeds(
   self : Parser,
-  start : Int,
-) -> (Int, Array[@ast.TsExpr]) {
+  start : Int32,
+) -> (Int32, Array[@ast.TsExpr]) {
   let embeds : Array[@ast.TsExpr] = []
   let mut i = start
   let mut depth = 0
@@ -2090,7 +2090,7 @@ fn Parser::is_source_word_char(_self : Parser, c : Char) -> Bool {
 }
 
 ///|
-fn Parser::is_source_word_apostrophe(self : Parser, idx : Int) -> Bool {
+fn Parser::is_source_word_apostrophe(self : Parser, idx : Int32) -> Bool {
   if idx <= 0 || idx + 1 >= self.src.length() {
     return false
   }
@@ -2100,7 +2100,7 @@ fn Parser::is_source_word_apostrophe(self : Parser, idx : Int) -> Bool {
 }
 
 ///|
-fn Parser::skip_source_line_comment(self : Parser, idx : Int) -> Int {
+fn Parser::skip_source_line_comment(self : Parser, idx : Int32) -> Int32 {
   let mut i = idx + 2
   while i < self.src.length() {
     let c = self.src[i].to_int().unsafe_to_char()
@@ -2113,7 +2113,7 @@ fn Parser::skip_source_line_comment(self : Parser, idx : Int) -> Int {
 }
 
 ///|
-fn Parser::skip_source_block_comment(self : Parser, idx : Int) -> Int {
+fn Parser::skip_source_block_comment(self : Parser, idx : Int32) -> Int32 {
   let mut i = idx + 2
   while i + 1 < self.src.length() {
     if self.src[i].to_int().unsafe_to_char() == '*' &&
@@ -2126,7 +2126,7 @@ fn Parser::skip_source_block_comment(self : Parser, idx : Int) -> Int {
 }
 
 ///|
-fn Parser::skip_jsx_braces_in_source(self : Parser, idx : Int) -> Int {
+fn Parser::skip_jsx_braces_in_source(self : Parser, idx : Int32) -> Int32 {
   let mut i = idx + 1
   let mut depth = 1
   let mut quote : Char? = None
@@ -2206,8 +2206,8 @@ fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
 /// flat `embeds` list produced by the legacy scanner.
 fn Parser::parse_jsx_element_at_source(
   self : Parser,
-  start : Int,
-) -> (Int, @ast.TsExpr)? {
+  start : Int32,
+) -> (Int32, @ast.TsExpr)? {
   if start >= self.src.length() ||
     self.src[start].to_int().unsafe_to_char() != '<' {
     return None
@@ -2268,8 +2268,8 @@ fn Parser::parse_jsx_element_at_source(
 /// as a parse failure.
 fn Parser::parse_jsx_opening_header(
   self : Parser,
-  start : Int,
-) -> (Int, String, Array[(String, @ast.TsExpr?)], Bool) {
+  start : Int32,
+) -> (Int32, String, Array[(String, @ast.TsExpr?)], Bool) {
   let attrs : Array[(String, @ast.TsExpr?)] = []
   let mut i = start
   if i >= self.src.length() || self.src[i].to_int().unsafe_to_char() != '<' {
@@ -2463,9 +2463,9 @@ fn Parser::parse_jsx_opening_header(
 /// `<` and the assembled children list. `None` on malformed input.
 fn Parser::parse_jsx_children(
   self : Parser,
-  start : Int,
+  start : Int32,
   closing_tag : String,
-) -> (Int, Array[@ast.TsExpr])? {
+) -> (Int32, Array[@ast.TsExpr])? {
   let children : Array[@ast.TsExpr] = []
   let mut i = start
   let mut text_start = i
@@ -2533,9 +2533,9 @@ fn Parser::parse_jsx_children(
 /// right after `>` on success, `None` if the source doesn't match.
 fn Parser::skip_jsx_closing_tag(
   self : Parser,
-  start : Int,
+  start : Int32,
   tag : String,
-) -> Int? {
+) -> Int32? {
   let mut i = start
   if i + 1 >= self.src.length() ||
     self.src[i].to_int().unsafe_to_char() != '<' ||

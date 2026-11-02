@@ -10,7 +10,7 @@
 // override stdlib utility shapes per-module.
 pub fn module_alias_resolver(
   module_ : @ast.TsModule,
-  include_standard? : Bool = true,
+  include_standard~ : Bool = true,
 ) -> (String) -> AliasBinding? {
   let table : Map[String, AliasBinding] = if include_standard {
     standard_utility_types()
@@ -50,10 +50,10 @@ pub fn is_assignable_to_with_generics(
 // tree); we permit up to this many nested expansions of the same alias
 // name before collapsing to `Any`. 16 is enough for typical real-world
 // JSON / DOM / virtual-tree shapes while still bounding work.
-let alias_expansion_depth_limit : Int = 16
+let alias_expansion_depth_limit : Int32 = 16
 
 ///|
-fn visited_count(visited : Array[String], name : String) -> Int {
+fn visited_count(visited : Array[String], name : String) -> Int32 {
   let mut n = 0
   for v in visited {
     if v == name {

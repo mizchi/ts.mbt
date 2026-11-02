@@ -33,7 +33,7 @@ fn is_array_like_iterable_name(name : String) -> Bool {
 ///|
 // Position of the single `Rest(...)` element inside a tuple, if any. TS
 // allows at most one variadic element per tuple type (e.g. `[A, ...B[], C]`).
-fn tuple_rest_index(items : Array[@ast.TsType]) -> Int? {
+fn tuple_rest_index(items : Array[@ast.TsType]) -> Int32? {
   for i in 0..<items.length() {
     match items[i] {
       Rest(_) => return Some(i)
@@ -315,11 +315,11 @@ fn literal_matches_template(
 // success so callers can confirm the whole input was consumed.
 fn try_match_literal_template(
   name : String,
-  pos : Int,
+  pos : Int32,
   parts : Array[String],
-  arg_idx : Int,
+  arg_idx : Int32,
   args : Array[@ast.TsType],
-) -> Int? {
+) -> Int32? {
   let part = parts[arg_idx]
   // Source must contain `part` starting at `pos`.
   if pos + part.length() > name.length() {

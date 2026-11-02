@@ -7637,7 +7637,7 @@ test "expr_check: destructuring rest pattern carries the remaining fields" {
 // tsc), so `f<T>(x: T, y: T)` called with mixed types is not a false
 // positive. A type parameter that also appears nested (`g<T>(arr: T[], x:
 // T)`) keeps first-wins inference so a genuine mismatch is still caught.
-fn ts62_issue_count(src : String) -> Int {
+fn ts62_issue_count(src : String) -> Int32 {
   let module_ = parse_module_or_empty(src)
   check_module_function_bodies(module_).length()
 }
@@ -7780,7 +7780,7 @@ test "expr_check: intrinsic-source object check still flags real mismatches" {
 // so the check is purely structural and false-positive-free — a plain `#x`,
 // a `readonly #x`, or a regular `private y` (no `#`) is not flagged.
 test "expr_check: TS18010 flags accessibility modifier on a private identifier" {
-  let flagged = fn(src : String) -> Int {
+  let flagged = fn(src : String) -> Int32 {
     let module_ = parse_module_or_empty(src)
     check_module_function_bodies(module_)
     .filter(fn(i) {
@@ -7805,7 +7805,7 @@ test "expr_check: TS18010 flags accessibility modifier on a private identifier" 
 // `__private_brand__N__constructor`; a normal `constructor` is not branded and
 // stays legal.
 test "expr_check: TS18012 flags `#constructor` private member" {
-  let flagged = fn(src : String) -> Int {
+  let flagged = fn(src : String) -> Int32 {
     let module_ = parse_module_or_empty(src)
     check_module_function_bodies(module_)
     .filter(fn(i) { i.message.contains("`#constructor` is a reserved word") })
@@ -7825,7 +7825,7 @@ test "expr_check: TS18012 flags `#constructor` private member" {
 // field is allowed — so only a non-static, non-accessor property literally
 // named `constructor` is flagged.
 test "expr_check: TS18006 flags a field named constructor" {
-  let flagged = fn(src : String) -> Int {
+  let flagged = fn(src : String) -> Int32 {
     let module_ = parse_module_or_empty(src)
     check_module_function_bodies(module_)
     .filter(fn(i) { i.message.contains("field named `constructor`") })
@@ -7844,7 +7844,7 @@ test "expr_check: TS18006 flags a field named constructor" {
 // base whose constructor references `super` (`super()`, `super.x`) is an
 // error; a derived class (or one with no `super` reference) is not flagged.
 test "expr_check: TS2335 flags super in a class with no base" {
-  let flagged = fn(src : String) -> Int {
+  let flagged = fn(src : String) -> Int32 {
     let module_ = parse_module_or_empty(src)
     check_module_function_bodies(module_)
     .filter(fn(i) { i.message.contains("can only be referenced in a derived") })
@@ -7873,7 +7873,7 @@ test "expr_check: TS2335 flags super in a class with no base" {
 // pins `T = number` from `bar`, so the later `baz: ""` mismatch surfaces;
 // consistent field types stay silent.
 test "expr_check: generic inference through object-typed parameter fields" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let decl = "function foo<T>(x: { bar: T; baz: T }) { return x; }\n"
@@ -7894,7 +7894,7 @@ test "expr_check: generic inference through object-typed parameter fields" {
 // `T` is expected is a TS2345 (`T` could be instantiated to a non-nullable
 // type). Non-strict files keep the permissive null rule.
 test "expr_check: null/undefined is not assignable to a bare type parameter (strict)" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("not assignable to type parameter") })
     .length()
@@ -7929,7 +7929,7 @@ test "expr_check: null/undefined is not assignable to a bare type parameter (str
 // TS2322 / TS2345 regardless of strict mode. The complement of the
 // null/undefined rule above; together they cover "non-`T` value -> bare `T`".
 test "expr_check: a literal is not assignable to a bare type parameter" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("not assignable to type parameter") })
     .length()
@@ -7969,7 +7969,7 @@ test "expr_check: a literal is not assignable to a bare type parameter" {
 // signatures, and by object-literal call signatures are NOT mistaken for
 // out-of-scope references — keeping the check false-positive-free.
 test "expr_check: out-of-scope single-letter type parameter (TS2304)" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("cannot find name") })
     .length()
@@ -8001,7 +8001,7 @@ test "expr_check: out-of-scope single-letter type parameter (TS2304)" {
 // type parameters, unresolved names, and inference-union formals are skipped
 // to stay false-positive-free.
 test "expr_check: function-type parameter mismatch (contravariance)" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("expected") })
     .length()
@@ -8057,7 +8057,7 @@ test "expr_check: function-type parameter mismatch (contravariance)" {
 // parameter / return types are incompatible with the expected constructor
 // type is flagged, mirroring the function-type check.
 test "expr_check: constructor-type return mismatch" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("expected") })
     .length()
@@ -8085,7 +8085,7 @@ test "expr_check: constructor-type return mismatch" {
 // (which inlines a constrained type parameter to its ultimate bound), so a
 // reference that is still a bare type parameter here is genuinely unrelated.
 test "expr_check: unrelated type-parameter assignment (TS2322)" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("expected") })
     .length()
@@ -8110,7 +8110,7 @@ test "expr_check: unrelated type-parameter assignment (TS2322)" {
 // silent. Relies on the parser capturing call/new type arguments in a
 // `TypeArgs` wrapper.
 test "expr_check: type arguments on non-generic callee (TS2558)" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("type argument") })
     .length()
@@ -8142,7 +8142,7 @@ test "expr_check: type arguments on non-generic callee (TS2558)" {
 
 ///|
 test "expr_check: too many type arguments on generic callee (TS2558)" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("type argument") })
     .length()
@@ -8176,7 +8176,7 @@ test "expr_check: too many type arguments on generic callee (TS2558)" {
 // bounds on `TsFunc` / `TsClassDecl` and threading them to the checker, plus
 // the `TypeArgs` wrapper capturing the call's type arguments.
 test "expr_check: TS2344 constraint violation on explicit type args" {
-  let constraint_issues = fn(src : String) -> Int {
+  let constraint_issues = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("constraint") })
     .length()
@@ -8339,7 +8339,7 @@ test "expr_check: class field computed key references" {
 // property access. A literal LHS (`1 >>= 2`) is flagged; reference targets and
 // property/index accesses are left silent.
 test "expr_check: TS2364 literal assignment target" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   assert_true(issues("1 >>= 2;") > 0)
@@ -8355,7 +8355,7 @@ test "expr_check: TS2364 literal assignment target" {
 // and value keywords (`undefined`, `this`) are all left silent — the check
 // only fires for a provably undeclared base.
 test "expr_check: TS2304 typeof over undefined name" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   assert_true(issues("var v: typeof A;") > 0)
@@ -8374,7 +8374,7 @@ test "expr_check: TS2304 typeof over undefined name" {
 test "expr_check: TS2322 literal not assignable to literal target" {
   // Permissive helper: matches the CLI / conformance path, where the
   // widening-suppression this feature works around is active.
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("let x: \"a\" = \"b\";") > 0)
@@ -8395,7 +8395,7 @@ test "expr_check: TS2322 literal not assignable to literal target" {
 // an enum-typed target. Numeric values, the same enum, and `null` /
 // `undefined` (non-strict) stay silent.
 test "expr_check: enum nominality assignment target" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let prelude = "enum E { A, B }\nvar e: E;\n"
@@ -8417,7 +8417,7 @@ test "expr_check: enum nominality assignment target" {
 // `Box<string>`) and identical instantiations stay silent. This relaxes the
 // blanket `Applied` bail in `check_expr_against`.
 test "expr_check: covariant generic instantiation mismatch" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let pre = "interface Box<T> { v: T }\n"
@@ -8443,7 +8443,7 @@ test "expr_check: covariant generic instantiation mismatch" {
 // so assigning one to a callable-typed target (`() => void`, `new () => A`) is
 // a real mismatch. Callable-to-callable shapes still stay silent.
 test "expr_check: primitive not assignable to callable type" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("var f: () => void;\nf = 5;") > 0)
@@ -8458,7 +8458,7 @@ test "expr_check: primitive not assignable to callable type" {
 // primitive, or an object missing a part's members) is a real mismatch; a
 // source satisfying all parts stays silent.
 test "expr_check: intersection target requires every part" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let pre = "declare var a: { a: string };\n"
@@ -8480,7 +8480,7 @@ test "expr_check: intersection target requires every part" {
 // an overload-bearing interface, so assigning one to such a target is a real
 // mismatch (the overloaded-shape bail otherwise stays silent).
 test "expr_check: primitive not assignable to overloaded interface" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let pre = "interface I { f(x: string): string; f(x: number): number }\n"
@@ -8493,7 +8493,7 @@ test "expr_check: primitive not assignable to overloaded interface" {
 // only assignable to / from the same class (or via inheritance). A distinct
 // structural / nominal type can never satisfy it.
 test "expr_check: private member makes a class nominal" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Source class with a private member -> structural object target: error.
@@ -8527,7 +8527,7 @@ test "expr_check: private member makes a class nominal" {
 // signature (`x = cond && (a => …)` types the arrow's params). The left
 // operand of `||` / `??` is the guarded value and is not checked.
 test "expr_check: logical operator propagates contextual type to rhs" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // The arrow body assigns its (contextually `string`) param to a `number`.
@@ -8551,7 +8551,7 @@ test "expr_check: logical operator propagates contextual type to rhs" {
 // (`foo(<T>(x, y) => '')` against `{ (x: T): string; (x: T, y?: T): string }`
 // -- the 1-param overload supplies no `y`).
 test "expr_check: function value arity vs overloaded call signature" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let overloaded = "function foo<T>(cb: { (x: T): string; (x: T, y?: T): string }) { return cb }\n"
@@ -8576,7 +8576,7 @@ test "expr_check: function value arity vs overloaded call signature" {
 // constructor value that requires more parameters than a `<new>` overload
 // provides can't implement it.
 test "expr_check: constructor value arity vs overloaded construct signature" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let pre = "function foo<T>(cb: { new (x: T): string; new (x: T, y?: T): string }) { return cb }\n"
@@ -8596,7 +8596,7 @@ test "expr_check: constructor value arity vs overloaded construct signature" {
 // requiring more arguments than the base signature provides incorrectly
 // extends it (a base-typed caller would invoke it with too few args).
 test "expr_check: interface extends with too many required params" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let base = "interface Base { a: () => number }\n"
@@ -8651,7 +8651,7 @@ test "expr_check: interface extends with too many required params" {
 // different generic instantiation is caught. Only bidirectionally-incompatible
 // pairs are flagged, so covariant / assignable cases stay silent.
 test "expr_check: generic interface instantiation mismatch" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let box = "interface Box<T> { value: T }\n"
@@ -8688,7 +8688,7 @@ test "expr_check: generic interface instantiation mismatch" {
 // Forwarded (in-scope) type parameters, `infer` markers, and union arguments
 // abstain so the check stays false-positive-free.
 test "expr_check: type-argument constraint violation (TS2344)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let a = "type A<T extends string> = T;\n"
@@ -8724,7 +8724,7 @@ test "expr_check: type-argument constraint violation (TS2344)" {
 // receiver, compound, or increment) is an error. A writable `#`-field stays
 // silent (it lives in `properties`, not `methods`).
 test "expr_check: assignment to a private method (TS2803)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Assign to a private method through `this` / another receiver.
@@ -8761,7 +8761,7 @@ test "expr_check: assignment to a private method (TS2803)" {
 // error; nested/anonymous classes (different brand) are not judged, so a nested
 // class legally reaching an outer private never false-flags.
 test "expr_check: private identifier not declared in enclosing class" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Reference to a `#`-name the class does not declare -> flagged.
@@ -8788,7 +8788,7 @@ test "expr_check: private identifier not declared in enclosing class" {
 // allowed in an abstract class (TS1244); `private` cannot combine with
 // `abstract` (TS1243). Valid abstract members in an abstract class stay silent.
 test "expr_check: abstract member modifier rules (TS1244/TS1243)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Abstract method in a non-abstract class.
@@ -8807,7 +8807,7 @@ test "expr_check: abstract member modifier rules (TS1244/TS1243)" {
 // other class) is flagged. A public constructor and a `new` of the enclosing
 // class stay silent.
 test "expr_check: private/protected constructor accessibility (TS2673/2674)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(
@@ -8835,7 +8835,7 @@ test "expr_check: private/protected constructor accessibility (TS2673/2674)" {
 // method `m` has a concrete non-void return type. Expression-bodied arrows and
 // methods returning void stay silent.
 test "expr_check: void function assigned to non-void class method" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Instance (prototype) and static method with number return + void arrow.
@@ -8870,7 +8870,7 @@ test "expr_check: void function assigned to non-void class method" {
 // checked against an intersection target's parts. Incompatible parts (a
 // differing literal property) are flagged; a compatible assignment stays silent.
 test "expr_check: intersection source assignability (TS2322)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `{t?:'A'} & {a}` is not assignable to `{t?:'B'} & {a}`.
@@ -8894,7 +8894,7 @@ test "expr_check: intersection source assignability (TS2322)" {
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
 test "expr_check: circular type-parameter constraint (TS2313)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("function f<T extends T>() {}") > 0)
@@ -8915,7 +8915,7 @@ test "expr_check: circular type-parameter constraint (TS2313)" {
 // `(a: void) => R` is assignable to `() => R`. The arity check must not flag
 // the value as "requires 1 argument" against a parameter-less target.
 test "expr_check: void parameter is omittable for arity" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   @test.assert_eq(
@@ -8934,7 +8934,7 @@ test "expr_check: void parameter is omittable for arity" {
 // is flagged; a compatible signature stays silent. Signatures involving
 // intersections / generic instantiations abstain.
 test "expr_check: callable value assignment compares signatures" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Return-type mismatch between two function-typed values.
@@ -8965,7 +8965,7 @@ test "expr_check: callable value assignment compares signatures" {
 // implement each of them. An abstract subclass, or a concrete class that
 // implements the member, stays silent.
 test "expr_check: non-abstract class must implement abstract members" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let base = "abstract class B { abstract foo(): void; bar(): void {} }\n"
@@ -8987,7 +8987,7 @@ test "expr_check: non-abstract class must implement abstract members" {
 // form. A wrong-typed argument to a known primitive method is flagged; correct
 // args and unknown (`any`) receivers stay silent.
 test "expr_check: TS2345 computed method-call argument" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("var x = \"\";\nx[\"charAt\"](\"bad\");") > 0)
@@ -9001,7 +9001,7 @@ test "expr_check: TS2345 computed method-call argument" {
 // argument incompatible with the supplied type is a TS2345 — independent of
 // what inference would have derived from the arguments.
 test "expr_check: explicit type-argument call argument mismatch" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("function f<T>(t: T) { return t; }\nf<string>(1);") > 0)
@@ -9014,7 +9014,7 @@ test "expr_check: explicit type-argument call argument mismatch" {
 // class-like standard-library type (`Date`, `RegExp`), but still widens to its
 // wrapper interface (`Number`, `String`) and into the universal `Object`.
 test "expr_check: primitive not assignable to lib class type" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("let x: Date = 1;") > 0)
@@ -9028,7 +9028,7 @@ test "expr_check: primitive not assignable to lib class type" {
 // constructor's parameters just as they do for a function call, so
 // `new C<string>(1)` rejects the numeric constructor argument.
 test "expr_check: explicit type-argument constructor argument mismatch" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(
@@ -9050,7 +9050,7 @@ test "expr_check: explicit type-argument constructor argument mismatch" {
 // It is an error on a free function, arrow, non-constructor method, or a
 // call / construct signature; a real constructor parameter list stays silent.
 test "expr_check: parameter property outside a constructor (TS2369)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Free function, arrow, non-constructor method: each is an error.
@@ -9076,7 +9076,7 @@ test "expr_check: parameter property outside a constructor (TS2369)" {
 // `===` / `!==`, however, is always permitted (the canonical loose null
 // check) and never trips the TS2367 "always false" check.
 test "expr_check: nullish keyword in arithmetic / relational / equality" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `undefined` in an arithmetic operand -> TS18050.
@@ -9102,7 +9102,7 @@ test "expr_check: nullish keyword in arithmetic / relational / equality" {
 // everywhere again. The `strict_null_checks` flag (parsed from the header)
 // gates this; `void` in particular accepts `undefined` but never `null`.
 test "expr_check: nullish literal assignability gated on strictNullChecks" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Default (strict): null/undefined not assignable to a non-nullable target.
@@ -9133,7 +9133,7 @@ test "expr_check: nullish literal assignability gated on strictNullChecks" {
 // undefined/null". Narrowing guards (`if (x)`, `typeof`, `=== undefined`
 // early return, `??=`) remove the nullish part and must stay silent.
 test "expr_check: possibly-undefined member access (TS18048) + narrowing" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Unguarded access on a possibly-undefined value -> flagged.
@@ -9183,7 +9183,7 @@ test "expr_check: possibly-undefined member access (TS18048) + narrowing" {
 // undefined), `!x` early return, and `&&` / `||` short-circuits in expression
 // position (`x && x.foo`, `!x || x.foo`).
 test "expr_check: narrowing guards suppress possibly-undefined (TS18048)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Loose `!= null` removes both null and undefined.
@@ -9223,7 +9223,7 @@ test "expr_check: narrowing guards suppress possibly-undefined (TS18048)" {
 // receiver, and `typeof x === \`tmpl\`` (a no-substitution template literal)
 // narrows the same as the quoted string form.
 test "expr_check: possibly-undefined method call + template-literal typeof" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Method call on a possibly-undefined value -> flagged.
@@ -9261,7 +9261,7 @@ test "expr_check: possibly-undefined method call + template-literal typeof" {
 // (where `x` is `undefined`) was unioned back at the merge point and produced
 // a spurious "object is possibly undefined" on the subsequent use.
 test "expr_check: continue / break narrow the loop-body fall-through (TS18048)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `continue` on the nullish branch -> rest of the iteration is non-nullish.
@@ -9327,7 +9327,7 @@ test "expr_check: continue / break narrow the loop-body fall-through (TS18048)" 
 // and `null` / `undefined` are always falsy — so a non-nullish rhs strips the
 // nullish part exactly like `??=`. `x ||= "d"; x.length` must be silent.
 test "expr_check: `||=` strips nullish from the lhs (TS18048)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   @test.assert_eq(
@@ -9358,7 +9358,7 @@ test "expr_check: `||=` strips nullish from the lhs (TS18048)" {
 // must be silent. `do { … } while (cond)` must NOT narrow the body — the body
 // runs once before the condition is ever tested.
 test "expr_check: loop-condition narrows the body (TS18048)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `while` condition narrows the body.
@@ -9409,7 +9409,7 @@ test "expr_check: loop-condition narrows the body (TS18048)" {
 // truthy effect, the alternative the falsy one. `x !== undefined ? x.foo : 0`
 // must be silent in both contextual (`return`) and statement positions.
 test "expr_check: ternary branches are narrowed by the condition (TS18048)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Contextual position (checked against the declared return type).
@@ -9446,7 +9446,7 @@ test "expr_check: ternary branches are narrowed by the condition (TS18048)" {
 // TS17009: in a derived-class constructor, `this` must not be accessed before
 // `super(...)`. Sound, conservative detection — see `check_super_before_this`.
 test "expr_check: super must be called before this in derived ctor (TS17009)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Bare `this` before `super()` -> flagged.
@@ -9552,7 +9552,7 @@ test "expr_check: super must be called before this in derived ctor (TS17009)" {
 ///|
 // TS2414: a class name cannot be a predefined type keyword.
 test "expr_check: reserved class name (TS2414)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("class any {}") > 0)
@@ -9566,7 +9566,7 @@ test "expr_check: reserved class name (TS2414)" {
 ///|
 // TS2611: overriding a base-class data property with an accessor.
 test "expr_check: property overridden as accessor (TS2611)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Base data property `p`, derived overrides with `get` -> flagged.
@@ -9615,7 +9615,7 @@ test "expr_check: property overridden as accessor (TS2611)" {
 ///|
 // TS1014: a rest parameter must be last in the parameter list.
 test "expr_check: rest parameter must be last (TS1014)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("function f(...x: number[], ...y: number[]) {}") > 0)
@@ -9630,7 +9630,7 @@ test "expr_check: rest parameter must be last (TS1014)" {
 // always false. Pure literal sets only (flattening nested discriminant unions);
 // any `string` / `Named` / residue member keeps it silent.
 test "expr_check: literal-union disjoint comparison (TS2367/TS2678)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Discriminant `===` against a value not in the union.
@@ -9681,7 +9681,7 @@ test "expr_check: literal-union disjoint comparison (TS2367/TS2678)" {
 ///|
 // TS1267 / TS1245: abstract members cannot carry an initializer / implementation.
 test "expr_check: abstract member with init/impl (TS1267/TS1245)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("abstract class C { abstract prop: number = 1; }") > 0)
@@ -9694,7 +9694,7 @@ test "expr_check: abstract member with init/impl (TS1267/TS1245)" {
 // Tuple-arity in call-argument position: too many elements is a hard error even
 // with optional/rest params; a `...rest` target slot makes the length open.
 test "expr_check: tuple too-many vs variadic target (TS2345)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Fixed-length tuple param, too many elements -> flagged.
@@ -9712,7 +9712,7 @@ test "expr_check: tuple too-many vs variadic target (TS2345)" {
 // Field-type inference from a primitive-literal initializer: an unannotated
 // field `x = 1` is `number`, so `this.x = "s"` is a TS2322.
 test "expr_check: inferred primitive field assignment (TS2322)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("class C { a = 1; m() { this.a = \"s\"; } }") > 0)
@@ -9727,7 +9727,7 @@ test "expr_check: inferred primitive field assignment (TS2322)" {
 // TS2790: the operand of `delete` must be an optional property (under
 // strictNullChecks); deleting a private name is never allowed.
 test "expr_check: delete operand must be optional (TS2790)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Required field, strictNullChecks -> flagged.
@@ -9761,7 +9761,7 @@ test "expr_check: delete operand must be optional (TS2790)" {
 // TS2322: null / undefined are not assignable to an enum type under
 // strictNullChecks.
 test "expr_check: null/undefined to enum (TS2322)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(
@@ -9787,7 +9787,7 @@ test "expr_check: null/undefined to enum (TS2322)" {
 // TS2322: a bare unconstrained type parameter is not assignable to a concrete
 // object type. Constrained type params / any / T-to-T stay silent.
 test "expr_check: unconstrained type param to object type (TS2322)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("function f<T>(a: T) { let b: { s: number } = a; }") > 0)
@@ -9811,7 +9811,7 @@ test "expr_check: unconstrained type param to object type (TS2322)" {
 // TS2322: under strictNullChecks, a union value still carrying undefined/null
 // is not assignable to a target that does not accept it.
 test "expr_check: residual nullish union not assignable (TS2322)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(
@@ -9845,7 +9845,7 @@ test "expr_check: residual nullish union not assignable (TS2322)" {
 ///|
 // TS2539: `undefined` is not an assignable variable.
 test "expr_check: cannot assign to undefined (TS2539)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("var x = undefined = null;") > 0)
@@ -9856,7 +9856,7 @@ test "expr_check: cannot assign to undefined (TS2539)" {
 ///|
 // TS1228: a type predicate is only allowed in return-type position.
 test "expr_check: misplaced type predicate (TS1228)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("var x: this is string;") > 0)
@@ -9870,7 +9870,7 @@ test "expr_check: misplaced type predicate (TS1228)" {
 
 ///|
 test "expr_check: class named with predefined-type keyword (TS2414)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A class whose name is a predefined-type keyword is always a TS error.
@@ -9886,7 +9886,7 @@ test "expr_check: class named with predefined-type keyword (TS2414)" {
 
 ///|
 test "expr_check: type alias named with predefined-type keyword (TS2457)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A type alias whose name is a predefined-type keyword is always a TS error.
@@ -9900,7 +9900,7 @@ test "expr_check: type alias named with predefined-type keyword (TS2457)" {
 
 ///|
 test "expr_check: parameter optional marker plus initializer (TS1015)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A parameter cannot be both optional and have an initializer.
@@ -9914,7 +9914,7 @@ test "expr_check: parameter optional marker plus initializer (TS1015)" {
 
 ///|
 test "expr_check: multiple constructor implementations (TS2392)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Two constructor implementations (both with bodies) is an error.
@@ -9934,7 +9934,7 @@ test "expr_check: multiple constructor implementations (TS2392)" {
 
 ///|
 test "expr_check: accessibility modifier on index signature (TS1071)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // An accessibility modifier on an index signature is always an error.
@@ -9947,7 +9947,7 @@ test "expr_check: accessibility modifier on index signature (TS1071)" {
 
 ///|
 test "expr_check: abstract method with implementation (TS1245)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // An abstract method that carries a body is always an error.
@@ -9960,7 +9960,7 @@ test "expr_check: abstract method with implementation (TS1245)" {
 
 ///|
 test "expr_check: inherited constructor arity (TS2554)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A derived class with no own constructor inherits the base's signature;
@@ -9987,7 +9987,7 @@ test "expr_check: inherited constructor arity (TS2554)" {
 
 ///|
 test "expr_check: unimplemented inherited abstract member (TS2515)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A non-abstract class that does not implement an inherited abstract member.
@@ -10013,7 +10013,7 @@ test "expr_check: unimplemented inherited abstract member (TS2515)" {
 
 ///|
 test "expr_check: field initializer references constructor parameter (TS2301/2844)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A bare field initializer referencing a constructor parameter is an error.
@@ -10034,7 +10034,7 @@ test "expr_check: field initializer references constructor parameter (TS2301/284
 
 ///|
 test "expr_check: duplicate private name and nested-class duplicates" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A private name declared as both a field and a method is a duplicate
@@ -10052,7 +10052,7 @@ test "expr_check: duplicate private name and nested-class duplicates" {
 
 ///|
 test "expr_check: method/accessor override mismatch (TS2423/2426)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Base method overridden by a derived accessor (TS2423).
@@ -10075,7 +10075,7 @@ test "expr_check: method/accessor override mismatch (TS2423/2426)" {
 
 ///|
 test "expr_check: base accessor overridden by derived property (TS2610)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A base accessor overridden by a data property is an error, and it is
@@ -10114,7 +10114,7 @@ test "expr_check: base accessor overridden by derived property (TS2610)" {
 
 ///|
 test "expr_check: super property access before super() call (TS17011)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `super.x()` before `super()` in a derived constructor is an error.
@@ -10135,7 +10135,7 @@ test "expr_check: super property access before super() call (TS17011)" {
 
 ///|
 test "expr_check: parameter property in ambient declare class (TS2369)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A parameter property in an ambient `declare class` member signature has no
@@ -10150,7 +10150,7 @@ test "expr_check: parameter property in ambient declare class (TS2369)" {
 
 ///|
 test "expr_check: overload signatures mixing static and instance (TS2387/2388)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Bodyless overload signatures of the same name mixing static and instance.
@@ -10180,7 +10180,7 @@ test "expr_check: overload signatures mixing static and instance (TS2387/2388)" 
 
 ///|
 test "expr_check: overload signature with no implementation (TS2391)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A bodyless method with no implementation in a runtime class is TS2391.
@@ -10200,7 +10200,7 @@ test "expr_check: overload signature with no implementation (TS2391)" {
 
 ///|
 test "expr_check: field-init-order (TS2729) via full permissive pipeline" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A field initializer reading a *later* field that has its own initializer
@@ -10231,7 +10231,7 @@ test "expr_check: field-init-order (TS2729) via full permissive pipeline" {
 
 ///|
 test "expr_check: property on some-but-not-all union members (TS2339)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A property present on only some members of a union is a TS2339 on a simple
@@ -10279,7 +10279,7 @@ test "expr_check: property on some-but-not-all union members (TS2339)" {
 
 ///|
 test "expr_check: numeric / enum discriminant narrowing (switch + if)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A numeric-discriminated union narrowed by `switch (v.k)` must let each
@@ -10317,7 +10317,7 @@ test "expr_check: numeric / enum discriminant narrowing (switch + if)" {
 
 ///|
 test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A string literal that the pattern cannot produce is a mismatch.
@@ -10334,7 +10334,7 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 
 ///|
 test "expr_check: type parameter used as base (TS2304)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A class / interface extending one of its own type parameters is TS2304.
@@ -10347,7 +10347,7 @@ test "expr_check: type parameter used as base (TS2304)" {
 
 ///|
 test "expr_check: read of setter-only private accessor (TS2806)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Reading a private accessor defined with a setter but no getter is TS2806.
@@ -10371,7 +10371,7 @@ test "expr_check: read of setter-only private accessor (TS2806)" {
 
 ///|
 test "expr_check: static private member not on class (TS2339)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A private name accessed on the static side of a class that doesn't declare
@@ -10405,7 +10405,7 @@ test "expr_check: static private member not on class (TS2339)" {
 
 ///|
 test "expr_check: statement in class body (TS1128)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A `var`/`function` statement in a class body (declaration and expression).
@@ -10440,7 +10440,7 @@ test "expr_check: statement in class body (TS1128)" {
 
 ///|
 test "expr_check: class-expression structural diagnostics" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Class *expressions* now surface the same class-body structural errors as
@@ -10462,7 +10462,7 @@ test "expr_check: class-expression structural diagnostics" {
 
 ///|
 test "expr_check: async-before-static modifier order (TS1029)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `async static` (wrong order) is TS1029 — in a class declaration and a
@@ -10478,7 +10478,7 @@ test "expr_check: async-before-static modifier order (TS1029)" {
 
 ///|
 test "expr_check: constructor overload accessibility mismatch (TS2385)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Constructor overload signatures with inconsistent accessibility are TS2385.
@@ -10513,7 +10513,7 @@ test "expr_check: constructor overload accessibility mismatch (TS2385)" {
 
 ///|
 test "expr_check: parameter initializer in interface signature (TS2371)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A parameter initializer in an interface method / call signature is illegal
@@ -10529,7 +10529,7 @@ test "expr_check: parameter initializer in interface signature (TS2371)" {
 
 ///|
 test "expr_check: accessibility modifier on interface member (TS1070)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `private` / `public` / `protected` are never valid on a type member.
@@ -10559,7 +10559,7 @@ test "expr_check: accessibility modifier on interface member (TS1070)" {
 
 ///|
 test "expr_check: string literal vs string-literal union, call args (TS2345)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A string literal not in the union, passed as a call argument, is flagged
@@ -10586,7 +10586,7 @@ test "expr_check: string literal vs string-literal union, call args (TS2345)" {
 
 ///|
 test "expr_check: string literal vs intrinsic string-mapping type (TS2322)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A literal that violates the case constraint of the mapping is a mismatch.
@@ -10607,7 +10607,7 @@ test "expr_check: string literal vs intrinsic string-mapping type (TS2322)" {
 
 ///|
 test "expr_check: generic constraint on runtime declaration (TS2344)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A runtime `let`/`const`/`var` is retained as a statement, not lowered into
@@ -10630,7 +10630,7 @@ test "expr_check: generic constraint on runtime declaration (TS2344)" {
 
 ///|
 test "expr_check: capitalized-primitive type misspelling (TS2304)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `Null` / `Undefined` are never valid TS type names (the primitives spell
@@ -10651,7 +10651,7 @@ test "expr_check: capitalized-primitive type misspelling (TS2304)" {
 
 ///|
 test "expr_check: static index signature referencing class type parameter (TS2302)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains(
@@ -10676,7 +10676,7 @@ test "expr_check: static index signature referencing class type parameter (TS230
 
 ///|
 test "expr_check: const modifier on interface/type-alias type parameter (TS1277)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains(
@@ -10702,7 +10702,7 @@ test "expr_check: const modifier on interface/type-alias type parameter (TS1277)
 
 ///|
 test "expr_check: required tuple element after optional (TS1257)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains(
@@ -10726,7 +10726,7 @@ test "expr_check: required tuple element after optional (TS1257)" {
 
 ///|
 test "expr_check: object-type members on same line without separator (TS1005)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("`;` expected") {
@@ -10749,7 +10749,7 @@ test "expr_check: object-type members on same line without separator (TS1005)" {
 
 ///|
 test "expr_check: always-truthy left operand of && (TS2872)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("this kind of expression is always truthy") {
@@ -10783,7 +10783,7 @@ test "expr_check: always-truthy left operand of && (TS2872)" {
 
 ///|
 test "expr_check: always-falsy left operand of || (TS2873)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("this kind of expression is always falsy") {
@@ -10810,7 +10810,7 @@ test "expr_check: always-falsy left operand of || (TS2873)" {
 
 ///|
 test "expr_check: intrinsic string-mapping type with non-string arg (TS2344)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("does not satisfy the `S` constraint") {
@@ -10835,7 +10835,7 @@ test "expr_check: intrinsic string-mapping type with non-string arg (TS2344)" {
 
 ///|
 test "expr_check: exported var initializer is walked; opaque target abstains" {
-  let count = fn(src : String, needle : String) -> Int {
+  let count = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains(needle) {
@@ -10872,7 +10872,7 @@ test "expr_check: exported var initializer is walked; opaque target abstains" {
 
 ///|
 test "expr_check: class/interface merge with conflicting modifiers (TS2687)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("must have identical modifiers") {
@@ -10909,7 +10909,7 @@ test "expr_check: class/interface merge with conflicting modifiers (TS2687)" {
 
 ///|
 test "expr_check: bare reference to generic without type arguments (TS2314)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("generic type requires") {
@@ -10944,7 +10944,7 @@ test "expr_check: bare reference to generic without type arguments (TS2314)" {
 
 ///|
 test "expr_check: circular type alias through typeof value query (TS2456)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("resolves to itself") {
@@ -10963,7 +10963,7 @@ test "expr_check: circular type alias through typeof value query (TS2456)" {
 
 ///|
 test "expr_check: type assertion between primitive and object (TS2352)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("neither type sufficiently overlaps") {
@@ -11006,7 +11006,7 @@ test "expr_check: type assertion between primitive and object (TS2352)" {
 
 ///|
 test "expr_check: enum property under string index signature (TS2411)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("is not assignable to") &&
@@ -11042,7 +11042,7 @@ test "expr_check: enum property under string index signature (TS2411)" {
 
 ///|
 test "expr_check: abstract method accessed via super (TS2513)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("cannot be accessed via super expression") {
@@ -11085,7 +11085,7 @@ test "expr_check: abstract method accessed via super (TS2513)" {
 
 ///|
 test "expr_check: class extends a plain function (TS2507)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("is not a constructor function type") {
@@ -11109,7 +11109,7 @@ test "expr_check: class extends a plain function (TS2507)" {
 
 ///|
 test "expr_check: function-valued expression bodies are walked" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Undefined names inside non-contextual callable bodies are flagged.
@@ -11153,7 +11153,7 @@ test "expr_check: function-valued expression bodies are walked" {
 
 ///|
 test "expr_check: arguments outside any function (TS2304)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("cannot find name `arguments`") {
@@ -11180,7 +11180,7 @@ test "expr_check: arguments outside any function (TS2304)" {
 
 ///|
 test "expr_check: strict-mode eval/arguments misuse (TS1100 family)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("in strict mode") {
@@ -11224,7 +11224,7 @@ test "expr_check: strict-mode eval/arguments misuse (TS1100 family)" {
 
 ///|
 test "expr_check: increment/decrement operand type (TS2356)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("arithmetic operand") {
@@ -11248,7 +11248,7 @@ test "expr_check: increment/decrement operand type (TS2356)" {
 
 ///|
 test "expr_check: computed property name type (TS2464)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("computed property name") {
@@ -11270,7 +11270,7 @@ test "expr_check: computed property name type (TS2464)" {
 
 ///|
 test "expr_check: decorators are not valid here (TS1206)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("decorators are not valid here") {
@@ -11299,7 +11299,7 @@ test "expr_check: decorators are not valid here (TS1206)" {
 
 ///|
 test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS1029)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2480: `let` as a let/const binding name.
@@ -11331,7 +11331,7 @@ test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS10
 
 ///|
 test "expr_check: instanceof primitive LHS, nullish arithmetic operands, generator yield names" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2358: a syntactic literal LHS of `instanceof` is never an object.
@@ -11353,7 +11353,7 @@ test "expr_check: instanceof primitive LHS, nullish arithmetic operands, generat
 
 ///|
 test "expr_check: derived index-signature compatibility (TS2415)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Concrete widening against the base indexer is flagged.
@@ -11388,7 +11388,7 @@ test "expr_check: derived index-signature compatibility (TS2415)" {
 
 ///|
 test "expr_check: nested-class private shadowing (TS18014)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // The nested class declares its own `#x`, shadowing the outer one -- an
@@ -11455,7 +11455,7 @@ test "expr_check: nested-class private shadowing (TS18014)" {
 /// else, so `yield* foo` — forgetting to CALL the generator, which is the
 /// real-world shape and `YieldExpression6_es6` — was silent.
 test "expr_check: yield* delegates to an iterable (TS2488)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // The corpus shape: the generator FUNCTION rather than a call to it.
@@ -11515,7 +11515,7 @@ test "expr_check: yield* delegates to an iterable (TS2488)" {
 
 ///|
 test "expr_check: exact spread arity (TS2554) and es6 yield function names (TS1212)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Array-literal / fixed-tuple spreads give an exact argument count.
@@ -11548,7 +11548,7 @@ test "expr_check: exact spread arity (TS2554) and es6 yield function names (TS12
 
 ///|
 test "expr_check: noImplicitAny family (TS7005/TS7006/TS7010/TS7019/TS7031)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("implicitly has an") {
@@ -11615,7 +11615,7 @@ test "expr_check: noImplicitAny family (TS7005/TS7006/TS7010/TS7019/TS7031)" {
 
 ///|
 test "expr_check: batch L — TS2307 / TS1042 / TS2703 / TS2430" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2307: an import specifier no in-file ambient module provides.
@@ -11661,7 +11661,7 @@ test "expr_check: batch L — TS2307 / TS1042 / TS2703 / TS2430" {
 
 ///|
 test "expr_check: strict yield/let bindings (TS1212) and union computed keys (TS2464)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `yield` / `let` as binding identifiers in strict contexts.
@@ -11684,7 +11684,7 @@ test "expr_check: strict yield/let bindings (TS1212) and union computed keys (TS
 
 ///|
 test "expr_check: symbol keys, template-literal values, accessor pairs (batch N)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2464: `Symbol.*` statics that are not well-known symbols.
@@ -11734,7 +11734,7 @@ test "expr_check: symbol keys, template-literal values, accessor pairs (batch N)
 
 ///|
 test "expr_check: for-of assign targets, custom iterators, `in` operands (batch O)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Assignment-form for-of checks the element against the declared target.
@@ -11766,7 +11766,7 @@ test "expr_check: for-of assign targets, custom iterators, `in` operands (batch 
 
 ///|
 test "expr_check: `object` keyword as first-class type (batch P)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2339: member existence on an `object` receiver — only the
@@ -11808,7 +11808,7 @@ test "expr_check: `object` keyword as first-class type (batch P)" {
 
 ///|
 test "expr_check: TS2304 computed type keys, export =, var annotations (batch Q)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2304: a bare-identifier computed key in a type position must resolve
@@ -11848,7 +11848,7 @@ test "expr_check: TS2304 computed type keys, export =, var annotations (batch Q)
 
 ///|
 test "expr_check: TS2411/TS2413 index-signature member compatibility (batch R)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2411: an object-shaped member vs an object-shaped index value is
@@ -11918,7 +11918,7 @@ test "expr_check: TS2411/TS2413 index-signature member compatibility (batch R)" 
 
 ///|
 test "expr_check: TS2454 computed keys, new-callee, conditional assigns (batch S)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("used before being assigned") })
     .length()
@@ -11963,7 +11963,7 @@ test "expr_check: TS2454 computed keys, new-callee, conditional assigns (batch S
 
 ///|
 test "expr_check: TS1212/TS1359 reserved binding names (batch T)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS1212 at ES2015+ targets: strict-reserved words as *binding* names.
@@ -12007,7 +12007,7 @@ test "expr_check: TS1212/TS1359 reserved binding names (batch T)" {
 
 ///|
 test "expr_check: TS2564 computed fields, index sigs, literal names (batch U)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("no initializer") })
     .length()
@@ -12041,7 +12041,7 @@ test "expr_check: TS2564 computed fields, index sigs, literal names (batch U)" {
 
 ///|
 test "expr_check: TS2300 duplicates and TS1046 dts modifiers (batch V)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2300: a function declaration and a var binding share one value space.
@@ -12091,7 +12091,7 @@ test "expr_check: TS2300 duplicates and TS1046 dts modifiers (batch V)" {
     0,
   )
   // TS1046: bare top-level declarations in a .d.ts module.
-  let dts = fn(src : String) -> Int {
+  let dts = fn(src : String) -> Int32 {
     check_dts_top_level_modifiers(parse_module_or_empty(src)).length()
   }
   assert_true(dts("enum E { A = 1 }") > 0)
@@ -12105,7 +12105,7 @@ test "expr_check: TS2300 duplicates and TS1046 dts modifiers (batch V)" {
 
 ///|
 test "expr_check: TS2394/TS2371/TS2349 overloads, non-callable tags (batch W)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2394: a scalar-returning overload over a void-annotated impl.
@@ -12152,7 +12152,7 @@ test "expr_check: TS2394/TS2371/TS2349 overloads, non-callable tags (batch W)" {
 
 ///|
 test "expr_check: leading BOM does not swallow the first statement" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("\u{FEFF}`abc${0}abc`(`hello`);") > 0)
@@ -12160,7 +12160,7 @@ test "expr_check: leading BOM does not swallow the first statement" {
 
 ///|
 test "expr_check: TS2339 namespace exports and enum members (batch X)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A declared-but-not-exported namespace member is inaccessible.
@@ -12201,7 +12201,7 @@ test "expr_check: TS2339 namespace exports and enum members (batch X)" {
 
 ///|
 test "expr_check: TS7006 uncontextual arrow params (batch Y)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // An unannotated binding gives its arrow initializer no contextual type.
@@ -12217,7 +12217,7 @@ test "expr_check: TS7006 uncontextual arrow params (batch Y)" {
 
 ///|
 test "expr_check: TS2322 unions, in-operands, static index writes (batch Z)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Mixed scalar array literals infer a union element type.
@@ -12275,7 +12275,7 @@ test "expr_check: TS2322 unions, in-operands, static index writes (batch Z)" {
 
 ///|
 test "expr_check: generator returns and destructuring assignment (batch AA)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A generator's return annotation must be iterator-like.
@@ -12327,7 +12327,7 @@ test "expr_check: generator returns and destructuring assignment (batch AA)" {
 
 ///|
 test "expr_check: TS2345 iterables vs tuples, spread elements, BigInt (batch AB)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { !i.message.contains("implicitly has an `any`") })
     .length()
@@ -12385,7 +12385,7 @@ test "expr_check: TS2345 iterables vs tuples, spread elements, BigInt (batch AB)
 
 ///|
 test "expr_check: TS2304 typeof tails, module names, dotted paths (batch AC)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A trailing dot keeps the typeof query alive so the base resolves.
@@ -12412,7 +12412,7 @@ test "expr_check: TS2304 typeof tails, module names, dotted paths (batch AC)" {
 
 ///|
 test "expr_check: Partial/Required/Readonly lattice (batch AD)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Optionality may only stay or decrease: Partial never satisfies
@@ -12459,7 +12459,7 @@ test "expr_check: Partial/Required/Readonly lattice (batch AD)" {
 
 ///|
 test "expr_check: TS2528/TS2488/override family (batch AE)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2528: multiple default exports.
@@ -12540,7 +12540,7 @@ test "expr_check: TS2528/TS2488/override family (batch AE)" {
 
 ///|
 test "expr_check: truthiness/comma/await/static-block (batch AF)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2872 / TS2873: literal ternary conditions (0 / 1 / booleans exempt).
@@ -12623,7 +12623,7 @@ test "expr_check: truthiness/comma/await/static-block (batch AF)" {
 
 ///|
 test "expr_check: spread arity, enum string arith, relational pairs (batch AG)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2556: array spread past a rest-less parameter list, or an iterator
@@ -12683,7 +12683,7 @@ test "expr_check: spread arity, enum string arith, relational pairs (batch AG)" 
 
 ///|
 test "expr_check: identity keys and union callee arity (batch AH)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2403 via structural identity keys: function-type unions vs a
@@ -12768,7 +12768,7 @@ test "expr_check: union callable arity preserves source optional syntax" {
 
 ///|
 test "expr_check: TS2352 cast overlap (batch AI)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Cross-family primitive casts are definite mistakes.
@@ -12811,7 +12811,7 @@ test "expr_check: TS2352 cast overlap (batch AI)" {
 
 ///|
 test "expr_check: destructuring literal misses and globalThis (batch AJ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2339: non-defaulted pattern properties missing from a syntactic
@@ -12848,7 +12848,7 @@ test "expr_check: destructuring literal misses and globalThis (batch AJ)" {
 
 ///|
 test "expr_check: static-block TDZ, spread overwrite, enum readonly, await type (batch AK)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2448: a static block using a block-scoped variable declared later.
@@ -12899,7 +12899,7 @@ test "expr_check: static-block TDZ, spread overwrite, enum readonly, await type 
 
 ///|
 test "expr_check: wrapper primitives, construct sigs, index values, templates (batch AL)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Wrapper object -> primitive is an error; the reverse flows.
@@ -12956,7 +12956,7 @@ test "expr_check: wrapper primitives, construct sigs, index values, templates (b
 
 ///|
 test "expr_check: abstract ctor typeof, iterable spreads/assign (batch AM)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2322: abstract constructor into a non-abstract `typeof` slot.
@@ -12992,7 +12992,7 @@ test "expr_check: abstract ctor typeof, iterable spreads/assign (batch AM)" {
 
 ///|
 test "expr_check: legal-TS parse recoveries (batch AN)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // These previously failed to parse outright; they are legal TS and must
@@ -13007,7 +13007,7 @@ test "expr_check: legal-TS parse recoveries (batch AN)" {
 
 ///|
 test "expr_check: decorator/tagged-template parse recoveries (batch AO)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Tagged template with explicit type arguments parses as a call, not a
@@ -13045,7 +13045,7 @@ test "expr_check: decorator/tagged-template parse recoveries (batch AO)" {
 
 ///|
 test "expr_check: ambient declare, dup accessibility, non-generator yield, dts stmts (batch AP)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS1038: `declare` inside an already-ambient namespace body.
@@ -13071,7 +13071,7 @@ test "expr_check: ambient declare, dup accessibility, non-generator yield, dts s
 
 ///|
 test "expr_check: NoInfer inference barrier (batch AQ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // T pins from the non-NoInfer position; the NoInfer argument is checked
@@ -13100,7 +13100,7 @@ test "expr_check: NoInfer inference barrier (batch AQ)" {
 
 ///|
 test "expr_check: predicate narrowing from any (batch AR)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `any` narrows to the predicate target; `{}` has no members.
@@ -13121,7 +13121,7 @@ test "expr_check: predicate narrowing from any (batch AR)" {
 
 ///|
 test "expr_check: keyword member names in object types (batch AS)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `type` lexes as its own token; as an object-type member name followed
@@ -13150,7 +13150,7 @@ test "expr_check: keyword member names in object types (batch AS)" {
 
 ///|
 test "expr_check: generalized keyword member names (batch AT)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Keyword-keyed members no longer collapse the annotation to Any, so
@@ -13179,7 +13179,7 @@ test "expr_check: generalized keyword member names (batch AT)" {
 
 ///|
 test "expr_check: TS2428 interface merge type-param identity (batch AU)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Generic + non-generic declarations of one name never merge.
@@ -13258,7 +13258,7 @@ test "expr_check: TS2428 interface merge type-param identity (batch AU)" {
 
 ///|
 test "expr_check: constant template folding feeds TS2367 (batch AU)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Literal substitutions fold to the resulting string-literal type, so
@@ -13293,7 +13293,7 @@ test "expr_check: constant template folding feeds TS2367 (batch AU)" {
 
 ///|
 test "expr_check: TS1163 yield contexts inside generators (batch AV)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Arrow bodies never inherit the generator context.
@@ -13369,7 +13369,7 @@ test "expr_check: TS1163 yield contexts inside generators (batch AV)" {
 
 ///|
 test "expr_check: generic inference stage 1 (batch AW)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Exact array-literal spread against an interface method's optional
@@ -13442,7 +13442,7 @@ test "expr_check: generic inference stage 1 (batch AW)" {
 
 ///|
 test "expr_check: generic inference stage 2 — Map entries + tag funcs (batch AW)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Mixed (K, V) entry array: no Map constructor overload matches
@@ -13486,7 +13486,7 @@ test "expr_check: generic inference stage 2 — Map entries + tag funcs (batch A
 
 ///|
 test "expr_check: uniform Map<K, V> inference (batch AW stage 3)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Uniform-map spread element vs a tuple-typed rest param
@@ -13515,7 +13515,7 @@ test "expr_check: uniform Map<K, V> inference (batch AW stage 3)" {
 
 ///|
 test "expr_check: generator TReturn + construct overloads (batch AX)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let strategy_decl = "interface StrategicState { lastStrategyApplied?: string; }\nfunction strategy<T extends StrategicState>(stratName: string, gen: (a: T) => IterableIterator<T | undefined, void>): (a: T) => IterableIterator<T | undefined, void> { return null; }\ninterface State extends StrategicState { foo: number; }\n"
@@ -13564,7 +13564,7 @@ test "expr_check: generator TReturn + construct overloads (batch AX)" {
 
 ///|
 test "expr_check: loop back-edge widening (batch AY)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A variable reassigned in a while body sees the union of entry and
@@ -13615,7 +13615,7 @@ test "expr_check: loop back-edge widening (batch AY)" {
 
 ///|
 test "expr_check: comma-operand implicit any (batch AZ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A non-final comma operand never receives a contextual type: its
@@ -13658,7 +13658,7 @@ test "expr_check: comma-operand implicit any (batch AZ)" {
 
 ///|
 test "expr_check: union contextual-type implicit any (batch AZ stage 2)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let ifaces = "interface IWithNoCallSignatures { foo: string; }\ninterface IWithCallSignatures { (a: number): string; }\ninterface IWithCallSignatures2 { (a: number): number; }\ninterface IWithCallSignatures3 { (b: string): number; }\ninterface IWithCallSignatures4 { (a: number): string; (a: string, b: number): number; }\n"
@@ -13702,7 +13702,7 @@ test "expr_check: union contextual-type implicit any (batch AZ stage 2)" {
 
 ///|
 test "expr_check: IIFE optional-param arithmetic TS18048 (batch AZ stage 3)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // An optional unannotated IIFE parameter keeps `undefined` in its type
@@ -13729,7 +13729,7 @@ test "expr_check: IIFE optional-param arithmetic TS18048 (batch AZ stage 3)" {
 
 ///|
 test "expr_check: uncontextual object literals (batch AZ stage 4)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `satisfies` intercepts the contextual type: a method missing from
@@ -13774,7 +13774,7 @@ test "expr_check: uncontextual object literals (batch AZ stage 4)" {
 
 ///|
 test "expr_check: class-expression method implicit any (batch AZ stage 5)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Class-expression METHOD declarations are never contextually typed:
@@ -13822,7 +13822,7 @@ test "expr_check: class-expression method implicit any (batch AZ stage 5)" {
 
 ///|
 test "expr_check: for-of assign patterns + rest targets (batch BA)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Array `.values()` yields the element type (for-of12).
@@ -13888,7 +13888,7 @@ test "expr_check: for-of assign patterns + rest targets (batch BA)" {
 
 ///|
 test "expr_check: destructuring defaults + literal overload sets (batch BB)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Binding-element defaults check against the annotated path type
@@ -13922,7 +13922,7 @@ test "expr_check: destructuring defaults + literal overload sets (batch BB)" {
 
 ///|
 test "expr_check: well-known-symbol members (batch BC task 1)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // `[Symbol.iterator]`-typed members participate in assignability:
@@ -13974,7 +13974,7 @@ test "expr_check: well-known-symbol members (batch BC task 1)" {
 
 ///|
 test "expr_check: Object member hiding (batch BC task 2)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A member hiding an Object.prototype member with an incompatible
@@ -14017,7 +14017,7 @@ test "expr_check: Object member hiding (batch BC task 2)" {
 
 ///|
 test "expr_check: generator object vs function type (batch BC task 3)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Calling a generator IIFE produces a `Generator` object, which has no
@@ -14050,7 +14050,7 @@ test "expr_check: generator object vs function type (batch BC task 3)" {
 
 ///|
 test "expr_check: mapped-type as clauses (batch BC task 4)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Concrete evaluation of a filter remap: `KeysExtendedBy<M, number>`
@@ -14098,7 +14098,7 @@ test "expr_check: mapped-type as clauses (batch BC task 4)" {
 
 ///|
 test "expr_check: Error/Date lib member surface (batch BC task 5)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // The Error / Date instance surfaces are fully table-modeled, so a
@@ -14153,7 +14153,7 @@ test "expr_check: Error/Date lib member surface (batch BC task 5)" {
 
 ///|
 test "expr_check: TS2411 computed keys and symbol index sigs (batch BC task 6)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A constant computed key names the member statically: the getter's
@@ -14229,7 +14229,7 @@ test "expr_check: TS2411 computed keys and symbol index sigs (batch BC task 6)" 
 
 ///|
 test "expr_check: using-declaration grammar (batch BC task 7)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS1492: a `using` / `await using` declarator never takes a binding
@@ -14269,7 +14269,7 @@ test "expr_check: using-declaration grammar (batch BC task 7)" {
 
 ///|
 test "expr_check: invalid radix digits (batch BC task 7b)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A binary / octal literal running into an out-of-radix decimal digit
@@ -14289,7 +14289,7 @@ test "expr_check: invalid radix digits (batch BC task 7b)" {
 
 ///|
 test "expr_check: TS7 oracle switch fixes (batch BD)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // A redeclaration of a runtime-provided lib global is never "used
@@ -14331,7 +14331,7 @@ test "expr_check: TS7 oracle switch fixes (batch BD)" {
 
 ///|
 test "expr_check: TS7-only miss clusters (batch BE)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS5102: `downlevelIteration` was REMOVED in TS7 — its presence is an
@@ -14387,7 +14387,7 @@ test "expr_check: TS7-only miss clusters (batch BE)" {
 
 ///|
 test "expr_check: TS7 lexical clusters (batch BF)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2465: `this` in a class member's computed property name; TS1166:
@@ -14433,7 +14433,7 @@ test "expr_check: TS7 lexical clusters (batch BF)" {
 
 ///|
 test "expr_check: template and regex escape validation (batch BG)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Regex `\u{...}` under the `u` flag: hex digits required, value
@@ -14464,7 +14464,7 @@ test "expr_check: template and regex escape validation (batch BG)" {
 
 ///|
 test "expr_check: implicit-any this (batch BH)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Plain functions (incl. nested in methods, static-init function
@@ -14502,7 +14502,7 @@ test "expr_check: implicit-any this (batch BH)" {
 
 ///|
 test "expr_check: accessor arity, member modifiers, exponents, super keys (batch BI)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS1049/TS1054: setter takes exactly one parameter, getter none —
@@ -14541,7 +14541,7 @@ test "expr_check: accessor arity, member modifiers, exponents, super keys (batch
 
 ///|
 test "expr_check: ASI namespace/declare, for-of TS2488, lib-global TS2403 (batch BJ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2454 via ASI: `namespace` / `module` / `declare` followed by a
@@ -14599,7 +14599,7 @@ test "expr_check: ASI namespace/declare, for-of TS2488, lib-global TS2403 (batch
 
 ///|
 test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (batch BK)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2304: a `let` for-of head is loop-scoped (for-of7) and a body `let`
@@ -14612,7 +14612,7 @@ test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (ba
   // the binding is possibly-unassigned), and the count form of this
   // assertion was measuring the absence of that diagnostic rather than
   // the hoisting it is named for.
-  let cannot_find = fn(src : String) -> Int {
+  let cannot_find = fn(src : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -14665,7 +14665,7 @@ test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (ba
 
 ///|
 test "expr_check: patterns over primitives/arrays, spread folding, SharedArrayBuffer (batch BL)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2339: object pattern over a primitive for-of element (ES5For-of27);
@@ -14702,7 +14702,7 @@ test "expr_check: patterns over primitives/arrays, spread folding, SharedArrayBu
 
 ///|
 test "expr_check: lib directives, decorator signatures, generator returns (batch BM)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2318: `@noLib` removes every required global type; an explicit
@@ -14757,7 +14757,7 @@ test "expr_check: lib directives, decorator signatures, generator returns (batch
 
 ///|
 test "expr_check: TS7053 string-literal keys, Symbol.keyFor, es5 Date.UTC (batch BN)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS7053: a string-literal key provably absent from a fully-literal
@@ -14793,7 +14793,7 @@ test "expr_check: TS7053 string-literal keys, Symbol.keyFor, es5 Date.UTC (batch
 
 ///|
 test "expr_check: for-in patterns, lib eras, import-eq roots (batch BO)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2491: the left side of for...in is never a destructuring pattern,
@@ -14852,7 +14852,7 @@ test "expr_check: for-in patterns, lib eras, import-eq roots (batch BO)" {
 
 ///|
 test "expr_check: buffer nominality, Array targs, primitive spreads, computed index values (batch BP)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2322: SharedArrayBuffer and ArrayBuffer are nominally distinct
@@ -14893,7 +14893,7 @@ test "expr_check: buffer nominality, Array targs, primitive spreads, computed in
 
 ///|
 test "expr_check: TS7057 generator yield implicit any + generic rest tuple arity (batch BQ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS7057: unannotated binding consumes the yield result
@@ -15098,7 +15098,7 @@ test "expr_check: a defaulted parameter is omittable on every callable form" {
 /// "silent on the good one" are separate claims and only the second keeps
 /// the conformance gate at FP 0.
 test "expr_check: super outside a derived class (TS2335 / TS2337)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("`super` can only be referenced") ||
@@ -15180,7 +15180,7 @@ test "expr_check: super outside a derived class (TS2335 / TS2337)" {
 /// makes the namespace half meaningful, since a rule that never fires would
 /// pass the namespace assertion trivially.
 test "expr_check: parser channels survive a namespace body" {
-  let count = fn(src : String) -> Int {
+  let count = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Each pair is (top level, same code inside a namespace). Both halves are
@@ -15227,7 +15227,7 @@ test "expr_check: parser channels survive a namespace body" {
 /// only to a corpus directive, since real code sets the flag in tsconfig,
 /// which the parser does not read.
 test "expr_check: decorators are not valid on a static block or import=" {
-  let decos = fn(src : String) -> Int {
+  let decos = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("decorators are not valid here") {
@@ -15261,7 +15261,7 @@ test "expr_check: decorators are not valid on a static block or import=" {
 /// `New`, or `Call(_, args)`. That last one is the reachable gap: `super`
 /// in the argument of an ordinary named call inside a computed key.
 test "expr_check: super in a computed key, through the shared walker" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("super") {
@@ -15295,7 +15295,7 @@ test "expr_check: super in a computed key, through the shared walker" {
 /// because a route this pass cannot see is a false positive on correct code
 /// — and unlike a MISS, an FP has a zero budget.
 test "expr_check: class implements — a required member must be present" {
-  let missing = fn(src : String) -> Int {
+  let missing = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("is missing") {
@@ -15389,7 +15389,7 @@ test "expr_check: class implements — a required member must be present" {
 /// the flat `Ident` binding forms of `module_.top_level_stmts`, with no
 /// scope walk, so each case below documents a shape that must NOT reach it.
 test "expr_check: duplicate top-level declarations (TS2451 / TS2300)" {
-  let dups = fn(src : String) -> Int {
+  let dups = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("duplicate identifier") {
@@ -15449,7 +15449,7 @@ test "expr_check: duplicate top-level declarations (TS2451 / TS2300)" {
 /// aliases and not for interfaces; and the async return-type helper already
 /// took `is_generator` as an exemption.
 test "expr_check: using-declaration grammar, objlit getters, reserved names" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let d = "declare const d: Disposable; "
@@ -15486,7 +15486,7 @@ test "expr_check: using-declaration grammar, objlit getters, reserved names" {
   )
   @test.assert_eq(issues(d + "switch (1) { case 1: { using x = d; } }"), 0)
   // TS2378 for an OBJECT-LITERAL getter, and every abstention.
-  let getter = fn(src : String) -> Int {
+  let getter = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("`get` accessor must return a value") {
@@ -15544,7 +15544,7 @@ test "expr_check: using-declaration grammar, objlit getters, reserved names" {
 /// stays silent about under `@strict: false`. Every other
 /// `<noimplicitany>` recorder in the parser gates on that flag.
 test "expr_check: pattern duplicates, for-head var collision, self-iterable" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2451 — the error half of destructuringSameNames.ts.
@@ -15602,7 +15602,7 @@ test "expr_check: pattern duplicates, for-head var collision, self-iterable" {
 /// Without that exemption `class C1 extends C2 {} declare class C2 {}` —
 /// ordinary @types layout — was flagged.
 test "expr_check: forward class base, module pattern, objlit duplicate key" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -15666,7 +15666,7 @@ test "expr_check: forward class base, module pattern, objlit duplicate key" {
 /// `catch (e)` against `catch (e: string)`, and `*gen()` against
 /// `*constructor()` — a generator is illegal only at that one name.
 test "expr_check: rest initializer, repeated static, catch annotation, generator ctor" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -15716,7 +15716,7 @@ test "expr_check: rest initializer, repeated static, catch annotation, generator
 /// sits at the `export` keyword in all three export parsers instead of on
 /// the export forms that bind a value.
 test "expr_check: quoted module name, strict reserved words, await using context" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -15809,7 +15809,7 @@ test "expr_check: quoted module name, strict reserved words, await using context
 /// why `function data(): string; function next(): string;` stayed silent
 /// while the same pair without return annotations was reported.
 test "expr_check: node globals and overload implementations" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -15867,7 +15867,7 @@ test "expr_check: node globals and overload implementations" {
 /// property access on `this` is a place, unlike `this` itself), and
 /// `o["k"]++`.
 test "expr_check: assignment and update operands must be references" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -15929,7 +15929,7 @@ test "expr_check: assignment and update operands must be references" {
 /// excludes the three code points in it that ARE ID_Start: `ª`, `µ`, `º`.
 /// Everything from U+00C0 up keeps the permissive treatment.
 test "expr_check: scanner-level grammar rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -15994,7 +15994,7 @@ test "expr_check: scanner-level grammar rules" {
 /// and supported by standard ES ones, so it points the opposite way from
 /// the `abstract` / `declare` rule next to it.
 test "expr_check: enum initializer suspends, legacy decorator on a private member" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16064,7 +16064,7 @@ test "expr_check: enum initializer suspends, legacy decorator on a private membe
 /// about, which is how the batch's three corpus false positives were
 /// found before they shipped and how two more were diagnosed after.
 test "expr_check: not-callable, computed keys and scoped exemptions (batch CL)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16204,7 +16204,7 @@ test "expr_check: an object type with a call signature IS callable (strict)" {
 /// positive was diagnosed — an alias to an instantiated namespace IS a
 /// runtime value, which `namespace_is_instantiated` did not know.
 test "expr_check: lib era, namespace values, new over a call signature (batch CM)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16352,7 +16352,7 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
 /// DISAGREE — `decoratorInAmbientContext` is TS7-accepted, so the ambient
 /// and abstract exclusions are what keep this at FP 0.
 test "expr_check: index-signature dot access, decorator placement, const enums (batch CO)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16429,7 +16429,7 @@ test "expr_check: index-signature dot access, decorator placement, const enums (
 /// `++t ** 2` is legal where `-t ** 2` is not, `a?` is not a non-simple
 /// parameter, and the `"use strict"` rule needs target >= es2016.
 test "expr_check: exponent LHS, nullish mixing, rest initializers, use strict (batch CP)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16534,7 +16534,7 @@ test "expr_check: exponent LHS, nullish mixing, rest initializers, use strict (b
 /// `override` rule batch BY rejected outright — so the legal neighbours
 /// here are the cases that made those the right calls at the time.
 test "expr_check: constructor signatures, computed override, tuple index (batch CP2)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16602,7 +16602,7 @@ test "expr_check: constructor signatures, computed override, tuple index (batch 
 /// but not on an ambient one; and a write to a set-only private accessor
 /// is legal while a READ of one is the error.
 test "expr_check: reserved-word identifiers, implicit-any members, private access (batch CQ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16678,7 +16678,7 @@ test "expr_check: reserved-word identifiers, implicit-any members, private acces
 /// Batch CR: three rules that are all one shape — a fact the parser
 /// already had, recorded at some of the places that produce it.
 test "expr_check: re-export specifiers, import types, unused privates (batch CR)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16729,7 +16729,7 @@ test "expr_check: re-export specifiers, import types, unused privates (batch CR)
 /// refuses is `symbol` — so `~aString` and `-aBoolean` had been reported
 /// on legal code. Every boundary below was probed operator by operator.
 test "expr_check: unary coercion, symbol inference, instanceof and for-in operands (batch CS)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16814,7 +16814,7 @@ test "expr_check: unary coercion, symbol inference, instanceof and for-in operan
 /// and has a real type in tsc. `staticIndexSignature6` is the corpus
 /// file that made the loose version a false positive.
 test "ts2347 untyped call type arguments" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -16874,7 +16874,7 @@ test "ts2347 untyped call type arguments" {
 /// method's, which is the corpus false positive
 /// (`decoratorOnClassProperty13`) the first version shipped.
 test "member decorator arity" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let head = "// @experimentalDecorators: true\n// @strict: false\n"
     check_module_function_bodies_permissive(parse_module_or_empty(head + src)).length()
   }
@@ -16935,7 +16935,7 @@ test "member decorator arity" {
 /// faces — and the second one was a FALSE POSITIVE the corpus could not
 /// see, because it has no file of that shape.
 test "ambient class accessors" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // TS2610: a base accessor overridden by a derived data property.
@@ -17002,7 +17002,7 @@ test "ambient class accessors" {
 /// Batch CW: four rules, each one an existing check that had been written
 /// for some of the spellings that produce it.
 test "batch CW rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -17069,7 +17069,7 @@ test "batch CW rules" {
 /// a private member is nominal. Both of those cells are ones a rule
 /// written from the message text would get wrong.
 test "batch CX rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -17133,7 +17133,7 @@ test "batch CX rules" {
 /// of the arm. `Void` cannot be produced by narrowing, which is what
 /// makes the remaining half sound.
 test "batch CY rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -17178,7 +17178,7 @@ test "batch CY rules" {
   // checked against this one's. Asserted on the MESSAGE rather than the
   // count, because an unresolvable specifier is a TS2307 of its own and
   // a count would be measuring that instead.
-  let non_local = fn(src : String) -> Int {
+  let non_local = fn(src : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -17218,10 +17218,10 @@ test "batch CY rules" {
 /// lines, `var y: string | number` beside `var y: number | string`, are
 /// legal. A rule that compared spellings would fail the second.
 test "batches CZ+DA rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -17309,7 +17309,7 @@ test "batches CZ+DA rules" {
 /// `var` whose only assignment is a loop head is unassigned everywhere
 /// outside the body, full stop.
 test "batch DB rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -17374,7 +17374,7 @@ test "batch DB rules" {
 /// nullish, and the check must see a bare NAME -- which is why the
 /// negated form is excluded at the call sites and the union at the type.
 test "batch DC rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -17438,7 +17438,7 @@ test "batch DC rules" {
 /// bodiless signature, so `m() {}` and `m();` are indistinguishable
 /// downstream.
 test "batch DF rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -17503,7 +17503,7 @@ test "batch DF rules" {
 /// arithmetic list, because it also concatenates: a boolean operand is
 /// only an error when the other side is not a string.
 test "batch DG rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -17684,7 +17684,7 @@ test "merge_interface_group matches pairwise fold" {
 /// `thisTypeInObjectLiterals2` (see the `ThisType` case below) and broke
 /// `Record` / `Partial` field lookup.
 test "expr_check: conditional via generic alias + the conditional utility types" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   // The gap itself: substitution happens, then the conditional has to
@@ -17786,7 +17786,7 @@ test "expr_check: conditional via generic alias + the conditional utility types"
 /// resolved to `{}` ahead of the generic `Applied` arm and the shared
 /// table is left alone for the consumer it was written for.
 test "expr_check: ThisType is an empty marker, not the identity" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   @test.assert_eq(
@@ -17829,7 +17829,7 @@ test "expr_check: ThisType is an empty marker, not the identity" {
 /// says "don't know". The `unresolved` case below is the one that would
 /// regress if the gate were dropped.
 test "expr_check: infer-binding utility types decide through reduce_conditional" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let g = "declare function g(): number;\n"
@@ -17896,7 +17896,7 @@ test "expr_check: infer-binding utility types decide through reduce_conditional"
 /// Both fixes are needed, and the inline case is the one that proves the
 /// gate was the problem rather than the class lookup.
 test "expr_check: InstanceType / ConstructorParameters through a construct signature" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   // No `typeof`: this is the case that isolates `contains_infer_marker`.
@@ -17980,7 +17980,7 @@ test "expr_check: InstanceType / ConstructorParameters through a construct signa
 /// conflict is not reported twice — which is what `single-declaration
 /// still reports exactly once` pins.
 test "expr_check: index-signature conflicts across merged interface halves" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   // Cross-declaration: the case that was silent.
@@ -18046,7 +18046,7 @@ test "expr_check: index-signature conflicts across merged interface halves" {
 /// per-member with an early return, so one member that merely MIGHT
 /// accept silences the call — that is what the five abstention cases pin.
 test "expr_check: TS2769 when no overload can accept the call" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let g = "declare function g(a: string): void;\ndeclare function g(a: number): void;\n"
@@ -18125,7 +18125,7 @@ test "expr_check: TS2769 when no overload can accept the call" {
 /// old-style constructor's inferred return is `void`, which the return-type
 /// predicate already abstains on) and was the only thing blocking TS7009.
 test "checker: new over a function with no construct signature" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let off = "//@noImplicitAny: false\n"
@@ -18213,7 +18213,7 @@ test "checker: new over a function with no construct signature" {
 /// by the operator, so unioning `a` in there would report the legal
 /// spellings.
 test "checker: (a &&= b) keeps the target's nullish part" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let u = "function f(r: number[] | undefined) { "
@@ -18253,7 +18253,7 @@ test "checker: (a &&= b) keeps the target's nullish part" {
 /// `&&=` rule above; no conformance file exercises it, which is why FP 0
 /// never caught it.
 test "checker: += on a string-literal-typed target is concatenation" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   // --- stays silent: every spelling of a string target.
@@ -18289,7 +18289,7 @@ test "checker: += on a string-literal-typed target is concatenation" {
 /// The merge is NOT unconditional, and each guard below is a false
 /// positive it cost first.
 test "checker: class rules see a class declared inside a function" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
 
@@ -18365,7 +18365,7 @@ test "checker: class rules see a class declared inside a function" {
 /// the rule that needs a base and left the other two silent, which is how
 /// the split was found.
 test "checker: class rules see a class expression" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let iface = "interface I { a: number }\n"
@@ -18432,7 +18432,7 @@ test "checker: class rules see a class expression" {
 /// TS2790 already existed for `delete o.b` and was blind to the other
 /// two spellings of the same property reference.
 test "checker: the nullish operators (batch DR)" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let strict = "//@strict: true\n"
@@ -18559,7 +18559,7 @@ test "checker: the nullish operators (batch DR)" {
 /// treated as a definite assignment, which gives up the `while` case as
 /// a MISS in exchange for FP 0.
 test "checker: TS2386 / TS2394 / TS2565 (batch DS)" {
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   let strict = "//@strict: true\n"
@@ -18679,7 +18679,7 @@ test "checker: TS2386 / TS2394 / TS2565 (batch DS)" {
 test "checker: TS7010 / TS7022 / TS2448 (batch DT)" {
   // The PERMISSIVE entry point: a `<noimplicitany>` marker is surfaced
   // only there, which is where TS7010 lives.
-  let n = fn(src : String) -> Int {
+  let n = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let nia = "// @noImplicitAny: true\n"
@@ -18782,7 +18782,7 @@ test "checker: TS7010 / TS7022 / TS2448 (batch DT)" {
 /// was avoided for the wrong reason and is still avoided, for the right
 /// one.
 test "checker: TS2729 for a field with no initializer (batch DU)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let h = "// @strictNullChecks: true\n// @target: esnext\n// @useDefineForClassFields: true\n"
@@ -18853,7 +18853,7 @@ test "checker: TS7022 indirect through the iteration protocol (batch DV)" {
   // ("cannot find name `v`") from a different check — the class body is
   // outside the loop's block scope, which is exactly what tsc reports
   // there too.
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("referenced indirectly in its own initializer") {
@@ -18927,7 +18927,7 @@ test "checker: TS7022 indirect through the iteration protocol (batch DV)" {
 /// `f20<T, K extends keyof T>(obj: Pick<T, K>)`, which accepts any object
 /// literal because `T` is inferred FROM the argument.
 test "checker: excess properties through Record<string, V> (batch DW)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("does not exist on target type") {
@@ -18979,7 +18979,7 @@ test "checker: excess properties through Record<string, V> (batch DW)" {
 /// The conformance corpus scores this rule at ZERO, so this test IS the
 /// measurement.
 test "checker: excess properties at a call argument (batch DX)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("does not exist on target type") {
@@ -19046,7 +19046,7 @@ test "checker: excess properties at a call argument (batch DX)" {
 /// foo().x` is silent too. So the file needs return-type inference from a
 /// body, not this rule.
 test "checker: assignment-form for-of target, all three spellings (batch DY)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.path.contains("for-of target") {
@@ -19097,7 +19097,7 @@ test "checker: assignment-form for-of target, all three spellings (batch DY)" {
 /// the flag — and the same mechanism is why a private access inside a call
 /// ARGUMENT within the chain stays legal.
 test "expr_check: an optional chain cannot contain private identifiers (batch DZ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let cls = "class A { #b?: A; c?: A; getA(x?: any): A { return new A(); }\n"
@@ -19161,7 +19161,7 @@ test "expr_check: an optional chain cannot contain private identifiers (batch DZ
 /// source in its SILENT list -- the eleventh test in this repo found
 /// asserting a gap rather than a behaviour -- and it fires here.
 test "batch EA rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -19255,7 +19255,7 @@ test "batch EA rules" {
 ///     beside `const y` is not, which is the pair `globalThis­Readonly­Properties`
 ///     puts four lines apart.
 test "batch EB rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -19350,7 +19350,7 @@ test "batch EB rules" {
 /// not the method's, and a namespace carrying one runtime `export var` is
 /// instantiated and therefore fine.
 test "batch EE rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -19479,7 +19479,7 @@ test "batch EE rules" {
 /// do and `static` — the one the ECMAScript grammar writes with a
 /// reserved word — does not.
 test "batch ED rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -19585,7 +19585,7 @@ test "batch ED rules" {
 /// inside a namespace is TS2683 rather than TS2331, and a class at script
 /// top level carrying a `@(this.x)` decorator is TS7017.
 test "batch EC rules" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -19723,7 +19723,7 @@ test "batch EC rules" {
 /// the union arm, matched no member, and came back carrying an unresolved
 /// `T` that every downstream check reads as unknowable.
 test "batch EB: generic overload return inference" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -19780,7 +19780,7 @@ test "batch EB: generic overload return inference" {
 /// would have got wrong: a named function expression's name IS a binding,
 /// including when it is held in a property of the same spelling.
 test "batch EF: a method shorthand's key is not a binding" {
-  let only = fn(src : String, needle : String) -> Int {
+  let only = fn(src : String, needle : String) -> Int32 {
     let mut n = 0
     for
       issue in check_module_function_bodies_permissive(
@@ -19865,7 +19865,7 @@ test "batch EF: a method shorthand's key is not a binding" {
 ///     verdict also depends on `strictNullChecks`, which is the cell that
 ///     makes it two flags rather than one fact.
 test "batch EG rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -19956,7 +19956,7 @@ test "batch EG rules" {
 ///   - `filter` / `some` / `every` / `find` declare their predicate as
 ///     returning `unknown`, so `names.filter(x => x)` is legal.
 test "batch EH rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -20080,7 +20080,7 @@ test "batch EH rules" {
 /// keeps the gate at FP 0, and three of its entries are shapes an earlier
 /// draft of a rule in this batch actually reported.
 test "batch EI rules" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -20302,7 +20302,7 @@ test "expr_check: destructuring params bind every pattern name" {
       i.message
     })
   }
-  let unresolved = fn(src : String) -> Int {
+  let unresolved = fn(src : String) -> Int32 {
     issues(src).filter(fn(m) { m.contains("cannot find name") }).length()
   }
   // Object rest, at each of the three spellings.
@@ -20374,7 +20374,7 @@ test "expr_check: constructor accessibility on class-value assignment" {
       i.message
     })
   }
-  let ctor = fn(src : String) -> Int {
+  let ctor = fn(src : String) -> Int32 {
     issues(src).filter(fn(m) { m.contains("constructor type") }).length()
   }
   let decls =
@@ -20419,7 +20419,7 @@ test "expr_check: namespace member write type mismatch" {
       i.message
     })
   }
-  let mismatch = fn(src : String) -> Int {
+  let mismatch = fn(src : String) -> Int32 {
     issues(src)
     .filter(fn(m) { m.contains("is not assignable to type") })
     .length()
@@ -20465,7 +20465,7 @@ test "expr_check: function-type assertion comparability" {
       i.message
     })
   }
-  let overlap = fn(src : String) -> Int {
+  let overlap = fn(src : String) -> Int32 {
     issues(src).filter(fn(m) { m.contains("sufficiently overlaps") }).length()
   }
   // The corpus shape: an UNANNOTATED arrow, contextually typed by the
@@ -20519,7 +20519,7 @@ test "expr_check: function-type assertion comparability" {
 /// well as `abstract foo(): void`. Every cell probed against the real
 /// compiler; the exemptions are exactly a concrete class's.
 test "expr_check: strict property init inside an abstract class" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("has no initializer") })
     .length()
@@ -20607,7 +20607,7 @@ test "expr_check: private member reached through an interface extends" {
 /// layered recursion does not descend into — so the top-level spelling
 /// reported and this one did not (`parserExportAssignment6`).
 test "expr_check: export = inside declare module resolves its name" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("cannot find name `A`") })
     .length()
@@ -20687,7 +20687,7 @@ test "expr_check: an overloaded method's arguments are not judged against overlo
 /// for the runtime `var` and was silent for the ambient one
 /// (ES5SymbolProperty5), which is the spelling every `.d.ts` uses.
 test "expr_check: lib-global redeclaration at the ambient spelling" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("same type as the lib declaration") })
     .length()
@@ -20796,7 +20796,7 @@ test "expr_check: a function value against a union of call signatures" {
 /// work in Typescript -- must be const"), and every cell was probed
 /// against the real compiler.
 test "expr_check: expando property on a mutable function binding" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("expando properties require") })
     .length()
@@ -20855,7 +20855,7 @@ test "expr_check: expando property on a mutable function binding" {
 /// IDENTICAL tuples collapses to one tuple and is accepted. Every cell
 /// probed against the real compiler (callWithSpread5).
 test "expr_check: a spread argument of union-of-tuples type" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("spread argument must either") })
     .length()
@@ -20926,7 +20926,7 @@ test "expr_check: a spread argument of union-of-tuples type" {
 /// makes the function-local `var` in `parserAmbiguityWithBinaryOperator4`
 /// reachable. All nine cells probed against the real compiler.
 test "expr_check: a value name in a type-argument position" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("refers to a value") })
     .length()
@@ -20963,7 +20963,7 @@ test "expr_check: a value name in a type-argument position" {
 /// definitely-non-numeric member decides it (typeGuardsDefeat). Cells
 /// probed against the real compiler.
 test "expr_check: arithmetic on a union operand" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("not a valid number type") })
     .length()
@@ -20998,7 +20998,7 @@ test "expr_check: arithmetic on a union operand" {
 /// the test is on the key's characters rather than on a name set a single
 /// file cannot have (globalThisAmbientModules).
 test "expr_check: an unspellable globalThis index key" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) {
       i.message.contains("does not exist on `typeof globalThis`")
@@ -21037,7 +21037,7 @@ test "expr_check: an unspellable globalThis index key" {
 /// Eleven cells probed against the real compiler
 /// (intersectionAsWeakTypeSource).
 test "expr_check: weak type with no properties in common" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("no properties in common") })
     .length()
@@ -21126,7 +21126,7 @@ test "expr_check: weak type with no properties in common" {
 /// A NUMBER index signature gets no exemption: `{ 1?: string }` against
 /// `{ [k: number]: string }` really is TS2322. All six cells probed.
 test "expr_check: an object-type index signature's value type" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("but got") })
     .length()
@@ -21210,7 +21210,7 @@ test "expr_check: an object-type index signature's value type" {
 /// applied. Both spellings of the receiver are asserted, so the fix
 /// cannot be "stop narrowing".
 test "expr_check: `in` narrowing unwraps a type alias to its union" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("does not exist") })
     .length()
@@ -21241,7 +21241,7 @@ test "expr_check: `in` narrowing unwraps a type alias to its union" {
 /// unannotated container abstains and a container whose `TNext` matches is
 /// legal.
 test "expr_check: an iterator's declared next() parameter type" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("`next` method") })
     .length()
@@ -21336,7 +21336,7 @@ test "expr_check: an iterator's declared next() parameter type" {
 /// A user-augmented `Symbol.foo` has no stable encoding and stays a
 /// computed key, which is a MISS rather than a finding.
 test "expr_check: a well-known symbol key in an object literal" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) {
       i.message.contains("does not exist on target type") ||
@@ -21376,7 +21376,7 @@ test "expr_check: a well-known symbol key in an object literal" {
 /// are asserted here, in both directions, so a regression in either one
 /// fails.
 test "expr_check: an unannotated field initialized with a class instance" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("but got") })
     .length()
@@ -21430,7 +21430,7 @@ test "expr_check: an unannotated field initialized with a class instance" {
 /// the rule reads: a constrained `T`, an `any` or `unknown` base member,
 /// and a composite `T[]` are all ACCEPTED.
 test "expr_check: a bare type parameter redeclaring a base member" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(d) { d.message.contains("incorrectly extends interface") })
     .length()
@@ -21511,7 +21511,7 @@ test "expr_check: a bare type parameter redeclaring a base member" {
 /// declaration MERGES with the lib's rather than replacing it), so that
 /// cell is a declared MISS.
 test "expr_check: a Symbol member key in a declare class body" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(d) {
       d.message.contains("does not exist on type `SymbolConstructor`")
@@ -21553,7 +21553,7 @@ test "expr_check: a Symbol member key in a declare class body" {
 /// the unshadowed `new Abstract()` must still report, at both the `New`
 /// and the `NewExpr` spelling.
 test "expr_check: a local binding shadows an abstract class" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("instance of abstract class") })
     .length()
@@ -21596,7 +21596,7 @@ test "expr_check: a local binding shadows an abstract class" {
 /// "fires on the corpus file" and "stays silent on the legal spelling"
 /// are separate claims and only the second keeps the gate at zero.
 test "expr_check: index signatures, import types, super in object keys (batch EP)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -21664,7 +21664,7 @@ test "expr_check: index signatures, import types, super in object keys (batch EP
 /// pick a winner: the module-wide pool has one slot per name, so
 /// registering the first made its shape answer for every other scope's.
 test "expr_check: a `this` parameter is not an argument, local types do not collide (batch EQ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- stays silent (all of these tsc ACCEPTS)
@@ -21716,7 +21716,7 @@ test "expr_check: a `this` parameter is not an argument, local types do not coll
 /// and a union with a `this`-less member is accepted while one with a
 /// non-void member is an error on the whole union.
 test "expr_check: the `this` context of a call (batch ER)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("`this` context") })
     .length()
@@ -21777,7 +21777,7 @@ test "expr_check: the `this` context of a call (batch ER)" {
 /// it is whether the assigned value can inhabit the narrowed type, which a
 /// literal right-hand side answers and an arbitrary expression does not.
 test "expr_check: a closure cannot rely on an unstable narrowing (batch ES)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .filter(fn(i) { i.message.contains("valid number type") })
     .length()
@@ -21838,7 +21838,7 @@ test "expr_check: a closure cannot rely on an unstable narrowing (batch ES)" {
 /// type parameter of an object-literal method or a generic arrow (neither
 /// of which reaches the AST).
 test "expr_check: shadowed enum initializers and undeclared type arguments (batch ET)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -21906,7 +21906,7 @@ test "expr_check: shadowed enum initializers and undeclared type arguments (batc
 /// a STATIC method's `this` is `typeof C` rather than the polymorphic
 /// `this`.
 test "checker: TS2403 in a function scope and the polymorphic `this` (batch EU)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src))
     .iter()
     .filter(fn(i) { i.message.contains("subsequent variable declaration") })
@@ -21998,7 +21998,7 @@ test "checker: TS2403 in a function scope and the polymorphic `this` (batch EU)"
 /// an index and a method call and none for the CALL form — the same
 /// false positive batch EH fixed at the three shapes it did cover.
 test "checker: generic method inference and the optional-call chain (batch EV)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -22054,7 +22054,7 @@ test "checker: generic method inference and the optional-call chain (batch EV)" 
 /// consumer of that list while the INTERFACE spelling of one declaration
 /// was not.
 test "checker: index-signature read through an anonymous object type (batch EW)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -22131,7 +22131,7 @@ test "checker: index-signature read through an anonymous object type (batch EW)"
 /// structurally, which is what "too coarse" meant. The corpus has none
 /// of those shapes, so FP 0 stayed 0 with the wrong rule in.
 test "checker: intersection source against an index signature (batch EY)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -22201,7 +22201,7 @@ test "checker: intersection source against an index signature (batch EY)" {
 /// Together they are `callChain.3`. Every fires/silent pair below was
 /// run through the real compiler first.
 test "checker: optional chain result and optional methods (batch EZ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -22270,7 +22270,7 @@ test "checker: optional chain result and optional methods (batch EZ)" {
 /// A false positive on legal code that the conformance corpus cannot
 /// see — measured against the pre-batch binary, not assumed.
 test "checker: interface overload resolution (batch EZ)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let iface = "interface O { m(x: string): number; m(x: number): string }\n"
@@ -22330,7 +22330,7 @@ test "checker: interface overload resolution (batch EZ)" {
 ///    writing it at one is how the two spellings came to disagree in the
 ///    first place.
 test "checker: late-bound unique-symbol member key (batch FA)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   let uk = "declare const k: unique symbol;\n"
@@ -22409,7 +22409,7 @@ test "checker: late-bound unique-symbol member key (batch FA)" {
 /// literal type came from an annotation and is not fresh, so `b` keeps
 /// `"foo"` and `let c: "foo" = b` is TS7-ACCEPTED.
 test "checker: string source against a literal target (batch FB)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- fires
@@ -22509,7 +22509,7 @@ test "checker: string source against a literal target (batch FB)" {
 /// `parent: N | Q` expanded its members while `parent: N` did not, and a
 /// `Named`-only match worked for the bare pair and failed for the union.
 test "checker: TS2430 nominal and aliased member compatibility (batch FC)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // --- silent: legal narrowings tsc accepts (all probed against 6.0.3)
@@ -22570,12 +22570,12 @@ test "checker: TS2430 nominal and aliased member compatibility (batch FC)" {
 /// declaration file is written. Probed against 6.0.3 — flipping the
 /// whole-parse flag would have false-positived on all of them.
 test "checker: a declaration file is ambient (batch FD)" {
-  let dts = fn(src : String) -> Int {
+  let dts = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(
       parse_declaration_module_or_empty(src),
     ).length()
   }
-  let ts = fn(src : String) -> Int {
+  let ts = fn(src : String) -> Int32 {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   // Every one of these is ACCEPTED by tsc in a `.d.ts` and REJECTED in a
@@ -22623,7 +22623,7 @@ test "checker: a declaration file is ambient (batch FD)" {
 /// half was module-local, which is exactly what made the gap look like
 /// a rule that works.
 test "checker: a namespace may re-export a file-level import (batch FE)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("only local declarations") {
@@ -22681,7 +22681,7 @@ test "checker: a namespace may re-export a file-level import (batch FE)" {
 ///    — and consulted only for the RETURN-type comparison, never for the
 ///    member type.
 test "checker: TS2430 nominal reach through brands and nested unions (batch FF)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("incorrectly extends") {
@@ -22749,7 +22749,7 @@ test "checker: TS2430 nominal reach through brands and nested unions (batch FF)"
 /// as. It was found by BISECTING that union against the real file rather
 /// than by reading — seven runs, and the culprit was the eighteenth arm.
 test "checker: TS2430 nominal reach through classes, intersections, generics (batch FG)" {
-  let issues = fn(src : String) -> Int {
+  let issues = fn(src : String) -> Int32 {
     let mut n = 0
     for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
       if i.message.contains("incorrectly extends") {

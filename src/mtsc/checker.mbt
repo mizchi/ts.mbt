@@ -84,7 +84,7 @@ fn collect_type_issues_from_module(
 pub fn collect_type_issues(
   source : String,
   allow_jsx : Bool,
-  declaration_file? : Bool = false,
+  declaration_file~ : Bool = false,
 ) -> Result[Array[MtscTypeIssue], String] {
   let parser = @parser.Parser::from_source_with_jsx(source, allow_jsx)
   if declaration_file {

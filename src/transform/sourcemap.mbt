@@ -21,12 +21,20 @@
 
 ///|
 pub(all) struct Position {
-  line : Int // 0-indexed
-  column : Int // 0-indexed
+  line : Int32 // 0-indexed
+  column : Int32 // 0-indexed
 } derive(Eq, Debug)
 
 ///|
-pub fn Position::new(line : Int, column : Int) -> Position {
+#deprecated
+pub extend Position with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend Position with @debug.Debug::{to_repr}
+
+///|
+pub fn Position::new(line : Int32, column : Int32) -> Position {
   { line, column, }
 }
 
@@ -35,12 +43,12 @@ pub fn Position::new(line : Int, column : Int) -> Position {
 /// string. Precomputes line-start byte offsets so the per-lookup cost
 /// is O(log lines).
 pub(all) struct LineIndex {
-  line_starts : Array[Int]
+  line_starts : Array[Int32]
 }
 
 ///|
 pub fn LineIndex::new(source : String) -> LineIndex {
-  let starts : Array[Int] = [0]
+  let starts : Array[Int32] = [0]
   let len = source.length()
   let mut i = 0
   while i < len {
@@ -66,7 +74,7 @@ pub fn LineIndex::new(source : String) -> LineIndex {
 ///|
 /// Convert a byte offset into a zero-indexed `(line, column)` pair.
 /// Out-of-range offsets clamp to the last line.
-pub fn LineIndex::position(self : LineIndex, offset : Int) -> Position {
+pub fn LineIndex::position(self : LineIndex, offset : Int32) -> Position {
   let starts = self.line_starts
   if starts.length() == 0 {
     return { line: 0, column: 0, }
@@ -98,7 +106,7 @@ let vlq_base64_chars : String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstu
 /// Encode a single signed integer as a base64 VLQ string. This is the
 /// per-segment encoding used in the `mappings` field of a v3 source
 /// map.
-pub fn vlq_encode(value : Int) -> String {
+pub fn vlq_encode(value : Int32) -> String {
   let buf = StringBuilder()
   // Move the sign bit to bit 0 of the resulting unsigned integer.
   let mut v = if value < 0 { (-value << 1).lor(1) } else { value << 1 }
@@ -126,12 +134,12 @@ pub fn vlq_encode(value : Int) -> String {
 /// mapping that only records an output position (no original mapping)
 /// emits as `vlq(out_col_delta)` alone.
 pub(all) struct Segment {
-  out_col : Int
-  src_line : Int?
-  src_col : Int?
+  out_col : Int32
+  src_line : Int32?
+  src_col : Int32?
   // Source-id slot. The current builder uses a single source string,
   // so this is always 0 when present.
-  src_id : Int?
+  src_id : Int32?
 }
 
 ///|
@@ -140,12 +148,12 @@ pub(all) struct SourceMapBuilder {
   // between represent blank lines.
   lines : Array[Array[Segment]]
   // Tracked so the builder can grow lines lazily.
-  mut last_out_line : Int
+  mut last_out_line : Int32
   // Index into the `sources` array used when `add_mapping` is called
   // without explicit source-id. The bundler switches this between
   // modules so each module's mappings point at the right source
   // file.
-  mut current_source : Int
+  mut current_source : Int32
 }
 
 ///|
@@ -160,13 +168,13 @@ pub fn SourceMapBuilder::new() -> SourceMapBuilder {
 /// `sources` array.
 pub fn SourceMapBuilder::set_current_source(
   self : SourceMapBuilder,
-  source_id : Int,
+  source_id : Int32,
 ) -> Unit {
   self.current_source = source_id
 }
 
 ///|
-fn SourceMapBuilder::ensure_line(self : SourceMapBuilder, line : Int) -> Unit {
+fn SourceMapBuilder::ensure_line(self : SourceMapBuilder, line : Int32) -> Unit {
   while self.lines.length() <= line {
     self.lines.push([])
   }
@@ -182,10 +190,10 @@ fn SourceMapBuilder::ensure_line(self : SourceMapBuilder, line : Int) -> Unit {
 /// doesn't sort.
 pub fn SourceMapBuilder::add_mapping(
   self : SourceMapBuilder,
-  out_line : Int,
-  out_col : Int,
-  src_line : Int,
-  src_col : Int,
+  out_line : Int32,
+  out_col : Int32,
+  src_line : Int32,
+  src_col : Int32,
 ) -> Unit {
   self.ensure_line(out_line)
   self.lines[out_line].push({
@@ -202,8 +210,8 @@ pub fn SourceMapBuilder::add_mapping(
 /// spec treats these as "lookup falls through".
 pub fn SourceMapBuilder::add_unmapped(
   self : SourceMapBuilder,
-  out_line : Int,
-  out_col : Int,
+  out_line : Int32,
+  out_col : Int32,
 ) -> Unit {
   self.ensure_line(out_line)
   self.lines[out_line].push({

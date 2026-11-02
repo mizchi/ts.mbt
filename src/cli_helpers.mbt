@@ -6,18 +6,18 @@
 
 ///|
 #cfg(target="native")
-extern "C" fn cli_exit_native(code : Int) = "exit"
+extern "C" fn cli_exit_native(code : Int32) = "exit"
 
 ///|
 #cfg(not(target="native"))
-fn cli_exit_native(code : Int) -> Unit {
+fn cli_exit_native(code : Int32) -> Unit {
   abort("tsmbt cli exit \{code}")
 }
 
 ///|
 /// Exit the CLI with the given status code. Use `0` for success and a
 /// non-zero value for any failure path.
-pub fn cli_exit(code : Int) -> Unit {
+pub fn cli_exit(code : Int32) -> Unit {
   cli_exit_native(code)
 }
 
@@ -132,10 +132,10 @@ pub enum CliArgScan {
 /// bail message; pass `""` to suppress it.
 pub fn cli_parse_subcommand_args(
   args : Array[String],
-  start : Int,
-  min_args : Int,
+  start : Int32,
+  min_args : Int32,
   usage : String,
-  help_hint? : String = "",
+  help_hint~ : String = "",
 ) -> CliArgScan {
   if start < args.length() && cli_subcommand_is_help(args[start]) {
     return HelpRequested

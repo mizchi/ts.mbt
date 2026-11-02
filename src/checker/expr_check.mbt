@@ -17,6 +17,14 @@ pub(all) struct ExprIssue {
   message : String
 } derive(Eq, Debug)
 
+///|
+#deprecated
+pub extend ExprIssue with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend ExprIssue with @debug.Debug::{to_repr}
+
 // ---------------------------------------------------------------------------
 // Resolver — maps `Named(N)` to interface / class / type-alias definitions and
 // looks up fields, methods, constructors. Built once per module check.
@@ -355,11 +363,11 @@ priv struct ClassIndex {
   // types, so a method's `Func` type is still built only when something
   // asks for it, and `properties` still wins over `methods` because the
   // consumer consults them in that order.
-  inst_prop : Map[String, Map[String, Int]]
-  inst_meth : Map[String, Map[String, Int]]
+  inst_prop : Map[String, Map[String, Int32]]
+  inst_meth : Map[String, Map[String, Int32]]
   // class key -> field name -> index of the first `instance_field_inits`
   // entry of that name.
-  field_init : Map[String, Map[String, Int]]
+  field_init : Map[String, Map[String, Int32]]
 }
 
 ///|
@@ -370,13 +378,13 @@ fn ClassIndex::empty() -> ClassIndex {
 ///|
 /// The inner map for `key`, created on first use.
 fn ClassIndex::slot(
-  outer : Map[String, Map[String, Int]],
+  outer : Map[String, Map[String, Int32]],
   key : String,
-) -> Map[String, Int] {
+) -> Map[String, Int32] {
   match outer.get(key) {
     Some(m) => m
     None => {
-      let m : Map[String, Int] = Map([])
+      let m : Map[String, Int32] = Map([])
       outer[key] = m
       m
     }
@@ -521,7 +529,7 @@ fn merge_interface_group(decls : Array[@ast.TsInterface]) -> @ast.TsInterface {
     return first
   }
   let fields : Array[(String, @ast.TsType)] = []
-  let seen : Map[String, Int] = Map([])
+  let seen : Map[String, Int32] = Map([])
   let readonly_fields : Array[String] = []
   let ro_seen : Map[String, Bool] = Map([])
   let extends_names : Array[String] = []
@@ -604,7 +612,7 @@ fn merge_interfaces(
   b : @ast.TsInterface,
 ) -> @ast.TsInterface {
   let fields : Array[(String, @ast.TsType)] = []
-  let seen : Map[String, Int] = Map([])
+  let seen : Map[String, Int32] = Map([])
   // Take `a`'s fields first, then let `b` override / extend.
   for f in a.fields {
     seen[f.0] = fields.length()
@@ -1324,7 +1332,7 @@ fn Resolver::ingest_module(
   // group same-name declarations into bodyless overload signatures vs
   // implementations; register only the unambiguous
   // all-TemplateStringsArray shape.
-  let tag_groups : Map[String, (Int, Int, Bool)] = Map([])
+  let tag_groups : Map[String, (Int32, Int32, Bool)] = Map([])
   for f in module_.funcs {
     let is_sig_only = f.body.stmts.length() == 0
     let tsa_first = f.params.length() > 0 &&
@@ -1596,7 +1604,7 @@ fn callable_param_types(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
 /// Required-argument count for a parameter list: the index of the first
 /// trailing optional / default / rest param. Used to validate `Call(...)`
 /// arity when the rich signature is available.
-fn required_arity(params : Array[@ast.TsParam]) -> Int {
+fn required_arity(params : Array[@ast.TsParam]) -> Int32 {
   // Walk left-to-right; once we cross an optional we keep going to make sure
   // the parameter list is well-formed (TS rejects required-after-optional
   // already), then return the last required index + 1.
@@ -1616,7 +1624,7 @@ fn required_arity(params : Array[@ast.TsParam]) -> Int {
 /// Minimum argument count derivable from parameter *types* alone (no rich
 /// `TsParam` metadata). A trailing parameter whose type accepts `undefined`
 /// (the `x?: T` -> `T | undefined` widening) is optional and omittable.
-fn required_arity_from_types(params : Array[@ast.TsType]) -> Int {
+fn required_arity_from_types(params : Array[@ast.TsType]) -> Int32 {
   let mut last_required = 0
   let mut i = 0
   while i < params.length() {
@@ -1639,7 +1647,7 @@ fn required_arity_from_types(params : Array[@ast.TsType]) -> Int {
 fn required_arity_from_callable_source(
   params : Array[@ast.TsType],
   optional_params : Array[Bool],
-) -> Int {
+) -> Int32 {
   let mut last_required = 0
   let mut i = 0
   while i < params.length() {
@@ -1676,7 +1684,7 @@ fn type_accepts_undefined_param(ty : @ast.TsType) -> Bool {
 ///|
 /// Required argument count of a function *value* -- an arrow or function
 /// expression. `None` for any other expression.
-fn function_value_required_arity(expr : @ast.TsExpr) -> Int? {
+fn function_value_required_arity(expr : @ast.TsExpr) -> Int32? {
   match expr {
     ArrowFunc(params, _, _, _) => Some(required_arity(params))
     FuncExpr(f) => Some(required_arity(f.params))
@@ -1754,7 +1762,7 @@ fn collect_construct_signatures(
 /// The finite parameter count of a call / construct signature (`Func` /
 /// `Constructor`), or `None` when it has a rest parameter (unbounded arity,
 /// so it can never be invoked with too few arguments).
-fn call_signature_param_count(sig : @ast.TsType) -> Int? {
+fn call_signature_param_count(sig : @ast.TsType) -> Int32? {
   let params = match sig {
     Func(params, _) => params
     Constructor(params, _, _) => params
@@ -1827,7 +1835,7 @@ fn single_signature_required_arity(
   ty : @ast.TsType,
   want_new : Bool,
   resolver : Resolver,
-) -> Int? {
+) -> Int32? {
   let sigs = if want_new {
     collect_construct_signatures(ty, resolver)
   } else {
@@ -2038,7 +2046,7 @@ fn Resolver::unwrap_containers(
 fn Resolver::unwrap_containers_at(
   self : Resolver,
   ty : @ast.TsType,
-  depth : Int,
+  depth : Int32,
   seen : Array[String],
   aborted : Array[Bool],
 ) -> @ast.TsType {
@@ -2112,7 +2120,7 @@ fn Resolver::unwrap_containers_at(
 fn Resolver::unwrap_element(
   self : Resolver,
   ty : @ast.TsType,
-  depth : Int,
+  depth : Int32,
   seen : Array[String],
   aborted : Array[Bool],
 ) -> @ast.TsType {
@@ -2972,7 +2980,7 @@ fn Resolver::field_on_any_union_member(
 fn Resolver::enumerable_object_shape(
   self : Resolver,
   ty : @ast.TsType,
-  depth : Int,
+  depth : Int32,
 ) -> Bool {
   if depth > 4 {
     return false
@@ -5778,7 +5786,7 @@ fn interface_declaring_restricted_member(
   ctx : CheckCtx,
   name : String,
   prop : String,
-  depth : Int,
+  depth : Int32,
 ) -> String? {
   if depth > 8 {
     return None
@@ -7807,8 +7815,8 @@ fn is_definitely_not_indexable(ty : @ast.TsType) -> Bool {
 /// The exact set of integer values an enum declares, or `None` when any
 /// member's value isn't a plain integer literal (computed members make
 /// the set unknown, so callers must stay conservative).
-fn enum_integer_values(decl : @ast.TsEnumDecl) -> Array[Int]? {
-  let values : Array[Int] = []
+fn enum_integer_values(decl : @ast.TsEnumDecl) -> Array[Int32]? {
+  let values : Array[Int32] = []
   for m in decl.members {
     match m.value {
       Some(Number(s)) => {
@@ -7875,7 +7883,7 @@ fn enum_incompatible_source(ty : @ast.TsType) -> Bool {
 
 ///|
 /// The integer value of a literal expression / type, if it is one.
-fn expr_integer_literal(e : @ast.TsExpr, t : @ast.TsType) -> Int? {
+fn expr_integer_literal(e : @ast.TsExpr, t : @ast.TsType) -> Int32? {
   match e {
     IntLit(n) => Some(n)
     NumberLit(d) =>
@@ -9804,7 +9812,7 @@ fn solve_generic_bindings(
       widen_safe[tp] = ()
     }
   }
-  fn is_rest_at(i : Int) -> Bool {
+  fn is_rest_at(i : Int32) -> Bool {
     if params[i] is Rest(_) {
       return true
     }
@@ -10733,7 +10741,7 @@ fn check_expr_against(
   expected : @ast.TsType,
   ctx : CheckCtx,
   sub_path : String,
-  arg_callee_non_generic? : Bool = false,
+  arg_callee_non_generic~ : Bool = false,
 ) -> Unit {
   // Always walk for nested call-site argument errors, even when the outer
   // expected type is `Any` (e.g. an unannotated return where we still want
@@ -12954,8 +12962,8 @@ fn type_is_unmodeled_shape(ty : @ast.TsType, resolver : Resolver) -> Bool {
 fn type_deeply_contains_unmodeled(
   ty : @ast.TsType,
   resolver : Resolver,
-  depth? : Int = 0,
-  visited? : Array[String] = [],
+  depth~ : Int32 = 0,
+  visited~ : Array[String] = [],
 ) -> Bool {
   if depth > 8 {
     return false
@@ -13964,7 +13972,7 @@ fn check_union_callee_arity(
     }
   }
   let mut max_min = 0
-  let mut min_min : Int? = None
+  let mut min_min : Int32? = None
   let member_params : Array[(Array[@ast.TsType], Array[Bool])] = []
   let mut all_bounded = true
   let mut max_max = 0
@@ -13999,7 +14007,7 @@ fn check_union_callee_arity(
   // for union-call reduction. This is exactly the source context where
   // `CallableMeta` matters: `?` is selected from that member instead of
   // being reconstructed from the widened `T | undefined` type.
-  let mut dominant_min : Int? = None
+  let mut dominant_min : Int32? = None
   for i in 0..<member_params.length() {
     let mut dominates_all = true
     let mut strictly_narrower = false
@@ -14101,7 +14109,7 @@ fn callable_source_params(
   // `?`. Resolve aliases here and stop once the wrapper is reached.
   fn go(
     current : @ast.TsType,
-    remaining_alias_hops : Int,
+    remaining_alias_hops : Int32,
   ) -> (Array[@ast.TsType], Array[Bool])? {
     match current {
       CallableMeta(Func(params, _), optional_params) =>
@@ -14921,7 +14929,7 @@ fn object_lit_never_satisfies_union(
 /// `0` = Required, `1` = plain, `2` = Partial. The OUTERMOST
 /// Partial/Required wrapper decides (`Partial<Required<T>>` is Partial);
 /// `Readonly` doesn't affect assignability and just unwraps.
-fn optionality_level(t : @ast.TsType) -> (@ast.TsType, Int) {
+fn optionality_level(t : @ast.TsType) -> (@ast.TsType, Int32) {
   match t {
     Applied("Partial", [inner]) => {
       let (core, _) = optionality_level(inner)
@@ -14981,7 +14989,7 @@ fn check_object_lit_against_target(
   resolver : Resolver,
   ctx : CheckCtx,
   sub_path : String,
-  arg_callee_non_generic? : Bool = false,
+  arg_callee_non_generic~ : Bool = false,
 ) -> Unit {
   // When the target is a bare in-scope type parameter (`T extends Foo`),
   // we don't know the concrete shape — TS allows objects with additional
@@ -15458,7 +15466,7 @@ fn record_closed_key_names(
           // starting at 0, and a member after a non-numeric one cannot be
           // auto-numbered at all (tsc rejects that program), so the whole
           // enum abstains there rather than guessing a key.
-          let mut next_auto : Int? = Some(0)
+          let mut next_auto : Int32? = Some(0)
           for m in decl.members {
             if m.is_computed {
               return []
@@ -15506,7 +15514,7 @@ fn record_closed_key_names(
 /// (`0x10`, `1e3`, `1.5`, a leading sign). Only used to continue enum
 /// auto-numbering, where an unparsed value stops the numbering instead of
 /// producing a wrong key.
-fn decimal_int_value(s : String) -> Int? {
+fn decimal_int_value(s : String) -> Int32? {
   if s.length() == 0 || s.length() > 9 {
     return None
   }
@@ -16179,7 +16187,7 @@ fn check_arrow_with_context(
 /// slot) — and both walks record name-resolution / member-access issues with
 /// identical strings. Only pre-existing entries suppress a new one, so two
 /// *distinct* occurrences of the same error inside a single walk are kept.
-fn dedup_issues_since(issues : Array[ExprIssue], pre_len : Int) -> Unit {
+fn dedup_issues_since(issues : Array[ExprIssue], pre_len : Int32) -> Unit {
   if issues.length() <= pre_len {
     return
   }
@@ -16377,7 +16385,7 @@ fn interface_method_arity_reliable(
   let mut count = 0
   let mut sig_ty : @ast.TsType? = None
   let mut generic = false
-  fn walk(name : String, depth : Int) -> Unit {
+  fn walk(name : String, depth : Int32) -> Unit {
     if depth > 8 {
       count += 2 // force-bail on suspiciously deep chains
       return
@@ -16460,13 +16468,13 @@ fn check_arguments_with_sig(
   args : Array[@ast.TsExpr],
   ctx : CheckCtx,
   call_path : String,
-  arity_reliable? : Bool = false,
-  check_spread? : Bool = false,
+  arity_reliable~ : Bool = false,
+  check_spread~ : Bool = false,
   // True only when the caller has PROVEN the callee declares no type
   // parameters. That is what lets the excess-property check run at an
   // argument position — see `check_object_lit_against_target`. Default
   // `false` means "cannot answer", which keeps the suppression.
-  callee_non_generic? : Bool = false,
+  callee_non_generic~ : Bool = false,
 ) -> Unit {
   // TS2556 ("A spread argument must either have a tuple type or be passed
   // to a rest parameter"): tsc's arity rule for the first non-tuple spread
@@ -16498,7 +16506,7 @@ fn check_arguments_with_sig(
       match a {
         Spread(inner) => {
           // An exact array-literal spread contributes a known count.
-          let literal_len : Int? = match inner {
+          let literal_len : Int32? = match inner {
             ArrayLit(items) => {
               let mut ok = true
               for it in items {
@@ -16772,9 +16780,9 @@ fn check_arguments_with_sig(
   }
   // Per-position assignability check. Rest-position args (at and beyond the
   // rest param's index) are checked against the rest param's *element* type.
-  let rest_index : Int = match sig {
+  let rest_index : Int32 = match sig {
     Some(ps) => {
-      let mut idx : Int = -1
+      let mut idx : Int32 = -1
       let mut i = 0
       while i < ps.length() {
         if ps[i].is_rest {
@@ -16838,7 +16846,7 @@ fn check_arguments_with_sig(
   // spread operand itself (and everything after) is still validated for
   // internal errors by the `check_call_args_in_expr` recursion at the call
   // site.
-  let first_spread : Int = {
+  let first_spread : Int32 = {
     let mut idx = -1
     let mut j = 0
     while j < args.length() {
@@ -18387,7 +18395,7 @@ fn apply_type_predicate_narrowing(
   // Map predicate's parameter name to argument index.
   let idx = match sig {
     Some(params) => {
-      let mut found : Int = -1
+      let mut found : Int32 = -1
       let mut i = 0
       while i < params.length() {
         if params[i].name == param_name {
@@ -18482,7 +18490,7 @@ fn apply_assertion_predicate_effect(
     Call(name, _) | CallExpr(Var(name), _) =>
       match resolver.signatures.get(name) {
         Some(params) => {
-          let mut found : Int = -1
+          let mut found : Int32 = -1
           let mut i = 0
           while i < params.length() {
             if params[i].name == param_name {
@@ -24396,7 +24404,7 @@ fn check_function_body_with(
   permissive : Bool,
   strict_property_init : Bool,
   strict_null_checks : Bool,
-  this_type? : @ast.TsType? = None,
+  this_type~ : @ast.TsType? = None,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let env = ExprEnv::new()
@@ -25385,7 +25393,10 @@ fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] 
 ///|
 /// Constructor-accessibility RANK: `public` 0, `protected` 1, `private` 2.
 /// `None` for a name that is not a top-level class in this module.
-fn constructor_visibility_rank(module_ : @ast.TsModule, name : String) -> Int? {
+fn constructor_visibility_rank(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Int32? {
   for cls in module_.classes {
     if cls.name != name || cls.is_local {
       continue
@@ -25437,7 +25448,7 @@ fn check_constructor_type_assignability(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // Declared rank per top-level binding, from its annotation or initializer.
-  let holder : Map[String, (String, Int)] = Map([])
+  let holder : Map[String, (String, Int32)] = Map([])
   // `<classval-decl:NAME:SRC>`: a top-level declaration with NO annotation
   // whose initializer is the bare identifier `SRC`. The parser has to say
   // so, because `TsStmt::Let` carries `Any` for both an absent annotation
@@ -25468,8 +25479,8 @@ fn check_constructor_type_assignability(
   fn report(
     src : String,
     tgt : String,
-    src_rank : Int,
-    tgt_rank : Int,
+    src_rank : Int32,
+    tgt_rank : Int32,
   ) -> Unit {
     let kind = if src_rank == 2 { "private" } else { "protected" }
     let want = if tgt_rank == 0 { "public" } else { "protected" }
@@ -28023,7 +28034,7 @@ fn check_interface_extends_class_private(
 /// Accessibility rank for the TS2415 / TS2417 comparison: `public` is 0,
 /// `protected` is 1. `private` has no rank -- it is nominal rather than a
 /// point on the visibility scale, so its callers test for it separately.
-fn accessibility_rank(name : String, cls : @ast.TsClassDecl) -> Int {
+fn accessibility_rank(name : String, cls : @ast.TsClassDecl) -> Int32 {
   if cls.protected_members.contains(name) {
     1
   } else {
@@ -28331,7 +28342,7 @@ fn types_definitely_differ_at(
   resolver : Resolver,
   a : @ast.TsType,
   b : @ast.TsType,
-  depth : Int,
+  depth : Int32,
 ) -> Bool {
   if depth > 16 {
     return false
@@ -28516,7 +28527,7 @@ fn check_merged_export_modifiers(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let exported : Map[String, Int] = Map([])
+  let exported : Map[String, Int32] = Map([])
   for gm in module_.grammar_misuses {
     if !gm.has_prefix("<export-type>") {
       continue
@@ -28535,7 +28546,7 @@ fn check_merged_export_modifiers(
   // `.d.ts` is 16M string comparisons -- 3.3x the whole old check time,
   // measured. Nothing about the rule changes: these are the same two
   // counts, read from an index.
-  let alias_counts : Map[String, Int] = Map([])
+  let alias_counts : Map[String, Int32] = Map([])
   for ta in module_.type_aliases {
     alias_counts[ta.name] = (match alias_counts.get(ta.name) {
         Some(v) => v
@@ -28543,7 +28554,7 @@ fn check_merged_export_modifiers(
       }) +
       1
   }
-  let iface_counts : Map[String, Int] = Map([])
+  let iface_counts : Map[String, Int32] = Map([])
   for iface in module_.interfaces {
     iface_counts[iface.name] = (match iface_counts.get(iface.name) {
         Some(v) => v
@@ -28606,7 +28617,7 @@ fn check_merged_interface_member_conflicts(
   // visited in first-appearance order, so the pairs this examines and
   // the order it reports them in are exactly what the pair loop produced
   // once the `b.name != a.name` arm is taken out.
-  let by_name : Map[String, Array[Int]] = Map([])
+  let by_name : Map[String, Array[Int32]] = Map([])
   let order : Array[String] = []
   for i in 0..<module_.interfaces.length() {
     let name = module_.interfaces[i].name
@@ -29036,7 +29047,7 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // forward reference). The exemption costs a MISS in the other
   // direction — `const D = class extends B {}; class B {}` IS TS2449 and
   // stays quiet — which is the affordable half.
-  let class_index : Map[String, Int] = Map([])
+  let class_index : Map[String, Int32] = Map([])
   for i, c in module_.classes {
     // A repeated name is a different error (TS2300, batch CA); keep the
     // FIRST index so a later duplicate cannot make an earlier `extends`
@@ -30028,7 +30039,7 @@ fn member_covariant_by_iface_extends(
   // while `Token<A>` against `Token<B>` depends on the arguments and is
   // left to the ordinary test. So the generic spelling is admitted on
   // the DERIVED side only, and only against a bare name.
-  fn member_reaches(dt : @ast.TsType, bt : @ast.TsType, depth : Int) -> Bool {
+  fn member_reaches(dt : @ast.TsType, bt : @ast.TsType, depth : Int32) -> Bool {
     if depth > 4 {
       return false
     }
@@ -31757,7 +31768,7 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // implementation") — the rule this file recorded as filed "because
   // nothing in the corpus asked for it", which `multipleDefaultExports04`
   // now does. A set threw exactly that count away.
-  let impl_count : Map[String, Int] = Map([])
+  let impl_count : Map[String, Int32] = Map([])
   for gm in module_.grammar_misuses {
     if gm.has_prefix("<fn-impl:") {
       let n = gm["<fn-impl:".length():gm.length() - 1].to_owned()
@@ -32768,7 +32779,7 @@ fn nearest_ancestor_member_kind(
   start_base : String,
   name : String,
   is_static : Bool,
-) -> Int? {
+) -> Int32? {
   let seen : Map[String, Unit] = Map([])
   let mut cur = start_base
   while !seen.contains(cur) {
@@ -32949,7 +32960,7 @@ fn check_property_overridden_as_accessor(
 /// How `name` is declared on `cls`: `2` = abstract, `1` = concrete, `0` = not
 /// declared here. An abstract method is recorded in both `abstract_members`
 /// and `methods` (as a bodyless stub), so `abstract_members` is checked first.
-fn class_member_decl_kind(cls : @ast.TsClassDecl, name : String) -> Int {
+fn class_member_decl_kind(cls : @ast.TsClassDecl, name : String) -> Int32 {
   if cls.abstract_members.contains(name) {
     return 2
   }
@@ -32976,7 +32987,7 @@ fn Resolver::nearest_member_decl_kind(
   self : Resolver,
   start : String,
   name : String,
-) -> Int? {
+) -> Int32? {
   let seen : Map[String, Unit] = Map([])
   let mut cur = start
   while !seen.contains(cur) {
@@ -33147,7 +33158,7 @@ fn check_merged_enum_first_member_initializers(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // path -> (total declarations, declarations omitting the first initializer)
-  let groups : Map[String, (Int, Int)] = Map([])
+  let groups : Map[String, (Int32, Int32)] = Map([])
   fn walk(m : @ast.TsModule, prefix : String) -> Unit {
     for e in m.enums {
       if e.is_declare {
@@ -34279,7 +34290,7 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
 fn structural_named_key(
   n : String,
   resolver : Resolver,
-  depth : Int,
+  depth : Int32,
 ) -> String? {
   match resolver.interfaces.get(n) {
     Some(iface) => {
@@ -34368,7 +34379,7 @@ fn structural_named_key(
 /// members sort / dedupe, literal members subsumed by their base primitive
 /// drop (`string | "a"` ≡ `string`), `never` members drop, `any` /
 /// `unknown` absorb the union, and `Array<T>` ≡ `T[]`.
-fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int) -> String? {
+fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int32) -> String? {
   if depth > 16 {
     return None
   }
@@ -34583,7 +34594,7 @@ fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int) -> String? {
 fn normalized_union_members(
   t : @ast.TsType,
   resolver : Resolver,
-  depth? : Int = 0,
+  depth~ : Int32 = 0,
 ) -> Array[@ast.TsType] {
   // Mutually-recursive aliases (`type A = B | number; type B = A | string;`)
   // would otherwise recurse forever through `unwrap` + union members. Cap the
@@ -35285,7 +35296,7 @@ fn check_var_redeclaration_in_scope(
   params : Array[@ast.TsParam],
   body : @ast.TsBlock,
   resolver : Resolver,
-  polymorphic_this? : Bool = false,
+  polymorphic_this~ : Bool = false,
 ) -> Array[ExprIssue] {
   let decls : Array[(String, @ast.TsType)] = []
   for p in params {
@@ -35545,7 +35556,7 @@ fn check_lib_directive_globals(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// Required-parameter count of a callable TYPE: parameters that are
 /// neither rest nor optional (`T | undefined`). `None` when the type
 /// isn't a plain function shape.
-fn callable_required_arity(resolver : Resolver, t : @ast.TsType) -> Int? {
+fn callable_required_arity(resolver : Resolver, t : @ast.TsType) -> Int32? {
   match resolver.unwrap(t) {
     GenericFunc(_, _, inner) => callable_required_arity(resolver, inner)
     Func(ps, _) => {
@@ -35565,7 +35576,7 @@ fn callable_required_arity(resolver : Resolver, t : @ast.TsType) -> Int? {
 ///|
 /// Required-parameter count of a SYNTACTIC callable (inline decorator
 /// arrows / function expressions).
-fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int {
+fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int32 {
   let mut required = 0
   for p in params {
     if !p.is_rest && p.default is None {
@@ -35764,7 +35775,7 @@ fn check_member_decorator_signatures(
       }
     }
     let hi = if has_rest { -1 } else { total }
-    fn accepts(n : Int) -> Bool {
+    fn accepts(n : Int32) -> Bool {
       lo <= n && (hi < 0 || n <= hi)
     }
 
@@ -35938,7 +35949,7 @@ fn check_class_decorator_signatures(
   let runtime_arity = if legacy { 1 } else { 2 }
   for cls in module_.classes {
     for d in cls.decorators {
-      let required : Int? = match d {
+      let required : Int32? = match d {
         Var(n) =>
           if resolver.classes.get(n) is Some(_) &&
             resolver.globals.get(n) is None {
@@ -36105,7 +36116,7 @@ fn member_name_duplicates(
       _ => false
     }
   }
-  let count : Map[String, Int] = Map([])
+  let count : Map[String, Int32] = Map([])
   let has_property : Map[String, Bool] = Map([])
   let order : Array[String] = []
   for f in fields {
@@ -36458,7 +36469,7 @@ fn check_module_function_bodies_layered(
   permissive : Bool,
   type_modules : Array[@ast.TsModule],
   extra_globals : Array[(String, @ast.TsType)],
-  backstops? : RootNameBackstops? = None,
+  backstops~ : RootNameBackstops? = None,
 ) -> Array[ExprIssue] {
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
@@ -39522,7 +39533,7 @@ fn shapes_definitely_disjoint(
 fn cast_shape_fields(
   resolver : Resolver,
   t : @ast.TsType,
-  depth : Int,
+  depth : Int32,
 ) -> Map[String, Bool]? {
   if depth > 8 {
     return None
@@ -39681,7 +39692,7 @@ fn check_class_implements(
     // compatible with everything, so `m() { return "" }` abstains — the
     // annotation-presence fact the AST does not carry, recorded for TS7031
     // / TS7022 / TS2729 / TS2490 as well.
-    let method_decl_count : Map[String, Int] = Map([])
+    let method_decl_count : Map[String, Int32] = Map([])
     for m in cls.methods {
       if !m.is_static && m.accessor == "" {
         method_decl_count[m.name] = match method_decl_count.get(m.name) {
@@ -39928,7 +39939,7 @@ fn check_class_implements(
 fn callable_member_incompatible(
   derived : @ast.TsType,
   base : @ast.TsType,
-  ignore_return? : Bool = false,
+  ignore_return~ : Bool = false,
 ) -> Bool {
   let same_kind = match (derived, base) {
     (Func(_, _), Func(_, _)) => true
@@ -40058,17 +40069,17 @@ fn check_interface_extends_compat(
   // name, which is exactly how bases resolve (`iface_by_name`).
   let base_fields_cache : Map[
     String,
-    (Map[String, @ast.TsType], Map[String, Int]),
+    (Map[String, @ast.TsType], Map[String, Int32]),
   ] = Map([])
   fn base_field_maps(
     name : String,
     base : @ast.TsInterface,
-  ) -> (Map[String, @ast.TsType], Map[String, Int]) {
+  ) -> (Map[String, @ast.TsType], Map[String, Int32]) {
     match base_fields_cache.get(name) {
       Some(v) => v
       None => {
         let fields : Map[String, @ast.TsType] = Map([])
-        let counts : Map[String, Int] = Map([])
+        let counts : Map[String, Int32] = Map([])
         for f in base.fields {
           fields[f.0] = f.1
           counts[f.0] = match counts.get(f.0) {
@@ -40096,7 +40107,7 @@ fn check_interface_extends_compat(
     // `addEventListener<K extends keyof ...>` + string-overload pattern
     // misfired 464 times. Count once per derived declaration (NOT per
     // base edge) and skip those members below.
-    let derived_counts : Map[String, Int] = Map([])
+    let derived_counts : Map[String, Int32] = Map([])
     for df in iface.fields {
       derived_counts[df.0] = match derived_counts.get(df.0) {
         Some(n) => n + 1
@@ -40553,7 +40564,7 @@ fn check_interface_extends_compat(
   ) -> Unit {
     for sig in index_sigs {
       // 0 = numeric keys only, 1 = string keys, 2 = symbol keys.
-      let key_kind : Int = match sig.0 {
+      let key_kind : Int32 = match sig.0 {
         Number | Int => 0
         String_ => 1
         // A `symbol` index signature constrains exactly the well-known
@@ -40654,7 +40665,7 @@ fn check_interface_extends_compat(
   // than iterating `resolver.interfaces` wholesale: that table also
   // holds interfaces ingested from imported modules and the lib, and
   // those are not this module's to report on.
-  let iface_decl_counts : Map[String, Int] = Map([])
+  let iface_decl_counts : Map[String, Int32] = Map([])
   for iface in module_.interfaces {
     iface_decl_counts[iface.name] = (match iface_decl_counts.get(iface.name) {
         Some(v) => v

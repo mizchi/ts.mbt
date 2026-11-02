@@ -46,7 +46,7 @@
 ///|
 /// How many parameters each trimmable function keeps.
 pub(all) struct ArityPlan {
-  keep_count : Map[String, Int]
+  keep_count : Map[String, Int32]
 }
 
 ///|
@@ -59,8 +59,8 @@ priv struct ParamScan {
   // Occurrences of `Var(name)` anywhere, and of `Var(name)` specifically
   // as the callee of a `CallExpr`. A name whose plain-reference count
   // exceeds its callee count is used as a value somewhere.
-  var_hits : Map[String, Int]
-  callee_hits : Map[String, Int]
+  var_hits : Map[String, Int32]
+  callee_hits : Map[String, Int32]
   // Argument lists seen at call sites, in the two call shapes.
   calls : Map[String, Array[Array[@ast.TsExpr]]]
   // Names an assignment writes to, and names used as a constructor.
@@ -69,7 +69,7 @@ priv struct ParamScan {
 }
 
 ///|
-fn bump(counter : Map[String, Int], name : String) -> Unit {
+fn bump(counter : Map[String, Int32], name : String) -> Unit {
   counter[name] = counter.get(name).unwrap_or(0) + 1
 }
 
@@ -92,8 +92,8 @@ fn record_call(
 /// exported bindings.
 pub fn plan_unused_params(
   block : @ast.TsBlock,
-  keep? : Map[String, Bool] = {},
-  declines? : Array[String] = [],
+  keep~ : Map[String, Bool] = {},
+  declines~ : Array[String] = [],
 ) -> ArityPlan {
   let scan : ParamScan = {
     params: {},
@@ -109,7 +109,7 @@ pub fn plan_unused_params(
     return { keep_count: {}, }
   }
   scan_param_uses(scan, block)
-  let keep_count : Map[String, Int] = Map([])
+  let keep_count : Map[String, Int32] = Map([])
   for entry in scan.params {
     let (name, params) = entry
     if keep.contains(name) {
@@ -377,7 +377,10 @@ fn trim_args(
 }
 
 ///|
-fn trim_params(params : Array[@ast.TsParam], keep : Int) -> Array[@ast.TsParam] {
+fn trim_params(
+  params : Array[@ast.TsParam],
+  keep : Int32,
+) -> Array[@ast.TsParam] {
   let out : Array[@ast.TsParam] = []
   for i, p in params {
     if i < keep {

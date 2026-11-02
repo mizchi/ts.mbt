@@ -15,7 +15,7 @@
 ///| Keep the scope narrow unless a separate "real checker" goal is chosen.
 
 ///|
-fn object_shape_char_at(s : String, idx : Int) -> Char {
+fn object_shape_char_at(s : String, idx : Int32) -> Char {
   s[idx].to_int().unsafe_to_char()
 }
 
@@ -40,8 +40,8 @@ fn object_shape_is_ident_char(c : Char) -> Bool {
 ///|
 fn object_shape_take_identifier_at(
   source : String,
-  start : Int,
-) -> (String, Int) {
+  start : Int32,
+) -> (String, Int32) {
   let mut i = start
   let mut result = ""
   while i < source.length() {
@@ -79,7 +79,7 @@ fn object_shape_compact_ascii_space(source : String) -> String {
 }
 
 ///|
-fn object_shape_next_non_space_index(source : String, start : Int) -> Int {
+fn object_shape_next_non_space_index(source : String, start : Int32) -> Int32 {
   let mut i = start
   while i < source.length() {
     let c = object_shape_char_at(source, i)
@@ -150,8 +150,8 @@ fn object_shape_strip_trailing_semicolon(source : String) -> String {
 ///|
 fn object_shape_skip_leading_member_modifiers_from(
   source : String,
-  idx : Int,
-) -> Int {
+  idx : Int32,
+) -> Int32 {
   let start = object_shape_next_non_space_index(source, idx)
   if start >= source.length() {
     return start
@@ -165,7 +165,7 @@ fn object_shape_skip_leading_member_modifiers_from(
 }
 
 ///|
-fn object_shape_skip_leading_member_modifiers(source : String) -> Int {
+fn object_shape_skip_leading_member_modifiers(source : String) -> Int32 {
   object_shape_skip_leading_member_modifiers_from(source, 0)
 }
 

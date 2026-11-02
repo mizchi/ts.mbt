@@ -1111,8 +1111,8 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
 
 ///|
 fn apply_jsdoc_param_overlay(
-  jsdoc_at_pos : Map[Int, JsdocBlock],
-  pos : Int,
+  jsdoc_at_pos : Map[Int32, JsdocBlock],
+  pos : Int32,
   params : Array[@ast.TsParam],
 ) -> Array[@ast.TsParam] {
   let jb = match jsdoc_at_pos.get(pos) {
@@ -1154,8 +1154,8 @@ fn apply_jsdoc_param_overlay(
 
 ///|
 fn apply_jsdoc_return_overlay(
-  jsdoc_at_pos : Map[Int, JsdocBlock],
-  pos : Int,
+  jsdoc_at_pos : Map[Int32, JsdocBlock],
+  pos : Int32,
   return_type : @ast.TsType,
 ) -> @ast.TsType {
   match return_type {
@@ -1768,7 +1768,7 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
 fn Parser::push_local_type_param_bounds(
   self : Parser,
   bounds : Array[(String, @ast.TsType)],
-) -> Int {
+) -> Int32 {
   let old_len = self.local_type_param_bounds.length()
   for bound in bounds {
     self.local_type_param_bounds.push(bound)
@@ -1779,7 +1779,7 @@ fn Parser::push_local_type_param_bounds(
 ///|
 fn Parser::restore_local_type_param_bounds(
   self : Parser,
-  old_len : Int,
+  old_len : Int32,
 ) -> Unit {
   while self.local_type_param_bounds.length() > old_len {
     let _ = self.local_type_param_bounds.pop()
@@ -3058,8 +3058,8 @@ pub fn Parser::parse_declare_function(
 /// ends the scan for that property.
 fn param_pattern_renamings(
   tokens : Array[Token],
-  start : Int,
-  end_ : Int,
+  start : Int32,
+  end_ : Int32,
 ) -> Array[(String, String)] {
   let out : Array[(String, String)] = []
   // Nesting level inside the pattern's own brackets, and the level at

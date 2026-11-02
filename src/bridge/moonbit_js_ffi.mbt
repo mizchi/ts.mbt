@@ -5,6 +5,10 @@ pub struct MoonBitJsFfiBundle {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend MoonBitJsFfiBundle with @debug.Debug::{to_repr}
+
+///|
 priv struct MoonBitBridgeImport {
   imported_name : String
   local_name : String
@@ -29,7 +33,7 @@ priv struct MoonBitJsFfiState {
   enums : Array[@ast.TsEnumDecl]
   external_type_names : Array[String]
   local_type_param_names : Array[String]
-  function_field_method_wrapper_limit : Int
+  function_field_method_wrapper_limit : Int32
   tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl]
   // Inline `A | B` unions encountered while lowering parameter / return /
   // field types are auto-synthesized into PascalCase tagged-union aliases
@@ -56,7 +60,7 @@ priv struct MoonBitJsFfiState {
 }
 
 ///|
-let ffi_function_field_method_wrapper_limit : Int = 128
+let ffi_function_field_method_wrapper_limit : Int32 = 128
 
 ///|
 fn ffi_is_ascii_letter(c : Char) -> Bool {
@@ -266,7 +270,7 @@ fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
 fn ffi_push_local_type_params(
   state : MoonBitJsFfiState,
   names : Array[String],
-) -> Int {
+) -> Int32 {
   let old_len = state.local_type_param_names.length()
   for name in names {
     if !state.local_type_param_names.contains(name) {
@@ -279,7 +283,7 @@ fn ffi_push_local_type_params(
 ///|
 fn ffi_restore_local_type_params(
   state : MoonBitJsFfiState,
-  old_len : Int,
+  old_len : Int32,
 ) -> Unit {
   while state.local_type_param_names.length() > old_len {
     let _ = state.local_type_param_names.pop()
@@ -690,7 +694,7 @@ fn ffi_enum_string_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, String)]? {
 }
 
 ///|
-fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
+fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int32)]? {
   match enum_lowering_int_cases(enum_) {
     Some(cases) =>
       if ffi_int_cases_need_double(cases) {
@@ -703,7 +707,9 @@ fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
 }
 
 ///|
-fn ffi_enum_double_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
+fn ffi_enum_double_int_cases(
+  enum_ : @ast.TsEnumDecl,
+) -> Array[(String, Int32)]? {
   match enum_lowering_int_cases(enum_) {
     Some(cases) =>
       if ffi_int_cases_need_double(cases) {
@@ -1832,8 +1838,8 @@ fn ffi_function_field_method_decl(
   field_name : String,
   js_field_name : String,
   field_type : @ast.TsType,
-  event_special? : (String, String)? = None,
-  method_type_params? : Array[String] = [],
+  event_special~ : (String, String)? = None,
+  method_type_params~ : Array[String] = [],
 ) -> String? {
   let field_type = match field_type {
     CallableMeta(inner, _) => inner
@@ -2851,7 +2857,7 @@ fn ffi_enum_js_extern_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
 }
 
 ///|
-fn ffi_int_literal_expr(value : Int) -> String {
+fn ffi_int_literal_expr(value : Int32) -> String {
   let raw = value.to_string()
   if raw == "-2147483648" {
     "(-2147483647 - 1)"
@@ -2861,7 +2867,7 @@ fn ffi_int_literal_expr(value : Int) -> String {
 }
 
 ///|
-fn ffi_double_literal_expr(value : Int) -> String {
+fn ffi_double_literal_expr(value : Int32) -> String {
   let raw = value.to_string()
   if raw == "-2147483648" {
     "(-536870912.0 * 4.0)"
@@ -2871,7 +2877,7 @@ fn ffi_double_literal_expr(value : Int) -> String {
 }
 
 ///|
-fn ffi_int_cases_need_double(cases : Array[(String, Int)]) -> Bool {
+fn ffi_int_cases_need_double(cases : Array[(String, Int32)]) -> Bool {
   for item in cases {
     if item.1.to_string() == "-2147483648" {
       return true
@@ -2881,7 +2887,7 @@ fn ffi_int_cases_need_double(cases : Array[(String, Int)]) -> Bool {
 }
 
 ///|
-fn ffi_enum_js_raw_literal(enum_ : @ast.TsEnumDecl, index : Int) -> String? {
+fn ffi_enum_js_raw_literal(enum_ : @ast.TsEnumDecl, index : Int32) -> String? {
   match ffi_enum_string_cases(enum_) {
     Some(cases) => {
       let (_, value) = cases[index]
@@ -2900,7 +2906,7 @@ fn ffi_enum_js_raw_literal(enum_ : @ast.TsEnumDecl, index : Int) -> String? {
 }
 
 ///|
-fn ffi_enum_case_count(enum_ : @ast.TsEnumDecl) -> Int {
+fn ffi_enum_case_count(enum_ : @ast.TsEnumDecl) -> Int32 {
   match ffi_enum_string_cases(enum_) {
     Some(cases) => cases.length()
     None =>
@@ -4349,7 +4355,7 @@ fn ffi_converted_return_extern_pair(
   arg_names : Array[String],
   return_type : String,
   target : String,
-  force? : Bool = false,
+  force~ : Bool = false,
 ) -> String? {
   let extern_name = "_\{extern_base}_ret_conv_js"
   let call = extern_name + "(" + arg_names.join(", ") + ")"
