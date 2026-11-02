@@ -876,28 +876,22 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-// `ZodSafeParseResult` is a union of the success and error results, so
-// the bridge exports it as an opaque type; read the shared `success`
-// discriminant on the JS side, as the valibot smoke does.
-extern "js" fn realworld_zod_success(r : Parse_ZodSafeParseResult) -> Bool =
-  #| (r) => r.success === true
-
 test "real-world zod bridge smoke" {
   let _ = number(None)
   let _ = boolean(None)
   // Concrete schemas expose the flattened ZodType surface directly.
   let s = string(None)
-  if !realworld_zod_success(s.safeParse(unsafeCast("hello"), None)) {
+  if !s.safeParse(unsafeCast("hello"), None).success {
     abort("expected zod safeParse success")
   }
-  if realworld_zod_success(s.safeParse(unsafeCast(42), None)) {
+  if s.safeParse(unsafeCast(42), None).success {
     abort("expected zod safeParse failure")
   }
   let email = string(None).email(None)
-  if !realworld_zod_success(email.safeParse(unsafeCast("a@b.co"), None)) {
+  if !email.safeParse(unsafeCast("a@b.co"), None).success {
     abort("expected zod email success")
   }
-  if realworld_zod_success(email.safeParse(unsafeCast("nope"), None)) {
+  if email.safeParse(unsafeCast("nope"), None).success {
     abort("expected zod email failure")
   }
   // Generic owners (ZodObject) reach the surface via the as_schema upcast;
@@ -906,7 +900,7 @@ test "real-world zod bridge smoke" {
   // no per-value unsafeCast remains.
   let shape = loose_shape_of(["name"], [as_schema(string(None))])
   let obj = as_schema(object(Some(shape), None))
-  if realworld_zod_success(obj.safeParse(unsafeCast("not an object"), None)) {
+  if obj.safeParse(unsafeCast("not an object"), None).success {
     abort("expected zod object failure")
   }
 }
@@ -1795,23 +1789,20 @@ EOF
       ;;
     zod)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_zod_success(r : @sut.Parse_ZodSafeParseResult) -> Bool =
-  #| (r) => r.success === true
-
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
 fn main {
   let _ = @sut.number(None)
   let _ = @sut.boolean(None)
   let s = @sut.string(None)
-  if !realworld_zod_success(s.safeParse(unsafeCast("hello"), None)) {
+  if !s.safeParse(unsafeCast("hello"), None).success {
     abort("expected zod safeParse success")
   }
-  if realworld_zod_success(s.safeParse(unsafeCast(42), None)) {
+  if s.safeParse(unsafeCast(42), None).success {
     abort("expected zod safeParse failure")
   }
   let obj = @sut.as_schema(@sut.object(None, None))
-  if realworld_zod_success(obj.safeParse(unsafeCast("nope"), None)) {
+  if obj.safeParse(unsafeCast("nope"), None).success {
     abort("expected zod object failure")
   }
 }
