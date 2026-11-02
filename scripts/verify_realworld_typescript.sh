@@ -792,6 +792,8 @@ EOF
       ;;
     hono)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_hono_options() -> HonoOptions[Env] =
   #| () => ({ strict: true })
 
@@ -872,6 +874,8 @@ EOF
       ;;
     zod)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 test "real-world zod bridge smoke" {
   let _ = number(None)
   let _ = boolean(None)
@@ -943,6 +947,8 @@ EOF
       ;;
     valibot)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_valibot_success(r : JSValue) -> Bool =
   #| (r) => r.success === true
 
@@ -1005,6 +1011,8 @@ EOF
       ;;
     react)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_react_vnode(
   elem : DetailedReactHTMLElement[
     InputHTMLAttributes[HTMLInputElement],
@@ -1087,6 +1095,8 @@ EOF
       ;;
     superstruct)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ss_string_value() -> JSValue =
   #| () => "hello"
 
@@ -1099,6 +1109,8 @@ EOF
       ;;
     eventemitter3)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ee3_event() -> EventEmitter_EventNames =
   #| () => "ping"
 
@@ -1134,6 +1146,8 @@ EOF
       ;;
     marked)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 test "real-world marked bridge smoke" {
   let html = marked_string_marked_options_optional("# hello", None)
   let rendered : String = unsafeCast(html)
@@ -1145,6 +1159,8 @@ EOF
       ;;
     semver)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 test "real-world semver bridge smoke" {
   assert_eq(valid(Some(unsafeCast("1.2.3")), None), Some("1.2.3"))
   assert_eq(clean(" 1.2.3 ", None), Some("1.2.3"))
@@ -1154,6 +1170,8 @@ EOF
       ;;
     picomatch)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_pm_match(m : Picomatch_Matcher, input : String) -> Bool =
   #| (m, input) => m(input)
 
@@ -1189,6 +1207,8 @@ EOF
       ;;
     axios)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_axios_config() -> AxiosRequestConfig[JSValue] =
   #| () => ({ url: "/users/1", baseURL: "https://example.test" })
 
@@ -1217,6 +1237,8 @@ EOF
       ;;
     debug)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 test "real-world debug bridge smoke" {
   let dbg : Debug = unsafeCast(get_default())
   dbg.enable("tsmbt:*")
@@ -1266,6 +1288,8 @@ EOF
       ;;
     uuid)
       cat > "$out/bridge_test.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_uuid_absent() -> JSValue =
   #| () => undefined
 
@@ -1728,6 +1752,8 @@ EOF
       ;;
     hono)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_hono_options() -> @sut.HonoOptions[@sut.Env] =
   #| () => ({ strict: true })
 
@@ -3137,6 +3163,8 @@ pkgtype(kind: "executable")
 EOF
 
   cat > "$app/src/main/main.mbt" <<'EOF'
+fn[A, B] unsafeCast(value : A) -> B = "%identity"
+
 extern "js" fn smoke_response_status(res : @hono.JSValue) -> Int =
   #| (res) => res.status
 
