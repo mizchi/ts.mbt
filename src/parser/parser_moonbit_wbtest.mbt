@@ -373,3 +373,18 @@ test "moonbit_sanitize_type_param_name suffixes reserved builtin type names" {
   // The existing `$` rewrite still applies.
   assert_eq(moonbit_sanitize_type_param_name("TInput$1"), "TInput_1")
 }
+
+///|
+test "moonbit_type_identifier suffixes a declared type that moonc reserves" {
+  // commander exports `class Option`; moonc v0.10.19 rejects `pub type
+  // Option` ([4003]) exactly as it rejects the name as a type variable.
+  assert_eq(moonbit_type_identifier("Option", "OpaqueType"), "Option_")
+  assert_eq(moonbit_type_identifier("Self", "OpaqueType"), "Self_")
+  assert_eq(moonbit_type_identifier("Char", "OpaqueType"), "Char_")
+  // Long-standing renames are kept.
+  assert_eq(moonbit_type_identifier("Array", "OpaqueType"), "Array_")
+  assert_eq(moonbit_type_identifier("Error", "OpaqueType"), "Error_")
+  // Not reserved.
+  assert_eq(moonbit_type_identifier("Result", "OpaqueType"), "Result")
+  assert_eq(moonbit_type_identifier("Command", "OpaqueType"), "Command")
+}

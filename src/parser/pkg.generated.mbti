@@ -31,6 +31,10 @@ pub fn moonbit_inline_union_func_case_name(Array[@ast.TsType], @ast.TsType) -> S
 
 pub fn moonbit_inline_union_runtime_named_ok(String) -> Bool
 
+pub fn moonbit_reserved_type_name_needs_suffix(String) -> Bool
+
+pub let moonbit_reserved_type_names : Array[String]
+
 pub fn moonbit_sanitize_type_param_name(String) -> String
 
 pub fn moonbit_upcast_helper_name(String) -> String?

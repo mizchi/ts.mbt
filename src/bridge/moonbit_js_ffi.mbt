@@ -237,9 +237,14 @@ fn ffi_type_identifier(name : String, fallback : String) -> String {
     core
   }
   let normalized = prefix + normalized_core
+  // The same reserved set as `moonbit_type_identifier` (see
+  // `@parser.moonbit_reserved_type_names`), so the decl and ffi layers name
+  // a commander `Option` identically.
+  if normalized == "Array" ||
+    @parser.moonbit_reserved_type_name_needs_suffix(normalized) {
+    return normalized + "_"
+  }
   match normalized {
-    "Array" | "Bool" | "Double" | "Error" | "Int" | "String" | "Unit" =>
-      normalized + "_"
     "default" => "Default"
     _ => normalized
   }

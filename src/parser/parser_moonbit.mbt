@@ -291,10 +291,14 @@ fn moonbit_type_identifier(name : String, fallback : String) -> String {
     core
   }
   let normalized = prefix + normalized_core
-  match normalized {
-    "Array" | "Bool" | "Double" | "Error" | "Int" | "String" | "Unit" =>
-      normalized + "_"
-    _ => normalized
+  // commander exports `class Option`; `Option` (like `Self`, `Char`, …) is
+  // reserved for a declared type too. `Array` is not reserved and is
+  // renamed anyway so a declared `Array` cannot shadow the builtin.
+  if normalized == "Array" ||
+    moonbit_reserved_type_name_needs_suffix(normalized) {
+    normalized + "_"
+  } else {
+    normalized
   }
 }
 
@@ -366,13 +370,29 @@ fn moonbit_type_param_suffix(type_params : Array[String]) -> String {
 }
 
 ///|
-/// Builtin type names moonc refuses as a type variable (see
-/// `moonbit_sanitize_type_param_name`).
-let moonbit_reserved_type_variable_names : Array[String] = [
+/// Builtin type names moonc v0.10.19 refuses both as a type VARIABLE and
+/// as a declared TYPE ([4003] "is a reserved type name"). Probed one name
+/// at a time — `struct S[X] { x : X }` and `#external pub type X` give the
+/// identical set — so `Array`, `Result` and `Map` are NOT in it. Shared by
+/// the type-parameter sanitizer and both type-identifier functions, so the
+/// three cannot disagree about which names move.
+pub let moonbit_reserved_type_names : Array[String] = [
   "Unit", "Int", "Int16", "Int32", "Int64", "UInt", "UInt16", "UInt32", "UInt64",
   "Byte", "Bool", "Char", "String", "Double", "Float", "Bytes", "FixedArray", "Option",
   "Error", "Self", "StringView", "BytesView",
 ]
+
+///|
+/// Whether a TYPE NAME (as opposed to a type variable) must be suffixed.
+/// `Int64` / `UInt64` are the bigint lowering's own spelling and flow
+/// through the type-identifier functions as genuine builtin references
+/// (`StatsBase[Int64]`), so they keep their name; a `.d.ts` declaring a type
+/// literally called `Int64` is the case this gives up.
+pub fn moonbit_reserved_type_name_needs_suffix(name : String) -> Bool {
+  name != "Int64" &&
+  name != "UInt64" &&
+  moonbit_reserved_type_names.contains(name)
+}
 
 ///|
 /// MoonBit identifiers do not allow `$`, but TypeScript declarations
@@ -393,7 +413,7 @@ pub fn moonbit_sanitize_type_param_name(name : String) -> String {
   // `Map` are NOT reserved there and are deliberately absent. Declaration
   // and every reference both route through this function, so the
   // suffixed spelling stays consistent.
-  if moonbit_reserved_type_variable_names.contains(name) {
+  if moonbit_reserved_type_names.contains(name) {
     return name + "_"
   }
   let mut needs = false
