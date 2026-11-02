@@ -1,12 +1,12 @@
 ///|
 pub struct Item {
-  id : Int
+  id : Int32
   name : String
 }
 
 ///|
-pub fn make_item(id : Int, name : String) -> Item {
-  { id, name }
+pub fn make_item(id : Int32, name : String) -> Item {
+  { id, name, }
 }
 
 ///|

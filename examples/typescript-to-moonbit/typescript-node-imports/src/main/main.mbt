@@ -1,29 +1,46 @@
 ///| Convert Node's Buffer result to a MoonBit String without weakening the
-///| generated `readFileSync` return type.
+
+///|
+/// generated `readFileSync` return type.
 extern "js" fn utf8_text(data : @fs.NonSharedBuffer) -> String =
   #| (data) => data.toString("utf8")
 
 ///| A `ReadStream`-shaped object, so the accessor pair below can be observed
+
 ///| without opening a file. `ReadStream` is an opaque `#external` type, and
-///| what the accessors touch is one property.
+
+///|
+/// what the accessors touch is one property.
 extern "js" fn read_stream_with_path(path : String) -> @fs.ReadStream =
   #| (path) => ({ path })
 
+///|
 fn script_target() -> @ts.ScriptTarget {
   @ts.ScriptTarget::ES2024
 }
 
 ///| `ReadStream.path` is declared `PathLike` — a tagged union whose MoonBit
+
 ///| repr is `{ "$tag": i, "_0": v }` and whose JS repr is the bare value — so
+
 ///| both accessors have to convert. Neither did: the getter handed the raw JS
+
 ///| string back as if it were the enum, and the setter stored the enum object
+
 ///| into Node's field.
+
 ///|
+
 ///| Checked by VALUE rather than by compiling, because both bugs compile
+
 ///| perfectly: the declared type is the same either way. The round trip is
+
 ///| what catches the write direction — a setter that stored the box leaves the
+
 ///| getter looking at an object that is neither string, Buffer nor URL, and
-///| its `_from_js` throws.
+
+///|
+/// its `_from_js` throws.
 fn check_tagged_union_property_accessors() -> Unit {
   let stream = read_stream_with_path("read-stream-accessor.ts")
   match stream.get_read_stream_path() {
@@ -32,7 +49,9 @@ fn check_tagged_union_property_accessors() -> Unit {
         abort("ReadStream.path getter returned the wrong string: " + text)
       }
     _ =>
-      abort("expected ReadStream.path to build PathLike::StringValue from a JS string")
+      abort(
+        "expected ReadStream.path to build PathLike::StringValue from a JS string",
+      )
   }
   stream.set_read_stream_path(@fs.path_like_from_string("reassigned.ts"))
   match stream.get_read_stream_path() {
@@ -44,6 +63,7 @@ fn check_tagged_union_property_accessors() -> Unit {
   }
 }
 
+///|
 fn main {
   // This is the generated TypeScript compiler API, imported just like a
   // normal MoonBit package through `moon.pkg`.

@@ -3,6 +3,4 @@ import {
   "examples/typescript_node_imports/internal/generated/typescript" @ts,
 }
 
-options(
-  "is-main": true,
-)
+pkgtype(kind: "executable")
