@@ -2748,8 +2748,156 @@ fn type_alias_object_fields_to_interface(
         deprecated_members: [],
       })
     }
+    // hono 4.13's `HonoOptions<E>` = `{ router? } & ({ strict?: true;
+    // getPath? } | { strict: false; getPath?: never })` — the
+    // discriminated-options idiom. Without this arm the alias had no
+    // interface at all and `new Hono(options)` took an opaque type MoonBit
+    // could not construct, where 4.12's plain object gave a struct.
+    @ast.TsType::Intersection(items) =>
+      match alias_intersection_object_fields(items) {
+        Some(fields) =>
+          type_alias_object_fields_to_interface(
+            name,
+            type_params,
+            @ast.TsType::Object(fields),
+          )
+        None => None
+      }
     _ => None
   }
+}
+
+///|
+/// Flatten an intersection of object shapes into one field list. A member
+/// that is a UNION of object shapes is folded by
+/// `alias_join_options_object_union` first. Two members declaring the same
+/// key would need a field-type intersection, so that case declines.
+fn alias_intersection_object_fields(
+  items : Array[@ast.TsType],
+) -> Array[(@ast.TsType, @ast.TsType)]? {
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  for item in items {
+    let fields = match item {
+      @ast.TsType::Object(fields) => fields
+      @ast.TsType::Union(_) =>
+        match alias_join_options_object_union(item) {
+          Some(fields) => fields
+          None => return None
+        }
+      _ => return None
+    }
+    for f in fields {
+      if !(f.0 is @ast.TsType::Literal(_)) {
+        return None
+      }
+      for existing in out {
+        if existing.0 == f.0 {
+          return None
+        }
+      }
+      out.push(f)
+    }
+  }
+  Some(out)
+}
+
+///|
+/// Join a union of object shapes into ONE shape a caller can CONSTRUCT:
+/// every field becomes optional, boolean-literal discriminants
+/// (`strict?: true` / `strict: false`) widen to `boolean`, and a member's
+/// `?: never` for a field only makes that field optional. Any other
+/// disagreement between members declines.
+///
+/// This is the WRITE-oriented counterpart of the bridge's
+/// `decl_join_never_exclusive_object_union`, which keeps exclusive fields
+/// RAW because zod's result is READ from JS. The two cannot share a rule:
+/// an options object is built in MoonBit and handed to JS, so the useful
+/// shape is the one every member accepts a subset of.
+fn alias_join_options_object_union(
+  t : @ast.TsType,
+) -> Array[(@ast.TsType, @ast.TsType)]? {
+  let members = match t {
+    @ast.TsType::Union(items) => items
+    _ => return None
+  }
+  if members.length() < 2 {
+    return None
+  }
+  let keys : Array[@ast.TsType] = []
+  for member_ in members {
+    match member_ {
+      @ast.TsType::Object(fields) =>
+        for f in fields {
+          if !(f.0 is @ast.TsType::Literal(_)) {
+            return None
+          }
+          if !keys.contains(f.0) {
+            keys.push(f.0)
+          }
+        }
+      _ => return None
+    }
+  }
+  fn strip_undefined(ty : @ast.TsType) -> @ast.TsType? {
+    match ty {
+      @ast.TsType::Undefined | @ast.TsType::Never => None
+      @ast.TsType::Union(items) => {
+        let kept : Array[@ast.TsType] = []
+        for it in items {
+          match it {
+            @ast.TsType::Undefined | @ast.TsType::Never => ()
+            other => kept.push(other)
+          }
+        }
+        match kept.length() {
+          0 => None
+          1 => Some(kept[0])
+          _ => Some(@ast.TsType::Union(kept))
+        }
+      }
+      other => Some(other)
+    }
+  }
+
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  for key in keys {
+    let real : Array[@ast.TsType] = []
+    for member_ in members {
+      guard member_ is @ast.TsType::Object(fields) else { return None }
+      for f in fields {
+        if f.0 == key {
+          match strip_undefined(f.1) {
+            Some(ty) => if !real.contains(ty) { real.push(ty) }
+            None => ()
+          }
+        }
+      }
+    }
+    let joined = if real.length() == 0 {
+      return None
+    } else if real.length() == 1 {
+      real[0]
+    } else {
+      let mut all_bool = true
+      for ty in real {
+        if !(ty is @ast.TsType::BooleanLiteral(_)) {
+          all_bool = false
+        }
+      }
+      if !all_bool {
+        return None
+      }
+      @ast.TsType::Boolean
+    }
+    // A lone boolean literal is still a discriminant a caller must be able
+    // to set either way once the members are joined.
+    let joined = match joined {
+      @ast.TsType::BooleanLiteral(_) => @ast.TsType::Boolean
+      other => other
+    }
+    out.push((key, @ast.TsType::Union([joined, @ast.TsType::Undefined])))
+  }
+  Some(out)
 }
 
 ///|
