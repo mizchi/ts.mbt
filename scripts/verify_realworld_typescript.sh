@@ -1330,11 +1330,15 @@ EOF
       ;;
     minimatch)
       cat > "$out/bridge_test.mbt" <<'EOF'
+// `minimatch` is a const typed as a call signature PLUS static members, so
+// the bridge exposes it as `get_minimatch() -> JSValue` (the generator
+// before the moon 0.1.20261029 migration emits the same surface); the
+// `Minimatch` class carries the typed matcher.
 test "real-world minimatch bridge smoke" {
-  if !minimatch("bar.foo", "*.foo", None) {
+  if !@minimatch.new_minimatch("*.foo", None).match_("bar.foo", None) {
     abort("expected *.foo to match bar.foo")
   }
-  if minimatch("bar.foo", "*.bar", None) {
+  if @minimatch.new_minimatch("*.bar", None).match_("bar.foo", None) {
     abort("expected *.bar not to match bar.foo")
   }
   let is_foo = filter("*.foo", None)
@@ -2311,7 +2315,7 @@ EOF
     minimatch)
       cat > "$smoke_dir/main.mbt" <<'EOF'
 fn main {
-  if !@sut.minimatch("bar.foo", "*.foo", None) {
+  if !@sut.new_minimatch("*.foo", None).match_("bar.foo", None) {
     abort("expected *.foo to match bar.foo")
   }
 }
