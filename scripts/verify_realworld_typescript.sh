@@ -3258,8 +3258,8 @@ async fn main {
   // bare Response at runtime despite the Promise-typed declaration.
   let app : @hono.Hono[@hono.JSValue, @hono.JSValue, @hono.JSValue] = @hono.new_hono(None)
   let _ = app.get("/hello", smoke_hono_handler)
-  let res_p : @hono.Promise[@hono.JSValue] = @hono.unsafeCast(
-    app.request(@hono.unsafeCast("http://localhost/hello"), None, None, None),
+  let res_p : @hono.Promise[@hono.JSValue] = unsafeCast(
+    app.request(unsafeCast("http://localhost/hello"), None, None, None),
   )
   let res = res_p.wait()
   if smoke_response_status(res) != 200 {
