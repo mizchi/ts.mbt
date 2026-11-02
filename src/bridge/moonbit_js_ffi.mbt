@@ -1669,6 +1669,30 @@ fn ffi_inline_js_return_expr_with_state(
   type_ : @ast.TsType,
   expr : String,
 ) -> String {
+  // A FUNCTION handed back to MoonBit is called with MoonBit values, so its
+  // parameters need the conversion a direct argument gets — the same rule
+  // `ffi_type_js_return_expr` applies to a top-level function's return.
+  // The member renderers never asked it, so `factory().make("…")(None)`
+  // passed MoonBit's `None : Double?` (an object on the JS backend) into the
+  // JS closure raw. Inline lambdas cannot reach `bridge.js` helpers, so the
+  // arguments go through the INLINE converter.
+  let fn_type = match type_ {
+    CallableMeta(callable, _) => callable
+    other => other
+  }
+  match fn_type {
+    Func(fn_params, _) if ffi_returned_func_needs_arg_wrap(state, fn_type) => {
+      let arg_names : Array[String] = []
+      let converted : Array[String] = []
+      for i, p in fn_params {
+        let a = "a\{i}"
+        arg_names.push(a)
+        converted.push(ffi_inline_js_arg_expr_with_state(Some(state), p, a))
+      }
+      return "((__fn_) => (\{arg_names.join(", ")}) => __fn_(\{converted.join(", ")}))(\{expr})"
+    }
+    _ => ()
+  }
   let (inner, is_optional) = match
     @checker.classify_optional_like_union(type_) {
     Some((collapsed, true)) => (collapsed, true)
@@ -4045,7 +4069,8 @@ fn ffi_type_needs_js_return_conversion_with_state(
     return true
   }
   match type_ {
-    Func(_, _) => ffi_returned_func_needs_arg_wrap(state, type_)
+    Func(_, _) | CallableMeta(_, _) =>
+      ffi_returned_func_needs_arg_wrap(state, type_)
     _ => false
   }
 }
@@ -4064,6 +4089,14 @@ fn ffi_returned_func_needs_arg_wrap(
   type_ : @ast.TsType,
 ) -> Bool {
   match type_ {
+    // A returned function with an OPTIONAL parameter arrives wrapped in
+    // `CallableMeta` (the inner `Func`'s parameter types already carry the
+    // `| undefined`). Without this arm nanoid's `customAlphabet(…)` — the
+    // very case this wrap was written for — got no wrapper, and MoonBit's
+    // own `None : Double?`, an OBJECT on the JS backend
+    // (`Option$None` instance, `$tag` on the prototype), reached the raw
+    // closure as `size`, so the id generator looped until the heap ran out.
+    CallableMeta(inner, _) => ffi_returned_func_needs_arg_wrap(state, inner)
     Func(fn_params, _) => {
       for i, p in fn_params {
         let probe = "a\{i}"
@@ -4475,6 +4508,10 @@ fn ffi_type_js_return_expr(
   match ffi_wrappable_union_alias_name(state, type_) {
     Some(name) => return "\{tagged_union_from_js_function_name(name)}(\{expr})"
     None => ()
+  }
+  let type_ = match type_ {
+    CallableMeta(inner, _) => inner
+    other => other
   }
   match type_ {
     Func(fn_params, _) if ffi_returned_func_needs_arg_wrap(state, type_) => {

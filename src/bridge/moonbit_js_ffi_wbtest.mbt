@@ -5952,3 +5952,32 @@ async test "bridge: Pick inside an optional-parameter const callable reaches the
   assert_true(bundle.ffi_mbt.contains("pub(all) struct OptsPickAB {"))
   assert_false(bundle.ffi_mbt.contains(": Pick?"))
 }
+
+///|
+async test "bridge: a returned function with an optional parameter unwraps MoonBit options" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/returned-optional-callable-entry.d.ts", "/runtime/mod.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // MoonBit's `None : Double?` is an object on the JS backend, so the raw
+  // closure must not receive it: every call goes through the unwrap.
+  assert_true(
+    bundle.bridge_js.contains(
+      "((__fn_) => (a0) => __fn_(__ts_mbt_unwrap_option(a0)))(customAlphabet(",
+    ),
+  )
+  // The same rule for a MEMBER: an inline lambda cannot reach the bridge.js
+  // helper, so the argument goes through the inline unwrap.
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "#| (self, arg0) => ((__fn_) => (a0) => __fn_((a0 == null ? undefined",
+    ),
+  )
+}
