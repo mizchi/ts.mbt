@@ -93,13 +93,14 @@ verify_typescript_to_moonbit_example() {
     --out "$out" \
     --module-spec ../runtime/greetings.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -134,13 +135,14 @@ write_js_any_stub() {
 
   mkdir -p "$root/_stubs/mizchi_js/core"
 
-  cat > "$root/_stubs/mizchi_js/moon.mod.json" <<'EOF'
-{
-  "name": "mizchi/js",
-  "version": "0.0.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/_stubs/mizchi_js/moon.mod" <<'EOF'
+name = "mizchi/js"
+
+version = "0.0.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   : > "$root/_stubs/mizchi_js/core/moon.pkg"
@@ -251,16 +253,24 @@ verify_typescript_to_moonbit_hono_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_hono",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_hono"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -310,16 +320,24 @@ verify_typescript_to_moonbit_hono_real_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_hono_real",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_hono_real"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -389,16 +407,24 @@ verify_typescript_to_moonbit_react_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_react",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_react"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -438,16 +464,24 @@ verify_typescript_to_moonbit_react_types_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_react_types",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_react_types"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -544,16 +578,24 @@ verify_typescript_to_moonbit_vitest_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_vitest",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_vitest"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -635,16 +677,24 @@ verify_typescript_to_moonbit_result_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_result",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_result"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -684,13 +734,14 @@ verify_typescript_to_moonbit_reducer_example() {
     --out "$out" \
     --module-spec ../runtime/reducer.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_reducer",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_reducer"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -765,13 +816,14 @@ verify_typescript_to_moonbit_default_class_example() {
     --out "$out" \
     --module-spec ../runtime/counter.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_default_class",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_default_class"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -827,13 +879,14 @@ verify_typescript_to_moonbit_const_table_example() {
     --out "$out" \
     --module-spec ../runtime/index.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_const_table",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_const_table"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
@@ -883,16 +936,24 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   write_js_any_stub "$out"
 
   echo "Writing TypeScript AST MoonBit manifest"
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_typescript_ast",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_typescript_ast"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   echo "Checking TypeScript AST bridge artifacts"
@@ -938,7 +999,7 @@ verify_typescript_node_imports_example() {
 
   rm -rf "$root"
   mkdir -p "$root"
-  cp examples/typescript-to-moonbit/typescript-node-imports/moon.mod.json "$root/"
+  cp examples/typescript-to-moonbit/typescript-node-imports/moon.mod "$root/"
   cp examples/typescript-to-moonbit/typescript-node-imports/package.json "$root/"
   cp -R examples/typescript-to-moonbit/typescript-node-imports/src "$root/"
 
@@ -989,13 +1050,14 @@ verify_typescript_to_moonbit_hono_server_example() {
   rm -rf "$root"
   mkdir -p "$root/cmd/main"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_hono_server",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_hono_server"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$root/package.json" <<'EOF'
@@ -1081,13 +1143,14 @@ verify_typescript_to_moonbit_drizzle_example() {
   rm -rf "$root"
   mkdir -p "$root/cmd/main"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_drizzle",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_drizzle"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   # `@drizzle-smoke/helpers` is a smoke-local ESM helper that wraps

@@ -652,13 +652,14 @@ write_js_any_stub() {
 
   mkdir -p "$root/_stubs/mizchi_js/core"
 
-  cat > "$root/_stubs/mizchi_js/moon.mod.json" <<'EOF'
-{
-  "name": "mizchi/js",
-  "version": "0.0.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/_stubs/mizchi_js/moon.mod" <<'EOF'
+name = "mizchi/js"
+
+version = "0.0.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$root/_stubs/mizchi_js/core/moon.pkg.json" <<'EOF'
@@ -682,16 +683,24 @@ write_probe_moon_mod() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<EOF
-{
-  "name": "realworld_typescript/$module_name",
-  "version": "0.0.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<EOF
+name = "realworld_typescript/$module_name"
+
+version = "0.0.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 }
 
@@ -3085,14 +3094,18 @@ verify_async_integration_app() {
   mkdir -p "$app/src/main"
   ensure_project_node_modules "$app" "$(node_modules_root_for_spec axios)"
 
-  cat > "$app/moon.mod.json" <<'EOF'
-{
-  "name": "realworld/async_integration",
-  "version": "0.1.0",
-  "source": "src",
-  "preferred-target": "js",
-  "deps": { "moonbitlang/async": "0.20.2" }
+  cat > "$app/moon.mod" <<'EOF'
+name = "realworld/async_integration"
+
+version = "0.1.0"
+
+import {
+  "moonbitlang/async@0.22.7",
 }
+
+source = "src"
+
+preferred_target = "js"
 EOF
 
   (
@@ -3416,23 +3429,28 @@ verify_async_callback_app() {
   write_async_callback_fixture_package "$app/node_modules"
 
   if [ "$mode" = "integration" ]; then
-    cat > "$app/moon.mod.json" <<'EOF'
-{
-  "name": "realworld/async_callback_integration",
-  "version": "0.1.0",
-  "source": "src",
-  "preferred-target": "js",
-  "deps": { "moonbitlang/async": "0.20.2" }
+    cat > "$app/moon.mod" <<'EOF'
+name = "realworld/async_callback_integration"
+
+version = "0.1.0"
+
+import {
+  "moonbitlang/async@0.22.7",
 }
+
+source = "src"
+
+preferred_target = "js"
 EOF
   else
-    cat > "$app/moon.mod.json" <<'EOF'
-{
-  "name": "realworld/async_callback_sc",
-  "version": "0.1.0",
-  "source": "src",
-  "preferred-target": "js"
-}
+    cat > "$app/moon.mod" <<'EOF'
+name = "realworld/async_callback_sc"
+
+version = "0.1.0"
+
+source = "src"
+
+preferred_target = "js"
 EOF
   fi
 

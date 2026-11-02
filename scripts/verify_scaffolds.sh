@@ -376,13 +376,14 @@ write_js_any_stub() {
 
   mkdir -p "$root/_stubs/mizchi_js/core"
 
-  cat > "$root/_stubs/mizchi_js/moon.mod.json" <<'EOF'
-{
-  "name": "mizchi/js",
-  "version": "0.0.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/_stubs/mizchi_js/moon.mod" <<'EOF'
+name = "mizchi/js"
+
+version = "0.0.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   : > "$root/_stubs/mizchi_js/core/moon.pkg"
@@ -450,13 +451,14 @@ verify_moonbit_scaffold_fixture() {
     "$fixture_path" "./runtime/double.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/double.js"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -502,13 +504,14 @@ export function fetchUser(id) {
 }
 EOF
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_neverthrow_like",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_neverthrow_like"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -541,16 +544,24 @@ verify_moonbit_scaffold_react_like_jsx_fixture() {
 
   write_js_any_stub "$root"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_like_jsx",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_like_jsx"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/runtime/react-like.js" <<'EOF'
@@ -590,16 +601,24 @@ verify_moonbit_scaffold_react_package_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_package",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_package"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -704,16 +723,24 @@ verify_moonbit_scaffold_react_jsx_runtime_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_jsx_runtime",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_jsx_runtime"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -753,16 +780,24 @@ verify_moonbit_scaffold_react_jsx_dev_runtime_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_jsx_dev_runtime",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_jsx_dev_runtime"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -832,16 +867,24 @@ verify_moonbit_scaffold_hono_jsx_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/hono" "$root/node_modules/hono"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_hono_jsx",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_hono_jsx"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -886,16 +929,24 @@ verify_moonbit_scaffold_hono_options_fixture() {
 
   write_js_any_stub "$root"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_hono_options",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_hono_options"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/runtime/hono.js" <<'EOF'
@@ -947,16 +998,24 @@ verify_moonbit_scaffold_namespace_fixture() {
   write_js_any_stub "$root"
   cp "$repo_root/fixtures/bridge_smoke/runtime/ns.js" "$root/runtime/ns.js"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_namespace",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_namespace"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -997,16 +1056,24 @@ export function maybeHires(value) {
 }
 EOF
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_heterogeneous_union",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_heterogeneous_union"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
@@ -1050,16 +1117,24 @@ verify_moonbit_scaffold_handles_ambiguous_surface() {
 
   write_js_any_stub "$root"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_ambiguous",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_ambiguous"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   [ -f "$root/SCAFFOLD_DIAGNOSTICS.md" ]
