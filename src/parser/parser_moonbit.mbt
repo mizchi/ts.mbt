@@ -366,6 +366,15 @@ fn moonbit_type_param_suffix(type_params : Array[String]) -> String {
 }
 
 ///|
+/// Builtin type names moonc refuses as a type variable (see
+/// `moonbit_sanitize_type_param_name`).
+let moonbit_reserved_type_variable_names : Array[String] = [
+  "Unit", "Int", "Int16", "Int32", "Int64", "UInt", "UInt16", "UInt32", "UInt64",
+  "Byte", "Bool", "Char", "String", "Double", "Float", "Bytes", "FixedArray", "Option",
+  "Error", "Self", "StringView", "BytesView",
+]
+
+///|
 /// MoonBit identifiers do not allow `$`, but TypeScript declarations
 /// produced by tools like `tsc` can mint synthetic type parameter names
 /// such as `TInput$1` to disambiguate scope-shadowed generics. Replace
@@ -375,6 +384,17 @@ fn moonbit_type_param_suffix(type_params : Array[String]) -> String {
 pub fn moonbit_sanitize_type_param_name(name : String) -> String {
   if name == "" {
     return name
+  }
+  // MoonBit rejects a builtin type name as a type VARIABLE ([4003],
+  // "is a reserved type name"), so date-fns'
+  // `interface NearestToUnitOptions<Unit extends number>` cannot keep its
+  // spelling. The list was PROBED against moonc v0.10.19 by declaring
+  // `struct S[X] { x : X }` for each candidate: `Array`, `Result` and
+  // `Map` are NOT reserved there and are deliberately absent. Declaration
+  // and every reference both route through this function, so the
+  // suffixed spelling stays consistent.
+  if moonbit_reserved_type_variable_names.contains(name) {
+    return name + "_"
   }
   let mut needs = false
   for c in name {

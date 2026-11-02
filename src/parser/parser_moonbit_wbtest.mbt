@@ -358,3 +358,18 @@ test "parser: emit MoonBit decl drops internal and JSValue-widened deprecated me
   assert_true(actual.contains("/// name : String"))
   assert_true(actual.contains("/// keep : String"))
 }
+
+///|
+test "moonbit_sanitize_type_param_name suffixes reserved builtin type names" {
+  // moonc rejects these as a type variable ([4003]); date-fns declares
+  // `NearestToUnitOptions<Unit extends number>`.
+  assert_eq(moonbit_sanitize_type_param_name("Unit"), "Unit_")
+  assert_eq(moonbit_sanitize_type_param_name("String"), "String_")
+  assert_eq(moonbit_sanitize_type_param_name("Self"), "Self_")
+  // Probed as legal type variables, so left alone.
+  assert_eq(moonbit_sanitize_type_param_name("Array"), "Array")
+  assert_eq(moonbit_sanitize_type_param_name("Result"), "Result")
+  assert_eq(moonbit_sanitize_type_param_name("T"), "T")
+  // The existing `$` rewrite still applies.
+  assert_eq(moonbit_sanitize_type_param_name("TInput$1"), "TInput_1")
+}
