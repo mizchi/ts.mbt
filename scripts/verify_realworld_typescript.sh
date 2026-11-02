@@ -1562,10 +1562,10 @@ EOF
       ;;
     node_sqlite)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_node_sqlite_memory_path() -> PathLike =
+extern "js" fn realworld_node_sqlite_memory_path() -> @node_sqlite.PathLike =
   #| () => ":memory:"
 
-fn realworld_node_sqlite_options() -> DatabaseSyncOptions {
+fn realworld_node_sqlite_options() -> @node_sqlite.DatabaseSyncOptions {
   {
     open: Some(true),
     enableForeignKeyConstraints: None,
@@ -1582,14 +1582,14 @@ fn realworld_node_sqlite_options() -> DatabaseSyncOptions {
   }
 }
 
-extern "js" fn realworld_node_sqlite_params() -> Array[SQLInputValue] =
+extern "js" fn realworld_node_sqlite_params() -> Array[@node_sqlite.SQLInputValue] =
   #| () => []
 
-extern "js" fn realworld_node_sqlite_row_value(row : StringRecordOfSqloutputValue) -> String =
+extern "js" fn realworld_node_sqlite_row_value(row : @node_sqlite.StringRecordOfSqloutputValue) -> String =
   #| (row) => row.value
 
 test "real-world node:sqlite bridge smoke" {
-  let db = new_database_sync(
+  let db = @node_sqlite.new_database_sync(
     realworld_node_sqlite_memory_path(),
     Some(realworld_node_sqlite_options()),
   )
@@ -1609,46 +1609,46 @@ EOF
       ;;
     node_fs)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_node_fs_to_string(data : NonSharedBuffer) -> String =
+extern "js" fn realworld_node_fs_to_string(data : @node_fs.NonSharedBuffer) -> String =
   #| (data) => data.toString("utf8")
 
 test "real-world node:fs bridge smoke" {
-  let path = path_like_from_string("node-fs-test.txt")
-  let file = path_or_file_descriptor_from_path_like(path)
-  if existsSync(path) {
-    unlinkSync(path)
+  let path = @node_fs.path_like_from_string("node-fs-test.txt")
+  let file = @node_fs.path_or_file_descriptor_from_path_like(path)
+  if @node_fs.existsSync(path) {
+    @node_fs.unlinkSync(path)
   }
-  writeFileSync(file, "hello from moonbit", None)
-  assert_true(existsSync(path))
-  let data = readFileSync(file, None)
+  @node_fs.writeFileSync(file, "hello from moonbit", None)
+  assert_true(@node_fs.existsSync(path))
+  let data = @node_fs.readFileSync(file, None)
   assert_eq(realworld_node_fs_to_string(data), "hello from moonbit")
-  unlinkSync(path)
-  assert_false(existsSync(path))
+  @node_fs.unlinkSync(path)
+  assert_false(@node_fs.existsSync(path))
 }
 EOF
       ;;
     node_path)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world node:path bridge smoke" {
-  assert_eq(pathNormalize("a/../b"), "b")
-  assert_eq(pathBasename("/tmp/demo.txt", Some(".txt")), "demo")
-  assert_eq(pathExtname("demo.txt"), ".txt")
-  assert_false(pathIsAbsolute("relative/path"))
+  assert_eq(@node_path.pathNormalize("a/../b"), "b")
+  assert_eq(@node_path.pathBasename("/tmp/demo.txt", Some(".txt")), "demo")
+  assert_eq(@node_path.pathExtname("demo.txt"), ".txt")
+  assert_false(@node_path.pathIsAbsolute("relative/path"))
 }
 EOF
       ;;
     node_crypto)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_node_crypto_binary_like() -> BinaryLike =
+extern "js" fn realworld_node_crypto_binary_like() -> @node_crypto.BinaryLike =
   #| () => "hello"
 
 test "real-world node:crypto bridge smoke" {
-  let digest = hash("sha256", realworld_node_crypto_binary_like(), None)
+  let digest = @node_crypto.hash("sha256", realworld_node_crypto_binary_like(), None)
   assert_eq(
     digest,
     "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
   )
-  if getHashes().length() == 0 {
+  if @node_crypto.getHashes().length() == 0 {
     abort("expected crypto hash algorithms")
   }
 }
@@ -1657,13 +1657,13 @@ EOF
     node_os)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world node:os bridge smoke" {
-  if tmpdir().length() == 0 {
+  if @node_os.tmpdir().length() == 0 {
     abort("expected tmpdir")
   }
-  if homedir().length() == 0 {
+  if @node_os.homedir().length() == 0 {
     abort("expected homedir")
   }
-  if availableParallelism() <= 0.0 {
+  if @node_os.availableParallelism() <= 0.0 {
     abort("expected available parallelism")
   }
 }
@@ -1672,51 +1672,51 @@ EOF
     node_url)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world node:url bridge smoke" {
-  assert_eq(domainToASCII("example.com"), "example.com")
-  assert_eq(domainToUnicode("example.com"), "example.com")
-  assert_eq(resolve("https://example.com/a/b", "../c"), "https://example.com/c")
+  assert_eq(@node_url.domainToASCII("example.com"), "example.com")
+  assert_eq(@node_url.domainToUnicode("example.com"), "example.com")
+  assert_eq(@node_url.resolve("https://example.com/a/b", "../c"), "https://example.com/c")
 }
 EOF
       ;;
     node_querystring)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world node:querystring bridge smoke" {
-  assert_eq(escape("a b"), "a%20b")
-  assert_eq(unescape("a%20b"), "a b")
+  assert_eq(@node_querystring.escape("a b"), "a%20b")
+  assert_eq(@node_querystring.unescape("a%20b"), "a b")
 }
 EOF
       ;;
     node_assert)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world node:assert bridge smoke" {
-  assert_ok_bool(true, None)
-  assert_equal_double(1.0, 1.0, None)
-  assert_strict_equal_string("ok", "ok", None)
-  assert_not_equal_double(1.0, 2.0, None)
-  assert_not_strict_equal_string("ok", "ng", None)
+  @node_assert.assert_ok_bool(true, None)
+  @node_assert.assert_equal_double(1.0, 1.0, None)
+  @node_assert.assert_strict_equal_string("ok", "ok", None)
+  @node_assert.assert_not_equal_double(1.0, 2.0, None)
+  @node_assert.assert_not_strict_equal_string("ok", "ng", None)
 }
 EOF
       ;;
     node_util)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world node:util bridge smoke" {
-  assert_eq(toUSVString("ok"), "ok")
-  assert_eq(stripVTControlCharacters("plain"), "plain")
-  if diff_string("alpha", "alps").length() == 0 {
+  assert_eq(@node_util.toUSVString("ok"), "ok")
+  assert_eq(@node_util.stripVTControlCharacters("plain"), "plain")
+  if @node_util.diff_string("alpha", "alps").length() == 0 {
     abort("expected util.diff string wrapper to produce chunks")
   }
-  assert_true(is_array_string_array(["ok"]))
+  assert_true(@node_util.is_array_string_array(["ok"]))
 }
 EOF
       ;;
     node_buffer)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_buffer_value() -> Uint8Array =
+extern "js" fn realworld_buffer_value() -> @node_buffer.Uint8Array =
   #| () => Buffer.from("hello")
 
 test "real-world node:buffer bridge smoke" {
-  assert_true(isUtf8(realworld_buffer_value()))
-  if get_k_max_length() <= 0.0 {
+  assert_true(@node_buffer.isUtf8(realworld_buffer_value()))
+  if @node_buffer.get_k_max_length() <= 0.0 {
     abort("expected positive buffer max length")
   }
 }
