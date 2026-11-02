@@ -6552,3 +6552,39 @@ test "mtsc bridge keeps its generation stages as its public CLI contract" {
     ),
   )
 }
+
+///|
+async test "ensure_bridge_node_modules_link resolves when node_modules is itself a symlink" {
+  // A shared / hoisted install: the module's `node_modules` points
+  // elsewhere, so a target written relative to the module would resolve
+  // against the shared directory and dangle.
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_link_symlinked_node_modules",
+  )
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  let app = wbtest_join_path(root, "app")
+  let shared = wbtest_join_path(root, "shared_node_modules")
+  let bridge_dir = wbtest_join_path(app, "src/bridges/hono")
+  ensure_dir_tree(bridge_dir)
+  ensure_dir_tree(shared)
+  @fs.write_file(
+    wbtest_join_path(app, "moon.mod"),
+    "name = \"fixture/app\"\n\nsource = \"src\"\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(bridge_dir, "bridge.js"),
+    "export const ok = 1;\n",
+    create=0o644,
+  )
+  let shared_real = @fs.realpath(shared)
+  @fs.symlink(wbtest_join_path(app, "node_modules"), target=shared_real)
+  assert_true(ensure_bridge_node_modules_link(bridge_dir, "@tsmbt-bridge/hono"))
+  // Reading THROUGH the link is the claim: a dangling target fails here.
+  let text = @fs.read_file(
+    wbtest_join_path(app, "node_modules/@tsmbt-bridge/hono/bridge.js"),
+  ).text()
+  assert_eq(text, "export const ok = 1;\n")
+}

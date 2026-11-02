@@ -1581,7 +1581,20 @@ async fn ensure_bridge_node_modules_link(
     None => bridge_real
   }
   let link_rel_to_module = "node_modules/" + scope + "/" + name
-  let target = relative_path_between(link_rel_to_module, bridge_rel_to_module)
+  // The relative target is computed as if `node_modules/<scope>` sat
+  // PHYSICALLY under the module. When `node_modules` is itself a symlink
+  // (a shared or hoisted install — how the realworld harness, and many
+  // workspace layouts, provide it) the link is resolved against the
+  // directory it really lives in, so `../../src/bridges/hono` pointed into
+  // the shared install and Node reported `Cannot find package
+  // '@tsmbt-bridge/hono'`. Fall back to the absolute bridge path there.
+  let scope_real = @fs.realpath(scope_dir) catch { _ => scope_dir }
+  let target = if scope_real ==
+    main_join_path(main_join_path(module_real, "node_modules"), scope) {
+    relative_path_between(link_rel_to_module, bridge_rel_to_module)
+  } else {
+    bridge_real
+  }
   let _ = @fs.symlink(link_path, target~) catch {
     e => {
       println("vendor: failed to symlink \{link_path} -> \{target}: \{e}")
