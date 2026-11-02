@@ -55,8 +55,7 @@ verify_typescript_scaffold_fixture() {
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -134,8 +133,7 @@ verify_typescript_facade_scaffold_fixture() {
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -221,8 +219,7 @@ EOF
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -313,8 +310,7 @@ EOF
     "target": "es2020",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [

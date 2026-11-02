@@ -79,7 +79,6 @@ verify-language-service-types:
         "module": "esnext",
         "moduleResolution": "bundler",
         "target": "es2022",
-        "ignoreDeprecations": "6.0",
         "lib": ["es2022"],
         "skipLibCheck": false
       },
@@ -151,8 +150,7 @@ verify-mbti-dts:
         "noEmit": true,
         "module": "esnext",
         "moduleResolution": "bundler",
-        "baseUrl": ".",
-        "ignoreDeprecations": "6.0",
+        "paths": { "*": ["./*"] },
         "lib": ["es2020"]
       },
       "files": [

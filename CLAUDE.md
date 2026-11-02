@@ -36,9 +36,13 @@ product surfaces now.
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
-  answers both: `node_modules/typescript` is 6.0.3, and
-  `scripts/tsc_probe.mjs` runs it over a file the way the harness would
-  (reading the `// @option:` header). Batch CL diagnosed three wrong
+  answers both: `node_modules/typescript` was 6.0.3 when the notes
+  below were written and is now **TypeScript 7** (tsgo, through its
+  `unstable/sync` API), and `scripts/tsc_probe.mjs` runs it over a file
+  the way the harness would (reading the `// @option:` header). Every
+  "6.0.3 reports / accepts" in this file is that older compiler's answer;
+  6.0.3 stays installed as `node_modules/typescript-6` for the scripts
+  that need the classic in-process API. Batch CL diagnosed three wrong
   rules with it and left one alone because of it — `symbolProperty37` is
   in the TS7 error set and 6.0.3 accepts it, so
   `member_name_duplicates`'s claim that duplicate well-known-symbol

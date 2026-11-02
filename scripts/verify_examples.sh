@@ -34,8 +34,7 @@ verify_moonbit_to_typescript_example() {
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -928,11 +927,15 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
+  # The compiler API lives in TypeScript 6: TypeScript 7 (the Go port, which
+  # is the repo's `typescript`) ships no `typescript.d.ts` and no JS API. The
+  # pinned `typescript-6` is both the input and the runtime module, so the
+  # emitted bridge.js imports what actually provides `createSourceFile`.
   echo "Generating TypeScript AST bridge"
   moon run src/cmd/mtsc -- bridge \
-    --input node_modules/typescript/lib/typescript.d.ts \
+    --input node_modules/typescript-6/lib/typescript.d.ts \
     --out "$out" \
-    --module-spec typescript
+    --module-spec typescript-6
 
   echo "Writing TypeScript AST JS stubs"
   write_js_any_stub "$out"
@@ -1008,9 +1011,9 @@ verify_typescript_node_imports_example() {
   (
     cd "$root"
     moon run "$repo_root/src/cmd/mtsc" -- bridge \
-      --input "$repo_root/node_modules/typescript/lib/typescript.d.ts" \
+      --input "$repo_root/node_modules/typescript-6/lib/typescript.d.ts" \
       --out src/internal/generated/typescript \
-      --module-spec typescript
+      --module-spec typescript-6
     moon run "$repo_root/src/cmd/mtsc" -- bridge \
       --input "$node_fs_types" \
       --out src/internal/generated/node_fs \

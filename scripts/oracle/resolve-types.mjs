@@ -24,7 +24,9 @@
 // indexed access, generic param) round-trip as { kind: "unknown_shape",
 // printed: string } so the caller can decide whether to widen or fail.
 
-import ts from "typescript";
+// The classic type-checker API (`createProgram`, `getTypeAtLocation`, …),
+// which TypeScript 7 does not ship; `typescript-6` is pinned for it.
+import ts from "typescript-6";
 import fs from "node:fs";
 import path from "node:path";
 

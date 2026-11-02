@@ -88,8 +88,7 @@ EOF
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "include": ["**/*.d.ts"]

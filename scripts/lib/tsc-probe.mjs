@@ -9,10 +9,19 @@
 // second copy of them would be a second set of phantom findings, which is
 // the failure mode this repo keeps recording.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import { API } from "typescript/unstable/sync";
 
 const require_ = createRequire(import.meta.url);
+// TypeScript 7 (the Go port). Its main entry exports only the version; the
+// compiler is reached through the `unstable/sync` API, which drives a native
+// `tsgo` process over JSON-RPC and works on PROJECTS rather than on an
+// in-process `createProgram`. This is the same compiler the conformance
+// oracle's vendored baselines come from, where the 6.0.3 this used to run
+// was a stand-in for it.
 export const ts = require_("typescript");
 
 // Harness header directives. Only the ones that change what is an error
@@ -77,18 +86,116 @@ export function optionsJson(dirs) {
   return opts;
 }
 
+// One API process for the whole run: `checker_miss_rank.mjs` probes
+// hundreds of files, and spawning `tsgo` per file is the cost to avoid.
+// Each probe opens its own throwaway project and closes it again, so a
+// project's options never leak into the next file's.
+let api = null;
+function getApi() {
+  if (!api) {
+    api = new API({ cwd: process.cwd() });
+    // By `exit` the `tsgo` child is already being torn down, so `close()`
+    // can only report that; the hook is tidiness, never a failure.
+    process.once("exit", () => {
+      try {
+        api.close();
+      } catch {}
+    });
+  }
+  return api;
+}
+
+function lineCol(text, pos) {
+  let line = 1;
+  let col = 1;
+  for (let i = 0; i < pos && i < text.length; i++) {
+    if (text[i] === "\n") {
+      line += 1;
+      col = 1;
+    } else {
+      col += 1;
+    }
+  }
+  return { line, col };
+}
+
+/** A diagnostic's message with its chain flattened, as `flattenDiagnosticMessageText` did. */
+function flatten(d) {
+  const parts = [d.text];
+  const walk = (chain) => {
+    for (const c of chain ?? []) {
+      parts.push(c.text);
+      walk(c.messageChain);
+    }
+  };
+  walk(d.messageChain);
+  return parts.join(" ");
+}
+
+/**
+ * Diagnostics for header options TS7 REJECTED. The API's `parseConfigFile`
+ * returns only the options it accepted, so a refused one (`@target: es5` —
+ * TS7 dropped ES3 and ES5 — is TS6046 from the CLI) would otherwise vanish
+ * without a word and the file be checked under the default instead. A key
+ * the header set and the parse dropped is the signal; only then is the CLI
+ * run on the same tsconfig, to report the compiler's own code and message.
+ */
+function rejectedOptionDiagnostics(client, tsconfig, opts) {
+  const parsed = client.parseConfigFile(tsconfig).options ?? {};
+  const dropped = Object.keys(opts).filter((k) => parsed[k] === undefined);
+  if (dropped.length === 0) return [];
+  const tsc = path.join(path.dirname(require_.resolve("typescript/package.json")), "bin", "tsc");
+  const r = spawnSync(process.execPath, [tsc, "-p", tsconfig, "--pretty", "false", "--noEmit"], {
+    encoding: "utf8",
+  });
+  const out = [];
+  for (const line of `${r.stdout}\n${r.stderr}`.split("\n")) {
+    const m = line.match(/^(?:.*tsconfig\.json\(\d+,\d+\): )?error TS(\d+): (.*)$/);
+    if (m && line.includes("tsconfig.json")) {
+      out.push({ code: Number(m[1]), text: m[2], pos: 0 });
+    }
+  }
+  if (out.length === 0) {
+    // The CLI said nothing we could attribute: still do not let the option
+    // disappear silently.
+    out.push({ code: 0, text: `TS7 did not accept option(s): ${dropped.join(", ")}`, pos: 0 });
+  }
+  return out;
+}
+
 /**
  * Check one file under its own header. Returns
- * `{ opts, diags: [{ code, line, col, msg }] }`.
+ * `{ opts, diags: [{ code, line, col, msg }], otherFiles }`.
  */
 export function probe(file) {
   const src = fs.readFileSync(file, "utf8");
   const opts = optionsJson(directives(src));
-  const { options, errors } = ts.convertCompilerOptionsFromJson(
-    { ...opts, noEmit: true },
-    process.cwd(),
+  const abs = path.resolve(file);
+  // The project is a real tsconfig on disk: the TS7 API opens projects, not
+  // option objects. Options it rejects come back as PROGRAM diagnostics,
+  // which is where `convertCompilerOptionsFromJson`'s errors used to go.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tsc-probe-"));
+  const tsconfig = path.join(dir, "tsconfig.json");
+  fs.writeFileSync(
+    tsconfig,
+    JSON.stringify({ compilerOptions: { ...opts, noEmit: true }, files: [abs] }),
   );
-  const program = ts.createProgram([file], options);
+  const client = getApi();
+  let all;
+  try {
+    const configErrors = rejectedOptionDiagnostics(client, tsconfig, opts);
+    const snapshot = client.updateSnapshot({ openProject: tsconfig });
+    const program = snapshot.getProject(tsconfig).program;
+    all = [
+      ...configErrors,
+      ...program.getProgramDiagnostics(),
+      ...program.getSyntacticDiagnostics(),
+      ...program.getSemanticDiagnostics(),
+    ];
+    client.updateSnapshot({ closeProjects: [tsconfig] });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   // `getSemanticDiagnostics()` with no argument returns EVERY file's
   // diagnostics, including the vendored `lib.*.d.ts` — and a test that
   // augments `interface Object` under `@skipDefaultLibCheck: false` makes
@@ -98,31 +205,32 @@ export function probe(file) {
   // file, such as TS2318 "Cannot find global type", belongs here too),
   // and `otherFiles` keeps the rest so the information is reported rather
   // than lost.
-  const abs = path.resolve(file);
-  const split = (list) => list.filter((d) => !d.file || path.resolve(d.file.fileName) === abs);
+  const mine = (d) =>
+    !d.fileName || path.resolve(d.fileName) === abs || path.basename(d.fileName) === "tsconfig.json";
+  const texts = new Map([[abs, src]]);
   const shape = (d) => {
     let line = 0;
     let col = 0;
-    if (d.file && d.start !== undefined) {
-      const p = d.file.getLineAndCharacterOfPosition(d.start);
-      line = p.line + 1;
-      col = p.character + 1;
+    if (d.fileName) {
+      const key = path.resolve(d.fileName);
+      if (!texts.has(key)) {
+        try {
+          texts.set(key, fs.readFileSync(key, "utf8"));
+        } catch {
+          texts.set(key, "");
+        }
+      }
+      ({ line, col } = lineCol(texts.get(key), d.pos));
     }
     return {
       code: d.code,
       line,
       col,
-      file: d.file ? path.basename(d.file.fileName) : null,
-      msg: ts.flattenDiagnosticMessageText(d.messageText, " "),
+      file: d.fileName ? path.basename(d.fileName) : null,
+      msg: flatten(d),
     };
   };
-  const all = [
-    ...program.getSyntacticDiagnostics(),
-    ...program.getSemanticDiagnostics(),
-    ...program.getGlobalDiagnostics(),
-    ...errors,
-  ];
-  const diags = split(all).map(shape);
-  const otherFiles = all.filter((d) => !split([d]).length).map(shape);
+  const diags = all.filter(mine).map(shape);
+  const otherFiles = all.filter((d) => !mine(d)).map(shape);
   return { opts, diags, otherFiles };
 }

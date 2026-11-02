@@ -1,5 +1,7 @@
 // Extract interface information from TypeScript files using the compiler API
-import ts from 'typescript';
+// The classic AST API; TypeScript 7 does not ship it, so the pinned
+// `typescript-6` is used.
+import ts from 'typescript-6';
 import fs from 'fs';
 import path from 'path';
 
