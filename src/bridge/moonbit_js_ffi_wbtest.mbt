@@ -5932,3 +5932,23 @@ test "bridge: an unbuildable tagged-union output widens through every wrapper" {
   // A name that is not a tagged union at all is untouched.
   assert_eq(ffi_output_type_name(state, Named("Options")), "Options")
 }
+
+///|
+async test "bridge: Pick inside an optional-parameter const callable reaches the extern projected" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/utility-pick-callable-entry.d.ts", "/runtime/mod.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // glob's `escape` / `unescape`: the extern takes the projected struct,
+  // and the struct it names is declared.
+  assert_true(bundle.ffi_mbt.contains("arg1 : OptsPickAB?) -> String"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct OptsPickAB {"))
+  assert_false(bundle.ffi_mbt.contains(": Pick?"))
+}

@@ -6487,6 +6487,16 @@ fn lower_react_utility_type(
         lower_react_utility_type(info, return_type, modules, canonical_types),
       )
     }
+    // A callable with an optional parameter arrives wrapped in
+    // `CallableMeta`, and the `_` arm below would hand it back untouched —
+    // so `const escape: (s, o?: Pick<Opts, "a">) => string` kept an opaque
+    // `Pick` while the identical `function escape(…)` got the projected
+    // `OptsPickA` struct (glob's `escape` / `unescape`). Lower through it.
+    CallableMeta(inner, optional_params) =>
+      CallableMeta(
+        lower_react_utility_type(info, inner, modules, canonical_types),
+        optional_params,
+      )
     Union(types) => {
       let next_types : Array[@ast.TsType] = []
       for item in types {
@@ -6846,6 +6856,14 @@ fn collect_react_utility_interfaces_from_type(
         info, return_type, modules, canonical_types, seen_names, interfaces,
       )
     }
+    // Mirror of the `CallableMeta` arm in `lower_react_utility_type`: the
+    // lowering renames a `Pick<…>` inside an optional-parameter callable to
+    // its projection, so the projection has to be COLLECTED from the same
+    // position or the name is referenced and never declared.
+    CallableMeta(inner, _) =>
+      collect_react_utility_interfaces_from_type(
+        info, inner, modules, canonical_types, seen_names, interfaces,
+      )
     _ => ()
   }
 }
