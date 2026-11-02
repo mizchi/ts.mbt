@@ -2299,9 +2299,16 @@ fn ffi_struct_decl_to_moonbit(
       type_
     }
     let raw_struct_field_type = ffi_struct_field_type_name(state, read_type)
-    // TypeScript `this` builder return -> owning struct.
+    // TypeScript `this` builder return -> owning struct, WITH its type
+    // parameters: a generic struct named bare is a [4040] arity error.
+    // Most `this` returns never reach this token rewrite, but a member
+    // with an optional parameter arrives wrapped in `CallableMeta` and
+    // renders its return as the literal `This` (zod's `clone(def?, …):
+    // this` and `ZodMap.min(n, params?): this`), so the owner spelled
+    // here has to be the same `Owner[T…]` the method wrapper uses.
     let struct_field_type = ffi_replace_this_token(
-      raw_struct_field_type, type_name,
+      raw_struct_field_type,
+      ffi_receiver_self_type(type_name, active_type_params),
     )
     lines.push("  \{field_name} : \{struct_field_type}")
     let force_method_wrapper = field_name == "_call_"

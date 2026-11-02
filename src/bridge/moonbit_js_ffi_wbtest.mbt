@@ -5613,6 +5613,11 @@ async test "bridge: polymorphic this lowers to the owner with its own type param
   assert_true(bundle.ffi_mbt.contains("check : (Array[String]) -> Box[A, B]"))
   assert_true(bundle.ffi_mbt.contains("optional : () -> Wrap[Box[A, B]]"))
   assert_true(bundle.ffi_mbt.contains("pair : (B) -> Box[A, B]"))
+  // An optional parameter wraps the callable in `CallableMeta`, whose
+  // return renders as the literal `This`; the field still has to name
+  // the owner WITH its parameters (a bare generic `Box` is [4040]).
+  assert_true(bundle.ffi_mbt.contains("clone : (String?) -> Box[A, B]"))
+  assert_false(bundle.ffi_mbt.contains("-> Box\n"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub fn[A, B] Box::check(self : Box[A, B], arg0 : Array[String]) -> Box[A, B]",
