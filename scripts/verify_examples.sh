@@ -105,8 +105,8 @@ EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated TypeScript to MoonBit example" {
-  assert_eq(greet("MoonBit"), "Hello, MoonBit")
-  assert_eq(double(21.0), 42.0)
+  assert_eq(@typescript_to_moonbit.greet("MoonBit"), "Hello, MoonBit")
+  assert_eq(@typescript_to_moonbit.double(21.0), 42.0)
 }
 EOF
 
@@ -274,12 +274,12 @@ members = [
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_hono_options() -> HonoOptions[JSValue] =
+extern "js" fn test_hono_options() -> @typescript_to_moonbit_hono.HonoOptions[@typescript_to_moonbit_hono.JSValue] =
   #| () => ({ strict: true })
 
 test "generated Hono pattern" {
-  let _ : Hono[JSValue] = new_hono(None)
-  let _ = createApp(test_hono_options())
+  let _ : @typescript_to_moonbit_hono.Hono[@typescript_to_moonbit_hono.JSValue] = @typescript_to_moonbit_hono.new_hono(None)
+  let _ = @typescript_to_moonbit_hono.createApp(test_hono_options())
 }
 EOF
 
@@ -343,24 +343,24 @@ EOF
   cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
-fn test_hono_handler(c : Context[JSValue, JSValue, JSValue]) -> Response {
+fn test_hono_handler(c : @typescript_to_moonbit_hono_real.Context[@typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue]) -> @typescript_to_moonbit_hono_real.Response {
   test_unsafe_cast(c.text(test_unsafe_cast("hi"), None, None))
 }
 
-extern "js" fn test_undefined() -> JSValue =
+extern "js" fn test_undefined() -> @typescript_to_moonbit_hono_real.JSValue =
   #| () => undefined
 
-extern "js" fn test_hono_route_response(app : Hono[JSValue, JSValue, JSValue]) -> String =
+extern "js" fn test_hono_route_response(app : @typescript_to_moonbit_hono_real.Hono[@typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue]) -> String =
   #| (app) => {
   #|   const route = app.routes[0];
   #|   return `${route.method}:${route.path}`;
   #| }
 
 test "generated real Hono bridge smoke" {
-  let app : Hono[JSValue, JSValue, JSValue] = new_hono(None)
+  let app : @typescript_to_moonbit_hono_real.Hono[@typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue] = @typescript_to_moonbit_hono_real.new_hono(None)
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
-  let _ : Promise[Response] = app.request(
+  let _ : @typescript_to_moonbit_hono_real.Promise[@typescript_to_moonbit_hono_real.Response] = app.request(
     test_unsafe_cast("/hello"),
     test_unsafe_cast(undefined_),
     test_unsafe_cast(undefined_),
@@ -429,8 +429,8 @@ EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated React pattern" {
-  let _ = createElement("badge")
-  let _ = get_default()
+  let _ = @typescript_to_moonbit_react.createElement("badge")
+  let _ = @typescript_to_moonbit_react.get_default()
 }
 EOF
 
@@ -485,34 +485,34 @@ members = [
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_children() -> Array[JSValue] =
+extern "js" fn test_children() -> Array[@typescript_to_moonbit_react_types.JSValue] =
   #| () => ["child"]
 
-extern "js" fn test_props() -> JSValue =
+extern "js" fn test_props() -> @typescript_to_moonbit_react_types.JSValue =
   #| () => ({ id: "root" })
 
-extern "js" fn test_function_component() -> FunctionComponent[JSValue] =
+extern "js" fn test_function_component() -> @typescript_to_moonbit_react_types.FunctionComponent[@typescript_to_moonbit_react_types.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null, ref: null })
 
-extern "js" fn test_forward_ref_render() -> ForwardRefRenderFunction[JSValue, JSValue] =
+extern "js" fn test_forward_ref_render() -> @typescript_to_moonbit_react_types.ForwardRefRenderFunction[@typescript_to_moonbit_react_types.JSValue, @typescript_to_moonbit_react_types.JSValue] =
   #| () => (props, ref) => ({ type: "forward", props, key: null, ref })
 
-extern "js" fn test_transition_scope() -> TransitionFunction =
+extern "js" fn test_transition_scope() -> @typescript_to_moonbit_react_types.TransitionFunction =
   #| () => () => undefined
 
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
 test "generated @types/react bridge smoke" {
-  let element = createElement("div", Some(test_props()), test_children())
+  let element = @typescript_to_moonbit_react_types.createElement("div", Some(test_props()), test_children())
   // `cloneElement` is typed against the generic `DetailedReactHTMLElement[
   // HTMLAttributes[JSValue], HTMLElement]` but `createElement("div", ...)`
   // resolves to a more specific instantiation; the test helper bridges them.
-  let _ = cloneElement(test_unsafe_cast(element), None, test_children())
-  assert_true(isValidElement(test_unsafe_cast(element)))
-  let _ = memo(test_function_component(), None)
-  let _ = forwardRef(test_forward_ref_render())
-  startTransition(test_transition_scope())
-  let _ = get_default()
+  let _ = @typescript_to_moonbit_react_types.cloneElement(test_unsafe_cast(element), None, test_children())
+  assert_true(@typescript_to_moonbit_react_types.isValidElement(test_unsafe_cast(element)))
+  let _ = @typescript_to_moonbit_react_types.memo(test_function_component(), None)
+  let _ = @typescript_to_moonbit_react_types.forwardRef(test_forward_ref_render())
+  @typescript_to_moonbit_react_types.startTransition(test_transition_scope())
+  let _ = @typescript_to_moonbit_react_types.get_default()
 }
 EOF
 
@@ -599,13 +599,13 @@ members = [
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_number() -> JSValue =
+extern "js" fn test_number() -> @typescript_to_moonbit_vitest.JSValue =
   #| () => 2
 
-extern "js" fn test_object() -> JSValue =
+extern "js" fn test_object() -> @typescript_to_moonbit_vitest.JSValue =
   #| () => ({ value: "ok" })
 
-extern "js" fn test_vitest_vi(vi : VitestUtils) -> Unit =
+extern "js" fn test_vitest_vi(vi : @typescript_to_moonbit_vitest.VitestUtils) -> Unit =
   #| (vi) => {
   #|   const fn = vi.fn((x) => x + 1);
   #|   if (fn(2) !== 3) throw new Error("unexpected vi.fn output");
@@ -615,7 +615,7 @@ extern "js" fn test_vitest_vi(vi : VitestUtils) -> Unit =
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
 test "generated real Vitest bridge smoke" {
-  let expect = get_expect()
+  let expect = @typescript_to_moonbit_vitest.get_expect()
   // Build assertions to ensure the generic-preserved chain compiles. The
   // generic-preserved `Assertion[T]` falls through to a pure-MoonBit
   // wrapper whose `(self.toBe)(arg)` form loses chai's `this`-bound
@@ -623,7 +623,7 @@ test "generated real Vitest bridge smoke" {
   // `vi.fn` smoke below exercises the runtime path.
   let _ = expect._call_(test_unsafe_cast(test_number()), None)
   let _ = expect._call_(test_unsafe_cast(test_object()), None)
-  test_vitest_vi(get_vi())
+  test_vitest_vi(@typescript_to_moonbit_vitest.get_vi())
 }
 EOF
 
@@ -699,8 +699,8 @@ EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated Result pattern" {
-  let _ = parseUser("u1")
-  let _ = fetchUser("u2")
+  let _ = @typescript_to_moonbit_result.parseUser("u1")
+  let _ = @typescript_to_moonbit_result.fetchUser("u2")
 }
 EOF
 
@@ -745,30 +745,30 @@ preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-fn initial_state() -> CounterState {
+fn initial_state() -> @typescript_to_moonbit_reducer.CounterState {
   { count: 1.0, label: "ready" }
 }
 
 test "generated reducer tagged union pattern" {
-  let increment = counter_action_from_increment_action({
+  let increment = @typescript_to_moonbit_reducer.counter_action_from_increment_action({
     type_: Increment,
     amount: 4.0,
   })
-  assert_eq(actionKind(increment), "increment")
-  let after_increment = reducer(initial_state(), increment)
+  assert_eq(@typescript_to_moonbit_reducer.actionKind(increment), "increment")
+  let after_increment = @typescript_to_moonbit_reducer.reducer(initial_state(), increment)
   assert_eq(after_increment.count, 5.0)
   assert_eq(after_increment.label, "ready")
 
-  let rename = counter_action_from_rename_action({
+  let rename = @typescript_to_moonbit_reducer.counter_action_from_rename_action({
     type_: Rename,
     label: "done",
   })
-  let after_rename = reducer(after_increment, rename)
+  let after_rename = @typescript_to_moonbit_reducer.reducer(after_increment, rename)
   assert_eq(after_rename.count, 5.0)
   assert_eq(after_rename.label, "done")
 
-  let reset = counter_action_from_reset_action({ type_: Reset })
-  let after_reset = reducer(after_rename, reset)
+  let reset = @typescript_to_moonbit_reducer.counter_action_from_reset_action({ type_: Reset })
+  let after_reset = @typescript_to_moonbit_reducer.reducer(after_rename, reset)
   assert_eq(after_reset.count, 0.0)
   assert_eq(after_reset.label, "idle")
 }
@@ -828,11 +828,11 @@ EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated default class pattern" {
-  let counter = new_default(10.0)
+  let counter = @typescript_to_moonbit_default_class.new_default(10.0)
   assert_eq(counter.inc(5.0), 15.0)
   counter.set_default_count(20.0)
   assert_eq(counter.get_default_count(), 20.0)
-  let seeded = default_from(3.0)
+  let seeded = @typescript_to_moonbit_default_class.default_from(3.0)
   assert_eq(seeded.get_default_count(), 3.0)
 }
 EOF
@@ -891,9 +891,9 @@ EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated const table pattern" {
-  assert_eq(get_runtime_version(), "v12")
-  assert_eq(get_build(), 16.0)
-  let _ = get_rest_meta()
+  assert_eq(@typescript_to_moonbit_const_table.get_runtime_version(), "v12")
+  assert_eq(@typescript_to_moonbit_const_table.get_build(), 16.0)
+  let _ = @typescript_to_moonbit_const_table.get_rest_meta()
 }
 EOF
 
@@ -1117,7 +1117,7 @@ pub fn make_hono() -> @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] {
 EOF
   cat > "$root/lib/smoke_test.mbt" <<'EOF'
 test "smoke: hono bridge resolves under moon test --target js" {
-  let _ = make_hono()
+  let _ = @lib.make_hono()
 }
 EOF
   moon -C "$root" test --target js
