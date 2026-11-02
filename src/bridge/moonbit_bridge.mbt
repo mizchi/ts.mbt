@@ -1930,9 +1930,15 @@ fn add_bridge_public_wrappers(
   }
   let sections : Array[String] = []
   let helper_text = helpers.join("\n")
+  // The WRAPPERS are a third source: an option-returning wrapper is spelled
+  // `__ts_mbt_wrap_option_return(unsafeCast(…))`, and semver's bridge had no
+  // other `unsafeCast`, so `diff` / `parse` / `coerce` called a helper that
+  // was never declared ([4021]).
+  let wrapper_text = wrappers.join("\n")
   if (
       next_bridge_mbt.contains("unsafeCast(") ||
-      helper_text.contains("unsafeCast(")
+      helper_text.contains("unsafeCast(") ||
+      wrapper_text.contains("unsafeCast(")
     ) &&
     !next_bridge_mbt.contains("fn[A, B] unsafeCast(value : A) -> B") {
     sections.push("fn[A, B] unsafeCast(value : A) -> B = \"%identity\"")

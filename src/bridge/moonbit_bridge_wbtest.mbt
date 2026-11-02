@@ -1493,3 +1493,22 @@ test "reconcile_bridge_widened_union_returns takes an extern's function return o
     out.contains("declare pub fn optionalOne(x : Double) -> JSValue?"),
   )
 }
+
+///|
+test "add_bridge_public_wrappers declares unsafeCast when only an option-return wrapper uses it" {
+  // semver's `parse` / `diff` / `coerce`: an option return is constructed
+  // on the MoonBit side as `__ts_mbt_wrap_option_return(unsafeCast(…))`, and
+  // nothing else in that bridge mentions `unsafeCast`.
+  let bridge_mbti =
+    #|declare pub fn majorOf(version : String) -> Double?
+  let bridge_mbt =
+    #|#external
+    #|pub type JSValue
+    #|
+    #|pub extern "js" fn major_of(version : String) -> Double? = "__ts_mbt_major_of"
+  let (mbt, _) = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
+  assert_true(mbt.contains("__ts_mbt_wrap_option_return(unsafeCast("))
+  assert_true(
+    mbt.contains("fn[A, B] unsafeCast(value : A) -> B = \"%identity\""),
+  )
+}
