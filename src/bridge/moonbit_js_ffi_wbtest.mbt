@@ -5995,3 +5995,22 @@ test "tagged-union payload names a reserved declared type by its suffixed name" 
     Some("Command"),
   )
 }
+
+///|
+async test "bridge: an optional callback with an optional parameter keeps its parens" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/optional-callback-optional-param-entry.d.ts",
+    "/runtime/mod.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `(Error_?) -> Unit?` would be a function RETURNING `Unit?`.
+  assert_true(bundle.ffi_mbt.contains("cb : ((Error_?) -> Unit)?) -> Unit"))
+  assert_false(bundle.ffi_mbt.contains("cb : (Error_?) -> Unit?"))
+}

@@ -544,6 +544,12 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       if is_optional {
         return match collapsed {
           Func(_, _) => "(\{rendered})?"
+          // A callable with an optional parameter (`CallableMeta`) that
+          // rendered as an arrow needs the same parens: a bare
+          // `(E?) -> Unit?` is a function RETURNING `Unit?` (ws's
+          // `close(cb?: (err?: Error) => void)`). One that widened to
+          // `JSValue` must not gain them.
+          CallableMeta(_, _) if rendered.contains("->") => "(\{rendered})?"
           _ => rendered + "?"
         }
       }
@@ -1134,6 +1140,12 @@ fn moonbit_function_field_type_name(
       if is_optional {
         return match collapsed {
           Func(_, _) => "(\{rendered})?"
+          // A callable with an optional parameter (`CallableMeta`) that
+          // rendered as an arrow needs the same parens: a bare
+          // `(E?) -> Unit?` is a function RETURNING `Unit?` (ws's
+          // `close(cb?: (err?: Error) => void)`). One that widened to
+          // `JSValue` must not gain them.
+          CallableMeta(_, _) if rendered.contains("->") => "(\{rendered})?"
           _ => rendered + "?"
         }
       }
