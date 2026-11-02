@@ -1281,14 +1281,26 @@ EOF
       ;;
     lodash)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_lodash_list() -> ArrayLike =
-  #| () => [1, 2, 3, 4, 5]
+// lodash declares `camelCase` / `kebabCase` / `chunk` through
+// `declare module "../index" { interface LoDashStatic { ... } }`
+// augmentations, which the generator does not merge, so they are not
+// top-level bridge functions (the generator before the moon
+// 0.1.20261029 migration emits the same surface). Reach them on the
+// typed default export instead.
+extern "js" fn realworld_lodash_camel(l : @lodash.UnderscoreUnderscoreLoDashStatic, s : String) -> String =
+  #| (l, s) => l.camelCase(s)
+
+extern "js" fn realworld_lodash_kebab(l : @lodash.UnderscoreUnderscoreLoDashStatic, s : String) -> String =
+  #| (l, s) => l.kebabCase(s)
+
+extern "js" fn realworld_lodash_chunk_count(l : @lodash.UnderscoreUnderscoreLoDashStatic) -> Int =
+  #| (l) => l.chunk([1, 2, 3, 4, 5], 2).length
 
 test "real-world lodash bridge smoke" {
-  assert_eq(camelCase(Some("hello world")), "helloWorld")
-  assert_eq(kebabCase(Some("helloWorld")), "hello-world")
-  let chunks = chunk(Some(realworld_lodash_list()), Some(2))
-  assert_eq(chunks.length(), 3)
+  let l = @lodash.get_default()
+  assert_eq(realworld_lodash_camel(l, "hello world"), "helloWorld")
+  assert_eq(realworld_lodash_kebab(l, "helloWorld"), "hello-world")
+  assert_eq(realworld_lodash_chunk_count(l), 3)
 }
 EOF
       ;;
@@ -2269,8 +2281,17 @@ EOF
       ;;
     lodash)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+// lodash declares `camelCase` / `kebabCase` / `chunk` through
+// `declare module "../index" { interface LoDashStatic { ... } }`
+// augmentations, which the generator does not merge, so they are not
+// top-level bridge functions (the generator before the moon
+// 0.1.20261029 migration emits the same surface). Reach them on the
+// typed default export instead.
+extern "js" fn realworld_lodash_camel(l : @sut.UnderscoreUnderscoreLoDashStatic, s : String) -> String =
+  #| (l, s) => l.camelCase(s)
+
 fn main {
-  if @sut.camelCase(Some("hello world")) != "helloWorld" {
+  if realworld_lodash_camel(@sut.get_default(), "hello world") != "helloWorld" {
     abort("unexpected lodash camelCase")
   }
 }
