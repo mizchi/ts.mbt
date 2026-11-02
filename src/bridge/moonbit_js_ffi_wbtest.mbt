@@ -5981,3 +5981,17 @@ async test "bridge: a returned function with an optional parameter unwraps MoonB
     ),
   )
 }
+
+///|
+test "tagged-union payload names a reserved declared type by its suffixed name" {
+  // commander: `Option | Command`, where `class Option` is emitted as
+  // `pub type Option_`; a bare `Option` would be the builtin `Option[T]`.
+  assert_eq(
+    tagged_union_inner_moonbit_text(@ast.TsType::Named("Option")),
+    Some("Option_"),
+  )
+  assert_eq(
+    tagged_union_inner_moonbit_text(@ast.TsType::Named("Command")),
+    Some("Command"),
+  )
+}

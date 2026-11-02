@@ -818,8 +818,17 @@ pub fn tagged_union_inner_moonbit_text_with_arity(
     @ast.TsType::String_ => Some("String")
     @ast.TsType::Boolean => Some("Bool")
     @ast.TsType::BigInt => Some("Int64")
-    @ast.TsType::Named(name) =>
-      match generic_type_params_by_name.get(name) {
+    @ast.TsType::Named(raw_name) => {
+      // The payload names a DECLARED type, which the declaring renderer
+      // suffixed if moonc reserves its name (commander's `class Option` is
+      // emitted as `pub type Option_`); a bare `Option` here is the builtin
+      // `Option[T]` and fails with [4040]. Same rule, same list.
+      let name = if @parser.moonbit_reserved_type_name_needs_suffix(raw_name) {
+        raw_name + "_"
+      } else {
+        raw_name
+      }
+      match generic_type_params_by_name.get(raw_name) {
         Some(type_params) if type_params.length() > 0 => {
           let widened : Array[String] = []
           for _ in 0..<type_params.length() {
@@ -829,6 +838,7 @@ pub fn tagged_union_inner_moonbit_text_with_arity(
         }
         _ => Some(name)
       }
+    }
     @ast.TsType::Array(inner) =>
       match
         tagged_union_inner_moonbit_text_with_arity(
