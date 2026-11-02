@@ -5283,6 +5283,11 @@ fn parse_mbti_to_typescript_with_import_rewrites(
       idx = next_idx
       continue
     }
+    if (trimmed.has_prefix("pub fn") || trimmed.has_prefix("pub async fn")) &&
+      mbti_is_trait_plumbing_fn(trimmed) {
+      idx += 1
+      continue
+    }
     if trimmed.has_prefix("pub fn") || trimmed.has_prefix("pub async fn") {
       match parse_mbti_function_signature(trimmed, imports, used_aliases) {
         Some(signature) => {
@@ -6690,4 +6695,22 @@ pub async fn emit_typescript_decl_from_mbti_path(
     e => raise MbtiTypescriptDeclError::ReadError("\{e}")
   }
   parse_mbti_to_typescript(source)
+}
+
+///|
+/// A method that only exists to plumb a MoonBit trait and that no JS caller
+/// can use: one taking the builtin `&Logger` trait object (`Show::output`),
+/// which JavaScript cannot construct, or returning `@debug.Repr` (`Debug::to_repr`),
+/// an opaque core type with no TypeScript model. moonc v0.10.19 deprecates the
+/// implicit promotion of trait impls to methods, so a package now spells
+/// `pub extend T with Show::{to_string, output}` and these methods appear in
+/// its `.mbti` as ordinary `pub fn` lines where before there was only the
+/// `pub impl` — and rendering them emitted `value: Logger` / `debug.Repr`,
+/// names the declaration cannot resolve. The useful siblings (`to_string`,
+/// `equal`) translate normally and are kept.
+fn mbti_is_trait_plumbing_fn(line : String) -> Bool {
+  // Deliberately the two BUILTIN spellings and not "any `&Trait`": a trait
+  // the package declares itself is parsed from its `pub trait` block above,
+  // and a function taking one of those is not this case.
+  line.contains("@debug.Repr") || line.contains("&Logger")
 }
