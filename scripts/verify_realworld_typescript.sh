@@ -2115,7 +2115,11 @@ extern "js" fn realworld_axios_config() -> @sut.AxiosRequestConfig[@sut.JSValue]
 extern "js" fn realworld_request_interceptors(a : @sut.AxiosInstance) -> @sut.AxiosInterceptorManagerInternalAxiosRequestConfig =
   #| (a) => a.interceptors.request
 
-extern "js" fn realworld_mark_config(c : @sut.InternalAxiosRequestConfig[@sut.JSValue]) -> @sut.InternalAxiosRequestConfig[@sut.JSValue] =
+// The request interceptor's value crosses as `JSValue`: `use` is the
+// conditional `V extends AxiosResponse ? … : AxiosRequestInterceptorUse<V>`
+// and its `V | Promise<V>` callback widens (same with the generator before
+// the moon 0.1.20261029 migration), so the marker is typed to match.
+extern "js" fn realworld_mark_config(c : @sut.JSValue) -> @sut.JSValue =
   #| (c) => { globalThis.__tsmbt_intercepted = (globalThis.__tsmbt_intercepted || 0) + 1; return c; }
 
 extern "js" fn realworld_intercepted_count() -> Int =
