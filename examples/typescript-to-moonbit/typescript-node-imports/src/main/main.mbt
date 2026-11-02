@@ -87,7 +87,16 @@ fn main {
     @fs.unlinkSync(path)
   }
   @fs.writeFileSync(file, printed, None)
-  let disk_text = utf8_text(@fs.readFileSync(file, None))
+  // `@types/node` 26.6 added a generic `readFileSync<T>(path, { buffer })`
+  // overload FIRST, so the generator gives it the base name and the
+  // `(path, options?) -> NonSharedBuffer` form this reads with gets its
+  // descriptive name.
+  let disk_text = utf8_text(
+    @fs.readFileSync_path_or_file_descriptor_read_file_sync_options_with_buffer_encoding_optional(
+      file,
+      None,
+    ),
+  )
   @fs.unlinkSync(path)
 
   if disk_text != printed {
