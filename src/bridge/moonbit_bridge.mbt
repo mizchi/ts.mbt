@@ -1253,7 +1253,31 @@ fn reconcile_bridge_widened_union_returns(
           } else {
             bridge_value_fn_name(name)
           }
-          if is_plain_name &&
+          // The mirror case: the DECL layer widened to `JSValue` while the
+          // extern kept a FUNCTION type. immer's `produceWithPatches` is a
+          // value typed by a six-overload call interface, and the two layers
+          // render different signatures of it — `declare pub fn
+          // produceWithPatches(…) -> JSValue` over an extern returning
+          // `(State?, Array[Args]) -> PatchesTuple`, which the public wrapper
+          // cannot pass through ([4014], has type `(…) -> PatchesTuple`,
+          // wanted `JSValue`). A function type cannot be either NORMAL
+          // disagreement above (an enum crossing as `Int`/`String`, an
+          // option wrap), and the extern compiled, so every name in its
+          // type resolves — taking it is safe where guessing was not.
+          let extern_fn_return = if !declared_opt && declared == "JSValue" {
+            match extern_returns.get(extern_key) {
+              Some(extern_ret) if extern_ret.has_prefix("(") &&
+                extern_ret.contains("->") => Some(extern_ret)
+              _ => None
+            }
+          } else {
+            None
+          }
+          if extern_fn_return is Some(extern_ret) {
+            rewritten = Some(
+              "declare pub fn \{name}(\{params_src}) -> \{extern_ret}",
+            )
+          } else if is_plain_name &&
             (
               payload_enums.contains(declared) ||
               !implemented.contains(declared)
