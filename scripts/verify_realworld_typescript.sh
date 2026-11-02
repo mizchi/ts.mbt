@@ -876,22 +876,28 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
+// `ZodSafeParseResult` is a union of the success and error results, so
+// the bridge exports it as an opaque type; read the shared `success`
+// discriminant on the JS side, as the valibot smoke does.
+extern "js" fn realworld_zod_success(r : Parse_ZodSafeParseResult) -> Bool =
+  #| (r) => r.success === true
+
 test "real-world zod bridge smoke" {
   let _ = number(None)
   let _ = boolean(None)
   // Concrete schemas expose the flattened ZodType surface directly.
   let s = string(None)
-  if !s.safeParse(unsafeCast("hello"), None).success {
+  if !realworld_zod_success(s.safeParse(unsafeCast("hello"), None)) {
     abort("expected zod safeParse success")
   }
-  if s.safeParse(unsafeCast(42), None).success {
+  if realworld_zod_success(s.safeParse(unsafeCast(42), None)) {
     abort("expected zod safeParse failure")
   }
   let email = string(None).email(None)
-  if !email.safeParse(unsafeCast("a@b.co"), None).success {
+  if !realworld_zod_success(email.safeParse(unsafeCast("a@b.co"), None)) {
     abort("expected zod email success")
   }
-  if email.safeParse(unsafeCast("nope"), None).success {
+  if realworld_zod_success(email.safeParse(unsafeCast("nope"), None)) {
     abort("expected zod email failure")
   }
   // Generic owners (ZodObject) reach the surface via the as_schema upcast;
@@ -900,7 +906,7 @@ test "real-world zod bridge smoke" {
   // no per-value unsafeCast remains.
   let shape = loose_shape_of(["name"], [as_schema(string(None))])
   let obj = as_schema(object(Some(shape), None))
-  if obj.safeParse(unsafeCast("not an object"), None).success {
+  if realworld_zod_success(obj.safeParse(unsafeCast("not an object"), None)) {
     abort("expected zod object failure")
   }
 }
