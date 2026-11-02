@@ -416,6 +416,10 @@ jsvalue_cause_budget() {
     # 2026-07-20 union-return normalization: two hono signatures moved
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
+    # 2026-11-02 re-calibrated to the generator on moon 0.1.20261029: the
+    # total fell (86 -> 81) while two signatures moved into the overload
+    # and namespace/value buckets. Identical with and without the oracle
+    # cache, and byte-identical from the generator before that migration.
     hono) printf '81|12|8|20|4|28|9\n' ;;
     zod) printf '1493|333|8|206|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
@@ -761,14 +765,14 @@ write_bridge_test() {
     clsx)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world clsx bridge smoke" {
-  assert_eq(clsx([]), "")
+  assert_eq(@clsx.clsx([]), "")
 }
 EOF
       ;;
     chalk)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world chalk bridge smoke" {
-  let names = get_color_names()
+  let names = @chalk.get_color_names()
   if names.length() == 0 {
     abort("expected chalk color names")
   }
@@ -778,15 +782,15 @@ EOF
     dotenv)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world dotenv bridge smoke" {
-  let _ = config(None)
-  let _ = configDotenv(None)
+  let _ = @dotenv.config(None)
+  let _ = @dotenv.configDotenv(None)
 }
 EOF
       ;;
     ignore)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world ignore bridge smoke" {
-  assert_true(isPathValid("src/index.ts"))
+  assert_true(@ignore.isPathValid("src/index.ts"))
 }
 EOF
       ;;
@@ -794,19 +798,19 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-extern "js" fn realworld_hono_options() -> HonoOptions[Env] =
+extern "js" fn realworld_hono_options() -> @hono.HonoOptions[@hono.Env] =
   #| () => ({ strict: true })
 
-extern "js" fn realworld_hono_resolve(r : Response) -> Promise[Response] =
+extern "js" fn realworld_hono_resolve(r : @hono.Response) -> @hono.Promise[@hono.Response] =
   #| (r) => Promise.resolve(r)
 
-extern "js" fn realworld_hono_key(s : String) -> Key =
+extern "js" fn realworld_hono_key(s : String) -> @hono.Key =
   #| (s) => s
 
-extern "js" fn realworld_hono_str(v : JSValue) -> String =
+extern "js" fn realworld_hono_str(v : @hono.JSValue) -> String =
   #| (v) => String(v)
 
-extern "js" fn realworld_hono_roundtrip(app : Hono[JSValue, JSValue, JSValue]) -> Unit =
+extern "js" fn realworld_hono_roundtrip(app : @hono.Hono[@hono.JSValue, @hono.JSValue, @hono.JSValue]) -> Unit =
   #| (app) => {
   #|   globalThis.__tsmbt_pending = (async () => {
   #|     const ok = await app.fetch(new Request("http://localhost/"));
@@ -827,30 +831,30 @@ extern "js" fn realworld_hono_roundtrip(app : Hono[JSValue, JSValue, JSValue]) -
   #| }
 
 fn realworld_hono_handler(
-  c : Context[JSValue, JSValue, JSValue],
-) -> Response {
+  c : @hono.Context[@hono.JSValue, @hono.JSValue, @hono.JSValue],
+) -> @hono.Response {
   unsafeCast(c.text(unsafeCast("hello from moonbit"), None, None))
 }
 
 fn realworld_hono_async_handler(
-  c : Context[JSValue, JSValue, JSValue],
-) -> Promise[Response] {
+  c : @hono.Context[@hono.JSValue, @hono.JSValue, @hono.JSValue],
+) -> @hono.Promise[@hono.Response] {
   realworld_hono_resolve(
     unsafeCast(c.text(unsafeCast("async moonbit"), None, None)),
   )
 }
 
 fn realworld_hono_mw(
-  c : Context[JSValue, JSValue, JSValue],
-  next : () -> Promise[Unit],
-) -> Promise[Unit] {
+  c : @hono.Context[@hono.JSValue, @hono.JSValue, @hono.JSValue],
+  next : () -> @hono.Promise[Unit],
+) -> @hono.Promise[Unit] {
   c.set(realworld_hono_key("who"), unsafeCast("from middleware"))
   next()
 }
 
 fn realworld_hono_mw_handler(
-  c : Context[JSValue, JSValue, JSValue],
-) -> Response {
+  c : @hono.Context[@hono.JSValue, @hono.JSValue, @hono.JSValue],
+) -> @hono.Response {
   unsafeCast(
     c.text(
       unsafeCast(realworld_hono_str(c.get(realworld_hono_key("who")))),
@@ -861,7 +865,7 @@ fn realworld_hono_mw_handler(
 }
 
 test "real-world hono bridge smoke" {
-  let app : Hono[JSValue, JSValue, JSValue] = new_hono(
+  let app : @hono.Hono[@hono.JSValue, @hono.JSValue, @hono.JSValue] = @hono.new_hono(
     Some(realworld_hono_options()),
   )
   app.use_middleware(None, realworld_hono_mw)
@@ -877,17 +881,17 @@ EOF
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
 test "real-world zod bridge smoke" {
-  let _ = number(None)
-  let _ = boolean(None)
+  let _ = @zod.number(None)
+  let _ = @zod.boolean(None)
   // Concrete schemas expose the flattened ZodType surface directly.
-  let s = string(None)
+  let s = @zod.string(None)
   if !s.safeParse(unsafeCast("hello"), None).success {
     abort("expected zod safeParse success")
   }
   if s.safeParse(unsafeCast(42), None).success {
     abort("expected zod safeParse failure")
   }
-  let email = string(None).email(None)
+  let email = @zod.string(None).email(None)
   if !email.safeParse(unsafeCast("a@b.co"), None).success {
     abort("expected zod email success")
   }
@@ -898,8 +902,8 @@ test "real-world zod bridge smoke" {
   // the shape is built with the TYPED loose_shape_of module hook — the
   // value slots take the same Schema upper bound as_schema produces, so
   // no per-value unsafeCast remains.
-  let shape = loose_shape_of(["name"], [as_schema(string(None))])
-  let obj = as_schema(object(Some(shape), None))
+  let shape = @zod.loose_shape_of(["name"], [@zod.as_schema(@zod.string(None))])
+  let obj = @zod.as_schema(@zod.object(Some(shape), None))
   if obj.safeParse(unsafeCast("not an object"), None).success {
     abort("expected zod object failure")
   }
@@ -909,26 +913,26 @@ EOF
     date_fns)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world date-fns bridge smoke" {
-  assert_eq(daysToWeeks(14.0), 2.0)
-  assert_eq(weeksToDays(2.0), 14.0)
-  assert_eq(hoursToMinutes(2.0), 120.0)
-  assert_true(isExists(2020.0, 1.0, 29.0))
+  assert_eq(@date_fns.daysToWeeks(14.0), 2.0)
+  assert_eq(@date_fns.weeksToDays(2.0), 14.0)
+  assert_eq(@date_fns.hoursToMinutes(2.0), 120.0)
+  assert_true(@date_fns.isExists(2020.0, 1.0, 29.0))
 }
 EOF
       ;;
     colorette)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world colorette bridge smoke" {
-  let _ = get_red()
-  let _ = createColors(None)
-  let _ = get_is_color_supported()
+  let _ = @colorette.get_red()
+  let _ = @colorette.createColors(None)
+  let _ = @colorette.get_is_color_supported()
 }
 EOF
       ;;
     magic_string)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world magic-string bridge smoke" {
-  let s = new_default("hello", None)
+  let s = @magic_string.new_default("hello", None)
   assert_eq(s.to_string(), "hello")
   let _ = s.append("!")
   assert_eq(s.to_string(), "hello!")
@@ -938,7 +942,7 @@ EOF
     source_map)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world source-map bridge smoke" {
-  let generator = new_source_map_generator(None)
+  let generator = @source_map.new_source_map_generator(None)
   if generator.to_string().length() == 0 {
     abort("expected source map generator output")
   }
@@ -949,27 +953,27 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-extern "js" fn realworld_valibot_success(r : JSValue) -> Bool =
+extern "js" fn realworld_valibot_success(r : @valibot.JSValue) -> Bool =
   #| (r) => r.success === true
 
 test "real-world valibot bridge smoke" {
-  let _ = number()
-  let _ = boolean()
-  let _ = uuid()
-  let s : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = unsafeCast(string())
-  if !realworld_valibot_success(safeParse(s, unsafeCast("hello"), None)) {
+  let _ = @valibot.number()
+  let _ = @valibot.boolean()
+  let _ = @valibot.uuid()
+  let s : @valibot.BaseSchema[@valibot.JSValue, @valibot.JSValue, @valibot.BaseIssue[@valibot.JSValue]] = unsafeCast(@valibot.string())
+  if !realworld_valibot_success(@valibot.safeParse(s, unsafeCast("hello"), None)) {
     abort("expected valibot safeParse success")
   }
-  if realworld_valibot_success(safeParse(s, unsafeCast(42), None)) {
+  if realworld_valibot_success(@valibot.safeParse(s, unsafeCast(42), None)) {
     abort("expected valibot safeParse failure")
   }
-  let piped : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = unsafeCast(
-    pipe(s, [unsafeCast(minLength(3.0))]),
+  let piped : @valibot.BaseSchema[@valibot.JSValue, @valibot.JSValue, @valibot.BaseIssue[@valibot.JSValue]] = unsafeCast(
+    @valibot.pipe(s, [unsafeCast(@valibot.minLength(3.0))]),
   )
-  if !realworld_valibot_success(safeParse(piped, unsafeCast("abcd"), None)) {
+  if !realworld_valibot_success(@valibot.safeParse(piped, unsafeCast("abcd"), None)) {
     abort("expected valibot pipe success")
   }
-  if realworld_valibot_success(safeParse(piped, unsafeCast("ab"), None)) {
+  if realworld_valibot_success(@valibot.safeParse(piped, unsafeCast("ab"), None)) {
     abort("expected valibot pipe failure")
   }
 }
@@ -977,35 +981,35 @@ EOF
       ;;
     immer)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_immer_object() -> JSValue =
+extern "js" fn realworld_immer_object() -> @immer.JSValue =
   #| () => ({ value: 1 })
 
-extern "js" fn realworld_immer_false() -> JSValue =
+extern "js" fn realworld_immer_false() -> @immer.JSValue =
   #| () => false
 
 test "real-world immer bridge smoke" {
-  assert_true(isDraftable(realworld_immer_object()))
-  assert_false(isDraftable(realworld_immer_false()))
+  assert_true(@immer.isDraftable(realworld_immer_object()))
+  assert_false(@immer.isDraftable(realworld_immer_false()))
 }
 EOF
       ;;
     execa)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world execa bridge smoke" {
-  let parts = parseCommandString("node --version")
+  let parts = @execa.parseCommandString("node --version")
   assert_eq(parts.length(), 2)
-  let _ = get_execa()
+  let _ = @execa.get_execa()
 }
 EOF
       ;;
     preact)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_preact_children() -> Array[ComponentChildren] =
+extern "js" fn realworld_preact_children() -> Array[@preact.ComponentChildren] =
   #| () => []
 
 test "real-world preact bridge smoke" {
-  let _ = h(Input, None, realworld_preact_children())
-  let _ = createRef()
+  let _ = @preact.h(Input, None, realworld_preact_children())
+  let _ = @preact.createRef()
 }
 EOF
       ;;
@@ -1014,33 +1018,33 @@ EOF
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
 extern "js" fn realworld_react_vnode(
-  elem : DetailedReactHTMLElement[
-    InputHTMLAttributes[HTMLInputElement],
-    HTMLInputElement,
+  elem : @react.DetailedReactHTMLElement[
+    @react.InputHTMLAttributes[@react.HTMLInputElement],
+    @react.HTMLInputElement,
   ],
-) -> VNode =
+) -> @react.VNode =
   #| (e) => e
 
-extern "js" fn realworld_render_to_string(element : JSValue) -> String =
+extern "js" fn realworld_render_to_string(element : @react.JSValue) -> String =
   #| (element) => require("react-dom/server").renderToString(element)
 
 test "real-world react bridge smoke" {
-  let elem = createElement("input", None, [])
-  if !isValidElement(realworld_react_vnode(elem)) {
+  let elem = @react.createElement("input", None, [])
+  if !@react.isValidElement(realworld_react_vnode(elem)) {
     abort("expected a valid react element")
   }
-  let _ = createRef()
-  if !get_version().has_prefix("19") {
+  let _ = @react.createRef()
+  if !@react.get_version().has_prefix("19") {
     abort("unexpected react version")
   }
 }
 
 test "real-world react component layer smoke" {
-  let counter = fn(_props : JSValue) -> JSValue {
-    let (count, _set_count) = use_state_typed(41)
-    unsafeCast(createElement("div", None, [unsafeCast(count)]))
+  let counter = fn(_props : @react.JSValue) -> @react.JSValue {
+    let (count, _set_count) = @react.use_state_typed(41)
+    unsafeCast(@react.createElement("div", None, [unsafeCast(count)]))
   }
-  let element = element_of_component(counter, None, [])
+  let element = @react.element_of_component(counter, None, [])
   assert_eq(realworld_render_to_string(element), "<div>41</div>")
 }
 EOF
@@ -1048,48 +1052,48 @@ EOF
     ms)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world ms bridge smoke" {
-  assert_eq(default(60000, None), "1m")
+  assert_eq(@ms.default(60000, None), "1m")
 }
 EOF
       ;;
     nanoid)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world nanoid bridge smoke" {
-  assert_eq(nanoid(Some(10)).length(), 10)
-  assert_eq(get_url_alphabet().length(), 64)
+  assert_eq(@nanoid.nanoid(Some(10)).length(), 10)
+  assert_eq(@nanoid.get_url_alphabet().length(), 64)
 }
 EOF
       ;;
     dayjs)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_dayjs_format(d : Dayjs_Dayjs) -> String =
+extern "js" fn realworld_dayjs_format(d : @dayjs.Dayjs_Dayjs) -> String =
   #| (d) => d.format("YYYY")
 
 test "real-world dayjs bridge smoke" {
-  let d = default(None)
+  let d = @dayjs.default(None)
   assert_eq(realworld_dayjs_format(d).length(), 4)
 }
 EOF
       ;;
     qs)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_qs_obj() -> JSValue =
+extern "js" fn realworld_qs_obj() -> @qs.JSValue =
   #| () => ({ a: "1" })
 
 test "real-world qs bridge smoke" {
-  let parsed = parse("a=1&b=2", None)
+  let parsed = @qs.parse("a=1&b=2", None)
   if parsed["a"] is None {
     abort("expected parsed key a")
   }
-  assert_eq(stringify(realworld_qs_obj(), None), "a=1")
+  assert_eq(@qs.stringify(realworld_qs_obj(), None), "a=1")
 }
 EOF
       ;;
     yaml)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world yaml bridge smoke" {
-  let doc = parse("a: 1", None)
-  assert_eq(stringify(doc, None), "a: 1\n")
+  let doc = @yaml.parse("a: 1", None)
+  assert_eq(@yaml.stringify(doc, None), "a: 1\n")
 }
 EOF
       ;;
@@ -1097,13 +1101,13 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-extern "js" fn realworld_ss_string_value() -> JSValue =
+extern "js" fn realworld_ss_string_value() -> @superstruct.JSValue =
   #| () => "hello"
 
 test "real-world superstruct bridge smoke" {
-  let s : Struct[JSValue, JSValue] = unsafeCast(string())
-  assert_(realworld_ss_string_value(), s, None)
-  let _ = validate(realworld_ss_string_value(), s, None)
+  let s : @superstruct.Struct[@superstruct.JSValue, @superstruct.JSValue] = unsafeCast(@superstruct.string())
+  @superstruct.assert_(realworld_ss_string_value(), s, None)
+  let _ = @superstruct.validate(realworld_ss_string_value(), s, None)
 }
 EOF
       ;;
@@ -1111,12 +1115,12 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-extern "js" fn realworld_ee3_event() -> EventEmitter_EventNames =
+extern "js" fn realworld_ee3_event() -> @eventemitter3.EventEmitter_EventNames =
   #| () => "ping"
 
 test "real-world eventemitter3 bridge smoke" {
-  let ee : Default[JSValue, JSValue] = new_default()
-  let listener : EventEmitter_EventListener = unsafeCast(fn(_args : Array[JSValue]) -> Unit {  })
+  let ee : @eventemitter3.Default[@eventemitter3.JSValue, @eventemitter3.JSValue] = @eventemitter3.new_default()
+  let listener : @eventemitter3.EventEmitter_EventListener = unsafeCast(fn(_args : Array[@eventemitter3.JSValue]) -> Unit {  })
   let _ = ee.on(realworld_ee3_event(), listener, None)
   assert_eq(ee.listener_count(realworld_ee3_event()), 1)
 }
@@ -1124,17 +1128,17 @@ EOF
       ;;
     mitt)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_mitt_event() -> JSValue =
+extern "js" fn realworld_mitt_event() -> @mitt.JSValue =
   #| () => "ping"
 
 extern "js" fn realworld_mitt_counter() -> Ref[Int] =
   #| () => ({ val: 0 })
 
-extern "js" fn realworld_mitt_handler(counter : Ref[Int]) -> EmitterOnArg1Callback =
+extern "js" fn realworld_mitt_handler(counter : Ref[Int]) -> @mitt.EmitterOnArg1Callback =
   #| (counter) => () => { counter.val++ }
 
 test "real-world mitt bridge smoke" {
-  let emitter = default(None)
+  let emitter = @mitt.default(None)
   let counter = realworld_mitt_counter()
   emitter.on(realworld_mitt_event(), realworld_mitt_handler(counter))
   // `emit` overloads (`emit(type)` / `emit(type, event)`) merge to one
@@ -1149,7 +1153,7 @@ EOF
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
 test "real-world marked bridge smoke" {
-  let html = marked_string_marked_options_optional("# hello", None)
+  let html = @marked.marked_string_marked_options_optional("# hello", None)
   let rendered : String = unsafeCast(html)
   if !rendered.contains("<h1>hello</h1>") {
     abort("unexpected marked output: \{rendered}")
@@ -1162,9 +1166,9 @@ EOF
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
 test "real-world semver bridge smoke" {
-  assert_eq(valid(Some(unsafeCast("1.2.3")), None), Some("1.2.3"))
-  assert_eq(clean(" 1.2.3 ", None), Some("1.2.3"))
-  assert_eq(major(unsafeCast("2.4.6"), None), 2)
+  assert_eq(@semver.valid(Some(unsafeCast("1.2.3")), None), Some("1.2.3"))
+  assert_eq(@semver.clean(" 1.2.3 ", None), Some("1.2.3"))
+  assert_eq(@semver.major(unsafeCast("2.4.6"), None), 2)
 }
 EOF
       ;;
@@ -1172,11 +1176,11 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-extern "js" fn realworld_pm_match(m : Picomatch_Matcher, input : String) -> Bool =
+extern "js" fn realworld_pm_match(m : @picomatch.Picomatch_Matcher, input : String) -> Bool =
   #| (m, input) => m(input)
 
 test "real-world picomatch bridge smoke" {
-  let matcher = default(unsafeCast("*.ts"), None, None)
+  let matcher = @picomatch.default(unsafeCast("*.ts"), None, None)
   if !realworld_pm_match(matcher, "a.ts") {
     abort("expected *.ts to match a.ts")
   }
@@ -1188,17 +1192,17 @@ EOF
       ;;
     deepmerge)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_dm_obj_a() -> Partial =
+extern "js" fn realworld_dm_obj_a() -> @deepmerge.Partial =
   #| () => ({ a: 1 })
 
-extern "js" fn realworld_dm_obj_b() -> Partial =
+extern "js" fn realworld_dm_obj_b() -> @deepmerge.Partial =
   #| () => ({ b: 2 })
 
-extern "js" fn realworld_dm_has(v : JSValue, key : String) -> Bool =
+extern "js" fn realworld_dm_has(v : @deepmerge.JSValue, key : String) -> Bool =
   #| (v, key) => Object.prototype.hasOwnProperty.call(v, key)
 
 test "real-world deepmerge bridge smoke" {
-  let merged = default(realworld_dm_obj_a(), realworld_dm_obj_b(), None)
+  let merged = @deepmerge.default(realworld_dm_obj_a(), realworld_dm_obj_b(), None)
   if !realworld_dm_has(merged, "a") || !realworld_dm_has(merged, "b") {
     abort("expected merged object with both keys")
   }
@@ -1209,24 +1213,24 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-extern "js" fn realworld_axios_config() -> AxiosRequestConfig[JSValue] =
+extern "js" fn realworld_axios_config() -> @axios.AxiosRequestConfig[@axios.JSValue] =
   #| () => ({ url: "/users/1", baseURL: "https://example.test" })
 
 test "real-world axios bridge smoke" {
-  let axios_core : Axios = unsafeCast(get_default())
+  let axios_core : @axios.Axios = unsafeCast(@axios.get_default())
   let uri = axios_core.get_uri(Some(realworld_axios_config()))
   assert_eq(uri, "https://example.test/users/1")
-  let _ = create(None)
+  let _ = @axios.create(None)
 }
 EOF
       ;;
     commander)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_cmd_debug_flag(opts : OptionValues) -> Bool =
+extern "js" fn realworld_cmd_debug_flag(opts : @commander.OptionValues) -> Bool =
   #| (opts) => opts.debug === true
 
 test "real-world commander bridge smoke" {
-  let cmd = new_command(Some("app"))
+  let cmd = @commander.new_command(Some("app"))
     .option("-d, --debug", Some("enable debug"), None)
     .parse(Some(["node", "app", "--debug"]), None)
   if !realworld_cmd_debug_flag(cmd.opts()) {
@@ -1240,7 +1244,7 @@ EOF
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
 test "real-world debug bridge smoke" {
-  let dbg : Debug = unsafeCast(get_default())
+  let dbg : @debug.Debug = unsafeCast(@debug.get_default())
   dbg.enable("tsmbt:*")
   if !dbg.enabled("tsmbt:probe") {
     abort("expected namespace to be enabled")
@@ -1254,21 +1258,21 @@ EOF
     chokidar)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world chokidar bridge smoke" {
-  let watcher = new_fswatcher(None)
+  let watcher = @chokidar.new_fswatcher(None)
   let _ = watcher.close()
 }
 EOF
       ;;
     pino)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_pino_options() -> Pino_LoggerOptions =
+extern "js" fn realworld_pino_options() -> @pino.Pino_LoggerOptions =
   #| () => ({ level: "warn" })
 
-extern "js" fn realworld_pino_level(logger : Pino_Logger) -> String =
+extern "js" fn realworld_pino_level(logger : @pino.Pino_Logger) -> String =
   #| (logger) => logger.level
 
 test "real-world pino bridge smoke" {
-  let logger = default(realworld_pino_options(), None)
+  let logger = @pino.default(realworld_pino_options(), None)
   assert_eq(realworld_pino_level(logger), "warn")
 }
 EOF
@@ -1302,21 +1306,21 @@ EOF
       cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] unsafeCast(value : A) -> B = "%identity"
 
-extern "js" fn realworld_uuid_absent() -> JSValue =
+extern "js" fn realworld_uuid_absent() -> @uuid.JSValue =
   #| () => undefined
 
 test "real-world uuid bridge smoke" {
-  let id = v4_version4_options_optional_undefined_number_optional(
+  let id = @uuid.v4_version4_options_optional_undefined_number_optional(
     None,
     realworld_uuid_absent(),
     None,
   )
   assert_eq(id.length(), 36)
-  if !validate(unsafeCast(id)) {
+  if !@uuid.validate(unsafeCast(id)) {
     abort("expected generated uuid to validate")
   }
-  assert_eq(version(id), 4)
-  if validate(unsafeCast("not-a-uuid")) {
+  assert_eq(@uuid.version(id), 4)
+  if @uuid.validate(unsafeCast("not-a-uuid")) {
     abort("expected invalid string to fail validation")
   }
 }
@@ -1335,7 +1339,7 @@ test "real-world minimatch bridge smoke" {
   if @minimatch.new_minimatch("*.bar", None).match_("bar.foo", None) {
     abort("expected *.bar not to match bar.foo")
   }
-  let is_foo = filter("*.foo", None)
+  let is_foo = @minimatch.filter("*.foo", None)
   if !is_foo("bar.foo") {
     abort("expected filter matcher to match")
   }
@@ -1344,11 +1348,11 @@ EOF
       ;;
     ws)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_ws_server_options() -> WebSocketServerOptions[JSValue, JSValue] =
+extern "js" fn realworld_ws_server_options() -> @ws.WebSocketServerOptions[@ws.JSValue, @ws.JSValue] =
   #| () => ({ noServer: true })
 
 test "real-world ws bridge smoke" {
-  let server : Server[JSValue, JSValue] = new_server(
+  let server : @ws.Server[@ws.JSValue, @ws.JSValue] = @ws.new_server(
     Some(realworld_ws_server_options()),
     None,
   )
@@ -1358,17 +1362,17 @@ EOF
       ;;
     vitest_runtime)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_vitest_global() -> JSValue =
+extern "js" fn realworld_vitest_global() -> @vitest_runtime.JSValue =
   #| () => globalThis
 
-extern "js" fn realworld_vitest_options() -> StringRecordOfAny =
+extern "js" fn realworld_vitest_options() -> @vitest_runtime.StringRecordOfAny =
   #| () => ({})
 
-extern "js" fn realworld_vitest_object() -> JSValue =
+extern "js" fn realworld_vitest_object() -> @vitest_runtime.JSValue =
   #| () => ({})
 
 test "real-world vitest environments bridge smoke" {
-  let envs = get_builtin_environments()
+  let envs = @vitest_runtime.get_builtin_environments()
   assert_eq(envs.node.name, "node")
   assert_eq(envs.jsdom.name, "jsdom")
   let global = realworld_vitest_global()
@@ -1380,7 +1384,7 @@ test "real-world vitest environments bridge smoke" {
     }
     None => ()
   }
-  let populated = populateGlobal(
+  let populated = @vitest_runtime.populateGlobal(
     realworld_vitest_object(),
     realworld_vitest_object(),
     None,
@@ -1397,7 +1401,7 @@ test "real-world playwright bridge smoke" {
   // pre-installed browser binaries we don't ship in CI, and the lazily
   // initialised globals throw `Cannot read properties of undefined` when
   // accessed without the npm postinstall step having run.
-  let _launch_options = LaunchOptions::{
+  let _launch_options = @playwright.LaunchOptions::{
     args: Some(["--disable-dev-shm-usage"]),
     artifactsDir: None,
     channel: None,
@@ -1424,26 +1428,26 @@ EOF
     react_router)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world react-router bridge smoke" {
-  let path = PathPartial::{
+  let path = @react_router.PathPartial::{
     pathname: Some("/docs"),
     search: None,
     hash: None,
   }
-  assert_eq(createPath(path), "/docs")
-  let parsed = parsePath("/docs?tab=api#top")
+  assert_eq(@react_router.createPath(path), "/docs")
+  let parsed = @react_router.parsePath("/docs?tab=api#top")
   assert_eq(parsed.pathname, Some("/docs"))
-  assert_eq(generatePath("/docs", None), "/docs")
-  let full_path = PathPartial::{
+  assert_eq(@react_router.generatePath("/docs", None), "/docs")
+  let full_path = @react_router.PathPartial::{
     pathname: Some("/docs"),
     search: Some("?tab=api"),
     hash: Some("#top"),
   }
-  assert_eq(createPath(full_path), "/docs?tab=api#top")
+  assert_eq(@react_router.createPath(full_path), "/docs?tab=api#top")
   assert_eq(
-    generate_path_params("/users/:id", params_from_pairs(["id"], ["42"])),
+    @react_router.generate_path_params("/users/:id", @react_router.params_from_pairs(["id"], ["42"])),
     "/users/42",
   )
-  let resolved = resolvePath(to_from_string("../api"), Some("/docs/reference"))
+  let resolved = @react_router.resolvePath(@react_router.to_from_string("../api"), Some("/docs/reference"))
   assert_eq(resolved.pathname, "/docs/api")
   assert_eq(resolved.search, "")
   assert_eq(resolved.hash, "")
@@ -1453,45 +1457,45 @@ EOF
     jose)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world jose bridge smoke" {
-  let jwt = new_unsecured_jwt(None)
+  let jwt = @jose.new_unsecured_jwt(None)
   let _ = jwt.set_issuer("https://issuer.example")
   let _ = jwt.set_subject("user-42")
   let _ = jwt.set_jti("token-1")
-  let _ = unsecured_jwt_set_issued_at_double(jwt, 1710000000.0)
+  let _ = @jose.unsecured_jwt_set_issued_at_double(jwt, 1710000000.0)
   let encoded = jwt.encode()
-  let decoded = unsecured_jwt_decode(encoded, None)
+  let decoded = @jose.unsecured_jwt_decode(encoded, None)
   let _ = decoded.header
-  let _ = decodeJwt(encoded)
-  let signer = new_sign_jwt(None)
+  let _ = @jose.decodeJwt(encoded)
+  let signer = @jose.new_sign_jwt(None)
   let _ = signer.set_issuer("https://issuer.example")
   let _ = signer.set_subject("user-42")
   let _ = signer.set_jti("token-1")
-  let _ = sign_jwt_set_issued_at_double(signer, 1710000000.0)
+  let _ = @jose.sign_jwt_set_issued_at_double(signer, 1710000000.0)
 }
 EOF
       ;;
     express)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world express bridge smoke" {
-  let options = RouterOptions::{
+  let options = @express.RouterOptions::{
     caseSensitive: Some(true),
     mergeParams: Some(true),
     strict: Some(false),
   }
-  let _ = router(Some(options))
-  let _ = get_json()
-  let _ = get_urlencoded()
-  let _ = get_static()
-  let _ = get_request()
-  let _ = get_response()
-  let _ = default()
+  let _ = @express.router(Some(options))
+  let _ = @express.get_json()
+  let _ = @express.get_urlencoded()
+  let _ = @express.get_static()
+  let _ = @express.get_request()
+  let _ = @express.get_response()
+  let _ = @express.default()
 }
 EOF
       ;;
     glob)
       cat > "$out/bridge_test.mbt" <<'EOF'
-fn realworld_glob_options() -> GlobOptions {
-  GlobOptions::{
+fn realworld_glob_options() -> @glob.GlobOptions {
+  @glob.GlobOptions::{
     absolute: Some(false),
     allowWindowsEscape: None,
     cwd: None,
@@ -1525,20 +1529,20 @@ fn realworld_glob_options() -> GlobOptions {
 }
 
 test "real-world glob bridge smoke" {
-  let matches = globSync_string_glob_options_with_file_types_unset_optional(
+  let matches = @glob.globSync_string_glob_options_with_file_types_unset_optional(
     "*.json",
     None,
   )
   if matches.length() == 0 {
     abort("expected json files in generated project")
   }
-  let opts = MinimatchOptionsPickWindowsPathsNoEscapeMagicalBraces::{
+  let opts = @glob.MinimatchOptionsPickWindowsPathsNoEscapeMagicalBraces::{
     windowsPathsNoEscape: Some(false),
     magicalBraces: Some(false),
   }
-  assert_eq(escape("src/*.mbt", Some(opts)), "src/\\*.mbt")
-  assert_eq(unescape("src/\\*.mbt", Some(opts)), "src/*.mbt")
-  if !has_magic("src/*.mbt", Some(realworld_glob_options())) {
+  assert_eq(@glob.escape("src/*.mbt", Some(opts)), "src/\\*.mbt")
+  assert_eq(@glob.unescape("src/\\*.mbt", Some(opts)), "src/*.mbt")
+  if !@glob.has_magic("src/*.mbt", Some(realworld_glob_options())) {
     abort("expected glob pattern to have magic")
   }
 }

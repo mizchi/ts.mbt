@@ -40,15 +40,6 @@ tsmbt_run_no_warnings() {
   # as `[0020]`, so let them through until the syntax migration lands
   # upstream-wide.
   #
-  # `[0025]` (`test_unqualified_package`: a black-box test calling its
-  # own package's `pub fn` without `@pkg.`) appeared with moon
-  # 0.1.20261029. It can only fire on a `*_test.mbt`, and the generator
-  # emits none — every one is a fixture test these harnesses write (133
-  # heredocs across four scripts), so it says nothing about generated
-  # code. Renaming them to `_wbtest.mbt` would silence it by dropping the
-  # check that the bridge API is `pub`, which is worse; qualifying them
-  # is the real migration and is tracked separately.
-  #
   # "Package `moonbitlang/async...` depends on experimental package
   # `moonbitlang/core/async...`" comes from the async library's OWN
   # moon.pkg files, which do not yet set `allow-experimental-packages`.
@@ -62,7 +53,7 @@ tsmbt_run_no_warnings() {
   #
   # Treat every other Warning as fatal.
   if grep -E '(^|[[:space:]])([Ww]arning):|forwardRef requires a render function' "$tmp" \
-      | grep -vE '^Warning: \[0020\]|^Warning: \[0005\]|^Warning: \[0082\]|^Warning: \[0035\]|^Warning: \[0025\]|^warning: unhandled Platform key|^Warning: Package `moonbitlang/async[^`]*` depends on experimental package `moonbitlang/core/async[^`]*`' >&2; then
+      | grep -vE '^Warning: \[0020\]|^Warning: \[0005\]|^Warning: \[0082\]|^Warning: \[0035\]|^warning: unhandled Platform key|^Warning: Package `moonbitlang/async[^`]*` depends on experimental package `moonbitlang/core/async[^`]*`' >&2; then
     printf 'warning output detected while running:' >&2
     printf ' %q' "$@" >&2
     printf '\n' >&2
