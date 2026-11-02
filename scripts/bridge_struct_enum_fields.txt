@@ -105,7 +105,9 @@ typescript_ast                  | 4 | 4 | 0 | Diagnostic.messageText and Diagnos
 typescript                      | 4 | 4 | 0 | the same typescript.d.ts, generated again under the node-imports example
 vitest                          | 6 | 6 | 0 | Serialized{,Root}Config.diff / .inspect / .inspectBrk, all six buildable
 react_types                     | 0 | 0 | 0 | its aria attributes are write-only, so no JS value arrives as those structs; the 5 it used to report were the `%identity` upcast helpers the probe read as returns
-ts_to_moonbit_react_jsx_runtime | 1 | 1 | 0 | ButtonHTMLAttributes.children (after the @types/react 19.3 upgrade ReactElement.type_ no longer carries one)
-ts_to_moonbit_hono_jsx          | 0 | 0 | 0 | ButtonAttributes.children no longer carries a payload enum after the hono 4.13 upgrade
+ts_to_moonbit_react_jsx_runtime | 1 | 1 | 0 | ReactElement.type_; the second that used to count, ButtonHTMLAttributes.children, was reachable only through the harness's own bridge_test.mbt extern, which the probe no longer reads
+ts_to_moonbit_hono_jsx          | 0 | 0 | 0 | ButtonAttributes.children carries an enum and only the harness's own bridge_test.mbt extern returned that struct
 node_fs                         | 0 | 0 | 0 | ReadOptions.position carries an enum and no struct holding one is returned
-hono                            | 0 | 0 | 0 | the hono-real example (hono 4.13): a field carries an enum and no struct holding one is returned
+hono                            | 0 | 0 | 0 | the typescript-to-moonbit-hono example: no struct holding an enum field is returned
+hono_real                       | 0 | 0 | 0 | the hono-real example (hono 4.13): no struct holding an enum field is returned
+drizzle_orm                     | 0 | 0 | 0 | three fields carry an enum and no struct holding one is ever returned, so the read direction is unreachable
