@@ -98,7 +98,7 @@ async fn module_spec_resolves_on_disk(
 ///|
 /// `start` is the index of the first option, so the verb dispatch in
 /// `driver.mbt` passes `2`.
-async fn mtsc_run_check(argv : Array[String], start : Int) -> Unit {
+async fn mtsc_run_check(argv : Array[String], start : Int32) -> Unit {
   if start >= argv.length() {
     println("Usage: mtsc check [--parse] [--iters N] [--strict] <file.ts>")
     return

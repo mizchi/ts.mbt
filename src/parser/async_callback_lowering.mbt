@@ -11,12 +11,12 @@
 /// with `Option::map` glue.
 pub struct AsyncCallbackLowering {
   lowered_type : String
-  arity : Int
+  arity : Int32
   is_optional : Bool
 }
 
 ///|
-fn async_cb_find_matching_paren(text : String, open_index : Int) -> Int? {
+fn async_cb_find_matching_paren(text : String, open_index : Int32) -> Int32? {
   let mut depth = 0
   for i, c in text.iter2() {
     if i < open_index {

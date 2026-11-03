@@ -1250,7 +1250,7 @@ fn Parser::try_parse_simple_type_args(self : Parser) -> Array[@ast.TsType]? {
 /// True when the token at `offset` is an identifier or a reserved
 /// keyword that's still valid as a labeled-tuple element name. TS
 /// permits any `IdentifierName` here, which includes most keywords.
-fn Parser::is_tuple_label_token(self : Parser, offset : Int) -> Bool {
+fn Parser::is_tuple_label_token(self : Parser, offset : Int32) -> Bool {
   match self.peek_at(offset).kind {
     Ident(_)
     | Type
@@ -1299,7 +1299,7 @@ fn Parser::is_tuple_label_token(self : Parser, offset : Int) -> Bool {
 }
 
 ///|
-fn Parser::is_qualified_type_name_part(self : Parser, offset : Int) -> Bool {
+fn Parser::is_qualified_type_name_part(self : Parser, offset : Int32) -> Bool {
   match self.peek_at(offset).kind {
     Ident(_)
     | Type

@@ -5,6 +5,10 @@ pub struct MoonBitJsFfiBundle {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend MoonBitJsFfiBundle with @debug.Debug::{to_repr}
+
+///|
 priv struct MoonBitBridgeImport {
   imported_name : String
   local_name : String
@@ -29,7 +33,7 @@ priv struct MoonBitJsFfiState {
   enums : Array[@ast.TsEnumDecl]
   external_type_names : Array[String]
   local_type_param_names : Array[String]
-  function_field_method_wrapper_limit : Int
+  function_field_method_wrapper_limit : Int32
   tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl]
   // Inline `A | B` unions encountered while lowering parameter / return /
   // field types are auto-synthesized into PascalCase tagged-union aliases
@@ -56,7 +60,7 @@ priv struct MoonBitJsFfiState {
 }
 
 ///|
-let ffi_function_field_method_wrapper_limit : Int = 128
+let ffi_function_field_method_wrapper_limit : Int32 = 128
 
 ///|
 fn ffi_is_ascii_letter(c : Char) -> Bool {
@@ -233,9 +237,14 @@ fn ffi_type_identifier(name : String, fallback : String) -> String {
     core
   }
   let normalized = prefix + normalized_core
+  // The same reserved set as `moonbit_type_identifier` (see
+  // `@parser.moonbit_reserved_type_names`), so the decl and ffi layers name
+  // a commander `Option` identically.
+  if normalized == "Array" ||
+    @parser.moonbit_reserved_type_name_needs_suffix(normalized) {
+    return normalized + "_"
+  }
   match normalized {
-    "Array" | "Bool" | "Double" | "Error" | "Int" | "String" | "Unit" =>
-      normalized + "_"
     "default" => "Default"
     _ => normalized
   }
@@ -266,7 +275,7 @@ fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
 fn ffi_push_local_type_params(
   state : MoonBitJsFfiState,
   names : Array[String],
-) -> Int {
+) -> Int32 {
   let old_len = state.local_type_param_names.length()
   for name in names {
     if !state.local_type_param_names.contains(name) {
@@ -279,7 +288,7 @@ fn ffi_push_local_type_params(
 ///|
 fn ffi_restore_local_type_params(
   state : MoonBitJsFfiState,
-  old_len : Int,
+  old_len : Int32,
 ) -> Unit {
   while state.local_type_param_names.length() > old_len {
     let _ = state.local_type_param_names.pop()
@@ -690,7 +699,7 @@ fn ffi_enum_string_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, String)]? {
 }
 
 ///|
-fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
+fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int32)]? {
   match enum_lowering_int_cases(enum_) {
     Some(cases) =>
       if ffi_int_cases_need_double(cases) {
@@ -703,7 +712,9 @@ fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
 }
 
 ///|
-fn ffi_enum_double_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
+fn ffi_enum_double_int_cases(
+  enum_ : @ast.TsEnumDecl,
+) -> Array[(String, Int32)]? {
   match enum_lowering_int_cases(enum_) {
     Some(cases) =>
       if ffi_int_cases_need_double(cases) {
@@ -969,6 +980,12 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       if is_optional {
         return match collapsed {
           Func(_, _) => "(\{rendered})?"
+          // A callable with an optional parameter (`CallableMeta`) that
+          // rendered as an arrow needs the same parens: a bare
+          // `(E?) -> Unit?` is a function RETURNING `Unit?` (ws's
+          // `close(cb?: (err?: Error) => void)`). One that widened to
+          // `JSValue` must not gain them.
+          CallableMeta(_, _) if rendered.contains("->") => "(\{rendered})?"
           _ => rendered + "?"
         }
       }
@@ -1452,6 +1469,12 @@ fn ffi_function_field_type_name(
       if is_optional {
         return match collapsed {
           Func(_, _) => "(\{rendered})?"
+          // A callable with an optional parameter (`CallableMeta`) that
+          // rendered as an arrow needs the same parens: a bare
+          // `(E?) -> Unit?` is a function RETURNING `Unit?` (ws's
+          // `close(cb?: (err?: Error) => void)`). One that widened to
+          // `JSValue` must not gain them.
+          CallableMeta(_, _) if rendered.contains("->") => "(\{rendered})?"
           _ => rendered + "?"
         }
       }
@@ -1501,6 +1524,12 @@ fn ffi_struct_field_type_name(
       if is_optional {
         return match collapsed {
           Func(_, _) => "(\{rendered})?"
+          // A callable with an optional parameter (`CallableMeta`) that
+          // rendered as an arrow needs the same parens: a bare
+          // `(E?) -> Unit?` is a function RETURNING `Unit?` (ws's
+          // `close(cb?: (err?: Error) => void)`). One that widened to
+          // `JSValue` must not gain them.
+          CallableMeta(_, _) if rendered.contains("->") => "(\{rendered})?"
           _ => rendered + "?"
         }
       }
@@ -1663,6 +1692,30 @@ fn ffi_inline_js_return_expr_with_state(
   type_ : @ast.TsType,
   expr : String,
 ) -> String {
+  // A FUNCTION handed back to MoonBit is called with MoonBit values, so its
+  // parameters need the conversion a direct argument gets — the same rule
+  // `ffi_type_js_return_expr` applies to a top-level function's return.
+  // The member renderers never asked it, so `factory().make("…")(None)`
+  // passed MoonBit's `None : Double?` (an object on the JS backend) into the
+  // JS closure raw. Inline lambdas cannot reach `bridge.js` helpers, so the
+  // arguments go through the INLINE converter.
+  let fn_type = match type_ {
+    CallableMeta(callable, _) => callable
+    other => other
+  }
+  match fn_type {
+    Func(fn_params, _) if ffi_returned_func_needs_arg_wrap(state, fn_type) => {
+      let arg_names : Array[String] = []
+      let converted : Array[String] = []
+      for i, p in fn_params {
+        let a = "a\{i}"
+        arg_names.push(a)
+        converted.push(ffi_inline_js_arg_expr_with_state(Some(state), p, a))
+      }
+      return "((__fn_) => (\{arg_names.join(", ")}) => __fn_(\{converted.join(", ")}))(\{expr})"
+    }
+    _ => ()
+  }
   let (inner, is_optional) = match
     @checker.classify_optional_like_union(type_) {
     Some((collapsed, true)) => (collapsed, true)
@@ -1832,8 +1885,8 @@ fn ffi_function_field_method_decl(
   field_name : String,
   js_field_name : String,
   field_type : @ast.TsType,
-  event_special? : (String, String)? = None,
-  method_type_params? : Array[String] = [],
+  event_special~ : (String, String)? = None,
+  method_type_params~ : Array[String] = [],
 ) -> String? {
   let field_type = match field_type {
     CallableMeta(inner, _) => inner
@@ -2293,9 +2346,16 @@ fn ffi_struct_decl_to_moonbit(
       type_
     }
     let raw_struct_field_type = ffi_struct_field_type_name(state, read_type)
-    // TypeScript `this` builder return -> owning struct.
+    // TypeScript `this` builder return -> owning struct, WITH its type
+    // parameters: a generic struct named bare is a [4040] arity error.
+    // Most `this` returns never reach this token rewrite, but a member
+    // with an optional parameter arrives wrapped in `CallableMeta` and
+    // renders its return as the literal `This` (zod's `clone(def?, …):
+    // this` and `ZodMap.min(n, params?): this`), so the owner spelled
+    // here has to be the same `Owner[T…]` the method wrapper uses.
     let struct_field_type = ffi_replace_this_token(
-      raw_struct_field_type, type_name,
+      raw_struct_field_type,
+      ffi_receiver_self_type(type_name, active_type_params),
     )
     lines.push("  \{field_name} : \{struct_field_type}")
     let force_method_wrapper = field_name == "_call_"
@@ -2851,7 +2911,7 @@ fn ffi_enum_js_extern_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
 }
 
 ///|
-fn ffi_int_literal_expr(value : Int) -> String {
+fn ffi_int_literal_expr(value : Int32) -> String {
   let raw = value.to_string()
   if raw == "-2147483648" {
     "(-2147483647 - 1)"
@@ -2861,7 +2921,7 @@ fn ffi_int_literal_expr(value : Int) -> String {
 }
 
 ///|
-fn ffi_double_literal_expr(value : Int) -> String {
+fn ffi_double_literal_expr(value : Int32) -> String {
   let raw = value.to_string()
   if raw == "-2147483648" {
     "(-536870912.0 * 4.0)"
@@ -2871,7 +2931,7 @@ fn ffi_double_literal_expr(value : Int) -> String {
 }
 
 ///|
-fn ffi_int_cases_need_double(cases : Array[(String, Int)]) -> Bool {
+fn ffi_int_cases_need_double(cases : Array[(String, Int32)]) -> Bool {
   for item in cases {
     if item.1.to_string() == "-2147483648" {
       return true
@@ -2881,7 +2941,7 @@ fn ffi_int_cases_need_double(cases : Array[(String, Int)]) -> Bool {
 }
 
 ///|
-fn ffi_enum_js_raw_literal(enum_ : @ast.TsEnumDecl, index : Int) -> String? {
+fn ffi_enum_js_raw_literal(enum_ : @ast.TsEnumDecl, index : Int32) -> String? {
   match ffi_enum_string_cases(enum_) {
     Some(cases) => {
       let (_, value) = cases[index]
@@ -2900,7 +2960,7 @@ fn ffi_enum_js_raw_literal(enum_ : @ast.TsEnumDecl, index : Int) -> String? {
 }
 
 ///|
-fn ffi_enum_case_count(enum_ : @ast.TsEnumDecl) -> Int {
+fn ffi_enum_case_count(enum_ : @ast.TsEnumDecl) -> Int32 {
   match ffi_enum_string_cases(enum_) {
     Some(cases) => cases.length()
     None =>
@@ -4032,7 +4092,8 @@ fn ffi_type_needs_js_return_conversion_with_state(
     return true
   }
   match type_ {
-    Func(_, _) => ffi_returned_func_needs_arg_wrap(state, type_)
+    Func(_, _) | CallableMeta(_, _) =>
+      ffi_returned_func_needs_arg_wrap(state, type_)
     _ => false
   }
 }
@@ -4051,6 +4112,14 @@ fn ffi_returned_func_needs_arg_wrap(
   type_ : @ast.TsType,
 ) -> Bool {
   match type_ {
+    // A returned function with an OPTIONAL parameter arrives wrapped in
+    // `CallableMeta` (the inner `Func`'s parameter types already carry the
+    // `| undefined`). Without this arm nanoid's `customAlphabet(…)` — the
+    // very case this wrap was written for — got no wrapper, and MoonBit's
+    // own `None : Double?`, an OBJECT on the JS backend
+    // (`Option$None` instance, `$tag` on the prototype), reached the raw
+    // closure as `size`, so the id generator looped until the heap ran out.
+    CallableMeta(inner, _) => ffi_returned_func_needs_arg_wrap(state, inner)
     Func(fn_params, _) => {
       for i, p in fn_params {
         let probe = "a\{i}"
@@ -4349,7 +4418,7 @@ fn ffi_converted_return_extern_pair(
   arg_names : Array[String],
   return_type : String,
   target : String,
-  force? : Bool = false,
+  force~ : Bool = false,
 ) -> String? {
   let extern_name = "_\{extern_base}_ret_conv_js"
   let call = extern_name + "(" + arg_names.join(", ") + ")"
@@ -4462,6 +4531,10 @@ fn ffi_type_js_return_expr(
   match ffi_wrappable_union_alias_name(state, type_) {
     Some(name) => return "\{tagged_union_from_js_function_name(name)}(\{expr})"
     None => ()
+  }
+  let type_ = match type_ {
+    CallableMeta(inner, _) => inner
+    other => other
   }
   match type_ {
     Func(fn_params, _) if ffi_returned_func_needs_arg_wrap(state, type_) => {

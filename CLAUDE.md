@@ -36,9 +36,13 @@ product surfaces now.
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
-  answers both: `node_modules/typescript` is 6.0.3, and
-  `scripts/tsc_probe.mjs` runs it over a file the way the harness would
-  (reading the `// @option:` header). Batch CL diagnosed three wrong
+  answers both: `node_modules/typescript` was 6.0.3 when the notes
+  below were written and is now **TypeScript 7** (tsgo, through its
+  `unstable/sync` API), and `scripts/tsc_probe.mjs` runs it over a file
+  the way the harness would (reading the `// @option:` header). Every
+  "6.0.3 reports / accepts" in this file is that older compiler's answer;
+  6.0.3 stays installed as `node_modules/typescript-6` for the scripts
+  that need the classic in-process API. Batch CL diagnosed three wrong
   rules with it and left one alone because of it — `symbolProperty37` is
   in the TS7 error set and 6.0.3 accepts it, so
   `member_name_duplicates`'s claim that duplicate well-known-symbol
@@ -5299,6 +5303,18 @@ typescript.mbt/
 # were real dead imports and are gone. So "clean" is a claim about a
 # toolchain as much as about the tree, and bumping the toolchain means
 # re-running this before trusting it.
+#
+# Re-verified clean on moon 0.1.20261029 / moonc v0.10.19. That bump
+# needed four things: `moonbitlang/regexp@0.3.7` pinned in `moon.mod`
+# (mizchi/x@0.6.1 asks for 0.3.5, whose `moon.mod.json` the toolchain
+# no longer loads — MVS picks the higher pin), 140
+# `implicit_impl_as_method` sites given an explicit `pub extend` (Show,
+# whose `to_string` is called as a method) or a `#deprecated pub extend`
+# (derived Eq / Debug, whose methods nothing calls), `.or` ->
+# `.unwrap_or` and iterator `.length()` -> `.count()`, and a `moon fmt`
+# pass that rewrites `Int` -> `Int32` and `x? : T = d` -> `x~ : T = d`
+# (no `#|` line touched). The "depends on experimental package" lines
+# come from `moonbitlang/async`'s own packages and do not fail the gate.
 moon check --deny-warn
 
 # Run tests. Takes about an hour, and most of that is NOT tests: the

@@ -61,7 +61,7 @@ fn collect_trivial_fns(block : @ast.TsBlock) -> Map[String, TrivialFn] {
   // A name declared more than once, or reassigned anywhere, is not safe
   // to resolve syntactically — the call site might reach a different
   // value than the declaration this pass read.
-  let declared_count : Map[String, Int] = Map([])
+  let declared_count : Map[String, Int32] = Map([])
   for s in block.stmts {
     match s {
       Let(@ast.TsBinding::Ident(n), _, _)
@@ -839,6 +839,6 @@ fn try_inline_trivial_call(
 /// valid in a JavaScript identifier, so no parsed source can produce
 /// this name and neither substitution phase can capture the other's
 /// output.
-fn inline_arg_slot(i : Int) -> String {
+fn inline_arg_slot(i : Int32) -> String {
   "@@inline-arg:" + i.to_string()
 }

@@ -10,11 +10,18 @@
 // hand-written LEGAL NEIGHBOUR, which no baseline can ever cover.
 //
 // The version here is whatever `node_modules/typescript` holds (print it
-// with --version), not tsgo, so a disagreement with the TS7 verdict is
-// possible and is itself worth knowing rather than assuming. There is at
-// least one recorded instance: TS1249 on an ambient bodiless member, which
-// this compiler reports and TS7 accepts, so following it there would have
-// shipped a false positive.
+// with --version). Since the TS7 migration that IS tsgo — the compiler the
+// oracle's baselines come from — where it used to be 6.0.3, a stand-in
+// that disagreed with TS7 at least once (TS1249 on an ambient bodiless
+// member, which 6.0.3 reports and TS7 accepts). Notes written before the
+// migration quote 6.0.3's answers; re-probe before relying on one.
+// `node_modules/typescript-6` keeps 6.0.3 installed for the classic-API
+// scripts, so the old answer is one import away if a comparison is wanted.
+//
+// One TS7 behaviour shows up on old corpus headers: `@target: es5` is
+// TS5108 ("option has been removed") and `@target: es3` is TS6046. Both
+// are reported, because the API's `parseConfigFile` silently drops a
+// rejected option and the probe re-asks the CLI exactly when it does.
 //
 // The header reading and program construction live in
 // `scripts/lib/tsc-probe.mjs`, shared with `checker_miss_rank.mjs`.

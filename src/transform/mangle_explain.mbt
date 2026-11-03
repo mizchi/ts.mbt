@@ -170,11 +170,11 @@ fn collect_external_class_members(
 pub fn escape_breakdown(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
-  type_env? : Map[String, @ast.TsType] = {},
+  type_env~ : Map[String, @ast.TsType] = {},
   // `LinkRenames.synthesized_namespaces` — which bindings the LINKER
   // created as namespace objects. `None` falls back to a structural
   // guess that over-reserves; see `reserved_props_from_observability`.
-  synthesized_namespaces? : Map[String, Bool]? = None,
+  synthesized_namespaces~ : Map[String, Bool]? = None,
 ) -> EscapeBreakdown {
   let (graph, obs_map, scoped_sinks, host_shaped_names) = block_observability(
     block, external_bindings,
@@ -333,7 +333,7 @@ pub fn escape_breakdown(
 fn obs_attribution_summary(
   provenance : Map[String, Array[String]],
 ) -> Array[String] {
-  let counts : Map[String, Int] = Map([])
+  let counts : Map[String, Int32] = Map([])
   let examples : Map[String, Array[String]] = Map([])
   for entry in provenance {
     let (name, whys) = entry
@@ -351,7 +351,7 @@ fn obs_attribution_summary(
   }
   // Rank by name count, descending, with a stable tie-break so the
   // report does not shuffle between runs.
-  let facts : Array[(String, Int)] = []
+  let facts : Array[(String, Int32)] = []
   for k in counts.keys() {
     facts.push((k, counts.get(k).unwrap_or(0)))
   }

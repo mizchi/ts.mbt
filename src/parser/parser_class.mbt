@@ -32,7 +32,7 @@ priv enum ClassKey {
 /// implementation arity can be out of its reach). A `this` parameter is a
 /// type annotation, not an argument, and is excluded from both counts —
 /// `m(this: C): void; m(this: C, a: number) {}` is TS2394 for the `a`.
-fn signature_max_args(params : Array[@ast.TsParam]) -> Int {
+fn signature_max_args(params : Array[@ast.TsParam]) -> Int32 {
   let mut n = 0
   for p in params {
     if p.is_rest {
@@ -55,7 +55,7 @@ fn signature_max_args(params : Array[@ast.TsParam]) -> Int {
 /// that rule is ever violated — a LOWER required count only ever silences
 /// the check. A parameter property (`constructor(private a: number)`) is
 /// an ordinary required parameter and is counted.
-fn impl_required_arity(params : Array[@ast.TsParam]) -> Int {
+fn impl_required_arity(params : Array[@ast.TsParam]) -> Int32 {
   let mut n = 0
   for p in params {
     if p.is_rest {
@@ -132,7 +132,7 @@ fn computed_key_const_name(e : @ast.TsExpr) -> String? {
 }
 
 ///|
-fn computed_key_const_int(e : @ast.TsExpr) -> Int? {
+fn computed_key_const_int(e : @ast.TsExpr) -> Int32? {
   match e {
     IntLit(i) => Some(i)
     BinOp(op, a, b) => {
@@ -222,7 +222,7 @@ fn runtime_class_method_params(
   for st in func.body.stmts {
     stmts.push(st)
   }
-  let positions : Array[Int] = []
+  let positions : Array[Int32] = []
   if func.body.stmt_positions.length() == func.body.stmts.length() &&
     func.body.stmt_positions.length() > 0 {
     for _ in prologue {
@@ -236,7 +236,7 @@ fn runtime_class_method_params(
 }
 
 ///|
-fn runtime_class_param_name(param : @ast.TsParam, index : Int) -> String {
+fn runtime_class_param_name(param : @ast.TsParam, index : Int32) -> String {
   if param.name != "" {
     return param.name
   }
@@ -714,7 +714,7 @@ fn static_block_use_before_def(
     return hits
   }
   // First declaration index of every public static field.
-  let first_decl : Map[String, Int] = Map([])
+  let first_decl : Map[String, Int32] = Map([])
   for i, element in elements {
     match element {
       Field(true, Name(n), _, _, _, _) =>
@@ -1013,13 +1013,13 @@ fn build_runtime_class_decl(
   // Legal and left silent: a single field, method *overloads* (several
   // non-accessor methods -- a separate diagnostic family), and a get/set
   // pair.
-  let counts : Map[String, Array[Int]] = Map([]) // key -> [field, get, set, method]
+  let counts : Map[String, Array[Int32]] = Map([]) // key -> [field, get, set, method]
   let key_name : Map[String, String] = Map([])
   // Private names (`#foo`) share a *single* namespace across the static and
   // instance halves of a class (a static `#foo` and an instance `#foo`
   // collide, TS2804), unlike public members. Accumulate them separately keyed
   // by the bare name with no `|s` / `|i` split.
-  let priv_counts : Map[String, Array[Int]] = Map([])
+  let priv_counts : Map[String, Array[Int32]] = Map([])
   for element in elements {
     let (name, is_static, slot) = match element {
       Field(s, Name(n), _, _, _, _) => (n, s, 0)
@@ -1659,7 +1659,7 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
 ///|
 fn Parser::can_consume_class_modifier(
   self : Parser,
-  allow_line_break? : Bool = false,
+  allow_line_break~ : Bool = false,
 ) -> Bool {
   // A class-member modifier spelled as a CONTEXTUAL KEYWORD may not be
   // followed by a line terminator — the grammar writes
@@ -2178,7 +2178,7 @@ fn Parser::record_unused_private_members(self : Parser, head : String) -> Unit {
   if self.private_decl_counts.length() == 0 {
     return
   }
-  let occurrences : Map[String, Int] = Map([])
+  let occurrences : Map[String, Int32] = Map([])
   for tok in self.tokens {
     if tok.kind is PrivateIdent(n) {
       occurrences[n] = occurrences.get(n).unwrap_or(0) + 1
@@ -2226,7 +2226,7 @@ fn Parser::record_unused_private_members(self : Parser, head : String) -> Unit {
 /// course fine.
 fn Parser::record_private_member_misuse(
   self : Parser,
-  body_start : Int,
+  body_start : Int32,
   methods : Array[String],
   getters : Array[String],
   setters : Array[String],
@@ -2330,7 +2330,7 @@ fn Parser::record_private_member_misuse(
 /// `current_class_brand` is NOT reset by a function body, which is correct
 /// here: a private name resolves lexically through one, so a class inside a
 /// method of `A` still has `A` as its enclosing brand.
-fn private_parent_sentinel(brand_id : Int, prev_brand : String?) -> String? {
+fn private_parent_sentinel(brand_id : Int32, prev_brand : String?) -> String? {
   match prev_brand {
     Some(pb) => {
       let prefix = "__private_brand__"
@@ -2354,8 +2354,8 @@ fn Parser::parse_class_body(
   Array[String],
   Array[String],
   Array[String],
-  Int,
-  Int,
+  Int32,
+  Int32,
   Bool,
   Bool,
   Bool,
@@ -2411,7 +2411,7 @@ fn Parser::parse_class_body(
   // IMPLEMENTATION's required arity when that arrives — see
   // `signature_max_args` / `impl_required_arity` for why only that one
   // direction is an error.
-  let sig_max_args : Map[String, Array[Int]] = Map([])
+  let sig_max_args : Map[String, Array[Int32]] = Map([])
   // TS2386 support: the `?`-ness of the first declaration of each member
   // key in this class body. Unlike the interface / object-type sites, the
   // IMPLEMENTATION participates — a bodied method can never be optional,

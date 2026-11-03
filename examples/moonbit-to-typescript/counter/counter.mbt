@@ -6,7 +6,7 @@ pub struct Counter {
 
 ///|
 pub fn create(label : String, item : @child.Item) -> Counter {
-  { label, item }
+  { label, item, }
 }
 
 ///|

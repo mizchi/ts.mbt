@@ -1,5 +1,8 @@
 ///|
-fn count_occurrences_in_decl_output(haystack : String, needle : String) -> Int {
+fn count_occurrences_in_decl_output(
+  haystack : String,
+  needle : String,
+) -> Int32 {
   let mut count = 0
   for _ in haystack.split(needle) {
     count += 1
@@ -3248,4 +3251,23 @@ async test "bridge: method-level generics survive on generic owners" {
       "declare pub fn[T] CollectionChain::first(self : CollectionChain[T]) -> T",
     ),
   )
+}
+
+///|
+async test "bridge: Pick inside an optional-parameter const callable is projected and declared" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/utility-pick-callable-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // glob's `escape` / `unescape`: lowered through `CallableMeta` AND the
+  // projection collected from the same position.
+  assert_true(actual.contains("declare pub type OptsPickAB"))
+  assert_false(actual.contains(": Pick?"))
 }

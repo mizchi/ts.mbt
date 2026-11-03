@@ -112,9 +112,11 @@ package_checkout_exists() {
     return 1
   fi
   local moon_mod
-  for moon_mod in "$github_root/$owner"/*/moon.mod.json; do
+  # A checkout may carry either manifest spelling: `moon.mod` (DSL,
+  # `name = "..."`) or the legacy `moon.mod.json` (`"name": "..."`).
+  for moon_mod in "$github_root/$owner"/*/moon.mod "$github_root/$owner"/*/moon.mod.json; do
     [ -f "$moon_mod" ] || continue
-    if grep -F "\"name\": \"$package_name\"" "$moon_mod" >/dev/null; then
+    if grep -F -e "\"name\": \"$package_name\"" -e "name = \"$package_name\"" "$moon_mod" >/dev/null; then
       return 0
     fi
   done
@@ -521,8 +523,6 @@ const config = {
     module: "esnext",
     moduleResolution: "bundler",
     target: "es2020",
-    baseUrl: ".",
-    ignoreDeprecations: "6.0",
     lib: ["es2020"],
     paths,
   },
@@ -738,8 +738,6 @@ fs.writeFileSync(path.join(consumerDir, "tsconfig.json"), JSON.stringify({
     module: "esnext",
     moduleResolution: "bundler",
     target: "es2022",
-    baseUrl: ".",
-    ignoreDeprecations: "6.0",
     lib: ["es2022", "dom"],
     paths,
   },

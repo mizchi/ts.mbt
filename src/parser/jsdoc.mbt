@@ -30,6 +30,10 @@ pub(all) struct JsdocBlock {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend JsdocBlock with @debug.Debug::{to_repr}
+
+///|
 pub(all) enum JsdocTag {
   Param(String, String?, String) // name, optional type, description
   Returns(String?, String) // optional type, description
@@ -48,6 +52,14 @@ pub(all) enum JsdocTag {
   Typedef(String?, String) // type, name
   Other(String, String) // tag_name (without `@`), raw content
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend JsdocTag with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend JsdocTag with @debug.Debug::{to_repr}
 
 ///|
 pub fn JsdocBlock::is_empty(self : JsdocBlock) -> Bool {

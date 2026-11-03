@@ -5,6 +5,10 @@ pub suberror MbtiTypescriptDeclError {
 } derive(@debug.Debug)
 
 ///|
+#deprecated
+pub extend MbtiTypescriptDeclError with @debug.Debug::{to_repr}
+
+///|
 pub struct MbtiTypescriptPackageFile {
   relative_path : String
   content : String
@@ -129,7 +133,7 @@ priv struct MbtiFunctionDecl {
 ///|
 priv struct MbtiMarkerTraitDecl {
   name : String
-  arity : Int
+  arity : Int32
 }
 
 ///|
@@ -157,7 +161,7 @@ priv struct MbtiRawFacadeParam {
 }
 
 ///|
-fn mbti_char_at(s : String, idx : Int) -> Char {
+fn mbti_char_at(s : String, idx : Int32) -> Char {
   s[idx].to_int().unsafe_to_char()
 }
 
@@ -293,8 +297,8 @@ fn mbti_heuristic_param_name(ty_src : String) -> String? {
 /// args stay distinguishable.
 fn mbti_positional_param_name(
   ty_src : String,
-  idx : Int,
-  total : Int,
+  idx : Int32,
+  total : Int32,
 ) -> String {
   match mbti_heuristic_param_name(ty_src) {
     Some(name) => name
@@ -303,7 +307,7 @@ fn mbti_positional_param_name(
 }
 
 ///|
-fn mbti_count_char(source : String, target : Char) -> Int {
+fn mbti_count_char(source : String, target : Char) -> Int32 {
   let mut count = 0
   for c in source {
     if c == target {
@@ -325,7 +329,7 @@ fn upsert_marker_trait_decl(
   decls : Map[String, MbtiMarkerTraitDecl],
   order : Array[String],
   name : String,
-  arity : Int,
+  arity : Int32,
 ) -> Unit {
   match decls.get(name) {
     Some(existing) =>
@@ -694,10 +698,10 @@ fn split_top_level_plus_items(source : String) -> Array[String] {
 ///|
 fn find_matching(
   source : String,
-  start : Int,
+  start : Int32,
   open_char : Char,
   close_char : Char,
-) -> Int? {
+) -> Int32? {
   let mut depth = 0
   for i = start; i < source.length(); i = i + 1 {
     let c = mbti_char_at(source, i)
@@ -714,7 +718,7 @@ fn find_matching(
 }
 
 ///|
-fn find_top_level_tuple_payload_open(source : String) -> Int? {
+fn find_top_level_tuple_payload_open(source : String) -> Int32? {
   let mut bracket = 0
   for i = 0; i < source.length(); i = i + 1 {
     let c = mbti_char_at(source, i)
@@ -729,7 +733,7 @@ fn find_top_level_tuple_payload_open(source : String) -> Int? {
 }
 
 ///|
-fn find_top_level_arrow(source : String) -> Int? {
+fn find_top_level_arrow(source : String) -> Int32? {
   let mut paren = 0
   let mut bracket = 0
   let mut brace = 0
@@ -755,7 +759,7 @@ fn find_top_level_arrow(source : String) -> Int? {
 ///|
 fn is_mbti_effect_marker_at(
   source : String,
-  space_idx : Int,
+  space_idx : Int32,
   keyword : String,
 ) -> Bool {
   let keyword_start = space_idx + 1
@@ -774,7 +778,7 @@ fn is_mbti_effect_marker_at(
 }
 
 ///|
-fn find_top_level_effect_marker(source : String) -> Int? {
+fn find_top_level_effect_marker(source : String) -> Int32? {
   let mut paren = 0
   let mut bracket = 0
   let mut brace = 0
@@ -1049,7 +1053,7 @@ fn collect_mbti_public_type_aliases_with_external_import_types(
 ///|
 fn collect_runtime_inaccessible_free_function_names(
   source : String,
-  external_import_aliases? : Array[String] = [],
+  external_import_aliases~ : Array[String] = [],
 ) -> Array[String] {
   let imports = parse_mbti_imports(source)
   let used_aliases : Array[String] = []
@@ -1189,7 +1193,7 @@ fn render_autolink_diagnostics_md(
   root_package_name : String,
   ordered_packages : Array[String],
   package_sources : Map[String, String],
-  allowed_external_import_spec_rewrites? : Map[String, String] = {},
+  allowed_external_import_spec_rewrites~ : Map[String, String] = {},
 ) -> String {
   let lines : Array[String] = [
     "# Autolink Diagnostics", "", "Public members omitted from link.js.exports because MoonBit JS autolink currently exports non-generic top-level public free functions with runtime-public boundary types.",
@@ -1305,7 +1309,7 @@ fn parse_mbti_raw_facade_params(
 fn mbti_dedup_param_name(
   candidate : String,
   used : Array[String],
-  idx : Int,
+  idx : Int32,
 ) -> String {
   if !used.contains(candidate) {
     return candidate
@@ -2324,7 +2328,7 @@ fn collect_mbti_autolink_glue_decls(
 fn collect_mbti_bundle_autolink_glue_decls(
   loaded : LoadedMbtiPackageSources,
   include_facades : Bool,
-  allowed_external_import_spec_rewrites? : Map[String, String] = {},
+  allowed_external_import_spec_rewrites~ : Map[String, String] = {},
 ) -> Array[MbtiAutolinkGlueDecl] raise MbtiTypescriptDeclError {
   let decls : Array[MbtiAutolinkGlueDecl] = []
   let local_package_aliases : Map[String, String] = Map([])
@@ -2388,7 +2392,7 @@ fn collect_mbti_bundle_autolink_glue_decls(
 }
 
 ///|
-fn mbti_compare_string_ascending(lhs : String, rhs : String) -> Int {
+fn mbti_compare_string_ascending(lhs : String, rhs : String) -> Int32 {
   let min_len = if lhs.length() < rhs.length() {
     lhs.length()
   } else {
@@ -3526,8 +3530,8 @@ fn parse_mbti_type_header(
 ///|
 fn collect_brace_block(
   lines : Array[String],
-  start : Int,
-) -> (Array[String], Int) {
+  start : Int32,
+) -> (Array[String], Int32) {
   let block : Array[String] = []
   let mut brace_depth = 0
   let mut seen_open = false
@@ -3552,8 +3556,8 @@ fn collect_brace_block(
 ///|
 fn collect_mbti_decl_block(
   lines : Array[String],
-  start : Int,
-) -> (Array[String], Int) {
+  start : Int32,
+) -> (Array[String], Int32) {
   if lines[start].contains("{") {
     collect_brace_block(lines, start)
   } else {
@@ -5099,7 +5103,7 @@ fn mbti_branded_empty_interface_body(name : String) -> String {
 /// convention is `T`, `U`, `V`, `W`, ... for the first few and a
 /// `T<n>` fallback past that, so `Comparable<T>` reads as a normal
 /// generic interface rather than `Comparable<T0>`.
-fn mbti_default_type_param_name(idx : Int) -> String {
+fn mbti_default_type_param_name(idx : Int32) -> String {
   match idx {
     0 => "T"
     1 => "U"
@@ -5277,6 +5281,11 @@ fn parse_mbti_to_typescript_with_import_rewrites(
       }
       trait_decls[trait_decl.name] = trait_decl
       idx = next_idx
+      continue
+    }
+    if (trimmed.has_prefix("pub fn") || trimmed.has_prefix("pub async fn")) &&
+      mbti_is_trait_plumbing_fn(trimmed) {
+      idx += 1
       continue
     }
     if trimmed.has_prefix("pub fn") || trimmed.has_prefix("pub async fn") {
@@ -6046,7 +6055,10 @@ fn collect_typescript_external_type_import_aliases(
 /// Returns the end offset of a qualified TypeScript type reference. The
 /// declaration emitter only uses namespace-qualified names here, but nested
 /// generic arguments are consumed so `pkg.Type<A>` becomes one `unknown`.
-fn mbti_typescript_qualified_type_ref_end(source : String, start : Int) -> Int {
+fn mbti_typescript_qualified_type_ref_end(
+  source : String,
+  start : Int32,
+) -> Int32 {
   let mut idx = start
   while idx < source.length() {
     if !mbti_is_identifier_start(mbti_char_at(source, idx)) {
@@ -6338,9 +6350,9 @@ fn ts_decl_line_is_flat_method_export(line : String) -> Bool {
 fn strip_runtime_inaccessible_typescript_package_files(
   loaded : LoadedMbtiPackageSources,
   files : Array[MbtiTypescriptPackageFile],
-  runtime_export_names? : Array[String] = [],
-  generic_glue_export_names? : Array[String] = [],
-  allowed_external_import_spec_rewrites? : Map[String, String] = {},
+  runtime_export_names~ : Array[String] = [],
+  generic_glue_export_names~ : Array[String] = [],
+  allowed_external_import_spec_rewrites~ : Map[String, String] = {},
 ) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError {
   let inaccessible_by_path : Map[String, Array[String]] = Map([])
   let source_by_path : Map[String, String] = Map([])
@@ -6683,4 +6695,22 @@ pub async fn emit_typescript_decl_from_mbti_path(
     e => raise MbtiTypescriptDeclError::ReadError("\{e}")
   }
   parse_mbti_to_typescript(source)
+}
+
+///|
+/// A method that only exists to plumb a MoonBit trait and that no JS caller
+/// can use: one taking the builtin `&Logger` trait object (`Show::output`),
+/// which JavaScript cannot construct, or returning `@debug.Repr` (`Debug::to_repr`),
+/// an opaque core type with no TypeScript model. moonc v0.10.19 deprecates the
+/// implicit promotion of trait impls to methods, so a package now spells
+/// `pub extend T with Show::{to_string, output}` and these methods appear in
+/// its `.mbti` as ordinary `pub fn` lines where before there was only the
+/// `pub impl` — and rendering them emitted `value: Logger` / `debug.Repr`,
+/// names the declaration cannot resolve. The useful siblings (`to_string`,
+/// `equal`) translate normally and are kept.
+fn mbti_is_trait_plumbing_fn(line : String) -> Bool {
+  // Deliberately the two BUILTIN spellings and not "any `&Trait`": a trait
+  // the package declares itself is parsed from its `pub trait` block above,
+  // and a function taking one of those is not this case.
+  line.contains("@debug.Repr") || line.contains("&Logger")
 }

@@ -55,8 +55,7 @@ verify_typescript_scaffold_fixture() {
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -134,8 +133,7 @@ verify_typescript_facade_scaffold_fixture() {
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -221,8 +219,7 @@ EOF
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -313,8 +310,7 @@ EOF
     "target": "es2020",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -376,13 +372,14 @@ write_js_any_stub() {
 
   mkdir -p "$root/_stubs/mizchi_js/core"
 
-  cat > "$root/_stubs/mizchi_js/moon.mod.json" <<'EOF'
-{
-  "name": "mizchi/js",
-  "version": "0.0.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/_stubs/mizchi_js/moon.mod" <<'EOF'
+name = "mizchi/js"
+
+version = "0.0.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   : > "$root/_stubs/mizchi_js/core/moon.pkg"
@@ -450,18 +447,19 @@ verify_moonbit_scaffold_fixture() {
     "$fixture_path" "./runtime/double.js" "$root" >/dev/null
   cp "$runtime_path" "$root/runtime/double.js"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
 test "generated scaffold package smoke" {
-  assert_eq(double(21.0), 42.0)
+  assert_eq(@scaffold_ts_to_moonbit.double(21.0), 42.0)
 }
 EOF
 
@@ -502,19 +500,20 @@ export function fetchUser(id) {
 }
 EOF
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_neverthrow_like",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_neverthrow_like"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
 test "generated scaffold package with external package types smoke" {
-  let _ = parseUser("u1")
-  let _ = fetchUser("u2")
+  let _ = @scaffold_ts_to_moonbit_neverthrow_like.parseUser("u1")
+  let _ = @scaffold_ts_to_moonbit_neverthrow_like.fetchUser("u2")
 }
 EOF
 
@@ -541,16 +540,24 @@ verify_moonbit_scaffold_react_like_jsx_fixture() {
 
   write_js_any_stub "$root"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_like_jsx",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_like_jsx"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/runtime/react-like.js" <<'EOF'
@@ -563,7 +570,7 @@ EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
 test "generated react-like jsx scaffold smoke" {
-  let _ = createElement("badge")
+  let _ = @scaffold_ts_to_moonbit_react_like_jsx.createElement("badge")
 }
 EOF
 
@@ -590,54 +597,62 @@ verify_moonbit_scaffold_react_package_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_package",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_package"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_dom_attributes() -> DOMAttributes =
+extern "js" fn test_dom_attributes() -> @scaffold_ts_to_moonbit_react_package.DOMAttributes =
   #| () => ({ id: "app" })
 
-extern "js" fn test_dom_attributes_partial() -> DOMAttributesPartial =
+extern "js" fn test_dom_attributes_partial() -> @scaffold_ts_to_moonbit_react_package.DOMAttributesPartial =
   #| () => ({ id: "app" })
 
-extern "js" fn test_button_attributes() -> ButtonHTMLAttributes =
+extern "js" fn test_button_attributes() -> @scaffold_ts_to_moonbit_react_package.ButtonHTMLAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_function_component() -> FunctionComponent[JSValue] =
+extern "js" fn test_function_component() -> @scaffold_ts_to_moonbit_react_package.FunctionComponent[@scaffold_ts_to_moonbit_react_package.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null })
 
-extern "js" fn test_forward_ref_render() -> ForwardRefRenderCallback =
+extern "js" fn test_forward_ref_render() -> @scaffold_ts_to_moonbit_react_package.ForwardRefRenderCallback =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
-extern "js" fn test_ref() -> Ref[JSValue] =
+extern "js" fn test_ref() -> @scaffold_ts_to_moonbit_react_package.Ref[@scaffold_ts_to_moonbit_react_package.JSValue] =
   #| () => ({ current: null })
 
-extern "js" fn test_children() -> Array[JSValue] =
+extern "js" fn test_children() -> Array[@scaffold_ts_to_moonbit_react_package.JSValue] =
   #| () => []
 
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
 test "generated React package scaffold smoke" {
-  let element : ReactElement[JSValue, JSValue] = test_unsafe_cast(createElement(
+  let element : @scaffold_ts_to_moonbit_react_package.ReactElement[@scaffold_ts_to_moonbit_react_package.JSValue, @scaffold_ts_to_moonbit_react_package.JSValue] = test_unsafe_cast(@scaffold_ts_to_moonbit_react_package.createElement(
     "div",
     Some(test_dom_attributes()),
     test_children(),
   ))
-  let _ = cloneElement(element, Some(test_dom_attributes_partial()), test_children())
-  let _ = forwardRef(test_forward_ref_render())
-  let _ = memo(test_function_component(), None)
-  let _ = normalizeProps(test_button_attributes())
-  let _ = useComponentRef(test_ref())
-  let _ = get_default()
+  let _ = @scaffold_ts_to_moonbit_react_package.cloneElement(element, Some(test_dom_attributes_partial()), test_children())
+  let _ = @scaffold_ts_to_moonbit_react_package.forwardRef(test_forward_ref_render())
+  let _ = @scaffold_ts_to_moonbit_react_package.memo(test_function_component(), None)
+  let _ = @scaffold_ts_to_moonbit_react_package.normalizeProps(test_button_attributes())
+  let _ = @scaffold_ts_to_moonbit_react_package.useComponentRef(test_ref())
+  let _ = @scaffold_ts_to_moonbit_react_package.get_default()
 }
 EOF
 
@@ -704,25 +719,33 @@ verify_moonbit_scaffold_react_jsx_runtime_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_jsx_runtime",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_jsx_runtime"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_button_attributes() -> ButtonHTMLAttributes =
+extern "js" fn test_button_attributes() -> @scaffold_ts_to_moonbit_react_jsx_runtime.ButtonHTMLAttributes =
   #| () => ({ disabled: true })
 
 test "generated jsx runtime scaffold smoke" {
-  let _ = jsx("button", test_button_attributes(), None)
-  let _ = jsxs("button", test_button_attributes(), None)
+  let _ = @scaffold_ts_to_moonbit_react_jsx_runtime.jsx("button", test_button_attributes(), None)
+  let _ = @scaffold_ts_to_moonbit_react_jsx_runtime.jsxs("button", test_button_attributes(), None)
 }
 EOF
 
@@ -753,33 +776,41 @@ verify_moonbit_scaffold_react_jsx_dev_runtime_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_react_jsx_dev_runtime",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_react_jsx_dev_runtime"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_element_type() -> ElementType =
+extern "js" fn test_element_type() -> @scaffold_ts_to_moonbit_react_jsx_dev_runtime.ElementType =
   #| () => "badge"
 
-extern "js" fn test_key() -> Key =
+extern "js" fn test_key() -> @scaffold_ts_to_moonbit_react_jsx_dev_runtime.Key =
   #| () => "key"
 
-extern "js" fn test_props() -> JSValue =
+extern "js" fn test_props() -> @scaffold_ts_to_moonbit_react_jsx_dev_runtime.JSValue =
   #| () => ({ label: "Badge" })
 
-extern "js" fn test_source() -> JSXSource =
+extern "js" fn test_source() -> @scaffold_ts_to_moonbit_react_jsx_dev_runtime.JSXSource =
   #| () => ({ fileName: "x.tsx", lineNumber: 1 })
 
 test "generated jsx dev runtime scaffold smoke" {
-  let _ = jsxDEV(
+  let _ = @scaffold_ts_to_moonbit_react_jsx_dev_runtime.jsxDEV(
     test_element_type(),
     test_props(),
     Some(test_key()),
@@ -832,28 +863,36 @@ verify_moonbit_scaffold_hono_jsx_fixture() {
   write_js_any_stub "$root"
   cp -R "$repo_root/fixtures/resolver/project/node_modules/hono" "$root/node_modules/hono"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_hono_jsx",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_hono_jsx"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_button_attributes() -> ButtonAttributes =
+extern "js" fn test_button_attributes() -> @scaffold_ts_to_moonbit_hono_jsx.ButtonAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_component() -> MemoComponentCallback =
+extern "js" fn test_component() -> @scaffold_ts_to_moonbit_hono_jsx.MemoComponentCallback =
   #| () => (props) => ({ tag: "button", props })
 
 test "generated Hono JSX scaffold smoke" {
-  let _ = jsx("button", test_button_attributes())
-  let _ = memo(test_component())
+  let _ = @scaffold_ts_to_moonbit_hono_jsx.jsx("button", test_button_attributes())
+  let _ = @scaffold_ts_to_moonbit_hono_jsx.memo(test_component())
 }
 EOF
 
@@ -886,16 +925,24 @@ verify_moonbit_scaffold_hono_options_fixture() {
 
   write_js_any_stub "$root"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_hono_options",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_hono_options"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/runtime/hono.js" <<'EOF'
@@ -911,12 +958,12 @@ export function createApp(options) {
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_hono_options() -> HonoOptions[JSValue] =
+extern "js" fn test_hono_options() -> @scaffold_ts_to_moonbit_hono_options.HonoOptions[@scaffold_ts_to_moonbit_hono_options.JSValue] =
   #| () => ({ strict: true })
 
 test "generated hono options scaffold smoke" {
-  let _ : Hono[JSValue] = new_hono(None)
-  let _ = createApp(test_hono_options())
+  let _ : @scaffold_ts_to_moonbit_hono_options.Hono[@scaffold_ts_to_moonbit_hono_options.JSValue] = @scaffold_ts_to_moonbit_hono_options.new_hono(None)
+  let _ = @scaffold_ts_to_moonbit_hono_options.createApp(test_hono_options())
 }
 EOF
 
@@ -947,21 +994,29 @@ verify_moonbit_scaffold_namespace_fixture() {
   write_js_any_stub "$root"
   cp "$repo_root/fixtures/bridge_smoke/runtime/ns.js" "$root/runtime/ns.js"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_namespace",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_namespace"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
 test "generated scaffold package namespace smoke" {
-  let _ = get_shapes()
+  let _ = @scaffold_ts_to_moonbit_namespace.get_shapes()
 }
 EOF
 
@@ -997,36 +1052,44 @@ export function maybeHires(value) {
 }
 EOF
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_heterogeneous_union",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_heterogeneous_union"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
 test "generated heterogeneous union scaffold smoke" {
   // Round-trip a primitive case and a no-payload literal case through the
   // generated MoonBit -> JS -> MoonBit converter chain.
-  let bool_in = hires_from_bool(true)
-  match setHires(bool_in) {
+  let bool_in = @scaffold_ts_to_moonbit_heterogeneous_union.hires_from_bool(true)
+  match @scaffold_ts_to_moonbit_heterogeneous_union.setHires(bool_in) {
     BoolValue(v) => assert_eq(v, true)
     _ => abort("expected BoolValue")
   }
-  match setHires(Boundary) {
+  match @scaffold_ts_to_moonbit_heterogeneous_union.setHires(Boundary) {
     Boundary => ()
     _ => abort("expected Boundary")
   }
-  match maybeHires(Some(Boundary)) {
+  match @scaffold_ts_to_moonbit_heterogeneous_union.maybeHires(Some(Boundary)) {
     Some(Boundary) => ()
     _ => abort("expected Some(Boundary)")
   }
-  match maybeHires(None) {
+  match @scaffold_ts_to_moonbit_heterogeneous_union.maybeHires(None) {
     None => ()
     _ => abort("expected None")
   }
@@ -1050,16 +1113,24 @@ verify_moonbit_scaffold_handles_ambiguous_surface() {
 
   write_js_any_stub "$root"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "fixture/scaffold_ts_to_moonbit_ambiguous",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$root/moon.mod" <<'EOF'
+name = "fixture/scaffold_ts_to_moonbit_ambiguous"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$root/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   [ -f "$root/SCAFFOLD_DIAGNOSTICS.md" ]

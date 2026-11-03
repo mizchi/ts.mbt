@@ -3,6 +3,7 @@ export interface Box<A, B> {
   check(...checks: string[]): this;
   optional(): Wrap<this>;
   pair(other: B): this;
+  clone(label?: string): this;
 }
 export interface Wrap<T> {
   inner: T;

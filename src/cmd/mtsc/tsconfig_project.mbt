@@ -54,7 +54,7 @@ async fn mtsc_resolve_project_config(project : String?) -> String? {
 /// pattern here is a handful of characters, so there is nothing to gain
 /// from a table.
 fn mtsc_glob_segment_matches(pattern : String, name : String) -> Bool {
-  fn go(pi : Int, ni : Int) -> Bool {
+  fn go(pi : Int32, ni : Int32) -> Bool {
     if pi >= pattern.length() {
       return ni >= name.length()
     }
@@ -93,7 +93,7 @@ fn mtsc_glob_path_matches(
   pattern_segments : Array[String],
   segments : Array[String],
 ) -> Bool {
-  fn go(pi : Int, si : Int) -> Bool {
+  fn go(pi : Int32, si : Int32) -> Bool {
     if pi >= pattern_segments.length() {
       return si >= segments.length()
     }

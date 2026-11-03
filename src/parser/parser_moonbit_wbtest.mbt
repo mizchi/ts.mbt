@@ -358,3 +358,84 @@ test "parser: emit MoonBit decl drops internal and JSValue-widened deprecated me
   assert_true(actual.contains("/// name : String"))
   assert_true(actual.contains("/// keep : String"))
 }
+
+///|
+test "moonbit_sanitize_type_param_name suffixes reserved builtin type names" {
+  // moonc rejects these as a type variable ([4003]); date-fns declares
+  // `NearestToUnitOptions<Unit extends number>`.
+  assert_eq(moonbit_sanitize_type_param_name("Unit"), "Unit_")
+  assert_eq(moonbit_sanitize_type_param_name("String"), "String_")
+  assert_eq(moonbit_sanitize_type_param_name("Self"), "Self_")
+  // Probed as legal type variables, so left alone.
+  assert_eq(moonbit_sanitize_type_param_name("Array"), "Array")
+  assert_eq(moonbit_sanitize_type_param_name("Result"), "Result")
+  assert_eq(moonbit_sanitize_type_param_name("T"), "T")
+  // The existing `$` rewrite still applies.
+  assert_eq(moonbit_sanitize_type_param_name("TInput$1"), "TInput_1")
+}
+
+///|
+test "moonbit_type_identifier suffixes a declared type that moonc reserves" {
+  // commander exports `class Option`; moonc v0.10.19 rejects `pub type
+  // Option` ([4003]) exactly as it rejects the name as a type variable.
+  assert_eq(moonbit_type_identifier("Option", "OpaqueType"), "Option_")
+  assert_eq(moonbit_type_identifier("Self", "OpaqueType"), "Self_")
+  assert_eq(moonbit_type_identifier("Char", "OpaqueType"), "Char_")
+  // Long-standing renames are kept.
+  assert_eq(moonbit_type_identifier("Array", "OpaqueType"), "Array_")
+  assert_eq(moonbit_type_identifier("Error", "OpaqueType"), "Error_")
+  // Not reserved.
+  assert_eq(moonbit_type_identifier("Result", "OpaqueType"), "Result")
+  assert_eq(moonbit_type_identifier("Command", "OpaqueType"), "Command")
+}
+
+///|
+test "an object intersected with a discriminated object union becomes one constructible interface" {
+  // hono 4.13's `HonoOptions<E>`.
+  let body = parse_type_from_source(
+    "{ router?: string } & ({ strict?: true; getPath?: (r: string) => string } | { strict: false; getPath?: never })",
+  ) catch {
+    _ => {
+      fail("parse failed")
+      return
+    }
+  }
+  let iface = match type_alias_object_fields_to_interface("Opts", ["E"], body) {
+    Some(iface) => iface
+    None => {
+      fail("expected an interface")
+      return
+    }
+  }
+  assert_eq(iface.type_params, ["E"])
+  let names = iface.fields.map(f => f.0)
+  assert_eq(names, ["router", "strict", "getPath"])
+  // The boolean discriminant widens to an optional `boolean`.
+  let strict = iface.fields[1].1
+  assert_true(
+    strict == @ast.TsType::Union([@ast.TsType::Boolean, @ast.TsType::Undefined]),
+  )
+}
+
+///|
+test "an intersection the options join cannot model stays without an interface" {
+  // The same key in two intersection members would need a field-type
+  // intersection.
+  let dup = parse_type_from_source("{ a?: string } & { a?: number }") catch {
+    _ => {
+      fail("parse failed")
+      return
+    }
+  }
+  assert_true(type_alias_object_fields_to_interface("D", [], dup) is None)
+  // Union members that disagree on a NON-boolean field.
+  let clash = parse_type_from_source(
+    "{ r?: string } & ({ k: string } | { k: number })",
+  ) catch {
+    _ => {
+      fail("parse failed")
+      return
+    }
+  }
+  assert_true(type_alias_object_fields_to_interface("C", [], clash) is None)
+}

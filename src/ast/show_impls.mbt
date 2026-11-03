@@ -190,3 +190,117 @@ pub impl Show for TypedFunc with fn output(self, logger) {
 pub impl Show for TypedModule with fn output(self, logger) {
   write_debug_show(logger, self)
 }
+
+// Keep `to_string` / `output` callable as methods: the toolchain is
+// retiring implicit promotion of trait impls to regular methods.
+
+///|
+pub extend TsType with Show::{to_string, output}
+
+///|
+pub extend TsExpr with Show::{to_string, output}
+
+///|
+pub extend TsArrowBody with Show::{to_string, output}
+
+///|
+pub extend TsBinOp with Show::{to_string, output}
+
+///|
+pub extend TsUnaryOp with Show::{to_string, output}
+
+///|
+pub extend TsCompoundOp with Show::{to_string, output}
+
+///|
+pub extend TsForOfKind with Show::{to_string, output}
+
+///|
+pub extend TsStmt with Show::{to_string, output}
+
+///|
+pub extend TsBlock with Show::{to_string, output}
+
+///|
+pub extend TsSwitchCase with Show::{to_string, output}
+
+///|
+pub extend TsParam with Show::{to_string, output}
+
+///|
+pub extend TsBinding with Show::{to_string, output}
+
+///|
+pub extend TsBindingElem with Show::{to_string, output}
+
+///|
+pub extend TsArrayBinding with Show::{to_string, output}
+
+///|
+pub extend TsObjectBindingProp with Show::{to_string, output}
+
+///|
+pub extend TsObjectBinding with Show::{to_string, output}
+
+///|
+pub extend TsFunc with Show::{to_string, output}
+
+///|
+pub extend TsInterface with Show::{to_string, output}
+
+///|
+pub extend TsTypeAlias with Show::{to_string, output}
+
+///|
+pub extend TsImport with Show::{to_string, output}
+
+///|
+pub extend TsValueDecl with Show::{to_string, output}
+
+///|
+pub extend TsClassPropertyDecl with Show::{to_string, output}
+
+///|
+pub extend TsClassMethodDecl with Show::{to_string, output}
+
+///|
+pub extend TsClassDecl with Show::{to_string, output}
+
+///|
+pub extend TsEnumMemberValue with Show::{to_string, output}
+
+///|
+pub extend TsEnumMember with Show::{to_string, output}
+
+///|
+pub extend TsEnumDecl with Show::{to_string, output}
+
+///|
+pub extend TsModule with Show::{to_string, output}
+
+///|
+pub extend TsImportDecl with Show::{to_string, output}
+
+///|
+pub extend TsExportSpec with Show::{to_string, output}
+
+///|
+pub extend TsReExportKind with Show::{to_string, output}
+
+///|
+pub extend TsReExportSpec with Show::{to_string, output}
+
+///|
+pub extend TsModuleBlock with Show::{to_string, output}
+
+///|
+pub extend TypedExpr with Show::{to_string, output}
+
+///|
+pub extend TypedStmt with Show::{to_string, output}
+
+///|
+pub extend TypedFunc with Show::{to_string, output}
+
+///|
+pub extend TypedModule with Show::{to_string, output}

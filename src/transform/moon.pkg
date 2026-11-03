@@ -1,6 +1,7 @@
 import {
   "moonbitlang/core/bench",
   "moonbitlang/core/cmp",
+  "moonbitlang/core/debug",
   "moonbitlang/core/string",
   "mizchi/ts/ast",
   "mizchi/ts/checker",
@@ -8,6 +9,5 @@ import {
 }
 
 import {
-  "moonbitlang/core/debug",
   "moonbitlang/core/test",
 } for "wbtest"

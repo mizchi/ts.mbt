@@ -682,7 +682,7 @@ fn link_module_graph(
       new_block
     } else {
       let merged_stmts : Array[@ast.TsStmt] = []
-      let merged_positions : Array[Int] = []
+      let merged_positions : Array[Int32] = []
       for s in all_prepend {
         merged_stmts.push(s)
         merged_positions.push(-1)
@@ -1045,7 +1045,7 @@ fn synthesize_namespace_bindings_for(
 fn mint_unique_name(
   base : String,
   taken : Map[String, Bool],
-  start_counter : Int,
+  start_counter : Int32,
 ) -> String {
   let mut n = start_counter
   while true {
@@ -2249,7 +2249,7 @@ fn substitute_dotted_name(
 }
 
 ///|
-fn find_char_index(s : String, target : Char) -> Int {
+fn find_char_index(s : String, target : Char) -> Int32 {
   let mut idx = 0
   for c in s {
     if c == target {

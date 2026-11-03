@@ -146,7 +146,7 @@ fn fold_guard_return(block : @ast.TsBlock) -> @ast.TsBlock {
       )
     }
     let stmts : Array[@ast.TsStmt] = []
-    let pos : Array[Int] = []
+    let pos : Array[Int32] = []
     let has_positions = block.stmt_positions.length() == n
     for j in 0..<i {
       stmts.push(block.stmts[j])
@@ -309,7 +309,7 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
               }
             }
             prefix.push(Return(Some(Cond(cond, e1, e2))))
-            let pos : Array[Int] = []
+            let pos : Array[Int32] = []
             if block.stmt_positions.length() == n {
               for i in 0..<(n - 1) {
                 pos.push(block.stmt_positions[i])
@@ -335,7 +335,7 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
                     }
                   }
                   prefix.push(Return(Some(Cond(cond, e1, e2))))
-                  let pos : Array[Int] = []
+                  let pos : Array[Int32] = []
                   if block.stmt_positions.length() == n {
                     for i in 0..<(n - 2) {
                       pos.push(block.stmt_positions[i])
@@ -372,7 +372,7 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
           trimmed.push(s)
         }
       }
-      let pos : Array[Int] = []
+      let pos : Array[Int32] = []
       if block.stmt_positions.length() == n {
         for i in 0..<(n - 1) {
           pos.push(block.stmt_positions[i])
@@ -396,7 +396,7 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // semantics (the parser converts `function f(){}` to `let f = function f(){}`
   // which loses hoisting, so we manually hoist them before the exit point).
   let hoisted : Array[@ast.TsStmt] = []
-  let positions : Array[Int] = []
+  let positions : Array[Int32] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   let mut exited = false
   for i, s in block.stmts {
@@ -2555,7 +2555,7 @@ fn fold_string_method(
       // including negative indices (we know the length at compile time).
       let len = s.length()
       // JS slice semantics: negative → clamp relative to end; out-of-bounds → 0/len.
-      let resolve = fn(i : Int) -> Int {
+      let resolve = fn(i : Int32) -> Int32 {
         let resolved = if i < 0 { len + i } else { i }
         resolved.max(0).min(len)
       }
@@ -2587,7 +2587,7 @@ fn fold_string_method(
     "substring" => {
       // `"hello".substring(start[, end])` — same as slice but clamps negatives to 0.
       let len = s.length()
-      let clamp = fn(i : Int) -> Int { i.max(0).min(len) }
+      let clamp = fn(i : Int32) -> Int32 { i.max(0).min(len) }
       match args.length() {
         1 =>
           match args[0] {
@@ -2973,7 +2973,7 @@ fn fold_array_method(
       // `[1,2,3].slice(start[, end])` — same semantics as String.slice
       // but returns a new array.  Only fold when all items are pure.
       let len = items.length()
-      let resolve = fn(i : Int) -> Int {
+      let resolve = fn(i : Int32) -> Int32 {
         let r = if i < 0 { len + i } else { i }
         r.max(0).min(len)
       }
@@ -3075,8 +3075,8 @@ fn try_fold_switch(
     return None
   }
   // Walk cases to find the first one that matches `disc` under ===.
-  let mut matched_idx : Int? = None
-  let mut default_idx : Int? = None
+  let mut matched_idx : Int32? = None
+  let mut default_idx : Int32? = None
   for i, c in cases {
     match c.test_expr {
       None => default_idx = Some(i)
@@ -4036,7 +4036,7 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
 /// Map a comparison operator to its logical negation.
 /// Format a non-negative integer as a string in the given radix (2–36).
 /// Produces lowercase digits for bases > 10, matching JS `toString(radix)`.
-fn format_int_radix(n : Int, radix : Int) -> String {
+fn format_int_radix(n : Int32, radix : Int32) -> String {
   if n == 0 {
     return "0"
   }
@@ -4058,7 +4058,7 @@ fn format_int_radix(n : Int, radix : Int) -> String {
 /// `!(a op b)` → `a negate_op b` (saves 2 bytes).
 /// Parse `s` as an integer in the given radix (2–36).
 /// Returns `None` on parse error or overflow.
-fn parse_int_radix(s : String, radix : Int) -> Int? {
+fn parse_int_radix(s : String, radix : Int32) -> Int32? {
   if s.length() == 0 {
     return None
   }

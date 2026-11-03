@@ -51,9 +51,9 @@ fn enum_lowering_string_cases(
 }
 
 ///|
-fn enum_lowering_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
-  let cases : Array[(String, Int)] = []
-  let seen_values : Array[Int] = []
+fn enum_lowering_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int32)]? {
+  let cases : Array[(String, Int32)] = []
+  let seen_values : Array[Int32] = []
   let mut next_value = 0
   for item in enum_lowering_case_names(enum_) {
     let (case_name, enum_member) = item
@@ -291,7 +291,7 @@ fn enum_lowering_type_alias_string_enum_decl(
 }
 
 ///|
-fn enum_lowering_type_alias_number_enum_member_name(value : Int) -> String {
+fn enum_lowering_type_alias_number_enum_member_name(value : Int32) -> String {
   if value < 0 {
     "Negative" + (0 - value).to_string()
   } else {
@@ -312,7 +312,7 @@ fn enum_lowering_type_alias_number_enum_members(
     return None
   }
   let members : Array[@ast.TsEnumMember] = []
-  let seen_values : Array[Int] = []
+  let seen_values : Array[Int32] = []
   for item in items {
     match item {
       @ast.TsType::NumberLiteral(raw) => {
@@ -417,7 +417,7 @@ fn enum_lowering_type_alias_enum_like_unsupported_reason(
   let mut has_bigint = false
   let mut has_bool = false
   let seen_string_values : Array[String] = []
-  let seen_number_values : Array[Int] = []
+  let seen_number_values : Array[Int32] = []
   for item in items {
     match item {
       @ast.TsType::Literal(value) => {
@@ -988,7 +988,7 @@ fn enum_lowering_unsupported_reason(enum_ : @ast.TsEnumDecl) -> String? {
     return None
   }
   let seen_string_values : Array[String] = []
-  let seen_number_values : Array[Int] = []
+  let seen_number_values : Array[Int32] = []
   let mut has_string = false
   let mut has_number = false
   let mut has_bigint = false

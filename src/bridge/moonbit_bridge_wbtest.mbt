@@ -1467,3 +1467,48 @@ async test "bridge: an unbuildable tagged-union output widens in all three rende
     ),
   )
 }
+
+///|
+test "reconcile_bridge_widened_union_returns takes an extern's function return over a JSValue declaration" {
+  // immer's `produceWithPatches`: the decl layer widened the return to
+  // `JSValue`, the extern kept the function type, and the public wrapper
+  // rendered from the declaration could not pass one through as the other.
+  let bridge_mbt =
+    #|pub extern "js" fn produce_with_patches(arg0 : JSValue, arg1 : State) -> (State?, Array[Args]) -> PatchesTuple = "produceWithPatches"
+    #|pub extern "js" fn other(x : Double) -> JSValue = "other"
+    #|pub extern "js" fn optional_one(x : Double) -> (Double) -> Bool = "optionalOne"
+  let bridge_mbti =
+    #|declare pub fn produceWithPatches(arg0 : JSValue, arg1 : State) -> JSValue
+    #|declare pub fn other(x : Double) -> JSValue
+    #|declare pub fn optionalOne(x : Double) -> JSValue?
+  let out = reconcile_bridge_widened_union_returns(bridge_mbti, bridge_mbt)
+  assert_true(
+    out.contains(
+      "declare pub fn produceWithPatches(arg0 : JSValue, arg1 : State) -> (State?, Array[Args]) -> PatchesTuple",
+    ),
+  )
+  // A JSValue extern, and an OPTIONAL JSValue declaration, are left alone.
+  assert_true(out.contains("declare pub fn other(x : Double) -> JSValue\n"))
+  assert_true(
+    out.contains("declare pub fn optionalOne(x : Double) -> JSValue?"),
+  )
+}
+
+///|
+test "add_bridge_public_wrappers declares unsafeCast when only an option-return wrapper uses it" {
+  // semver's `parse` / `diff` / `coerce`: an option return is constructed
+  // on the MoonBit side as `__ts_mbt_wrap_option_return(unsafeCast(…))`, and
+  // nothing else in that bridge mentions `unsafeCast`.
+  let bridge_mbti =
+    #|declare pub fn majorOf(version : String) -> Double?
+  let bridge_mbt =
+    #|#external
+    #|pub type JSValue
+    #|
+    #|pub extern "js" fn major_of(version : String) -> Double? = "__ts_mbt_major_of"
+  let (mbt, _) = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
+  assert_true(mbt.contains("__ts_mbt_wrap_option_return(unsafeCast("))
+  assert_true(
+    mbt.contains("fn[A, B] unsafeCast(value : A) -> B = \"%identity\""),
+  )
+}

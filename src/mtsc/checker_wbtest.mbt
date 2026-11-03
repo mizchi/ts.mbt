@@ -189,7 +189,7 @@ test "mtsc graph checker supports aliased and default imports" {
   })
   // Both the default and aliased named import are injected with their
   // exporter types, producing one mismatch each in the consuming module.
-  assert_eq(diagnostics.split("expected `string` but got `number`").length(), 3)
+  assert_eq(diagnostics.split("expected `string` but got `number`").count(), 3)
 }
 
 ///|

@@ -9,7 +9,7 @@ priv struct MoonBitDeclState {
   // Arity of each generic-preserved type, keyed by interface name. Used
   // to widen bare references (`Ref` ⇒ `Ref[JSValue]`) and arity-mismatched
   // references to a syntactically valid form matching the struct decl.
-  generic_preserved_type_arity_by_name : Map[String, Int]
+  generic_preserved_type_arity_by_name : Map[String, Int32]
   mut needs_jsvalue : Bool
   // Track whether `Applied("Promise"|"PromiseLike", ...)` was emitted so
   // the declarations file can append a self-contained
@@ -19,7 +19,10 @@ priv struct MoonBitDeclState {
 }
 
 ///|
-fn generic_preserved_type_arity(state : MoonBitDeclState, name : String) -> Int {
+fn generic_preserved_type_arity(
+  state : MoonBitDeclState,
+  name : String,
+) -> Int32 {
   match state.generic_preserved_type_arity_by_name.get(name) {
     Some(arity) => arity
     None => 0
@@ -27,7 +30,7 @@ fn generic_preserved_type_arity(state : MoonBitDeclState, name : String) -> Int 
 }
 
 ///|
-let moonbit_function_field_method_wrapper_limit : Int = 128
+let moonbit_function_field_method_wrapper_limit : Int32 = 128
 
 ///|
 fn is_ascii_letter(c : Char) -> Bool {
@@ -288,10 +291,14 @@ fn moonbit_type_identifier(name : String, fallback : String) -> String {
     core
   }
   let normalized = prefix + normalized_core
-  match normalized {
-    "Array" | "Bool" | "Double" | "Error" | "Int" | "String" | "Unit" =>
-      normalized + "_"
-    _ => normalized
+  // commander exports `class Option`; `Option` (like `Self`, `Char`, …) is
+  // reserved for a declared type too. `Array` is not reserved and is
+  // renamed anyway so a declared `Array` cannot shadow the builtin.
+  if normalized == "Array" ||
+    moonbit_reserved_type_name_needs_suffix(normalized) {
+    normalized + "_"
+  } else {
+    normalized
   }
 }
 
@@ -327,7 +334,7 @@ fn mark_referenced_type(state : MoonBitDeclState, name : String) -> Unit {
 fn push_local_type_params(
   state : MoonBitDeclState,
   names : Array[String],
-) -> Int {
+) -> Int32 {
   let old_len = state.local_type_param_names.length()
   for name in names {
     if !state.local_type_param_names.contains(name) {
@@ -338,7 +345,7 @@ fn push_local_type_params(
 }
 
 ///|
-fn restore_local_type_params(state : MoonBitDeclState, old_len : Int) -> Unit {
+fn restore_local_type_params(state : MoonBitDeclState, old_len : Int32) -> Unit {
   while state.local_type_param_names.length() > old_len {
     let _ = state.local_type_param_names.pop()
   }
@@ -363,6 +370,31 @@ fn moonbit_type_param_suffix(type_params : Array[String]) -> String {
 }
 
 ///|
+/// Builtin type names moonc v0.10.19 refuses both as a type VARIABLE and
+/// as a declared TYPE ([4003] "is a reserved type name"). Probed one name
+/// at a time — `struct S[X] { x : X }` and `#external pub type X` give the
+/// identical set — so `Array`, `Result` and `Map` are NOT in it. Shared by
+/// the type-parameter sanitizer and both type-identifier functions, so the
+/// three cannot disagree about which names move.
+pub let moonbit_reserved_type_names : Array[String] = [
+  "Unit", "Int", "Int16", "Int32", "Int64", "UInt", "UInt16", "UInt32", "UInt64",
+  "Byte", "Bool", "Char", "String", "Double", "Float", "Bytes", "FixedArray", "Option",
+  "Error", "Self", "StringView", "BytesView",
+]
+
+///|
+/// Whether a TYPE NAME (as opposed to a type variable) must be suffixed.
+/// `Int64` / `UInt64` are the bigint lowering's own spelling and flow
+/// through the type-identifier functions as genuine builtin references
+/// (`StatsBase[Int64]`), so they keep their name; a `.d.ts` declaring a type
+/// literally called `Int64` is the case this gives up.
+pub fn moonbit_reserved_type_name_needs_suffix(name : String) -> Bool {
+  name != "Int64" &&
+  name != "UInt64" &&
+  moonbit_reserved_type_names.contains(name)
+}
+
+///|
 /// MoonBit identifiers do not allow `$`, but TypeScript declarations
 /// produced by tools like `tsc` can mint synthetic type parameter names
 /// such as `TInput$1` to disambiguate scope-shadowed generics. Replace
@@ -372,6 +404,17 @@ fn moonbit_type_param_suffix(type_params : Array[String]) -> String {
 pub fn moonbit_sanitize_type_param_name(name : String) -> String {
   if name == "" {
     return name
+  }
+  // MoonBit rejects a builtin type name as a type VARIABLE ([4003],
+  // "is a reserved type name"), so date-fns'
+  // `interface NearestToUnitOptions<Unit extends number>` cannot keep its
+  // spelling. The list was PROBED against moonc v0.10.19 by declaring
+  // `struct S[X] { x : X }` for each candidate: `Array`, `Result` and
+  // `Map` are NOT reserved there and are deliberately absent. Declaration
+  // and every reference both route through this function, so the
+  // suffixed spelling stays consistent.
+  if moonbit_reserved_type_names.contains(name) {
+    return name + "_"
   }
   let mut needs = false
   for c in name {
@@ -501,6 +544,12 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       if is_optional {
         return match collapsed {
           Func(_, _) => "(\{rendered})?"
+          // A callable with an optional parameter (`CallableMeta`) that
+          // rendered as an arrow needs the same parens: a bare
+          // `(E?) -> Unit?` is a function RETURNING `Unit?` (ws's
+          // `close(cb?: (err?: Error) => void)`). One that widened to
+          // `JSValue` must not gain them.
+          CallableMeta(_, _) if rendered.contains("->") => "(\{rendered})?"
           _ => rendered + "?"
         }
       }
@@ -1091,6 +1140,12 @@ fn moonbit_function_field_type_name(
       if is_optional {
         return match collapsed {
           Func(_, _) => "(\{rendered})?"
+          // A callable with an optional parameter (`CallableMeta`) that
+          // rendered as an arrow needs the same parens: a bare
+          // `(E?) -> Unit?` is a function RETURNING `Unit?` (ws's
+          // `close(cb?: (err?: Error) => void)`). One that widened to
+          // `JSValue` must not gain them.
+          CallableMeta(_, _) if rendered.contains("->") => "(\{rendered})?"
           _ => rendered + "?"
         }
       }
@@ -1138,7 +1193,7 @@ fn interface_function_field_method_decl(
   receiver_type_params : Array[String],
   field_name : String,
   field_type : @ast.TsType,
-  method_type_params? : Array[String] = [],
+  method_type_params~ : Array[String] = [],
 ) -> String? {
   // A member's own generic binder (`map<U>(fn: (item: T) => U):
   // CollectionChain<U>`) survives on the pure-MoonBit wrapper: render
@@ -1766,19 +1821,19 @@ pub fn emit_moonbit_decl_with_sections_types_and_arities(
   module_ : @ast.TsModule,
   extra_sections : Array[String],
   extra_declared_type_names : Array[String],
-  extra_generic_arities : Map[String, Int],
+  extra_generic_arities : Map[String, Int32],
   force_jsvalue : Bool,
 ) -> String {
   let declared_type_names : Array[String] = []
   let generic_preserved_type_names : Array[String] = []
-  let generic_preserved_type_arity_by_name : Map[String, Int] = Map([])
+  let generic_preserved_type_arity_by_name : Map[String, Int32] = Map([])
   // When a class and an interface share a name (TS declaration merging) the
   // class drives the emitted shape: `class_decl_to_moonbit_sections` emits
   // `declare pub type ClassName[T, U]` with the class's type-params, and the
   // interface emission is skipped below. Pre-collect class names + their
   // arities so interface registration aligns with the class.
   let class_decl_names : Array[String] = []
-  let class_arity_by_name : Map[String, Int] = Map([])
+  let class_arity_by_name : Map[String, Int32] = Map([])
   for class_ in module_.classes {
     class_decl_names.push(class_.name)
     if moonbit_should_preserve_class_type_params(class_) {

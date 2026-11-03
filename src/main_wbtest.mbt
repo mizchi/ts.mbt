@@ -326,14 +326,15 @@ async test "resolve_unified_mbt_input_path_from_roots finds package names from g
   }
   ensure_dir_tree(pkg_dir)
   @fs.write_file(
-    wbtest_join_path(repo_dir, "moon.mod.json"),
+    wbtest_join_path(repo_dir, "moon.mod"),
     (
-      #|{
-      #|  "name": "mizchi/jsonschema",
-      #|  "version": "0.1.0",
-      #|  "source": "src",
-      #|  "preferred-target": "js"
-      #|}
+      #|name = "mizchi/jsonschema"
+      #|
+      #|version = "0.1.0"
+      #|
+      #|source = "src"
+      #|
+      #|preferred_target = "js"
     ),
     create=0o644,
   )
@@ -390,8 +391,8 @@ async test "resolve_unified_mbt_input_path_from_roots prefers ghq package checko
   )
   assert_true(
     write_text_file(
-      wbtest_join_path(ghq_root, "mizchi/moonbit_jsonschema/moon.mod.json"),
-      "{\"name\":\"mizchi/jsonschema\",\"source\":\"src\"}",
+      wbtest_join_path(ghq_root, "mizchi/moonbit_jsonschema/moon.mod"),
+      "name = \"mizchi/jsonschema\"\n\nsource = \"src\"\n",
     ),
   )
   assert_true(
@@ -915,14 +916,15 @@ async test "emit_typescript_scaffold_from_mbti handles moon.mod source subdir" {
   let pkg_dir = wbtest_join_path(root, "src/pkg")
   ensure_dir_tree(pkg_dir)
   @fs.write_file(
-    wbtest_join_path(root, "moon.mod.json"),
+    wbtest_join_path(root, "moon.mod"),
     (
-      #|{
-      #|  "name": "fixture/source-subdir",
-      #|  "version": "0.1.0",
-      #|  "source": "src",
-      #|  "preferred-target": "js"
-      #|}
+      #|name = "fixture/source-subdir"
+      #|
+      #|version = "0.1.0"
+      #|
+      #|source = "src"
+      #|
+      #|preferred_target = "js"
     ),
     create=0o644,
   )
@@ -1051,17 +1053,21 @@ async test "emit_typescript_npm_package_from_project creates a publishable npm d
   let source_root = wbtest_join_path(root, "src")
   ensure_dir_tree(source_root)
   @fs.write_file(
-    wbtest_join_path(root, "moon.mod.json"),
+    wbtest_join_path(root, "moon.mod"),
     (
-      #|{
-      #|  "name": "fixture/npm-ready",
-      #|  "version": "1.2.3",
-      #|  "description": "A publishable MoonBit fixture",
-      #|  "license": "Apache-2.0",
-      #|  "repository": "https://github.com/fixture/npm-ready",
-      #|  "source": "src",
-      #|  "preferred-target": "js"
-      #|}
+      #|name = "fixture/npm-ready"
+      #|
+      #|version = "1.2.3"
+      #|
+      #|description = "A publishable MoonBit fixture"
+      #|
+      #|license = "Apache-2.0"
+      #|
+      #|repository = "https://github.com/fixture/npm-ready"
+      #|
+      #|source = "src"
+      #|
+      #|preferred_target = "js"
     ),
     create=0o644,
   )
@@ -1138,15 +1144,19 @@ async test "emit_typescript_npm_package_from_project exports unreferenced source
   ensure_dir_tree(command_root)
   ensure_dir_tree(ignored_command_root)
   @fs.write_file(
-    wbtest_join_path(root, "moon.mod.json"),
+    wbtest_join_path(root, "moon.mod"),
     (
-      #|{
-      #|  "name": "fixture/npm-submodule-exports",
-      #|  "version": "1.2.3",
-      #|  "source": "src",
-      #|  "preferred-target": "js",
-      #|  "options": { "exclude": ["src/cmd/ignored"] }
-      #|}
+      #|name = "fixture/npm-submodule-exports"
+      #|
+      #|version = "1.2.3"
+      #|
+      #|source = "src"
+      #|
+      #|preferred_target = "js"
+      #|
+      #|options(
+      #|  options: { "exclude": [ "src/cmd/ignored" ] },
+      #|)
     ),
     create=0o644,
   )
@@ -6541,4 +6551,40 @@ test "mtsc bridge keeps its generation stages as its public CLI contract" {
       "  all <ts-entry> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TypeScript entrypoint",
     ),
   )
+}
+
+///|
+async test "ensure_bridge_node_modules_link resolves when node_modules is itself a symlink" {
+  // A shared / hoisted install: the module's `node_modules` points
+  // elsewhere, so a target written relative to the module would resolve
+  // against the shared directory and dangle.
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_link_symlinked_node_modules",
+  )
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  let app = wbtest_join_path(root, "app")
+  let shared = wbtest_join_path(root, "shared_node_modules")
+  let bridge_dir = wbtest_join_path(app, "src/bridges/hono")
+  ensure_dir_tree(bridge_dir)
+  ensure_dir_tree(shared)
+  @fs.write_file(
+    wbtest_join_path(app, "moon.mod"),
+    "name = \"fixture/app\"\n\nsource = \"src\"\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(bridge_dir, "bridge.js"),
+    "export const ok = 1;\n",
+    create=0o644,
+  )
+  let shared_real = @fs.realpath(shared)
+  @fs.symlink(wbtest_join_path(app, "node_modules"), target=shared_real)
+  assert_true(ensure_bridge_node_modules_link(bridge_dir, "@tsmbt-bridge/hono"))
+  // Reading THROUGH the link is the claim: a dangling target fails here.
+  let text = @fs.read_file(
+    wbtest_join_path(app, "node_modules/@tsmbt-bridge/hono/bridge.js"),
+  ).text()
+  assert_eq(text, "export const ok = 1;\n")
 }

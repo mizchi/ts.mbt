@@ -10,11 +10,11 @@ pub fn cli_bail(String) -> Unit
 
 pub fn cli_clean_error(String) -> String
 
-pub fn cli_exit(Int) -> Unit
+pub fn cli_exit(Int32) -> Unit
 
 pub fn cli_fail(String) -> Unit
 
-pub fn cli_parse_subcommand_args(Array[String], Int, Int, String, help_hint? : String) -> CliArgScan
+pub fn cli_parse_subcommand_args(Array[String], Int32, Int32, String, help_hint? : String) -> CliArgScan
 
 pub fn cli_print_version(String) -> Unit
 
@@ -48,15 +48,15 @@ pub async fn emit_typescript_scaffold_from_mbti(String, String, String?) -> Bool
 
 pub fn pkg_help_lines() -> Array[String]
 
-pub async fn run_bridge_cli(Array[String], Int) -> Unit
+pub async fn run_bridge_cli(Array[String], Int32) -> Unit
 
-pub async fn run_mbt_to_ts_pkg_cli(Array[String], Int, print_help~ : () -> Unit) -> Bool
+pub async fn run_mbt_to_ts_pkg_cli(Array[String], Int32, print_help~ : () -> Unit) -> Bool
 
-pub async fn run_mbt_to_ts_unified_cli(Array[String], Int, print_help~ : () -> Unit) -> Bool
+pub async fn run_mbt_to_ts_unified_cli(Array[String], Int32, print_help~ : () -> Unit) -> Bool
 
-pub async fn run_pkg_cli(Array[String], Int) -> Unit
+pub async fn run_pkg_cli(Array[String], Int32) -> Unit
 
-pub async fn run_ts_to_mbt_unified_cli(Array[String], Int, print_help~ : () -> Unit) -> Bool
+pub async fn run_ts_to_mbt_unified_cli(Array[String], Int32, print_help~ : () -> Unit) -> Bool
 
 pub async fn ts2mbt_generate_from_package_json(package_json_path_override? : String?, vendor_root_override? : String?) -> Bool
 

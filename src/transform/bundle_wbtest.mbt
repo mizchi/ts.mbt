@@ -4386,7 +4386,7 @@ test "bundle: a repeated unresolved specifier is not imported twice" {
   let opts = BundleOptions::default().with_allow_unresolved_imports(true)
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
-      let n = out.js.split("\n").filter(l => l.has_prefix("import ")).length()
+      let n = out.js.split("\n").filter(l => l.has_prefix("import ")).count()
       @test.assert_eq(n, 1)
     }
     Err(e) => fail("bundle error: \{e}")
@@ -4687,7 +4687,7 @@ test "bundle: the JSX runtime import is deduplicated across modules" {
       let jsx_imports = out.js
         .split("\n")
         .filter(l => l.has_prefix("import ") && l.contains("jsx-runtime"))
-        .length()
+        .count()
       // One statement per distinct binding set is fine; what must not
       // happen is the same NAME imported twice.
       let jsx_named = out.js
@@ -4697,7 +4697,7 @@ test "bundle: the JSX runtime import is deduplicated across modules" {
           l.contains("jsx-runtime") &&
           l.contains("{ jsx ")
         })
-        .length()
+        .count()
       assert_true(jsx_imports >= 1)
       assert_true(jsx_named <= 1)
       @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)

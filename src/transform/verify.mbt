@@ -40,6 +40,10 @@ pub(all) struct Violation {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend Violation with @debug.Debug::{to_repr}
+
+///|
 /// Names that resolve to nothing inside the bundle and are not the
 /// host's. Empty means the bundle has no dangling reference.
 ///
@@ -48,7 +52,7 @@ pub(all) struct Violation {
 /// a CommonJS host, a name injected by a wrapper).
 pub fn verify_emitted_bundle(
   js : String,
-  externals? : Map[String, Bool] = {},
+  externals~ : Map[String, Bool] = {},
 ) -> Array[Violation] {
   let out : Array[Violation] = []
   let parsed = @parser.Parser::from_source(js).parse_module_block() catch {

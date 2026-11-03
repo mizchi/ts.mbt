@@ -43,11 +43,11 @@
 pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
-  type_env? : Map[String, @ast.TsType] = {},
+  type_env~ : Map[String, @ast.TsType] = {},
   // Forwarded to `escape_breakdown`: which bindings the LINKER created
   // as namespace objects, so their keys are reserved by fact instead of
   // by a shape that a library's ordinary dispatch table also has.
-  synthesized_namespaces? : Map[String, Bool]? = None,
+  synthesized_namespaces~ : Map[String, Bool]? = None,
 ) -> Array[String] {
   // A merge over `escape_breakdown`, which computes the same reserved
   // set in pieces and keeps the reason for each. Deliberately not a
@@ -352,7 +352,7 @@ let known_global_bindings : Array[String] = [
 // where `k: "foo" | "bar"` reserves just `foo` / `bar` instead of
 // the wildcard.
 fn literal_string_name_set(g : SymbolGraph) -> Map[String, Array[String]] {
-  let counts : Map[String, Int] = Map([])
+  let counts : Map[String, Int32] = Map([])
   for s in g.symbols {
     counts[s.name] = counts.get(s.name).unwrap_or(0) + 1
   }

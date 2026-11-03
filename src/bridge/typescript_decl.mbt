@@ -37,7 +37,7 @@ priv struct TypeScriptDeclNormalizationRules {
 ///| intended to reimplement the full TypeScript checker.
 
 ///|
-fn char_at(s : String, idx : Int) -> Char {
+fn char_at(s : String, idx : Int32) -> Char {
   s[idx].to_int().unsafe_to_char()
 }
 
@@ -260,13 +260,13 @@ fn collect_moonbit_namespace_imports(
 }
 
 ///|
-fn has_prefix_at(source : String, prefix : String, start : Int) -> Bool {
+fn has_prefix_at(source : String, prefix : String, start : Int32) -> Bool {
   start + prefix.length() <= source.length() &&
   source[start:start + prefix.length()].to_owned() == prefix
 }
 
 ///|
-fn take_identifier_at(source : String, start : Int) -> (String, Int) {
+fn take_identifier_at(source : String, start : Int32) -> (String, Int32) {
   let mut i = start
   let mut result = ""
   while i < source.length() {
@@ -379,7 +379,7 @@ fn strip_leading_union_bar(source : String) -> String {
 }
 
 ///|
-fn next_non_space_index(source : String, start : Int) -> Int {
+fn next_non_space_index(source : String, start : Int32) -> Int32 {
   let mut i = start
   while i < source.length() {
     let c = char_at(source, i)
@@ -568,7 +568,7 @@ fn collect_export_type_alias_blocks(source : String) -> Array[String] {
 }
 
 ///|
-fn count_char(source : String, target : Char) -> Int {
+fn count_char(source : String, target : Char) -> Int32 {
   let mut count = 0
   for c in source {
     if c == target {
@@ -941,7 +941,7 @@ fn resolve_imported_decl_path(
 }
 
 ///|
-fn find_matching_type_args_end(source : String, start : Int) -> Int? {
+fn find_matching_type_args_end(source : String, start : Int32) -> Int32? {
   let mut angle = 0
   let mut paren = 0
   let mut bracket = 0
@@ -1146,7 +1146,7 @@ fn merge_named_type_imports(source : String) -> String {
   let rebuilt : Array[String] = []
   let module_order : Array[String] = []
   let module_names : Array[Array[String]] = []
-  let module_positions : Array[Int] = []
+  let module_positions : Array[Int32] = []
   for line_view in source.split("\n") {
     let line = line_view.to_owned()
     match parse_named_type_import_line(line) {

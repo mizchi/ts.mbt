@@ -24,17 +24,17 @@ pub fn[T, U] CallbackBox::map(
   self : Self[T],
   mapper : (T) -> U,
 ) -> CallbackBox[U] {
-  { current: mapper(self.current), on_change: None, meta: self.meta }
+  { current: mapper(self.current), on_change: None, meta: self.meta, }
 }
 
 ///|
 pub enum Status {
-  Ready(Int)
+  Ready(Int32)
   Failed(LoadError)
 }
 
 ///|
-pub fn ready(count : Int) -> Status {
+pub fn ready(count : Int32) -> Status {
   Ready(count)
 }
 
@@ -51,12 +51,12 @@ pub type MaybeHandler[T] = ((T) -> Unit)?
 
 ///|
 pub fn make_string_box(value : String) -> CallbackBox[String] {
-  { current: value, on_change: None, meta: Map::new() }
+  { current: value, on_change: None, meta: Map::new(), }
 }
 
 ///|
 pub fn consume_callbacks(
-  handler : (String, Int) -> Unit,
+  handler : (String, Int32) -> Unit,
   on_error? : (LoadError) -> Unit,
   required : Array[String],
 ) -> Unit {
@@ -71,7 +71,7 @@ pub fn consume_callbacks(
 #warnings("-unused_async")
 pub async fn load_all(
   keys : Array[String],
-) -> Result[Array[(String, Int)], LoadError] raise LoadError {
+) -> Result[Array[(String, Int32)], LoadError] raise LoadError {
   if keys.length() == 0 {
     raise LoadError::MissingKey("keys")
   }

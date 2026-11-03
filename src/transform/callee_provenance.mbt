@@ -39,6 +39,14 @@ enum CalleeClass {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend CalleeClass with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend CalleeClass with @debug.Debug::{to_repr}
+
+///|
 /// The facts a provenance question needs.
 ///
 /// `resolves` is how the two callers differ. The pre-pass (which runs

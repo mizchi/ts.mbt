@@ -31,9 +31,9 @@ fn types_package_hint(pkg_spec : String) -> String {
 ///|
 pub async fn ts2mbt_vendor_package(
   pkg_spec : String,
-  module_spec_override? : String? = None,
-  vendor_root_override? : String? = None,
-  print_import_hint? : Bool = true,
+  module_spec_override~ : String? = None,
+  vendor_root_override~ : String? = None,
+  print_import_hint~ : Bool = true,
 ) -> Bool {
   let vendor_root = match vendor_root_override {
     Some(root) => root
@@ -163,8 +163,7 @@ async fn vendor_import_path_prefix(vendor_root : String) -> String {
     Some(root) => root
     None => return fallback
   }
-  let mod_source = main_join_path(module_root, "moon.mod.json")
-  let mod_text = @fs.read_file(mod_source).text() catch { _ => "" }
+  let mod_text = read_moon_mod_source(module_root).unwrap_or("")
   let source_field = match parse_moon_mod_string_field(mod_text, "source") {
     Some(dir) => dir
     None => "src"
@@ -179,7 +178,8 @@ async fn vendor_import_path_prefix(vendor_root : String) -> String {
 }
 
 ///|
-/// Resolve the consumer's moon module name from `moon.mod.json`. Falls
+/// Resolve the consumer's moon module name from `moon.mod` (or the
+/// legacy `moon.mod.json`). Falls
 /// back to a `<your-module>` placeholder so the printed hint still
 /// reads as a template even outside a moon module.
 async fn read_consumer_module_name() -> String {
@@ -187,8 +187,9 @@ async fn read_consumer_module_name() -> String {
     Some(root) => root
     None => return "<your-module>"
   }
-  let path = main_join_path(module_root, "moon.mod.json")
-  let source = @fs.read_file(path).text() catch { _ => return "<your-module>" }
+  guard read_moon_mod_source(module_root) is Some(source) else {
+    return "<your-module>"
+  }
   match parse_moon_mod_string_field(source, "name") {
     Some(name) => name
     None => "<your-module>"
@@ -465,8 +466,8 @@ async fn print_vendor_module_type_hint() -> Unit {
 ///
 /// `package_json_path_override` defaults to `./package.json`.
 pub async fn ts2mbt_generate_from_package_json(
-  package_json_path_override? : String? = None,
-  vendor_root_override? : String? = None,
+  package_json_path_override~ : String? = None,
+  vendor_root_override~ : String? = None,
 ) -> Bool {
   let package_json_path = match package_json_path_override {
     Some(path) => path

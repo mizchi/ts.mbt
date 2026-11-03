@@ -99,7 +99,7 @@ fn TypeScope::get(self : TypeScope, name : String) -> @ast.TsType? {
 /// decision: the same rule written twice and fixed once is the most
 /// frequent bug in this pipeline. The count says how many candidates
 /// there were and how many survived; it does not re-derive why.
-pub fn count_type_fold_sites(block : @ast.TsBlock) -> Int {
+pub fn count_type_fold_sites(block : @ast.TsBlock) -> Int32 {
   let n = Ref(0)
   for s in block.stmts {
     count_tf_sites_stmt(s, n, None)
@@ -114,9 +114,11 @@ pub fn count_type_fold_sites(block : @ast.TsBlock) -> Int {
 /// excludes null, and real code writes that check exactly when it does
 /// not — so a corpus made mostly of null checks is a pass with nothing
 /// to do rather than a lookup that is failing.
-pub fn count_type_fold_sites_by_kind(block : @ast.TsBlock) -> Map[String, Int] {
+pub fn count_type_fold_sites_by_kind(
+  block : @ast.TsBlock,
+) -> Map[String, Int32] {
   let n = Ref(0)
-  let kinds : Map[String, Int] = Map([])
+  let kinds : Map[String, Int32] = Map([])
   for s in block.stmts {
     count_tf_sites_stmt(s, n, Some(kinds))
   }
@@ -168,7 +170,7 @@ fn type_fold_site_kind(expr : @ast.TsExpr) -> String? {
 ///|
 pub fn type_fold_block(
   block : @ast.TsBlock,
-  type_aliases? : Array[@ast.TsTypeAlias] = [],
+  type_aliases~ : Array[@ast.TsTypeAlias] = [],
 ) -> @ast.TsBlock {
   // Cheap pre-scan: type-fold only does work when something it can
   // act on appears in the block — `typeof` comparisons, `=== null`
@@ -373,8 +375,8 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
 /// understates a diagnostic instead of making a decision wrong.
 fn count_tf_sites_block(
   block : @ast.TsBlock,
-  n : Ref[Int],
-  kinds : Map[String, Int]?,
+  n : Ref[Int32],
+  kinds : Map[String, Int32]?,
 ) -> Unit {
   for s in block.stmts {
     count_tf_sites_stmt(s, n, kinds)
@@ -384,8 +386,8 @@ fn count_tf_sites_block(
 ///|
 fn count_tf_sites_stmt(
   stmt : @ast.TsStmt,
-  n : Ref[Int],
-  kinds : Map[String, Int]?,
+  n : Ref[Int32],
+  kinds : Map[String, Int32]?,
 ) -> Unit {
   match stmt {
     Var(_, _, e)
@@ -487,8 +489,8 @@ fn count_tf_sites_stmt(
 ///|
 fn count_tf_sites_expr(
   expr : @ast.TsExpr,
-  n : Ref[Int],
-  kinds : Map[String, Int]?,
+  n : Ref[Int32],
+  kinds : Map[String, Int32]?,
 ) -> Unit {
   match type_fold_site_kind(expr) {
     Some(k) => {

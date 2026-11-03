@@ -340,7 +340,9 @@ if (propRows.length) {
 // candidate for the identifier mangler, and counting one makes the
 // column unreadable.
 if (names) {
-  const ts = await import("typescript");
+  // The classic compiler API, which TypeScript 7 (the Go port) does not
+  // ship; `typescript-6` is pinned in package.json for exactly this.
+  const ts = await import("typescript-6");
   const isVarPosition = (nd) => {
     const p = nd.parent;
     if (!p) return true;

@@ -137,7 +137,7 @@ impl MtscHost for MtscMemoryHost with fn compilation_settings(self) {
 /// matters, `roots` is a field — state it there instead.
 pub fn MtscMemoryHost::over(
   files : Map[String, String],
-  jsx? : Bool = false,
+  jsx~ : Bool = false,
 ) -> MtscMemoryHost {
   let roots : Array[String] = []
   for path in files.keys() {

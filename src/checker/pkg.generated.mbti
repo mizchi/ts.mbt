@@ -138,11 +138,17 @@ pub(all) struct ExprIssue {
   path : String
   message : String
 } derive(Eq, @debug.Debug)
+#deprecated
+pub fn ExprIssue::equal(Self, Self) -> Bool
+#deprecated
+pub fn ExprIssue::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn ExprIssue::to_repr(Self) -> @debug.Repr
 
 pub(all) struct TypeCheckReport {
   issues : Array[TypeIssue]
 }
-pub fn TypeCheckReport::count_of_kind(Self, TypeIssueKind) -> Int
+pub fn TypeCheckReport::count_of_kind(Self, TypeIssueKind) -> Int32
 pub fn TypeCheckReport::is_clean(Self) -> Bool
 pub fn TypeCheckReport::of_kind(Self, TypeIssueKind) -> Array[TypeIssue]
 
@@ -151,6 +157,12 @@ pub(all) struct TypeIssue {
   name : String
   detail : String
 } derive(Eq, @debug.Debug)
+#deprecated
+pub fn TypeIssue::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeIssue::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeIssue::to_repr(Self) -> @debug.Repr
 
 pub(all) enum TypeIssueKind {
   UnresolvedReference
@@ -163,6 +175,12 @@ pub(all) enum TypeIssueKind {
   InterfaceExtendsCycle
   ClassPropertyDuplicate
 } derive(Eq, @debug.Debug)
+#deprecated
+pub fn TypeIssueKind::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeIssueKind::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeIssueKind::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

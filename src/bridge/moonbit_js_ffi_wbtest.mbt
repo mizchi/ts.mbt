@@ -1,5 +1,5 @@
 ///|
-fn count_occurrences_in_ffi_output(haystack : String, needle : String) -> Int {
+fn count_occurrences_in_ffi_output(haystack : String, needle : String) -> Int32 {
   let mut count = 0
   for _ in haystack.split(needle) {
     count += 1
@@ -5613,6 +5613,11 @@ async test "bridge: polymorphic this lowers to the owner with its own type param
   assert_true(bundle.ffi_mbt.contains("check : (Array[String]) -> Box[A, B]"))
   assert_true(bundle.ffi_mbt.contains("optional : () -> Wrap[Box[A, B]]"))
   assert_true(bundle.ffi_mbt.contains("pair : (B) -> Box[A, B]"))
+  // An optional parameter wraps the callable in `CallableMeta`, whose
+  // return renders as the literal `This`; the field still has to name
+  // the owner WITH its parameters (a bare generic `Box` is [4040]).
+  assert_true(bundle.ffi_mbt.contains("clone : (String?) -> Box[A, B]"))
+  assert_false(bundle.ffi_mbt.contains("-> Box\n"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub fn[A, B] Box::check(self : Box[A, B], arg0 : Array[String]) -> Box[A, B]",
@@ -5926,4 +5931,86 @@ test "bridge: an unbuildable tagged-union output widens through every wrapper" {
   )
   // A name that is not a tagged union at all is untouched.
   assert_eq(ffi_output_type_name(state, Named("Options")), "Options")
+}
+
+///|
+async test "bridge: Pick inside an optional-parameter const callable reaches the extern projected" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/utility-pick-callable-entry.d.ts", "/runtime/mod.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // glob's `escape` / `unescape`: the extern takes the projected struct,
+  // and the struct it names is declared.
+  assert_true(bundle.ffi_mbt.contains("arg1 : OptsPickAB?) -> String"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct OptsPickAB {"))
+  assert_false(bundle.ffi_mbt.contains(": Pick?"))
+}
+
+///|
+async test "bridge: a returned function with an optional parameter unwraps MoonBit options" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/returned-optional-callable-entry.d.ts", "/runtime/mod.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // MoonBit's `None : Double?` is an object on the JS backend, so the raw
+  // closure must not receive it: every call goes through the unwrap.
+  assert_true(
+    bundle.bridge_js.contains(
+      "((__fn_) => (a0) => __fn_(__ts_mbt_unwrap_option(a0)))(customAlphabet(",
+    ),
+  )
+  // The same rule for a MEMBER: an inline lambda cannot reach the bridge.js
+  // helper, so the argument goes through the inline unwrap.
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "#| (self, arg0) => ((__fn_) => (a0) => __fn_((a0 == null ? undefined",
+    ),
+  )
+}
+
+///|
+test "tagged-union payload names a reserved declared type by its suffixed name" {
+  // commander: `Option | Command`, where `class Option` is emitted as
+  // `pub type Option_`; a bare `Option` would be the builtin `Option[T]`.
+  assert_eq(
+    tagged_union_inner_moonbit_text(@ast.TsType::Named("Option")),
+    Some("Option_"),
+  )
+  assert_eq(
+    tagged_union_inner_moonbit_text(@ast.TsType::Named("Command")),
+    Some("Command"),
+  )
+}
+
+///|
+async test "bridge: an optional callback with an optional parameter keeps its parens" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/optional-callback-optional-param-entry.d.ts",
+    "/runtime/mod.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `(Error_?) -> Unit?` would be a function RETURNING `Unit?`.
+  assert_true(bundle.ffi_mbt.contains("cb : ((Error_?) -> Unit)?) -> Unit"))
+  assert_false(bundle.ffi_mbt.contains("cb : (Error_?) -> Unit?"))
 }

@@ -27,8 +27,8 @@ priv struct DeclEntry {
 /// (function bodies, control flow) are left alone.
 pub fn treeshake_block(
   block : @ast.TsBlock,
-  roots? : Map[String, Bool] = {},
-  pure_calls? : Map[String, Bool] = {},
+  roots~ : Map[String, Bool] = {},
+  pure_calls~ : Map[String, Bool] = {},
 ) -> @ast.TsBlock {
   // Flatten fold's multi-declarator Block wrappers (`const a=1, b=2;`
   // is stored as `Block([Const(a), Const(b)])`) back into individual
@@ -117,7 +117,7 @@ fn drop_dead_stores(
     }
   }
   let kept : Array[@ast.TsStmt] = []
-  let kept_positions : Array[Int] = []
+  let kept_positions : Array[Int32] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   let mut dropped = false
   for i, stmt in block.stmts {
@@ -161,7 +161,7 @@ fn treeshake_flat_block(
   // (single name + pure rhs) or a side-effect root. Build a name ->
   // DeclEntry index for the BFS.
   let decls : Array[DeclEntry] = []
-  let decl_by_name : Map[String, Int] = Map([])
+  let decl_by_name : Map[String, Int32] = Map([])
   let is_decl : Array[Bool] = []
   for stmt in block.stmts {
     let _ = stmt
@@ -287,7 +287,7 @@ fn treeshake_flat_block(
   // are carried over so downstream source-map emission can still map
   // each remaining stmt back to its input position.
   let kept : Array[@ast.TsStmt] = []
-  let kept_positions : Array[Int] = []
+  let kept_positions : Array[Int32] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   for i, stmt in block.stmts {
     let keep = if is_decl[i] {

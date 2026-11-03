@@ -3,8 +3,10 @@ name = "mizchi/ts"
 version = "0.6.0"
 
 import {
-  "moonbitlang/async@0.22.1",
+  "moonbitlang/async@0.22.7",
+  "moonbitlang/regexp@0.3.7",
   "mizchi/x@0.6.1",
+  "moonbitlang/x@0.5.7",
 }
 
 readme = "README.md"

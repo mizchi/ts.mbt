@@ -117,13 +117,13 @@ pub(all) struct PredicateEntry {
   // How many times the body reads the parameter. The substitution
   // copies the ARGUMENT once per reference, so this is both a
   // correctness input and a size input.
-  param_refs : Int
+  param_refs : Int32
   // Node count of the body, as a stand-in for the bytes a copy costs.
-  body_cost : Int
+  body_cost : Int32
   // Calls to this predicate in the whole block. One call means the
   // declaration dies after inlining and the trade is unconditionally
   // good; several mean every copy is paid for again.
-  call_sites : Int
+  call_sites : Int32
   // Whether inlining every caller can actually delete the declaration.
   //
   // The first version of this asked only "does the entry export it?",
@@ -179,7 +179,7 @@ impl SubstitutedValue for PredicateEntry with fn free_names(self) {
 /// declaration that was never going to be deleted. With that fixed
 /// the budget only decides how large a body may be copied when the
 /// declaration really does die.
-const PREDICATE_INLINE_MAX_COST : Int = 2
+const PREDICATE_INLINE_MAX_COST : Int32 = 2
 
 ///|
 /// Is this argument safe to write more than once?
@@ -227,8 +227,8 @@ fn arg_is_duplicable(arg : @ast.TsExpr) -> Bool {
 /// effectful argument, undercounting the cost inlines something large —
 /// so an unrecognised node is not counted as a leaf, it stops the
 /// decision.
-fn predicate_body_facts(expr : @ast.TsExpr, param : String) -> (Int, Int)? {
-  fn go(e : @ast.TsExpr) -> (Int, Int)? {
+fn predicate_body_facts(expr : @ast.TsExpr, param : String) -> (Int32, Int32)? {
+  fn go(e : @ast.TsExpr) -> (Int32, Int32)? {
     match e {
       Var(n) => Some((1, if n == param { 1 } else { 0 }))
       NumberLit(_)
@@ -327,7 +327,11 @@ fn predicate_body_facts(expr : @ast.TsExpr, param : String) -> (Int, Int)? {
 ///|
 /// Add two `(cost, refs)` results plus a cost for the node joining them.
 /// `None` anywhere poisons the result, which is the point.
-fn join(a : (Int, Int)?, b : (Int, Int)?, extra : Int) -> (Int, Int)? {
+fn join(
+  a : (Int32, Int32)?,
+  b : (Int32, Int32)?,
+  extra : Int32,
+) -> (Int32, Int32)? {
   match (a, b) {
     (Some((c1, r1)), Some((c2, r2))) => Some((c1 + c2 + extra, r1 + r2))
     _ => None
@@ -344,10 +348,10 @@ fn join(a : (Int, Int)?, b : (Int, Int)?, extra : Int) -> (Int, Int)? {
 /// whether anything is left holding the declaration alive afterwards.
 fn count_predicate_calls(
   block : @ast.TsBlock,
-  calls : Map[String, Int],
-  other_refs : Map[String, Int],
+  calls : Map[String, Int32],
+  other_refs : Map[String, Int32],
 ) -> Unit {
-  fn bump(m : Map[String, Int], n : String) -> Unit {
+  fn bump(m : Map[String, Int32], n : String) -> Unit {
     m[n] = m.get(n).unwrap_or(0) + 1
   }
 
@@ -361,8 +365,8 @@ fn count_predicate_calls(
   // is why the non-call tally is `Var` sightings MINUS `CallExpr`
   // callees rather than a category of its own — miscounting that way
   // would make every called predicate look permanently referenced.
-  let var_sightings : Map[String, Int] = Map([])
-  let callee_vars : Map[String, Int] = Map([])
+  let var_sightings : Map[String, Int32] = Map([])
+  let callee_vars : Map[String, Int32] = Map([])
   surface_visit_exprs_block(block, e => {
     match e {
       Call(n, _) => bump(calls, n)
@@ -402,11 +406,11 @@ pub fn build_predicate_table(
   // it; this list only covers the export SPECIFIERS, which are
   // statements rather than expressions and so are invisible to that
   // walk.
-  exported? : Map[String, Bool] = {},
+  exported~ : Map[String, Bool] = {},
 ) -> PredicateTable {
   let entries : Map[String, PredicateEntry] = Map([])
-  let calls : Map[String, Int] = Map([])
-  let other_refs : Map[String, Int] = Map([])
+  let calls : Map[String, Int32] = Map([])
+  let other_refs : Map[String, Int32] = Map([])
   count_predicate_calls(block, calls, other_refs)
   for stmt in block.stmts {
     match stmt {

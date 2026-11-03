@@ -609,7 +609,7 @@ fn drop_dead_props_block(
   read_props : Map[String, Bool],
 ) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
-  let positions : Array[Int] = []
+  let positions : Array[Int32] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   for i, s in block.stmts {
     if is_dead_field_write(s, reserved, read_props) {

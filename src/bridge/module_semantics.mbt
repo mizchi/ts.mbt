@@ -6,6 +6,10 @@ pub(all) suberror ModuleGraphError {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend ModuleGraphError with @debug.Debug::{to_repr}
+
+///|
 struct ResolvedImportEdge {
   specifier : String
   resolved_path : String
@@ -14,12 +18,20 @@ struct ResolvedImportEdge {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend ResolvedImportEdge with @debug.Debug::{to_repr}
+
+///|
 struct ResolvedReExportEdge {
   specifier : String
   resolved_path : String
   kind : @ast.TsReExportKind
   type_only : Bool
 } derive(Debug)
+
+///|
+#deprecated
+pub extend ResolvedReExportEdge with @debug.Debug::{to_repr}
 
 ///|
 struct ResolvedModuleRecord {
@@ -36,10 +48,18 @@ struct ResolvedModuleRecord {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend ResolvedModuleRecord with @debug.Debug::{to_repr}
+
+///|
 struct ModuleGraph {
   entry_path : String
   modules : Array[ResolvedModuleRecord]
 } derive(Debug)
+
+///|
+#deprecated
+pub extend ModuleGraph with @debug.Debug::{to_repr}
 
 ///|
 enum ResolvedExportKind {
@@ -49,6 +69,14 @@ enum ResolvedExportKind {
   Namespace
   Ambiguous
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend ResolvedExportKind with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend ResolvedExportKind with @debug.Debug::{to_repr}
 
 ///|
 struct ResolvedExport {
@@ -61,6 +89,10 @@ struct ResolvedExport {
   ambiguous_source_paths : Array[String]
   type_only : Bool
 } derive(Debug)
+
+///|
+#deprecated
+pub extend ResolvedExport with @debug.Debug::{to_repr}
 
 ///|
 fn resolved_export_source_paths(export_ : ResolvedExport) -> Array[String] {
@@ -300,7 +332,7 @@ fn graph_to_map(graph : ModuleGraph) -> Map[String, ResolvedModuleRecord] {
 fn find_export_index(
   exports : Array[ResolvedExport],
   export_name : String,
-) -> Int? {
+) -> Int32? {
   for i, export_ in exports {
     if export_.export_name == export_name {
       return Some(i)

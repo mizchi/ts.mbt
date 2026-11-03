@@ -24,7 +24,7 @@ fn parse_assign_binding_from(src : String) -> @ast.TsBinding {
 fn count_occurrences_in_parser_output(
   haystack : String,
   needle : String,
-) -> Int {
+) -> Int32 {
   let mut count = 0
   for _ in haystack.split(needle) {
     count += 1
@@ -8199,7 +8199,7 @@ test "parser: an overload signature must be able to reach its implementation" {
 /// line in the same file.
 test "parser: an unused renaming in a bodiless parameter list" {
   let needle = "is an unused renaming of"
-  let count = fn(src : String) -> Int raise {
+  let count = fn(src : String) -> Int32 raise {
     let m = Parser::from_source(src).parse_module()
     m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length()
   }

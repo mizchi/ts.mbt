@@ -644,7 +644,7 @@ fn build_property_rename_map(
   // this side of the subtraction: how many property names the mangler
   // even considers. A reserved-set experiment is meaningless if the
   // candidate set is empty.
-  census? : Array[String]? = None,
+  census~ : Array[String]? = None,
 ) -> Map[String, String] {
   let names : Map[String, Bool] = Map([])
   collect_property_names(block, names)
@@ -863,7 +863,7 @@ fn build_property_rename_map_colored(
   }
   // Frequency-weighted ordering: high-occurrence names get the
   // shortest free color so the resulting bytes drop more.
-  let freq : Map[String, Int] = Map([])
+  let freq : Map[String, Int32] = Map([])
   count_property_occurrences(block, freq)
   candidates.sort_by(fn(a, b) {
     let fa = freq.get(a).unwrap_or(0)
@@ -875,10 +875,10 @@ fn build_property_rename_map_colored(
     }
   })
   // Greedy graph coloring with deterministic short-name picks.
-  let name_to_color : Map[String, Int] = Map([])
+  let name_to_color : Map[String, Int32] = Map([])
   let map : Map[String, String] = Map([])
   for n in candidates {
-    let used_colors : Map[Int, Bool] = Map([])
+    let used_colors : Map[Int32, Bool] = Map([])
     match conflicts.get(n) {
       Some(neighbors) =>
         for entry in neighbors {
@@ -1445,7 +1445,7 @@ fn collect_this_member_names_in_expr(
 // `collect_property_names` but tallying instead of marking.
 fn count_property_occurrences(
   block : @ast.TsBlock,
-  out : Map[String, Int],
+  out : Map[String, Int32],
 ) -> Unit {
   let collected : Map[String, Bool] = Map([])
   collect_property_names(block, collected)
@@ -1474,7 +1474,7 @@ priv struct ScopeFrame {
   // reachable binding.
   used : Map[String, Bool]
   // Counter for the next short name to allocate.
-  mut counter : Int
+  mut counter : Int32
   // Reserved-name set — shared across the whole scope tree so nested
   // functions / arrow bodies see the same names as the root.
   reserved : Map[String, Bool]
@@ -1559,7 +1559,7 @@ fn ScopeFrame::function_child(
   //   const fallback = 9;                                  // → a
   //   function pick({ n = fallback }) { return n; }
   //   function b({n: a = a}) { return a; }                  // TDZ
-  params? : Array[@ast.TsParam] = [],
+  params~ : Array[@ast.TsParam] = [],
 ) -> ScopeFrame {
   // Collect all Var references inside the body (non-recursive: stops at
   // nested function boundaries so we only see free vars of this level).
@@ -1994,7 +1994,7 @@ fn ScopeFrame::bind(
 /// `in`, `as`, …) sit in `mangler_builtin_reserved` and the caller
 /// skips them by bumping the counter — `next_short_name` itself is
 /// pure index-to-name.
-fn next_short_name(n : Int) -> String {
+fn next_short_name(n : Int32) -> String {
   let first_alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
   let subseq_alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
   // 1. Find the length L such that n falls in the L-char band:
@@ -2010,7 +2010,7 @@ fn next_short_name(n : Int) -> String {
   // 2. m = position within this band.
   let mut m = n - consumed
   // 3. Decompose m into digits, low-to-high.
-  let digits : Array[Int] = []
+  let digits : Array[Int32] = []
   for _i in 0..<(len - 1) {
     digits.push(m % 62)
     m = m / 62

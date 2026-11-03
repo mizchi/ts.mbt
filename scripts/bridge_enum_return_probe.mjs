@@ -23,6 +23,14 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 
+// A generated package's PRODUCT sources. A harness's own `bridge_test.mbt`
+// declares externs too (`test_button_attributes() -> ButtonAttributes`), and
+// reading those as return positions made a struct look JS-reachable when
+// only test code produced it -- which is how qualifying the tests' names
+// (`@pkg.ButtonAttributes`) silently moved two budgets. One predicate for
+// every site, so the sites cannot disagree about what a package is.
+const isProductMbt = (f) => f.endsWith(".mbt") && !/_(wb)?test\.mbt$/.test(f);
+
 // The declared backlog. An occurrence not listed fails; a listed entry that no
 // longer occurs is STALE and also fails, which is the only mechanism that keeps
 // such a file from turning into a suppression list.
@@ -158,7 +166,7 @@ for (const mbti of walk("_build")) {
   const src = readFileSync(mbti, "utf8");
   let declSrc = src;
   for (const f of readdirSync(dir)) {
-    if (f.endsWith(".mbt")) declSrc += "\n" + readFileSync(join(dir, f), "utf8");
+    if (isProductMbt(f)) declSrc += "\n" + readFileSync(join(dir, f), "utf8");
   }
   const enums = payloadEnums(declSrc);
   totalEnums += enums.size;
@@ -202,7 +210,7 @@ for (const mbti of walk("_build")) {
   // Both directions: a return promising the enum, and a parameter declared as
   // the enum whose `{$tag, _0}` is handed to JS unconverted.
   for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".mbt")) continue;
+    if (!isProductMbt(file)) continue;
     const text = readFileSync(join(dir, file), "utf8");
     for (const m of text.matchAll(
       /^pub extern "js" fn(?:\[[^\]]*\])? ([A-Za-z_][\w:]*)\(([^)]*)\) -> ([A-Za-z_][\w]*)(\[[^\]]*\])?(\??)\s*=\n((?:\s*#\|.*\n)+)/gm,
@@ -282,7 +290,7 @@ for (const mbti of walk("_build")) {
     let erased = 0;
     const examples = [];
     for (const file of readdirSync(dir)) {
-      if (!file.endsWith(".mbt")) continue;
+      if (!isProductMbt(file)) continue;
       const text = readFileSync(join(dir, file), "utf8");
       for (const m of text.matchAll(
         /^pub\(all\) struct ([A-Za-z_][\w]*)(\[[^\]]*\])? \{\n((?:  .*\n)*)\}/gm,

@@ -343,7 +343,7 @@ pub fn[H : MtscHost] get_program_file_names(host : H) -> Array[String] {
 /// host supplied.
 pub fn check_files(
   files : Map[String, String],
-  jsx? : Bool = false,
+  jsx~ : Bool = false,
 ) -> Array[MtscDiagnostic] {
   get_program_diagnostics(MtscMemoryHost::over(files, jsx~))
 }

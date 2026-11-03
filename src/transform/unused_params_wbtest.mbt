@@ -9,7 +9,10 @@
 // output for `unusedOpts` proves nothing either way.
 
 ///|
-fn up_plan(source : String, exported : Array[String]) -> Map[String, Int] raise {
+fn up_plan(
+  source : String,
+  exported : Array[String],
+) -> Map[String, Int32] raise {
   let block = @parser.parse_block_from_source(source)
   let keep : Map[String, Bool] = Map([])
   for n in exported {

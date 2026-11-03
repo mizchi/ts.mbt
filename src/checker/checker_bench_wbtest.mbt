@@ -100,7 +100,7 @@ let bench_advanced_source : String =
 /// Programmatically build a module with `n` interface declarations that
 /// share field shapes so the checker's resolver + structural lookups
 /// scale predictably.
-fn build_bench_wide_module(n : Int) -> String {
+fn build_bench_wide_module(n : Int32) -> String {
   let buf = StringBuilder()
   for i in 0..<n {
     let suffix = i.to_string()
@@ -135,7 +135,7 @@ let bench_wide_5000 : String = build_bench_wide_module(5000)
 /// Generic-heavy fixture: lots of `infer` patterns, conditional
 /// distribution, mapped-key remapping, and call sites that exercise
 /// `solve_generic_bindings`.
-fn build_bench_generic_heavy(n : Int) -> String {
+fn build_bench_generic_heavy(n : Int32) -> String {
   let buf = StringBuilder()
   buf.write_string("type Awaited<T> = T extends Promise<infer U> ? U : T;\n")
   buf.write_string(
@@ -176,7 +176,7 @@ fn build_bench_generic_heavy(n : Int) -> String {
 /// JSX-heavy fixture: many component declarations + many JSX call
 /// sites. Exercises `check_jsx_attrs`, `infer_param_bindings` for
 /// generic components, and the spread-prop path.
-fn build_bench_jsx_heavy(components : Int, callsites : Int) -> String {
+fn build_bench_jsx_heavy(components : Int32, callsites : Int32) -> String {
   let buf = StringBuilder()
   buf.write_string(
     "interface CardProps { title: string; count: number; active?: boolean }\n",
@@ -477,7 +477,7 @@ async test "bench checker: corpus files (permissive, file IO)" {
     "typescript/tests/cases/conformance/parser/ecmascript5/RealWorld/parserharness.ts",
     "typescript/tests/cases/conformance/fixSignatureCaching.ts",
   ]
-  let prepared : Array[(String, Int, @ast.TsModule)] = []
+  let prepared : Array[(String, Int32, @ast.TsModule)] = []
   for path in candidates {
     try @fs.read_file(path) catch {
       _ => ()
@@ -530,7 +530,7 @@ async test "bench checker: TypeScript compiler source (file IO)" {
   // Parse each candidate once, then time only the checker pass over
   // the resulting `TsModule`. Capture the input character count so we
   // can report throughput.
-  let prepared : Array[(String, Int, @ast.TsModule)] = []
+  let prepared : Array[(String, Int32, @ast.TsModule)] = []
   for path in candidates {
     try @fs.read_file(path) catch {
       _ => ()

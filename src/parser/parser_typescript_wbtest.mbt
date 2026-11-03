@@ -486,7 +486,7 @@ async test "parser: validate interface structure against TypeScript" {
   // Note: es5.d.ts has 95 interfaces in the oracle, but 15 are inside
   // `declare namespace Intl { ... }` which we currently skip.
   // So we expect 80 interfaces (95 - 15 = 80)
-  let test_cases : Array[(String, Int)] = [
+  let test_cases : Array[(String, Int32)] = [
     ("typescript/src/lib/es2015.symbol.d.ts", 1),
     ("typescript/src/lib/es5.d.ts", 80), // Excludes interfaces inside namespaces
   ]
@@ -1148,7 +1148,7 @@ async test "checker: accuracy against TypeScript conformance baselines" {
   let mut recall_miss = 0
   let mut precision_hit = 0
   let mut precision_miss = 0
-  let per_dir : Map[String, (Int, Int, Int, Int)] = Map([])
+  let per_dir : Map[String, (Int32, Int32, Int32, Int32)] = Map([])
   for dir in dirs {
     let files = collect_ts_source_files_recursive(dir)
     let mut d_rh = 0
@@ -1273,7 +1273,7 @@ async test "parser: smoke-run against the entire TypeScript repo source" {
   let mut total = 0
   let mut parsed = 0
   let mut checked = 0
-  let per_dir : Map[String, (Int, Int)] = Map([])
+  let per_dir : Map[String, (Int32, Int32)] = Map([])
   let parse_failures : Array[String] = []
   let check_crashes : Array[String] = []
   for path in files {

@@ -139,7 +139,7 @@ priv struct SurfaceWalk {
   visited : Map[String, Bool]
   // The shallowest depth at which a named function body or class has
   // already been walked. See `surface_should_walk`.
-  walked : Map[String, Int]
+  walked : Map[String, Int32]
   queue : Array[String]
 }
 
@@ -179,7 +179,7 @@ priv struct SurfaceWalk {
 /// that same name (`w.funcs`, `w.classes`), so two different bodies
 /// cannot collide on one key. A class EXPRESSION is walked per
 /// occurrence, which is linear in the AST and needs no memo.
-fn surface_should_walk(w : SurfaceWalk, key : String, depth : Int) -> Bool {
+fn surface_should_walk(w : SurfaceWalk, key : String, depth : Int32) -> Bool {
   match w.walked.get(key) {
     Some(seen) if seen <= depth => false
     _ => {
@@ -192,7 +192,7 @@ fn surface_should_walk(w : SurfaceWalk, key : String, depth : Int) -> Bool {
 ///|
 /// Bound on expression recursion. Deeply nested literals are fine;
 /// this only guards against a pathological AST.
-const SURFACE_MAX_DEPTH : Int = 96
+const SURFACE_MAX_DEPTH : Int32 = 96
 
 ///|
 fn surface_enqueue(w : SurfaceWalk, name : String) -> Unit {
@@ -405,7 +405,7 @@ fn is_container_write(meth : String) -> Bool {
 fn surface_escape_class(
   w : SurfaceWalk,
   decl : @ast.TsClassDecl,
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   let private_ : Map[String, Bool] = Map([])
   for n in decl.private_members {
@@ -552,7 +552,7 @@ fn class_this_writes(
 fn surface_escape_expr(
   w : SurfaceWalk,
   expr : @ast.TsExpr,
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   if depth > SURFACE_MAX_DEPTH {
     return
@@ -747,7 +747,7 @@ fn surface_method_returns(
 fn surface_escape_callback_args(
   w : SurfaceWalk,
   args : Array[@ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   for a in args {
     match a {
@@ -788,7 +788,7 @@ fn surface_escape_returned_args(
   w : SurfaceWalk,
   f : @ast.TsFunc,
   args : Array[@ast.TsExpr],
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   let returns : Array[@ast.TsExpr] = []
   collect_own_returns_block(f.body, returns)
@@ -835,7 +835,7 @@ fn surface_escape_member(
   w : SurfaceWalk,
   obj : @ast.TsExpr,
   key : String,
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   // Only an EXACT hit counts as having resolved the key. An opaque write
   // escapes its value — it may well be this key — but it does not answer
@@ -935,7 +935,7 @@ fn surface_escape_func_body(
   w : SurfaceWalk,
   params : Array[@ast.TsParam],
   body : @ast.TsBlock,
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   if depth > SURFACE_MAX_DEPTH {
     return
@@ -957,7 +957,7 @@ fn surface_escape_params(
   w : SurfaceWalk,
   params : Array[@ast.TsParam],
   body : @ast.TsBlock,
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   for p in params {
     // Destructured parameters name their keys inline:
@@ -1014,7 +1014,7 @@ fn surface_reserve_props_on_name_block(
   w : SurfaceWalk,
   block : @ast.TsBlock,
   name : String,
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   surface_visit_exprs_block(block, e => {
     surface_reserve_props_on_name_expr(w, e, name, depth)
@@ -1032,7 +1032,7 @@ fn surface_reserve_props_on_name_expr(
   w : SurfaceWalk,
   expr : @ast.TsExpr,
   name : String,
-  depth : Int,
+  depth : Int32,
 ) -> Unit {
   if depth > SURFACE_MAX_DEPTH {
     return

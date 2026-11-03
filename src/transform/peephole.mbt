@@ -125,7 +125,7 @@ pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
     undeclared: undeclared_referenced_names(block),
   }
   let stmts : Array[@ast.TsStmt] = []
-  let positions : Array[Int] = []
+  let positions : Array[Int32] = []
   // Positions are tracked per surviving statement rather than carried
   // over wholesale: this loop can now DROP a statement, and a positions
   // array left at the original length would either be discarded by the
@@ -833,7 +833,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
 /// statement (not nested in a branch or loop), so the removal is safe.
 fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
   // Collect the indices of top-level `this.X = void 0` statements.
-  let void_inits : Map[String, Int] = Map([])
+  let void_inits : Map[String, Int32] = Map([])
   for i, s in block.stmts {
     match s {
       PropAssign(
@@ -856,7 +856,7 @@ fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
   }
   // For each void-0 init, check if there is a later top-level unconditional
   // assignment to the same property. If so, mark it for removal.
-  let removals : Map[Int, Bool] = Map([])
+  let removals : Map[Int32, Bool] = Map([])
   for p, init_idx in void_inits {
     for j = init_idx + 1; j < block.stmts.length(); j = j + 1 {
       let s = block.stmts[j]

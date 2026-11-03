@@ -34,8 +34,7 @@ verify_moonbit_to_typescript_example() {
     "noEmit": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "paths": { "*": ["./*"] },
     "lib": ["es2020"]
   },
   "files": [
@@ -93,19 +92,20 @@ verify_typescript_to_moonbit_example() {
     --out "$out" \
     --module-spec ../runtime/greetings.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated TypeScript to MoonBit example" {
-  assert_eq(greet("MoonBit"), "Hello, MoonBit")
-  assert_eq(double(21.0), 42.0)
+  assert_eq(@typescript_to_moonbit.greet("MoonBit"), "Hello, MoonBit")
+  assert_eq(@typescript_to_moonbit.double(21.0), 42.0)
 }
 EOF
 
@@ -134,13 +134,14 @@ write_js_any_stub() {
 
   mkdir -p "$root/_stubs/mizchi_js/core"
 
-  cat > "$root/_stubs/mizchi_js/moon.mod.json" <<'EOF'
-{
-  "name": "mizchi/js",
-  "version": "0.0.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/_stubs/mizchi_js/moon.mod" <<'EOF'
+name = "mizchi/js"
+
+version = "0.0.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   : > "$root/_stubs/mizchi_js/core/moon.pkg"
@@ -251,25 +252,33 @@ verify_typescript_to_moonbit_hono_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_hono",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_hono"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_hono_options() -> HonoOptions[JSValue] =
+extern "js" fn test_hono_options() -> @typescript_to_moonbit_hono.HonoOptions[@typescript_to_moonbit_hono.JSValue] =
   #| () => ({ strict: true })
 
 test "generated Hono pattern" {
-  let _ : Hono[JSValue] = new_hono(None)
-  let _ = createApp(test_hono_options())
+  let _ : @typescript_to_moonbit_hono.Hono[@typescript_to_moonbit_hono.JSValue] = @typescript_to_moonbit_hono.new_hono(None)
+  let _ = @typescript_to_moonbit_hono.createApp(test_hono_options())
 }
 EOF
 
@@ -310,39 +319,47 @@ verify_typescript_to_moonbit_hono_real_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_hono_real",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_hono_real"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
-fn test_hono_handler(c : Context[JSValue, JSValue, JSValue]) -> Response {
+fn test_hono_handler(c : @typescript_to_moonbit_hono_real.Context[@typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue]) -> @typescript_to_moonbit_hono_real.Response {
   test_unsafe_cast(c.text(test_unsafe_cast("hi"), None, None))
 }
 
-extern "js" fn test_undefined() -> JSValue =
+extern "js" fn test_undefined() -> @typescript_to_moonbit_hono_real.JSValue =
   #| () => undefined
 
-extern "js" fn test_hono_route_response(app : Hono[JSValue, JSValue, JSValue]) -> String =
+extern "js" fn test_hono_route_response(app : @typescript_to_moonbit_hono_real.Hono[@typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue]) -> String =
   #| (app) => {
   #|   const route = app.routes[0];
   #|   return `${route.method}:${route.path}`;
   #| }
 
 test "generated real Hono bridge smoke" {
-  let app : Hono[JSValue, JSValue, JSValue] = new_hono(None)
+  let app : @typescript_to_moonbit_hono_real.Hono[@typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue, @typescript_to_moonbit_hono_real.JSValue] = @typescript_to_moonbit_hono_real.new_hono(None)
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
-  let _ : Promise[Response] = app.request(
+  let _ : @typescript_to_moonbit_hono_real.Promise[@typescript_to_moonbit_hono_real.Response] = app.request(
     test_unsafe_cast("/hello"),
     test_unsafe_cast(undefined_),
     test_unsafe_cast(undefined_),
@@ -389,22 +406,30 @@ verify_typescript_to_moonbit_react_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_react",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_react"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated React pattern" {
-  let _ = createElement("badge")
-  let _ = get_default()
+  let _ = @typescript_to_moonbit_react.createElement("badge")
+  let _ = @typescript_to_moonbit_react.get_default()
 }
 EOF
 
@@ -438,47 +463,55 @@ verify_typescript_to_moonbit_react_types_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_react_types",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_react_types"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_children() -> Array[JSValue] =
+extern "js" fn test_children() -> Array[@typescript_to_moonbit_react_types.JSValue] =
   #| () => ["child"]
 
-extern "js" fn test_props() -> JSValue =
+extern "js" fn test_props() -> @typescript_to_moonbit_react_types.JSValue =
   #| () => ({ id: "root" })
 
-extern "js" fn test_function_component() -> FunctionComponent[JSValue] =
+extern "js" fn test_function_component() -> @typescript_to_moonbit_react_types.FunctionComponent[@typescript_to_moonbit_react_types.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null, ref: null })
 
-extern "js" fn test_forward_ref_render() -> ForwardRefRenderFunction[JSValue, JSValue] =
+extern "js" fn test_forward_ref_render() -> @typescript_to_moonbit_react_types.ForwardRefRenderFunction[@typescript_to_moonbit_react_types.JSValue, @typescript_to_moonbit_react_types.JSValue] =
   #| () => (props, ref) => ({ type: "forward", props, key: null, ref })
 
-extern "js" fn test_transition_scope() -> TransitionFunction =
+extern "js" fn test_transition_scope() -> @typescript_to_moonbit_react_types.TransitionFunction =
   #| () => () => undefined
 
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
 test "generated @types/react bridge smoke" {
-  let element = createElement("div", Some(test_props()), test_children())
+  let element = @typescript_to_moonbit_react_types.createElement("div", Some(test_props()), test_children())
   // `cloneElement` is typed against the generic `DetailedReactHTMLElement[
   // HTMLAttributes[JSValue], HTMLElement]` but `createElement("div", ...)`
   // resolves to a more specific instantiation; the test helper bridges them.
-  let _ = cloneElement(test_unsafe_cast(element), None, test_children())
-  assert_true(isValidElement(test_unsafe_cast(element)))
-  let _ = memo(test_function_component(), None)
-  let _ = forwardRef(test_forward_ref_render())
-  startTransition(test_transition_scope())
-  let _ = get_default()
+  let _ = @typescript_to_moonbit_react_types.cloneElement(test_unsafe_cast(element), None, test_children())
+  assert_true(@typescript_to_moonbit_react_types.isValidElement(test_unsafe_cast(element)))
+  let _ = @typescript_to_moonbit_react_types.memo(test_function_component(), None)
+  let _ = @typescript_to_moonbit_react_types.forwardRef(test_forward_ref_render())
+  @typescript_to_moonbit_react_types.startTransition(test_transition_scope())
+  let _ = @typescript_to_moonbit_react_types.get_default()
 }
 EOF
 
@@ -544,26 +577,34 @@ verify_typescript_to_moonbit_vitest_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_vitest",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_vitest"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_number() -> JSValue =
+extern "js" fn test_number() -> @typescript_to_moonbit_vitest.JSValue =
   #| () => 2
 
-extern "js" fn test_object() -> JSValue =
+extern "js" fn test_object() -> @typescript_to_moonbit_vitest.JSValue =
   #| () => ({ value: "ok" })
 
-extern "js" fn test_vitest_vi(vi : VitestUtils) -> Unit =
+extern "js" fn test_vitest_vi(vi : @typescript_to_moonbit_vitest.VitestUtils) -> Unit =
   #| (vi) => {
   #|   const fn = vi.fn((x) => x + 1);
   #|   if (fn(2) !== 3) throw new Error("unexpected vi.fn output");
@@ -573,7 +614,7 @@ extern "js" fn test_vitest_vi(vi : VitestUtils) -> Unit =
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
 test "generated real Vitest bridge smoke" {
-  let expect = get_expect()
+  let expect = @typescript_to_moonbit_vitest.get_expect()
   // Build assertions to ensure the generic-preserved chain compiles. The
   // generic-preserved `Assertion[T]` falls through to a pure-MoonBit
   // wrapper whose `(self.toBe)(arg)` form loses chai's `this`-bound
@@ -581,7 +622,7 @@ test "generated real Vitest bridge smoke" {
   // `vi.fn` smoke below exercises the runtime path.
   let _ = expect._call_(test_unsafe_cast(test_number()), None)
   let _ = expect._call_(test_unsafe_cast(test_object()), None)
-  test_vitest_vi(get_vi())
+  test_vitest_vi(@typescript_to_moonbit_vitest.get_vi())
 }
 EOF
 
@@ -591,12 +632,14 @@ EOF
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
   grep_generated_mbt "$out" 'pub(all) struct ExpectStatic'
-  grep_generated_mbt "$out" 'pub(all) struct Assertion[T]'
+  # vitest 5 made `Assertion<R extends void | Promise<void> = void, T>`
+  # and moved `toBe` / `toEqual` to the `JestAssertion<R, T>` it extends.
+  grep_generated_mbt "$out" 'pub(all) struct Assertion[R, T]'
   grep_generated_mbt "$out" 'pub extern "js" fn ExpectStatic::_call_(self : ExpectStatic'
   # Generic-preserved receivers can't host `extern "js"` (MoonBit forbids
   # `extern "js" fn[T]`), so the FFI emits a pure-MoonBit wrapper.
-  grep_generated_mbt "$out" 'pub fn[T, E] Assertion::toBe(self : Assertion[T], arg0 : E)'
-  grep_generated_mbt "$out" 'pub fn[T, E] Assertion::toEqual(self : Assertion[T], arg0 : E)'
+  grep_generated_mbt "$out" 'pub fn[R, T, E] JestAssertion::toBe(self : JestAssertion[R, T], arg0 : E)'
+  grep_generated_mbt "$out" 'pub fn[R, T, E] JestAssertion::toEqual(self : JestAssertion[R, T], arg0 : E)'
   grep_generated_mbt "$out" 'pub extern "js" fn get_expect() -> ExpectStatic'
   grep_generated_mbt "$out" 'pub extern "js" fn get_assert() -> Chai_Assert'
   grep_generated_mbt "$out" 'pub extern "js" fn get_vi() -> VitestUtils'
@@ -635,22 +678,30 @@ verify_typescript_to_moonbit_result_example() {
 
   write_js_any_stub "$out"
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_result",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_result"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated Result pattern" {
-  let _ = parseUser("u1")
-  let _ = fetchUser("u2")
+  let _ = @typescript_to_moonbit_result.parseUser("u1")
+  let _ = @typescript_to_moonbit_result.fetchUser("u2")
 }
 EOF
 
@@ -684,40 +735,41 @@ verify_typescript_to_moonbit_reducer_example() {
     --out "$out" \
     --module-spec ../runtime/reducer.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_reducer",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_reducer"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-fn initial_state() -> CounterState {
+fn initial_state() -> @typescript_to_moonbit_reducer.CounterState {
   { count: 1.0, label: "ready" }
 }
 
 test "generated reducer tagged union pattern" {
-  let increment = counter_action_from_increment_action({
+  let increment = @typescript_to_moonbit_reducer.counter_action_from_increment_action({
     type_: Increment,
     amount: 4.0,
   })
-  assert_eq(actionKind(increment), "increment")
-  let after_increment = reducer(initial_state(), increment)
+  assert_eq(@typescript_to_moonbit_reducer.actionKind(increment), "increment")
+  let after_increment = @typescript_to_moonbit_reducer.reducer(initial_state(), increment)
   assert_eq(after_increment.count, 5.0)
   assert_eq(after_increment.label, "ready")
 
-  let rename = counter_action_from_rename_action({
+  let rename = @typescript_to_moonbit_reducer.counter_action_from_rename_action({
     type_: Rename,
     label: "done",
   })
-  let after_rename = reducer(after_increment, rename)
+  let after_rename = @typescript_to_moonbit_reducer.reducer(after_increment, rename)
   assert_eq(after_rename.count, 5.0)
   assert_eq(after_rename.label, "done")
 
-  let reset = counter_action_from_reset_action({ type_: Reset })
-  let after_reset = reducer(after_rename, reset)
+  let reset = @typescript_to_moonbit_reducer.counter_action_from_reset_action({ type_: Reset })
+  let after_reset = @typescript_to_moonbit_reducer.reducer(after_rename, reset)
   assert_eq(after_reset.count, 0.0)
   assert_eq(after_reset.label, "idle")
 }
@@ -765,22 +817,23 @@ verify_typescript_to_moonbit_default_class_example() {
     --out "$out" \
     --module-spec ../runtime/counter.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_default_class",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_default_class"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated default class pattern" {
-  let counter = new_default(10.0)
+  let counter = @typescript_to_moonbit_default_class.new_default(10.0)
   assert_eq(counter.inc(5.0), 15.0)
   counter.set_default_count(20.0)
   assert_eq(counter.get_default_count(), 20.0)
-  let seeded = default_from(3.0)
+  let seeded = @typescript_to_moonbit_default_class.default_from(3.0)
   assert_eq(seeded.get_default_count(), 3.0)
 }
 EOF
@@ -827,20 +880,21 @@ verify_typescript_to_moonbit_const_table_example() {
     --out "$out" \
     --module-spec ../runtime/index.js >/dev/null
 
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_const_table",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_const_table"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated const table pattern" {
-  assert_eq(get_runtime_version(), "v12")
-  assert_eq(get_build(), 16.0)
-  let _ = get_rest_meta()
+  assert_eq(@typescript_to_moonbit_const_table.get_runtime_version(), "v12")
+  assert_eq(@typescript_to_moonbit_const_table.get_build(), 16.0)
+  let _ = @typescript_to_moonbit_const_table.get_rest_meta()
 }
 EOF
 
@@ -873,26 +927,38 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
+  # The compiler API lives in TypeScript 6: TypeScript 7 (the Go port, which
+  # is the repo's `typescript`) ships no `typescript.d.ts` and no JS API. The
+  # pinned `typescript-6` is both the input and the runtime module, so the
+  # emitted bridge.js imports what actually provides `createSourceFile`.
   echo "Generating TypeScript AST bridge"
   moon run src/cmd/mtsc -- bridge \
-    --input node_modules/typescript/lib/typescript.d.ts \
+    --input node_modules/typescript-6/lib/typescript.d.ts \
     --out "$out" \
-    --module-spec typescript
+    --module-spec typescript-6
 
   echo "Writing TypeScript AST JS stubs"
   write_js_any_stub "$out"
 
   echo "Writing TypeScript AST MoonBit manifest"
-  cat > "$out/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_typescript_ast",
-  "version": "0.1.0",
-  "deps": {
-    "mizchi/js": { "path": "./_stubs/mizchi_js" }
-  },
-  "source": ".",
-  "preferred-target": "js"
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_typescript_ast"
+
+version = "0.1.0"
+
+import {
+  "mizchi/js@0.0.0",
 }
+
+source = "."
+
+preferred_target = "js"
+EOF
+  cat > "$out/moon.work" <<'EOF'
+members = [
+  ".",
+  "./_stubs/mizchi_js",
+]
 EOF
 
   echo "Checking TypeScript AST bridge artifacts"
@@ -938,16 +1004,16 @@ verify_typescript_node_imports_example() {
 
   rm -rf "$root"
   mkdir -p "$root"
-  cp examples/typescript-to-moonbit/typescript-node-imports/moon.mod.json "$root/"
+  cp examples/typescript-to-moonbit/typescript-node-imports/moon.mod "$root/"
   cp examples/typescript-to-moonbit/typescript-node-imports/package.json "$root/"
   cp -R examples/typescript-to-moonbit/typescript-node-imports/src "$root/"
 
   (
     cd "$root"
     moon run "$repo_root/src/cmd/mtsc" -- bridge \
-      --input "$repo_root/node_modules/typescript/lib/typescript.d.ts" \
+      --input "$repo_root/node_modules/typescript-6/lib/typescript.d.ts" \
       --out src/internal/generated/typescript \
-      --module-spec typescript
+      --module-spec typescript-6
     moon run "$repo_root/src/cmd/mtsc" -- bridge \
       --input "$node_fs_types" \
       --out src/internal/generated/node_fs \
@@ -989,13 +1055,14 @@ verify_typescript_to_moonbit_hono_server_example() {
   rm -rf "$root"
   mkdir -p "$root/cmd/main"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_hono_server",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_hono_server"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   cat > "$root/package.json" <<'EOF'
@@ -1055,7 +1122,7 @@ pub fn make_hono() -> @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] {
 EOF
   cat > "$root/lib/smoke_test.mbt" <<'EOF'
 test "smoke: hono bridge resolves under moon test --target js" {
-  let _ = make_hono()
+  let _ = @lib.make_hono()
 }
 EOF
   moon -C "$root" test --target js
@@ -1081,13 +1148,14 @@ verify_typescript_to_moonbit_drizzle_example() {
   rm -rf "$root"
   mkdir -p "$root/cmd/main"
 
-  cat > "$root/moon.mod.json" <<'EOF'
-{
-  "name": "examples/typescript_to_moonbit_drizzle",
-  "version": "0.1.0",
-  "source": ".",
-  "preferred-target": "js"
-}
+  cat > "$root/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_drizzle"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
 EOF
 
   # `@drizzle-smoke/helpers` is a smoke-local ESM helper that wraps

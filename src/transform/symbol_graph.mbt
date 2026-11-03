@@ -35,10 +35,10 @@
 // them as "value crosses the bundle boundary".
 
 ///|
-pub type SymbolId = Int
+pub type SymbolId = Int32
 
 ///|
-pub type ScopeId = Int
+pub type ScopeId = Int32
 
 ///|
 pub(all) struct SymbolGraph {
@@ -91,6 +91,10 @@ pub(all) struct FuncInfo {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend FuncInfo with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct Scope {
   id : ScopeId
   parent : ScopeId?
@@ -106,6 +110,14 @@ pub(all) enum ScopeKind {
   Block
   Catch
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend ScopeKind with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend ScopeKind with @debug.Debug::{to_repr}
 
 ///|
 pub(all) struct Symbol {
@@ -154,6 +166,10 @@ pub(all) struct Symbol {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend Symbol with @debug.Debug::{to_repr}
+
+///|
 pub(all) enum SymbolKind {
   Let
   Const
@@ -168,15 +184,31 @@ pub(all) enum SymbolKind {
 } derive(Eq, Debug)
 
 ///|
+#deprecated
+pub extend SymbolKind with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend SymbolKind with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct Def {
   init : @ast.TsExpr?
 } derive(Debug)
+
+///|
+#deprecated
+pub extend Def with @debug.Debug::{to_repr}
 
 ///|
 pub(all) struct Use {
   scope_id : ScopeId
   context : UseContext
 } derive(Debug)
+
+///|
+#deprecated
+pub extend Use with @debug.Debug::{to_repr}
 
 ///|
 pub(all) enum UseContext {
@@ -193,7 +225,7 @@ pub(all) enum UseContext {
   // `x(args)`: the binding is the callee.
   CallReceiver
   // `f(x)`: the binding is an argument; `Int` is the position.
-  CallArg(Int)
+  CallArg(Int32)
   // `new x(...)`.
   NewReceiver
   // `return x;`.
@@ -211,10 +243,18 @@ pub(all) enum UseContext {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend UseContext with @debug.Debug::{to_repr}
+
+///|
 pub(all) struct FlowEdge {
   from : FlowNode
   to : FlowNode
 } derive(Debug)
+
+///|
+#deprecated
+pub extend FlowEdge with @debug.Debug::{to_repr}
 
 ///|
 /// A point in the data-flow graph.
@@ -227,7 +267,7 @@ pub(all) enum FlowNode {
   FuncReturn(SymbolId)
   // The n-th parameter slot of a function call. Phase 3 propagates
   // observability from the call site into the callee's parameter.
-  FuncArg(SymbolId, Int)
+  FuncArg(SymbolId, Int32)
   // Literal-derived value (no upstream source). Phase 2/3 stops
   // backward propagation here; `kind` lets the numeric-vars pass
   // distinguish `0` from `"broken"` without re-walking the AST.
@@ -242,6 +282,10 @@ pub(all) enum FlowNode {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend FlowNode with @debug.Debug::{to_repr}
+
+///|
 pub(all) enum LiteralKind {
   LitNumeric // NumberLit / IntLit / BigIntLit / Number-typed arithmetic
   LitString // StringLit / TemplateLiteral
@@ -250,6 +294,14 @@ pub(all) enum LiteralKind {
   LitObject // ObjectLit / ArrayLit / function expression
   LitOther // anything else we don't classify
 } derive(Eq, Debug)
+
+///|
+#deprecated
+pub extend LiteralKind with Eq::{not_equal, equal}
+
+///|
+#deprecated
+pub extend LiteralKind with @debug.Debug::{to_repr}
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -287,8 +339,8 @@ pub fn build_symbol_graph(
 pub fn build_symbol_graph_with_sinks(
   block : @ast.TsBlock,
   external_local_names : Map[String, Bool],
-  host_shaped? : Map[String, Bool] = {},
-  host_returning? : Map[String, Bool] = {},
+  host_shaped~ : Map[String, Bool] = {},
+  host_returning~ : Map[String, Bool] = {},
 ) -> (SymbolGraph, Array[(Sink, ScopeId)]) {
   let g : SymbolGraph = {
     scopes: [],
@@ -330,7 +382,7 @@ priv struct SgWalker {
   // Counts how many `function` / `=>` boundaries we've crossed
   // since the binding was declared. Any use inside a positive
   // depth is a closure capture.
-  mut in_closure_depth : Int
+  mut in_closure_depth : Int32
   // SymbolId of the function we're currently inside (its body
   // gathers `return` / `throw` edges back to this symbol).
   mut enclosing_func : SymbolId?
@@ -1462,7 +1514,7 @@ fn sg_visit_expr_as_arg(
   w : SgWalker,
   arg : @ast.TsExpr,
   callee_name : String,
-  arg_index : Int,
+  arg_index : Int32,
 ) -> Unit {
   match sg_lookup(w.g, w.current_scope, callee_name) {
     Some(id) =>

@@ -7,7 +7,7 @@ import {
 }
 
 // Values
-pub fn analyze_observability(SymbolGraph, Array[(Sink, Int)]) -> Map[Int, Observability]
+pub fn analyze_observability(SymbolGraph, Array[(Sink, Int32)]) -> Map[Int32, Observability]
 
 pub fn analyze_purity(@ast.TsBlock) -> PurityReport
 
@@ -31,7 +31,7 @@ pub fn build_switch_fold_table(@ast.TsBlock, explain? : Array[String]?) -> Switc
 
 pub fn build_symbol_graph(@ast.TsBlock, Map[String, Bool]) -> SymbolGraph
 
-pub fn build_symbol_graph_with_sinks(@ast.TsBlock, Map[String, Bool], host_shaped? : Map[String, Bool], host_returning? : Map[String, Bool]) -> (SymbolGraph, Array[(Sink, Int)])
+pub fn build_symbol_graph_with_sinks(@ast.TsBlock, Map[String, Bool], host_shaped? : Map[String, Bool], host_returning? : Map[String, Bool]) -> (SymbolGraph, Array[(Sink, Int32)])
 
 pub fn build_type_env(Array[@ast.TsInterface], Array[@ast.TsTypeAlias]) -> Map[String, @ast.TsType]
 
@@ -53,11 +53,11 @@ pub fn const_scalar_inline_block(@ast.TsBlock) -> @ast.TsBlock
 
 pub fn constructor_like_top_level(@ast.TsBlock, Map[String, Bool]) -> Unit
 
-pub fn container_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
+pub fn container_name_set(SymbolGraph, Map[Int32, Bool]) -> Map[String, Bool]
 
-pub fn count_type_fold_sites(@ast.TsBlock) -> Int
+pub fn count_type_fold_sites(@ast.TsBlock) -> Int32
 
-pub fn count_type_fold_sites_by_kind(@ast.TsBlock) -> Map[String, Int]
+pub fn count_type_fold_sites_by_kind(@ast.TsBlock) -> Map[String, Int32]
 
 pub fn ctor_name_comparison_literals(@ast.TsBlock) -> Array[String]?
 
@@ -95,9 +95,9 @@ pub fn imported_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
 
 pub fn imported_const_enum_table(Array[@ast.TsImportDecl], Map[String, String], (String) -> Array[@ast.TsEnumDecl]?, (String) -> Array[@ast.TsExportSpec]?, (String) -> Array[@ast.TsReExportSpec]?, (String, String) -> String?) -> Map[String, @ast.TsExpr]
 
-pub fn infer_container_symbols(SymbolGraph, ContainerFacts) -> Map[Int, Bool]
+pub fn infer_container_symbols(SymbolGraph, ContainerFacts) -> Map[Int32, Bool]
 
-pub fn infer_numeric_symbols(SymbolGraph) -> Map[Int, Bool]
+pub fn infer_numeric_symbols(SymbolGraph) -> Map[Int32, Bool]
 
 pub fn inline_block(@ast.TsBlock, keep? : Map[String, Bool]) -> @ast.TsBlock
 
@@ -105,7 +105,7 @@ pub fn inline_const_enums(@ast.TsBlock, Map[String, @ast.TsExpr]) -> @ast.TsBloc
 
 pub fn inline_predicates(@ast.TsBlock, PredicateTable) -> @ast.TsBlock
 
-pub fn is_index_numeric_with_graph(@ast.TsExpr, SymbolGraph, Map[Int, Bool]) -> Bool
+pub fn is_index_numeric_with_graph(@ast.TsExpr, SymbolGraph, Map[Int32, Bool]) -> Bool
 
 pub fn is_index_numeric_with_names(@ast.TsExpr, Map[String, Bool]) -> Bool
 
@@ -115,7 +115,7 @@ pub fn is_private_member_name(String) -> Bool
 
 pub fn is_relative_specifier(String) -> Bool
 
-pub fn lookup_symbol_in_scope(SymbolGraph, Int, String) -> Int?
+pub fn lookup_symbol_in_scope(SymbolGraph, Int32, String) -> Int32?
 
 pub fn lower_block_with_runtime_imports(JsxConfig, @ast.TsBlock) -> (@ast.TsBlock, Array[String])
 
@@ -141,9 +141,9 @@ pub fn merge_escape_breakdown(EscapeBreakdown) -> Array[String]
 
 pub fn module_const_enums(Array[@ast.TsEnumDecl]) -> Array[@ast.TsEnumDecl]
 
-pub fn numeric_name_census(SymbolGraph, Map[Int, Bool]) -> Map[String, (Int, Int)]
+pub fn numeric_name_census(SymbolGraph, Map[Int32, Bool]) -> Map[String, (Int32, Int32)]
 
-pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
+pub fn numeric_name_set(SymbolGraph, Map[Int32, Bool]) -> Map[String, Bool]
 
 pub fn observed_class_names(@ast.TsBlock) -> (Array[String], Bool)
 
@@ -153,9 +153,9 @@ pub fn plan_discriminant_ints(@ast.TsBlock, Map[String, Bool], declines? : Array
 
 pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool], declines? : Array[String]) -> ArityPlan
 
-pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
+pub fn reserve_props_from_sink(Sink, Int32, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
-pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType], class_members? : Map[String, Array[String]], provenance? : Map[String, Array[String]]?, synthesized_namespaces? : Map[String, Bool]?) -> Map[String, Bool]
+pub fn reserved_props_from_observability(SymbolGraph, Map[Int32, Observability], type_env? : Map[String, @ast.TsType], class_members? : Map[String, Array[String]], provenance? : Map[String, Array[String]]?, synthesized_namespaces? : Map[String, Bool]?) -> Map[String, Bool]
 
 pub fn string_name_set(SymbolGraph) -> Map[String, Bool]
 
@@ -181,13 +181,13 @@ pub fn undeclared_referenced_names(@ast.TsBlock) -> Map[String, Bool]
 
 pub fn verify_emitted_bundle(String, externals? : Map[String, Bool]) -> Array[Violation]
 
-pub fn vlq_encode(Int) -> String
+pub fn vlq_encode(Int32) -> String
 
 // Errors
 
 // Types and methods
 pub(all) struct ArityPlan {
-  keep_count : Map[String, Int]
+  keep_count : Map[String, Int32]
 }
 
 pub(all) struct BundleExport {
@@ -241,6 +241,12 @@ pub(all) struct BundleOutput {
 }
 
 type CalleeClass derive(Eq, @debug.Debug)
+#deprecated
+pub fn CalleeClass::equal(Self, Self) -> Bool
+#deprecated
+pub fn CalleeClass::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn CalleeClass::to_repr(Self) -> @debug.Repr
 
 pub(all) struct ContainerFacts {
   class_names : Map[String, Bool]
@@ -252,9 +258,11 @@ pub(all) struct ContainerFacts {
 pub(all) struct Def {
   init : @ast.TsExpr?
 } derive(@debug.Debug)
+#deprecated
+pub fn Def::to_repr(Self) -> @debug.Repr
 
 pub(all) struct DiscriminantPlan {
-  maps : Map[String, Map[String, Int]]
+  maps : Map[String, Map[String, Int32]]
 }
 
 pub(all) struct EscapeBreakdown {
@@ -273,20 +281,26 @@ pub(all) struct FlowEdge {
   from : FlowNode
   to : FlowNode
 } derive(@debug.Debug)
+#deprecated
+pub fn FlowEdge::to_repr(Self) -> @debug.Repr
 
 pub(all) enum FlowNode {
-  SymVal(Int)
-  FuncReturn(Int)
-  FuncArg(Int, Int)
+  SymVal(Int32)
+  FuncReturn(Int32)
+  FuncArg(Int32, Int32)
   Literal(LiteralKind)
   External
   Unknown
 } derive(@debug.Debug)
+#deprecated
+pub fn FlowNode::to_repr(Self) -> @debug.Repr
 
 pub(all) struct FuncInfo {
-  params : Array[Int]
+  params : Array[Int32]
   returns : Array[FlowNode]
 } derive(@debug.Debug)
+#deprecated
+pub fn FuncInfo::to_repr(Self) -> @debug.Repr
 
 pub(all) struct ImpureGetter {
   class_name : String
@@ -310,10 +324,10 @@ pub fn JsxConfig::with_pragma_jsx_frag(Self, String) -> Self
 pub fn JsxConfig::with_runtime(Self, String) -> Self
 
 pub(all) struct LineIndex {
-  line_starts : Array[Int]
+  line_starts : Array[Int32]
 }
 pub fn LineIndex::new(String) -> Self
-pub fn LineIndex::position(Self, Int) -> Position
+pub fn LineIndex::position(Self, Int32) -> Position
 
 pub(all) struct LinkRenames {
   locals : Map[String, Map[String, String]]
@@ -329,6 +343,12 @@ pub(all) enum LiteralKind {
   LitObject
   LitOther
 } derive(Eq, @debug.Debug)
+#deprecated
+pub fn LiteralKind::equal(Self, Self) -> Bool
+#deprecated
+pub fn LiteralKind::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn LiteralKind::to_repr(Self) -> @debug.Repr
 
 pub(all) struct ManglerConfig {
   reserved : Array[String]
@@ -353,6 +373,12 @@ pub(all) enum Observability {
   RecursiveProps
   External
 } derive(Eq, @debug.Debug)
+#deprecated
+pub fn Observability::equal(Self, Self) -> Bool
+#deprecated
+pub fn Observability::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn Observability::to_repr(Self) -> @debug.Repr
 
 pub(all) struct PhaseTimer {
   enabled : Bool
@@ -365,17 +391,23 @@ pub fn PhaseTimer::record(Self, String, Double) -> Unit
 pub fn PhaseTimer::report(Self) -> Array[String]
 
 pub(all) struct Position {
-  line : Int
-  column : Int
+  line : Int32
+  column : Int32
 } derive(Eq, @debug.Debug)
-pub fn Position::new(Int, Int) -> Self
+#deprecated
+pub fn Position::equal(Self, Self) -> Bool
+pub fn Position::new(Int32, Int32) -> Self
+#deprecated
+pub fn Position::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn Position::to_repr(Self) -> @debug.Repr
 
 pub(all) struct PredicateEntry {
   param_name : String
   body_expr : @ast.TsExpr
-  param_refs : Int
-  body_cost : Int
-  call_sites : Int
+  param_refs : Int32
+  body_cost : Int32
+  call_sites : Int32
   removable : Bool
 }
 
@@ -389,10 +421,10 @@ pub(all) struct PurityReport {
 }
 
 pub(all) struct Scope {
-  id : Int
-  parent : Int?
+  id : Int32
+  parent : Int32?
   kind : ScopeKind
-  declared : Array[Int]
+  declared : Array[Int32]
 }
 
 pub(all) enum ScopeKind {
@@ -401,12 +433,18 @@ pub(all) enum ScopeKind {
   Block
   Catch
 } derive(Eq, @debug.Debug)
+#deprecated
+pub fn ScopeKind::equal(Self, Self) -> Bool
+#deprecated
+pub fn ScopeKind::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn ScopeKind::to_repr(Self) -> @debug.Repr
 
 pub(all) struct Segment {
-  out_col : Int
-  src_line : Int?
-  src_col : Int?
-  src_id : Int?
+  out_col : Int32
+  src_line : Int32?
+  src_col : Int32?
+  src_id : Int32?
 }
 
 pub(all) struct Sink {
@@ -424,19 +462,19 @@ pub(all) enum SinkObservation {
 
 pub(all) struct SourceMapBuilder {
   lines : Array[Array[Segment]]
-  mut last_out_line : Int
-  mut current_source : Int
+  mut last_out_line : Int32
+  mut current_source : Int32
 }
-pub fn SourceMapBuilder::add_mapping(Self, Int, Int, Int, Int) -> Unit
-pub fn SourceMapBuilder::add_unmapped(Self, Int, Int) -> Unit
+pub fn SourceMapBuilder::add_mapping(Self, Int32, Int32, Int32, Int32) -> Unit
+pub fn SourceMapBuilder::add_unmapped(Self, Int32, Int32) -> Unit
 pub fn SourceMapBuilder::new() -> Self
-pub fn SourceMapBuilder::set_current_source(Self, Int) -> Unit
+pub fn SourceMapBuilder::set_current_source(Self, Int32) -> Unit
 pub fn SourceMapBuilder::to_json(Self, source~ : String, source_path~ : String, output_path~ : String) -> String
 pub fn SourceMapBuilder::to_json_multi(Self, Array[String], Array[String], output_path~ : String) -> String
 
 pub(all) struct SwitchFoldEntry {
   param_names : Array[String]
-  switch_param_index : Int
+  switch_param_index : Int32
   arms : Map[String, @ast.TsExpr]
 }
 
@@ -445,8 +483,8 @@ pub(all) struct SwitchFoldTable {
 }
 
 pub(all) struct Symbol {
-  id : Int
-  scope_id : Int
+  id : Int32
+  scope_id : Int32
   name : String
   kind : SymbolKind
   uses : Array[Use]
@@ -457,15 +495,17 @@ pub(all) struct Symbol {
   mut captured_by_closure : Bool
   mut ts_type : @ast.TsType
 } derive(@debug.Debug)
+#deprecated
+pub fn Symbol::to_repr(Self) -> @debug.Repr
 
 pub(all) struct SymbolGraph {
   scopes : Array[Scope]
   symbols : Array[Symbol]
-  by_name : Map[String, Int]
+  by_name : Map[String, Int32]
   flow_edges : Array[FlowEdge]
-  external_bindings : Map[Int, Bool]
-  funcs : Map[Int, FuncInfo]
-  unresolved : Map[String, Int]
+  external_bindings : Map[Int32, Bool]
+  funcs : Map[Int32, FuncInfo]
+  unresolved : Map[String, Int32]
 }
 
 pub(all) enum SymbolKind {
@@ -480,6 +520,12 @@ pub(all) enum SymbolKind {
   Catch
   ClassDecl
 } derive(Eq, @debug.Debug)
+#deprecated
+pub fn SymbolKind::equal(Self, Self) -> Bool
+#deprecated
+pub fn SymbolKind::not_equal(Self, Self) -> Bool
+#deprecated
+pub fn SymbolKind::to_repr(Self) -> @debug.Repr
 
 pub(all) struct TagRewriteBoundary {
   exported : Map[String, Bool]
@@ -492,9 +538,11 @@ pub(all) struct TransformOutput {
 }
 
 pub(all) struct Use {
-  scope_id : Int
+  scope_id : Int32
   context : UseContext
 } derive(@debug.Debug)
+#deprecated
+pub fn Use::to_repr(Self) -> @debug.Repr
 
 pub(all) enum UseContext {
   Read
@@ -502,7 +550,7 @@ pub(all) enum UseContext {
   IndexReceiver
   IndexKey
   CallReceiver
-  CallArg(Int)
+  CallArg(Int32)
   NewReceiver
   ReturnValue
   ThrowValue
@@ -511,17 +559,21 @@ pub(all) enum UseContext {
   PropAssignRHS
   IndexAssignRHS
 } derive(@debug.Debug)
+#deprecated
+pub fn UseContext::to_repr(Self) -> @debug.Repr
 
 pub(all) struct Violation {
   kind : String
   name : String
   detail : String
 } derive(@debug.Debug)
+#deprecated
+pub fn Violation::to_repr(Self) -> @debug.Repr
 
 // Type aliases
-pub type ScopeId = Int
+pub type ScopeId = Int32
 
-pub type SymbolId = Int
+pub type SymbolId = Int32
 
 // Traits
 trait SubstitutedValue

@@ -104,7 +104,7 @@ let advanced_types_source : String =
 /// Programmatically build a wide interface declaration with `field_count`
 /// readonly/optional properties so that benchmarks can scale to inputs
 /// larger than what is convenient to hand-write inline.
-fn build_wide_interface(field_count : Int) -> String {
+fn build_wide_interface(field_count : Int32) -> String {
   let buf = StringBuilder()
   buf.write_string("export interface Wide {\n")
   for i in 0..<field_count {
@@ -142,7 +142,7 @@ let wide_2000 : String = build_wide_interface(2000)
 /// comments by volume). Tracks the lexer's comment scan +
 /// `parse_jsdoc_block` path, which dominated whole-file profiles before
 /// the view-based rewrite.
-fn build_jsdoc_heavy(decl_count : Int) -> String {
+fn build_jsdoc_heavy(decl_count : Int32) -> String {
   let buf = StringBuilder()
   for i in 0..<decl_count {
     let n = i.to_string()
@@ -178,7 +178,7 @@ let jsdoc_heavy_300 : String = build_jsdoc_heavy(300)
 /// position trigger the JSX speculation path (scan + nested sub-parse)
 /// when `allow_jsx` is on, the dominant cost on legacy TS sources like
 /// parserharness.ts. Tracks the speculative re-parse overhead.
-fn build_cast_heavy(func_count : Int) -> String {
+fn build_cast_heavy(func_count : Int32) -> String {
   let buf = StringBuilder()
   for i in 0..<func_count {
     let n = i.to_string()

@@ -758,8 +758,8 @@ fn Parser::record_await_using_context(self : Parser, using_kw : String) -> Unit 
 fn Parser::parse_var_like(
   self : Parser,
   kind : VarKind,
-  kw_pos : Int,
-  using_kw? : String = "",
+  kw_pos : Int32,
+  using_kw~ : String = "",
 ) -> @ast.TsStmt raise ParseError {
   let binding = self.parse_binding_pattern()
   // TS2480: `let` is not allowed as a binding name in `let` / `const`
@@ -1123,7 +1123,7 @@ fn Parser::record_unknown_catch_use(
   self : Parser,
   name : String,
   had_annotation : Bool,
-  body_start : Int,
+  body_start : Int32,
 ) -> Unit {
   if name == "" || had_annotation || !self.unknown_catch_variables {
     return
@@ -1223,7 +1223,7 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     let _ = self.expect(Colon)
     let stmts : Array[@ast.TsStmt] = []
-    let case_stmt_positions : Array[Int] = []
+    let case_stmt_positions : Array[Int32] = []
     while !self.check(Case) && !self.check(Default) && !self.check(RBrace) {
       case_stmt_positions.push(self.peek().pos)
       // TS1547 / TS1548: "'using' / 'await using' declarations are not
@@ -1885,7 +1885,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   // `Parser::block_local_type_names`. Popped at the same single exit.
   self.block_local_type_names.push([])
   let stmts : Array[@ast.TsStmt] = []
-  let stmt_positions : Array[Int] = []
+  let stmt_positions : Array[Int32] = []
   let prev_strict = self.in_strict
   let mut in_directive = true
   while !self.check(RBrace) && !self.check(Eof) {
@@ -1985,7 +1985,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       }
       // Parse the remaining statements in this block into the try body.
       let rest_stmts : Array[@ast.TsStmt] = []
-      let rest_positions : Array[Int] = []
+      let rest_positions : Array[Int32] = []
       while !self.check(RBrace) && !self.check(Eof) {
         rest_positions.push(self.peek().pos)
         rest_stmts.push(self.parse_stmt())
@@ -2423,8 +2423,8 @@ fn strip_lvalue_wrappers(expr : @ast.TsExpr) -> @ast.TsExpr {
 /// block is looked up by the keyword position (`let`/`const`/`var` token pos)
 /// because that is where the comment sits in the source.
 fn apply_jsdoc_func_init_overlay(
-  jsdoc_at_pos : Map[Int, JsdocBlock],
-  kw_pos : Int,
+  jsdoc_at_pos : Map[Int32, JsdocBlock],
+  kw_pos : Int32,
   init : @ast.TsExpr,
 ) -> @ast.TsExpr {
   match init {
@@ -2446,9 +2446,9 @@ fn apply_jsdoc_func_init_overlay(
 /// Apply JSDoc param/return type overlays to a `let`/`const`/`var` declarator
 /// whose initializer is an arrow-function or function-expression.
 fn apply_jsdoc_var_func_overlay(
-  jsdoc_at_pos : Map[Int, JsdocBlock],
+  jsdoc_at_pos : Map[Int32, JsdocBlock],
   stmt : @ast.TsStmt,
-  kw_pos : Int,
+  kw_pos : Int32,
 ) -> @ast.TsStmt {
   match stmt {
     @ast.TsStmt::Const(binding, ty, init) =>
@@ -2505,7 +2505,7 @@ fn Parser::record_block_local_type_name(self : Parser, name : String) -> Unit {
 /// name, because `record_local_class` consumes the parser's stash and may
 /// legitimately push NOTHING (a class the parser lowered instead). Reading
 /// the last element unconditionally would then name a PREVIOUS class.
-fn Parser::record_block_local_class_name(self : Parser, before : Int) -> Unit {
+fn Parser::record_block_local_class_name(self : Parser, before : Int32) -> Unit {
   let after = self.collected_local_classes.length()
   if after <= before {
     return

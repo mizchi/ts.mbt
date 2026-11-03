@@ -7,18 +7,22 @@ pub(all) suberror ParseError {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend ParseError with @debug.Debug::{to_repr}
+
+///|
 // /
 pub struct Parser {
   tokens : Array[Token]
-  mut pos : Int
-  mut pending_gt : Int
-  mut pending_gt_pos : Int
+  mut pos : Int32
+  mut pending_gt : Int32
+  mut pending_gt_pos : Int32
   mut in_generator : Bool
   mut in_async : Bool
-  mut temp_index : Int
+  mut temp_index : Int32
   // Counter assigned to every `unique symbol` occurrence so the type
   // gets a stable per-occurrence tag.
-  mut unique_symbol_index : Int
+  mut unique_symbol_index : Int32
   mut in_strict : Bool
   mut in_function : Bool // for return validation
   mut in_iteration : Bool // for continue validation
@@ -70,12 +74,12 @@ pub struct Parser {
   labels : Array[String] // for labeled break/continue validation
   src : String
   allow_jsx : Bool
-  mut class_id : Int // for private field brand generation
+  mut class_id : Int32 // for private field brand generation
   // File-level counter for computed-key temp variables (`__class_key_N`).
   // A per-class local counter would reset to 0 for every class in the file,
   // causing duplicate `let __class_key_0` declarations when multiple classes
   // are bundled into a single scope.
-  mut class_key_counter : Int
+  mut class_key_counter : Int32
   mut current_class_brand : String? // brand ID of current class being parsed
   mut last_runtime_class_decl : @ast.TsClassDecl?
   // The expression parsed by `parse_class_base_name` when the
@@ -99,7 +103,7 @@ pub struct Parser {
   // parameters WITHOUT a default in the list just parsed (TS requires
   // defaulted parameters to be trailing, so this is the minimum legal
   // type-argument count). `Iterable<T, TReturn = any, TNext = any>` -> 1.
-  mut last_type_params_min_required : Int
+  mut last_type_params_min_required : Int32
   local_type_param_bounds : Array[(String, @ast.TsType)]
   // Decorator expressions parsed at the statement level that should be
   // attached to the next class declaration. The class parsers drain
@@ -219,7 +223,7 @@ pub struct Parser {
   // literals (from the lexer). Tagged templates accept invalid escapes
   // (ES2018), so only the UNTAGGED template parse site counts the
   // entries inside its token span.
-  template_invalid_escape_positions : Array[Int]
+  template_invalid_escape_positions : Array[Int32]
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -298,25 +302,25 @@ pub struct Parser {
   // file (a get/set pair counts twice — two declarations of one member).
   // Compared against the number of `PrivateIdent` tokens carrying it,
   // which is an exact upper bound on declarations + reads.
-  private_decl_counts : Map[String, Int]
+  private_decl_counts : Map[String, Int32]
   override_member_names : Array[String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal
   // `@__PURE__`. The call-expr parser consults the map to wrap
   // its result in `TsExpr::PureCall(...)`.
-  pure_marker_positions : Map[Int, Bool]
+  pure_marker_positions : Map[Int32, Bool]
   // Same shape for `/** @internal */` JSDoc blocks. The decl
   // parser flags the next declaration's name into
   // `collected_internal_names`, which gets attached to the
   // emitted `TsModuleBlock`. `.d.ts` emit then drops those
   // names from the published surface.
-  internal_marker_positions : Map[Int, Bool]
+  internal_marker_positions : Map[Int32, Bool]
   collected_internal_names : Map[String, Bool]
   // Parsed JSDoc block per next-token position. Populated by the
   // lexer; queried by decl parsers to attach tag info (`@param`,
   // `@returns`, `@deprecated`, …) to the AST.
-  jsdoc_at_pos : Map[Int, JsdocBlock]
+  jsdoc_at_pos : Map[Int32, JsdocBlock]
   // Names with a `@deprecated` tag — fed into the emitted
   // `TsModuleBlock` so `.d.ts` emit can mark them.
   collected_deprecations : Map[String, String]
@@ -393,6 +397,10 @@ pub struct Parser {
   // duplicate declaration and a SyntaxError in a module.
   mut last_function_bodiless : Bool
 } derive(Debug)
+
+///|
+#deprecated
+pub extend Parser with @debug.Debug::{to_repr}
 
 ///|
 // / create
@@ -837,7 +845,7 @@ fn Parser::check(self : Parser, kind : TokenKind) -> Bool {
 
 ///|
 // / get
-fn Parser::peek_at(self : Parser, offset : Int) -> Token {
+fn Parser::peek_at(self : Parser, offset : Int32) -> Token {
   if offset < self.pending_gt {
     return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false, }
   }
@@ -1051,7 +1059,7 @@ fn detect_directive_strict(head : String) -> Bool {
 ///|
 /// Lengths of the parser's misuse-recording arrays, taken before a
 /// speculative parse whose side effects must not survive.
-fn Parser::recording_lengths(self : Parser) -> (Int, Int, Int, Int) {
+fn Parser::recording_lengths(self : Parser) -> (Int32, Int32, Int32, Int32) {
   (
     self.grammar_misuses.length(),
     self.strict_mode_misuses.length(),
@@ -1064,7 +1072,7 @@ fn Parser::recording_lengths(self : Parser) -> (Int, Int, Int, Int) {
 /// Drop any misuse recordings pushed since `recording_lengths` was taken.
 fn Parser::rollback_recordings(
   self : Parser,
-  lens : (Int, Int, Int, Int),
+  lens : (Int32, Int32, Int32, Int32),
 ) -> Unit {
   while self.grammar_misuses.length() > lens.0 {
     let _ = self.grammar_misuses.pop()
@@ -1082,7 +1090,7 @@ fn Parser::rollback_recordings(
 
 ///|
 /// Exact match of `needle` against `src` starting at position `i`.
-fn matches_at(src : String, i : Int, needle : String) -> Bool {
+fn matches_at(src : String, i : Int32, needle : String) -> Bool {
   let n = needle.length()
   if i + n > src.length() {
     return false
@@ -1098,7 +1106,7 @@ fn matches_at(src : String, i : Int, needle : String) -> Bool {
 ///|
 /// ASCII-case-insensitive match of lowercase-ASCII `needle` against
 /// `src` starting at position `i` (code-unit compare, A-Z folded).
-fn matches_ascii_ci_at(src : String, i : Int, needle : String) -> Bool {
+fn matches_ascii_ci_at(src : String, i : Int32, needle : String) -> Bool {
   let n = needle.length()
   if i + n > src.length() {
     return false
@@ -1354,7 +1362,7 @@ fn detect_target_list(head : String) -> String? {
 ///|
 /// Year number of an `es20NN` token; `es6` maps to 2015, `esnext` to 9999.
 /// `None` for anything else (`es5`, `es3`, dotted slices, `dom`, ...).
-fn es_token_year(t : String) -> Int? {
+fn es_token_year(t : String) -> Int32? {
   if t == "esnext" {
     return Some(9999)
   }
@@ -1378,7 +1386,7 @@ fn es_token_year(t : String) -> Int? {
 /// Whether an explicit `@lib:` list provides the ES-`year` surface: a
 /// full-year lib at or past `year`, `esnext`, or a dotted slice of that
 /// exact year (`es2017.object` grants 2017).
-fn lib_list_grants_year(libs : String, year : Int) -> Bool {
+fn lib_list_grants_year(libs : String, year : Int32) -> Bool {
   for tok in libs.split(",") {
     let t = tok.trim().to_owned()
     match es_token_year(t) {
@@ -1397,7 +1405,7 @@ fn lib_list_grants_year(libs : String, year : Int) -> Bool {
 /// this (does some run reach the year) and a rule that fires at LOW ones
 /// asks `target_list_has_below_year`. Parameterised because it was
 /// written out twice at 2017 before a third year needed it.
-fn target_list_reaches_year(targets : String, year : Int) -> Bool {
+fn target_list_reaches_year(targets : String, year : Int32) -> Bool {
   for tok in targets.split(",") {
     let t = tok.trim().to_owned()
     match es_token_year(t) {

@@ -8,6 +8,10 @@ pub struct MoonBitTsBridgeBundle {
 } derive(Debug)
 
 ///|
+#deprecated
+pub extend MoonBitTsBridgeBundle with @debug.Debug::{to_repr}
+
+///|
 pub struct MoonBitTsBridgePackageBundle {
   entry_path : String
   module_spec : String
@@ -16,6 +20,10 @@ pub struct MoonBitTsBridgePackageBundle {
   bridge_mbt : String
   bridge_js : String
 } derive(Debug)
+
+///|
+#deprecated
+pub extend MoonBitTsBridgePackageBundle with @debug.Debug::{to_repr}
 
 ///|
 priv struct BridgeTopLevelFnDecl {
@@ -220,7 +228,7 @@ fn bridge_to_pascal_case(name : String) -> String {
 /// return type is itself a (curried) function type -- the last `)` on the
 /// line belongs to the RETURN type, not the parameter list
 /// (`declare pub fn get_use_() -> (A) -> (B) -> C`).
-fn bridge_find_matching_paren(text : String, open_index : Int) -> Int? {
+fn bridge_find_matching_paren(text : String, open_index : Int32) -> Int32? {
   let mut depth = 0
   for i, c in text.iter2() {
     if i < open_index {
@@ -518,7 +526,7 @@ fn parse_bridge_implemented_type_name_line(line : String) -> String? {
 /// return its type-parameter arity. Inspects `pub(all) struct` /
 /// `pub type` / `pub enum` style decls (with or without `#external`).
 /// Returns `0` when no decl is found or the name appears bare.
-fn bridge_struct_decl_arity(bridge_mbt : String, name : String) -> Int {
+fn bridge_struct_decl_arity(bridge_mbt : String, name : String) -> Int32 {
   let prefixes = [
     "pub(all) struct ", "pub struct ", "pub(all) enum ", "pub enum ", "pub type ",
   ]
@@ -900,8 +908,8 @@ fn collect_bridge_type_guard_helpers(
 /// from `pub(all) struct X[..]` / `pub type X[..]` /
 /// `declare pub type X[..]` lines. Used to validate generated upcast
 /// helpers against what actually got emitted.
-fn bridge_declared_type_arities(text : String) -> Map[String, Int] {
-  let arities : Map[String, Int] = Map([])
+fn bridge_declared_type_arities(text : String) -> Map[String, Int32] {
+  let arities : Map[String, Int32] = Map([])
   for line_view in text.split("\n") {
     let line = line_view.to_owned().trim().to_owned()
     let rest = if line.has_prefix("pub(all) struct ") {
@@ -945,10 +953,10 @@ fn bridge_declared_type_arities(text : String) -> Map[String, Int] {
 ///|
 fn bridge_find_matching_paren_char(
   text : String,
-  open_index : Int,
+  open_index : Int32,
   open_char : Char,
   close_char : Char,
-) -> Int? {
+) -> Int32? {
   let mut depth = 0
   for i, c in text.iter2() {
     if i < open_index {
@@ -975,7 +983,7 @@ fn bridge_find_matching_paren_char(
 /// the helper must be dropped.
 fn bridge_upcast_helper_line_is_valid(
   line : String,
-  arities : Map[String, Int],
+  arities : Map[String, Int32],
 ) -> Bool {
   let marker = "::as"
   if !line.contains(marker) || !line.contains("(self : ") {
@@ -1245,7 +1253,31 @@ fn reconcile_bridge_widened_union_returns(
           } else {
             bridge_value_fn_name(name)
           }
-          if is_plain_name &&
+          // The mirror case: the DECL layer widened to `JSValue` while the
+          // extern kept a FUNCTION type. immer's `produceWithPatches` is a
+          // value typed by a six-overload call interface, and the two layers
+          // render different signatures of it — `declare pub fn
+          // produceWithPatches(…) -> JSValue` over an extern returning
+          // `(State?, Array[Args]) -> PatchesTuple`, which the public wrapper
+          // cannot pass through ([4014], has type `(…) -> PatchesTuple`,
+          // wanted `JSValue`). A function type cannot be either NORMAL
+          // disagreement above (an enum crossing as `Int`/`String`, an
+          // option wrap), and the extern compiled, so every name in its
+          // type resolves — taking it is safe where guessing was not.
+          let extern_fn_return = if !declared_opt && declared == "JSValue" {
+            match extern_returns.get(extern_key) {
+              Some(extern_ret) if extern_ret.has_prefix("(") &&
+                extern_ret.contains("->") => Some(extern_ret)
+              _ => None
+            }
+          } else {
+            None
+          }
+          if extern_fn_return is Some(extern_ret) {
+            rewritten = Some(
+              "declare pub fn \{name}(\{params_src}) -> \{extern_ret}",
+            )
+          } else if is_plain_name &&
             (
               payload_enums.contains(declared) ||
               !implemented.contains(declared)
@@ -1668,7 +1700,7 @@ fn render_bridge_public_wrapper_with_converters(
   fn_decl : BridgeTopLevelFnDecl,
   converters : Array[BridgeEnumConverter],
   internal_name : String,
-  wrap_option_return? : Bool = false,
+  wrap_option_return~ : Bool = false,
 ) -> String? {
   if bridge_value_identifier_needs_suffix(fn_decl.public_name) {
     return None
@@ -1898,9 +1930,15 @@ fn add_bridge_public_wrappers(
   }
   let sections : Array[String] = []
   let helper_text = helpers.join("\n")
+  // The WRAPPERS are a third source: an option-returning wrapper is spelled
+  // `__ts_mbt_wrap_option_return(unsafeCast(…))`, and semver's bridge had no
+  // other `unsafeCast`, so `diff` / `parse` / `coerce` called a helper that
+  // was never declared ([4021]).
+  let wrapper_text = wrappers.join("\n")
   if (
       next_bridge_mbt.contains("unsafeCast(") ||
-      helper_text.contains("unsafeCast(")
+      helper_text.contains("unsafeCast(") ||
+      wrapper_text.contains("unsafeCast(")
     ) &&
     !next_bridge_mbt.contains("fn[A, B] unsafeCast(value : A) -> B") {
     sections.push("fn[A, B] unsafeCast(value : A) -> B = \"%identity\"")
