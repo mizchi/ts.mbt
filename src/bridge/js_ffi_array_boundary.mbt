@@ -30,7 +30,10 @@ pub fn migrate_js_ffi_array_boundaries(mbt : String) -> String {
   if !mbt.contains("Array[") {
     return mbt
   }
-  let lines : Array[String] = mbt.split("\n").map(fn(l) { l.to_owned() }).collect()
+  let lines : Array[String] = mbt
+    .split("\n")
+    .map(fn(l) { l.to_owned() })
+    .collect()
   let out : Array[String] = []
   let mut i = 0
   while i < lines.length() {
@@ -78,8 +81,10 @@ pub fn migrate_js_ffi_array_boundaries(mbt : String) -> String {
 
 ///|
 fn js_ffi_is_extern_header(line : String) -> Bool {
-  (line.has_prefix("extern \"js\" fn") ||
-  line.has_prefix("pub extern \"js\" fn")) &&
+  (
+    line.has_prefix("extern \"js\" fn") ||
+    line.has_prefix("pub extern \"js\" fn")
+  ) &&
   line.contains(") -> ") &&
   (line.has_suffix(" =") || line.has_suffix("\""))
 }
@@ -103,16 +108,19 @@ fn js_ffi_parse_type(t : String) -> JsFfiArrayType {
       _ => return Leaf(t)
     }
   }
-  if t.has_prefix("Array[") && t.has_suffix("]") &&
+  if t.has_prefix("Array[") &&
+    t.has_suffix("]") &&
     js_ffi_bracket_close(t, 5) == Some(t.length() - 1) {
-    return Arr(js_ffi_parse_type(t["Array[".length():t.length() - 1].to_owned()))
+    return Arr(
+      js_ffi_parse_type(t["Array[".length():t.length() - 1].to_owned()),
+    )
   }
   Leaf(t)
 }
 
 ///|
 /// Index of the bracket that closes the one opening at `open`.
-fn js_ffi_bracket_close(t : String, open : Int) -> Int? {
+fn js_ffi_bracket_close(t : String, open : Int32) -> Int32? {
   let mut depth = 0
   for i in open..<t.length() {
     let c = t[i]
@@ -147,7 +155,7 @@ fn js_ffi_render(t : JsFfiArrayType) -> String {
 
 ///|
 /// MoonBit value -> the extern's argument.
-fn js_ffi_to_ffi(expr : String, t : JsFfiArrayType, depth : Int) -> String {
+fn js_ffi_to_ffi(expr : String, t : JsFfiArrayType, depth : Int32) -> String {
   let v = "v\{depth}"
   match t {
     Leaf(_) => expr
@@ -163,7 +171,7 @@ fn js_ffi_to_ffi(expr : String, t : JsFfiArrayType, depth : Int) -> String {
 
 ///|
 /// The extern's result -> the MoonBit value the wrapper promises.
-fn js_ffi_from_ffi(expr : String, t : JsFfiArrayType, depth : Int) -> String {
+fn js_ffi_from_ffi(expr : String, t : JsFfiArrayType, depth : Int32) -> String {
   let v = "v\{depth}"
   match t {
     Leaf(_) => expr
