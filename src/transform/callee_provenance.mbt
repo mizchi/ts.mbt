@@ -25,6 +25,7 @@
 
 ///|
 /// Who answers when this callee is called?
+#derive(Eq, Debug)
 enum CalleeClass {
   /// A binding the bundle declares. Whatever it does with its
   /// arguments is code the analysis can see, so the flow analysis
@@ -36,7 +37,7 @@ enum CalleeClass {
   /// Anything else. The body is invisible, so every argument's
   /// property names escape.
   ForeignCallee
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated

@@ -1,8 +1,9 @@
 ///|
+#derive(Debug)
 pub struct MoonBitJsFfiBundle {
   ffi_mbt : String
   bridge_js : String
-} derive(Debug)
+}
 
 ///|
 #deprecated

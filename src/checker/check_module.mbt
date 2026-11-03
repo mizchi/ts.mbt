@@ -5,6 +5,7 @@
 // the user.
 
 ///|
+#derive(Eq, Debug)
 pub(all) enum TypeIssueKind {
   UnresolvedReference
   DuplicateDeclaration
@@ -15,7 +16,7 @@ pub(all) enum TypeIssueKind {
   EnumMemberDuplicate
   InterfaceExtendsCycle
   ClassPropertyDuplicate
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -26,11 +27,12 @@ pub extend TypeIssueKind with Eq::{not_equal, equal}
 pub extend TypeIssueKind with @debug.Debug::{to_repr}
 
 ///|
+#derive(Eq, Debug)
 pub(all) struct TypeIssue {
   kind : TypeIssueKind
   name : String
   detail : String
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated

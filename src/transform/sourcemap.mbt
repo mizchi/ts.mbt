@@ -20,10 +20,11 @@
 // so the JSON serializer is a trivial walk.
 
 ///|
+#derive(Eq, Debug)
 pub(all) struct Position {
   line : Int32 // 0-indexed
   column : Int32 // 0-indexed
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated

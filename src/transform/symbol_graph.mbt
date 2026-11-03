@@ -78,6 +78,7 @@ pub(all) struct SymbolGraph {
 }
 
 ///|
+#derive(Debug)
 pub(all) struct FuncInfo {
   // The function's parameter symbol ids in declaration order.
   // Phase 4 uses this to walk from `FuncArg(fid, i)` flow
@@ -88,7 +89,7 @@ pub(all) struct FuncInfo {
   // observability landing on this function's return value back
   // to these sources.
   returns : Array[FlowNode]
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -104,12 +105,13 @@ pub(all) struct Scope {
 }
 
 ///|
+#derive(Eq, Debug)
 pub(all) enum ScopeKind {
   Module
   Function
   Block
   Catch
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -120,6 +122,7 @@ pub extend ScopeKind with Eq::{not_equal, equal}
 pub extend ScopeKind with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct Symbol {
   id : SymbolId
   scope_id : ScopeId
@@ -163,13 +166,14 @@ pub(all) struct Symbol {
   // consult this to skip the External-observation wildcard when
   // the type's key set is statically bounded.
   mut ts_type : @ast.TsType
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend Symbol with @debug.Debug::{to_repr}
 
 ///|
+#derive(Eq, Debug)
 pub(all) enum SymbolKind {
   Let
   Const
@@ -181,7 +185,7 @@ pub(all) enum SymbolKind {
   ImportNamed
   Catch
   ClassDecl
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -192,25 +196,28 @@ pub extend SymbolKind with Eq::{not_equal, equal}
 pub extend SymbolKind with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct Def {
   init : @ast.TsExpr?
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend Def with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct Use {
   scope_id : ScopeId
   context : UseContext
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend Use with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) enum UseContext {
   // Plain read: `let y = x;`, `x + 1`, etc.
   Read
@@ -240,17 +247,18 @@ pub(all) enum UseContext {
   PropAssignRHS
   // `obj[k] = x` — same for index assignment.
   IndexAssignRHS
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend UseContext with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct FlowEdge {
   from : FlowNode
   to : FlowNode
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -258,6 +266,7 @@ pub extend FlowEdge with @debug.Debug::{to_repr}
 
 ///|
 /// A point in the data-flow graph.
+#derive(Debug)
 pub(all) enum FlowNode {
   // The value of a binding.
   SymVal(SymbolId)
@@ -279,13 +288,14 @@ pub(all) enum FlowNode {
   // Couldn't statically determine the source (computed call,
   // dynamic property, etc.). Phase 3 must treat as External.
   Unknown
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend FlowNode with @debug.Debug::{to_repr}
 
 ///|
+#derive(Eq, Debug)
 pub(all) enum LiteralKind {
   LitNumeric // NumberLit / IntLit / BigIntLit / Number-typed arithmetic
   LitString // StringLit / TemplateLiteral
@@ -293,7 +303,7 @@ pub(all) enum LiteralKind {
   LitNull // NullLit / Undefined
   LitObject // ObjectLit / ArrayLit / function expression
   LitOther // anything else we don't classify
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated

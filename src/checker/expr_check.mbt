@@ -10,12 +10,13 @@
 // Node globals and class state we do not model yet.
 
 ///|
+#derive(Eq, Debug)
 pub(all) struct ExprIssue {
   // Dotted breadcrumb describing where in the function the issue was found,
   // e.g. `function foo > param init`, `function foo > return`.
   path : String
   message : String
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -38832,10 +38833,11 @@ fn check_native_class_property_initializers(
 /// One walker answers both. Writing a second copy for the call-only question
 /// is what produced the bug this batch fixes — see
 /// `class_mentions_super_outside` — so the variation is a parameter.
+#derive(Eq)
 priv enum SuperRefKind {
   AnyRef
   CallOnly
-} derive(Eq)
+}
 
 ///|
 /// Whether `expr` references `super` (a `super(...)` call, `super.x`, or

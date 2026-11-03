@@ -186,6 +186,7 @@ pub fn build_switch_fold_table(
 /// `NotADispatcher` is the "shape absent" answer — no first parameter,
 /// or one that is not a closed string-literal union — and every other
 /// variant is a gate that could in principle be opened.
+#derive(Eq)
 priv enum SwitchFoldReject {
   NotADispatcher
   DestructuredOrRestParam
@@ -193,7 +194,7 @@ priv enum SwitchFoldReject {
   ArmNotASingleReturn
   CaseNotAStringLiteral
   LiteralWithNoArm
-} derive(Eq)
+}
 
 ///|
 fn SwitchFoldReject::label(self : SwitchFoldReject) -> String {

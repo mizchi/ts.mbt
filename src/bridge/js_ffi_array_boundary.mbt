@@ -30,6 +30,9 @@ pub fn migrate_js_ffi_array_boundaries(mbt : String) -> String {
   if !mbt.contains("Array[") {
     return mbt
   }
+  // `Promise[T]` is converted through the generated `Promise::map`, so only
+  // in a package that defines it.
+  let promise_map = mbt.contains("fn[T, U] Promise::map(")
   let lines : Array[String] = mbt
     .split("\n")
     .map(fn(l) { l.to_owned() })
@@ -58,7 +61,7 @@ pub fn migrate_js_ffi_array_boundaries(mbt : String) -> String {
       attr_start -= 1
     }
     let attrs = out[attr_start:].to_owned()
-    match js_ffi_migrate_extern(line, body, attrs) {
+    match js_ffi_migrate_extern(promise_map, line, body, attrs) {
       Some(rewritten) => {
         while out.length() > attr_start {
           let _ = out.pop()
@@ -90,30 +93,74 @@ fn js_ffi_is_extern_header(line : String) -> Bool {
 }
 
 ///|
-/// A parameter / return type as this pass sees it: an `Array`, an optional
-/// `Array`, or anything else (left as written).
+/// A parameter / return type as this pass sees it: an `Array`, an optional,
+/// a `Promise`, or anything else (left as written).
 priv enum JsFfiArrayType {
   Leaf(String)
   Arr(JsFfiArrayType)
   Opt(JsFfiArrayType)
+  /// `Promise[T]`, converted through the generated `Promise::map`; only
+  /// parsed when that method is in the same package (`promise_map`).
+  Prom(JsFfiArrayType)
 }
 
 ///|
-fn js_ffi_parse_type(t : String) -> JsFfiArrayType {
+fn js_ffi_parse_type(t : String, promise_map : Bool) -> JsFfiArrayType {
   let t = t.trim().to_owned()
-  if t.has_suffix("?") {
-    let inner = js_ffi_parse_type(t[:t.length() - 1].to_owned())
-    match inner {
-      Arr(_) => return Opt(inner)
-      _ => return Leaf(t)
+  // A function type is recognised first, because `(A) -> B?` is a function
+  // RETURNING `B?` and the `?` suffix test below must not see it — and it
+  // is then left as written. Converting an `Array` inside a callback means
+  // handing the other side a WRAPPER closure, a new function on every call,
+  // and JS APIs observe function identity: `off(event, cb)` and
+  // `removeEventListener` find a listener by it, so wrapping would stop
+  // `off(cb)` from removing what `on(cb)` added — a break today, while
+  // `Array` and `FixedArray` still share a representation. A returned
+  // callback has the mirror problem (`set_x(get_x())` installs a wrapper).
+  if t.has_prefix("(") {
+    guard js_ffi_bracket_close(t, 0) is Some(close) else { return Leaf(t) }
+    if t[close + 1:].has_prefix(" -> ") {
+      return Leaf(t)
     }
+    // A parenthesised type, `((A) -> B)`; a tuple `(A, B)` stays a leaf.
+    if close == t.length() - 1 {
+      let inner = t[1:close].to_owned()
+      if js_ffi_split_top(inner).length() == 1 {
+        let parsed = js_ffi_parse_type(inner, promise_map)
+        if js_ffi_needs(parsed) {
+          return parsed
+        }
+      }
+      return Leaf(t)
+    }
+  }
+  if t.has_suffix("?") {
+    let inner = js_ffi_parse_type(t[:t.length() - 1].to_owned(), promise_map)
+    if js_ffi_needs(inner) {
+      return Opt(inner)
+    }
+    return Leaf(t)
   }
   if t.has_prefix("Array[") &&
     t.has_suffix("]") &&
     js_ffi_bracket_close(t, 5) == Some(t.length() - 1) {
     return Arr(
-      js_ffi_parse_type(t["Array[".length():t.length() - 1].to_owned()),
+      js_ffi_parse_type(
+        t["Array[".length():t.length() - 1].to_owned(),
+        promise_map,
+      ),
     )
+  }
+  if promise_map &&
+    t.has_prefix("Promise[") &&
+    t.has_suffix("]") &&
+    js_ffi_bracket_close(t, 7) == Some(t.length() - 1) {
+    let inner = js_ffi_parse_type(
+      t["Promise[".length():t.length() - 1].to_owned(),
+      promise_map,
+    )
+    if js_ffi_needs(inner) {
+      return Prom(inner)
+    }
   }
   Leaf(t)
 }
@@ -140,49 +187,77 @@ fn js_ffi_bracket_close(t : String, open : Int32) -> Int32? {
 fn js_ffi_needs(t : JsFfiArrayType) -> Bool {
   match t {
     Leaf(_) => false
-    Arr(_) | Opt(_) => true
+    Arr(_) => true
+    Opt(a) | Prom(a) => js_ffi_needs(a)
+  }
+}
+
+///|
+/// The type at the boundary (`fixed`) or as the wrapper promises it.
+fn js_ffi_type_text(t : JsFfiArrayType, fixed : Bool) -> String {
+  match t {
+    Leaf(s) => s
+    Arr(e) => {
+      let head = if fixed { "FixedArray" } else { "Array" }
+      "\{head}[\{js_ffi_type_text(e, fixed)}]"
+    }
+    Opt(a) => "\{js_ffi_type_text(a, fixed)}?"
+    Prom(a) => "Promise[\{js_ffi_type_text(a, fixed)}]"
   }
 }
 
 ///|
 fn js_ffi_render(t : JsFfiArrayType) -> String {
+  js_ffi_type_text(t, true)
+}
+
+///|
+fn js_ffi_original(t : JsFfiArrayType) -> String {
+  js_ffi_type_text(t, false)
+}
+
+///|
+/// A conversion that is the identity is written as no conversion at all.
+fn js_ffi_convert(
+  expr : String,
+  t : JsFfiArrayType,
+  depth : Int32,
+  to_ffi : Bool,
+) -> String {
+  if !js_ffi_needs(t) {
+    return expr
+  }
+  let v = "v\{depth}"
   match t {
-    Leaf(s) => s
-    Arr(e) => "FixedArray[\{js_ffi_render(e)}]"
-    Opt(a) => "\{js_ffi_render(a)}?"
+    Leaf(_) => expr
+    Arr(e) =>
+      if to_ffi {
+        if js_ffi_needs(e) {
+          "FixedArray::from_array(\{expr}.map(fn(\{v}) { \{js_ffi_convert(v, e, depth + 1, true)} }))"
+        } else {
+          "FixedArray::from_array(\{expr})"
+        }
+      } else if js_ffi_needs(e) {
+        "Array::from_fixed_array(\{expr}).map(fn(\{v}) { \{js_ffi_convert(v, e, depth + 1, false)} })"
+      } else {
+        "Array::from_fixed_array(\{expr})"
+      }
+    // `Option::map` and the generated `Promise::map` alike.
+    Opt(a) | Prom(a) =>
+      "\{expr}.map(fn(\{v}) { \{js_ffi_convert(v, a, depth + 1, to_ffi)} })"
   }
 }
 
 ///|
 /// MoonBit value -> the extern's argument.
 fn js_ffi_to_ffi(expr : String, t : JsFfiArrayType, depth : Int32) -> String {
-  let v = "v\{depth}"
-  match t {
-    Leaf(_) => expr
-    Arr(e) =>
-      if js_ffi_needs(e) {
-        "FixedArray::from_array(\{expr}.map(fn(\{v}) { \{js_ffi_to_ffi(v, e, depth + 1)} }))"
-      } else {
-        "FixedArray::from_array(\{expr})"
-      }
-    Opt(a) => "\{expr}.map(fn(\{v}) { \{js_ffi_to_ffi(v, a, depth + 1)} })"
-  }
+  js_ffi_convert(expr, t, depth, true)
 }
 
 ///|
 /// The extern's result -> the MoonBit value the wrapper promises.
 fn js_ffi_from_ffi(expr : String, t : JsFfiArrayType, depth : Int32) -> String {
-  let v = "v\{depth}"
-  match t {
-    Leaf(_) => expr
-    Arr(e) =>
-      if js_ffi_needs(e) {
-        "Array::from_fixed_array(\{expr}).map(fn(\{v}) { \{js_ffi_from_ffi(v, e, depth + 1)} })"
-      } else {
-        "Array::from_fixed_array(\{expr})"
-      }
-    Opt(a) => "\{expr}.map(fn(\{v}) { \{js_ffi_from_ffi(v, a, depth + 1)} })"
-  }
+  js_ffi_convert(expr, t, depth, false)
 }
 
 ///|
@@ -211,6 +286,7 @@ fn js_ffi_split_top(s : String) -> Array[String] {
 
 ///|
 fn js_ffi_migrate_extern(
+  promise_map : Bool,
   header : String,
   body : Array[String],
   attrs : Array[String],
@@ -250,9 +326,9 @@ fn js_ffi_migrate_extern(
     if pname == "" || pname.contains("~") || pname.contains("?") {
       return None
     }
-    params.push((pname, js_ffi_parse_type(p[sep + 3:].to_owned())))
+    params.push((pname, js_ffi_parse_type(p[sep + 3:].to_owned(), promise_map)))
   }
-  let ret = js_ffi_parse_type(ret_src)
+  let ret = js_ffi_parse_type(ret_src, promise_map)
   if !js_ffi_needs(ret) && !params.iter().any(fn(p) { js_ffi_needs(p.1) }) {
     return None
   }
@@ -290,13 +366,4 @@ fn js_ffi_migrate_extern(
   out.push("  \{call}")
   out.push("}")
   Some(out)
-}
-
-///|
-fn js_ffi_original(t : JsFfiArrayType) -> String {
-  match t {
-    Leaf(s) => s
-    Arr(e) => "Array[\{js_ffi_original(e)}]"
-    Opt(a) => "\{js_ffi_original(a)}?"
-  }
 }
