@@ -1016,8 +1016,12 @@ EOF
       ;;
     preact)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_preact_children() -> Array[@preact.ComponentChildren] =
+extern "js" fn realworld_preact_children_ffi() -> FixedArray[@preact.ComponentChildren] =
   #| () => []
+
+fn realworld_preact_children() -> Array[@preact.ComponentChildren] {
+  Array::from_fixed_array(realworld_preact_children_ffi())
+}
 
 test "real-world preact bridge smoke" {
   let _ = @preact.h(Input, None, realworld_preact_children())
@@ -1582,8 +1586,12 @@ fn realworld_node_sqlite_options() -> @node_sqlite.DatabaseSyncOptions {
   }
 }
 
-extern "js" fn realworld_node_sqlite_params() -> Array[@node_sqlite.SQLInputValue] =
+extern "js" fn realworld_node_sqlite_params_ffi() -> FixedArray[@node_sqlite.SQLInputValue] =
   #| () => []
+
+fn realworld_node_sqlite_params() -> Array[@node_sqlite.SQLInputValue] {
+  Array::from_fixed_array(realworld_node_sqlite_params_ffi())
+}
 
 extern "js" fn realworld_node_sqlite_row_value(row : @node_sqlite.StringRecordOfSqloutputValue) -> String =
   #| (row) => row.value
@@ -1916,8 +1924,12 @@ EOF
       ;;
     preact)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_preact_children() -> Array[@sut.ComponentChildren] =
+extern "js" fn realworld_preact_children_ffi() -> FixedArray[@sut.ComponentChildren] =
   #| () => []
+
+fn realworld_preact_children() -> Array[@sut.ComponentChildren] {
+  Array::from_fixed_array(realworld_preact_children_ffi())
+}
 
 fn main {
   let _ = @sut.h(@sut.Input, None, realworld_preact_children())
@@ -2577,8 +2589,12 @@ fn realworld_node_sqlite_options() -> @sut.DatabaseSyncOptions {
   }
 }
 
-extern "js" fn realworld_node_sqlite_params() -> Array[@sut.SQLInputValue] =
+extern "js" fn realworld_node_sqlite_params_ffi() -> FixedArray[@sut.SQLInputValue] =
   #| () => []
+
+fn realworld_node_sqlite_params() -> Array[@sut.SQLInputValue] {
+  Array::from_fixed_array(realworld_node_sqlite_params_ffi())
+}
 
 extern "js" fn realworld_node_sqlite_row_value(row : @sut.StringRecordOfSqloutputValue) -> String =
   #| (row) => row.value

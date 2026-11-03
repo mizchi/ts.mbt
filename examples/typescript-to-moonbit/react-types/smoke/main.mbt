@@ -1,5 +1,9 @@
-extern "js" fn test_children() -> Array[@sut.JSValue] =
+extern "js" fn test_children_ffi() -> FixedArray[@sut.JSValue] =
   #| () => ["child"]
+
+fn test_children() -> Array[@sut.JSValue] {
+  Array::from_fixed_array(test_children_ffi())
+}
 
 extern "js" fn test_props() -> @sut.JSValue =
   #| () => ({ id: "root" })

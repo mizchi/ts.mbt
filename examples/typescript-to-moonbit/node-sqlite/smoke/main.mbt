@@ -17,8 +17,12 @@ fn node_sqlite_options() -> @sut.DatabaseSyncOptions {
   }
 }
 
-extern "js" fn node_sqlite_params() -> Array[@sut.SQLInputValue] =
+extern "js" fn node_sqlite_params_ffi() -> FixedArray[@sut.SQLInputValue] =
   #| () => []
+
+fn node_sqlite_params() -> Array[@sut.SQLInputValue] {
+  Array::from_fixed_array(node_sqlite_params_ffi())
+}
 
 extern "js" fn node_sqlite_row_value(row : @sut.Record?) -> String =
   #| (row) => row.value
