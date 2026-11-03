@@ -1082,7 +1082,7 @@ pub async fn emit_moonbit_js_ffi(
     Some(path) => {
       let _ = @fs.write_file(
         path,
-        string_to_bytes(bundle.ffi_mbt),
+        string_to_bytes(@bridge.migrate_js_ffi_array_boundaries(bundle.ffi_mbt)),
         create=0o644,
       ) catch {
         e => {
@@ -1094,7 +1094,7 @@ pub async fn emit_moonbit_js_ffi(
     }
     None => {
       println("=== ffi.mbt ===")
-      println(bundle.ffi_mbt)
+      println(@bridge.migrate_js_ffi_array_boundaries(bundle.ffi_mbt))
     }
   }
   match bridge_output_path {
@@ -1158,7 +1158,7 @@ pub async fn emit_moonbit_bridge(
     Some(path) => {
       let _ = @fs.write_file(
         path,
-        string_to_bytes(bundle.ffi_mbt),
+        string_to_bytes(@bridge.migrate_js_ffi_array_boundaries(bundle.ffi_mbt)),
         create=0o644,
       ) catch {
         e => {
@@ -1170,7 +1170,7 @@ pub async fn emit_moonbit_bridge(
     }
     None => {
       println("=== bridge.mbt ===")
-      println(bundle.ffi_mbt)
+      println(@bridge.migrate_js_ffi_array_boundaries(bundle.ffi_mbt))
     }
   }
   match bridge_output_path {
