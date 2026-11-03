@@ -43,6 +43,8 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path(String) -> MbtiTypes
 
 pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(String, Map[String, String]) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
 
+pub fn migrate_js_ffi_array_boundaries(String) -> String
+
 pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String) -> String raise ModuleGraphError
 
 pub fn parse_typescript_import_rewrite_map_source(String) -> Map[String, String]?
