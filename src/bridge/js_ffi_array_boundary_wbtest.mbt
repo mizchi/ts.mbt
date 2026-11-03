@@ -13,7 +13,7 @@ test "js ffi array boundary: param, return, optional and nested arrays get a Fix
     migrate_js_ffi_array_boundaries(src),
     content=(
       #|#module("@tsmbt-bridge/dist")
-      #|extern "js" fn __ts_mbt_ffi_WebSocketHandlers__getFiles(self : WebSocketHandlers) -> FixedArray[File] =
+      #|extern "js" fn __ts_mbt_ffi_WebSocketHandlers__getFiles(receiver : WebSocketHandlers) -> FixedArray[File] =
       #|  #| (self) => self.getFiles()
       #|
       #|pub fn WebSocketHandlers::getFiles(self : WebSocketHandlers) -> Array[File] {

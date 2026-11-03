@@ -249,7 +249,16 @@ fn js_ffi_migrate_extern(
     return None
   }
   let ffi_name = "__ts_mbt_ffi_" + name.replace_all(old="::", new="__")
-  let ffi_params = params.map(fn(p) { "\{p.0} : \{js_ffi_render(p.1)}" }).join(", ")
+  // The private extern is a FREE function, where a first parameter named
+  // `self` is the deprecated `fn meth(self : Type)` method syntax
+  // (warning 0027). The JS body binds its arguments by position, so the
+  // extern's MoonBit parameter names are free to differ from the body's.
+  let ffi_params = params
+    .map(fn(p) {
+      let pname = if p.0 == "self" { "receiver" } else { p.0 }
+      "\{pname} : \{js_ffi_render(p.1)}"
+    })
+    .join(", ")
   let orig_params = params
     .map(fn(p) { "\{p.0} : \{js_ffi_original(p.1)}" })
     .join(", ")
