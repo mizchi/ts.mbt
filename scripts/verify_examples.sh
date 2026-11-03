@@ -484,8 +484,12 @@ members = [
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_children() -> Array[@typescript_to_moonbit_react_types.JSValue] =
+extern "js" fn test_children_ffi() -> FixedArray[@typescript_to_moonbit_react_types.JSValue] =
   #| () => ["child"]
+
+fn test_children() -> Array[@typescript_to_moonbit_react_types.JSValue] {
+  Array::from_fixed_array(test_children_ffi())
+}
 
 extern "js" fn test_props() -> @typescript_to_moonbit_react_types.JSValue =
   #| () => ({ id: "root" })
@@ -532,8 +536,12 @@ EOF
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_react_types" <<'EOF'
-extern "js" fn test_children() -> Array[@sut.JSValue] =
+extern "js" fn test_children_ffi() -> FixedArray[@sut.JSValue] =
   #| () => ["child"]
+
+fn test_children() -> Array[@sut.JSValue] {
+  Array::from_fixed_array(test_children_ffi())
+}
 
 extern "js" fn test_props() -> @sut.JSValue =
   #| () => ({ id: "root" })

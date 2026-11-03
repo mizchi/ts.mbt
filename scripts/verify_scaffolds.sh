@@ -636,8 +636,12 @@ extern "js" fn test_forward_ref_render() -> @scaffold_ts_to_moonbit_react_packag
 extern "js" fn test_ref() -> @scaffold_ts_to_moonbit_react_package.Ref[@scaffold_ts_to_moonbit_react_package.JSValue] =
   #| () => ({ current: null })
 
-extern "js" fn test_children() -> Array[@scaffold_ts_to_moonbit_react_package.JSValue] =
+extern "js" fn test_children_ffi() -> FixedArray[@scaffold_ts_to_moonbit_react_package.JSValue] =
   #| () => []
+
+fn test_children() -> Array[@scaffold_ts_to_moonbit_react_package.JSValue] {
+  Array::from_fixed_array(test_children_ffi())
+}
 
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
@@ -682,8 +686,12 @@ extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderCallback =
 extern "js" fn test_ref() -> @sut.Ref[@sut.JSValue] =
   #| () => ({ current: null })
 
-extern "js" fn test_children() -> Array[@sut.JSValue] =
+extern "js" fn test_children_ffi() -> FixedArray[@sut.JSValue] =
   #| () => []
+
+fn test_children() -> Array[@sut.JSValue] {
+  Array::from_fixed_array(test_children_ffi())
+}
 
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
