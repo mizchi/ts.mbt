@@ -978,7 +978,10 @@ EOF
     fi
   done
   grep_generated_mbt "$out" 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : ScriptTarget, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile'
-  grep_generated_mbt "$out" 'pub extern "js" fn transform(source : SourceFile, transformers : Array[(TransformationContext) -> (SourceFile) -> SourceFile], compilerOptions : CompilerOptions?) -> TransformationResult[Node]'
+  # `Array` crosses the JS FFI boundary as `FixedArray` (warning 0020), so the
+  # extern is private and a wrapper keeps the public signature unchanged.
+  grep_generated_mbt "$out" 'pub fn transform(source : SourceFile, transformers : Array[(TransformationContext) -> (SourceFile) -> SourceFile], compilerOptions : CompilerOptions?) -> TransformationResult[Node]'
+  grep_generated_mbt "$out" 'extern "js" fn __ts_mbt_ffi_transform(source : SourceFile, transformers : FixedArray[(TransformationContext) -> (SourceFile) -> SourceFile], compilerOptions : CompilerOptions?) -> TransformationResult[Node]'
   grep_generated_mbt "$out" 'pub fn visitEachChild(node : Node, visitor : (Node) -> Node, context : TransformationContext?) -> Node'
   grep_generated_mbt "$out" 'pub fn isIdentifier(node : Node) -> Bool'
   # `unsafeCast` is an implementation helper; keeping it private ensures the

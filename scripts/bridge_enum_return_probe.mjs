@@ -213,7 +213,10 @@ for (const mbti of walk("_build")) {
     if (!isProductMbt(file)) continue;
     const text = readFileSync(join(dir, file), "utf8");
     for (const m of text.matchAll(
-      /^pub extern "js" fn(?:\[[^\]]*\])? ([A-Za-z_][\w:]*)\(([^)]*)\) -> ([A-Za-z_][\w]*)(\[[^\]]*\])?(\??)\s*=\n((?:\s*#\|.*\n)+)/gm,
+      // `(?:pub )?`: an extern whose signature carries `Array` is PRIVATE
+      // behind a FixedArray wrapper (migrate_js_ffi_array_boundaries), and
+      // its inline body is still the code that crosses the enum.
+      /^(?:pub )?extern "js" fn(?:\[[^\]]*\])? ([A-Za-z_][\w:]*)\(([^)]*)\) -> ([A-Za-z_][\w]*)(\[[^\]]*\])?(\??)\s*=\n((?:\s*#\|.*\n)+)/gm,
     )) {
       const [, fn, params, ret, typeArgs, optional, body] = m;
       const missing = [];

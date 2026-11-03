@@ -3363,7 +3363,14 @@ async test "emit_moonbit_bridge_package rewrites nested and array-rest destructu
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_tail() -> Array[Double] = \"__ts_mbt_get_tail\"",
+      "#module(\"\{bridge_js_path}\")\nextern \"js\" fn __ts_mbt_ffi_get_tail() -> FixedArray[Double] = \"__ts_mbt_get_tail\"",
+    ),
+  )
+  // `Array` crosses the JS FFI boundary as `FixedArray`; the public
+  // signature is the wrapper's and is unchanged.
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn get_tail() -> Array[Double] {\n  Array::from_fixed_array(__ts_mbt_ffi_get_tail())\n}",
     ),
   )
   assert_true(

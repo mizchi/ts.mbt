@@ -2004,6 +2004,10 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
   let (bridge_mbti, bridge_mbt) = prune_mismatched_upcast_helpers(
     pre_prune_mbti, bridge_mbt,
   )
+  // Last, so every pass above still reads the externs as rendered: they
+  // parse extern headers by name and type, and this pass renames the
+  // ones it moves behind a wrapper.
+  let bridge_mbt = migrate_js_ffi_array_boundaries(bridge_mbt)
   {
     entry_path: bundle.entry_path,
     module_spec: bundle.module_spec,
