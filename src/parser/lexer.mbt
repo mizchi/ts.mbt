@@ -2,6 +2,7 @@
 
 ///|
 // /
+#derive(Eq, Debug)
 pub enum TokenKind {
   // literal
   Number(Double)
@@ -122,7 +123,7 @@ pub enum TokenKind {
   Declare // declare (externalimport)
   Null // null
   Eof
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -134,11 +135,12 @@ pub extend TokenKind with @debug.Debug::{to_repr}
 
 ///|
 // /
+#derive(Debug)
 pub struct Token {
   kind : TokenKind
   pos : Int32 // position
   has_newline_before : Bool // true if there was a newline before this token
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -155,6 +157,7 @@ fn write_codepoint(buf : StringBuilder, code : Int32) -> Unit {
 
 ///|
 // /
+#derive(Debug)
 pub struct Lexer {
   // TS1127: count of genuinely-unknown ASCII characters the tokenizer had
   // to skip (a stray `\` not starting a unicode escape, control chars, ...).
@@ -237,7 +240,7 @@ pub struct Lexer {
   // comment immediately preceded the token). Parser consults
   // through `Parser.jsdoc_at_pos`.
   jsdoc_at_pos : Map[Int32, JsdocBlock]
-} derive(Debug)
+}
 
 ///|
 #deprecated

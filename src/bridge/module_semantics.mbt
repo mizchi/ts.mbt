@@ -1,39 +1,43 @@
 ///|
+#derive(Debug)
 pub(all) suberror ModuleGraphError {
   ReadError(String)
   ParseError(String)
   ResolveError(String)
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend ModuleGraphError with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 struct ResolvedImportEdge {
   specifier : String
   resolved_path : String
   type_only : Bool
   side_effect_only : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend ResolvedImportEdge with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 struct ResolvedReExportEdge {
   specifier : String
   resolved_path : String
   kind : @ast.TsReExportKind
   type_only : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend ResolvedReExportEdge with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 struct ResolvedModuleRecord {
   path : String
   module_block : @ast.TsModuleBlock
@@ -45,30 +49,32 @@ struct ResolvedModuleRecord {
   // `declare module "lodash"`); the decl layer folds them into the
   // referencing module's surface.
   references : Array[String]
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend ResolvedModuleRecord with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 struct ModuleGraph {
   entry_path : String
   modules : Array[ResolvedModuleRecord]
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend ModuleGraph with @debug.Debug::{to_repr}
 
 ///|
+#derive(Eq, Debug)
 enum ResolvedExportKind {
   Local
   NamedReExport
   StarReExport
   Namespace
   Ambiguous
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -79,6 +85,7 @@ pub extend ResolvedExportKind with Eq::{not_equal, equal}
 pub extend ResolvedExportKind with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 struct ResolvedExport {
   export_name : String
   source_export_name : String
@@ -88,7 +95,7 @@ struct ResolvedExport {
   via_path : String?
   ambiguous_source_paths : Array[String]
   type_only : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated

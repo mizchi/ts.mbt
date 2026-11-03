@@ -1,8 +1,9 @@
 ///|
+#derive(@debug.Debug)
 pub suberror MbtiJsLinkConfigError {
   ReadError(String)
   ParseError(String)
-} derive(@debug.Debug)
+}
 
 ///|
 #deprecated

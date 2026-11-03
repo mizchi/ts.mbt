@@ -32,12 +32,13 @@
 
 ///|
 /// One thing wrong with an emitted bundle.
+#derive(Debug)
 pub(all) struct Violation {
   // Machine-readable category, for tests and for the harnesses.
   kind : String
   name : String
   detail : String
-} derive(Debug)
+}
 
 ///|
 #deprecated

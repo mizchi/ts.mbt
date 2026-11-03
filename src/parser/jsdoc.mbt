@@ -24,16 +24,18 @@
 // build extensions without losing fidelity.
 
 ///|
+#derive(Debug)
 pub(all) struct JsdocBlock {
   description : String
   tags : Array[JsdocTag]
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend JsdocBlock with @debug.Debug::{to_repr}
 
 ///|
+#derive(Eq, Debug)
 pub(all) enum JsdocTag {
   Param(String, String?, String) // name, optional type, description
   Returns(String?, String) // optional type, description
@@ -51,7 +53,7 @@ pub(all) enum JsdocTag {
   Template(String, String) // name, description
   Typedef(String?, String) // type, name
   Other(String, String) // tag_name (without `@`), raw content
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated

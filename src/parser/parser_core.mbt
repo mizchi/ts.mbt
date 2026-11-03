@@ -2,9 +2,10 @@
 
 ///|
 // / error
+#derive(Debug)
 pub(all) suberror ParseError {
   ParseError(String)
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -12,6 +13,7 @@ pub extend ParseError with @debug.Debug::{to_repr}
 
 ///|
 // /
+#derive(Debug)
 pub struct Parser {
   tokens : Array[Token]
   mut pos : Int32
@@ -396,7 +398,7 @@ pub struct Parser {
   // `function f() {}` next to the real implementation, which is a
   // duplicate declaration and a SyntaxError in a module.
   mut last_function_bodiless : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated

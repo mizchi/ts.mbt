@@ -1,8 +1,9 @@
 ///|
+#derive(@debug.Debug)
 pub suberror MbtiTypescriptDeclError {
   ReadError(String)
   ParseError(String)
-} derive(@debug.Debug)
+}
 
 ///|
 #deprecated

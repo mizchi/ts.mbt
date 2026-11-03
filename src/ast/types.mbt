@@ -2,6 +2,7 @@
 
 ///|
 // / type
+#derive(Eq, Debug)
 pub(all) enum TsType {
   // Primitive types
   Number // f64
@@ -123,7 +124,7 @@ pub(all) enum TsType {
   // the predicate is meaningful at call sites where the checker can
   // narrow the named binding for code that follows.
   AssertsPredicate(String, TsType?)
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -135,6 +136,7 @@ pub extend TsType with @debug.Debug::{to_repr}
 
 ///|
 // / typedexpression
+#derive(Debug)
 pub(all) enum TsExpr {
   // literal
   NumberLit(Double)
@@ -312,7 +314,7 @@ pub(all) enum TsExpr {
   // tag resolves to a known component or HTML element) validates the
   // attribute values against the receiving prop / element type.
   JsxElement(String, Array[(String, TsExpr?)], Array[TsExpr])
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -320,10 +322,11 @@ pub extend TsExpr with @debug.Debug::{to_repr}
 
 ///|
 // / function
+#derive(Debug)
 pub(all) enum TsArrowBody {
   ArrowExpr(TsExpr) // () => expr
   ArrowBlock(TsBlock) // () => { ... }
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -331,6 +334,7 @@ pub extend TsArrowBody with @debug.Debug::{to_repr}
 
 ///|
 // / binaryoperator
+#derive(Eq, Debug)
 pub(all) enum TsBinOp {
   Add // +
   Sub // -
@@ -361,7 +365,7 @@ pub(all) enum TsBinOp {
   And // &&
   Or // ||
   Coalesce // ??
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -373,6 +377,7 @@ pub extend TsBinOp with @debug.Debug::{to_repr}
 
 ///|
 // / unaryoperator
+#derive(Eq, Debug)
 pub(all) enum TsUnaryOp {
   Neg // -
   Not // !
@@ -385,7 +390,7 @@ pub(all) enum TsUnaryOp {
   PreDec // --x
   PostInc // x++
   PostDec // x--
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -397,6 +402,7 @@ pub extend TsUnaryOp with @debug.Debug::{to_repr}
 
 ///|
 // / compoundassignmentoperator
+#derive(Eq, Debug)
 pub(all) enum TsCompoundOp {
   AddAssign // +=
   SubAssign // -=
@@ -414,7 +420,7 @@ pub(all) enum TsCompoundOp {
   AndAssign // &&=
   OrAssign // ||=
   CoalesceAssign // ??=
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -426,12 +432,13 @@ pub extend TsCompoundOp with @debug.Debug::{to_repr}
 
 ///|
 // / for...of binding kind
+#derive(Eq, Debug)
 pub(all) enum TsForOfKind {
   Var
   Let
   Const
   Assign
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -443,6 +450,7 @@ pub extend TsForOfKind with @debug.Debug::{to_repr}
 
 ///|
 // / statement
+#derive(Debug)
 pub(all) enum TsStmt {
   // variable
   Var(TsBinding, TsType, TsExpr) // var declaration (function-scoped)
@@ -499,7 +507,7 @@ pub(all) enum TsStmt {
   // break/continue
   Break(String?)
   Continue(String?)
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -514,20 +522,22 @@ pub extend TsStmt with @debug.Debug::{to_repr}
 // `class` declaration) leave the array empty — callers that don't
 // need positions can ignore it, and the source-map generator falls
 // back to "no mapping" when the array is shorter than `stmts`.
+#derive(Debug)
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
   stmt_positions : Array[Int32]
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend TsBlock with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct TsSwitchCase {
   test_expr : TsExpr?
   body : TsBlock
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -535,6 +545,7 @@ pub extend TsSwitchCase with @debug.Debug::{to_repr}
 
 ///|
 // / functionparameter
+#derive(Debug)
 pub(all) struct TsParam {
   name : String
   binding : TsBinding?
@@ -544,7 +555,7 @@ pub(all) struct TsParam {
   is_optional : Bool
   type_ : TsType
   default : TsExpr? // ()
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -552,54 +563,59 @@ pub extend TsParam with @debug.Debug::{to_repr}
 
 ///|
 // /
+#derive(Debug)
 pub(all) enum TsBinding {
   Ident(String)
   Array(TsArrayBinding)
   Object(TsObjectBinding)
   Target(TsExpr)
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend TsBinding with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct TsBindingElem {
   binding : TsBinding
   default : TsExpr?
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend TsBindingElem with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct TsArrayBinding {
   items : Array[TsBindingElem?]
   rest : TsBinding?
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend TsArrayBinding with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct TsObjectBindingProp {
   key : String
   key_expr : TsExpr?
   binding : TsBinding
   default : TsExpr?
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend TsObjectBindingProp with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct TsObjectBinding {
   props : Array[TsObjectBindingProp]
   rest : String?
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -607,6 +623,7 @@ pub extend TsObjectBinding with @debug.Debug::{to_repr}
 
 ///|
 // / functiondefine
+#derive(Debug)
 pub(all) struct TsFunc {
   name : String
   // Generic type parameters declared on this function (e.g. `T`, `R` in
@@ -650,7 +667,7 @@ pub(all) struct TsFunc {
   // cannot be `new`ed, and it may use `super`. So the two must stay
   // distinct rather than be collapsed to whichever is shorter.
   name_is_member_key : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -658,6 +675,7 @@ pub extend TsFunc with @debug.Debug::{to_repr}
 
 ///|
 // / interface (structtype)
+#derive(Debug)
 pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
@@ -702,7 +720,7 @@ pub(all) struct TsInterface {
   // widen to `JSValue` — a deprecated member nobody should adopt is not
   // worth a fallback slot (zod's `_def` / `_input` / `_output`).
   deprecated_members : Array[String]
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -710,6 +728,7 @@ pub extend TsInterface with @debug.Debug::{to_repr}
 
 ///|
 // / type alias declaration
+#derive(Debug)
 pub(all) struct TsTypeAlias {
   name : String
   type_params : Array[String]
@@ -719,7 +738,7 @@ pub(all) struct TsTypeAlias {
   // bound into the alias body and erasing the generic shape.
   type_param_bounds : Array[(String, TsType)]
   type_ : TsType
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -727,6 +746,7 @@ pub extend TsTypeAlias with @debug.Debug::{to_repr}
 
 ///|
 // / externalfunctionimport
+#derive(Debug)
 pub(all) struct TsImport {
   name : String // function
   module_ : String // import (: "env")
@@ -740,7 +760,7 @@ pub(all) struct TsImport {
   // older producers that don't populate it stay correct by default.
   param_is_rest : Array[Bool]
   return_type : TsType // return valuetype
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -748,10 +768,11 @@ pub extend TsImport with @debug.Debug::{to_repr}
 
 ///|
 // / ambient value declaration
+#derive(Debug)
 pub(all) struct TsValueDecl {
   name : String
   type_ : TsType
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -759,6 +780,7 @@ pub extend TsValueDecl with @debug.Debug::{to_repr}
 
 ///|
 // / class property declaration
+#derive(Debug)
 pub(all) struct TsClassPropertyDecl {
   name : String
   type_ : TsType
@@ -781,7 +803,7 @@ pub(all) struct TsClassPropertyDecl {
   // (`class C { x!: T }`). Suppresses TS2564 for the field even
   // when there is no initializer or constructor assignment.
   has_definite_assertion : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -789,6 +811,7 @@ pub extend TsClassPropertyDecl with @debug.Debug::{to_repr}
 
 ///|
 // / class method declaration
+#derive(Debug)
 pub(all) struct TsClassMethodDecl {
   name : String
   // Method-level generics: `get<Path extends string>(path: Path): ...` records
@@ -833,7 +856,7 @@ pub(all) struct TsClassMethodDecl {
   // SyntaxError in non-async functions.
   is_async : Bool
   is_generator : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -841,6 +864,7 @@ pub extend TsClassMethodDecl with @debug.Debug::{to_repr}
 
 ///|
 // / class declaration
+#derive(Debug)
 pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
@@ -968,13 +992,14 @@ pub(all) struct TsClassDecl {
   // shape alone (a data field can never share a name with a method or
   // accessor), so it is false-positive-free. Empty for the common case.
   duplicate_member_names : Array[String]
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend TsClassDecl with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub(all) struct TsNamespaceDecl {
   name : String
   module_ : TsModule
@@ -987,7 +1012,7 @@ pub(all) struct TsNamespaceDecl {
   // can't (`function f(): void {}` and an ambient `function f():
   // void;` both arrive with an empty body).
   is_declare : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -995,12 +1020,13 @@ pub extend TsNamespaceDecl with @debug.Debug::{to_repr}
 
 ///|
 // / enum member initializer literal
+#derive(Eq, Debug)
 pub(all) enum TsEnumMemberValue {
   String(String)
   Number(String)
   BigInt(String)
   Bool(Bool)
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -1012,11 +1038,12 @@ pub extend TsEnumMemberValue with @debug.Debug::{to_repr}
 
 ///|
 // / enum member declaration
+#derive(Eq, Debug)
 pub(all) struct TsEnumMember {
   name : String
   value : TsEnumMemberValue?
   is_computed : Bool
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -1028,12 +1055,13 @@ pub extend TsEnumMember with @debug.Debug::{to_repr}
 
 ///|
 // / enum declaration
+#derive(Eq, Debug)
 pub(all) struct TsEnumDecl {
   name : String
   members : Array[TsEnumMember]
   is_const : Bool
   is_declare : Bool
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -1045,6 +1073,7 @@ pub extend TsEnumDecl with @debug.Debug::{to_repr}
 
 ///|
 // / ()
+#derive(Debug)
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
@@ -1165,7 +1194,7 @@ pub(all) struct TsModule {
   // sentinels). Lets the checker flag nested classes that the IIFE lowering
   // drops from `classes`. Empty for well-formed input.
   class_dup_diagnostics : Array[(String, Array[String])]
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1173,6 +1202,7 @@ pub extend TsModule with @debug.Debug::{to_repr}
 
 ///|
 // / module import declaration
+#derive(Debug)
 pub(all) struct TsImportDecl {
   module_spec : String
   default_binding : String?
@@ -1190,7 +1220,7 @@ pub(all) struct TsImportDecl {
   // (and the legacy `assert { ... }` form). Each entry is a
   // `(key, string_value)` pair; non-string values are omitted.
   attributes : Array[(String, String)]
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1198,10 +1228,11 @@ pub extend TsImportDecl with @debug.Debug::{to_repr}
 
 ///|
 // / module export specifier
+#derive(Debug)
 pub(all) struct TsExportSpec {
   local_name : String
   export_name : String
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1209,11 +1240,12 @@ pub extend TsExportSpec with @debug.Debug::{to_repr}
 
 ///|
 // / module re-export kind
+#derive(Debug)
 pub(all) enum TsReExportKind {
   Named(Array[(String, String)]) // imported, exported
   All
   Namespace(String) // export * as name from "mod"
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1221,11 +1253,12 @@ pub extend TsReExportKind with @debug.Debug::{to_repr}
 
 ///|
 // / module re-export specifier
+#derive(Debug)
 pub(all) struct TsReExportSpec {
   module_spec : String
   kind : TsReExportKind
   type_only : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1233,6 +1266,7 @@ pub extend TsReExportSpec with @debug.Debug::{to_repr}
 
 ///|
 // / module block with import/export metadata
+#derive(Debug)
 pub(all) struct TsModuleBlock {
   block : TsBlock
   imports : Array[TsImportDecl]
@@ -1319,7 +1353,7 @@ pub(all) struct TsModuleBlock {
   // entity, not a namespace object -- the bridge export resolution
   // forwards through the module's `default` export in that case.
   has_export_equals : Bool
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1331,10 +1365,11 @@ pub extend TsModuleBlock with @debug.Debug::{to_repr}
 
 ///|
 // / typedexpression (type)
+#derive(Debug)
 pub(all) struct TypedExpr {
   expr : TsExpr
   type_ : TsType
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1342,10 +1377,11 @@ pub extend TypedExpr with @debug.Debug::{to_repr}
 
 ///|
 // / typedstatement
+#derive(Debug)
 pub(all) struct TypedStmt {
   stmt : TsStmt
   // add
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1353,11 +1389,12 @@ pub extend TypedStmt with @debug.Debug::{to_repr}
 
 ///|
 // / typedfunction
+#derive(Debug)
 pub(all) struct TypedFunc {
   func : TsFunc
   // variabletype
   locals : Array[(String, TsType)]
-} derive(Debug)
+}
 
 ///|
 #deprecated
@@ -1365,9 +1402,10 @@ pub extend TypedFunc with @debug.Debug::{to_repr}
 
 ///|
 // / typed
+#derive(Debug)
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
-} derive(Debug)
+}
 
 ///|
 #deprecated

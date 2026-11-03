@@ -27,6 +27,7 @@
 // observability monotonically):
 
 ///|
+#derive(Eq, Debug)
 pub(all) enum Observability {
   /// No observation path reaches this binding. Its non-built-in
   /// properties are free to rename.
@@ -45,7 +46,7 @@ pub(all) enum Observability {
   /// fully-dynamic sink. All names escape — equivalent to the
   /// wildcard `*` reservation.
   External
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated

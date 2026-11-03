@@ -279,10 +279,11 @@ fn tagged_union_has_primitive_overlap(members : Array[@ast.TsType]) -> Bool {
 /// Bridge-local description of a tagged enum lowered from a heterogeneous
 /// union type alias. The cases preserve declaration order and pair each
 /// PascalCase constructor name with the lowered MoonBit-side inner type.
+#derive(Eq, Debug)
 pub(all) struct BridgeTaggedUnionDecl {
   name : String
   cases : Array[(String, @ast.TsType)]
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated
@@ -444,6 +445,7 @@ pub fn tagged_union_widen_reason_for_alias(
 /// payload is a single named type, which is what the enum renderer and the
 /// `$tag` dispatch need. Whether `value instanceof <Name>` can actually run
 /// is a different question — see `tagged_union_case_runtime_discriminator`.
+#derive(Eq, Debug)
 pub(all) enum TaggedUnionCaseDiscriminator {
   TypeofString
   TypeofNumber
@@ -456,7 +458,7 @@ pub(all) enum TaggedUnionCaseDiscriminator {
   StrictEqualsNumber(String)
   StrictEqualsBigInt(String)
   StrictEqualsBool(Bool)
-} derive(Eq, Debug)
+}
 
 ///|
 #deprecated

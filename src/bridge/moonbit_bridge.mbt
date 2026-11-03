@@ -1,17 +1,19 @@
 ///|
+#derive(Debug)
 pub struct MoonBitTsBridgeBundle {
   entry_path : String
   module_spec : String
   decl_mbt : String
   ffi_mbt : String
   bridge_js : String
-} derive(Debug)
+}
 
 ///|
 #deprecated
 pub extend MoonBitTsBridgeBundle with @debug.Debug::{to_repr}
 
 ///|
+#derive(Debug)
 pub struct MoonBitTsBridgePackageBundle {
   entry_path : String
   module_spec : String
@@ -19,7 +21,7 @@ pub struct MoonBitTsBridgePackageBundle {
   bridge_mbti : String
   bridge_mbt : String
   bridge_js : String
-} derive(Debug)
+}
 
 ///|
 #deprecated
