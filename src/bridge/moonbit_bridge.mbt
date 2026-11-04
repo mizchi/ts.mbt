@@ -2020,6 +2020,7 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
       }
     }
   }
+  jsdoc_add_member_aliases(docs)
   let bridge_mbt = attach_jsdoc_to_bridge_mbt(bridge_mbt, docs)
   {
     entry_path: bundle.entry_path,

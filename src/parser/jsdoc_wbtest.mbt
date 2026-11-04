@@ -416,3 +416,30 @@ test "jsdoc: declarations inside a namespace or declare module body are recorded
   assert_eq(block.docs.get("createNode"), Some(["Make one."]))
   assert_eq(block.docs.get("readFileSync"), Some(["Read a file."]))
 }
+
+///|
+test "jsdoc: declare class members are recorded as Class.member" {
+  let block = parse_module_block_from_source(
+    (
+      #|/** A client. */
+      #|export declare class Client {
+      #|  /** Create one. */
+      #|  constructor(url: string);
+      #|  /** The base URL. */
+      #|  readonly url: string;
+      #|  /** Send it. */
+      #|  send(body: string): void;
+      #|  /** A factory. */
+      #|  static create(url: string): Client;
+      #|  undocumented(): void;
+      #|}
+    ),
+  )
+  assert_eq(block.docs.get("Client"), Some(["A client."]))
+  assert_eq(block.docs.get("Client.constructor"), Some(["Create one."]))
+  // The doc sits before a modifier (`readonly`, `static`).
+  assert_eq(block.docs.get("Client.url"), Some(["The base URL."]))
+  assert_eq(block.docs.get("Client.create"), Some(["A factory."]))
+  assert_eq(block.docs.get("Client.send"), Some(["Send it."]))
+  assert_eq(block.docs.get("Client.undocumented"), None)
+}

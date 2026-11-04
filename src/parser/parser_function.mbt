@@ -3911,6 +3911,10 @@ fn Parser::parse_declare_class(
     if self.match_(Semicolon) {
       continue
     }
+    // The member's JSDoc attaches to its FIRST token, which may be a
+    // modifier (`static`, `readonly`, `public`), so take the position
+    // before any is consumed.
+    let member_doc_pos = self.peek().pos
     // Index signature: `[name: KeyType]: ValueType`. Detect before any
     // modifier consumption so the shape isn't lost when the body opens
     // with `[`. Stale-pattern bail-out: revert to the original skip
@@ -4017,6 +4021,10 @@ fn Parser::parse_declare_class(
       _ => ()
     }
     let member_name = self.parse_declare_class_member_name()
+    match member_name {
+      Some(n) => self.record_doc("\{name}.\{n}", member_doc_pos)
+      None => ()
+    }
     match member_name {
       Some(n) => {
         if visibility == "private" {
