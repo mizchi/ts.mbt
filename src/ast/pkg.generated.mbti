@@ -11,26 +11,29 @@ pub const DECL_GROUP_POSITION : Int32 = -1
 // Errors
 
 // Types and methods
+#derive(@debug.Debug)
 pub(all) struct TsArrayBinding {
   items : Array[TsBindingElem?]
   rest : TsBinding?
-} derive(@debug.Debug)
+}
 pub fn TsArrayBinding::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsArrayBinding::to_repr(Self) -> @debug.Repr
 pub fn TsArrayBinding::to_string(Self) -> String
 pub impl Show for TsArrayBinding
 
+#derive(@debug.Debug)
 pub(all) enum TsArrowBody {
   ArrowExpr(TsExpr)
   ArrowBlock(TsBlock)
-} derive(@debug.Debug)
+}
 pub fn TsArrowBody::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsArrowBody::to_repr(Self) -> @debug.Repr
 pub fn TsArrowBody::to_string(Self) -> String
 pub impl Show for TsArrowBody
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TsBinOp {
   Add
   Sub
@@ -57,7 +60,7 @@ pub(all) enum TsBinOp {
   And
   Or
   Coalesce
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsBinOp::equal(Self, Self) -> Bool
 #deprecated
@@ -68,38 +71,42 @@ pub fn TsBinOp::to_repr(Self) -> @debug.Repr
 pub fn TsBinOp::to_string(Self) -> String
 pub impl Show for TsBinOp
 
+#derive(@debug.Debug)
 pub(all) enum TsBinding {
   Ident(String)
   Array(TsArrayBinding)
   Object(TsObjectBinding)
   Target(TsExpr)
-} derive(@debug.Debug)
+}
 pub fn TsBinding::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsBinding::to_repr(Self) -> @debug.Repr
 pub fn TsBinding::to_string(Self) -> String
 pub impl Show for TsBinding
 
+#derive(@debug.Debug)
 pub(all) struct TsBindingElem {
   binding : TsBinding
   default : TsExpr?
-} derive(@debug.Debug)
+}
 pub fn TsBindingElem::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsBindingElem::to_repr(Self) -> @debug.Repr
 pub fn TsBindingElem::to_string(Self) -> String
 pub impl Show for TsBindingElem
 
+#derive(@debug.Debug)
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
   stmt_positions : Array[Int32]
-} derive(@debug.Debug)
+}
 pub fn TsBlock::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsBlock::to_repr(Self) -> @debug.Repr
 pub fn TsBlock::to_string(Self) -> String
 pub impl Show for TsBlock
 
+#derive(@debug.Debug)
 pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
@@ -128,13 +135,14 @@ pub(all) struct TsClassDecl {
   protected_members : Array[String]
   abstract_members : Array[String]
   duplicate_member_names : Array[String]
-} derive(@debug.Debug)
+}
 pub fn TsClassDecl::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsClassDecl::to_repr(Self) -> @debug.Repr
 pub fn TsClassDecl::to_string(Self) -> String
 pub impl Show for TsClassDecl
 
+#derive(@debug.Debug)
 pub(all) struct TsClassMethodDecl {
   name : String
   type_params : Array[String]
@@ -149,13 +157,14 @@ pub(all) struct TsClassMethodDecl {
   key_expr : TsExpr?
   is_async : Bool
   is_generator : Bool
-} derive(@debug.Debug)
+}
 pub fn TsClassMethodDecl::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsClassMethodDecl::to_repr(Self) -> @debug.Repr
 pub fn TsClassMethodDecl::to_string(Self) -> String
 pub impl Show for TsClassMethodDecl
 
+#derive(@debug.Debug)
 pub(all) struct TsClassPropertyDecl {
   name : String
   type_ : TsType
@@ -164,13 +173,14 @@ pub(all) struct TsClassPropertyDecl {
   is_accessor : Bool
   has_initializer : Bool
   has_definite_assertion : Bool
-} derive(@debug.Debug)
+}
 pub fn TsClassPropertyDecl::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsClassPropertyDecl::to_repr(Self) -> @debug.Repr
 pub fn TsClassPropertyDecl::to_string(Self) -> String
 pub impl Show for TsClassPropertyDecl
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TsCompoundOp {
   AddAssign
   SubAssign
@@ -187,7 +197,7 @@ pub(all) enum TsCompoundOp {
   AndAssign
   OrAssign
   CoalesceAssign
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsCompoundOp::equal(Self, Self) -> Bool
 #deprecated
@@ -198,12 +208,13 @@ pub fn TsCompoundOp::to_repr(Self) -> @debug.Repr
 pub fn TsCompoundOp::to_string(Self) -> String
 pub impl Show for TsCompoundOp
 
+#derive(Eq, @debug.Debug)
 pub(all) struct TsEnumDecl {
   name : String
   members : Array[TsEnumMember]
   is_const : Bool
   is_declare : Bool
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsEnumDecl::equal(Self, Self) -> Bool
 #deprecated
@@ -214,11 +225,12 @@ pub fn TsEnumDecl::to_repr(Self) -> @debug.Repr
 pub fn TsEnumDecl::to_string(Self) -> String
 pub impl Show for TsEnumDecl
 
+#derive(Eq, @debug.Debug)
 pub(all) struct TsEnumMember {
   name : String
   value : TsEnumMemberValue?
   is_computed : Bool
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsEnumMember::equal(Self, Self) -> Bool
 #deprecated
@@ -229,12 +241,13 @@ pub fn TsEnumMember::to_repr(Self) -> @debug.Repr
 pub fn TsEnumMember::to_string(Self) -> String
 pub impl Show for TsEnumMember
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TsEnumMemberValue {
   String(String)
   Number(String)
   BigInt(String)
   Bool(Bool)
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsEnumMemberValue::equal(Self, Self) -> Bool
 #deprecated
@@ -245,16 +258,18 @@ pub fn TsEnumMemberValue::to_repr(Self) -> @debug.Repr
 pub fn TsEnumMemberValue::to_string(Self) -> String
 pub impl Show for TsEnumMemberValue
 
+#derive(@debug.Debug)
 pub(all) struct TsExportSpec {
   local_name : String
   export_name : String
-} derive(@debug.Debug)
+}
 pub fn TsExportSpec::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsExportSpec::to_repr(Self) -> @debug.Repr
 pub fn TsExportSpec::to_string(Self) -> String
 pub impl Show for TsExportSpec
 
+#derive(@debug.Debug)
 pub(all) enum TsExpr {
   NumberLit(Double)
   IntLit(Int32)
@@ -301,19 +316,20 @@ pub(all) enum TsExpr {
   NonNull(TsExpr)
   OptionalChain(TsExpr)
   JsxElement(String, Array[(String, TsExpr?)], Array[TsExpr])
-} derive(@debug.Debug)
+}
 pub fn TsExpr::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsExpr::to_repr(Self) -> @debug.Repr
 pub fn TsExpr::to_string(Self) -> String
 pub impl Show for TsExpr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TsForOfKind {
   Var
   Let
   Const
   Assign
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsForOfKind::equal(Self, Self) -> Bool
 #deprecated
@@ -324,6 +340,7 @@ pub fn TsForOfKind::to_repr(Self) -> @debug.Repr
 pub fn TsForOfKind::to_string(Self) -> String
 pub impl Show for TsForOfKind
 
+#derive(@debug.Debug)
 pub(all) struct TsFunc {
   name : String
   type_params : Array[String]
@@ -335,13 +352,14 @@ pub(all) struct TsFunc {
   is_generator : Bool
   is_async : Bool
   name_is_member_key : Bool
-} derive(@debug.Debug)
+}
 pub fn TsFunc::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsFunc::to_repr(Self) -> @debug.Repr
 pub fn TsFunc::to_string(Self) -> String
 pub impl Show for TsFunc
 
+#derive(@debug.Debug)
 pub(all) struct TsImport {
   name : String
   module_ : String
@@ -349,13 +367,14 @@ pub(all) struct TsImport {
   params : Array[(String, TsType)]
   param_is_rest : Array[Bool]
   return_type : TsType
-} derive(@debug.Debug)
+}
 pub fn TsImport::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsImport::to_repr(Self) -> @debug.Repr
 pub fn TsImport::to_string(Self) -> String
 pub impl Show for TsImport
 
+#derive(@debug.Debug)
 pub(all) struct TsImportDecl {
   module_spec : String
   default_binding : String?
@@ -365,13 +384,14 @@ pub(all) struct TsImportDecl {
   side_effect_only : Bool
   type_only : Bool
   attributes : Array[(String, String)]
-} derive(@debug.Debug)
+}
 pub fn TsImportDecl::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsImportDecl::to_repr(Self) -> @debug.Repr
 pub fn TsImportDecl::to_string(Self) -> String
 pub impl Show for TsImportDecl
 
+#derive(@debug.Debug)
 pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
@@ -385,13 +405,14 @@ pub(all) struct TsInterface {
   method_type_param_bounds : Array[(String, Array[(String, TsType)])]
   internal_members : Array[String]
   deprecated_members : Array[String]
-} derive(@debug.Debug)
+}
 pub fn TsInterface::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsInterface::to_repr(Self) -> @debug.Repr
 pub fn TsInterface::to_string(Self) -> String
 pub impl Show for TsInterface
 
+#derive(@debug.Debug)
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
@@ -419,13 +440,14 @@ pub(all) struct TsModule {
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]
   class_dup_diagnostics : Array[(String, Array[String])]
-} derive(@debug.Debug)
+}
 pub fn TsModule::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsModule::to_repr(Self) -> @debug.Repr
 pub fn TsModule::to_string(Self) -> String
 pub impl Show for TsModule
 
+#derive(@debug.Debug)
 pub(all) struct TsModuleBlock {
   block : TsBlock
   imports : Array[TsImportDecl]
@@ -441,43 +463,47 @@ pub(all) struct TsModuleBlock {
   module_request_order : Array[String]
   type_only_exports : Map[String, Bool]
   has_export_equals : Bool
-} derive(@debug.Debug)
+}
 pub fn TsModuleBlock::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsModuleBlock::to_repr(Self) -> @debug.Repr
 pub fn TsModuleBlock::to_string(Self) -> String
 pub impl Show for TsModuleBlock
 
+#derive(@debug.Debug)
 pub(all) struct TsNamespaceDecl {
   name : String
   module_ : TsModule
   is_declare : Bool
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn TsNamespaceDecl::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) struct TsObjectBinding {
   props : Array[TsObjectBindingProp]
   rest : String?
-} derive(@debug.Debug)
+}
 pub fn TsObjectBinding::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsObjectBinding::to_repr(Self) -> @debug.Repr
 pub fn TsObjectBinding::to_string(Self) -> String
 pub impl Show for TsObjectBinding
 
+#derive(@debug.Debug)
 pub(all) struct TsObjectBindingProp {
   key : String
   key_expr : TsExpr?
   binding : TsBinding
   default : TsExpr?
-} derive(@debug.Debug)
+}
 pub fn TsObjectBindingProp::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsObjectBindingProp::to_repr(Self) -> @debug.Repr
 pub fn TsObjectBindingProp::to_string(Self) -> String
 pub impl Show for TsObjectBindingProp
 
+#derive(@debug.Debug)
 pub(all) struct TsParam {
   name : String
   binding : TsBinding?
@@ -485,35 +511,38 @@ pub(all) struct TsParam {
   is_optional : Bool
   type_ : TsType
   default : TsExpr?
-} derive(@debug.Debug)
+}
 pub fn TsParam::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsParam::to_repr(Self) -> @debug.Repr
 pub fn TsParam::to_string(Self) -> String
 pub impl Show for TsParam
 
+#derive(@debug.Debug)
 pub(all) enum TsReExportKind {
   Named(Array[(String, String)])
   All
   Namespace(String)
-} derive(@debug.Debug)
+}
 pub fn TsReExportKind::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsReExportKind::to_repr(Self) -> @debug.Repr
 pub fn TsReExportKind::to_string(Self) -> String
 pub impl Show for TsReExportKind
 
+#derive(@debug.Debug)
 pub(all) struct TsReExportSpec {
   module_spec : String
   kind : TsReExportKind
   type_only : Bool
-} derive(@debug.Debug)
+}
 pub fn TsReExportSpec::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsReExportSpec::to_repr(Self) -> @debug.Repr
 pub fn TsReExportSpec::to_string(Self) -> String
 pub impl Show for TsReExportSpec
 
+#derive(@debug.Debug)
 pub(all) enum TsStmt {
   Var(TsBinding, TsType, TsExpr)
   Let(TsBinding, TsType, TsExpr)
@@ -542,23 +571,25 @@ pub(all) enum TsStmt {
   NativeClassStmt(TsClassDecl, TsFunc?)
   Break(String?)
   Continue(String?)
-} derive(@debug.Debug)
+}
 pub fn TsStmt::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsStmt::to_repr(Self) -> @debug.Repr
 pub fn TsStmt::to_string(Self) -> String
 pub impl Show for TsStmt
 
+#derive(@debug.Debug)
 pub(all) struct TsSwitchCase {
   test_expr : TsExpr?
   body : TsBlock
-} derive(@debug.Debug)
+}
 pub fn TsSwitchCase::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsSwitchCase::to_repr(Self) -> @debug.Repr
 pub fn TsSwitchCase::to_string(Self) -> String
 pub impl Show for TsSwitchCase
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TsType {
   Number
   Int
@@ -600,7 +631,7 @@ pub(all) enum TsType {
   MappedTypeRemap(String, TsType, TsType, TsType, Bool)
   TypePredicate(String, TsType)
   AssertsPredicate(String, TsType?)
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsType::equal(Self, Self) -> Bool
 #deprecated
@@ -611,18 +642,20 @@ pub fn TsType::to_repr(Self) -> @debug.Repr
 pub fn TsType::to_string(Self) -> String
 pub impl Show for TsType
 
+#derive(@debug.Debug)
 pub(all) struct TsTypeAlias {
   name : String
   type_params : Array[String]
   type_param_bounds : Array[(String, TsType)]
   type_ : TsType
-} derive(@debug.Debug)
+}
 pub fn TsTypeAlias::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsTypeAlias::to_repr(Self) -> @debug.Repr
 pub fn TsTypeAlias::to_string(Self) -> String
 pub impl Show for TsTypeAlias
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TsUnaryOp {
   Neg
   Not
@@ -635,7 +668,7 @@ pub(all) enum TsUnaryOp {
   PreDec
   PostInc
   PostDec
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TsUnaryOp::equal(Self, Self) -> Bool
 #deprecated
@@ -646,48 +679,53 @@ pub fn TsUnaryOp::to_repr(Self) -> @debug.Repr
 pub fn TsUnaryOp::to_string(Self) -> String
 pub impl Show for TsUnaryOp
 
+#derive(@debug.Debug)
 pub(all) struct TsValueDecl {
   name : String
   type_ : TsType
-} derive(@debug.Debug)
+}
 pub fn TsValueDecl::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TsValueDecl::to_repr(Self) -> @debug.Repr
 pub fn TsValueDecl::to_string(Self) -> String
 pub impl Show for TsValueDecl
 
+#derive(@debug.Debug)
 pub(all) struct TypedExpr {
   expr : TsExpr
   type_ : TsType
-} derive(@debug.Debug)
+}
 pub fn TypedExpr::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TypedExpr::to_repr(Self) -> @debug.Repr
 pub fn TypedExpr::to_string(Self) -> String
 pub impl Show for TypedExpr
 
+#derive(@debug.Debug)
 pub(all) struct TypedFunc {
   func : TsFunc
   locals : Array[(String, TsType)]
-} derive(@debug.Debug)
+}
 pub fn TypedFunc::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TypedFunc::to_repr(Self) -> @debug.Repr
 pub fn TypedFunc::to_string(Self) -> String
 pub impl Show for TypedFunc
 
+#derive(@debug.Debug)
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
-} derive(@debug.Debug)
+}
 pub fn TypedModule::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TypedModule::to_repr(Self) -> @debug.Repr
 pub fn TypedModule::to_string(Self) -> String
 pub impl Show for TypedModule
 
+#derive(@debug.Debug)
 pub(all) struct TypedStmt {
   stmt : TsStmt
-} derive(@debug.Debug)
+}
 pub fn TypedStmt::output(Self, &Logger) -> Unit
 #deprecated
 pub fn TypedStmt::to_repr(Self) -> @debug.Repr

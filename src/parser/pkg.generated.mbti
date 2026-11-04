@@ -72,9 +72,10 @@ pub async fn tsconfig_compiler_option_bool_at(String, String) -> Bool?
 pub fn value_identifier_needs_suffix(String) -> Bool
 
 // Errors
+#derive(@debug.Debug)
 pub(all) suberror ParseError {
   ParseError(String)
-} derive(@debug.Debug)
+}
 pub fn ParseError::output(Self, &Logger) -> Unit
 #deprecated
 pub fn ParseError::to_repr(Self) -> @debug.Repr
@@ -88,14 +89,16 @@ pub struct AsyncCallbackLowering {
   is_optional : Bool
 }
 
+#derive(@debug.Debug)
 pub(all) struct JsdocBlock {
   description : String
   tags : Array[JsdocTag]
-} derive(@debug.Debug)
+}
 pub fn JsdocBlock::is_empty(Self) -> Bool
 #deprecated
 pub fn JsdocBlock::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum JsdocTag {
   Param(String, String?, String)
   Returns(String?, String)
@@ -113,7 +116,7 @@ pub(all) enum JsdocTag {
   Template(String, String)
   Typedef(String?, String)
   Other(String, String)
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn JsdocTag::equal(Self, Self) -> Bool
 #deprecated
@@ -121,6 +124,7 @@ pub fn JsdocTag::not_equal(Self, Self) -> Bool
 #deprecated
 pub fn JsdocTag::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub struct Lexer {
   mut invalid_char_count : Int32
   mut invalid_radix_digit_count : Int32
@@ -148,7 +152,7 @@ pub struct Lexer {
   pure_marker_positions : Map[Int32, Bool]
   internal_marker_positions : Map[Int32, Bool]
   jsdoc_at_pos : Map[Int32, JsdocBlock]
-} derive(@debug.Debug)
+}
 pub fn Lexer::new(String) -> Self
 pub fn Lexer::next_token(Self) -> Token
 pub fn Lexer::output(Self, &Logger) -> Unit
@@ -158,6 +162,7 @@ pub fn Lexer::to_string(Self) -> String
 pub fn Lexer::tokenize(Self) -> Array[Token]
 pub impl Show for Lexer
 
+#derive(@debug.Debug)
 pub struct Parser {
   tokens : Array[Token]
   mut pos : Int32
@@ -238,7 +243,7 @@ pub struct Parser {
   collected_type_only_exports : Map[String, Bool]
   mut collected_export_equals : Bool
   mut last_function_bodiless : Bool
-} derive(@debug.Debug)
+}
 pub fn Parser::from_source(String) -> Self
 pub fn Parser::from_source_with_jsx(String, Bool) -> Self
 pub fn Parser::mark_declaration_file(Self) -> Unit
@@ -259,17 +264,19 @@ pub fn Parser::to_repr(Self) -> @debug.Repr
 pub fn Parser::to_string(Self) -> String
 pub impl Show for Parser
 
+#derive(@debug.Debug)
 pub struct Token {
   kind : TokenKind
   pos : Int32
   has_newline_before : Bool
-} derive(@debug.Debug)
+}
 pub fn Token::output(Self, &Logger) -> Unit
 #deprecated
 pub fn Token::to_repr(Self) -> @debug.Repr
 pub fn Token::to_string(Self) -> String
 pub impl Show for Token
 
+#derive(Eq, @debug.Debug)
 pub enum TokenKind {
   Number(Double)
   Int(Int32)
@@ -382,7 +389,7 @@ pub enum TokenKind {
   Declare
   Null
   Eof
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TokenKind::equal(Self, Self) -> Bool
 #deprecated
