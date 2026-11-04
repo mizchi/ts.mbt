@@ -342,8 +342,60 @@ pub fn jsdoc_doc_lines(jb : JsdocBlock) -> Array[String] {
   let flat : Array[String] = []
   for entry in out {
     for line in entry.split("\n") {
-      flat.push(line.trim_end().to_owned())
+      flat.push(jsdoc_inline_links(line.trim_end().to_owned()))
     }
   }
   flat
+}
+
+///|
+/// JSDoc inline links as Markdown (doc comments are Markdown):
+/// `{@link Name}` -> `` `Name` ``, `{@link https://u}` -> `<https://u>`,
+/// `{@link https://u text}` -> `[text](https://u)`, and
+/// `{@link Name text}` / `{@link Name|text}` -> ``text (`Name`)``.
+/// `@linkcode` and `@linkplain` are read the same way. An unterminated
+/// tag is left as written.
+fn jsdoc_inline_links(line : String) -> String {
+  if !line.contains("{@link") {
+    return line
+  }
+  let out = StringBuilder()
+  let mut rest = line
+  while true {
+    guard rest.find("{@link") is Some(start) else { break }
+    guard rest[start:].find("}") is Some(len) else { break }
+    out.write_string(rest[:start].to_owned())
+    let inner = rest[start + 1:start + len].to_owned()
+    // Drop the tag name (`@link`, `@linkcode`, `@linkplain`).
+    let body = match inner.find(" ") {
+      Some(i) => inner[i + 1:].trim().to_owned()
+      None => ""
+    }
+    out.write_string(jsdoc_link_markdown(body))
+    rest = rest[start + len + 1:].to_owned()
+  }
+  out.write_string(rest)
+  out.to_string()
+}
+
+///|
+fn jsdoc_link_markdown(body : String) -> String {
+  let (target, text) = match body.find("|") {
+    Some(i) => (body[:i].trim().to_owned(), body[i + 1:].trim().to_owned())
+    None =>
+      match body.find(" ") {
+        Some(i) => (body[:i].to_owned(), body[i + 1:].trim().to_owned())
+        None => (body, "")
+      }
+  }
+  if target == "" {
+    return text
+  }
+  let is_url = target.has_prefix("http://") || target.has_prefix("https://")
+  match (is_url, text == "") {
+    (true, true) => "<\{target}>"
+    (true, false) => "[\{text}](\{target})"
+    (false, true) => "`\{target}`"
+    (false, false) => "\{text} (`\{target}`)"
+  }
 }
