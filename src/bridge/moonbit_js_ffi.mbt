@@ -1511,6 +1511,37 @@ fn ffi_replace_this_token(rendered : String, owner_name : String) -> String {
 }
 
 ///|
+/// `Array[` -> `FixedArray[` in rendered MoonBit type text, at a word
+/// boundary only, so a type NAMED `NodeArray[...]` is untouched.
+fn ffi_fixed_array_type_text(rendered : String) -> String {
+  if !rendered.contains("Array[") {
+    return rendered
+  }
+  let chars = rendered.to_array()
+  let out = StringBuilder()
+  let mut i = 0
+  while i < chars.length() {
+    let at_boundary = i == 0 ||
+      {
+        let c = chars[i - 1]
+        !(c.is_ascii_alphabetic() ||
+        c.is_ascii_digit() ||
+        c == '_' ||
+        c == '@' ||
+        c == '.')
+      }
+    if at_boundary && rendered[i:].has_prefix("Array[") {
+      out.write_string("FixedArray[")
+      i += "Array[".length()
+    } else {
+      out.write_char(chars[i])
+      i += 1
+    }
+  }
+  out.to_string()
+}
+
+///|
 fn ffi_struct_field_type_name(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
@@ -1545,9 +1576,29 @@ fn ffi_struct_field_type_name(
   match type_ {
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       ffi_struct_field_type_name(state, @checker.normalize_literal_type(type_))
-    Array(inner) => "Array[" + ffi_struct_field_type_name(state, inner) + "]"
+    // A generated struct mirrors a JS object, which holds plain JS arrays,
+    // and `Array`'s runtime layout is set to stop matching one — the same
+    // reason `migrate_js_ffi_array_boundaries` moves extern signatures to
+    // `FixedArray`. A field has no boundary at which to convert (the struct
+    // IS the JS object), so the field's TYPE is what has to change.
+    Array(inner) =>
+      "FixedArray[" + ffi_struct_field_type_name(state, inner) + "]"
+    // A tuple is a JS array too (`close: []`, `error: [err: Error]` in
+    // node's event maps); the element type is the tuple renderer's choice.
+    Tuple(items) => {
+      let rendered = ffi_tuple_type_name(state, items)
+      "FixedArray" + rendered["Array".length():].to_owned()
+    }
+    Rest(inner) =>
+      "FixedArray[" + ffi_struct_field_type_name(state, inner) + "]"
+    // A function-typed field holds a JS function (or a MoonBit closure the
+    // JS side calls), so its parameter and return types are representations
+    // too. Rewritten on the RENDERED text because the arrow goes through
+    // `ffi_func_type_name`, which extern callback parameters share — those
+    // stay `Array`, for the function-identity reason recorded in
+    // `migrate_js_ffi_array_boundaries`; here no wrapper is involved.
     Func(_, _) | GenericFunc(_, _, _) =>
-      ffi_function_field_type_name(state, type_)
+      ffi_fixed_array_type_text(ffi_function_field_type_name(state, type_))
     Named(name) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
       ffi_type_identifier(name, "GeneratedEnum")
     Applied(name, _) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
