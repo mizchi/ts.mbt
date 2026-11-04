@@ -1905,6 +1905,17 @@ fn bridge_package_is_type_block(block : String) -> Bool {
 }
 
 ///|
+/// A block's lines without its `///` doc comments.
+fn bridge_package_block_code(block : String) -> String {
+  block
+  .split("\n")
+  .filter(fn(l) { !l.trim_start().has_prefix("///") })
+  .map(fn(l) { l.to_owned() })
+  .collect()
+  .join("\n")
+}
+
+///|
 fn bridge_package_is_converter_block(block : String) -> Bool {
   let trimmed = block.trim()
   trimmed.has_prefix("fn __ts_mbt_") ||
@@ -1948,13 +1959,17 @@ fn bridge_package_mbt_files(
   let guard_blocks : Array[String] = []
   let bridge_blocks : Array[String] = []
   for block in bridge_package_split_top_level_blocks(bridge_mbt) {
-    if bridge_package_is_type_block(block) {
+    // Classified on the CODE: the tests below search the block's text, and
+    // a doc comment ported from JSDoc can mention any of their words
+    // (`unsafeCast`, `extern "js" fn`, `pub(all) struct`).
+    let code = bridge_package_block_code(block)
+    if bridge_package_is_type_block(code) {
       type_blocks.push(block)
-    } else if bridge_package_is_converter_block(block) {
+    } else if bridge_package_is_converter_block(code) {
       converter_blocks.push(block)
-    } else if bridge_package_is_guard_block(block) {
+    } else if bridge_package_is_guard_block(code) {
       guard_blocks.push(block)
-    } else if block.contains("extern \"js\" fn ") {
+    } else if code.contains("extern \"js\" fn ") {
       extern_blocks.push(block)
     } else {
       bridge_blocks.push(block)

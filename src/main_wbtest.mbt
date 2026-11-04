@@ -6595,3 +6595,23 @@ async test "ensure_bridge_node_modules_link resolves when node_modules is itself
   ).text()
   assert_eq(text, "export const ok = 1;\n")
 }
+
+///|
+test "bridge package split classifies a block by its code, not its doc comment" {
+  // A doc ported from JSDoc can mention the words the classifier looks
+  // for; `unsafeCast` in prose must not move a public wrapper to guards.
+  let mbt =
+    #|/// Wraps `unsafeCast` for you.
+    #|pub fn wrap(x : Int) -> Int {
+    #|  x
+    #|}
+  let files = bridge_package_mbt_files(mbt, force_split=true)
+  for file in files {
+    let (name, content) = file
+    if name == "bridge.mbt" {
+      assert_true(content.contains("pub fn wrap("))
+    } else {
+      assert_false(content.contains("pub fn wrap("))
+    }
+  }
+}
