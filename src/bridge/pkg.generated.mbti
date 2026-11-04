@@ -9,6 +9,8 @@ import {
 // Values
 pub fn apply_oracle_resolutions(@ast.TsModule, Map[String, @ast.TsType]) -> Unit
 
+pub fn attach_jsdoc_to_bridge_mbt(String, Map[String, Array[String]]) -> String
+
 pub let bridge_promise_wait_async_integration_section : String
 
 pub let bridge_promise_wait_self_contained_section : String

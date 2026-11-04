@@ -1283,6 +1283,12 @@ pub(all) struct TsModuleBlock {
   // JSDoc comment so downstream consumers' IDEs surface the
   // notice. Empty message means "deprecated but no explanation".
   deprecations : Map[String, String]
+  // JSDoc carried as documentation, keyed by declaration path: `Name`
+  // for a top-level declaration, `Name.member` for an interface member.
+  // Each value is the doc-comment lines, already rendered
+  // (`@parser.jsdoc_doc_lines`). The bridge generator attaches them to
+  // the MoonBit items it emits for those declarations.
+  docs : Map[String, Array[String]]
   // Function declarations annotated with `@__PURE__` or
   // `@__NO_SIDE_EFFECTS__` JSDoc. The purity pass adds these to
   // its pure set unconditionally, overriding the call-graph

@@ -327,3 +327,55 @@ test "jsdoc: !T strips non-null, Object<K,V> becomes Record, inline TS wins" {
     _ => fail("expected Let / FuncExpr")
   }
 }
+
+///|
+test "jsdoc: module block records docs by declaration path" {
+  let block = parse_module_block_from_source(
+    (
+      #|/**
+      #| * Make an id.
+      #| * @param size How long.
+      #| * @returns The id.
+      #| */
+      #|export declare function nanoid(size?: number): string;
+      #|/** Declared without export. */
+      #|declare function helper(x: string): void;
+      #|/** Options. */
+      #|export interface Options {
+      #|  /** Base URL. */
+      #|  baseUrl: string;
+      #|  /** @deprecated use retry */
+      #|  retries?: number;
+      #|  noDoc: boolean;
+      #|}
+      #|/** An alias. */
+      #|export type Id = string;
+      #|export declare function undocumented(): void;
+    ),
+  )
+  assert_eq(
+    block.docs.get("nanoid"),
+    Some(["Make an id.", "", "- `size`: How long.", "Returns: The id."]),
+  )
+  assert_eq(block.docs.get("helper"), Some(["Declared without export."]))
+  assert_eq(block.docs.get("Options"), Some(["Options."]))
+  assert_eq(block.docs.get("Options.baseUrl"), Some(["Base URL."]))
+  assert_eq(block.docs.get("Options.retries"), Some(["Deprecated: use retry"]))
+  assert_eq(block.docs.get("Id"), Some(["An alias."]))
+  // No JSDoc, no entry — never an empty doc.
+  assert_eq(block.docs.get("Options.noDoc"), None)
+  assert_eq(block.docs.get("undocumented"), None)
+}
+
+///|
+test "jsdoc: only documentation tags become doc lines" {
+  let jb = parse_jsdoc_block(
+    "/** Pure helper.\n * @internal\n * @__PURE__\n * @example\n * f(1)\n */",
+  ).unwrap()
+  assert_eq(jsdoc_doc_lines(jb), [
+    "Pure helper.", "", "Example:", "```", "f(1)", "```",
+  ])
+  // A block of tool markers only has nothing to document.
+  let markers = parse_jsdoc_block("/** @internal */").unwrap()
+  assert_eq(jsdoc_doc_lines(markers), [])
+}

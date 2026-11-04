@@ -2098,7 +2098,8 @@ pub fn Parser::parse_interface(
     // `@deprecated` tags are recorded per member name below.
     let mut member_is_internal = false
     let mut member_is_deprecated = false
-    match self.jsdoc_at_pos.get(self.peek().pos) {
+    let member_doc_pos = self.peek().pos
+    match self.jsdoc_at_pos.get(member_doc_pos) {
       Some(jb) =>
         for t in jb.tags {
           match t {
@@ -2646,6 +2647,7 @@ pub fn Parser::parse_interface(
       if member_is_deprecated && !deprecated_members.contains(field_name) {
         deprecated_members.push(field_name)
       }
+      self.record_doc("\{name}.\{field_name}", member_doc_pos)
     }
     // Skip trailing semicolon or comma (both optional)
     if self.check(Semicolon) || self.check(Comma) {

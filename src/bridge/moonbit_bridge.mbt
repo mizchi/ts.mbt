@@ -2010,6 +2010,17 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
   // parse extern headers by name and type, and this pass renames the
   // ones it moves behind a wrapper.
   let bridge_mbt = migrate_js_ffi_array_boundaries(bridge_mbt)
+  // After the FixedArray pass, so a doc lands on the public wrapper and not
+  // on the private extern behind it.
+  let docs : Map[String, Array[String]] = Map([])
+  for record in graph.modules {
+    for key, doc in record.module_block.docs {
+      if !docs.contains(key) {
+        docs[key] = doc
+      }
+    }
+  }
+  let bridge_mbt = attach_jsdoc_to_bridge_mbt(bridge_mbt, docs)
   {
     entry_path: bundle.entry_path,
     module_spec: bundle.module_spec,
