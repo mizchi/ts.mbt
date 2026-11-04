@@ -443,3 +443,16 @@ test "jsdoc: declare class members are recorded as Class.member" {
   assert_eq(block.docs.get("Client.send"), Some(["Send it."]))
   assert_eq(block.docs.get("Client.undocumented"), None)
 }
+
+///|
+test "jsdoc: inline links become Markdown" {
+  let jb = parse_jsdoc_block(
+    "/** See {@link Foo} and {@link https://a.dev}, {@link https://b.dev React Docs}, {@linkcode Bar the bar}, {@link Baz|baz}. */",
+  ).unwrap()
+  assert_eq(jsdoc_doc_lines(jb), [
+    "See `Foo` and <https://a.dev>, [React Docs](https://b.dev), the bar (`Bar`), baz (`Baz`).",
+  ])
+  // An unterminated tag is left alone.
+  let open_ = parse_jsdoc_block("/** Broken {@link Foo */").unwrap()
+  assert_eq(jsdoc_doc_lines(open_), ["Broken {@link Foo"])
+}
