@@ -1153,6 +1153,82 @@ EOF
   fi
 }
 
+verify_typescript_to_moonbit_callback_identity_example() {
+  # A callback that takes an array crosses the JS FFI boundary through a
+  # converting wrapper (`FixedArray` <-> `Array`), and JS observes function
+  # IDENTITY: `removeListener` finds a listener by it. This RUNS the
+  # generated package under Node, because the property is about the values
+  # JS receives and no text assertion can show it.
+  local root="_build/examples/typescript-to-moonbit-callback-identity"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+  cp examples/typescript-to-moonbit/callback-identity/runtime/events.js "$root/runtime/events.js"
+
+  moon run src/cmd/mtsc -- bridge \
+    --input examples/typescript-to-moonbit/callback-identity/index.d.ts \
+    --out "$out" \
+    --module-spec ../runtime/events.js >/dev/null
+
+  cat > "$out/moon.mod" <<'EOF'
+name = "examples/typescript_to_moonbit_callback_identity"
+
+version = "0.1.0"
+
+source = "."
+
+preferred_target = "js"
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+test "a listener added twice is one listener" {
+  let source = @typescript_to_moonbit_callback_identity.new_event_source()
+  let listener = fn(_items : Array[String]) {  }
+  source.add_listener(listener)
+  source.add_listener(listener)
+  assert_eq(source.listener_count(), 1.0)
+}
+
+test "remove_listener removes what add_listener added" {
+  let source = @typescript_to_moonbit_callback_identity.new_event_source()
+  let listener = fn(_items : Array[String]) {  }
+  source.add_listener(listener)
+  assert_true(source.has_listener(listener))
+  source.remove_listener(listener)
+  assert_eq(source.listener_count(), 0.0)
+}
+
+test "the listener receives the dispatched array" {
+  let source = @typescript_to_moonbit_callback_identity.new_event_source()
+  let seen : Array[Int] = []
+  source.add_listener(fn(items) { seen.push(items.length()) })
+  source.dispatch(["a", "b", "c"])
+  assert_eq(seen, [3])
+}
+
+test "a listener read back from JS is the one that was added" {
+  // `first_listener` wraps a JS function for MoonBit; handing that back
+  // must give JS its own function, not a wrapper of a wrapper.
+  let source = @typescript_to_moonbit_callback_identity.new_event_source()
+  let seen : Array[Int] = []
+  let listener = fn(items : Array[String]) { seen.push(items.length()) }
+  source.add_listener(listener)
+  let back = source.first_listener()
+  assert_true(source.has_listener(back))
+  back(["x"])
+  assert_eq(seen, [1])
+  source.remove_listener(back)
+  assert_eq(source.listener_count(), 0.0)
+}
+EOF
+
+  grep_generated_mbt "$out" 'pub fn EventSource::add_listener(self : EventSource, listener : (Array[String]) -> Unit) -> Unit {'
+  grep_generated_mbt "$out" 'extern "js" fn __ts_mbt_cb_memo('
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+}
+
 verify_typescript_to_moonbit_drizzle_example() {
   local root="_build/examples/typescript-to-moonbit-drizzle"
 
@@ -1267,3 +1343,4 @@ verify_typescript_to_moonbit_const_table_example
 verify_typescript_to_moonbit_typescript_ast_example
 verify_typescript_node_imports_example
 verify_typescript_to_moonbit_drizzle_example
+verify_typescript_to_moonbit_callback_identity_example
