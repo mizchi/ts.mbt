@@ -181,3 +181,44 @@ fn jsdoc_field_name(line : String) -> String? {
     None => None
   }
 }
+
+///|
+/// Extra doc keys for the names the generator gives class members, built
+/// with the SAME spellings its renderers use (`ffi_to_snake_case`), so the
+/// two cannot drift. For a doc keyed `Class.member`:
+///
+/// - the constructor becomes `new_<class>` (a free function);
+/// - a property becomes `Class::get_<class>_<member>` and
+///   `Class::set_<class>_<member>`;
+/// - a static member becomes `<class>_<member>` (a free function).
+///
+/// A plain method is `Class::member` already and needs no alias. Every
+/// alias is added only where no key of that name exists, so a declaration
+/// actually named `client_create` keeps its own doc. An alias whose name
+/// the generator never emits is simply never looked up.
+pub fn jsdoc_add_member_aliases(docs : Map[String, Array[String]]) -> Unit {
+  let aliases : Array[(String, Array[String])] = []
+  for key, doc in docs {
+    guard key.find(".") is Some(dot) else { continue }
+    let owner = key[:dot].to_owned()
+    let member_name = key[dot + 1:].to_owned()
+    if owner == "" || member_name == "" || member_name.contains(".") {
+      continue
+    }
+    let owner_snake = ffi_to_snake_case(owner)
+    if member_name == "constructor" {
+      aliases.push(("new_\{owner_snake}", doc))
+      continue
+    }
+    let member_snake = ffi_to_snake_case(member_name)
+    aliases.push(("\{owner}.get_\{owner_snake}_\{member_snake}", doc))
+    aliases.push(("\{owner}.set_\{owner_snake}_\{member_snake}", doc))
+    aliases.push(("\{owner_snake}_\{member_snake}", doc))
+  }
+  for entry in aliases {
+    let (key, doc) = entry
+    if !docs.contains(key) {
+      docs[key] = doc
+    }
+  }
+}

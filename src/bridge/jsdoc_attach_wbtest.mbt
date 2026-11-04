@@ -72,3 +72,29 @@ test "jsdoc attach: a renamed item gets no doc rather than a wrong one" {
     #|extern "js" fn __ts_mbt_ffi_pick(a : String) -> String = "pick"
   inspect(attach_jsdoc_to_bridge_mbt(src, docs) == src, content="true")
 }
+
+///|
+test "jsdoc attach: class member aliases follow the generator's names" {
+  let docs : Map[String, Array[String]] = Map([
+    ("HttpClient.constructor", ["Create one."]),
+    ("HttpClient.baseUrl", ["The base URL."]),
+    ("HttpClient.create", ["A factory."]),
+    // A real declaration that happens to share an alias's spelling keeps
+    // its own doc.
+    ("http_client_create", ["A real top-level function."]),
+  ])
+  jsdoc_add_member_aliases(docs)
+  assert_eq(docs.get("new_http_client"), Some(["Create one."]))
+  assert_eq(
+    docs.get("HttpClient.get_http_client_base_url"),
+    Some(["The base URL."]),
+  )
+  assert_eq(
+    docs.get("HttpClient.set_http_client_base_url"),
+    Some(["The base URL."]),
+  )
+  assert_eq(
+    docs.get("http_client_create"),
+    Some(["A real top-level function."]),
+  )
+}
