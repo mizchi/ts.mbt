@@ -900,14 +900,33 @@ fn Parser::parse_declaration_block_source(
 }
 
 ///|
-fn parse_ambient_external_module_source(
+fn Parser::parse_ambient_external_module_source(
+  self : Parser,
   body_source : String,
 ) -> @ast.TsModule raise ParseError {
   if body_source.trim() == "" {
     empty_ts_module()
   } else {
     let parser = Parser::from_source(body_source)
-    parser.parse_module_with_seeded_const_values_internal({}, true)
+    let module_ = parser.parse_module_with_seeded_const_values_internal(
+      {},
+      true,
+    )
+    self.absorb_docs(parser)
+    module_
+  }
+}
+
+///|
+/// A body sub-parsed by a FRESH parser (a namespace, a `declare module
+/// "spec"` or `declare global` block) records its JSDoc there; carry it up
+/// so the declarations inside are documented like top-level ones. First
+/// recorded wins, as within one parser.
+fn Parser::absorb_docs(self : Parser, child : Parser) -> Unit {
+  for key, doc in child.collected_docs {
+    if !self.collected_docs.contains(key) {
+      self.collected_docs[key] = doc
+    }
   }
 }
 
@@ -957,7 +976,7 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
       let spec = self.expect_str_literal()
       if self.check(LBrace) {
         let body_source = self.parse_declaration_block_source()
-        let module_ = parse_ambient_external_module_source(body_source)
+        let module_ = self.parse_ambient_external_module_source(body_source)
         self.propagate_suppression_sentinels(module_)
         Some((spec, module_))
       } else {
@@ -1097,7 +1116,7 @@ fn Parser::parse_namespace_decl_with_mode(
     // namespace so downstream resolvers can see augmented globals.
     if self.check(LBrace) {
       let body_source = self.parse_declaration_block_source()
-      let augmented = parse_ambient_external_module_source(body_source)
+      let augmented = self.parse_ambient_external_module_source(body_source)
       self.propagate_suppression_sentinels(augmented)
       let ns : @ast.TsNamespaceDecl = {
         name: "<global>",
@@ -1210,7 +1229,12 @@ fn Parser::parse_namespace_decl_with_mode(
         if self.in_declaration_file {
           parser.mark_declaration_file()
         }
-        parser.parse_module_with_seeded_const_values_internal({}, true)
+        let body = parser.parse_module_with_seeded_const_values_internal(
+          {},
+          true,
+        )
+        self.absorb_docs(parser)
+        body
       } else {
         // Runtime first, ambient fallback. This lets us parse runtime
         // namespaces in `.ts` files (with class method bodies) without
@@ -1237,13 +1261,18 @@ fn Parser::parse_namespace_decl_with_mode(
             if self.in_declaration_file {
               ambient_parser.mark_declaration_file()
             }
-            ambient_parser.parse_module_with_seeded_const_values_internal(
+            let body = ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
               true,
             )
+            self.absorb_docs(ambient_parser)
+            body
           }
         } noraise {
-          module_ => module_
+          module_ => {
+            self.absorb_docs(runtime_parser)
+            module_
+          }
         }
       }
       // TS1063 and TS1319: `export = X` and `export default X` are module
@@ -4585,6 +4614,7 @@ fn Parser::parse_module_block_with_const_values(
         Some(enum_) => {
           enums.push(enum_)
           exports.push({ local_name: enum_.name, export_name: enum_.name, })
+          self.record_doc(enum_.name, export_pos)
           if is_internal {
             self.collected_internal_names[enum_.name] = true
           }
@@ -4604,6 +4634,7 @@ fn Parser::parse_module_block_with_const_values(
       }
       for spec in export_specs {
         exports.push(spec)
+        self.record_doc(spec.local_name, export_pos)
         if is_internal {
           self.collected_internal_names[spec.local_name] = true
         }
@@ -4624,32 +4655,51 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Declare) {
+      // A JSDoc block above `declare …` attaches to the `declare` token.
+      let doc_pos = self.peek().pos
       let _ = self.advance()
       if self.is_const_enum_decl_start() {
-        enums.push(self.parse_const_enum_decl(true))
+        let enum_ = self.parse_const_enum_decl(true)
+        self.record_doc(enum_.name, doc_pos)
+        enums.push(enum_)
         continue
       }
       if self.is_enum_keyword_at(0) {
-        enums.push(self.parse_enum_decl_after_enum_keyword(false, true))
+        let enum_ = self.parse_enum_decl_after_enum_keyword(false, true)
+        self.record_doc(enum_.name, doc_pos)
+        enums.push(enum_)
         continue
       }
       match self.peek().kind {
         Function => {
           let _ = self.advance()
-          let _ = self.parse_declare_function()
+          let func = self.parse_declare_function()
+          self.record_doc(func.name, doc_pos)
         }
         Var | Let | Const => {
           let _ = self.advance()
-          let _ = self.parse_declare_values()
+          for value in self.parse_declare_values() {
+            self.record_doc(value.name, doc_pos)
+          }
         }
-        Interface => self.collected_interfaces.push(self.parse_interface())
+        Interface => {
+          let iface = self.parse_interface()
+          self.record_doc(iface.name, doc_pos)
+          self.collected_interfaces.push(iface)
+        }
         Class => {
-          let _ = self.parse_declare_class(false)
+          let class_ = self.parse_declare_class(false)
+          self.record_doc(class_.name, doc_pos)
         }
-        Type => self.collected_type_aliases.push(self.parse_type_alias())
+        Type => {
+          let type_alias = self.parse_type_alias()
+          self.record_doc(type_alias.name, doc_pos)
+          self.collected_type_aliases.push(type_alias)
+        }
         Ident(name) =>
           if name == "abstract" && self.peek_at(1).kind == Class {
-            let _ = self.parse_declare_class_with_optional_abstract()
+            let class_ = self.parse_declare_class_with_optional_abstract()
+            self.record_doc(class_.name, doc_pos)
           } else if name == "module" &&
             (match self.peek_at(1).kind {
               Str(_) => true
@@ -4677,7 +4727,10 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Interface) {
-      self.collected_interfaces.push(self.parse_interface())
+      let doc_pos = self.peek().pos
+      let iface = self.parse_interface()
+      self.record_doc(iface.name, doc_pos)
+      self.collected_interfaces.push(iface)
       continue
     }
     match self.peek().kind {
@@ -4691,7 +4744,10 @@ fn Parser::parse_module_block_with_const_values(
       // Type aliases are erased at runtime but we keep them in
       // `TsModuleBlock.type_aliases` so whole-program type-driven
       // passes (e.g. discriminant-tag rewrite) can inspect them.
-      self.collected_type_aliases.push(self.parse_type_alias())
+      let doc_pos = self.peek().pos
+      let type_alias = self.parse_type_alias()
+      self.record_doc(type_alias.name, doc_pos)
+      self.collected_type_aliases.push(type_alias)
       continue
     }
     if self.is_namespace_decl_start() {
@@ -4769,6 +4825,7 @@ fn Parser::parse_module_block_with_const_values(
       enums,
       internal_names: self.collected_internal_names,
       deprecations: self.collected_deprecations,
+      docs: self.collected_docs,
       pure_declarations: self.collected_pure_declarations,
       type_aliases: self.collected_type_aliases,
       interfaces: self.collected_interfaces,

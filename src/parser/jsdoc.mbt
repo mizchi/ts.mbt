@@ -285,3 +285,65 @@ fn split_first_word(s : String) -> (String, String) {
   }
   (head, rest)
 }
+
+///|
+/// A JSDoc block as MoonBit doc-comment lines, without the `/// ` prefix:
+/// the description, then one line per documentation tag. Tags that are
+/// instructions to a tool rather than documentation (`@internal`,
+/// `@__PURE__`, visibility markers, `@template`, `@typedef`) are left out,
+/// and so is a block that ends up with nothing to say.
+pub fn jsdoc_doc_lines(jb : JsdocBlock) -> Array[String] {
+  let out : Array[String] = []
+  for line in jb.description.trim().split("\n") {
+    out.push(line.trim_end().to_owned())
+  }
+  if out.length() == 1 && out[0] == "" {
+    let _ = out.pop()
+  }
+  let tags : Array[String] = []
+  for t in jb.tags {
+    match t {
+      Param(name, _, desc) => tags.push("- `\{name}`: \{desc.trim()}")
+      Returns(_, desc) if desc.trim() != "" =>
+        tags.push("Returns: \{desc.trim()}")
+      Throws(_, desc) if desc.trim() != "" =>
+        tags.push("Throws: \{desc.trim()}")
+      Deprecated(msg) =>
+        tags.push(
+          if msg.trim() == "" {
+            "Deprecated."
+          } else {
+            "Deprecated: \{msg.trim()}"
+          },
+        )
+      See(target) => tags.push("See: \{target.trim()}")
+      // Doc comments are Markdown, and an `@example` is code.
+      Example(code) => {
+        tags.push("Example:")
+        tags.push("```")
+        for line in code.trim().split("\n") {
+          tags.push(line.trim_end().to_owned())
+        }
+        tags.push("```")
+      }
+      _ => ()
+    }
+  }
+  if out.length() > 0 && tags.length() > 0 {
+    out.push("")
+  }
+  for t in tags {
+    out.push(t)
+  }
+  // Every entry is ONE line: a tag's text can span several (vitest's
+  // `@param` lists do), and a doc-comment consumer prefixes each entry
+  // with `///` — a continuation line left inside an entry would come out
+  // as bare source text.
+  let flat : Array[String] = []
+  for entry in out {
+    for line in entry.split("\n") {
+      flat.push(line.trim_end().to_owned())
+    }
+  }
+  flat
+}

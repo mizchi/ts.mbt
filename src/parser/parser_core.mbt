@@ -326,6 +326,9 @@ pub struct Parser {
   // Names with a `@deprecated` tag — fed into the emitted
   // `TsModuleBlock` so `.d.ts` emit can mark them.
   collected_deprecations : Map[String, String]
+  /// JSDoc by declaration path (`Name`, `Name.member`); see
+  /// `TsModuleBlock.docs`.
+  collected_docs : Map[String, Array[String]]
   // Function names with a `@__PURE__` or `@__NO_SIDE_EFFECTS__`
   // tag. The purity pass treats these as unconditionally pure.
   collected_pure_declarations : Map[String, Bool]
@@ -493,6 +496,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_internal_names: {},
     jsdoc_at_pos: {},
     collected_deprecations: {},
+    collected_docs: {},
     collected_pure_declarations: {},
     collected_type_aliases: [],
     collected_interfaces: [],
@@ -782,6 +786,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_internal_names: {},
     jsdoc_at_pos: lexer.jsdoc_at_pos,
     collected_deprecations: {},
+    collected_docs: {},
     collected_pure_declarations: {},
     collected_type_aliases: [],
     collected_interfaces: [],
@@ -1474,5 +1479,53 @@ fn detect_experimental_decorators(head : String) -> Bool {
       line.trim().to_owned().has_prefix("true")
     }
     None => false
+  }
+}
+
+///|
+/// Record the JSDoc of the declaration whose keyword is the token at
+/// `index`. The lexer attaches a comment to the FIRST token after it, which
+/// is the keyword itself or a modifier in front of it (`export`, `declare`,
+/// `default`, `abstract`, `async`), so this looks at the keyword and walks
+/// back over those. Called from the declaration parsers themselves rather
+/// than from the loops that call them, so a declaration in a namespace or
+/// `declare module` body — parsed by a fresh parser through a different
+/// loop — is recorded the same way as one at the top level.
+fn Parser::record_doc_at(self : Parser, key : String, index : Int32) -> Unit {
+  let mut i = index
+  while i >= 0 && i < self.tokens.length() {
+    let tok = self.tokens[i]
+    if self.jsdoc_at_pos.contains(tok.pos) {
+      self.record_doc(key, tok.pos)
+      return
+    }
+    if i == 0 {
+      return
+    }
+    match self.tokens[i - 1].kind {
+      Export | Declare | Default => i -= 1
+      Ident(m) if m == "abstract" || m == "async" => i -= 1
+      _ => return
+    }
+  }
+}
+
+///|
+/// Record the JSDoc attached at `pos` as the documentation of `key` (a
+/// declaration path; see `TsModuleBlock.docs`). The first documented
+/// declaration of a key wins, so an overload set keeps the text of its
+/// first documented signature.
+fn Parser::record_doc(self : Parser, key : String, pos : Int32) -> Unit {
+  if key == "" || self.collected_docs.contains(key) {
+    return
+  }
+  match self.jsdoc_at_pos.get(pos) {
+    Some(jb) => {
+      let lines = jsdoc_doc_lines(jb)
+      if lines.length() > 0 {
+        self.collected_docs[key] = lines
+      }
+    }
+    None => ()
   }
 }

@@ -19,6 +19,8 @@ pub fn emit_moonbit_decl_with_sections_and_types(@ast.TsModule, Array[String], A
 
 pub fn emit_moonbit_decl_with_sections_types_and_arities(@ast.TsModule, Array[String], Array[String], Map[String, Int32], Bool) -> String
 
+pub fn jsdoc_doc_lines(JsdocBlock) -> Array[String]
+
 pub async fn load_tsconfig_project(String) -> TsconfigProject?
 
 pub fn lower_enum_decl_to_runtime_stmts(@ast.TsEnumDecl) -> Array[@ast.TsStmt]
@@ -232,6 +234,7 @@ pub struct Parser {
   collected_internal_names : Map[String, Bool]
   jsdoc_at_pos : Map[Int32, JsdocBlock]
   collected_deprecations : Map[String, String]
+  collected_docs : Map[String, Array[String]]
   collected_pure_declarations : Map[String, Bool]
   collected_type_aliases : Array[@ast.TsTypeAlias]
   collected_interfaces : Array[@ast.TsInterface]

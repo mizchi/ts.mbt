@@ -935,10 +935,12 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   // attached JSDoc block (for `@param {Type}` / `@returns {Type}`
   // overlay below).
   let func_kw_pos = self.peek().pos
+  let doc_index = self.pos
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
+  self.record_doc_at(name, doc_index)
   // TS1212: a *generator* cannot be named `yield` (`function * yield() {}`)
   // -- inside generator grammar `yield` is a reserved word. A plain
   // function named `yield` is additionally reserved when the conformance
@@ -2042,11 +2044,13 @@ fn token_starts_interface_member(kind : TokenKind) -> Bool {
 pub fn Parser::parse_interface(
   self : Parser,
 ) -> @ast.TsInterface raise ParseError {
+  let doc_index = self.pos
   let _ = self.expect(Interface)
   let name = match self.advance().kind {
     Ident(n) => n
     k => raise ParseError("Expected interface name, got \{k}")
   }
+  self.record_doc_at(name, doc_index)
   let (type_params, const_flags, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   // TS2314: a generic interface with no defaulted type parameter requires all
   // of its type arguments, so a bare reference (`I` without `<...>`) is an
@@ -2098,7 +2102,8 @@ pub fn Parser::parse_interface(
     // `@deprecated` tags are recorded per member name below.
     let mut member_is_internal = false
     let mut member_is_deprecated = false
-    match self.jsdoc_at_pos.get(self.peek().pos) {
+    let member_doc_pos = self.peek().pos
+    match self.jsdoc_at_pos.get(member_doc_pos) {
       Some(jb) =>
         for t in jb.tags {
           match t {
@@ -2646,6 +2651,7 @@ pub fn Parser::parse_interface(
       if member_is_deprecated && !deprecated_members.contains(field_name) {
         deprecated_members.push(field_name)
       }
+      self.record_doc("\{name}.\{field_name}", member_doc_pos)
     }
     // Skip trailing semicolon or comma (both optional)
     if self.check(Semicolon) || self.check(Comma) {
@@ -3044,8 +3050,11 @@ fn Parser::parse_type_alias_after_type_keyword(
 
 ///|
 fn Parser::parse_type_alias(self : Parser) -> @ast.TsTypeAlias raise ParseError {
+  let doc_index = self.pos
   let _ = self.expect(Type)
-  self.parse_type_alias_after_type_keyword()
+  let type_alias = self.parse_type_alias_after_type_keyword()
+  self.record_doc_at(type_alias.name, doc_index)
+  type_alias
 }
 
 ///|
@@ -3090,7 +3099,10 @@ pub fn Parser::parse_declare_function(
 ) -> @ast.TsImport raise ParseError {
 
   // function
+  // Called after `function` is consumed, so the keyword is one back.
+  let doc_index = self.pos - 1
   let name = self.parse_binding_ident()
+  self.record_doc_at(name, doc_index)
 
   let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
@@ -3358,6 +3370,8 @@ fn Parser::parse_declare_param_name(self : Parser) -> String raise ParseError {
 fn Parser::parse_declare_values(
   self : Parser,
 ) -> Array[@ast.TsValueDecl] raise ParseError {
+  // Called after `var` / `let` / `const` is consumed.
+  let doc_index = self.pos - 1
   let values : Array[@ast.TsValueDecl] = []
   // A destructuring pattern in an ambient declaration (`declare var
   // [a, b];`, declarationInAmbientContext) is tolerated: current tsc
@@ -3395,6 +3409,7 @@ fn Parser::parse_declare_values(
     let _ = self.parse_expr()
   }
   record_ambient_implicit_any(self, name, annotated, initialised)
+  self.record_doc_at(name, doc_index)
   values.push({ name, type_, })
   while self.match_(Comma) {
     let next_name = self.parse_binding_ident()
@@ -3407,6 +3422,7 @@ fn Parser::parse_declare_values(
     record_ambient_implicit_any(
       self, next_name, next_annotated, next_initialised,
     )
+    self.record_doc_at(next_name, doc_index)
     values.push({ name: next_name, type_: next_type, })
   }
   self.consume_semicolon()
@@ -3847,8 +3863,10 @@ fn Parser::parse_declare_class(
   self : Parser,
   is_abstract : Bool,
 ) -> @ast.TsClassDecl raise ParseError {
+  let doc_index = self.pos
   let _ = self.expect(Class)
   let name = self.parse_binding_ident()
+  self.record_doc_at(name, doc_index)
   let mut class_type_params : Array[String] = []
   let mut class_type_param_bounds : Array[(String, @ast.TsType)] = []
   let mut class_type_param_bound_len = self.local_type_param_bounds.length()
