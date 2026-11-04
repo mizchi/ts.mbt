@@ -379,3 +379,40 @@ test "jsdoc: only documentation tags become doc lines" {
   let markers = parse_jsdoc_block("/** @internal */").unwrap()
   assert_eq(jsdoc_doc_lines(markers), [])
 }
+
+///|
+test "jsdoc: a multi-line tag becomes one entry per line" {
+  let jb = parse_jsdoc_block(
+    "/**\n * Run it.\n * @param mode How it runs:\n * - `a`: first\n * - `b`: second\n */",
+  ).unwrap()
+  for line in jsdoc_doc_lines(jb) {
+    assert_false(line.contains("\n"))
+  }
+}
+
+///|
+test "jsdoc: declarations inside a namespace or declare module body are recorded" {
+  // Both bodies are re-parsed by a FRESH parser through a different loop;
+  // the declaration parsers record, and the parent absorbs the child's docs.
+  let block = parse_module_block_from_source(
+    (
+      #|declare namespace ns {
+      #|  /** A node. */
+      #|  interface Node {
+      #|    /** Its kind. */
+      #|    kind: number;
+      #|  }
+      #|  /** Make one. */
+      #|  function createNode(kind: number): Node;
+      #|}
+      #|declare module "fsish" {
+      #|  /** Read a file. */
+      #|  export function readFileSync(path: string): string;
+      #|}
+    ),
+  )
+  assert_eq(block.docs.get("Node"), Some(["A node."]))
+  assert_eq(block.docs.get("Node.kind"), Some(["Its kind."]))
+  assert_eq(block.docs.get("createNode"), Some(["Make one."]))
+  assert_eq(block.docs.get("readFileSync"), Some(["Read a file."]))
+}

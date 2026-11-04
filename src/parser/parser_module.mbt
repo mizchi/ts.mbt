@@ -900,14 +900,33 @@ fn Parser::parse_declaration_block_source(
 }
 
 ///|
-fn parse_ambient_external_module_source(
+fn Parser::parse_ambient_external_module_source(
+  self : Parser,
   body_source : String,
 ) -> @ast.TsModule raise ParseError {
   if body_source.trim() == "" {
     empty_ts_module()
   } else {
     let parser = Parser::from_source(body_source)
-    parser.parse_module_with_seeded_const_values_internal({}, true)
+    let module_ = parser.parse_module_with_seeded_const_values_internal(
+      {},
+      true,
+    )
+    self.absorb_docs(parser)
+    module_
+  }
+}
+
+///|
+/// A body sub-parsed by a FRESH parser (a namespace, a `declare module
+/// "spec"` or `declare global` block) records its JSDoc there; carry it up
+/// so the declarations inside are documented like top-level ones. First
+/// recorded wins, as within one parser.
+fn Parser::absorb_docs(self : Parser, child : Parser) -> Unit {
+  for key, doc in child.collected_docs {
+    if !self.collected_docs.contains(key) {
+      self.collected_docs[key] = doc
+    }
   }
 }
 
@@ -957,7 +976,7 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
       let spec = self.expect_str_literal()
       if self.check(LBrace) {
         let body_source = self.parse_declaration_block_source()
-        let module_ = parse_ambient_external_module_source(body_source)
+        let module_ = self.parse_ambient_external_module_source(body_source)
         self.propagate_suppression_sentinels(module_)
         Some((spec, module_))
       } else {
@@ -1097,7 +1116,7 @@ fn Parser::parse_namespace_decl_with_mode(
     // namespace so downstream resolvers can see augmented globals.
     if self.check(LBrace) {
       let body_source = self.parse_declaration_block_source()
-      let augmented = parse_ambient_external_module_source(body_source)
+      let augmented = self.parse_ambient_external_module_source(body_source)
       self.propagate_suppression_sentinels(augmented)
       let ns : @ast.TsNamespaceDecl = {
         name: "<global>",
@@ -1210,7 +1229,12 @@ fn Parser::parse_namespace_decl_with_mode(
         if self.in_declaration_file {
           parser.mark_declaration_file()
         }
-        parser.parse_module_with_seeded_const_values_internal({}, true)
+        let body = parser.parse_module_with_seeded_const_values_internal(
+          {},
+          true,
+        )
+        self.absorb_docs(parser)
+        body
       } else {
         // Runtime first, ambient fallback. This lets us parse runtime
         // namespaces in `.ts` files (with class method bodies) without
@@ -1237,13 +1261,18 @@ fn Parser::parse_namespace_decl_with_mode(
             if self.in_declaration_file {
               ambient_parser.mark_declaration_file()
             }
-            ambient_parser.parse_module_with_seeded_const_values_internal(
+            let body = ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
               true,
             )
+            self.absorb_docs(ambient_parser)
+            body
           }
         } noraise {
-          module_ => module_
+          module_ => {
+            self.absorb_docs(runtime_parser)
+            module_
+          }
         }
       }
       // TS1063 and TS1319: `export = X` and `export default X` are module

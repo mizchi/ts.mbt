@@ -1483,6 +1483,34 @@ fn detect_experimental_decorators(head : String) -> Bool {
 }
 
 ///|
+/// Record the JSDoc of the declaration whose keyword is the token at
+/// `index`. The lexer attaches a comment to the FIRST token after it, which
+/// is the keyword itself or a modifier in front of it (`export`, `declare`,
+/// `default`, `abstract`, `async`), so this looks at the keyword and walks
+/// back over those. Called from the declaration parsers themselves rather
+/// than from the loops that call them, so a declaration in a namespace or
+/// `declare module` body — parsed by a fresh parser through a different
+/// loop — is recorded the same way as one at the top level.
+fn Parser::record_doc_at(self : Parser, key : String, index : Int32) -> Unit {
+  let mut i = index
+  while i >= 0 && i < self.tokens.length() {
+    let tok = self.tokens[i]
+    if self.jsdoc_at_pos.contains(tok.pos) {
+      self.record_doc(key, tok.pos)
+      return
+    }
+    if i == 0 {
+      return
+    }
+    match self.tokens[i - 1].kind {
+      Export | Declare | Default => i -= 1
+      Ident(m) if m == "abstract" || m == "async" => i -= 1
+      _ => return
+    }
+  }
+}
+
+///|
 /// Record the JSDoc attached at `pos` as the documentation of `key` (a
 /// declaration path; see `TsModuleBlock.docs`). The first documented
 /// declaration of a key wins, so an overload set keeps the text of its

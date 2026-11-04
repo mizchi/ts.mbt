@@ -335,5 +335,15 @@ pub fn jsdoc_doc_lines(jb : JsdocBlock) -> Array[String] {
   for t in tags {
     out.push(t)
   }
-  out
+  // Every entry is ONE line: a tag's text can span several (vitest's
+  // `@param` lists do), and a doc-comment consumer prefixes each entry
+  // with `///` — a continuation line left inside an entry would come out
+  // as bare source text.
+  let flat : Array[String] = []
+  for entry in out {
+    for line in entry.split("\n") {
+      flat.push(line.trim_end().to_owned())
+    }
+  }
+  flat
 }
