@@ -18,9 +18,18 @@
 /// Covered positions are the ones a value conversion can reach: a bare
 /// `Array[T]`, an optional `Array[T]?` (which crosses as `undefined` or a
 /// plain array either way, probed) and `Array` nested in those
-/// (`Array[Array[T]]`). An `Array` inside another type constructor
-/// (`Promise[Array[T]]`, a callback's parameter, a struct field) has no
-/// boundary at which a wrapper could convert it and is left as it is.
+/// (`Array[Array[T]]`), inside a `Promise` (through the generated
+/// `Promise::map`), and inside a CALLBACK's parameters or result. A struct
+/// field holds its JS array itself and is typed `FixedArray` by the struct
+/// renderer instead.
+///
+/// A callback is converted by handing the other side a wrapper closure,
+/// and JS observes function identity: `off(event, cb)` and
+/// `removeEventListener` find a listener by it. So a wrapper is made once
+/// per original function and reused (`__ts_mbt_cb_memo`, a pair of
+/// `WeakMap`s on `globalThis` that every generated package shares), and
+/// wrapping a wrapper returns its original — `set_x(get_x())` hands JS
+/// back the very function it handed out.
 ///
 /// Fail direction: any extern whose shape this pass does not recognise —
 /// an attribute other than `#module(...)`, a header that does not parse,
@@ -79,8 +88,33 @@ pub fn migrate_js_ffi_array_boundaries(mbt : String) -> String {
     }
     i = end
   }
-  out.join("\n")
+  let result = out.join("\n")
+  // The callback conversion calls two helpers; emit them once, and only in
+  // a package that uses them.
+  if result.contains("__ts_mbt_cb_memo(") &&
+    !result.contains("fn __ts_mbt_cb_memo(") {
+    result + "\n\n" + js_ffi_callback_helpers
+  } else {
+    result
+  }
 }
+
+///|
+/// The helpers a converted callback calls. `__ts_mbt_cb_memo(f, make)`
+/// returns the wrapper for `f`, building it with `make` the first time;
+/// if `f` is itself a wrapper it returns the original instead. The maps
+/// are WEAK, so neither a callback nor its wrapper is kept alive by them.
+let js_ffi_callback_helpers : String =
+  #|///|
+  #|fn[A, B] __ts_mbt_cb_cast(value : A) -> B = "%identity"
+  #|
+  #|///|
+  #|#external
+  #|priv type TsMbtCallbackRef
+  #|
+  #|///|
+  #|extern "js" fn __ts_mbt_cb_memo(f : TsMbtCallbackRef, make : () -> TsMbtCallbackRef) -> TsMbtCallbackRef =
+  #|  #| (f, make) => { const s = (globalThis.__ts_mbt_callbacks ??= { wrap: new WeakMap(), orig: new WeakMap() }); const o = s.orig.get(f); if (o !== undefined) return o; let w = s.wrap.get(f); if (w === undefined) { w = make(); s.wrap.set(f, w); s.orig.set(w, f); } return w; }
 
 ///|
 fn js_ffi_is_extern_header(line : String) -> Bool {
@@ -102,24 +136,28 @@ priv enum JsFfiArrayType {
   /// `Promise[T]`, converted through the generated `Promise::map`; only
   /// parsed when that method is in the same package (`promise_map`).
   Prom(JsFfiArrayType)
+  /// A callback `(P, ..) -> R`.
+  Func(Array[JsFfiArrayType], JsFfiArrayType)
 }
 
 ///|
 fn js_ffi_parse_type(t : String, promise_map : Bool) -> JsFfiArrayType {
   let t = t.trim().to_owned()
   // A function type is recognised first, because `(A) -> B?` is a function
-  // RETURNING `B?` and the `?` suffix test below must not see it — and it
-  // is then left as written. Converting an `Array` inside a callback means
-  // handing the other side a WRAPPER closure, a new function on every call,
-  // and JS APIs observe function identity: `off(event, cb)` and
-  // `removeEventListener` find a listener by it, so wrapping would stop
-  // `off(cb)` from removing what `on(cb)` added — a break today, while
-  // `Array` and `FixedArray` still share a representation. A returned
-  // callback has the mirror problem (`set_x(get_x())` installs a wrapper).
+  // RETURNING `B?` and the `?` suffix test below must not see it.
   if t.has_prefix("(") {
     guard js_ffi_bracket_close(t, 0) is Some(close) else { return Leaf(t) }
     if t[close + 1:].has_prefix(" -> ") {
-      return Leaf(t)
+      let ret_src = t[close + 1 + " -> ".length():].to_owned()
+      // A wrapper would have to restate an effect, and none occurs.
+      if ret_src.contains("raise") || t.has_prefix("async") {
+        return Leaf(t)
+      }
+      let params = js_ffi_split_top(t[1:close].to_owned()).map(fn(p) {
+        js_ffi_parse_type(p, promise_map)
+      })
+      let parsed = Func(params, js_ffi_parse_type(ret_src, promise_map))
+      return if js_ffi_needs(parsed) { parsed } else { Leaf(t) }
     }
     // A parenthesised type, `((A) -> B)`; a tuple `(A, B)` stays a leaf.
     if close == t.length() - 1 {
@@ -189,6 +227,7 @@ fn js_ffi_needs(t : JsFfiArrayType) -> Bool {
     Leaf(_) => false
     Arr(_) => true
     Opt(a) | Prom(a) => js_ffi_needs(a)
+    Func(ps, r) => js_ffi_needs(r) || ps.iter().any(js_ffi_needs)
   }
 }
 
@@ -201,8 +240,13 @@ fn js_ffi_type_text(t : JsFfiArrayType, fixed : Bool) -> String {
       let head = if fixed { "FixedArray" } else { "Array" }
       "\{head}[\{js_ffi_type_text(e, fixed)}]"
     }
+    Opt(Func(_, _) as f) => "(\{js_ffi_type_text(f, fixed)})?"
     Opt(a) => "\{js_ffi_type_text(a, fixed)}?"
     Prom(a) => "Promise[\{js_ffi_type_text(a, fixed)}]"
+    Func(ps, r) => {
+      let params = ps.map(fn(p) { js_ffi_type_text(p, fixed) }).join(", ")
+      "(\{params}) -> \{js_ffi_type_text(r, fixed)}"
+    }
   }
 }
 
@@ -245,6 +289,23 @@ fn js_ffi_convert(
     // `Option::map` and the generated `Promise::map` alike.
     Opt(a) | Prom(a) =>
       "\{expr}.map(fn(\{v}) { \{js_ffi_convert(v, a, depth + 1, to_ffi)} })"
+    Func(ps, r) => {
+      // The wrapper is CALLED by the side it is handed to: its parameters
+      // arrive from there, so they convert the opposite way, and its result
+      // goes back. Its types are that side's (`to_ffi`: the FixedArray ones).
+      let f = "f\{depth}"
+      let names = ps.mapi(fn(i, _) { "a\{depth}_\{i}" })
+      let typed = ps
+        .mapi(fn(i, p) { "\{names[i]} : \{js_ffi_type_text(p, to_ffi)}" })
+        .join(", ")
+      let args = ps
+        .mapi(fn(i, p) { js_ffi_convert(names[i], p, depth + 1, !to_ffi) })
+        .join(", ")
+      let call = js_ffi_convert("\{f}(\{args})", r, depth + 1, to_ffi)
+      let ret = js_ffi_type_text(r, to_ffi)
+      // Bound once: `expr` may be a call (an extern's result).
+      "{ let \{f} = \{expr}; __ts_mbt_cb_cast(__ts_mbt_cb_memo(__ts_mbt_cb_cast(\{f}), fn() { __ts_mbt_cb_cast(fn(\{typed}) -> \{ret} { \{call} }) })) }"
+    }
   }
 }
 

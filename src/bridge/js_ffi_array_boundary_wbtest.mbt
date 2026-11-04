@@ -42,7 +42,9 @@ test "js ffi array boundary: shapes with no boundary conversion are left alone" 
     #|pub extern "js" fn run(self : Provider) -> Promise[Array[Result]] =
     #|  #| (self) => self.run()
     #|
-    #|pub extern "js" fn on(cb : (Array[String]) -> Bool) -> Unit = "on"
+    #|pub extern "js" fn on(cb : (String) -> Bool) -> Unit = "on"
+    #|
+    #|pub extern "js" fn on_err(cb : (Array[String]) -> Unit raise) -> Unit = "on_err"
     #|
     #|pub extern "js" fn plain(x : String?) -> FixedArray[Int] = "plain"
     #|
@@ -80,22 +82,49 @@ test "js ffi array boundary: Promise[Array] converts through the package's Promi
 }
 
 ///|
-test "js ffi array boundary: a callback is never wrapped, in either direction" {
-  // Wrapping would hand JS a new function per call, and `off(cb)` finds a
-  // listener by identity. `(A) -> B?` is a function returning `B?`, not an
-  // optional callback, and must not be read as one.
+test "js ffi array boundary: a callback converts through one memoized wrapper" {
+  // A wrapper made per call would break `off(cb)`, which finds a listener
+  // by function identity, so both directions go through
+  // `__ts_mbt_cb_memo`, and the helpers are emitted once per package.
   let src =
-    #|pub fn[T, U] Promise::map(self : Promise[T], f : (T) -> U) -> Promise[U] { abort("") }
-    #|
     #|pub extern "js" fn Server::off(self : Server, arg0 : String, arg1 : (Array[String]) -> Unit) -> Server =
     #|  #| (self, arg0, arg1) => self.off(arg0, arg1)
     #|
     #|pub extern "js" fn get_tags() -> (Array[String]) -> Bool = "__ts_mbt_get_tags"
-    #|
+  let out = migrate_js_ffi_array_boundaries(src)
+  assert_true(
+    out.contains(
+      "pub fn Server::off(self : Server, arg0 : String, arg1 : (Array[String]) -> Unit) -> Server {\n  __ts_mbt_ffi_Server__off(self, arg0, { let f0 = arg1; __ts_mbt_cb_cast(__ts_mbt_cb_memo(__ts_mbt_cb_cast(f0), fn() { __ts_mbt_cb_cast(fn(a0_0 : FixedArray[String]) -> Unit { f0(Array::from_fixed_array(a0_0)) }) })) })\n}",
+    ),
+  )
+  // The returned JS function is wrapped the other way: MoonBit calls it
+  // with an `Array`, and it hands JS a `FixedArray`.
+  assert_true(
+    out.contains(
+      "{ let f0 = __ts_mbt_ffi_get_tags(); __ts_mbt_cb_cast(__ts_mbt_cb_memo(__ts_mbt_cb_cast(f0), fn() { __ts_mbt_cb_cast(fn(a0_0 : Array[String]) -> Bool { f0(FixedArray::from_array(a0_0)) }) })) }",
+    ),
+  )
+  // Helpers once, even with two converted callbacks.
+  assert_eq(out.split("fn __ts_mbt_cb_memo(").count(), 2)
+}
+
+///|
+test "js ffi array boundary: a function returning an optional is not an optional callback" {
+  // `(A) -> B?` returns `B?`; `((A) -> B)?` is an optional callback.
+  let src =
     #|pub extern "js" fn get_pick() -> (String) -> Array[String]? = "__ts_mbt_get_pick"
     #|
     #|pub extern "js" fn get_cb() -> ((Array[String]) -> Unit)? = "__ts_mbt_get_cb"
-    #|
-    #|pub extern "js" fn read() -> Promise[ReadResult[Array[Buffer]]] = "__ts_mbt_read"
-  inspect(migrate_js_ffi_array_boundaries(src) == src, content="true")
+  let out = migrate_js_ffi_array_boundaries(src)
+  assert_true(
+    out.contains(
+      "extern \"js\" fn __ts_mbt_ffi_get_pick() -> (String) -> FixedArray[String]? = \"__ts_mbt_get_pick\"",
+    ),
+  )
+  assert_true(
+    out.contains(
+      "extern \"js\" fn __ts_mbt_ffi_get_cb() -> ((FixedArray[String]) -> Unit)? = \"__ts_mbt_get_cb\"",
+    ),
+  )
+  assert_true(out.contains("__ts_mbt_ffi_get_cb().map(fn(v0) {"))
 }
