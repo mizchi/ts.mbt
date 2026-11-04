@@ -1511,6 +1511,61 @@ fn ffi_replace_this_token(rendered : String, owner_name : String) -> String {
 }
 
 ///|
+/// The type of a FIELD of a generated struct. A generated struct mirrors a
+/// JS object, which holds plain JS arrays, and `Array`'s runtime layout is
+/// set to stop matching one — the reason `migrate_js_ffi_array_boundaries`
+/// moves extern signatures to `FixedArray`. A field has no boundary to
+/// convert at (the struct IS the JS object), so the field's TYPE changes,
+/// at every depth: a bare, optional or nested `Array`, a tuple (`close: []`
+/// in node's event maps renders as one), and a function-typed field's
+/// parameters and return, since that holds a JS function or a MoonBit
+/// closure JS calls — no wrapper is created, so the function-identity
+/// reason extern callbacks keep `Array` for does not arise.
+///
+/// Only the two struct DECLARATION renderers call this.
+/// `ffi_struct_field_type_name` also renders class property accessors,
+/// index-signature accessors and class methods, which are extern
+/// signatures: those keep `Array` and get their `FixedArray` boundary from
+/// the extern pass, so their public types do not change.
+fn ffi_struct_decl_field_type_name(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> String {
+  ffi_fixed_array_type_text(ffi_struct_field_type_name(state, type_))
+}
+
+///|
+/// `Array[` -> `FixedArray[` in rendered MoonBit type text, at a word
+/// boundary only, so a type NAMED `NodeArray[...]` is untouched.
+fn ffi_fixed_array_type_text(rendered : String) -> String {
+  if !rendered.contains("Array[") {
+    return rendered
+  }
+  let chars = rendered.to_array()
+  let out = StringBuilder()
+  let mut i = 0
+  while i < chars.length() {
+    let at_boundary = i == 0 ||
+      ({
+        let c = chars[i - 1]
+        !(c.is_ascii_alphabetic() ||
+        c.is_ascii_digit() ||
+        c == '_' ||
+        c == '@' ||
+        c == '.')
+      })
+    if at_boundary && rendered[i:].has_prefix("Array[") {
+      out.write_string("FixedArray[")
+      i += "Array[".length()
+    } else {
+      out.write_char(chars[i])
+      i += 1
+    }
+  }
+  out.to_string()
+}
+
+///|
 fn ffi_struct_field_type_name(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
@@ -2032,8 +2087,27 @@ fn ffi_function_field_method_decl(
           let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
           Some(getter_decl + "\n\n" + wrapper_decl)
         } else {
+          // `self._call_` is the struct FIELD, whose `Array`s render as
+          // `FixedArray` (`ffi_struct_field_type_name`); the method keeps
+          // the `Array` signature and converts at this one call site, with
+          // the same conversions the extern pass applies.
+          let field_args = arg_exprs
+            .mapi(fn(i, expr) {
+              if expr != args[i] {
+                // An async-callback lowering already rewrote this argument.
+                expr
+              } else {
+                js_ffi_to_ffi(expr, js_ffi_parse_type(param_types[i], false), 0)
+              }
+            })
+            .join(", ")
+          let call = js_ffi_from_ffi(
+            "(self.\{field_name})(\{field_args})",
+            js_ffi_parse_type(return_type, false),
+            0,
+          )
           Some(
-            "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+            "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  \{call}\n}",
           )
         }
       } else {
@@ -2346,7 +2420,9 @@ fn ffi_struct_decl_to_moonbit(
     } else {
       type_
     }
-    let raw_struct_field_type = ffi_struct_field_type_name(state, read_type)
+    let raw_struct_field_type = ffi_struct_decl_field_type_name(
+      state, read_type,
+    )
     // TypeScript `this` builder return -> owning struct, WITH its type
     // parameters: a generic struct named bare is a [4040] arity error.
     // Most `this` returns never reach this token rewrite, but a member
@@ -2605,7 +2681,7 @@ fn ffi_named_struct_decl_to_moonbit(
     } else {
       field_type
     }
-    let safe_type = ffi_struct_field_type_name(state, read_type)
+    let safe_type = ffi_struct_decl_field_type_name(state, read_type)
     lines.push("  \{safe_name} : \{safe_type}")
   }
   lines.push("}")

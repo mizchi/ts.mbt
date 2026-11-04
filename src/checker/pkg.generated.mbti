@@ -134,10 +134,11 @@ pub(all) struct AssignabilityIssue {
   message : String
 }
 
+#derive(Eq, @debug.Debug)
 pub(all) struct ExprIssue {
   path : String
   message : String
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn ExprIssue::equal(Self, Self) -> Bool
 #deprecated
@@ -152,11 +153,12 @@ pub fn TypeCheckReport::count_of_kind(Self, TypeIssueKind) -> Int32
 pub fn TypeCheckReport::is_clean(Self) -> Bool
 pub fn TypeCheckReport::of_kind(Self, TypeIssueKind) -> Array[TypeIssue]
 
+#derive(Eq, @debug.Debug)
 pub(all) struct TypeIssue {
   kind : TypeIssueKind
   name : String
   detail : String
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TypeIssue::equal(Self, Self) -> Bool
 #deprecated
@@ -164,6 +166,7 @@ pub fn TypeIssue::not_equal(Self, Self) -> Bool
 #deprecated
 pub fn TypeIssue::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TypeIssueKind {
   UnresolvedReference
   DuplicateDeclaration
@@ -174,7 +177,7 @@ pub(all) enum TypeIssueKind {
   EnumMemberDuplicate
   InterfaceExtendsCycle
   ClassPropertyDuplicate
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TypeIssueKind::equal(Self, Self) -> Bool
 #deprecated

@@ -240,7 +240,8 @@ pub(all) struct BundleOutput {
   timings : Array[(String, Double)]
 }
 
-type CalleeClass derive(Eq, @debug.Debug)
+#derive(Eq, @debug.Debug)
+type CalleeClass
 #deprecated
 pub fn CalleeClass::equal(Self, Self) -> Bool
 #deprecated
@@ -255,9 +256,10 @@ pub(all) struct ContainerFacts {
   aliases : Map[String, @ast.TsType]
 }
 
+#derive(@debug.Debug)
 pub(all) struct Def {
   init : @ast.TsExpr?
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn Def::to_repr(Self) -> @debug.Repr
 
@@ -277,13 +279,15 @@ pub(all) struct EscapeBreakdown {
   obs_attribution : Array[String]
 }
 
+#derive(@debug.Debug)
 pub(all) struct FlowEdge {
   from : FlowNode
   to : FlowNode
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn FlowEdge::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) enum FlowNode {
   SymVal(Int32)
   FuncReturn(Int32)
@@ -291,14 +295,15 @@ pub(all) enum FlowNode {
   Literal(LiteralKind)
   External
   Unknown
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn FlowNode::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) struct FuncInfo {
   params : Array[Int32]
   returns : Array[FlowNode]
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn FuncInfo::to_repr(Self) -> @debug.Repr
 
@@ -335,6 +340,7 @@ pub(all) struct LinkRenames {
   synthesized_namespaces : Map[String, Bool]
 }
 
+#derive(Eq, @debug.Debug)
 pub(all) enum LiteralKind {
   LitNumeric
   LitString
@@ -342,7 +348,7 @@ pub(all) enum LiteralKind {
   LitNull
   LitObject
   LitOther
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn LiteralKind::equal(Self, Self) -> Bool
 #deprecated
@@ -366,13 +372,14 @@ pub fn ManglerConfig::with_preserve_top_level(Self, Bool) -> Self
 pub fn ManglerConfig::with_reserved(Self, Array[String]) -> Self
 pub fn ManglerConfig::with_reserved_properties(Self, Array[String]) -> Self
 
+#derive(Eq, @debug.Debug)
 pub(all) enum Observability {
   Hidden
   ViaStringify
   DirectProps
   RecursiveProps
   External
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn Observability::equal(Self, Self) -> Bool
 #deprecated
@@ -390,10 +397,11 @@ pub fn[T] PhaseTimer::phase(Self, String, () -> T) -> T
 pub fn PhaseTimer::record(Self, String, Double) -> Unit
 pub fn PhaseTimer::report(Self) -> Array[String]
 
+#derive(Eq, @debug.Debug)
 pub(all) struct Position {
   line : Int32
   column : Int32
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn Position::equal(Self, Self) -> Bool
 pub fn Position::new(Int32, Int32) -> Self
@@ -427,12 +435,13 @@ pub(all) struct Scope {
   declared : Array[Int32]
 }
 
+#derive(Eq, @debug.Debug)
 pub(all) enum ScopeKind {
   Module
   Function
   Block
   Catch
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn ScopeKind::equal(Self, Self) -> Bool
 #deprecated
@@ -482,6 +491,7 @@ pub(all) struct SwitchFoldTable {
   entries : Map[String, SwitchFoldEntry]
 }
 
+#derive(@debug.Debug)
 pub(all) struct Symbol {
   id : Int32
   scope_id : Int32
@@ -494,7 +504,7 @@ pub(all) struct Symbol {
   mut reassigned : Bool
   mut captured_by_closure : Bool
   mut ts_type : @ast.TsType
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn Symbol::to_repr(Self) -> @debug.Repr
 
@@ -508,6 +518,7 @@ pub(all) struct SymbolGraph {
   unresolved : Map[String, Int32]
 }
 
+#derive(Eq, @debug.Debug)
 pub(all) enum SymbolKind {
   Let
   Const
@@ -519,7 +530,7 @@ pub(all) enum SymbolKind {
   ImportNamed
   Catch
   ClassDecl
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn SymbolKind::equal(Self, Self) -> Bool
 #deprecated
@@ -537,13 +548,15 @@ pub(all) struct TransformOutput {
   sourcemap : String?
 }
 
+#derive(@debug.Debug)
 pub(all) struct Use {
   scope_id : Int32
   context : UseContext
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn Use::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) enum UseContext {
   Read
   PropReceiver(String)
@@ -558,15 +571,16 @@ pub(all) enum UseContext {
   AssignRHS
   PropAssignRHS
   IndexAssignRHS
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn UseContext::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) struct Violation {
   kind : String
   name : String
   detail : String
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn Violation::to_repr(Self) -> @debug.Repr
 

@@ -100,33 +100,37 @@ pub fn tagged_union_type_alias_decl(@ast.TsTypeAlias) -> BridgeTaggedUnionDecl?
 pub fn tagged_union_widen_reason_for_alias(@ast.TsTypeAlias) -> String?
 
 // Errors
+#derive(@debug.Debug)
 pub suberror MbtiJsLinkConfigError {
   ReadError(String)
   ParseError(String)
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn MbtiJsLinkConfigError::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub suberror MbtiTypescriptDeclError {
   ReadError(String)
   ParseError(String)
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn MbtiTypescriptDeclError::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) suberror ModuleGraphError {
   ReadError(String)
   ParseError(String)
   ResolveError(String)
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn ModuleGraphError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
+#derive(Eq, @debug.Debug)
 pub(all) struct BridgeTaggedUnionDecl {
   name : String
   cases : Array[(String, @ast.TsType)]
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn BridgeTaggedUnionDecl::equal(Self, Self) -> Bool
 #deprecated
@@ -149,27 +153,31 @@ pub struct MbtiTypescriptScaffoldBundle {
   files : Array[MbtiTypescriptPackageFile]
 }
 
-type ModuleGraph derive(@debug.Debug)
+#derive(@debug.Debug)
+type ModuleGraph
 #deprecated
 pub fn ModuleGraph::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub struct MoonBitJsFfiBundle {
   ffi_mbt : String
   bridge_js : String
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn MoonBitJsFfiBundle::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub struct MoonBitTsBridgeBundle {
   entry_path : String
   module_spec : String
   decl_mbt : String
   ffi_mbt : String
   bridge_js : String
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn MoonBitTsBridgeBundle::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub struct MoonBitTsBridgePackageBundle {
   entry_path : String
   module_spec : String
@@ -177,15 +185,17 @@ pub struct MoonBitTsBridgePackageBundle {
   bridge_mbti : String
   bridge_mbt : String
   bridge_js : String
-} derive(@debug.Debug)
+}
 #deprecated
 pub fn MoonBitTsBridgePackageBundle::to_repr(Self) -> @debug.Repr
 
-type ResolvedExport derive(@debug.Debug)
+#derive(@debug.Debug)
+type ResolvedExport
 #deprecated
 pub fn ResolvedExport::to_repr(Self) -> @debug.Repr
 
-type ResolvedExportKind derive(Eq, @debug.Debug)
+#derive(Eq, @debug.Debug)
+type ResolvedExportKind
 #deprecated
 pub fn ResolvedExportKind::equal(Self, Self) -> Bool
 #deprecated
@@ -193,18 +203,22 @@ pub fn ResolvedExportKind::not_equal(Self, Self) -> Bool
 #deprecated
 pub fn ResolvedExportKind::to_repr(Self) -> @debug.Repr
 
-type ResolvedImportEdge derive(@debug.Debug)
+#derive(@debug.Debug)
+type ResolvedImportEdge
 #deprecated
 pub fn ResolvedImportEdge::to_repr(Self) -> @debug.Repr
 
-type ResolvedModuleRecord derive(@debug.Debug)
+#derive(@debug.Debug)
+type ResolvedModuleRecord
 #deprecated
 pub fn ResolvedModuleRecord::to_repr(Self) -> @debug.Repr
 
-type ResolvedReExportEdge derive(@debug.Debug)
+#derive(@debug.Debug)
+type ResolvedReExportEdge
 #deprecated
 pub fn ResolvedReExportEdge::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TaggedUnionCaseDiscriminator {
   TypeofString
   TypeofNumber
@@ -217,7 +231,7 @@ pub(all) enum TaggedUnionCaseDiscriminator {
   StrictEqualsNumber(String)
   StrictEqualsBigInt(String)
   StrictEqualsBool(Bool)
-} derive(Eq, @debug.Debug)
+}
 #deprecated
 pub fn TaggedUnionCaseDiscriminator::equal(Self, Self) -> Bool
 #deprecated

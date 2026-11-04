@@ -4998,12 +4998,12 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   assert_true(actual.contains("  import_ : Module"))
   assert_true(actual.contains("  and_ : NaryIntersectionParser"))
   assert_true(actual.contains("  with_ : Scheduler"))
-  assert_true(actual.contains("  include_ : Array[String]"))
+  assert_true(actual.contains("  include_ : FixedArray[String]"))
   assert_true(actual.contains("  override_ : Bool"))
   assert_true(actual.contains("  method_ : String"))
   assert_true(actual.contains("  priv_ : String"))
   assert_true(actual.contains("  field : OpaqueType"))
-  assert_true(actual.contains("  references : Array[BaseNode]"))
+  assert_true(actual.contains("  references : FixedArray[BaseNode]"))
   assert_false(actual.contains("  _ : Scope"))
 }
 
@@ -5610,7 +5610,9 @@ async test "bridge: polymorphic this lowers to the owner with its own type param
   }
   // Interface members: `this` keeps the fluent chain typed on Box[A, B]
   // instead of falling into the JSValue arity filler.
-  assert_true(bundle.ffi_mbt.contains("check : (Array[String]) -> Box[A, B]"))
+  assert_true(
+    bundle.ffi_mbt.contains("check : (FixedArray[String]) -> Box[A, B]"),
+  )
   assert_true(bundle.ffi_mbt.contains("optional : () -> Wrap[Box[A, B]]"))
   assert_true(bundle.ffi_mbt.contains("pair : (B) -> Box[A, B]"))
   // An optional parameter wraps the callable in `CallableMeta`, whose
