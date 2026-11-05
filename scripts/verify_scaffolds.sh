@@ -279,6 +279,7 @@ import {
   make_string_box,
   ready,
   type MoonBitArray,
+  type MoonBitSet,
   update_ref,
   type CallbackBox,
   type LoadError,
@@ -293,7 +294,7 @@ const ok: Promise<Result<Result<MoonBitArray<[string, number]>, LoadError>, Load
 const status: Status = ready(1);
 const errorStatus: Status = failed("missing");
 const state: Ref<Array<bigint>> = { val: [] };
-const updated: Set<string> = update_ref(state, [1n, 2n]);
+const updated: MoonBitSet<string> = update_ref(state, [1n, 2n]);
 consume_callbacks((_label, _count) => {}, undefined, ["required"]);
 void bytes;
 void box;
