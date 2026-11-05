@@ -2462,9 +2462,12 @@ async test "bridge: emit MoonBit declarations from fixture React package surface
   )
   assert_true(
     actual.contains(
-      "declare pub fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((Readonly, Readonly) -> Bool)?) -> MemoExoticComponent[FunctionComponent[JSValue]]",
+      "declare pub fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((JSValue, JSValue) -> Bool)?) -> MemoExoticComponent[FunctionComponent[JSValue]]",
     ),
   )
+  // `Readonly<P>` over a type parameter is `P`; it used to leave a bare
+  // opaque `Readonly` behind that named nothing.
+  assert_false(actual.contains("declare pub type Readonly"))
   assert_true(
     actual.contains(
       "declare pub fn normalizeProps(props : ButtonHTMLAttributes) -> ButtonHTMLAttributes",

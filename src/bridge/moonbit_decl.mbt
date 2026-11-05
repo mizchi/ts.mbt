@@ -6080,6 +6080,15 @@ fn lower_react_utility_type(
           info, name, source_type, modules, canonical_types,
         ) {
         Some(iface) => Named(iface.name)
+        // No interface to copy fields from (a type parameter, an erased
+        // `JSValue`, an inline shape). `Readonly<X>` is `X` at runtime and
+        // MoonBit has no read-only flag for a type, so it lowers to the
+        // source itself; left `Applied`, it rendered as a bare opaque
+        // `Readonly` that names nothing (`memo`'s `propsAreEqual` came out
+        // `(Readonly, Readonly) -> Bool`). `Partial` / `Required` change
+        // the shape, so they keep the wrapper.
+        None if name == "Readonly" =>
+          lower_react_utility_type(info, source_type, modules, canonical_types)
         None =>
           Applied(name, [
             lower_react_utility_type(
