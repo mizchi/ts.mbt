@@ -58,7 +58,7 @@ pub fn make_string_box(value : String) -> CallbackBox[String] {
 pub fn consume_callbacks(
   handler : (String, Int32) -> Unit,
   on_error? : (LoadError) -> Unit,
-  required : Array[String],
+  required : FixedArray[String],
 ) -> Unit {
   handler("required", required.length())
   match on_error {
@@ -70,12 +70,12 @@ pub fn consume_callbacks(
 ///|
 #warnings("-unused_async")
 pub async fn load_all(
-  keys : Array[String],
+  keys : FixedArray[String],
 ) -> Result[Array[(String, Int32)], LoadError] raise LoadError {
   if keys.length() == 0 {
     raise LoadError::MissingKey("keys")
   }
-  Ok(keys.map(fn(key) { (key, key.length()) }))
+  Ok(Array::from_fixed_array(keys).map(fn(key) { (key, key.length()) }))
 }
 
 ///|
@@ -85,8 +85,8 @@ pub fn borrow_bytes(data : BytesView) -> Bytes {
 
 ///|
 pub fn update_ref(
-  state : Ref[Array[Int64]],
-  next : ArrayView[UInt64],
+  state : Ref[FixedArray[Int64]],
+  next : FixedArray[UInt64],
 ) -> Set[String] {
   state.val = next.map(fn(value) { value.reinterpret_as_int64() })
   Set::from_array(["updated", state.val.length().to_string()])

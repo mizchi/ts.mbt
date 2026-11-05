@@ -10,11 +10,19 @@
 // and the `moon test` path the same code. The service is exercised
 // against `MtscMemoryHost` by `service_wbtest.mbt` on native, and the
 // only thing these wrappers can get wrong is which function they call.
+//
+// Every array that crosses here is a `FixedArray`. A `FixedArray` IS a JS
+// array on this backend, while an `Array` is a MoonBit growable array —
+// since moonc v0.10.20 an object `{ buf, len }`, so returning one hands
+// JavaScript something with no `.map` and taking one rejects the plain
+// arrays every JS caller passes.
 
 ///|
 /// Every diagnostic for the program the host describes.
-pub fn js_get_program_diagnostics(host : MtscJsHost) -> Array[MtscDiagnostic] {
-  get_program_diagnostics(host)
+pub fn js_get_program_diagnostics(
+  host : MtscJsHost,
+) -> FixedArray[MtscDiagnostic] {
+  FixedArray::from_array(get_program_diagnostics(host))
 }
 
 ///|
@@ -22,8 +30,8 @@ pub fn js_get_program_diagnostics(host : MtscJsHost) -> Array[MtscDiagnostic] {
 pub fn js_get_semantic_diagnostics(
   host : MtscJsHost,
   file : String,
-) -> Array[MtscDiagnostic] {
-  get_semantic_diagnostics(host, file)
+) -> FixedArray[MtscDiagnostic] {
+  FixedArray::from_array(get_semantic_diagnostics(host, file))
 }
 
 ///|
@@ -31,14 +39,14 @@ pub fn js_get_semantic_diagnostics(
 pub fn js_get_syntactic_diagnostics(
   host : MtscJsHost,
   file : String,
-) -> Array[MtscDiagnostic] {
-  get_syntactic_diagnostics(host, file)
+) -> FixedArray[MtscDiagnostic] {
+  FixedArray::from_array(get_syntactic_diagnostics(host, file))
 }
 
 ///|
 /// Every file in the program, roots plus what they reach.
-pub fn js_get_program_file_names(host : MtscJsHost) -> Array[String] {
-  get_program_file_names(host)
+pub fn js_get_program_file_names(host : MtscJsHost) -> FixedArray[String] {
+  FixedArray::from_array(get_program_file_names(host))
 }
 
 ///|
@@ -49,4 +57,23 @@ pub fn js_resolve_module_name(
   specifier : String,
 ) -> MtscResolvedModule {
   resolve_module_name(host, importer, specifier)
+}
+
+///|
+/// `checkModuleGraph`'s argument as JavaScript builds it: an object whose
+/// `modules` and `edges` are plain JS arrays.
+pub(all) struct MtscJsModuleGraph {
+  modules : FixedArray[MtscModuleSource]
+  edges : FixedArray[MtscModuleEdge]
+}
+
+///|
+/// The original string ABI, reading the graph through `MtscJsModuleGraph`
+/// so a plain JS array is accepted; the check itself is
+/// `check_module_graph`, unchanged.
+pub fn js_check_module_graph(graph : MtscJsModuleGraph) -> String {
+  check_module_graph({
+    modules: Array::from_fixed_array(graph.modules),
+    edges: Array::from_fixed_array(graph.edges),
+  })
 }

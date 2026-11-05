@@ -103,10 +103,16 @@ async test "bridge: emit TypeScript declarations keeps pub(all) types used by pu
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI emit error: \{msg}")
   }
+  // A MoonBit `Array` is the opaque `MoonBitArray`, declared once.
   let expected =
+    #|declare const __moonbitArray: unique symbol;
+    #|export interface MoonBitArray<T> {
+    #|  readonly [__moonbitArray]: T;
+    #|}
+    #|
     #|export function analyze_truthiness_guard(s: string): [string, boolean] | undefined;
     #|
-    #|export type AnalysisResult<T> = { $tag: "Ok"; _0: T; _1: Array<string> } | { $tag: "Err"; _0: Array<string> };
+    #|export type AnalysisResult<T> = { $tag: "Ok"; _0: T; _1: MoonBitArray<string> } | { $tag: "Err"; _0: MoonBitArray<string> };
     #|
     #|export type AnalysisResult_Ok<T> = Extract<AnalysisResult<T>, { $tag: "Ok" }>;
     #|export type AnalysisResult_Err<T> = Extract<AnalysisResult<T>, { $tag: "Err" }>;
@@ -287,7 +293,7 @@ test "bridge: emit TypeScript declarations keeps required params after optional 
   }
   assert_true(
     actual.contains(
-      "export function view(id: string | undefined, gap: number | undefined, items: Array<string>): void;",
+      "export function view(id: string | undefined, gap: number | undefined, items: MoonBitArray<string>): void;",
     ),
   )
   assert_true(
@@ -361,12 +367,12 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   }
   assert_true(
     actual.contains(
-      "export function consume_callbacks(handler: (s: string, n: number) => void, on_error: ((value: Error) => void) | undefined, required: Array<string>): void;",
+      "export function consume_callbacks(handler: (s: string, n: number) => void, on_error: ((value: Error) => void) | undefined, required: MoonBitArray<string>): void;",
     ),
   )
   assert_true(
     actual.contains(
-      "export function load_all(keys: Array<string>): Promise<Result<Result<Array<[string, number]>, Error>, Error>>;",
+      "export function load_all(keys: MoonBitArray<string>): Promise<Result<Result<MoonBitArray<[string, number]>, Error>, Error>>;",
     ),
   )
   assert_true(
@@ -376,12 +382,12 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export function update_ref(state: { val: Array<bigint> }, next: ReadonlyArray<bigint>): Set<string>;",
+      "export function update_ref(state: { val: MoonBitArray<bigint> }, next: ReadonlyArray<bigint>): Set<string>;",
     ),
   )
   assert_true(
     actual.contains(
-      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((value: T) => void) | undefined;\n  meta: Map<string, Array<boolean>>;\n}",
+      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((value: T) => void) | undefined;\n  meta: Map<string, MoonBitArray<boolean>>;\n}",
     ),
   )
   assert_true(
@@ -772,7 +778,7 @@ test "bridge: emit TypeScript declarations imports fully qualified external type
   )
   assert_true(
     actual.contains(
-      "export function nodes(items: Array<mizchi_luna_core.Node<void, string>>): mizchi_luna_core.Node<void, string>;",
+      "export function nodes(items: MoonBitArray<mizchi_luna_core.Node<void, string>>): mizchi_luna_core.Node<void, string>;",
     ),
   )
   let rewrites : Map[String, String] = Map([])
@@ -824,7 +830,7 @@ test "bridge: emit TypeScript declarations unwraps borrowed types" {
   )
   assert_true(
     actual.contains(
-      "export function read(arg0: io.Reader, items: Array<Node>): Node;",
+      "export function read(arg0: io.Reader, items: MoonBitArray<Node>): Node;",
     ),
   )
   assert_true(actual.contains("  reader: io.Reader;"))
@@ -1700,7 +1706,7 @@ async test "bridge: unconstrained generic free fns export through monomorphized 
   )
   assert_true(
     root_content.contains(
-      "export function first<T>(items: Array<T>): T | undefined;",
+      "export function first<T>(items: MoonBitArray<T>): T | undefined;",
     ),
   )
   assert_false(root_content.contains("export function describe"))
@@ -1740,7 +1746,7 @@ async test "bridge: generic methods on non-generic owners export via monomorphiz
   )
   assert_true(
     ts_decls.contains(
-      "export function counter_pick<T>(self: Counter, items: Array<T>): T | undefined;",
+      "export function counter_pick<T>(self: Counter, items: MoonBitArray<T>): T | undefined;",
     ),
   )
   // Trait-bounded methods stay omitted.
@@ -1809,4 +1815,51 @@ test "bridge: emit TypeScript declarations skips Show::output / Debug::to_repr p
   assert_false(actual.contains("Repr"))
   assert_true(actual.contains("Point_to_string"))
   assert_true(actual.contains("Point_equal"))
+}
+
+///|
+test "bridge: a MoonBit Array is opaque in TypeScript and a FixedArray is a JS array" {
+  // moonc v0.10.20 passes an `Array` to JS as `{ buf, len }`; only a
+  // `FixedArray` is a plain JS array.
+  let actual = parse_mbti_to_typescript(
+    (
+      #|package "p/arr"
+      #|
+      #|pub fn count(Array[String]) -> Int
+      #|
+      #|pub fn countf(FixedArray[String]) -> Int
+    ),
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) => fail(msg)
+  }
+  inspect(
+    actual,
+    content=(
+      #|declare const __moonbitArray: unique symbol;
+      #|export interface MoonBitArray<T> {
+      #|  readonly [__moonbitArray]: T;
+      #|}
+      #|
+      #|export function count(items: MoonBitArray<string>): number;
+      #|
+      #|export function countf(items: Array<string>): number;
+    ),
+  )
+  assert_eq(actual.split("export interface MoonBitArray<T>").count(), 2)
+}
+
+///|
+test "bridge: no MoonBitArray declaration without a MoonBit Array" {
+  let actual = parse_mbti_to_typescript(
+    (
+      #|package "p/arr"
+      #|
+      #|pub fn countf(FixedArray[String]) -> Int
+    ),
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) => fail(msg)
+  }
+  assert_false(actual.contains("MoonBitArray"))
 }

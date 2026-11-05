@@ -278,6 +278,7 @@ import {
   load_all,
   make_string_box,
   ready,
+  type MoonBitArray,
   update_ref,
   type CallbackBox,
   type LoadError,
@@ -288,7 +289,7 @@ import type { Ref } from "moonbitlang/core/ref";
 
 const bytes: Uint8Array = borrow_bytes(new Uint8Array([1, 2, 3]));
 const box: CallbackBox<string> = make_string_box("value");
-const ok: Promise<Result<Result<Array<[string, number]>, LoadError>, LoadError>> = load_all(["a"]);
+const ok: Promise<Result<Result<MoonBitArray<[string, number]>, LoadError>, LoadError>> = load_all(["a"]);
 const status: Status = ready(1);
 const errorStatus: Status = failed("missing");
 const state: Ref<Array<bigint>> = { val: [] };
@@ -630,7 +631,7 @@ extern "js" fn test_button_attributes() -> @scaffold_ts_to_moonbit_react_package
 extern "js" fn test_function_component() -> @scaffold_ts_to_moonbit_react_package.FunctionComponent[@scaffold_ts_to_moonbit_react_package.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null })
 
-extern "js" fn test_forward_ref_render() -> @scaffold_ts_to_moonbit_react_package.ForwardRefRenderCallback =
+extern "js" fn test_forward_ref_render() -> (@scaffold_ts_to_moonbit_react_package.JSValue, @scaffold_ts_to_moonbit_react_package.Ref[@scaffold_ts_to_moonbit_react_package.JSValue]) -> @scaffold_ts_to_moonbit_react_package.JSValue =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
 extern "js" fn test_ref() -> @scaffold_ts_to_moonbit_react_package.Ref[@scaffold_ts_to_moonbit_react_package.JSValue] =
@@ -680,7 +681,7 @@ extern "js" fn test_button_attributes() -> @sut.ButtonHTMLAttributes =
 extern "js" fn test_function_component() -> @sut.FunctionComponent[@sut.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null })
 
-extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderCallback =
+extern "js" fn test_forward_ref_render() -> (@sut.JSValue, @sut.Ref[@sut.JSValue]) -> @sut.JSValue =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
 extern "js" fn test_ref() -> @sut.Ref[@sut.JSValue] =
@@ -895,7 +896,7 @@ EOF
 extern "js" fn test_button_attributes() -> @scaffold_ts_to_moonbit_hono_jsx.ButtonAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_component() -> @scaffold_ts_to_moonbit_hono_jsx.MemoComponentCallback =
+extern "js" fn test_component() -> (@scaffold_ts_to_moonbit_hono_jsx.JSValue) -> @scaffold_ts_to_moonbit_hono_jsx.JsxElement =
   #| () => (props) => ({ tag: "button", props })
 
 test "generated Hono JSX scaffold smoke" {
@@ -910,7 +911,7 @@ EOF
 extern "js" fn test_button_attributes() -> @sut.ButtonAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_component() -> @sut.MemoComponentCallback =
+extern "js" fn test_component() -> (@sut.JSValue) -> @sut.JsxElement =
   #| () => (props) => ({ tag: "button", props })
 
 fn main {

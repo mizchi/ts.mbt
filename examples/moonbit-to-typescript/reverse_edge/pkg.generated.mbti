@@ -9,17 +9,17 @@ import {
 // Values
 pub fn borrow_bytes(BytesView) -> Bytes
 
-pub fn consume_callbacks((String, Int) -> Unit, on_error? : (LoadError) -> Unit, Array[String]) -> Unit
+pub fn consume_callbacks((String, Int) -> Unit, on_error? : (LoadError) -> Unit, FixedArray[String]) -> Unit
 
 pub fn failed(String) -> Status
 
-pub async fn load_all(Array[String]) -> Result[Array[(String, Int)], LoadError] raise LoadError
+pub async fn load_all(FixedArray[String]) -> Result[Array[(String, Int)], LoadError] raise LoadError
 
 pub fn make_string_box(String) -> CallbackBox[String]
 
 pub fn ready(Int) -> Status
 
-pub fn update_ref(@ref.Ref[Array[Int64]], ArrayView[UInt64]) -> @set.Set[String]
+pub fn update_ref(@ref.Ref[FixedArray[Int64]], FixedArray[UInt64]) -> @set.Set[String]
 
 // Errors
 pub suberror LoadError {

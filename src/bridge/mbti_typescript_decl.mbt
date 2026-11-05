@@ -276,7 +276,9 @@ fn mbti_heuristic_param_name(ty_src : String) -> String? {
     "bigint" => Some("n")
     "void" | "Unit" => Some("v")
     _ =>
-      if core_ty.has_prefix("Array<") || core_ty.has_prefix("ReadonlyArray<") {
+      if core_ty.has_prefix("Array<") ||
+        core_ty.has_prefix("ReadonlyArray<") ||
+        core_ty.has_prefix("MoonBitArray<") {
         Some("items")
       } else if core_ty.has_prefix("Map<") || core_ty.has_prefix("ReadonlyMap<") {
         Some("entries")
@@ -3180,11 +3182,23 @@ fn translate_named_type(
     "Int64" | "UInt64" => "bigint"
     "String" | "StringView" => "string"
     "Bytes" | "BytesView" => "Uint8Array"
-    "Array" | "FixedArray" =>
+    // A `FixedArray` is a plain JS array on the `js` backend. A MoonBit
+    // `Array` is not: since moonc v0.10.20 it is an object `{ buf, len }`,
+    // and moonc never promised otherwise (its own `.d.ts` declares an
+    // exported `Array` as `any`). So `Array[T]` is the opaque
+    // `MoonBitArray<T>`, which only a value that came from MoonBit
+    // satisfies, and a TypeScript caller cannot hand it a JS array.
+    "FixedArray" =>
       if args.length() == 1 {
         "Array<\{args[0]}>"
       } else {
         "Array<unknown>"
+      }
+    "Array" =>
+      if args.length() == 1 {
+        "MoonBitArray<\{args[0]}>"
+      } else {
+        "MoonBitArray<unknown>"
       }
     "ArrayView" | "ReadOnlyArray" =>
       if args.length() == 1 {
@@ -4349,6 +4363,36 @@ fn decls_reference_builtin_json(
   }
   for decl in decls {
     if contains_unqualified_type_name(decl, "Json") {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// The opaque type a MoonBit `Array[T]` crosses as. The brand is a
+/// required property keyed by a `unique symbol` nothing can name, so a
+/// plain JS array is rejected while a value MoonBit returned is accepted
+/// and can be handed back to it; `T` is carried so two element types stay
+/// distinct.
+fn render_builtin_moonbit_array_decl() -> String {
+  "declare const __moonbitArray: unique symbol;\n" +
+  "export interface MoonBitArray<T> {\n" +
+  "  readonly [__moonbitArray]: T;\n" +
+  "}"
+}
+
+///|
+fn decls_reference_builtin_moonbit_array(
+  decls : Array[String],
+  type_kinds : Map[String, String],
+) -> Bool {
+  match type_kinds.get("MoonBitArray") {
+    Some(_) => return false
+    None => ()
+  }
+  for decl in decls {
+    if contains_unqualified_type_name(decl, "MoonBitArray") {
       return true
     }
   }
@@ -5678,6 +5722,9 @@ fn parse_mbti_to_typescript_with_import_rewrites(
   }
   if decls_reference_builtin_string_builder(decls, type_kinds) {
     final_decls.push(render_builtin_string_builder_decl())
+  }
+  if decls_reference_builtin_moonbit_array(decls, type_kinds) {
+    final_decls.push(render_builtin_moonbit_array_decl())
   }
   for marker_name in bound_marker_order {
     if marker_name == "Show" {

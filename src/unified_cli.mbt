@@ -301,14 +301,7 @@ async fn collect_pkg_generated_mbti_files(
   }
   match kind {
     @fs.FileKind::Directory => {
-      let entries = @fs.readdir(
-        path,
-        include_hidden=false,
-        include_special=false,
-        sort=true,
-      ) catch {
-        _ => []
-      }
+      let entries = fs_readdir(path, sort=true) catch { _ => [] }
       for name in entries {
         if unified_tsmbt_skip_scan_dir(name) {
           continue
@@ -376,14 +369,7 @@ async fn ghq_module_name_candidate_repo_paths(
   if !@fs.exists(owner_root) {
     return paths
   }
-  let entries = @fs.readdir(
-    owner_root,
-    include_hidden=false,
-    include_special=false,
-    sort=true,
-  ) catch {
-    _ => return paths
-  }
+  let entries = fs_readdir(owner_root, sort=true) catch { _ => return paths }
   for name in entries {
     if unified_tsmbt_skip_scan_dir(name) {
       continue
@@ -1080,12 +1066,7 @@ async fn mbt2ts_pkg_collect_commands_from_dir(
       commands.push({ name, source_relative_dir, })
     }
   }
-  let entries = @fs.readdir(
-    dir,
-    include_hidden=false,
-    include_special=false,
-    sort=true,
-  ) catch {
+  let entries = fs_readdir(dir, sort=true) catch {
     e => {
       println("Error: --pkg could not read source directory \{dir}: \{e}")
       return false
@@ -1143,12 +1124,7 @@ async fn mbt2ts_pkg_collect_submodule_mbti_paths(
   dir : String,
   paths : Array[String],
 ) -> Bool {
-  let entries = @fs.readdir(
-    dir,
-    include_hidden=false,
-    include_special=false,
-    sort=true,
-  ) catch {
+  let entries = fs_readdir(dir, sort=true) catch {
     e => {
       println("Error: --pkg could not read source directory \{dir}: \{e}")
       return false

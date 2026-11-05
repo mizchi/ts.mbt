@@ -638,26 +638,20 @@ preferred_target = "js"
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_listener() -> @bridge_callback.EmitEventListenerCallback =
-  #| () => (label, count) => {
-  #|   globalThis.__tsmbtCallbackSeen = `${label}:${count}`;
-  #| }
-
-extern "js" fn test_maybe_listener() -> @bridge_callback.MaybeEmitListenerCallback =
-  #| () => (label, count) => {
-  #|   globalThis.__tsmbtCallbackSeen = `${label}:${count}`;
-  #| }
-
-extern "js" fn test_callback_seen() -> String =
-  #| () => globalThis.__tsmbtCallbackSeen ?? ""
-
 ///|
 test "generated bridge package calls callback APIs" {
-  assert_eq(@bridge_callback.emitEvent("evt", 3.0, test_listener()), "evt:3")
-  assert_eq(test_callback_seen(), "evt:3")
+  // The listeners are MoonBit closures: an inline callback parameter is a
+  // function type, not an opaque `<Owner><Param>Callback` that only a JS
+  // extern could produce.
+  let seen : Ref[String] = { val: "" }
+  let listener = fn(label : String, count : Double) {
+    seen.val = "\{label}:\{count.to_int()}"
+  }
+  assert_eq(@bridge_callback.emitEvent("evt", 3.0, listener), "evt:3")
+  assert_eq(seen.val, "evt:3")
   assert_eq(@bridge_callback.maybeEmit("empty", None), "empty:none")
-  assert_eq(@bridge_callback.maybeEmit("once", Some(test_maybe_listener())), "once:called")
-  assert_eq(test_callback_seen(), "once:1")
+  assert_eq(@bridge_callback.maybeEmit("once", Some(listener)), "once:called")
+  assert_eq(seen.val, "once:1")
 }
 EOF
 

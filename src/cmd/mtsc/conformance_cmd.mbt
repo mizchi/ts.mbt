@@ -39,14 +39,7 @@ fn ts_case_basename(path : String) -> String {
 ///|
 async fn collect_baseline_basenames() -> Map[String, Bool] {
   let dir = "typescript/tests/baselines/reference"
-  let entries = @fs.readdir(
-    dir,
-    include_hidden=false,
-    include_special=false,
-    sort=false,
-  ) catch {
-    _ => []
-  }
+  let entries = fs_readdir(dir, sort=false) catch { _ => [] }
   let suffix = ".errors.txt"
   let set : Map[String, Bool] = Map([])
   for name in entries {
@@ -70,14 +63,7 @@ async fn collect_ts_source_files_recursive(dir : String) -> Array[String] {
   if !(kind is @fs.FileKind::Directory) {
     return []
   }
-  let entries = @fs.readdir(
-    dir,
-    include_hidden=false,
-    include_special=false,
-    sort=true,
-  ) catch {
-    _ => []
-  }
+  let entries = fs_readdir(dir, sort=true) catch { _ => [] }
   let files : Array[String] = []
   for name in entries {
     let path = dir + "/" + name

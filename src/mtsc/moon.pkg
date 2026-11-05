@@ -25,7 +25,7 @@ options(
       // arrays of plain objects rather than strings, which the string
       // ABI could not do and which is what an editor or overlay needs.
       "exports": [
-        "check_module_graph:checkModuleGraph",
+        "js_check_module_graph:checkModuleGraph",
         "js_get_program_diagnostics:getProgramDiagnostics",
         "js_get_semantic_diagnostics:getSemanticDiagnostics",
         "js_get_syntactic_diagnostics:getSyntacticDiagnostics",

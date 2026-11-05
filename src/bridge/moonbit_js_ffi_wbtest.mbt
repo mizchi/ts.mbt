@@ -3917,20 +3917,17 @@ async test "bridge: emit MoonBit JS FFI bundle from callback APIs with synthetic
       return
     }
   }
-  assert_true(
-    bundle.ffi_mbt.contains("#external\npub type EmitEventListenerCallback"),
-  )
-  assert_true(
-    bundle.ffi_mbt.contains("#external\npub type MaybeEmitListenerCallback"),
-  )
+  // An inline callback stays a function type, so a caller can pass a
+  // closure; it used to become an opaque type nothing could construct.
+  assert_false(bundle.ffi_mbt.contains("ListenerCallback"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn emit_event(label : String, count : Double, listener : EmitEventListenerCallback) -> String = \"__ts_mbt_emit_event\"",
+      "extern \"js\" fn emit_event(label : String, count : Double, listener : (String, Double) -> Unit) -> String = \"__ts_mbt_emit_event\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn maybe_emit(label : String, listener : MaybeEmitListenerCallback?) -> String = \"__ts_mbt_maybe_emit\"",
+      "extern \"js\" fn maybe_emit(label : String, listener : ((String, Double) -> Unit)?) -> String = \"__ts_mbt_maybe_emit\"",
     ),
   )
   assert_true(bundle.bridge_js.contains("__ts_mbt_emit_event"))
@@ -3996,7 +3993,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_reducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult = \"__ts_mbt_use_reducer\"",
+      "extern \"js\" fn use_reducer(reducer : (JSValue, JSValue) -> JSValue, initialState : JSValue) -> UseReducerResult = \"__ts_mbt_use_reducer\"",
     ),
   )
   assert_true(
@@ -4743,12 +4740,12 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "extern \"js\" fn forward_ref(render : ForwardRefRenderCallback) -> ForwardRefExoticComponent[JSValue] = \"__ts_mbt_forward_ref\"",
+      "extern \"js\" fn forward_ref(render : (JSValue, Ref[JSValue]) -> JSValue) -> ForwardRefExoticComponent[JSValue] = \"__ts_mbt_forward_ref\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn memo(component : FunctionComponent[JSValue], propsAreEqual : MemoPropsAreEqualCallback?) -> MemoExoticComponent[FunctionComponent[JSValue]] = \"__ts_mbt_memo\"",
+      "pub extern \"js\" fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((Readonly, Readonly) -> Bool)?) -> MemoExoticComponent[FunctionComponent[JSValue]] = \"__ts_mbt_memo\"",
     ),
   )
   assert_true(
@@ -4876,7 +4873,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture Hono JSX package sub
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn memo(component : MemoComponentCallback) -> (JSValue) -> JsxElement = \"memo\"",
+      "pub extern \"js\" fn memo(component : (JSValue) -> JsxElement) -> (JSValue) -> JsxElement = \"memo\"",
     ),
   )
 }

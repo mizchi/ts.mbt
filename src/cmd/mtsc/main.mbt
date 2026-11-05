@@ -759,7 +759,7 @@ async fn mtsc_load_bundle_files(
 /// file deeper in the tree belongs to whatever entry sits next to it.
 async fn mtsc_sibling_declaration_files(entry_path : String) -> Array[String] {
   let dir = mtsc_dirname(entry_path)
-  let names = @fs.readdir(dir, sort=true) catch { _ => return [] }
+  let names = fs_readdir(dir, sort=true) catch { _ => return [] }
   let out : Array[String] = []
   for name in names {
     if name.has_suffix(".d.ts") {
@@ -849,7 +849,7 @@ async fn mtsc_dir_listing(dir : String) -> Map[String, Bool] {
     Some(m) => m
     None => {
       let m : Map[String, Bool] = Map([])
-      let names = @fs.readdir(key) catch { _ => [] }
+      let names = fs_readdir(key) catch { _ => [] }
       for n in names {
         m[n] = true
       }
