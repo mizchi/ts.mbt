@@ -278,6 +278,7 @@ import {
   load_all,
   make_string_box,
   ready,
+  type MoonBitArray,
   update_ref,
   type CallbackBox,
   type LoadError,
@@ -288,7 +289,7 @@ import type { Ref } from "moonbitlang/core/ref";
 
 const bytes: Uint8Array = borrow_bytes(new Uint8Array([1, 2, 3]));
 const box: CallbackBox<string> = make_string_box("value");
-const ok: Promise<Result<Result<Array<[string, number]>, LoadError>, LoadError>> = load_all(["a"]);
+const ok: Promise<Result<Result<MoonBitArray<[string, number]>, LoadError>, LoadError>> = load_all(["a"]);
 const status: Status = ready(1);
 const errorStatus: Status = failed("missing");
 const state: Ref<Array<bigint>> = { val: [] };
