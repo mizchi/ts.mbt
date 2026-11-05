@@ -2010,6 +2010,9 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
   // parse extern headers by name and type, and this pass renames the
   // ones it moves behind a wrapper.
   let bridge_mbt = migrate_js_ffi_array_boundaries(bridge_mbt)
+  // Same rewrite on both files, keyed on the types the `.mbt` declares.
+  let bridge_mbti = migrate_generic_type_arg_arrays(bridge_mbti, bridge_mbt)
+  let bridge_mbt = migrate_generic_type_arg_arrays(bridge_mbt, bridge_mbt)
   // After the FixedArray pass, so a doc lands on the public wrapper and not
   // on the private extern behind it.
   let docs : Map[String, Array[String]] = Map([])

@@ -47,6 +47,8 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
 
 pub fn jsdoc_add_member_aliases(Map[String, Array[String]]) -> Unit
 
+pub fn migrate_generic_type_arg_arrays(String, String) -> String
+
 pub fn migrate_js_ffi_array_boundaries(String) -> String
 
 pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String) -> String raise ModuleGraphError

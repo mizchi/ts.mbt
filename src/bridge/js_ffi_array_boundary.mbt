@@ -428,3 +428,118 @@ fn js_ffi_migrate_extern(
   out.push("}")
   Some(out)
 }
+
+///|
+/// `Array` -> `FixedArray` inside the TYPE ARGUMENTS of the generic types
+/// this package declares (`Promise[ReadVResult[Array[T]]]` ->
+/// `Promise[ReadVResult[FixedArray[T]]]`), at every occurrence.
+///
+/// A generated generic type mirrors JS data: its type arguments describe
+/// the JS values it holds, and a JS array is a `FixedArray` — the reason
+/// struct fields render as `FixedArray` (`ffi_struct_decl_field_type_name`).
+/// node's `ReadVResult[T]` is the case: `T` is the TypeScript `TBuffers`,
+/// its field `buffers` is already `FixedArray`, and an `Array` argument
+/// would contradict it. Only STRUCTS declared in `decl_source` are touched,
+/// so a builtin, an imported generic or an opaque `type` (the package's own
+/// `Promise[T]`) keeps its argument, and the same
+/// rewrite is applied to `.mbt` and `.mbti` so the two cannot disagree.
+pub fn migrate_generic_type_arg_arrays(
+  text : String,
+  decl_source : String,
+) -> String {
+  let names = js_ffi_declared_generic_type_names(decl_source)
+  if names.is_empty() || !text.contains("Array[") {
+    return text
+  }
+  js_ffi_rewrite_generic_args(text, names)
+}
+
+///|
+/// Indexes are UTF-16 code units throughout, matching `text[a:b]`: the
+/// generated text carries JSDoc in any language, and a code-point index
+/// would drift from the slice index after the first non-ASCII character.
+fn js_ffi_rewrite_generic_args(text : String, names : Set[String]) -> String {
+  let out = StringBuilder()
+  let n = text.length()
+  let mut copied = 0
+  let mut i = 0
+  while i < n {
+    let at_boundary = i == 0 || !js_ffi_is_ident_unit(text[i - 1])
+    if !(at_boundary && js_ffi_is_ident_start_unit(text[i])) {
+      i += 1
+      continue
+    }
+    let mut j = i
+    while j < n && js_ffi_is_ident_unit(text[j]) {
+      j += 1
+    }
+    if j < n && text[j] == '[' && names.contains(text[i:j].to_owned()) {
+      match js_ffi_bracket_close(text, j) {
+        Some(close) => {
+          out.write_string(text[copied:j + 1].to_owned())
+          // The arguments may hold further declared generics.
+          let args = js_ffi_rewrite_generic_args(
+            text[j + 1:close].to_owned(),
+            names,
+          )
+          out.write_string(ffi_fixed_array_type_text(args))
+          out.write_string("]")
+          copied = close + 1
+          i = close + 1
+          continue
+        }
+        None => ()
+      }
+    }
+    i = j
+  }
+  out.write_string(text[copied:].to_owned())
+  out.to_string()
+}
+
+///|
+fn js_ffi_is_ident_start_unit(c : UInt16) -> Bool {
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
+///|
+fn js_ffi_is_ident_unit(c : UInt16) -> Bool {
+  js_ffi_is_ident_start_unit(c) || (c >= '0' && c <= '9')
+}
+
+///|
+/// Generic structs declared in generated MoonBit: `struct Name[` at the
+/// start of a line, with any of the generator's visibility prefixes.
+fn js_ffi_declared_generic_type_names(mbt : String) -> Set[String] {
+  let names : Set[String] = Set([])
+  // Structs only: a struct's fields are what render as `FixedArray`.
+  // A generic `type` such as the package's own `Promise[T]` is an opaque
+  // handle, and the boundary pass keeps `Promise[Array[_]]` public on
+  // purpose.
+  let prefixes = [
+    "pub(all) struct ", "pub struct ", "struct ", "declare pub(all) struct ",
+  ]
+  for line in mbt.split("\n") {
+    for prefix in prefixes {
+      if line.has_prefix(prefix) {
+        let rest = line[prefix.length():].to_owned()
+        match rest.find("[") {
+          Some(open) => {
+            let name = rest[:open].to_owned()
+            if name != "" &&
+              name
+              .iter()
+              .all(fn(c) {
+                c.is_ascii_alphabetic() || c.is_ascii_digit() || c == '_'
+              }) {
+              names.add(name)
+            }
+          }
+          None => ()
+        }
+        break
+      }
+    }
+  }
+  names
+}
