@@ -36,7 +36,7 @@ async test "mtsc JavaScript module exposes only the Vite graph checker ABI" {
   let manifest = @fs.read_file("src/mtsc/moon.pkg").text() catch {
     e => fail("failed to read mtsc package manifest: \{e}")
   }
-  assert_true(manifest.contains("\"check_module_graph:checkModuleGraph\""))
+  assert_true(manifest.contains("\"js_check_module_graph:checkModuleGraph\""))
   assert_false(manifest.contains("check_source:checkSource"))
   assert_false(manifest.contains("check_module_sources:checkModuleSources"))
 }
