@@ -86,8 +86,10 @@ pub fn borrow_bytes(data : BytesView) -> Bytes {
 ///|
 pub fn update_ref(
   state : Ref[FixedArray[Int64]],
-  next : FixedArray[UInt64],
+  next : ArrayView[UInt64],
 ) -> Set[String] {
-  state.val = next.map(fn(value) { value.reinterpret_as_int64() })
+  state.val = FixedArray::from_array(
+    next.map(fn(value) { value.reinterpret_as_int64() }),
+  )
   Set::from_array(["updated", state.val.length().to_string()])
 }

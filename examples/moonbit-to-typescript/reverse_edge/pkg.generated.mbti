@@ -19,7 +19,7 @@ pub fn make_string_box(String) -> CallbackBox[String]
 
 pub fn ready(Int) -> Status
 
-pub fn update_ref(@ref.Ref[FixedArray[Int64]], FixedArray[UInt64]) -> @set.Set[String]
+pub fn update_ref(@ref.Ref[FixedArray[Int64]], ArrayView[UInt64]) -> @set.Set[String]
 
 // Errors
 pub suberror LoadError {

@@ -270,7 +270,7 @@ fn mbti_heuristic_param_name(ty_src : String) -> String? {
     trimmed
   }
   match core_ty {
-    "string" => Some("s")
+    "string" | "MoonBitStringView" => Some("s")
     "number" => Some("n")
     "boolean" => Some("flag")
     "bigint" => Some("n")
@@ -1685,7 +1685,10 @@ fn mbti_render_js_boundary_glue_param_type(
     let rendered_inner = mbti_qualify_root_type_refs_for_glue(
       inner, local_type_names, type_param_names, source_alias,
     )
-    return "Array[\{rendered_inner}]"
+    // `FixedArray`, not `Array`: the caller is JavaScript, and since moonc
+    // v0.10.20 a MoonBit `Array` is `{ buf, len }` while a `FixedArray` is
+    // the plain JS array a caller passes. `[:]` views either.
+    return "FixedArray[\{rendered_inner}]"
   }
   mbti_qualify_root_type_refs_for_glue(
     source, local_type_names, type_param_names, source_alias,
@@ -2172,7 +2175,7 @@ fn collect_mbti_autolink_glue_decls(
                 // non-generic and its `Self` renders bare. Method type
                 // params reach the TS declaration through the `<T>` suffix
                 // and render verbatim as unknown type refs.
-                let params = parse_mbti_params(
+                let params = parse_mbti_glued_signature_params(
                   params_src,
                   imports,
                   used_aliases,
@@ -3001,8 +3004,11 @@ fn lookup_import_module_spec(
 /// `{ buf, start, end }`, and an `Array` is `{ buf, len }`. None of them is
 /// the JS `Map` / `Set` / `Array` the `.d.ts` used to name, so a TypeScript
 /// caller could build one that type-checked and that MoonBit then read as
-/// empty. `FixedArray` and `ReadOnlyArray` ARE plain JS arrays and keep
-/// their `Array<T>` / `ReadonlyArray<T>`.
+/// empty. `Iter` / `Iter2` are closure-carrying structs, and `StringView` /
+/// `BytesView` are `{ str | buf, start, end }`. `FixedArray` and
+/// `ReadOnlyArray` ARE plain JS arrays and keep their `Array<T>` /
+/// `ReadonlyArray<T>`; `String` and `Bytes` are a JS string and a
+/// `Uint8Array` and keep `string` / `Uint8Array`.
 ///
 /// Each gets its own interface, so a `HashMap` cannot stand in for a `Map`.
 fn mbti_opaque_builtin_types() -> Array[(String, Array[String])] {
@@ -3016,6 +3022,10 @@ fn mbti_opaque_builtin_types() -> Array[(String, Array[String])] {
     ("MoonBitSortedMap", ["K", "V"]),
     ("MoonBitSortedSet", ["T"]),
     ("MoonBitDeque", ["T"]),
+    ("MoonBitIter", ["T"]),
+    ("MoonBitIter2", ["K", "V"]),
+    ("MoonBitStringView", []),
+    ("MoonBitBytesView", []),
   ]
 }
 
@@ -3028,6 +3038,9 @@ fn mbti_ts_opaque_of(name : String, args : Array[String]) -> String {
     if entry.0 == name {
       arity = entry.1.length()
     }
+  }
+  if arity == 0 {
+    return name
   }
   let rendered = if args.length() == arity {
     args
@@ -3111,6 +3124,77 @@ fn parse_mbti_params(
   owner_name : String?,
   owner_type_params : Array[String],
 ) -> Array[MbtiParam] raise MbtiTypescriptDeclError {
+  parse_mbti_params_at(
+    source, imports, used_aliases, owner_name, owner_type_params, false,
+  )
+}
+
+///|
+/// The parameters of an exported function or method, which the scaffold's
+/// JS-boundary glue receives. That glue converts exactly three top-level
+/// parameter types (`mbti_render_js_boundary_glue_param_type`): it takes a
+/// `String` for a `StringView`, `Bytes` for a `BytesView` and a
+/// `FixedArray` for an `ArrayView`, and builds the view itself, so at THIS
+/// position those are a JS string, a `Uint8Array` and a JS array. Anywhere
+/// else (a return, a field, a callback's parameter, a nested type) nothing
+/// converts and the view crosses as the MoonBit struct it is.
+fn parse_mbti_glued_signature_params(
+  source : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+  owner_name : String?,
+  owner_type_params : Array[String],
+) -> Array[MbtiParam] raise MbtiTypescriptDeclError {
+  parse_mbti_params_at(
+    source, imports, used_aliases, owner_name, owner_type_params, true,
+  )
+}
+
+///|
+/// One parameter type. At a glued position the three views the boundary
+/// glue converts are rendered as what JS hands it; everywhere else, and for
+/// every other type, this is `translate_mbti_type`.
+fn translate_mbti_param_type(
+  source : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+  owner_name : String?,
+  owner_type_params : Array[String],
+  glued : Bool,
+) -> String raise MbtiTypescriptDeclError {
+  if glued {
+    let unborrowed = mbti_strip_borrow_prefix(source)
+    if unborrowed == "StringView" {
+      return "string"
+    }
+    if unborrowed == "BytesView" {
+      return "Uint8Array"
+    }
+    if unborrowed.has_prefix("ArrayView[") && unborrowed.has_suffix("]") {
+      let inner = translate_mbti_type(
+        unborrowed["ArrayView[".length():unborrowed.length() - 1].to_owned(),
+        imports,
+        used_aliases,
+        owner_name,
+        owner_type_params,
+      )
+      return "ReadonlyArray<\{inner}>"
+    }
+  }
+  translate_mbti_type(
+    source, imports, used_aliases, owner_name, owner_type_params,
+  )
+}
+
+///|
+fn parse_mbti_params_at(
+  source : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+  owner_name : String?,
+  owner_type_params : Array[String],
+  glued : Bool,
+) -> Array[MbtiParam] raise MbtiTypescriptDeclError {
   let params : Array[MbtiParam] = []
   let raw_items = split_top_level_items(source)
   let total = raw_items.length()
@@ -3129,12 +3213,13 @@ fn parse_mbti_params(
         } else {
           raw_name
         }
-        let ty = translate_mbti_type(
+        let ty = translate_mbti_param_type(
           trimmed[colon_idx + 1:trimmed.length()].trim().to_owned(),
           imports,
           used_aliases,
           owner_name,
           owner_type_params,
+          glued,
         )
         let param_name = if idx == 0 && trimmed.has_prefix("Self") {
           "self"
@@ -3149,8 +3234,8 @@ fn parse_mbti_params(
         })
       }
       None => {
-        let ty = translate_mbti_type(
-          trimmed, imports, used_aliases, owner_name, owner_type_params,
+        let ty = translate_mbti_param_type(
+          trimmed, imports, used_aliases, owner_name, owner_type_params, glued,
         )
         let param_name = if idx == 0 && trimmed.has_prefix("Self") {
           "self"
@@ -3209,8 +3294,14 @@ fn translate_named_type(
     | "Float"
     | "Double" => "number"
     "Int64" | "UInt64" => "bigint"
-    "String" | "StringView" => "string"
-    "Bytes" | "BytesView" => "Uint8Array"
+    // `String` is a JS string and `Bytes` a `Uint8Array` (measured). Their
+    // views are not: `StringView` is `{ str, start, end }` and `BytesView`
+    // `{ buf, start, end }`, and a JS string or `Uint8Array` passed as one
+    // reads as length 0.
+    "String" => "string"
+    "StringView" => mbti_ts_opaque_of("MoonBitStringView", args)
+    "Bytes" => "Uint8Array"
+    "BytesView" => mbti_ts_opaque_of("MoonBitBytesView", args)
     // A `FixedArray` is a plain JS array on the `js` backend. A MoonBit
     // `Array` is not: since moonc v0.10.20 it is an object `{ buf, len }`,
     // and moonc never promised otherwise (its own `.d.ts` declares an
@@ -3234,20 +3325,11 @@ fn translate_named_type(
       }
     "Map" => mbti_ts_opaque_of("MoonBitMap", args)
     "Set" => mbti_ts_opaque_of("MoonBitSet", args)
-    "Iter" =>
-      if args.length() == 1 {
-        "Iterable<\{args[0]}>"
-      } else {
-        "Iterable<unknown>"
-      }
-    // `Iter2[K, V]` is a lazy iterator of key/value pairs; the faithful TS
-    // shape is an iterable of `[K, V]` tuples (TypeScript has no `Iter2`).
-    "Iter2" =>
-      if args.length() == 2 {
-        "Iterable<[\{args[0]}, \{args[1]}]>"
-      } else {
-        "Iterable<unknown>"
-      }
+    // `Iter` / `Iter2` are MoonBit structs wrapping a closure, not JS
+    // iterables: iterating one from JS finds no `Symbol.iterator`, and a JS
+    // array passed as one throws `_func is not a function` (measured).
+    "Iter" => mbti_ts_opaque_of("MoonBitIter", args)
+    "Iter2" => mbti_ts_opaque_of("MoonBitIter2", args)
     "Ref" =>
       if args.length() == 1 {
         "{ val: \{args[0]} }"
@@ -3389,8 +3471,16 @@ fn translate_mbti_type(
           ),
         )
       }
-      let joined_items = rendered.join(", ")
-      return "[\{joined_items}]"
+      // A MoonBit tuple is a plain object `{ _0, _1, ... }` on the `js`
+      // backend, not a JS array (measured; moonc's own `.d.ts` says
+      // `[A, B]`, which is wrong the same way). An object of that shape is
+      // also what MoonBit accepts back, so the type is structural rather
+      // than opaque.
+      let fields : Array[String] = []
+      for i, item_ts in rendered {
+        fields.push("_\{i}: \{item_ts}")
+      }
+      return "{ \{fields.join("; ")} }"
     }
     return translate_mbti_type(
       inner, imports, used_aliases, owner_name, owner_type_params,
@@ -4398,13 +4488,18 @@ fn decls_reference_builtin_json(
 /// and `MoonBitMap<string, string>` stay distinct.
 fn render_builtin_opaque_decl(name : String, params : Array[String]) -> String {
   let symbol = "__\{name}"
-  let carried = if params.length() == 1 {
-    params[0]
+  let carried = match params.length() {
+    0 => "true"
+    1 => params[0]
+    _ => "[\{params.join(", ")}]"
+  }
+  let generics = if params.length() == 0 {
+    ""
   } else {
-    "[\{params.join(", ")}]"
+    "<\{params.join(", ")}>"
   }
   "declare const \{symbol}: unique symbol;\n" +
-  "export interface \{name}<\{params.join(", ")}> {\n" +
+  "export interface \{name}\{generics} {\n" +
   "  readonly [\{symbol}]: \{carried};\n" +
   "}"
 }
@@ -5414,7 +5509,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
               None => []
             }
             let owner_type_param_names = type_param_names(owner_type_params)
-            let params = parse_mbti_params(
+            let params = parse_mbti_glued_signature_params(
               function_decl.params_src,
               imports,
               used_aliases,
@@ -5525,7 +5620,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
           None => ()
         }
       None => {
-        let params = parse_mbti_params(
+        let params = parse_mbti_glued_signature_params(
           function_decl.params_src,
           imports,
           used_aliases,

@@ -32,7 +32,7 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|
     #|export function debug_identity<T extends debug.Debug>(value: T): T;
     #|
-    #|export function wrap_pair(s: string, n: number): [string, number];
+    #|export function wrap_pair(s: string, n: number): { _0: string; _1: number };
     #|
     #|export type ParseError = ({ $tag: "InvalidFormat"; _0: string } | { $tag: "Overflow"; _0: number; _1: string }) & Show & Eq<ParseError>;
     #|
@@ -110,7 +110,7 @@ async test "bridge: emit TypeScript declarations keeps pub(all) types used by pu
     #|  readonly [__MoonBitArray]: T;
     #|}
     #|
-    #|export function analyze_truthiness_guard(s: string): [string, boolean] | undefined;
+    #|export function analyze_truthiness_guard(s: string): { _0: string; _1: boolean } | undefined;
     #|
     #|export type AnalysisResult<T> = { $tag: "Ok"; _0: T; _1: MoonBitArray<string> } | { $tag: "Err"; _0: MoonBitArray<string> };
     #|
@@ -235,11 +235,17 @@ test "bridge: emit TypeScript declarations normalizes StringView" {
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI emit error: \{msg}")
   }
-  assert_true(actual.contains("export function format(s: string): string;"))
   assert_true(
-    actual.contains("export function parse(s: string): Result<string, Error>;"),
+    actual.contains("export function format(s: string): MoonBitStringView;"),
   )
-  assert_false(actual.contains("StringView"))
+  assert_true(
+    actual.contains(
+      "export function parse(s: string): Result<MoonBitStringView, Error>;",
+    ),
+  )
+  // No bare MoonBit `StringView` leaks into the TypeScript.
+  assert_false(actual.contains(" StringView"))
+  assert_false(actual.contains("(StringView"))
 }
 
 ///|
@@ -372,7 +378,7 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export function load_all(keys: MoonBitArray<string>): Promise<Result<Result<MoonBitArray<[string, number]>, Error>, Error>>;",
+      "export function load_all(keys: MoonBitArray<string>): Promise<Result<Result<MoonBitArray<{ _0: string; _1: number }>, Error>, Error>>;",
     ),
   )
   assert_true(
@@ -382,7 +388,7 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export function update_ref(state: { val: MoonBitArray<bigint> }, next: MoonBitArrayView<bigint>): MoonBitSet<string>;",
+      "export function update_ref(state: { val: MoonBitArray<bigint> }, next: ReadonlyArray<bigint>): MoonBitSet<string>;",
     ),
   )
   assert_true(
@@ -554,7 +560,7 @@ test "bridge: emit TypeScript declarations keeps private local opaque types refe
   )
   assert_true(
     actual.contains(
-      "export function use_runtime(value: Runtime): Iterable<string>;",
+      "export function use_runtime(value: Runtime): MoonBitIter<string>;",
     ),
   )
   assert_true(actual.contains("  runtime: Runtime;"))
@@ -581,14 +587,15 @@ test "bridge: emit TypeScript declarations maps Iter2 to an iterable of pairs" {
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI emit error: \{msg}")
   }
-  // `Iter2[K, V]` has no TypeScript counterpart; it lowers to an iterable of
-  // `[K, V]` tuples rather than leaking the invalid `Iter2<...>` identifier.
+  // `Iter2[K, V]` is a MoonBit struct, not a JS iterable, so it lowers to
+  // the opaque `MoonBitIter2<K, V>` rather than leaking the invalid
+  // `Iter2<...>` identifier.
   assert_true(
     actual.contains(
-      "export function entries(entries: MoonBitMap<string, number>): Iterable<[string, number]>;",
+      "export function entries(entries: MoonBitMap<string, number>): MoonBitIter2<string, number>;",
     ),
   )
-  assert_false(actual.contains("Iter2<"))
+  assert_false(actual.contains(" Iter2<"))
 }
 
 ///|
@@ -1333,7 +1340,7 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
   )
   assert_true(
     bundle.autolink_glue_mbt.contains(
-      "pub fn update_ref(state : Ref[Array[Int64]], next : Array[UInt64]) -> Set[String] {",
+      "pub fn update_ref(state : Ref[Array[Int64]], next : FixedArray[UInt64]) -> Set[String] {",
     ),
   )
   assert_true(
@@ -1880,7 +1887,9 @@ test "bridge: no MoonBitArray declaration without a MoonBit Array" {
 ///|
 test "bridge: MoonBit containers with no JS shape are opaque, each its own type" {
   // Measured on the `js` backend: a `Map`, a set, an `ArrayView` are
-  // MoonBit structs, and `ReadOnlyArray` is a plain JS array.
+  // MoonBit structs, and `ReadOnlyArray` is a plain JS array. `v`'s
+  // `ArrayView` is a top-level parameter, which the boundary glue takes as
+  // a JS array.
   let actual = parse_mbti_to_typescript(
     (
       #|package "p/c"
@@ -1898,11 +1907,6 @@ test "bridge: MoonBit containers with no JS shape are opaque, each its own type"
   inspect(
     actual,
     content=(
-      #|declare const __MoonBitArrayView: unique symbol;
-      #|export interface MoonBitArrayView<T> {
-      #|  readonly [__MoonBitArrayView]: T;
-      #|}
-      #|
       #|declare const __MoonBitMap: unique symbol;
       #|export interface MoonBitMap<K, V> {
       #|  readonly [__MoonBitMap]: [K, V];
@@ -1910,9 +1914,76 @@ test "bridge: MoonBit containers with no JS shape are opaque, each its own type"
       #|
       #|export function m(entries: MoonBitMap<string, number>): MoonBitMap<string, number>;
       #|
-      #|export function v(items: MoonBitArrayView<number>): number;
+      #|export function v(items: ReadonlyArray<number>): number;
       #|
       #|export function r(items: ReadonlyArray<number>): number;
+    ),
+  )
+}
+
+///|
+test "bridge: tuples are { _0, _1 } objects; Iter and the views are opaque" {
+  // Measured on the `js` backend: a tuple is a plain object `{ _0, _1 }`,
+  // an `Iter` a closure-carrying struct, a `StringView` / `BytesView`
+  // `{ str | buf, start, end }`. `String` and `Bytes` stay JS natives. A
+  // view as a TOP-LEVEL parameter is what the boundary glue receives, a
+  // JS string / `Uint8Array` / array; returned, or as a callback's
+  // parameter, it is the struct.
+  let actual = parse_mbti_to_typescript(
+    (
+      #|package "p/t"
+      #|
+      #|pub fn pair(String, Int) -> (String, Int, Bool)
+      #|
+      #|pub fn it(Iter[Int]) -> Iter2[String, Int]
+      #|
+      #|pub fn views(StringView, BytesView, ArrayView[Int]) -> (String, Bytes)
+      #|
+      #|pub fn back(String) -> (StringView, BytesView, ArrayView[Int])
+      #|
+      #|pub fn cb((StringView) -> Unit) -> Unit
+    ),
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) => fail(msg)
+  }
+  inspect(
+    actual,
+    content=(
+      #|declare const __MoonBitArrayView: unique symbol;
+      #|export interface MoonBitArrayView<T> {
+      #|  readonly [__MoonBitArrayView]: T;
+      #|}
+      #|
+      #|declare const __MoonBitIter: unique symbol;
+      #|export interface MoonBitIter<T> {
+      #|  readonly [__MoonBitIter]: T;
+      #|}
+      #|
+      #|declare const __MoonBitIter2: unique symbol;
+      #|export interface MoonBitIter2<K, V> {
+      #|  readonly [__MoonBitIter2]: [K, V];
+      #|}
+      #|
+      #|declare const __MoonBitStringView: unique symbol;
+      #|export interface MoonBitStringView {
+      #|  readonly [__MoonBitStringView]: true;
+      #|}
+      #|
+      #|declare const __MoonBitBytesView: unique symbol;
+      #|export interface MoonBitBytesView {
+      #|  readonly [__MoonBitBytesView]: true;
+      #|}
+      #|
+      #|export function pair(s: string, n: number): { _0: string; _1: number; _2: boolean };
+      #|
+      #|export function it(value: MoonBitIter<number>): MoonBitIter2<string, number>;
+      #|
+      #|export function views(s: string, arg1: Uint8Array, items: ReadonlyArray<number>): { _0: string; _1: Uint8Array };
+      #|
+      #|export function back(s: string): { _0: MoonBitStringView; _1: MoonBitBytesView; _2: MoonBitArrayView<number> };
+      #|
+      #|export function cb(fn_: (s: MoonBitStringView) => void): void;
     ),
   )
 }
