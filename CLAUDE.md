@@ -5326,6 +5326,17 @@ typescript.mbt/
 # pass that rewrites `Int` -> `Int32` and `x? : T = d` -> `x~ : T = d`
 # (no `#|` line touched). The "depends on experimental package" lines
 # come from `moonbitlang/async`'s own packages and do not fail the gate.
+#
+# Re-verified clean on moon 0.1.20261104 / moonc v0.10.20, the release
+# after v0.10.19 (https://www.moonbitlang.com/updates/2026/11/05/index).
+# v0.10.20 ships the change those notes announce as upcoming: `Array` on
+# the `js` backend is no longer a native JS array but `{ buf, len }`, so
+# everything that crosses JS uses `FixedArray` and `mtsc pkg` declares a
+# MoonBit `Array` as the opaque `MoonBitArray<T>`. The same notes say
+# `moon install` no longer synchronizes dependencies, which made
+# `scripts/patch_async_dep.sh` a silent no-op; it is gone, because
+# `moonbitlang/async@0.22.7` no longer carries the in-struct `fn new(..)`
+# it patched out.
 moon check --deny-warn
 
 # Run tests. Takes about an hour, and most of that is NOT tests: the
