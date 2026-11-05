@@ -105,9 +105,9 @@ async test "bridge: emit TypeScript declarations keeps pub(all) types used by pu
   }
   // A MoonBit `Array` is the opaque `MoonBitArray`, declared once.
   let expected =
-    #|declare const __moonbitArray: unique symbol;
+    #|declare const __MoonBitArray: unique symbol;
     #|export interface MoonBitArray<T> {
-    #|  readonly [__moonbitArray]: T;
+    #|  readonly [__MoonBitArray]: T;
     #|}
     #|
     #|export function analyze_truthiness_guard(s: string): [string, boolean] | undefined;
@@ -382,12 +382,12 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export function update_ref(state: { val: MoonBitArray<bigint> }, next: ReadonlyArray<bigint>): Set<string>;",
+      "export function update_ref(state: { val: MoonBitArray<bigint> }, next: MoonBitArrayView<bigint>): MoonBitSet<string>;",
     ),
   )
   assert_true(
     actual.contains(
-      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((value: T) => void) | undefined;\n  meta: Map<string, MoonBitArray<boolean>>;\n}",
+      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((value: T) => void) | undefined;\n  meta: MoonBitMap<string, MoonBitArray<boolean>>;\n}",
     ),
   )
   assert_true(
@@ -585,7 +585,7 @@ test "bridge: emit TypeScript declarations maps Iter2 to an iterable of pairs" {
   // `[K, V]` tuples rather than leaking the invalid `Iter2<...>` identifier.
   assert_true(
     actual.contains(
-      "export function entries(entries: Map<string, number>): Iterable<[string, number]>;",
+      "export function entries(entries: MoonBitMap<string, number>): Iterable<[string, number]>;",
     ),
   )
   assert_false(actual.contains("Iter2<"))
@@ -616,12 +616,14 @@ test "bridge: emit TypeScript declarations maps core bigint and set to natives" 
       fail("MBTI emit error: \{msg}")
   }
   // `@bigint.BigInt` and `@set.Set` have no importable `.d.ts` module; they
-  // lower to the native `bigint` / `Set<T>` forms (matching how the bare
-  // `Int64` / `Set` translations already behave) instead of emitting an
+  // lower to `bigint` and the opaque `MoonBitSet<T>` (a MoonBit set is a
+  // struct on the `js` backend, not a JS `Set`) instead of emitting an
   // unresolvable `moonbitlang/core/...` namespace import.
   assert_true(actual.contains("export function big(n: bigint): bigint;"))
   assert_true(
-    actual.contains("export function names(value: Set<string>): Set<string>;"),
+    actual.contains(
+      "export function names(value: MoonBitSet<string>): MoonBitSet<string>;",
+    ),
   )
   assert_false(actual.contains("moonbitlang/core/bigint"))
   assert_false(actual.contains("moonbitlang/core/set"))
@@ -660,19 +662,30 @@ test "bridge: emit TypeScript declarations maps core containers to native shapes
       fail("MBTI emit error: \{msg}")
   }
   // Core associative / sequence containers have no importable `.d.ts` module;
-  // they lower to the structurally-equivalent TS `Map` / `Set` / `Array`
-  // shapes instead of dangling `moonbitlang/core/...` namespace imports.
+  // each lowers to its own opaque interface, since none is a JS `Map` /
+  // `Set` / array on the `js` backend, instead of dangling
+  // `moonbitlang/core/...` namespace imports.
   assert_true(
-    actual.contains("export function dq(items: Array<number>): void;"),
+    actual.contains("export function dq(items: MoonBitDeque<number>): void;"),
   )
   assert_true(
-    actual.contains("export function hm(entries: Map<string, number>): void;"),
+    actual.contains(
+      "export function hm(entries: MoonBitHashMap<string, number>): void;",
+    ),
   )
-  assert_true(actual.contains("export function hs(value: Set<string>): void;"))
   assert_true(
-    actual.contains("export function sm(entries: Map<string, number>): void;"),
+    actual.contains("export function hs(value: MoonBitHashSet<string>): void;"),
   )
-  assert_true(actual.contains("export function ss(value: Set<string>): void;"))
+  assert_true(
+    actual.contains(
+      "export function sm(entries: MoonBitSortedMap<string, number>): void;",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export function ss(value: MoonBitSortedSet<string>): void;",
+    ),
+  )
   assert_false(actual.contains("moonbitlang/core/"))
 }
 
@@ -1836,9 +1849,9 @@ test "bridge: a MoonBit Array is opaque in TypeScript and a FixedArray is a JS a
   inspect(
     actual,
     content=(
-      #|declare const __moonbitArray: unique symbol;
+      #|declare const __MoonBitArray: unique symbol;
       #|export interface MoonBitArray<T> {
-      #|  readonly [__moonbitArray]: T;
+      #|  readonly [__MoonBitArray]: T;
       #|}
       #|
       #|export function count(items: MoonBitArray<string>): number;
@@ -1862,4 +1875,41 @@ test "bridge: no MoonBitArray declaration without a MoonBit Array" {
     | MbtiTypescriptDeclError::ParseError(msg) => fail(msg)
   }
   assert_false(actual.contains("MoonBitArray"))
+}
+
+///|
+test "bridge: MoonBit containers with no JS shape are opaque, each its own type" {
+  // Measured on the `js` backend: a `Map`, a set, an `ArrayView` are
+  // MoonBit structs, and `ReadOnlyArray` is a plain JS array.
+  let actual = parse_mbti_to_typescript(
+    (
+      #|package "p/c"
+      #|
+      #|pub fn m(Map[String, Int]) -> Map[String, Int]
+      #|
+      #|pub fn v(ArrayView[Int]) -> Int
+      #|
+      #|pub fn r(ReadOnlyArray[Int]) -> Int
+    ),
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) => fail(msg)
+  }
+  inspect(actual, content=(
+    #|declare const __MoonBitArrayView: unique symbol;
+    #|export interface MoonBitArrayView<T> {
+    #|  readonly [__MoonBitArrayView]: T;
+    #|}
+    #|
+    #|declare const __MoonBitMap: unique symbol;
+    #|export interface MoonBitMap<K, V> {
+    #|  readonly [__MoonBitMap]: [K, V];
+    #|}
+    #|
+    #|export function m(entries: MoonBitMap<string, number>): MoonBitMap<string, number>;
+    #|
+    #|export function v(items: MoonBitArrayView<number>): number;
+    #|
+    #|export function r(items: ReadonlyArray<number>): number;
+  ))
 }

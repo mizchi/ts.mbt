@@ -278,9 +278,15 @@ fn mbti_heuristic_param_name(ty_src : String) -> String? {
     _ =>
       if core_ty.has_prefix("Array<") ||
         core_ty.has_prefix("ReadonlyArray<") ||
-        core_ty.has_prefix("MoonBitArray<") {
+        core_ty.has_prefix("MoonBitArray<") ||
+        core_ty.has_prefix("MoonBitArrayView<") ||
+        core_ty.has_prefix("MoonBitDeque<") {
         Some("items")
-      } else if core_ty.has_prefix("Map<") || core_ty.has_prefix("ReadonlyMap<") {
+      } else if core_ty.has_prefix("Map<") ||
+        core_ty.has_prefix("ReadonlyMap<") ||
+        core_ty.has_prefix("MoonBitMap<") ||
+        core_ty.has_prefix("MoonBitHashMap<") ||
+        core_ty.has_prefix("MoonBitSortedMap<") {
         Some("entries")
       } else if core_ty.has_prefix("(") && core_ty.contains("=>") {
         Some("fn_")
@@ -2985,30 +2991,50 @@ fn lookup_import_module_spec(
 }
 
 ///|
-fn mbti_ts_map_of(args : Array[String]) -> String {
-  if args.length() == 2 {
-    "Map<\{args[0]}, \{args[1]}>"
-  } else {
-    "Map<unknown, unknown>"
-  }
+/// MoonBit types that have no JS shape of their own, and the type
+/// parameters of the opaque TypeScript interface each one crosses as.
+///
+/// Measured on the `js` backend (moonc v0.10.20), not assumed: a `Map`,
+/// `@set.Set`, `@hashmap.HashMap`, `@hashset.HashSet`, `SortedMap`,
+/// `SortedSet` and `Deque` are each a MoonBit struct (`{ entries, ... }`,
+/// `{ root, size }`, `{ buf, len, head }`), an `ArrayView` is
+/// `{ buf, start, end }`, and an `Array` is `{ buf, len }`. None of them is
+/// the JS `Map` / `Set` / `Array` the `.d.ts` used to name, so a TypeScript
+/// caller could build one that type-checked and that MoonBit then read as
+/// empty. `FixedArray` and `ReadOnlyArray` ARE plain JS arrays and keep
+/// their `Array<T>` / `ReadonlyArray<T>`.
+///
+/// Each gets its own interface, so a `HashMap` cannot stand in for a `Map`.
+fn mbti_opaque_builtin_types() -> Array[(String, Array[String])] {
+  [
+    ("MoonBitArray", ["T"]),
+    ("MoonBitArrayView", ["T"]),
+    ("MoonBitMap", ["K", "V"]),
+    ("MoonBitSet", ["T"]),
+    ("MoonBitHashMap", ["K", "V"]),
+    ("MoonBitHashSet", ["T"]),
+    ("MoonBitSortedMap", ["K", "V"]),
+    ("MoonBitSortedSet", ["T"]),
+    ("MoonBitDeque", ["T"]),
+  ]
 }
 
 ///|
-fn mbti_ts_set_of(args : Array[String]) -> String {
-  if args.length() == 1 {
-    "Set<\{args[0]}>"
-  } else {
-    "Set<unknown>"
+/// `Name<args>` for one of `mbti_opaque_builtin_types`, with `unknown` for
+/// each argument when the MoonBit side gave the wrong number.
+fn mbti_ts_opaque_of(name : String, args : Array[String]) -> String {
+  let mut arity = 0
+  for entry in mbti_opaque_builtin_types() {
+    if entry.0 == name {
+      arity = entry.1.length()
+    }
   }
-}
-
-///|
-fn mbti_ts_array_of(args : Array[String]) -> String {
-  if args.length() == 1 {
-    "Array<\{args[0]}>"
+  let rendered = if args.length() == arity {
+    args
   } else {
-    "Array<unknown>"
+    Array::make(arity, "unknown")
   }
+  "\{name}<\{rendered.join(", ")}>"
 }
 
 ///|
@@ -3018,10 +3044,9 @@ fn mbti_ts_array_of(args : Array[String]) -> String {
 /// alias. These types have no `.d.ts` module to import from, so the default
 /// `import type * as set from "moonbitlang/core/..."` reference does not
 /// resolve; lowering them here keeps the emitted output in line with how the
-/// bare `Set` / `Map` / `Int64` forms already translate. The associative and
-/// sequence containers map to the structurally-equivalent TS `Map` / `Set` /
-/// `Array` shapes (the ordering guarantee of the sorted variants is a runtime
-/// property that has no TypeScript counterpart either way).
+/// bare `Set` / `Map` / `Int64` forms already translate. The containers are
+/// MoonBit structs on the `js` backend, not JS `Map` / `Set` / arrays, so
+/// each lowers to its opaque interface (`mbti_opaque_builtin_types`).
 fn mbti_stdlib_native_ts_type(
   imports : Array[MbtiImportRef],
   alias_name : String,
@@ -3036,14 +3061,18 @@ fn mbti_stdlib_native_ts_type(
       } else {
         Some("{ val: unknown }")
       }
-    (Some("moonbitlang/core/set"), "Set") => Some(mbti_ts_set_of(args))
-    (Some("moonbitlang/core/hashset"), "HashSet") => Some(mbti_ts_set_of(args))
+    (Some("moonbitlang/core/set"), "Set") =>
+      Some(mbti_ts_opaque_of("MoonBitSet", args))
+    (Some("moonbitlang/core/hashset"), "HashSet") =>
+      Some(mbti_ts_opaque_of("MoonBitHashSet", args))
     (Some("moonbitlang/core/sorted_set"), "SortedSet") =>
-      Some(mbti_ts_set_of(args))
-    (Some("moonbitlang/core/hashmap"), "HashMap") => Some(mbti_ts_map_of(args))
+      Some(mbti_ts_opaque_of("MoonBitSortedSet", args))
+    (Some("moonbitlang/core/hashmap"), "HashMap") =>
+      Some(mbti_ts_opaque_of("MoonBitHashMap", args))
     (Some("moonbitlang/core/sorted_map"), "SortedMap") =>
-      Some(mbti_ts_map_of(args))
-    (Some("moonbitlang/core/deque"), "Deque") => Some(mbti_ts_array_of(args))
+      Some(mbti_ts_opaque_of("MoonBitSortedMap", args))
+    (Some("moonbitlang/core/deque"), "Deque") =>
+      Some(mbti_ts_opaque_of("MoonBitDeque", args))
     _ => None
   }
 }
@@ -3194,25 +3223,17 @@ fn translate_named_type(
       } else {
         "Array<unknown>"
       }
-    "Array" =>
-      if args.length() == 1 {
-        "MoonBitArray<\{args[0]}>"
-      } else {
-        "MoonBitArray<unknown>"
-      }
-    "ArrayView" | "ReadOnlyArray" =>
+    "Array" => mbti_ts_opaque_of("MoonBitArray", args)
+    "ArrayView" => mbti_ts_opaque_of("MoonBitArrayView", args)
+    // `ReadOnlyArray` IS a plain JS array (measured), like `FixedArray`.
+    "ReadOnlyArray" =>
       if args.length() == 1 {
         "ReadonlyArray<\{args[0]}>"
       } else {
         "ReadonlyArray<unknown>"
       }
-    "Map" =>
-      if args.length() == 2 {
-        "Map<\{args[0]}, \{args[1]}>"
-      } else {
-        "Map<unknown, unknown>"
-      }
-    "Set" => if args.length() == 1 { "Set<\{args[0]}>" } else { "Set<unknown>" }
+    "Map" => mbti_ts_opaque_of("MoonBitMap", args)
+    "Set" => mbti_ts_opaque_of("MoonBitSet", args)
     "Iter" =>
       if args.length() == 1 {
         "Iterable<\{args[0]}>"
@@ -4370,33 +4391,45 @@ fn decls_reference_builtin_json(
 }
 
 ///|
-/// The opaque type a MoonBit `Array[T]` crosses as. The brand is a
-/// required property keyed by a `unique symbol` nothing can name, so a
-/// plain JS array is rejected while a value MoonBit returned is accepted
-/// and can be handed back to it; `T` is carried so two element types stay
-/// distinct.
-fn render_builtin_moonbit_array_decl() -> String {
-  "declare const __moonbitArray: unique symbol;\n" +
-  "export interface MoonBitArray<T> {\n" +
-  "  readonly [__moonbitArray]: T;\n" +
+/// The declaration of one opaque MoonBit type. The brand is a required
+/// property keyed by a `unique symbol` nothing can name, so a plain JS value
+/// is rejected while a value MoonBit returned is accepted and can be handed
+/// back to it; the type parameters are carried so `MoonBitMap<string, number>`
+/// and `MoonBitMap<string, string>` stay distinct.
+fn render_builtin_opaque_decl(name : String, params : Array[String]) -> String {
+  let symbol = "__\{name}"
+  let carried = if params.length() == 1 {
+    params[0]
+  } else {
+    "[\{params.join(", ")}]"
+  }
+  "declare const \{symbol}: unique symbol;\n" +
+  "export interface \{name}<\{params.join(", ")}> {\n" +
+  "  readonly [\{symbol}]: \{carried};\n" +
   "}"
 }
 
 ///|
-fn decls_reference_builtin_moonbit_array(
+/// The opaque MoonBit types `decls` mention, in table order, skipping a
+/// name the package declares itself.
+fn decls_referenced_opaque_builtins(
   decls : Array[String],
   type_kinds : Map[String, String],
-) -> Bool {
-  match type_kinds.get("MoonBitArray") {
-    Some(_) => return false
-    None => ()
-  }
-  for decl in decls {
-    if contains_unqualified_type_name(decl, "MoonBitArray") {
-      return true
+) -> Array[String] {
+  let out : Array[String] = []
+  for entry in mbti_opaque_builtin_types() {
+    let (name, params) = entry
+    if type_kinds.get(name) is Some(_) {
+      continue
+    }
+    for decl in decls {
+      if contains_unqualified_type_name(decl, name) {
+        out.push(render_builtin_opaque_decl(name, params))
+        break
+      }
     }
   }
-  false
+  out
 }
 
 ///|
@@ -5723,8 +5756,8 @@ fn parse_mbti_to_typescript_with_import_rewrites(
   if decls_reference_builtin_string_builder(decls, type_kinds) {
     final_decls.push(render_builtin_string_builder_decl())
   }
-  if decls_reference_builtin_moonbit_array(decls, type_kinds) {
-    final_decls.push(render_builtin_moonbit_array_decl())
+  for opaque_decl in decls_referenced_opaque_builtins(decls, type_kinds) {
+    final_decls.push(opaque_decl)
   }
   for marker_name in bound_marker_order {
     if marker_name == "Show" {
