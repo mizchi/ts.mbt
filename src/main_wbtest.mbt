@@ -5557,7 +5557,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult",
+      "declare pub fn useReducer(reducer : (JSValue, JSValue) -> JSValue, initialState : JSValue) -> UseReducerResult",
     ),
   )
   assert_true(
@@ -5582,7 +5582,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult {\n  use_reducer(reducer, initialState)\n}",
+      "pub fn useReducer(reducer : (JSValue, JSValue) -> JSValue, initialState : JSValue) -> UseReducerResult {\n  use_reducer(reducer, initialState)\n}",
     ),
   )
   assert_true(
