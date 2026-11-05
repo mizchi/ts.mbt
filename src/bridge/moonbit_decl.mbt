@@ -7806,8 +7806,8 @@ fn decl_maybe_synthesize_class_event_companions(
   raw_method : @ast.TsClassMethodDecl,
   clone : (@ast.TsClassMethodDecl) -> @ast.TsClassMethodDecl,
 ) -> Unit {
-  // Detection runs on the RAW method: the clone rewrites the listener
-  // to a named opaque callback, hiding the `(Literal, Func)` shape.
+  // Detection runs on the RAW method, before the clone rewrites any of
+  // its parameter types, so the `(Literal, Func)` shape is the source's.
   if raw_method.is_static || raw_method.type_params.length() > 0 {
     return
   }
@@ -8266,18 +8266,10 @@ fn append_lowered_interface_field(
     ),
   )
   let final_type = decl_null_member_type(
-    decl_rewrite_inline_object_member_type(
-      owner_name,
-      field_name,
-      decl_rewrite_inline_callback_params_in_func_type(
-        owner_name + "_" + field_name,
-        lowered_type,
-      ),
-    ),
+    decl_rewrite_inline_object_member_type(owner_name, field_name, lowered_type),
   )
-  // Detect on the PRE-rewrite lowering: the inline-callback naming pass
-  // replaces the listener's function type with a named opaque callback,
-  // which would hide the `(Literal, Func)` event shape.
+  // Detect on the PRE-rewrite lowering, so the `(Literal, Func)` event
+  // shape is the one the source declared.
   decl_maybe_synthesize_event_companions(
     fields, seen_field_names, owner_name, field_name, lowered_type,
   )
@@ -9341,19 +9333,14 @@ fn clone_exported_import(
     params.push(
       (
         param_name,
-        decl_rewrite_inline_callback_param_type(
+        decl_specialize_generated_api_param_type(
           callback_owner_name,
           param_name,
           param_index,
-          decl_specialize_generated_api_param_type(
-            callback_owner_name,
-            param_name,
+          decl_widen_react_factory_tag_param(
+            exported.export_name,
             param_index,
-            decl_widen_react_factory_tag_param(
-              exported.export_name,
-              param_index,
-              lowered,
-            ),
+            lowered,
           ),
         ),
       ),
@@ -10656,27 +10643,9 @@ fn decl_widen_react_factory_tag_param(
 }
 
 ///|
-fn decl_inline_callback_type_name(
-  owner_name : String,
-  param_name : String,
-  param_index : Int32,
-) -> String {
-  let safe_param_name = if param_name == "" {
-    "arg" + param_index.to_string()
-  } else {
-    param_name
-  }
-  decl_to_pascal_case(owner_name) +
-  decl_to_pascal_case(safe_param_name) +
-  "Callback"
-}
-
-///|
-/// Owner name used when synthesizing inline-callback type names. A renamed
+/// Owner name the per-API parameter specializations key on. A renamed
 /// re-export keeps its original source name; default / unnamed exports fall
-/// back to the public export name. Shared by the import / func cloners and
-/// by `decl_collect_synthetic_callback_type_names` so the reconstructed set
-/// of synthetic names cannot drift from the names actually emitted.
+/// back to the public export name.
 fn decl_callback_owner_name(
   export_name : String,
   source_export_name : String,
@@ -10689,159 +10658,6 @@ fn decl_callback_owner_name(
     source_export_name
   }
 }
-
-///|
-/// Reconstruct the set of synthetic inline-callback type names that the decl
-/// emitter injects for callback-typed parameters (e.g. `OnEachFnCallback`
-/// for `onEach(items, fn)`). These are emitted as opaque `declare pub type`
-/// companions on purpose, so the post-synthesis checker must not report them
-/// as "unresolved type references". Replaying the pure synthesizer over the
-/// same `(owner, param, index)` inputs keeps this set exact; genuinely
-/// missing references never collide because they don't match the
-/// `<Owner><Param>Callback` shape.
-fn decl_collect_synthetic_callback_type_names(
-  imports : Array[ExportedImportDecl],
-  funcs : Array[ExportedFuncDecl],
-) -> Array[String] {
-  let names : Array[String] = []
-  for exported in imports {
-    let owner = decl_callback_owner_name(
-      exported.export_name,
-      exported.source_export_name,
-    )
-    for idx, param in exported.import_.params {
-      match decl_synthetic_callback_type_for_param(owner, param.0, idx) {
-        Some(@ast.TsType::Named(name)) =>
-          if !names.contains(name) {
-            names.push(name)
-          }
-        _ => ()
-      }
-    }
-  }
-  for exported in funcs {
-    let owner = decl_callback_owner_name(
-      exported.export_name,
-      exported.source_export_name,
-    )
-    for idx, param in exported.func.params {
-      match decl_synthetic_callback_type_for_param(owner, param.name, idx) {
-        Some(@ast.TsType::Named(name)) =>
-          if !names.contains(name) {
-            names.push(name)
-          }
-        _ => ()
-      }
-    }
-  }
-  names
-}
-
-///|
-fn decl_synthetic_callback_type_for_param(
-  owner_name : String,
-  param_name : String,
-  param_index : Int32,
-) -> @ast.TsType? {
-  if owner_name.length() > 10 && owner_name != "useActionState" {
-    return None
-  }
-  let callback_type_name = decl_inline_callback_type_name(
-    owner_name, param_name, param_index,
-  )
-  if callback_type_name.length() > 64 {
-    None
-  } else {
-    Some(Named(callback_type_name))
-  }
-}
-
-///|
-/// Promise-returning callbacks must keep their structural form: the
-/// async-callback lowering (`async (...) -> T raise` public params via
-/// `Promise::from_async` glue) only fires on structural
-/// `(...) -> Promise[T]` renderings, and an opaque synthesized name
-/// would erase both the structure and that ergonomics.
-fn decl_callback_return_is_promise_like(return_type : @ast.TsType) -> Bool {
-  match return_type {
-    Applied(name, _) => name == "Promise" || name == "PromiseLike"
-    _ => @checker.classify_promise_like_union(return_type) is Some(_)
-  }
-}
-
-///|
-fn decl_rewrite_inline_callback_param_type(
-  owner_name : String,
-  param_name : String,
-  param_index : Int32,
-  type_ : @ast.TsType,
-) -> @ast.TsType {
-  match @checker.classify_optional_like_union(type_) {
-    Some((Func(_, func_return), is_optional)) =>
-      if decl_callback_return_is_promise_like(func_return) {
-        type_
-      } else {
-        match
-          decl_synthetic_callback_type_for_param(
-            owner_name, param_name, param_index,
-          ) {
-          Some(named) =>
-            if is_optional {
-              Union([named, Undefined])
-            } else {
-              named
-            }
-          None => type_
-        }
-      }
-    _ =>
-      match type_ {
-        Func(_, func_return) =>
-          if decl_callback_return_is_promise_like(func_return) {
-            type_
-          } else {
-            match
-              decl_synthetic_callback_type_for_param(
-                owner_name, param_name, param_index,
-              ) {
-              Some(named) => named
-              None => type_
-            }
-          }
-        _ => type_
-      }
-  }
-}
-
-///|
-fn decl_rewrite_inline_callback_params_in_func_type(
-  owner_name : String,
-  type_ : @ast.TsType,
-) -> @ast.TsType {
-  match type_ {
-    Func(params, return_type) => {
-      let rewritten_params : Array[@ast.TsType] = []
-      for param_index, param in params {
-        rewritten_params.push(
-          decl_rewrite_inline_callback_param_type(
-            owner_name,
-            "arg" + param_index.to_string(),
-            param_index,
-            param,
-          ),
-        )
-      }
-      Func(rewritten_params, return_type)
-    }
-    _ => type_
-  }
-}
-
-// `decl_classify_optional_like_union` moved to `mizchi/ts/checker`. Bridge
-// callers go through `@checker.classify_optional_like_union` directly. The
-// shared implementation also normalizes literal members (Literal/NumberLiteral/
-// BooleanLiteral/BigIntLiteral) before comparing, which is strictly more
-// aggressive than the old decl-local version and matches the parser/ffi side.
 
 ///|
 fn decl_type_widening_score(type_ : @ast.TsType) -> Int32 {
@@ -11263,19 +11079,14 @@ fn clone_exported_func(
       binding: param.binding,
       is_rest: param.is_rest,
       is_optional: param.is_optional,
-      type_: decl_rewrite_inline_callback_param_type(
+      type_: decl_specialize_generated_api_param_type(
         callback_owner_name,
         param.name,
         param_index,
-        decl_specialize_generated_api_param_type(
-          callback_owner_name,
-          param.name,
+        decl_widen_react_factory_tag_param(
+          exported.export_name,
           param_index,
-          decl_widen_react_factory_tag_param(
-            exported.export_name,
-            param_index,
-            lowered,
-          ),
+          lowered,
         ),
       ),
       default: param.default,
@@ -11683,17 +11494,12 @@ fn clone_class_method_in_scope(
           class_name,
           class_method.name,
           param_name,
-          decl_rewrite_inline_callback_param_type(
-            class_name + "_" + class_method.name,
+          decl_specialize_generated_class_method_param_type(
+            class_name,
+            class_method.name,
             param_name,
             param_index,
-            decl_specialize_generated_class_method_param_type(
-              class_name,
-              class_method.name,
-              param_name,
-              param_index,
-              lowered_param_type,
-            ),
+            lowered_param_type,
           ),
         ),
       ),
@@ -12451,16 +12257,11 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // issue in bridge synthesis.
   let report = @checker.check_module(emitted_module)
   // Names the emitter deliberately introduces as opaque companions are not
-  // genuine unresolved references: tagged-union case payloads, plus the
-  // synthetic inline-callback parameter types (`<Owner><Param>Callback`).
-  let synthetic_callback_type_names = decl_collect_synthetic_callback_type_names(
-    emitted_exported_imports, emitted_exported_funcs,
-  )
+  // genuine unresolved references: tagged-union case payloads.
   for issue in report.issues {
     if issue.kind is UnresolvedReference &&
       (
         tagged_union_declared_names.contains(issue.name) ||
-        synthetic_callback_type_names.contains(issue.name) ||
         issue.name == "JSNull"
       ) {
       continue

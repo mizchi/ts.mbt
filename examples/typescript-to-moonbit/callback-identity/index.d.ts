@@ -12,3 +12,15 @@ export declare class EventSource {
   dispatch(items: string[]): void;
   firstListener(): (items: string[]) => void;
 }
+/**
+ * The `on` / `off` spelling. The owner and method together were short
+ * enough (`Emitter_on`) that `on` used to take an opaque callback type
+ * nothing could construct, while `off` took a closure.
+ */
+export declare class Emitter {
+  constructor();
+  on(event: string, listener: (items: string[]) => void): this;
+  off(event: string, listener: (items: string[]) => void): this;
+  emit(event: string, items: string[]): void;
+  count(event: string): number;
+}

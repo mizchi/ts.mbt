@@ -526,7 +526,7 @@ EOF
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
   grep_generated_mbt "$out" 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement['
   grep_generated_mbt "$out" 'pub fn cloneElement(element : DetailedReactHTMLElement[HTMLAttributes[JSValue], HTMLElement], props : HTMLAttributes[JSValue]?, children : Array[JSValue]) -> DetailedReactHTMLElement['
-  grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent[JSValue], propsAreEqual : MemoPropsAreEqualCallback?) -> NamedExoticComponent[JSValue]'
+  grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((Readonly, Readonly) -> Bool)?) -> NamedExoticComponent[JSValue]'
   grep_generated_mbt "$out" 'pub fn forwardRef(render : ForwardRefRenderFunction[JSValue, JSValue]) -> ForwardRefExoticComponent[JSValue]'
   grep_generated_mbt "$out" 'pub fn useState(initialState : JSValue) -> UseStateResult'
   grep_generated_mbt "$out" 'pub fn useTransition() -> UseTransitionResult'
@@ -1221,10 +1221,22 @@ test "a listener read back from JS is the one that was added" {
   source.remove_listener(back)
   assert_eq(source.listener_count(), 0.0)
 }
+
+test "Emitter::on takes a closure, and off removes it" {
+  let emitter = @typescript_to_moonbit_callback_identity.new_emitter()
+  let seen : Array[Int] = []
+  let listener = fn(items : Array[String]) { seen.push(items.length()) }
+  let _ = emitter.on("data", listener)
+  emitter.emit("data", ["a", "b"])
+  assert_eq(seen, [2])
+  let _ = emitter.off("data", listener)
+  assert_eq(emitter.count("data"), 0.0)
+}
 EOF
 
   grep_generated_mbt "$out" 'pub fn EventSource::add_listener(self : EventSource, listener : (Array[String]) -> Unit) -> Unit {'
   grep_generated_mbt "$out" 'extern "js" fn __ts_mbt_cb_memo('
+  grep_generated_mbt "$out" 'pub fn Emitter::on(self : Emitter, event : String, listener : (Array[String]) -> Unit) -> Emitter {'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
 }

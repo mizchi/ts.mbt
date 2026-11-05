@@ -630,7 +630,7 @@ extern "js" fn test_button_attributes() -> @scaffold_ts_to_moonbit_react_package
 extern "js" fn test_function_component() -> @scaffold_ts_to_moonbit_react_package.FunctionComponent[@scaffold_ts_to_moonbit_react_package.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null })
 
-extern "js" fn test_forward_ref_render() -> @scaffold_ts_to_moonbit_react_package.ForwardRefRenderCallback =
+extern "js" fn test_forward_ref_render() -> (@scaffold_ts_to_moonbit_react_package.JSValue, @scaffold_ts_to_moonbit_react_package.Ref[@scaffold_ts_to_moonbit_react_package.JSValue]) -> @scaffold_ts_to_moonbit_react_package.JSValue =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
 extern "js" fn test_ref() -> @scaffold_ts_to_moonbit_react_package.Ref[@scaffold_ts_to_moonbit_react_package.JSValue] =
@@ -680,7 +680,7 @@ extern "js" fn test_button_attributes() -> @sut.ButtonHTMLAttributes =
 extern "js" fn test_function_component() -> @sut.FunctionComponent[@sut.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null })
 
-extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderCallback =
+extern "js" fn test_forward_ref_render() -> (@sut.JSValue, @sut.Ref[@sut.JSValue]) -> @sut.JSValue =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
 extern "js" fn test_ref() -> @sut.Ref[@sut.JSValue] =
@@ -895,7 +895,7 @@ EOF
 extern "js" fn test_button_attributes() -> @scaffold_ts_to_moonbit_hono_jsx.ButtonAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_component() -> @scaffold_ts_to_moonbit_hono_jsx.MemoComponentCallback =
+extern "js" fn test_component() -> (@scaffold_ts_to_moonbit_hono_jsx.JSValue) -> @scaffold_ts_to_moonbit_hono_jsx.JsxElement =
   #| () => (props) => ({ tag: "button", props })
 
 test "generated Hono JSX scaffold smoke" {
@@ -910,7 +910,7 @@ EOF
 extern "js" fn test_button_attributes() -> @sut.ButtonAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_component() -> @sut.MemoComponentCallback =
+extern "js" fn test_component() -> (@sut.JSValue) -> @sut.JsxElement =
   #| () => (props) => ({ tag: "button", props })
 
 fn main {

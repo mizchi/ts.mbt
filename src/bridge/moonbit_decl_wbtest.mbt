@@ -1784,30 +1784,23 @@ async test "bridge: emit MoonBit declarations from callback APIs with synthetic 
       return
     }
   }
-  assert_true(actual.contains("declare pub type EmitEventListenerCallback"))
-  assert_true(actual.contains("declare pub type MaybeEmitListenerCallback"))
+  // An inline callback stays a function type, so a caller can pass a
+  // closure. It used to become an opaque `<Owner><Param>Callback` that
+  // nothing could construct.
+  assert_false(actual.contains("ListenerCallback"))
   assert_true(
     actual.contains(
-      "declare pub fn emitEvent(label : String, count : Double, listener : EmitEventListenerCallback) -> String",
+      "declare pub fn emitEvent(label : String, count : Double, listener : (String, Double) -> Unit) -> String",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn maybeEmit(label : String, listener : MaybeEmitListenerCallback?) -> String",
+      "declare pub fn maybeEmit(label : String, listener : ((String, Double) -> Unit)?) -> String",
     ),
   )
   assert_false(actual.contains("declare pub type JSValue"))
   assert_false(actual.contains("Unsupported export emitEvent"))
   assert_false(actual.contains("Unsupported export maybeEmit"))
-  // The synthetic callback types are emitted as opaque companions on
-  // purpose, so the post-synthesis checker must not flag them as unresolved
-  // type references (the note is reserved for genuinely missing types).
-  assert_false(
-    actual.contains("Unresolved type reference EmitEventListenerCallback"),
-  )
-  assert_false(
-    actual.contains("Unresolved type reference MaybeEmitListenerCallback"),
-  )
 }
 
 ///|
@@ -1842,7 +1835,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
   )
   assert_true(
     actual.contains(
-      "declare pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult",
+      "declare pub fn useReducer(reducer : (JSValue, JSValue) -> JSValue, initialState : JSValue) -> UseReducerResult",
     ),
   )
   assert_true(
@@ -2464,12 +2457,12 @@ async test "bridge: emit MoonBit declarations from fixture React package surface
   )
   assert_true(
     actual.contains(
-      "declare pub fn forwardRef(render : ForwardRefRenderCallback) -> ForwardRefExoticComponent[JSValue]",
+      "declare pub fn forwardRef(render : (JSValue, Ref[JSValue]) -> JSValue) -> ForwardRefExoticComponent[JSValue]",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn memo(component : FunctionComponent[JSValue], propsAreEqual : MemoPropsAreEqualCallback?) -> MemoExoticComponent[FunctionComponent[JSValue]]",
+      "declare pub fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((Readonly, Readonly) -> Bool)?) -> MemoExoticComponent[FunctionComponent[JSValue]]",
     ),
   )
   assert_true(
@@ -2555,7 +2548,7 @@ async test "bridge: emit MoonBit declarations from fixture Hono JSX package subp
   )
   assert_true(
     actual.contains(
-      "declare pub fn memo(component : MemoComponentCallback) -> (JSValue) -> JsxElement",
+      "declare pub fn memo(component : (JSValue) -> JsxElement) -> (JSValue) -> JsxElement",
     ),
   )
 }

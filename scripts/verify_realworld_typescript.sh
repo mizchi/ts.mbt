@@ -3496,8 +3496,8 @@ async fn async_callback_smoke() -> Unit {
   if intercepted != "v0>async" {
     abort("unexpected interceptor result: " + intercepted)
   }
-  // Short-owner promise callbacks keep their structural form (no opaque
-  // synthesized RunActionActionCallback) and lower.
+  // Callbacks keep their structural form (no opaque synthesized
+  // RunActionActionCallback) and lower.
   let ran = @sa.runAction(
     async fn(input) { @sa.delayValue(input, 5).wait() + "?" },
     "go",
@@ -3615,7 +3615,7 @@ EOF
     echo "expected bound-closure getter for sanitized member in $mode bridge" >&2
     exit 1
   fi
-  # Promise-returning callbacks on short-named owners stay structural.
+  # Callbacks stay structural; no opaque `<Owner><Param>Callback`.
   if grep -q "RunActionActionCallback" "$bridge"; then
     echo "unexpected opaque synthesized callback type in $mode bridge" >&2
     exit 1
