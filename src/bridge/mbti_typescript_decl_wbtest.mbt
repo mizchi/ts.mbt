@@ -1895,21 +1895,24 @@ test "bridge: MoonBit containers with no JS shape are opaque, each its own type"
     MbtiTypescriptDeclError::ReadError(msg)
     | MbtiTypescriptDeclError::ParseError(msg) => fail(msg)
   }
-  inspect(actual, content=(
-    #|declare const __MoonBitArrayView: unique symbol;
-    #|export interface MoonBitArrayView<T> {
-    #|  readonly [__MoonBitArrayView]: T;
-    #|}
-    #|
-    #|declare const __MoonBitMap: unique symbol;
-    #|export interface MoonBitMap<K, V> {
-    #|  readonly [__MoonBitMap]: [K, V];
-    #|}
-    #|
-    #|export function m(entries: MoonBitMap<string, number>): MoonBitMap<string, number>;
-    #|
-    #|export function v(items: MoonBitArrayView<number>): number;
-    #|
-    #|export function r(items: ReadonlyArray<number>): number;
-  ))
+  inspect(
+    actual,
+    content=(
+      #|declare const __MoonBitArrayView: unique symbol;
+      #|export interface MoonBitArrayView<T> {
+      #|  readonly [__MoonBitArrayView]: T;
+      #|}
+      #|
+      #|declare const __MoonBitMap: unique symbol;
+      #|export interface MoonBitMap<K, V> {
+      #|  readonly [__MoonBitMap]: [K, V];
+      #|}
+      #|
+      #|export function m(entries: MoonBitMap<string, number>): MoonBitMap<string, number>;
+      #|
+      #|export function v(items: MoonBitArrayView<number>): number;
+      #|
+      #|export function r(items: ReadonlyArray<number>): number;
+    ),
+  )
 }
