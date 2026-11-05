@@ -4971,8 +4971,19 @@ product surfaces now.
   object whose keys are the field names, so diagnostics can be
   structured rather than the string the old ABI flattened them into.
   And `Array` in an `extern "js"` SIGNATURE is deprecated while
-  `FixedArray` is not — a distinction that does not apply to an exported
-  function's return type, where `Array[MtscDiagnostic]` is fine.
+  `FixedArray` is not. This file used to add that the distinction "does
+  not apply to an exported function's return type, where
+  `Array[MtscDiagnostic]` is fine" — true when written and FALSE since
+  moonc v0.10.20, which represents a MoonBit `Array` on `js` as an object
+  `{ buf, len }`: `getProgramDiagnostics()` handed JavaScript something
+  with no `.map`, and `checkModuleGraph` rejected the plain arrays its
+  callers pass, 18 of 22 language-service checks red on a toolchain bump
+  with no source change. A `FixedArray` IS a JS array, so every array
+  crossing an export is one now, in both directions — `checkModuleGraph`
+  reads its argument through `MtscJsModuleGraph` and converts, which
+  keeps the native `MtscModuleGraph` API unchanged. The bridge's own
+  boundaries were already `FixedArray`, which is why the generated
+  packages did not move.
   A TRAIT rather than a struct of closures, for the property this file
   records twenty-plus instances of paying for: MoonBit requires an
   `impl` to supply every method, so a new host cannot inherit a default

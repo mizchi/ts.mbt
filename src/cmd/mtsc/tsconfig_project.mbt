@@ -212,7 +212,7 @@ fn mtsc_default_excludes(out_dir : String?) -> Array[String] {
 /// tree by two or three orders of magnitude, and an exclude applied
 /// afterwards still pays for reading all of them.
 async fn mtsc_collect_sources(dir : String, out : Array[String]) -> Unit {
-  let names = @fs.readdir(dir, sort=true) catch { _ => return }
+  let names = fs_readdir(dir, sort=true) catch { _ => return }
   for name in names {
     if name == "node_modules" ||
       name == "bower_components" ||
