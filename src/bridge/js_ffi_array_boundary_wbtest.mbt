@@ -128,3 +128,30 @@ test "js ffi array boundary: a function returning an optional is not an optional
   )
   assert_true(out.contains("__ts_mbt_ffi_get_cb().map(fn(v0) {"))
 }
+
+///|
+test "js ffi array boundary: a declared generic's Array argument becomes FixedArray" {
+  let decls =
+    #|pub(all) struct ReadVResult[T] {
+    #|  buffers : FixedArray[NodeJS_ArrayBufferView]
+    #|}
+    #|pub(all) struct Box[T] {
+    #|  v : T
+    #|}
+    #|#external
+    #|pub type Promise[T]
+  let text =
+    #|/// 非 ASCII の doc がずれないこと
+    #|pub fn readv() -> Promise[ReadVResult[Array[NodeJS_ArrayBufferView]]] {
+    #|pub fn nested() -> Box[ReadVResult[Array[Int]]]
+    #|pub fn untouched(a : Promise[Array[Int]], b : NodeArray[Array[Int]], c : MyBox[Array[Int]]) -> Map[String, Array[Int]]
+  inspect(
+    migrate_generic_type_arg_arrays(text, decls),
+    content=(
+      #|/// 非 ASCII の doc がずれないこと
+      #|pub fn readv() -> Promise[ReadVResult[FixedArray[NodeJS_ArrayBufferView]]] {
+      #|pub fn nested() -> Box[ReadVResult[FixedArray[Int]]]
+      #|pub fn untouched(a : Promise[Array[Int]], b : NodeArray[Array[Int]], c : MyBox[Array[Int]]) -> Map[String, Array[Int]]
+    ),
+  )
+}
