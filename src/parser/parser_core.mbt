@@ -847,7 +847,16 @@ fn Parser::expect(
 ///|
 // /
 fn Parser::check(self : Parser, kind : TokenKind) -> Bool {
-  self.peek().kind == kind
+  // `peek()` spelled out so no `Token` is built or reference-counted just to
+  // read its kind: this runs ~4x per token, more than anything else in the
+  // parser. Same three cases, same answers.
+  if self.pending_gt > 0 {
+    kind is Gt
+  } else if self.pos >= self.tokens.length() {
+    kind is Eof
+  } else {
+    self.tokens[self.pos].kind == kind
+  }
 }
 
 ///|

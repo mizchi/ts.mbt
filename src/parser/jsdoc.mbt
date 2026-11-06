@@ -109,16 +109,26 @@ fn parse_jsdoc_block_view(text : StringView) -> JsdocBlock? {
     tags.push(
       interpret_tag(
         current_tag_name,
-        tag_content.to_string().trim_end().to_owned(),
+        jsdoc_trim_end(tag_content.to_string()).to_owned(),
       ),
     )
   }
 
-  for line in body.split("\n") {
+  // Lines by index rather than `split("\n")`, whose iterator was a tenth of
+  // the cost of a doc block. Same lines: a trailing `\n` still yields a
+  // final empty line, and an empty body yields one empty line.
+  let body_len = body.length()
+  let mut line_start = 0
+  for k in 0..=body_len {
+    if k < body_len && body[k] != '\n' {
+      continue
+    }
+    let line = body[line_start:k]
+    line_start = k + 1
     // Strip the leading `*` (with optional space) that the JSDoc
     // convention puts on every continuation line; lines without the
     // marker keep their original indentation.
-    let star_trimmed = line.trim_start()
+    let star_trimmed = jsdoc_trim_start(line)
     let cleaned = if star_trimmed.has_prefix("* ") {
       star_trimmed[2:]
     } else if star_trimmed.has_prefix("*") {
@@ -126,7 +136,7 @@ fn parse_jsdoc_block_view(text : StringView) -> JsdocBlock? {
     } else {
       line
     }
-    let trimmed = cleaned.trim_start()
+    let trimmed = jsdoc_trim_start(cleaned)
     if trimmed.has_prefix("@") {
       // Flush whatever we were collecting.
       if !in_description {
@@ -155,7 +165,7 @@ fn parse_jsdoc_block_view(text : StringView) -> JsdocBlock? {
     flush_tag()
   }
   let block : JsdocBlock = {
-    description: description.to_string().trim().to_owned(),
+    description: jsdoc_trim(description.to_string()).to_owned(),
     tags,
   }
   if block.is_empty() {
@@ -185,7 +195,7 @@ fn split_tag_head(s : StringView) -> (String, StringView) {
     return ("", s)
   }
   let name = s[0:i].to_owned()
-  let rest = s[i:].trim_start()
+  let rest = jsdoc_trim_start(s[i:])
   (name, rest)
 }
 
@@ -236,9 +246,9 @@ fn interpret_tag(name : String, content : String) -> JsdocTag {
 /// `(Some(inner), rest)` when the input starts with `{…}`,
 /// `(None, s)` otherwise. Nested braces are supported.
 fn extract_brace_type(s : String) -> (String?, String) {
-  let trimmed = s.trim_start().to_owned()
+  let trimmed = jsdoc_trim_start(s)
   if trimmed.length() == 0 || trimmed[0] != '{' {
-    return (None, trimmed)
+    return (None, trimmed.to_owned())
   }
   let mut depth = 0
   let mut i = 0
@@ -249,21 +259,21 @@ fn extract_brace_type(s : String) -> (String?, String) {
     } else if c == '}' {
       depth = depth - 1
       if depth == 0 {
-        let inner = trimmed[1:i].to_owned().trim().to_owned()
-        let rest = trimmed[i + 1:].to_owned().trim_start().to_owned()
+        let inner = jsdoc_trim(trimmed[1:i]).to_owned()
+        let rest = jsdoc_trim_start(trimmed[i + 1:]).to_owned()
         return (Some(inner), rest)
       }
     }
     i = i + 1
   }
-  (None, trimmed)
+  (None, trimmed.to_owned())
 }
 
 ///|
 /// Split off the first whitespace-delimited word — useful for
 /// `@param TYPE NAME description` shapes.
 fn split_first_word(s : String) -> (String, String) {
-  let trimmed = s.trim_start().to_owned()
+  let trimmed = jsdoc_trim_start(s)
   let mut i = 0
   while i < trimmed.length() {
     let c = trimmed[i]
@@ -273,17 +283,56 @@ fn split_first_word(s : String) -> (String, String) {
     i = i + 1
   }
   if i == 0 {
-    return ("", trimmed)
+    return ("", trimmed.to_owned())
   }
   let head = trimmed[0:i].to_owned()
-  let mut rest = trimmed[i:].to_owned().trim_start().to_owned()
+  let mut rest = jsdoc_trim_start(trimmed[i:])
   // The convention `@param name - description` uses a leading `-`
   // between the name and the description — strip it so the
   // description doesn't end up with a stray dash.
   if rest.has_prefix("-") {
-    rest = rest[1:].to_owned().trim_start().to_owned()
+    rest = jsdoc_trim_start(rest[1:])
   }
-  (head, rest)
+  (head, rest.to_owned())
+}
+
+///|
+/// `StringView::trim_start()` with its default set (`"\t\n\r "`), spelled
+/// out. The library version builds a character set from its `chars`
+/// argument on every call, which made trimming most of the cost of
+/// parsing a doc block; every doc comment in a `.d.ts` is parsed eagerly.
+fn jsdoc_trim_start(v : StringView) -> StringView {
+  let mut i = 0
+  while i < v.length() {
+    let c = v[i]
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i = i + 1
+    } else {
+      break
+    }
+  }
+  v[i:]
+}
+
+///|
+/// `StringView::trim_end()` with its default set; see `jsdoc_trim_start`.
+fn jsdoc_trim_end(v : StringView) -> StringView {
+  let mut j = v.length()
+  while j > 0 {
+    let c = v[j - 1]
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      j = j - 1
+    } else {
+      break
+    }
+  }
+  v[:j]
+}
+
+///|
+/// `StringView::trim()` with its default set; see `jsdoc_trim_start`.
+fn jsdoc_trim(v : StringView) -> StringView {
+  jsdoc_trim_end(jsdoc_trim_start(v))
 }
 
 ///|
