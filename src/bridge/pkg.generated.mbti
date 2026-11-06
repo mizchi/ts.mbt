@@ -51,6 +51,8 @@ pub fn migrate_generic_type_arg_arrays(String, String) -> String
 
 pub fn migrate_js_ffi_array_boundaries(String) -> String
 
+pub fn migrate_js_ffi_struct_reads(String) -> String
+
 pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String) -> String raise ModuleGraphError
 
 pub fn parse_typescript_import_rewrite_map_source(String) -> Map[String, String]?

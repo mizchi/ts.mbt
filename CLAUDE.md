@@ -4945,6 +4945,23 @@ product surfaces now.
   vitest's `diff`, the two JSX `children` unions — each with a working
   `_from_js` that nothing calls at a struct field, which is the separately
   filed `_from_js` struct converter and 259 functions' worth of mirror.
+  That converter now exists for PLAIN-DATA structs
+  (`struct_read_converter.mbt` + the `migrate_js_ffi_struct_reads`
+  post-pass): a struct JS returns, with a write converter, no function
+  fields and a field needing conversion, gets a `bridge.js`
+  `__ts_mbt_read_struct_<snake>` that renames, boxes (`Double?`), maps the
+  `Bool?` sentinel and converts enum and union fields, and every extern
+  return holding one (bare, `FixedArray`, optional, `Promise`) is routed
+  through it on the MoonBit side, because most of those externs are inline
+  lambdas that cannot import a `bridge.js` helper. A value whose prototype
+  is not `Object.prototype` (an AST node, hono's `Router`) is returned
+  untouched, so the 197 TypeScript AST handles keep reading raw — the
+  stated limit. Two findings: the field lists must come from the loop that
+  emits the `_to_js` converter, since a walk over every namespace by bare
+  name picked `ts.server.protocol.Diagnostic` for `ts.Diagnostic`; and
+  every optional layout was PROBED on moonc v0.10.20 before being written
+  (`Double?` and `#external` boxed, `String` / `Int` / record / enum /
+  `FixedArray` unboxed, `Bool?` the `-1` sentinel).
   `ffi_func_type_name`'s missing direction parameter is untouched by this:
   "can a JS value arrive as this STRUCT" and "which way does this function
   TYPE cross" are different questions.

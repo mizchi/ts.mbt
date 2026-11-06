@@ -6093,7 +6093,13 @@ async test "emit_moonbit_scaffold_from_ts sanitizes reserved exported function a
     bridge_mbt.contains(
       "pub fn fragment(children : String) -> ReactElement {\n  fragment(children)\n}",
     ) ||
-    bridge_mbt.contains("pub extern \"js\" fn fragment(children : String)"),
+    bridge_mbt.contains("pub extern \"js\" fn fragment(children : String)") ||
+    // `ReactElement` is a struct JS returns, so the return is converted on
+    // the way in (`migrate_js_ffi_struct_reads`) and the public name is a
+    // wrapper over a private extern.
+    bridge_mbt.contains(
+      "pub fn fragment(children : String) -> ReactElement {\n  __ts_mbt_read_cast(__ts_mbt_read_struct__ReactElement(",
+    ),
   )
   assert_false(bridge_mbt.contains("pub fn Fragment("))
   assert_false(bridge_mbt.contains("Component :"))
