@@ -2316,18 +2316,23 @@ fn mapped_infinite_key_signature(
 
 ///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
-  let seen : Map[String, Bool] = Map([])
+  // Allocated on the first alias actually followed. Most calls are handed
+  // a type that is not an alias at all and leave on the first iteration,
+  // and building and freeing an empty map was most of what such a call
+  // cost — `unwrap` runs once per type inspected, hundreds of thousands of
+  // times on a module with generic call sites.
+  let mut seen : Map[String, Bool]? = None
   let mut cur = ty
   let mut keep_going = true
   while keep_going {
     match cur {
       Named(n) =>
-        if seen.contains(n) {
+        if unwrap_seen_has(seen, n) {
           keep_going = false
         } else {
           match self.type_aliases.get(n) {
             Some(aliased) => {
-              seen[n] = true
+              seen = unwrap_seen_add(seen, n)
               cur = aliased.type_
             }
             None =>
@@ -2337,7 +2342,7 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               // assignability see the element type.
               match interface_pure_array_element(self, n) {
                 Some(elem) => {
-                  seen[n] = true
+                  seen = unwrap_seen_add(seen, n)
                   cur = Array(elem)
                 }
                 None => keep_going = false
@@ -2369,7 +2374,7 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       Applied("ThisType", _) if !self.type_aliases.contains("ThisType") =>
         cur = Object([])
       Applied(n, args) =>
-        if seen.contains(n) {
+        if unwrap_seen_has(seen, n) {
           keep_going = false
         } else {
           // A module's own alias first, then the standard utility table.
@@ -2412,7 +2417,7 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           }
           match binding {
             Some((type_params, body)) => {
-              seen[n] = true
+              seen = unwrap_seen_add(seen, n)
               let bindings : Map[String, @ast.TsType] = Map([])
               let limit = if args.length() < type_params.length() {
                 args.length()
@@ -2434,12 +2439,12 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // loop forever, so guard the name through `seen` like the alias cases.
       TypeOf(name) => {
         let key = "typeof " + name
-        if seen.contains(key) {
+        if unwrap_seen_has(seen, key) {
           keep_going = false
         } else {
           match self.globals.get(name) {
             Some(resolved) => {
-              seen[key] = true
+              seen = unwrap_seen_add(seen, key)
               cur = resolved
             }
             None => keep_going = false
@@ -2659,6 +2664,27 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
     }
   }
   cur
+}
+
+///|
+fn unwrap_seen_has(seen : Map[String, Bool]?, name : String) -> Bool {
+  match seen {
+    Some(m) => m.contains(name)
+    None => false
+  }
+}
+
+///|
+fn unwrap_seen_add(
+  seen : Map[String, Bool]?,
+  name : String,
+) -> Map[String, Bool]? {
+  let m = match seen {
+    Some(m) => m
+    None => Map([])
+  }
+  m[name] = true
+  Some(m)
 }
 
 ///|
@@ -36117,15 +36143,57 @@ fn member_name_duplicates(
       _ => false
     }
   }
+  // Well-known-symbol members (`@@X`) merge without a duplicate check in
+  // tsc (symbolProperty37 declares `[Symbol.isConcatSpreadable]` twice
+  // legally).
+  fn skipped(name : String) -> Bool {
+    is_signature_sentinel(name) || name.has_prefix("@@")
+  }
+
+  // A member list is usually a handful of entries, and two maps built and
+  // freed per declaration cost more than comparing every pair: this runs
+  // once per interface and type literal in the module. Same answer as the
+  // map path below — each name once, in first-occurrence order, when it
+  // occurs at least twice and some occurrence is not a method.
+  if fields.length() <= 16 {
+    let dups : Array[String] = []
+    for i in 0..<fields.length() {
+      let name = fields[i].0
+      if skipped(name) {
+        continue
+      }
+      let mut seen_before = false
+      for j in 0..<i {
+        if fields[j].0 == name {
+          seen_before = true
+          break
+        }
+      }
+      if seen_before {
+        continue
+      }
+      let mut n = 1
+      let mut has_property = !is_method_type(fields[i].1)
+      for j in (i + 1)..<fields.length() {
+        if fields[j].0 == name {
+          n += 1
+          if !is_method_type(fields[j].1) {
+            has_property = true
+          }
+        }
+      }
+      if n >= 2 && has_property {
+        dups.push(name)
+      }
+    }
+    return dups
+  }
   let count : Map[String, Int32] = Map([])
   let has_property : Map[String, Bool] = Map([])
   let order : Array[String] = []
   for f in fields {
     let name = f.0
-    // Well-known-symbol members (`@@X`) merge without a duplicate check in
-    // tsc (symbolProperty37 declares `[Symbol.isConcatSpreadable]` twice
-    // legally).
-    if is_signature_sentinel(name) || name.has_prefix("@@") {
+    if skipped(name) {
       continue
     }
     match count.get(name) {

@@ -392,7 +392,16 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
     } else {
       let _ = self.match_ident("readonly")
     }
-    let _ = self.expect(LBracket)
+    // Every ordinary object type `{ id: number }` reaches here first, so the
+    // common answer is "not mapped". Asking with `check` rather than letting
+    // `expect` raise keeps that answer off the error path, which formats a
+    // Debug repr of both tokens into the message (~12k instructions each, a
+    // fifth of a whole-file parse on an interface-heavy `.d.ts`).
+    if !self.check(LBracket) {
+      self.pos = saved_pos
+      return None
+    }
+    let _ = self.advance()
     let key_param = match self.peek().kind {
       Ident(name) => {
         let _ = self.advance()
