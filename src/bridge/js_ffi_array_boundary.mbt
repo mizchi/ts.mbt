@@ -35,7 +35,16 @@
 /// an attribute other than `#module(...)`, a header that does not parse,
 /// a labelled parameter — is left untouched, which keeps the deprecation
 /// warning rather than inventing a wrong signature.
+///
+/// The READ-direction struct pass (`migrate_js_ffi_struct_reads`) runs on
+/// the result, so every caller of this pass gets both and no call site can
+/// apply one and forget the other.
 pub fn migrate_js_ffi_array_boundaries(mbt : String) -> String {
+  migrate_js_ffi_struct_reads(js_ffi_migrate_array_boundaries_only(mbt))
+}
+
+///|
+fn js_ffi_migrate_array_boundaries_only(mbt : String) -> String {
   if !mbt.contains("Array[") {
     return mbt
   }
@@ -357,37 +366,13 @@ fn js_ffi_migrate_extern(
       return None
     }
   }
-  let is_pub = header.has_prefix("pub ")
-  let after_fn = header[header.find("fn").unwrap() + 2:].to_owned()
-  // Optional generics: `fn[T] name(...)`.
-  let (generics, rest) = if after_fn.has_prefix("[") {
-    guard js_ffi_bracket_close(after_fn, 0) is Some(close) else { return None }
-    (after_fn[:close + 1].to_owned(), after_fn[close + 1:].to_owned())
-  } else {
-    ("", after_fn)
-  }
-  let rest = rest.trim_start().to_owned()
-  guard rest.find("(") is Some(open) else { return None }
-  let name = rest[:open].to_owned()
-  if name == "" || name.contains(" ") {
+  guard js_ffi_split_extern_header(header)
+    is Some((is_pub, generics, name, raw_params, ret_src, body_tail)) else {
     return None
   }
-  guard js_ffi_bracket_close(rest, open) is Some(close) else { return None }
-  let params_src = rest[open + 1:close].to_owned()
-  let tail = rest[close + 1:].to_owned()
-  guard tail.has_prefix(" -> ") else { return None }
-  // The return type runs to the ` =` that introduces the body.
-  guard tail.rev_find(" =") is Some(eq) else { return None }
-  let ret_src = tail[" -> ".length():eq].to_owned()
-  let body_tail = tail[eq:].to_owned()
   let params : Array[(String, JsFfiArrayType)] = []
-  for p in js_ffi_split_top(params_src) {
-    guard p.find(" : ") is Some(sep) else { return None }
-    let pname = p[:sep].to_owned().trim().to_owned()
-    if pname == "" || pname.contains("~") || pname.contains("?") {
-      return None
-    }
-    params.push((pname, js_ffi_parse_type(p[sep + 3:].to_owned(), promise_map)))
+  for p in raw_params {
+    params.push((p.0, js_ffi_parse_type(p.1, promise_map)))
   }
   let ret = js_ffi_parse_type(ret_src, promise_map)
   if !js_ffi_needs(ret) && !params.iter().any(fn(p) { js_ffi_needs(p.1) }) {
@@ -427,6 +412,53 @@ fn js_ffi_migrate_extern(
   out.push("  \{call}")
   out.push("}")
   Some(out)
+}
+
+///|
+/// An `extern "js" fn` header split into what a rewriting pass needs:
+/// visibility, the generics suffix (`[T]` or empty), the name, each
+/// parameter as `(name, type source)`, the return type source and the body
+/// tail starting at ` =`. `None` for a shape it does not recognise — a
+/// labelled or optional parameter, a missing return — so a pass leaves that
+/// extern alone. Shared by every pass over the generated externs, because a
+/// second parser is a second answer to what a header says.
+fn js_ffi_split_extern_header(
+  header : String,
+) -> (Bool, String, String, Array[(String, String)], String, String)? {
+  let is_pub = header.has_prefix("pub ")
+  guard header.find("fn") is Some(fn_at) else { return None }
+  let after_fn = header[fn_at + 2:].to_owned()
+  // Optional generics: `fn[T] name(...)`.
+  let (generics, rest) = if after_fn.has_prefix("[") {
+    guard js_ffi_bracket_close(after_fn, 0) is Some(close) else { return None }
+    (after_fn[:close + 1].to_owned(), after_fn[close + 1:].to_owned())
+  } else {
+    ("", after_fn)
+  }
+  let rest = rest.trim_start().to_owned()
+  guard rest.find("(") is Some(open) else { return None }
+  let name = rest[:open].to_owned()
+  if name == "" || name.contains(" ") {
+    return None
+  }
+  guard js_ffi_bracket_close(rest, open) is Some(close) else { return None }
+  let params_src = rest[open + 1:close].to_owned()
+  let tail = rest[close + 1:].to_owned()
+  guard tail.has_prefix(" -> ") else { return None }
+  // The return type runs to the ` =` that introduces the body.
+  guard tail.rev_find(" =") is Some(eq) else { return None }
+  let ret_src = tail[" -> ".length():eq].to_owned()
+  let body_tail = tail[eq:].to_owned()
+  let params : Array[(String, String)] = []
+  for p in js_ffi_split_top(params_src) {
+    guard p.find(" : ") is Some(sep) else { return None }
+    let pname = p[:sep].to_owned().trim().to_owned()
+    if pname == "" || pname.contains("~") || pname.contains("?") {
+      return None
+    }
+    params.push((pname, p[sep + 3:].to_owned()))
+  }
+  Some((is_pub, generics, name, params, ret_src, body_tail))
 }
 
 ///|

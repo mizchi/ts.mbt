@@ -4,6 +4,42 @@ fn script_target() -> @sut.ScriptTarget {
 
 fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
+extern "js" fn transpile_options() -> @sut.TranspileOptions =
+  #| () => ({ reportDiagnostics: true, compilerOptions: {} })
+
+/// A `Diagnostic` returned from JS is converted on the way in: its
+/// `messageText` union, `category` enum and boxed `start` read as MoonBit
+/// values, not as the raw JS string / number they arrive as.
+fn check_returned_diagnostic() -> Unit {
+  let out = @sut.transpileModule("let x = ;", transpile_options())
+  let diagnostics = match out.diagnostics {
+    Some(diagnostics) => diagnostics
+    None => abort("expected transpileModule to report diagnostics")
+  }
+  if diagnostics.length() == 0 {
+    abort("expected a syntax diagnostic")
+  }
+  let diagnostic = diagnostics[0]
+  match diagnostic.messageText {
+    StringValue(text) =>
+      if !text.contains("Expression expected") {
+        abort("unexpected diagnostic message: " + text)
+      }
+    DiagnosticMessageChainValue(_) => abort("expected a plain string message")
+  }
+  match diagnostic.category {
+    Error_ => ()
+    _ => abort("expected an error category")
+  }
+  match diagnostic.start {
+    Some(start) =>
+      if start != 8.0 {
+        abort("unexpected diagnostic start: " + start.to_string())
+      }
+    None => abort("expected a start offset")
+  }
+}
+
 fn rename_identifier(identifier : @sut.Identifier) -> @sut.Node {
   let text : String = test_unsafe_cast(identifier.escapedText)
   if text == "value" {
@@ -37,6 +73,7 @@ fn transformer_factory(
 }
 
 fn main {
+  check_returned_diagnostic()
   let source = @sut.createSourceFile(
     "input.ts",
     "const value = 1; console.log(value);",
