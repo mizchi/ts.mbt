@@ -51,7 +51,7 @@ pub type MaybeHandler[T] = ((T) -> Unit)?
 
 ///|
 pub fn make_string_box(value : String) -> CallbackBox[String] {
-  { current: value, on_change: None, meta: Map::new(), }
+  { current: value, on_change: None, meta: Map([]), }
 }
 
 ///|
@@ -68,7 +68,11 @@ pub fn consume_callbacks(
 }
 
 ///|
-#warnings("-unused_async")
+/// `Result` returned from a function that also raises is the edge shape this
+/// example exists to cover (its `.d.ts` is `Promise<Result<...>>` with the
+/// raise becoming the outer `Result`), so the "prefer `raise`" advice does
+/// not apply here.
+#warnings("-unused_async-result_error_return")
 pub async fn load_all(
   keys : FixedArray[String],
 ) -> Result[Array[(String, Int32)], LoadError] raise LoadError {
@@ -80,7 +84,7 @@ pub async fn load_all(
 
 ///|
 pub fn borrow_bytes(data : BytesView) -> Bytes {
-  data.to_bytes()
+  data.to_owned()
 }
 
 ///|

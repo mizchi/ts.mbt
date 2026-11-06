@@ -4745,7 +4745,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((Readonly, Readonly) -> Bool)?) -> MemoExoticComponent[FunctionComponent[JSValue]] = \"__ts_mbt_memo\"",
+      "pub extern \"js\" fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((JSValue, JSValue) -> Bool)?) -> MemoExoticComponent[FunctionComponent[JSValue]] = \"__ts_mbt_memo\"",
     ),
   )
   assert_true(

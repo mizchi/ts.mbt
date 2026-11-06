@@ -526,7 +526,7 @@ EOF
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
   grep_generated_mbt "$out" 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement['
   grep_generated_mbt "$out" 'pub fn cloneElement(element : DetailedReactHTMLElement[HTMLAttributes[JSValue], HTMLElement], props : HTMLAttributes[JSValue]?, children : Array[JSValue]) -> DetailedReactHTMLElement['
-  grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((Readonly, Readonly) -> Bool)?) -> NamedExoticComponent[JSValue]'
+  grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent[JSValue], propsAreEqual : ((JSValue, JSValue) -> Bool)?) -> NamedExoticComponent[JSValue]'
   grep_generated_mbt "$out" 'pub fn forwardRef(render : ForwardRefRenderFunction[JSValue, JSValue]) -> ForwardRefExoticComponent[JSValue]'
   grep_generated_mbt "$out" 'pub fn useState(initialState : JSValue) -> UseStateResult'
   grep_generated_mbt "$out" 'pub fn useTransition() -> UseTransitionResult'
