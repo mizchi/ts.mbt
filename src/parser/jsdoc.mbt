@@ -119,7 +119,7 @@ fn parse_jsdoc_block_view(text : StringView) -> JsdocBlock? {
   // final empty line, and an empty body yields one empty line.
   let body_len = body.length()
   let mut line_start = 0
-  for k in 0..=body_len {
+  for k in 0..<=body_len {
     if k < body_len && body[k] != '\n' {
       continue
     }

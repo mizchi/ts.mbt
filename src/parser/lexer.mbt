@@ -1007,8 +1007,18 @@ fn classify_ident_or_keyword(s : StringView) -> TokenKind {
   match n {
     2 =>
       match c0 {
-        c if c == 'a'.to_int() => if s == "as" { As } else { Ident(s.to_owned()) }
-        c if c == 'd'.to_int() => if s == "do" { Do } else { Ident(s.to_owned()) }
+        c if c == 'a'.to_int() =>
+          if s == "as" {
+            As
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'd'.to_int() =>
+          if s == "do" {
+            Do
+          } else {
+            Ident(s.to_owned())
+          }
         c if c == 'i'.to_int() =>
           if s == "if" {
             If
@@ -1017,25 +1027,80 @@ fn classify_ident_or_keyword(s : StringView) -> TokenKind {
           } else {
             Ident(s.to_owned())
           }
-        c if c == 'o'.to_int() => if s == "of" { Of } else { Ident(s.to_owned()) }
+        c if c == 'o'.to_int() =>
+          if s == "of" {
+            Of
+          } else {
+            Ident(s.to_owned())
+          }
         _ => Ident(s.to_owned())
       }
     3 =>
       match c0 {
-        c if c == 'v'.to_int() => if s == "var" { Var } else { Ident(s.to_owned()) }
-        c if c == 'l'.to_int() => if s == "let" { Let } else { Ident(s.to_owned()) }
-        c if c == 'f'.to_int() => if s == "for" { For } else { Ident(s.to_owned()) }
-        c if c == 't'.to_int() => if s == "try" { Try } else { Ident(s.to_owned()) }
-        c if c == 'n'.to_int() => if s == "new" { New } else { Ident(s.to_owned()) }
-        c if c == 'i'.to_int() => if s == "int" { IntType } else { Ident(s.to_owned()) }
+        c if c == 'v'.to_int() =>
+          if s == "var" {
+            Var
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'l'.to_int() =>
+          if s == "let" {
+            Let
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'f'.to_int() =>
+          if s == "for" {
+            For
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 't'.to_int() =>
+          if s == "try" {
+            Try
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'n'.to_int() =>
+          if s == "new" {
+            New
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'i'.to_int() =>
+          if s == "int" {
+            IntType
+          } else {
+            Ident(s.to_owned())
+          }
         _ => Ident(s.to_owned())
       }
     4 =>
       match c0 {
-        c if c == 'c'.to_int() => if s == "case" { Case } else { Ident(s.to_owned()) }
-        c if c == 'e'.to_int() => if s == "else" { Else } else { Ident(s.to_owned()) }
-        c if c == 'f'.to_int() => if s == "from" { From } else { Ident(s.to_owned()) }
-        c if c == 'n'.to_int() => if s == "null" { Null } else { Ident(s.to_owned()) }
+        c if c == 'c'.to_int() =>
+          if s == "case" {
+            Case
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'e'.to_int() =>
+          if s == "else" {
+            Else
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'f'.to_int() =>
+          if s == "from" {
+            From
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'n'.to_int() =>
+          if s == "null" {
+            Null
+          } else {
+            Ident(s.to_owned())
+          }
         c if c == 't'.to_int() =>
           if s == "true" {
             Bool(true)
@@ -1044,13 +1109,28 @@ fn classify_ident_or_keyword(s : StringView) -> TokenKind {
           } else {
             Ident(s.to_owned())
           }
-        c if c == 'v'.to_int() => if s == "void" { VoidType } else { Ident(s.to_owned()) }
-        c if c == 'w'.to_int() => if s == "with" { With } else { Ident(s.to_owned()) }
+        c if c == 'v'.to_int() =>
+          if s == "void" {
+            VoidType
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'w'.to_int() =>
+          if s == "with" {
+            With
+          } else {
+            Ident(s.to_owned())
+          }
         _ => Ident(s.to_owned())
       }
     5 =>
       match c0 {
-        c if c == 'b'.to_int() => if s == "break" { Break } else { Ident(s.to_owned()) }
+        c if c == 'b'.to_int() =>
+          if s == "break" {
+            Break
+          } else {
+            Ident(s.to_owned())
+          }
         c if c == 'c'.to_int() =>
           if s == "class" {
             Class
@@ -1067,16 +1147,46 @@ fn classify_ident_or_keyword(s : StringView) -> TokenKind {
           } else {
             Ident(s.to_owned())
           }
-        c if c == 't'.to_int() => if s == "throw" { Throw } else { Ident(s.to_owned()) }
-        c if c == 'w'.to_int() => if s == "while" { While } else { Ident(s.to_owned()) }
-        c if c == 'y'.to_int() => if s == "yield" { Yield } else { Ident(s.to_owned()) }
+        c if c == 't'.to_int() =>
+          if s == "throw" {
+            Throw
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'w'.to_int() =>
+          if s == "while" {
+            While
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'y'.to_int() =>
+          if s == "yield" {
+            Yield
+          } else {
+            Ident(s.to_owned())
+          }
         _ => Ident(s.to_owned())
       }
     6 =>
       match c0 {
-        c if c == 'r'.to_int() => if s == "return" { Return } else { Ident(s.to_owned()) }
-        c if c == 'i'.to_int() => if s == "import" { Import } else { Ident(s.to_owned()) }
-        c if c == 'e'.to_int() => if s == "export" { Export } else { Ident(s.to_owned()) }
+        c if c == 'r'.to_int() =>
+          if s == "return" {
+            Return
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'i'.to_int() =>
+          if s == "import" {
+            Import
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 'e'.to_int() =>
+          if s == "export" {
+            Export
+          } else {
+            Ident(s.to_owned())
+          }
         c if c == 's'.to_int() =>
           if s == "switch" {
             Switch
@@ -1085,8 +1195,18 @@ fn classify_ident_or_keyword(s : StringView) -> TokenKind {
           } else {
             Ident(s.to_owned())
           }
-        c if c == 'd'.to_int() => if s == "delete" { Delete } else { Ident(s.to_owned()) }
-        c if c == 't'.to_int() => if s == "typeof" { Typeof } else { Ident(s.to_owned()) }
+        c if c == 'd'.to_int() =>
+          if s == "delete" {
+            Delete
+          } else {
+            Ident(s.to_owned())
+          }
+        c if c == 't'.to_int() =>
+          if s == "typeof" {
+            Typeof
+          } else {
+            Ident(s.to_owned())
+          }
         c if c == 'n'.to_int() =>
           if s == "number" {
             NumberType
