@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2671 / MISS in scope 44 /
+  is a soundness bug, and there are none (TP 2670 / MISS in scope 45 /
   OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -3231,6 +3231,54 @@ product surfaces now.
   left alone with its blocker — it needs the name to be absent from every
   outer scope and from the lib, which is `unresolved_type_references`,
   rejected three times here with a measured cause.
+  Batch FI turns from the corpus to a real package's SOURCE rather than
+  its `.d.ts`: zod's own TypeScript
+  (`node_modules/zod/src`, 134 files checked one at a time, every
+  diagnostic a false positive since tsc compiles zod) goes from **460
+  distinct reports to 211** and gains none at a new location. A
+  4,000-file `.d.ts` sweep is byte-identical, and a 1,641-file `.ts`
+  sweep's only additions are 24 lines in zod v3's `types.ts`
+  (18 are `mtsc check`'s single-file mode reporting an import it cannot
+  resolve, at call sites that now get further; graph mode has none). The
+  cause was one shape, the one every zod v3 class is: `_def: Def` on a
+  generic base and `this._def.checks` in `class S extends Base<string,
+  StrDef>`. TWO layers lost the instantiation, and fixing either alone
+  measured as a NO-OP, which is the finding worth keeping. The checker
+  walked a base by NAME (`Named(base)`) at both `lookup_class_field` and
+  the `Applied` class arm, though `class_base_type_args` had recorded
+  every `extends B<…>` for years for one rule; it now walks
+  `Applied(base, args)` there and in the inherited-constructor walk, which
+  composes through `Mid<D> extends Base<D>`. And the PARSER had already
+  replaced `Def` by its constraint inside the member, because a bounded
+  type parameter is inlined to its bound everywhere it is declared — so
+  the substitution found nothing to substitute. A class's own bounds are
+  no longer inlined (a function's still are); the oracle is identical
+  with and without that inlining, so no true positive leaned on it. The
+  first measurement after the checker half alone was unchanged, and it
+  took one `println` to see the arguments arriving intact and the member
+  already typed `BaseDef`.
+  Three neighbouring false positives came with it, each pre-existing and
+  each reachable only once `_def` resolved. `readonly x; constructor(v)
+  { this.x = v }` was reported: the statement spelling of a property
+  write never checks readonly and the expression spelling had no
+  constructor exemption, so the same line reported or not depending on
+  whether it sat inside an `if` — the exemption is own-class instance
+  fields in that class's constructor, and a subclass writing an
+  inherited readonly stays an error in tsc (still a MISS here, because
+  `is_readonly_field` does not walk bases). An object literal's own
+  `get error()` did not provide `error` for the missing-property check
+  while the spread branch ten lines above had stripped `@@get:` for
+  years. `a || b` always unioned `b` in, where tsc returns `a`'s type
+  alone when `a` cannot be falsy — `falsy_subset`, the test `&&` already
+  used, is exactly that question. And "`string` is not assignable to the
+  generic indexed access `T[number]`" was right for a GENERIC key
+  (`T[P]`) and wrong for a concrete one: tsc relates `T[number]` and
+  `T["a"]` through the constraint indexed the same way, so
+  `Set<T[number]>.has(s)` is legal; probed on eight shapes, and a
+  concrete key now abstains. It cost one TP for the right reason:
+  `literalTypesWidenInParameterPosition` was flagged only by the readonly
+  report the exemption removes, its real TS2322 needs numeric literal
+  types, and `--max-miss` went 44 -> 45 with that written at the gate.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

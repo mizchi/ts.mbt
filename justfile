@@ -227,9 +227,17 @@ checker-miss-buckets *ARGS:
 # MISS count (`scripts/checker_out_of_scope.txt` holds the declared
 # remainder, `docs/checker-triage.md` the argument) — lower it whenever a
 # batch improves it, the same way the FP budget only ever tightened.
+#
+# It went UP once, 44 -> 45, and the file says why:
+# `literalTypesWidenInParameterPosition` was a TP only because the
+# `readonly` rule reported `this.noWiden = 5` inside the declaring class's
+# own constructor — the one place tsc allows that write. tsc's real error
+# there is TS2322 (`5` into the literal type `1`), which needs numeric
+# literal types `infer_expr` does not keep. A correct fix losing a file
+# that was flagged for the wrong reason is a MISS, not a regression.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 44
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 45
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

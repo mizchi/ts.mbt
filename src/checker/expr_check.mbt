@@ -195,6 +195,15 @@ priv struct Resolver {
   // "is any", since it says nothing about annotated or initialized
   // bindings.
   any_uninitialized_values : Map[String, Bool]
+  // `class C extends B<A1, A2>`: the type arguments of each heritage edge,
+  // keyed by `class_base_key(class key, base name)`. The base chain is
+  // otherwise walked by NAME, so a member a generic base declares as `Def`
+  // came out as `Def`'s constraint in every subclass — `this._def.checks`
+  // on `class S extends Base<string, StrDef>` read `Def` as `BaseDef` and
+  // reported a property every zod v3 schema class has. `None` marks an
+  // edge recorded twice with different arguments (a block-local class of
+  // the same name), which the lookup treats as unknown rather than guess.
+  class_base_args : Map[String, Array[@ast.TsType]?]
 }
 
 ///|
@@ -469,6 +478,7 @@ fn Resolver::empty() -> Resolver {
     this_param_members: {},
     local_type_names: {},
     any_uninitialized_values: {},
+    class_base_args: {},
     class_index: ClassIndex::empty(),
     no_implicit_any: false,
     lib_lacks_es2017: false,
@@ -1118,6 +1128,15 @@ fn Resolver::ingest_module(
       // collision) still merges pairwise: that is one merge, not a fold.
       Some(existing) => r.interfaces[key] = merge_interfaces(existing, merged)
       None => r.interfaces[key] = merged
+    }
+  }
+  for e in module_.class_base_type_args {
+    let (cls_name, base, args) = e
+    let key = class_base_key(prefix + cls_name, base)
+    match r.class_base_args.get(key) {
+      None => r.class_base_args[key] = Some(args)
+      Some(Some(prev)) if prev != args => r.class_base_args[key] = None
+      Some(_) => ()
     }
   }
   for c in module_.classes {
@@ -3205,6 +3224,37 @@ fn inferred_primitive_field_type(
 }
 
 ///|
+/// `this.x = v` for a `readonly x` inside the constructor of the class that
+/// DECLARES `x` — the one place TypeScript allows the write, and the way a
+/// readonly field without an initializer gets its value at all
+/// (`readonly _def: Def; constructor(def: Def) { this._def = def }`, which
+/// every zod v3 schema class inherits). The statement spelling of that line
+/// was never checked for readonly at all; only the expression spelling was,
+/// and it had no constructor exemption, so the same assignment reported or
+/// not depending on where in the body it sat.
+///
+/// Only an OWN field qualifies: a subclass constructor writing an inherited
+/// readonly field is TS2540 in tsc, and the base's declaration is not in
+/// this class's `properties`. A nested arrow keeps its constructor's path
+/// and is exempted too, which loses that finding rather than inventing one.
+fn readonly_write_in_own_constructor(
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  recv_ty : @ast.TsType,
+  field : String,
+) -> Bool {
+  guard recv is Var("this") && recv_ty is Named(cls_name) else { return false }
+  if ctx.path_prefix != "function \{cls_name}.constructor" {
+    return false
+  }
+  match ctx.resolver.classes.get(cls_name) {
+    Some(cls) =>
+      cls.properties.iter().any(fn(p) { p.name == field && !p.is_static })
+    None => false
+  }
+}
+
+///|
 /// True when assigning to `recv.field` is forbidden because the field is
 /// declared `readonly` on a reachable interface/class member. For a union
 /// receiver, *any* member with the readonly bit set is enough — the value
@@ -3528,7 +3578,7 @@ fn Resolver::lookup_field_core(
                 }
               }
               for base in cls.base_names {
-                match self.lookup_field(@ast.TsType::Named(base), field) {
+                match self.lookup_field(self.class_base_type(n, base), field) {
                   Some(t) => return Some(substitute_params(t, bindings))
                   None => ()
                 }
@@ -4543,6 +4593,28 @@ fn string_prototype_member(field : String) -> @ast.TsType? {
 }
 
 ///|
+fn class_base_key(class_key : String, base : String) -> String {
+  class_key + "\u{1}" + base
+}
+
+///|
+/// The type a member lookup should walk to for `class_key`'s heritage edge
+/// to `base`: `B<A1, A2>` when the clause wrote type arguments, so the base's
+/// own type parameters are substituted in what it declares, and the bare
+/// `B` otherwise — which is what every caller used to pass, so an edge with
+/// no recorded arguments resolves exactly as before.
+fn Resolver::class_base_type(
+  self : Resolver,
+  class_key : String,
+  base : String,
+) -> @ast.TsType {
+  match self.class_base_args.get(class_base_key(class_key, base)) {
+    Some(Some(args)) if args.length() > 0 => Applied(base, args)
+    _ => Named(base)
+  }
+}
+
+///|
 /// Takes the resolver's KEY for the class rather than the decl, so the
 /// name index (`ClassIndex`, keyed the same way) and the member lists it
 /// indexes cannot be handed over as a mismatched pair.
@@ -4563,7 +4635,7 @@ fn Resolver::lookup_class_field(
     )
   }
   for base in cls.base_names {
-    match self.lookup_field(@ast.TsType::Named(base), field) {
+    match self.lookup_field(self.class_base_type(class_key, base), field) {
       Some(t) => return Some(t)
       None => ()
     }
@@ -5024,7 +5096,12 @@ fn Resolver::lookup_constructor_sig(
           if cls.base_names.length() == 0 {
             Some(([], []))
           } else {
-            self.lookup_inherited_constructor_sig(cls.base_names[0], Map([]))
+            self.lookup_inherited_constructor_sig(
+              class_name,
+              cls.base_names[0],
+              Map([]),
+              Map([]),
+            )
           }
       }
     None => None
@@ -5039,9 +5116,18 @@ fn Resolver::lookup_constructor_sig(
 /// implicit zero-arg ancestor yields `Some(([], []))`, which correctly flags
 /// `new Derived(x)` on a zero-arg base. `seen` guards against an `extends`
 /// cycle.
+///
+/// `from_key` is the class whose heritage edge led here and `outer` the
+/// substitution in force on that class, so an inherited constructor's
+/// parameters are read at the instantiation the `extends` clauses wrote:
+/// `class S extends Base<string, StrDef>` inherits `constructor(def: Def)`
+/// as `(def: StrDef)`, not as `Def`'s constraint. A type parameter with no
+/// written argument stays a bare name, which is what all of them were.
 fn Resolver::lookup_inherited_constructor_sig(
   self : Resolver,
+  from_key : String,
   class_name : String,
+  outer : Map[String, @ast.TsType],
   seen : Map[String, Unit],
 ) -> (Array[@ast.TsType], Array[@ast.TsParam])? {
   if seen.contains(class_name) {
@@ -5052,6 +5138,16 @@ fn Resolver::lookup_inherited_constructor_sig(
     Some(c) => c
     None => return None
   }
+  let bindings : Map[String, @ast.TsType] = Map([])
+  match self.class_base_type(from_key, class_name) {
+    Applied(_, args) =>
+      for i, tp in cls.type_params {
+        if i < args.length() {
+          bindings[tp] = substitute_params(args[i], outer)
+        }
+      }
+    _ => ()
+  }
   // An expression base (`extends mixin(Base)`) hides the real constructor.
   if cls.base_names.contains("<expr-base>") {
     return None
@@ -5061,7 +5157,8 @@ fn Resolver::lookup_inherited_constructor_sig(
       let types : Array[@ast.TsType] = []
       let sig : Array[@ast.TsParam] = []
       for idx, p in params {
-        types.push(p.1)
+        let type_ = substitute_params(p.1, bindings)
+        types.push(type_)
         let is_rest = idx < cls.constructor_param_is_rest.length() &&
           cls.constructor_param_is_rest[idx]
         sig.push({
@@ -5069,7 +5166,7 @@ fn Resolver::lookup_inherited_constructor_sig(
           binding: None,
           is_rest,
           is_optional: false,
-          type_: p.1,
+          type_,
           default: None,
         })
       }
@@ -5079,7 +5176,12 @@ fn Resolver::lookup_inherited_constructor_sig(
       if cls.base_names.length() == 0 {
         Some(([], []))
       } else {
-        self.lookup_inherited_constructor_sig(cls.base_names[0], seen)
+        self.lookup_inherited_constructor_sig(
+          class_name,
+          cls.base_names[0],
+          bindings,
+          seen,
+        )
       }
   }
 }
@@ -10521,7 +10623,18 @@ fn infer_binop(
     // we don't model literal-value falsiness for primitives like
     // `0` / `""` / `false`). Matches the common `x || default` pattern
     // where `x: T | undefined` and `default: T` produce `T`.
-    Or => narrow_union(non_nullable(l), r)
+    //
+    // An operand that can never be falsy never evaluates `b`, so tsc's
+    // type is `a`'s alone — `falsy_subset`, the test `&&` uses above, is
+    // exactly that question. zod writes `const effect = this._def.effect
+    // || null` over a required object-typed `effect` and reads
+    // `effect.type` next; unioning `null` in reported that read.
+    Or =>
+      if falsy_subset(resolver, l) is Never {
+        non_nullable(l)
+      } else {
+        narrow_union(non_nullable(l), r)
+      }
     // `a ?? b` — `b` is only evaluated when `a` is null/undefined, so the
     // result strips nullish from `a` and unions with `b`'s type.
     Coalesce => narrow_union(non_nullable(l), r)
@@ -10855,7 +10968,22 @@ fn check_expr_against(
       | BigIntLiteral(_)
       | Symbol,
       IndexedAccess(base_t, key_t),
-    ) if (base_t is Named(base) && ctx.in_scope_type_params.contains(base)) ||
+    ) if (
+        base_t is Named(base) &&
+        ctx.in_scope_type_params.contains(base) &&
+        // A CONCRETE key is a different rule in tsc: `T[number]` and
+        // `T["a"]` relate a source through T's constraint indexed the
+        // same way, so `string` into `T[number]` with
+        // `T extends [string, ...string[]]` is legal — zod's `ZodEnum`
+        // calls `Set<T[number]>.has(s)` with a plain string — while
+        // `number` into it, or `string` against `("x" | "y")[]`, is
+        // TS2322. Deciding that needs the constraint here; abstaining
+        // loses those two and invents nothing. Probed on eight shapes.
+        !(
+          key_t
+          is (Number | Int | String_ | Literal(_) | NumberLiteral(_))
+        )
+      ) ||
       // Parameter registration substitutes in-scope type params with their
       // bounds, leaving shapes like `IndexedAccess(Any, Keyof(Named("T")))`
       // — the `keyof` key marks it as the same opaque generic access.
@@ -15226,6 +15354,12 @@ fn check_object_lit_against_target(
         }
         provided[n] = true
       }
+    } else if entry.0.has_prefix("@@get:") || entry.0.has_prefix("@@set:") {
+      // The literal's OWN accessor provides the property too, and the
+      // spread branch above already knew the spelling: `{ get error() {
+      // … }, input }` against `{ error: E; input: unknown }` reported
+      // `error` as missing — zod's `ZodCatch` builds exactly that object.
+      provided[entry.0[6:].to_owned()] = true
     } else {
       provided[entry.0] = true
     }
@@ -23643,6 +23777,7 @@ fn check_call_args_in_expr(
       check_member_accessibility(env, ctx, recv, prop)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       if !prop.has_prefix("__private_brand__") &&
+        !readonly_write_in_own_constructor(ctx, recv, recv_ty, prop) &&
         is_readonly_field(ctx.resolver, recv_ty, prop) {
         record(
           ctx,
