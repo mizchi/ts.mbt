@@ -2341,6 +2341,13 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   // cost — `unwrap` runs once per type inspected, hundreds of thousands of
   // times on a module with generic call sites.
   let mut seen : Map[String, Bool]? = None
+  // Indexed-access hops taken through `lookup_field`. A member typed as an
+  // indexed access into its own declaration (`class C1 { x: C1["x"] }`,
+  // `type T1 = { x: T1["x"] }` — circularIndexedAccessErrors) hands back
+  // the same `IndexedAccess` it was asked about, and no name enters `seen`
+  // on that route, so the loop never ended. Bounded like the other
+  // depth-limited walks here; running out abstains.
+  let mut indexed_hops = 0
   let mut cur = ty
   let mut keep_going = true
   while keep_going {
@@ -2554,9 +2561,12 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           IndexedAccess(_, _) =>
             // Still unresolved: try a resolver-aware field lookup.
             match key {
-              Literal(name) =>
+              Literal(name) if indexed_hops < 16 =>
                 match self.lookup_field(resolved_base, name) {
-                  Some(t) => cur = t
+                  Some(t) => {
+                    indexed_hops += 1
+                    cur = t
+                  }
                   None => keep_going = false
                 }
               _ => keep_going = false
@@ -2566,7 +2576,26 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           // unmodeled receiver from a modeled one, and `Any` claims the
           // latter — which is how `Info["dog"].name` came to be reported
           // as a missing property.
-          Any if !(resolved_base is Any) => keep_going = false
+          //
+          // An INTERFACE base is the commonest way to reach that `Any`:
+          // `unwrap` leaves `Named(iface)` alone and the simplifier has no
+          // table to look it up in, so `Def["type"]` stayed opaque — and
+          // the switch comparability check read the opaque shape as one
+          // no case could match, reporting every arm of zod's
+          // `switch (def.type as $ZodTypeDef["type"])`. A literal key is
+          // the one `lookup_field` answers, exactly as in the arm above.
+          Any if !(resolved_base is Any) =>
+            match key {
+              Literal(name) if indexed_hops < 16 =>
+                match self.lookup_field(resolved_base, name) {
+                  Some(t) => {
+                    indexed_hops += 1
+                    cur = t
+                  }
+                  None => keep_going = false
+                }
+              _ => keep_going = false
+            }
           _ => cur = simplified
         }
       }
@@ -8098,6 +8127,23 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
     (Applied(_, _), _) | (_, Applied(_, _)) => true
     (Object(_), _) | (_, Object(_)) => true
     (Struct(_, _), _) | (_, Struct(_, _)) => true
+    // A COMPUTED type the resolver could not reduce says nothing about its
+    // values, so it overlaps everything, exactly like the `Named` arm above.
+    // It used to reach the final `false`, and an unresolved
+    // `$ZodTypeDef["type"]` — an interface imported from another module,
+    // whose members this checker does not see — read as a type no string
+    // could equal, reporting all eighty arms of zod's two
+    // `switch (def.type as $ZodTypeDef["type"])` dispatchers.
+    (IndexedAccess(_, _), _)
+    | (_, IndexedAccess(_, _))
+    | (Keyof(_), _)
+    | (_, Keyof(_))
+    | (TypeOf(_), _)
+    | (_, TypeOf(_))
+    | (Conditional(_, _, _, _), _)
+    | (_, Conditional(_, _, _, _))
+    | (MappedType(_, _, _, _), _)
+    | (_, MappedType(_, _, _, _)) => true
     // Same primitive families overlap with each other and their literals.
     (Number, Number)
     | (Number, NumberLiteral(_))
@@ -30225,6 +30271,22 @@ fn member_covariant_by_iface_extends(
     match (dn, bn) {
       (Some(dname), Some(bname)) =>
         named_iface_extends_reaches(resolver, dname, bname)
+      // A GENERIC base member: `_zod: $ZodCheckInternals<T>` read at
+      // `extends $ZodCheck<string>` is `$ZodCheckInternals<string>`, and
+      // `_zod: $ZodCheckLowerCaseInternals` with
+      // `interface $ZodCheckLowerCaseInternals extends
+      // $ZodCheckInternals<string>` satisfies it nominally — tsc checks
+      // that `extends` clause on its own. The structural test cannot see
+      // it whenever a member refers through a namespace import
+      // (`errors.$ZodIssueBase`), which is how all twenty-four of zod's
+      // check interfaces are written.
+      (Some(dname), None) =>
+        match bt {
+          Applied(bname, bargs) =>
+            iface_extends_instantiation(resolver, dname, bname, bargs) ||
+            is_assignable_to(dt, bt)
+          _ => is_assignable_to(dt, bt)
+        }
       _ => is_assignable_to(dt, bt)
     }
   }
@@ -30248,6 +30310,56 @@ fn member_covariant_by_iface_extends(
     }
   }
   true
+}
+
+///|
+/// Does interface `from` reach the INSTANTIATION `to<args>` through its
+/// declared `extends` chain — some edge written exactly `to<args>`?
+///
+/// Only non-generic interfaces are walked: a generic one's edge arguments
+/// can mention its own type parameters, which mean nothing until the
+/// interface is instantiated, so passing through it would compare an
+/// unsubstituted `T` against a concrete argument. Stopping there loses the
+/// accept rather than inventing one. Arguments compare by structural
+/// equality of the written types, so two spellings of one type
+/// (`Named` / `Struct`) do not match — again the affordable direction.
+fn iface_extends_instantiation(
+  resolver : Resolver,
+  from : String,
+  to : String,
+  args : Array[@ast.TsType],
+) -> Bool {
+  let mut frontier = [from]
+  let visited : Map[String, Unit] = Map([])
+  for _ in 0..<16 {
+    let next : Array[String] = []
+    for n in frontier {
+      if visited.contains(n) {
+        continue
+      }
+      visited[n] = ()
+      guard resolver.interfaces.get(n) is Some(i) else { continue }
+      if i.type_params.length() > 0 {
+        continue
+      }
+      for k, en in i.extends_names {
+        let eargs = if k < i.extends_args.length() {
+          i.extends_args[k]
+        } else {
+          []
+        }
+        if en == to && eargs == args {
+          return true
+        }
+        next.push(en)
+      }
+    }
+    if next.length() == 0 {
+      break
+    }
+    frontier = next
+  }
+  false
 }
 
 ///|
