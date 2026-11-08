@@ -168,3 +168,83 @@ test "indexed access: a concrete key relates through the constraint" {
     }),
   )
 }
+
+///|
+test "indexed access: an interface member by literal key resolves" {
+  // `switch (k)` over `Def["type"]` judges each case against the member's
+  // literal union: legal arms are silent and an impossible one reports.
+  let src =
+    #|interface Def { type: "a" | "b" | "c" }
+    #|function h(k: Def["type"]): number {
+    #|  switch (k) { case "a": return 1; case "b": return 2; }
+    #|  return 0;
+    #|}
+    #|function bad(k: Def["type"]): number {
+    #|  switch (k) { case "z": return 1; }
+    #|  return 0;
+    #|}
+  let issues = generic_base_issues(src)
+  assert_false(issues.iter().any(fn(i) { i.path.contains("function h") }))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("function bad") && i.message.contains("can never match")
+    }),
+  )
+}
+
+///|
+test "indexed access: an unresolvable base overlaps every case" {
+  // zod casts to `$ZodTypeDef["type"]` with the interface imported from
+  // another module; an indexed access nothing can reduce says nothing
+  // about its values, so no arm may be called impossible.
+  let src =
+    #|function f(x: any): number {
+    #|  const k = x.type as Missing["type"];
+    #|  switch (k) { case "a": return 1; case "b": return 2; }
+    #|  return 0;
+    #|}
+  let issues = generic_base_issues(src)
+  assert_false(
+    issues.iter().any(fn(i) { i.message.contains("can never match") }),
+  )
+}
+
+///|
+test "indexed access: a self-referential member terminates" {
+  // `x: C1["x"]` hands the lookup back the same indexed access; this used
+  // to loop forever (circularIndexedAccessErrors). Reaching the assertion
+  // at all is the test.
+  let src =
+    #|type T1 = { x: T1["x"] };
+    #|class C1 { x: C1["x"]; }
+    #|function f(a: T1, c: C1): void { const p = a.x; const q = c.x; }
+  let _ = generic_base_issues(src)
+  assert_true(true)
+}
+
+///|
+test "generic base member: a derived interface extending its instantiation" {
+  // `_zod: LInternals` against `Internals<string>` where
+  // `interface LInternals extends Internals<string>` — also through two
+  // generic levels — is accepted; a derived member whose `check` takes the
+  // wrong type through a NON-generic interface is still TS2430.
+  let src =
+    #|interface Internals<T> { issc?: Unresolved.Base; check(p: T): void; }
+    #|interface Check<in T = never> { _zod: Internals<T> }
+    #|interface LInternals extends Internals<string> { issc: Unresolved.Fmt }
+    #|interface LCheck extends Check<string> { _zod: LInternals }
+    #|interface MInternals<T> extends Internals<T> { issc: Unresolved.Fmt }
+    #|interface MCheck<T> extends Check<T> { _zod: MInternals<T> }
+  let issues = generic_base_issues(src)
+  for name in ["LCheck", "MCheck"] {
+    assert_false(
+      issues
+      .iter()
+      .any(fn(i) {
+        i.message.contains("interface `\{name}` incorrectly extends")
+      }),
+    )
+  }
+}

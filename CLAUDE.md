@@ -3279,6 +3279,56 @@ product surfaces now.
   `literalTypesWidenInParameterPosition` was flagged only by the readonly
   report the exemption removes, its real TS2322 needs numeric literal
   types, and `--max-miss` went 44 -> 45 with that written at the gate.
+  Batch FJ takes zod from **211 to 117** at a corpus-NEUTRAL gate (TP
+  2670 / MISS 45 / FP 0) with no report at a new location, and its most
+  useful output is a correction to how batch FI was verified. Eighty of
+  the 211 were one rule: zod writes `switch (def.type as
+  $ZodTypeDef["type"])` with the interface IMPORTED from another module,
+  whose members this checker does not see in graph mode, and
+  `types_can_overlap` sent an unreducible `IndexedAccess` to its final
+  `false`, so every arm read as impossible. An unresolved computed type
+  (indexed access, `keyof`, `typeof`, conditional, mapped) now overlaps
+  everything, exactly like `Named` two arms above. The same-module
+  spelling was a separate defect: `unwrap` leaves an interface base
+  `Named`, the simplifier answers `Any` for it, and the `Any` branch gave
+  up where the branch above it asks `lookup_field` — so `Def["type"]` was
+  opaque even with `Def` in the file. Asking there exposed a HANG that had
+  always been reachable through the existing branch:
+  `class C1 { x: C1["x"] }` hands the lookup back the same indexed access
+  and nothing enters `seen` on that route, so both lookups share a 16-hop
+  bound now. The conformance run that found it sat at 97% CPU for ten
+  minutes on `circularIndexedAccessErrors` before `ps` named the file.
+  The other 14 are TS2430 through a GENERIC base member: `_zod:
+  XInternals` against `$ZodCheckInternals<string>` where `interface
+  XInternals extends $ZodCheckInternals<string>`, which the structural
+  test cannot recover once a member refers through a namespace import.
+  `iface_extends_instantiation` walks `(name, arguments)` pairs and
+  substitutes each interface's arguments into the edges it declares,
+  passing through only when the counts match, since an unbound `T` would
+  compare equal to an unrelated `T`. It TRUSTS edges TS2430 never checks
+  (a base carrying type arguments is skipped), so `interface WI<T>
+  extends Internals<T> { check(p: string): void }` is silent and a member
+  typed `WI<number>` is then accepted too — measured: the old binary
+  reported that one and the legal `MCheck` beside it, so it costs one
+  finding and is stated at the site.
+  The correction: **a bridge harness exiting 0 is not evidence that the
+  generated output is unchanged.** `verify-generated-fixtures`,
+  `verify-scaffolds` and `verify-examples` write into `_build/`, which is
+  not tracked, so "they pass and `git status` is clean" says the corpus
+  COMPILES and nothing about what it says. The last 12 TS2430 reports
+  were the bound-inlining shape again, this time for an INTERFACE
+  (`def: $ZodStringFormatDef<Format>` stored as `<string>`), and dropping
+  that inlining passed all three harnesses while **48 generated files
+  changed** — typescript-ast's `kind : SyntaxKind` became
+  `kind : TKind`, because the bridge reads the inlined bound as the
+  member's MoonBit type, and two parser tests pin it for that reason. It
+  was REVERTED. The check that decides it is a diff of the generated
+  corpus between the two parsers, and run that way the CLASS half batch
+  FI shipped is **byte-identical** (0 files), so that half stands on a
+  measurement now rather than on the exit codes it was first shipped on.
+  Separately recorded: in graph mode an imported interface's members are
+  opaque (`d.nope` on an imported `Def` is silent), which is a larger
+  capability gap than anything here.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
