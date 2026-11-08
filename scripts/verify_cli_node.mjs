@@ -139,6 +139,17 @@ const CASES = [
     args: ["entry.ts", "--bundle", "--noEmit"],
   },
   {
+    // Plain `--noEmit` follows imports the way `tsc --noEmit entry.ts`
+    // does; it used to check the entry alone, so this was silent.
+    name: "cross-module type error, --noEmit without --bundle",
+    files: {
+      "entry.ts": 'import { score } from "./score";\nexport const label: string = score;\n',
+      "score.ts": "export const score: number = 1;\n",
+    },
+    args: ["entry.ts", "--noEmit"],
+    expectCode: 1,
+  },
+  {
     name: "clean program, --bundle --noEmit",
     files: {
       "entry.ts": 'import { score } from "./score";\nexport const label: number = score;\n',
@@ -331,6 +342,9 @@ for (const testCase of CASES) {
     }
     if (nativeRun.code !== jsRun.code) {
       problems.push(`exit code differs: native ${nativeRun.code}, js ${jsRun.code}`);
+    }
+    if (testCase.expectCode !== undefined && nativeRun.code !== testCase.expectCode) {
+      problems.push(`exit code ${nativeRun.code}, expected ${testCase.expectCode}`);
     }
     for (const artifact of testCase.reads ?? []) {
       const readOne = (base) => {

@@ -3329,6 +3329,24 @@ product surfaces now.
   Separately recorded: in graph mode an imported interface's members are
   opaque (`d.nope` on an imported `Def` is silent), which is a larger
   capability gap than anything here.
+  Batch FK is that gap, and it was not a checker gap: **plain
+  `mtsc file.ts --noEmit` never followed imports.** It called
+  `mtsc_typecheck_source`, the single-file check, so an imported `Def`
+  was an unknown name and every member of it opaque, while
+  `tsc --noEmit file.ts` checks the whole program the entry reaches —
+  only `--bundle --noEmit` did. The non-bundle path now loads the import
+  graph with the bundle loader and checks it through
+  `mtsc_typecheck_graph`, the same code `--bundle --noEmit` runs, falling
+  back to the single-file check only when the graph cannot be loaded.
+  Emit is untouched (per-file emit stays per-file); only the CHECK
+  widened. The honest cost is measured on zod checked one file at a
+  time: 117 distinct reports become **135**, because members that used
+  to be opaque are now judged — the checker sees MORE of the program,
+  and the residue is the same assignability / member-existence families
+  as before, not a new rule. `verify-cli-node` gains a case pinning the
+  cross-module error without `--bundle`, with an `expectCode` field so
+  the case asserts behaviour rather than only native/Node agreement —
+  mutation-proven (with the change reverted it exits 0 and fails).
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
