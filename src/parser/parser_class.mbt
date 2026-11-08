@@ -3834,9 +3834,16 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         "<generic-min-arity>\{class_name}=\{self.last_type_params_min_required}",
       )
     }
-    class_type_param_bound_len = self.push_local_type_param_bounds(
-      type_param_bounds,
-    )
+    // A CLASS's own bounded type parameters are NOT inlined into its
+    // members, though a function's still are: `readonly _def: Def` must stay
+    // `Def`, because a subclass written `extends Base<string, StrDef>`
+    // substitutes it (`Resolver::class_base_type`), and a member already
+    // rewritten to `Def`'s constraint has nothing left to substitute — every
+    // zod v3 schema class read `this._def.checks` against `ZodTypeDef`. The
+    // bound itself is still recorded on `TsClassDecl.type_param_bounds`.
+    // Measured: the conformance oracle is identical with and without
+    // inlining here, so no true positive depended on it.
+    class_type_param_bound_len = self.push_local_type_param_bounds([])
   }
   let mut base : String? = None
   if self.match_(Extends) {
@@ -4698,9 +4705,8 @@ fn Parser::parse_class_decl_with_abstract(
         "<generic-min-arity>\{name}=\{self.last_type_params_min_required}",
       )
     }
-    class_type_param_bound_len = self.push_local_type_param_bounds(
-      type_param_bounds,
-    )
+    // See `parse_class_stub`: class-level bounds are not inlined.
+    class_type_param_bound_len = self.push_local_type_param_bounds([])
   }
   let mut base : String? = None
   if self.match_(Extends) {
