@@ -1029,6 +1029,53 @@ fn mtsc_typecheck_graph(
 }
 
 ///|
+/// Type-check a non-bundled compile as a PROGRAM: the entry and every
+/// TypeScript module it imports, checked together, which is what
+/// `tsc --noEmit file.ts` does. Checking the entry alone leaves every
+/// imported type opaque — `d.nope` on an imported interface was silent,
+/// while the identical file under `--bundle --noEmit` reported it.
+///
+/// Only TypeScript sources take part. The loader is the bundler's and
+/// follows imports into a dependency's `.js`, which `tsc` does not check
+/// without `allowJs`; a module filtered out here stays opaque to the
+/// ones that import it, exactly as before. `None` means the graph could
+/// not be loaded (a resolution the bundler would refuse), and the caller
+/// falls back to checking the entry alone, so this can only add the
+/// imported types a file was already allowed to use, never make a
+/// previously checkable file uncheckable.
+async fn mtsc_typecheck_program(
+  opts : MtscOptions,
+  input_path : String,
+) -> Bool? {
+  let files : Map[String, String] = Map([])
+  let edges : Array[@mtsc_core.MtscModuleEdge] = []
+  let loaded = mtsc_load_bundle_files(
+    input_path,
+    files,
+    Map([]),
+    opts.externals,
+    Map([]),
+    false,
+    [],
+    Map([]),
+    edges,
+  )
+  guard loaded is Ok(_) else { return None }
+  let ts_files : Map[String, String] = Map([])
+  for path, source in files {
+    if path.has_suffix(".ts") ||
+      path.has_suffix(".tsx") ||
+      path.has_suffix(".mts") {
+      ts_files[path] = source
+    }
+  }
+  if ts_files.length() == 0 {
+    return None
+  }
+  Some(mtsc_typecheck_graph(ts_files, edges))
+}
+
+///|
 /// True for a path that names a source file we should type-check.
 fn mtsc_is_module_path(path : String) -> Bool {
   path.has_suffix(".ts") ||
@@ -1610,8 +1657,18 @@ async fn mtsc_compile_entry(
       return false
     }
   }
-  if !mtsc_typecheck_source(source, input_path) && !opts.no_check {
-    return false
+  if opts.no_check {
+    // Unchanged: under `--noCheck` the single-file diagnostics were
+    // printed and did not fail the compile.
+    let _ = mtsc_typecheck_source(source, input_path)
+  } else {
+    let ok = match mtsc_typecheck_program(opts, input_path) {
+      Some(ok) => ok
+      None => mtsc_typecheck_source(source, input_path)
+    }
+    if !ok {
+      return false
+    }
   }
   // The single-file path's program is the one file, so the two list
   // options degenerate to printing it.
