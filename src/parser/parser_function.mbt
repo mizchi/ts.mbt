@@ -3275,6 +3275,16 @@ fn Parser::record_param_pattern_renamings(
   self : Parser,
   renamings : Array[(String, String)],
 ) -> Unit {
+  // A declaration FILE is exempt, probed: the same seven bodiless
+  // spellings that are TS2842 in a `.ts` (a `declare class` method, an
+  // interface method, `declare function`, a function type, an overload,
+  // an abstract member) are all ACCEPTED in a `.d.ts` — which is where
+  // emitted declarations keep the source's destructuring pattern
+  // verbatim (vitest's `updateThresholds({ thresholds: allThresholds,
+  // … })`).
+  if self.in_declaration_file {
+    return
+  }
   for r in renamings {
     self.grammar_misuses.push(
       "`\{r.1}` is an unused renaming of `\{r.0}`; did you intend to use it as a type annotation?",

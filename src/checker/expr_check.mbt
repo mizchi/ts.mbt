@@ -2371,6 +2371,19 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                   seen = unwrap_seen_add(seen, n)
                   cur = Array(elem)
                 }
+                // `lib.es5.d.ts`'s `type PropertyKey = string | number |
+                // symbol`. A lib alias is not in `type_aliases`, so the
+                // name stayed nominal and `string` was "not assignable to
+                // `PropertyKey`" — ten reports on zod, whose property
+                // helpers all take one. A module's own declaration of the
+                // name still wins (the alias case above; a same-named
+                // interface or class is checked here).
+                None if n == "PropertyKey" &&
+                  !self.interfaces.contains(n) &&
+                  !self.classes.contains(n) => {
+                  seen = unwrap_seen_add(seen, n)
+                  cur = Union([String_, Number, Symbol])
+                }
                 None => keep_going = false
               }
           }
@@ -10940,6 +10953,18 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // `const B: unique symbol = Symbol("b")` is how a `unique symbol` is
+  // DECLARED: tsc gives a fresh `Symbol()` / `Symbol.for()` call the
+  // declaration's own unique type, while any other `symbol`-typed source
+  // (a variable, an `as symbol`) is TS2322 — probed. Our inference types
+  // the call as plain `symbol`, so the declaration form was reported
+  // (seven times on zod's brand symbols).
+  if expected_shape is UniqueSymbol(_) && env.lookup("Symbol") is None {
+    match expr {
+      Call("Symbol", _) | MethodCall(Var("Symbol"), "for", _) => return
+      _ => ()
+    }
+  }
   // --- Batch AL targeted rules (all conservative, unfiltered) ---
   // A bare variable source uses its DECLARED type: our assignment
   // narrowing over-narrows non-union declared types (`symObj = sym`
@@ -19071,7 +19096,17 @@ fn analyze_equality(
           // Else side: remove variants matching that primitive. Use the
           // shared helper so a `name.prop` key resolves through the
           // property-access path instead of returning `Any`.
-          let cur = narrowing_current_type(env, resolver, name)
+          // An alias to a union (`type PK = string | number`, the lib's
+          // `PropertyKey`) is one opaque variant until it is unwrapped, so
+          // `typeof seg === "number"` stripped nothing from the else side
+          // and `seg` was still `string | number` there — the reason the
+          // `"key" in v` arm above unwraps too. Only a union is taken, so
+          // a non-alias type keeps the exact shape it had.
+          let cur0 = narrowing_current_type(env, resolver, name)
+          let cur = match resolver.unwrap(cur0) {
+            Union(_) as u => u
+            _ => cur0
+          }
           let stripped = narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
           false_side.push((name, stripped))
         }
@@ -26161,17 +26196,15 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "`abstract` modifier can only appear on a class, method, or property declaration",
       })
     }
-    // TS1245: an `abstract` method cannot carry an implementation (`abstract
-    // foo() {}`). A genuinely-abstract method has no body, so a body on a member
-    // whose name is in `abstract_set` is the abstract-with-implementation form.
-    for m in cls.methods {
-      if abstract_set.contains(m.name) && m.body is Some(_) {
-        issues.push({
-          path: "class \{cls.name}.\{m.name}",
-          message: "method `\{m.name}` cannot have an implementation because it is marked abstract",
-        })
-      }
-    }
+    // TS1245 (an `abstract` method with an implementation) is NOT decided
+    // here. It used to be, as "a member in `abstract_set` whose `body` is
+    // `Some`", and that reads the wrong fact: `body` is `None` for an
+    // EMPTY `{}` (so `abstract m() {}` was missed) and `Some` for a
+    // bodiless `abstract m({ a }: T): void;`, whose destructuring prologue
+    // the parser synthesizes — so a pattern parameter on an abstract
+    // method was reported on legal code. The parser decides it from
+    // `has_body_block` and records `<abstract-impl>`, which the sentinel
+    // loop reports.
     // TS1267: an `abstract` property cannot have an initializer (`abstract prop
     // = 1`).
     for p in cls.properties {
@@ -30259,6 +30292,45 @@ fn member_covariant_by_iface_extends(
       }
       _ => ()
     }
+    // Arrays are covariant in their element (TypeScript's method
+    // bivariance makes `T[]` so), and the nominal reach below matches a
+    // bare name only — so `attachments: VAtt[]` against `Att[]`, with
+    // `interface VAtt extends Att`, was reported (vitest's two artifact
+    // interfaces). Each element part must reach some base element part,
+    // the same quantifiers as the union split.
+    match (dt, bt) {
+      (Array(de), Array(be)) => {
+        let du = resolver.unwrap_containers(de)
+        let bu = resolver.unwrap_containers(be)
+        if is_assignable_to(du, bu) {
+          return true
+        }
+        let bp = parts(bu)
+        return parts(du)
+          .iter()
+          .all(fn(dp) {
+            bp.iter().any(fn(x) { member_reaches(dp, x, depth + 1) })
+          })
+      }
+      // A tuple is an array whose every element must reach the base
+      // element: vitest's `attachments: [FailureScreenshotAttachment] |
+      // []` against `TestAttachment[]` (the empty tuple trivially).
+      (Tuple(des), Array(be)) => {
+        let bp = parts(resolver.unwrap_containers(be))
+        return des
+          .iter()
+          .all(fn(de) {
+            let du = resolver.unwrap_containers(de)
+            is_assignable_to(du, resolver.unwrap_containers(be)) ||
+            parts(du)
+            .iter()
+            .all(fn(dp) {
+              bp.iter().any(fn(x) { member_reaches(dp, x, depth + 1) })
+            })
+          })
+      }
+      _ => ()
+    }
     let bn = iface_name(bt)
     let dn = match iface_name(dt) {
       Some(n) => Some(n)
@@ -30287,6 +30359,16 @@ fn member_covariant_by_iface_extends(
             is_assignable_to(dt, bt)
           _ => is_assignable_to(dt, bt)
         }
+      // The SAME generic interface at two instantiations, every argument of
+      // the derived one reaching the base's argument:
+      // `role?: Signalish<'link' | undefined>` against
+      // `Signalish<AriaRole | undefined>`, where `Signalish<T> = T |
+      // SignalLike<T>` leaves `SignalLike<'link' | undefined>` against
+      // `SignalLike<AriaRole | undefined>` — preact's `dom.d.ts`, 31 times.
+      // This reads every argument as COVARIANT. A parameter that is really
+      // contravariant (a function-typed PROPERTY taking `T` under
+      // strictFunctionTypes) makes it accept a pair tsc reports, which costs
+      // a finding; it can never invent one.
       // Both sides generic: `$ZodCheckMultipleOfInternals<T>` against
       // `$ZodCheckInternals<T>`, with the derived interface declared
       // `extends $ZodCheckInternals<T>` — the walk substitutes as it goes.
@@ -30294,6 +30376,31 @@ fn member_covariant_by_iface_extends(
         match (dt, bt) {
           (Applied(dname, dargs), Applied(bname, bargs)) =>
             iface_extends_instantiation(resolver, dname, dargs, bname, bargs) ||
+            (
+              dname == bname &&
+              dargs.length() == bargs.length() &&
+              dargs.length() > 0 &&
+              resolver.interfaces.contains(dname) &&
+              ({
+                let mut all_ok = true
+                for i, da in dargs {
+                  let du = resolver.unwrap_containers(da)
+                  let bu = resolver.unwrap_containers(bargs[i])
+                  if all_ok &&
+                    !is_assignable_to(du, bu) &&
+                    !parts(du)
+                    .iter()
+                    .all(fn(dp) {
+                      parts(bu)
+                      .iter()
+                      .any(fn(x) { member_reaches(dp, x, depth + 1) })
+                    }) {
+                    all_ok = false
+                  }
+                }
+                all_ok
+              })
+            ) ||
             is_assignable_to(dt, bt)
           _ => is_assignable_to(dt, bt)
         }
