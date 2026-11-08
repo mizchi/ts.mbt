@@ -10979,10 +10979,7 @@ fn check_expr_against(
         // `number` into it, or `string` against `("x" | "y")[]`, is
         // TS2322. Deciding that needs the constraint here; abstaining
         // loses those two and invents nothing. Probed on eight shapes.
-        !(
-          key_t
-          is (Number | Int | String_ | Literal(_) | NumberLiteral(_))
-        )
+        !(key_t is (Number | Int | String_ | Literal(_) | NumberLiteral(_)))
       ) ||
       // Parameter registration substitutes in-scope type params with their
       // bounds, leaving shapes like `IndexedAccess(Any, Keyof(Named("T")))`

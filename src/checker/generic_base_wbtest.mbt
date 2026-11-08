@@ -96,7 +96,8 @@ test "readonly: writable in the declaring class's constructor only" {
     issues
     .iter()
     .any(fn(i) {
-      i.path.contains("C.m") && i.message.contains("`y` because it is read-only")
+      i.path.contains("C.m") &&
+      i.message.contains("`y` because it is read-only")
     }),
   )
 }
