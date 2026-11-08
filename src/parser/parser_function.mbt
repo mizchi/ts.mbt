@@ -2077,7 +2077,9 @@ pub fn Parser::parse_interface(
       self.interface_member_modifier_misuses.push("<const-typeparam>\{name_i}")
     }
   }
-  let local_type_param_bound_len = self.push_local_type_param_bounds([])
+  let local_type_param_bound_len = self.push_local_type_param_bounds(
+    type_param_bounds,
+  )
   let (extends_names, extends_args) = self.parse_extends_clause_until_body()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
