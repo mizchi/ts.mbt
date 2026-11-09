@@ -3347,6 +3347,49 @@ product surfaces now.
   cross-module error without `--bundle`, with an `expectCode` field so
   the case asserts behaviour rather than only native/Node agreement —
   mutation-proven (with the change reverted it exits 0 and fails).
+  Batch FL measured what FK's widening cost on the `.d.ts` side, which
+  FK itself had not: **`typescript.d.ts` went 0 -> 146, preact's
+  `index.d.ts` 0 -> 31, vitest's 0 -> 3** on plain `--noEmit`. Every
+  "0" this file records for those entries was taken through the
+  single-file path, which never saw an imported file, so the numbers
+  were true of a narrower question. Four causes, each a false positive
+  on legal code. The loader's sibling-`.d.ts` scan (the `globals.d.ts`
+  convention) took TypeScript's OWN `lib/` directory as ambient siblings
+  of `typescript.d.ts`, loading `lib.dom.d.ts` and `lib.webworker.d.ts`
+  together, which contradict each other — 145 of the 146; that
+  directory is recognised by `lib.es5.d.ts` and its `lib.*` files are
+  skipped. The other three are TS2430's nominal reach again: the SAME
+  generic interface at two instantiations (`SignalLike<'link'>` against
+  `SignalLike<AriaRole>`, preact's `role` 31 times) is accepted when
+  every argument reaches covariantly, and arrays and tuples are
+  covariant in their element (vitest's `attachments: VAtt[]` and
+  `[FA] | []` against `Att[]`). Reading every argument as covariant can
+  only lose a finding. And TS2842 is not reported in a declaration file
+  at all — probed on seven bodiless spellings that ARE TS2842 in a
+  `.ts` — while vitest's emitted `.d.ts` keeps a destructuring rename
+  verbatim. All three entries are 0 again, measured on the graph path.
+  The zod side is three smaller things (135 -> 122, none at a new
+  location). `PropertyKey` is `lib.es5.d.ts`'s alias for
+  `string | number | symbol`, and a lib alias is not in `type_aliases`,
+  so `string` was not assignable to it — ten reports; a module's own
+  declaration of the name still wins. A `unique symbol` is DECLARED by a
+  fresh `Symbol()` / `Symbol.for()` call, which tsc gives the
+  declaration's own unique type, while any other `symbol` source is
+  TS2322 (probed) — seven brand symbols. And resolving `PropertyKey`
+  exposed a pre-existing false positive one layer down: `typeof`
+  narrowing did not unwrap an alias to a union, so after
+  `typeof seg === "number"` the else side of a `type PK = string |
+  number` binding was still the whole union; the `"key" in v` arm beside
+  it unwraps for the same reason, and only a union is taken so a
+  non-alias type keeps its shape. The `string | symbol` left by a
+  single guard is still reported. One more came from probing the TS2842
+  neighbours: `abstract m({ a }: T): void;` was reported as having an
+  implementation, because the checker's TS1245 read `body is Some` and
+  the parser synthesizes a destructuring prologue for a pattern
+  parameter — while `body` is `None` for an EMPTY `{}`, so the rule was
+  wrong in both directions. The parser already decides it from
+  `has_body_block` (`<abstract-impl>`), so the checker copy is deleted.
+  Oracle identical (TP 2670 / MISS 45 / FP 0).
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

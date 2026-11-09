@@ -761,7 +761,21 @@ async fn mtsc_sibling_declaration_files(entry_path : String) -> Array[String] {
   let dir = mtsc_dirname(entry_path)
   let names = fs_readdir(dir, sort=true) catch { _ => return [] }
   let out : Array[String] = []
+  // TypeScript's OWN lib directory (`node_modules/typescript/lib`) holds
+  // `typescript.d.ts` beside every `lib.*.d.ts`, and those are default
+  // libraries, never part of a user's program: `tsc typescript.d.ts`
+  // loads none of them as roots, and `lib.dom.d.ts` and
+  // `lib.webworker.d.ts` contradict each other when loaded together.
+  // Taking them as ambient siblings turned a clean `typescript.d.ts` into
+  // 145 reports inside the libs once `--noEmit` started checking the
+  // whole program. The checker models the lib through its generated
+  // tables, so nothing is lost. The directory is recognised by
+  // `lib.es5.d.ts`, which only that directory carries.
+  let ts_lib_dir = names.contains("lib.es5.d.ts")
   for name in names {
+    if ts_lib_dir && name.has_prefix("lib.") {
+      continue
+    }
     if name.has_suffix(".d.ts") {
       out.push(mtsc_normalize(mtsc_join_path(dir, name)))
     }
