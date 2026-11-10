@@ -3438,6 +3438,37 @@ product surfaces now.
   wrapper peeled — the ninth wrapper-node default arm in this ledger. The
   one-path assignment (`if (k) { b = new WeakMap() } return b`) is still
   reported, as tsc does.
+  Batch FN is zod 91 -> **84** (no new location, oracle identical) from
+  two small fixes, and a third REVERTED with its numbers. `/*@__PURE__*/
+  Symbol("zod_brand")` — how a library shipping for bundlers spells it —
+  arrives wrapped in `PureCall`, so FM's `unique symbol` rule matched the
+  bare call and missed all three of zod's brand symbols: the tenth
+  wrapper-node default arm in this ledger, written one batch after the
+  ninth. And overload selection compared UNWRAPPED argument types against
+  UNWRAPPED-NOWHERE parameter types, so a parameter typed with an
+  object-type ALIAS (`type S = { k: string }`) never matched and the call
+  fell back to the union of every overload's return — zod's
+  `generateCheck(doc, ctx, schema, accessor)` read as `string | string |
+  null` where its first overload says `string`; the interface spelling of
+  the same parameter always matched, which is what made the alias case
+  look like an overload bug rather than an unwrap asymmetry.
+  The reverted change is the one worth reading. A type written through a
+  NAMESPACE import (`import * as core`, then `core.ZObject` in an
+  annotation or an `extends` clause) is not resolved in graph mode at all:
+  the imported modules reach the resolver by their BARE names, so the
+  named-import spelling works and the qualified one is opaque — zod's
+  `interface ZodObject … extends core.$ZodObject<…>` loses every inherited
+  member. `ingest_type_module` already takes a name PREFIX, so passing each
+  namespace import's target with `ns.` fixes it in about thirty lines, and
+  measured it is a NET LOSS today on both axes: one locale file went
+  **4.1 s -> 24.3 s**, and resolving `errors.$ZodStringFormatIssues`
+  exposed ~150 new false positives — three per locale file — because those
+  files narrow an imported discriminated union with `switch (issue.format)`
+  and that narrowing does not follow the now-resolved alias. Opaque was
+  hiding a narrowing gap and a cost, the same shape as batch FK's graph
+  `--noEmit` widening. What it needs before it can ship: discriminant
+  narrowing through an imported union alias, and an ingestion that does
+  not rebuild the target module once per importing module.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

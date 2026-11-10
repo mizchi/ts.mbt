@@ -10348,7 +10348,17 @@ fn infer_call(
             if params.length() == arg_types.length() {
               let mut ok = true
               for i in 0..<params.length() {
-                if !is_assignable_to(arg_types[i], params[i]) {
+                // Both sides unwrapped: `arg_types` already are, and a
+                // parameter typed with an object-type ALIAS
+                // (`type S = { k: string }`) stayed the bare name `S`, so
+                // the resolver-free comparison saw `{ k: string }` against
+                // `Named("S")`, no member matched, and the call fell back
+                // to the UNION of every overload's return — zod's
+                // `generateCheck(doc, ctx, schema, accessor)` came back
+                // `string | string | null` instead of its first
+                // overload's `string`. The interface spelling of the same
+                // parameter always matched.
+                if !is_assignable_to(arg_types[i], resolver.unwrap(params[i])) {
                   ok = false
                   break
                 }
@@ -10384,7 +10394,7 @@ fn infer_call(
         if sps.length() == arg_types.length() {
           let mut ok = true
           for i in 0..<sps.length() {
-            if !is_assignable_to(arg_types[i], sps[i]) {
+            if !is_assignable_to(arg_types[i], resolver.unwrap(sps[i])) {
               ok = false
               break
             }
@@ -11022,7 +11032,15 @@ fn check_expr_against(
   // the call as plain `symbol`, so the declaration form was reported
   // (seven times on zod's brand symbols).
   if expected_shape is UniqueSymbol(_) && env.lookup("Symbol") is None {
-    match expr {
+    // `/*@__PURE__*/ Symbol("zod_brand")` — how a library that ships for
+    // bundlers writes it — arrives wrapped in `PureCall`, which says
+    // nothing about the value; matching the bare call alone left zod's
+    // three brand symbols reported after the rule existed.
+    let call = match expr {
+      PureCall(inner) => inner
+      _ => expr
+    }
+    match call {
       Call("Symbol", _) | MethodCall(Var("Symbol"), "for", _) => return
       _ => ()
     }
@@ -20128,7 +20146,7 @@ fn narrow_after_assignment(
   // `new C<T>()` arrives wrapped in `TypeArgs`, which says nothing about
   // the value — peel it, or the shape test below never sees the `new`.
   let shape = match value {
-    TypeArgs(_, inner) => inner
+    TypeArgs(_, inner) | PureCall(inner) => inner
     _ => value
   }
   let never_nullish = match shape {
