@@ -3390,6 +3390,54 @@ product surfaces now.
   wrong in both directions. The parser already decides it from
   `has_body_block` (`<abstract-impl>`), so the checker copy is deleted.
   Oracle identical (TP 2670 / MISS 45 / FP 0).
+  Batch FM is zod 122 -> **91** (no report at a new location, real
+  `.d.ts` entries still 0, oracle identical) and its first finding is the
+  plainest false positive this file records: **`n.toFixed()` was "expected
+  1 argument(s), got 0"**, and so were `s.slice(1)`, `n.toString(16)`,
+  `xs.reduce(f)`, `JSON.stringify(x, null, 2)` and `Promise.resolve()` —
+  twenty everyday calls in one probe file tsc accepts outright. The lib
+  member tables (`string_prototype_member`, `number_…`, `date_…`, the
+  `JSON` / `Promise` statics) spelled every optional parameter either as
+  REQUIRED or as ABSENT; `array_prototype_member` had been fixed for the
+  same thing earlier with its reason written at the site, and the
+  neighbouring tables never got it. They follow `lib.es5.d.ts` now, and
+  the eight negative neighbours (a wrong argument type, a genuinely
+  required parameter, one argument too many) all still report, with arity
+  messages that now match tsc's wording. One mechanical fact made half
+  the first attempt a no-op: `narrow_union(Any, Undefined)` collapses back
+  to `Any`, because `equivalent` treats `any` as equivalent to everything,
+  and a bare `Any` reads as REQUIRED — so every optional `options?` /
+  `space?` / `initialValue?` stayed mandatory until it was spelled as an
+  explicit `Union([Any, Undefined])` (`optional_any_param`).
+  The flow half is four defects, two of them a MISS rather than a false
+  positive and one found only because fixing another exposed it. A
+  truthy optional chain did not narrow the receiver its `?.` guarded, so
+  `p?.a && p.a.length` and `if (p?.a) { p.b }` reported (zod writes
+  `...(params?.metadata && { metadata: params.metadata })` four times in
+  one constructor); the parser wraps only the guarded link, so the walk
+  peels `OptionalChain` to recover a chain the narrowing keys can name.
+  An EQUALITY against an optional chain narrows the same receivers on
+  whichever side rules out `undefined`, and the cells read the other way
+  round from intuition: `p?.a !== undefined`, `p?.a != null` and
+  `p?.b === 1` narrow `p`, `p?.a !== null` does NOT. The `if` join was
+  `narrow_union(then, else)`, which NESTS — `P` joined with
+  `P | undefined` is `P | (P | undefined)`, and every consumer that splits
+  a union one level read that as having no nullish member — so after
+  `if (p) { … }` the narrowing LEAKED past the `if` and `return p.b` on a
+  `p?: P` was silent (tsc reports it); measured silent on HEAD, all four
+  spellings. Making the join honest exposed the fourth: `b = new
+  WeakMap()` never narrowed `b` away from `undefined` — `new WeakMap()`
+  infers as `any`, and the statement spelling `Expr(AssignExpr(…))`
+  (what `b = v;` is inside a block) narrowed NOTHING while `Assign`, its
+  top-of-list twin, did — so zod's `let b = m.get(k); if (!b) { b = new
+  WeakMap(); m.set(k, b) } return b` reported at the `set` on HEAD and at
+  the `return` once the join stopped hiding it. One helper serves both
+  spellings, a syntactically never-nullish value narrows a declaration
+  with ONE non-nullish member to exactly that member (what tsc's
+  declared-type narrowing yields), and `new C<T>()` needed its `TypeArgs`
+  wrapper peeled — the ninth wrapper-node default arm in this ledger. The
+  one-path assignment (`if (k) { b = new WeakMap() } return b`) is still
+  reported, as tsc does.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

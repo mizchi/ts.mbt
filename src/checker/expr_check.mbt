@@ -2904,7 +2904,9 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
               [@ast.TsType::Any, elem, @ast.TsType::Number, arr_t],
               @ast.TsType::Any,
             ),
-            @ast.TsType::Any,
+            // `initialValue` is optional: `xs.reduce((a, b) => a + b)`
+            // folds from the first element.
+            optional_any_param(),
           ],
           @ast.TsType::Any,
         ),
@@ -2917,7 +2919,9 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
               [@ast.TsType::Any, elem, @ast.TsType::Number, arr_t],
               @ast.TsType::Any,
             ),
-            @ast.TsType::Any,
+            // `initialValue` is optional: `xs.reduce((a, b) => a + b)`
+            // folds from the first element.
+            optional_any_param(),
           ],
           @ast.TsType::Any,
         ),
@@ -4086,12 +4090,14 @@ fn date_prototype_member(field : String) -> @ast.TsType? {
     "toString"
     | "toDateString"
     | "toTimeString"
-    | "toLocaleString"
-    | "toLocaleDateString"
-    | "toLocaleTimeString"
     | "toISOString"
-    | "toJSON"
     | "toUTCString" => Some(@ast.TsType::Func([], s))
+    // `toJSON(key?: any)` and `toLocale*String(locales?, options?)`:
+    // optional parameters, which were absent here, so
+    // `d.toLocaleDateString("en", { … })` was "expected 0 argument(s)".
+    "toJSON" => Some(@ast.TsType::Func([optional_any_param()], s))
+    "toLocaleString" | "toLocaleDateString" | "toLocaleTimeString" =>
+      Some(@ast.TsType::Func([optional_any_param(), optional_any_param()], s))
     _ => None
   }
 }
@@ -4103,13 +4109,16 @@ fn number_prototype_member(field : String) -> @ast.TsType? {
   let n = @ast.TsType::Number
   let s = @ast.TsType::String_
   match field {
-    "toFixed" | "toExponential" | "toPrecision" =>
-      Some(@ast.TsType::Func([n], s))
-    // `toString(radix?: number): string` — the radix argument is
-    // optional, so expose the zero-arg form so a bare `.toString()`
-    // call validates.
-    "toString" => Some(@ast.TsType::Func([], s))
-    "toLocaleString" => Some(@ast.TsType::Func([], s))
+    // Every parameter of these is OPTIONAL in `lib.es5.d.ts`
+    // (`toFixed(fractionDigits?)`, `toString(radix?)`,
+    // `toLocaleString(locales?, options?)`), so `n.toFixed()` and
+    // `n.toString(16)` — both reported until this — are legal. An
+    // optional parameter is a type admitting `undefined`, which is how
+    // `required_arity_from_types` reads it.
+    "toFixed" | "toExponential" | "toPrecision" | "toString" =>
+      Some(@ast.TsType::Func([narrow_union(n, @ast.TsType::Undefined)], s))
+    "toLocaleString" =>
+      Some(@ast.TsType::Func([optional_any_param(), optional_any_param()], s))
     "valueOf" => Some(@ast.TsType::Func([], n))
     _ => None
   }
@@ -4431,14 +4440,21 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     | ("Number", "isFinite")
     | ("Number", "isNaN") => Some(@ast.TsType::Func([any], b))
     ("Number", "parseFloat") => Some(@ast.TsType::Func([s], n))
-    ("Number", "parseInt") => Some(@ast.TsType::Func([s, n], n))
+    ("Number", "parseInt") =>
+      Some(@ast.TsType::Func([s, narrow_union(n, @ast.TsType::Undefined)], n))
     // String.* (constructor namespace, not prototype)
     ("String", "fromCharCode") | ("String", "fromCodePoint") =>
       Some(@ast.TsType::Func([@ast.TsType::Rest(@ast.TsType::Array(n))], s))
     ("String", "raw") => Some(@ast.TsType::Func([any], s))
     // JSON.*
-    ("JSON", "parse") => Some(@ast.TsType::Func([s], any))
-    ("JSON", "stringify") => Some(@ast.TsType::Func([any], s))
+    // `parse(text, reviver?)` / `stringify(value, replacer?, space?)` —
+    // `JSON.stringify(x, null, 2)` is the commonest pretty-printing call
+    // there is and was "expected 1 argument(s), got 3".
+    ("JSON", "parse") => Some(@ast.TsType::Func([s, optional_any_param()], any))
+    ("JSON", "stringify") =>
+      Some(
+        @ast.TsType::Func([any, optional_any_param(), optional_any_param()], s),
+      )
     // Array.*
     ("Array", "isArray") => Some(@ast.TsType::Func([any], b))
     // `from(iterable, mapFn?, thisArg?)`.
@@ -4468,10 +4484,22 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     ("Date", "UTC") =>
       Some(@ast.TsType::Func([n, @ast.TsType::Rest(@ast.TsType::Array(n))], n))
     // Promise.*
+    // `resolve(value?)` / `reject(reason?)`: `Promise.resolve()` is how a
+    // resolved `Promise<void>` is written.
     ("Promise", "resolve") =>
-      Some(@ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])))
+      Some(
+        @ast.TsType::Func(
+          [optional_any_param()],
+          @ast.TsType::Applied("Promise", [any]),
+        ),
+      )
     ("Promise", "reject") =>
-      Some(@ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])))
+      Some(
+        @ast.TsType::Func(
+          [optional_any_param()],
+          @ast.TsType::Applied("Promise", [any]),
+        ),
+      )
     ("Promise", "all") | ("Promise", "race") | ("Promise", "any") =>
       Some(
         @ast.TsType::Func(
@@ -4577,6 +4605,17 @@ fn global_static_method_special(
 }
 
 ///|
+/// An OPTIONAL parameter of type `any`, for the hand-written lib member
+/// tables. `narrow_union(Any, Undefined)` cannot spell it: `equivalent`
+/// treats `any` as equivalent to everything, so it collapses back to a
+/// bare `Any`, which `required_arity_from_types` reads as REQUIRED — and
+/// every optional `locales?` / `options?` / `space?` / `initialValue?`
+/// written that way stayed mandatory.
+fn optional_any_param() -> @ast.TsType {
+  @ast.TsType::Union([@ast.TsType::Any, @ast.TsType::Undefined])
+}
+
+///|
 /// Well-known `String.prototype.*` members. Strings are immutable in JS so
 /// every "mutating-looking" method returns a new string rather than
 /// modifying the receiver. We expose the most commonly used ones with
@@ -4585,51 +4624,74 @@ fn string_prototype_member(field : String) -> @ast.TsType? {
   let s = @ast.TsType::String_
   let n = @ast.TsType::Number
   let b = @ast.TsType::Boolean
+  let any = @ast.TsType::Any
   let str_arr = @ast.TsType::Array(s)
+  // Optional and rest parameters, spelled the way `array_prototype_member`
+  // spells them and `required_arity_from_types` reads them: a parameter
+  // whose type admits `undefined` is omittable, a `Rest` lifts the cap.
+  // Every entry follows its `lib.es5.d.ts` signature. Before this, every
+  // optional parameter here was either REQUIRED (`s.slice()`,
+  // `s.padStart(2)`, `s.normalize()`) or ABSENT (`s.split(",", 2)`,
+  // `s.startsWith("a", 1)`, `s.localeCompare(x, "en")`), so ordinary calls
+  // tsc accepts were reported as arity errors.
+  let opt = fn(t) { narrow_union(t, @ast.TsType::Undefined) }
+  let opt_n = opt(n)
+  // `replace(searchValue, replaceValue: string | ((substring, ...args) =>
+  // string))` — the callback form is how a case-insensitive rewrite is
+  // written, and it was rejected as "expected `string`".
+  let replacer = narrow_union(
+    s,
+    @ast.TsType::Func([s, @ast.TsType::Rest(@ast.TsType::Array(any))], s),
+  )
   match field {
     // Properties
     "length" => Some(n)
     // Char access
     "charAt" => Some(@ast.TsType::Func([n], s))
     "charCodeAt" => Some(@ast.TsType::Func([n], n))
-    "codePointAt" => Some(@ast.TsType::Func([n], n))
+    "codePointAt" =>
+      Some(@ast.TsType::Func([n], narrow_union(n, @ast.TsType::Undefined)))
     "at" =>
       Some(@ast.TsType::Func([n], narrow_union(s, @ast.TsType::Undefined)))
     // Search
-    "indexOf" => Some(@ast.TsType::Func([s, n], n))
-    "lastIndexOf" => Some(@ast.TsType::Func([s, n], n))
-    "includes" => Some(@ast.TsType::Func([s], b))
-    "startsWith" => Some(@ast.TsType::Func([s], b))
-    "endsWith" => Some(@ast.TsType::Func([s], b))
+    "indexOf" => Some(@ast.TsType::Func([s, opt_n], n))
+    "lastIndexOf" => Some(@ast.TsType::Func([s, opt_n], n))
+    "includes" => Some(@ast.TsType::Func([s, opt_n], b))
+    "startsWith" => Some(@ast.TsType::Func([s, opt_n], b))
+    "endsWith" => Some(@ast.TsType::Func([s, opt_n], b))
     "search" => Some(@ast.TsType::Func([s], n))
     "match" =>
       Some(@ast.TsType::Func([s], narrow_union(str_arr, @ast.TsType::Null)))
     "matchAll" => Some(@ast.TsType::Func([s], str_arr))
     // Transformation (returns string)
-    "slice" => Some(@ast.TsType::Func([n, n], s))
-    "substring" => Some(@ast.TsType::Func([n, n], s))
-    "substr" => Some(@ast.TsType::Func([n, n], s))
-    "replace" => Some(@ast.TsType::Func([s, s], s))
-    "replaceAll" => Some(@ast.TsType::Func([s, s], s))
+    "slice" => Some(@ast.TsType::Func([opt_n, opt_n], s))
+    "substring" => Some(@ast.TsType::Func([n, opt_n], s))
+    "substr" => Some(@ast.TsType::Func([n, opt_n], s))
+    "replace" => Some(@ast.TsType::Func([s, replacer], s))
+    "replaceAll" => Some(@ast.TsType::Func([s, replacer], s))
     "toLowerCase" => Some(@ast.TsType::Func([], s))
     "toUpperCase" => Some(@ast.TsType::Func([], s))
-    "toLocaleLowerCase" => Some(@ast.TsType::Func([], s))
-    "toLocaleUpperCase" => Some(@ast.TsType::Func([], s))
+    "toLocaleLowerCase" => Some(@ast.TsType::Func([optional_any_param()], s))
+    "toLocaleUpperCase" => Some(@ast.TsType::Func([optional_any_param()], s))
     "trim" => Some(@ast.TsType::Func([], s))
     "trimStart" => Some(@ast.TsType::Func([], s))
     "trimEnd" => Some(@ast.TsType::Func([], s))
-    "padStart" => Some(@ast.TsType::Func([n, s], s))
-    "padEnd" => Some(@ast.TsType::Func([n, s], s))
+    "padStart" => Some(@ast.TsType::Func([n, opt(s)], s))
+    "padEnd" => Some(@ast.TsType::Func([n, opt(s)], s))
     "repeat" => Some(@ast.TsType::Func([n], s))
-    "normalize" => Some(@ast.TsType::Func([s], s))
-    "concat" => Some(@ast.TsType::Func([s], s))
+    "normalize" => Some(@ast.TsType::Func([opt(s)], s))
+    "concat" =>
+      Some(@ast.TsType::Func([@ast.TsType::Rest(@ast.TsType::Array(s))], s))
     // Splitting
-    "split" => Some(@ast.TsType::Func([s], str_arr))
+    "split" => Some(@ast.TsType::Func([s, opt_n], str_arr))
     // Conversion
     "toString" => Some(@ast.TsType::Func([], s))
     "valueOf" => Some(@ast.TsType::Func([], s))
-    // Comparison
-    "localeCompare" => Some(@ast.TsType::Func([s], n))
+    // Comparison: `localeCompare(that, locales?, options?)`.
+    "localeCompare" =>
+      Some(
+        @ast.TsType::Func([s, optional_any_param(), optional_any_param()], n),
+      )
     _ => None
   }
 }
@@ -18468,6 +18530,18 @@ fn collect_narrowing(
           analyze_equality(
             env, resolver, left, right, true_side, false_side, loose,
           )
+          // A comparison that rules `undefined` out also rules out the
+          // short-circuit of an optional chain, so the receivers it guarded
+          // are non-nullish on that side: `p?.a !== undefined`,
+          // `p?.a != null` and `p?.b === 1` all narrow `p`, while
+          // `p?.a !== null` does NOT (a short-circuited `undefined` is not
+          // `null`) — probed against tsc cell by cell.
+          optional_chain_equality_narrowing(
+            env, resolver, left, right, loose, true_side, false_side,
+          )
+          optional_chain_equality_narrowing(
+            env, resolver, right, left, loose, true_side, false_side,
+          )
         }
         None => ()
       }
@@ -18578,18 +18652,118 @@ fn collect_narrowing(
     // where the value is truthy (the then-branch normally, or the
     // else-branch under a `!` -- `if (!x) return; x.length`), the value
     // is non-nullish.
-    _ =>
-      match narrowing_key_for_expr(cond) {
-        Some(key) => {
-          let cur = narrowing_current_type(env, resolver, key)
-          if then_sense {
-            then_binds.push((key, non_nullable(cur)))
-          } else {
-            else_binds.push((key, non_nullable(cur)))
-          }
+    _ => {
+      // An optional chain that is TRUTHY did not short-circuit, so every
+      // receiver a `?.` guarded is non-nullish there, and so is the chain
+      // value itself: `p?.a && p.a.length` and `if (p?.a) { p.b }` are
+      // legal, and both were "object is possibly `undefined`" — zod's
+      // `...(params?.metadata && { metadata: params.metadata })` four
+      // times in one constructor. The parser wraps only the guarded link
+      // (`OptionalChain(PropAccess(p, a))`), so the walk peels the
+      // wrapper to recover a plain chain the narrowing keys can name.
+      let (plain, guarded) = optional_chain_guarded_receivers(cond)
+      let push = fn(key : String) {
+        let cur = narrowing_current_type(env, resolver, key)
+        if then_sense {
+          then_binds.push((key, non_nullable(cur)))
+        } else {
+          else_binds.push((key, non_nullable(cur)))
         }
+      }
+      for g in guarded {
+        match narrowing_key_for_expr(g) {
+          Some(key) => push(key)
+          None => ()
+        }
+      }
+      match narrowing_key_for_expr(plain) {
+        Some(key) => push(key)
         None => ()
       }
+    }
+  }
+}
+
+///|
+/// Narrow the receivers an optional chain guarded, on the side of an
+/// equality where `chain` is known not to be `undefined`. `true_side` is
+/// the side where the operands compare EQUAL. An `other` this cannot
+/// classify narrows nothing.
+fn optional_chain_equality_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  chain : @ast.TsExpr,
+  other : @ast.TsExpr,
+  loose : Bool,
+  true_side : Array[(String, @ast.TsType)],
+  false_side : Array[(String, @ast.TsType)],
+) -> Unit {
+  let (_, guarded) = optional_chain_guarded_receivers(chain)
+  if guarded.length() == 0 {
+    return
+  }
+  // Which side excludes `undefined`: equal to a value that is not
+  // `undefined` (for `==`, not nullish either), or NOT equal to
+  // `undefined` (for `!=`, to either nullish value).
+  let is_undefined = match other {
+    Var("undefined") | UnaryOp(Void, _) => true
+    _ => false
+  }
+  let is_null = other is NullLit
+  let is_definite_value = match other {
+    StringLit(_) | NumberLit(_) | IntLit(_) | BoolLit(_) => true
+    TemplateLiteral(_, []) => true
+    _ => false
+  }
+  let side = if is_definite_value || (is_null && !loose) {
+    Some(true_side)
+  } else if is_undefined || (is_null && loose) {
+    Some(false_side)
+  } else {
+    None
+  }
+  guard side is Some(out) else { return }
+  for g in guarded {
+    match narrowing_key_for_expr(g) {
+      Some(key) =>
+        out.push(
+          (key, non_nullable(narrowing_current_type(env, resolver, key))),
+        )
+      None => ()
+    }
+  }
+}
+
+///|
+/// Strip the `OptionalChain` wrappers out of a member chain, returning
+/// the plain chain and every receiver a `?.` guarded, outermost last.
+/// `p?.a.b` is `PropAccess(OptionalChain(PropAccess(p, a)), b)` and
+/// yields `(p.a.b, [p])`. Anything that is not a property / index chain
+/// comes back unchanged with no receivers, so a caller narrows exactly
+/// what it narrowed before.
+fn optional_chain_guarded_receivers(
+  expr : @ast.TsExpr,
+) -> (@ast.TsExpr, Array[@ast.TsExpr]) {
+  match expr {
+    OptionalChain(PropAccess(recv, p)) => {
+      let (r, gs) = optional_chain_guarded_receivers(recv)
+      gs.push(r)
+      (PropAccess(r, p), gs)
+    }
+    OptionalChain(IndexAccess(recv, i)) => {
+      let (r, gs) = optional_chain_guarded_receivers(recv)
+      gs.push(r)
+      (IndexAccess(r, i), gs)
+    }
+    PropAccess(inner, p) => {
+      let (r, gs) = optional_chain_guarded_receivers(inner)
+      (PropAccess(r, p), gs)
+    }
+    IndexAccess(inner, i) => {
+      let (r, gs) = optional_chain_guarded_receivers(inner)
+      (IndexAccess(r, i), gs)
+    }
+    _ => (expr, [])
   }
 }
 
@@ -19274,6 +19448,34 @@ fn check_block(env : ExprEnv, block : @ast.TsBlock, ctx : CheckCtx) -> Unit {
 }
 
 ///|
+/// The type a binding has after an `if` whose two branches leave it at
+/// `a` and `b`: their union, FLATTENED and deduplicated. `narrow_union`
+/// nests, so `if (p) { … }` joined `P` with `P | undefined` into
+/// `P | (P | undefined)` — and every consumer that splits a union one
+/// level (`union_components`, the possibly-`undefined` member check)
+/// read that as having no nullish member. So `if (p) { } return p.b`
+/// was SILENT on a `p?: P` parameter, which tsc reports, and the same
+/// held for every narrowing an `if` with no `else` performs.
+fn join_branch_types(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
+  let out : Array[@ast.TsType] = []
+  let add = fn(t : @ast.TsType) {
+    if !out.iter().any(fn(x) { x == t }) {
+      out.push(t)
+    }
+  }
+  for t in [a, b] {
+    match t {
+      Union(ms) =>
+        for m in ms {
+          add(m)
+        }
+      _ => add(t)
+    }
+  }
+  union_of(out)
+}
+
+///|
 /// Checks `block` with the given narrowing `binds` applied, then returns
 /// the variable types in effect at the *end* of the block (after the binds
 /// plus any in-block assignment narrowing) before restoring the outer env.
@@ -19908,6 +20110,74 @@ fn collect_binding_names(b : @ast.TsBinding, out : Array[String]) -> Unit {
 }
 
 ///|
+/// After `name = value`, the binding's effective type is the assigned
+/// value's type (TypeScript narrows by assignment); `narrow` rather than
+/// `bind` keeps the declared slot, so a later assignment is still checked
+/// against the declaration. When the value's type cannot be inferred but
+/// the value is SYNTACTICALLY never nullish (`new C()`, an object or array
+/// literal, a function), the declaration with its nullish members removed
+/// is the narrowed type: `b = new WeakMap()` on a `WeakMap<K, V> |
+/// undefined` binding is `WeakMap<K, V>`, which tsc agrees with, and it
+/// was left carrying `undefined` because `new WeakMap()` infers as `any`.
+fn narrow_after_assignment(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  value : @ast.TsExpr,
+) -> Unit {
+  // `new C<T>()` arrives wrapped in `TypeArgs`, which says nothing about
+  // the value — peel it, or the shape test below never sees the `new`.
+  let shape = match value {
+    TypeArgs(_, inner) => inner
+    _ => value
+  }
+  let never_nullish = match shape {
+    New(_, _)
+    | NewExpr(_, _)
+    | ObjectLit(_)
+    | ArrayLit(_)
+    | ArrowFunc(_, _, _, _)
+    | FuncExpr(_)
+    | NativeClassExpr(_, _) => true
+    _ => false
+  }
+  // A declaration with a SINGLE non-nullish member narrows to exactly that
+  // member when a never-nullish value is assigned: tsc narrows the
+  // DECLARED type by assignability, and with one candidate the answer is
+  // that candidate whatever the value's own spelling (an assignment that
+  // does not fit is reported on its own). Taking the value's inferred
+  // shape instead made `b = { v: 1 }` on an `Entry | undefined` binding
+  // read back as `{ v: number } | Entry` after an `if`, which the
+  // resolver-free comparison then rejected against `Entry`.
+  let declared_single = match env.lookup_declared(name) {
+    Some(d) if type_has_undefined(d) || type_has_null(d) =>
+      match non_nullable(d) {
+        Union(_) | Never => None
+        one => Some(one)
+      }
+    _ => None
+  }
+  if never_nullish && declared_single is Some(one) && is_checkable(one) {
+    env.narrow(name, one)
+    return
+  }
+  let new_ty = infer_expr(env, ctx.resolver, value)
+  if is_checkable(new_ty) {
+    env.narrow(name, new_ty)
+    return
+  }
+  if never_nullish {
+    match env.lookup(name) {
+      Some(cur) =>
+        if type_has_undefined(cur) || type_has_null(cur) {
+          env.narrow(name, non_nullable(cur))
+        }
+      None => ()
+    }
+  }
+}
+
+///|
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
@@ -20029,6 +20299,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // `f(v)` where `f`'s declared return is `asserts v [is T]` narrows
       // `v` for every statement that follows.
       apply_assertion_predicate_effect(env, ctx.resolver, e)
+      // `x = v;` inside a block arrives as an EXPRESSION statement — the
+      // parser makes it an `Assign` only at the top of a list — and this
+      // arm narrowed nothing, so `let b = m.get(k); if (!b) { b = {…} }
+      // return b` kept `| undefined` past the assignment while the same
+      // line one level out narrowed. One helper serves both spellings.
+      match e {
+        AssignExpr(name, v) => narrow_after_assignment(env, ctx, name, v)
+        _ => ()
+      }
     }
     Assign(name, e) => {
       check_call_args_in_expr(env, e, ctx)
@@ -20067,10 +20346,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // declared slot stays at the original annotation -- otherwise
       // a later `x = otherValue;` would be checked against this
       // narrowed type instead of the union.
-      let new_ty = infer_expr(env, ctx.resolver, e)
-      if is_checkable(new_ty) {
-        env.narrow(name, new_ty)
-      }
+      narrow_after_assignment(env, ctx, name, e)
       // TS2454: this assignment counts; the variable is no longer
       // "used before being assigned".
       let _ = ctx.unassigned.remove(name)
@@ -20308,7 +20584,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             None => pre_map.get(k)
           }
           match (tt, et) {
-            (Some(a), Some(b)) => env.narrow(k, narrow_union(a, b))
+            (Some(a), Some(b)) => env.narrow(k, join_branch_types(a, b))
             _ => ()
           }
         }
