@@ -115,3 +115,150 @@ test "overloads: a parameter typed with an object-type alias still selects" {
   assert_false(lf_has(issues, "ok"))
   assert_true(lf_has(issues, "bad"))
 }
+
+///|
+test "distributive conditional over an alias-to-union argument" {
+  // `Exclude<Formats, "regex">` must remove ONE member. Substituting the
+  // alias first made the false branch the whole `Formats`, so it answered
+  // for every member whatever it decided.
+  let src =
+    #|type Formats = "email" | "regex" | "url";
+    #|type E2 = Exclude<Formats, "regex">;
+    #|type X2 = Extract<Formats, "regex" | "nope">;
+    #|declare const e2: E2;
+    #|declare const x2: X2;
+    #|function ok(): unknown { const a: "email" | "url" = e2; const b: "regex" = x2; return [a, b]; }
+    #|function bad(): unknown { const c: "regex" = e2; return c; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "discriminant narrowing with a union-of-literals member" {
+  // zod's `$ZodIssueStringCommonFormats` declares its tag as
+  // `Exclude<Formats, …>`; a variant whose tag is a UNION survives a
+  // branch when some member of it could take that branch.
+  let src =
+    #|type Formats = "email" | "regex" | "starts_with" | "ends_with";
+    #|interface Base { readonly format: Formats | (string & {}); }
+    #|interface Common extends Base { format: Exclude<Formats, "regex" | "starts_with" | "ends_with"> }
+    #|interface Multi extends Base { format: "regex" | "url"; pattern: string }
+    #|interface SW extends Base { format: "starts_with"; prefix: string }
+    #|interface EW extends Base { format: "ends_with"; suffix: string }
+    #|type Issues = Common | SW | EW | Multi;
+    #|function ok(i: Issues): string {
+    #|  if (i.format === "starts_with") return i.prefix;
+    #|  if (i.format === "regex") return i.pattern;
+    #|  return "";
+    #|}
+    #|function bad(i: Issues): string {
+    #|  if (i.format === "email") return i.prefix;
+    #|  return "";
+    #|}
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "generic interface member typed by a bounded parameter keeps its instantiation" {
+  // The parser inlines `I`'s bound into `_zod`, so `T<any, ArrInt>._zod`
+  // read back as the base `BaseInt` and every discriminant branch saw the
+  // base def. Both arms below are silent in tsc; `bad` is TS2339.
+  let src =
+    #|interface BaseDef { type: "string" | "array" | "set" }
+    #|interface ArrDef extends BaseDef { type: "array"; element: number }
+    #|interface SetDef extends BaseDef { type: "set"; valueType: number }
+    #|interface BaseInt { def: BaseDef }
+    #|interface ArrInt extends BaseInt { def: ArrDef }
+    #|interface SetInt extends BaseInt { def: SetDef }
+    #|interface T<O = unknown, I extends BaseInt = BaseInt> { _zod: I; o?: O }
+    #|interface W<I extends BaseInt = BaseInt> extends T<unknown, I> {}
+    #|interface Arr extends T<any, ArrInt> {}
+    #|interface St extends W<SetInt> {}
+    #|type All = Arr | St;
+    #|function ok(s: All): number {
+    #|  const def = s._zod.def;
+    #|  if (def.type === "array") return def.element;
+    #|  if (def.type === "set") return def.valueType;
+    #|  return 0;
+    #|}
+    #|function bad(s: All): number {
+    #|  const def = s._zod.def;
+    #|  if (def.type === "set") return def.element;
+    #|  return 0;
+    #|}
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "a bare generic reference relates to its all-any instantiation" {
+  let src =
+    #|interface P<T = unknown> { value: T }
+    #|declare let f: (p: P<any>) => P;
+    #|function ok(): void { const g = (p: P): P => p; f = g; }
+    #|function bad(): void { const h = (p: string): P => ({ value: 1 }); f = h; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "Array.isArray narrows a union to its array members" {
+  let src =
+    #|interface S { anyOf?: S[]; type?: string }
+    #|function ok1(s: S): number { const o = s.anyOf; if (!Array.isArray(o) || o.length === 0) return 0; return o.length; }
+    #|function ok2(s: S): number { const o = s.anyOf; if (Array.isArray(o)) return o.length; return 0; }
+    #|function bad(s: S): number { const o = s.anyOf; if (Array.isArray(o)) return 0; return o.length; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok1"))
+  assert_false(lf_has(issues, "ok2"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "variadic tuples: literals, rest-parameter tuples and indexing" {
+  // Every `bad*` is an error in tsc and every `ok*` is accepted (probed).
+  let src =
+    #|function ok1(): unknown { const x: [string, ...number[]] = ["a", 1, 2]; return x; }
+    #|function ok2(): unknown { const x: [...string[], number] = ["a", 2]; return x; }
+    #|function ok3(xs: readonly [string, number]): unknown { const y: [string, number, boolean] = [...xs, true]; return y; }
+    #|function ok4(xs: [string, ...number[]]): unknown { const a: string = xs[0]; const b: number = xs[3]; return [a, b]; }
+    #|function gen<T extends unknown[]>(...args: [...T, number]): T { return null as any; }
+    #|function ok5(): unknown { const r: [string] = gen("a", 1); return r; }
+    #|function two(...args: [string, number]): void {}
+    #|function ok6(): void { two("a", 1); }
+    #|function bad1(): unknown { const x: [string, ...number[]] = ["a", "b"]; return x; }
+    #|function bad2(): unknown { const x: [...string[], number] = ["a", "b"]; return x; }
+    #|function bad3(xs: [string, ...number[]]): unknown { const z: string = xs[1]; return z; }
+    #|function bad4(): void { two("a", "b"); }
+  let issues = lf_issues(src)
+  for f in ["ok1", "ok2", "ok3", "ok4", "ok5", "ok6"] {
+    assert_false(lf_has(issues, f), msg=f)
+  }
+  for f in ["bad1", "bad2", "bad3", "bad4"] {
+    assert_true(lf_has(issues, f), msg=f)
+  }
+}
+
+///|
+test "return type inferred from an unannotated function body" {
+  let src =
+    #|function foo() { return { x: 0 }; }
+    #|function maybe(a: boolean) { if (a) return 1; return undefined; }
+    #|function both(a: boolean) { if (a) { return 1; } else { return 2; } }
+    #|function tail(a: boolean) { if (a) return 1; }
+    #|function ok1(): unknown { const n: number = both(true); const x: number = foo().x; return [n, x]; }
+    #|function bad1(): unknown { const s: string = foo().x; return s; }
+    #|function bad2(): unknown { const n: number = maybe(true); return n; }
+    #|function bad3(): unknown { const n: number = tail(true); return n; }
+    #|function bad4(): unknown { const o = foo(); return o.nope; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok1"))
+  for f in ["bad1", "bad2", "bad3", "bad4"] {
+    assert_true(lf_has(issues, f), msg=f)
+  }
+}

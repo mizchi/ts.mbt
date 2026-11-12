@@ -1,10 +1,10 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FH:
+Measured on 2026-11-12, after batches EU–FO:
 
 ```
-TP  err+flag  : 2671   (of which via parse rejection: 390)
-MISS in scope : 44     (the backlog — this one can reach zero)
+TP  err+flag  : 2670   (of which via parse rejection: 390)
+MISS in scope : 45     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -82,7 +82,7 @@ Two rules for reading the output, both learned the hard way:
 
 ---
 
-## 1. The 44 in-scope MISS files, by machinery
+## 1. The 45 in-scope MISS files, by machinery
 
 Paths are relative to `typescript/tests/cases/conformance/`. The code is
 what the local compiler reports on the file; where a rule was already
@@ -133,7 +133,7 @@ function f<A extends object>(a: A, sa: Something<A>) {
 
 | file | tsc | what is needed |
 |---|---|---|
-| `types/tuple/variadicTuples3` | TS2322 | spread-element matching against `[...T, ...P]`; assignability compares `Tuple` element by element and abstains. Probed: `[...T]` as a parameter and `[string, ...number[]]` are equally blind, a concrete `[string, number]` is caught |
+| `types/tuple/variadicTuples3` | TS2322 | spread-element matching against a GENERIC `[...T, ...P]`. The concrete forms are caught since batch FO (`[string, ...number[]]`, `[...string[], number]`, a tuple-typed rest parameter, indexing past the rest) |
 | `types/literal/templateLiteralTypes4` | TS2345 | `` `${T}` `` distributed over `T`'s constraint to produce a literal union — the parser carries `TemplateLiteralType` and nothing evaluates it against a type parameter |
 | `types/literal/templateLiteralTypes7` | TS2322 | same machinery, at the assignability of two generic signatures |
 | `types/mapped/mappedTypeErrors2` | TS2322, TS2536 | TS2536 "cannot be used to index": a key type parameter checked against the indexed type's key set |
@@ -151,8 +151,8 @@ function f<A extends object>(a: A, sa: Something<A>) {
 | `types/union/unionTypeWithIndexSignature` | TS2339, TS2540, TS7053 | member resolution on a union where one member is an index signature (`{ foo: number } \| { [s: string]: string }`) |
 | `expressions/contextualTyping/taggedTemplateContextualTyping2` | TS2345 | a tagged template's substitutions checked against the tag function's parameter types |
 | `expressions/contextualTyping/superCallParameterContextualTyping2` | TS2349 | the parameter of an arrow passed to `super(...)` typed contextually from the base constructor, so `new Number()` inside it is not callable |
-| `statements/for-ofStatements/ES5For-of8` | TS2322 | return-type inference from a function BODY: `function foo() { return { x: 0 } }` has no resolved return type here at all (`const bad: string = foo().x` is silent too) |
 | `types/tuple/wideningTuples7` | TS7010 | TS7010 on a function EXPRESSION at a `var` initializer; the same shape reports for a function DECLARATION |
+| `types/literal/literalTypesWidenInParameterPosition` | TS2322 | NUMERIC literal types: `infer_expr` erases `NumberLit(_)` to `number` (see §3). Batch FI moved it here from TP — it had been flagged only by a readonly-in-constructor report that was itself a false positive |
 
 ### 1d. Narrowing and control flow — 4 files
 
@@ -238,7 +238,10 @@ measured gap.
 | the same with a NUMERIC / BOOLEAN / BIGINT source (`declare const n: number; const a: 1 = n`, `const q = 789; const b: 1 = q`) | **BLIND — deliberate (batch FB)**: `infer_expr` erases those literals at the source (`NumberLit(_) => Number`), so a `const` really is widened here and reporting would be about OUR widening. The string arm survives because `Literal(s)` does not get erased |
 | `as const` (`"hello" as const`, a tuple index, a DECLARED literal member) | CAUGHT at the verdict; the message names `string` where tsc names `"hello"`. Since batch FB a file carrying one also turns OFF the literal-target rule, because the parser erases the assertion — see §3 |
 | **strictNullChecks on a member-chain receiver** (`o.a.b` with `a?:`) | **BLIND — deliberate**: the check is gated to a bare `Var` receiver because those are the bindings the narrowing engine rewrites precisely (batch DO) |
-| **variadic tuple** (`[...T]`, `[string, ...number[]]`) | **BLIND** |
+| variadic tuple, concrete (`[string, ...number[]]` / `[...string[], number]` literals, `...args: [string, number]`, `xs[1]` past the rest) | CAUGHT (batch FO) — the literal check had matched the `Rest` slot positionally and judged spreads against the wrong slots |
+| variadic tuple, GENERIC (`[...T, ...P]`, a `declare function` returning a bare bounded `T`) | **BLIND** — the parser inlines the bound and a `declare function` value carries no binder list |
+| return type inferred from an unannotated BODY (`function foo() { return { x: 0 } }`, nested `return`s, falling off the end) | CAUGHT (batch FO) |
+| `Array.isArray(x)` narrowing | CAUGHT (batch FO) — it did not exist |
 | computed `unique symbol` key (`interface I { [k]: number }` / `{ [k]: number }`, `i[k]` against `string`) | CAUGHT (batch FA) — the ANONYMOUS spelling did not PARSE at all, so every member of such a type was lost |
 | **`this` inside an object-literal `function` property** (`{ n: 101, f: function () { this.n.length } }`) | **BLIND — measured and not taken**, see §3 |
 | template-literal type with a placeholder (`` `${T}-x` `` against `"c-x"`) | CAUGHT at the error shape, and the type it computes is `string` rather than the evaluated literal — the legal neighbours (`"c-x"`, `string`) are silent, measured |
@@ -286,6 +289,44 @@ Each entry names the LEGAL neighbour that decides it. None is a bug.
 | `{ [P in string]: P }` — a mapped type whose VALUE mentions the binder | — | The infinite-key reduction (batch EX) requires the value to be independent of the key, because a HOMOMORPHIC mapped type over `any` yields `any` and not a shape. Reporting it cost two TS7-accepted files before the guard existed |
 | `A & B` assigned to `A` | — | LEGAL, and the reason the intersection-source rule (batch EY) is restricted to an index-signature target: `is_assignable_to` is resolver-free and cannot expand a `Named` target structurally, so the unrestricted version reported four legal shapes at the same +1 conformance file |
 | a CONSTRUCT / CALL signature's own type parameters in an object type | — | Not carried. Wrapping them in `GenericFunc` cost a true positive outright (`genericCallWithOverloadedConstructorTypedArguments2`, all `new <T>(…)` members) and nothing reads them; the named-method binders that batch EV does carry are read at the call site |
+
+## 4a. Real code — what is still wrong on zod
+
+The conformance numbers say nothing about real code, so this is the
+other half of the backlog. tsc accepts zod, so every diagnostic `mtsc
+<file> --noEmit` (graph mode, one run per source file under
+`node_modules/zod/src`, tests excluded) reports is a false positive.
+`typescript.d.ts`, preact's `index.d.ts` and vitest's `index.d.ts` are
+at **0** on the same path.
+
+Trend: 272 (batch EO) -> 211 (FI) -> 117 (FJ) -> 135 (FK, graph
+`--noEmit` sees more) -> 122 (FL) -> 91 (FM) -> 84 (FN) -> **78** (FO,
+namespace-import types resolved: 18 gone, 12 newly reachable).
+
+| family | count | cause |
+|---|---|---|
+| `property X does not exist on …` (`_zod`, `value`, `pattern`, …) | ~35 | mostly a type written through a NAMESPACE import (`core.$ZodObject`) is opaque in graph mode, so every inherited member is lost. Prototyped in batch FN and REVERTED: one locale file 4.1 s -> 24.3 s and ~150 new false positives, because `switch (issue.format)` narrowing does not follow an imported discriminated-union alias |
+| arity (`expected N argument(s), got M`) | ~10 | lib signatures and overload sets still read one declaration |
+| TS2430 through interface bound-inlining | 12 | the parser inlines an INTERFACE's type-parameter bound into its members; undoing it changes 48 generated bridge files (batch FJ), so it is blocked on a bridge decision |
+| null / assignability / flow | ~25 | one or two each: `not all paths return`, use-before-assign, `string \| undefined` into `string`, object-literal unions |
+
+### Plan, in order
+
+All three were taken in batch FO (see CLAUDE.md); what is left on zod is
+listed above, and the remaining namespace-exposed families are a
+function's inlined bound defeating an explicit type argument
+(`aggregateChecks<number>(…)`), `||`-narrowing through a reassigned
+alias, and assignability of large intersected JSON-schema shapes.
+
+1. **Namespace-import type resolution** — DONE. Prerequisites, both measured in
+   batch FN: discriminant narrowing through an imported union alias, and
+   an ingestion that does not rebuild the target module once per
+   importing module.
+2. **Variadic tuples** — concrete forms DONE (`[...T]`, `[string, ...number[]]`) — the most
+   visible BLIND row in §2 and `variadicTuples3` in §1b.
+3. **Return-type inference from a function BODY** — DONE; `function foo() {
+   return { x: 0 } }` has no resolved return type (`ES5For-of8`, §1c),
+   which real code hits constantly.
 
 ## 4. Out of scope — 19 files
 

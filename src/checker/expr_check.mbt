@@ -49,6 +49,13 @@ priv struct Resolver {
   // happen to matter) is deliberate — a second copy of those names is
   // the "one rule written in two places" defect this repo keeps finding.
   standard_aliases : Map[String, AliasBinding]
+  // `core.X` -> `X` for every type reachable through a NAMESPACE import
+  // (see `alias_namespace_import_types`). `unwrap` canonicalizes through
+  // it first, so a qualified spelling and the bare one are ONE type to
+  // every name-keyed comparison downstream — the nominal `extends` walks
+  // match bare names only, and the declarations they walk name their
+  // bases bare.
+  qualified_names : Map[String, String]
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -460,6 +467,7 @@ fn Resolver::empty() -> Resolver {
     classes: {},
     type_aliases: {},
     standard_aliases: standard_utility_types(),
+    qualified_names: {},
     globals: {},
     signatures: {},
     func_type_params: {},
@@ -745,6 +753,217 @@ fn Resolver::ingest_type_module(
   }
   for name, enum_ in types.enums {
     r.enums[name] = enum_
+  }
+}
+
+///|
+/// `Array.isArray(x)` splits `x`'s union into its array members and the
+/// rest. It decides only when EVERY member is classifiable: an array or
+/// tuple on one side, a primitive, `null` / `undefined`, a function or an
+/// object literal type on the other. Anything else (`any`, `unknown`, a
+/// type parameter, an interface that might extend `Array`) abstains, so
+/// an unclassified member costs the narrowing rather than inventing one.
+fn array_is_array_split(
+  resolver : Resolver,
+  cur : @ast.TsType,
+) -> (@ast.TsType, @ast.TsType)? {
+  let parts = union_components(resolver.unwrap(cur))
+  if parts.length() < 2 {
+    return None
+  }
+  let arrays : Array[@ast.TsType] = []
+  let others : Array[@ast.TsType] = []
+  for p in parts {
+    match resolver.unwrap(p) {
+      Array(_) | Tuple(_) | Applied("Array", _) | Applied("ReadonlyArray", _) =>
+        arrays.push(p)
+      Undefined
+      | Null
+      | String_
+      | Number
+      | Int
+      | Boolean
+      | BigInt
+      | Symbol
+      | Literal(_)
+      | NumberLiteral(_)
+      | BooleanLiteral(_)
+      | Func(_, _)
+      | Object(_) => others.push(p)
+      _ => return None
+    }
+  }
+  if arrays.length() == 0 {
+    return None
+  }
+  Some((union_of(arrays), union_of(others)))
+}
+
+///|
+/// The parser inlines a bounded type parameter's BOUND into an interface's
+/// members (`interface Box<I extends Base> { v: I }` stores `v: Base`),
+/// and the bridge generator reads that inlined type as the member's
+/// MoonBit type, which is why the parser cannot simply stop (batch FJ:
+/// 48 generated files change). The instantiation is what that loses:
+/// `Box<Sub>`'s `v` read back as `Base`, so zod's
+/// `interface $ZodArray<T> extends $ZodType<any, any, $ZodArrayInternals<T>>`
+/// resolved `_zod` to the base `$ZodTypeInternals` and every
+/// `switch (def.type)` arm read the base def. When a member's type is
+/// EXACTLY a bound and the instantiation supplies that parameter, the
+/// argument is the member's type. The cost is stated: a member written
+/// with the bound's type itself, not the parameter, reads as the argument
+/// — narrower than declared, which can only hide a report on a read.
+fn inlined_bound_param(
+  bounds : Array[(String, @ast.TsType)],
+  member_ty : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> @ast.TsType? {
+  fn direct(t : @ast.TsType) -> @ast.TsType? {
+    for b in bounds {
+      let (p, bound) = b
+      if bound == t {
+        match bindings.get(p) {
+          Some(arg) => return Some(arg)
+          None => ()
+        }
+      }
+    }
+    None
+  }
+
+  match direct(member_ty) {
+    Some(a) => return Some(a)
+    None => ()
+  }
+  // `x?: N` is stored as `Bound | undefined` — the parser wraps the
+  // optional member AFTER inlining — so the bound can also be one member
+  // of a union.
+  match member_ty {
+    Union(items) => {
+      let mut hit = false
+      let out = items.map(fn(t) {
+        match direct(t) {
+          Some(a) => {
+            hit = true
+            a
+          }
+          None => substitute_params(t, bindings)
+        }
+      })
+      if hit {
+        Some(Union(out))
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// A conditional alias whose CHECK type is a naked type parameter
+/// distributes over a union argument — that is what makes
+/// `Exclude<Formats, "regex">` remove one member_ty rather than answer for
+/// the whole union. Substituting first and deciding afterwards loses the
+/// rule: the check becomes `Named("Formats")`, the false branch becomes
+/// the same `Formats`, and the decision returns the WHOLE union whatever
+/// it decides per member_ty. So when the bound argument resolves to a
+/// union, the body is instantiated once per member_ty and the results are
+/// joined, exactly as TypeScript instantiates a distributive conditional.
+/// `None` for every other shape, which keeps the old path unchanged.
+fn distribute_conditional_alias(
+  r : Resolver,
+  body : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> @ast.TsType? {
+  let p = match body {
+    Conditional(Named(p), _, _, _) => p
+    _ => return None
+  }
+  let arg = match bindings.get(p) {
+    Some(a) => a
+    None => return None
+  }
+  let members = match r.unwrap(arg) {
+    Union(items) => items
+    _ => return None
+  }
+  let out : Array[@ast.TsType] = []
+  for m in members {
+    let b : Map[String, @ast.TsType] = Map([])
+    for k, v in bindings {
+      b[k] = v
+    }
+    b[p] = m
+    let inst = substitute_params(body, b)
+    match r.unwrap(inst) {
+      Conditional(_, _, _, _) => return None
+      Never => ()
+      t => out.push(t)
+    }
+  }
+  Some(
+    if out.length() == 0 {
+      Never
+    } else if out.length() == 1 {
+      out[0]
+    } else {
+      Union(out)
+    },
+  )
+}
+
+///|
+/// A type written through a NAMESPACE import (`import * as core from
+/// "./core"`, then `core.$ZodObject` in an annotation or an `extends`
+/// clause) names a declaration the embedding has ALREADY ingested at its
+/// bare name — `type_modules` carries every module the importer reaches.
+/// So the qualified spelling needs no second ingestion, only a second KEY
+/// for the same entry: `(qualified, bare)` pairs, computed by the caller
+/// from the target module's exports. Batch FN's version re-ingested each
+/// target under a prefix, which rebuilt a module per importing module and
+/// took one zod locale file from 4.1 s to 24.3 s; copying a map entry is
+/// one insert. A name the module itself declares wins, and an entry whose
+/// bare name was never ingested is skipped, so the qualified spelling can
+/// only ever resolve to what the bare one does.
+fn Resolver::alias_namespace_import_types(
+  r : Resolver,
+  aliases : Array[(String, String)],
+) -> Unit {
+  for pair in aliases {
+    let (qualified, bare) = pair
+    let declared_here = r.interfaces.get(qualified) is Some(_) ||
+      r.classes.get(qualified) is Some(_) ||
+      r.type_aliases.get(qualified) is Some(_) ||
+      r.enums.get(qualified) is Some(_)
+    if !declared_here && qualified != bare {
+      r.qualified_names[qualified] = bare
+    }
+    match r.interfaces.get(bare) {
+      Some(i) =>
+        if r.interfaces.get(qualified) is None {
+          r.interfaces[qualified] = i
+        }
+      None => ()
+    }
+    match r.classes.get(bare) {
+      Some(c) =>
+        if r.classes.get(qualified) is None {
+          Resolver::put_class(r, qualified, c)
+        }
+      None => ()
+    }
+    match r.type_aliases.get(bare) {
+      Some(a) =>
+        if r.type_aliases.get(qualified) is None {
+          r.type_aliases[qualified] = a
+        }
+      None => ()
+    }
+    match r.enums.get(bare) {
+      Some(e) => if r.enums.get(qualified) is None { r.enums[qualified] = e }
+      None => ()
+    }
   }
 }
 
@@ -1316,7 +1535,11 @@ fn Resolver::ingest_module(
         String_ => @ast.TsType::String_
         Boolean => @ast.TsType::Boolean
         BigInt => @ast.TsType::BigInt
-        _ => @ast.TsType::Any
+        _ =>
+          match infer_body_return_type(fenv, r, f.body) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
       }
     } else {
       f.return_type
@@ -2351,6 +2574,21 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let mut cur = ty
   let mut keep_going = true
   while keep_going {
+    if self.qualified_names.length() > 0 {
+      match cur {
+        Named(n) =>
+          match self.qualified_names.get(n) {
+            Some(b) => cur = Named(b)
+            None => ()
+          }
+        Applied(n, args) =>
+          match self.qualified_names.get(n) {
+            Some(b) => cur = Applied(b, args)
+            None => ()
+          }
+        _ => ()
+      }
+    }
     match cur {
       Named(n) =>
         if unwrap_seen_has(seen, n) {
@@ -2468,7 +2706,10 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                 bindings[type_params[i]] = args[i]
                 i = i + 1
               }
-              cur = substitute_params(body, bindings)
+              cur = match distribute_conditional_alias(self, body, bindings) {
+                Some(t) => t
+                None => substitute_params(body, bindings)
+              }
             }
             None => keep_going = false
           }
@@ -3533,6 +3774,10 @@ fn Resolver::lookup_field_core(
                 iface.method_type_params,
                 field,
               )
+              match inlined_bound_param(iface.type_param_bounds, f.1, scoped) {
+                Some(arg) => return Some(arg)
+                None => ()
+              }
               return Some(substitute_params(f.1, scoped))
             }
           }
@@ -3549,7 +3794,13 @@ fn Resolver::lookup_field_core(
             // becomes a lookup against `Box<number>`, not `Box<T>`.
             let substituted_args : Array[@ast.TsType] = []
             for a in base_args {
-              substituted_args.push(substitute_params(a, bindings))
+              // An `extends B<T>` argument is inlined to `T`'s bound the
+              // same way a member is (`_$ZodType<T extends Internals>
+              // extends $ZodType<…, T>`), so it gets the same recovery.
+              match inlined_bound_param(iface.type_param_bounds, a, bindings) {
+                Some(arg) => substituted_args.push(arg)
+                None => substituted_args.push(substitute_params(a, bindings))
+              }
             }
             let base_ty : @ast.TsType = if substituted_args.length() > 0 {
               @ast.TsType::Applied(base_name, substituted_args)
@@ -8993,6 +9244,20 @@ fn infer_expr_inner(
             for a in args {
               let _ = infer_expr(env, resolver, a)
             }
+            // The parser inlines a function's bounded type parameter, so
+            // a return of `T` with `T extends unknown[]` arrives as the
+            // bound itself and no binding can reach it: `h<T extends
+            // unknown[]>(...args: [...T, number]): T` "returned"
+            // `unknown[]`, which `const r: [string] = h("a", 1)` then
+            // rejected on a line tsc accepts. A return that IS a bound is
+            // an instantiation this cannot compute, so it abstains.
+            match resolver.func_type_param_bounds.get(name) {
+              Some(bounds) =>
+                if bounds.iter().any(fn(b) { b.1 == ret }) {
+                  return @ast.TsType::Any
+                }
+              None => ()
+            }
             return substitute_params(ret, bindings)
           }
           _ => ()
@@ -10275,6 +10540,18 @@ fn infer_call(
   for a in args {
     let _ = infer_expr(env, resolver, a)
   }
+  // The `Call` arm's abstention, for the callee that arrives as a VALUE
+  // (`declare function h<T extends unknown[]>(…): T`): a return that is
+  // exactly one of the binders' inlined bounds is an instantiation this
+  // cannot compute. Read before `unwrap`, which peels the wrapper.
+  match callee {
+    GenericFunc(_, bounds, Func(_, ret))
+    | GenericFunc(_, bounds, CallableMeta(Func(_, ret), _)) =>
+      if bounds.iter().any(fn(b) { b.1 == ret }) {
+        return @ast.TsType::Any
+      }
+    _ => ()
+  }
   let callee = resolver.unwrap(callee)
   match callee {
     // `paramName is T` is a boolean at the value level — calls to a type
@@ -10465,6 +10742,46 @@ fn infer_index(
             _ => elem // arr[i] for any index still yields elem type
           }
       }
+    // A VARIADIC tuple (`[string, ...number[]]`): a literal index before
+    // the rest slot is that element; at or after it the position depends
+    // on the runtime length, so it is the rest's element type joined with
+    // every fixed element after it. The plain arm below returned the raw
+    // `Rest(...)` slot itself, which then reached assignability as a type
+    // nothing could match.
+    Tuple(items) if items.iter().any(fn(t) { t is Rest(_) }) => {
+      let mut rest_at = 0
+      for i, t in items {
+        if t is Rest(_) {
+          rest_at = i
+          break
+        }
+      }
+      let lit : Int32? = match idx_expr {
+        IntLit(i) => Some(i)
+        NumberLit(d) => Some(d.to_int())
+        _ => None
+      }
+      match lit {
+        Some(i) if i >= 0 && i < rest_at => return items[i]
+        _ => ()
+      }
+      let start = match lit {
+        Some(i) if i >= rest_at => rest_at
+        _ => 0
+      }
+      let parts : Array[@ast.TsType] = []
+      for k in start..<items.length() {
+        match items[k] {
+          Rest(_) as r =>
+            match rest_element_type(r) {
+              Some(e) => parts.push(e)
+              None => return @ast.TsType::Any
+            }
+          t => parts.push(t)
+        }
+      }
+      union_of(parts)
+    }
     Tuple(items) =>
       match idx_expr {
         IntLit(i) if i >= 0 && i < items.length() => items[i]
@@ -13607,47 +13924,112 @@ fn check_array_lit_against_tuple(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
-  let mut has_spread = false
-  for it in items {
-    match it {
-      Spread(_) => has_spread = true
-      _ => ()
+  // Elements before the first spread are the only ones whose POSITION is
+  // known: `[...xs, true]` puts `true` at an index that depends on
+  // `xs`'s length, so judging it against `slots[1]` (and judging the
+  // spread itself against `slots[0]`, as this did) compared the wrong
+  // pairs — `[...xs, true]` against `[string, number, boolean]` with
+  // `xs: [string, number]` reported two errors on a line tsc accepts.
+  let mut first_spread = items.length()
+  for i, it in items {
+    if it is Spread(_) && first_spread == items.length() {
+      first_spread = i
     }
   }
-  // A `...rest` slot in the *target* tuple (`[a, ...b[]]`) makes its length
-  // open-ended, so a count mismatch is not an error. Optional trailing slots
-  // (`[a, b?]`) similarly make a *shorter* literal valid — but never a *longer*
-  // one, so supplying more elements than a fixed-length tuple has is always an
-  // error (marked `(too many)` so the permissive filter can keep it in
-  // call-argument position, where the "too few" case stays suppressed).
-  let mut has_rest_slot = false
-  for s in slots {
-    if s is Rest(_) {
-      has_rest_slot = true
+  let has_spread = first_spread < items.length()
+  // At most one rest slot (`[a, ...b[]]`, `[...a[], b]`, `[a, ...T, b]`).
+  let mut rest_at = -1
+  for i, s in slots {
+    if s is Rest(_) && rest_at < 0 {
+      rest_at = i
     }
   }
-  if !has_spread && !has_rest_slot && items.length() != slots.length() {
-    let excess = if items.length() > slots.length() {
-      " (too many)"
+  if rest_at < 0 {
+    // A fixed-length target. Optional trailing slots (`[a, b?]`) make a
+    // SHORTER literal valid — but never a longer one, so supplying more
+    // elements than a fixed-length tuple has is always an error (marked
+    // `(too many)` so the permissive filter can keep it in call-argument
+    // position, where the "too few" case stays suppressed).
+    // A slot written `T?` is stored as `T | undefined` (the parser wraps
+    // it), and a literal may stop before the optional tail:
+    // `[1]` against `[number, string?]` is legal. The explicit
+    // `[number, string | undefined]` is the same node and is tolerated
+    // too, which costs that spelling's MISS.
+    let mut required = slots.length()
+    while required > 0 &&
+          slots[required - 1] is Union(parts) &&
+          parts.iter().any(fn(p) { p is Undefined }) {
+      required = required - 1
+    }
+    if !has_spread &&
+      (items.length() > slots.length() || items.length() < required) {
+      let excess = if items.length() > slots.length() {
+        " (too many)"
+      } else {
+        ""
+      }
+      record(
+        ctx,
+        sub_path,
+        "expected tuple of \{slots.length()} element(s), got \{items.length()}\{excess}",
+      )
+    }
+    let n = if first_spread < slots.length() {
+      first_spread
     } else {
-      ""
+      slots.length()
     }
+    for i in 0..<n {
+      check_expr_against(env, items[i], slots[i], ctx, "\{sub_path}[\{i}]")
+    }
+    return
+  }
+  // A variadic target: the fixed PREFIX aligns from the front, the fixed
+  // SUFFIX from the back, and whatever is left in between belongs to the
+  // rest slot. tsc aligns exactly this way, which is what makes
+  // `["a", "b"]` against `[string, ...number[]]` an error on "b" and
+  // `[..."a", 2]` against `[...string[], number]` legal.
+  let prefix = rest_at
+  let suffix = slots.length() - rest_at - 1
+  // The prefix is judged up to the first spread; with a spread nothing
+  // after it has a known position, so the suffix and the middle are left.
+  let prefix_n = if prefix < first_spread { prefix } else { first_spread }
+  for i in 0..<prefix_n {
+    check_expr_against(env, items[i], slots[i], ctx, "\{sub_path}[\{i}]")
+  }
+  if has_spread {
+    return
+  }
+  if items.length() < prefix + suffix {
+    // Too few for the fixed part. Kept the same `got N` shape as the
+    // fixed-length arm so the permissive filter treats it identically.
     record(
       ctx,
       sub_path,
-      "expected tuple of \{slots.length()} element(s), got \{items.length()}\{excess}",
+      "expected tuple of at least \{prefix + suffix} element(s), got \{items.length()}",
+    )
+    return
+  }
+  let suffix_start = items.length() - suffix
+  for k in 0..<suffix {
+    let i = suffix_start + k
+    check_expr_against(
+      env,
+      items[i],
+      slots[rest_at + 1 + k],
+      ctx,
+      "\{sub_path}[\{i}]",
     )
   }
-  let n = if items.length() < slots.length() {
-    items.length()
-  } else {
-    slots.length()
-  }
-  let mut i = 0
-  while i < n {
-    let sub = "\{sub_path}[\{i}]"
-    check_expr_against(env, items[i], slots[i], ctx, sub)
-    i = i + 1
+  // The middle against the rest's ELEMENT type, only when the rest is a
+  // plain array (`...number[]`). A rest of a type parameter or a nested
+  // tuple (`...T`, `...[a, b]`) has no single element type to judge by.
+  match rest_element_type(slots[rest_at]) {
+    Some(elem) =>
+      for i in prefix..<suffix_start {
+        check_expr_against(env, items[i], elem, ctx, "\{sub_path}[\{i}]")
+      }
+    None => ()
   }
 }
 
@@ -16170,6 +16552,206 @@ fn infer_arrow_body_with_params(
 }
 
 ///|
+/// The return type tsc infers for an unannotated function body, when it
+/// can be computed WITHOUT guessing. `infer_block_return` reads only the
+/// block's own top-level `return`s, which is right for the callback
+/// positions it serves and wrong as a declaration's type: `if (a) return
+/// 1; return undefined` came back `undefined`. So every `return` is
+/// collected here, at any depth short of a nested function (a function
+/// body is an expression, which this walk never enters), and the result
+/// is adopted only when EVERY return infers to a type built from
+/// primitives, literals, object and array shapes or declared names.
+/// Literals widen the way a return position widens them (`return "a"`
+/// is `string`), and a body whose end is reachable gains `undefined`,
+/// since that is what falling off the end returns. Anything else is
+/// `None`, and the caller keeps `any` — the old answer.
+fn infer_body_return_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  body : @ast.TsBlock,
+) -> @ast.TsType? {
+  let returns : Array[@ast.TsExpr?] = []
+  fn walk(stmts : Array[@ast.TsStmt], out : Array[@ast.TsExpr?]) -> Unit {
+    for st in stmts {
+      match st {
+        Return(e) => out.push(e)
+        If(_, t, e) => {
+          walk(t.stmts, out)
+          match e {
+            Some(b) => walk(b.stmts, out)
+            None => ()
+          }
+        }
+        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+          walk(b.stmts, out)
+        For(_, _, _, b)
+        | ForOf(_, _, _, _, b)
+        | ForAwaitOf(_, _, _, _, b)
+        | ForIn(_, _, _, _, b) => walk(b.stmts, out)
+        Try(t, _, c, f) => {
+          walk(t.stmts, out)
+          match c {
+            Some(b) => walk(b.stmts, out)
+            None => ()
+          }
+          match f {
+            Some(b) => walk(b.stmts, out)
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            walk(c.body.stmts, out)
+          }
+        Label(_, inner) => walk([inner], out)
+        _ => ()
+      }
+    }
+  }
+
+  walk(body.stmts, returns)
+  if returns.length() == 0 {
+    return None
+  }
+  // The top-level locals are what a return expression's names mean; a
+  // name bound only in a nested block infers as `any` and makes the whole
+  // answer decline below, which is the safe direction.
+  let added : Array[String] = []
+  for stmt in body.stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(name), declared, init)
+      | Let(@ast.TsBinding::Ident(name), declared, init)
+      | Const(@ast.TsBinding::Ident(name), declared, init) =>
+        if env.lookup(name) is None {
+          let ty = if is_checkable(declared) {
+            declared
+          } else {
+            binding_init_type(
+              !(stmt is Const(_, _, _)),
+              is_fresh_literal_expr(init),
+              infer_expr(env, resolver, init),
+            )
+          }
+          if is_checkable(ty) {
+            env.bind(name, ty)
+            added.push(name)
+          }
+        }
+      _ => ()
+    }
+  }
+  let parts : Array[@ast.TsType] = []
+  let mut ok = true
+  for r in returns {
+    let t = match r {
+      Some(e) => widen_literal_deep(infer_expr(env, resolver, e))
+      None => @ast.TsType::Undefined
+    }
+    if !return_type_trustworthy(resolver, t, 0) {
+      ok = false
+      break
+    }
+    parts.push(t)
+  }
+  for name in added {
+    let _ = env.vars.remove(name)
+    let _ = env.declared.remove(name)
+  }
+  if !ok {
+    return None
+  }
+  // Whether falling off the end is possible decides an `| undefined`,
+  // and guessing wrong either way costs: a missing `undefined` is a type
+  // narrower than tsc's, and an extra one makes `const n: number = f()`
+  // a false positive when every path returns. So the answer is three
+  // valued and an unknown one abstains.
+  match end_reachable(body.stmts) {
+    Some(true) => parts.push(@ast.TsType::Undefined)
+    Some(false) => ()
+    None => return None
+  }
+  let flat : Array[@ast.TsType] = []
+  for p in parts {
+    for c in union_components(p) {
+      if !flat.contains(c) {
+        flat.push(c)
+      }
+    }
+  }
+  Some(union_of(flat))
+}
+
+///|
+/// Can control fall off the end of `stmts`? `Some(true)` definitely,
+/// `Some(false)` definitely not, `None` when this cannot tell (a loop, a
+/// `switch`, a `try`): the caller abstains on `None`.
+fn end_reachable(stmts : Array[@ast.TsStmt]) -> Bool? {
+  match stmts.last() {
+    None => Some(true)
+    Some(Return(_)) | Some(Throw(_)) => Some(false)
+    Some(If(_, _, None)) => Some(true)
+    Some(If(_, t, Some(e))) =>
+      match (end_reachable(t.stmts), end_reachable(e.stmts)) {
+        (Some(true), _) | (_, Some(true)) => Some(true)
+        (Some(false), Some(false)) => Some(false)
+        _ => None
+      }
+    Some(Block(b)) => end_reachable(b.stmts)
+    Some(Expr(_))
+    | Some(Var(_, _, _))
+    | Some(Let(_, _, _))
+    | Some(Const(_, _, _))
+    | Some(Assign(_, _))
+    | Some(CompoundAssign(_, _, _))
+    | Some(IndexAssign(_, _, _))
+    | Some(PropAssign(_, _, _))
+    | Some(Empty) => Some(true)
+    _ => None
+  }
+}
+
+///|
+fn return_type_trustworthy(
+  resolver : Resolver,
+  t : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if depth > 6 {
+    return false
+  }
+  match t {
+    Number
+    | Int
+    | String_
+    | Boolean
+    | BigInt
+    | Symbol
+    | Undefined
+    | Null
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_) => true
+    Array(e) => return_type_trustworthy(resolver, e, depth + 1)
+    Union(items) =>
+      items
+      .iter()
+      .all(fn(x) { return_type_trustworthy(resolver, x, depth + 1) })
+    Object(fields) =>
+      fields.length() > 0 &&
+      fields
+      .iter()
+      .all(fn(f) {
+        f.0 is Literal(_) && return_type_trustworthy(resolver, f.1, depth + 1)
+      })
+    Named(n) =>
+      resolver.interfaces.contains(n) ||
+      resolver.classes.contains(n) ||
+      resolver.enums.contains(n)
+    _ => false
+  }
+}
+
+///|
 /// Walk a block looking for `Return(Some(expr))` statements and union
 /// their inferred types. Used by callback-body inference where we need
 /// the result type of a block-bodied arrow / function expression.
@@ -17167,6 +17749,39 @@ fn check_arguments_with_sig(
     }
     idx
   }
+  // A rest parameter typed as a TUPLE (`...args: [string, number]`,
+  // `...args: [...T, number]`) is POSITIONAL: the arguments from the rest
+  // index on are that tuple's elements, so they are judged the way an
+  // array literal against the tuple is. Joining every slot into one
+  // union both missed `g("a", "b")` against `[string, number]` and, with
+  // a variadic slot in the tuple, judged every argument against a raw
+  // `Rest(...)` member nothing could match.
+  let rest_tuple : Array[@ast.TsType]? = if rest_index >= 0 &&
+    rest_index < params.length() {
+    match params[rest_index] {
+      Rest(Tuple(parts)) | Tuple(parts) => Some(parts)
+      _ => None
+    }
+  } else {
+    None
+  }
+  match rest_tuple {
+    Some(parts) if rest_index <= args.length() =>
+      if first_spread < 0 || first_spread >= rest_index {
+        let tail : Array[@ast.TsExpr] = []
+        for k in rest_index..<args.length() {
+          tail.push(args[k])
+        }
+        check_array_lit_against_tuple(
+          env,
+          tail,
+          parts,
+          ctx,
+          "\{call_path} rest arg",
+        )
+      }
+    _ => ()
+  }
   let mut i = 0
   while i < args.length() {
     if first_spread >= 0 && i >= first_spread {
@@ -17174,7 +17789,9 @@ fn check_arguments_with_sig(
     }
     let sub_path = "\{call_path} arg[\{i}]"
     if rest_index >= 0 && i >= rest_index {
-      check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
+      if rest_tuple is None {
+        check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
+      }
     } else if i < params.length() {
       check_generator_arg_treturn(ctx, args[i], params[i], sub_path)
       check_expr_against(
@@ -18398,11 +19015,36 @@ fn narrow_by_discriminant(
         // — would fail every predicate and wrongly narrow the union to `never`
         // (the `discriminatedUnionTypes4` false positive). Conservative
         // non-narrowing matches the previous string-only behaviour there.
-        if !is_literal_discriminant_type(field_ty) {
+        // A discriminant can also be a UNION of literals — written out
+        // (`format: "a" | "b"`) or computed (`format: Exclude<Formats,
+        // "regex">`, the shape zod's `$ZodIssueStringCommonFormats` uses).
+        // Both reach here unreduced, so the field is unwrapped first and
+        // split; the variant survives when SOME member could take the
+        // branch, which is exactly the single-literal rule applied per
+        // member. Any non-literal member still bails the whole narrowing.
+        let parts = if is_literal_discriminant_type(field_ty) {
+          [field_ty]
+        } else {
+          let parts = union_components(resolver.unwrap(field_ty))
+          for p in parts {
+            if !is_literal_discriminant_type(p) {
+              return None
+            }
+          }
+          parts
+        }
+        if parts.length() == 0 {
           return None
         }
         any_resolved = true
-        if field_matches(field_ty) == keep {
+        let mut survives = false
+        for p in parts {
+          if field_matches(p) == keep {
+            survives = true
+            break
+          }
+        }
+        if survives {
           kept.push(v)
         }
       }
@@ -18653,6 +19295,17 @@ fn collect_narrowing(
       apply_type_predicate_narrowing(
         env, resolver, callee_name, args, pair_pos, pair_neg,
       )
+    }
+    MethodCall(Var("Array"), "isArray", [Var(x)]) if env.lookup("Array") is None => {
+      let pair_pos = if then_sense { then_binds } else { else_binds }
+      let pair_neg = if then_sense { else_binds } else { then_binds }
+      match array_is_array_split(resolver, env_lookup_full(env, resolver, x)) {
+        Some((arrays, others)) => {
+          pair_pos.push((x, arrays))
+          pair_neg.push((x, others))
+        }
+        None => ()
+      }
     }
     MethodCall(receiver, method_name, args) => {
       let pair_pos = if then_sense { then_binds } else { else_binds }
@@ -25185,6 +25838,7 @@ pub fn check_module_function_bodies_with_context(
   module_ : @ast.TsModule,
   globals : Array[(String, @ast.TsType)],
   type_modules : Array[@ast.TsModule],
+  namespace_type_aliases~ : Array[(String, String)] = [],
 ) -> Array[ExprIssue] {
   check_module_function_bodies_layered(
     module_,
@@ -25192,6 +25846,7 @@ pub fn check_module_function_bodies_with_context(
     false,
     type_modules,
     globals,
+    namespace_type_aliases~,
   )
 }
 
@@ -30550,8 +31205,8 @@ fn member_covariant_by_iface_extends(
   // asymmetry batch EM found in `is_assignable_to_inner`.
   fn iface_name(t : @ast.TsType) -> String? {
     match t {
-      Named(n) => Some(n)
-      Struct(n, _) => Some(n)
+      Named(n) | Struct(n, _) =>
+        Some(resolver.qualified_names.get(n).unwrap_or(n))
       _ => None
     }
   }
@@ -30668,7 +31323,9 @@ fn member_covariant_by_iface_extends(
       // `extends $ZodCheckInternals<T>` — the walk substitutes as it goes.
       (None, None) =>
         match (dt, bt) {
-          (Applied(dname, dargs), Applied(bname, bargs)) =>
+          (Applied(dname0, dargs), Applied(bname0, bargs)) => {
+            let dname = resolver.qualified_names.get(dname0).unwrap_or(dname0)
+            let bname = resolver.qualified_names.get(bname0).unwrap_or(bname0)
             iface_extends_instantiation(resolver, dname, dargs, bname, bargs) ||
             (
               dname == bname &&
@@ -30680,7 +31337,15 @@ fn member_covariant_by_iface_extends(
                 for i, da in dargs {
                   let du = resolver.unwrap_containers(da)
                   let bu = resolver.unwrap_containers(bargs[i])
+                  // A base argument of `never` is the bottom of a
+                  // CONTRAVARIANT parameter — zod's `$ZodCheck<in T =
+                  // never>` is exactly that, and `$ZodCheck<string>[]`
+                  // against `$ZodCheck<never>[]` is legal. The `in`
+                  // annotation is not in the AST, so the argument is
+                  // accepted whatever the variance, which can only lose a
+                  // finding.
                   if all_ok &&
+                    !(bu is Never) &&
                     !is_assignable_to(du, bu) &&
                     !parts(du)
                     .iter()
@@ -30696,6 +31361,7 @@ fn member_covariant_by_iface_extends(
               })
             ) ||
             is_assignable_to(dt, bt)
+          }
           _ => is_assignable_to(dt, bt)
         }
       _ => is_assignable_to(dt, bt)
@@ -37216,6 +37882,7 @@ fn check_module_function_bodies_layered(
   type_modules : Array[@ast.TsModule],
   extra_globals : Array[(String, @ast.TsType)],
   backstops~ : RootNameBackstops? = None,
+  namespace_type_aliases~ : Array[(String, String)] = [],
 ) -> Array[ExprIssue] {
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
@@ -37315,6 +37982,7 @@ fn check_module_function_bodies_layered(
       )
     }
   }
+  Resolver::alias_namespace_import_types(resolver, namespace_type_aliases)
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
   // `@strict: ...` directive, so they inherit. Reuses the same root
@@ -38642,6 +39310,7 @@ fn check_module_function_bodies_layered(
       type_modules,
       extra_globals,
       backstops=Some(nested_backstops),
+      namespace_type_aliases~,
     )
     let prefix = if ns.name == "<global>" {
       "declare global"
