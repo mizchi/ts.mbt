@@ -781,7 +781,37 @@ fn Resolver::ingest_type_module(
       }
     }
   }
+  // A module-scoped TOP-LEVEL declaration of another module is visible here
+  // only through an import, yet this ingestion registers it at its bare
+  // name — and where that name is a lib global type it SHADOWED the lib for
+  // the whole program. effect declares `export type Error<T> = T extends
+  // Effect<…> ? … : never` in ten modules, so every `e.message` on a lib
+  // `Error` read the conditional alias and reported "property `message`
+  // does not exist on `Error`". Such a name cannot be what an unqualified
+  // reference elsewhere means, so it is left out; a `declare global`
+  // augmentation is a namespace, not a top-level declaration, and still
+  // merges. The qualified spelling (`Effect.Error`) loses its entry with
+  // it and abstains as an unresolved name.
+  let shadows_lib : Map[String, Unit] = Map([])
+  for i in module_.interfaces {
+    if is_lib_global_type(i.name) {
+      shadows_lib[i.name] = ()
+    }
+  }
+  for a in module_.type_aliases {
+    if is_lib_global_type(a.name) {
+      shadows_lib[a.name] = ()
+    }
+  }
+  for c in module_.classes {
+    if is_lib_global_type(c.name) {
+      shadows_lib[c.name] = ()
+    }
+  }
   for name, interface_ in types.interfaces {
+    if shadows_lib.contains(name) {
+      continue
+    }
     match r.interfaces.get(name) {
       Some(existing) =>
         r.interfaces[name] = merge_interfaces(existing, interface_)
@@ -789,9 +819,15 @@ fn Resolver::ingest_type_module(
     }
   }
   for name, class_ in types.classes {
+    if shadows_lib.contains(name) {
+      continue
+    }
     Resolver::put_class(r, name, class_)
   }
   for name, alias_ in types.type_aliases {
+    if shadows_lib.contains(name) {
+      continue
+    }
     r.type_aliases[name] = alias_
   }
   for name, enum_ in types.enums {
@@ -13967,49 +14003,10 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
   match resolver.unwrap(ty) {
     Intersection(_) | TypeOf(_) => true
     Named(n) | Applied(n, _) =>
-      (
-        resolver.classes.get(n) is Some(_) &&
-        class_chain_has_unresolved_base(n, resolver)
-      ) ||
-      iface_chain_reaches_lib_type(n, resolver)
+      resolver.classes.get(n) is Some(_) &&
+      class_chain_has_unresolved_base(n, resolver)
     _ => false
   }
-}
-
-///|
-/// True when an interface's `extends` chain — itself included — reaches a
-/// LIB type the resolver only sees part of. `declare global { interface
-/// Error { … } }` is how a library augments a lib type, and it leaves the
-/// resolver holding the augmentation's members and none of the lib's, so
-/// `e.message` on effect's `Error` read as missing; an interface extending
-/// an un-augmented lib `Error` has the same hole one level up. A miss
-/// against such a shape abstains, which is the affordable direction.
-fn iface_chain_reaches_lib_type(name : String, resolver : Resolver) -> Bool {
-  // Only a chain that STARTS at an interface the program declares or
-  // augments: a plain `Array` / `Promise` / `string` receiver is modeled by
-  // the lib member tables and must keep reporting a missing member.
-  if resolver.interfaces.get(name) is None {
-    return false
-  }
-  let seen : Map[String, Unit] = Map([])
-  let stack = [name]
-  while stack.pop() is Some(n) {
-    if seen.contains(n) {
-      continue
-    }
-    seen[n] = ()
-    if is_lib_global_type(n) && resolver.classes.get(n) is None {
-      return true
-    }
-    match resolver.interfaces.get(n) {
-      Some(i) =>
-        for b in i.extends_names {
-          stack.push(b)
-        }
-      None => ()
-    }
-  }
-  false
 }
 
 ///|
@@ -19562,7 +19559,24 @@ fn collect_narrowing(
                 resolver.lookup_field(v, key) is Some(_)
               })
               match then_ty {
-                Never => ()
+                // TypeScript 4.9 narrows a receiver that does NOT declare
+                // the key to one that does: `"then" in u` on an `object` or
+                // `unknown` is `object & Record<"then", unknown>`, which is
+                // the whole point of the spelling (effect's
+                // `"catch" in input && isFunction(input.catch)`). Only the
+                // record-ish shapes take it; a union whose members all lack
+                // the key is left alone.
+                Never =>
+                  match cur {
+                    NonPrimitiveObject | Unknown =>
+                      pair_pos.push((name, Object([(Literal(key), Unknown)])))
+                    Object(fields) => {
+                      let out = fields.copy()
+                      out.push((Literal(key), Unknown))
+                      pair_pos.push((name, Object(out)))
+                    }
+                    _ => ()
+                  }
                 _ => pair_pos.push((name, then_ty))
               }
               let else_ty = narrow_remove(cur, fn(v) {
@@ -19747,6 +19761,64 @@ fn apply_type_predicate_narrowing(
     Some(Func(_, TypePredicate(param_name, target))) =>
       Some((param_name, target))
     _ => None
+  }
+  // An OVERLOADED predicate value — effect's `hasProperty: { <P>(property:
+  // P): (self: unknown) => self is …; <P>(self: unknown, property: P): self
+  // is … }`, a `const` with an object type of call signatures rather than a
+  // function declaration — had no route here at all, so `if
+  // (hasProperty(u, "then")) u.then` read `u` as `unknown`. The member is
+  // the one whose arity matches the call and whose return is a predicate;
+  // call-signature types carry no parameter names, so the predicate's
+  // subject is taken as the FIRST parameter, which it is in every spelling
+  // of this idiom, and only a `Var` first argument is narrowed.
+  let overloaded_predicate = match predicate {
+    Some(_) => None
+    None =>
+      match resolver.globals.get(callee_name) {
+        Some(ty) => {
+          let mut found : @ast.TsType? = None
+          for f in collect_declared_fields(ty, resolver) {
+            if f.0 != "<call>" {
+              continue
+            }
+            match resolver.unwrap(f.1) {
+              Func(ps, TypePredicate(_, target)) if ps.length() == args.length() => {
+                found = Some(target)
+                break
+              }
+              _ => ()
+            }
+          }
+          found
+        }
+        None => None
+      }
+  }
+  match overloaded_predicate {
+    Some(target) => {
+      match args.get(0) {
+        Some(Var(arg_name)) => {
+          let cur = env_lookup_full(env, resolver, arg_name)
+          let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+          pair_pos.push(
+            (
+              arg_name,
+              match cur {
+                Any | Unknown => target
+                _ =>
+                  match then_ty {
+                    Never => @ast.TsType::Intersection([cur, target])
+                    _ => then_ty
+                  }
+              },
+            ),
+          )
+        }
+        _ => ()
+      }
+      return
+    }
+    None => ()
   }
   match predicate {
     None => return
