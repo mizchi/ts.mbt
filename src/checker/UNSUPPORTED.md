@@ -1,10 +1,10 @@
 # What the checker does NOT flag
 
-Measured on 2026-09-20, after batches EU–FH:
+Measured on 2026-11-12, after batches EU–FN:
 
 ```
-TP  err+flag  : 2671   (of which via parse rejection: 390)
-MISS in scope : 44     (the backlog — this one can reach zero)
+TP  err+flag  : 2670   (of which via parse rejection: 390)
+MISS in scope : 45     (the backlog — this one can reach zero)
 OUT OF SCOPE  : 19     (declared in scripts/checker_out_of_scope.txt)
 FP  ok +flag  : 0      (soundness bugs — TS7 accepts these)
 PFLEGAL       : 0      (parser rejects TS7-legal files — parser bugs)
@@ -82,7 +82,7 @@ Two rules for reading the output, both learned the hard way:
 
 ---
 
-## 1. The 44 in-scope MISS files, by machinery
+## 1. The 45 in-scope MISS files, by machinery
 
 Paths are relative to `typescript/tests/cases/conformance/`. The code is
 what the local compiler reports on the file; where a rule was already
@@ -140,7 +140,7 @@ function f<A extends object>(a: A, sa: Something<A>) {
 | `types/conditional/conditionalTypesExcessProperties` | TS2322 | a conditional left UNRESOLVED inside an intersection cannot be projected to a field shape, so the excess-property check has no target. Batches DI–DM made a conditional resolve through a generic alias; the composition with `&` still abstains |
 | `types/conditional/inferTypesInvalidExtendsDeclaration` | TS2304 | **REJECTED after instrumenting** (batch EI): the type parser REDUCES `T extends infer A extends B ? …` when it can decide the relation, so the checker receives the bare `Number` and neither `A` nor its bound `B` survives to be resolved |
 
-### 1c. Object literals, contextual typing, widening — 9 files
+### 1c. Object literals, contextual typing, widening — 10 files
 
 | file | tsc | what is needed |
 |---|---|---|
@@ -153,6 +153,7 @@ function f<A extends object>(a: A, sa: Something<A>) {
 | `expressions/contextualTyping/superCallParameterContextualTyping2` | TS2349 | the parameter of an arrow passed to `super(...)` typed contextually from the base constructor, so `new Number()` inside it is not callable |
 | `statements/for-ofStatements/ES5For-of8` | TS2322 | return-type inference from a function BODY: `function foo() { return { x: 0 } }` has no resolved return type here at all (`const bad: string = foo().x` is silent too) |
 | `types/tuple/wideningTuples7` | TS7010 | TS7010 on a function EXPRESSION at a `var` initializer; the same shape reports for a function DECLARATION |
+| `types/literal/literalTypesWidenInParameterPosition` | TS2322 | NUMERIC literal types: `infer_expr` erases `NumberLit(_)` to `number` (see §3). Batch FI moved it here from TP — it had been flagged only by a readonly-in-constructor report that was itself a false positive |
 
 ### 1d. Narrowing and control flow — 4 files
 
@@ -286,6 +287,37 @@ Each entry names the LEGAL neighbour that decides it. None is a bug.
 | `{ [P in string]: P }` — a mapped type whose VALUE mentions the binder | — | The infinite-key reduction (batch EX) requires the value to be independent of the key, because a HOMOMORPHIC mapped type over `any` yields `any` and not a shape. Reporting it cost two TS7-accepted files before the guard existed |
 | `A & B` assigned to `A` | — | LEGAL, and the reason the intersection-source rule (batch EY) is restricted to an index-signature target: `is_assignable_to` is resolver-free and cannot expand a `Named` target structurally, so the unrestricted version reported four legal shapes at the same +1 conformance file |
 | a CONSTRUCT / CALL signature's own type parameters in an object type | — | Not carried. Wrapping them in `GenericFunc` cost a true positive outright (`genericCallWithOverloadedConstructorTypedArguments2`, all `new <T>(…)` members) and nothing reads them; the named-method binders that batch EV does carry are read at the call site |
+
+## 4a. Real code — what is still wrong on zod
+
+The conformance numbers say nothing about real code, so this is the
+other half of the backlog. tsc accepts zod, so every diagnostic `mtsc
+<file> --noEmit` (graph mode, one run per source file under
+`node_modules/zod/src`, tests excluded) reports is a false positive.
+`typescript.d.ts`, preact's `index.d.ts` and vitest's `index.d.ts` are
+at **0** on the same path.
+
+Trend: 272 (batch EO) -> 211 (FI) -> 117 (FJ) -> 135 (FK, graph
+`--noEmit` sees more) -> 122 (FL) -> 91 (FM) -> **84** (FN).
+
+| family | count | cause |
+|---|---|---|
+| `property X does not exist on …` (`_zod`, `value`, `pattern`, …) | ~35 | mostly a type written through a NAMESPACE import (`core.$ZodObject`) is opaque in graph mode, so every inherited member is lost. Prototyped in batch FN and REVERTED: one locale file 4.1 s -> 24.3 s and ~150 new false positives, because `switch (issue.format)` narrowing does not follow an imported discriminated-union alias |
+| arity (`expected N argument(s), got M`) | ~10 | lib signatures and overload sets still read one declaration |
+| TS2430 through interface bound-inlining | 12 | the parser inlines an INTERFACE's type-parameter bound into its members; undoing it changes 48 generated bridge files (batch FJ), so it is blocked on a bridge decision |
+| null / assignability / flow | ~25 | one or two each: `not all paths return`, use-before-assign, `string \| undefined` into `string`, object-literal unions |
+
+### Plan, in order
+
+1. **Namespace-import type resolution.** Prerequisites, both measured in
+   batch FN: discriminant narrowing through an imported union alias, and
+   an ingestion that does not rebuild the target module once per
+   importing module.
+2. **Variadic tuples** (`[...T]`, `[string, ...number[]]`) — the most
+   visible BLIND row in §2 and `variadicTuples3` in §1b.
+3. **Return-type inference from a function BODY** — `function foo() {
+   return { x: 0 } }` has no resolved return type (`ES5For-of8`, §1c),
+   which real code hits constantly.
 
 ## 4. Out of scope — 19 files
 
