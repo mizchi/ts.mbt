@@ -218,3 +218,28 @@ test "Array.isArray narrows a union to its array members" {
   assert_false(lf_has(issues, "ok2"))
   assert_true(lf_has(issues, "bad"))
 }
+
+///|
+test "variadic tuples: literals, rest-parameter tuples and indexing" {
+  // Every `bad*` is an error in tsc and every `ok*` is accepted (probed).
+  let src =
+    #|function ok1(): unknown { const x: [string, ...number[]] = ["a", 1, 2]; return x; }
+    #|function ok2(): unknown { const x: [...string[], number] = ["a", 2]; return x; }
+    #|function ok3(xs: readonly [string, number]): unknown { const y: [string, number, boolean] = [...xs, true]; return y; }
+    #|function ok4(xs: [string, ...number[]]): unknown { const a: string = xs[0]; const b: number = xs[3]; return [a, b]; }
+    #|function gen<T extends unknown[]>(...args: [...T, number]): T { return null as any; }
+    #|function ok5(): unknown { const r: [string] = gen("a", 1); return r; }
+    #|function two(...args: [string, number]): void {}
+    #|function ok6(): void { two("a", 1); }
+    #|function bad1(): unknown { const x: [string, ...number[]] = ["a", "b"]; return x; }
+    #|function bad2(): unknown { const x: [...string[], number] = ["a", "b"]; return x; }
+    #|function bad3(xs: [string, ...number[]]): unknown { const z: string = xs[1]; return z; }
+    #|function bad4(): void { two("a", "b"); }
+  let issues = lf_issues(src)
+  for f in ["ok1", "ok2", "ok3", "ok4", "ok5", "ok6"] {
+    assert_false(lf_has(issues, f), msg=f)
+  }
+  for f in ["bad1", "bad2", "bad3", "bad4"] {
+    assert_true(lf_has(issues, f), msg=f)
+  }
+}

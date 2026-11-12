@@ -9240,6 +9240,20 @@ fn infer_expr_inner(
             for a in args {
               let _ = infer_expr(env, resolver, a)
             }
+            // The parser inlines a function's bounded type parameter, so
+            // a return of `T` with `T extends unknown[]` arrives as the
+            // bound itself and no binding can reach it: `h<T extends
+            // unknown[]>(...args: [...T, number]): T` "returned"
+            // `unknown[]`, which `const r: [string] = h("a", 1)` then
+            // rejected on a line tsc accepts. A return that IS a bound is
+            // an instantiation this cannot compute, so it abstains.
+            match resolver.func_type_param_bounds.get(name) {
+              Some(bounds) =>
+                if bounds.iter().any(fn(b) { b.1 == ret }) {
+                  return @ast.TsType::Any
+                }
+              None => ()
+            }
             return substitute_params(ret, bindings)
           }
           _ => ()
@@ -10522,6 +10536,18 @@ fn infer_call(
   for a in args {
     let _ = infer_expr(env, resolver, a)
   }
+  // The `Call` arm's abstention, for the callee that arrives as a VALUE
+  // (`declare function h<T extends unknown[]>(…): T`): a return that is
+  // exactly one of the binders' inlined bounds is an instantiation this
+  // cannot compute. Read before `unwrap`, which peels the wrapper.
+  match callee {
+    GenericFunc(_, bounds, Func(_, ret))
+    | GenericFunc(_, bounds, CallableMeta(Func(_, ret), _)) =>
+      if bounds.iter().any(fn(b) { b.1 == ret }) {
+        return @ast.TsType::Any
+      }
+    _ => ()
+  }
   let callee = resolver.unwrap(callee)
   match callee {
     // `paramName is T` is a boolean at the value level — calls to a type
@@ -10712,6 +10738,46 @@ fn infer_index(
             _ => elem // arr[i] for any index still yields elem type
           }
       }
+    // A VARIADIC tuple (`[string, ...number[]]`): a literal index before
+    // the rest slot is that element; at or after it the position depends
+    // on the runtime length, so it is the rest's element type joined with
+    // every fixed element after it. The plain arm below returned the raw
+    // `Rest(...)` slot itself, which then reached assignability as a type
+    // nothing could match.
+    Tuple(items) if items.iter().any(fn(t) { t is Rest(_) }) => {
+      let mut rest_at = 0
+      for i, t in items {
+        if t is Rest(_) {
+          rest_at = i
+          break
+        }
+      }
+      let lit : Int32? = match idx_expr {
+        IntLit(i) => Some(i)
+        NumberLit(d) => Some(d.to_int())
+        _ => None
+      }
+      match lit {
+        Some(i) if i >= 0 && i < rest_at => return items[i]
+        _ => ()
+      }
+      let start = match lit {
+        Some(i) if i >= rest_at => rest_at
+        _ => 0
+      }
+      let parts : Array[@ast.TsType] = []
+      for k in start..<items.length() {
+        match items[k] {
+          Rest(_) as r =>
+            match rest_element_type(r) {
+              Some(e) => parts.push(e)
+              None => return @ast.TsType::Any
+            }
+          t => parts.push(t)
+        }
+      }
+      union_of(parts)
+    }
     Tuple(items) =>
       match idx_expr {
         IntLit(i) if i >= 0 && i < items.length() => items[i]
@@ -13854,47 +13920,100 @@ fn check_array_lit_against_tuple(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
-  let mut has_spread = false
-  for it in items {
-    match it {
-      Spread(_) => has_spread = true
-      _ => ()
+  // Elements before the first spread are the only ones whose POSITION is
+  // known: `[...xs, true]` puts `true` at an index that depends on
+  // `xs`'s length, so judging it against `slots[1]` (and judging the
+  // spread itself against `slots[0]`, as this did) compared the wrong
+  // pairs — `[...xs, true]` against `[string, number, boolean]` with
+  // `xs: [string, number]` reported two errors on a line tsc accepts.
+  let mut first_spread = items.length()
+  for i, it in items {
+    if it is Spread(_) && first_spread == items.length() {
+      first_spread = i
     }
   }
-  // A `...rest` slot in the *target* tuple (`[a, ...b[]]`) makes its length
-  // open-ended, so a count mismatch is not an error. Optional trailing slots
-  // (`[a, b?]`) similarly make a *shorter* literal valid — but never a *longer*
-  // one, so supplying more elements than a fixed-length tuple has is always an
-  // error (marked `(too many)` so the permissive filter can keep it in
-  // call-argument position, where the "too few" case stays suppressed).
-  let mut has_rest_slot = false
-  for s in slots {
-    if s is Rest(_) {
-      has_rest_slot = true
+  let has_spread = first_spread < items.length()
+  // At most one rest slot (`[a, ...b[]]`, `[...a[], b]`, `[a, ...T, b]`).
+  let mut rest_at = -1
+  for i, s in slots {
+    if s is Rest(_) && rest_at < 0 {
+      rest_at = i
     }
   }
-  if !has_spread && !has_rest_slot && items.length() != slots.length() {
-    let excess = if items.length() > slots.length() {
-      " (too many)"
+  if rest_at < 0 {
+    // A fixed-length target. Optional trailing slots (`[a, b?]`) make a
+    // SHORTER literal valid — but never a longer one, so supplying more
+    // elements than a fixed-length tuple has is always an error (marked
+    // `(too many)` so the permissive filter can keep it in call-argument
+    // position, where the "too few" case stays suppressed).
+    if !has_spread && items.length() != slots.length() {
+      let excess = if items.length() > slots.length() {
+        " (too many)"
+      } else {
+        ""
+      }
+      record(
+        ctx,
+        sub_path,
+        "expected tuple of \{slots.length()} element(s), got \{items.length()}\{excess}",
+      )
+    }
+    let n = if first_spread < slots.length() {
+      first_spread
     } else {
-      ""
+      slots.length()
     }
+    for i in 0..<n {
+      check_expr_against(env, items[i], slots[i], ctx, "\{sub_path}[\{i}]")
+    }
+    return
+  }
+  // A variadic target: the fixed PREFIX aligns from the front, the fixed
+  // SUFFIX from the back, and whatever is left in between belongs to the
+  // rest slot. tsc aligns exactly this way, which is what makes
+  // `["a", "b"]` against `[string, ...number[]]` an error on "b" and
+  // `[..."a", 2]` against `[...string[], number]` legal.
+  let prefix = rest_at
+  let suffix = slots.length() - rest_at - 1
+  // The prefix is judged up to the first spread; with a spread nothing
+  // after it has a known position, so the suffix and the middle are left.
+  let prefix_n = if prefix < first_spread { prefix } else { first_spread }
+  for i in 0..<prefix_n {
+    check_expr_against(env, items[i], slots[i], ctx, "\{sub_path}[\{i}]")
+  }
+  if has_spread {
+    return
+  }
+  if items.length() < prefix + suffix {
+    // Too few for the fixed part. Kept the same `got N` shape as the
+    // fixed-length arm so the permissive filter treats it identically.
     record(
       ctx,
       sub_path,
-      "expected tuple of \{slots.length()} element(s), got \{items.length()}\{excess}",
+      "expected tuple of at least \{prefix + suffix} element(s), got \{items.length()}",
+    )
+    return
+  }
+  let suffix_start = items.length() - suffix
+  for k in 0..<suffix {
+    let i = suffix_start + k
+    check_expr_against(
+      env,
+      items[i],
+      slots[rest_at + 1 + k],
+      ctx,
+      "\{sub_path}[\{i}]",
     )
   }
-  let n = if items.length() < slots.length() {
-    items.length()
-  } else {
-    slots.length()
-  }
-  let mut i = 0
-  while i < n {
-    let sub = "\{sub_path}[\{i}]"
-    check_expr_against(env, items[i], slots[i], ctx, sub)
-    i = i + 1
+  // The middle against the rest's ELEMENT type, only when the rest is a
+  // plain array (`...number[]`). A rest of a type parameter or a nested
+  // tuple (`...T`, `...[a, b]`) has no single element type to judge by.
+  match rest_element_type(slots[rest_at]) {
+    Some(elem) =>
+      for i in prefix..<suffix_start {
+        check_expr_against(env, items[i], elem, ctx, "\{sub_path}[\{i}]")
+      }
+    None => ()
   }
 }
 
@@ -17414,6 +17533,39 @@ fn check_arguments_with_sig(
     }
     idx
   }
+  // A rest parameter typed as a TUPLE (`...args: [string, number]`,
+  // `...args: [...T, number]`) is POSITIONAL: the arguments from the rest
+  // index on are that tuple's elements, so they are judged the way an
+  // array literal against the tuple is. Joining every slot into one
+  // union both missed `g("a", "b")` against `[string, number]` and, with
+  // a variadic slot in the tuple, judged every argument against a raw
+  // `Rest(...)` member nothing could match.
+  let rest_tuple : Array[@ast.TsType]? = if rest_index >= 0 &&
+    rest_index < params.length() {
+    match params[rest_index] {
+      Rest(Tuple(parts)) | Tuple(parts) => Some(parts)
+      _ => None
+    }
+  } else {
+    None
+  }
+  match rest_tuple {
+    Some(parts) if rest_index <= args.length() =>
+      if first_spread < 0 || first_spread >= rest_index {
+        let tail : Array[@ast.TsExpr] = []
+        for k in rest_index..<args.length() {
+          tail.push(args[k])
+        }
+        check_array_lit_against_tuple(
+          env,
+          tail,
+          parts,
+          ctx,
+          "\{call_path} rest arg",
+        )
+      }
+    _ => ()
+  }
   let mut i = 0
   while i < args.length() {
     if first_spread >= 0 && i >= first_spread {
@@ -17421,7 +17573,9 @@ fn check_arguments_with_sig(
     }
     let sub_path = "\{call_path} arg[\{i}]"
     if rest_index >= 0 && i >= rest_index {
-      check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
+      if rest_tuple is None {
+        check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
+      }
     } else if i < params.length() {
       check_generator_arg_treturn(ctx, args[i], params[i], sub_path)
       check_expr_against(
