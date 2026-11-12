@@ -19060,18 +19060,20 @@ test "checker: assignment-form for-of target, all three spellings (batch DY)" {
       "declare let n: number;\nfor (n of [\"a\", \"b\"]) { }", "declare const o: { x: number };\nfor (o.x of [\"a\", \"b\"]) { }",
       "declare const arr: number[];\nfor (arr[0] of [\"a\", \"b\"]) { }", "declare function foo(): { x: number };\nfor (foo().x of [\"a\", \"b\"]) { }",
       "function foo(): { x: number } { return { x: 0 }; }\nfor (foo().x of [\"a\", \"b\"]) { }",
+      // The corpus file's own shape: an un-annotated `foo()`. Its return
+      // type is inferred from the body since batch FO, and tsc reports it
+      // (`ES5For-of8`); this used to sit in the silent list below, which
+      // was pinning the gap.
+       "function foo() { return { x: 0 }; }\nfor (foo().x of [\"a\", \"b\"]) { }",
     ] {
     assert_true(issues(src) > 0)
   }
   // Silent: a matching target type, `any`, and a union that admits the
-  // element type. Plus the shape the corpus file actually has — an
-  // un-annotated `foo()`, whose return type does not resolve, so this
-  // abstains rather than guessing.
+  // element type.
   for
     src in [
       "declare const o: { x: string };\nfor (o.x of [\"a\", \"b\"]) { }", "declare const arr: string[];\nfor (arr[0] of [\"a\", \"b\"]) { }",
       "declare const o: { x: any };\nfor (o.x of [\"a\", \"b\"]) { }", "declare const o: { x: string | number };\nfor (o.x of [\"a\", \"b\"]) { }",
-      "function foo() { return { x: 0 }; }\nfor (foo().x of [\"a\", \"b\"]) { }",
     ] {
     @test.assert_eq(issues(src), 0)
   }

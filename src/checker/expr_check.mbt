@@ -13950,7 +13950,19 @@ fn check_array_lit_against_tuple(
     // elements than a fixed-length tuple has is always an error (marked
     // `(too many)` so the permissive filter can keep it in call-argument
     // position, where the "too few" case stays suppressed).
-    if !has_spread && items.length() != slots.length() {
+    // A slot written `T?` is stored as `T | undefined` (the parser wraps
+    // it), and a literal may stop before the optional tail:
+    // `[1]` against `[number, string?]` is legal. The explicit
+    // `[number, string | undefined]` is the same node and is tolerated
+    // too, which costs that spelling's MISS.
+    let mut required = slots.length()
+    while required > 0 &&
+          slots[required - 1] is Union(parts) &&
+          parts.iter().any(fn(p) { p is Undefined }) {
+      required = required - 1
+    }
+    if !has_spread &&
+      (items.length() > slots.length() || items.length() < required) {
       let excess = if items.length() > slots.length() {
         " (too many)"
       } else {
