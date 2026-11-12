@@ -236,16 +236,18 @@ checker-miss-buckets *ARGS:
 # literal types `infer_expr` does not keep. A correct fix losing a file
 # that was flagged for the wrong reason is a MISS, not a regression.
 #
-# And again, 45 -> 46, for the same reason: `conditionalTypes1` was a TP
+# And it lost one more, for the same reason: `conditionalTypes1` was a TP
 # only because `NonNullable<T["x"]>` did not resolve — the same gap that
 # also reported `let s2: string = y`, which tsc ACCEPTS. Once the
 # distributive conditional resolves (batch FO), the one real error left
 # is `x = y; let s1: string = x` with `x: T["x"]`, and the parser inlines
 # a function's bound, so that is the same node as legal code over a
-# concrete `string | undefined`.
+# concrete `string | undefined`. The same batch then took `ES5For-of8`
+# (return-type inference from a function BODY), so the budget is back at
+# 45 with one file traded for another.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 46
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 45
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

@@ -1535,7 +1535,11 @@ fn Resolver::ingest_module(
         String_ => @ast.TsType::String_
         Boolean => @ast.TsType::Boolean
         BigInt => @ast.TsType::BigInt
-        _ => @ast.TsType::Any
+        _ =>
+          match infer_body_return_type(fenv, r, f.body) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
       }
     } else {
       f.return_type
@@ -16532,6 +16536,206 @@ fn infer_arrow_body_with_params(
       }
     }
     _ => infer_expr(outer, resolver, callback)
+  }
+}
+
+///|
+/// The return type tsc infers for an unannotated function body, when it
+/// can be computed WITHOUT guessing. `infer_block_return` reads only the
+/// block's own top-level `return`s, which is right for the callback
+/// positions it serves and wrong as a declaration's type: `if (a) return
+/// 1; return undefined` came back `undefined`. So every `return` is
+/// collected here, at any depth short of a nested function (a function
+/// body is an expression, which this walk never enters), and the result
+/// is adopted only when EVERY return infers to a type built from
+/// primitives, literals, object and array shapes or declared names.
+/// Literals widen the way a return position widens them (`return "a"`
+/// is `string`), and a body whose end is reachable gains `undefined`,
+/// since that is what falling off the end returns. Anything else is
+/// `None`, and the caller keeps `any` — the old answer.
+fn infer_body_return_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  body : @ast.TsBlock,
+) -> @ast.TsType? {
+  let returns : Array[@ast.TsExpr?] = []
+  fn walk(stmts : Array[@ast.TsStmt], out : Array[@ast.TsExpr?]) -> Unit {
+    for st in stmts {
+      match st {
+        Return(e) => out.push(e)
+        If(_, t, e) => {
+          walk(t.stmts, out)
+          match e {
+            Some(b) => walk(b.stmts, out)
+            None => ()
+          }
+        }
+        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+          walk(b.stmts, out)
+        For(_, _, _, b)
+        | ForOf(_, _, _, _, b)
+        | ForAwaitOf(_, _, _, _, b)
+        | ForIn(_, _, _, _, b) => walk(b.stmts, out)
+        Try(t, _, c, f) => {
+          walk(t.stmts, out)
+          match c {
+            Some(b) => walk(b.stmts, out)
+            None => ()
+          }
+          match f {
+            Some(b) => walk(b.stmts, out)
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            walk(c.body.stmts, out)
+          }
+        Label(_, inner) => walk([inner], out)
+        _ => ()
+      }
+    }
+  }
+
+  walk(body.stmts, returns)
+  if returns.length() == 0 {
+    return None
+  }
+  // The top-level locals are what a return expression's names mean; a
+  // name bound only in a nested block infers as `any` and makes the whole
+  // answer decline below, which is the safe direction.
+  let added : Array[String] = []
+  for stmt in body.stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(name), declared, init)
+      | Let(@ast.TsBinding::Ident(name), declared, init)
+      | Const(@ast.TsBinding::Ident(name), declared, init) =>
+        if env.lookup(name) is None {
+          let ty = if is_checkable(declared) {
+            declared
+          } else {
+            binding_init_type(
+              !(stmt is Const(_, _, _)),
+              is_fresh_literal_expr(init),
+              infer_expr(env, resolver, init),
+            )
+          }
+          if is_checkable(ty) {
+            env.bind(name, ty)
+            added.push(name)
+          }
+        }
+      _ => ()
+    }
+  }
+  let parts : Array[@ast.TsType] = []
+  let mut ok = true
+  for r in returns {
+    let t = match r {
+      Some(e) => widen_literal_deep(infer_expr(env, resolver, e))
+      None => @ast.TsType::Undefined
+    }
+    if !return_type_trustworthy(resolver, t, 0) {
+      ok = false
+      break
+    }
+    parts.push(t)
+  }
+  for name in added {
+    let _ = env.vars.remove(name)
+    let _ = env.declared.remove(name)
+  }
+  if !ok {
+    return None
+  }
+  // Whether falling off the end is possible decides an `| undefined`,
+  // and guessing wrong either way costs: a missing `undefined` is a type
+  // narrower than tsc's, and an extra one makes `const n: number = f()`
+  // a false positive when every path returns. So the answer is three
+  // valued and an unknown one abstains.
+  match end_reachable(body.stmts) {
+    Some(true) => parts.push(@ast.TsType::Undefined)
+    Some(false) => ()
+    None => return None
+  }
+  let flat : Array[@ast.TsType] = []
+  for p in parts {
+    for c in union_components(p) {
+      if !flat.contains(c) {
+        flat.push(c)
+      }
+    }
+  }
+  Some(union_of(flat))
+}
+
+///|
+/// Can control fall off the end of `stmts`? `Some(true)` definitely,
+/// `Some(false)` definitely not, `None` when this cannot tell (a loop, a
+/// `switch`, a `try`): the caller abstains on `None`.
+fn end_reachable(stmts : Array[@ast.TsStmt]) -> Bool? {
+  match stmts.last() {
+    None => Some(true)
+    Some(Return(_)) | Some(Throw(_)) => Some(false)
+    Some(If(_, _, None)) => Some(true)
+    Some(If(_, t, Some(e))) =>
+      match (end_reachable(t.stmts), end_reachable(e.stmts)) {
+        (Some(true), _) | (_, Some(true)) => Some(true)
+        (Some(false), Some(false)) => Some(false)
+        _ => None
+      }
+    Some(Block(b)) => end_reachable(b.stmts)
+    Some(Expr(_))
+    | Some(Var(_, _, _))
+    | Some(Let(_, _, _))
+    | Some(Const(_, _, _))
+    | Some(Assign(_, _))
+    | Some(CompoundAssign(_, _, _))
+    | Some(IndexAssign(_, _, _))
+    | Some(PropAssign(_, _, _))
+    | Some(Empty) => Some(true)
+    _ => None
+  }
+}
+
+///|
+fn return_type_trustworthy(
+  resolver : Resolver,
+  t : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if depth > 6 {
+    return false
+  }
+  match t {
+    Number
+    | Int
+    | String_
+    | Boolean
+    | BigInt
+    | Symbol
+    | Undefined
+    | Null
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_) => true
+    Array(e) => return_type_trustworthy(resolver, e, depth + 1)
+    Union(items) =>
+      items
+      .iter()
+      .all(fn(x) { return_type_trustworthy(resolver, x, depth + 1) })
+    Object(fields) =>
+      fields.length() > 0 &&
+      fields
+      .iter()
+      .all(fn(f) {
+        f.0 is Literal(_) && return_type_trustworthy(resolver, f.1, depth + 1)
+      })
+    Named(n) =>
+      resolver.interfaces.contains(n) ||
+      resolver.classes.contains(n) ||
+      resolver.enums.contains(n)
+    _ => false
   }
 }
 
