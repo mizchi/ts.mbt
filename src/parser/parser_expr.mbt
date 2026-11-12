@@ -1315,16 +1315,15 @@ fn Parser::parse_postfix(self : Parser) -> @ast.TsExpr raise ParseError {
 
 ///|
 fn is_instantiation_expr_target(expr : @ast.TsExpr) -> Bool {
-  let is_upper_initial = fn(name : String) -> Bool {
-    if name.length() == 0 {
-      return false
-    }
-    let c = name[0].to_int().unsafe_to_char()
-    c >= 'A' && c <= 'Z'
-  }
+  // TypeScript decides an instantiation expression by the token AFTER the
+  // `>` (`canFollowTypeArgumentsInExpression`), never by the target's
+  // spelling, and the follower set at the only call site is that rule's
+  // "cannot start an expression" half. Requiring an upper-case initial
+  // rejected effect's `effect.failCause<Error>,` (a lower-case property
+  // read with explicit type arguments) as a parse error, which failed
+  // `Schedule.ts` and with it every module importing it.
   match expr {
-    Var(name) => is_upper_initial(name)
-    PropAccess(_, prop) => is_upper_initial(prop)
+    Var(_) | PropAccess(_, _) => true
     _ => false
   }
 }

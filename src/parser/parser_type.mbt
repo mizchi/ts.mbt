@@ -1215,6 +1215,15 @@ fn Parser::try_parse_simple_type_args(self : Parser) -> Array[@ast.TsType]? {
   let args : Array[@ast.TsType] = []
   try {
     let _ = self.expect(Lt)
+    // TS1099: `f<>` / `Array<>` — an EMPTY type argument list is always an
+    // error. It used to be caught only by accident, as a parse failure of
+    // a lower-case instantiation expression (`fx<>;`), which went away
+    // once that spelling parsed.
+    if self.check(Gt) {
+      let _ = self.advance()
+      self.grammar_misuses.push("type argument list cannot be empty")
+      return Some(args)
+    }
     while !self.check(Eof) {
       args.push(self.parse_type())
       if self.match_(Comma) {
@@ -1354,7 +1363,15 @@ fn Parser::parse_named_type_tail(
     let next_name = self.parse_binding_ident()
     full_name = full_name + "." + next_name
   }
-  if self.check(Lt) {
+  // A type reference takes type arguments only when the `<` is on the
+  // SAME line: tsc's `parseTypeReference` checks
+  // `!scanner.hasPrecedingLineBreak()`. Without that, an object type whose
+  // call signatures are separated by newlines rather than `;` — effect's
+  // `dual: { <A>(…): A \n <B>(…): B }`, the commonest way a `.ts` library
+  // spells an overload set — read the second signature's `<B>` as type
+  // arguments of the first one's return type, and the whole literal
+  // failed with "`;` expected".
+  if self.check(Lt) && !self.has_line_terminator_before() {
     match self.try_parse_simple_type_args() {
       Some(type_args) => Applied(full_name, type_args)
       None => {
@@ -1784,7 +1801,18 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
           "cannot find name `await`. Did you mean `Awaited`?",
         )
       }
-      match self.local_type_param_bound(name) {
+      // `P.Member` is a QUALIFIED name, and its first segment resolves as a
+      // namespace even where a type parameter spells the same name —
+      // effect's Schema writes `TypeParameters.Encoded<TypeParameters>`
+      // inside `interface Declaration<…, TypeParameters extends …>`, beside
+      // `namespace TypeParameters`. Inlining the bound first left the `.`
+      // for the type grammar to choke on ("Expected RParen, got Colon").
+      let bound = if self.check(Dot) {
+        None
+      } else {
+        self.local_type_param_bound(name)
+      }
+      match bound {
         // A `T extends object` bound erases to `Any`, not `NonPrimitiveObject`:
         // the constraint promises "some object type", so treating a value of
         // type `T` as the bare `object` surface would let member-existence
