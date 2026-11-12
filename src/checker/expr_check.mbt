@@ -223,6 +223,9 @@ priv struct Resolver {
   // "is any", since it says nothing about annotated or initialized
   // bindings.
   any_uninitialized_values : Map[String, Bool]
+  // Top-level `var` / `let` / `const` names bound WITH an initializer (see
+  // `check_untyped_call_type_args`).
+  initialized_top_level_names : Map[String, Unit]
   // `class C extends B<A1, A2>`: the type arguments of each heritage edge,
   // keyed by `class_base_key(class key, base name)`. The base chain is
   // otherwise walked by NAME, so a member a generic base declares as `Def`
@@ -511,6 +514,7 @@ fn Resolver::empty() -> Resolver {
     this_param_members: {},
     local_type_names: {},
     any_uninitialized_values: {},
+    initialized_top_level_names: {},
     class_base_args: {},
     class_index: ClassIndex::empty(),
     no_implicit_any: false,
@@ -5445,6 +5449,45 @@ fn Resolver::method_overload_signatures(
 }
 
 ///|
+/// How many declarations of `meth` a receiver's interface hierarchy holds,
+/// counting every shape (a generic member, an optional one, a plain one)
+/// and every base once. More than one is an overload set whatever the
+/// members look like.
+fn method_declaration_count(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> Int32 {
+  let root = match resolver.unwrap(recv) {
+    Named(n) | Applied(n, _) | Struct(n, _) => n
+    _ => return 0
+  }
+  let seen : Map[String, Unit] = Map([])
+  let stack = [root]
+  let mut count = 0
+  while stack.pop() is Some(n) {
+    if seen.contains(n) {
+      continue
+    }
+    seen[n] = ()
+    match resolver.interfaces.get(n) {
+      Some(i) => {
+        for f in i.fields {
+          if f.0 == meth {
+            count = count + 1
+          }
+        }
+        for b in i.extends_names {
+          stack.push(b)
+        }
+      }
+      None => ()
+    }
+  }
+  count
+}
+
+///|
 fn Resolver::resolve_method_overload(
   self : Resolver,
   recv : @ast.TsType,
@@ -8553,6 +8596,9 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
   }
   match (a, b) {
     (Any, _) | (_, Any) => true
+    // `unknown` is comparable to every type; `x === y` on two `unknown`
+    // values (effect's `Equal.equals`) reached the final `false`.
+    (Unknown, _) | (_, Unknown) => true
     (Never, _) | (_, Never) => true
     (Union(_), _) | (_, Union(_)) => true
     (Intersection(_), _) | (_, Intersection(_)) => true
@@ -8855,10 +8901,20 @@ fn check_binop_operands(
       }
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      // An operand whose type is EXACTLY `undefined` / `null` is almost
+      // always our flow model's answer rather than a declaration's: a
+      // `let x = undefined` reassigned later narrows to `Undefined` here
+      // (the hazard batch CY records for TS2532), and effect's
+      // `let current = undefined; … if (current === "array")` was reported
+      // as an impossible comparison. Abstaining costs
+      // `declare const u: undefined; u === "a"` as a MISS.
+      let nullish_only = fn(t : @ast.TsType) -> Bool { t is (Undefined | Null) }
       if !is_typeof(l) &&
         !is_typeof(r) &&
         !is_nullish_kw(l) &&
         !is_nullish_kw(r) &&
+        !nullish_only(lt) &&
+        !nullish_only(rt) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
         (
@@ -9436,6 +9492,18 @@ fn infer_expr_inner(
       let callee_ty = infer_expr(env, resolver, callee)
       infer_call(env, resolver, callee_ty, args)
     }
+    // A LOCAL binding of the name shadows a module class: zod's
+    // `_string(Class: util.SchemaClass<T>)` does `new Class(…)` beside its
+    // own `export abstract class Class`, and inferring the module class's
+    // instance type there reported the parameter's construct result as the
+    // wrong class. Batch EO's shadowing fix covered the abstract-
+    // instantiation CHECK and not this inference; the construct signature
+    // of the local's type is the answer, and anything else abstains.
+    New(class_name, _) if env.lookup(class_name) is Some(local) =>
+      match resolver.unwrap(local) {
+        Constructor(_, ret, _) => ret
+        _ => @ast.TsType::Any
+      }
     New(class_name, args) =>
       match resolver.lookup_constructor(class_name) {
         Some(_) =>
@@ -13899,10 +13967,49 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
   match resolver.unwrap(ty) {
     Intersection(_) | TypeOf(_) => true
     Named(n) | Applied(n, _) =>
-      resolver.classes.get(n) is Some(_) &&
-      class_chain_has_unresolved_base(n, resolver)
+      (
+        resolver.classes.get(n) is Some(_) &&
+        class_chain_has_unresolved_base(n, resolver)
+      ) ||
+      iface_chain_reaches_lib_type(n, resolver)
     _ => false
   }
+}
+
+///|
+/// True when an interface's `extends` chain — itself included — reaches a
+/// LIB type the resolver only sees part of. `declare global { interface
+/// Error { … } }` is how a library augments a lib type, and it leaves the
+/// resolver holding the augmentation's members and none of the lib's, so
+/// `e.message` on effect's `Error` read as missing; an interface extending
+/// an un-augmented lib `Error` has the same hole one level up. A miss
+/// against such a shape abstains, which is the affordable direction.
+fn iface_chain_reaches_lib_type(name : String, resolver : Resolver) -> Bool {
+  // Only a chain that STARTS at an interface the program declares or
+  // augments: a plain `Array` / `Promise` / `string` receiver is modeled by
+  // the lib member tables and must keep reporting a missing member.
+  if resolver.interfaces.get(name) is None {
+    return false
+  }
+  let seen : Map[String, Unit] = Map([])
+  let stack = [name]
+  while stack.pop() is Some(n) {
+    if seen.contains(n) {
+      continue
+    }
+    seen[n] = ()
+    if is_lib_global_type(n) && resolver.classes.get(n) is None {
+      return true
+    }
+    match resolver.interfaces.get(n) {
+      Some(i) =>
+        for b in i.extends_names {
+          stack.push(b)
+        }
+      None => ()
+    }
+  }
+  false
 }
 
 ///|
@@ -23198,10 +23305,19 @@ fn check_call_args_in_expr(
             // signature for the RETURN type, and nothing here can
             // reconstruct which one the arguments were meant for, so the
             // trade is a MISS rather than a finding.
+            // Counted over EVERY declaration of the name, generic and
+            // inherited included: `method_overload_signatures` takes only
+            // bare `Func` members of the receiver's own declaration, so
+            // effect's `Pipeable` — twenty generic `pipe` overloads
+            // reached through `interface Effect<…> extends Pipeable` —
+            // read as no overload set at all, and every `x.pipe(f)` was
+            // judged against `pipe<A>(this: A): A` as "expected 0
+            // argument(s)".
             let overloaded = ctx.resolver
               .method_overload_signatures(pruned, meth)
               .length() >
-              1
+              1 ||
+              method_declaration_count(ctx.resolver, pruned, meth) > 1
             match ctx.resolver.lookup_method_sig(pruned, meth) {
               Some(_) if overloaded => ()
               Some((params, _)) =>
@@ -32775,6 +32891,16 @@ fn check_untyped_call_type_args(ctx : CheckCtx, inner : @ast.TsExpr) -> Unit {
   let declared_any = ctx.resolver.globals.get(name) is Some(Any) ||
     ctx.resolver.any_uninitialized_values.get(name) is Some(_)
   guard declared_any else { return }
+  // An `export const f = <E>(…) => …` lands in `module_.values` too, with
+  // the `Any` of an absent annotation — the "written annotation" reading
+  // above holds only for an AMBIENT entry. A name the module binds at top
+  // level with a real initializer has its type from that initializer, so
+  // an `Any` there is this checker's inference gap: effect's
+  // `causePrettyErrors<…>(…)` and `callback<…>(…)` were reported forty
+  // times. Losing `const f: any = g; f<T>()` is the affordable MISS.
+  if ctx.resolver.initialized_top_level_names.get(name) is Some(_) {
+    return
+  }
   record_unfiltered(
     ctx,
     "call `\{name}`",
@@ -36457,6 +36583,15 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // Probed per occurrence rather than enumerated: the generated predicate
   // answers name-by-name and there is no list to iterate.
   fn not_a_global_property(key : String) -> Bool {
+    // A lib global VALUE is a `globalThis` property whatever a module
+    // declares under the same name: effect writes `export const Array =
+    // globalThis.Array` — a module-scoped `const` that is not on
+    // `globalThis` at all, read beside the lib `var Array` that is. Only a
+    // name the lib itself declares block-scoped (`name` in the DOM lib) is
+    // still not one.
+    if is_lib_global_value(key) && !is_lib_dom_blockscoped_value(key) {
+      return false
+    }
     if block_scoped.get(key) is Some(_) {
       return true
     }
@@ -36916,6 +37051,24 @@ fn lib_global_ctor_type_name(name : String) -> String? {
 /// Nested scopes are deliberately not walked: a local binding is not in
 /// this map, so its consumer abstains, which costs a finding rather than
 /// inventing one.
+fn collect_initialized_top_level_names(
+  module_ : @ast.TsModule,
+  out : Map[String, Unit],
+) -> Unit {
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), _, init)
+      | Let(@ast.TsBinding::Ident(n), _, init)
+      | Const(@ast.TsBinding::Ident(n), _, init) =>
+        if !(init is Var("__ts_no_init__")) {
+          out[n] = ()
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
 fn collect_any_uninitialized_values(
   module_ : @ast.TsModule,
   out : Map[String, Bool],
@@ -38153,6 +38306,10 @@ fn check_module_function_bodies_layered(
     Resolver::ingest_module(resolver, module_, "")
     collect_module_value_names(module_, resolver.declared_value_names)
     collect_any_uninitialized_values(module_, resolver.any_uninitialized_values)
+    collect_initialized_top_level_names(
+      module_,
+      resolver.initialized_top_level_names,
+    )
   } else {
     for o in outer_modules {
       Resolver::ingest_module(resolver, o, "")
