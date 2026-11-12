@@ -328,6 +328,22 @@ alias, and assignability of large intersected JSON-schema shapes.
    return { x: 0 } }` has no resolved return type (`ES5For-of8`, §1c),
    which real code hits constantly.
 
+## 4b. Real code — effect
+
+`effect@4.1.2` is in `node_modules` with its sources. tsc accepts it, so
+every report `mtsc node_modules/effect/src/index.ts --noEmit` makes is a
+false positive; that run covers 145 modules and takes about 10 s.
+
+Trend: graph did not load (batch FP's parser fixes) -> 1,556 -> **1,299**.
+
+| family | count | note |
+|---|---|---|
+| `property X does not exist on …` | ~480 | the largest receivers are `unknown` (narrowing helpers effect defines itself), `IndexedNode` (a class union narrowed by `_tag`), `never` and `undefined` (flow results), and `Latch` |
+| `receiver may be null or undefined` / `object is possibly …` | ~180 | strict-null flow through closures and `let` reassignment |
+| `cannot index into …` | ~60 | index access on mapped / generic shapes |
+| arity | ~60 | remaining overload and optional-parameter shapes |
+| `property X is required by …` | ~36 | object literals against types with optional members spelled through generics |
+
 ## 4. Out of scope — 19 files
 
 `scripts/checker_out_of_scope.txt` holds them, one path per line with a
