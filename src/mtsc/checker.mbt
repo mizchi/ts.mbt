@@ -60,11 +60,15 @@ fn collect_type_issues_from_module(
   module_ : @ast.TsModule,
   globals : Array[(String, @ast.TsType)],
   type_modules : Array[@ast.TsModule],
+  namespace_type_aliases~ : Array[(String, String)] = [],
 ) -> Result[Array[MtscTypeIssue], String] {
   let issues : Array[MtscTypeIssue] = []
   for
     issue in @checker.check_module_function_bodies_with_context(
-      module_, globals, type_modules,
+      module_,
+      globals,
+      type_modules,
+      namespace_type_aliases~,
     ) {
     if !is_unresolved_import_binding(issue, module_.imported_binding_names) {
       issues.push({ path: issue.path, message: issue.message, })
@@ -308,6 +312,126 @@ fn is_local_module_specifier(module_specifier : String) -> Bool {
 }
 
 ///|
+/// The type names a module exposes, as `(exposed, bare)` pairs: its own
+/// type declarations, plus whatever its re-exports expose — `export *`
+/// unchanged, `export { A as B }` under the new name, and
+/// `export * as ns` under `ns.`. `bare` is the key the resolver ingested
+/// the declaration at (`graph_type_modules` ingests every reachable module
+/// at bare names), so the pair is all `alias_namespace_import_types`
+/// needs. Every declared type counts, exported or not: an unexported one
+/// is already reachable at its bare name, so the qualified key adds no
+/// declaration the resolver does not already hold.
+fn graph_exposed_type_names(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  seen : Map[String, Unit],
+  out : Array[(String, String)],
+  prefix : String,
+  depth : Int32,
+) -> Unit {
+  if depth > 8 || seen.contains(prefix + "|" + module_.source.path) {
+    return
+  }
+  seen[prefix + "|" + module_.source.path] = ()
+  let m = module_.module_
+  for i in m.interfaces {
+    out.push((prefix + i.name, i.name))
+  }
+  for c in m.classes {
+    out.push((prefix + c.name, c.name))
+  }
+  for a in m.type_aliases {
+    out.push((prefix + a.name, a.name))
+  }
+  for e in m.enums {
+    out.push((prefix + e.name, e.name))
+  }
+  for re in module_.module_block.reexports {
+    let target = match
+      find_graph_target(edges, module_.source.path, re.module_spec) {
+      Some(path) =>
+        match find_graph_module(modules, path) {
+          Some(t) => t
+          None => continue
+        }
+      None => continue
+    }
+    match re.kind {
+      @ast.TsReExportKind::All =>
+        graph_exposed_type_names(
+          target,
+          modules,
+          edges,
+          seen,
+          out,
+          prefix,
+          depth + 1,
+        )
+      @ast.TsReExportKind::Namespace(ns) =>
+        graph_exposed_type_names(
+          target,
+          modules,
+          edges,
+          seen,
+          out,
+          prefix + ns + ".",
+          depth + 1,
+        )
+      @ast.TsReExportKind::Named(items) => {
+        let inner : Array[(String, String)] = []
+        graph_exposed_type_names(
+          target,
+          modules,
+          edges,
+          {},
+          inner,
+          "",
+          depth + 1,
+        )
+        for item in items {
+          let (imported, exported) = item
+          for pair in inner {
+            if pair.0 == imported {
+              out.push((prefix + exported, pair.1))
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+/// `(qualified, bare)` pairs for every NAMESPACE import of `module_`
+/// (`import * as core from "./core"` exposes `core.X` for each type the
+/// target exposes). See `alias_namespace_import_types` in the checker.
+fn graph_namespace_type_aliases(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> Array[(String, String)] {
+  let out : Array[(String, String)] = []
+  for imp in module_.module_block.imports {
+    let ns = match imp.namespace_binding {
+      Some(ns) => ns
+      None => continue
+    }
+    let target = match
+      find_graph_target(edges, module_.source.path, imp.module_spec) {
+      Some(path) =>
+        match find_graph_module(modules, path) {
+          Some(t) => t
+          None => continue
+        }
+      None => continue
+    }
+    graph_exposed_type_names(target, modules, edges, {}, out, ns + ".", 0)
+  }
+  out
+}
+
+///|
 /// Collect type declarations from the caller-resolved transitive dependency
 /// graph. Runtime names are deliberately not injected from these modules;
 /// `graph_import_globals` remains the only path for value bindings.
@@ -544,8 +668,16 @@ fn collect_parsed_graph_issues(
     for ambient in ambient_modules {
       type_modules.push(ambient)
     }
+    let namespace_type_aliases = graph_namespace_type_aliases(
+      module_, parsed_modules, edges,
+    )
     match
-      collect_type_issues_from_module(module_.module_, globals, type_modules) {
+      collect_type_issues_from_module(
+        module_.module_,
+        globals,
+        type_modules,
+        namespace_type_aliases~,
+      ) {
       Err(e) =>
         issues.push({
           modulePath: module_.source.path,
@@ -584,8 +716,18 @@ pub fn check_module_graph(graph : MtscModuleGraph) -> String {
       diagnostics.push("\{module_.source.path}: \{diagnostic}")
     }
     let type_modules = graph_type_modules(module_, parsed_modules, graph.edges)
+    let namespace_type_aliases = graph_namespace_type_aliases(
+      module_,
+      parsed_modules,
+      graph.edges,
+    )
     match
-      collect_type_issues_from_module(module_.module_, globals, type_modules) {
+      collect_type_issues_from_module(
+        module_.module_,
+        globals,
+        type_modules,
+        namespace_type_aliases~,
+      ) {
       Err(e) => diagnostics.push("\{module_.source.path}: parse error: \{e}")
       Ok(issues) =>
         for issue in issues {

@@ -115,3 +115,48 @@ test "overloads: a parameter typed with an object-type alias still selects" {
   assert_false(lf_has(issues, "ok"))
   assert_true(lf_has(issues, "bad"))
 }
+
+///|
+test "distributive conditional over an alias-to-union argument" {
+  // `Exclude<Formats, "regex">` must remove ONE member. Substituting the
+  // alias first made the false branch the whole `Formats`, so it answered
+  // for every member whatever it decided.
+  let src =
+    #|type Formats = "email" | "regex" | "url";
+    #|type E2 = Exclude<Formats, "regex">;
+    #|type X2 = Extract<Formats, "regex" | "nope">;
+    #|declare const e2: E2;
+    #|declare const x2: X2;
+    #|function ok(): unknown { const a: "email" | "url" = e2; const b: "regex" = x2; return [a, b]; }
+    #|function bad(): unknown { const c: "regex" = e2; return c; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "discriminant narrowing with a union-of-literals member" {
+  // zod's `$ZodIssueStringCommonFormats` declares its tag as
+  // `Exclude<Formats, …>`; a variant whose tag is a UNION survives a
+  // branch when some member of it could take that branch.
+  let src =
+    #|type Formats = "email" | "regex" | "starts_with" | "ends_with";
+    #|interface Base { readonly format: Formats | (string & {}); }
+    #|interface Common extends Base { format: Exclude<Formats, "regex" | "starts_with" | "ends_with"> }
+    #|interface Multi extends Base { format: "regex" | "url"; pattern: string }
+    #|interface SW extends Base { format: "starts_with"; prefix: string }
+    #|interface EW extends Base { format: "ends_with"; suffix: string }
+    #|type Issues = Common | SW | EW | Multi;
+    #|function ok(i: Issues): string {
+    #|  if (i.format === "starts_with") return i.prefix;
+    #|  if (i.format === "regex") return i.pattern;
+    #|  return "";
+    #|}
+    #|function bad(i: Issues): string {
+    #|  if (i.format === "email") return i.prefix;
+    #|  return "";
+    #|}
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}

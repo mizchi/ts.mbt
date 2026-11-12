@@ -749,6 +749,106 @@ fn Resolver::ingest_type_module(
 }
 
 ///|
+/// A conditional alias whose CHECK type is a naked type parameter
+/// distributes over a union argument — that is what makes
+/// `Exclude<Formats, "regex">` remove one member rather than answer for
+/// the whole union. Substituting first and deciding afterwards loses the
+/// rule: the check becomes `Named("Formats")`, the false branch becomes
+/// the same `Formats`, and the decision returns the WHOLE union whatever
+/// it decides per member. So when the bound argument resolves to a
+/// union, the body is instantiated once per member and the results are
+/// joined, exactly as TypeScript instantiates a distributive conditional.
+/// `None` for every other shape, which keeps the old path unchanged.
+fn distribute_conditional_alias(
+  r : Resolver,
+  body : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> @ast.TsType? {
+  let p = match body {
+    Conditional(Named(p), _, _, _) => p
+    _ => return None
+  }
+  let arg = match bindings.get(p) {
+    Some(a) => a
+    None => return None
+  }
+  let members = match r.unwrap(arg) {
+    Union(items) => items
+    _ => return None
+  }
+  let out : Array[@ast.TsType] = []
+  for m in members {
+    let b : Map[String, @ast.TsType] = Map([])
+    for k, v in bindings {
+      b[k] = v
+    }
+    b[p] = m
+    let inst = substitute_params(body, b)
+    match r.unwrap(inst) {
+      Conditional(_, _, _, _) => return None
+      Never => ()
+      t => out.push(t)
+    }
+  }
+  Some(
+    if out.length() == 0 {
+      Never
+    } else if out.length() == 1 {
+      out[0]
+    } else {
+      Union(out)
+    },
+  )
+}
+
+///|
+/// A type written through a NAMESPACE import (`import * as core from
+/// "./core"`, then `core.$ZodObject` in an annotation or an `extends`
+/// clause) names a declaration the embedding has ALREADY ingested at its
+/// bare name — `type_modules` carries every module the importer reaches.
+/// So the qualified spelling needs no second ingestion, only a second KEY
+/// for the same entry: `(qualified, bare)` pairs, computed by the caller
+/// from the target module's exports. Batch FN's version re-ingested each
+/// target under a prefix, which rebuilt a module per importing module and
+/// took one zod locale file from 4.1 s to 24.3 s; copying a map entry is
+/// one insert. A name the module itself declares wins, and an entry whose
+/// bare name was never ingested is skipped, so the qualified spelling can
+/// only ever resolve to what the bare one does.
+fn Resolver::alias_namespace_import_types(
+  r : Resolver,
+  aliases : Array[(String, String)],
+) -> Unit {
+  for pair in aliases {
+    let (qualified, bare) = pair
+    match r.interfaces.get(bare) {
+      Some(i) =>
+        if r.interfaces.get(qualified) is None {
+          r.interfaces[qualified] = i
+        }
+      None => ()
+    }
+    match r.classes.get(bare) {
+      Some(c) =>
+        if r.classes.get(qualified) is None {
+          Resolver::put_class(r, qualified, c)
+        }
+      None => ()
+    }
+    match r.type_aliases.get(bare) {
+      Some(a) =>
+        if r.type_aliases.get(qualified) is None {
+          r.type_aliases[qualified] = a
+        }
+      None => ()
+    }
+    match r.enums.get(bare) {
+      Some(e) => if r.enums.get(qualified) is None { r.enums[qualified] = e }
+      None => ()
+    }
+  }
+}
+
+///|
 /// Collect every value-binding name introduced in `module_` (and nested
 /// namespaces) into `out`. Backstop for the TS2304 check — see
 /// `Resolver::declared_value_names`.
@@ -2468,7 +2568,10 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                 bindings[type_params[i]] = args[i]
                 i = i + 1
               }
-              cur = substitute_params(body, bindings)
+              cur = match distribute_conditional_alias(self, body, bindings) {
+                Some(t) => t
+                None => substitute_params(body, bindings)
+              }
             }
             None => keep_going = false
           }
@@ -18398,11 +18501,36 @@ fn narrow_by_discriminant(
         // — would fail every predicate and wrongly narrow the union to `never`
         // (the `discriminatedUnionTypes4` false positive). Conservative
         // non-narrowing matches the previous string-only behaviour there.
-        if !is_literal_discriminant_type(field_ty) {
+        // A discriminant can also be a UNION of literals — written out
+        // (`format: "a" | "b"`) or computed (`format: Exclude<Formats,
+        // "regex">`, the shape zod's `$ZodIssueStringCommonFormats` uses).
+        // Both reach here unreduced, so the field is unwrapped first and
+        // split; the variant survives when SOME member could take the
+        // branch, which is exactly the single-literal rule applied per
+        // member. Any non-literal member still bails the whole narrowing.
+        let parts = if is_literal_discriminant_type(field_ty) {
+          [field_ty]
+        } else {
+          let parts = union_components(resolver.unwrap(field_ty))
+          for p in parts {
+            if !is_literal_discriminant_type(p) {
+              return None
+            }
+          }
+          parts
+        }
+        if parts.length() == 0 {
           return None
         }
         any_resolved = true
-        if field_matches(field_ty) == keep {
+        let mut survives = false
+        for p in parts {
+          if field_matches(p) == keep {
+            survives = true
+            break
+          }
+        }
+        if survives {
           kept.push(v)
         }
       }
@@ -25185,6 +25313,7 @@ pub fn check_module_function_bodies_with_context(
   module_ : @ast.TsModule,
   globals : Array[(String, @ast.TsType)],
   type_modules : Array[@ast.TsModule],
+  namespace_type_aliases~ : Array[(String, String)] = [],
 ) -> Array[ExprIssue] {
   check_module_function_bodies_layered(
     module_,
@@ -25192,6 +25321,7 @@ pub fn check_module_function_bodies_with_context(
     false,
     type_modules,
     globals,
+    namespace_type_aliases~,
   )
 }
 
@@ -37216,6 +37346,7 @@ fn check_module_function_bodies_layered(
   type_modules : Array[@ast.TsModule],
   extra_globals : Array[(String, @ast.TsType)],
   backstops~ : RootNameBackstops? = None,
+  namespace_type_aliases~ : Array[(String, String)] = [],
 ) -> Array[ExprIssue] {
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
@@ -37315,6 +37446,7 @@ fn check_module_function_bodies_layered(
       )
     }
   }
+  Resolver::alias_namespace_import_types(resolver, namespace_type_aliases)
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
   // `@strict: ...` directive, so they inherit. Reuses the same root
@@ -38642,6 +38774,7 @@ fn check_module_function_bodies_layered(
       type_modules,
       extra_globals,
       backstops=Some(nested_backstops),
+      namespace_type_aliases~,
     )
     let prefix = if ns.name == "<global>" {
       "declare global"
