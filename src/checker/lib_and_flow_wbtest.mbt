@@ -84,3 +84,34 @@ test "assignment narrowing: the block spelling and an untyped new" {
   // Assigned on only one path: still possibly `undefined` after the join.
   assert_true(lf_has(issues, "c4"))
 }
+
+///|
+test "unique symbol: a /*@__PURE__*/-annotated Symbol() declares one" {
+  let src =
+    #|declare const s: symbol;
+    #|function f(): void {
+    #|  const a: unique symbol = /*@__PURE__*/ Symbol("a");
+    #|  const c: unique symbol = /*@__PURE__*/ (s);
+    #|}
+  let issues = lf_issues(src).filter(fn(i) {
+    i.message.contains("unique symbol")
+  })
+  assert_eq(issues.length(), 1)
+  assert_true(issues[0].path.contains("`c`"))
+}
+
+///|
+test "overloads: a parameter typed with an object-type alias still selects" {
+  // zod's `generateCheck`: the 4-argument call is the first overload's
+  // `string`, not the union of every overload's return.
+  let src =
+    #|type S = { k: string };
+    #|function g(schema: S, a: string): string;
+    #|function g(schema: S, a: string, b: boolean): string | null;
+    #|function g(schema: S, a: string, b = true): string | null { return b ? a : null; }
+    #|function ok(schema: S, a: string): string { return g(schema, a); }
+    #|function bad(schema: S, a: string): string { return g(schema, a, false); }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
