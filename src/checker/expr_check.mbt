@@ -49,6 +49,13 @@ priv struct Resolver {
   // happen to matter) is deliberate — a second copy of those names is
   // the "one rule written in two places" defect this repo keeps finding.
   standard_aliases : Map[String, AliasBinding]
+  // `core.X` -> `X` for every type reachable through a NAMESPACE import
+  // (see `alias_namespace_import_types`). `unwrap` canonicalizes through
+  // it first, so a qualified spelling and the bare one are ONE type to
+  // every name-keyed comparison downstream — the nominal `extends` walks
+  // match bare names only, and the declarations they walk name their
+  // bases bare.
+  qualified_names : Map[String, String]
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -460,6 +467,7 @@ fn Resolver::empty() -> Resolver {
     classes: {},
     type_aliases: {},
     standard_aliases: standard_utility_types(),
+    qualified_names: {},
     globals: {},
     signatures: {},
     func_type_params: {},
@@ -749,14 +757,118 @@ fn Resolver::ingest_type_module(
 }
 
 ///|
+/// `Array.isArray(x)` splits `x`'s union into its array members and the
+/// rest. It decides only when EVERY member is classifiable: an array or
+/// tuple on one side, a primitive, `null` / `undefined`, a function or an
+/// object literal type on the other. Anything else (`any`, `unknown`, a
+/// type parameter, an interface that might extend `Array`) abstains, so
+/// an unclassified member costs the narrowing rather than inventing one.
+fn array_is_array_split(
+  resolver : Resolver,
+  cur : @ast.TsType,
+) -> (@ast.TsType, @ast.TsType)? {
+  let parts = union_components(resolver.unwrap(cur))
+  if parts.length() < 2 {
+    return None
+  }
+  let arrays : Array[@ast.TsType] = []
+  let others : Array[@ast.TsType] = []
+  for p in parts {
+    match resolver.unwrap(p) {
+      Array(_) | Tuple(_) | Applied("Array", _) | Applied("ReadonlyArray", _) =>
+        arrays.push(p)
+      Undefined
+      | Null
+      | String_
+      | Number
+      | Int
+      | Boolean
+      | BigInt
+      | Symbol
+      | Literal(_)
+      | NumberLiteral(_)
+      | BooleanLiteral(_)
+      | Func(_, _)
+      | Object(_) => others.push(p)
+      _ => return None
+    }
+  }
+  if arrays.length() == 0 {
+    return None
+  }
+  Some((union_of(arrays), union_of(others)))
+}
+
+///|
+/// The parser inlines a bounded type parameter's BOUND into an interface's
+/// members (`interface Box<I extends Base> { v: I }` stores `v: Base`),
+/// and the bridge generator reads that inlined type as the member's
+/// MoonBit type, which is why the parser cannot simply stop (batch FJ:
+/// 48 generated files change). The instantiation is what that loses:
+/// `Box<Sub>`'s `v` read back as `Base`, so zod's
+/// `interface $ZodArray<T> extends $ZodType<any, any, $ZodArrayInternals<T>>`
+/// resolved `_zod` to the base `$ZodTypeInternals` and every
+/// `switch (def.type)` arm read the base def. When a member's type is
+/// EXACTLY a bound and the instantiation supplies that parameter, the
+/// argument is the member's type. The cost is stated: a member written
+/// with the bound's type itself, not the parameter, reads as the argument
+/// — narrower than declared, which can only hide a report on a read.
+fn inlined_bound_param(
+  bounds : Array[(String, @ast.TsType)],
+  member_ty : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> @ast.TsType? {
+  fn direct(t : @ast.TsType) -> @ast.TsType? {
+    for b in bounds {
+      let (p, bound) = b
+      if bound == t {
+        match bindings.get(p) {
+          Some(arg) => return Some(arg)
+          None => ()
+        }
+      }
+    }
+    None
+  }
+
+  match direct(member_ty) {
+    Some(a) => return Some(a)
+    None => ()
+  }
+  // `x?: N` is stored as `Bound | undefined` — the parser wraps the
+  // optional member AFTER inlining — so the bound can also be one member
+  // of a union.
+  match member_ty {
+    Union(items) => {
+      let mut hit = false
+      let out = items.map(fn(t) {
+        match direct(t) {
+          Some(a) => {
+            hit = true
+            a
+          }
+          None => substitute_params(t, bindings)
+        }
+      })
+      if hit {
+        Some(Union(out))
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 /// A conditional alias whose CHECK type is a naked type parameter
 /// distributes over a union argument — that is what makes
-/// `Exclude<Formats, "regex">` remove one member rather than answer for
+/// `Exclude<Formats, "regex">` remove one member_ty rather than answer for
 /// the whole union. Substituting first and deciding afterwards loses the
 /// rule: the check becomes `Named("Formats")`, the false branch becomes
 /// the same `Formats`, and the decision returns the WHOLE union whatever
-/// it decides per member. So when the bound argument resolves to a
-/// union, the body is instantiated once per member and the results are
+/// it decides per member_ty. So when the bound argument resolves to a
+/// union, the body is instantiated once per member_ty and the results are
 /// joined, exactly as TypeScript instantiates a distributive conditional.
 /// `None` for every other shape, which keeps the old path unchanged.
 fn distribute_conditional_alias(
@@ -820,6 +932,13 @@ fn Resolver::alias_namespace_import_types(
 ) -> Unit {
   for pair in aliases {
     let (qualified, bare) = pair
+    let declared_here = r.interfaces.get(qualified) is Some(_) ||
+      r.classes.get(qualified) is Some(_) ||
+      r.type_aliases.get(qualified) is Some(_) ||
+      r.enums.get(qualified) is Some(_)
+    if !declared_here && qualified != bare {
+      r.qualified_names[qualified] = bare
+    }
     match r.interfaces.get(bare) {
       Some(i) =>
         if r.interfaces.get(qualified) is None {
@@ -2451,6 +2570,21 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let mut cur = ty
   let mut keep_going = true
   while keep_going {
+    if self.qualified_names.length() > 0 {
+      match cur {
+        Named(n) =>
+          match self.qualified_names.get(n) {
+            Some(b) => cur = Named(b)
+            None => ()
+          }
+        Applied(n, args) =>
+          match self.qualified_names.get(n) {
+            Some(b) => cur = Applied(b, args)
+            None => ()
+          }
+        _ => ()
+      }
+    }
     match cur {
       Named(n) =>
         if unwrap_seen_has(seen, n) {
@@ -3636,6 +3770,10 @@ fn Resolver::lookup_field_core(
                 iface.method_type_params,
                 field,
               )
+              match inlined_bound_param(iface.type_param_bounds, f.1, scoped) {
+                Some(arg) => return Some(arg)
+                None => ()
+              }
               return Some(substitute_params(f.1, scoped))
             }
           }
@@ -3652,7 +3790,13 @@ fn Resolver::lookup_field_core(
             // becomes a lookup against `Box<number>`, not `Box<T>`.
             let substituted_args : Array[@ast.TsType] = []
             for a in base_args {
-              substituted_args.push(substitute_params(a, bindings))
+              // An `extends B<T>` argument is inlined to `T`'s bound the
+              // same way a member is (`_$ZodType<T extends Internals>
+              // extends $ZodType<…, T>`), so it gets the same recovery.
+              match inlined_bound_param(iface.type_param_bounds, a, bindings) {
+                Some(arg) => substituted_args.push(arg)
+                None => substituted_args.push(substitute_params(a, bindings))
+              }
             }
             let base_ty : @ast.TsType = if substituted_args.length() > 0 {
               @ast.TsType::Applied(base_name, substituted_args)
@@ -18782,6 +18926,17 @@ fn collect_narrowing(
         env, resolver, callee_name, args, pair_pos, pair_neg,
       )
     }
+    MethodCall(Var("Array"), "isArray", [Var(x)]) if env.lookup("Array") is None => {
+      let pair_pos = if then_sense { then_binds } else { else_binds }
+      let pair_neg = if then_sense { else_binds } else { then_binds }
+      match array_is_array_split(resolver, env_lookup_full(env, resolver, x)) {
+        Some((arrays, others)) => {
+          pair_pos.push((x, arrays))
+          pair_neg.push((x, others))
+        }
+        None => ()
+      }
+    }
     MethodCall(receiver, method_name, args) => {
       let pair_pos = if then_sense { then_binds } else { else_binds }
       let pair_neg = if then_sense { else_binds } else { then_binds }
@@ -30680,8 +30835,8 @@ fn member_covariant_by_iface_extends(
   // asymmetry batch EM found in `is_assignable_to_inner`.
   fn iface_name(t : @ast.TsType) -> String? {
     match t {
-      Named(n) => Some(n)
-      Struct(n, _) => Some(n)
+      Named(n) | Struct(n, _) =>
+        Some(resolver.qualified_names.get(n).unwrap_or(n))
       _ => None
     }
   }
@@ -30798,7 +30953,9 @@ fn member_covariant_by_iface_extends(
       // `extends $ZodCheckInternals<T>` — the walk substitutes as it goes.
       (None, None) =>
         match (dt, bt) {
-          (Applied(dname, dargs), Applied(bname, bargs)) =>
+          (Applied(dname0, dargs), Applied(bname0, bargs)) => {
+            let dname = resolver.qualified_names.get(dname0).unwrap_or(dname0)
+            let bname = resolver.qualified_names.get(bname0).unwrap_or(bname0)
             iface_extends_instantiation(resolver, dname, dargs, bname, bargs) ||
             (
               dname == bname &&
@@ -30810,7 +30967,15 @@ fn member_covariant_by_iface_extends(
                 for i, da in dargs {
                   let du = resolver.unwrap_containers(da)
                   let bu = resolver.unwrap_containers(bargs[i])
+                  // A base argument of `never` is the bottom of a
+                  // CONTRAVARIANT parameter — zod's `$ZodCheck<in T =
+                  // never>` is exactly that, and `$ZodCheck<string>[]`
+                  // against `$ZodCheck<never>[]` is legal. The `in`
+                  // annotation is not in the AST, so the argument is
+                  // accepted whatever the variance, which can only lose a
+                  // finding.
                   if all_ok &&
+                    !(bu is Never) &&
                     !is_assignable_to(du, bu) &&
                     !parts(du)
                     .iter()
@@ -30826,6 +30991,7 @@ fn member_covariant_by_iface_extends(
               })
             ) ||
             is_assignable_to(dt, bt)
+          }
           _ => is_assignable_to(dt, bt)
         }
       _ => is_assignable_to(dt, bt)

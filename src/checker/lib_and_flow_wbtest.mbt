@@ -160,3 +160,61 @@ test "discriminant narrowing with a union-of-literals member" {
   assert_false(lf_has(issues, "ok"))
   assert_true(lf_has(issues, "bad"))
 }
+
+///|
+test "generic interface member typed by a bounded parameter keeps its instantiation" {
+  // The parser inlines `I`'s bound into `_zod`, so `T<any, ArrInt>._zod`
+  // read back as the base `BaseInt` and every discriminant branch saw the
+  // base def. Both arms below are silent in tsc; `bad` is TS2339.
+  let src =
+    #|interface BaseDef { type: "string" | "array" | "set" }
+    #|interface ArrDef extends BaseDef { type: "array"; element: number }
+    #|interface SetDef extends BaseDef { type: "set"; valueType: number }
+    #|interface BaseInt { def: BaseDef }
+    #|interface ArrInt extends BaseInt { def: ArrDef }
+    #|interface SetInt extends BaseInt { def: SetDef }
+    #|interface T<O = unknown, I extends BaseInt = BaseInt> { _zod: I; o?: O }
+    #|interface W<I extends BaseInt = BaseInt> extends T<unknown, I> {}
+    #|interface Arr extends T<any, ArrInt> {}
+    #|interface St extends W<SetInt> {}
+    #|type All = Arr | St;
+    #|function ok(s: All): number {
+    #|  const def = s._zod.def;
+    #|  if (def.type === "array") return def.element;
+    #|  if (def.type === "set") return def.valueType;
+    #|  return 0;
+    #|}
+    #|function bad(s: All): number {
+    #|  const def = s._zod.def;
+    #|  if (def.type === "set") return def.element;
+    #|  return 0;
+    #|}
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "a bare generic reference relates to its all-any instantiation" {
+  let src =
+    #|interface P<T = unknown> { value: T }
+    #|declare let f: (p: P<any>) => P;
+    #|function ok(): void { const g = (p: P): P => p; f = g; }
+    #|function bad(): void { const h = (p: string): P => ({ value: 1 }); f = h; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok"))
+  assert_true(lf_has(issues, "bad"))
+}
+
+///|
+test "Array.isArray narrows a union to its array members" {
+  let src =
+    #|interface S { anyOf?: S[]; type?: string }
+    #|function ok1(s: S): number { const o = s.anyOf; if (!Array.isArray(o) || o.length === 0) return 0; return o.length; }
+    #|function ok2(s: S): number { const o = s.anyOf; if (Array.isArray(o)) return o.length; return 0; }
+    #|function bad(s: S): number { const o = s.anyOf; if (Array.isArray(o)) return 0; return o.length; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok1"))
+  assert_false(lf_has(issues, "ok2"))
+  assert_true(lf_has(issues, "bad"))
+}

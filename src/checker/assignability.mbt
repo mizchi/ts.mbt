@@ -900,6 +900,14 @@ fn is_assignable_to_inner(
     }
     // Named/applied references are nominal: only equal names match.
     (Named(a), Named(b)) => a == b
+    // `ParsePayload` (its default argument) against `ParsePayload<any>`:
+    // an `any` argument relates to whatever the default is, in both
+    // directions, so the bare reference and an all-`any` instantiation
+    // are one type here. Any OTHER argument depends on what the default
+    // is, which this resolver-free entry point cannot see, so it stays
+    // nominal.
+    (Named(a), Applied(b, args)) | (Applied(b, args), Named(a)) =>
+      a == b && args.length() > 0 && args.iter().all(fn(x) { x is Any })
     (Applied(a, args_a), Applied(b, args_b)) => {
       if a != b || args_a.length() != args_b.length() {
         return false
