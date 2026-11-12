@@ -3469,6 +3469,84 @@ product surfaces now.
   `--noEmit` widening. What it needs before it can ship: discriminant
   narrowing through an imported union alias, and an ingestion that does
   not rebuild the target module once per importing module.
+  Batch FO takes the three items `UNSUPPORTED.md` §4a lists, in order,
+  and the first one's recorded diagnosis was WRONG in both halves. FN
+  blamed the 4.1 s -> 24.3 s cost on re-ingesting each target module per
+  importer, and the ~150 false positives on narrowing that "does not
+  follow the imported alias". Rebuilt the cheap way — every module the
+  importer reaches is ALREADY ingested at bare names, so `core.X` needs
+  only a second map key and a `qualified -> bare` canonicalization at the
+  top of `unwrap` — it reproduced both numbers exactly, which ruled the
+  ingestion out, and a two-file repro then showed the qualification was
+  irrelevant too: the same reports appear with a plain named import. The
+  cause was `Exclude<Formats, "regex">`. A distributive conditional alias
+  was SUBSTITUTED before it was decided, so its check became
+  `Named("Formats")`, its false branch became the same `Formats`, and the
+  decision answered with the whole union whatever it decided per member;
+  and `narrow_by_discriminant` bailed on any variant whose tag was a UNION
+  of literals, which is what zod's `$ZodIssueStringCommonFormats` writes.
+  Distributing at instantiation when the check is a naked type parameter
+  (TypeScript's own rule) took the locale file back to 5.5 s — the
+  slowdown WAS the failed decision, re-run at every use — and the locale
+  reports to zero. Second time in two batches that a "this costs X
+  because of Y" note was a hypothesis; it is the measurement that settles
+  it.
+  Resolving the namespace types then exposed the shapes they had been
+  hiding, and four fixes followed. The parser inlines a bounded type
+  parameter's bound into an INTERFACE's members and `extends` arguments
+  (batch FJ: undoing that moves 48 bridge files), so `interface $ZodArray
+  extends $ZodType<any, any, $ZodArrayInternals<T>>` read `_zod` as the
+  base internals and every `switch (def.type)` arm saw the base def;
+  `inlined_bound_param` recovers the instantiation when a member or base
+  argument is EXACTLY a bound (or a union member of one, which is how
+  `x?: N` is stored). The nominal TS2430 walk compared `errors.X` against
+  bare `extends` names and needed the canonical name; `$ZodCheck<string>`
+  against `$ZodCheck<never>` is legal because zod writes `in T`, which the
+  AST drops, so a `never` base argument is accepted; `ParsePayload`
+  against `ParsePayload<any>` relates; and `Array.isArray` narrowing did
+  not exist at all. That last one is the family this file keeps
+  recording: `typeof`, `instanceof`, `in`, a type predicate and a
+  discriminant all narrow, and the single commonest runtime array test
+  did not.
+  One conformance file was lost and one gained, both for a stated reason.
+  `conditionalTypes1` had been a TP only because `NonNullable<T["x"]>`
+  did not resolve — the same gap reported `let s2: string = y`, which tsc
+  accepts — and the remaining real error (`x = y; let s1: string = x`) is,
+  with the function's bound inlined, the same node as legal code over a
+  concrete `string | undefined`. A declared-type guard was written for it,
+  measured to change nothing, and removed rather than kept as dead code.
+  `ES5For-of8` came in through item 3.
+  Item 2, variadic tuples, was four defects and no feature. An array
+  literal against `[string, ...number[]]` was matched POSITIONALLY with
+  the `Rest(...)` slot as an ordinary member, so `["a", 1, 2]` reported
+  "expected `type`" (the printer's spelling of a raw rest slot) and
+  `["a", "b"]` was silent on the real error; a spread element was judged
+  against `slots[0]` and every element after it shifted, so
+  `[...xs, true]` reported two errors on a legal line; indexing past the
+  rest returned the raw slot; and a rest parameter typed as a tuple
+  (`...args: [string, number]`) judged every argument against the UNION
+  of its slots, missing `g("a", "b")`. The literal check now aligns a
+  fixed prefix from the front, a fixed suffix from the back and the middle
+  against the rest's element type, which is how tsc aligns. A generic
+  function returning a bare bounded `T` (`h<T extends unknown[]>(…): T`)
+  returned its inlined bound and false-positived against `[string]`; it
+  abstains now when the return IS a bound. The `declare function` spelling
+  of the same call still reports — that value is a plain `Func` with no
+  binder list, and giving it one changes what the bridge reads, so it is
+  filed. `variadicTuples3` needs `[...T, ...P]` matched against a concrete
+  pair and stays a MISS.
+  Item 3 is return-type inference from a BODY. Only a bare primitive was
+  adopted, through `infer_block_return`, which reads a block's TOP-LEVEL
+  `return`s — right for the callback positions it serves and wrong for a
+  declaration, where `if (a) return 1; return undefined` came back
+  `undefined`. `infer_body_return_type` collects every `return` short of
+  a nested function, widens literals as a return position does, adopts the
+  result only when every part is built from primitives, literals, object
+  and array shapes or declared names, and adds `undefined` exactly when
+  falling off the end is possible — three-valued, with "cannot tell"
+  abstaining, because both wrong answers cost: a missing `undefined` is
+  narrower than tsc, an extra one makes `const n: number = both(true)` a
+  false positive when every path returns.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
