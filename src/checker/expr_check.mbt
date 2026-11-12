@@ -9499,8 +9499,8 @@ fn infer_expr_inner(
     // wrong class. Batch EO's shadowing fix covered the abstract-
     // instantiation CHECK and not this inference; the construct signature
     // of the local's type is the answer, and anything else abstains.
-    New(class_name, _) if env.lookup(class_name) is Some(local) =>
-      match resolver.unwrap(local) {
+    New(class_name, _) if env.lookup(class_name) is Some(local_ty) =>
+      match resolver.unwrap(local_ty) {
         Constructor(_, ret, _) => ret
         _ => @ast.TsType::Any
       }
