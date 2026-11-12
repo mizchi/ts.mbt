@@ -243,3 +243,22 @@ test "variadic tuples: literals, rest-parameter tuples and indexing" {
     assert_true(lf_has(issues, f), msg=f)
   }
 }
+
+///|
+test "return type inferred from an unannotated function body" {
+  let src =
+    #|function foo() { return { x: 0 }; }
+    #|function maybe(a: boolean) { if (a) return 1; return undefined; }
+    #|function both(a: boolean) { if (a) { return 1; } else { return 2; } }
+    #|function tail(a: boolean) { if (a) return 1; }
+    #|function ok1(): unknown { const n: number = both(true); const x: number = foo().x; return [n, x]; }
+    #|function bad1(): unknown { const s: string = foo().x; return s; }
+    #|function bad2(): unknown { const n: number = maybe(true); return n; }
+    #|function bad3(): unknown { const n: number = tail(true); return n; }
+    #|function bad4(): unknown { const o = foo(); return o.nope; }
+  let issues = lf_issues(src)
+  assert_false(lf_has(issues, "ok1"))
+  for f in ["bad1", "bad2", "bad3", "bad4"] {
+    assert_true(lf_has(issues, f), msg=f)
+  }
+}
