@@ -14551,6 +14551,19 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
       return true
     }
   }
+  // A file AUGMENTING a lib interface this checker has no member table for
+  // (`declare global { interface RawJSON { f?(): string } }` beside
+  // ES2026's `interface RawJSON extends RawJSONInstance`) holds only the
+  // augmentation's members, so "does not exist" there is a statement about
+  // the augmentation, not the merged interface. The lib types whose members
+  // ARE modelled keep their checks (`interface Error { code }` merges with
+  // the Error table).
+  match ty {
+    Named(n) | Applied(n, _) if resolver.interfaces.contains(n) &&
+      is_lib_global_type(n) &&
+      !lib_interface_members_modeled(n) => return true
+    _ => ()
+  }
   match resolver.unwrap(ty) {
     Intersection(_) | TypeOf(_) => true
     Named(n) | Applied(n, _) =>
@@ -14558,6 +14571,44 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
       class_chain_has_unresolved_base(n, resolver)
     _ => false
   }
+}
+
+///|
+/// Lib interfaces whose instance members this checker models itself (the
+/// prototype tables), so a local augmentation of one is merged rather than
+/// read on its own.
+fn lib_interface_members_modeled(name : String) -> Bool {
+  is_error_class_name(name) ||
+  (match name {
+    "Array"
+    | "ReadonlyArray"
+    | "String"
+    | "Number"
+    | "Boolean"
+    | "BigInt"
+    | "Symbol"
+    | "Object"
+    | "Function"
+    | "Date"
+    | "RegExp"
+    | "Promise"
+    | "PromiseLike"
+    | "Map"
+    | "Set"
+    | "WeakMap"
+    | "WeakSet"
+    | "ReadonlyMap"
+    | "ReadonlySet"
+    | "JSON"
+    | "Math"
+    | "Iterator"
+    | "IterableIterator"
+    | "Generator"
+    | "AsyncGenerator"
+    | "Uint8Array"
+    | "ArrayBuffer" => true
+    _ => false
+  })
 }
 
 ///|
@@ -20339,6 +20390,17 @@ fn collect_narrowing(
           }
       }
     }
+    // ES2026 lib static type guards: `Error.isError(v): v is Error` and
+    // `JSON.isRawJSON(v): v is RawJSON`. Only the positive branch narrows
+    // — the negative one keeps what it had, which can only lose a finding.
+    MethodCall(Var(recv), meth, [arg]) if lib_static_guard_target(recv, meth)
+      is Some(_) &&
+      env.lookup(recv) is None &&
+      narrowing_key_for_expr(arg) is Some(_) => {
+      let pair_pos = if then_sense { then_binds } else { else_binds }
+      let target = lib_static_guard_target(recv, meth).unwrap()
+      pair_pos.push((narrowing_key_for_expr(arg).unwrap(), target))
+    }
     MethodCall(receiver, method_name, args) => {
       let pair_pos = if then_sense { then_binds } else { else_binds }
       let pair_neg = if then_sense { else_binds } else { then_binds }
@@ -21583,6 +21645,18 @@ fn named_open_record_interface(ty : @ast.TsType, resolver : Resolver) -> Bool {
       .iter()
       .any(fn(sig) { sig.0 is String_ && sig.1 is (Unknown | Any) })
     None => false
+  }
+}
+
+///|
+/// The narrowed type of a lib STATIC type guard (`lib.es2026.error.d.ts`'s
+/// `isError(error: unknown): error is Error`, `lib.es2026.json.d.ts`'s
+/// `isRawJSON(value: unknown): value is RawJSON`).
+fn lib_static_guard_target(recv : String, meth : String) -> @ast.TsType? {
+  match (recv, meth) {
+    ("Error", "isError") => Some(Named("Error"))
+    ("JSON", "isRawJSON") => Some(Named("RawJSON"))
+    _ => None
   }
 }
 

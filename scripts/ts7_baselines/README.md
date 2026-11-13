@@ -17,19 +17,27 @@ from the baseline FILE NAMES alone, so the repo vendors only name lists:
   (`name(target=es2015)`) are stripped; a test counts as erroring if any
   ran variant errors.
 
-Provenance: microsoft/typescript-go tag `typescript/v7.0.2`
-(commit tree `testdata/baselines/reference/submodule/conformance`),
-case files from microsoft/TypeScript @ `4d4f005c8541e0255a9d8791205fdce326e462bc`
-(the `tsgo-port` branch pin referenced by that tag — the `typescript`
-submodule points there).
+Provenance: microsoft/TypeScript tag `v7.1-beta`
+(`3e9236361fa97a9e6c685f4833ac457ae2d8c50a`, the `gitHead` npm records for
+`typescript@7.1.0-beta`). From 7.1 the native compiler lives in
+microsoft/TypeScript itself, with its own conformance cases and baselines in
+the same tree:
+
+- baselines: `tsc/testdata/baselines/reference/conformance/` (flat)
+- cases:     `tsc/testdata/tests/cases/conformance/`
+
+The cases come from the `typescript7` submodule pinned to that commit. The
+older `typescript` submodule (TS 6-era `src/compiler`, `src/lib`, `tests/`)
+is kept for the parser tests and benches that read those trees, and is no
+longer the conformance corpus.
 
 Regenerate with:
 
 ```bash
-git clone --filter=blob:none --sparse --depth 1 \
-  --branch typescript/vX.Y.Z https://github.com/microsoft/typescript-go /tmp/tsgo
-cd /tmp/tsgo
-git ls-tree -r HEAD testdata/baselines/reference/submodule/conformance --name-only \
+git clone --filter=blob:none --no-checkout --depth 1 \
+  --branch vX.Y-tag https://github.com/microsoft/TypeScript /tmp/ts7
+cd /tmp/ts7
+git ls-tree -r HEAD tsc/testdata/baselines/reference/conformance --name-only \
   | sed 's|.*/||' > names.txt
 grep '\.errors\.txt$' names.txt \
   | sed -E 's/\.errors\.txt$//; s/\(.*\)$//' | sort -u > tsgo_errors_set.txt
@@ -37,5 +45,8 @@ grep -E '\.(types|symbols|js|errors\.txt)$' names.txt \
   | sed -E 's/\.(types|symbols|js|errors\.txt)$//; s/\(.*\)$//' | sort -u > tsgo_ran_set.txt
 ```
 
-Then update the `typescript` submodule to typescript-go's
-`_submodules/TypeScript` pin (`git ls-tree <tag> _submodules/TypeScript`).
+Then move the `typescript7` submodule to the same commit, and regenerate
+`src/checker/lib_globals.mbt` (`scripts/gen_lib_globals.sh`, which reads
+`typescript7/tsc/internal/bundled/libs`). Locally a sparse checkout of
+`tsc/testdata/tests/cases/conformance/`, `tsc/testdata/baselines/reference/conformance/`
+and `tsc/internal/bundled/libs/` is all the scripts need.

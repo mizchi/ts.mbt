@@ -13,11 +13,11 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { API } from "typescript/unstable/sync";
+import { API } from "typescript/sync";
 
 const require_ = createRequire(import.meta.url);
 // TypeScript 7 (the Go port). Its main entry exports only the version; the
-// compiler is reached through the `unstable/sync` API, which drives a native
+// compiler is reached through the `typescript/sync` API, which drives a native
 // `tsgo` process over JSON-RPC and works on PROJECTS rather than on an
 // in-process `createProgram`. This is the same compiler the conformance
 // oracle's vendored baselines come from, where the 6.0.3 this used to run
@@ -184,15 +184,25 @@ export function probe(file) {
   let all;
   try {
     const configErrors = rejectedOptionDiagnostics(client, tsconfig, opts);
-    const snapshot = client.updateSnapshot({ openProject: tsconfig });
-    const program = snapshot.getProject(tsconfig).program;
-    all = [
-      ...configErrors,
-      ...program.getProgramDiagnostics(),
-      ...program.getSyntacticDiagnostics(),
-      ...program.getSemanticDiagnostics(),
-    ];
-    client.updateSnapshot({ closeProjects: [tsconfig] });
+    // TS 7.1's sync API creates a fresh snapshot per request and requires it
+    // to be disposed; 7.0's `updateSnapshot({ openProject })` /
+    // `{ closeProjects }` pair is gone (`updateSnapshot` now derives from a
+    // base snapshot).
+    const snapshot = client.createSnapshot({ openProjects: [tsconfig] });
+    try {
+      const program = snapshot.getConfiguredProject(tsconfig).program;
+      all = [
+        ...configErrors,
+        ...program.getProgramDiagnostics(),
+        ...program.getSyntacticDiagnostics(),
+        ...program.getSemanticDiagnostics(),
+      ];
+      // Projects are reference-counted per client, so the probe's throwaway
+      // project is closed explicitly before its snapshots are released.
+      snapshot.update({ closeProjects: [tsconfig] }).dispose();
+    } finally {
+      snapshot.dispose();
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

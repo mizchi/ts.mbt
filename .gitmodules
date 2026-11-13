@@ -2,3 +2,7 @@
 	path = typescript
 	url = https://github.com/microsoft/TypeScript
 	branch = main
+[submodule "typescript7"]
+	path = typescript7
+	url = https://github.com/microsoft/TypeScript
+	shallow = true

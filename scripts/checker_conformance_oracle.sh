@@ -84,7 +84,7 @@ if [ -z "$TSCHECK" ]; then
   exit 1
 fi
 
-CONFORMANCE="typescript/tests/cases/conformance"
+CONFORMANCE="typescript7/tsc/testdata/tests/cases/conformance"
 RAN_SET="scripts/ts7_baselines/tsgo_ran_set.txt"
 ERRORS_SET="scripts/ts7_baselines/tsgo_errors_set.txt"
 SCOPE_FILE="scripts/checker_out_of_scope.txt"
