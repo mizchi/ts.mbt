@@ -899,7 +899,11 @@ fn is_assignable_to_inner(
       true
     }
     // Named/applied references are nominal: only equal names match.
-    (Named(a), Named(b)) => a == b
+    // A type predicate is a `boolean` to everything that reads it as a
+    // value: `(u: unknown) => u is X` IS a `(u: unknown) => boolean`.
+    (TypePredicate(_, _), _) =>
+      is_assignable_to_inner(Boolean, target, bivariant_params)
+    (Named(a), Named(b)) => a == b || same_name_modulo_qualifier(a, b)
     // `ParsePayload` (its default argument) against `ParsePayload<any>`:
     // an `any` argument relates to whatever the default is, in both
     // directions, so the bare reference and an all-`any` instantiation
@@ -1332,4 +1336,42 @@ fn contains_infer_marker(t : @ast.TsType) -> Bool {
       contains_infer_marker(base) || contains_infer_marker(key)
     _ => false
   }
+}
+
+///|
+/// `SchemaRepresentation.Representation`, `Representation` and the
+/// per-module key `Representation@src/SchemaRepresentation.ts` can all
+/// spell one declaration in a graph check — the first through a
+/// namespace import, the second through a named import, the third once the
+/// resolver has disambiguated it. Two names relate here when they agree
+/// after the qualifier and the key suffix are dropped, unless BOTH are
+/// qualified by different namespaces (`A.X` against `B.X` is two
+/// declarations as written). Can only lose a finding, never invent one.
+fn same_name_modulo_qualifier(a : String, b : String) -> Bool {
+  let split = fn(n : String) -> (String, String) {
+    let base = match n.find("@") {
+      Some(i) => n[0:i].to_owned()
+      None => n
+    }
+    match base.rev_find(".") {
+      Some(i) => (base[0:i].to_owned(), base[i + 1:].to_owned())
+      None => ("", base)
+    }
+  }
+  let (qa, na) = split(a)
+  let (qb, nb) = split(b)
+  if na != nb {
+    return false
+  }
+  if qa != "" && qb != "" && qa != qb {
+    return false
+  }
+  // Two different per-module keys are two declarations.
+  if a.contains("@") && b.contains("@") {
+    return false
+  }
+  // Nothing to reconcile: two bare, unkeyed, different spellings cannot
+  // reach here (`na == nb` with both qualifiers empty means `a == b`
+  // modulo a key suffix, which is the case this exists for).
+  a.contains("@") || b.contains("@") || qa != qb
 }

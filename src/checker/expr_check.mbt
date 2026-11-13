@@ -11991,6 +11991,23 @@ fn check_expr_against(
   // expected type is `Any` (e.g. an unannotated return where we still want
   // bad calls inside the returned expression to be flagged).
   check_call_args_in_expr(env, expr, ctx)
+  // A type-predicate return position (`function isX(u): u is X { return
+  // typeof u === "object" }`) is checked against `boolean`: the predicate
+  // is what the CALLER learns, and the body only produces the boolean.
+  match expected {
+    TypePredicate(_, _) => {
+      check_expr_against(
+        env,
+        expr,
+        Boolean,
+        ctx,
+        sub_path,
+        arg_callee_non_generic~,
+      )
+      return
+    }
+    _ => ()
+  }
   // Contextual typing for arrow / function expressions: when the value being
   // passed is a callable and the expected slot is `Func(formal_params,
   // formal_ret)`, recheck the callable's body with the formal parameter
@@ -12719,6 +12736,27 @@ fn check_expr_against(
     // `[T1, T2]` checks each element against the corresponding slot. Without
     // this hop the array literal would infer as `Array<elem>` and fail
     // assignability against `Tuple(...)`.
+    // `[a, b]` against `Pair | undefined`: an array literal is never the
+    // nullish member, so when exactly ONE non-nullish member is an array
+    // or tuple shape the literal is contextually typed by it — without this
+    // the literal inferred as `(bigint | undefined)[]` and failed against
+    // the tuple alias (effect's `coefficientRange`).
+    (ArrayLit(_), Union(parts)) => {
+      let rest = parts.filter(fn(p) {
+        !(ctx.resolver.unwrap(p) is (Undefined | Null))
+      })
+      if rest.length() == 1 && rest.length() < parts.length() {
+        match ctx.resolver.unwrap(rest[0]) {
+          Tuple(_)
+          | Array(_)
+          | Applied("Array" | "ReadonlyArray" | "Readonly", _) => {
+            check_expr_against(env, expr, rest[0], ctx, sub_path)
+            return
+          }
+          _ => ()
+        }
+      }
+    }
     (ArrayLit(items), Tuple(slots)) => {
       check_array_lit_against_tuple(env, items, slots, ctx, sub_path)
       return
@@ -13868,6 +13906,15 @@ fn check_expr_against(
       widen_literal(inferred_u)
     }
     let exp_str = type_display(expected)
+    // `interface JsonSchema { [x: string]: unknown }` declares no member
+    // and an index signature that accepts every value, so every object
+    // type is assignable to it. The interface stays `Named` here (there is
+    // no member for `unwrap_containers` to expand into a shape), which is
+    // why `const s = { allOf: xs }; const j: JsonSchema = s` reported.
+    if inferred_u is Object(_) &&
+      named_open_record_interface(expected_u, ctx.resolver) {
+      return
+    }
     let detail = "expected `\{exp_str}` but got `\{type_display(shown)}`"
     record(ctx, sub_path, detail)
   }
@@ -18929,6 +18976,7 @@ fn strip_type_qualifiers(s : String) -> String {
 ///|
 fn type_display(ty : @ast.TsType) -> String {
   match ty {
+    TypePredicate(param, target) => "\{param} is \{type_display(target)}"
     Number => "number"
     Int => "int"
     Boolean => "boolean"
@@ -19719,7 +19767,27 @@ fn typeof_string_to_type(s : String) -> @ast.TsType? {
 /// union).
 fn union_components(ty : @ast.TsType) -> Array[@ast.TsType] {
   match ty {
-    Union(items) => items
+    // A union of unions is the same union. `cond ? f() : undefined` with
+    // `f(): T | undefined` is `(T | undefined) | undefined`, and splitting
+    // one level left the inner `undefined` behind every `!== undefined`
+    // guard — effect's `parseUriFragment` callers reported "possibly
+    // undefined" on the narrowed side.
+    Union(items) =>
+      if items.iter().any(fn(p) { p is Union(_) }) {
+        let out : Array[@ast.TsType] = []
+        fn go(ps : Array[@ast.TsType], out : Array[@ast.TsType]) -> Unit {
+          for p in ps {
+            match p {
+              Union(inner) => go(inner, out)
+              _ => if !out.contains(p) { out.push(p) }
+            }
+          }
+        }
+        go(items, out)
+        out
+      } else {
+        items
+      }
     _ => [ty]
   }
 }
@@ -21386,6 +21454,60 @@ fn join_branch_types(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// True for a reference to an interface with no members, no bases, and a
+/// `string` index signature whose value is `unknown` or `any`.
+fn named_open_record_interface(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  let name = match ty {
+    Named(n) => n
+    _ => return false
+  }
+  match resolver.interfaces.get(name) {
+    Some(i) =>
+      i.fields.length() == 0 &&
+      i.extends_names.length() == 0 &&
+      i.index_signatures
+      .iter()
+      .any(fn(sig) { sig.0 is String_ && sig.1 is (Unknown | Any) })
+    None => false
+  }
+}
+
+///|
+/// `join_branch_types`, seeing through an alias to a union. A branch that
+/// did not narrow keeps the binding's DECLARED spelling (`Representation`)
+/// while the other holds the expanded members (`Str | Num`), and joining
+/// the two by identity gave `Str | Num | Representation` — a union whose
+/// alias member no discriminant narrowing can split, so
+/// `if (p._tag !== "R" && …) x = 1; switch (p._tag) { case "R": p.$ref }`
+/// reported. When one side's members cover the other's, the wider side IS
+/// the join.
+fn join_branch_types_resolved(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> @ast.TsType {
+  let comps = fn(t : @ast.TsType) -> Array[@ast.TsType] {
+    match t {
+      Named(_) | Applied(_, _) =>
+        match resolver.unwrap(t) {
+          Union(_) as u => union_components(u)
+          _ => [t]
+        }
+      _ => union_components(t)
+    }
+  }
+  let ca = comps(a)
+  let cb = comps(b)
+  if ca.iter().all(fn(x) { cb.contains(x) }) {
+    return flatten_union_parts(b)
+  }
+  if cb.iter().all(fn(x) { ca.contains(x) }) {
+    return flatten_union_parts(a)
+  }
+  join_branch_types(a, b)
+}
+
+///|
 /// Checks `block` with the given narrowing `binds` applied, then returns
 /// the variable types in effect at the *end* of the block (after the binds
 /// plus any in-block assignment narrowing) before restoring the outer env.
@@ -22531,7 +22653,8 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             None => pre_map.get(k)
           }
           match (tt, et) {
-            (Some(a), Some(b)) => env.narrow(k, join_branch_types(a, b))
+            (Some(a), Some(b)) =>
+              env.narrow(k, join_branch_types_resolved(ctx.resolver, a, b))
             _ => ()
           }
         }
@@ -22919,15 +23042,76 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           None => ()
         }
         let pre = env.full_snapshot()
-        match (scrutinee_name, case_.test_expr) {
-          (Some(name), Some(t)) =>
-            apply_switch_case_narrowing(env, ctx.resolver, name, t)
-          _ => ()
+        // Fall-through: `case "a": case "b": { … }` runs the body for
+        // either label, so it sees the UNION of the two narrowings — not
+        // the last label's alone, which made `issue._tag === "a"` inside
+        // read as always false. A preceding non-empty body that does not
+        // always exit falls in too, and then any label could be live, so
+        // narrowing abstains for that body.
+        let case_index = cases_index_of(cases, case_)
+        let group : Array[@ast.TsExpr] = []
+        let mut group_ok = true
+        match case_.test_expr {
+          Some(t) => group.push(t)
+          None => group_ok = false
         }
-        match (scrutinee_disc, case_.test_expr) {
-          (Some((obj_name, prop)), Some(t)) =>
-            apply_switch_disc_narrowing(env, ctx.resolver, obj_name, prop, t)
-          _ => ()
+        let mut k = case_index - 1
+        while k >= 0 {
+          let prev = cases[k]
+          if prev.body.stmts.length() == 0 {
+            match prev.test_expr {
+              Some(t) => group.push(t)
+              None => group_ok = false
+            }
+            k = k - 1
+          } else {
+            if !block_always_exits(prev.body) {
+              group_ok = false
+            }
+            break
+          }
+        }
+        let narrow_target = match (scrutinee_name, scrutinee_disc) {
+          (Some(name), _) => Some(name)
+          (_, Some((obj_name, _))) => Some(obj_name)
+          _ => None
+        }
+        let apply_label = fn(t : @ast.TsExpr) {
+          match scrutinee_name {
+            Some(name) =>
+              apply_switch_case_narrowing(env, ctx.resolver, name, t)
+            None => ()
+          }
+          match scrutinee_disc {
+            Some((obj_name, prop)) =>
+              apply_switch_disc_narrowing(env, ctx.resolver, obj_name, prop, t)
+            None => ()
+          }
+        }
+        if case_.test_expr is Some(_) && group_ok {
+          if group.length() == 1 {
+            apply_label(group[0])
+          } else {
+            match narrow_target {
+              Some(target) => {
+                let parts : Array[@ast.TsType] = []
+                let mut all = true
+                for t in group {
+                  env.restore_from(pre)
+                  apply_label(t)
+                  match env.lookup(target) {
+                    Some(ty) => parts.push(ty)
+                    None => all = false
+                  }
+                }
+                env.restore_from(pre)
+                if all && parts.length() > 0 {
+                  env.narrow(target, flatten_union_exact(parts))
+                }
+              }
+              None => ()
+            }
+          }
         }
         // `default:` body — narrow against all literal cases.
         match (scrutinee_name, case_.test_expr) {
@@ -25228,7 +25412,13 @@ fn check_call_args_in_expr(
       // unresolvable spread shapes abstain (`cast_shape_fields` returns
       // `None` for those); spread-vs-spread never errors.
       for i, ent in entries {
-        if ent.0.has_prefix("@@spread") || ent.0.has_prefix("<") {
+        // `@@computed:N` is a positional placeholder for a key this
+        // literal cannot spell (`[TypeId]: …`), and the spread's own
+        // computed members get the same placeholder numbering, so two
+        // unrelated keys would compare equal by name.
+        if ent.0.has_prefix("@@spread") ||
+          ent.0.has_prefix("<") ||
+          ent.0.has_prefix("@@computed:") {
           continue
         }
         let mut reported = false
@@ -25765,6 +25955,16 @@ fn check_call_args_in_expr(
       let _ = ctx.unassigned.remove(name)
     }
     CompoundAssignExpr(target, op, v) => {
+      // TS2454: `x ??= v` / `x ||= v` / `x &&= v` read `x` only to decide
+      // whether to assign it, and tsc does not report that read (probed:
+      // `let p: T; return () => (p ??= make())(n)` is accepted while a
+      // plain `() => p` is TS2454). Settle the variable before the walk.
+      match (target, op) {
+        (Var(name), CoalesceAssign | OrAssign | AndAssign) => {
+          let _ = ctx.unassigned.remove(name)
+        }
+        _ => ()
+      }
       check_call_args_in_expr(env, target, ctx)
       check_call_args_in_expr(env, v, ctx)
       // TS2364: the left-hand side of an assignment must be a variable or a
@@ -26721,14 +26921,27 @@ fn stmt_always_exits_with(
       block_always_exits_with(then_b, env, resolver) &&
       block_always_exits_with(else_b, env, resolver)
     Block(b) => block_always_exits_with(b, env, resolver)
-    Try(try_b, _, catch_b_opt, _) => {
-      let try_exits = block_always_exits_with(try_b, env, resolver)
-      let catch_exits = match catch_b_opt {
-        Some(cb) => block_always_exits_with(cb, env, resolver)
-        None => false
+    Try(try_b, _, catch_b_opt, finally_opt) => {
+      // A `finally` that itself exits overrides every path. Without a
+      // `catch` an exception from the `try` propagates (an exit), so the
+      // `try` alone decides — `try { return f() } finally { cleanup() }`
+      // is how effect writes every path-stack helper.
+      if finally_opt is Some(fb) && block_always_exits_with(fb, env, resolver) {
+        return true
       }
-      try_exits && catch_exits
+      let try_exits = block_always_exits_with(try_b, env, resolver)
+      match catch_b_opt {
+        Some(cb) => try_exits && block_always_exits_with(cb, env, resolver)
+        None => try_exits
+      }
     }
+    // A loop whose condition is literally `true` (or absent, `for (;;)`)
+    // never falls through unless a `break` leaves it.
+    While(BoolLit(true), body) | For(_, None | Some(BoolLit(true)), _, body) =>
+      !loop_body_breaks_out(body, None)
+    Label(l, While(BoolLit(true), body))
+    | Label(l, For(_, None | Some(BoolLit(true)), _, body)) =>
+      !loop_body_breaks_out(body, Some(l))
     Label(_, inner) => stmt_always_exits_with(inner, env, resolver)
     Switch(scrutinee, cases) => {
       // Every case body must exit.
@@ -26753,6 +26966,80 @@ fn stmt_always_exits_with(
     }
     _ => false
   }
+}
+
+///|
+fn cases_index_of(
+  cases : Array[@ast.TsSwitchCase],
+  case_ : @ast.TsSwitchCase,
+) -> Int32 {
+  for i, c in cases {
+    if physical_equal(c, case_) {
+      return i
+    }
+  }
+  -1
+}
+
+///|
+/// True when some `break` in `body` leaves the loop that owns it: an
+/// unlabeled `break` not inside a nested loop or `switch`, or a labeled
+/// one whose label is not declared inside `body` (that covers both the
+/// loop's own label and any label further out). A missed spelling reads
+/// as "never breaks", which claims the loop exits — a MISS, not a report.
+fn loop_body_breaks_out(body : @ast.TsBlock, own : String?) -> Bool {
+  let inner_labels : Map[String, Unit] = Map([])
+  letrec walk = fn(stmts : Array[@ast.TsStmt], nested : Bool) -> Bool {
+    for st in stmts {
+      if walk_stmt(st, nested) {
+        return true
+      }
+    }
+    false
+  }
+  and walk_stmt = fn(st : @ast.TsStmt, nested : Bool) -> Bool {
+    match st {
+      Break(None) => !nested
+      Break(Some(l)) => !inner_labels.contains(l) || own == Some(l)
+      Block(b) | With(_, b) => walk(b.stmts, nested)
+      If(_, t, e) =>
+        walk(t.stmts, nested) ||
+        (match e {
+          Some(b) => walk(b.stmts, nested)
+          None => false
+        })
+      Try(t, _, c, f) =>
+        walk(t.stmts, nested) ||
+        (match c {
+          Some(b) => walk(b.stmts, nested)
+          None => false
+        }) ||
+        (match f {
+          Some(b) => walk(b.stmts, nested)
+          None => false
+        })
+      While(_, b)
+      | DoWhile(_, b)
+      | For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => walk(b.stmts, true)
+      Switch(_, cases) => {
+        for c in cases {
+          if walk(c.body.stmts, true) {
+            return true
+          }
+        }
+        false
+      }
+      Label(l, inner) => {
+        inner_labels[l] = ()
+        walk_stmt(inner, nested)
+      }
+      _ => false
+    }
+  }
+  walk(body.stmts, false)
 }
 
 ///|
@@ -33897,7 +34184,8 @@ fn check_untyped_call_type_args(ctx : CheckCtx, inner : @ast.TsExpr) -> Unit {
   // an `Any` there is this checker's inference gap: effect's
   // `causePrettyErrors<…>(…)` and `callback<…>(…)` were reported forty
   // times. Losing `const f: any = g; f<T>()` is the affordable MISS.
-  if ctx.resolver.initialized_top_level_names.get(name) is Some(_) {
+  if ctx.resolver.initialized_top_level_names.get(name) is Some(_) ||
+    ctx.resolver.globals.contains("@imported:" + name) {
     return
   }
   record_unfiltered(

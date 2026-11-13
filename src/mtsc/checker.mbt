@@ -647,6 +647,13 @@ fn graph_import_globals(
       match exported_value_type(target, imported_name, modules, edges, []) {
         Some(type_) => {
           globals.push((local_name, type_))
+          // An imported value's `Any` is usually an exporter whose type
+          // this checker could not compute (`export const identity = <A>(a:
+          // A): A => a` — an arrow's own `<A>` is not in the AST), not a
+          // written `any`. Rules that trust `Any` as a declaration read this.
+          if type_ is Any {
+            globals.push(("@imported:" + local_name, Any))
+          }
           // An imported OVERLOAD set arrives as the same `Union` of
           // signatures a union-typed value is, and the two take opposite
           // arity rules (one overload must accept, against every member).
