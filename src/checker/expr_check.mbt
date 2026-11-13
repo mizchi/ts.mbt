@@ -86,6 +86,12 @@ priv struct Resolver {
   // callable there would put its unbound type parameters into every
   // argument check of every call.
   const_predicates : Map[String, (Int32, @ast.TsType)]
+  // For a GRAPH check: which module (its cache key) each type name was
+  // ingested from, and the names two different modules declare. Modules are
+  // scoped, so a second module's `interface Metadata` is a different type,
+  // not another half of the first one; see `ingest_type_module`.
+  type_name_origin : Map[String, String]
+  colliding_type_names : Map[String, Unit]
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -506,6 +512,8 @@ fn Resolver::empty() -> Resolver {
     lookup_visited_bases: {},
     types_only: false,
     const_predicates: {},
+    type_name_origin: {},
+    colliding_type_names: {},
     globals: {},
     signatures: {},
     func_type_params: {},
@@ -767,6 +775,150 @@ fn merge_interfaces(
 }
 
 ///|
+/// `Name@path` is how a graph check keys a declaration that more than one
+/// module declares (see `module_local_type_renames`); a diagnostic prints
+/// the name the source wrote.
+fn module_local_display_name(n : String) -> String {
+  match n.find("@") {
+    Some(i) if i > 0 => n[:i].to_owned()
+    _ => n
+  }
+}
+
+///|
+/// Rewrite every type REFERENCE whose name is in `renames` — `Named(n)` and
+/// the name of `Applied(n, …)`, which `substitute_params` leaves alone —
+/// skipping binders that shadow it (a mapped type's key, a generic
+/// callable's own parameters).
+pub fn rename_type_refs(
+  ty : @ast.TsType,
+  renames : Map[String, String],
+) -> @ast.TsType {
+  if renames.length() == 0 {
+    return ty
+  }
+  let go = fn(t : @ast.TsType) { rename_type_refs(t, renames) }
+  let all = fn(ts : Array[@ast.TsType]) {
+    let out : Array[@ast.TsType] = []
+    for t in ts {
+      out.push(rename_type_refs(t, renames))
+    }
+    out
+  }
+  let without = fn(names : Array[String]) {
+    let out : Map[String, String] = Map([])
+    for k, v in renames {
+      if !names.contains(k) {
+        out[k] = v
+      }
+    }
+    out
+  }
+  match ty {
+    Named(n) =>
+      match renames.get(n) {
+        Some(r) => Named(r)
+        None => ty
+      }
+    Applied(n, args) => Applied(renames.get(n).unwrap_or(n), all(args))
+    Array(inner) => Array(go(inner))
+    Tuple(items) => Tuple(all(items))
+    Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in fields {
+        out.push((go(f.0), go(f.1)))
+      }
+      Object(out)
+    }
+    Struct(name, fields) => {
+      let out : Array[(String, @ast.TsType)] = []
+      for f in fields {
+        out.push((f.0, go(f.1)))
+      }
+      Struct(name, out)
+    }
+    Func(params, ret) => Func(all(params), go(ret))
+    Union(members) => Union(all(members))
+    Intersection(members) => Intersection(all(members))
+    Conditional(c, e, t, f) => Conditional(go(c), go(e), go(t), go(f))
+    IndexedAccess(b, k) => IndexedAccess(go(b), go(k))
+    Keyof(inner) => Keyof(go(inner))
+    MappedType(k, source, value, optional) =>
+      MappedType(k, go(source), rename_type_refs(value, without([k])), optional)
+    MappedTypeRemap(k, source, remap, value, optional) => {
+      let inner = without([k])
+      MappedTypeRemap(
+        k,
+        go(source),
+        rename_type_refs(remap, inner),
+        rename_type_refs(value, inner),
+        optional,
+      )
+    }
+    Constructor(params, ret, is_abstract) =>
+      Constructor(all(params), go(ret), is_abstract)
+    Rest(inner) => Rest(go(inner))
+    TemplateLiteralType(parts, args) => TemplateLiteralType(parts, all(args))
+    GenericFunc(names, bounds, inner) => {
+      let inner_r = without(names)
+      let nb : Array[(String, @ast.TsType)] = []
+      for b in bounds {
+        nb.push((b.0, rename_type_refs(b.1, inner_r)))
+      }
+      GenericFunc(names, nb, rename_type_refs(inner, inner_r))
+    }
+    CallableMeta(inner, optional_params) =>
+      CallableMeta(go(inner), optional_params)
+    TypePredicate(p, t) => TypePredicate(p, go(t))
+    _ => ty
+  }
+}
+
+///|
+/// An interface with its references rewritten (`rename_type_refs`), its
+/// own type parameters shadowing a rename.
+fn rename_interface_refs(
+  i : @ast.TsInterface,
+  renames : Map[String, String],
+) -> @ast.TsInterface {
+  let r : Map[String, String] = Map([])
+  for k, v in renames {
+    if !i.type_params.contains(k) {
+      r[k] = v
+    }
+  }
+  if r.length() == 0 {
+    return i
+  }
+  let fields : Array[(String, @ast.TsType)] = []
+  for f in i.fields {
+    fields.push((f.0, rename_type_refs(f.1, r)))
+  }
+  let extends_args : Array[Array[@ast.TsType]] = []
+  for args in i.extends_args {
+    extends_args.push(args.map(fn(a) { rename_type_refs(a, r) }))
+  }
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  for sig in i.index_signatures {
+    index_signatures.push(
+      (rename_type_refs(sig.0, r), rename_type_refs(sig.1, r)),
+    )
+  }
+  let type_param_bounds : Array[(String, @ast.TsType)] = []
+  for b in i.type_param_bounds {
+    type_param_bounds.push((b.0, rename_type_refs(b.1, r)))
+  }
+  {
+    ..i,
+    extends_names: i.extends_names.map(fn(n) { r.get(n).unwrap_or(n) }),
+    extends_args,
+    fields,
+    index_signatures,
+    type_param_bounds,
+  }
+}
+
+///|
 /// Import only type declarations from another ES module. Value declarations
 /// intentionally stay out of `globals`: an embedding must still provide the
 /// concrete bindings it resolved for the current module's runtime imports.
@@ -775,6 +927,8 @@ fn Resolver::ingest_type_module(
   module_ : @ast.TsModule,
   prefix : String,
   cache_key~ : String = "",
+  skip~ : Map[String, Unit] = Map([]),
+  renames~ : Map[String, String] = Map([]),
 ) -> Unit {
   let types = if cache_key == "" {
     let t = { ..Resolver::empty(), types_only: true, }
@@ -818,8 +972,108 @@ fn Resolver::ingest_type_module(
       shadows_lib[c.name] = ()
     }
   }
-  for name, interface_ in types.interfaces {
+  // Every one of these modules is SCOPED: its top-level `interface
+  // Metadata` is visible in the checked module only through an import, and
+  // a second module's `interface Metadata` is a different type rather than
+  // another half of the first. Bare-name ingestion merged them — effect
+  // declares `Metadata` in four modules and `IndexedNode` in two, so a
+  // literal against `Schedule.Metadata` was asked for `Metric.Metadata`'s
+  // members, and `this.children` inside hashMap.ts's own `class
+  // IndexedNode` was looked up on Graph.ts's interface. A name the checked
+  // module declares itself (`skip`) is never taken from another module.
+  // Between two OTHER modules the declarations still merge, and that is a
+  // measured choice: their own bare references (`type AST = Literal | Enum
+  // | …` inside SchemaAST.ts) resolve through this one flat table, so
+  // letting the nearest module win instead sent SchemaAST's `Literal` to
+  // Schema.ts's and turned 49 discriminant narrowings into `never`. What a
+  // flat table CAN do is notice the collision, which is what lets a
+  // qualified `ns.X` take its own module's declaration
+  // (`alias_namespace_import_types`) — `Schedule.Metadata` is the spelling
+  // real code uses across modules.
+  let claim = fn(name : String) -> Bool {
     if shadows_lib.contains(name) {
+      return false
+    }
+    // Skipped for the checked module's own declaration, the name still
+    // COLLIDES: `A.Context` must reach A's `Context`, not canonicalize to
+    // the bare name the checked module's own declaration now holds.
+    if skip.contains(name) {
+      if cache_key != "" {
+        r.colliding_type_names[name] = ()
+      }
+      return false
+    }
+    if cache_key == "" {
+      return true
+    }
+    match r.type_name_origin.get(name) {
+      None => {
+        r.type_name_origin[name] = cache_key
+        true
+      }
+      Some(origin) => {
+        if origin != cache_key {
+          r.colliding_type_names[name] = ()
+        }
+        true
+      }
+    }
+  }
+  // `renames` maps each name this module declares that ANOTHER reachable
+  // module also declares to `name@<this module>`. Its declarations are
+  // rewritten to reference those keys and registered under them too, so
+  // its own bare references (`type AST = Literal | …` inside SchemaAST)
+  // reach its own declarations whatever the shared bare entry holds.
+  // The rewrite is a pure function of (module, rename set), and every
+  // checked module of a graph ingests every module it reaches — so it is
+  // cached, or effect's check went from 7 s to 27 s.
+  let renamed = if renames.length() == 0 || cache_key == "" {
+    None
+  } else {
+    let names : Array[String] = []
+    for k, _ in renames {
+      names.push(k)
+    }
+    names.sort()
+    let rkey = cache_key + "\u{0}" + names.join(",")
+    match renamed_type_module_cache.get(rkey) {
+      Some(t) => Some(t)
+      None => {
+        let ifaces : Map[String, @ast.TsInterface] = Map([])
+        for name, i in types.interfaces {
+          ifaces[name] = rename_interface_refs(i, renames)
+        }
+        let aliases : Map[String, @ast.TsTypeAlias] = Map([])
+        for name, a in types.type_aliases {
+          let own : Map[String, String] = Map([])
+          for k, v in renames {
+            if !a.type_params.contains(k) {
+              own[k] = v
+            }
+          }
+          aliases[name] = { ..a, type_: rename_type_refs(a.type_, own), }
+        }
+        renamed_type_module_cache[rkey] = (ifaces, aliases)
+        Some((ifaces, aliases))
+      }
+    }
+  }
+  for name, interface_ in types.interfaces {
+    let interface_ = match renamed {
+      Some((ifaces, _)) => ifaces.get(name).unwrap_or(interface_)
+      None => interface_
+    }
+    match renames.get(name) {
+      Some(key) => {
+        r.interfaces[key] = interface_
+        r.colliding_type_names[name] = ()
+      }
+      None => ()
+    }
+    if shadows_lib.contains(name) {
+      continue
+    }
+    if !claim(name) {
       continue
     }
     match r.interfaces.get(name) {
@@ -829,18 +1083,49 @@ fn Resolver::ingest_type_module(
     }
   }
   for name, class_ in types.classes {
+    match renames.get(name) {
+      Some(key) => {
+        Resolver::put_class(r, key, class_)
+        r.colliding_type_names[name] = ()
+      }
+      None => ()
+    }
     if shadows_lib.contains(name) {
+      continue
+    }
+    if !claim(name) {
       continue
     }
     Resolver::put_class(r, name, class_)
   }
   for name, alias_ in types.type_aliases {
+    let alias_ = match renamed {
+      Some((_, aliases)) => aliases.get(name).unwrap_or(alias_)
+      None => alias_
+    }
+    match renames.get(name) {
+      Some(key) => {
+        r.type_aliases[key] = alias_
+        r.colliding_type_names[name] = ()
+      }
+      None => ()
+    }
     if shadows_lib.contains(name) {
+      continue
+    }
+    if !claim(name) {
       continue
     }
     r.type_aliases[name] = alias_
   }
   for name, enum_ in types.enums {
+    match renames.get(name) {
+      Some(key) => r.enums[key] = enum_
+      None => ()
+    }
+    if !claim(name) {
+      continue
+    }
     r.enums[name] = enum_
   }
 }
@@ -858,8 +1143,17 @@ fn Resolver::ingest_type_module(
 let type_module_cache : Map[String, Resolver] = Map([])
 
 ///|
+/// `ingest_type_module`'s renamed declarations, keyed by module and rename
+/// set; cleared with `type_module_cache`.
+let renamed_type_module_cache : Map[
+  String,
+  (Map[String, @ast.TsInterface], Map[String, @ast.TsTypeAlias]),
+] = Map([])
+
+///|
 pub fn clear_type_module_cache() -> Unit {
   type_module_cache.clear()
+  renamed_type_module_cache.clear()
 }
 
 ///|
@@ -1034,10 +1328,23 @@ fn distribute_conditional_alias(
 /// only ever resolve to what the bare one does.
 fn Resolver::alias_namespace_import_types(
   r : Resolver,
-  aliases : Array[(String, String)],
+  aliases : Array[(String, String, String)],
 ) -> Unit {
   for pair in aliases {
-    let (qualified, bare) = pair
+    let (qualified, bare, origin) = pair
+    // When two modules declare `bare`, its bare entry is their merge, and
+    // the qualified spelling must still mean ITS module's declaration,
+    // which ingestion registered under `bare@origin`.
+    if r.colliding_type_names.contains(bare) {
+      let key = bare + "@" + origin
+      if r.interfaces.contains(key) ||
+        r.classes.contains(key) ||
+        r.type_aliases.contains(key) ||
+        r.enums.contains(key) {
+        r.qualified_names[qualified] = key
+        continue
+      }
+    }
     let declared_here = r.interfaces.get(qualified) is Some(_) ||
       r.classes.get(qualified) is Some(_) ||
       r.type_aliases.get(qualified) is Some(_) ||
@@ -3379,6 +3686,7 @@ fn Resolver::lookup_field(
     None => ()
   }
   match found {
+    Some(Union(parts)) => Some(flatten_union_exact(parts))
     Some(t) => Some(t)
     None =>
       // Object-like receivers inherit Object.prototype members
@@ -4075,6 +4383,17 @@ fn Resolver::lookup_field_core(
             if field_is_numeric {
               return Some(entry.1)
             }
+          // `{ [x: PropertyKey]: unknown }` — effect's `isObject` guard —
+          // keeps its key as the ALIAS, which read as a property named
+          // `PropertyKey`. A key type that resolves to a union containing
+          // `string` is a string index signature.
+          Named(_) =>
+            match self.unwrap(entry.0) {
+              String_ => return Some(entry.1)
+              Union(parts) if parts.iter().any(fn(p) { p is String_ }) =>
+                return Some(entry.1)
+              _ => ()
+            }
           _ => ()
         }
       }
@@ -4090,6 +4409,7 @@ fn Resolver::lookup_field_core(
     }
     Array(elem) => array_prototype_member(elem, field)
     Number | NumberLiteral(_) | Int => number_prototype_member(field)
+    BigInt | BigIntLiteral(_) => bigint_prototype_member(field)
     Boolean | BooleanLiteral(_) => boolean_prototype_member(field)
     Func(params, ret) => func_prototype_member(params, ret, field)
     Tuple(items) =>
@@ -4487,21 +4807,35 @@ fn date_prototype_member(field : String) -> @ast.TsType? {
     | "getUTCMilliseconds"
     | "getUTCDay"
     | "valueOf" => Some(@ast.TsType::Func([], n))
+    // `lib.es5.d.ts` gives the multi-field setters their trailing fields
+    // as OPTIONAL (`setUTCHours(hours, min?, sec?, ms?)`), so effect's
+    // `d.setUTCHours(h, m, s, ms)` was "expected 1 argument(s), got 4".
     "setTime"
-    | "setFullYear"
-    | "setMonth"
     | "setDate"
-    | "setHours"
-    | "setMinutes"
-    | "setSeconds"
     | "setMilliseconds"
-    | "setUTCFullYear"
-    | "setUTCMonth"
     | "setUTCDate"
-    | "setUTCHours"
-    | "setUTCMinutes"
-    | "setUTCSeconds"
     | "setUTCMilliseconds" => Some(@ast.TsType::Func([n], n))
+    "setSeconds" | "setUTCSeconds" | "setMonth" | "setUTCMonth" =>
+      Some(@ast.TsType::Func([n, optional_number_param()], n))
+    "setMinutes" | "setUTCMinutes" | "setFullYear" | "setUTCFullYear" =>
+      Some(
+        @ast.TsType::Func(
+          [n, optional_number_param(), optional_number_param()],
+          n,
+        ),
+      )
+    "setHours" | "setUTCHours" =>
+      Some(
+        @ast.TsType::Func(
+          [
+            n,
+            optional_number_param(),
+            optional_number_param(),
+            optional_number_param(),
+          ],
+          n,
+        ),
+      )
     "toString"
     | "toDateString"
     | "toTimeString"
@@ -4515,6 +4849,29 @@ fn date_prototype_member(field : String) -> @ast.TsType? {
       Some(@ast.TsType::Func([optional_any_param(), optional_any_param()], s))
     _ => None
   }
+}
+
+///|
+/// `BigInt.prototype.*` (`lib.es2020.bigint.d.ts`). There was no table at
+/// all, so a `bigint` receiver fell through to a zero-parameter fallback
+/// and effect's `self.toString(10)` after `typeof self === "bigint"` was
+/// "expected 0 argument(s), got 1".
+fn bigint_prototype_member(field : String) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  match field {
+    "toString" => Some(@ast.TsType::Func([optional_number_param()], s))
+    "toLocaleString" =>
+      Some(@ast.TsType::Func([optional_any_param(), optional_any_param()], s))
+    "valueOf" => Some(@ast.TsType::Func([], @ast.TsType::BigInt))
+    _ => None
+  }
+}
+
+///|
+/// An optional `number` parameter, spelled the way the parser spells
+/// `x?: number`.
+fn optional_number_param() -> @ast.TsType {
+  @ast.TsType::Union([@ast.TsType::Number, @ast.TsType::Undefined])
 }
 
 ///|
@@ -4763,12 +5120,31 @@ fn typed_array_extra_member(field : String) -> @ast.TsType? {
   match field {
     "buffer" => Some(@ast.TsType::Named("ArrayBuffer"))
     "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" => Some(n)
+    // `subarray(begin?, end?)`, `set(array, offset?)` and
+    // `copyWithin(target, start, end?)` per `lib.es5.d.ts`; every optional
+    // here was required, so `buf.subarray(4)` and `out.set(bytes)` — how
+    // every typed-array copy is written — reported an arity mismatch.
     "subarray" =>
-      Some(@ast.TsType::Func([n, n], @ast.TsType::Named("Uint8Array")))
+      Some(
+        @ast.TsType::Func(
+          [optional_number_param(), optional_number_param()],
+          @ast.TsType::Named("Uint8Array"),
+        ),
+      )
     "set" =>
-      Some(@ast.TsType::Func([@ast.TsType::Array(n), n], @ast.TsType::Void))
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Any, optional_number_param()],
+          @ast.TsType::Void,
+        ),
+      )
     "copyWithin" =>
-      Some(@ast.TsType::Func([n, n], @ast.TsType::Named("Uint8Array")))
+      Some(
+        @ast.TsType::Func(
+          [n, n, optional_number_param()],
+          @ast.TsType::Named("Uint8Array"),
+        ),
+      )
     _ => None
   }
 }
@@ -4811,7 +5187,9 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     ("Object", "getPrototypeOf") => Some(@ast.TsType::Func([any], any))
     ("Object", "setPrototypeOf") => Some(@ast.TsType::Func([any, any], any))
     ("Object", "getOwnPropertyNames") => Some(@ast.TsType::Func([any], str_arr))
-    ("Object", "hasOwn") => Some(@ast.TsType::Func([any, s], b))
+    // `hasOwn(o: object, v: PropertyKey)` — a number or symbol key is
+    // legal (`lib.es2022.object.d.ts`).
+    ("Object", "hasOwn") => Some(@ast.TsType::Func([any, any], b))
     // Math.*
     ("Math", "abs")
     | ("Math", "ceil")
@@ -9328,14 +9706,58 @@ fn infer_expr_inner(
       let inner_ty = infer_expr(env, resolver, inner)
       match op {
         Typeof => infer_typeof_type(resolver, inner_ty)
+        // `-x` and `~x` keep a bigint a bigint (`-difference` with
+        // `difference: bigint`); everything else is as before.
+        // Decided by assignability, so `bigint | bigint` (a union the
+        // flow joins can leave un-deduplicated) still counts.
+        Neg | BitwiseNot if !(inner_ty is Any) &&
+          !(inner_ty is Never) &&
+          is_assignable_to(inner_ty, @ast.TsType::BigInt) => @ast.TsType::BigInt
         _ => infer_unary(op)
       }
     }
-    Cond(_, then_, else_) =>
-      narrow_union(
-        infer_expr(env, resolver, then_),
-        infer_expr(env, resolver, else_),
-      )
+    // Each branch of `c ? a : b` is read under `c`'s narrowing, as an `if`
+    // reads its blocks: `typeof capacity === "number" ? { capacity } :
+    // capacity` (effect's `PubSub`) is `{ capacity: number } | { … }`, and
+    // without this both branches saw the whole `number | { … }`.
+    Cond(c, then_, else_) => {
+      let n = analyze_narrowing(env, resolver, c)
+      if n.then_binds.length() == 0 && n.else_binds.length() == 0 {
+        narrow_union(
+          infer_expr(env, resolver, then_),
+          infer_expr(env, resolver, else_),
+        )
+      } else {
+        // A binding the condition would narrow to `never` is left as it
+        // was: here the branch is only being TYPED, and our discriminant
+        // narrowing can empty a generic union that tsc keeps (zod's
+        // `result.status === "valid" ? result.value : …`).
+        let snap = env.full_snapshot()
+        for b in n.then_binds {
+          if !(b.1 is Never) {
+            env.bind(b.0, b.1)
+          }
+        }
+        let t1 = infer_expr(env, resolver, then_)
+        env.restore_from(snap)
+        let snap2 = env.full_snapshot()
+        for b in n.else_binds {
+          if !(b.1 is Never) {
+            env.bind(b.0, b.1)
+          }
+        }
+        let t2 = infer_expr(env, resolver, else_)
+        env.restore_from(snap2)
+        // Not `narrow_union`, which drops a member assignable to another:
+        // `{ capacity: number }` would swallow `{ capacity; replay? }` and
+        // `options.replay` would be reported.
+        if t1 is Any || t2 is Any {
+          @ast.TsType::Any
+        } else {
+          flatten_union_exact([t1, t2])
+        }
+      }
+    }
     ArrayLit(items) => {
       let mut elem : @ast.TsType = Any
       let mut first = true
@@ -9439,6 +9861,28 @@ fn infer_expr_inner(
         resolver.classes.get(name) is None &&
         resolver.interfaces.get("SymbolConstructor") is None {
         return @ast.TsType::Symbol
+      }
+      // The same holds for the other primitive conversion functions, called
+      // without `new`: `String(x)` is `string`, `Number(x)` `number`,
+      // `Boolean(x)` `boolean`, `BigInt(x)` `bigint`. They inferred `Any`,
+      // and `any ** any` is `number`, so effect's `BigInt(1024) ** BigInt(2)`
+      // into a `bigint` field reported "expected `bigint` but got `number`".
+      let primitive_ctor = match name {
+        "String" => Some((@ast.TsType::String_, "StringConstructor"))
+        "Number" => Some((@ast.TsType::Number, "NumberConstructor"))
+        "Boolean" => Some((@ast.TsType::Boolean, "BooleanConstructor"))
+        "BigInt" => Some((@ast.TsType::BigInt, "BigIntConstructor"))
+        _ => None
+      }
+      match primitive_ctor {
+        Some((ty, ctor_iface)) =>
+          if env.lookup(name) is None &&
+            resolver.declared_value_names.get(name) is None &&
+            resolver.classes.get(name) is None &&
+            resolver.interfaces.get(ctor_iface) is None {
+            return ty
+          }
+        None => ()
       }
       let callee_ty = match env.lookup(name) {
         Some(t) => t
@@ -11253,6 +11697,14 @@ fn infer_binop(
         | (BigInt, BigIntLiteral(_))
         | (BigIntLiteral(_), BigInt)
         | (BigIntLiteral(_), BigIntLiteral(_)) => @ast.TsType::BigInt
+        // tsc says `any * any` is `number`, but an `Any` here is as often
+        // a type this checker failed to compute (a module-level `const`
+        // read inside a function body is one), and answering `number` for
+        // `index & mask` with two bigints made `=== BigInt(0)` "always
+        // false". Two `Any`s, or `Any` beside a bigint, stay `Any`.
+        (Any, Any)
+        | (Any, BigInt | BigIntLiteral(_))
+        | (BigInt | BigIntLiteral(_), Any) => @ast.TsType::Any
         _ => @ast.TsType::Number
       }
     BinEq
@@ -18447,13 +18899,13 @@ fn type_display(ty : @ast.TsType) -> String {
     BigIntLiteral(s) => s + "n"
     BooleanLiteral(b) => if b { "true" } else { "false" }
     Array(inner) => type_display(inner) + "[]"
-    Named(n) => n
+    Named(n) => module_local_display_name(n)
     Applied(n, args) => {
       let parts : Array[String] = []
       for a in args {
         parts.push(type_display(a))
       }
-      n + "<" + parts.join(", ") + ">"
+      module_local_display_name(n) + "<" + parts.join(", ") + ">"
     }
     Union(items) => {
       let parts : Array[String] = []
@@ -18752,8 +19204,19 @@ fn bind_object_pattern(
             }
           }
           // Non-union source with no matching field: the property is absent,
-          // which in JS evaluates to `undefined` at runtime.
-          _ => @ast.TsType::Undefined
+          // which in JS evaluates to `undefined` at runtime — but only a
+          // shape whose members are ENUMERABLE can say "absent". A mapped
+          // type over a generic, an unresolved alias or an applied generic
+          // read as `undefined` too, so effect's `toCode: ({ typeParameters
+          // }) => typeParameters[0]` against a contextual type it could not
+          // expand reported "cannot index into `undefined`" nineteen times.
+          // The array-pattern fallback makes the same split.
+          _ =>
+            if ctx.resolver.enumerable_object_shape(source, 0) {
+              @ast.TsType::Undefined
+            } else {
+              @ast.TsType::Any
+            }
         }
     }
     let field_ty = apply_binding_default(env, ctx, field_ty, prop.default)
@@ -18886,6 +19349,20 @@ fn check_compound_assign(
     _ => false
   }
   if !needs_numeric {
+    return
+  }
+  // A `bigint` target takes `bigint` arithmetic (`d *= 2n`): the rule was
+  // written for `number` only, invisible while `BigInt(x)` inferred `any`.
+  if is_checkable(target) &&
+    !(target is Any) &&
+    is_assignable_to(target, @ast.TsType::BigInt) {
+    check_expr_against(
+      env,
+      rhs,
+      @ast.TsType::BigInt,
+      ctx,
+      "compound-assign `\{name}`",
+    )
     return
   }
   // Verify target is numeric — otherwise we have an immediate error.
@@ -19207,6 +19684,40 @@ fn union_of(items : Array[@ast.TsType]) -> @ast.TsType {
 }
 
 ///|
+/// A union read off a UNION receiver arrives nested — `ast.context` over a
+/// 21-member class union is 21 copies of `Context | undefined` inside one
+/// `Union` — and every consumer that splits a union one level (the `?.`
+/// prune, truthiness narrowing) then sees no nullish member and no
+/// `Context` either, so `ast.context?.isOptional` reported "does not
+/// exist". Flattening and dropping EXACT duplicates changes no member's
+/// meaning; nothing is subsumed, unlike `simplify_union`.
+fn flatten_union_exact(parts : Array[@ast.TsType]) -> @ast.TsType {
+  if !parts.iter().any(fn(p) { p is Union(_) }) {
+    return Union(parts)
+  }
+  let out : Array[@ast.TsType] = []
+  fn go(ps : Array[@ast.TsType], out : Array[@ast.TsType]) -> Unit {
+    for p in ps {
+      match p {
+        Union(inner) => go(inner, out)
+        _ => if !out.contains(p) { out.push(p) }
+      }
+    }
+  }
+  go(parts, out)
+  union_of(out)
+}
+
+///|
+/// `ty` with nested unions flattened (see `flatten_union_exact`).
+fn flatten_union_parts(ty : @ast.TsType) -> @ast.TsType {
+  match ty {
+    Union(parts) => flatten_union_exact(parts)
+    _ => ty
+  }
+}
+
+///|
 /// Strip `Null` and `Undefined` from `ty`.
 fn non_nullable(ty : @ast.TsType) -> @ast.TsType {
   let variants = union_components(ty)
@@ -19470,6 +19981,36 @@ fn collect_narrowing(
         for b in ro.else_binds {
           else_binds.push(b)
         }
+        // The then-branch is `l` true, or `l` false and `r` true, so a
+        // binding BOTH sides narrow is narrowed to the union of the two:
+        // `options?.fromFile !== undefined || options?.toFile !==
+        // undefined` rules `options` being `undefined` out on either path,
+        // and effect reads `options.fromFile` right after it. A binding
+        // only one side narrows is left alone.
+        let lt : Map[String, @ast.TsType] = Map([])
+        for b in lo.then_binds {
+          lt[b.0] = b.1
+        }
+        let rt : Map[String, @ast.TsType] = Map([])
+        for b in ro.then_binds {
+          rt[b.0] = b.1
+        }
+        for k, t1 in lt {
+          match rt.get(k) {
+            Some(t2) =>
+              then_binds.push(
+                (
+                  k,
+                  if t1 is Any || t2 is Any {
+                    @ast.TsType::Any
+                  } else {
+                    flatten_union_exact([t1, t2])
+                  },
+                ),
+              )
+            None => ()
+          }
+        }
       }
     BinOp(Coalesce, l, r) =>
       // `x ?? y`: when truthy, x is non-nullish; when falsy, narrowing from r.
@@ -19590,7 +20131,10 @@ fn collect_narrowing(
               // reason `narrow_by_discriminant` unwraps. Without this an
               // alias is one opaque variant, `lookup_field` answers for the
               // whole alias, and `"a" in m` narrows nothing.
-              let cur = resolver.unwrap(env_lookup_full(env, resolver, name))
+              let cur = deep_union_members(
+                resolver,
+                resolver.unwrap(env_lookup_full(env, resolver, name)),
+              )
               let then_ty = narrow_keep(cur, fn(v) {
                 resolver.lookup_field(v, key) is Some(_)
               })
@@ -19637,15 +20181,30 @@ fn collect_narrowing(
         env, resolver, callee_name, args, pair_pos, pair_neg,
       )
     }
-    MethodCall(Var("Array"), "isArray", [Var(x)]) if env.lookup("Array") is None => {
+    MethodCall(Var("Array"), "isArray", [arg]) if env.lookup("Array") is None &&
+      narrowing_key_for_expr(arg) is Some(_) => {
       let pair_pos = if then_sense { then_binds } else { else_binds }
       let pair_neg = if then_sense { else_binds } else { then_binds }
-      match array_is_array_split(resolver, env_lookup_full(env, resolver, x)) {
-        Some((arrays, others)) => {
-          pair_pos.push((x, arrays))
-          pair_neg.push((x, others))
-        }
-        None => ()
+      let x = narrowing_key_for_expr(arg).unwrap()
+      let cur = match arg {
+        Var(n) => env_lookup_full(env, resolver, n)
+        _ => infer_expr(env, resolver, arg)
+      }
+      // `unknown` narrows to `any[]` in the then-branch, as tsc gives it,
+      // and keeps `unknown` in the else-branch; a property path
+      // (`Array.isArray(source.allOf)`) narrows through the same dotted key
+      // the truthiness and equality guards bind. effect's `unknown`-typed
+      // JSON walkers read `.length` straight after both shapes.
+      match resolver.unwrap(cur) {
+        Unknown => pair_pos.push((x, @ast.TsType::Array(@ast.TsType::Any)))
+        _ =>
+          match array_is_array_split(resolver, cur) {
+            Some((arrays, others)) => {
+              pair_pos.push((x, arrays))
+              pair_neg.push((x, others))
+            }
+            None => ()
+          }
       }
     }
     MethodCall(receiver, method_name, args) => {
@@ -19694,6 +20253,44 @@ fn collect_narrowing(
       }
     }
   }
+}
+
+///|
+/// `ty` with every union member that is itself an alias for a union
+/// expanded in place, recursively: effect's `AsymmetricAlgorithm |
+/// SecretAlgorithm` is two aliases whose members are aliases
+/// (`Signature.Algorithm`, …) of unions of interfaces, and `"_tag" in
+/// algorithm` has to see the interfaces to keep the ones that declare
+/// `_tag`. A member that does not unwrap to a union is kept as written.
+fn deep_union_members(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  let parts = match ty {
+    Union(ps) => ps
+    _ => return ty
+  }
+  let out : Array[@ast.TsType] = []
+  fn go(
+    resolver : Resolver,
+    ps : Array[@ast.TsType],
+    depth : Int32,
+    out : Array[@ast.TsType],
+  ) -> Unit {
+    for p in ps {
+      match p {
+        Union(inner) => go(resolver, inner, depth, out)
+        _ =>
+          if depth < 8 {
+            match resolver.unwrap(p) {
+              Union(inner) => go(resolver, inner, depth + 1, out)
+              _ => out.push(p)
+            }
+          } else {
+            out.push(p)
+          }
+      }
+    }
+  }
+  go(resolver, parts, 0, out)
+  union_of(out)
 }
 
 ///|
@@ -19838,22 +20435,7 @@ fn apply_type_predicate_narrowing(
     Some(_) => None
     None =>
       match resolver.globals.get(callee_name) {
-        Some(ty) => {
-          let mut found : @ast.TsType? = None
-          for f in collect_declared_fields(ty, resolver) {
-            if f.0 != "<call>" {
-              continue
-            }
-            match resolver.unwrap(f.1) {
-              Func(ps, TypePredicate(_, target)) if ps.length() == args.length() => {
-                found = Some(target)
-                break
-              }
-              _ => ()
-            }
-          }
-          found
-        }
+        Some(ty) => overloaded_predicate_target(resolver, ty, args.length())
         None => None
       }
   }
@@ -19938,11 +20520,51 @@ fn apply_type_predicate_narrowing(
         arg_name,
         pair_pos,
         pair_neg,
-        loose_target=predicate_is_generic,
+        // A target holding a name this resolver cannot expand (an arrow
+        // guard's own `<T>`, which the AST does not keep) is as loose as a
+        // generic one.
+        loose_target=predicate_is_generic ||
+          type_contains_unresolved_named(target, resolver),
       )
     }
     _ => ()
   }
+}
+
+///|
+/// The target of the call signature of `ty` (an object type of overloaded
+/// call signatures) whose arity is `nargs` and whose return is a type
+/// predicate — effect's `hasProperty: { <P>(property: P): (self: unknown)
+/// => self is …; <P>(self: unknown, property: P): self is … }`. A generic
+/// member's own type parameters read as `any`.
+fn overloaded_predicate_target(
+  resolver : Resolver,
+  ty : @ast.TsType,
+  nargs : Int32,
+) -> @ast.TsType? {
+  for f in collect_declared_fields(ty, resolver) {
+    if f.0 != "<call>" {
+      continue
+    }
+    let (tps, sig) = match f.1 {
+      GenericFunc(tps, _, inner) => (tps, inner)
+      other => ([], resolver.unwrap(other))
+    }
+    match sig {
+      Func(ps, TypePredicate(_, target)) if ps.length() == nargs => {
+        if tps.length() == 0 {
+          return Some(target)
+        }
+        let bindings : Map[String, @ast.TsType] = Map([])
+        for tp in tps {
+          bindings[tp] = Any
+        }
+        return Some(substitute_params(target, bindings))
+      }
+      _ => ()
+    }
+  }
+  None
 }
 
 ///|
@@ -20104,12 +20726,51 @@ fn apply_method_type_predicate_narrowing(
       // `lookup_method_sig` misses it. Fall back to the field's return type.
       match resolver.lookup_field(recv_ty, method_name) {
         Some(Func(_, r)) => r
-        _ => return
+        // Not a method here: the namespace-import route below may still
+        // know it as a predicate.
+        _ => @ast.TsType::Any
       }
   }
+  // A target reached through the fallback below is a generic predicate's
+  // with its type parameters read as `any`: fine for the positive branch,
+  // too wide for the negative one (see `narrow_by_predicate_target`).
+  let mut loose = false
   let (param_name, target) = match ret {
     TypePredicate(p, t) => (p, t)
-    _ => return
+    // An OVERLOADED predicate (`Predicate.hasProperty(cause, "errno")`):
+    // `lookup_method_sig` answers for the FIRST overload, which for this
+    // idiom is the curried one returning a function, so choose by arity
+    // instead. Through a namespace import the receiver has no value type
+    // at all; the embedding publishes the target's predicate exports as
+    // `@ns:NS.member`.
+    _ => {
+      let field_ty = match resolver.lookup_field(recv_ty, method_name) {
+        Some(t) if !(t is Any) => Some(t)
+        _ =>
+          match receiver {
+            Var(ns) if env.lookup(ns) is None =>
+              resolver.globals.get("@ns:" + ns + "." + method_name)
+            _ => None
+          }
+      }
+      loose = true
+      match field_ty {
+        Some(Func(_, TypePredicate(p, t))) => (p, t)
+        Some(GenericFunc(tps, _, Func(_, TypePredicate(p, t)))) => {
+          let bindings : Map[String, @ast.TsType] = Map([])
+          for tp in tps {
+            bindings[tp] = Any
+          }
+          (p, substitute_params(t, bindings))
+        }
+        Some(ft) =>
+          match overloaded_predicate_target(resolver, ft, args.length()) {
+            Some(t) => ("", t)
+            None => return
+          }
+        None => return
+      }
+    }
   }
   // `this is T` predicate (`isLeader(): this is LeadGuard`): the guard
   // narrows the *receiver* itself, not a positional argument. Narrow the
@@ -20146,7 +20807,9 @@ fn apply_method_type_predicate_narrowing(
       }
       pair_pos.push((arg_name, then_resolved))
       let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
-      pair_neg.push((arg_name, else_ty))
+      if !(loose && else_ty is Never && !(cur is Never)) {
+        pair_neg.push((arg_name, else_ty))
+      }
     }
     _ => ()
   }
@@ -25694,12 +26357,25 @@ fn check_call_args_in_expr(
           // type so we don't double-flag on the explicit optional
           // chain.
           check_call_args_in_expr(env, recv, ctx)
-          let recv_ty = ctx.resolver.unwrap(
-            prune_nullish(ctx.resolver, infer_expr(env, ctx.resolver, recv)),
+          // Pruned again after the unwrap: an alias can carry the nullish
+          // member inside it (or arrive nested), and the property check is
+          // about the non-nullish part either way.
+          let recv_ty = prune_nullish(
+            ctx.resolver,
+            flatten_union_parts(
+              ctx.resolver.unwrap(
+                prune_nullish(ctx.resolver, infer_expr(env, ctx.resolver, recv)),
+              ),
+            ),
           )
           if is_checkable(recv_ty) &&
             !is_in_scope_type_param(ctx, recv_ty) &&
             !member_recv_unmodeled(recv_ty, ctx.resolver) &&
+            // The plain `.prop` check's gate for a shape holding a name the
+            // resolver cannot expand — missing here, so `a?.toCodec` on a
+            // namespace-qualified interface reported where `a.toCodec`
+            // did not.
+            !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
             !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) &&
             !private_brand_declared_on_receiver(ctx.resolver, recv_ty, prop) &&
             !ctx.resolver.field_on_any_union_member(recv_ty, prop) {
@@ -26330,7 +27006,7 @@ pub fn check_module_function_bodies_with_context(
   module_ : @ast.TsModule,
   globals : Array[(String, @ast.TsType)],
   type_modules : Array[@ast.TsModule],
-  namespace_type_aliases~ : Array[(String, String)] = [],
+  namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
 ) -> Array[ExprIssue] {
   check_module_function_bodies_layered(
@@ -37223,6 +37899,44 @@ fn lib_global_ctor_type_name(name : String) -> String? {
 }
 
 ///|
+/// A module-level `const` with no annotation is not in `globals` (only an
+/// annotated binding is), and the top-level env that infers it is walked
+/// AFTER the function bodies — so inside every body it read as `any`, and
+/// `const n = 1; function f() { const s: string = n }` was silent. The
+/// first, narrow step: a `const` whose initializer infers to a PRIMITIVE or
+/// literal type is registered before the bodies run. A `const` cannot be
+/// reassigned, so its type at every read is the initializer's; anything
+/// composite (objects, calls returning shapes, arrows) still reads `any`,
+/// which is a capability change at every call site and is not taken here.
+fn register_primitive_top_level_consts(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Unit {
+  let env = ExprEnv::new()
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Const(Ident(name), Any, init) =>
+        if resolver.globals.get(name) is None {
+          let t = infer_expr(env, resolver, init)
+          match t {
+            Number
+            | String_
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_)
+            | NumberLiteral(_)
+            | BooleanLiteral(_)
+            | BigIntLiteral(_) => resolver.globals[name] = t
+            _ => ()
+          }
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
 /// Collect top-level `var x;` / `let x: any;` names — a declaration with
 /// no `=` initializer (the parser's `Var("__ts_no_init__")` sentinel)
 /// whose annotation is `any` or absent.
@@ -38413,7 +39127,7 @@ fn check_module_function_bodies_layered(
   type_modules : Array[@ast.TsModule],
   extra_globals : Array[(String, @ast.TsType)],
   backstops~ : RootNameBackstops? = None,
-  namespace_type_aliases~ : Array[(String, String)] = [],
+  namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
 ) -> Array[ExprIssue] {
   if outer_modules.length() == 0 {
@@ -38482,13 +39196,104 @@ fn check_module_function_bodies_layered(
     Some(b) => Resolver::empty_with_backstops(b)
     None => Resolver::empty()
   }
+  // The checked module's own top-level type names: another module's
+  // same-named declaration is a different type (see `ingest_type_module`).
+  let own_type_names : Map[String, Unit] = Map([])
+  let own_root = if outer_modules.length() > 0 {
+    outer_modules[0]
+  } else {
+    module_
+  }
+  for i in own_root.interfaces {
+    own_type_names[i.name] = ()
+  }
+  for c in own_root.classes {
+    own_type_names[c.name] = ()
+  }
+  for a in own_root.type_aliases {
+    own_type_names[a.name] = ()
+  }
+  for e in own_root.enums {
+    own_type_names[e.name] = ()
+  }
+  // Which top-level type names more than one reachable module declares
+  // (the checked module counting as one): those get a per-module key.
+  let declarers : Map[String, Map[String, Unit]] = Map([])
+  let note_declared = fn(m : @ast.TsModule, key : String) {
+    let add = fn(n : String) {
+      match declarers.get(n) {
+        Some(set) => set[key] = ()
+        None => declarers[n] = Map([(key, ())])
+      }
+    }
+    for i in m.interfaces {
+      add(i.name)
+    }
+    for c in m.classes {
+      add(c.name)
+    }
+    for a in m.type_aliases {
+      add(a.name)
+    }
+    for e in m.enums {
+      add(e.name)
+    }
+  }
+  note_declared(own_root, "<checked>")
+  for i, type_module in type_modules {
+    if i < type_module_keys.length() {
+      note_declared(type_module, type_module_keys[i])
+    }
+  }
   for i, type_module in type_modules {
     let cache_key = if i < type_module_keys.length() {
       type_module_keys[i]
     } else {
       ""
     }
-    Resolver::ingest_type_module(resolver, type_module, "", cache_key~)
+    let renames : Map[String, String] = Map([])
+    if cache_key != "" {
+      // A name another module also declares, or one that is a LIB global
+      // type: the second kind never reaches the bare table (see
+      // `ingest_type_module`'s `shadows_lib`), so without a per-module key
+      // effect's `Signature.Algorithm` — WebCrypto has an `Algorithm` —
+      // resolved to nothing and every `"_tag" in algorithm` narrowing
+      // threw its members away.
+      let add_if = fn(n : String) {
+        let multi = match declarers.get(n) {
+          Some(set) => set.length() > 1
+          None => false
+        }
+        if multi || is_lib_global_type(n) {
+          renames[n] = n + "@" + cache_key
+        }
+      }
+      for d in type_module.interfaces {
+        add_if(d.name)
+      }
+      for d in type_module.type_aliases {
+        add_if(d.name)
+      }
+      for d in type_module.enums {
+        add_if(d.name)
+      }
+      // A CLASS keeps its bare name: class member lookups go through the
+      // declaration's own name (`ClassIndex`, the inheritance walks), so a
+      // class registered under `Union@path` answered nothing and SchemaAST's
+      // `ast._tag === "Union" && ast.types` stopped narrowing. An interface
+      // merged with a same-named class keeps it too.
+      for d in type_module.classes {
+        renames.remove(d.name)
+      }
+    }
+    Resolver::ingest_type_module(
+      resolver,
+      type_module,
+      "",
+      cache_key~,
+      skip=own_type_names,
+      renames~,
+    )
   }
   if outer_modules.length() == 0 {
     Resolver::ingest_module(resolver, module_, "")
@@ -38498,6 +39303,7 @@ fn check_module_function_bodies_layered(
       module_,
       resolver.initialized_top_level_names,
     )
+    register_primitive_top_level_consts(module_, resolver)
   } else {
     for o in outer_modules {
       Resolver::ingest_module(resolver, o, "")

@@ -335,12 +335,17 @@ every report `mtsc node_modules/effect/src/index.ts --noEmit` makes is a
 false positive; that run covers 145 modules and takes about 10 s.
 
 Trend: graph did not load (batch FP's parser fixes) -> 1,556 -> 1,299 ->
-**1,164** (batch FQ: arrow-`const` and generic type guards narrow,
-destructuring an `any` / `ReadonlyMap` entry).
+1,164 (batch FQ: arrow-`const` and generic type guards narrow,
+destructuring an `any` / `ReadonlyMap` entry) -> **489** (batch FR:
+per-module keys for type names two modules declare, namespace-imported
+guards, `||` / conditional-expression narrowing, lib bigint/Date/TypedArray
+surfaces).
 
-Batch FQ found, and did not fix, that a module-level unannotated `const`
-reads as `any` inside every function body: the top-level env that infers it
-is walked after the bodies, and `globals` records only annotated bindings.
+Batch FQ found that a module-level unannotated `const` reads as `any` inside
+every function body; batch FR registers the PRIMITIVE-typed ones, and the
+composite ones (objects, arrows, call results) still read `any`. A
+namespace import (`import * as X`) still binds no value type, so `X.f(...)`
+calls are unchecked except for the guards FR publishes.
 The remaining `_tag` reports through a namespace-qualified union alias
 (`DateTime.TimeZone`, `Cause.Die`) are the next narrowing gap.
 

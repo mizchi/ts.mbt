@@ -170,3 +170,40 @@ test "effect: destructuring an any or a ReadonlyMap entry" {
   assert_false(eff_has(issues, "okMap"))
   assert_true(eff_has(issues, "badMap"))
 }
+
+///|
+test "effect: || then-branch, conditional branches, alias index keys, bigint" {
+  let src =
+    #|interface O { readonly a?: string | undefined; readonly b?: string | undefined }
+    #|function okOr(o?: O) { if (o?.a !== undefined || o?.b !== undefined) { return o.a ?? o.b } return "" }
+    #|function badOr(o: O | undefined, n: string | number) { if (typeof n === "string" || o === undefined) { return o.a } return "" }
+    #|function okCond(capacity: number | { readonly capacity: number; readonly replay?: number | undefined }) {
+    #|  const options = typeof capacity === "number" ? { capacity } : capacity
+    #|  return options.capacity
+    #|}
+    #|function okIndex(x: { [k: PropertyKey]: unknown }) { return x.anything }
+    #|function okBig(num: bigint, b: boolean) { num = b ? -num : num; const q: bigint = num / num; return q }
+    #|function okBigCtor() { const d = BigInt(1024); const q: bigint = d ** BigInt(2); return q }
+    #|function badBig() { const s: string = BigInt(1); return s }
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okOr"))
+  assert_true(eff_has(issues, "badOr"))
+  assert_false(eff_has(issues, "okCond"))
+  assert_false(eff_has(issues, "okIndex"))
+  assert_false(eff_has(issues, "okBig"))
+  assert_false(eff_has(issues, "okBigCtor"))
+  assert_true(eff_has(issues, "badBig"))
+}
+
+///|
+test "effect: a nested union read off a union receiver is flattened" {
+  let src =
+    #|export interface Context { readonly isOptional: boolean }
+    #|interface ASTNode { readonly context: Context | undefined; readonly _tag: string }
+    #|class A implements ASTNode { readonly _tag = "A"; readonly context: Context | undefined = undefined }
+    #|class B implements ASTNode { readonly _tag = "B"; readonly context: Context | undefined = undefined }
+    #|type AST = A | B
+    #|function okNested(ast: AST): boolean { return ast.context?.isOptional ?? false }
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okNested"))
+}

@@ -245,9 +245,15 @@ checker-miss-buckets *ARGS:
 # concrete `string | undefined`. The same batch then took `ES5For-of8`
 # (return-type inference from a function BODY), so the budget is back at
 # 45 with one file traded for another.
+#
+# 45 -> 46 in batch FR, the same way: `controlFlowBindingPatternOrder` was a
+# TP only because destructuring a computed key bound `undefined`, and every
+# one of its five reports read "got `undefined`". An object pattern over a
+# shape the checker cannot enumerate binds `any` now; the real errors there
+# need computed-key destructuring and `as const` tuple narrowing.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 45
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 46
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #
