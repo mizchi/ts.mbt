@@ -60,7 +60,7 @@ fn collect_type_issues_from_module(
   module_ : @ast.TsModule,
   globals : Array[(String, @ast.TsType)],
   type_modules : Array[@ast.TsModule],
-  namespace_type_aliases~ : Array[(String, String)] = [],
+  namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
 ) -> Result[Array[MtscTypeIssue], String] {
   let issues : Array[MtscTypeIssue] = []
@@ -173,8 +173,20 @@ fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
 fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
   for value in module_.values {
     if value.name == name {
+      match value.type_ {
+        Any =>
+          match arrow_const_predicate_type(module_, name) {
+            Some(t) => return Some(t)
+            None => ()
+          }
+        _ => ()
+      }
       return Some(value.type_)
     }
+  }
+  match arrow_const_predicate_type(module_, name) {
+    Some(t) => return Some(t)
+    None => ()
   }
   for func in module_.funcs {
     if func.name == name {
@@ -201,6 +213,45 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
     }
   }
   None
+}
+
+///|
+/// `const NAME = (x: T): x is U => …` — how effect writes a guard — is in
+/// `values` as `Any` (no annotation), so an importer saw no predicate at
+/// all. Only a predicate return is taken, and its PARAMETERS are `any`:
+/// an arrow's own `<A>` is not in the AST, so the written parameter types
+/// could carry unbound names into every argument check of every call.
+fn arrow_const_predicate_type(
+  module_ : @ast.TsModule,
+  name : String,
+) -> @ast.TsType? {
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Const(Ident(n), Any, ArrowFunc(params, TypePredicate(p, t), _, _)) if n ==
+        name => {
+        let ps : Array[@ast.TsType] = []
+        for _ in params {
+          ps.push(Any)
+        }
+        return Some(Func(ps, TypePredicate(p, t)))
+      }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+/// True when `ty` can narrow: a predicate-returning callable, generic or
+/// not, or an object type whose call signatures include one.
+fn is_predicate_value_type(ty : @ast.TsType) -> Bool {
+  match ty {
+    Func(_, TypePredicate(_, _)) => true
+    GenericFunc(_, _, inner) => is_predicate_value_type(inner)
+    Object(entries) =>
+      entries.iter().any(fn(e) { is_predicate_value_type(e.1) })
+    _ => false
+  }
 }
 
 ///|
@@ -328,7 +379,7 @@ fn graph_exposed_type_names(
   modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
   seen : Map[String, Unit],
-  out : Array[(String, String)],
+  out : Array[(String, String, String)],
   prefix : String,
   depth : Int32,
 ) -> Unit {
@@ -338,16 +389,16 @@ fn graph_exposed_type_names(
   seen[prefix + "|" + module_.source.path] = ()
   let m = module_.module_
   for i in m.interfaces {
-    out.push((prefix + i.name, i.name))
+    out.push((prefix + i.name, i.name, module_.source.path))
   }
   for c in m.classes {
-    out.push((prefix + c.name, c.name))
+    out.push((prefix + c.name, c.name, module_.source.path))
   }
   for a in m.type_aliases {
-    out.push((prefix + a.name, a.name))
+    out.push((prefix + a.name, a.name, module_.source.path))
   }
   for e in m.enums {
-    out.push((prefix + e.name, e.name))
+    out.push((prefix + e.name, e.name, module_.source.path))
   }
   for re in module_.module_block.reexports {
     let target = match
@@ -381,7 +432,7 @@ fn graph_exposed_type_names(
           depth + 1,
         )
       @ast.TsReExportKind::Named(items) => {
-        let inner : Array[(String, String)] = []
+        let inner : Array[(String, String, String)] = []
         graph_exposed_type_names(
           target,
           modules,
@@ -395,7 +446,7 @@ fn graph_exposed_type_names(
           let (imported, exported) = item
           for pair in inner {
             if pair.0 == imported {
-              out.push((prefix + exported, pair.1))
+              out.push((prefix + exported, pair.1, pair.2))
             }
           }
         }
@@ -412,8 +463,8 @@ fn graph_namespace_type_aliases(
   module_ : ParsedMtscModule,
   modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
-) -> Array[(String, String)] {
-  let out : Array[(String, String)] = []
+) -> Array[(String, String, String)] {
+  let out : Array[(String, String, String)] = []
   for imp in module_.module_block.imports {
     let ns = match imp.namespace_binding {
       Some(ns) => ns
@@ -515,6 +566,41 @@ fn graph_import_globals(
             diagnostics.push(
               "module `\{import_.module_spec}` has no default value export",
             )
+        }
+      None => ()
+    }
+    // A NAMESPACE import (`import * as Predicate`) binds no value type, so
+    // `Predicate.isObject(u)` narrowed nothing — effect calls nearly every
+    // guard that way. Its PREDICATE exports alone are published under an
+    // `@ns:` key only the narrowing reads, so no other `ns.member` access
+    // changes meaning.
+    match import_.namespace_binding {
+      Some(ns) =>
+        for export_ in target.module_block.exports {
+          match local_value_type(target.module_, export_.local_name) {
+            Some(t) if is_predicate_value_type(t) => {
+              // The type is written in the TARGET's scope: its bare
+              // `Success` means the target's own, which in the importer is
+              // reached as `ns.Success`.
+              let renames : Map[String, String] = Map([])
+              for i in target.module_.interfaces {
+                renames[i.name] = ns + "." + i.name
+              }
+              for a in target.module_.type_aliases {
+                renames[a.name] = ns + "." + a.name
+              }
+              for c in target.module_.classes {
+                renames[c.name] = ns + "." + c.name
+              }
+              globals.push(
+                (
+                  "@ns:" + ns + "." + export_.export_name,
+                  @checker.rename_type_refs(t, renames),
+                ),
+              )
+            }
+            _ => ()
+          }
         }
       None => ()
     }
