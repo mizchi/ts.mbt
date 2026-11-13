@@ -12918,6 +12918,19 @@ fn check_expr_against(
   // an alias left sitting inside `Array` / `Tuple` never resolves and
   // `type I = { n: number }; const xs: I[] = [1].map(n => ({ n }))`
   // reported a mismatch between two identical shapes.
+  // A qualified spelling (`SchemaAST.AST`) and the declaration it names
+  // (`AST`, imported by name, or its per-module key `AST@path`) are one
+  // type, but the comparison below matches `Named` by string and
+  // `unwrap_containers` stops at a callable's parameters — so
+  // `(ast: SchemaAST.AST) => …` against a parameter typed `(AST) => AST`
+  // was a mismatch. Two types that print identically once qualifiers are
+  // dropped are treated as the same: this can only lose a finding (two
+  // distinct same-named types), never invent one.
+  if ctx.resolver.qualified_names.length() > 0 &&
+    strip_type_qualifiers(type_display(inferred)) ==
+    strip_type_qualifiers(type_display(expected)) {
+    return
+  }
   let inferred_u = ctx.resolver.unwrap_containers(inferred)
   let expected_u = ctx.resolver.unwrap_containers(expected)
   // TS2322 / TS2345: a concrete string literal assigned to a template-literal
@@ -18870,6 +18883,47 @@ fn generator_stmt_returns_value(st : @ast.TsStmt) -> Bool {
     }
     _ => false
   }
+}
+
+///|
+/// Drops every `Qualifier.` prefix of a dotted identifier in a printed
+/// type (`(SchemaAST.AST) => SchemaAST.AST` -> `(AST) => AST`).
+fn strip_type_qualifiers(s : String) -> String {
+  let out = StringBuilder()
+  let ident = StringBuilder()
+  let flush_ident = fn(next : Char?) {
+    let id = ident.to_string()
+    ident.reset()
+    match next {
+      Some('.') if id.length() > 0 => ()
+      _ => out.write_string(id)
+    }
+  }
+  let mut in_str = false
+  for c in s {
+    if in_str {
+      out.write_char(c)
+      if c == '"' {
+        in_str = false
+      }
+      continue
+    }
+    if c.is_ascii_alphabetic() || c.is_ascii_digit() || c == '_' || c == '$' {
+      ident.write_char(c)
+    } else {
+      let had = ident.to_string().length() > 0
+      flush_ident(Some(c))
+      if c == '.' && had {
+        continue
+      }
+      if c == '"' {
+        in_str = true
+      }
+      out.write_char(c)
+    }
+  }
+  flush_ident(None)
+  out.to_string()
 }
 
 ///|

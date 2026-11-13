@@ -255,16 +255,16 @@ fn arrow_const_predicate_type(
 ///|
 /// True when `module_` exports `name` as a function declared more than once.
 fn exported_is_overload_set(module_ : ParsedMtscModule, name : String) -> Bool {
-  let mut local = name
+  let mut local_ = name
   for export_ in module_.module_block.exports {
     if export_.export_name == name {
-      local = export_.local_name
+      local_ = export_.local_name
       break
     }
   }
   let mut n = 0
   for f in module_.module_.funcs {
-    if f.name == local {
+    if f.name == local_ {
       n = n + 1
     }
   }
