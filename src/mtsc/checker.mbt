@@ -246,6 +246,19 @@ fn arrow_const_predicate_type(
         }
         return Some(Func(ps, TypePredicate(p, t)))
       }
+      // `export const isUnion = makeGuard("Union")` — see
+      // `@checker.factory_guard_predicate`.
+      Const(Ident(n), Any, init) if n == name =>
+        match @checker.factory_guard_predicate(module_, init) {
+          Some((params, p, t)) => {
+            let ps : Array[@ast.TsType] = []
+            for _ in params {
+              ps.push(Any)
+            }
+            return Some(Func(ps, TypePredicate(p, t)))
+          }
+          None => ()
+        }
       _ => ()
     }
   }

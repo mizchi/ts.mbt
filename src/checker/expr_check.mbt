@@ -2203,6 +2203,22 @@ fn Resolver::ingest_module(
           r.const_predicates[prefix + name] = (idx, target)
         }
       }
+      Const(Ident(name), Any, init) =>
+        match factory_guard_predicate(module_, init) {
+          Some((params, pname, target)) => {
+            let mut idx = -1
+            for i, p in params {
+              if p.name == pname {
+                idx = i
+                break
+              }
+            }
+            if idx >= 0 {
+              r.const_predicates[prefix + name] = (idx, target)
+            }
+          }
+          None => ()
+        }
       _ => ()
     }
     match stmt {
@@ -3741,6 +3757,32 @@ fn Resolver::lookup_field(
     Some(k) => self.lookup_active.remove(k)
     None => ()
   }
+  // A lib generic name the MODULE also declares (`export interface
+  // Generator<A> { minCost; generate }` in effect's arbitrary model, or a
+  // `declare global` augmentation of `Array`): the built-in table answers
+  // first, and a miss there is not a miss on the module's own declaration.
+  let found = match (found, self.unwrap(recv)) {
+    (None, Applied(n, args)) if is_builtin_generic_table_name(n) =>
+      match self.interfaces.get(n) {
+        Some(iface) => {
+          let bindings : Map[String, @ast.TsType] = Map([])
+          for i, tp in iface.type_params {
+            if i < args.length() {
+              bindings[tp] = args[i]
+            }
+          }
+          let mut hit : @ast.TsType? = None
+          for f in iface.fields {
+            if f.0 == field {
+              hit = Some(substitute_params(f.1, bindings))
+            }
+          }
+          hit
+        }
+        None => None
+      }
+    _ => found
+  }
   match found {
     Some(Union(parts)) => Some(flatten_union_exact(parts))
     Some(t) => Some(t)
@@ -5136,6 +5178,79 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
     "cause" => Some(@ast.TsType::Any)
     "toString" => Some(@ast.TsType::Func([], s))
     _ => None
+  }
+}
+
+///|
+/// A guard built by a FACTORY call: `const isUnion = makeGuard("Union")`
+/// over `function makeGuard<T extends AST["_tag"]>(tag: T) { return (ast:
+/// AST): ast is Extract<AST, { _tag: T }> => … }` — effect's SchemaAST
+/// writes every one of its `is*` guards that way. When `init` calls a
+/// module function whose body is exactly `return <predicate arrow>`, the
+/// arrow's parameters and predicate are returned with the factory's type
+/// parameters bound to the LITERAL arguments passed for them. A non-literal
+/// argument leaves its parameter unbound, which makes the target loose.
+pub fn factory_guard_predicate(
+  module_ : @ast.TsModule,
+  init : @ast.TsExpr,
+) -> (Array[@ast.TsParam], String, @ast.TsType)? {
+  let (fname, args) = match init {
+    Call(n, a) => (n, a)
+    PureCall(Call(n, a)) => (n, a)
+    _ => return None
+  }
+  for f in module_.funcs {
+    if f.name != fname || f.body.stmts.length() != 1 {
+      continue
+    }
+    match f.body.stmts[0] {
+      Return(Some(ArrowFunc(params, TypePredicate(pname, target), _, _))) => {
+        let bindings : Map[String, @ast.TsType] = Map([])
+        for i, fp in f.params {
+          if i >= args.length() {
+            break
+          }
+          match fp.type_ {
+            Named(tp) if f.type_params.contains(tp) =>
+              match precise_literal_type(args[i]) {
+                Some(lit) => bindings[tp] = lit
+                None => ()
+              }
+            _ => ()
+          }
+        }
+        return Some((params, pname, substitute_params(target, bindings)))
+      }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+/// Generic lib names `lookup_field_core` answers from a built-in table
+/// before consulting any interface of that name.
+fn is_builtin_generic_table_name(n : String) -> Bool {
+  match n {
+    "Array"
+    | "ReadonlyArray"
+    | "Promise"
+    | "PromiseLike"
+    | "Map"
+    | "ReadonlyMap"
+    | "Set"
+    | "ReadonlySet"
+    | "WeakMap"
+    | "WeakSet"
+    | "Iterable"
+    | "IterableIterator"
+    | "Iterator"
+    | "Generator"
+    | "AsyncIterable"
+    | "AsyncIterableIterator"
+    | "AsyncIterator"
+    | "AsyncGenerator" => true
+    _ => false
   }
 }
 
@@ -19978,7 +20093,11 @@ fn apply_switch_disc_default_narrowing(
   if matchers.length() == 0 {
     return
   }
-  let cur = env_lookup_full(env, resolver, obj_name)
+  let cur = if obj_name.contains(".") {
+    narrowing_current_type(env, resolver, obj_name)
+  } else {
+    env_lookup_full(env, resolver, obj_name)
+  }
   let mut next : @ast.TsType = cur
   for m in matchers {
     match narrow_by_discriminant(resolver, next, prop, m, false) {
@@ -20036,7 +20155,11 @@ fn apply_switch_disc_narrowing(
 ) -> Unit {
   match discriminant_field_matcher(resolver, case_test) {
     Some(matcher) => {
-      let cur = env_lookup_full(env, resolver, obj_name)
+      let cur = if obj_name.contains(".") {
+        narrowing_current_type(env, resolver, obj_name)
+      } else {
+        env_lookup_full(env, resolver, obj_name)
+      }
       match narrow_by_discriminant(resolver, cur, prop, matcher, true) {
         Some(narrowed) => env.bind(obj_name, narrowed)
         None => ()
@@ -20641,7 +20764,11 @@ fn collect_narrowing(
       // the truthiness and equality guards bind. effect's `unknown`-typed
       // JSON walkers read `.length` straight after both shapes.
       match resolver.unwrap(cur) {
-        Unknown => pair_pos.push((x, @ast.TsType::Array(@ast.TsType::Any)))
+        // `object` narrows the same way: effect's `Equal.compareStructure`
+        // takes `self: object` and reads `self.length` after
+        // `Array.isArray(self)`.
+        Unknown | NonPrimitiveObject =>
+          pair_pos.push((x, @ast.TsType::Array(@ast.TsType::Any)))
         _ =>
           match array_is_array_split(resolver, cur) {
             Some((arrays, others)) => {
@@ -21731,6 +21858,21 @@ fn analyze_equality(
   // the parent chain. Accepts any `Var` / `PropAccess`-chain on the LHS
   // so `o.shape.kind === "circle"` narrows `o.shape`. The literal may be a
   // string, numeric, or boolean tag (`x.kind === 0`, `x.ok === true`).
+  // `escaped?._tag === "Character"`: a comparison with a literal rules out
+  // the short-circuit, so the chain is read as the plain `escaped._tag`
+  // for the EQUAL side. The other side keeps whatever it had — there the
+  // receiver may still be `undefined`.
+  let (left, right, from_chain) = match (left, right) {
+    (OptionalChain(PropAccess(p, f)), r) if discriminant_field_matcher(
+        resolver, r,
+      )
+      is Some(_) => (@ast.TsExpr::PropAccess(p, f), r, true)
+    (l, OptionalChain(PropAccess(p, f))) if discriminant_field_matcher(
+        resolver, l,
+      )
+      is Some(_) => (l, @ast.TsExpr::PropAccess(p, f), true)
+    _ => (left, right, false)
+  }
   let disc_match : (String, String, (@ast.TsType) -> Bool)? = match
     (left, right) {
     (PropAccess(parent, prop), rhs) =>
@@ -21756,12 +21898,19 @@ fn analyze_equality(
   match disc_match {
     Some((parent_key, prop, matcher)) => {
       let cur = narrowing_current_type(env, resolver, parent_key)
+      let cur = if from_chain {
+        non_nullable_resolved(resolver, cur)
+      } else {
+        cur
+      }
       match narrow_by_discriminant(resolver, cur, prop, matcher, true) {
         Some(then_ty) => {
           true_side.push((parent_key, then_ty))
-          match narrow_by_discriminant(resolver, cur, prop, matcher, false) {
-            Some(else_ty) => false_side.push((parent_key, else_ty))
-            None => ()
+          if !from_chain {
+            match narrow_by_discriminant(resolver, cur, prop, matcher, false) {
+              Some(else_ty) => false_side.push((parent_key, else_ty))
+              None => ()
+            }
           }
         }
         None => ()
@@ -21925,6 +22074,8 @@ fn named_open_record_interface(ty : @ast.TsType, resolver : Resolver) -> Bool {
 fn lib_static_guard_target(recv : String, meth : String) -> @ast.TsType? {
   match (recv, meth) {
     ("Error", "isError") => Some(Named("Error"))
+    // `ArrayBuffer.isView(arg: any): arg is ArrayBufferView`.
+    ("ArrayBuffer", "isView") => Some(Named("ArrayBufferView"))
     ("JSON", "isRawJSON") => Some(Named("RawJSON"))
     _ => None
   }
@@ -23456,8 +23607,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         Var(n) => Some(n)
         _ => None
       }
+      // Any property chain as the parent (`switch (self.state._tag)`), keyed
+      // the way the `if` narrowing keys it, so `const state = self.state`
+      // in a case body reads the narrowed member.
       let scrutinee_disc = match scrutinee {
         PropAccess(Var(name), prop) => Some((name, prop))
+        PropAccess(parent, prop) =>
+          match narrowing_key_for_expr(parent) {
+            Some(key) => Some((key, prop))
+            None => None
+          }
         _ => None
       }
       let scrutinee_ty = ctx.resolver.unwrap(

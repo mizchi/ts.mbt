@@ -51,6 +51,8 @@ pub fn extends_decision_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?)
 
 pub fn extends_decision_with_generics(@ast.TsType, @ast.TsType, (String) -> AliasBinding?) -> Bool?
 
+pub fn factory_guard_predicate(@ast.TsModule, @ast.TsExpr) -> (Array[@ast.TsParam], String, @ast.TsType)?
+
 pub fn infer_marker_bound(@ast.TsType) -> @ast.TsType?
 
 pub fn infer_marker_name(@ast.TsType) -> String?
