@@ -34,25 +34,25 @@
 # removed-feature — the construct is no longer part of the language, so a
 # rule for it could never fire on an input anyone can still write.
 # ---------------------------------------------------------------------
-typescript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser519458.ts removed-feature: `import rect = module("rect")`, the pre-1.0 external-module import form.
-typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource3.ts removed-feature: the error is TS6053 "File 'typescript.ts' not found" from a `///<reference path=...>`, which is triple-slash path RESOLUTION — program construction rather than type checking, and the checker has no notion of a program.
-typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource1.ts removed-feature: same as parserRealSource3 — TS6053 on `///<reference path='typescript.ts'>` and nothing else (probed). It was a TP by ACCIDENT until batch DO: the only thing we flagged in it was `result += "\\t"`, ordinary string building, through the `+=` exemption bug fixed in that batch. `--max-miss` is what surfaced it.
-typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource2.ts removed-feature: same as parserRealSource1, same accidental-TP history.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser519458.ts removed-feature: `import rect = module("rect")`, the pre-1.0 external-module import form.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/parserRealSource3.ts removed-feature: the error is TS6053 "File 'typescript.ts' not found" from a `///<reference path=...>`, which is triple-slash path RESOLUTION — program construction rather than type checking, and the checker has no notion of a program.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/parserRealSource1.ts removed-feature: same as parserRealSource3 — TS6053 on `///<reference path='typescript.ts'>` and nothing else (probed). It was a TP by ACCIDENT until batch DO: the only thing we flagged in it was `result += "\\t"`, ordinary string building, through the `+=` exemption bug fixed in that batch. `--max-miss` is what surfaced it.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/parserRealSource2.ts removed-feature: same as parserRealSource1, same accidental-TP history.
 
 # ---------------------------------------------------------------------
 # malformed — deliberately broken input from the parser's error-recovery
 # corpus. A rule would fire only on syntax nobody writes; CLAUDE.md
 # records that taking this cluster for its size is fitting the corpus.
 # ---------------------------------------------------------------------
-typescript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ParameterLists/parserErrorRecovery_ParameterList6.ts malformed: `public banana (x: break) { }` — a keyword where a type annotation belongs.
-typescript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser553699.ts malformed: `public banana (x: public) { }` — a modifier keyword where a type annotation belongs.
-typescript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature2.ts malformed: `interface I { [public a] }` — an accessibility modifier inside an index signature, with no type.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ParameterLists/parserErrorRecovery_ParameterList6.ts malformed: `public banana (x: break) { }` — a keyword where a type annotation belongs.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser553699.ts malformed: `public banana (x: public) { }` — a modifier keyword where a type annotation belongs.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature2.ts malformed: `interface I { [public a] }` — an accessibility modifier inside an index signature, with no type.
 
 # ---------------------------------------------------------------------
 # lexer-adversarial — the file exists to test regex-versus-comment
 # disambiguation on input written to be ambiguous.
 # ---------------------------------------------------------------------
-typescript/tests/cases/conformance/parser/ecmascript5/RegularExpressions/parseRegularExpressionMixedWithComments.ts lexer-adversarial: `/**// asdf /` and `/**///**/ asdf /`. Ordinary regex-after-comment lexing is correct here (both `var r = /**/ / asdf /` and `var r = /**// asdf /` scan and check clean — measured), so the gap is only that tsc resolves these particular no-space forms to DIVISION where we resolve them to a regex, which is why its diagnostics are ordinary TS2362/TS2363 arithmetic-operand errors. Flipping the file means reproducing tsc's resolution on input written to defeat it.
+typescript7/tsc/testdata/tests/cases/conformance/parser/ecmascript5/RegularExpressions/parseRegularExpressionMixedWithComments.ts lexer-adversarial: `/**// asdf /` and `/**///**/ asdf /`. Ordinary regex-after-comment lexing is correct here (both `var r = /**/ / asdf /` and `var r = /**// asdf /` scan and check clean — measured), so the gap is only that tsc resolves these particular no-space forms to DIVISION where we resolve them to a regex, which is why its diagnostics are ordinary TS2362/TS2363 arithmetic-operand errors. Flipping the file means reproducing tsc's resolution on input written to defeat it.
 
 # ---------------------------------------------------------------------
 # resource-mgmt — explicit resource management (`using` / `await using`).
@@ -61,11 +61,11 @@ typescript/tests/cases/conformance/parser/ecmascript5/RegularExpressions/parseRe
 # list. Revisit if a real dependency adopts it. Only files whose
 # DIAGNOSTIC needs the feature are here.
 # ---------------------------------------------------------------------
-typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsInForOf.2.ts resource-mgmt: `for (using of of [])` — the `using` binding grammar inside a for-of head.
-typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForAwaitOf.2.ts resource-mgmt: `for await (await using of of of)` — the `await using` binding grammar inside a for-await-of head.
-typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithAsyncIteratorObject.ts resource-mgmt: TS2851, the `[Symbol.asyncDispose]()` disposal protocol.
-typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsWithIteratorObject.ts resource-mgmt: TS2850, the `[Symbol.dispose]()` disposal protocol.
-typescript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithIteratorObject.ts resource-mgmt: TS2851, the `[Symbol.asyncDispose]()` disposal protocol.
+typescript7/tsc/testdata/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsInForOf.2.ts resource-mgmt: `for (using of of [])` — the `using` binding grammar inside a for-of head.
+typescript7/tsc/testdata/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForAwaitOf.2.ts resource-mgmt: `for await (await using of of of)` — the `await using` binding grammar inside a for-await-of head.
+typescript7/tsc/testdata/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithAsyncIteratorObject.ts resource-mgmt: TS2851, the `[Symbol.asyncDispose]()` disposal protocol.
+typescript7/tsc/testdata/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsWithIteratorObject.ts resource-mgmt: TS2850, the `[Symbol.dispose]()` disposal protocol.
+typescript7/tsc/testdata/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithIteratorObject.ts resource-mgmt: TS2851, the `[Symbol.asyncDispose]()` disposal protocol.
 
 # ---------------------------------------------------------------------
 # no-local-oracle — TS7 errors on these and the locally installed
@@ -78,11 +78,10 @@ typescript/tests/cases/conformance/statements/VariableStatements/usingDeclaratio
 # CLAUDE.md already records `symbolProperty37` as exactly this case, and
 # it is why `member_name_duplicates` was left alone.
 # ---------------------------------------------------------------------
-typescript/tests/cases/conformance/types/specifyingTypes/typeQueries/typeofThisWithImplicitThis.ts no-local-oracle: `let x: typeof this.no = 1` under `noImplicitThis: false`.
-typescript/tests/cases/conformance/es6/Symbols/symbolProperty37.ts no-local-oracle: duplicate well-known-symbol interface members.
-typescript/tests/cases/conformance/override/override20.ts no-local-oracle: `noImplicitOverride` against a base that is a class expression typed as an intersection of two construct signatures.
-typescript/tests/cases/conformance/override/override2.ts no-local-oracle: `noImplicitOverride` against abstract members, including an abstract redeclaration and an abstract-to-concrete narrowing.
-typescript/tests/cases/conformance/statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash2.ts no-local-oracle: `foo: var y;` inside a `for...of` body that also closes over the loop binding.
+typescript7/tsc/testdata/tests/cases/conformance/es6/Symbols/symbolProperty37.ts no-local-oracle: duplicate well-known-symbol interface members.
+typescript7/tsc/testdata/tests/cases/conformance/override/override20.ts no-local-oracle: `noImplicitOverride` against a base that is a class expression typed as an intersection of two construct signatures.
+typescript7/tsc/testdata/tests/cases/conformance/override/override2.ts no-local-oracle: `noImplicitOverride` against abstract members, including an abstract redeclaration and an abstract-to-concrete narrowing.
+typescript7/tsc/testdata/tests/cases/conformance/statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash2.ts no-local-oracle: `foo: var y;` inside a `for...of` body that also closes over the loop binding.
 
 # ---------------------------------------------------------------------
 # lib-diagnostic — the file's ONLY error is inside a vendored `lib.*.d.ts`
@@ -105,4 +104,4 @@ typescript/tests/cases/conformance/statements/labeledStatements/labeledStatement
 # `objectTypeHidingMembersOfExtendedObject` really does carry an
 # in-file `TS2411(13,5)` and stays in the backlog.
 # ---------------------------------------------------------------------
-typescript/tests/cases/conformance/types/members/objectTypeWithStringIndexerHidingObjectIndexer.ts lib-diagnostic: every error is inside `lib.es5.d.ts`, reached through `interface Object` augmentation under `@skipDefaultLibCheck: false`.
+typescript7/tsc/testdata/tests/cases/conformance/types/members/objectTypeWithStringIndexerHidingObjectIndexer.ts lib-diagnostic: every error is inside `lib.es5.d.ts`, reached through `interface Object` augmentation under `@skipDefaultLibCheck: false`.

@@ -45,8 +45,8 @@ import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
-const CONFORMANCE = path.join(ROOT, "typescript/tests/cases/conformance");
-const BASELINES = path.join(ROOT, "typescript/tests/baselines/reference");
+const CONFORMANCE = path.join(ROOT, "typescript7/tsc/testdata/tests/cases/conformance");
+const BASELINES = path.join(ROOT, "typescript7/tsc/testdata/baselines/reference/conformance");
 const RAN = path.join(ROOT, "scripts/ts7_baselines/tsgo_ran_set.txt");
 const ERRS = path.join(ROOT, "scripts/ts7_baselines/tsgo_errors_set.txt");
 const CACHE = path.join(ROOT, "_build/checker-miss/results.tsv");

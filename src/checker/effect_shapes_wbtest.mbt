@@ -284,3 +284,20 @@ test "effect: batch FS shapes — predicates, open records, nullable tuples, typ
   assert_true(eff_has(issues, "badTypeofFn"))
   assert_false(eff_has(issues, "okNested"))
 }
+
+///|
+test "TS 7.1: ES2026 lib static guards and augmented lib interfaces" {
+  let src =
+    #|declare const v: unknown;
+    #|function okIsError() { if (Error.isError(v)) { const m: string = v.message; return m } return "" }
+    #|function badIsError() { if (Error.isError(v)) { const n: number = v.message; return n } return 0 }
+    #|declare global { interface RawJSON { f?(): string } }
+    #|function okRaw(x: RawJSON): string { return x.rawJSON }
+    #|interface Mine { a: number }
+    #|function badMine(m: Mine) { return m.nope }
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okIsError"))
+  assert_true(eff_has(issues, "badIsError"))
+  assert_false(eff_has(issues, "okRaw"))
+  assert_true(eff_has(issues, "badMine"))
+}

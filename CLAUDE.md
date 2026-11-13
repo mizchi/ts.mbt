@@ -32,13 +32,18 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2670 / MISS in scope 45 /
-  OUT OF SCOPE 19 / FP 0 / PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
+  is a soundness bug, and there are none (TP 2676 / MISS in scope 50 /
+  OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
+  **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
+  see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
   answers both: `node_modules/typescript` was 6.0.3 when the notes
-  below were written and is now **TypeScript 7** (tsgo, through its
-  `unstable/sync` API), and `scripts/tsc_probe.mjs` runs it over a file
+  below were written and is now **TypeScript 7.1.0-beta** (tsgo, through
+  its `typescript/sync` API — 7.0's `unstable/sync` subpath and its
+  `updateSnapshot({ openProject })` form are gone, replaced by
+  `createSnapshot({ openProjects })` plus an explicit `dispose()`), and
+  `scripts/tsc_probe.mjs` runs it over a file
   the way the harness would (reading the `// @option:` header). Every
   "6.0.3 reports / accepts" in this file is that older compiler's answer;
   6.0.3 stays installed as `node_modules/typescript-6` for the scripts
@@ -3758,7 +3763,30 @@ product surfaces now.
   `parse_type.mbt`'s own comment, so `.call(b)` reports "expected 2".
   Dropping it is a parser change the bridge generator reads, so it needs
   a generated-corpus diff first.
-- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
+  Batch FT moves the TS7 oracle from 7.0.2 to **7.1.0-beta**, and the
+  move is a change of CORPUS as much as of compiler. From 7.1 the native
+  compiler lives in microsoft/TypeScript itself (tag `v7.1-beta`), with its
+  cases at `tsc/testdata/tests/cases/conformance` and flat baselines at
+  `tsc/testdata/baselines/reference/conformance`, so the corpus is a NEW
+  submodule, `typescript7`, while `typescript` stays where it was: the
+  parser tests, the benches and `checker_precision.sh` read its TS 6-era
+  `src/compiler` / `src/lib` trees, which the 7.1 tree does not have.
+  Diffed by blob, the case set is 5,813 files unchanged, ~60 edited, 35
+  removed and 75 added; the error manifest gained 53 names and lost 7.
+  `lib_globals.mbt` is regenerated from the 7.1 bundled libs and is a
+  strict SUPERSET of the old registry (+16 values, +63 types, 0 removed,
+  measured by set difference rather than by the 3,000-line diff, which was
+  formatting). The new corpus produced two FPs, both ES2026 lib surfaces
+  with no model here: `Error.isError` / `JSON.isRawJSON` are lib STATIC
+  type guards and now narrow their argument on the positive branch, and a
+  `declare global { interface RawJSON { … } }` augmentation of a lib
+  interface whose members this checker does not tabulate now abstains on
+  member existence instead of reading the augmentation as the whole
+  interface (the tabulated ones — `Error`, `Array`, `Promise`, … — still
+  merge). One TP went with it for the right reason (`jsonRawJSON1`, see the
+  justfile), and `typeofThisWithImplicitThis` left the scope file because
+  TS 7.1 accepts it. The budget is MISS 50 against the new corpus.
+- `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
   exports) and `mangle_safety.mbt` + `flow_analysis.mbt` (names that reach a

@@ -429,7 +429,10 @@ chained2
 chainedPrototypeAssignment
 checkExportsObjectAssignProperty
 checkExportsObjectAssignPrototypeProperty
+checkJsdocOnEndOfFile
 checkJsdocOptionalParamOrder
+checkJsdocReturnTag1
+checkJsdocReturnTag2
 checkJsdocSatisfiesTag1
 checkJsdocSatisfiesTag10
 checkJsdocSatisfiesTag12
@@ -849,6 +852,7 @@ decrementOperatorWithNumberType
 decrementOperatorWithNumberTypeInvalidOperations
 decrementOperatorWithUnsupportedBooleanType
 decrementOperatorWithUnsupportedStringType
+deepElementAccessExpressionInJS
 defaultExportsCannotMerge01
 defaultExportsCannotMerge02
 defaultExportsCannotMerge03
@@ -865,6 +869,10 @@ deleteOperatorWithEnumType
 deleteOperatorWithNumberType
 deleteOperatorWithStringType
 dependentDestructuredVariables
+dependentDestructuredVariablesNoCrash1
+dependentDestructuredVariablesNoCrash2
+dependentDestructuredVariablesNoCrash3
+dependentDestructuredVariablesReferenceInDeclaration1
 derivedClassConstructorWithoutSuperCall
 derivedClassFunctionOverridesBaseClassAccessor
 derivedClassOverridesPrivates
@@ -1041,6 +1049,7 @@ esDecorators-classDeclaration-fields-nonStaticAbstractAccessor
 esDecorators-classDeclaration-fields-nonStaticAmbient
 esDecorators-classDeclaration-fields-staticAmbient
 esDecorators-classDeclaration-methods-nonStaticAbstract
+esDecorators-classDeclaration-methods-staticPrivate
 esDecorators-classDeclaration-parameterDecorators
 esDecorators-decoratorExpression.1
 esDecorators-decoratorExpression.3
@@ -1085,6 +1094,8 @@ exportAssignNonIdentifier
 exportAssignmentAndDeclaration
 exportAssignmentConstrainedGenericType
 exportAssignmentGenericType
+exportAssignmentMergedInterface
+exportAssignmentTopLevelEnumdule
 exportBinding
 exportClassNameWithObjectCommonJS
 exportCodeGen
@@ -1125,7 +1136,12 @@ exportedEnumTypeAndValue
 exportsAndImportsWithContextualKeywordNames01
 exportsAndImportsWithUnderscores1
 extendsClause
+extendsTag10
+extendsTag11
+extendsTag12
+extendsTag13
 extendsTag5
+extendsTag9
 extendsTagEmit
 extensionLoadingPriority
 filterNamespace_import
@@ -1278,6 +1294,7 @@ globalThisPropertyAssignment
 globalThisReadonlyProperties
 globalThisUnknown
 globalThisUnknownNoImplicitAny
+globalThisVarDeclaration
 grammarAmbiguities
 grammarErrors
 ifDoWhileStatements
@@ -1288,13 +1305,12 @@ importAliasIdentifiers
 importAliasModuleExports
 importAssertion1
 importAssertion2
-importAssertion3
 importAssertion4
 importAssertion5
 importAttributes1
 importAttributes10
+importAttributes12
 importAttributes2
-importAttributes3
 importAttributes4
 importAttributes5
 importAttributes6
@@ -1336,6 +1352,14 @@ importMeta
 importMetaPropertyInvalidInCall
 importNonExternalModule
 importNonStringLiteral
+importSource11
+importSource13
+importSource15
+importSource17
+importSource18
+importSource4
+importSource5
+importSource6
 importSpecifiers1
 importSpecifiers_js
 importStatementsInterfaces
@@ -1344,7 +1368,6 @@ importTag11
 importTag12
 importTag13
 importTag14
-importTag15
 importTag17
 importTag22
 importTag23
@@ -1379,6 +1402,7 @@ indexerWithTuple
 inferTypes1
 inferTypesInvalidExtendsDeclaration
 inferTypesWithExtends2
+inferringClassMembersFromAssignments
 inferringClassMembersFromAssignments2
 inferringClassMembersFromAssignments6
 inferringClassMembersFromAssignments7
@@ -1506,6 +1530,7 @@ iterableArrayPattern5
 iterableArrayPattern6
 iterableArrayPattern7
 iterableArrayPattern8
+iteratorConcat
 iteratorSpreadInArray10
 iteratorSpreadInArray11
 iteratorSpreadInArray5
@@ -1565,7 +1590,6 @@ jsDeclarationsTypedefAndLatebound
 jsdocAccessibilityTags
 jsdocAugmentsMissingType
 jsdocAugments_errorInExtendsExpression
-jsdocAugments_nameMismatch
 jsdocAugments_noExtends
 jsdocCatchClauseWithTypeAnnotation
 jsdocConstructorFunctionTypeReference
@@ -1588,8 +1612,11 @@ jsdocOuterTypeParameters1
 jsdocOuterTypeParameters2
 jsdocOuterTypeParameters3
 jsdocOverrideTag1
+jsdocParamTag
 jsdocParamTag2
+jsdocParamTagNoName
 jsdocParamTagTypeLiteral
+jsdocParseAwait
 jsdocParseBackquotedParamName
 jsdocParseDotDotDotInJSDocFunction
 jsdocParseErrorsInTypescript
@@ -1602,6 +1629,7 @@ jsdocPrivateName1
 jsdocPrivateName2
 jsdocPrototypePropertyAccessWithType
 jsdocReadonly
+jsdocReadonlyDeclarations
 jsdocTemplateClass
 jsdocTemplateConstructorFunction
 jsdocTemplateConstructorFunction2
@@ -1627,6 +1655,9 @@ jsdocTypeTagCast
 jsdocTypeTagParameterType
 jsdocTypeTagRequiredParameters
 jsdocVariadicType
+jsonRawJSON1
+jsonRawJSON2
+jsonRawJSON4
 jsxAndTypeAssertion
 jsxAttributeInitializer
 jsxCheckJsxNoTypeArgumentsAllowed
@@ -1691,6 +1722,7 @@ logicalOrExpressionIsNotContextuallyTyped
 logicalOrOperatorWithEveryType
 logicalOrOperatorWithTypeParameters
 looseThisTypeInFunctions
+mapGetOrInsert
 mappedTypeAsClauseRelationships
 mappedTypeAsClauses
 mappedTypeConstraints2
@@ -1704,6 +1736,7 @@ mappedTypes3
 mappedTypes5
 mappedTypes6
 mappedTypesAndObjects
+mathSumPrecise
 memberFunctionOverloadMixingStaticAndInstance
 memberFunctionsWithPrivateOverloads
 memberFunctionsWithPublicPrivateOverloads
@@ -1714,6 +1747,9 @@ mergeTwoInterfaces2
 mergedClassInterface
 mergedInheritedClassInterface
 mergedInheritedMembersSatisfyAbstractBase
+mergedInterfaceAugmentationDiagnostics
+mergedInterfaceDefaultLibraryDiagnostics
+mergedInterfaceInheritanceDiagnostics
 mergedInterfacesWithConflictingPropertyNames
 mergedInterfacesWithIndexers
 mergedInterfacesWithIndexers2
@@ -1731,7 +1767,6 @@ missingDecoratorType
 mixinAbstractClasses.2
 mixinAccessModifiers
 mixinAccessors3
-mixinWithBaseDependingOnSelfNoCrash1
 moduleExportAlias
 moduleExportAlias2
 moduleExportAlias4
@@ -1835,6 +1870,7 @@ nodeModulesCJSResolvingToESM3_modulePackageJson
 nodeModulesCJSResolvingToESM4_noPackageJson
 nodeModulesConditionalPackageExports
 nodeModulesDeclarationEmitWithPackageExports
+nodeModulesDeclarationEmitWithPackageExportsNoOutDir
 nodeModulesExportAssignments
 nodeModulesExportsBlocksSpecifierResolution
 nodeModulesExportsBlocksTypesVersions
@@ -1864,7 +1900,7 @@ nodeModulesJson
 nodeModulesNoDirectoryModule
 nodeModulesPackageExports
 nodeModulesPackageImports
-nodeModulesPackageImportsRootWildcardNode16
+nodeModulesPackageImportsRootWildcardNode16_promoted
 nodeModulesPackagePatternExports
 nodeModulesPackagePatternExportsExclude
 nodeModulesPackagePatternExportsTrailers
@@ -2693,6 +2729,7 @@ privateNamesIncompatibleModifiers
 privateNamesIncompatibleModifiersJs
 privateNamesInterfaceExtendingClass
 privateNamesNoDelete
+privateNamesNotAllowedAsDestructuringPatterns
 privateNamesNotAllowedAsParameters
 privateNamesNotAllowedInVariableDeclarations
 privateNamesUnique-1
@@ -3087,6 +3124,7 @@ topLevelAwaitErrors.9
 topLevelAwaitNonModule
 topLevelFileModuleMissing
 topLevelModuleDeclarationAndFile
+topLevelThisAssignment
 trailingCommasInBindingPatterns
 trailingCommasInFunctionParametersAndArguments
 trailingCommasInGetter
@@ -3154,6 +3192,7 @@ tsxNamespacedTagName2
 tsxNoJsx
 tsxParseTests1
 tsxParseTests2
+tsxPreserveEmit3
 tsxReactComponentWithDefaultTypeParameter3
 tsxReactEmit1
 tsxReactEmit3
@@ -3176,11 +3215,16 @@ tsxSpreadAttributesResolution6
 tsxSpreadChildren
 tsxSpreadChildrenInvalidType
 tsxSpreadInvalidType
+tsxStatelessFunctionComponentOverload1
+tsxStatelessFunctionComponentOverload2
 tsxStatelessFunctionComponentOverload4
 tsxStatelessFunctionComponentOverload5
 tsxStatelessFunctionComponentOverload6
+tsxStatelessFunctionComponentWithDefaultTypeParameter2
 tsxStatelessFunctionComponents1
 tsxStatelessFunctionComponents2
+tsxStatelessFunctionComponents3
+tsxStatelessFunctionComponentsWithTypeArguments2
 tsxStatelessFunctionComponentsWithTypeArguments4
 tsxTypeArgumentResolution
 tsxTypeErrors
@@ -3337,6 +3381,7 @@ typeSatisfaction
 typeSatisfactionWithDefaultExport
 typeSatisfaction_contextualTyping2
 typeSatisfaction_errorLocations1
+typeSatisfaction_js
 typeSatisfaction_optionalMemberConformance
 typeSatisfaction_propNameConstraining
 typeSatisfaction_propertyNameFulfillment
@@ -3345,6 +3390,7 @@ typeSatisfaction_propertyValueConformance2
 typeSatisfaction_propertyValueConformance3
 typeSatisfaction_vacuousIntersectionOfContextualTypes
 typeTagCircularReferenceOnConstructorFunction
+typeTagForMultipleVariableDeclarations
 typeTagModuleExports
 typeTagNoErasure
 typeTagPrototypeAssignment
@@ -3370,7 +3416,6 @@ typeofOperatorWithEnumType
 typeofOperatorWithNumberType
 typeofOperatorWithStringType
 typeofThis
-typeofThisWithImplicitThis
 typeofTypeParameter
 types.asyncGenerators.es2018.2
 types.forAwait.es2018.2
@@ -3442,6 +3487,7 @@ unionTypesAssignability
 unionsOfTupleTypes1
 uniqueSymbols
 uniqueSymbolsDeclarations
+uniqueSymbolsDeclarationsInJsErrors
 uniqueSymbolsErrors
 uniqueSymbolsPropertyNames
 unknownControlFlow
