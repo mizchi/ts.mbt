@@ -2073,6 +2073,10 @@ fn Resolver::ingest_module(
       // lands on its own `TsModule` and only this recursion sees it.
       r.has_const_assertion = true
     }
+    if gm.has_prefix("<written-any-decl:") && gm.has_suffix(">") {
+      let n = gm["<written-any-decl:".length():gm.length() - 1].to_owned()
+      r.globals["@written-any:" + n] = Any
+    }
     if gm.has_prefix("<local-type-name>") {
       // Unprefixed: the question is whether the spelling names a type
       // somewhere in the file, which no namespace prefix narrows.
@@ -2582,6 +2586,12 @@ fn param_is_optional(p : @ast.TsParam) -> Bool {
   if p.is_rest {
     return true
   }
+  // The written `?` decides on its own: `wrap?: F | null` reached here as a
+  // union with no `undefined` member and counted as REQUIRED, so zod's
+  // `mirrorShape(target, source, keys)` was "expected 4 argument(s)".
+  if p.is_optional {
+    return true
+  }
   match p.default {
     Some(_) => return true
     None => ()
@@ -2589,8 +2599,8 @@ fn param_is_optional(p : @ast.TsParam) -> Bool {
   // The parser widens `x?: T` to `T | undefined`, which we treat as optional
   // both ways: callers can omit the trailing argument either form.
   match p.type_ {
-    Union(parts) => {
-      for part in parts {
+    Union(_) as u => {
+      for part in union_components(u) {
         match part {
           Undefined => return true
           _ => ()
@@ -5290,7 +5300,9 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
       )
     ("Object", "freeze") => Some(@ast.TsType::Func([any], any))
     ("Object", "isFrozen") => Some(@ast.TsType::Func([any], b))
-    ("Object", "create") => Some(@ast.TsType::Func([any], any))
+    // `create(o, properties?)`.
+    ("Object", "create") =>
+      Some(@ast.TsType::Func([any, optional_any_param()], any))
     ("Object", "fromEntries") => Some(@ast.TsType::Func([any], any))
     ("Object", "getPrototypeOf") => Some(@ast.TsType::Func([any], any))
     ("Object", "setPrototypeOf") => Some(@ast.TsType::Func([any, any], any))
@@ -8283,7 +8295,9 @@ fn is_nullable_type(ty : @ast.TsType) -> Bool {
 fn type_has_undefined(ty : @ast.TsType) -> Bool {
   match ty {
     Undefined => true
-    Union(parts) => parts.iter().any(fn(p) { p is Undefined })
+    // Flattened: `(string | null) | undefined` (an optional parameter whose
+    // annotation is already a union) carries both.
+    Union(_) as u => union_components(u).iter().any(fn(p) { p is Undefined })
     _ => false
   }
 }
@@ -8292,7 +8306,7 @@ fn type_has_undefined(ty : @ast.TsType) -> Bool {
 fn type_has_null(ty : @ast.TsType) -> Bool {
   match ty {
     Null => true
-    Union(parts) => parts.iter().any(fn(p) { p is Null })
+    Union(_) as u => union_components(u).iter().any(fn(p) { p is Null })
     _ => false
   }
 }
@@ -8304,8 +8318,8 @@ fn type_has_null(ty : @ast.TsType) -> Bool {
 fn type_has_non_nullish(ty : @ast.TsType) -> Bool {
   match ty {
     Null | Undefined => false
-    Union(parts) =>
-      parts
+    Union(_) as u =>
+      union_components(u)
       .iter()
       .any(fn(p) {
         match p {
@@ -9207,6 +9221,20 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
     | (BigInt, BigIntLiteral(_))
     | (BigIntLiteral(_), BigInt) => true
     (Null, Null) | (Undefined, Undefined) => true
+    // Function types are comparable with each other whatever their
+    // signatures (`inst._zod.run === base`, zod's memoizer) — tsc reports
+    // `===` on two callables only through a much finer comparability
+    // relation this checker does not model.
+    (
+      Func(_, _)
+      | GenericFunc(_, _, _)
+      | Constructor(_, _, _)
+      | CallableMeta(_, _),
+      Func(_, _)
+      | GenericFunc(_, _, _)
+      | Constructor(_, _, _)
+      | CallableMeta(_, _),
+    ) => true
     // Cross-family primitives never overlap.
     _ => false
   }
@@ -13118,6 +13146,40 @@ fn check_expr_against(
   }
   let inferred_u = ctx.resolver.unwrap_containers(inferred)
   let expected_u = ctx.resolver.unwrap_containers(expected)
+  // The same generic on both sides (`Hooks<string, { occurrences: … }>`
+  // against `Hooks<string, FreqState>`): a type argument inferred from an
+  // object literal is an object SHAPE where the annotation names an
+  // interface, and the resolver-free comparison below reads that pair
+  // nominally. Variance is not modelled, so an argument pair that relates
+  // structurally in EITHER direction is accepted; only when every pair does
+  // is the mismatch dropped, which can only lose a finding.
+  match (inferred_u, expected_u) {
+    (Applied(sn, sargs), Applied(tn, targs)) if sn == tn &&
+      sargs.length() == targs.length() &&
+      sargs.length() > 0 &&
+      sargs != targs => {
+      let mut all_relate = true
+      for i in 0..<sargs.length() {
+        let a = ctx.resolver.unwrap_containers(sargs[i])
+        let b = ctx.resolver.unwrap_containers(targs[i])
+        let relates = a == b ||
+          is_assignable_to(a, b) ||
+          is_assignable_to(b, a) ||
+          structural_oneway_assignable(a, b, ctx.resolver) ||
+          structural_oneway_assignable(b, a, ctx.resolver) ||
+          is_structurally_assignable_named(a, b, ctx.resolver) ||
+          is_structurally_assignable_named(b, a, ctx.resolver)
+        if !relates {
+          all_relate = false
+          break
+        }
+      }
+      if all_relate {
+        return
+      }
+    }
+    _ => ()
+  }
   // An array against a lib array-like target (`Iterable<number>`,
   // `ReadonlyArray<T>`, `ArrayLike<T>`): the target is an unresolved name
   // to the general path below, which abstains on it, but the relation is
@@ -16497,10 +16559,17 @@ fn object_lit_never_satisfies_union(
       _ => return false
     }
   }
-  // Infer entry types once.
+  // Infer entry types once. A literal entry keeps its LITERAL type:
+  // `infer_expr` widens `false` to `boolean` and `0` to `number`, and
+  // `{ valid: false }` then fit neither `{ valid: true }` nor
+  // `{ valid: false }`.
   let entry_types : Array[(String, @ast.TsType)] = []
   for entry in entries {
-    entry_types.push((entry.0, infer_expr(env, resolver, entry.1)))
+    let t = match precise_literal_type(entry.1) {
+      Some(lit) => lit
+      None => infer_expr(env, resolver, entry.1)
+    }
+    entry_types.push((entry.0, t))
   }
   for shape in member_shapes {
     let field_by_name : Map[String, @ast.TsType] = Map([])
@@ -19340,19 +19409,22 @@ fn apply_binding_default(
       let default_ty = widen_literal(infer_expr(env, ctx.resolver, d))
       match ty {
         Undefined | Any => default_ty
-        Union(members) => {
+        // Flattened and deduplicated: an optional field read off a union
+        // (or an alias carrying `undefined`) arrives as a union of unions,
+        // and the one-level split left the inner `undefined` behind —
+        // `graphName = "G"` over `graphName?: string` bound
+        // `string | undefined | string`.
+        Union(_) as u => {
           let kept : Array[@ast.TsType] = []
-          for m in members {
-            if !(m is Undefined) {
+          for m in union_components(u) {
+            if !(m is Undefined) && !kept.contains(m) {
               kept.push(m)
             }
           }
-          kept.push(default_ty)
-          if kept.length() == 1 {
-            kept[0]
-          } else {
-            @ast.TsType::Union(kept)
+          if !kept.contains(default_ty) {
+            kept.push(default_ty)
           }
+          union_of(kept)
         }
         _ => ty
       }
@@ -21959,6 +22031,9 @@ fn check_ident_binding_decl(
   }
   let bound_type = if is_checkable(declared) {
     declared
+  } else if declared is Any &&
+    ctx.resolver.globals.contains("@written-any:" + name) {
+    @ast.TsType::Any
   } else {
     // No annotation: infer from the initializer, widening what TypeScript
     // widens. See `binding_init_type` — a composite literal's contents
@@ -33459,7 +33534,24 @@ fn iface_extends_instantiation(
         } else {
           []
         }
-        if en == to && eargs == args {
+        // Arguments are read COVARIANTLY, as the same-generic case in
+        // `member_covariant_by_iface_extends` reads them: zod's
+        // `$ZodUUIDDef extends $ZodStringFormatDef<"uuid">` against a base
+        // member stored as `$ZodStringFormatDef<string>` (the parser
+        // inlines the bound) is accepted by tsc, and `"uuid"` is a
+        // `string`. A contravariant parameter can only cost a finding.
+        if en == to &&
+          eargs.length() == args.length() &&
+          eargs
+          .iter()
+          .zip(args.iter())
+          .all(fn(p) {
+            p.0 == p.1 ||
+            is_assignable_to(
+              resolver.unwrap_containers(p.0),
+              resolver.unwrap_containers(p.1),
+            )
+          }) {
           return true
         }
         next.push((en, eargs))

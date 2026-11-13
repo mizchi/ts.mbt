@@ -2288,6 +2288,20 @@ fn Parser::parse_var_decl_item(
       }
     }
   }
+  // A WRITTEN `: any` and an absent annotation are the same `Any`
+  // downstream, and only the second takes its type from the initializer:
+  // `const full: any = {}; full.path ??= []` is legal (zod's
+  // `finalizeIssue`), and reading `full` as `{}` reported it. Flat and
+  // scope-blind like the markers below, so a same-named un-annotated
+  // binding elsewhere also keeps `any` — a lost finding, never an invented
+  // one.
+  if annotated && type_ is Any {
+    match binding {
+      @ast.TsBinding::Ident(name) =>
+        self.grammar_misuses.push("<written-any-decl:\{name}>")
+      _ => ()
+    }
+  }
   if !annotated {
     self.record_tuple_index_out_of_range(binding, init)
     // TS7031 / TS7018: a `null` / `undefined` literal standing where the
