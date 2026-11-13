@@ -3607,6 +3607,40 @@ product surfaces now.
   lib interface — broke a test that pins `interface Error { code }`
   merging with the lib table and was reverted; the real cause was found
   only by asking where the receiver came from.
+  Batch FQ is effect 1,299 -> **1,164** and zod 76 -> 67 at an identical
+  oracle, from three defects in the commonest effect idiom — a type guard
+  written as an arrow `const` — and the shapes they had been hiding.
+  `apply_type_predicate_narrowing` read the guard out of `globals`, and an
+  unannotated `const` is in `globals` as `Any` (exported) or not at all,
+  because the top-level env that infers it is walked AFTER the function
+  bodies: inside a body, a module-level `const n = 1` reads as `any`, so
+  `const a: string = n` is silent there too. That wider gap is recorded
+  rather than fixed — registering every inferred top-level `const` is a
+  capability change at every call site. What shipped is narrower:
+  `Resolver.const_predicates` holds `(subject index, target)` for a
+  `const NAME = (x: T): x is U => …`, read only by the narrowing, because
+  an arrow's own `<A, E>` is not in the AST and the whole callable in
+  `globals` would put those unbound names into every argument check. The
+  annotated spelling (`export const isSuccess: <A, E>(self: Result<A, E>)
+  => self is Success<A, E> = …`) reached the match as `GenericFunc` and
+  matched nothing — the eleventh wrapper-node default arm in this ledger —
+  and its type parameters become `any` in the target. That target is a
+  fine upper bound for the POSITIVE branch and too wide for the negative
+  one: `Some<A>` reads as assignable to `None<any>`, so the first run
+  emptied `if (isNone(a) || isNone(b)) return; a.value` to `never` at every
+  such site, and a generic route's else-branch now abstains
+  when removal leaves nothing. `unknown` narrows to the target itself,
+  as tsc gives it.
+  Narrowing then exposed two pre-existing false positives one layer
+  down, which is the recurring shape. `bind_array_pattern`'s fallback
+  read any source it had no arm for as `undefined` — including `any`
+  itself — so `for (const [key, value] of x)` with `x: any` reported
+  every use of `key`; an `any`, named, applied or struct source binds
+  `any` now, and a literal non-iterable keeps the old answer. And
+  `for_of_element_type` had `Map` and no `ReadonlyMap`. Several reports
+  MOVED rather than vanished (`.id` on `unknown` became `.id` on
+  `DateTime.TimeZone`), and they name the next gap: `_tag` narrowing
+  through a namespace-qualified union alias.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
