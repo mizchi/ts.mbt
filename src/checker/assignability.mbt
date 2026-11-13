@@ -901,8 +901,17 @@ fn is_assignable_to_inner(
     // Named/applied references are nominal: only equal names match.
     // A type predicate is a `boolean` to everything that reads it as a
     // value: `(u: unknown) => u is X` IS a `(u: unknown) => boolean`.
-    (TypePredicate(_, _), _) =>
+    // Predicate against predicate keeps its own comparison below.
+    (TypePredicate(_, _), _) if !(target is TypePredicate(_, _)) =>
       is_assignable_to_inner(Boolean, target, bivariant_params)
+    // Two predicates relate positionally — the parameter NAME is not part
+    // of the type (`(p1: any) => p1 is A` IS an `(item: any) => item is A`)
+    // — by their narrowed types. A bare name on the target side may be the
+    // callee's own type parameter (`funC<T>(g: (p1: any) => p1 is T)`),
+    // which this resolver-free entry point cannot instantiate, so it
+    // relates too: that can only lose a finding.
+    (TypePredicate(_, s), TypePredicate(_, t)) =>
+      t is Named(_) || is_assignable_to_inner(s, t, bivariant_params)
     (Named(a), Named(b)) => a == b || same_name_modulo_qualifier(a, b)
     // `ParsePayload` (its default argument) against `ParsePayload<any>`:
     // an `any` argument relates to whatever the default is, in both

@@ -17,7 +17,11 @@ fn eff_issues(src : String) -> Array[ExprIssue] {
 
 ///|
 fn eff_has(issues : Array[ExprIssue], fname : String) -> Bool {
-  issues.iter().any(fn(i) { i.path.contains("function \{fname} ") })
+  issues
+  .iter()
+  .any(fn(i) {
+    i.path.contains("function \{fname} ") || i.path == "function \{fname}"
+  })
 }
 
 ///|
@@ -205,5 +209,78 @@ test "effect: a nested union read off a union receiver is flattened" {
     #|type AST = A | B
     #|function okNested(ast: AST): boolean { return ast.context?.isOptional ?? false }
   let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okNested"))
+}
+
+///|
+test "effect: batch FS control flow — loops, try/finally, fall-through, joins" {
+  let src =
+    #|function okFinally(): number { try { return 1 } finally { console.log(1) } }
+    #|function okLoop(x: number): number { outer: while (true) { if (x > 1) { continue outer } return 1 } }
+    #|function badLoop(x: number): number { while (true) { if (x) break } }
+    #|function badCatch(): number { try { return 1 } catch { console.log(1) } }
+    #|interface Ref { readonly _tag: "Ref"; readonly $ref: string }
+    #|interface Str { readonly _tag: "Str"; readonly checks: Array<number> }
+    #|interface Num { readonly _tag: "Num"; readonly checks: Array<number> }
+    #|type Rep = Ref | Str | Num
+    #|function okJoin(part: Rep): string {
+    #|  let exact = true
+    #|  if (part._tag !== "Ref" && part.checks.length > 0) exact = false
+    #|  switch (part._tag) { case "Ref": return part.$ref }
+    #|  return String(exact)
+    #|}
+    #|function okFall(part: Rep): boolean {
+    #|  switch (part._tag) {
+    #|    case "Str":
+    #|    case "Num": { return part._tag === "Str" || part.checks.length > 0 }
+    #|  }
+    #|  return false
+    #|}
+    #|interface F { _parent: F | undefined; n: number }
+    #|function okForUpdate(f0: F) { for (let cur = f0 as F | undefined; cur; cur = cur._parent) { cur.n } }
+    #|function okNullishAssign() { let keys: Array<string>; return (e: string) => { keys ??= ["a"]; return keys.includes(e) } }
+    #|function badUnassigned() { let q: number; return () => q }
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okFinally"))
+  assert_false(eff_has(issues, "okLoop"))
+  assert_true(eff_has(issues, "badLoop"))
+  assert_true(eff_has(issues, "badCatch"))
+  assert_false(eff_has(issues, "okJoin"))
+  assert_false(eff_has(issues, "okFall"))
+  assert_false(eff_has(issues, "okForUpdate"))
+  assert_false(eff_has(issues, "okNullishAssign"))
+  assert_true(eff_has(issues, "badUnassigned"))
+}
+
+///|
+test "effect: batch FS shapes — predicates, open records, nullable tuples, typeof" {
+  let src =
+    #|function okPred(u: unknown): u is string { return typeof u === "string" }
+    #|const okPredValue: (u: unknown) => boolean = okPred
+    #|function badPred(u: unknown): u is string { return 1 }
+    #|interface JsonSchema { [x: string]: unknown }
+    #|function okOpen(): JsonSchema { const schema = { allOf: [1].map((x) => x) }; return schema }
+    #|type CR = readonly [minimum: bigint | undefined, maximum: bigint | undefined]
+    #|declare const m: bigint | undefined
+    #|function okTuple(): CR | undefined { return [m, m] }
+    #|function badTuple(): CR | undefined { return ["a", 1n] }
+    #|declare const proc: { stdout?: { isTTY?: boolean } } | undefined
+    #|function okTypeofChain() { return typeof proc?.stdout === "object" && proc.stdout.isTTY === true }
+    #|function okTypeofFn(o: ((n: number) => string) | string): string { return typeof o === "function" ? o(1) : o }
+    #|function badTypeofFn(o: ((n: number) => string) | string): string { return typeof o === "function" ? o("x") : o }
+    #|declare const xs: Array<string>
+    #|function okNested(r: string) {
+    #|  const path = r.startsWith("#") ? (xs.length > 0 ? xs : undefined) : undefined
+    #|  return path !== undefined ? path.slice(1) : []
+    #|}
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okPred"))
+  assert_true(eff_has(issues, "badPred"))
+  assert_false(eff_has(issues, "okOpen"))
+  assert_false(eff_has(issues, "okTuple"))
+  assert_true(eff_has(issues, "badTuple"))
+  assert_false(eff_has(issues, "okTypeofChain"))
+  assert_false(eff_has(issues, "okTypeofFn"))
+  assert_true(eff_has(issues, "badTypeofFn"))
   assert_false(eff_has(issues, "okNested"))
 }

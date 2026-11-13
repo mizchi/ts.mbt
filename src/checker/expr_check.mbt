@@ -12008,6 +12008,16 @@ fn check_expr_against(
     }
     _ => ()
   }
+  // A bare `A` that is only ever a TYPE PARAMETER in this file — declared
+  // by a generic arrow (`const randomWith = <A>(f: (r: Random) => A) => …`,
+  // whose `<A>` is not in the AST) and by no interface, alias, class or
+  // enum — is a binder the call site should have instantiated. Judging an
+  // argument against the raw `A` reported `expected A but got number` at
+  // every call; abstain instead (`ctx.in_scope_type_params` is where a
+  // REAL in-scope parameter lives, and it is honoured as before).
+  if expected_mentions_phantom_type_param(expected, ctx) {
+    return
+  }
   // Contextual typing for arrow / function expressions: when the value being
   // passed is a callable and the expected slot is `Func(formal_params,
   // formal_ret)`, recheck the callable's body with the formal parameter
@@ -21227,6 +21237,37 @@ fn analyze_equality(
   // `typeof <expr> === "string"` — accept any Var / PropAccess chain on
   // the operand position so `typeof c.a.b === "string"` narrows the
   // nested access.
+  // `typeof p?.a === "object"`: every tag but `"undefined"` rules out the
+  // short-circuit, so the `?.`-guarded receivers are non-nullish on the
+  // true side, and the chain itself is narrowed by its plain spelling
+  // below (`typeof process?.stdout === "object" && process.stdout.isTTY`).
+  let (left, right) = match (left, right) {
+    (UnaryOp(Typeof, operand), StringLit(s))
+    | (StringLit(s), UnaryOp(Typeof, operand)) if s != "undefined" => {
+      let (plain, guarded) = optional_chain_guarded_receivers(operand)
+      if guarded.length() > 0 {
+        for g in guarded {
+          match narrowing_key_for_expr(g) {
+            Some(key) =>
+              true_side.push(
+                (
+                  key,
+                  non_nullable_resolved(
+                    resolver,
+                    narrowing_current_type(env, resolver, key),
+                  ),
+                ),
+              )
+            None => ()
+          }
+        }
+        (@ast.TsExpr::UnaryOp(Typeof, plain), @ast.TsExpr::StringLit(s))
+      } else {
+        (left, right)
+      }
+    }
+    _ => (left, right)
+  }
   let typeof_match = match (left, right) {
     (UnaryOp(Typeof, operand), StringLit(s)) =>
       match narrowing_key_for_expr(operand) {
@@ -21244,7 +21285,32 @@ fn analyze_equality(
     Some((name, ts)) =>
       match typeof_string_to_type(ts) {
         Some(narrowed) => {
-          true_side.push((name, narrowed))
+          // `typeof f === "function"` keeps the CALLABLE members of the
+          // binding's type — not a fresh `() => any`, whose zero
+          // parameters made `typeof o === "function" ? o(x) : o` report
+          // "expected 0 argument(s)". No callable member known: `any`.
+          let true_ty = if ts == "function" {
+            let cur0 = narrowing_current_type(env, resolver, name)
+            let parts = union_components(
+              match resolver.unwrap(cur0) {
+                Union(_) as u => u
+                _ => cur0
+              },
+            ).filter(fn(v) {
+              match resolver.unwrap(v) {
+                Func(_, _) | GenericFunc(_, _, _) | CallableMeta(_, _) => true
+                _ => false
+              }
+            })
+            if parts.length() == 0 {
+              @ast.TsType::Any
+            } else {
+              union_of(parts)
+            }
+          } else {
+            narrowed
+          }
+          true_side.push((name, true_ty))
           // Else side: remove variants matching that primitive. Use the
           // shared helper so a `name.prop` key resolves through the
           // property-access path instead of returning `Any`.
@@ -21259,7 +21325,16 @@ fn analyze_equality(
             Union(_) as u => u
             _ => cur0
           }
-          let stripped = narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
+          let stripped = if ts == "function" {
+            narrow_remove(cur, fn(v) {
+              match resolver.unwrap(v) {
+                Func(_, _) | GenericFunc(_, _, _) | CallableMeta(_, _) => true
+                _ => false
+              }
+            })
+          } else {
+            narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
+          }
           false_side.push((name, stripped))
         }
         None => ()
@@ -21451,6 +21526,45 @@ fn join_branch_types(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
     }
   }
   union_of(out)
+}
+
+///|
+fn expected_mentions_phantom_type_param(
+  expected : @ast.TsType,
+  ctx : CheckCtx,
+) -> Bool {
+  let r = ctx.resolver
+  if r.local_type_names.length() == 0 {
+    return false
+  }
+  // A name some function DECLARATION binds is a binder the call path
+  // instantiates (or deliberately judges, `foo6<T>(cb: { new(x: T) … })`),
+  // so only names no declaration binds are phantoms.
+  let declared_binders : Map[String, Unit] = Map([])
+  for _, ps in r.func_overload_type_params {
+    for p in ps {
+      declared_binders[p] = ()
+    }
+  }
+  for _, ps in r.func_type_params {
+    for p in ps {
+      declared_binders[p] = ()
+    }
+  }
+  let phantoms : Array[String] = []
+  for n, _ in r.local_type_names {
+    if declared_binders.contains(n) {
+      continue
+    }
+    if !r.interfaces.contains(n) &&
+      !r.type_aliases.contains(n) &&
+      !r.classes.contains(n) &&
+      !r.enums.contains(n) &&
+      !ctx.in_scope_type_params.contains(n) {
+      phantoms.push(n)
+    }
+  }
+  type_references_any(expected, phantoms)
 }
 
 ///|
@@ -22704,16 +22818,25 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         Some(e) => check_call_args_in_expr(env, e, ctx)
         None => ()
       }
-      match update {
-        Some(s) => check_stmt(env, s, ctx)
-        None => ()
-      }
-      // Like `while`, the body runs only when the condition holds.
+      // Like `while`, the body runs only when the condition holds — and so
+      // does the update, which runs after a body the condition admitted:
+      // `for (let c = f as F | undefined; c; c = c._parent)` reads `c`
+      // where it is known truthy.
       match cond {
         Some(e) =>
           for b in analyze_narrowing(env, ctx.resolver, e).then_binds {
             env.bind(b.0, b.1)
           }
+        None => ()
+      }
+      match update {
+        Some(s) => {
+          // The update's own assignment (`c = c._parent`) must not leak
+          // into the body, which sees the condition's narrowing.
+          let before_update = env.full_snapshot()
+          check_stmt(env, s, ctx)
+          env.restore_from(before_update)
+        }
         None => ()
       }
       check_block(env, body, ctx)
