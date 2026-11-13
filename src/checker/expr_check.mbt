@@ -77,6 +77,15 @@ priv struct Resolver {
   // is work nothing reads — and it ran once per reachable module per
   // checked module, which is what made effect's graph quadratic in bodies.
   types_only : Bool
+  // `const NAME = (x: T): x is U => …` at module level, keyed by name, as
+  // (index of the predicate's subject parameter, narrowed-to type). An
+  // unannotated `const` reaches `globals` as `Any` or not at all, so a
+  // guard written as an arrow — how effect writes every one — narrowed
+  // nothing inside a function body. Kept apart from `globals` on purpose:
+  // an arrow's own `<A, E>` is not in the AST, so registering the whole
+  // callable there would put its unbound type parameters into every
+  // argument check of every call.
+  const_predicates : Map[String, (Int32, @ast.TsType)]
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -496,6 +505,7 @@ fn Resolver::empty() -> Resolver {
     lookup_active: {},
     lookup_visited_bases: {},
     types_only: false,
+    const_predicates: {},
     globals: {},
     signatures: {},
     func_type_params: {},
@@ -1819,6 +1829,25 @@ fn Resolver::ingest_module(
   // module. `module_.values` covers ambient `declare var`s; this loop
   // covers the rest by pulling typed bindings out of `top_level_stmts`.
   for stmt in module_.top_level_stmts {
+    match stmt {
+      Const(
+        Ident(name),
+        Any,
+        ArrowFunc(params, TypePredicate(pname, target), _, _)
+      ) => {
+        let mut idx = -1
+        for i, p in params {
+          if p.name == pname {
+            idx = i
+            break
+          }
+        }
+        if idx >= 0 {
+          r.const_predicates[prefix + name] = (idx, target)
+        }
+      }
+      _ => ()
+    }
     match stmt {
       Var(Ident(name), ty, _)
       | Let(Ident(name), ty, _)
@@ -18557,6 +18586,12 @@ fn bind_array_pattern(
             }
           Array(t) => t
           Applied("Array", [t]) | Applied("ReadonlyArray", [t]) => t
+          // `any` destructures to `any`, and so does an iterable this
+          // function has no arm for (a `Map` entry, a user iterable, a
+          // type it could not expand): reading those as `undefined` made
+          // `for (const [k, v] of x)` with `x: any` report every use of `k`
+          // — effect's `Equal` implementations do exactly that.
+          Any | Named(_) | Applied(_, _) | Struct(_, _) => @ast.TsType::Any
           // Unknown iterable shape: infer undefined (element may not exist).
           _ => @ast.TsType::Undefined
         }
@@ -18931,7 +18966,8 @@ fn for_of_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
         ("Array", 1) | ("ReadonlyArray", 1) => args[0]
         ("Set", 1) | ("Iterable", 1) | ("IterableIterator", 1) => args[0]
         ("Generator", n) if n >= 1 => args[0]
-        ("Map", 2) => @ast.TsType::Tuple([args[0], args[1]])
+        ("Map", 2) | ("ReadonlyMap", 2) =>
+          @ast.TsType::Tuple([args[0], args[1]])
         ("ReadonlySet", 1) => args[0]
         _ => @ast.TsType::Any
       }
@@ -19757,9 +19793,36 @@ fn apply_type_predicate_narrowing(
   pair_pos : Array[(String, @ast.TsType)],
   pair_neg : Array[(String, @ast.TsType)],
 ) -> Unit {
-  let predicate = match resolver.globals.get(callee_name) {
+  // A GENERIC predicate — `const isSuccess = <A, E>(r: Result<A, E>): r is
+  // Success<A, E> => …`, how effect writes every guard — is stored behind a
+  // `GenericFunc` wrapper, which this match did not peel, so the guard
+  // narrowed nothing (eleventh wrapper-node default arm in CLAUDE.md's
+  // ledger). The predicate's own type parameters are not solved here; they
+  // become `any`, which can only widen what the narrowed binding accepts.
+  // A `const` guard is in `globals` as the declaration recorded it — an
+  // unannotated `export const` reads `Any` there, and a non-exported one is
+  // absent — while the env holds the type inferred from its arrow
+  // initializer, which is where the predicate return survives.
+  let callee_ty = match resolver.globals.get(callee_name) {
+    None | Some(Any) =>
+      match env.lookup(callee_name) {
+        Some(t) => Some(t)
+        None => resolver.globals.get(callee_name)
+      }
+    other => other
+  }
+  let mut predicate_is_generic = false
+  let predicate = match callee_ty {
     Some(Func(_, TypePredicate(param_name, target))) =>
       Some((param_name, target))
+    Some(GenericFunc(tps, _, Func(_, TypePredicate(param_name, target)))) => {
+      predicate_is_generic = true
+      let bindings : Map[String, @ast.TsType] = Map([])
+      for tp in tps {
+        bindings[tp] = Any
+      }
+      Some((param_name, substitute_params(target, bindings)))
+    }
     _ => None
   }
   // An OVERLOADED predicate value — effect's `hasProperty: { <P>(property:
@@ -19821,7 +19884,25 @@ fn apply_type_predicate_narrowing(
     None => ()
   }
   match predicate {
-    None => return
+    None =>
+      match resolver.const_predicates.get(callee_name) {
+        Some((idx, target)) =>
+          match args.get(idx) {
+            Some(Var(arg_name)) => {
+              let cur = env_lookup_full(env, resolver, arg_name)
+              narrow_by_predicate_target(
+                cur,
+                target,
+                arg_name,
+                pair_pos,
+                pair_neg,
+                loose_target=true,
+              )
+            }
+            _ => ()
+          }
+        None => ()
+      }
     Some(_) => ()
   }
   let (param_name, target) = match predicate {
@@ -19851,35 +19932,70 @@ fn apply_type_predicate_narrowing(
   match args[idx] {
     Var(arg_name) => {
       let cur = env_lookup_full(env, resolver, arg_name)
-      // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
-      // single Named that isn't assignable to `target` but the source
-      // type genuinely supports the predicate, like
-      // `function hasLegs(x: Beast): x is Legged`), fall back to the
-      // intersection `cur & target` — TS narrows to that intersection,
-      // not just to `target`, so subsequent calls expecting `cur` still
-      // accept the narrowed value.
-      let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
-      let then_resolved = match cur {
-        // From `any`, a positive predicate narrows straight to the target
-        // — except `Function` / `Object`, which tsc deliberately leaves
-        // as `any` (narrowFromAnyWithTypePredicate).
-        Any =>
-          match target {
-            Named("Function") | Named("Object") => @ast.TsType::Any
-            _ => target
-          }
-        _ =>
-          match then_ty {
-            Never => @ast.TsType::Intersection([cur, target])
-            _ => then_ty
-          }
-      }
-      pair_pos.push((arg_name, then_resolved))
-      // Negative: strip members that fit T.
-      let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
-      pair_neg.push((arg_name, else_ty))
+      narrow_by_predicate_target(
+        cur,
+        target,
+        arg_name,
+        pair_pos,
+        pair_neg,
+        loose_target=predicate_is_generic,
+      )
     }
     _ => ()
+  }
+}
+
+///|
+/// The positive / negative halves of a `x is T` narrowing of one binding,
+/// shared by every route a predicate can arrive by.
+fn narrow_by_predicate_target(
+  cur : @ast.TsType,
+  target : @ast.TsType,
+  arg_name : String,
+  pair_pos : Array[(String, @ast.TsType)],
+  pair_neg : Array[(String, @ast.TsType)],
+  loose_target~ : Bool = false,
+) -> Unit {
+  // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
+  // single Named that isn't assignable to `target` but the source
+  // type genuinely supports the predicate, like
+  // `function hasLegs(x: Beast): x is Legged`), fall back to the
+  // intersection `cur & target` — TS narrows to that intersection,
+  // not just to `target`, so subsequent calls expecting `cur` still
+  // accept the narrowed value.
+  let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+  let then_resolved = match cur {
+    // `unknown` has no members to keep, so the narrowing is the target
+    // itself, as tsc gives it.
+    Unknown => target
+    // From `any`, a positive predicate narrows straight to the target
+    // — except `Function` / `Object`, which tsc deliberately leaves
+    // as `any` (narrowFromAnyWithTypePredicate).
+    Any =>
+      match target {
+        Named("Function") | Named("Object") => @ast.TsType::Any
+        _ => target
+      }
+    _ =>
+      match then_ty {
+        Never => @ast.TsType::Intersection([cur, target])
+        _ => then_ty
+      }
+  }
+  pair_pos.push((arg_name, then_resolved))
+  // Negative: strip members that fit T.
+  let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+  // A `loose_target` is a generic predicate's target with its unsolved
+  // type parameters read as `any` (or left unbound, for an arrow whose
+  // `<A>` the AST does not keep). That is a fine upper bound for the
+  // POSITIVE branch and too wide for this one: `Some<A>` can read as
+  // assignable to `None<any>`, and removing it empties the union, so
+  // `if (isNone(a) || isNone(b)) return; a.value` saw `never`. An empty
+  // result abstains instead.
+  match (else_ty, cur) {
+    (Never, Never) => pair_neg.push((arg_name, else_ty))
+    (Never, _) if loose_target => ()
+    _ => pair_neg.push((arg_name, else_ty))
   }
 }
 

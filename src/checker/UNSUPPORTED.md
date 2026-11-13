@@ -334,7 +334,15 @@ alias, and assignability of large intersected JSON-schema shapes.
 every report `mtsc node_modules/effect/src/index.ts --noEmit` makes is a
 false positive; that run covers 145 modules and takes about 10 s.
 
-Trend: graph did not load (batch FP's parser fixes) -> 1,556 -> **1,299**.
+Trend: graph did not load (batch FP's parser fixes) -> 1,556 -> 1,299 ->
+**1,164** (batch FQ: arrow-`const` and generic type guards narrow,
+destructuring an `any` / `ReadonlyMap` entry).
+
+Batch FQ found, and did not fix, that a module-level unannotated `const`
+reads as `any` inside every function body: the top-level env that infers it
+is walked after the bodies, and `globals` records only annotated bindings.
+The remaining `_tag` reports through a namespace-qualified union alias
+(`DateTime.TimeZone`, `Cause.Die`) are the next narrowing gap.
 
 | family | count | note |
 |---|---|---|
