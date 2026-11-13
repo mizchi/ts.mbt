@@ -3704,6 +3704,60 @@ product surfaces now.
   the net was honest. And `--max-miss` is 46: `controlFlowBindingPatternOrder`
   was a TP only because destructuring a computed key bound `undefined`
   and every report in it said "got `undefined`".
+  Batch FS takes effect from 489 to **297**. Zod numbers and the oracle
+  are recorded in the PR. Almost nothing in it is a new rule. Most of it
+  is the batch FR family again: one fact that some sites had and others
+  did not.
+  **Unions.** `union_components` split one level, so
+  `cond ? f() : undefined` with `f(): T | undefined` kept an inner
+  `undefined` behind every `!== undefined` guard. That was 36 lines, and
+  `flatten_union_exact` already said why in its own comment. The `if`
+  join compared an alias by identity: one branch keeps the DECLARED
+  `Representation`, the other the expanded `Str | Num`, and their union
+  carried the alias as a member no discriminant narrowing can split. When
+  one side's resolved members cover the other's, the join is now the
+  wider side.
+  **Qualified names.** `SchemaAST.AST`, a named-import `AST` and the
+  per-module key `AST@path` are one declaration. Nominal `Named` equality
+  now relates them modulo the qualifier and key, except that two
+  different qualifiers or two different keys stay apart, so it can only
+  lose a finding. Canonicalizing both sides through `qualified_names` was
+  tried first and EXPOSED 29 new reports, because a named-import `AST`
+  never gets the key.
+  **Control flow and narrowing.**
+  - Exit analysis: `try { return } finally { … }` with no `catch`, and a
+    `while (true)` / `for (;;)` with no `break` that leaves it, exit.
+    Probed against tsc: an inner loop's `break` does not count and a
+    labelled `break outer` does.
+  - `switch` fall-through narrows to the union of the grouped labels and
+    abstains after a non-empty body that falls in.
+  - A `for` update is checked under the condition's narrowing, in its own
+    snapshot so its assignment does not leak into the body.
+  - `typeof p?.a === "object"` narrows the `?.`-guarded receivers.
+  - `typeof f === "function"` keeps the union's CALLABLE members instead
+    of a fresh `() => any`. That fresh type is what made every
+    `typeof o === "function" ? o(x) : o` read "expected 0 argument(s)".
+  - `x ??= v` settles TS2454 before the read. Probed: tsc accepts
+    `let p: T; () => (p ??= f())(n)` and still reports a plain
+    `() => p`.
+  **Smaller items.**
+  - A type-predicate return position is checked as `boolean`, and a
+    predicate is a `boolean` as a value. `type_display` printed every
+    predicate as `type`, which hid the family.
+  - An array literal against `Tuple | undefined` is typed by the tuple.
+  - Any object is assignable to an interface that declares only
+    `[k: string]: unknown`.
+  - `@@computed:N` placeholders no longer collide in TS2783.
+  - TS2347 skips an imported `Any`, marked `@imported:` by the graph
+    loader.
+  - A bare name that is only ever a type parameter in the file (a
+    generic arrow's `<A>`, which is not in the AST) is not judged as a
+    concrete expected type.
+  **Filed rather than fixed.** The function-TYPE parser keeps a leading
+  `this` parameter (`(this: U8) => string`), which contradicts
+  `parse_type.mbt`'s own comment, so `.call(b)` reports "expected 2".
+  Dropping it is a parser change the bridge generator reads, so it needs
+  a generated-corpus diff first.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

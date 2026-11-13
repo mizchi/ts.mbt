@@ -11991,6 +11991,33 @@ fn check_expr_against(
   // expected type is `Any` (e.g. an unannotated return where we still want
   // bad calls inside the returned expression to be flagged).
   check_call_args_in_expr(env, expr, ctx)
+  // A type-predicate return position (`function isX(u): u is X { return
+  // typeof u === "object" }`) is checked against `boolean`: the predicate
+  // is what the CALLER learns, and the body only produces the boolean.
+  match expected {
+    TypePredicate(_, _) => {
+      check_expr_against(
+        env,
+        expr,
+        Boolean,
+        ctx,
+        sub_path,
+        arg_callee_non_generic~,
+      )
+      return
+    }
+    _ => ()
+  }
+  // A bare `A` that is only ever a TYPE PARAMETER in this file — declared
+  // by a generic arrow (`const randomWith = <A>(f: (r: Random) => A) => …`,
+  // whose `<A>` is not in the AST) and by no interface, alias, class or
+  // enum — is a binder the call site should have instantiated. Judging an
+  // argument against the raw `A` reported `expected A but got number` at
+  // every call; abstain instead (`ctx.in_scope_type_params` is where a
+  // REAL in-scope parameter lives, and it is honoured as before).
+  if expected_mentions_phantom_type_param(expected, ctx) {
+    return
+  }
   // Contextual typing for arrow / function expressions: when the value being
   // passed is a callable and the expected slot is `Func(formal_params,
   // formal_ret)`, recheck the callable's body with the formal parameter
@@ -12719,6 +12746,27 @@ fn check_expr_against(
     // `[T1, T2]` checks each element against the corresponding slot. Without
     // this hop the array literal would infer as `Array<elem>` and fail
     // assignability against `Tuple(...)`.
+    // `[a, b]` against `Pair | undefined`: an array literal is never the
+    // nullish member, so when exactly ONE non-nullish member is an array
+    // or tuple shape the literal is contextually typed by it — without this
+    // the literal inferred as `(bigint | undefined)[]` and failed against
+    // the tuple alias (effect's `coefficientRange`).
+    (ArrayLit(_), Union(parts)) => {
+      let rest = parts.filter(fn(p) {
+        !(ctx.resolver.unwrap(p) is (Undefined | Null))
+      })
+      if rest.length() == 1 && rest.length() < parts.length() {
+        match ctx.resolver.unwrap(rest[0]) {
+          Tuple(_)
+          | Array(_)
+          | Applied("Array" | "ReadonlyArray" | "Readonly", _) => {
+            check_expr_against(env, expr, rest[0], ctx, sub_path)
+            return
+          }
+          _ => ()
+        }
+      }
+    }
     (ArrayLit(items), Tuple(slots)) => {
       check_array_lit_against_tuple(env, items, slots, ctx, sub_path)
       return
@@ -12918,6 +12966,19 @@ fn check_expr_against(
   // an alias left sitting inside `Array` / `Tuple` never resolves and
   // `type I = { n: number }; const xs: I[] = [1].map(n => ({ n }))`
   // reported a mismatch between two identical shapes.
+  // A qualified spelling (`SchemaAST.AST`) and the declaration it names
+  // (`AST`, imported by name, or its per-module key `AST@path`) are one
+  // type, but the comparison below matches `Named` by string and
+  // `unwrap_containers` stops at a callable's parameters — so
+  // `(ast: SchemaAST.AST) => …` against a parameter typed `(AST) => AST`
+  // was a mismatch. Two types that print identically once qualifiers are
+  // dropped are treated as the same: this can only lose a finding (two
+  // distinct same-named types), never invent one.
+  if ctx.resolver.qualified_names.length() > 0 &&
+    strip_type_qualifiers(type_display(inferred)) ==
+    strip_type_qualifiers(type_display(expected)) {
+    return
+  }
   let inferred_u = ctx.resolver.unwrap_containers(inferred)
   let expected_u = ctx.resolver.unwrap_containers(expected)
   // TS2322 / TS2345: a concrete string literal assigned to a template-literal
@@ -13855,6 +13916,15 @@ fn check_expr_against(
       widen_literal(inferred_u)
     }
     let exp_str = type_display(expected)
+    // `interface JsonSchema { [x: string]: unknown }` declares no member
+    // and an index signature that accepts every value, so every object
+    // type is assignable to it. The interface stays `Named` here (there is
+    // no member for `unwrap_containers` to expand into a shape), which is
+    // why `const s = { allOf: xs }; const j: JsonSchema = s` reported.
+    if inferred_u is Object(_) &&
+      named_open_record_interface(expected_u, ctx.resolver) {
+      return
+    }
     let detail = "expected `\{exp_str}` but got `\{type_display(shown)}`"
     record(ctx, sub_path, detail)
   }
@@ -18873,8 +18943,50 @@ fn generator_stmt_returns_value(st : @ast.TsStmt) -> Bool {
 }
 
 ///|
+/// Drops every `Qualifier.` prefix of a dotted identifier in a printed
+/// type (`(SchemaAST.AST) => SchemaAST.AST` -> `(AST) => AST`).
+fn strip_type_qualifiers(s : String) -> String {
+  let out = StringBuilder()
+  let ident = StringBuilder()
+  let flush_ident = fn(next : Char?) {
+    let id = ident.to_string()
+    ident.reset()
+    match next {
+      Some('.') if id.length() > 0 => ()
+      _ => out.write_string(id)
+    }
+  }
+  let mut in_str = false
+  for c in s {
+    if in_str {
+      out.write_char(c)
+      if c == '"' {
+        in_str = false
+      }
+      continue
+    }
+    if c.is_ascii_alphabetic() || c.is_ascii_digit() || c == '_' || c == '$' {
+      ident.write_char(c)
+    } else {
+      let had = ident.to_string().length() > 0
+      flush_ident(Some(c))
+      if c == '.' && had {
+        continue
+      }
+      if c == '"' {
+        in_str = true
+      }
+      out.write_char(c)
+    }
+  }
+  flush_ident(None)
+  out.to_string()
+}
+
+///|
 fn type_display(ty : @ast.TsType) -> String {
   match ty {
+    TypePredicate(param, target) => "\{param} is \{type_display(target)}"
     Number => "number"
     Int => "int"
     Boolean => "boolean"
@@ -19665,7 +19777,27 @@ fn typeof_string_to_type(s : String) -> @ast.TsType? {
 /// union).
 fn union_components(ty : @ast.TsType) -> Array[@ast.TsType] {
   match ty {
-    Union(items) => items
+    // A union of unions is the same union. `cond ? f() : undefined` with
+    // `f(): T | undefined` is `(T | undefined) | undefined`, and splitting
+    // one level left the inner `undefined` behind every `!== undefined`
+    // guard — effect's `parseUriFragment` callers reported "possibly
+    // undefined" on the narrowed side.
+    Union(items) =>
+      if items.iter().any(fn(p) { p is Union(_) }) {
+        let out : Array[@ast.TsType] = []
+        fn go(ps : Array[@ast.TsType], out : Array[@ast.TsType]) -> Unit {
+          for p in ps {
+            match p {
+              Union(inner) => go(inner, out)
+              _ => if !out.contains(p) { out.push(p) }
+            }
+          }
+        }
+        go(items, out)
+        out
+      } else {
+        items
+      }
     _ => [ty]
   }
 }
@@ -20336,11 +20468,54 @@ fn optional_chain_equality_narrowing(
     match narrowing_key_for_expr(g) {
       Some(key) =>
         out.push(
-          (key, non_nullable(narrowing_current_type(env, resolver, key))),
+          (
+            key,
+            non_nullable_resolved(
+              resolver,
+              narrowing_current_type(env, resolver, key),
+            ),
+          ),
         )
       None => ()
     }
   }
+  // The chain itself is non-nullish on that side too, and for a
+  // comparison against `undefined` / `null` that is the half real code
+  // reads next: `options?.domain !== undefined && re.test(options.domain)`.
+  // Only for those two, since a definite-value comparison narrows the
+  // chain to the VALUE, which is the equality narrowing's job.
+  if is_undefined || is_null {
+    let (plain, _) = optional_chain_guarded_receivers(chain)
+    match narrowing_key_for_expr(plain) {
+      Some(key) => {
+        let cur = infer_expr(env, resolver, plain)
+        let stripped = non_nullable_resolved(resolver, cur)
+        if !(stripped is Never) && !(stripped is Any) {
+          out.push((key, stripped))
+        }
+      }
+      None => ()
+    }
+  }
+}
+
+///|
+/// `non_nullable` after resolving each part, so a member that is an
+/// indexed access or an alias carrying `undefined` inside it
+/// (`Cookie["options"]` of an optional field) loses it too.
+fn non_nullable_resolved(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  let out : Array[@ast.TsType] = []
+  for p in union_components(ty) {
+    match resolver.unwrap(p) {
+      Union(inner) =>
+        for q in inner {
+          out.push(q)
+        }
+      Null | Undefined => out.push(Undefined)
+      _ => out.push(p)
+    }
+  }
+  non_nullable(flatten_union_exact(out))
 }
 
 ///|
@@ -21062,6 +21237,37 @@ fn analyze_equality(
   // `typeof <expr> === "string"` — accept any Var / PropAccess chain on
   // the operand position so `typeof c.a.b === "string"` narrows the
   // nested access.
+  // `typeof p?.a === "object"`: every tag but `"undefined"` rules out the
+  // short-circuit, so the `?.`-guarded receivers are non-nullish on the
+  // true side, and the chain itself is narrowed by its plain spelling
+  // below (`typeof process?.stdout === "object" && process.stdout.isTTY`).
+  let (left, right) = match (left, right) {
+    (UnaryOp(Typeof, operand), StringLit(s))
+    | (StringLit(s), UnaryOp(Typeof, operand)) if s != "undefined" => {
+      let (plain, guarded) = optional_chain_guarded_receivers(operand)
+      if guarded.length() > 0 {
+        for g in guarded {
+          match narrowing_key_for_expr(g) {
+            Some(key) =>
+              true_side.push(
+                (
+                  key,
+                  non_nullable_resolved(
+                    resolver,
+                    narrowing_current_type(env, resolver, key),
+                  ),
+                ),
+              )
+            None => ()
+          }
+        }
+        (@ast.TsExpr::UnaryOp(Typeof, plain), @ast.TsExpr::StringLit(s))
+      } else {
+        (left, right)
+      }
+    }
+    _ => (left, right)
+  }
   let typeof_match = match (left, right) {
     (UnaryOp(Typeof, operand), StringLit(s)) =>
       match narrowing_key_for_expr(operand) {
@@ -21079,7 +21285,32 @@ fn analyze_equality(
     Some((name, ts)) =>
       match typeof_string_to_type(ts) {
         Some(narrowed) => {
-          true_side.push((name, narrowed))
+          // `typeof f === "function"` keeps the CALLABLE members of the
+          // binding's type — not a fresh `() => any`, whose zero
+          // parameters made `typeof o === "function" ? o(x) : o` report
+          // "expected 0 argument(s)". No callable member known: `any`.
+          let true_ty = if ts == "function" {
+            let cur0 = narrowing_current_type(env, resolver, name)
+            let parts = union_components(
+              match resolver.unwrap(cur0) {
+                Union(_) as u => u
+                _ => cur0
+              },
+            ).filter(fn(v) {
+              match resolver.unwrap(v) {
+                Func(_, _) | GenericFunc(_, _, _) | CallableMeta(_, _) => true
+                _ => false
+              }
+            })
+            if parts.length() == 0 {
+              @ast.TsType::Any
+            } else {
+              union_of(parts)
+            }
+          } else {
+            narrowed
+          }
+          true_side.push((name, true_ty))
           // Else side: remove variants matching that primitive. Use the
           // shared helper so a `name.prop` key resolves through the
           // property-access path instead of returning `Any`.
@@ -21094,7 +21325,16 @@ fn analyze_equality(
             Union(_) as u => u
             _ => cur0
           }
-          let stripped = narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
+          let stripped = if ts == "function" {
+            narrow_remove(cur, fn(v) {
+              match resolver.unwrap(v) {
+                Func(_, _) | GenericFunc(_, _, _) | CallableMeta(_, _) => true
+                _ => false
+              }
+            })
+          } else {
+            narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
+          }
           false_side.push((name, stripped))
         }
         None => ()
@@ -21286,6 +21526,99 @@ fn join_branch_types(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
     }
   }
   union_of(out)
+}
+
+///|
+fn expected_mentions_phantom_type_param(
+  expected : @ast.TsType,
+  ctx : CheckCtx,
+) -> Bool {
+  let r = ctx.resolver
+  if r.local_type_names.length() == 0 {
+    return false
+  }
+  // A name some function DECLARATION binds is a binder the call path
+  // instantiates (or deliberately judges, `foo6<T>(cb: { new(x: T) … })`),
+  // so only names no declaration binds are phantoms.
+  let declared_binders : Map[String, Unit] = Map([])
+  for _, ps in r.func_overload_type_params {
+    for p in ps {
+      declared_binders[p] = ()
+    }
+  }
+  for _, ps in r.func_type_params {
+    for p in ps {
+      declared_binders[p] = ()
+    }
+  }
+  let phantoms : Array[String] = []
+  for n, _ in r.local_type_names {
+    if declared_binders.contains(n) {
+      continue
+    }
+    if !r.interfaces.contains(n) &&
+      !r.type_aliases.contains(n) &&
+      !r.classes.contains(n) &&
+      !r.enums.contains(n) &&
+      !ctx.in_scope_type_params.contains(n) {
+      phantoms.push(n)
+    }
+  }
+  type_references_any(expected, phantoms)
+}
+
+///|
+/// True for a reference to an interface with no members, no bases, and a
+/// `string` index signature whose value is `unknown` or `any`.
+fn named_open_record_interface(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  let name = match ty {
+    Named(n) => n
+    _ => return false
+  }
+  match resolver.interfaces.get(name) {
+    Some(i) =>
+      i.fields.length() == 0 &&
+      i.extends_names.length() == 0 &&
+      i.index_signatures
+      .iter()
+      .any(fn(sig) { sig.0 is String_ && sig.1 is (Unknown | Any) })
+    None => false
+  }
+}
+
+///|
+/// `join_branch_types`, seeing through an alias to a union. A branch that
+/// did not narrow keeps the binding's DECLARED spelling (`Representation`)
+/// while the other holds the expanded members (`Str | Num`), and joining
+/// the two by identity gave `Str | Num | Representation` — a union whose
+/// alias member no discriminant narrowing can split, so
+/// `if (p._tag !== "R" && …) x = 1; switch (p._tag) { case "R": p.$ref }`
+/// reported. When one side's members cover the other's, the wider side IS
+/// the join.
+fn join_branch_types_resolved(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> @ast.TsType {
+  let comps = fn(t : @ast.TsType) -> Array[@ast.TsType] {
+    match t {
+      Named(_) | Applied(_, _) =>
+        match resolver.unwrap(t) {
+          Union(_) as u => union_components(u)
+          _ => [t]
+        }
+      _ => union_components(t)
+    }
+  }
+  let ca = comps(a)
+  let cb = comps(b)
+  if ca.iter().all(fn(x) { cb.contains(x) }) {
+    return flatten_union_parts(b)
+  }
+  if cb.iter().all(fn(x) { ca.contains(x) }) {
+    return flatten_union_parts(a)
+  }
+  join_branch_types(a, b)
 }
 
 ///|
@@ -21991,6 +22324,40 @@ fn narrow_after_assignment(
 }
 
 ///|
+/// After `x ??= v` (or `x ||= v`) `x` is no longer nullish: either it was
+/// not, or it now holds `v`. effect's `bySentinel ??= new Map()` then
+/// `bySentinel.get(key)` read the binding as still possibly `undefined`.
+/// The value's own type is unioned in when it is known; an `any` value
+/// (`new Map()` infers `any` here) contributes nothing, which narrows to
+/// the declaration's non-nullish part — what the line means.
+fn narrow_after_nullish_assign(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  op : @ast.TsCompoundOp,
+  value : @ast.TsExpr,
+) -> Unit {
+  if !(op is (CoalesceAssign | OrAssign)) {
+    return
+  }
+  let cur = match env.lookup(name) {
+    Some(t) => t
+    None => return
+  }
+  let kept = non_nullable_resolved(ctx.resolver, cur)
+  if kept is Never || kept is Any || !is_checkable(kept) {
+    return
+  }
+  let v = infer_expr(env, ctx.resolver, value)
+  let next = if v is Any || !is_checkable(v) {
+    kept
+  } else {
+    flatten_union_exact([kept, v])
+  }
+  env.narrow(name, next)
+}
+
+///|
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
@@ -22119,6 +22486,8 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // line one level out narrowed. One helper serves both spellings.
       match e {
         AssignExpr(name, v) => narrow_after_assignment(env, ctx, name, v)
+        CompoundAssignExpr(Var(name), op, v) =>
+          narrow_after_nullish_assign(env, ctx, name, op, v)
         _ => ()
       }
     }
@@ -22181,6 +22550,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // already records the read via `check_call_args_in_expr` on the
       // RHS; after this stmt the variable is unambiguously assigned.
       let _ = ctx.unassigned.remove(name)
+      narrow_after_nullish_assign(env, ctx, name, op, e)
     }
     PropAssign(recv, prop, value) => {
       check_call_args_in_expr(env, recv, ctx)
@@ -22397,7 +22767,8 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             None => pre_map.get(k)
           }
           match (tt, et) {
-            (Some(a), Some(b)) => env.narrow(k, join_branch_types(a, b))
+            (Some(a), Some(b)) =>
+              env.narrow(k, join_branch_types_resolved(ctx.resolver, a, b))
             _ => ()
           }
         }
@@ -22447,16 +22818,25 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         Some(e) => check_call_args_in_expr(env, e, ctx)
         None => ()
       }
-      match update {
-        Some(s) => check_stmt(env, s, ctx)
-        None => ()
-      }
-      // Like `while`, the body runs only when the condition holds.
+      // Like `while`, the body runs only when the condition holds — and so
+      // does the update, which runs after a body the condition admitted:
+      // `for (let c = f as F | undefined; c; c = c._parent)` reads `c`
+      // where it is known truthy.
       match cond {
         Some(e) =>
           for b in analyze_narrowing(env, ctx.resolver, e).then_binds {
             env.bind(b.0, b.1)
           }
+        None => ()
+      }
+      match update {
+        Some(s) => {
+          // The update's own assignment (`c = c._parent`) must not leak
+          // into the body, which sees the condition's narrowing.
+          let before_update = env.full_snapshot()
+          check_stmt(env, s, ctx)
+          env.restore_from(before_update)
+        }
         None => ()
       }
       check_block(env, body, ctx)
@@ -22785,15 +23165,76 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           None => ()
         }
         let pre = env.full_snapshot()
-        match (scrutinee_name, case_.test_expr) {
-          (Some(name), Some(t)) =>
-            apply_switch_case_narrowing(env, ctx.resolver, name, t)
-          _ => ()
+        // Fall-through: `case "a": case "b": { … }` runs the body for
+        // either label, so it sees the UNION of the two narrowings — not
+        // the last label's alone, which made `issue._tag === "a"` inside
+        // read as always false. A preceding non-empty body that does not
+        // always exit falls in too, and then any label could be live, so
+        // narrowing abstains for that body.
+        let case_index = cases_index_of(cases, case_)
+        let group : Array[@ast.TsExpr] = []
+        let mut group_ok = true
+        match case_.test_expr {
+          Some(t) => group.push(t)
+          None => group_ok = false
         }
-        match (scrutinee_disc, case_.test_expr) {
-          (Some((obj_name, prop)), Some(t)) =>
-            apply_switch_disc_narrowing(env, ctx.resolver, obj_name, prop, t)
-          _ => ()
+        let mut k = case_index - 1
+        while k >= 0 {
+          let prev = cases[k]
+          if prev.body.stmts.length() == 0 {
+            match prev.test_expr {
+              Some(t) => group.push(t)
+              None => group_ok = false
+            }
+            k = k - 1
+          } else {
+            if !block_always_exits(prev.body) {
+              group_ok = false
+            }
+            break
+          }
+        }
+        let narrow_target = match (scrutinee_name, scrutinee_disc) {
+          (Some(name), _) => Some(name)
+          (_, Some((obj_name, _))) => Some(obj_name)
+          _ => None
+        }
+        let apply_label = fn(t : @ast.TsExpr) {
+          match scrutinee_name {
+            Some(name) =>
+              apply_switch_case_narrowing(env, ctx.resolver, name, t)
+            None => ()
+          }
+          match scrutinee_disc {
+            Some((obj_name, prop)) =>
+              apply_switch_disc_narrowing(env, ctx.resolver, obj_name, prop, t)
+            None => ()
+          }
+        }
+        if case_.test_expr is Some(_) && group_ok {
+          if group.length() == 1 {
+            apply_label(group[0])
+          } else {
+            match narrow_target {
+              Some(target) => {
+                let parts : Array[@ast.TsType] = []
+                let mut all = true
+                for t in group {
+                  env.restore_from(pre)
+                  apply_label(t)
+                  match env.lookup(target) {
+                    Some(ty) => parts.push(ty)
+                    None => all = false
+                  }
+                }
+                env.restore_from(pre)
+                if all && parts.length() > 0 {
+                  env.narrow(target, flatten_union_exact(parts))
+                }
+              }
+              None => ()
+            }
+          }
         }
         // `default:` body — narrow against all literal cases.
         match (scrutinee_name, case_.test_expr) {
@@ -23841,7 +24282,8 @@ fn check_call_args_in_expr(
               // needs only ONE overload to match, so the every-member arity
               // rule applies solely to union-typed *values* (names with no
               // function-declaration signature).
-              if ctx.resolver.signatures.get(name) is None {
+              if ctx.resolver.signatures.get(name) is None &&
+                !ctx.resolver.globals.contains("@overloads:" + name) {
                 check_union_callee_arity(ctx, other, args, "call `\{name}`")
               }
               // TS2684: a plain call supplies `this: void`.
@@ -25093,7 +25535,13 @@ fn check_call_args_in_expr(
       // unresolvable spread shapes abstain (`cast_shape_fields` returns
       // `None` for those); spread-vs-spread never errors.
       for i, ent in entries {
-        if ent.0.has_prefix("@@spread") || ent.0.has_prefix("<") {
+        // `@@computed:N` is a positional placeholder for a key this
+        // literal cannot spell (`[TypeId]: …`), and the spread's own
+        // computed members get the same placeholder numbering, so two
+        // unrelated keys would compare equal by name.
+        if ent.0.has_prefix("@@spread") ||
+          ent.0.has_prefix("<") ||
+          ent.0.has_prefix("@@computed:") {
           continue
         }
         let mut reported = false
@@ -25630,6 +26078,16 @@ fn check_call_args_in_expr(
       let _ = ctx.unassigned.remove(name)
     }
     CompoundAssignExpr(target, op, v) => {
+      // TS2454: `x ??= v` / `x ||= v` / `x &&= v` read `x` only to decide
+      // whether to assign it, and tsc does not report that read (probed:
+      // `let p: T; return () => (p ??= make())(n)` is accepted while a
+      // plain `() => p` is TS2454). Settle the variable before the walk.
+      match (target, op) {
+        (Var(name), CoalesceAssign | OrAssign | AndAssign) => {
+          let _ = ctx.unassigned.remove(name)
+        }
+        _ => ()
+      }
       check_call_args_in_expr(env, target, ctx)
       check_call_args_in_expr(env, v, ctx)
       // TS2364: the left-hand side of an assignment must be a variable or a
@@ -26586,14 +27044,27 @@ fn stmt_always_exits_with(
       block_always_exits_with(then_b, env, resolver) &&
       block_always_exits_with(else_b, env, resolver)
     Block(b) => block_always_exits_with(b, env, resolver)
-    Try(try_b, _, catch_b_opt, _) => {
-      let try_exits = block_always_exits_with(try_b, env, resolver)
-      let catch_exits = match catch_b_opt {
-        Some(cb) => block_always_exits_with(cb, env, resolver)
-        None => false
+    Try(try_b, _, catch_b_opt, finally_opt) => {
+      // A `finally` that itself exits overrides every path. Without a
+      // `catch` an exception from the `try` propagates (an exit), so the
+      // `try` alone decides — `try { return f() } finally { cleanup() }`
+      // is how effect writes every path-stack helper.
+      if finally_opt is Some(fb) && block_always_exits_with(fb, env, resolver) {
+        return true
       }
-      try_exits && catch_exits
+      let try_exits = block_always_exits_with(try_b, env, resolver)
+      match catch_b_opt {
+        Some(cb) => try_exits && block_always_exits_with(cb, env, resolver)
+        None => try_exits
+      }
     }
+    // A loop whose condition is literally `true` (or absent, `for (;;)`)
+    // never falls through unless a `break` leaves it.
+    While(BoolLit(true), body) | For(_, None | Some(BoolLit(true)), _, body) =>
+      !loop_body_breaks_out(body, None)
+    Label(l, While(BoolLit(true), body))
+    | Label(l, For(_, None | Some(BoolLit(true)), _, body)) =>
+      !loop_body_breaks_out(body, Some(l))
     Label(_, inner) => stmt_always_exits_with(inner, env, resolver)
     Switch(scrutinee, cases) => {
       // Every case body must exit.
@@ -26618,6 +27089,80 @@ fn stmt_always_exits_with(
     }
     _ => false
   }
+}
+
+///|
+fn cases_index_of(
+  cases : Array[@ast.TsSwitchCase],
+  case_ : @ast.TsSwitchCase,
+) -> Int32 {
+  for i, c in cases {
+    if physical_equal(c, case_) {
+      return i
+    }
+  }
+  -1
+}
+
+///|
+/// True when some `break` in `body` leaves the loop that owns it: an
+/// unlabeled `break` not inside a nested loop or `switch`, or a labeled
+/// one whose label is not declared inside `body` (that covers both the
+/// loop's own label and any label further out). A missed spelling reads
+/// as "never breaks", which claims the loop exits — a MISS, not a report.
+fn loop_body_breaks_out(body : @ast.TsBlock, own : String?) -> Bool {
+  let inner_labels : Map[String, Unit] = Map([])
+  letrec walk = fn(stmts : Array[@ast.TsStmt], nested : Bool) -> Bool {
+    for st in stmts {
+      if walk_stmt(st, nested) {
+        return true
+      }
+    }
+    false
+  }
+  and walk_stmt = fn(st : @ast.TsStmt, nested : Bool) -> Bool {
+    match st {
+      Break(None) => !nested
+      Break(Some(l)) => !inner_labels.contains(l) || own == Some(l)
+      Block(b) | With(_, b) => walk(b.stmts, nested)
+      If(_, t, e) =>
+        walk(t.stmts, nested) ||
+        (match e {
+          Some(b) => walk(b.stmts, nested)
+          None => false
+        })
+      Try(t, _, c, f) =>
+        walk(t.stmts, nested) ||
+        (match c {
+          Some(b) => walk(b.stmts, nested)
+          None => false
+        }) ||
+        (match f {
+          Some(b) => walk(b.stmts, nested)
+          None => false
+        })
+      While(_, b)
+      | DoWhile(_, b)
+      | For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => walk(b.stmts, true)
+      Switch(_, cases) => {
+        for c in cases {
+          if walk(c.body.stmts, true) {
+            return true
+          }
+        }
+        false
+      }
+      Label(l, inner) => {
+        inner_labels[l] = ()
+        walk_stmt(inner, nested)
+      }
+      _ => false
+    }
+  }
+  walk(body.stmts, false)
 }
 
 ///|
@@ -33762,7 +34307,8 @@ fn check_untyped_call_type_args(ctx : CheckCtx, inner : @ast.TsExpr) -> Unit {
   // an `Any` there is this checker's inference gap: effect's
   // `causePrettyErrors<…>(…)` and `callback<…>(…)` were reported forty
   // times. Losing `const f: any = g; f<T>()` is the affordable MISS.
-  if ctx.resolver.initialized_top_level_names.get(name) is Some(_) {
+  if ctx.resolver.initialized_top_level_names.get(name) is Some(_) ||
+    ctx.resolver.globals.contains("@imported:" + name) {
     return
   }
   record_unfiltered(

@@ -339,7 +339,9 @@ Trend: graph did not load (batch FP's parser fixes) -> 1,556 -> 1,299 ->
 destructuring an `any` / `ReadonlyMap` entry) -> **489** (batch FR:
 per-module keys for type names two modules declare, namespace-imported
 guards, `||` / conditional-expression narrowing, lib bigint/Date/TypedArray
-surfaces).
+surfaces) -> **297** (batch FS: flattened nested unions, alias-aware `if`
+joins, qualified-name equality, loop / `finally` exits, fall-through and
+`typeof` narrowing, type-predicate returns).
 
 Batch FQ found that a module-level unannotated `const` reads as `any` inside
 every function body; batch FR registers the PRIMITIVE-typed ones, and the
