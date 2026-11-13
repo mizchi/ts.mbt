@@ -25,7 +25,7 @@ pub fn check_module_function_bodies(@ast.TsModule) -> Array[ExprIssue]
 
 pub fn check_module_function_bodies_permissive(@ast.TsModule) -> Array[ExprIssue]
 
-pub fn check_module_function_bodies_with_context(@ast.TsModule, Array[(String, @ast.TsType)], Array[@ast.TsModule], namespace_type_aliases? : Array[(String, String)], type_module_keys? : Array[String]) -> Array[ExprIssue]
+pub fn check_module_function_bodies_with_context(@ast.TsModule, Array[(String, @ast.TsType)], Array[@ast.TsModule], namespace_type_aliases? : Array[(String, String, String)], type_module_keys? : Array[String]) -> Array[ExprIssue]
 
 pub fn check_module_function_bodies_with_globals(@ast.TsModule, Array[(String, @ast.TsType)]) -> Array[ExprIssue]
 
@@ -96,6 +96,8 @@ pub fn normalize_literal_type(@ast.TsType) -> @ast.TsType
 pub fn normalize_promise_like_union_return(@ast.TsType) -> @ast.TsType
 
 pub fn reduce_uniform_union(@ast.TsType) -> @ast.TsType
+
+pub fn rename_type_refs(@ast.TsType, Map[String, String]) -> @ast.TsType
 
 pub fn simplify_type(@ast.TsType) -> @ast.TsType
 

@@ -3641,6 +3641,69 @@ product surfaces now.
   MOVED rather than vanished (`.id` on `unknown` became `.id` on
   `DateTime.TimeZone`), and they name the next gap: `_tag` narrowing
   through a namespace-qualified union alias.
+  Batch FR is effect 1,164 -> **489** (zod 67 -> 61, oracle TP 2669 /
+  MISS 46 / FP 0) and most of it is ONE defect the flat type table had
+  carried since graph checking began: a graph check ingests every module
+  the importer reaches into one table keyed by BARE name, and modules are
+  scoped. effect declares `Metadata` in four modules, `Algorithm` in six,
+  `IndexedNode` in two, so a literal against `Schedule.Metadata` was asked
+  for `Metric.Metadata`'s members and `this.children` inside hashMap.ts's
+  own `class IndexedNode` read Graph.ts's interface. Three rules, each
+  found by the previous one failing. The checked module's own names win
+  (`skip`). Letting the NEAREST foreign module win instead was measured
+  and reverted: a foreign module's own bare references (`type AST =
+  Literal | Enum | …` inside SchemaAST.ts) resolve through the same table,
+  so SchemaAST's `Literal` became Schema.ts's and 49 narrowings went to
+  `never` — what the table needs is a per-module key, not a winner. So a
+  name two reachable modules declare is rewritten inside each foreign
+  module's interfaces and aliases to `name@<path>` (`rename_type_refs`,
+  the walker `substitute_params` is not, since it leaves `Applied`'s name
+  alone), registered under that key, and a qualified `ns.X` canonicalizes
+  to it; the bare entry keeps the merge for importers' bare references,
+  and `type_display` prints the source name. Classes keep their bare
+  name, because class member lookup goes through the declaration's own
+  name and a class under `Union@path` answered nothing. A LIB global name
+  takes the same key: batch FP kept a foreign module's `Error` from
+  shadowing the lib, which also threw away effect's module-scoped
+  `Algorithm` (WebCrypto has one), so `Signature.Algorithm` resolved to
+  nothing. The rewrite is cached per (module, rename set) — uncached it
+  took the effect check from 7 s to 27 s.
+  The rest is the applied-in-some-places family, eight times. A guard
+  called through a NAMESPACE import (`Predicate.hasProperty(u, "k")`,
+  `Option.isSome(o)`, how effect calls nearly every guard) narrowed
+  nothing, because a namespace import binds no value type at all; its
+  PREDICATE exports alone are published under an `@ns:` key only the
+  narrowing reads, with the target's bare names qualified to `ns.X`, and
+  an arrow-`const` guard exported by name gets its predicate type with
+  `any` parameters. A generic guard's target is loose, so a negative
+  branch that removal would empty abstains (`if (isNone(a) || isNone(b))
+  return; a.value` went to `never` otherwise), and so does one whose
+  target holds an unresolvable name. An object pattern over a shape this
+  checker cannot enumerate bound `undefined` (`({ typeParameters }) =>
+  typeParameters[0]`, nineteen times) — the array-pattern split batch FQ
+  made, on the other pattern kind, and 206 reports by itself. An index
+  signature keyed by an alias (`{ [x: PropertyKey]: unknown }`, effect's
+  `isObject`) read as a property named `PropertyKey`. `a?.b` lacked the
+  plain `.b` check's unresolved-name gate and pruned `undefined` before
+  unwrapping an alias that carried it. `Array.isArray` did not narrow
+  `unknown` or a property path; `"k" in x` expanded one alias level of a
+  union of aliases; a field read off a union receiver came back as a
+  NESTED union, so `ast.context?.isOptional` over a 21-class union saw no
+  nullish member; the then-branch of `||` narrowed nothing; a conditional
+  EXPRESSION's branches were inferred without the condition's narrowing.
+  And the lib: `BigInt.prototype` had no table, the Date setters and the
+  TypedArray methods had required optionals, `BigInt(x)` / `Number(x)` /
+  `String(x)` / `Boolean(x)` inferred `any`, `-x` on a bigint was
+  `number`, and a module-level `const n = 1` read as `any` inside every
+  function body — registered now when its initializer is primitive, the
+  narrow first step of the gap batch FQ recorded.
+  Two measurement notes. Every precision gain EXPOSED reports a coarser
+  answer had hidden — `SchemaAST.isUnion(ast) && ast.types` resolved only
+  while `AST` was the cross-module merge — so each step was judged on the
+  net and on the new lines, and three of them needed a follow-up before
+  the net was honest. And `--max-miss` is 46: `controlFlowBindingPatternOrder`
+  was a TP only because destructuring a computed key bound `undefined`
+  and every report in it said "got `undefined`".
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

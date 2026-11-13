@@ -9706,14 +9706,58 @@ fn infer_expr_inner(
       let inner_ty = infer_expr(env, resolver, inner)
       match op {
         Typeof => infer_typeof_type(resolver, inner_ty)
+        // `-x` and `~x` keep a bigint a bigint (`-difference` with
+        // `difference: bigint`); everything else is as before.
+        // Decided by assignability, so `bigint | bigint` (a union the
+        // flow joins can leave un-deduplicated) still counts.
+        Neg | BitwiseNot if !(inner_ty is Any) &&
+          !(inner_ty is Never) &&
+          is_assignable_to(inner_ty, @ast.TsType::BigInt) => @ast.TsType::BigInt
         _ => infer_unary(op)
       }
     }
-    Cond(_, then_, else_) =>
-      narrow_union(
-        infer_expr(env, resolver, then_),
-        infer_expr(env, resolver, else_),
-      )
+    // Each branch of `c ? a : b` is read under `c`'s narrowing, as an `if`
+    // reads its blocks: `typeof capacity === "number" ? { capacity } :
+    // capacity` (effect's `PubSub`) is `{ capacity: number } | { … }`, and
+    // without this both branches saw the whole `number | { … }`.
+    Cond(c, then_, else_) => {
+      let n = analyze_narrowing(env, resolver, c)
+      if n.then_binds.length() == 0 && n.else_binds.length() == 0 {
+        narrow_union(
+          infer_expr(env, resolver, then_),
+          infer_expr(env, resolver, else_),
+        )
+      } else {
+        // A binding the condition would narrow to `never` is left as it
+        // was: here the branch is only being TYPED, and our discriminant
+        // narrowing can empty a generic union that tsc keeps (zod's
+        // `result.status === "valid" ? result.value : …`).
+        let snap = env.full_snapshot()
+        for b in n.then_binds {
+          if !(b.1 is Never) {
+            env.bind(b.0, b.1)
+          }
+        }
+        let t1 = infer_expr(env, resolver, then_)
+        env.restore_from(snap)
+        let snap2 = env.full_snapshot()
+        for b in n.else_binds {
+          if !(b.1 is Never) {
+            env.bind(b.0, b.1)
+          }
+        }
+        let t2 = infer_expr(env, resolver, else_)
+        env.restore_from(snap2)
+        // Not `narrow_union`, which drops a member assignable to another:
+        // `{ capacity: number }` would swallow `{ capacity; replay? }` and
+        // `options.replay` would be reported.
+        if t1 is Any || t2 is Any {
+          @ast.TsType::Any
+        } else {
+          flatten_union_exact([t1, t2])
+        }
+      }
+    }
     ArrayLit(items) => {
       let mut elem : @ast.TsType = Any
       let mut first = true
@@ -9817,6 +9861,28 @@ fn infer_expr_inner(
         resolver.classes.get(name) is None &&
         resolver.interfaces.get("SymbolConstructor") is None {
         return @ast.TsType::Symbol
+      }
+      // The same holds for the other primitive conversion functions, called
+      // without `new`: `String(x)` is `string`, `Number(x)` `number`,
+      // `Boolean(x)` `boolean`, `BigInt(x)` `bigint`. They inferred `Any`,
+      // and `any ** any` is `number`, so effect's `BigInt(1024) ** BigInt(2)`
+      // into a `bigint` field reported "expected `bigint` but got `number`".
+      let primitive_ctor = match name {
+        "String" => Some((@ast.TsType::String_, "StringConstructor"))
+        "Number" => Some((@ast.TsType::Number, "NumberConstructor"))
+        "Boolean" => Some((@ast.TsType::Boolean, "BooleanConstructor"))
+        "BigInt" => Some((@ast.TsType::BigInt, "BigIntConstructor"))
+        _ => None
+      }
+      match primitive_ctor {
+        Some((ty, ctor_iface)) =>
+          if env.lookup(name) is None &&
+            resolver.declared_value_names.get(name) is None &&
+            resolver.classes.get(name) is None &&
+            resolver.interfaces.get(ctor_iface) is None {
+            return ty
+          }
+        None => ()
       }
       let callee_ty = match env.lookup(name) {
         Some(t) => t
@@ -11631,6 +11697,14 @@ fn infer_binop(
         | (BigInt, BigIntLiteral(_))
         | (BigIntLiteral(_), BigInt)
         | (BigIntLiteral(_), BigIntLiteral(_)) => @ast.TsType::BigInt
+        // tsc says `any * any` is `number`, but an `Any` here is as often
+        // a type this checker failed to compute (a module-level `const`
+        // read inside a function body is one), and answering `number` for
+        // `index & mask` with two bigints made `=== BigInt(0)` "always
+        // false". Two `Any`s, or `Any` beside a bigint, stay `Any`.
+        (Any, Any)
+        | (Any, BigInt | BigIntLiteral(_))
+        | (BigInt | BigIntLiteral(_), Any) => @ast.TsType::Any
         _ => @ast.TsType::Number
       }
     BinEq
@@ -19277,6 +19351,20 @@ fn check_compound_assign(
   if !needs_numeric {
     return
   }
+  // A `bigint` target takes `bigint` arithmetic (`d *= 2n`): the rule was
+  // written for `number` only, invisible while `BigInt(x)` inferred `any`.
+  if is_checkable(target) &&
+    !(target is Any) &&
+    is_assignable_to(target, @ast.TsType::BigInt) {
+    check_expr_against(
+      env,
+      rhs,
+      @ast.TsType::BigInt,
+      ctx,
+      "compound-assign `\{name}`",
+    )
+    return
+  }
   // Verify target is numeric — otherwise we have an immediate error.
   if is_checkable(target) && !is_assignable_to(target, @ast.TsType::Number) {
     record(
@@ -19618,6 +19706,15 @@ fn flatten_union_exact(parts : Array[@ast.TsType]) -> @ast.TsType {
   }
   go(parts, out)
   union_of(out)
+}
+
+///|
+/// `ty` with nested unions flattened (see `flatten_union_exact`).
+fn flatten_union_parts(ty : @ast.TsType) -> @ast.TsType {
+  match ty {
+    Union(parts) => flatten_union_exact(parts)
+    _ => ty
+  }
 }
 
 ///|
@@ -20423,7 +20520,11 @@ fn apply_type_predicate_narrowing(
         arg_name,
         pair_pos,
         pair_neg,
-        loose_target=predicate_is_generic,
+        // A target holding a name this resolver cannot expand (an arrow
+        // guard's own `<T>`, which the AST does not keep) is as loose as a
+        // generic one.
+        loose_target=predicate_is_generic ||
+          type_contains_unresolved_named(target, resolver),
       )
     }
     _ => ()
@@ -26256,8 +26357,16 @@ fn check_call_args_in_expr(
           // type so we don't double-flag on the explicit optional
           // chain.
           check_call_args_in_expr(env, recv, ctx)
-          let recv_ty = ctx.resolver.unwrap(
-            prune_nullish(ctx.resolver, infer_expr(env, ctx.resolver, recv)),
+          // Pruned again after the unwrap: an alias can carry the nullish
+          // member inside it (or arrive nested), and the property check is
+          // about the non-nullish part either way.
+          let recv_ty = prune_nullish(
+            ctx.resolver,
+            flatten_union_parts(
+              ctx.resolver.unwrap(
+                prune_nullish(ctx.resolver, infer_expr(env, ctx.resolver, recv)),
+              ),
+            ),
           )
           if is_checkable(recv_ty) &&
             !is_in_scope_type_param(ctx, recv_ty) &&
@@ -37790,6 +37899,44 @@ fn lib_global_ctor_type_name(name : String) -> String? {
 }
 
 ///|
+/// A module-level `const` with no annotation is not in `globals` (only an
+/// annotated binding is), and the top-level env that infers it is walked
+/// AFTER the function bodies — so inside every body it read as `any`, and
+/// `const n = 1; function f() { const s: string = n }` was silent. The
+/// first, narrow step: a `const` whose initializer infers to a PRIMITIVE or
+/// literal type is registered before the bodies run. A `const` cannot be
+/// reassigned, so its type at every read is the initializer's; anything
+/// composite (objects, calls returning shapes, arrows) still reads `any`,
+/// which is a capability change at every call site and is not taken here.
+fn register_primitive_top_level_consts(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Unit {
+  let env = ExprEnv::new()
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Const(Ident(name), Any, init) =>
+        if resolver.globals.get(name) is None {
+          let t = infer_expr(env, resolver, init)
+          match t {
+            Number
+            | String_
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_)
+            | NumberLiteral(_)
+            | BooleanLiteral(_)
+            | BigIntLiteral(_) => resolver.globals[name] = t
+            _ => ()
+          }
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
 /// Collect top-level `var x;` / `let x: any;` names — a declaration with
 /// no `=` initializer (the parser's `Var("__ts_no_init__")` sentinel)
 /// whose annotation is `any` or absent.
@@ -39156,6 +39303,7 @@ fn check_module_function_bodies_layered(
       module_,
       resolver.initialized_top_level_names,
     )
+    register_primitive_top_level_consts(module_, resolver)
   } else {
     for o in outer_modules {
       Resolver::ingest_module(resolver, o, "")
