@@ -3765,8 +3765,22 @@ fn Parser::parse_export_stmt(
           name == "module" ||
           name == "global" ||
           name == "class" {
-          match self.parse_namespace_decl_value() {
-            Some(value) => values.push(value)
+          // `export declare namespace X { … }` declares the same namespace
+          // `declare namespace X { … }` does; keeping only its value threw
+          // the declarations away, so effect's `Scope.State.Open` resolved
+          // to whichever OTHER module's `namespace State` declared an
+          // `Open` (RcMap's) and every `_tag` narrowing on it went wrong.
+          match self.parse_namespace_decl() {
+            Some((value, namespace_)) => {
+              match value {
+                Some(value) => values.push(value)
+                None => ()
+              }
+              match namespace_ {
+                Some(namespace_) => namespaces.push(namespace_)
+                None => ()
+              }
+            }
             None => self.skip_declaration_block()
           }
         } else {

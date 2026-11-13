@@ -919,6 +919,43 @@ fn rename_interface_refs(
 }
 
 ///|
+/// `m` (a namespace body) with every bare type reference to a type it
+/// declares rewritten to `prefix + name`. Type parameters that shadow a
+/// local name keep their bare spelling.
+fn qualify_namespace_local_refs(
+  m : @ast.TsModule,
+  prefix : String,
+) -> @ast.TsModule {
+  let renames : Map[String, String] = Map([])
+  for i in m.interfaces {
+    renames[i.name] = prefix + i.name
+  }
+  for a in m.type_aliases {
+    renames[a.name] = prefix + a.name
+  }
+  for e in m.enums {
+    renames[e.name] = prefix + e.name
+  }
+  if renames.length() == 0 {
+    return m
+  }
+  let aliases = m.type_aliases.map(fn(a) {
+    let own : Map[String, String] = Map([])
+    for k, v in renames {
+      if !a.type_params.contains(k) {
+        own[k] = v
+      }
+    }
+    { ..a, type_: rename_type_refs(a.type_, own), }
+  })
+  {
+    ..m,
+    interfaces: m.interfaces.map(fn(i) { rename_interface_refs(i, renames) }),
+    type_aliases: aliases,
+  }
+}
+
+///|
 /// Import only type declarations from another ES module. Value declarations
 /// intentionally stay out of `globals`: an embedding must still provide the
 /// concrete bindings it resolved for the current module's runtime imports.
@@ -2062,7 +2099,16 @@ fn Resolver::ingest_module(
     } else {
       prefix + ns.name + "."
     }
-    Resolver::ingest_module(r, ns.module_, ns_prefix)
+    // The body's declarations are registered under `ns_prefix`, so its own
+    // BARE references to them (`type Snapshot = SnapshotProto<…>` inside
+    // `namespace Metric`) must be qualified the same way or they resolve to
+    // nothing — every member of effect's `Metric.Snapshot` read as missing.
+    let body = if ns.name == "<global>" {
+      ns.module_
+    } else {
+      qualify_namespace_local_refs(ns.module_, ns_prefix)
+    }
+    Resolver::ingest_module(r, body, ns_prefix)
     // Record the namespace's declared value names and its `<export-value>`
     // marker set (merging across same-name declarations).
     if ns.name != "<global>" {
@@ -4166,6 +4212,13 @@ fn Resolver::lookup_field_core(
     // `Applied(n, args)` interface-lookup arm — otherwise the resolver
     // would search for an `interface Array { ... }` declaration that
     // doesn't exist and return `None`.
+    // The readonly views share the mutable tables, minus the members no
+    // lib file declares on them (`ReadonlyMap.set`, `ReadonlyArray.push`).
+    Applied("ReadonlyArray" | "ReadonlyMap" | "ReadonlySet" as n, _) if lib_interface_declares_member(
+        n, field,
+      )
+      is Some(false) &&
+      self.interfaces.get(n) is None => None
     Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
       array_prototype_member(elem, field)
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
@@ -5077,7 +5130,62 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
 }
 
 ///|
-/// True when `n` names a lib type whose instance-member surface is
+/// The qualified type names (`NS.Member`, `A.B.Member`) a module's
+/// namespaces declare: interfaces, type aliases and enums (classes keep a
+/// bare-name lookup path, see the rename loop).
+fn namespace_qualified_type_names(m : @ast.TsModule) -> Array[String] {
+  let out : Array[String] = []
+  fn go(m : @ast.TsModule, prefix : String, out : Array[String]) -> Unit {
+    for ns in m.namespaces {
+      let p = prefix + ns.name + "."
+      for i in ns.module_.interfaces {
+        out.push(p + i.name)
+      }
+      for a in ns.module_.type_aliases {
+        out.push(p + a.name)
+      }
+      for e in ns.module_.enums {
+        out.push(p + e.name)
+      }
+      go(ns.module_, p, out)
+    }
+  }
+  go(m, "", out)
+  out
+}
+
+///|
+/// True when `member` is definitely not a member of the lib interface `n`:
+/// `n` is one of the interfaces `lib_members.mbt` enumerates, no lib file
+/// declares `mem` on it, it is not an `Object.prototype` mem, and the
+/// module does not declare (and so possibly augment) an interface or class
+/// of that name.
+fn lib_applied_member_missing(
+  resolver : Resolver,
+  n : String,
+  mem : String,
+) -> Bool {
+  if resolver.interfaces.get(n) is Some(_) || resolver.classes.get(n) is Some(_) {
+    return false
+  }
+  if mem.has_prefix("__private_brand__") {
+    return false
+  }
+  match mem {
+    "constructor"
+    | "toString"
+    | "toLocaleString"
+    | "valueOf"
+    | "hasOwnProperty"
+    | "isPrototypeOf"
+    | "propertyIsEnumerable" => return false
+    _ => ()
+  }
+  lib_interface_declares_member(n, mem) is Some(false)
+}
+
+///|
+/// True when `n` names a lib type whose instance-mem surface is
 /// completely covered by a prototype table (`error_prototype_member` /
 /// `date_prototype_member` plus the `Object.prototype` fallback inside
 /// `lookup_field`), so a lookup miss on it is a definite TS2339 / TS2551
@@ -5224,6 +5332,24 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     // instead of exactly one.
     ("Math", "max") | ("Math", "min") | ("Math", "hypot") =>
       Some(@ast.TsType::Func([@ast.TsType::Rest(@ast.TsType::Array(n))], n))
+    // ES2026 `sumPrecise(numbers: Iterable<number>): number`.
+    ("Math", "sumPrecise") =>
+      Some(@ast.TsType::Func([@ast.TsType::Applied("Iterable", [n])], n))
+    // ES2026 `Iterator.concat<T>(...iterables: (Iterable<T> & object)[])`:
+    // every argument must be an OBJECT, so a string — iterable, and legal
+    // for `Iterator.from` — is not accepted. The element type is not
+    // modelled, so the result is `any`.
+    ("Iterator", "concat") =>
+      Some(
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Rest(
+              @ast.TsType::Array(@ast.TsType::NonPrimitiveObject),
+            ),
+          ],
+          any,
+        ),
+      )
     ("Math", "random") => Some(@ast.TsType::Func([], n))
     ("Math", "imul") => Some(@ast.TsType::Func([n, n], n))
     ("Math", "fround") | ("Math", "clz32") => Some(@ast.TsType::Func([n], n))
@@ -10149,10 +10275,21 @@ fn infer_expr_inner(
             @ast.TsType::Number,
             @ast.TsType::Array(elem),
           ])
-          // `flatMap` flattens one level: `T[] | T` → `T[]`.
-          let flattened = match cb_ret {
-            Array(inner) => inner
-            other => other
+          // `flatMap` flattens one level: `U | ReadonlyArray<U>` → `U[]`.
+          // The callback's return is resolved first and each union member
+          // flattened on its own, so a callback typed `ReadonlyArray<B>`
+          // (an alias or an annotated helper) yields `B[]` and not
+          // `ReadonlyArray<B>[]`.
+          let flat_one = fn(t : @ast.TsType) -> @ast.TsType {
+            match resolver.unwrap(t) {
+              Array(inner) => inner
+              Applied("Array" | "ReadonlyArray", [inner]) => inner
+              _ => t
+            }
+          }
+          let flattened = match resolver.unwrap(cb_ret) {
+            Union(parts) => union_of(parts.map(flat_one))
+            _ => flat_one(cb_ret)
           }
           return @ast.TsType::Array(flattened)
         }
@@ -12981,6 +13118,31 @@ fn check_expr_against(
   }
   let inferred_u = ctx.resolver.unwrap_containers(inferred)
   let expected_u = ctx.resolver.unwrap_containers(expected)
+  // An array against a lib array-like target (`Iterable<number>`,
+  // `ReadonlyArray<T>`, `ArrayLike<T>`): the target is an unresolved name
+  // to the general path below, which abstains on it, but the relation is
+  // just the element types'. `Math.sumPrecise([1n, 2n])` is TS2345.
+  match (inferred_u, expected_u) {
+    (Array(e), Applied(n, [t])) if is_array_like_iterable_name(n) &&
+      ctx.resolver.interfaces.get(n) is None &&
+      is_checkable(e) &&
+      is_checkable(t) &&
+      !type_contains_unresolved_named(e, ctx.resolver) &&
+      !type_contains_unresolved_named(t, ctx.resolver) &&
+      !is_in_scope_type_param(ctx, t) &&
+      is_concrete_primitive_or_literal(widen_literal(e)) &&
+      is_concrete_primitive_or_literal(t) => {
+      if !is_assignable_to(widen_literal(e), t) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected)}` but got `\{type_display(inferred_u)}`",
+        )
+      }
+      return
+    }
+    _ => ()
+  }
   // TS2322 / TS2345: a concrete string literal assigned to a template-literal
   // type pattern is an error when the pattern can't produce that literal
   // (`const x: `a${string}` = "hello"`). `is_assignable_to`'s pattern matcher
@@ -17784,9 +17946,25 @@ fn collect_literal_reassignments(
 /// the real annotation is unrecoverable there.
 fn copy_env_into_closure(outer : ExprEnv, env : ExprEnv) -> Unit {
   for entry in outer.full_snapshot() {
+    if is_property_path_narrowing_key(entry.0) {
+      continue
+    }
     env.bind(entry.0, entry.1)
   }
   unnarrow_unstable_bindings(outer, env)
+}
+
+///|
+/// A narrowing recorded under a PROPERTY PATH (`self.state`, `o.p`) rather
+/// than a binding. tsc does not carry those into a function expression —
+/// the property can be reassigned before the callback runs — so
+/// `if (self.state._tag === "Done") return; later(() => self.state.exit)`
+/// is TS2339 there, while a `const` alias of the same value keeps its
+/// narrowing. Internal marker keys (`<…>`, `@…`) are not paths.
+fn is_property_path_narrowing_key(key : String) -> Bool {
+  !key.has_prefix("<") &&
+  !key.has_prefix("@") &&
+  (key.contains(".") || key.contains("["))
 }
 
 ///|
@@ -18026,6 +18204,9 @@ fn check_funcexpr_with_context(
   // rebind captured variables at their declared types.
   let reset_narrowing = f.name == "<class>"
   for entry in outer.full_snapshot() {
+    if is_property_path_narrowing_key(entry.0) {
+      continue
+    }
     let captured = if reset_narrowing {
       match outer.lookup_declared(entry.0) {
         Some(d) => d
@@ -19715,7 +19896,7 @@ fn apply_switch_disc_default_narrowing(
   for c in cases {
     match c.test_expr {
       Some(e) =>
-        match discriminant_field_matcher(e) {
+        match discriminant_field_matcher(resolver, e) {
           Some(m) => matchers.push(m)
           None => ()
         }
@@ -19781,7 +19962,7 @@ fn apply_switch_disc_narrowing(
   prop : String,
   case_test : @ast.TsExpr,
 ) -> Unit {
-  match discriminant_field_matcher(case_test) {
+  match discriminant_field_matcher(resolver, case_test) {
     Some(matcher) => {
       let cur = env_lookup_full(env, resolver, obj_name)
       match narrow_by_discriminant(resolver, cur, prop, matcher, true) {
@@ -19955,6 +20136,7 @@ fn type_eq(a : @ast.TsType, b : @ast.TsType) -> Bool {
 /// operand shape (so the caller skips narrowing). Numeric literals are matched
 /// on their rendered text, mirroring `apply_switch_case_narrowing`.
 fn discriminant_field_matcher(
+  resolver : Resolver,
   case_test : @ast.TsExpr,
 ) -> ((@ast.TsType) -> Bool)? {
   match case_test {
@@ -19994,7 +20176,10 @@ fn discriminant_field_matcher(
     // member access renders as `PropAccess(Var(enum), member)` and the field
     // type of an enum-member literal parses as `Named("Enum.Member")`, so we
     // match on the qualified name.
-    PropAccess(Var(enum_name), member_) => {
+    // Only for a declared ENUM: `a._tag !== b._tag` compares two bindings'
+    // discriminants, and reading `b._tag` as the enum member `b._tag` matched
+    // no variant, narrowing `a` to `never` on the equal side.
+    PropAccess(Var(enum_name), member_) if resolver.enums.contains(enum_name) => {
       let qualified = enum_name + "." + member_
       Some(fn(ft) {
         match ft {
@@ -20016,8 +20201,13 @@ fn narrow_by_discriminant(
   keep : Bool,
 ) -> @ast.TsType? {
   // Unwrap type aliases first so a `type Shape = A | B` receiver
-  // becomes the underlying union before we split it.
-  let variants = union_components(resolver.unwrap(recv))
+  // becomes the underlying union before we split it. A union OF such
+  // aliases (`Q.State<any> | Q.State<any>`, a field read off a union
+  // receiver whose members both declare `state: Q.State<A>`) is expanded
+  // member by member, or every variant stays one opaque alias.
+  let variants = union_components(
+    deep_union_members(resolver, resolver.unwrap(recv)),
+  )
   if variants.length() < 2 {
     return None
   }
@@ -21472,12 +21662,20 @@ fn analyze_equality(
   let disc_match : (String, String, (@ast.TsType) -> Bool)? = match
     (left, right) {
     (PropAccess(parent, prop), rhs) =>
-      match (narrowing_key_for_expr(parent), discriminant_field_matcher(rhs)) {
+      match
+        (
+          narrowing_key_for_expr(parent),
+          discriminant_field_matcher(resolver, rhs),
+        ) {
         (Some(parent_key), Some(m)) => Some((parent_key, prop, m))
         _ => None
       }
     (lhs, PropAccess(parent, prop)) =>
-      match (narrowing_key_for_expr(parent), discriminant_field_matcher(lhs)) {
+      match
+        (
+          narrowing_key_for_expr(parent),
+          discriminant_field_matcher(resolver, lhs),
+        ) {
         (Some(parent_key), Some(m)) => Some((parent_key, prop, m))
         _ => None
       }
@@ -23533,11 +23731,16 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
   // way the name could be a value is ruled out first: `class M {}`, a
   // function, or an enum of the same name each give `M` a value meaning
   // the namespace body alone does not show.
+  // A `const` / `let` / `var` with an initializer merges the same way —
+  // effect writes `export declare namespace Path { … }` beside
+  // `export const Path = Context.Service(…)`, and `Path` there is the
+  // const.
   if ctx.resolver.namespace_instantiated.get(name) is Some(false) &&
     (ctx.script_top_level || env.lookup(name) is None) &&
     ctx.resolver.classes.get(name) is None &&
     ctx.resolver.enums.get(name) is None &&
-    ctx.resolver.signatures.get(name) is None {
+    ctx.resolver.signatures.get(name) is None &&
+    ctx.resolver.initialized_top_level_names.get(name) is None {
     record_unfiltered(
       ctx,
       "use `\{name}`",
@@ -24727,6 +24930,16 @@ fn check_call_args_in_expr(
                         "method `\{meth}` does not exist on `\{lib_n}`",
                       )
                     }
+                  Applied(lib_n, _) if lib_applied_member_missing(
+                      ctx.resolver,
+                      lib_n,
+                      meth,
+                    ) =>
+                    record(
+                      ctx,
+                      "call `\{meth}`",
+                      "method `\{meth}` does not exist on `\{type_display(pruned)}`",
+                    )
                   Named(_)
                   | Applied(_, _)
                   | Object(_)
@@ -25868,6 +26081,16 @@ fn check_call_args_in_expr(
           ctx,
           "PropAccess `.\{member_display_name(prop)}`",
           "object is possibly `\{type_display(kind)}`",
+        )
+      } else if ctx.resolver.unwrap(recv_ty) is Applied(lib_n, _) &&
+        lib_applied_member_missing(ctx.resolver, lib_n, prop) {
+        // A lib collection interface (`ReadonlyMap`, `ReadonlyArray`, …)
+        // whose member NAMES are enumerated from every bundled lib file:
+        // `readonlyMap.set` and `readonlyArray.push` are TS2339.
+        record(
+          ctx,
+          "PropAccess `.\{member_display_name(prop)}`",
+          "property `\{member_display_name(prop)}` does not exist on `\{type_display(recv_ty)}`",
         )
       } else if ctx.resolver.unwrap(recv_ty) is Named(lib_n) &&
         lib_member_surface_complete(ctx.resolver, lib_n) &&
@@ -39836,6 +40059,9 @@ fn check_module_function_bodies_layered(
   for e in own_root.enums {
     own_type_names[e.name] = ()
   }
+  for q in namespace_qualified_type_names(own_root) {
+    own_type_names[q] = ()
+  }
   // Which top-level type names more than one reachable module declares
   // (the checked module counting as one): those get a per-module key.
   let declarers : Map[String, Map[String, Unit]] = Map([])
@@ -39857,6 +40083,13 @@ fn check_module_function_bodies_layered(
     }
     for e in m.enums {
       add(e.name)
+    }
+    // Namespace members are registered under their QUALIFIED name
+    // (`State.Empty`), and two modules each declaring a `namespace State`
+    // (effect's Scope.ts and internal/rcRef.ts) collide on exactly those
+    // keys — so `state.exit` on Scope's `State.Closed` read rcRef's.
+    for q in namespace_qualified_type_names(m) {
+      add(q)
     }
   }
   note_declared(own_root, "<checked>")
@@ -39896,6 +40129,15 @@ fn check_module_function_bodies_layered(
       }
       for d in type_module.enums {
         add_if(d.name)
+      }
+      for q in namespace_qualified_type_names(type_module) {
+        let multi = match declarers.get(q) {
+          Some(set) => set.length() > 1
+          None => false
+        }
+        if multi {
+          renames[q] = q + "@" + cache_key
+        }
       }
       // A CLASS keeps its bare name: class member lookups go through the
       // declaration's own name (`ClassIndex`, the inheritance walks), so a
