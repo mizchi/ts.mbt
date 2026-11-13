@@ -56,6 +56,27 @@ priv struct Resolver {
   // match bare names only, and the declarations they walk name their
   // bases bare.
   qualified_names : Map[String, String]
+  // Re-entrancy depth of `lookup_field`. A member lookup walks bases,
+  // unwraps aliases and re-enters itself for every intersection and
+  // utility arm, and effect's recursive generic types closed that loop
+  // (`Option.ts` ended the process with a stack overflow 87,000 frames
+  // deep). Bounded the way `types_definitely_differ` is; running out of
+  // depth answers `None`, which every caller already reads as "unknown".
+  lookup_depth : Ref[Int32]
+  // The (receiver, field) lookups in progress below depth 8, so a cycle is
+  // refused at its second arrival instead of re-expanded until the depth
+  // bound — which still branches exponentially on effect's types.
+  lookup_active : Map[String, Unit]
+  // Interface bases already walked by the current OUTERMOST lookup. A miss
+  // walks the whole `extends` DAG, and effect's interfaces share their
+  // bases, so without this every diamond was re-walked once per path.
+  lookup_visited_bases : Map[String, Unit]
+  // Set for the throwaway resolver `ingest_type_module` builds: only its
+  // TYPE tables are copied out, so inferring every function body's return
+  // type there (which `ingest_module` does for the module being checked)
+  // is work nothing reads — and it ran once per reachable module per
+  // checked module, which is what made effect's graph quadratic in bodies.
+  types_only : Bool
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -202,6 +223,9 @@ priv struct Resolver {
   // "is any", since it says nothing about annotated or initialized
   // bindings.
   any_uninitialized_values : Map[String, Bool]
+  // Top-level `var` / `let` / `const` names bound WITH an initializer (see
+  // `check_untyped_call_type_args`).
+  initialized_top_level_names : Map[String, Unit]
   // `class C extends B<A1, A2>`: the type arguments of each heritage edge,
   // keyed by `class_base_key(class key, base name)`. The base chain is
   // otherwise walked by NAME, so a member a generic base declares as `Def`
@@ -468,6 +492,10 @@ fn Resolver::empty() -> Resolver {
     type_aliases: {},
     standard_aliases: standard_utility_types(),
     qualified_names: {},
+    lookup_depth: { val: 0, },
+    lookup_active: {},
+    lookup_visited_bases: {},
+    types_only: false,
     globals: {},
     signatures: {},
     func_type_params: {},
@@ -486,6 +514,7 @@ fn Resolver::empty() -> Resolver {
     this_param_members: {},
     local_type_names: {},
     any_uninitialized_values: {},
+    initialized_top_level_names: {},
     class_base_args: {},
     class_index: ClassIndex::empty(),
     no_implicit_any: false,
@@ -735,10 +764,54 @@ fn Resolver::ingest_type_module(
   r : Resolver,
   module_ : @ast.TsModule,
   prefix : String,
+  cache_key~ : String = "",
 ) -> Unit {
-  let types = Resolver::empty()
-  Resolver::ingest_module(types, module_, prefix)
+  let types = if cache_key == "" {
+    let t = { ..Resolver::empty(), types_only: true, }
+    Resolver::ingest_module(t, module_, prefix)
+    t
+  } else {
+    match type_module_cache.get(cache_key) {
+      Some(t) => t
+      None => {
+        let t = { ..Resolver::empty(), types_only: true, }
+        Resolver::ingest_module(t, module_, prefix)
+        type_module_cache[cache_key] = t
+        t
+      }
+    }
+  }
+  // A module-scoped TOP-LEVEL declaration of another module is visible here
+  // only through an import, yet this ingestion registers it at its bare
+  // name — and where that name is a lib global type it SHADOWED the lib for
+  // the whole program. effect declares `export type Error<T> = T extends
+  // Effect<…> ? … : never` in ten modules, so every `e.message` on a lib
+  // `Error` read the conditional alias and reported "property `message`
+  // does not exist on `Error`". Such a name cannot be what an unqualified
+  // reference elsewhere means, so it is left out; a `declare global`
+  // augmentation is a namespace, not a top-level declaration, and still
+  // merges. The qualified spelling (`Effect.Error`) loses its entry with
+  // it and abstains as an unresolved name.
+  let shadows_lib : Map[String, Unit] = Map([])
+  for i in module_.interfaces {
+    if is_lib_global_type(i.name) {
+      shadows_lib[i.name] = ()
+    }
+  }
+  for a in module_.type_aliases {
+    if is_lib_global_type(a.name) {
+      shadows_lib[a.name] = ()
+    }
+  }
+  for c in module_.classes {
+    if is_lib_global_type(c.name) {
+      shadows_lib[c.name] = ()
+    }
+  }
   for name, interface_ in types.interfaces {
+    if shadows_lib.contains(name) {
+      continue
+    }
     match r.interfaces.get(name) {
       Some(existing) =>
         r.interfaces[name] = merge_interfaces(existing, interface_)
@@ -746,14 +819,37 @@ fn Resolver::ingest_type_module(
     }
   }
   for name, class_ in types.classes {
+    if shadows_lib.contains(name) {
+      continue
+    }
     Resolver::put_class(r, name, class_)
   }
   for name, alias_ in types.type_aliases {
+    if shadows_lib.contains(name) {
+      continue
+    }
     r.type_aliases[name] = alias_
   }
   for name, enum_ in types.enums {
     r.enums[name] = enum_
   }
+}
+
+///|
+/// The type-only ingestion of each module in a GRAPH check, keyed by the
+/// caller's module key (its path). A graph check runs the layered check once
+/// per module and each run ingests every module that one reaches, so without
+/// this a program of N modules ingested N^2 of them — effect's 585-module
+/// graph spent half its time here. Ingestion of a module is a pure function
+/// of its AST, so caching it per key cannot change an answer; the caller
+/// clears it at the start of every graph check (`clear_type_module_cache`),
+/// which is what keeps watch mode and the language service from reading a
+/// stale entry.
+let type_module_cache : Map[String, Resolver] = Map([])
+
+///|
+pub fn clear_type_module_cache() -> Unit {
+  type_module_cache.clear()
 }
 
 ///|
@@ -1523,6 +1619,7 @@ fn Resolver::ingest_module(
     // (partial-resolver inference isn't trustworthy beyond that), and
     // generators are excluded (their calls yield iterator objects).
     let effective_ret = if f.return_type is Any &&
+      !r.types_only &&
       !f.is_generator &&
       f.body.stmts.length() > 0 {
       let fenv = ExprEnv::new()
@@ -3229,7 +3326,30 @@ fn Resolver::lookup_field(
   recv : @ast.TsType,
   field : String,
 ) -> @ast.TsType? {
-  match self.lookup_field_core(recv, field) {
+  if self.lookup_depth.val > 48 {
+    return None
+  }
+  if self.lookup_depth.val == 0 {
+    self.lookup_visited_bases.clear()
+  }
+  let key = if self.lookup_depth.val >= 8 {
+    let k = field + "|" + type_display(recv)
+    if self.lookup_active.contains(k) {
+      return None
+    }
+    self.lookup_active[k] = ()
+    Some(k)
+  } else {
+    None
+  }
+  self.lookup_depth.val = self.lookup_depth.val + 1
+  let found = self.lookup_field_core(recv, field)
+  self.lookup_depth.val = self.lookup_depth.val - 1
+  match key {
+    Some(k) => self.lookup_active.remove(k)
+    None => ()
+  }
+  match found {
     Some(t) => Some(t)
     None =>
       // Object-like receivers inherit Object.prototype members
@@ -3669,6 +3789,16 @@ fn Resolver::lookup_field_core(
           let mut i = 0
           while i < iface.extends_names.length() {
             let base_name = iface.extends_names[i]
+            // Keyed on the FIELD, and recorded only after a MISS: a miss
+            // does not depend on the base's type arguments, while a HIT
+            // does not end the outer walk when the receiver is a union —
+            // the next member reaching the same base must still find it.
+            // Cycles are the in-progress guard's job (`lookup_active`).
+            let visit_key = field + "|" + base_name
+            if self.lookup_visited_bases.contains(visit_key) {
+              i = i + 1
+              continue
+            }
             let base_args = if i < iface.extends_args.length() {
               iface.extends_args[i]
             } else {
@@ -3681,7 +3811,7 @@ fn Resolver::lookup_field_core(
             }
             match self.lookup_field(base_ty, field) {
               Some(t) => return Some(t)
-              None => ()
+              None => self.lookup_visited_bases[visit_key] = ()
             }
             i = i + 1
           }
@@ -3784,6 +3914,11 @@ fn Resolver::lookup_field_core(
           let mut j = 0
           while j < iface.extends_names.length() {
             let base_name = iface.extends_names[j]
+            let visit_key = field + "|" + base_name
+            if self.lookup_visited_bases.contains(visit_key) {
+              j = j + 1
+              continue
+            }
             let base_args = if j < iface.extends_args.length() {
               iface.extends_args[j]
             } else {
@@ -3809,7 +3944,7 @@ fn Resolver::lookup_field_core(
             }
             match self.lookup_field(base_ty, field) {
               Some(t) => return Some(substitute_params(t, bindings))
-              None => ()
+              None => self.lookup_visited_bases[visit_key] = ()
             }
             j = j + 1
           }
@@ -5350,6 +5485,45 @@ fn Resolver::method_overload_signatures(
 }
 
 ///|
+/// How many declarations of `meth` a receiver's interface hierarchy holds,
+/// counting every shape (a generic member, an optional one, a plain one)
+/// and every base once. More than one is an overload set whatever the
+/// members look like.
+fn method_declaration_count(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> Int32 {
+  let root = match resolver.unwrap(recv) {
+    Named(n) | Applied(n, _) | Struct(n, _) => n
+    _ => return 0
+  }
+  let seen : Map[String, Unit] = Map([])
+  let stack = [root]
+  let mut count = 0
+  while stack.pop() is Some(n) {
+    if seen.contains(n) {
+      continue
+    }
+    seen[n] = ()
+    match resolver.interfaces.get(n) {
+      Some(i) => {
+        for f in i.fields {
+          if f.0 == meth {
+            count = count + 1
+          }
+        }
+        for b in i.extends_names {
+          stack.push(b)
+        }
+      }
+      None => ()
+    }
+  }
+  count
+}
+
+///|
 fn Resolver::resolve_method_overload(
   self : Resolver,
   recv : @ast.TsType,
@@ -6272,27 +6446,39 @@ fn interface_declaring_restricted_member(
   prop : String,
   depth : Int32,
 ) -> String? {
-  if depth > 8 {
-    return None
-  }
-  let iface = match ctx.resolver.interfaces.get(name) {
-    Some(i) => i
-    None => return None
-  }
-  for base in iface.extends_names {
-    match ctx.resolver.classes.get(base) {
-      Some(d) =>
-        if d.private_members.contains(prop) ||
-          d.protected_members.contains(prop) {
-          return Some(base)
+  // Breadth-first with a visited set. The recursive form was bounded at
+  // depth 8 and still EXPONENTIAL, because it re-walked every shared base
+  // once per path through the hierarchy — effect's interfaces all extend
+  // the same few bases, and checking `Option.ts` sat in this function for
+  // fifteen minutes. The answer is the same: the first class found on the
+  // way up that declares `prop` restricted, nearest level first.
+  let seen : Map[String, Unit] = Map([(name, ())])
+  let mut frontier = [name]
+  let mut level = depth
+  while frontier.length() > 0 && level <= 8 {
+    let next : Array[String] = []
+    for n in frontier {
+      let iface = match ctx.resolver.interfaces.get(n) {
+        Some(i) => i
+        None => continue
+      }
+      for base in iface.extends_names {
+        match ctx.resolver.classes.get(base) {
+          Some(d) =>
+            if d.private_members.contains(prop) ||
+              d.protected_members.contains(prop) {
+              return Some(base)
+            }
+          None =>
+            if !seen.contains(base) {
+              seen[base] = ()
+              next.push(base)
+            }
         }
-      None =>
-        match
-          interface_declaring_restricted_member(ctx, base, prop, depth + 1) {
-          Some(n) => return Some(n)
-          None => ()
-        }
+      }
     }
+    frontier = next
+    level = level + 1
   }
   None
 }
@@ -8446,6 +8632,9 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
   }
   match (a, b) {
     (Any, _) | (_, Any) => true
+    // `unknown` is comparable to every type; `x === y` on two `unknown`
+    // values (effect's `Equal.equals`) reached the final `false`.
+    (Unknown, _) | (_, Unknown) => true
     (Never, _) | (_, Never) => true
     (Union(_), _) | (_, Union(_)) => true
     (Intersection(_), _) | (_, Intersection(_)) => true
@@ -8748,10 +8937,20 @@ fn check_binop_operands(
       }
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      // An operand whose type is EXACTLY `undefined` / `null` is almost
+      // always our flow model's answer rather than a declaration's: a
+      // `let x = undefined` reassigned later narrows to `Undefined` here
+      // (the hazard batch CY records for TS2532), and effect's
+      // `let current = undefined; … if (current === "array")` was reported
+      // as an impossible comparison. Abstaining costs
+      // `declare const u: undefined; u === "a"` as a MISS.
+      let nullish_only = fn(t : @ast.TsType) -> Bool { t is (Undefined | Null) }
       if !is_typeof(l) &&
         !is_typeof(r) &&
         !is_nullish_kw(l) &&
         !is_nullish_kw(r) &&
+        !nullish_only(lt) &&
+        !nullish_only(rt) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
         (
@@ -9210,9 +9409,6 @@ fn infer_expr_inner(
         resolver.declared_value_names.get(name) is None &&
         resolver.classes.get(name) is None &&
         resolver.interfaces.get("SymbolConstructor") is None {
-        for a in args {
-          let _ = infer_expr(env, resolver, a)
-        }
         return @ast.TsType::Symbol
       }
       let callee_ty = match env.lookup(name) {
@@ -9241,9 +9437,6 @@ fn infer_expr_inner(
               args,
               resolver.signatures.get(name),
             )
-            for a in args {
-              let _ = infer_expr(env, resolver, a)
-            }
             // The parser inlines a function's bounded type parameter, so
             // a return of `T` with `T extends unknown[]` arrives as the
             // bound itself and no binding can reach it: `h<T extends
@@ -9335,20 +9528,25 @@ fn infer_expr_inner(
       let callee_ty = infer_expr(env, resolver, callee)
       infer_call(env, resolver, callee_ty, args)
     }
+    // A LOCAL binding of the name shadows a module class: zod's
+    // `_string(Class: util.SchemaClass<T>)` does `new Class(…)` beside its
+    // own `export abstract class Class`, and inferring the module class's
+    // instance type there reported the parameter's construct result as the
+    // wrong class. Batch EO's shadowing fix covered the abstract-
+    // instantiation CHECK and not this inference; the construct signature
+    // of the local's type is the answer, and anything else abstains.
+    New(class_name, _) if env.lookup(class_name) is Some(local_ty) =>
+      match resolver.unwrap(local_ty) {
+        Constructor(_, ret, _) => ret
+        _ => @ast.TsType::Any
+      }
     New(class_name, args) =>
       match resolver.lookup_constructor(class_name) {
-        Some(_) => {
+        Some(_) =>
           // Validate args at the call site via `check_arguments`; here we
           // just return the instance type.
-          for a in args {
-            let _ = infer_expr(env, resolver, a)
-          }
           @ast.TsType::Named(class_name)
-        }
         None => {
-          for a in args {
-            let _ = infer_expr(env, resolver, a)
-          }
           // A lib `SharedArrayBuffer` instance keeps its Named type so the
           // fully-table-modeled member surface applies (`foge.length` —
           // useSharedArrayBuffer6).
@@ -9394,7 +9592,7 @@ fn infer_expr_inner(
           @ast.TsType::Any
         }
       }
-    NewExpr(callee, args) => {
+    NewExpr(callee, _) => {
       // Walk the callee expression to a dotted key string so we can look
       // it up in resolver.classes and resolver.globals.
       fn callee_key(e : @ast.TsExpr) -> String? {
@@ -9428,9 +9626,6 @@ fn infer_expr_inner(
         None => @ast.TsType::Any
       }
       let _ = infer_expr(env, resolver, callee)
-      for a in args {
-        let _ = infer_expr(env, resolver, a)
-      }
       instance_ty
     }
     MethodCall(receiver, meth, args) => {
@@ -9447,21 +9642,12 @@ fn infer_expr_inner(
               // shape when no special path applies.
               match
                 global_static_method_special(env, resolver, name, meth, args) {
-                Some(special_ret) => {
+                Some(special_ret) =>
                   // Walk args for nested call-site checks.
-                  for a in args {
-                    let _ = infer_expr(env, resolver, a)
-                  }
                   return special_ret
-                }
                 None =>
                   match sig {
-                    Func(_, ret) => {
-                      for a in args {
-                        let _ = infer_expr(env, resolver, a)
-                      }
-                      return ret
-                    }
+                    Func(_, ret) => return ret
                     _ => ()
                   }
               }
@@ -9563,9 +9749,6 @@ fn infer_expr_inner(
       // `(arr | null).map(...)` still resolves the method return type.
       match resolver.lookup_method_sig(pruned_recv, meth) {
         Some((params, ret)) => {
-          for a in args {
-            let _ = infer_expr(env, resolver, a)
-          }
           // A generic METHOD's type parameters are solved from the
           // arguments exactly as a generic FUNCTION's are in the `Call`
           // arm above — the same `solve_generic_bindings`, so the two
@@ -9595,12 +9778,7 @@ fn infer_expr_inner(
           // a bare `Named("this")` reference into downstream checks.
           substitute_this_type(instantiated, recv_ty)
         }
-        None => {
-          for a in args {
-            let _ = infer_expr(env, resolver, a)
-          }
-          @ast.TsType::Any
-        }
+        None => @ast.TsType::Any
       }
     }
     AssignExpr(_, value) | AssignPattern(_, value) =>
@@ -10537,9 +10715,6 @@ fn infer_call(
   callee : @ast.TsType,
   args : Array[@ast.TsExpr],
 ) -> @ast.TsType {
-  for a in args {
-    let _ = infer_expr(env, resolver, a)
-  }
   // The `Call` arm's abstention, for the callee that arrives as a VALUE
   // (`declare function h<T extends unknown[]>(…): T`): a return that is
   // exactly one of the binders' inlined bounds is an instantiation this
@@ -16225,11 +16400,32 @@ fn decimal_int_value(s : String) -> Int32? {
 /// (classes, applied generics, etc.) so callers don't accidentally flag
 /// missing-required errors on a literal that legitimately fills only a
 /// subset of an opaque shape.
+
+///|
 fn collect_declared_fields(
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Array[(String, @ast.TsType)] {
+  collect_declared_fields_at(target, resolver, 0, {})
+}
+
+///|
+fn collect_declared_fields_at(
+  target : @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+  visited : Map[String, Unit],
+) -> Array[(String, @ast.TsType)] {
   let out : Array[(String, @ast.TsType)] = []
+  // Bounded like `types_definitely_differ` and the indexed-access lookup:
+  // a recursive generic interface whose base mentions itself through an
+  // argument (effect's `Option` graph) re-expanded forever and ended the
+  // process with a stack overflow. Running out of depth returns what has
+  // been collected, which only drops members deeper than any real
+  // hierarchy has.
+  if depth > 24 {
+    return out
+  }
   let unwrapped = resolver.unwrap(target)
   match unwrapped {
     Object(entries) =>
@@ -16257,12 +16453,31 @@ fn collect_declared_fields(
             } else {
               []
             }
+            // Each base is expanded ONCE per collection. effect's
+            // interfaces all extend the same handful of bases (`Pipeable`,
+            // `Inspectable`, `Yieldable`, …), so every diamond in the
+            // hierarchy re-collected and re-substituted the same members
+            // once per PATH — exponential in the depth, and `Option.ts`
+            // ran out of memory in `substitute_params`. A second
+            // instantiation of the same base contributes members already
+            // present by name, so skipping it changes no lookup.
+            if visited.contains(base_name) {
+              i = i + 1
+              continue
+            }
+            visited[base_name] = ()
             let base_ty : @ast.TsType = if base_args.length() > 0 {
               @ast.TsType::Applied(base_name, base_args)
             } else {
               @ast.TsType::Named(base_name)
             }
-            for f in collect_declared_fields(base_ty, resolver) {
+            for
+              f in collect_declared_fields_at(
+                base_ty,
+                resolver,
+                depth + 1,
+                visited,
+              ) {
               out.push(f)
             }
             i = i + 1
@@ -16277,7 +16492,13 @@ fn collect_declared_fields(
                 }
               }
               for base_name in cls.base_names {
-                for f in collect_declared_fields(Named(base_name), resolver) {
+                for
+                  f in collect_declared_fields_at(
+                    Named(base_name),
+                    resolver,
+                    depth + 1,
+                    visited,
+                  ) {
                   out.push(f)
                 }
               }
@@ -16288,25 +16509,25 @@ fn collect_declared_fields(
     // Utility-type field collection so object-literal contextual typing
     // (missing-required / excess-property) honours the same rules.
     Applied("Partial", [t]) =>
-      for f in collect_declared_fields(t, resolver) {
+      for f in collect_declared_fields_at(t, resolver, depth + 1, visited) {
         out.push((f.0, narrow_union(f.1, @ast.TsType::Undefined)))
       }
     Applied("Required", [t]) =>
-      for f in collect_declared_fields(t, resolver) {
+      for f in collect_declared_fields_at(t, resolver, depth + 1, visited) {
         out.push((f.0, non_nullable(f.1)))
       }
     Applied("Readonly", [t]) =>
-      for f in collect_declared_fields(t, resolver) {
+      for f in collect_declared_fields_at(t, resolver, depth + 1, visited) {
         out.push(f)
       }
     Applied("Pick", [t, keys]) =>
-      for f in collect_declared_fields(t, resolver) {
+      for f in collect_declared_fields_at(t, resolver, depth + 1, visited) {
         if utility_keys_include(keys, f.0) {
           out.push(f)
         }
       }
     Applied("Omit", [t, keys]) =>
-      for f in collect_declared_fields(t, resolver) {
+      for f in collect_declared_fields_at(t, resolver, depth + 1, visited) {
         if !utility_keys_include(keys, f.0) {
           out.push(f)
         }
@@ -16346,6 +16567,12 @@ fn collect_declared_fields(
           let mut j = 0
           while j < iface.extends_names.length() {
             let base_name = iface.extends_names[j]
+            // Each base once per collection — see the `Named` arm above.
+            if visited.contains(base_name) {
+              j = j + 1
+              continue
+            }
+            visited[base_name] = ()
             let base_args = if j < iface.extends_args.length() {
               iface.extends_args[j]
             } else {
@@ -16360,7 +16587,13 @@ fn collect_declared_fields(
             } else {
               @ast.TsType::Named(base_name)
             }
-            for f in collect_declared_fields(base_ty, resolver) {
+            for
+              f in collect_declared_fields_at(
+                base_ty,
+                resolver,
+                depth + 1,
+                visited,
+              ) {
               out.push((f.0, substitute_params(f.1, bindings)))
             }
             j = j + 1
@@ -16386,7 +16619,13 @@ fn collect_declared_fields(
                 }
               }
               for base_name in cls.base_names {
-                for f in collect_declared_fields(Named(base_name), resolver) {
+                for
+                  f in collect_declared_fields_at(
+                    Named(base_name),
+                    resolver,
+                    depth + 1,
+                    visited,
+                  ) {
                   out.push(f)
                 }
               }
@@ -16397,7 +16636,7 @@ fn collect_declared_fields(
     // Intersection: a value of `A & B` has all properties of both A and B.
     Intersection(parts) =>
       for part in parts {
-        for f in collect_declared_fields(part, resolver) {
+        for f in collect_declared_fields_at(part, resolver, depth + 1, visited) {
           out.push(f)
         }
       }
@@ -16406,14 +16645,24 @@ fn collect_declared_fields(
       if parts.length() == 0 {
         ()
       } else {
-        let first_fields = collect_declared_fields(parts[0], resolver)
+        let first_fields = collect_declared_fields_at(
+          parts[0],
+          resolver,
+          depth + 1,
+          visited,
+        )
         let common : Map[String, @ast.TsType] = Map([])
         for f in first_fields {
           common[f.0] = f.1
         }
         let mut i = 1
         while i < parts.length() {
-          let member_fields = collect_declared_fields(parts[i], resolver)
+          let member_fields = collect_declared_fields_at(
+            parts[i],
+            resolver,
+            depth + 1,
+            visited,
+          )
           let member_map : Map[String, @ast.TsType] = Map([])
           for f in member_fields {
             member_map[f.0] = f.1
@@ -16960,6 +17209,31 @@ fn unnarrow_unstable_bindings(outer : ExprEnv, env : ExprEnv) -> Unit {
 }
 
 ///|
+/// Arrow bodies a CONTEXTUAL check has already walked, by identity. A call
+/// argument is checked twice by design — `check_arguments` walks it with the
+/// formal parameter types, then the generic recursion into the call's
+/// arguments walks it again with `any` parameters and relies on
+/// `dedup_issues_since` to drop the repeats (the comment at the
+/// non-contextual site says so). That second walk recurses into every
+/// callback nested inside, so `f(() => f(() => …))` was checked three
+/// times per level: 3^depth, which is how effect's `Effect.gen` / `pipe`
+/// code stopped the checker outright. The second walk adds nothing the
+/// first did not already report, so it is skipped for a body already
+/// walked. Reset per root module check.
+let walked_arrow_bodies : Array[@ast.TsArrowBody] = []
+
+///|
+/// The same record for function EXPRESSIONS — `Effect.gen(function* () {
+/// … })` is how effect nests callbacks, so the arrow half alone left the
+/// generator spelling exponential.
+let walked_func_bodies : Array[@ast.TsBlock] = []
+
+///|
+fn arrow_body_walked(body : @ast.TsArrowBody) -> Bool {
+  walked_arrow_bodies.iter().any(fn(b) { physical_equal(b, body) })
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -16970,6 +17244,9 @@ fn check_arrow_with_context(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
+  if formal_params.length() > 0 || is_checkable(formal_ret) {
+    walked_arrow_bodies.push(body)
+  }
   let env = ExprEnv::new()
   // Carry parent bindings into the inner scope. We don't snapshot/restore —
   // `ExprEnv` is mutable, but binding inside this synthetic env doesn't
@@ -17137,6 +17414,9 @@ fn check_funcexpr_with_context(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
+  if formal_params.length() > 0 || is_checkable(formal_ret) {
+    walked_func_bodies.push(f.body)
+  }
   let env = ExprEnv::new()
   // `<class>` marks the parser's class-expression IIFE lowering. Class
   // member bodies execute after the guard region ends, so TypeScript does
@@ -17276,11 +17556,19 @@ fn interface_method_arity_reliable(
   let mut count = 0
   let mut sig_ty : @ast.TsType? = None
   let mut generic = false
+  // Each interface once: a shared base reached by two paths is ONE
+  // declaration, and counting it per path both made the walk exponential
+  // on effect's hierarchies and miscounted it as an overload set.
+  let seen : Map[String, Unit] = Map([])
   fn walk(name : String, depth : Int32) -> Unit {
     if depth > 8 {
       count += 2 // force-bail on suspiciously deep chains
       return
     }
+    if seen.contains(name) {
+      return
+    }
+    seen[name] = ()
     match resolver.interfaces.get(name) {
       Some(iface) => {
         for f in iface.fields {
@@ -19271,7 +19559,24 @@ fn collect_narrowing(
                 resolver.lookup_field(v, key) is Some(_)
               })
               match then_ty {
-                Never => ()
+                // TypeScript 4.9 narrows a receiver that does NOT declare
+                // the key to one that does: `"then" in u` on an `object` or
+                // `unknown` is `object & Record<"then", unknown>`, which is
+                // the whole point of the spelling (effect's
+                // `"catch" in input && isFunction(input.catch)`). Only the
+                // record-ish shapes take it; a union whose members all lack
+                // the key is left alone.
+                Never =>
+                  match cur {
+                    NonPrimitiveObject | Unknown =>
+                      pair_pos.push((name, Object([(Literal(key), Unknown)])))
+                    Object(fields) => {
+                      let out = fields.copy()
+                      out.push((Literal(key), Unknown))
+                      pair_pos.push((name, Object(out)))
+                    }
+                    _ => ()
+                  }
                 _ => pair_pos.push((name, then_ty))
               }
               let else_ty = narrow_remove(cur, fn(v) {
@@ -19456,6 +19761,64 @@ fn apply_type_predicate_narrowing(
     Some(Func(_, TypePredicate(param_name, target))) =>
       Some((param_name, target))
     _ => None
+  }
+  // An OVERLOADED predicate value — effect's `hasProperty: { <P>(property:
+  // P): (self: unknown) => self is …; <P>(self: unknown, property: P): self
+  // is … }`, a `const` with an object type of call signatures rather than a
+  // function declaration — had no route here at all, so `if
+  // (hasProperty(u, "then")) u.then` read `u` as `unknown`. The member is
+  // the one whose arity matches the call and whose return is a predicate;
+  // call-signature types carry no parameter names, so the predicate's
+  // subject is taken as the FIRST parameter, which it is in every spelling
+  // of this idiom, and only a `Var` first argument is narrowed.
+  let overloaded_predicate = match predicate {
+    Some(_) => None
+    None =>
+      match resolver.globals.get(callee_name) {
+        Some(ty) => {
+          let mut found : @ast.TsType? = None
+          for f in collect_declared_fields(ty, resolver) {
+            if f.0 != "<call>" {
+              continue
+            }
+            match resolver.unwrap(f.1) {
+              Func(ps, TypePredicate(_, target)) if ps.length() == args.length() => {
+                found = Some(target)
+                break
+              }
+              _ => ()
+            }
+          }
+          found
+        }
+        None => None
+      }
+  }
+  match overloaded_predicate {
+    Some(target) => {
+      match args.get(0) {
+        Some(Var(arg_name)) => {
+          let cur = env_lookup_full(env, resolver, arg_name)
+          let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+          pair_pos.push(
+            (
+              arg_name,
+              match cur {
+                Any | Unknown => target
+                _ =>
+                  match then_ty {
+                    Never => @ast.TsType::Intersection([cur, target])
+                    _ => then_ty
+                  }
+              },
+            ),
+          )
+        }
+        _ => ()
+      }
+      return
+    }
+    None => ()
   }
   match predicate {
     None => return
@@ -23014,10 +23377,19 @@ fn check_call_args_in_expr(
             // signature for the RETURN type, and nothing here can
             // reconstruct which one the arguments were meant for, so the
             // trade is a MISS rather than a finding.
+            // Counted over EVERY declaration of the name, generic and
+            // inherited included: `method_overload_signatures` takes only
+            // bare `Func` members of the receiver's own declaration, so
+            // effect's `Pipeable` — twenty generic `pipe` overloads
+            // reached through `interface Effect<…> extends Pipeable` —
+            // read as no overload set at all, and every `x.pipe(f)` was
+            // judged against `pipe<A>(this: A): A` as "expected 0
+            // argument(s)".
             let overloaded = ctx.resolver
               .method_overload_signatures(pruned, meth)
               .length() >
-              1
+              1 ||
+              method_declaration_count(ctx.resolver, pruned, meth) > 1
             match ctx.resolver.lookup_method_sig(pruned, meth) {
               Some(_) if overloaded => ()
               Some((params, _)) =>
@@ -25282,25 +25654,29 @@ fn check_call_args_in_expr(
     // `dedup_issues_since` pass inside the helpers drops the resulting
     // duplicate diagnostics.
     ArrowFunc(params, _, body, is_async) =>
-      check_arrow_with_context(
-        env,
-        params,
-        body,
-        is_async,
-        [],
-        @ast.TsType::Any,
-        ctx,
-        "arrow",
-      )
+      if !arrow_body_walked(body) {
+        check_arrow_with_context(
+          env,
+          params,
+          body,
+          is_async,
+          [],
+          @ast.TsType::Any,
+          ctx,
+          "arrow",
+        )
+      }
     FuncExpr(f) =>
-      check_funcexpr_with_context(
-        env,
-        f,
-        [],
-        @ast.TsType::Any,
-        ctx,
-        "function expression",
-      )
+      if !walked_func_bodies.iter().any(fn(b) { physical_equal(b, f.body) }) {
+        check_funcexpr_with_context(
+          env,
+          f,
+          [],
+          @ast.TsType::Any,
+          ctx,
+          "function expression",
+        )
+      }
     _ => ()
   }
 }
@@ -25839,6 +26215,7 @@ pub fn check_module_function_bodies_with_context(
   globals : Array[(String, @ast.TsType)],
   type_modules : Array[@ast.TsModule],
   namespace_type_aliases~ : Array[(String, String)] = [],
+  type_module_keys~ : Array[String] = [],
 ) -> Array[ExprIssue] {
   check_module_function_bodies_layered(
     module_,
@@ -25847,6 +26224,7 @@ pub fn check_module_function_bodies_with_context(
     type_modules,
     globals,
     namespace_type_aliases~,
+    type_module_keys~,
   )
 }
 
@@ -32585,6 +32963,16 @@ fn check_untyped_call_type_args(ctx : CheckCtx, inner : @ast.TsExpr) -> Unit {
   let declared_any = ctx.resolver.globals.get(name) is Some(Any) ||
     ctx.resolver.any_uninitialized_values.get(name) is Some(_)
   guard declared_any else { return }
+  // An `export const f = <E>(…) => …` lands in `module_.values` too, with
+  // the `Any` of an absent annotation — the "written annotation" reading
+  // above holds only for an AMBIENT entry. A name the module binds at top
+  // level with a real initializer has its type from that initializer, so
+  // an `Any` there is this checker's inference gap: effect's
+  // `causePrettyErrors<…>(…)` and `callback<…>(…)` were reported forty
+  // times. Losing `const f: any = g; f<T>()` is the affordable MISS.
+  if ctx.resolver.initialized_top_level_names.get(name) is Some(_) {
+    return
+  }
   record_unfiltered(
     ctx,
     "call `\{name}`",
@@ -36267,6 +36655,15 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // Probed per occurrence rather than enumerated: the generated predicate
   // answers name-by-name and there is no list to iterate.
   fn not_a_global_property(key : String) -> Bool {
+    // A lib global VALUE is a `globalThis` property whatever a module
+    // declares under the same name: effect writes `export const Array =
+    // globalThis.Array` — a module-scoped `const` that is not on
+    // `globalThis` at all, read beside the lib `var Array` that is. Only a
+    // name the lib itself declares block-scoped (`name` in the DOM lib) is
+    // still not one.
+    if is_lib_global_value(key) && !is_lib_dom_blockscoped_value(key) {
+      return false
+    }
     if block_scoped.get(key) is Some(_) {
       return true
     }
@@ -36726,6 +37123,24 @@ fn lib_global_ctor_type_name(name : String) -> String? {
 /// Nested scopes are deliberately not walked: a local binding is not in
 /// this map, so its consumer abstains, which costs a finding rather than
 /// inventing one.
+fn collect_initialized_top_level_names(
+  module_ : @ast.TsModule,
+  out : Map[String, Unit],
+) -> Unit {
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), _, init)
+      | Let(@ast.TsBinding::Ident(n), _, init)
+      | Const(@ast.TsBinding::Ident(n), _, init) =>
+        if !(init is Var("__ts_no_init__")) {
+          out[n] = ()
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
 fn collect_any_uninitialized_values(
   module_ : @ast.TsModule,
   out : Map[String, Bool],
@@ -37883,7 +38298,12 @@ fn check_module_function_bodies_layered(
   extra_globals : Array[(String, @ast.TsType)],
   backstops~ : RootNameBackstops? = None,
   namespace_type_aliases~ : Array[(String, String)] = [],
+  type_module_keys~ : Array[String] = [],
 ) -> Array[ExprIssue] {
+  if outer_modules.length() == 0 {
+    walked_arrow_bodies.clear()
+    walked_func_bodies.clear()
+  }
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
   // for why the parser keeps them apart). Merging them HERE, before
@@ -37946,13 +38366,22 @@ fn check_module_function_bodies_layered(
     Some(b) => Resolver::empty_with_backstops(b)
     None => Resolver::empty()
   }
-  for type_module in type_modules {
-    Resolver::ingest_type_module(resolver, type_module, "")
+  for i, type_module in type_modules {
+    let cache_key = if i < type_module_keys.length() {
+      type_module_keys[i]
+    } else {
+      ""
+    }
+    Resolver::ingest_type_module(resolver, type_module, "", cache_key~)
   }
   if outer_modules.length() == 0 {
     Resolver::ingest_module(resolver, module_, "")
     collect_module_value_names(module_, resolver.declared_value_names)
     collect_any_uninitialized_values(module_, resolver.any_uninitialized_values)
+    collect_initialized_top_level_names(
+      module_,
+      resolver.initialized_top_level_names,
+    )
   } else {
     for o in outer_modules {
       Resolver::ingest_module(resolver, o, "")
@@ -39311,6 +39740,7 @@ fn check_module_function_bodies_layered(
       extra_globals,
       backstops=Some(nested_backstops),
       namespace_type_aliases~,
+      type_module_keys~,
     )
     let prefix = if ns.name == "<global>" {
       "declare global"
@@ -40774,6 +41204,9 @@ fn check_class_member_structure(
   for issue in check_class_implements(module_, resolver) {
     issues.push(issue)
   }
+  for issue in check_extends_interface_only(module_, resolver) {
+    issues.push(issue)
+  }
   for issue in check_abstract_implementation(module_, resolver) {
     issues.push(issue)
   }
@@ -41025,6 +41458,45 @@ fn cast_shape_fields(
     }
     _ => None
   }
+}
+
+///|
+/// TS2689: `class D extends Base` where `Base` names ONLY an interface —
+/// the heritage clause needs a value, and an interface has none. The legal
+/// neighbour is the shape every lib global and most `.d.ts` constructors
+/// use, an interface MERGED with a value of the same name (`interface X
+/// {}` beside `declare var X: XConstructor`), so any value spelling of the
+/// name — a declaration, a lib global, an import whose value-ness the
+/// parser cannot see, an enum, a namespace — keeps it silent. An
+/// expression base (`extends mixin(B)`) and a qualified name are not
+/// judged.
+fn check_extends_interface_only(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    for base in cls.base_names {
+      if base == "<expr-base>" || base.contains(".") || base.contains("<") {
+        continue
+      }
+      if resolver.interfaces.get(base) is None ||
+        resolver.classes.get(base) is Some(_) ||
+        resolver.globals.get(base) is Some(_) ||
+        resolver.declared_value_names.get(base) is Some(_) ||
+        resolver.enums.get(base) is Some(_) ||
+        module_.imported_binding_names.contains(base) ||
+        module_.namespaces.iter().any(fn(n) { n.name == base }) ||
+        is_lib_global_value(base) {
+        continue
+      }
+      issues.push({
+        path: "class \{cls.name}",
+        message: "cannot extend an interface `\{base}`. Did you mean `implements`?",
+      })
+    }
+  }
+  issues
 }
 
 ///|

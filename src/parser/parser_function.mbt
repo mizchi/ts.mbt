@@ -2046,9 +2046,17 @@ pub fn Parser::parse_interface(
 ) -> @ast.TsInterface raise ParseError {
   let doc_index = self.pos
   let _ = self.expect(Interface)
+  // A contextual keyword is a legal interface name: effect's Schema.ts
+  // declares `export interface declare<T, Iso = T>` beside
+  // `export function declare`. `in` is reserved and stays an error.
   let name = match self.advance().kind {
     Ident(n) => n
-    k => raise ParseError("Expected interface name, got \{k}")
+    In as k => raise ParseError("Expected interface name, got \{k}")
+    k =>
+      match contextual_ident_token_name(k) {
+        Some(n) => n
+        None => raise ParseError("Expected interface name, got \{k}")
+      }
   }
   self.record_doc_at(name, doc_index)
   let (type_params, const_flags, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()

@@ -1505,7 +1505,18 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   }
   if is_expr_base {
     self.pos = start
-    let expr = self.parse_expr()
+    // A heritage clause is a LEFT-HAND-SIDE expression with optional type
+    // arguments (`ClassHeritage: extends LeftHandSideExpression
+    // TypeArguments?`), not a full expression: effect's
+    // `class AsyncFiberError extends TaggedError("AsyncFiberError")<{ … }>`
+    // read the trailing `<{ … }>` as a COMPARISON against an object
+    // literal under `parse_expr`, and the class body that follows failed
+    // to parse — taking the whole module down, and with it every module
+    // that imports it.
+    let expr = self.parse_call()
+    if self.check(Lt) {
+      let _ = self.try_skip_type_args()
+    }
     self.pending_class_base_expr = Some(expr)
     return "<expr-base>"
   }

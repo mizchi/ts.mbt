@@ -61,6 +61,7 @@ fn collect_type_issues_from_module(
   globals : Array[(String, @ast.TsType)],
   type_modules : Array[@ast.TsModule],
   namespace_type_aliases~ : Array[(String, String)] = [],
+  type_module_keys~ : Array[String] = [],
 ) -> Result[Array[MtscTypeIssue], String] {
   let issues : Array[MtscTypeIssue] = []
   for
@@ -69,6 +70,7 @@ fn collect_type_issues_from_module(
       globals,
       type_modules,
       namespace_type_aliases~,
+      type_module_keys~,
     ) {
     if !is_unresolved_import_binding(issue, module_.imported_binding_names) {
       issues.push({ path: issue.path, message: issue.message, })
@@ -439,6 +441,7 @@ fn graph_type_modules(
   module_ : ParsedMtscModule,
   modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
+  keys~ : Array[String] = [],
 ) -> Array[@ast.TsModule] {
   let type_modules : Array[@ast.TsModule] = []
   let visited_paths : Array[String] = []
@@ -467,6 +470,7 @@ fn graph_type_modules(
         None => continue
       }
       type_modules.push(target.module_)
+      keys.push(target.source.path)
       pending_paths.push(target.source.path)
     }
   }
@@ -639,6 +643,9 @@ fn collect_parsed_graph_issues(
   // a source file that never imports it. Only script-shaped `.d.ts`
   // files count — one carrying its own imports / exports is a module,
   // and its declarations are private to it.
+  // Every type-only ingestion below is cached per module path for the
+  // duration of THIS check; a previous program's entries must not leak in.
+  @checker.clear_type_module_cache()
   let ambient_globals : Array[(String, @ast.TsType)] = []
   let ambient_modules : Array[@ast.TsModule] = []
   for module_ in parsed_modules {
@@ -664,7 +671,13 @@ fn collect_parsed_graph_issues(
         message: diagnostic,
       })
     }
-    let type_modules = graph_type_modules(module_, parsed_modules, edges)
+    let type_module_keys : Array[String] = []
+    let type_modules = graph_type_modules(
+      module_,
+      parsed_modules,
+      edges,
+      keys=type_module_keys,
+    )
     for ambient in ambient_modules {
       type_modules.push(ambient)
     }
@@ -677,6 +690,7 @@ fn collect_parsed_graph_issues(
         globals,
         type_modules,
         namespace_type_aliases~,
+        type_module_keys~,
       ) {
       Err(e) =>
         issues.push({

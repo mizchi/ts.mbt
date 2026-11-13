@@ -3547,6 +3547,66 @@ product surfaces now.
   abstaining, because both wrong answers cost: a missing `undefined` is
   narrower than tsc, an extra one makes `const n: number = both(true)` a
   false positive when every path returns.
+  Batch FP adds **effect** (`effect@4.1.2`, 585 source files, 21.8 MB) as
+  the second real package this checker is measured on, and the first
+  finding is that it had never been checked at all: plain `--noEmit` on
+  any effect module reported a handful of lines in 0.1 s because the
+  import graph FAILED TO LOAD and the FK path fell back to the single-file
+  check without saying so. Five parser gaps did it, each taking down its
+  module and every module importing it, and each the same rule written
+  narrower than the grammar. A type reference took type arguments across
+  a line break, so newline-separated call signatures (`dual: { <A>(…): A
+  \n <B>(…): B }`) read the second `<B>` as arguments of the first's
+  return type — tsc's `parseTypeReference` checks
+  `!hasPrecedingLineBreak()`. An expression heritage clause went through
+  `parse_expr`, which reads `extends TaggedError("E")<{ … }>`'s type
+  arguments as a comparison; it is a LeftHandSideExpression with optional
+  type arguments. An instantiation expression required an upper-case
+  name, where TypeScript decides it by the FOLLOWER token
+  (`effect.failCause<Error>,`). `interface declare<T>` used a contextual
+  keyword as a name. And `TypeParameters.Encoded` inlined a type
+  parameter's bound before seeing the `.` of a qualified name. The two
+  conformance files that had been TPs only through the old parse failures
+  (`instantiationExpressions`, `classExtendingClassLikeType`) are TPs
+  again through the rules that are actually theirs — TS1099 for `f<>` and
+  TS2689 for extending an interface, whose legal neighbour is an
+  interface merged with a value of the same name.
+  Loading the graph then SEGFAULTED, and the cost findings are worth more
+  than any rule. Five walks were exponential on effect's hierarchies,
+  where every interface extends the same few bases: `collect_declared_
+  fields` re-collected each shared base once per PATH (out of memory in
+  `substitute_params`), `lookup_field` re-walked the DAG on every miss,
+  `interface_declaring_restricted_member` was bounded at depth 8 and still
+  b^8, `interface_method_arity_reliable` both re-walked and MISCOUNTED a
+  shared base as an overload, and the checker walked every callback
+  argument twice by design — `check_arguments` contextually, then the
+  generic recursion non-contextually, relying on dedup — so
+  `f(() => f(() => …))` was 3^depth (depth 14 took 15 s; measured by an
+  `infer_expr` counter, which is what ruled out inference). Each got a
+  visited set or a walked-body record, and the lookup one had to be
+  corrected once: recording a base on a HIT wrongly skipped it for the
+  next member of a union receiver, so only a MISS is recorded. Two more
+  costs were multiplicative rather than exponential: `ingest_module` ran
+  FO's body return-type inference for every module of every graph check,
+  where the type-only ingestion throws values away, and every checked
+  module re-ingested every reachable module, now cached per path for the
+  duration of one graph check. `Option.ts`: killed at 300 s -> 9.3 s;
+  the whole graph from `index.ts`: 10.5 s; zod's sweep 520 s -> 175 s.
+  The false positives (1,556 -> 1,299 on effect, zod 78 -> 76, oracle
+  identical) are mostly the applied-in-some-places family again: a type
+  predicate returned by an OVERLOADED `const` (`hasProperty`), `"k" in x`
+  on `object` / `unknown`, an inherited GENERIC overload set (`Pipeable`'s
+  twenty `pipe`s judged by `pipe<A>(this: A): A`), lib values read off
+  `globalThis` beside a module-scoped `const Array`, `new Class(…)` on a
+  parameter shadowing a module class (batch EO's shadowing, on the
+  inference side), TS2347 trusting an `Any` that came from an absent
+  annotation, and `unknown === unknown`. The one worth reading is
+  `export type Error<T> = …`: effect declares it in ten modules, bare-name
+  ingestion registered it program-wide, and it SHADOWED the lib `Error`,
+  so every `e.message` failed. A first fix — abstaining for any augmented
+  lib interface — broke a test that pins `interface Error { code }`
+  merging with the lib table and was reverted; the real cause was found
+  only by asking where the receiver came from.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
