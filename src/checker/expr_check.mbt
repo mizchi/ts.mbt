@@ -85,7 +85,7 @@ priv struct Resolver {
   // an arrow's own `<A, E>` is not in the AST, so registering the whole
   // callable there would put its unbound type parameters into every
   // argument check of every call.
-  const_predicates : Map[String, (Int, @ast.TsType)]
+  const_predicates : Map[String, (Int32, @ast.TsType)]
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
@@ -1830,7 +1830,11 @@ fn Resolver::ingest_module(
   // covers the rest by pulling typed bindings out of `top_level_stmts`.
   for stmt in module_.top_level_stmts {
     match stmt {
-      Const(Ident(name), Any, ArrowFunc(params, TypePredicate(pname, target), _, _)) => {
+      Const(
+        Ident(name),
+        Any,
+        ArrowFunc(params, TypePredicate(pname, target), _, _)
+      ) => {
         let mut idx = -1
         for i, p in params {
           if p.name == pname {
