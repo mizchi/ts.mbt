@@ -188,10 +188,21 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
     Some(t) => return Some(t)
     None => ()
   }
+  // An OVERLOADED function is several declarations of one name, and the
+  // first is only one of its signatures: effect's `pipe` / `flow` have
+  // twenty, and handing an importer the first made every call with more
+  // arguments "expected 1 argument(s)". A union of the declarations' types
+  // is the overload-set shape the checker ingests a local one as.
+  let sigs : Array[@ast.TsType] = []
   for func in module_.funcs {
     if func.name == name {
-      return Some(function_value_type(func))
+      sigs.push(function_value_type(func))
     }
+  }
+  match sigs.length() {
+    0 => ()
+    1 => return Some(sigs[0])
+    _ => return Some(@ast.TsType::Union(sigs))
   }
   for import_ in module_.imports {
     if import_.name == name {
@@ -239,6 +250,25 @@ fn arrow_const_predicate_type(
     }
   }
   None
+}
+
+///|
+/// True when `module_` exports `name` as a function declared more than once.
+fn exported_is_overload_set(module_ : ParsedMtscModule, name : String) -> Bool {
+  let mut local = name
+  for export_ in module_.module_block.exports {
+    if export_.export_name == name {
+      local = export_.local_name
+      break
+    }
+  }
+  let mut n = 0
+  for f in module_.module_.funcs {
+    if f.name == local {
+      n = n + 1
+    }
+  }
+  n > 1
 }
 
 ///|
@@ -615,7 +645,17 @@ fn graph_import_globals(
       }
       let (imported_name, local_name) = binding
       match exported_value_type(target, imported_name, modules, edges, []) {
-        Some(type_) => globals.push((local_name, type_))
+        Some(type_) => {
+          globals.push((local_name, type_))
+          // An imported OVERLOAD set arrives as the same `Union` of
+          // signatures a union-typed value is, and the two take opposite
+          // arity rules (one overload must accept, against every member).
+          // Locally that is told apart by the function declaration's entry
+          // in `signatures`; across a module boundary this marker says it.
+          if exported_is_overload_set(target, imported_name) {
+            globals.push(("@overloads:" + local_name, Any))
+          }
+        }
         None =>
           diagnostics.push(
             "module `\{import_.module_spec}` has no value export `\{imported_name}`",

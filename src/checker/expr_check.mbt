@@ -20336,11 +20336,54 @@ fn optional_chain_equality_narrowing(
     match narrowing_key_for_expr(g) {
       Some(key) =>
         out.push(
-          (key, non_nullable(narrowing_current_type(env, resolver, key))),
+          (
+            key,
+            non_nullable_resolved(
+              resolver,
+              narrowing_current_type(env, resolver, key),
+            ),
+          ),
         )
       None => ()
     }
   }
+  // The chain itself is non-nullish on that side too, and for a
+  // comparison against `undefined` / `null` that is the half real code
+  // reads next: `options?.domain !== undefined && re.test(options.domain)`.
+  // Only for those two, since a definite-value comparison narrows the
+  // chain to the VALUE, which is the equality narrowing's job.
+  if is_undefined || is_null {
+    let (plain, _) = optional_chain_guarded_receivers(chain)
+    match narrowing_key_for_expr(plain) {
+      Some(key) => {
+        let cur = infer_expr(env, resolver, plain)
+        let stripped = non_nullable_resolved(resolver, cur)
+        if !(stripped is Never) && !(stripped is Any) {
+          out.push((key, stripped))
+        }
+      }
+      None => ()
+    }
+  }
+}
+
+///|
+/// `non_nullable` after resolving each part, so a member that is an
+/// indexed access or an alias carrying `undefined` inside it
+/// (`Cookie["options"]` of an optional field) loses it too.
+fn non_nullable_resolved(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  let out : Array[@ast.TsType] = []
+  for p in union_components(ty) {
+    match resolver.unwrap(p) {
+      Union(inner) =>
+        for q in inner {
+          out.push(q)
+        }
+      Null | Undefined => out.push(Undefined)
+      _ => out.push(p)
+    }
+  }
+  non_nullable(flatten_union_exact(out))
 }
 
 ///|
@@ -21991,6 +22034,40 @@ fn narrow_after_assignment(
 }
 
 ///|
+/// After `x ??= v` (or `x ||= v`) `x` is no longer nullish: either it was
+/// not, or it now holds `v`. effect's `bySentinel ??= new Map()` then
+/// `bySentinel.get(key)` read the binding as still possibly `undefined`.
+/// The value's own type is unioned in when it is known; an `any` value
+/// (`new Map()` infers `any` here) contributes nothing, which narrows to
+/// the declaration's non-nullish part — what the line means.
+fn narrow_after_nullish_assign(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  op : @ast.TsCompoundOp,
+  value : @ast.TsExpr,
+) -> Unit {
+  if !(op is (CoalesceAssign | OrAssign)) {
+    return
+  }
+  let cur = match env.lookup(name) {
+    Some(t) => t
+    None => return
+  }
+  let kept = non_nullable_resolved(ctx.resolver, cur)
+  if kept is Never || kept is Any || !is_checkable(kept) {
+    return
+  }
+  let v = infer_expr(env, ctx.resolver, value)
+  let next = if v is Any || !is_checkable(v) {
+    kept
+  } else {
+    flatten_union_exact([kept, v])
+  }
+  env.narrow(name, next)
+}
+
+///|
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
@@ -22119,6 +22196,8 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // line one level out narrowed. One helper serves both spellings.
       match e {
         AssignExpr(name, v) => narrow_after_assignment(env, ctx, name, v)
+        CompoundAssignExpr(Var(name), op, v) =>
+          narrow_after_nullish_assign(env, ctx, name, op, v)
         _ => ()
       }
     }
@@ -22181,6 +22260,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // already records the read via `check_call_args_in_expr` on the
       // RHS; after this stmt the variable is unambiguously assigned.
       let _ = ctx.unassigned.remove(name)
+      narrow_after_nullish_assign(env, ctx, name, op, e)
     }
     PropAssign(recv, prop, value) => {
       check_call_args_in_expr(env, recv, ctx)
@@ -23841,7 +23921,8 @@ fn check_call_args_in_expr(
               // needs only ONE overload to match, so the every-member arity
               // rule applies solely to union-typed *values* (names with no
               // function-declaration signature).
-              if ctx.resolver.signatures.get(name) is None {
+              if ctx.resolver.signatures.get(name) is None &&
+                !ctx.resolver.globals.contains("@overloads:" + name) {
                 check_union_callee_arity(ctx, other, args, "call `\{name}`")
               }
               // TS2684: a plain call supplies `this: void`.
