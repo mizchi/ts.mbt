@@ -41332,10 +41332,10 @@ fn check_class_decorator_signatures(
       match d {
         Var(dn) =>
           match class_decorator_prototype_mismatch(resolver, cls, dn) {
-            Some(member) =>
+            Some(mname) =>
               issues.push({
                 path: "class \{cls.name} decorator",
-                message: "unable to resolve signature of class decorator when called as an expression: the types returned by `\{member}()` are incompatible",
+                message: "unable to resolve signature of class decorator when called as an expression: the types returned by `\{mname}()` are incompatible",
               })
             None => ()
           }

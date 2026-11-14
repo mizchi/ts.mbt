@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2683 / MISS in scope 43 /
+  is a soundness bug, and there are none (TP 2711 / MISS in scope 15 /
   OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
   **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
@@ -3787,7 +3787,8 @@ product surfaces now.
   justfile), and `typeofThisWithImplicitThis` left the scope file because
   TS 7.1 accepts it. The budget is MISS 50 against the new corpus.
   Batch FU takes effect from **292 to 141** and zod from **49 to 19** on
-  plain `--noEmit`, and MISS in scope **50 -> 43** at FP 0. Most of the
+  plain `--noEmit`, and MISS in scope **50 -> 15** at FP 0 (the second
+  half of the batch, 43 -> 15, is described at the end of this entry). Most of the
   real-code half is facts that some sites had and others did not, again.
   `interface X extends declare<T>` dropped its base because `declare` lexes
   as its own token. `switch (typeof x)` narrowed nothing while
@@ -3846,6 +3847,60 @@ product surfaces now.
   reads `typescript/tests/baselines/reference`, which this checkout of the
   old submodule does not have, so every case reads as clean and the floor
   fails on any finding — an artifact of the checkout, not of the checker.
+  The second half took the 43 one file at a time, and the paragraph above
+  ("every one needs machinery") was wrong for 28 of them — the
+  label-for-objective substitution once more, this time a prediction
+  written before the files were opened. What they needed was mostly a
+  fact some site had and another lacked. Catch bindings were `any`
+  whatever `useUnknownInCatchVariables` said, a method CALL on `unknown`
+  was never reported where the property READ was, and a binding declared
+  `unknown` was narrowed by assignment, which tsc never does
+  (controlFlowAliasingCatchVariables needed all three plus the aliased
+  conditions above, cancelled by an assignment). The statement spelling of
+  a property write never checked `readonly` (jsonRawJSON1). A spread of
+  `T | undefined` copies `T`'s members as OPTIONAL, and an unannotated
+  `var o = { ...a }` declares that type (spreadUnion2). Member decorator
+  expressions were parsed and DRAINED, never checked, so they ride
+  `TsClassDecl.member_decorators` now — a field the compiler made every
+  construction site fill (decoratorChecksFunctionBodies). `typeof this` in
+  a type position collapsed to `any`; kept as `TypeOf("this…")` it feeds
+  TS2683 — and its first version `return`ed out of the primary-type parser,
+  skipping the postfix `[…]` handling, which broke `typeof this.enums
+  [number][1]` and with it effect's whole import graph: the effect count
+  read **0**, and only the 0-second wall time said that was a load failure
+  rather than a fix. The parser's private-name duplicate counter was dead
+  for every runtime class, because a lowered brand reads as a PUBLIC name
+  (TS2804). An interface or class value has no implicit index signature
+  (TS2322 against `Record<string, T>`), while an `any`-valued signature
+  accepts it — which the structural path had been REPORTING. A generic
+  class instance against a primitive, or against a class with a nominal
+  private member it does not inherit, is a mismatch whatever its type
+  arguments. Type arguments on a value typed by an interface construct
+  signature, by a generic function type, or on a primitive (TS2349) were
+  all unchecked. `super(arrow)` and a tagged template's arrow
+  substitutions are now contextually typed. Conflicting inference
+  candidates (`f(1, "s")`, `f(E1.X, E2.X)`) are TS2345 — and one existing
+  test asserted that tsc ACCEPTS `f("a", 1)`; TS 7.1 reports it, the
+  fifteenth test here found pinning a gap. A handful are narrower rules
+  whose boundary was probed: `Intl` constructor arity by lib, TS7010 for a
+  return widened from `null`, TS2536 against a finite mapped key set,
+  TS2511 on an abstract construct-signature value, TS2684 for `this:
+  C<never, …>` on a USED type parameter and for a detached method, TS2339
+  for a write through `(x || {})`, TS2420 against the lib `String`,
+  TS2454 for a for-of `var` read after the loop, TS2304 for an `infer`
+  bound (whose binders — mapped keys and other `infer` names — needed a
+  marker of their own after the first draft flagged them), TS1238 for a
+  `prototype: T` decorator, `[...T, ...P]` read off the return
+  annotation's TOKENS because bound inlining erases the parameters from
+  the parsed type, and a union read where one member is a closed literal
+  lacking the key. That last one cost two corpus false positives first
+  (discriminated unions whose narrowing we cannot decide) and then one in
+  effect the corpus could not see: tsc NORMALIZES an inferred union of
+  object literals, so the rule is restricted to a WRITTEN union with no
+  discriminant candidate. The 15 left each need real machinery: overload
+  resolution against the lib `Object` and through overloaded arguments,
+  object-literal normalization, conditional types through bound-inlined
+  parameters, template-literal relations, mixin heritage through a call.
 - `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
