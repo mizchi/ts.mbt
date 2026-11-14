@@ -19875,6 +19875,15 @@ fn bind_callable_param(
   ty : @ast.TsType,
   names : Array[String],
 ) -> Unit {
+  // A parameter typed by a bare type parameter the AST did not keep (a
+  // generic ARROW's `<A extends X>`) would resolve `A` against whatever
+  // type of that name another module declares — effect's `net/Dns.ts` has
+  // an `interface A` whose `_tag` is `"A"`, so `algorithm._tag ===
+  // "Ecdsa"` read as always false. Unknown binders bind as `any`.
+  let ty = match ty {
+    Named(n) if is_phantom_type_param_name(ctx, n) => @ast.TsType::Any
+    _ => ty
+  }
   match p.binding {
     Some(b) =>
       if b is (Object(_) | Array(_)) {
@@ -22147,23 +22156,34 @@ fn expected_mentions_phantom_type_param(
     if declared_binders.contains(n) {
       continue
     }
-    // A type ANOTHER module declares (effect's `net/Dns.ts` has an
-    // `interface A` for the DNS record) reaches this resolver at its bare
-    // name in a graph check, but it is not in scope here unqualified — so
-    // it does not make a generic `A` real. `type_name_origin` records
-    // exactly the foreign declarations.
-    let declared_here = (
-        r.interfaces.contains(n) ||
-        r.type_aliases.contains(n) ||
-        r.classes.contains(n) ||
-        r.enums.contains(n)
-      ) &&
-      !r.type_name_origin.contains(n)
-    if !declared_here && !ctx.in_scope_type_params.contains(n) {
+    if is_phantom_type_param_name(ctx, n) {
       phantoms.push(n)
     }
   }
   type_references_any(expected, phantoms)
+}
+
+///|
+/// A name the file only ever uses as a type parameter, not declared as a
+/// type in this module and not a binder in scope here.
+fn is_phantom_type_param_name(ctx : CheckCtx, n : String) -> Bool {
+  let r = ctx.resolver
+  if !r.local_type_names.contains(n) {
+    return false
+  }
+  // A type ANOTHER module declares (effect's `net/Dns.ts` has an
+  // `interface A` for the DNS record) reaches this resolver at its bare
+  // name in a graph check, but it is not in scope here unqualified — so
+  // it does not make a generic `A` real. `type_name_origin` records
+  // exactly the foreign declarations.
+  let declared_here = (
+      r.interfaces.contains(n) ||
+      r.type_aliases.contains(n) ||
+      r.classes.contains(n) ||
+      r.enums.contains(n)
+    ) &&
+    !r.type_name_origin.contains(n)
+  !declared_here && !ctx.in_scope_type_params.contains(n)
 }
 
 ///|
