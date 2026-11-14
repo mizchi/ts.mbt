@@ -7016,6 +7016,43 @@ fn current_enclosing_class(path_prefix : String) -> String? {
 }
 
 ///|
+/// A generic CLASS instance (`B<number>`) against a target that no class
+/// instance can be, whatever the type arguments: a primitive, or another
+/// class with a `private` / `protected` member the source's class chain
+/// does not inherit — those members are nominal, so structure cannot
+/// supply them. Both answers are independent of the arguments, which is
+/// what makes them decidable where the general `Applied` comparison bails.
+fn generic_class_instance_definite_mismatch(
+  src : @ast.TsType,
+  tgt : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let sn = match src {
+    Applied(n, _) | Named(n) if resolver.classes.contains(n) => n
+    _ => return false
+  }
+  match tgt {
+    String_
+    | Number
+    | Boolean
+    | BigInt
+    | Symbol
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_) => true
+    Applied(tn, _) | Named(tn) =>
+      match resolver.classes.get(tn) {
+        Some(tc) =>
+          (tc.private_members.length() > 0 || tc.protected_members.length() > 0) &&
+          !class_extends(resolver, sn, tn) &&
+          resolver.interfaces.get(tn) is None
+        None => false
+      }
+    _ => false
+  }
+}
+
+///|
 /// True when `sub` is `base` or transitively extends it, walking the
 /// declared `base_names` chain through the resolver's class table.
 fn class_extends(resolver : Resolver, sub : String, base : String) -> Bool {
@@ -13531,6 +13568,26 @@ fn check_expr_against(
   }
   let inferred_u = ctx.resolver.unwrap_containers(inferred)
   let expected_u = ctx.resolver.unwrap_containers(expected)
+  // Argument-independent verdicts for a GENERIC class instance, decided
+  // before the in-scope type-parameter abstentions below, which a `B<T>`
+  // inside `function f<T>` would otherwise hit (narrowingGenericTypeFrom
+  // Instanceof01: `x instanceof B` then `acceptA(x)`).
+  match inferred_u {
+    Applied(_, _) =>
+      if generic_class_instance_definite_mismatch(
+          inferred_u,
+          ctx.resolver.unwrap(expected_u),
+          ctx.resolver,
+        ) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
+    _ => ()
+  }
   // The same generic on both sides (`Hooks<string, { occurrences: … }>`
   // against `Hooks<string, FreqState>`): a type argument inferred from an
   // object literal is an object SHAPE where the annotation names an
@@ -14303,7 +14360,12 @@ fn check_expr_against(
       // object / different generic is caught too (`Box<string>` vs
       // `{ value: number }`). Everything else keeps the conservative bail.
       if applied_generic_mismatch(inferred_u, expected_u, ctx) ||
-        generic_instantiation_mismatch(inferred_u, expected_u, ctx.resolver) {
+        generic_instantiation_mismatch(inferred_u, expected_u, ctx.resolver) ||
+        generic_class_instance_definite_mismatch(
+          inferred_u,
+          expected_u,
+          ctx.resolver,
+        ) {
         record(
           ctx,
           sub_path,
