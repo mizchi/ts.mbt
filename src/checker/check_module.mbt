@@ -86,8 +86,44 @@ pub fn TypeCheckReport::count_of_kind(
 
 ///|
 pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
-  let issues : Array[TypeIssue] = []
+  check_module_kinds(module_, true)
+}
 
+///|
+/// `check_module` with the option of skipping the steps whose issue kinds
+/// a caller is going to throw away. The layered body checker keeps exactly
+/// four kinds — `CircularTypeAlias`, `InterfaceExtendsCycle`,
+/// `TypeAliasArityMismatch` and `TypeParameterConstraintViolation` — and
+/// discards the rest, and it calls this once per module and namespace;
+/// `unresolved_type_references` alone was a quarter of that call on a
+/// declaration-heavy module. With `all_kinds` false, steps 1, 2, 3c, 3d
+/// and 4 are not run. Each of them only ever produces one of the discarded
+/// kinds and none of them feeds a later step, so the kept issues come out
+/// identical and in the same order. With `all_kinds` true the steps run in
+/// their original order, so `check_module`'s report is unchanged too.
+fn check_module_kinds(
+  module_ : @ast.TsModule,
+  all_kinds : Bool,
+) -> TypeCheckReport {
+  let issues : Array[TypeIssue] = []
+  if all_kinds {
+    check_module_duplicates_and_unresolved(module_, issues)
+  }
+  check_module_cycles(module_, issues)
+  if all_kinds {
+    check_module_member_duplicates(module_, issues)
+  }
+  check_module_arity_and_constraints(module_, issues)
+  { issues, }
+}
+
+///|
+/// Steps 1 and 2 of `check_module` (`DuplicateDeclaration`,
+/// `UnresolvedReference`).
+fn check_module_duplicates_and_unresolved(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 1. Duplicate declarations across all top-level kinds.
   let seen_names : Map[String, Unit] = Map([])
   let dup_set : Map[String, Unit] = Map([])
@@ -123,7 +159,15 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       detail: "no top-level interface, alias, class, enum, or namespace declares this name",
     })
   }
+}
 
+///|
+/// Steps 3 and 3b of `check_module` (`CircularTypeAlias`,
+/// `InterfaceExtendsCycle`).
+fn check_module_cycles(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 3. Circular type-alias chains: a type alias whose body recursively reaches
   //    itself only through other Named references (not through generic args
   //    or compound shapes that interrupt the cycle).
@@ -144,6 +188,12 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   //     instead of rescanning every declaration at every step.
   let iface_edges : Map[String, Array[String]] = Map([])
   for iface in module_.interfaces {
+    // An interface with no `extends` contributes no edge, and an absent
+    // entry and an empty one answer `iface_extends_reaches` identically
+    // (neither has a successor), so it is left out of the table.
+    if iface.extends_names.length() == 0 {
+      continue
+    }
     match iface_edges.get(iface.name) {
       Some(edges) =>
         for n in iface.extends_names {
@@ -153,6 +203,10 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
     }
   }
   for iface in module_.interfaces {
+    // No `extends`, no cycle through this declaration.
+    if iface.extends_names.length() == 0 {
+      continue
+    }
     let visited : Map[String, Unit] = Map([])
     if iface_extends_reaches(
         iface_edges,
@@ -167,7 +221,15 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       })
     }
   }
+}
 
+///|
+/// Steps 3c, 3d and 4 of `check_module` (`EnumMemberDuplicate`,
+/// `ClassPropertyDuplicate`, `InterfaceFieldDuplicate`).
+fn check_module_member_duplicates(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 3c. Enum member duplicates: same member name listed twice in an enum.
   for e in module_.enums {
     let seen : Array[String] = []
@@ -248,7 +310,15 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       })
     }
   }
+}
 
+///|
+/// Steps 5 and 6 of `check_module` (`TypeAliasArityMismatch`,
+/// `TypeParameterConstraintViolation`).
+fn check_module_arity_and_constraints(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 5. Type-argument arity mismatches: every `Applied(Name, args)` that
   //    resolves to a top-level declared type must use that type's declared
   //    type-parameter count. Covers type aliases (`type T<P> = ...`),
@@ -433,15 +503,34 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   // machinery flags a non-string argument (`Uppercase<42>`) as TS2344. This
   // also makes `alias_bounds` non-empty, so the constraint walk below always
   // runs even in files that declare no generics of their own.
+  // Only ten names are ever looked up in this set (the intrinsics, the
+  // function-shaped utilities and `Function` / `Object` below), so only
+  // those are recorded rather than every declaration in the module.
   let user_declared_type_names : Map[String, Unit] = Map([])
+  fn note_user_declared(name : String) -> Unit {
+    match name {
+      "Uppercase"
+      | "Lowercase"
+      | "Capitalize"
+      | "Uncapitalize"
+      | "Parameters"
+      | "ReturnType"
+      | "ConstructorParameters"
+      | "InstanceType"
+      | "Function"
+      | "Object" => user_declared_type_names[name] = ()
+      _ => ()
+    }
+  }
+
   for ta in module_.type_aliases {
-    user_declared_type_names[ta.name] = ()
+    note_user_declared(ta.name)
   }
   for iface in module_.interfaces {
-    user_declared_type_names[iface.name] = ()
+    note_user_declared(iface.name)
   }
   for cls in module_.classes {
-    user_declared_type_names[cls.name] = ()
+    note_user_declared(cls.name)
   }
   for intrinsic in ["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"] {
     if user_declared_type_names.get(intrinsic) is None {
@@ -593,7 +682,6 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       }
     }
   }
-  { issues, }
 }
 
 ///|

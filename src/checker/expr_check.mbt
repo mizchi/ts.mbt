@@ -24679,30 +24679,43 @@ fn expected_mentions_phantom_type_param(
   // … })`), so it is not a phantom there. The callee is the innermost
   // `call \`NAME\`` segment of the path; any other position (an arrow
   // body, a `return`) has no declaration to instantiate it.
-  let declared_binders : Map[String, Unit] = Map([])
-  match sub_path_callee_name(sub_path) {
-    Some(callee) =>
-      for
-        ps in [
-          r.func_overload_type_params.get(callee).unwrap_or([]),
-          r.func_type_params.get(callee).unwrap_or([]),
-        ] {
-        for p in ps {
-          declared_binders[p] = ()
+  //
+  // The walk goes over `expected`'s own references and asks about each
+  // one, rather than enumerating every phantom name in the file and then
+  // asking whether `expected` mentions one of them: this runs once per
+  // argument checked, `local_type_names` holds every type-parameter
+  // spelling in the file, and `expected` is almost always a handful of
+  // nodes with no candidate in it at all — so the binder set is built
+  // only when a candidate is actually reached. The answer is the same
+  // set membership either way, through the same structural walk.
+  let mut declared_binders : Map[String, Unit]? = None
+  type_references_where(expected, fn(n) {
+    if !is_phantom_type_param_name(ctx, n) {
+      return false
+    }
+    let binders = match declared_binders {
+      Some(b) => b
+      None => {
+        let b : Map[String, Unit] = Map([])
+        match sub_path_callee_name(sub_path) {
+          Some(callee) =>
+            for
+              ps in [
+                r.func_overload_type_params.get(callee).unwrap_or([]),
+                r.func_type_params.get(callee).unwrap_or([]),
+              ] {
+              for p in ps {
+                b[p] = ()
+              }
+            }
+          None => ()
         }
+        declared_binders = Some(b)
+        b
       }
-    None => ()
-  }
-  let phantoms : Array[String] = []
-  for n, _ in r.local_type_names {
-    if declared_binders.contains(n) {
-      continue
     }
-    if is_phantom_type_param_name(ctx, n) {
-      phantoms.push(n)
-    }
-  }
-  type_references_any(expected, phantoms)
+    !binders.contains(n)
+  })
 }
 
 ///|
@@ -32782,7 +32795,7 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for cls in module_.classes {
     if !cls.is_abstract && cls.abstract_members.length() > 0 {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "abstract methods can only appear within an abstract class",
       })
     }
@@ -32797,7 +32810,7 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for n in cls.abstract_members {
       if private_set.contains(n) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "`private` modifier cannot be used with `abstract` modifier",
         })
       }
@@ -32806,7 +32819,7 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
     // constructor.
     if abstract_set.contains("constructor") {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "`abstract` modifier can only appear on a class, method, or property declaration",
       })
     }
@@ -32904,16 +32917,16 @@ fn check_circular_type_params(module_ : @ast.TsModule) -> Array[ExprIssue] {
   }
 
   for f in module_.funcs {
-    emit("function \{f.name}", f.type_params, f.type_param_bounds)
+    emit("function " + f.name, f.type_params, f.type_param_bounds)
   }
   for c in module_.classes {
-    emit("class \{c.name}", c.type_params, c.type_param_bounds)
+    emit("class " + c.name, c.type_params, c.type_param_bounds)
     for m in c.methods {
       emit("method \{c.name}.\{m.name}", m.type_params, m.type_param_bounds)
     }
   }
   for a in module_.type_aliases {
-    emit("type \{a.name}", a.type_params, a.type_param_bounds)
+    emit("type " + a.name, a.type_params, a.type_param_bounds)
   }
   for ns in module_.namespaces {
     for issue in check_circular_type_params(ns.module_) {
@@ -33659,11 +33672,11 @@ fn check_param_forward_refs(module_ : @ast.TsModule) -> Array[ExprIssue] {
       defaults.push(p.default)
       bindings.push(p.binding)
     }
-    check_one(names, defaults, Some(f.body), "function \{f.name}", bindings)
+    check_one(names, defaults, Some(f.body), "function " + f.name, bindings)
     for st in f.body.stmts {
       match st {
         Var(_, _, init) | Let(_, _, init) | Const(_, _, init) | Expr(init) =>
-          scan_callable_expr(init, "function \{f.name}")
+          scan_callable_expr(init, "function " + f.name)
         _ => ()
       }
     }
@@ -33747,7 +33760,7 @@ fn check_implicit_any_this(
   }
   for f in module_.funcs {
     let plain = !(f.params.length() > 0 && f.params[0].name == "this")
-    ts2683_walk_stmts(issues, f.body.stmts, plain, "function \{f.name}")
+    ts2683_walk_stmts(issues, f.body.stmts, plain, "function " + f.name)
   }
   // A true top level's `this` is `globalThis` (legal); a NAMESPACE
   // body is an IIFE whose `this` is implicit any
@@ -34069,7 +34082,7 @@ fn check_computed_key_type_param(
 ) -> Unit {
   if expr_type_positions_reference_any(key, decl.type_params) {
     issues.push({
-      path: "class \{decl.name}",
+      path: "class " + decl.name,
       message: "a computed property name cannot reference a type parameter from its containing type",
     })
   }
@@ -34090,7 +34103,7 @@ fn check_computed_key_type_param(
   // name reading as the class.
   if decl.name != "" && expr_mentions_var_outside_fn(key, decl.name) {
     issues.push({
-      path: "class \{decl.name}",
+      path: "class " + decl.name,
       message: "class `\{decl.name}` used before its declaration",
     })
   }
@@ -34383,7 +34396,7 @@ fn check_super_in_objlit_computed_keys(
     }
     if hit {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "`super` cannot be referenced in a computed property name",
       })
     }
@@ -34408,7 +34421,7 @@ fn check_this_in_computed_keys(
     for ke in decl.computed_field_keys {
       if expr_uses_this_outside_fn(ke) {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`this` cannot be referenced in a computed property name",
         })
       }
@@ -34416,7 +34429,7 @@ fn check_this_in_computed_keys(
       // (computedPropertyNames24/27/30's `[super.bar()]`).
       if computed_key_mentions_super(ke) {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`super` cannot be referenced in a computed property name",
         })
       }
@@ -34430,7 +34443,7 @@ fn check_this_in_computed_keys(
         CallExpr(Var(cn), _) | Call(cn, _) =>
           if resolver.globals.get(cn) is Some(Any) {
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "a computed property name in a class property declaration must have a simple literal type",
             })
           }
@@ -34442,13 +34455,13 @@ fn check_this_in_computed_keys(
         Some(ke) => {
           if expr_uses_this_outside_fn(ke) {
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "`this` cannot be referenced in a computed property name",
             })
           }
           if computed_key_mentions_super(ke) {
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "`super` cannot be referenced in a computed property name",
             })
           }
@@ -34835,7 +34848,7 @@ fn rest_walk_expr(e : @ast.TsExpr, out : Array[ExprIssue]) -> Unit {
     FuncExpr(f) => {
       if rest_param_misplaced(f.params) {
         out.push({
-          path: "function \{f.name}",
+          path: "function " + f.name,
           message: "a rest parameter must be last in a parameter list",
         })
       }
@@ -34912,7 +34925,7 @@ fn check_rest_param_position(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for f in module_.funcs {
     if rest_param_misplaced(f.params) {
       issues.push({
-        path: "function \{f.name}",
+        path: "function " + f.name,
         message: "a rest parameter must be last in a parameter list",
       })
     }
@@ -34969,27 +34982,27 @@ fn check_misplaced_type_predicates(module_ : @ast.TsModule) -> Array[ExprIssue] 
   for f in module_.funcs {
     for p in f.params {
       if p.type_ is TypePredicate(_, _) {
-        issues.push({ path: "function \{f.name}", message: msg, })
+        issues.push({ path: "function " + f.name, message: msg, })
       }
     }
   }
   for imp in module_.imports {
     for p in imp.params {
       if p.1 is TypePredicate(_, _) {
-        issues.push({ path: "function \{imp.name}", message: msg, })
+        issues.push({ path: "function " + imp.name, message: msg, })
       }
     }
   }
   for iface in module_.interfaces {
     for fld in iface.fields {
       if fld.1 is TypePredicate(_, _) {
-        issues.push({ path: "interface \{iface.name}", message: msg, })
+        issues.push({ path: "interface " + iface.name, message: msg, })
       }
     }
   }
   for ta in module_.type_aliases {
     if ta.type_ is TypePredicate(_, _) {
-      issues.push({ path: "type \{ta.name}", message: msg, })
+      issues.push({ path: "type " + ta.name, message: msg, })
     }
   }
   issues
@@ -35051,12 +35064,12 @@ fn check_interface_extends_class_private(
         }
         if base.private_members.contains(fname) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends class `\{base_name}`: property `\{fname}` is private in `\{base_name}` but not in `\{iface.name}`",
           })
         } else if base.protected_members.contains(fname) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends class `\{base_name}`: property `\{fname}` is protected in `\{base_name}` but not in `\{iface.name}`",
           })
         }
@@ -35526,7 +35539,7 @@ fn check_interface_conflicting_bases(
               for rty in tys {
                 if types_definitely_differ(resolver, lty, rty) {
                   issues.push({
-                    path: "interface \{iface.name}",
+                    path: "interface " + iface.name,
                     message: "interface `\{iface.name}` cannot simultaneously extend types `\{iface.extends_names[i]}` and `\{iface.extends_names[j]}`: named property `\{lname}` of types `\{type_display(lty)}` and `\{type_display(rty)}` are not identical",
                   })
                   done = true
@@ -35924,7 +35937,7 @@ fn check_iterator_return_property(
       if is_definite_primitive_type(ty) {
         reported = true
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "the `return` property of an iterator must be a method",
         })
       }
@@ -35936,7 +35949,7 @@ fn check_iterator_return_property(
       let (fname, fexpr) = init
       if fname == "return" && expr_is_definitely_not_a_function(fexpr) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "the `return` property of an iterator must be a method",
         })
         break
@@ -35991,12 +36004,12 @@ fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for cls in module_.classes {
     if is_predefined_type_name(cls.name) {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "class name cannot be `\{cls.name}`",
       })
     } else if commonjs && cls.name == "Object" && !cls.is_declare {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "class name cannot be `Object` when targeting ES5 and above with module CommonJS",
       })
     }
@@ -36012,7 +36025,7 @@ fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for iface in module_.interfaces {
     if is_predefined_type_name(iface.name) {
       issues.push({
-        path: "interface \{iface.name}",
+        path: "interface " + iface.name,
         message: "interface name cannot be `\{iface.name}`",
       })
     }
@@ -36036,7 +36049,7 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in cls.base_names {
       if cls.type_params.contains(base) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "cannot find name `\{base}` (a type parameter cannot be used as a base class)",
         })
       }
@@ -36046,7 +36059,7 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in iface.extends_names {
       if iface.type_params.contains(base) {
         issues.push({
-          path: "interface \{iface.name}",
+          path: "interface " + iface.name,
           message: "cannot find name `\{base}` (a type parameter cannot be extended)",
         })
       }
@@ -36099,7 +36112,7 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in cls.base_names {
       if class_index.get(base) is Some(j) && j > i {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "class `\{base}` used before its declaration",
         })
       }
@@ -36121,6 +36134,15 @@ fn check_class_interface_merge_modifiers(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // Only a class with a private or protected member can conflict, so
+  // without one the interface table below is not built at all.
+  if !module_.classes
+    .iter()
+    .any(fn(cls) {
+      cls.private_members.length() > 0 || cls.protected_members.length() > 0
+    }) {
+    return issues
+  }
   // Index interfaces by name once so the per-class lookup is O(1) rather than
   // an inner scan over every interface (which made this O(classes ×
   // interfaces) on files that declare many of both).
@@ -36147,7 +36169,7 @@ fn check_class_interface_merge_modifiers(
           if iface_field_names.get(name) is Some(_) && seen.get(name) is None {
             seen[name] = ()
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "all declarations of `\{name}` must have identical modifiers",
             })
           }
@@ -36156,7 +36178,7 @@ fn check_class_interface_merge_modifiers(
           if iface_field_names.get(name) is Some(_) && seen.get(name) is None {
             seen[name] = ()
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "all declarations of `\{name}` must have identical modifiers",
             })
           }
@@ -36200,7 +36222,7 @@ fn check_index_signature_enum_violation(
             Named(n) =>
               if resolver.enums.get(n) is Some(_) {
                 issues.push({
-                  path: "interface \{iface.name}",
+                  path: "interface " + iface.name,
                   message: "property `\{field.0}` of type `\{n}` is not assignable to `\{type_display(idx_ty)}` index type",
                 })
               }
@@ -36623,7 +36645,7 @@ fn check_derived_indexer_compat(
           }
           if concrete {
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "class `\{cls.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
             })
           }
@@ -36644,7 +36666,7 @@ fn check_derived_indexer_compat(
           ) &&
           !is_structurally_assignable_named(derived_val, base_val, resolver) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "class `\{cls.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
           })
         }
@@ -36716,7 +36738,7 @@ fn check_derived_indexer_compat(
           }
           if concrete {
             issues.push({
-              path: "class \{iface.name}",
+              path: "class " + iface.name,
               message: "class `\{iface.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
             })
           }
@@ -36736,7 +36758,7 @@ fn check_derived_indexer_compat(
           ) &&
           !is_structurally_assignable_named(derived_val, base_val, resolver) {
           issues.push({
-            path: "class \{iface.name}",
+            path: "class " + iface.name,
             message: "class `\{iface.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
           })
         }
@@ -36864,7 +36886,7 @@ fn check_symbol_index_members(
         !is_assignable_to_bivariant(member_ty, idx_value) &&
         !is_structurally_assignable_named(member_ty, idx_value, resolver) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "property `[Symbol.\{wk}]` is not assignable to the `symbol` index signature type",
         })
       }
@@ -36975,7 +36997,7 @@ fn check_accessor_pair_types(
         !is_assignable_to(resolver.unwrap(get_ty), resolver.unwrap(set_ty)) &&
         !is_structurally_assignable_named(get_ty, set_ty, resolver) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "the getter type is not assignable to its setter parameter type",
         })
       }
@@ -37560,7 +37582,7 @@ fn check_interface_extends_member_compat(
           !type_deeply_contains_unmodeled(bty, resolver) &&
           !type_has_call_signature(bty, resolver) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends interface `\{base_name}`: types of property `\{fname}` are incompatible",
           })
           continue
@@ -37605,7 +37627,7 @@ fn check_interface_extends_member_compat(
           ) &&
           !tuple_covariant_by_extends(fty, bty, resolver) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends interface `\{base_name}`: types of property `\{fname}` are incompatible",
           })
         }
@@ -38294,7 +38316,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
     if !has_heritage {
       if overrides.length() > 0 {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "this member cannot have an `override` modifier because its containing class does not extend another class",
         })
       }
@@ -38342,7 +38364,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
           base_abstract.length() == 0 &&
           !chain.has_opaque {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "this member cannot have an `override` modifier because it is not declared in the base class",
           })
         }
@@ -38355,7 +38377,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
       }
       if !known {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "this member cannot have an `override` modifier because it is not declared in the base class",
         })
       }
@@ -38393,7 +38415,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
         let key = (if is_static_m { "s:" } else { "i:" }) + name
         if in_base && !overrides.contains(key) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "this member must have an `override` modifier because it overrides a member in the base class",
           })
         }
@@ -38498,7 +38520,7 @@ fn check_use_strict_with_non_simple_params(
 
   fn walk_module(m : @ast.TsModule) -> Unit {
     for f in m.funcs {
-      judge(f, "function \{f.name}")
+      judge(f, "function " + f.name)
     }
     for ns in m.namespaces {
       walk_module(ns.module_)
@@ -39715,7 +39737,7 @@ fn check_class_namespace_static_merge(
           !flagged.contains(name) {
           flagged[name] = ()
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "duplicate identifier `\{name}`",
           })
         }
@@ -39758,7 +39780,7 @@ fn check_duplicate_computed_accessors(
               wk
             if seen.contains(key) {
               issues.push({
-                path: "class \{cls.name}",
+                path: "class " + cls.name,
                 message: "duplicate identifier `[Symbol.\{wk}]`",
               })
             } else {
@@ -39791,7 +39813,7 @@ fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in cls.base_names {
       if func_names.get(base) is Some(_) && non_function_decls.get(base) is None {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "type of `\{base}` is not a constructor function type",
         })
       }
@@ -39809,7 +39831,7 @@ fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] 
   for ta in module_.type_aliases {
     if is_predefined_type_name(ta.name) {
       issues.push({
-        path: "type \{ta.name}",
+        path: "type " + ta.name,
         message: "type alias name cannot be `\{ta.name}`",
       })
     }
@@ -39892,7 +39914,6 @@ fn collect_invalid_primitive_type_names(
 fn check_invalid_primitive_type_names(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
-  let declared = module_declared_names(module_)
   let found : Array[String] = []
   for v in module_.values {
     collect_invalid_primitive_type_names(v.type_, found)
@@ -39922,6 +39943,12 @@ fn check_invalid_primitive_type_names(
     }
   }
   let issues : Array[ExprIssue] = []
+  // The declared-name list is only consulted for a spelling actually found,
+  // which almost no module has.
+  if found.length() == 0 {
+    return issues
+  }
+  let declared = module_declared_names(module_)
   for name in found {
     if !declared.contains(name) {
       issues.push({
@@ -40545,7 +40572,7 @@ fn check_unimplemented_abstract_members(
       if resolver.nearest_member_decl_kind(cls.name, name) is Some(2) {
         reported[name] = ()
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "non-abstract class does not implement inherited abstract member `\{name}`",
         })
       }
@@ -40678,7 +40705,7 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
         if !(reported.get(em.name) is Some(_)) {
           reported[em.name] = true
           issues.push({
-            path: "enum \{e.name}",
+            path: "enum " + e.name,
             message: "duplicate identifier `\{em.name}`",
           })
         }
@@ -40691,7 +40718,7 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // synthesized into an interface by the parser, so the interface loop
   // below already covers it -- no separate type-alias pass is needed.
   for iface in module_.interfaces {
-    let ipath = "interface \{iface.name}"
+    let ipath = "interface " + iface.name
     for name in member_name_duplicates(iface.fields) {
       issues.push({ path: ipath, message: "duplicate identifier `\{name}`", })
     }
@@ -40707,25 +40734,25 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // (and its nested literals) -- skip it here to avoid a double report.
   for ta in module_.type_aliases {
     if !(ta.type_ is Object(_)) {
-      collect_type_dup_issues(ta.type_, "type \{ta.name}", issues)
+      collect_type_dup_issues(ta.type_, "type " + ta.name, issues)
     }
   }
   for f in module_.funcs {
-    let fpath = "function \{f.name}"
+    let fpath = "function " + f.name
     for p in f.params {
       collect_type_dup_issues(p.type_, fpath, issues)
     }
     collect_type_dup_issues(f.return_type, fpath, issues)
   }
   for imp in module_.imports {
-    let ipath = "function \{imp.name}"
+    let ipath = "function " + imp.name
     for p in imp.params {
       collect_type_dup_issues(p.1, ipath, issues)
     }
     collect_type_dup_issues(imp.return_type, ipath, issues)
   }
   for v in module_.values {
-    collect_type_dup_issues(v.type_, "value \{v.name}", issues)
+    collect_type_dup_issues(v.type_, "value " + v.name, issues)
   }
   issues
 }
@@ -40755,7 +40782,7 @@ fn check_interface_merge_type_params(
           !interface_type_params_identical(resolver, prev, iface) {
           reported[iface.name] = true
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "all declarations of `\{iface.name}` must have identical type parameters",
           })
         }
@@ -41416,7 +41443,7 @@ fn walk_module_undeclared_tps(
 ) -> Unit {
   for f in module_.funcs {
     let scope = scope_extend(tp_scope, f.type_params)
-    let fpath = "function \{f.name}"
+    let fpath = "function " + f.name
     for p in f.params {
       check_type_undeclared_tps(p.type_, scope, declared, issues, fpath)
     }
@@ -41424,7 +41451,7 @@ fn walk_module_undeclared_tps(
   }
   for imp in module_.imports {
     let scope = scope_extend(tp_scope, imp.type_params)
-    let ipath = "function \{imp.name}"
+    let ipath = "function " + imp.name
     for p in imp.params {
       check_type_undeclared_tps(p.1, scope, declared, issues, ipath)
     }
@@ -41432,7 +41459,7 @@ fn walk_module_undeclared_tps(
   }
   for iface in module_.interfaces {
     let iscope = scope_extend(tp_scope, iface.type_params)
-    let ipath = "interface \{iface.name}"
+    let ipath = "interface " + iface.name
     // A generic method field carries its own fresh type parameters.
     // Accumulate across ALL same-name entries: an overloaded method has
     // one entry per overload (lib.dom's `querySelector<K>` /
@@ -41440,6 +41467,7 @@ fn walk_module_undeclared_tps(
     // so each field must see the union of the overloads' binders.
     // Group once per interface — the per-field linear scan over
     // `method_type_params` was quadratic on lib.dom-sized interfaces.
+    let has_method_tps = iface.method_type_params.length() > 0
     let method_tps_by_name : Map[String, Array[String]] = Map([])
     for entry in iface.method_type_params {
       match method_tps_by_name.get(entry.0) {
@@ -41458,16 +41486,20 @@ fn walk_module_undeclared_tps(
       if is_signature_sentinel(field.0) {
         continue
       }
-      let mscope = match method_tps_by_name.get(field.0) {
-        Some(tps) => scope_extend(iscope, tps)
-        None => iscope
+      let mscope = if !has_method_tps {
+        iscope
+      } else {
+        match method_tps_by_name.get(field.0) {
+          Some(tps) => scope_extend(iscope, tps)
+          None => iscope
+        }
       }
       check_type_undeclared_tps(field.1, mscope, declared, issues, ipath)
     }
   }
   for c in module_.classes {
     let cscope = scope_extend(tp_scope, c.type_params)
-    let cpath = "class \{c.name}"
+    let cpath = "class " + c.name
     for prop in c.properties {
       check_type_undeclared_tps(prop.type_, cscope, declared, issues, cpath)
     }
@@ -41485,7 +41517,7 @@ fn walk_module_undeclared_tps(
       tp_scope,
       declared,
       issues,
-      "value \{v.name}",
+      "value " + v.name,
     )
   }
   for ns in module_.namespaces {
@@ -41511,6 +41543,24 @@ fn scope_extend(base : Array[String], extra : Array[String]) -> Array[String] {
 }
 
 ///|
+/// The leaf test of `check_type_undeclared_tps`. A top-level function
+/// rather than a local closure: the walk runs once per declared member
+/// type, and a closure capturing four values is an allocation per call.
+fn report_undeclared_tp(
+  n : String,
+  scope : Array[String],
+  declared : Map[String, Unit],
+  issues : Array[ExprIssue],
+  path : String,
+) -> Unit {
+  if is_single_upper_letter(n) &&
+    !scope.contains(n) &&
+    !(declared.get(n) is Some(_)) {
+    issues.push({ path, message: "cannot find name `\{n}`", })
+  }
+}
+
+///|
 /// Recurse a type position, reporting single-letter type references that are
 /// neither in `scope` nor `declared`. Binder / computed forms are not
 /// descended into (see `check_undeclared_type_parameters`).
@@ -41521,18 +41571,10 @@ fn check_type_undeclared_tps(
   issues : Array[ExprIssue],
   path : String,
 ) -> Unit {
-  fn report(n : String) -> Unit {
-    if is_single_upper_letter(n) &&
-      !scope.contains(n) &&
-      !(declared.get(n) is Some(_)) {
-      issues.push({ path, message: "cannot find name `\{n}`", })
-    }
-  }
-
   match ty {
-    Named(n) => report(n)
+    Named(n) => report_undeclared_tp(n, scope, declared, issues, path)
     Applied(n, args) => {
-      report(n)
+      report_undeclared_tp(n, scope, declared, issues, path)
       for a in args {
         check_type_undeclared_tps(a, scope, declared, issues, path)
       }
@@ -43655,7 +43697,10 @@ fn check_async_named_return_types(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
 
-  collect(module_, "")
+  // The name tables are only read for an `async` non-generator with a
+  // named return type, so they are collected on the first one rather than
+  // for every module.
+  let mut collected = false
   let rejected = fn(
     is_async : Bool,
     is_generator : Bool,
@@ -43667,6 +43712,10 @@ fn check_async_named_return_types(module_ : @ast.TsModule) -> Array[ExprIssue] {
     let n = match rt {
       Named(n) | Applied(n, _) => n
       _ => return None
+    }
+    if !collected {
+      collect(module_, "")
+      collected = true
     }
     // The global `Promise` is what the rule demands, and an in-file
     // `interface Promise<T>` merges INTO it.
@@ -43928,7 +43977,7 @@ fn check_generator_interface_returns(
           (Some(a), Some(b)) =>
             if types_definitely_differ(resolver, a, b) {
               issues.push({
-                path: "function \{f.name}",
+                path: "function " + f.name,
                 message: "the generator type is not assignable to `\{ret_name}`: `Iterator<\{type_display(a)}>` and `Iterable<\{type_display(b)}>` disagree",
               })
               continue
@@ -43940,7 +43989,7 @@ fn check_generator_interface_returns(
             !fl.0.has_prefix("@@") &&
             !type_accepts_undefined(fl.1) {
             issues.push({
-              path: "function \{f.name}",
+              path: "function " + f.name,
               message: "property `\{fl.0}` is missing in the generator object but required in type `\{ret_name}`",
             })
             break
@@ -43982,10 +44031,10 @@ fn check_duplicate_index_signatures(
     }
   }
   for iface in module_.interfaces {
-    scan("interface \{iface.name}", iface.index_signatures)
+    scan("interface " + iface.name, iface.index_signatures)
   }
   for c in module_.classes {
-    scan("class \{c.name}", c.index_signatures)
+    scan("class " + c.name, c.index_signatures)
   }
   issues
 }
@@ -44043,17 +44092,26 @@ fn member_name_duplicates(
         continue
       }
       let mut n = 1
-      let mut has_property = !is_method_type(fields[i].1)
       for j in (i + 1)..<fields.length() {
         if fields[j].0 == name {
           n += 1
-          if !is_method_type(fields[j].1) {
+        }
+      }
+      // Whether an occurrence is a property only matters for a repeated
+      // name, so the type is not inspected for the (usual) unique one.
+      if n >= 2 {
+        let mut has_property = !is_method_type(fields[i].1)
+        for j in (i + 1)..<fields.length() {
+          if has_property {
+            break
+          }
+          if fields[j].0 == name && !is_method_type(fields[j].1) {
             has_property = true
           }
         }
-      }
-      if n >= 2 && has_property {
-        dups.push(name)
+        if has_property {
+          dups.push(name)
+        }
       }
     }
     return dups
@@ -44166,7 +44224,7 @@ fn collect_globalthis_bad_index_issues(
 fn check_globalthis_bad_index(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for ta in module_.type_aliases {
-    collect_globalthis_bad_index_issues(ta.type_, "type \{ta.name}", issues)
+    collect_globalthis_bad_index_issues(ta.type_, "type " + ta.name, issues)
   }
   for v in module_.values {
     collect_globalthis_bad_index_issues(v.type_, "var \{v.name}", issues)
@@ -44544,20 +44602,25 @@ fn check_module_function_bodies_layered(
   } else {
     module_
   }
-  for i in own_root.interfaces {
-    own_type_names[i.name] = ()
-  }
-  for c in own_root.classes {
-    own_type_names[c.name] = ()
-  }
-  for a in own_root.type_aliases {
-    own_type_names[a.name] = ()
-  }
-  for e in own_root.enums {
-    own_type_names[e.name] = ()
-  }
-  for q in namespace_qualified_type_names(own_root) {
-    own_type_names[q] = ()
+  // Both tables below are read only while ingesting `type_modules`, so a
+  // single-module check (no imported type modules) builds neither.
+  let has_type_modules = type_modules.length() > 0
+  if has_type_modules {
+    for i in own_root.interfaces {
+      own_type_names[i.name] = ()
+    }
+    for c in own_root.classes {
+      own_type_names[c.name] = ()
+    }
+    for a in own_root.type_aliases {
+      own_type_names[a.name] = ()
+    }
+    for e in own_root.enums {
+      own_type_names[e.name] = ()
+    }
+    for q in namespace_qualified_type_names(own_root) {
+      own_type_names[q] = ()
+    }
   }
   // Which top-level type names more than one reachable module declares
   // (the checked module counting as one): those get a per-module key.
@@ -44589,7 +44652,9 @@ fn check_module_function_bodies_layered(
       add(q)
     }
   }
-  note_declared(own_root, "<checked>")
+  if has_type_modules {
+    note_declared(own_root, "<checked>")
+  }
   for i, type_module in type_modules {
     if i < type_module_keys.length() {
       note_declared(type_module, type_module_keys[i])
@@ -46017,7 +46082,7 @@ fn check_module_function_bodies_layered(
     //     `check_constraints` abstains on `infer` markers and forwarded
     //     (in-scope) type parameters, so only a concrete argument that
     //     definitely violates a concrete bound fires.
-    for issue in check_module(module_).issues {
+    for issue in check_module_kinds(module_, false).issues {
       let keep = match issue.kind {
         CircularTypeAlias
         | InterfaceExtendsCycle
@@ -46075,7 +46140,7 @@ fn check_module_function_bodies_layered(
     let prefix = if ns.name == "<global>" {
       "declare global"
     } else {
-      "namespace \{ns.name}"
+      "namespace " + ns.name
     }
     for issue in issues {
       all.push({ path: "\{prefix} > \{issue.path}", message: issue.message, })
@@ -46963,7 +47028,7 @@ fn check_native_class_property_initializers(
           is_checkable(prop.type_) &&
           !type_accepts_undefined(resolver.unwrap(prop.type_)) {
           issues.push({
-            path: "class \{decl.name}",
+            path: "class " + decl.name,
             message: "computed property has no initializer and is not definitely assigned",
           })
         }
@@ -46995,7 +47060,7 @@ fn check_native_class_property_initializers(
         continue
       }
       issues.push({
-        path: "class \{decl.name}",
+        path: "class " + decl.name,
         message: "property `\{prop.name}` has no initializer and is not definitely assigned",
       })
     }
@@ -47230,7 +47295,7 @@ fn check_class_member_structure(
         !reported_brand_modifier.contains(name) {
         reported_brand_modifier[name] = ()
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "an accessibility modifier cannot be used with a private identifier",
         })
       }
@@ -47240,7 +47305,7 @@ fn check_class_member_structure(
         !reported_brand_modifier.contains(name) {
         reported_brand_modifier[name] = ()
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "an accessibility modifier cannot be used with a private identifier",
         })
       }
@@ -47259,7 +47324,7 @@ fn check_class_member_structure(
       if is_brand_constructor(p.name) && !reported_hash_ctor {
         reported_hash_ctor = true
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`#constructor` is a reserved word",
         })
       }
@@ -47268,7 +47333,7 @@ fn check_class_member_structure(
       if is_brand_constructor(m.name) && !reported_hash_ctor {
         reported_hash_ctor = true
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`#constructor` is a reserved word",
         })
       }
@@ -47294,7 +47359,7 @@ fn check_class_member_structure(
         !reported_ctor_field {
         reported_ctor_field = true
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "classes may not have a field named `constructor`",
         })
       }
@@ -47318,7 +47383,7 @@ fn check_class_member_structure(
         block_mentions_super(body, AnyRef)
       if in_ctor || class_mentions_super_outside_ctor(decl, AnyRef) {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`super` can only be referenced in a derived class",
         })
       }
@@ -47331,7 +47396,7 @@ fn check_class_member_structure(
       // the derived branch because a non-derived class is already reported
       // above with the more specific TS2335.
       issues.push({
-        path: "class \{decl.name}",
+        path: "class " + decl.name,
         message: "super calls are not permitted outside constructors",
       })
     }
@@ -47343,7 +47408,7 @@ fn check_class_member_structure(
     for base in decl.base_names {
       if base == decl.name {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`\{decl.name}` is referenced directly in its own base expression",
         })
         break
@@ -47369,7 +47434,7 @@ fn check_class_member_structure(
         if !reported_dup.contains(key) {
           reported_dup[key] = ()
           issues.push({
-            path: "class \{decl.name}",
+            path: "class " + decl.name,
             message: "duplicate identifier `\{m.name}`",
           })
         }
@@ -47393,7 +47458,7 @@ fn check_class_member_structure(
           if bodied_method.contains(key) && !reported_dup.contains(key) {
             reported_dup[key] = ()
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "duplicate identifier `\{m.name}`",
             })
           }
@@ -47419,7 +47484,7 @@ fn check_class_member_structure(
       if regular_method.contains(key) && !reported_dup.contains(key) {
         reported_dup[key] = ()
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "duplicate identifier `\{prop.name}`",
         })
       }
@@ -47485,7 +47550,7 @@ fn check_class_member_structure(
           for name, _ in this_fields {
             if base_accessors.contains(name) {
               issues.push({
-                path: "class \{decl.name}",
+                path: "class " + decl.name,
                 message: "`\{name}` is defined as an accessor in the base class but is overridden here as a property",
               })
             }
@@ -47495,7 +47560,7 @@ fn check_class_member_structure(
           for name, _ in this_accessors {
             if base_fields.contains(name) {
               issues.push({
-                path: "class \{decl.name}",
+                path: "class " + decl.name,
                 message: "`\{name}` is defined as a property in the base class but is overridden here as an accessor",
               })
             }
@@ -47537,7 +47602,7 @@ fn check_class_member_structure(
               Some(btype) =>
                 if member_override_incompatible(p.type_, btype, resolver) {
                   issues.push({
-                    path: "class \{decl.name}",
+                    path: "class " + decl.name,
                     message: "property `\{p.name}` of type `\{type_display(p.type_)}` is not assignable to the same property `\{type_display(btype)}` in base type `\{base.name}`",
                   })
                 }
@@ -47658,7 +47723,7 @@ fn check_abstract_implementation(
     for name, from_class in abstract_needed {
       if !concrete.contains(name) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "non-abstract class `\{cls.name}` does not implement inherited abstract member `\{name}` from class `\{from_class}`",
         })
       }
@@ -48023,7 +48088,7 @@ fn check_extends_interface_only(
         continue
       }
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "cannot extend an interface `\{base}`. Did you mean `implements`?",
       })
     }
@@ -48069,7 +48134,7 @@ fn check_alias_index_key_bounds(
       }
       if wanted.iter().any(fn(w) { !keys.contains(w) }) {
         issues.push({
-          path: "type \{ta.name}",
+          path: "type " + ta.name,
           message: "type `\{k}` cannot be used to index type `\{type_display(obj)}`",
         })
       }
@@ -48231,7 +48296,7 @@ fn check_class_implements_lib_string(
     for m in wanted {
       if !have.contains(m) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "incorrectly implements interface `String`: member `\{m}` is missing",
         })
         break
@@ -48478,7 +48543,7 @@ fn check_class_implements(
           if member_override_incompatible(csig.1, isig.1, resolver) {
             let kind = if want_number { "number" } else { "string" }
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "incorrectly implements interface `\{iname}`: `\{kind}` index signature of type `\{type_display(csig.1)}` is not assignable to `\{type_display(isig.1)}`",
             })
             reported = true
@@ -48497,7 +48562,7 @@ fn check_class_implements(
         // Interface member implemented with non-public visibility.
         if nonpublic.get(mname) is Some(_) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "incorrectly implements interface `\{iname}`: member `\{mname}` is not public",
           })
           reported = true
@@ -48508,7 +48573,7 @@ fn check_class_implements(
           Some(ctype) =>
             if member_override_incompatible(ctype, f.1, resolver) {
               issues.push({
-                path: "class \{cls.name}",
+                path: "class " + cls.name,
                 message: "incorrectly implements interface `\{iname}`: property `\{mname}` of type `\{type_display(ctype)}` is not assignable to `\{type_display(f.1)}`",
               })
               reported = true
@@ -48525,7 +48590,7 @@ fn check_class_implements(
             Some(mtype) =>
               if method_override_incompatible(mtype, f.1, resolver) {
                 issues.push({
-                  path: "class \{cls.name}",
+                  path: "class " + cls.name,
                   message: "incorrectly implements interface `\{iname}`: method `\{mname}` of type `\{type_display(mtype)}` is not assignable to `\{type_display(f.1)}`",
                 })
                 reported = true
@@ -48543,7 +48608,7 @@ fn check_class_implements(
           !type_has_undefined(f.1) &&
           !supplied.contains(mname) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "incorrectly implements interface `\{iname}`: member `\{mname}` is missing",
           })
           reported = true
@@ -48629,10 +48694,25 @@ fn check_interface_extends_compat(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // Index declared interfaces by name (non-generic only).
-  let iface_by_name : Map[String, @ast.TsInterface] = Map([])
-  for iface in module_.interfaces {
-    if iface.type_params.length() == 0 {
-      iface_by_name[iface.name] = iface
+  //
+  // Both name tables below are built on first use rather than up front.
+  // They are only consulted along an `extends` edge or an index
+  // signature, and most declarations have neither — a `.d.ts` of plain
+  // interfaces paid for two module-sized maps per call and read neither.
+  let mut iface_by_name_cache : Map[String, @ast.TsInterface]? = None
+  fn iface_by_name() -> Map[String, @ast.TsInterface] {
+    match iface_by_name_cache {
+      Some(m) => m
+      None => {
+        let m : Map[String, @ast.TsInterface] = Map([])
+        for iface in module_.interfaces {
+          if iface.type_params.length() == 0 {
+            m[iface.name] = iface
+          }
+        }
+        iface_by_name_cache = Some(m)
+        m
+      }
     }
   }
   // Object-shaped declared names (interfaces or classes) -- used to
@@ -48640,15 +48720,25 @@ fn check_interface_extends_compat(
   // scalar override against it. Seeded with outer-scope names so a
   // namespaced interface extending a member typed by a top-level
   // interface is still recognised.
-  let object_shaped : Map[String, Unit] = Map([])
-  for name, _ in outer_object_names {
-    object_shaped[name] = ()
-  }
-  for iface in module_.interfaces {
-    object_shaped[iface.name] = ()
-  }
-  for c in module_.classes {
-    object_shaped[c.name] = ()
+  let mut object_shaped_cache : Map[String, Unit]? = None
+  fn object_shaped() -> Map[String, Unit] {
+    match object_shaped_cache {
+      Some(m) => m
+      None => {
+        let m : Map[String, Unit] = Map([])
+        for name, _ in outer_object_names {
+          m[name] = ()
+        }
+        for iface in module_.interfaces {
+          m[iface.name] = ()
+        }
+        for c in module_.classes {
+          m[c.name] = ()
+        }
+        object_shaped_cache = Some(m)
+        m
+      }
+    }
   }
   // Strip a trailing `| undefined` / `| null` (the parser's encoding of
   // `x?: T`) so the scalar-vs-object comparison sees the payload type.
@@ -48688,8 +48778,8 @@ fn check_interface_extends_compat(
   fn is_object_shaped(t : @ast.TsType) -> Bool {
     match t {
       Object(_) | Struct(_, _) => true
-      Named(n) => object_shaped.contains(n)
-      Applied(n, _) => object_shaped.contains(n)
+      Named(n) => object_shaped().contains(n)
+      Applied(n, _) => object_shaped().contains(n)
       _ => false
     }
   }
@@ -48749,7 +48839,7 @@ fn check_interface_extends_compat(
       if bi < iface.extends_args.length() && iface.extends_args[bi].length() > 0 {
         continue
       }
-      let base = match iface_by_name.get(base_name) {
+      let base = match iface_by_name().get(base_name) {
         Some(b) => b
         None => continue
       }
@@ -48789,7 +48879,7 @@ fn check_interface_extends_compat(
               continue
             }
             visited[n] = ()
-            match iface_by_name.get(n) {
+            match iface_by_name().get(n) {
               Some(i) =>
                 for en in i.extends_names {
                   if en == to {
@@ -48862,7 +48952,7 @@ fn check_interface_extends_compat(
             }
             if is_scalar(d_payload) && is_object_shaped(b_payload) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
             } else if both_plain_named &&
@@ -48890,7 +48980,7 @@ fn check_interface_extends_compat(
                 _ => false
               }) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
             } else if !member_is_overloaded(df.0) &&
@@ -48905,7 +48995,7 @@ fn check_interface_extends_compat(
                 ignore_return=df.0 == "<call>" || df.0 == "<new>",
               ) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: member `\{df.0}` signature is not assignable to the base signature",
               })
             } else if d_optional && !b_optional && !(df.1 is Any) {
@@ -48913,7 +49003,7 @@ fn check_interface_extends_compat(
               // lib.dom overrides `returnValue: boolean` with
               // `returnValue: any` legally.
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` is optional but required in the base",
               })
             }
@@ -48942,7 +49032,7 @@ fn check_interface_extends_compat(
             if both_plain_named &&
               !struct_assignable_named_rec(dv, bv, resolver, []) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: index signatures are incompatible",
               })
             }
@@ -49311,13 +49401,17 @@ fn check_interface_extends_compat(
     if iface_decl_counts.get(iface.name) is Some(n) && n > 1 {
       continue
     }
-    check_index_props(
-      iface.index_signatures,
-      iface.fields,
-      "interface \{iface.name}",
-    )
-    if iface.type_params.length() == 0 {
-      check_num_vs_str_sigs(iface.index_signatures, "interface \{iface.name}")
+    // Both checks iterate the interface's own index signatures, so with
+    // none there is nothing to report and the owner path is not built.
+    if iface.index_signatures.length() > 0 {
+      check_index_props(
+        iface.index_signatures,
+        iface.fields,
+        "interface " + iface.name,
+      )
+      if iface.type_params.length() == 0 {
+        check_num_vs_str_sigs(iface.index_signatures, "interface " + iface.name)
+      }
     }
     // Inherited index signatures constrain a derived interface's members
     // too (`interface D extends B { 1: { y } }` where `B` has a numeric
@@ -49340,7 +49434,7 @@ fn check_interface_extends_compat(
           continue
         }
         visited[n] = ()
-        match iface_by_name.get(n) {
+        match iface_by_name().get(n) {
           Some(b) => {
             for sig in b.index_signatures {
               inherited.push(sig)
@@ -49353,7 +49447,7 @@ fn check_interface_extends_compat(
         }
       }
       if inherited.length() > 0 {
-        check_index_props(inherited, iface.fields, "interface \{iface.name}")
+        check_index_props(inherited, iface.fields, "interface " + iface.name)
       }
     }
   }
@@ -49374,12 +49468,12 @@ fn check_interface_extends_compat(
         check_index_props(
           merged.index_signatures,
           merged.fields,
-          "interface \{merged.name}",
+          "interface " + merged.name,
         )
         if merged.type_params.length() == 0 {
           check_num_vs_str_sigs(
             merged.index_signatures,
-            "interface \{merged.name}",
+            "interface " + merged.name,
           )
         }
       }
@@ -49491,19 +49585,19 @@ fn check_interface_extends_compat(
           None => ()
         }
       }
-      check_index_props(c.index_signatures, fields, "class \{c.name}")
+      check_index_props(c.index_signatures, fields, "class " + c.name)
       if inherited_sigs.length() > 0 {
-        check_index_props(inherited_sigs, fields, "class \{c.name}")
+        check_index_props(inherited_sigs, fields, "class " + c.name)
       }
       if c.index_signatures.length() > 0 && inherited_fields.length() > 0 {
         check_index_props(
           c.index_signatures,
           inherited_fields,
-          "class \{c.name}",
+          "class " + c.name,
         )
       }
-      check_num_vs_str_sigs(c.index_signatures, "class \{c.name}")
-      check_num_vs_str_sigs(c.static_index_signatures, "class \{c.name}")
+      check_num_vs_str_sigs(c.index_signatures, "class " + c.name)
+      check_num_vs_str_sigs(c.static_index_signatures, "class " + c.name)
       // Static side: `static [k: string]: V` constrains static fields and
       // methods (never instance members, and vice versa). A field with no
       // annotation recovers its widened primitive from the recorded static
@@ -49553,7 +49647,7 @@ fn check_interface_extends_compat(
         check_index_props(
           c.static_index_signatures,
           static_fields,
-          "class \{c.name}",
+          "class " + c.name,
         )
       }
     }
@@ -49899,26 +49993,26 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // Top-level functions.
   for func in module_.funcs {
-    check_dup_type_params("function \{func.name}", func.type_params, issues)
+    check_dup_type_params("function " + func.name, func.type_params, issues)
     let names : Array[String] = []
     for p in func.params {
       names.push(p.name)
     }
-    check_dup_param_names("function \{func.name}", names, issues)
-    check_func_rest_params("function \{func.name}", func.params, issues)
+    check_dup_param_names("function " + func.name, names, issues)
+    check_func_rest_params("function " + func.name, func.params, issues)
   }
   // Ambient `declare function` imports.
   for imp in module_.imports {
-    check_dup_type_params("function \{imp.name}", imp.type_params, issues)
+    check_dup_type_params("function " + imp.name, imp.type_params, issues)
     let names : Array[String] = []
     for p in imp.params {
       names.push(p.0)
     }
-    check_dup_param_names("function \{imp.name}", names, issues)
+    check_dup_param_names("function " + imp.name, names, issues)
   }
   // Classes — own type-param list, plus methods.
   for cls in module_.classes {
-    check_dup_type_params("class \{cls.name}", cls.type_params, issues)
+    check_dup_type_params("class " + cls.name, cls.type_params, issues)
     if cls.type_params.length() > 0 {
       check_static_uses_class_type_params(cls, issues)
     }
@@ -49936,11 +50030,11 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
   }
   // Interfaces.
   for iface in module_.interfaces {
-    check_dup_type_params("interface \{iface.name}", iface.type_params, issues)
+    check_dup_type_params("interface " + iface.name, iface.type_params, issues)
   }
   // Type aliases.
   for ta in module_.type_aliases {
-    check_dup_type_params("type \{ta.name}", ta.type_params, issues)
+    check_dup_type_params("type " + ta.name, ta.type_params, issues)
   }
   issues
 }
@@ -50445,6 +50539,68 @@ fn type_references_any(ty : @ast.TsType, names : Array[String]) -> Bool {
       false
     }
     Rest(inner) => type_references_any(inner, names)
+    _ => false
+  }
+}
+
+///|
+/// `type_references_any` with a predicate in place of the name list: true
+/// when `ty` (or anything nested inside it) is `Named(n)` with `pred(n)`.
+/// The walk is the same one, arm for arm, so a caller can swap between
+/// the two without changing which references count.
+fn type_references_where(ty : @ast.TsType, pred : (String) -> Bool) -> Bool {
+  match ty {
+    Named(n) => pred(n)
+    Applied(_, args) => {
+      for a in args {
+        if type_references_where(a, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) => type_references_where(inner, pred)
+    Union(parts) | Intersection(parts) => {
+      for p in parts {
+        if type_references_where(p, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Tuple(parts) => {
+      for p in parts {
+        if type_references_where(p, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if type_references_where(p, pred) {
+          return true
+        }
+      }
+      type_references_where(ret, pred)
+    }
+    Object(fields) => {
+      for f in fields {
+        if type_references_where(f.0, pred) || type_references_where(f.1, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for f in fields {
+        if type_references_where(f.1, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Rest(inner) => type_references_where(inner, pred)
     _ => false
   }
 }
