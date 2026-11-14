@@ -25117,6 +25117,27 @@ fn check_explicit_type_args_on_signature_value(
         None => return
       }
   }
+  // A value typed by a generic FUNCTION type directly
+  // (`x: <T>(p: T) => T`, as a contextual binding gives it).
+  match vt {
+    GenericFunc(tps, _, Func(ps, _)) if key == "<call>" => {
+      if tps.length() != targs.length() || ps.iter().any(fn(p) { p is Rest(_) }) {
+        return
+      }
+      let bindings : Map[String, @ast.TsType] = Map([])
+      for i in 0..<tps.length() {
+        bindings[tps[i]] = targs[i]
+      }
+      let formal = substitute_params_array(ps, bindings)
+      for i, a in args {
+        if i < formal.length() && !(a is Spread(_)) {
+          check_expr_against(env, a, formal[i], ctx, "call `\{name}` arg[\{i}]")
+        }
+      }
+      return
+    }
+    _ => ()
+  }
   let iname = match vt {
     Named(n) => n
     _ => return
@@ -28263,6 +28284,41 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, tag, ctx)
       for e in exprs {
         check_call_args_in_expr(env, e, ctx)
+      }
+      // A function-literal SUBSTITUTION is contextually typed by the tag's
+      // parameter after the strings array, from the one overload whose
+      // parameter count is the substitution count plus one
+      // (taggedTemplateContextualTyping2). More than one such overload, or
+      // a rest parameter, abstains.
+      match tag {
+        Var(_) => {
+          let sigs = union_components(
+            ctx.resolver.unwrap(infer_expr(env, ctx.resolver, tag)),
+          ).filter_map(fn(m) {
+            match ctx.resolver.unwrap(m) {
+              Func(ps, _) => Some(ps)
+              _ => None
+            }
+          })
+          let fits = sigs.filter(fn(ps) {
+            ps.length() == exprs.length() + 1 &&
+            !ps.iter().any(fn(p) { p is Rest(_) })
+          })
+          if fits is [ps] {
+            for i, e in exprs {
+              if e is (ArrowFunc(_, _, _, _) | FuncExpr(_)) {
+                check_expr_against(
+                  env,
+                  e,
+                  ctx.resolver.unwrap(ps[i + 1]),
+                  ctx,
+                  "tagged template arg[\{i + 1}]",
+                )
+              }
+            }
+          }
+        }
+        _ => ()
       }
       // TS2349: the tag of a tagged template is *called*. A template /
       // string literal tag is a `string` (never callable), and a bare
