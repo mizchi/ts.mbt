@@ -4268,6 +4268,13 @@ fn Resolver::lookup_field_core(
   field : String,
 ) -> @ast.TsType? {
   let unwrapped = self.unwrap(recv)
+  // A namespace-local interface that SHADOWS a lib generic (see
+  // `@shadows-lib:` in the layered check): no built-in table, so the
+  // miss falls through to the module-declared interface in `lookup_field`.
+  match unwrapped {
+    Applied(n, _) if self.globals.contains("@shadows-lib:" + n) => return None
+    _ => ()
+  }
   // Try the built-in prototype dispatchers first so a `Named("Date")` /
   // `Named("RegExp")` receiver doesn't get masked by a missing-interface
   // lookup in the generic `Named(n)` arm below.
@@ -43822,6 +43829,17 @@ fn check_module_function_bodies_layered(
       Resolver::ingest_module(resolver, o, "")
     }
     Resolver::ingest_module(resolver, module_, "")
+    // An interface a NAMESPACE declares under a lib name (`namespace m {
+    // interface Promise<T> { then<U>(…) } }`) is a new local type that
+    // shadows the global one, where the same declaration at a script's top
+    // level is an augmentation that merges with it. The member lookup
+    // answers lib generics from built-in tables before any interface, so
+    // inside the namespace it must skip the table.
+    for i in module_.interfaces {
+      if is_builtin_generic_table_name(i.name) {
+        resolver.globals["@shadows-lib:" + i.name] = Any
+      }
+    }
     // TS2304 backstop: collect declared value names from the *outermost*
     // module, which recurses into every nested namespace. This lets code
     // inside a namespace reference outer-scope (and sibling-namespace)

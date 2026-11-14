@@ -291,9 +291,11 @@ checker-miss-buckets *ARGS:
 # recursive constraints included) and `templateLiteralTypes4` (`keyof` a
 # tuple, a literal against a `${number}` template, `infer N extends
 # number`, and an interface's inlined bound put back inside a method bound).
+# 3 -> 2 with `genericCallToOverloadedMethodWithOverloadedArguments`: an
+# interface a namespace declares under a lib name shadows the lib type.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 3
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 2
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

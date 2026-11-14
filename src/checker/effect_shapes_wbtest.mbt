@@ -699,3 +699,24 @@ test "batch FW: keyof tuples, template infer, constrained interface methods" {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
+
+///|
+test "batch FW: a namespace-local interface shadows a lib generic" {
+  let src =
+    #|namespace m1 {
+    #|  interface Promise<T> { then<U>(cb: (x: T) => Promise<U>): Promise<U>; }
+    #|  declare function single(n: number): Promise<number>;
+    #|  declare var np: Promise<number>;
+    #|  var ok = np.then(single);
+    #|}
+    #|namespace m2 {
+    #|  interface Promise<T> { then<U>(cb: (x: T) => Promise<U>): Promise<U>; }
+    #|  declare function tf(n: number): Promise<number>;
+    #|  declare function tf(s: string): Promise<string>;
+    #|  declare var np: Promise<number>;
+    #|  var bad = np.then(tf);
+    #|}
+  let issues = eff_issues(src)
+  assert_false(issues.iter().any(fn(i) { i.path.has_prefix("namespace m1") }))
+  assert_true(issues.iter().any(fn(i) { i.path.has_prefix("namespace m2") }))
+}
