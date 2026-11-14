@@ -3944,6 +3944,71 @@ fn Resolver::enumerable_object_shape(
 }
 
 ///|
+fn union_has_closed_literal_member_without(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> Bool {
+  match resolver.unwrap(recv) {
+    Union(items) => {
+      // A DISCRIMINANT candidate — a key two members share where one of
+      // them types it with a literal (or `undefined`, or a template) — is
+      // where an undecided narrowing leaves the whole union standing, so
+      // such a union abstains (discriminatedUnionTypes3 / 4).
+      let seen : Map[String, Int32] = Map([])
+      let literalish : Map[String, Bool] = Map([])
+      for it in items {
+        match resolver.unwrap(it) {
+          Object(fields) =>
+            for f in fields {
+              match f.0 {
+                Literal(k) => {
+                  seen[k] = seen.get(k).unwrap_or(0) + 1
+                  if resolver.unwrap(f.1)
+                    is (Literal(_)
+                    | NumberLiteral(_)
+                    | BooleanLiteral(_)
+                    | Undefined
+                    | TemplateLiteralType(_, _)) {
+                    literalish[k] = true
+                  }
+                }
+                _ => ()
+              }
+            }
+          _ => ()
+        }
+      }
+      for k, c in seen {
+        if c >= 2 && literalish.contains(k) {
+          return false
+        }
+      }
+      items
+      .iter()
+      .any(fn(it) {
+        match resolver.unwrap(it) {
+          Object(fields) =>
+            fields.length() > 0 &&
+            fields
+            .iter()
+            .all(fn(f) {
+              match f.0 {
+                Literal(k) => !k.has_prefix("<") && !k.has_prefix("@@")
+                _ => false
+              }
+            }) &&
+            !fields.iter().any(fn(f) { f.0 is Literal(k) && k == field }) &&
+            object_prototype_member(field) is None
+          _ => false
+        }
+      })
+    }
+    _ => false
+  }
+}
+
+///|
 /// TS2339 for a union receiver: a property access on `A | B` is valid only when
 /// *every* member has the property (TS gives the union the intersection of its
 /// members' properties). We flag the access only when we can be certain — every
@@ -27317,6 +27382,36 @@ fn check_call_args_in_expr(
           ctx,
           "PropAccess `.\{member_display_name(prop)}`",
           "property `\{prop}` does not exist on `\{lib_n}`",
+        )
+        // A union member that is a CLOSED object type literal (named keys
+        // only, no index signature) without the field is enough on its
+        // own — the access needs every member — but only for a binding no
+        // guard has touched on this path (it is not in `env` at all),
+        // since an inline-object union is exactly where an undecided
+        // discriminant narrowing leaves a stale union behind.
+      } else if (match recv {
+          Var(rn) =>
+            // The union must be WRITTEN as a named type: an inferred union
+            // of object literals is normalized by tsc (a fresh `{ a }`
+            // beside `{ a; b? }` gains `b?: undefined`), so reading `b` off
+            // one is legal (effect's PubSub `options.replay`).
+            recv_ty is (Named(_) | Applied(_, _)) &&
+            (match (env.lookup(rn), env.lookup_declared(rn)) {
+              (None, _) => ctx.resolver.globals.get(rn) is Some(_)
+              (Some(cur), Some(decl)) => cur == decl
+              _ => false
+            }) &&
+            union_has_closed_literal_member_without(
+              ctx.resolver,
+              prune_nullish(ctx.resolver, recv_ty),
+              prop,
+            )
+          _ => false
+        }) {
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
         )
       } else if is_checkable(recv_ty) &&
         !is_in_scope_type_param(ctx, recv_ty) &&
