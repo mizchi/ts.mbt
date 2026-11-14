@@ -5109,7 +5109,20 @@ fn regexp_prototype_member(field : String) -> @ast.TsType? {
   let b = @ast.TsType::Boolean
   let n = @ast.TsType::Number
   let regex_t = @ast.TsType::Named("RegExp")
-  let exec_arr = @ast.TsType::Array(s)
+  // `RegExpExecArray` is `string[]` plus the match's `index` / `input` /
+  // `groups` (lib.es5.d.ts and lib.es2018.regexp.d.ts). Modelled as plain
+  // `string[]` it rejected `m.index` on every successful `exec`.
+  let exec_arr = @ast.TsType::Intersection([
+    Array(s),
+    Object([
+      (Literal("index"), n),
+      (Literal("input"), s),
+      (
+        Literal("groups"),
+        Union([Object([(String_, s)]), @ast.TsType::Undefined]),
+      ),
+    ]),
+  ])
   match field {
     // Methods
     "test" => Some(@ast.TsType::Func([s], b))
@@ -10500,6 +10513,10 @@ fn infer_expr_inner(
       }
     }
     ArrayLit(items) => {
+      match normalized_object_literal_union(env, resolver, items) {
+        Some(u) => return Array(u)
+        None => ()
+      }
       let mut elem : @ast.TsType = Any
       let mut first = true
       for item in items {
@@ -12545,6 +12562,112 @@ fn late_bound_index_member_name(
   match (idx_expr, idx) {
     (Var(name), UniqueSymbol(_)) => Some("@@unique:" + name)
     _ => None
+  }
+}
+
+///|
+/// tsc's object-literal NORMALIZATION for an array of object literals of
+/// different shapes: the element type is the union of the literals'
+/// (widened) types, each given every key the others declare as an
+/// optional `undefined` — `[{ a: 0 }, { a: 1, b: "x" }]` has elements
+/// `{ a: number; b?: undefined } | { a: number; b: string }`, so `.b` is
+/// `string | undefined` and `{ b: "y" }` satisfies no member. The array
+/// arm used to give up on any mix of non-scalar elements and call the
+/// whole thing `any[]`.
+///
+/// Only flat literals: plain keys, no spread, no accessor or method, and
+/// every value a primitive after widening. A nested object VALUE is
+/// normalized recursively in tsc, and a union of un-normalized nested
+/// shapes would report every read of a key one shape lacks — so that
+/// case keeps the old `any`.
+fn normalized_object_literal_union(
+  env : ExprEnv,
+  resolver : Resolver,
+  items : Array[@ast.TsExpr],
+) -> @ast.TsType? {
+  if items.length() < 2 {
+    return None
+  }
+  let shapes : Array[Array[(String, @ast.TsType)]] = []
+  let keys : Array[String] = []
+  for item in items {
+    guard item is ObjectLit(entries) else { return None }
+    let fields : Array[(String, @ast.TsType)] = []
+    for e in entries {
+      if e.0.has_prefix("@@") || e.0.has_prefix("<") || e.0 == "__proto__" {
+        return None
+      }
+      if fields.iter().any(fn(f) { f.0 == e.0 }) {
+        return None
+      }
+      let t = widen_literal(infer_expr(env, resolver, e.1))
+      guard t is (Number | String_ | Boolean | BigInt) else { return None }
+      fields.push((e.0, t))
+      if !keys.contains(e.0) {
+        keys.push(e.0)
+      }
+    }
+    shapes.push(fields)
+  }
+  // Every shape identical is the ordinary case the scalar arm handles.
+  let first = shapes[0]
+  if shapes.iter().all(fn(s) { s == first }) {
+    return None
+  }
+  let members : Array[@ast.TsType] = []
+  for s in shapes {
+    let fs : Array[(@ast.TsType, @ast.TsType)] = []
+    for k in keys {
+      match s.search_by(fn(f) { f.0 == k }) {
+        Some(i) => fs.push((Literal(k), s[i].1))
+        None => fs.push((Literal(k), Undefined))
+      }
+    }
+    let m = @ast.TsType::Object(fs)
+    if !members.contains(m) {
+      members.push(m)
+    }
+  }
+  Some(if members.length() == 1 { members[0] } else { Union(members) })
+}
+
+///|
+/// `t` with its boolean members narrowed by a truthiness test: when
+/// `truthy`, `boolean` becomes `true` and a `false` literal is dropped;
+/// a union that loses every member is `never`. Non-boolean members are
+/// returned unchanged.
+fn boolean_truthiness(t : @ast.TsType, truthy : Bool) -> @ast.TsType {
+  match t {
+    Boolean => BooleanLiteral(truthy)
+    BooleanLiteral(b) => if b == truthy { t } else { Never }
+    Union(ms) => {
+      let kept : Array[@ast.TsType] = []
+      for m in ms {
+        let n = boolean_truthiness(m, truthy)
+        if !(n is Never) && !kept.contains(n) {
+          kept.push(n)
+        }
+      }
+      union_of(kept)
+    }
+    _ => t
+  }
+}
+
+///|
+/// The falsy narrowing of `t` when it differs from `t` only in its boolean
+/// members (`number | boolean` -> `number | false`), else `None`: the
+/// falsy side is not otherwise modelled, and a `None` keeps the binding.
+fn boolean_falsy_part(t : @ast.TsType) -> @ast.TsType? {
+  let has_bool = match t {
+    Boolean | BooleanLiteral(_) => true
+    Union(ms) => ms.iter().any(fn(m) { m is (Boolean | BooleanLiteral(_)) })
+    _ => false
+  }
+  if has_bool {
+    Some(boolean_truthiness(t, false))
+  } else {
+    None
   }
 }
 
@@ -19121,8 +19244,54 @@ fn copy_env_into_closure(outer : ExprEnv, env : ExprEnv) -> Unit {
       continue
     }
     env.bind(entry.0, entry.1)
+    keep_outer_declared(outer, env, entry.0)
   }
   unnarrow_unstable_bindings(outer, env)
+}
+
+///|
+/// Whether an object literal's inferred type `src` can be the value of the
+/// union member `m`: every key it supplies is one `m` declares, with an
+/// assignable type, and every key it omits is one `m` lets be `undefined`.
+/// `is_assignable_to` answers the first half and not the second for a
+/// member whose omitted key is typed exactly `undefined` — the shape
+/// normalization gives every missing key.
+fn object_literal_fits_member(src : @ast.TsType, m : @ast.TsType) -> Bool {
+  guard src is Object(sf) else { return false }
+  let mf = match m {
+    Object(fs) => fs
+    _ => return false
+  }
+  for f in sf {
+    match mf.search_by(fn(x) { x.0 == f.0 }) {
+      Some(i) => if !is_assignable_to(f.1, mf[i].1) { return false }
+      None => return false
+    }
+  }
+  for f in mf {
+    if !sf.iter().any(fn(x) { x.0 == f.0 }) &&
+      !(f.1 is Undefined) &&
+      !type_has_undefined(f.1) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Carry the outer binding's DECLARED type into the closure scope. `bind`
+/// makes its first write the declared slot, so copying a NARROWED binding
+/// made the narrowing the closure's assignment target: after
+/// `let x: string | null = …; if (x === null) return`, a closure writing
+/// `x = null` reported "expected `string`", and effect's
+/// `let done = false; if (done) return …; () => { done = true }` reported
+/// "expected `false`" — both lines tsc accepts. An assignment is always
+/// checked against the declaration, whichever scope it is written in.
+fn keep_outer_declared(outer : ExprEnv, env : ExprEnv, name : String) -> Unit {
+  match outer.lookup_declared(name) {
+    Some(d) => env.declare_type(name, d)
+    None => ()
+  }
 }
 
 ///|
@@ -19387,6 +19556,7 @@ fn check_funcexpr_with_context(
       entry.1
     }
     env.bind(entry.0, captured)
+    keep_outer_declared(outer, env, entry.0)
   }
   // And the narrowings this closure cannot rely on even when it is not a
   // class-expression body: `reset_narrowing` above answers the same
@@ -21498,6 +21668,44 @@ fn collect_narrowing(
   else_binds : Array[(String, @ast.TsType)],
   then_sense : Bool,
 ) -> Unit {
+  // An ASSIGNMENT used as the condition, or as the left operand of a
+  // comparison — `while ((m = re.exec(s)))`, `if ((z = x) !== null)` —
+  // narrows its TARGET: tsc's reference for the condition is the assigned
+  // name, holding the assigned value. `narrowing_key_for_expr` has no
+  // `AssignExpr` arm, so the condition narrowed nothing and the body read
+  // `m` as still possibly `null`, which is a report on the commonest
+  // regex-loop spelling there is. The assignment's own type is applied in
+  // a scratch env and pushed first, so the narrowing of the name pushed
+  // after it wins per key.
+  let assign_rewrite = match cond {
+    AssignExpr(n, v) => Some((n, v, @ast.TsExpr::Var(n)))
+    BinOp(op, AssignExpr(n, v), r) if !(op is (And | Or)) =>
+      Some((n, v, @ast.TsExpr::BinOp(op, Var(n), r)))
+    _ => None
+  }
+  match assign_rewrite {
+    Some((n, v, rewritten)) => {
+      let assigned = infer_expr(env, resolver, v)
+      if is_checkable(assigned) && env.lookup(n) is Some(_) {
+        let snap = env.full_snapshot()
+        env.narrow(n, assigned)
+        then_binds.push((n, assigned))
+        else_binds.push((n, assigned))
+        collect_narrowing(
+          env, resolver, rewritten, then_binds, else_binds, then_sense,
+        )
+        // tsc narrows the assigned VALUE's reference by the same test
+        // (`narrowTypeByTruthiness(narrowType(type, expr.right), …)`):
+        // after `(z = x)` is falsy, so is `x`.
+        if rewritten is Var(_) && v is Var(_) {
+          collect_narrowing(env, resolver, v, then_binds, else_binds, then_sense)
+        }
+        env.restore_from(snap)
+      }
+      return
+    }
+    None => ()
+  }
   match cond {
     BinOp(And, l, r) =>
       if then_sense {
@@ -21846,8 +22054,16 @@ fn collect_narrowing(
         let cur = narrowing_current_type(env, resolver, key)
         // A truthy `unknown` is `{}` (TS 4.8), which is what lets a later
         // `typeof x === "object"` see an `object` rather than `object | null`.
+        // The boolean refinements bind a LITERAL type, and binding a name
+        // this env does not yet hold makes the narrowed type its declared
+        // one — a module-level `let done = false` read inside a function
+        // then rejected `done = true` ("expected `false`"). So only a name
+        // the env already declares is refined.
+        let refine_bool = env.lookup_declared(key) is Some(_)
         let truthy = if cur is Unknown {
           @ast.TsType::Object([])
+        } else if refine_bool {
+          boolean_truthiness(non_nullable(cur), true)
         } else {
           non_nullable(cur)
         }
@@ -21855,6 +22071,21 @@ fn collect_narrowing(
           then_binds.push((key, truthy))
         } else {
           else_binds.push((key, truthy))
+        }
+        // The FALSY side, for the boolean members only: `boolean` is
+        // `true | false`, so a falsy test leaves `false` and drops a
+        // `true` literal. Every other member is kept as it was — a falsy
+        // `number` may be `0`, a falsy object type is impossible but
+        // deciding that needs every shape modelled — so this can only
+        // remove `true`.
+        match (if refine_bool { boolean_falsy_part(cur) } else { None }) {
+          Some(falsy) =>
+            if then_sense {
+              else_binds.push((key, falsy))
+            } else {
+              then_binds.push((key, falsy))
+            }
+          None => ()
         }
       }
       for g in guarded {
@@ -24206,6 +24437,30 @@ fn narrow_after_assignment(
     return
   }
   let new_ty = infer_expr(env, ctx.resolver, value)
+  // tsc's `getAssignmentReducedType`: a UNION declaration of object shapes
+  // narrows to the members the assigned value is assignable to, not to the
+  // value's own type. After `a1 = { a: 1 }` on a normalized
+  // `{ a: number; b?: undefined } | { a: number; b: string }`, `a1.b` is
+  // `undefined`; narrowing to the literal's `{ a: number }` made `.b` an
+  // unknown property.
+  if value is ObjectLit(_) && is_checkable(new_ty) {
+    match env.lookup_declared(name) {
+      Some(d) =>
+        match ctx.resolver.unwrap(d) {
+          Union(ms) if ms.iter().all(fn(m) { m is (Object(_) | Struct(_, _)) }) => {
+            let kept = ms.filter(fn(m) {
+              object_literal_fits_member(new_ty, m)
+            })
+            if kept.length() > 0 {
+              env.narrow(name, union_of(kept))
+              return
+            }
+          }
+          _ => ()
+        }
+      None => ()
+    }
+  }
   if is_checkable(new_ty) {
     env.narrow(name, new_ty)
     return
@@ -26780,6 +27035,17 @@ fn check_call_args_in_expr(
                   // reported for a long time and the call spelling was not.
                   Unknown =>
                     record(ctx, "call `\{meth}`", "object is of type `unknown`")
+                  // TS2339: `never` has no members. Only for a NAME whose
+                  // flow narrowing reached `never` — the case tsc reports
+                  // (`(y = x) && x.toString()` once `x` is `false` and the
+                  // truthy side removes it) — so a `never` this checker
+                  // produced some other way is not judged here.
+                  Never if receiver is Var(_) =>
+                    record(
+                      ctx,
+                      "call `\{meth}`",
+                      "property `\{meth}` does not exist on type `never`",
+                    )
                   // Table-modeled lib surfaces (`Error` / `Date`) decide
                   // even though the Named ref is unresolved
                   // (narrowFromAnyWithInstanceof's `d.getHuors()`).
