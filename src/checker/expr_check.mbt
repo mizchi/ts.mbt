@@ -1864,7 +1864,7 @@ fn Resolver::ingest_module(
     r.globals[prefix + v.name] = v.type_
   }
   for name, sig in module_.raw_generic_signatures {
-    if sig is Func(_, _) {
+    if sig is (Func(_, _) | GenericFunc(_, _, _)) {
       r.globals["@raw-sig:" + prefix + name] = sig
     }
   }
@@ -6798,6 +6798,8 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 /// exit.
 fn ExprEnv::forget_freshness(self : ExprEnv, name : String) -> Unit {
   let _ = self.vars.remove("<fresh>" + name)
+  // The same holds for the `<exact>` marker of `bind_object_pattern`.
+  let _ = self.vars.remove("<exact>" + name)
 }
 
 ///|
@@ -11116,6 +11118,10 @@ fn infer_expr_inner(
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
       match resolver.lookup_method_sig(pruned_recv, meth) {
+        Some((_, Any)) if nested_function_method_return(
+            env, resolver, pruned_recv, meth, args,
+          )
+          is Some(t) => t
         Some((params, ret)) => {
           // A generic METHOD's type parameters are solved from the
           // arguments exactly as a generic FUNCTION's are in the `Call`
@@ -11459,6 +11465,13 @@ fn infer_expr_inner(
           Some(s) => @ast.TsType::Literal(s)
           None => @ast.TsType::String_
         }
+      }
+    // `x as const` (kept only by a checking parse): the const-context
+    // type of `x` — see `const_context_type`.
+    As(inner, Named("const")) =>
+      match const_context_type(env, resolver, inner) {
+        Some(t) => t
+        None => infer_expr(env, resolver, inner)
       }
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.
@@ -12487,6 +12500,213 @@ fn instantiate_raw_generic_params(
     }
   }
   Some(out)
+}
+
+///|
+/// What a call to an UNANNOTATED generic class method returns when the
+/// method's body ends by returning a function it declares itself —
+/// `foo<U extends T>(x: U) { function bar<V extends U>(x: V) { … } return
+/// bar }` — which is a factory's shape, and `any` before this existed.
+///
+/// The parser inlines every bounded type parameter to its bound, so in the
+/// AST `bar`'s parameter is `T` and the call `c.foo("")` could only ever
+/// answer `(x: { length: number }) => …`. The un-inlined headers
+/// (`<method>C#foo`, `<nested>C#foo/bar`) still say `U` and `V extends U`,
+/// so the method's binders are solved from the call — `U = string` — and
+/// substituted into the returned function's BOUNDS before those are
+/// inlined the way the parser inlines a declared generic function's. The
+/// result is `<V extends string>(x: string) => …`, which is tsc's answer
+/// (wrappedAndRecursiveConstraints4).
+///
+/// Every condition abstains to `None` (the old `any`): an overloaded or
+/// static method, an annotated return, a body with any other `return`, a
+/// statement this cannot walk for returns, or a binder the call leaves
+/// unsolved.
+fn nested_function_method_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsType? {
+  let cls = match recv {
+    Named(n) | Applied(n, _) => n
+    _ => return None
+  }
+  guard resolver.classes.get(cls) is Some(decl) else { return None }
+  let (prefix, base) = match cls.rev_find(".") {
+    Some(i) => (cls[:i + 1].to_owned(), cls[i + 1:].to_owned())
+    None => ("", cls)
+  }
+  guard resolver.globals.get(
+      "@raw-sig:" + prefix + "<method>" + base + "#" + meth,
+    )
+    is Some(GenericFunc(mtps, _, Func(mparams, Named("<no-annotation>")))) else {
+    return None
+  }
+  let same_name = decl.methods.filter(fn(m) { m.name == meth })
+  guard same_name is [m] && !m.is_static && m.body is Some(body) else {
+    return None
+  }
+  guard body.stmts.last() is Some(Return(Some(Var(fname)))) else { return None }
+  guard stmts_return_count(body.stmts) is Some(1) else { return None }
+  let declared_here = body.stmts
+    .iter()
+    .any(fn(st) {
+      match st {
+        Let(Ident(n), _, FuncExpr(f)) => n == fname && f.name == fname
+        _ => false
+      }
+    })
+  if !declared_here {
+    return None
+  }
+  guard resolver.globals.get(
+      "@raw-sig:" + prefix + "<nested>" + base + "#" + meth + "/" + fname,
+    )
+    is Some(GenericFunc(ntps, nbounds, Func(nparams, nret))) else {
+    return None
+  }
+  let raw_ret = @ast.TsType::GenericFunc(ntps, nbounds, Func(nparams, nret))
+  let bindings = widen_fresh_literal_bindings(
+    env,
+    resolver,
+    solve_generic_bindings(env, resolver, mtps, mparams, args, None),
+    mtps,
+    None,
+    mparams,
+    args,
+    raw_ret,
+  )
+  // A binding substituted into a BOUND becomes a parameter type every call
+  // of the result is judged against, so it has to be one this checker
+  // infers exactly. A function-valued member is not: `(x: number) => { '' }`
+  // infers here as returning `undefined` where tsc says `void`, and
+  // `wrappedAndRecursiveConstraints3` — this file's legal neighbour, which
+  // binds `U` to `{ length: number; charAt: … }` — then rejected
+  // `r('')`, whose `string` does satisfy that shape. Scalars and objects
+  // made of them are exact.
+  fn exact_shape(t : @ast.TsType) -> Bool {
+    match t {
+      Array(inner) => exact_shape(inner)
+      Tuple(items) => items.iter().all(exact_shape)
+      Union(ms) => ms.length() > 0 && ms.iter().all(exact_shape)
+      Object(fields) => fields.iter().all(fn(f) { exact_shape(f.1) })
+      _ => is_primitive_shaped(t)
+    }
+  }
+  // `type_param_occurs` does not look inside a `GenericFunc`'s BOUNDS, and
+  // a bound is exactly where `U` lives in `<V extends U>(x: V) => …`.
+  for tp in mtps {
+    if type_param_occurs(tp, raw_ret) ||
+      nbounds.iter().any(fn(b) { type_param_occurs(tp, b.1) }) {
+      match bindings.get(tp) {
+        Some(b) if is_checkable(b) && !(b is Any) && exact_shape(b) => ()
+        _ => return None
+      }
+    }
+  }
+  let bounds_out = nbounds.map(fn(b) { (b.0, substitute_params(b.1, bindings)) })
+  let inline : Map[String, @ast.TsType] = Map([])
+  for b in bounds_out {
+    inline[b.0] = b.1
+  }
+  let params_out = nparams.map(fn(p) {
+    substitute_params(substitute_params(p, bindings), inline)
+  })
+  let ret_out = match nret {
+    Named("<no-annotation>") => @ast.TsType::Any
+    r => substitute_params(substitute_params(r, bindings), inline)
+  }
+  if ntps.length() == 0 {
+    Some(Func(params_out, ret_out))
+  } else {
+    Some(GenericFunc(ntps, bounds_out, Func(params_out, ret_out)))
+  }
+}
+
+///|
+/// How many `return` statements `stmts` holds, not counting those inside a
+/// nested function (an expression, which this never enters). `None` for a
+/// statement whose nested statements this does not walk, so a caller that
+/// needs the count to be exact abstains instead of under-counting.
+fn stmts_return_count(stmts : Array[@ast.TsStmt]) -> Int32? {
+  let mut n = 0
+  for st in stmts {
+    let k = match st {
+      Return(_) => Some(1)
+      If(_, t, e) =>
+        match (stmts_return_count(t.stmts), e) {
+          (Some(a), None) => Some(a)
+          (Some(a), Some(b)) =>
+            match stmts_return_count(b.stmts) {
+              Some(c) => Some(a + c)
+              None => None
+            }
+          _ => None
+        }
+      While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+        stmts_return_count(b.stmts)
+      For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => stmts_return_count(b.stmts)
+      Label(_, inner) => stmts_return_count([inner])
+      Try(t, _, c, f) => {
+        let mut total = 0
+        let mut ok = true
+        for blk in [Some(t), c, f] {
+          match blk {
+            Some(bb) =>
+              match stmts_return_count(bb.stmts) {
+                Some(x) => total += x
+                None => ok = false
+              }
+            None => ()
+          }
+        }
+        if ok {
+          Some(total)
+        } else {
+          None
+        }
+      }
+      Switch(_, cases) => {
+        let mut total = 0
+        let mut ok = true
+        for c in cases {
+          match stmts_return_count(c.body.stmts) {
+            Some(x) => total += x
+            None => ok = false
+          }
+        }
+        if ok {
+          Some(total)
+        } else {
+          None
+        }
+      }
+      Var(_, _, _)
+      | Let(_, _, _)
+      | Const(_, _, _)
+      | Assign(_, _)
+      | CompoundAssign(_, _, _)
+      | IndexAssign(_, _, _)
+      | PropAssign(_, _, _)
+      | Expr(_)
+      | Empty
+      | Throw(_)
+      | Debugger
+      | NativeClassStmt(_, _)
+      | Break(_)
+      | Continue(_) => Some(0)
+    }
+    match k {
+      Some(x) => n += x
+      None => return None
+    }
+  }
+  Some(n)
 }
 
 ///|
@@ -15663,8 +15883,20 @@ fn check_expr_against(
   // `expected "foo" but got "foo" | "bar"`), TypeScript has narrowed the source
   // to a compatible value at this point. We don't model flow narrowing, so the
   // source still looks like its full declared union — stay silent.
+  //
+  // Except for a binding whose type is known EXACT (`<exact>NAME`, written
+  // where a computed key selected it from a const-asserted tuple) and is
+  // still that type: nothing narrowed it, so there is no residue to hide.
+  let exact_source = match expr {
+    Var(n) =>
+      match (env.lookup("<exact>" + n), env.lookup(n)) {
+        (Some(a), Some(b)) => a == b
+        _ => false
+      }
+    _ => false
+  }
   match (literal_union_members(expected_u), literal_union_members(inferred_u)) {
-    (Some(exp_lits), Some(inf_lits)) =>
+    (Some(exp_lits), Some(inf_lits)) if !exact_source =>
       if exp_lits.iter().all(fn(e) { inf_lits.iter().any(fn(i) { i == e }) }) {
         return
       }
@@ -15955,7 +16187,8 @@ fn check_expr_against(
     // a guard that narrows one side; absent flow tracking we still see
     // both as unions and the diagnostic is almost always wrong. Stay
     // silent rather than emit a false mismatch.
-    (Union(_), Union(_)) => return
+    // A source known EXACT (`exact_source` above) is not that residue.
+    (Union(_), Union(_)) if !exact_source => return
     // A union target with a generic `Applied` member (`Generator<...> |
     // AsyncGenerator<...>`) carries inference we don't track — the generator
     // `return`/`yield` contributes to a type argument, not the whole union.
@@ -16083,7 +16316,28 @@ fn check_expr_against(
     // the context a single-target assignment — never a call argument
     // (`… arg[i]`), where overload / specialized-signature resolution can
     // legitimately accept a literal that the checked signature rejects.
-    let precise_literal_mismatch = precise_literal_type(expr) is Some(_) &&
+    // A source that is a UNION OF LITERALS is not a widening residue
+    // either: erasure turns a literal into its primitive (`number`), never
+    // into a union of literals, so `0 | 9` can only come from an annotation
+    // or from narrowing — and `declare const b: 0 | 9; const bb: 9 = b` is
+    // TS2322 that widening the display to `number` had hidden.
+    let literal_union_source = match inferred_u {
+      Union(ms) =>
+        ms.length() > 1 &&
+        ms
+        .iter()
+        .all(fn(m) {
+          m
+          is (NumberLiteral(_)
+          | Literal(_)
+          | BooleanLiteral(_)
+          | BigIntLiteral(_))
+        })
+      _ => false
+    }
+    let precise_literal_mismatch = (
+        precise_literal_type(expr) is Some(_) || literal_union_source
+      ) &&
       literal_union_members(expected_u) is Some(_) &&
       !sub_path.contains("arg[")
     let shown = if precise_literal_mismatch {
@@ -17120,6 +17374,47 @@ fn is_fresh_literal_expr(e : @ast.TsExpr) -> Bool {
   match e {
     TemplateLiteral(_, _) => true
     _ => precise_literal_type(e) is Some(_)
+  }
+}
+
+///|
+/// The type of `e` in a CONST CONTEXT (`e as const`), for the shapes this
+/// can type exactly: a literal is its literal type, an array literal a
+/// tuple of its elements' const types (readonly is not modelled, which
+/// only ever accepts more), an assignment the const type of its right-hand
+/// side, and a nested `as const` the same again. `None` for anything else
+/// containing an array or object literal — an object literal, a spread —
+/// so the caller keeps the old answer rather than a half-const one. Other
+/// expressions keep their ordinary type, which is what a const context
+/// does to a reference: `[9, a] as const` with `a: 0` is `readonly [9, 0]`.
+fn const_context_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  e : @ast.TsExpr,
+) -> @ast.TsType? {
+  match precise_literal_type(e) {
+    Some(t) => return Some(t)
+    None => ()
+  }
+  match e {
+    ArrayLit(elems) => {
+      let items : Array[@ast.TsType] = []
+      for el in elems {
+        match el {
+          Spread(_) => return None
+          _ =>
+            match const_context_type(env, resolver, el) {
+              Some(t) => items.push(t)
+              None => return None
+            }
+        }
+      }
+      Some(Tuple(items))
+    }
+    AssignExpr(_, v) | As(v, Named("const")) =>
+      const_context_type(env, resolver, v)
+    ObjectLit(_) | Spread(_) | TemplateLiteral(_, _) => None
+    _ => Some(infer_expr(env, resolver, e))
   }
 }
 
@@ -21127,7 +21422,16 @@ fn loop_backedge_bindings(
     }
     guard env.lookup(name) is Some(cur) else { continue }
     guard env.lookup_declared(name) is Some(decl) else { continue }
-    let rhs_ty = widen_literal(infer_expr(env, ctx.resolver, rhs))
+    // A literal assigned into a declared LITERAL union keeps its literal
+    // type — that is what assignment narrowing gives it, and widening it
+    // first made `x = "b"` read as `string`, which the declared-type cap
+    // below then threw away, so `x` stayed `"a"` at the loop head and
+    // `while (c) { if (x === "b") break; x = "b" }` reported TS2367 on a
+    // loop tsc accepts.
+    let rhs_ty = match precise_literal_type(rhs) {
+      Some(l) if is_checkable(decl) && is_assignable_to(l, decl) => l
+      _ => widen_literal(infer_expr(env, ctx.resolver, rhs))
+    }
     if rhs_ty is Any || !is_checkable(rhs_ty) {
       continue
     }
@@ -21152,8 +21456,14 @@ fn loop_backedge_bindings(
 
 ///|
 /// Collect `x = rhs` assignments in the statement tree (not descending into
-/// nested functions / classes). Returns `false` — meaning "bail, don't
-/// widen" — when the body contains `break` / `continue` / `switch`.
+/// nested functions / classes). `break`, `continue` and `switch` used to
+/// make it answer `false` — "bail, don't widen" — which is the unsound
+/// direction for a back-edge JOIN: declining to widen keeps the entry
+/// narrowing at the loop head, so every loop that both exits early and
+/// reassigns a narrowed variable reported its comparisons as having no
+/// overlap. An assignment before a `break` does not reach the head, so
+/// counting it over-approximates the head's type by that assignment's
+/// type, which is the affordable direction. `switch` cases are walked.
 fn collect_loop_assignments(
   b : @ast.TsBlock,
   out : Array[(String, @ast.TsExpr)],
@@ -21172,7 +21482,15 @@ fn collect_loop_assignments_stmt(
   out : Array[(String, @ast.TsExpr)],
 ) -> Bool {
   match st {
-    Break(_) | Continue(_) | Switch(_, _) => false
+    Break(_) | Continue(_) => true
+    Switch(_, cases) => {
+      for c in cases {
+        if !collect_loop_assignments(c.body, out) {
+          return false
+        }
+      }
+      true
+    }
     Assign(name, rhs) => {
       out.push((name, rhs))
       true
@@ -21470,6 +21788,26 @@ fn apply_binding_default(
 ) -> @ast.TsType {
   match default {
     None => ty
+    // A CONST-ASSERTED default is typed exactly, and its type is what tsc
+    // unions in whatever the element is — `(element minus undefined) |
+    // default`, with no widening, since a const context is not a fresh
+    // literal (probed: `const [x = "d"] = ["s"] as const` gives
+    // `"d" | "s"`). The general arm below keeps the old approximation for
+    // every other default, whose inferred type is not exact enough to
+    // widen a binding by.
+    Some(As(_, Named("const")) as d) => {
+      let default_ty = infer_expr(env, ctx.resolver, d)
+      let kept : Array[@ast.TsType] = []
+      for m in union_components(ty) {
+        if !(m is (Undefined | Any)) && !kept.contains(m) {
+          kept.push(m)
+        }
+      }
+      if !kept.contains(default_ty) {
+        kept.push(default_ty)
+      }
+      union_of(kept)
+    }
     Some(d) => {
       let default_ty = widen_literal(infer_expr(env, ctx.resolver, d))
       match ty {
@@ -21494,6 +21832,86 @@ fn apply_binding_default(
         _ => ty
       }
     }
+  }
+}
+
+///|
+/// Join each `name = rhs` that `e` performs (outside any nested function)
+/// into `name`'s current narrowing: the expression is one that may or may
+/// not run, so afterwards the binding is either what it was or what was
+/// assigned. A literal right-hand side keeps its literal type when the
+/// declared type admits it — assignment narrowing — and anything this
+/// cannot type joins in the declared type, which only widens.
+fn join_conditional_assignments(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  e : @ast.TsExpr,
+) -> Unit {
+  let found : Array[(String, @ast.TsExpr)] = []
+  fn walk(x : @ast.TsExpr, out : Array[(String, @ast.TsExpr)]) -> Unit {
+    match x {
+      AssignExpr(n, v) => {
+        walk(v, out)
+        out.push((n, v))
+      }
+      ArrayLit(items) =>
+        for it in items {
+          walk(it, out)
+        }
+      ObjectLit(entries) =>
+        for en in entries {
+          walk(en.1, out)
+        }
+      BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) => {
+        walk(a, out)
+        walk(b, out)
+      }
+      Cond(c, a, b) => {
+        walk(c, out)
+        walk(a, out)
+        walk(b, out)
+      }
+      UnaryOp(_, a)
+      | Spread(a)
+      | As(a, _)
+      | Satisfies(a, _)
+      | NonNull(a)
+      | PropAccess(a, _)
+      | PureCall(a)
+      | Await(a) => walk(a, out)
+      Call(_, args) | New(_, args) =>
+        for a in args {
+          walk(a, out)
+        }
+      CallExpr(f, args) | NewExpr(f, args) | MethodCall(f, _, args) => {
+        walk(f, out)
+        for a in args {
+          walk(a, out)
+        }
+      }
+      _ => ()
+    }
+  }
+  walk(e, found)
+  for pair in found {
+    let (name, rhs) = pair
+    guard env.lookup(name) is Some(cur) else { continue }
+    let declared = match env.lookup_declared(name) {
+      Some(d) => d
+      None => cur
+    }
+    let assigned = match precise_literal_type(rhs) {
+      Some(l) if is_checkable(declared) && is_assignable_to(l, declared) => l
+      _ => {
+        let t = widen_literal(infer_expr(env, ctx.resolver, rhs))
+        if is_checkable(declared) && is_assignable_to(t, declared) {
+          t
+        } else {
+          declared
+        }
+      }
+    }
+    env.narrow(name, union_of(simplify_union([cur, assigned])))
   }
 }
 
@@ -21540,6 +21958,15 @@ fn bind_array_pattern(
           _ => @ast.TsType::Undefined
         }
         let elem_ty = apply_binding_default(env, ctx, elem_ty, elem.default)
+        // The default runs BEFORE the nested pattern's computed keys and
+        // only when the element is `undefined`, so a binding it assigns
+        // reaches those keys — and the code after — as the join of its
+        // old type and the assigned one (controlFlowBindingPatternOrder:
+        // `[{ [a]: b } = [9, a = 0] as const]` reads `a` as `0 | 1`).
+        match elem.default {
+          Some(d) => join_conditional_assignments(env, ctx, d)
+          None => ()
+        }
         bind_pattern(env, ctx, elem.binding, elem_ty)
       }
       None => ()
@@ -21631,6 +22058,53 @@ fn check_object_pattern_over_array(
 }
 
 ///|
+/// The element type a COMPUTED key selects from a tuple source — `const
+/// [{ [a]: b } = [9, 0] as const] = []` with `a: 0 | 1` binds `b` to
+/// `9 | 0`. Decided only when every source member is a tuple and every key
+/// the expression can produce is an in-range integer literal: the key is a
+/// literal, an assignment of one (`[(a = 1)]`), or a binding whose current
+/// type is a union of such literals. `None` otherwise, and the caller keeps
+/// its name-based lookup.
+fn computed_key_tuple_element(
+  env : ExprEnv,
+  resolver : Resolver,
+  source : @ast.TsType,
+  key : @ast.TsExpr,
+) -> @ast.TsType? {
+  let key_ty = match key {
+    AssignExpr(_, v) => precise_literal_type(v)
+    Var(n) => env.lookup(n)
+    _ => precise_literal_type(key)
+  }
+  guard key_ty is Some(kt) else { return None }
+  let indices : Array[Int32] = []
+  for k in union_components(kt) {
+    guard k is NumberLiteral(text) else { return None }
+    let i = @string.parse_int(text) catch { _ => return None }
+    if i < 0 {
+      return None
+    }
+    indices.push(i)
+  }
+  if indices.length() == 0 {
+    return None
+  }
+  let out : Array[@ast.TsType] = []
+  for m in union_components(resolver.unwrap(source)) {
+    guard m is Tuple(items) else { return None }
+    for i in indices {
+      if i >= items.length() {
+        return None
+      }
+      if !out.contains(items[i]) {
+        out.push(items[i])
+      }
+    }
+  }
+  Some(union_of(out))
+}
+
+///|
 fn bind_object_pattern(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -21656,63 +22130,78 @@ fn bind_object_pattern(
         )
       _ => ()
     }
-    let field_ty = match ctx.resolver.lookup_field(source, prop.key) {
+    let computed_ty = match prop.key_expr {
+      Some(k) => computed_key_tuple_element(env, ctx.resolver, source, k)
+      None => None
+    }
+    let field_ty = match computed_ty {
       Some(t) => t
       None =>
-        // Union receiver: distribute field lookup across each member and
-        // union the results so `{ kind } = (A | B)` gives "a" | "b" when
-        // every member declares `kind`.
-        match ctx.resolver.unwrap(source) {
-          Union(parts) => {
-            let member_types : Array[@ast.TsType] = []
-            let mut all_found = true
-            for part in parts {
-              match ctx.resolver.lookup_field(part, prop.key) {
-                Some(t) => member_types.push(t)
-                None => all_found = false
+        match ctx.resolver.lookup_field(source, prop.key) {
+          Some(t) => t
+          None =>
+            // Union receiver: distribute field lookup across each member and
+            // union the results so `{ kind } = (A | B)` gives "a" | "b" when
+            // every member declares `kind`.
+            match ctx.resolver.unwrap(source) {
+              Union(parts) => {
+                let member_types : Array[@ast.TsType] = []
+                let mut all_found = true
+                for part in parts {
+                  match ctx.resolver.lookup_field(part, prop.key) {
+                    Some(t) => member_types.push(t)
+                    None => all_found = false
+                  }
+                }
+                if member_types.length() == 0 {
+                  @ast.TsType::Any
+                } else if member_types.length() == 1 {
+                  if all_found {
+                    member_types[0]
+                  } else {
+                    narrow_union(member_types[0], @ast.TsType::Undefined)
+                  }
+                } else {
+                  let acc = member_types[0]
+                  let mut u = acc
+                  let mut i = 1
+                  while i < member_types.length() {
+                    u = narrow_union(u, member_types[i])
+                    i = i + 1
+                  }
+                  if all_found {
+                    u
+                  } else {
+                    narrow_union(u, @ast.TsType::Undefined)
+                  }
+                }
               }
-            }
-            if member_types.length() == 0 {
-              @ast.TsType::Any
-            } else if member_types.length() == 1 {
-              if all_found {
-                member_types[0]
-              } else {
-                narrow_union(member_types[0], @ast.TsType::Undefined)
-              }
-            } else {
-              let acc = member_types[0]
-              let mut u = acc
-              let mut i = 1
-              while i < member_types.length() {
-                u = narrow_union(u, member_types[i])
-                i = i + 1
-              }
-              if all_found {
-                u
-              } else {
-                narrow_union(u, @ast.TsType::Undefined)
-              }
-            }
-          }
-          // Non-union source with no matching field: the property is absent,
-          // which in JS evaluates to `undefined` at runtime — but only a
-          // shape whose members are ENUMERABLE can say "absent". A mapped
-          // type over a generic, an unresolved alias or an applied generic
-          // read as `undefined` too, so effect's `toCode: ({ typeParameters
-          // }) => typeParameters[0]` against a contextual type it could not
-          // expand reported "cannot index into `undefined`" nineteen times.
-          // The array-pattern fallback makes the same split.
-          _ =>
-            if ctx.resolver.enumerable_object_shape(source, 0) {
-              @ast.TsType::Undefined
-            } else {
-              @ast.TsType::Any
+              // Non-union source with no matching field: the property is absent,
+              // which in JS evaluates to `undefined` at runtime — but only a
+              // shape whose members are ENUMERABLE can say "absent". A mapped
+              // type over a generic, an unresolved alias or an applied generic
+              // read as `undefined` too, so effect's `toCode: ({ typeParameters
+              // }) => typeParameters[0]` against a contextual type it could not
+              // expand reported "cannot index into `undefined`" nineteen times.
+              // The array-pattern fallback makes the same split.
+              _ =>
+                if ctx.resolver.enumerable_object_shape(source, 0) {
+                  @ast.TsType::Undefined
+                } else {
+                  @ast.TsType::Any
+                }
             }
         }
     }
     let field_ty = apply_binding_default(env, ctx, field_ty, prop.default)
     bind_pattern(env, ctx, prop.binding, field_ty)
+    // A type a computed key selected from a const-asserted tuple is exact
+    // (see `check_expr_against`'s flow-residue suppression), as long as no
+    // default widened it.
+    match (computed_ty, prop.default, prop.binding) {
+      (Some(_), None, Ident(n)) => env.bind("<exact>" + n, field_ty)
+      _ => ()
+    }
   }
   // Rest pattern `{ a, b, ...rest }`: `rest` takes an object type with the
   // source's remaining (non-destructured) fields. Mirror the object-spread
@@ -24607,6 +25096,20 @@ fn check_ident_binding_decl(
   // when not, we leave declared as the inferred-from-init type
   // since that's what TS widens to anyway.
   env.declare_type(name, bound_type)
+  // Declared-type narrowing on initialization: `let a: 0 | 1 = 0` makes `a`
+  // `0` until something assigns it, exactly as `a = 0` would, while the
+  // declared slot stays the union every later assignment is checked
+  // against. Only a LITERAL initializer into a declared UNION narrows —
+  // that is where the literal is decidable and where tsc narrows — and the
+  // loop back-edge join is what keeps a reassignment inside a loop from
+  // being read as never happening.
+  if mutable_ && declared is Union(_) {
+    match precise_literal_type(init) {
+      Some(l) if is_assignable_to(l, declared) && l != declared =>
+        env.narrow(name, l)
+      _ => ()
+    }
+  }
   if !mutable_ && block_scoped {
     record_aliased_condition(env, ctx.resolver, name, init)
   }
@@ -25802,9 +26305,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       record_function_as_condition(env, ctx, cond)
       // `do { … } while (cond)`: the body runs once *before* the condition is
       // ever evaluated, so the condition's narrowing must NOT apply to it.
-      // (Back-edge widening is deliberately not applied here: this arm's
-      // in-body rebinds intentionally leak past the loop, and a snapshot /
-      // restore to contain a widened binding would change that.)
+      // The back-edge join is applied with no snapshot around it: this
+      // arm's in-body rebinds intentionally leak past the loop, and the
+      // widened entry binding is re-narrowed by any assignment the body
+      // makes, so what leaks is what the body last assigned — or the join,
+      // when a path through the body assigns nothing, which is what
+      // reaches the code after the loop on that path too.
+      for wb in loop_backedge_bindings(env, ctx, cond, body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       check_call_args_in_expr(env, cond, ctx)
     }
@@ -25813,6 +26322,19 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       match init {
         Some(s) => check_stmt(env, s, ctx)
         None => ()
+      }
+      // Loop back-edge join, as for `while`, over the body AND the update,
+      // which both run before the condition is read again.
+      let backedge_body : @ast.TsBlock = match update {
+        Some(u) => { stmts: [..body.stmts, u], stmt_positions: [], }
+        None => body
+      }
+      let backedge_cond = match cond {
+        Some(e) => e
+        None => BoolLit(true)
+      }
+      for wb in loop_backedge_bindings(env, ctx, backedge_cond, backedge_body) {
+        env.bind(wb.0, wb.1)
       }
       match cond {
         Some(e) => check_call_args_in_expr(env, e, ctx)
@@ -26005,6 +26527,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
         _ => bind_pattern(env, ctx, binding, elem_ty)
       }
+      // Loop back-edge join, as for `while`: a binding the body
+      // reassigns reaches the next iteration with the union of its entry
+      // type and the assigned types.
+      for wb in loop_backedge_bindings(env, ctx, BoolLit(true), body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       env.restore_from(pre)
       // TS2454: a `var` bound by the head is only assigned if the loop
@@ -26072,6 +26600,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let pre = env.full_snapshot()
       clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, elem_ty)
+      // Loop back-edge join, as for `while`: a binding the body
+      // reassigns reaches the next iteration with the union of its entry
+      // type and the assigned types.
+      for wb in loop_backedge_bindings(env, ctx, BoolLit(true), body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
@@ -26119,6 +26653,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // (`for (k in obj) ...`) shouldn't trip use-before-assign.
       clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, key_ty)
+      // Loop back-edge join, as for `while`: a binding the body
+      // reassigns reaches the next iteration with the union of its entry
+      // type and the assigned types.
+      for wb in loop_backedge_bindings(env, ctx, BoolLit(true), body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
@@ -27478,6 +28018,37 @@ fn check_call_args_in_expr(
               sig is Some(_),
           )
         }
+        // A GENERIC callable VALUE had no arm here, so its arguments were
+        // judged by nothing — not even a position whose parameter type
+        // mentions no binder at all, which is what a bounded binder
+        // becomes once inlined to its bound (`<V extends string>(x: string)
+        // => …`, the shape `nested_function_method_return` builds). Only
+        // those positions are judged. One that mentions a binder is
+        // skipped even after solving it from the call: the solved binding
+        // re-checks the argument against a type derived from the argument,
+        // and measured on effect that only ever adds noise — `failCause(
+        // this._interruptedCause)` read the field's declared `| undefined`
+        // because this checker does not narrow through a `this.x = …`
+        // write, and reported it against `Cause<E>` with `E` solved.
+        GenericFunc(names, _, Func(params, _))
+        | GenericFunc(names, _, CallableMeta(Func(params, _), _)) if !args
+          .iter()
+          .any(fn(a) { a is Spread(_) }) =>
+          for i, a in args {
+            if i >= params.length() || params[i] is Rest(_) {
+              break
+            }
+            if is_checkable(params[i]) &&
+              !names.iter().any(fn(n) { type_param_occurs(n, params[i]) }) {
+              check_expr_against(
+                env,
+                a,
+                params[i],
+                ctx,
+                "call `\{name}` arg[\{i}]",
+              )
+            }
+          }
         other =>
           // A union callee whose members share one identical call signature
           // (`{ (a:number):X } | { (a:number):Y }`) is callable with those
@@ -29962,6 +30533,8 @@ fn check_call_args_in_expr(
     // New AST wrappers: recurse into the inner expression so call-site
     // checks inside `(call(badArg) as T)` / `call(badArg)!` / `obj?.m()`
     // still fire.
+    // A const assertion asserts no TYPE, so there is no cast to judge.
+    As(inner, Named("const")) => check_call_args_in_expr(env, inner, ctx)
     As(inner, asserted) => {
       check_call_args_in_expr(env, inner, ctx)
       // TS2300: an object type-literal in the asserted type (`<{a;a}>x`,

@@ -8342,3 +8342,28 @@ test "parser: TS2300 type parameter vs a local type in the same body (batch FH)"
     }
   }
 }
+
+///|
+test "parser: TS1354 `readonly` applies only to array and tuple type syntax" {
+  let msg = "'readonly' type modifier is only permitted on array and tuple literal types"
+  // `-1` when the source does not parse, which every assertion below fails.
+  fn count(src : String, msg : String) -> Int32 {
+    let m = Parser::from_source(src).parse_module() catch { _ => return -1 }
+    m.grammar_misuses.filter(fn(g) { g == msg }).length()
+  }
+  for
+    src in [
+      "type A = readonly string;", "type B<T> = readonly T;", "type C = readonly { a: 1 };",
+      "type D = readonly Array<string>;", "type E = readonly (string[]);", "type F = readonly readonly string[];",
+    ] {
+    assert_eq(count(src, msg), 1, msg=src)
+  }
+  for
+    src in [
+      "type A = readonly string[];", "type B = readonly [number, number];", "type C = readonly string[][];",
+      "type D = readonly Array<string>[];", "type E<T> = readonly T[];", "type F = readonly [];",
+      "type G = readonly string[] | number;", "type H<K, V> = readonly (readonly [K, V])[];",
+    ] {
+    assert_eq(count(src, msg), 0, msg=src)
+  }
+}

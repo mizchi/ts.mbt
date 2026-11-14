@@ -581,3 +581,50 @@ test "check_module: dependent bound is evaluated against the concrete argument" 
   assert_eq(violations.length(), 1)
   assert_eq(violations[0].name, "Rel<K>")
 }
+
+///|
+test "check_module: a function-shaped utility rejects an argument with no call signature" {
+  for
+    arg in [
+      @ast.TsType::Named("Function"),
+      @ast.TsType::String_,
+      @ast.TsType::Unknown,
+      @ast.TsType::Literal("x"),
+    ] {
+    let m = empty_module_for_check()
+    m.type_aliases.push(
+      alias_for_check("T09", [], Applied("Parameters", [arg])),
+    )
+    let report = check_module(m)
+    assert_eq(
+      report.count_of_kind(TypeParameterConstraintViolation),
+      1,
+      msg="\{arg}",
+    )
+  }
+  // A function type, `any`, a forwarded type parameter and `typeof f`
+  // all abstain.
+  for
+    arg in [
+      @ast.TsType::Func([Number], Void),
+      @ast.TsType::Any,
+      @ast.TsType::Named("F"),
+      @ast.TsType::TypeOf("f"),
+    ] {
+    let m = empty_module_for_check()
+    m.type_aliases.push(alias_for_check("OK", [], Applied("ReturnType", [arg])))
+    let report = check_module(m)
+    assert_eq(
+      report.count_of_kind(TypeParameterConstraintViolation),
+      0,
+      msg="\{arg}",
+    )
+  }
+  // A file declaring its own `Function` means something else by it.
+  let m = empty_module_for_check()
+  m.type_aliases.push(alias_for_check("Function", [], Func([], Void)))
+  m.type_aliases.push(
+    alias_for_check("T09", [], Applied("Parameters", [Named("Function")])),
+  )
+  assert_eq(check_module(m).count_of_kind(TypeParameterConstraintViolation), 0)
+}

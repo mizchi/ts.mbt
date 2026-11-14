@@ -449,6 +449,28 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       alias_bounds[intrinsic] = [("S", @ast.TsType::String_)]
     }
   }
+  // The function-shaped utilities bound their parameter by a callable
+  // (`Parameters<T extends (...args: any) => any>`) or constructable type.
+  // The relation below cannot decide a callable bound, so these carry a
+  // sentinel bound read by `definitely_not_function_type`, which reports
+  // only an argument that can never be one — a primitive, a literal,
+  // `unknown`, or the lib `Function` / `Object` interfaces, which declare
+  // no call signature (`Parameters<Function>` is TS2344). Anything it
+  // cannot classify abstains.
+  for
+    util in [
+      "Parameters", "ReturnType", "ConstructorParameters", "InstanceType",
+    ] {
+    if user_declared_type_names.get(util) is None {
+      alias_params[util] = ["T"]
+      alias_bounds[util] = [("T", @ast.TsType::Named("<callable-bound>"))]
+    }
+  }
+  for lib_name in ["Function", "Object"] {
+    if user_declared_type_names.get(lib_name) is Some(_) {
+      alias_params["<user-declared:" + lib_name + ">"] = []
+    }
+  }
   let resolve = fn(name : String) -> @ast.TsType? {
     non_generic_alias_bodies.get(name)
   }
@@ -641,7 +663,9 @@ fn check_constraints(
                   // confirming with `is_assignable_to` (the actual constraint
                   // relation) removes that false positive while keeping genuine
                   // violations, where both agree.
-                  let violates = if unverifiable {
+                  let violates = if target is Named("<callable-bound>") {
+                    definitely_not_function_type(arg, alias_params)
+                  } else if unverifiable {
                     false
                   } else {
                     extends_decision_with(arg, target, resolve) is Some(false) &&
@@ -737,6 +761,37 @@ fn check_constraints(
       check_constraints(k, scope, alias_params, alias_bounds, resolve, issues)
     }
     _ => ()
+  }
+}
+
+///|
+/// An argument that can never satisfy a callable or constructable bound
+/// (the sentinel `<callable-bound>` of the function-shaped utilities). Only
+/// the shapes with no call signature by construction qualify; a union does
+/// when any member does, since the whole union must satisfy the bound.
+fn definitely_not_function_type(
+  t : @ast.TsType,
+  alias_params : Map[String, Array[String]],
+) -> Bool {
+  match t {
+    String_
+    | Number
+    | Boolean
+    | BigInt
+    | Symbol
+    | Null
+    | Undefined
+    | Void
+    | Unknown
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_)
+    | BigIntLiteral(_) => true
+    Named("Function" as n) | Named("Object" as n) =>
+      !alias_params.contains("<user-declared:" + n + ">")
+    Union(ms) =>
+      ms.iter().any(fn(m) { definitely_not_function_type(m, alias_params) })
+    _ => false
   }
 }
 

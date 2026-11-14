@@ -804,3 +804,99 @@ test "review: template infer patterns the matcher cannot decide stay unreduced" 
   }
   assert_true(eff_has(issues, "badPropertyType"), msg="badPropertyType")
 }
+
+///|
+test "a generic method returning a function it declares is typed from the call" {
+  let src =
+    #|class C<T extends { length: number }> {
+    #|  constructor(x: T) { }
+    #|  foo<U extends T>(x: U) {
+    #|    function bar<V extends U>(x: V) { return x; }
+    #|    return bar;
+    #|  }
+    #|  annotated<U extends T>(x: U): any {
+    #|    function bar<V extends U>(x: V) { return x; }
+    #|    return bar;
+    #|  }
+    #|  twoReturns<U extends T>(x: U, b: boolean) {
+    #|    function bar<V extends U>(x: V) { return x; }
+    #|    if (b) { return (y: number) => y; }
+    #|    return bar;
+    #|  }
+    #|}
+    #|function badFactoryBound() { const c = new C({ length: 2 }); const r = c.foo(""); r({ length: 3 }); }
+    #|function okFactoryString() { const c = new C({ length: 2 }); const r = c.foo(""); r("abc"); }
+    #|function okFactoryObjectBound() { const c = new C({ length: 2 }); const r = c.foo({ length: 3, charAt: (x: number) => { "" } }); r(""); }
+    #|function okAnnotatedAny() { const c = new C({ length: 2 }); const r = c.annotated(""); r({ length: 3 }); }
+    #|function abstainTwoReturns() { const c = new C({ length: 2 }); const r = c.twoReturns("", true); r({ length: 3 }); }
+    #|declare const h: <V extends string>(x: string) => V;
+    #|function badGenericValueConcreteParam() { h({ length: 3 }); }
+  let issues = eff_issues(src)
+  // `abstainTwoReturns` is TS2345 in tsc (the union of both returned
+  // functions accepts no `{ length: 3 }`); a body with a second `return`
+  // is not typed here, so it is a MISS, pinned so it cannot become a guess.
+  for
+    ok in [
+      "okFactoryString", "okFactoryObjectBound", "okAnnotatedAny", "abstainTwoReturns",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["badFactoryBound", "badGenericValueConcreteParam"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+/// The issues of a CHECKING parse — the one `mtsc` uses, which keeps
+/// `as const` (`Parser::keep_const_assertions`).
+fn eff_issues_checking(src : String) -> Array[ExprIssue] {
+  let parser = @parser.Parser::from_source_with_jsx(src, true)
+  parser.keep_const_assertions()
+  let module_ = parser.parse_module() catch { _ => return [] }
+  check_module_function_bodies(module_)
+}
+
+///|
+test "binding-pattern defaults: const tuples, computed keys and the conditional join" {
+  let src =
+    #|function ok1() { let a: 0 | 1 = 0; const [{ [(a = 1)]: b } = [9, a] as const] = []; const bb: 0 = b; return bb; }
+    #|function bad2() { let a: 0 | 1 = 1; const [{ [a]: b } = [9, a = 0] as const] = []; const bb: 9 = b; return bb; }
+    #|function ok3() { let a: 0 | 1 | 2 = 1; const [{ [a]: b } = [9, a = 0, 5] as const] = []; const bb: 0 | 9 = b; return bb; }
+    #|function ok4() { let a: 0 | 1 = 0; const [{ [(a = 1)]: b } = [9, a] as const] = [[9, 8] as const]; const bb: 0 | 8 = b; return bb; }
+    #|function okIndex() { const [{ [0]: c } = [9, 0] as const] = []; const cc: 9 = c; return cc; }
+    #|function badIndex() { const [{ [0]: c } = [9, 0] as const] = []; const cc: 0 = c; return cc; }
+    #|function okSatisfies() { const arr = [1, 2, 3] as const satisfies readonly unknown[]; return arr; }
+  let issues = eff_issues_checking(src)
+  for ok in ["ok1", "ok3", "ok4", "okIndex", "okSatisfies"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["bad2", "badIndex"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "a loop's back edge joins what the body assigns, whatever exits the loop early" {
+  let src =
+    #|declare const c: boolean;
+    #|declare const xs: number[];
+    #|function okWhile() { let x: "a" | "b"; x = "a"; while (c) { if (x === "b") { break; } x = "b"; } }
+    #|function okFor() { let x: "a" | "b"; x = "a"; for (;;) { if (x === "b") { break; } x = "b"; } }
+    #|function okForOf() { let x: "a" | "b"; x = "a"; for (const n of xs) { if (x === "b") { continue; } x = "b"; } }
+    #|function okForIn() { let x: "a" | "b"; x = "a"; for (const k in xs) { if (x === "b") { continue; } x = "b"; } }
+    #|function okDoWhile() { let x: "a" | "b"; x = "a"; do { if (x === "b") { break; } x = "b"; } while (c); }
+    #|function okSwitch() { let x: "a" | "b"; x = "a"; while (c) { switch (x) { case "b": break; } x = "b"; } }
+    #|function okDeclInit() { let x: "a" | "b" = "a"; while (c) { if (x === "b") { break; } x = "b"; } }
+    #|function badNoAssignment() { let x: "a" | "b"; x = "a"; while (c) { if (x === "b") { break; } } }
+    #|function badDeclInit() { let x: "a" | "b" = "a"; if (x === "b") { } }
+  let issues = eff_issues(src)
+  for
+    ok in [
+      "okWhile", "okFor", "okForOf", "okForIn", "okDoWhile", "okSwitch", "okDeclInit",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["badNoAssignment", "badDeclInit"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}

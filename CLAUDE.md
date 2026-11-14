@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2724 / MISS in scope 2 /
+  is a soundness bug, and there are none (TP 2726 / MISS in scope 0 /
   OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
   **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
@@ -4050,6 +4050,65 @@ product surfaces now.
   walking the raw and inlined signatures in parallel. Inlining is a
   structural substitution, so the two differ exactly where a bound
   stands.
+  Batch FX takes **MISS in scope 2 -> 0** (TP 2726 / OUT OF SCOPE 18 /
+  FP 0 / PFLEGAL 0 / TN 1763), with effect, zod and the real `.d.ts`
+  entries unchanged.
+
+  `wrappedAndRecursiveConstraints4` needed a factory's return type: an
+  unannotated generic class method whose body ends by returning a
+  function it declares (`foo<U extends T>(x: U) { function bar<V extends
+  U>(x: V) { … } return bar }`). The AST had inlined `U` and `V` to `T`,
+  so the parser now records both headers un-inlined, bounds included,
+  under `<method>C#foo` and `<nested>C#foo/bar`. The method's binders are
+  solved from the call and substituted into the returned function's
+  BOUNDS, then inlined the way a declared generic function's are.
+
+  Two things nearly shipped wrong:
+  - `type_param_occurs` does not look inside a `GenericFunc`'s bounds,
+    where `U` lives, so the gate requiring an exact binding was skipped.
+    The legal neighbour `wrappedAndRecursiveConstraints3` reported a
+    `string` against `{ length; charAt: (number) => undefined }`, an arrow
+    with a block body inferred as returning `undefined` where tsc says
+    `void`.
+  - A generic callable VALUE's arguments were judged by NOTHING (the call
+    arm had no `GenericFunc` case). Judging only the binder-free positions
+    is what stays quiet on effect: solving a binder and re-checking the
+    argument against it reported `failCause(this._interruptedCause)`,
+    because this checker does not narrow through a `this.x = …` write.
+
+  `controlFlowBindingPatternOrder` needed five pieces:
+  - A CHECKING parse keeps `as const` as `As(e, Named("const"))`
+    (`Parser::keep_const_assertions`, set at the five check-only parse
+    sites). The transform pipeline's parses still erase it, so no pass
+    ever sees the wrapper.
+  - A literal initializer narrows a declared union (`let a: 0 | 1 = 0`).
+  - A default's assignments join conditionally.
+  - A computed key selects from const tuples.
+  - A binding whose type that computation made EXACT is exempt from the
+    "flow-narrowing residue" suppressions that hide every literal-union
+    mismatch (`declare const b: 0 | 9; const bb: 9 = b` is still
+    suppressed; tsc reports it).
+
+  Declaration narrowing exposed a PRE-EXISTING false positive that
+  reached far beyond the corpus. The loop back-edge join gave up on any
+  body containing `break`, `continue` or `switch`, and widened a literal
+  right-hand side to `string` before capping it at the declared literal
+  union. So `while (c) { if (x === "b") break; x = "b" }` reported
+  TS2367 on a loop tsc accepts. The join now walks those statements,
+  keeps the literal, and applies to `for`, `for…of`, `for…in` and
+  `do…while`, which had no join at all.
+
+  Two TPs had been flagged for a WRONG reason. `is_assignable_to` had no
+  `(Tuple, Array)` arm, so a tuple was never assignable to `T[]`; that
+  was reported on `[1, 2, 3] as const satisfies readonly unknown[]` the
+  moment `as const` typed as a tuple. With the arm in place,
+  `readonlyArraysAndTuples` and `genericRestParameters1` went quiet, and
+  each now reports one of its real errors:
+  - TS1354: `readonly` on non-array syntax, probed on fourteen cells. A
+    parenthesized ELEMENT is legal, which a first draft got wrong on
+    `overrideInterfaceProperty`.
+  - TS2344: `Parameters<Function>`, through a sentinel bound only a
+    definitely-non-callable argument violates.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -588,3 +588,14 @@ test "a 1024-bit radix integer is finite unless it rounds up to 2^1024" {
   assert_true(is_js_finite_number_string("0x1" + "0".repeat(255)))
   assert_false(is_js_finite_number_string("0x1" + "0".repeat(256)))
 }
+
+///|
+test "is_assignable_to: a tuple flows into an array of its slots' union" {
+  let t = @ast.TsType::Tuple([NumberLiteral("1"), NumberLiteral("2")])
+  assert_true(is_assignable_to(t, Array(Number)))
+  assert_true(is_assignable_to(t, Array(Unknown)))
+  assert_false(is_assignable_to(t, Array(String_)))
+  let variadic = @ast.TsType::Tuple([String_, Rest(Array(Number))])
+  assert_true(is_assignable_to(variadic, Array(Union([String_, Number]))))
+  assert_false(is_assignable_to(variadic, Array(String_)))
+}

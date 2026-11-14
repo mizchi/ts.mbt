@@ -145,6 +145,8 @@ async fn mtsc_run_check(argv : Array[String], start : Int32) -> Unit {
   let mut issue_count = 0
   for _ in 0..<iters {
     let parser = @parser.Parser::from_source_with_jsx(text, allow_jsx)
+    // Only the checker reads this module, so `as const` is kept for it.
+    parser.keep_const_assertions()
     // A `.d.ts` makes every declaration in it ambient whether or not it
     // writes `declare`. The extension is the only place that fact
     // exists, and this site already keys TS1046 off it below.

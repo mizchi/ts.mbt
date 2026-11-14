@@ -294,6 +294,22 @@ pub struct Parser {
   // unbounded first overload left no trace and a later bounded one kept a
   // copy the checker read as the whole set's signature.
   raw_sig_seen_names : Map[String, Unit]
+  // The key prefix a NESTED function declaration's un-inlined header is
+  // recorded under (`CLASS#METHOD` inside a class method body, empty
+  // elsewhere), and the name of the class whose body is being parsed. A
+  // nested declaration cannot share the module-wide bare-name keys — see
+  // `Parser::at_module_scope` — so it is keyed by the method it lives in.
+  mut raw_sig_scope : String
+  // Keep `x as const` in the AST as `As(x, Named("const"))` instead of
+  // erasing it. Set only by the parses that feed TYPE CHECKING and nothing
+  // else (`Parser::keep_const_assertions`): the transform passes read raw
+  // expressions — a const-value table is matched on the literal itself —
+  // so an emitting parse must not see the wrapper, while the checker needs
+  // it to type `[9, a] as const` as a readonly tuple of literals rather
+  // than `number[]`. `const` is a reserved word, so no source type can
+  // spell `Named("const")`.
+  mut keep_const_assertion_nodes : Bool
+  mut current_class_name : String
   // `NAME\u{0}LITERAL` for an unannotated READONLY instance field whose
   // initializer is a literal. Drained per class into a
   // `<readonly-literal:…>` sentinel: such a field has the literal type,
@@ -509,6 +525,9 @@ pub fn Parser::new_with_strict_and_jsx(
     optional_member_names: [],
     raw_generic_signatures: {},
     raw_sig_seen_names: {},
+    raw_sig_scope: "",
+    keep_const_assertion_nodes: false,
+    current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],
@@ -558,6 +577,23 @@ pub fn Parser::from_source(src : String) -> Parser {
 /// the flag reads it only to go SILENT.
 pub fn Parser::mark_declaration_file(self : Parser) -> Unit {
   self.in_declaration_file = true
+}
+
+///|
+/// Keep `as const` assertions as `As(e, Named("const"))` — for a parse
+/// whose module only the CHECKER reads (see `keep_const_assertion_nodes`).
+pub fn Parser::keep_const_assertions(self : Parser) -> Unit {
+  self.keep_const_assertion_nodes = true
+}
+
+///|
+/// Carry the facts about the SOURCE (not about any one declaration) into a
+/// fresh parser over part of it — a namespace body is re-parsed that way.
+fn Parser::inherit_source_flags(self : Parser, child : Parser) -> Unit {
+  if self.in_declaration_file {
+    child.mark_declaration_file()
+  }
+  child.keep_const_assertion_nodes = self.keep_const_assertion_nodes
 }
 
 ///|
@@ -841,6 +877,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     optional_member_names: [],
     raw_generic_signatures: {},
     raw_sig_seen_names: {},
+    raw_sig_scope: "",
+    keep_const_assertion_nodes: false,
+    current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],

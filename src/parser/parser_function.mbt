@@ -951,6 +951,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       "`yield` cannot be used as the name of a function here",
     )
   }
+  let raw_header_start = self.pos
   let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
@@ -970,7 +971,21 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   // number>` nested in another body must not answer for a module-level
   // `id`.
   if !self.at_module_scope() {
-    ()
+    // A declaration nested in a class METHOD body is keyed by that method
+    // (`<nested>C#m/name`), and recorded only when a bounded type parameter
+    // is in scope — its own or an enclosing one — since that is the only
+    // case in which inlining changed its signature.
+    if self.raw_sig_scope != "" && self.local_type_param_bounds.length() > 0 {
+      let key = "<nested>" + self.raw_sig_scope + "/" + name
+      if self.raw_generic_signatures.contains(key) {
+        self.raw_generic_signatures[key] = Any
+      } else {
+        match raw_generic_header(self.tokens, raw_header_start) {
+          Some(sig) => self.raw_generic_signatures[key] = sig
+          None => ()
+        }
+      }
+    }
   } else if self.raw_sig_seen_names.contains(name) {
     self.raw_generic_signatures[name] = Any
   } else if type_param_bounds.length() > 0 {
@@ -3430,6 +3445,67 @@ pub fn Parser::parse_declare_function(
 /// body has not been entered when its header is recorded.
 fn Parser::at_module_scope(self : Parser) -> Bool {
   self.block_binding_nonnumeric.length() == 0
+}
+
+///|
+/// The whole un-inlined header of a generic callable whose type-parameter
+/// list opens at `start` (or whose parameter list does, when it has none):
+/// `GenericFunc(names, bounds, Func(params, return))`, parsed by a fresh
+/// Parser with no type-parameter scope so neither the parameters nor the
+/// BOUNDS have anything inlined — `bar<V extends U>(x: V)` keeps both `V`
+/// and `U`. An absent return annotation is `Named("<no-annotation>")`,
+/// which no source type can spell, so a reader can tell it from `: any`.
+/// A leading `this` parameter is dropped. `None` when it does not re-parse.
+fn raw_generic_header(tokens : Array[Token], start : Int32) -> @ast.TsType? {
+  let sp = Parser::new(tokens)
+  sp.pos = start
+  sp.no_bound_inline = true
+  let parsed = (fn() -> @ast.TsType raise ParseError {
+    let (names, _, bounds) = sp.parse_type_param_names_bounds_and_const_flags()
+    let _ = sp.expect(LParen)
+    let ps = sp.parse_params()
+    let _ = sp.expect(RParen)
+    let ret = if sp.match_(Colon) {
+      sp.parse_type()
+    } else {
+      @ast.TsType::Named("<no-annotation>")
+    }
+    let types : Array[@ast.TsType] = []
+    for i, p in ps {
+      if !(i == 0 && p.name == "this") {
+        types.push(p.type_)
+      }
+    }
+    GenericFunc(names, bounds, Func(types, ret))
+  })() catch {
+    _ => return None
+  }
+  Some(parsed)
+}
+
+///|
+/// Record a class METHOD's un-inlined header under `<method>CLASS#NAME`
+/// when it declares a bounded type parameter (the only case in which
+/// inlining changed it). A name seen twice — an overload set — keeps no
+/// copy, since the key cannot say which signature a call selected.
+fn Parser::record_method_raw_header(
+  self : Parser,
+  method_name : String,
+  header_start : Int32,
+  bounds : Array[(String, @ast.TsType)],
+) -> Unit {
+  let key = "<method>" + self.current_class_name + "#" + method_name
+  // Keyed through the same seen-set as module-scope functions, so the
+  // overload rule does not depend on which member carries the bound.
+  if self.raw_sig_seen_names.contains(key) {
+    self.raw_generic_signatures[key] = Any
+  } else if bounds.length() > 0 {
+    match raw_generic_header(self.tokens, header_start) {
+      Some(sig) => self.raw_generic_signatures[key] = sig
+      None => ()
+    }
+  }
+  self.raw_sig_seen_names[key] = ()
 }
 
 ///|

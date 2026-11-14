@@ -1227,9 +1227,7 @@ fn Parser::parse_namespace_decl_with_mode(
         // reads it goes back to reporting one level in. `typescript.d.ts`
         // is where that shows: its false positives are on
         // `namespace ts > namespace server > class Project`.
-        if self.in_declaration_file {
-          parser.mark_declaration_file()
-        }
+        self.inherit_source_flags(parser)
         let body = parser.parse_module_with_seeded_const_values_internal(
           {},
           true,
@@ -1245,9 +1243,7 @@ fn Parser::parse_namespace_decl_with_mode(
           body_source,
           self.allow_jsx,
         )
-        if self.in_declaration_file {
-          runtime_parser.mark_declaration_file()
-        }
+        self.inherit_source_flags(runtime_parser)
         try
           runtime_parser.parse_module_with_seeded_const_values_internal(
             {},
@@ -1259,9 +1255,7 @@ fn Parser::parse_namespace_decl_with_mode(
               body_source,
               self.allow_jsx,
             )
-            if self.in_declaration_file {
-              ambient_parser.mark_declaration_file()
-            }
+            self.inherit_source_flags(ambient_parser)
             let body = ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
               true,

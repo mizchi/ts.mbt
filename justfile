@@ -293,9 +293,19 @@ checker-miss-buckets *ARGS:
 # number`, and an interface's inlined bound put back inside a method bound).
 # 3 -> 2 with `genericCallToOverloadedMethodWithOverloadedArguments`: an
 # interface a namespace declares under a lib name shadows the lib type.
+# 2 -> 1 with `wrappedAndRecursiveConstraints4`: an unannotated generic
+# method returning a function it declares is typed from the call, with the
+# method's binders solved and substituted into the returned function's
+# bounds, and a generic callable VALUE's binder-free parameters are judged.
+# 1 -> 0 with `controlFlowBindingPatternOrder`: a checking parse keeps
+# `as const`, a literal initializer narrows a declared union, a default's
+# assignments join conditionally, and a computed key selects from const
+# tuples. Two TPs that had been flagged for a WRONG reason (a tuple was
+# never assignable to an array) are flagged for their real ones now:
+# TS1354 (`readonly` on non-array syntax) and TS2344 (`Parameters<Function>`).
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 2
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 0
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

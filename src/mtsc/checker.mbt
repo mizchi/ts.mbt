@@ -93,6 +93,9 @@ pub fn collect_type_issues(
   declaration_file~ : Bool = false,
 ) -> Result[Array[MtscTypeIssue], String] {
   let parser = @parser.Parser::from_source_with_jsx(source, allow_jsx)
+  // A checking parse: keep `as const` for the checker (no transform reads
+  // this module).
+  parser.keep_const_assertions()
   if declaration_file {
     parser.mark_declaration_file()
   }
@@ -144,11 +147,13 @@ fn parse_graph_module(
   // and the bodiless-declaration rules read it only to go silent.
   let is_dts = source.path.has_suffix(".d.ts")
   let p1 = @parser.Parser::from_source_with_jsx(source.source, source.allowJsx)
+  p1.keep_const_assertions()
   if is_dts {
     p1.mark_declaration_file()
   }
   let module_ = p1.parse_module() catch { e => return Err("\{e}") }
   let p2 = @parser.Parser::from_source_with_jsx(source.source, source.allowJsx)
+  p2.keep_const_assertions()
   if is_dts {
     p2.mark_declaration_file()
   }

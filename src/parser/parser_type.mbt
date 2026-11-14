@@ -1769,7 +1769,28 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     }
     Ident("readonly") => {
       let _ = self.advance()
-      self.parse_primary_type()
+      // TS1354: the operator applies only to ARRAY and TUPLE type syntax —
+      // `T[]` or `[A, B]` — so the operand has to END with the `]` both
+      // spellings end with. Probed cell by cell: `readonly string[][]`,
+      // `readonly Array<string>[]`, `readonly T[]` and `readonly []` are
+      // legal, while `readonly string`, `readonly T`, `readonly { a: 1 }`,
+      // `readonly Array<string>`, a parenthesized `readonly (string[])` and
+      // `readonly readonly string[]` are all errors. The parenthesized one
+      // ends in `)`; the doubled one ends in `]`, which is why the operand's
+      // FIRST token is tested too. A parenthesized ELEMENT is legal —
+      // `readonly (readonly [K, V])[]` is an array type
+      // (overrideInterfaceProperty). `readonly T["k"]` (an indexed access)
+      // also ends in `]` and is accepted here, which costs a MISS.
+      let operand_start = self.peek().kind
+      let operand = self.parse_primary_type()
+      let ends_in_bracket = self.pos > 0 &&
+        self.tokens[self.pos - 1].kind is RBracket
+      if !ends_in_bracket || operand_start is Ident("readonly") {
+        self.grammar_misuses.push(
+          "'readonly' type modifier is only permitted on array and tuple literal types",
+        )
+      }
+      operand
     }
     Ident("unique") => {
       // `unique symbol`: each occurrence gets a per-Parser tag so two
