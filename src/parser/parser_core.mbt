@@ -280,6 +280,12 @@ pub struct Parser {
   // the type cannot answer and the modifier needs its own channel.
   // Drained per class into `<optional-member:...>` sentinels.
   optional_member_names : Array[String]
+  // `NAME\u{0}LITERAL` for an unannotated READONLY instance field whose
+  // initializer is a literal. Drained per class into a
+  // `<readonly-literal:…>` sentinel: such a field has the literal type,
+  // which the checker cannot recover (an absent annotation and `: any` are
+  // the same `Any`), so `this.noWiden = 5` in the constructor is TS2322.
+  readonly_literal_members : Array[String]
   // Bodied instance METHOD names that carried no return annotation, while
   // parsing class bodies. `TsClassMethodDecl.return_type` is `Any` for both
   // a missing annotation and an explicit `: any`, and TS2416 / TS2490 both
@@ -486,6 +492,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
@@ -776,6 +783,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},

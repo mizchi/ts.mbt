@@ -96,6 +96,20 @@ priv enum ClassElement {
 }
 
 ///|
+/// A canonical key for a literal initializer (`n:1`, `s:x`, `b:true`), or
+/// `None` for anything else.
+fn readonly_literal_key(e : @ast.TsExpr) -> String? {
+  match e {
+    IntLit(i) => Some("n:" + i.to_string())
+    NumberLit(d) => Some("n:" + d.to_string())
+    UnaryOp(Neg, IntLit(i)) => Some("n:-" + i.to_string())
+    StringLit(s) => Some("s:" + s)
+    BoolLit(b) => Some("b:" + b.to_string())
+    _ => None
+  }
+}
+
+///|
 fn class_key_name(key : ClassKey) -> String {
   match key {
     Name(name) => name
@@ -1020,6 +1034,11 @@ fn build_runtime_class_decl(
   // collide, TS2804), unlike public members. Accumulate them separately keyed
   // by the bare name with no `|s` / `|i` split.
   let priv_counts : Map[String, Array[Int32]] = Map([])
+  // TS2804: a private name declared on BOTH the static and the instance
+  // side is an error whatever the member kinds (`static #a() {}` beside
+  // `#a() {}`, even a static getter beside an instance setter).
+  let priv_static : Map[String, Unit] = Map([])
+  let priv_instance : Map[String, Unit] = Map([])
   for element in elements {
     let (name, is_static, slot) = match element {
       Field(s, Name(n), _, _, _, _) => (n, s, 0)
@@ -1028,10 +1047,21 @@ fn build_runtime_class_decl(
       Method(s, Name(n), _, _) => (n, s, 3)
       _ => continue
     }
-    if !is_public_runtime_class_member_name(name) {
+    // A lowered `#name` (its brand) reads as a PUBLIC runtime name to the
+    // test below, so it has to be routed to the private counter first.
+    if name.has_prefix("__private_brand__") ||
+      !is_public_runtime_class_member_name(name) {
       // Only `#name` private identifiers participate; `<computed>` and other
       // non-public synthetic names are skipped (we can't reason about them).
-      if name.has_prefix("#") {
+      // A runtime class's `#name` has already been lowered to its brand
+      // (`__private_brand__N__name`) by the time this list is built, which
+      // left this loop dead for every class but an ambient one.
+      if name.has_prefix("#") || name.has_prefix("__private_brand__") {
+        if is_static {
+          priv_static[name] = ()
+        } else {
+          priv_instance[name] = ()
+        }
         let c = match priv_counts.get(name) {
           Some(existing) => existing
           None => {
@@ -1097,6 +1127,8 @@ fn build_runtime_class_decl(
       ng >= 2 ||
       ns >= 2 ||
       ((ng >= 1 || ns >= 1) && nm >= 1)
+    let is_dup = is_dup ||
+      (priv_static.contains(name) && priv_instance.contains(name))
     if is_dup && !(dup_seen.get(name) is Some(_)) {
       dup_seen[name] = ()
       duplicate_member_names.push(name)
@@ -3670,6 +3702,19 @@ fn Parser::parse_class_body(
         None
       }
       let _ = self.match_(Semicolon)
+      if !had_annotation && is_readonly_field && !is_static {
+        match init {
+          Some(e) =>
+            match readonly_literal_key(e) {
+              Some(k) =>
+                self.readonly_literal_members.push(
+                  class_key_name(key) + "\u{0}" + k,
+                )
+              None => ()
+            }
+          None => ()
+        }
+      }
       // TS7008 evidence: a field with NEITHER a type annotation NOR an
       // initializer has no source of a type, so under `noImplicitAny` it
       // is an implicit `any` member. Recorded here rather than decided in
@@ -3905,6 +3950,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let readonly_literal_start = self.readonly_literal_members.length()
   let unann_return_start = self.unannotated_return_members.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
@@ -3956,6 +4002,12 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   while self.optional_member_names.length() > optional_names_start {
     match self.optional_member_names.pop() {
       Some(n) => expr_class_sentinels.push("<optional-member:" + n + ">")
+      None => ()
+    }
+  }
+  while self.readonly_literal_members.length() > readonly_literal_start {
+    match self.readonly_literal_members.pop() {
+      Some(n) => expr_class_sentinels.push("<readonly-literal:" + n + ">")
       None => ()
     }
   }
@@ -4758,6 +4810,7 @@ fn Parser::parse_class_decl_with_abstract(
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
+  let readonly_literal_start = self.readonly_literal_members.length()
   let unann_return_start = self.unannotated_return_members.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
@@ -4805,6 +4858,13 @@ fn Parser::parse_class_decl_with_abstract(
     match self.optional_member_names.pop() {
       Some(n) =>
         runtime_decl.duplicate_member_names.push("<optional-member:" + n + ">")
+      None => ()
+    }
+  }
+  while self.readonly_literal_members.length() > readonly_literal_start {
+    match self.readonly_literal_members.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push("<readonly-literal:" + n + ">")
       None => ()
     }
   }

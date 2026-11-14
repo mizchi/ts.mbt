@@ -6624,6 +6624,16 @@ fn is_well_known_symbol_name(name : String) -> Bool {
 }
 
 ///|
+/// The global `Symbol` is the lib's, and the lib's `SymbolConstructor` is
+/// not augmented in this file.
+fn lib_symbol_constructor_unshadowed(env : ExprEnv, ctx : CheckCtx) -> Bool {
+  env.lookup("Symbol") is None &&
+  ctx.resolver.declared_value_names.get("Symbol") is None &&
+  ctx.resolver.classes.get("Symbol") is None &&
+  ctx.resolver.interfaces.get("SymbolConstructor") is None
+}
+
+///|
 fn check_computed_key_type(
   env : ExprEnv,
   key : @ast.TsExpr,
@@ -6650,6 +6660,15 @@ fn check_computed_key_type(
     _ => ()
   }
   let key_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, key))
+  // The `Symbol` constructor itself, bare or through a binding that holds
+  // it (`var s = Symbol; ({ [s]: 0 })`), is an object, not a symbol.
+  if (key is Var("Symbol") || key_ty is Named("SymbolConstructor")) &&
+    lib_symbol_constructor_unshadowed(env, ctx) {
+    record_unfiltered(
+      ctx, "computed key", "a computed property name must be of type `string`, `number`, `symbol`, or `any`",
+    )
+    return
+  }
   // Nullish shapes are deliberately absent: a `null` initializer narrows an
   // `any`-typed binding to `Null` in our flow model (`let a: any = null;
   // ({ [a]: 1 })`), and non-strict tsc widens such literals to `any` -- so
@@ -22323,6 +22342,10 @@ fn check_ident_binding_decl(
   } else if declared is Any &&
     ctx.resolver.globals.contains("@written-any:" + name) {
     @ast.TsType::Any
+  } else if init is Var("Symbol") && lib_symbol_constructor_unshadowed(env, ctx) {
+    // `var s = Symbol` holds the CONSTRUCTOR, whose lib type is
+    // `SymbolConstructor` — an object, so `{ [s]: 0 }` is TS2464.
+    @ast.TsType::Named("SymbolConstructor")
   } else {
     // No annotation: infer from the initializer, widening what TypeScript
     // widens. See `binding_init_type` — a composite literal's contents
@@ -38107,6 +38130,37 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // the strict-property-initialization check (literal-named fields
         // are exempt from TS2564).
         ()
+      } else if name.has_prefix("<readonly-literal:") {
+        // TS2322: an unannotated READONLY field initialized with a literal
+        // has that LITERAL type, so a constructor writing a different
+        // literal of the same kind (`readonly noWiden = 1` then
+        // `this.noWiden = 5`) is an error. Only the constructor can write
+        // it at all; a read keeps the widened type here, because a read
+        // flowing into a mutable `let` widens again in tsc.
+        let body = name["<readonly-literal:".length():name.length() - 1].to_owned()
+        match body.find("\u{0}") {
+          Some(cut) => {
+            let field = body[:cut].to_owned()
+            let key = body[cut + 1:].to_owned()
+            for c in module_.classes {
+              if c.name == cls_name {
+                match c.constructor_body {
+                  Some(b) =>
+                    for got in readonly_literal_ctor_writes(b.stmts, field) {
+                      if got != key && got[:2] == key[:2] {
+                        issues.push({
+                          path: "function \{cls_name}.constructor > assign `.\{field}`",
+                          message: "expected `\{key[2:]}` but got `\{got[2:]}`",
+                        })
+                      }
+                    }
+                  None => ()
+                }
+              }
+            }
+          }
+          None => ()
+        }
       } else if name.has_prefix("<optional-member:") {
         // Marker, not an error: an instance field declared with `?`.
         // Consumed by `check_class_property_init_order` (TS2729 exempts
@@ -38143,6 +38197,58 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+
+///|
+/// Literal keys (`n:5`, `s:x`, `b:true`) of every `this.FIELD = <literal>`
+/// in a constructor body, outside nested functions.
+fn readonly_literal_ctor_writes(
+  stmts : Array[@ast.TsStmt],
+  field : String,
+) -> Array[String] {
+  let out : Array[String] = []
+  let key_of = fn(e : @ast.TsExpr) -> String? {
+    match e {
+      IntLit(i) => Some("n:" + i.to_string())
+      NumberLit(d) => Some("n:" + d.to_string())
+      UnaryOp(Neg, IntLit(i)) => Some("n:-" + i.to_string())
+      StringLit(s) => Some("s:" + s)
+      BoolLit(b) => Some("b:" + b.to_string())
+      _ => None
+    }
+  }
+  fn walk(st : @ast.TsStmt) -> Unit {
+    match st {
+      PropAssign(Var("this"), f, v) | Expr(PropAssignExpr(Var("this"), f, v)) if f ==
+        field =>
+        match key_of(v) {
+          Some(k) => out.push(k)
+          None => ()
+        }
+      Block(b) =>
+        for s in b.stmts {
+          walk(s)
+        }
+      If(_, t, e) => {
+        for s in t.stmts {
+          walk(s)
+        }
+        match e {
+          Some(eb) =>
+            for s in eb.stmts {
+              walk(s)
+            }
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+
+  for st in stmts {
+    walk(st)
+  }
+  out
+}
 
 ///|
 /// Structural identity key for a named class / interface reference used by
