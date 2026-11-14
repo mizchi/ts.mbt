@@ -12116,6 +12116,8 @@ fn infer_typeof_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
     BigInt | BigIntLiteral(_) => lit("bigint")
     Symbol | UniqueSymbol(_) => lit("symbol")
     Null => lit("object")
+    // `{}` admits every non-nullish value, primitives included.
+    Object([]) => @ast.TsType::String_
     Array(_) | Tuple(_) | Object(_) | Struct(_, _) => lit("object")
     Undefined | Void => lit("undefined")
     Func(_, _) | Constructor(_, _, _) => lit("function")
@@ -20852,7 +20854,7 @@ fn collect_narrowing(
         // `object` narrows the same way: effect's `Equal.compareStructure`
         // takes `self: object` and reads `self.length` after
         // `Array.isArray(self)`.
-        Unknown | NonPrimitiveObject =>
+        Unknown | NonPrimitiveObject | Object([]) =>
           pair_pos.push((x, @ast.TsType::Array(@ast.TsType::Any)))
         _ =>
           match array_is_array_split(resolver, cur) {
@@ -20900,13 +20902,42 @@ fn collect_narrowing(
       // times in one constructor. The parser wraps only the guarded link
       // (`OptionalChain(PropAccess(p, a))`), so the walk peels the
       // wrapper to recover a plain chain the narrowing keys can name.
+      match cond {
+        Var(alias) =>
+          match aliased_condition_binds(env, resolver, alias, then_sense) {
+            Some(binds) =>
+              for b in binds {
+                then_binds.push(b)
+              }
+            None => ()
+          }
+        _ => ()
+      }
+      match cond {
+        Var(alias) =>
+          match aliased_condition_binds(env, resolver, alias, !then_sense) {
+            Some(binds) =>
+              for b in binds {
+                else_binds.push(b)
+              }
+            None => ()
+          }
+        _ => ()
+      }
       let (plain, guarded) = optional_chain_guarded_receivers(cond)
       let push = fn(key : String) {
         let cur = narrowing_current_type(env, resolver, key)
-        if then_sense {
-          then_binds.push((key, non_nullable(cur)))
+        // A truthy `unknown` is `{}` (TS 4.8), which is what lets a later
+        // `typeof x === "object"` see an `object` rather than `object | null`.
+        let truthy = if cur is Unknown {
+          @ast.TsType::Object([])
         } else {
-          else_binds.push((key, non_nullable(cur)))
+          non_nullable(cur)
+        }
+        if then_sense {
+          then_binds.push((key, truthy))
+        } else {
+          else_binds.push((key, truthy))
         }
       }
       for g in guarded {
@@ -21875,6 +21906,12 @@ fn analyze_equality(
             } else {
               union_of(parts)
             }
+          } else if ts == "object" &&
+            typeof_object_from_unknown_pieces(
+              narrowing_current_type(env, resolver, name),
+            )
+            is Some(t) {
+            t
           } else {
             narrowed
           }
@@ -21960,7 +21997,24 @@ fn analyze_equality(
           _ => false
         }
       }
-      if loose {
+      // `unknown` has no members to remove; tsc gives `{}` once both
+      // nullish values are ruled out, and `{} | undefined` / `{} | null`
+      // when only one is.
+      if cur is Unknown {
+        let empty = @ast.TsType::Object([])
+        if loose {
+          true_side.push((key, @ast.TsType::Union([Null, Undefined])))
+          false_side.push((key, empty))
+        } else {
+          true_side.push((key, tag))
+          let other = if tag is Null {
+            @ast.TsType::Undefined
+          } else {
+            @ast.TsType::Null
+          }
+          false_side.push((key, @ast.TsType::Union([empty, other])))
+        }
+      } else if loose {
         true_side.push((key, @ast.TsType::Union([Null, Undefined])))
         false_side.push((key, narrow_remove(cur, is_nullish)))
       } else {
@@ -22239,6 +22293,107 @@ fn lib_static_guard_target(recv : String, meth : String) -> @ast.TsType? {
 }
 
 ///|
+/// TS 4.4 aliased conditions: `const isArr = Array.isArray(v)` then
+/// `isArr ? v.length : …` narrows `v` as the inline guard would. The
+/// condition's narrowing is computed HERE and stored in the env under
+/// `<alias-cond>NAME` as `Tuple([then, else])`, each a tuple of
+/// `Tuple([Literal(key), type_at_alias, narrowed])` triples. A use applies
+/// a triple only while the key still has the type it had at the alias, so
+/// an assignment in between (which tsc also refuses to see through)
+/// cancels it.
+fn record_aliased_condition(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  init : @ast.TsExpr,
+) -> Unit {
+  let shaped = match init {
+    MethodCall(_, _, _) | Call(_, _) | CallExpr(_, _) => true
+    BinOp(BinEq | BinNe | AbstractEq | AbstractNe | Instanceof | In, _, _) =>
+      true
+    UnaryOp(Not, _) => true
+    _ => false
+  }
+  if !shaped {
+    return
+  }
+  let eff = analyze_narrowing(env, resolver, init)
+  if eff.then_binds.length() == 0 && eff.else_binds.length() == 0 {
+    return
+  }
+  let enc = fn(binds : Array[(String, @ast.TsType)]) -> @ast.TsType {
+    let out : Array[@ast.TsType] = []
+    for b in binds {
+      out.push(
+        @ast.TsType::Tuple([
+          Literal(b.0),
+          narrowing_current_type(env, resolver, b.0),
+          b.1,
+        ]),
+      )
+    }
+    @ast.TsType::Tuple(out)
+  }
+  env.bind(
+    "<alias-cond>" + name,
+    @ast.TsType::Tuple([enc(eff.then_binds), enc(eff.else_binds)]),
+  )
+}
+
+///|
+/// The stored narrowing of an aliased condition, for the side that holds.
+fn aliased_condition_binds(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  truthy : Bool,
+) -> Array[(String, @ast.TsType)]? {
+  guard env.lookup("<alias-cond>" + name) is Some(Tuple([Tuple(th), Tuple(el)])) else {
+    return None
+  }
+  let out : Array[(String, @ast.TsType)] = []
+  for t in (if truthy { th } else { el }) {
+    match t {
+      Tuple([Literal(key), before, after]) =>
+        if narrowing_current_type(env, resolver, key) == before {
+          out.push((key, after))
+        }
+      _ => ()
+    }
+  }
+  Some(out)
+}
+
+///|
+/// `typeof x === "object"` over `unknown` or the pieces narrowing splits it
+/// into (`{}`, `null`, `undefined`, `object`): `object`, plus `null` when a
+/// `null` is still possible (`typeof null === "object"`). `None` for any
+/// other type, where the caller keeps its old answer.
+fn typeof_object_from_unknown_pieces(cur : @ast.TsType) -> @ast.TsType? {
+  let parts = union_components(cur)
+  let mut obj = false
+  let mut null_ = false
+  for p in parts {
+    match p {
+      Unknown => {
+        obj = true
+        null_ = true
+      }
+      Object([]) | NonPrimitiveObject => obj = true
+      Null => null_ = true
+      Undefined => ()
+      _ => return None
+    }
+  }
+  match (obj, null_) {
+    (true, true) => Some(@ast.TsType::Union([NonPrimitiveObject, Null]))
+    (true, false) => Some(@ast.TsType::NonPrimitiveObject)
+    (false, true) => Some(@ast.TsType::Null)
+    (false, false) => None
+  }
+}
+
+///|
 /// `join_branch_types`, seeing through an alias to a union. A branch that
 /// did not narrow keeps the binding's DECLARED spelling (`Representation`)
 /// while the other holds the expanded members (`Str | Num`), and joining
@@ -22264,6 +22419,15 @@ fn join_branch_types_resolved(
   }
   let ca = comps(a)
   let cb = comps(b)
+  // The pieces an `unknown` is narrowed into (`{}`, `null`, `undefined`)
+  // join back to `unknown` once all three are present again.
+  let all_parts = [..ca, ..cb]
+  if all_parts.contains(@ast.TsType::Object([])) &&
+    all_parts.contains(@ast.TsType::Null) &&
+    all_parts.contains(@ast.TsType::Undefined) &&
+    all_parts.iter().all(fn(x) { x is (Object([]) | Null | Undefined) }) {
+    return @ast.TsType::Unknown
+  }
   if ca.iter().all(fn(x) { cb.contains(x) }) {
     return flatten_union_parts(b)
   }
@@ -22364,6 +22528,9 @@ fn check_ident_binding_decl(
   // when not, we leave declared as the inferred-from-init type
   // since that's what TS widens to anyway.
   env.declare_type(name, bound_type)
+  if !mutable_ && block_scoped {
+    record_aliased_condition(env, ctx.resolver, name, init)
+  }
   // TS2454: parser-synthesised `Var("__ts_no_init__")` marker means
   // `let x: T;` / `var x: T;` with no `=` initializer. Track the binding as
   // unassigned so later references can be flagged. Only do this when the
