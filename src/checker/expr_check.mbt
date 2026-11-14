@@ -12042,6 +12042,39 @@ fn lib_object_type_into_primitive(
 }
 
 ///|
+/// The DECLARED slot of a parameter typed by a type-ALIAS application over
+/// a BOUNDED type parameter (`sa: Something<A>` with `A extends object`),
+/// set from the un-inlined signature. The parser inlines the bound, so the
+/// binding reads `Something<any>` and an assignment to it was judged
+/// against that — where the alias's conditional is decided rather than
+/// deferred. Only the assignment TARGET changes: reads keep the inlined
+/// type every other rule was written against, so nothing that reads the
+/// parameter sees `A`.
+fn declare_raw_alias_param_types(
+  env : ExprEnv,
+  resolver : Resolver,
+  func : @ast.TsFunc,
+) -> Unit {
+  guard resolver.globals.get("@raw-sig:" + func.name) is Some(Func(raw, _)) else {
+    return
+  }
+  if raw.length() != func.params.length() {
+    return
+  }
+  let bounded = func.type_param_bounds.map(fn(b) { b.0 })
+  for i, p in func.params {
+    match (p.binding, raw[i]) {
+      (Some(Ident(_)) | None, Applied(alias_name, args)) if resolver.type_aliases.contains(
+          alias_name,
+        ) &&
+        args.iter().any(fn(a) { type_references_any(a, bounded) }) =>
+        env.declare_type(p.name, raw[i])
+      _ => ()
+    }
+  }
+}
+
+///|
 /// Whether `t` carries an object key that is this checker's member marker
 /// (`@@get:x`, `@@set:x`, `@@spread:…`, `@@computed:…`) rather than a
 /// property name — an inferred object-literal type, not one a program
@@ -30251,6 +30284,7 @@ fn check_function_body_with(
   for p in func.params {
     bind_callable_param(env, ctx, p, p.type_, body_param_names)
   }
+  declare_raw_alias_param_types(env, resolver, func)
   // Bind `this` to the enclosing class type for a method / constructor
   // body so `this.x` and `this.method(args)` resolve against the class's
   // members (property existence, method-argument types). Free functions

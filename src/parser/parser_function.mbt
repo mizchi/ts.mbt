@@ -956,11 +956,23 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     type_param_bounds,
   )
   let _ = self.expect(LParen)
+  let raw_params_start = self.pos
   let prev_record_nia = self.record_implicit_any_params
   self.record_implicit_any_params = true
   let params = self.parse_params()
   self.record_implicit_any_params = prev_record_nia
   let _ = self.expect(RParen)
+  // The un-inlined signature (see `raw_declare_signature`); a function
+  // DECLARATION is recorded too, for the checker's parameter binding. A
+  // name declared more than once (an overload set) keeps no copy.
+  if self.raw_generic_signatures.contains(name) {
+    self.raw_generic_signatures[name] = Any
+  } else if type_param_bounds.length() > 0 {
+    match raw_function_signature(self.tokens, raw_params_start) {
+      Some(sig) => self.raw_generic_signatures[name] = sig
+      None => ()
+    }
+  }
   // return valuetype ()
   let had_return_annotation = self.check(Colon)
   let mut variadic_generic_return = false
@@ -3390,6 +3402,34 @@ pub fn Parser::parse_declare_function(
   }
   self.consume_semicolon()
   { name, module_: "env", type_params, params, param_is_rest, return_type, }
+}
+
+///|
+/// `raw_declare_signature` for a function DECLARATION, whose parameters go
+/// through `parse_params` (defaults, patterns, modifiers) rather than the
+/// ambient name-and-type loop.
+fn raw_function_signature(
+  tokens : Array[Token],
+  start : Int32,
+) -> @ast.TsType? {
+  let sp = Parser::new(tokens)
+  sp.pos = start
+  sp.no_bound_inline = true
+  let parsed = (fn() -> @ast.TsType raise ParseError {
+    let ps = sp.parse_params()
+    let _ = sp.expect(RParen)
+    let ret = if sp.match_(Colon) { sp.parse_type() } else { Any }
+    let types : Array[@ast.TsType] = []
+    for i, p in ps {
+      if !(i == 0 && p.name == "this") {
+        types.push(p.type_)
+      }
+    }
+    Func(types, ret)
+  })() catch {
+    _ => return None
+  }
+  Some(parsed)
 }
 
 ///|

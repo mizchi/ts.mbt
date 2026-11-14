@@ -283,9 +283,12 @@ checker-miss-buckets *ARGS:
 # 9 -> 7 in batch FW with `intraExpressionInferences` and `override19`:
 # the parser keeps an un-inlined copy of a bounded `declare function`'s
 # signature, so call-site inference can still say which argument `T` was.
+# 7 -> 6 with `conditionalTypesExcessProperties`: a function DECLARATION's
+# un-inlined signature gives an alias-typed parameter (`sa: Something<A>`)
+# its real assignment target, so the deferred conditional is seen.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 7
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 6
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #
