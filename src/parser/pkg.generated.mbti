@@ -224,6 +224,7 @@ pub struct Parser {
   collected_class_dups : Array[(String, Array[String])]
   quoted_member_names : Array[String]
   optional_member_names : Array[String]
+  readonly_literal_members : Array[String]
   unannotated_return_members : Array[String]
   protocol_return_names : Array[String]
   protocol_returns_by_class : Map[String, Array[String]]

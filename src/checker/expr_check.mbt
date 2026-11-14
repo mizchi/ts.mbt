@@ -20903,8 +20903,8 @@ fn collect_narrowing(
       // (`OptionalChain(PropAccess(p, a))`), so the walk peels the
       // wrapper to recover a plain chain the narrowing keys can name.
       match cond {
-        Var(alias) =>
-          match aliased_condition_binds(env, resolver, alias, then_sense) {
+        Var(alias_name) =>
+          match aliased_condition_binds(env, resolver, alias_name, then_sense) {
             Some(binds) =>
               for b in binds {
                 then_binds.push(b)
@@ -20914,8 +20914,9 @@ fn collect_narrowing(
         _ => ()
       }
       match cond {
-        Var(alias) =>
-          match aliased_condition_binds(env, resolver, alias, !then_sense) {
+        Var(alias_name) =>
+          match
+            aliased_condition_binds(env, resolver, alias_name, !then_sense) {
             Some(binds) =>
               for b in binds {
                 else_binds.push(b)

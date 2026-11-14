@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2676 / MISS in scope 50 /
+  is a soundness bug, and there are none (TP 2683 / MISS in scope 43 /
   OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
   **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
@@ -3786,6 +3786,66 @@ product surfaces now.
   merge). One TP went with it for the right reason (`jsonRawJSON1`, see the
   justfile), and `typeofThisWithImplicitThis` left the scope file because
   TS 7.1 accepts it. The budget is MISS 50 against the new corpus.
+  Batch FU takes effect from **292 to 141** and zod from **49 to 19** on
+  plain `--noEmit`, and MISS in scope **50 -> 43** at FP 0. Most of the
+  real-code half is facts that some sites had and others did not, again.
+  `interface X extends declare<T>` dropped its base because `declare` lexes
+  as its own token. `switch (typeof x)` narrowed nothing while
+  `typeof x === "t"` always had. An optional-chain discriminant
+  (`e?._tag === "C"`) was narrowed and then OVERWRITTEN by the chain's
+  plain non-nullish push, which landed after it on the same key. A type
+  guard narrowing `that: Equal` to `Ipv4Address extends Equal` kept
+  `Equal`, because the resolver-free `keep` test cannot see the extends
+  relation; and the declared-type source rules had to be taught the same
+  thing, since a guard is the one thing that legitimately narrows a
+  non-union declaration. `named_iface_extends_reaches` now compares
+  canonical names, because `extends Equal.Equal` through
+  `import * as Equal` never matched `Equal`. Three findings are about
+  `unknown`, which narrowed to nothing at all: truthy and `== null` give
+  `{}`, `=== null` gives `{} | undefined`, `typeof x === "object"` gives
+  `object | null`, and the three pieces join back to `unknown` at an `if`
+  merge — `controlFlowTypeofObject` needs every one, and without the join
+  its own legal `f6` branch read as narrowed forever. Making `object`
+  precise then exposed TS 4.4 aliased conditions
+  (`const isArr = Array.isArray(v); isArr ? v.length : …`) in effect's
+  `SchemaAST.isTree`, so they are modelled: the condition's narrowing is
+  computed at the `const` and stored in the env as
+  `<alias-cond>NAME`, and a use applies a triple only while the guarded
+  key still has the type it had at the alias — an assignment in between
+  cancels it, which is also where tsc stops seeing through. A local class's
+  members are checked with the MODULE's env, which cannot see the
+  enclosing function's parameters, so `(tag) => { class B { t = tag } }`
+  read `tag` as undeclared; the enclosing function's own walk already
+  visits those bodies with the right scope, so the class-level "cannot find
+  name" is dropped. And a parameter typed by a generic ARROW's own `<A>` —
+  not in the AST — resolved `A` against effect's `net/Dns.ts`
+  `interface A`, whose `_tag` is `"A"`, so `algorithm._tag === "Ecdsa"`
+  read as always false; such a binder binds as `any` now.
+  The conformance half is four rules and one of them was dead code. The
+  private-name duplicate counter in `build_runtime_class_decl` never ran
+  for a runtime class: the lowering renames `#a` to its brand before the
+  member list is built, and a brand reads as a PUBLIC name to
+  `is_public_runtime_class_member_name`, so it went to the static /
+  instance-split public counter where `static #a` and `#a` never meet.
+  Routing brands first gives TS2804 and the existing TS2300 cases.
+  `readonly noWiden = 1` then `this.noWiden = 5` is TS2322 because such a
+  field has the LITERAL type — and the first version made every READ
+  literal too, which reported `let y = this.noWiden; y = 2`, a line tsc
+  accepts because a read into a mutable `let` widens again. The rule is the
+  constructor write alone, through a parser channel since an absent
+  annotation and `: any` are the same `Any` (the absent-versus-`: any`
+  blocker once more). `var s = Symbol` holds the constructor, so
+  `{ [s]: 0 }` is TS2464 — the rejection batch CY recorded with exactly
+  this blocker. The remaining 43 were opened one by one and every one needs
+  machinery rather than a rule: generic inference with no candidates
+  (`unknown`), contextual typing of a `super()` argument through the base
+  constructor's instantiation, overload resolution against the lib
+  `Object` type, the `typeof x` EXPRESSION being the full tag union, catch
+  bindings typed `unknown`, decorator expressions that never reach the AST.
+  One environment note: `parser_typescript_wbtest`'s precision-floor test
+  reads `typescript/tests/baselines/reference`, which this checkout of the
+  old submodule does not have, so every case reads as clean and the floor
+  fails on any finding — an artifact of the checkout, not of the checker.
 - `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

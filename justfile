@@ -260,9 +260,15 @@ checker-miss-buckets *ARGS:
 # flagged only for `d.rawJSON` on an un-narrowed `unknown`; `JSON.isRawJSON`
 # narrows now, and its real error (TS2540, writing the readonly lib member)
 # needs ES2026's `RawJSON` modelled.
+#
+# 50 -> 43 in batch FU: TS2804 (a private name on both the static and the
+# instance side), a constructor writing a different literal to a readonly
+# literal field, `var s = Symbol` as a computed key, the `unknown` narrowing
+# `controlFlowTypeofObject` needs, and three files the earlier half of the
+# batch picked up while removing effect / zod false positives.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 50
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 43
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #
