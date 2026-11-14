@@ -1617,6 +1617,30 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // typeof T
     Typeof => {
       let _ = self.advance()
+      // `typeof this` / `typeof this.a.b`: kept as `TypeOf("this…")` so the
+      // checker can see the `this` reference (TS2683 in a plain function);
+      // every consumer that resolves a query base treats `this` as opaque.
+      if self.peek().kind is Ident("this") {
+        let _ = self.advance()
+        let mut query = "this"
+        while self.check(Dot) {
+          let save = self.pos
+          let _ = self.advance()
+          let seg : String? = try self.parse_typeof_query_segment() catch {
+            _ => None
+          } noraise {
+            s => Some(s)
+          }
+          match seg {
+            Some(sg) => query += "." + sg
+            None => {
+              self.pos = save
+              break
+            }
+          }
+        }
+        return TypeOf(query)
+      }
       let saved_pos = self.pos
       self.parse_typeof_type_query() catch {
         _ => {

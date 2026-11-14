@@ -30817,6 +30817,16 @@ fn check_implicit_any_this(
 }
 
 ///|
+fn type_queries_this(t : @ast.TsType) -> Bool {
+  match t {
+    TypeOf(q) => q == "this" || q.has_prefix("this.")
+    Array(e) | Rest(e) | Keyof(e) => type_queries_this(e)
+    Union(ps) | Intersection(ps) | Tuple(ps) => ps.iter().any(type_queries_this)
+    _ => false
+  }
+}
+
+///|
 fn ts2683_walk_expr(
   issues : Array[ExprIssue],
   e : @ast.TsExpr,
@@ -30979,7 +30989,15 @@ fn ts2683_walk_stmts(
       // initializer (its declared type may carry a `this` parameter) —
       // skip those; unannotated initializers keep the implicit-any
       // verdict.
-      Var(_, ty, init) | Let(_, ty, init) | Const(_, ty, init) =>
+      Var(_, ty, init) | Let(_, ty, init) | Const(_, ty, init) => {
+        // `let x: typeof this.no` reads `this` in a TYPE position, which is
+        // the same implicit-any `this` an expression would be.
+        if in_plain && type_queries_this(ty) {
+          issues.push({
+            path: owner,
+            message: "`this` implicitly has type `any` because it does not have a type annotation",
+          })
+        }
         match init {
           FuncExpr(_) =>
             if !is_checkable(ty) {
@@ -30987,6 +31005,7 @@ fn ts2683_walk_stmts(
             }
           _ => ts2683_walk_expr(issues, init, in_plain, owner)
         }
+      }
       Assign(_, e) =>
         match e {
           FuncExpr(_) => ()
@@ -36845,7 +36864,9 @@ fn collect_typeof_query_bases(ty : @ast.TsType, out : Array[String]) -> Unit {
         Some(i) => q[:i].to_owned()
         None => q
       }
-      out.push(base)
+      if base != "this" {
+        out.push(base)
+      }
     }
     Array(e) | Rest(e) | Keyof(e) => collect_typeof_query_bases(e, out)
     Union(parts) | Intersection(parts) | Tuple(parts) =>
