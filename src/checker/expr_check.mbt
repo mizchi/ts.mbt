@@ -7016,6 +7016,85 @@ fn current_enclosing_class(path_prefix : String) -> String? {
 }
 
 ///|
+fn lacks_required_string_index_signature(
+  src : @ast.TsType,
+  tgt : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let sn = match src {
+    Named(n) | Applied(n, _) => n
+    _ => return false
+  }
+  if !is_declared_object_type_without_string_index(src, resolver) {
+    return false
+  }
+  // The target: a string index signature whose value is not `any`.
+  let value_needs = fn(v : @ast.TsType) { !(v is Any) }
+  match tgt {
+    Object(fields) =>
+      fields.iter().any(fn(f) { f.0 is String_ && value_needs(f.1) })
+    Applied("Record", [String_, v]) =>
+      resolver.type_aliases.get("Record") is None && value_needs(v)
+    Named(tn) | Applied(tn, _) =>
+      match resolver.interfaces.get(tn) {
+        Some(ti) =>
+          tn != sn &&
+          ti.index_signatures
+          .iter()
+          .any(fn(sig) { sig.0 is String_ && value_needs(sig.1) })
+        None => false
+      }
+    _ => false
+  }
+}
+
+///|
+/// A declared interface or class, none of whose declarations (or bases)
+/// carries a string index signature — the shapes that get no IMPLICIT one.
+fn is_declared_object_type_without_string_index(
+  src : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let sn = match src {
+    Named(n) | Applied(n, _) => n
+    _ => return false
+  }
+  let src_ok = match (resolver.interfaces.get(sn), resolver.classes.get(sn)) {
+    (Some(_), None) =>
+      resolver.type_aliases.get(sn) is None &&
+      !interface_chain_has_string_key_indexer(resolver, sn, 0)
+    (None, Some(c)) =>
+      c.base_names.length() == 0 &&
+      c.base_expr is None &&
+      !c.index_signatures.iter().any(fn(sig) { sig.0 is (String_ | Any) })
+    _ => false
+  }
+  src_ok
+}
+
+///|
+fn interface_chain_has_string_key_indexer(
+  resolver : Resolver,
+  name : String,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return true
+  }
+  match resolver.interfaces.get(name) {
+    Some(iface) =>
+      iface.index_signatures.iter().any(fn(sig) { sig.0 is (String_ | Any) }) ||
+      iface.extends_names
+      .iter()
+      .any(fn(b) {
+        resolver.interfaces.get(b) is None ||
+        interface_chain_has_string_key_indexer(resolver, b, depth + 1)
+      })
+    None => true
+  }
+}
+
+///|
 /// A generic CLASS instance (`B<number>`) against a target that no class
 /// instance can be, whatever the type arguments: a primitive, or another
 /// class with a `private` / `protected` member the source's class chain
@@ -13568,6 +13647,32 @@ fn check_expr_against(
   }
   let inferred_u = ctx.resolver.unwrap_containers(inferred)
   let expected_u = ctx.resolver.unwrap_containers(expected)
+  // An INTERFACE or CLASS value has no implicit index signature, so it is
+  // not assignable to a target with a `string` index signature (unless the
+  // signature's value is `any`): `Foo` / `NM<Function>` into
+  // `Record<string, string>` / `SM<T>` is TS2322 / TS2345, probed. A type
+  // ALIAS of an object type does get one and is not judged here.
+  // ...and a `[k: string]: any` target accepts every interface or class
+  // value outright, which the structural comparison below reported.
+  if is_declared_object_type_without_string_index(inferred_u, ctx.resolver) &&
+    (match ctx.resolver.unwrap(expected_u) {
+      Object([(String_, Any)]) => true
+      _ => false
+    }) {
+    return
+  }
+  if lacks_required_string_index_signature(
+      inferred_u,
+      ctx.resolver.unwrap(expected_u),
+      ctx.resolver,
+    ) {
+    record(
+      ctx,
+      sub_path,
+      "index signature for type `string` is missing in type `\{type_display(inferred_u)}`",
+    )
+    return
+  }
   // Argument-independent verdicts for a GENERIC class instance, decided
   // before the in-scope type-parameter abstentions below, which a `B<T>`
   // inside `function f<T>` would otherwise hit (narrowingGenericTypeFrom
