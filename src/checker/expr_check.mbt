@@ -1887,6 +1887,14 @@ fn Resolver::ingest_module(
     // accumulate them as a Union of Func types so infer_call can pick the
     // right branch at each call site.
     let key = prefix + imp.name
+    // An OVERLOAD SET is a `Union` of `Func`s here, which is also how a
+    // union-typed function VALUE is spelled — and the two relate
+    // oppositely (an overload set is assignable when SOME member is, a
+    // union value when EVERY member is). This marker is what tells them
+    // apart at a use of the name.
+    if r.globals.get(key) is Some(Func(_, _) | Union(_)) {
+      r.globals["@fn-overload-set:" + key] = Any
+    }
     match r.globals.get(key) {
       Some(Func(_, _) as existing) =>
         r.globals[key] = @ast.TsType::Union([existing, new_sig])
@@ -11840,7 +11848,12 @@ fn solve_generic_bindings(
       break
     }
     if i < args.length() {
-      let actual = infer_expr(env, resolver, args[i])
+      let actual = overload_set_inference_source(
+        env,
+        resolver,
+        args[i],
+        infer_expr(env, resolver, args[i]),
+      )
       // Widen (union across positions) only for a bare type parameter that
       // is never nested elsewhere; otherwise keep first-wins.
       let soft = match params[i] {
@@ -11968,6 +11981,106 @@ fn widen_fresh_literal_bindings(
     }
   }
   bindings
+}
+
+///|
+/// `Some(src)` when `src` is one of the lib's always-object types,
+/// undeclared in this program, and `expected` admits only primitives (a
+/// primitive, a literal, `null` / `undefined` / `void`, or a union of
+/// those). See the rule in `check_expr_against`.
+fn lib_object_type_into_primitive(
+  resolver : Resolver,
+  src : @ast.TsType,
+  expected : @ast.TsType,
+) -> @ast.TsType? {
+  let name = match src {
+    Applied(n, _) | Named(n) => n
+    _ => return None
+  }
+  let lib_object = match name {
+    "Promise"
+    | "Map"
+    | "Set"
+    | "WeakMap"
+    | "WeakSet"
+    | "ReadonlyMap"
+    | "ReadonlySet"
+    | "Array"
+    | "ReadonlyArray"
+    | "Date"
+    | "RegExp" => true
+    _ => false
+  }
+  if !lib_object ||
+    resolver.interfaces.contains(name) ||
+    resolver.classes.contains(name) ||
+    resolver.type_aliases.contains(name) ||
+    resolver.enums.contains(name) {
+    return None
+  }
+  fn primitive_only(t : @ast.TsType) -> Bool {
+    match t {
+      String_ | Number | Boolean | BigInt | Symbol => true
+      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) =>
+        true
+      // Not `void`: a callback typed `() => void` may return anything.
+      Undefined | Null => true
+      Union(ms) => ms.length() > 0 && ms.iter().all(primitive_only)
+      _ => false
+    }
+  }
+  if primitive_only(resolver.unwrap(expected)) {
+    Some(src)
+  } else {
+    None
+  }
+}
+
+///|
+/// The type an argument contributes to inference. An OVERLOADED function
+/// passed by name contributes its LAST signature, which is tsc's rule
+/// (`inferFromSignatures` uses the last one), rather than the union of
+/// every member that names it here.
+fn overload_set_inference_source(
+  env : ExprEnv,
+  resolver : Resolver,
+  arg : @ast.TsExpr,
+  actual : @ast.TsType,
+) -> @ast.TsType {
+  match (arg, actual) {
+    (Var(n), Union(parts)) if env.lookup(n) is None &&
+      resolver.globals.contains("@fn-overload-set:" + n) &&
+      parts.length() > 0 => parts[parts.length() - 1]
+    _ => actual
+  }
+}
+
+///|
+/// TS2345 / TS2322 for an OVERLOADED function passed by name where a
+/// function type is expected: it is assignable when SOME member is, and an
+/// error only when NONE is. `Some(true)` = report, `Some(false)` = a member
+/// fits, `None` = not this shape (or a member this cannot compare).
+fn overload_set_value_mismatch(
+  env : ExprEnv,
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+  expected : @ast.TsType,
+) -> Bool? {
+  guard expr is Var(n) &&
+    env.lookup(n) is None &&
+    resolver.globals.contains("@fn-overload-set:" + n) else {
+    return None
+  }
+  guard resolver.globals.get(n) is Some(Union(parts)) else { return None }
+  let target = resolver.unwrap(expected)
+  guard target is Func(_, _) else { return None }
+  if !is_checkable(target) {
+    return None
+  }
+  for p in parts {
+    guard p is Func(_, _) && is_checkable(p) else { return None }
+  }
+  Some(!parts.iter().any(fn(p) { is_assignable_to(p, target) }))
 }
 
 ///|
@@ -13226,6 +13339,64 @@ fn check_expr_against(
   // REAL in-scope parameter lives, and it is honoured as before).
   if expected_mentions_phantom_type_param(expected, ctx, sub_path) {
     return
+  }
+  // TS2322 / TS2345: a lib OBJECT type — `Promise<T>`, `Map<K, V>`,
+  // `Array<T>` and their siblings — where only primitives are expected.
+  // These are `Applied` names the resolver has no declaration for, so every
+  // relation below abstained on them, and `const s: string = fetchName()`
+  // with `fetchName(): Promise<string>` — the missing `await`, the
+  // commonest async mistake there is — reported nothing. No value of
+  // these types is ever a primitive, so the only thing to rule out is that
+  // the name means something else in this program: a declaration of it
+  // (an augmentation, or a local type that shadows the lib one) abstains.
+  //
+  // Not at a `return` or `yield`: in an `async` body both are checked
+  // against the UNWRAPPED element type and tsc awaits the operand
+  // (`async function f(): Promise<string> { return g() }` with `g():
+  // Promise<string>` is legal), and this site cannot tell an async body
+  // from a sync one — the sync `return` that a missing `await` breaks is
+  // the MISS that buys it.
+  //
+  // And at a call ARGUMENT only when the callee is a resolved, non-generic
+  // declaration in this program (`arg_callee_non_generic`): the lib member
+  // tables model some parameters narrower than lib.d.ts does —
+  // `String.prototype.replace` takes `string` there where the lib takes
+  // `string | RegExp` — so `s.replace(/x/g, "")` would be reported. The
+  // binding and assignment positions read a type the program wrote.
+  let at_return_or_yield = sub_path.has_prefix("return") ||
+    sub_path.contains("yield") ||
+    (sub_path.contains("arg[") && !arg_callee_non_generic)
+  match
+    (if at_return_or_yield {
+      None
+    } else {
+      lib_object_type_into_primitive(
+        ctx.resolver,
+        infer_expr(env, ctx.resolver, expr),
+        expected,
+      )
+    }) {
+    Some(src) => {
+      record(
+        ctx,
+        sub_path,
+        "type `\{type_display(src)}` is not assignable to type `\{type_display(expected)}`",
+      )
+      return
+    }
+    None => ()
+  }
+  match overload_set_value_mismatch(env, ctx.resolver, expr, expected) {
+    Some(true) => {
+      record(
+        ctx,
+        sub_path,
+        "no overload of `\{type_display(infer_expr(env, ctx.resolver, expr))}` is assignable to `\{type_display(expected)}`",
+      )
+      return
+    }
+    Some(false) => return
+    None => ()
   }
   // Contextual typing for arrow / function expressions: when the value being
   // passed is a callable and the expected slot is `Func(formal_params,
