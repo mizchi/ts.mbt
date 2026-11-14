@@ -12378,6 +12378,13 @@ fn check_expr_against(
   // narrows `symObj: Symbol` to `symbol`, which tsc does not do for
   // non-union declarations), and these rules must see the annotation.
   let src_shape = match expr {
+    // ...except where the current type is a DECLARED subtype of the
+    // declaration, which only a guard produces (`isIpv4Address(that)` on
+    // `that: Equal`) and which tsc does narrow to.
+    Var(n) if env.lookup(n) is Some(cur) &&
+      env.lookup_declared(n) is Some(decl) &&
+      predicate_target_extends(ctx.resolver, cur, decl) =>
+      ctx.resolver.unwrap(cur)
     Var(n) =>
       match env.lookup_declared(n) {
         Some(t) if is_checkable(t) => ctx.resolver.unwrap(t)
@@ -21153,6 +21160,7 @@ fn apply_type_predicate_narrowing(
             Some(Var(arg_name)) => {
               let cur = env_lookup_full(env, resolver, arg_name)
               narrow_by_predicate_target(
+                resolver,
                 cur,
                 target,
                 arg_name,
@@ -21195,6 +21203,7 @@ fn apply_type_predicate_narrowing(
     Var(arg_name) => {
       let cur = env_lookup_full(env, resolver, arg_name)
       narrow_by_predicate_target(
+        resolver,
         cur,
         target,
         arg_name,
@@ -21251,6 +21260,7 @@ fn overloaded_predicate_target(
 /// The positive / negative halves of a `x is T` narrowing of one binding,
 /// shared by every route a predicate can arrive by.
 fn narrow_by_predicate_target(
+  resolver : Resolver,
   cur : @ast.TsType,
   target : @ast.TsType,
   arg_name : String,
@@ -21278,6 +21288,12 @@ fn narrow_by_predicate_target(
         Named("Function") | Named("Object") => @ast.TsType::Any
         _ => target
       }
+    // A target DECLARED as extending the current type is a subtype of it,
+    // and tsc narrows to the target itself: `that: Equal` under
+    // `isIpv4Address(that)` with `interface Ipv4Address extends Equal` is
+    // an `Ipv4Address`. The resolver-free `keep` test cannot see the
+    // relation and kept `Equal`.
+    _ if predicate_target_extends(resolver, target, cur) => target
     _ =>
       match then_ty {
         Never => @ast.TsType::Intersection([cur, target])
@@ -21298,6 +21314,25 @@ fn narrow_by_predicate_target(
     (Never, Never) => pair_neg.push((arg_name, else_ty))
     (Never, _) if loose_target => ()
     _ => pair_neg.push((arg_name, else_ty))
+  }
+}
+
+///|
+fn predicate_target_extends(
+  resolver : Resolver,
+  target : @ast.TsType,
+  cur : @ast.TsType,
+) -> Bool {
+  let name_of = fn(t : @ast.TsType) -> String? {
+    match t {
+      Named(n) | Applied(n, _) | Struct(n, _) =>
+        Some(resolver.qualified_names.get(n).unwrap_or(n))
+      _ => None
+    }
+  }
+  match (name_of(target), name_of(cur)) {
+    (Some(t), Some(c)) => t != c && named_iface_extends_reaches(resolver, t, c)
+    _ => false
   }
 }
 
@@ -27725,9 +27760,18 @@ fn stmt_always_exits_with(
     | Label(l, For(_, None | Some(BoolLit(true)), _, body)) =>
       !loop_body_breaks_out(body, Some(l))
     Label(_, inner) => stmt_always_exits_with(inner, env, resolver)
+    // A call to a function DECLARED to return `never`
+    // (`function fail(e: unknown): never`) ends the path, as in tsc's
+    // assertion-call analysis — `catch (e) { throwDefect(e) }`.
+    Expr(Call(name, _)) | Expr(CallExpr(Var(name), _)) =>
+      callee_declared_never(env, resolver, name)
     Switch(scrutinee, cases) => {
-      // Every case body must exit.
-      for c in cases {
+      // Every case body must exit, except an EMPTY one that is not last:
+      // `case "a": case "b": return x` falls through to the shared body.
+      for i, c in cases {
+        if c.body.stmts.length() == 0 && i < cases.length() - 1 {
+          continue
+        }
         if !block_always_exits_with(c.body, env, resolver) {
           return false
         }
@@ -27746,6 +27790,26 @@ fn stmt_always_exits_with(
       // literal-union type.
       switch_covers_union(scrutinee, cases, env, resolver)
     }
+    _ => false
+  }
+}
+
+///|
+fn callee_declared_never(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+) -> Bool {
+  let t = match env.lookup(name) {
+    Some(t) => t
+    None =>
+      match resolver.globals.get(name) {
+        Some(t) => t
+        None => return false
+      }
+  }
+  match resolver.unwrap(t) {
+    Func(_, Never) | GenericFunc(_, _, Func(_, Never)) => true
     _ => false
   }
 }
@@ -33870,6 +33934,11 @@ fn named_iface_extends_reaches(
   from : String,
   to : String,
 ) -> Bool {
+  // A namespace-qualified heritage name (`extends Equal.Equal`, through
+  // `import * as Equal`) is the same declaration as its canonical key.
+  let canon = fn(n : String) { resolver.qualified_names.get(n).unwrap_or(n) }
+  let to = canon(to)
+  let from = canon(from)
   if from == to {
     return true
   }
@@ -33878,6 +33947,7 @@ fn named_iface_extends_reaches(
   for _ in 0..<16 {
     let next : Array[String] = []
     for n in frontier {
+      let n = canon(n)
       if visited.contains(n) {
         continue
       }
@@ -33885,7 +33955,7 @@ fn named_iface_extends_reaches(
       match resolver.interfaces.get(n) {
         Some(i) =>
           for en in i.extends_names {
-            if en == to {
+            if canon(en) == to {
               return true
             }
             next.push(en)
@@ -33906,13 +33976,13 @@ fn named_iface_extends_reaches(
       match resolver.classes.get(n) {
         Some(c) => {
           for bn in c.base_names {
-            if bn == to {
+            if canon(bn) == to {
               return true
             }
             next.push(bn)
           }
           for im in c.implements_names {
-            if im == to {
+            if canon(im) == to {
               return true
             }
             next.push(im)
@@ -40137,9 +40207,18 @@ fn reached_only_through_index_signature(
   recv : @ast.TsType,
   prop : String,
 ) -> Bool {
+  let mut has_indexer = false
   let fields = match resolver.unwrap(recv) {
     Object(fs) => fs
-    Struct(_, fs) => {
+    // `unwrap` leaves an interface reference `Named`.
+    Named(n) if resolver.interfaces.get(n) is Some(_) =>
+      return interface_chain_has_string_indexer(resolver, n, 0) &&
+        !interface_chain_declares_field(resolver, n, prop, 0)
+    Struct(n, fs) => {
+      // An interface's index signatures are not among the expanded fields;
+      // they live on the declaration (`interface JsonSchema { [x: string]:
+      // unknown }`, so `delete schema.anyOf` was read as a required member).
+      has_indexer = interface_chain_has_string_indexer(resolver, n, 0)
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fs {
         out.push((@ast.TsType::Literal(f.0), f.1))
@@ -40148,7 +40227,6 @@ fn reached_only_through_index_signature(
     }
     _ => return false
   }
-  let mut has_indexer = false
   for f in fields {
     match f.0 {
       Literal(k) => if k == prop { return false }
@@ -40157,6 +40235,56 @@ fn reached_only_through_index_signature(
     }
   }
   has_indexer
+}
+
+///|
+fn interface_chain_declares_field(
+  resolver : Resolver,
+  name : String,
+  prop : String,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    // Out of depth: claim the field is declared, which keeps the report.
+    return true
+  }
+  match resolver.interfaces.get(name) {
+    Some(iface) =>
+      iface.fields.iter().any(fn(f) { f.0 == prop }) ||
+      iface.extends_names
+      .iter()
+      .any(fn(b) {
+        interface_chain_declares_field(resolver, b, prop, depth + 1)
+      })
+    None => false
+  }
+}
+
+///|
+fn interface_chain_has_string_indexer(
+  resolver : Resolver,
+  name : String,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  match resolver.interfaces.get(name) {
+    Some(iface) => {
+      for sig in iface.index_signatures {
+        if sig.0 is (String_ | Number | Int | Symbol) {
+          return true
+        }
+      }
+      for b in iface.extends_names {
+        if interface_chain_has_string_indexer(resolver, b, depth + 1) {
+          return true
+        }
+      }
+      false
+    }
+    None => false
+  }
 }
 
 ///|
@@ -41922,6 +42050,30 @@ fn check_module_function_bodies_layered(
       if !gm.has_prefix("<") {
         all.push({ path: "\{prefix} > grammar", message: gm, })
       }
+    }
+  }
+  // A LOCAL class's members are checked here with the module's env, which
+  // cannot see the enclosing function's bindings — so
+  // `(tag: Tag) => { class Base { readonly _tag = tag } }` read `tag` as
+  // undeclared. The enclosing function's own walk already visits the same
+  // bodies under the right scope and reports a genuinely undeclared name
+  // there, so the class-level "cannot find name" is dropped.
+  let local_class_paths : Array[String] = []
+  for c in module_.classes {
+    if c.is_local {
+      local_class_paths.push(c.name)
+    }
+  }
+  if local_class_paths.length() > 0 {
+    let kept = all.filter(fn(i) {
+      !(i.message.has_prefix("cannot find name") &&
+      local_class_paths
+      .iter()
+      .any(fn(n) { i.path.contains("function \{n}.") || i.path == "class \{n}" }))
+    })
+    all.clear()
+    for i in kept {
+      all.push(i)
     }
   }
   // tsc gates the TS2695 comma-operator check on `allowUnreachableCode`
