@@ -25746,6 +25746,8 @@ fn check_call_args_in_expr(
     Call(name, args) => {
       if name == "super" {
         check_super_call_contextual_args(env, ctx, args)
+      } else if env.lookup(name) is None {
+        check_conflicting_inference_candidates(env, ctx, name, args)
       }
       // TS2304: calling a name declared nowhere and not a standard global.
       check_undefined_name(env, ctx, name)
@@ -30871,6 +30873,130 @@ fn any_expr_uses_this(es : Array[@ast.TsExpr]) -> Bool {
     }
   }
   false
+}
+
+///|
+/// TS2345 for conflicting inference candidates: a type parameter `T` whose
+/// candidates, gathered from bare `T` parameters, `T[]` array literals,
+/// object-literal members and the bodies of parameterless arrows, include
+/// two from different primitive or enum FAMILIES (`f(1, "s")`,
+/// `f(E1.X, E2.X)`, `f({ r: () => 1 }, "s")`). tsc fixes `T` to the first
+/// and rejects the later argument. A union, an object, `any` or a nullish
+/// candidate abstains for that `T`, since those are where tsc unions or
+/// absorbs.
+fn check_conflicting_inference_candidates(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  args : Array[@ast.TsExpr],
+) -> Unit {
+  guard ctx.resolver.signatures.get(name) is Some(params) else { return }
+  guard ctx.resolver.func_type_params.get(name) is Some(tps) else { return }
+  if tps.length() == 0 ||
+    ctx.resolver.globals.contains("@overloads:" + name) ||
+    params.iter().any(fn(p) { p.is_rest }) {
+    return
+  }
+  let cands : Map[String, Array[(String, String)]] = Map([])
+  let poisoned : Map[String, Unit] = Map([])
+  let family = fn(t : @ast.TsType) -> String? {
+    match ctx.resolver.unwrap(t) {
+      Number | Int | NumberLiteral(_) => Some("number")
+      String_ | Literal(_) => Some("string")
+      Boolean | BooleanLiteral(_) => Some("boolean")
+      BigInt | BigIntLiteral(_) => Some("bigint")
+      Named(n) if ctx.resolver.enums.contains(n) => Some("enum " + n)
+      _ => None
+    }
+  }
+  fn add(tp : String, e : @ast.TsExpr) -> Unit {
+    if poisoned.contains(tp) {
+      return
+    }
+    // An enum member infers as `number` here, so `E.X` is read off the
+    // syntax: its family is the enum itself.
+    match e {
+      PropAccess(Var(en), _) if env.lookup(en) is None &&
+        ctx.resolver.enums.contains(en) => {
+        let f = "enum " + en
+        match cands.get(tp) {
+          Some(list) => list.push((f, en))
+          None => cands[tp] = [(f, en)]
+        }
+        return
+      }
+      _ => ()
+    }
+    let t = infer_expr(env, ctx.resolver, e)
+    match family(t) {
+      Some(f) => {
+        let shown = type_display(widen_literal(t))
+        match cands.get(tp) {
+          Some(list) => list.push((f, shown))
+          None => cands[tp] = [(f, shown)]
+        }
+      }
+      None => poisoned[tp] = ()
+    }
+  }
+
+  fn walk(pt : @ast.TsType, e : @ast.TsExpr) -> Unit {
+    match (pt, e) {
+      (Named(t), _) if tps.contains(t) => add(t, e)
+      (Array(Named(t)), ArrayLit(items)) if tps.contains(t) =>
+        for it in items {
+          if it is Spread(_) {
+            poisoned[t] = ()
+          } else {
+            add(t, it)
+          }
+        }
+      (Object(fields), ObjectLit(entries)) =>
+        for f in fields {
+          match f.0 {
+            Literal(k) =>
+              match entries.iter().find_first(fn(en) { en.0 == k }) {
+                Some(en) => walk(f.1, en.1)
+                None => ()
+              }
+            _ => ()
+          }
+        }
+      (Func([], Named(t)), ArrowFunc([], _, ArrowExpr(body), false)) if tps.contains(
+          t,
+        ) => add(t, body)
+      _ => ()
+    }
+  }
+
+  for i, a in args {
+    if i < params.length() {
+      walk(params[i].type_, a)
+    }
+  }
+  for tp, list in cands {
+    if poisoned.contains(tp) || list.length() < 2 {
+      continue
+    }
+    let first = list[0]
+    // A numeric enum and `number` are mutually assignable, so that pair
+    // is no conflict (and a string enum against `number` abstains too).
+    let compatible = fn(a : String, b : String) {
+      a == b ||
+      (a == "number" && b.has_prefix("enum ")) ||
+      (b == "number" && a.has_prefix("enum "))
+    }
+    for c in list[1:] {
+      if !compatible(c.0, first.0) {
+        record(
+          ctx,
+          "call `\{name}`",
+          "argument of type `\{c.1}` is not assignable to parameter of type `\{first.1}`",
+        )
+        return
+      }
+    }
+  }
 }
 
 ///|
