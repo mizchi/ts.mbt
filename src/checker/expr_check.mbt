@@ -23104,6 +23104,22 @@ fn check_ident_binding_decl(
   if !mutable_ && block_scoped {
     record_aliased_condition(env, ctx.resolver, name, init)
   }
+  // TS2684 evidence for a DETACHED method: `let x = i.explicitThis` where
+  // the member declares a non-void `this` makes a later plain `x(12)`
+  // supply `this: void`, which it cannot accept.
+  if !is_checkable(declared) {
+    match init {
+      PropAccess(r, m) =>
+        match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r)) {
+          Named(i) | Applied(i, _) =>
+            if ctx.resolver.this_param_members.get(i + "." + m) is Some(true) {
+              env.bind("<this-required>" + name, Any)
+            }
+          _ => ()
+        }
+      _ => ()
+    }
+  }
   // TS2454: parser-synthesised `Var("__ts_no_init__")` marker means
   // `let x: T;` / `var x: T;` with no `=` initializer. Track the binding as
   // unassigned so later references can be flagged. Only do this when the
@@ -23670,6 +23686,10 @@ fn narrow_after_assignment(
   name : String,
   value : @ast.TsExpr,
 ) -> Unit {
+  // A reassignment also drops a detached-method `this` requirement.
+  if env.lookup("<this-required>" + name) is Some(_) {
+    env.narrow("<this-required>" + name, @ast.TsType::Never)
+  }
   // An assignment cancels every aliased condition that narrows this name:
   // tsc refuses to see through an alias to a reference that is assigned.
   let stale : Array[String] = []
@@ -25686,6 +25706,13 @@ fn check_call_args_in_expr(
     Call(name, args) => {
       // TS2304: calling a name declared nowhere and not a standard global.
       check_undefined_name(env, ctx, name)
+      if env.lookup("<this-required>" + name) is Some(Any) {
+        record_unfiltered(
+          ctx,
+          "call `\{name}`",
+          "the `this` context of type `void` is not assignable to the method's declared `this`",
+        )
+      }
       check_class_called_without_new(env, ctx, name, None)
       // TS2345 for the `BigInt` builtin (`(string | number | bigint |
       // boolean)`): nullish literals report under strictNullChecks;
