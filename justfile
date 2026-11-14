@@ -280,9 +280,12 @@ checker-miss-buckets *ARGS:
 # normalized union, each member given the others' keys as `?: undefined`).
 # 10 -> 9 with `mixinAccessors3`: TS2611 through `extends mixin(Base)`, the
 # base being the intersection of the mixin's class expression and `Base`.
+# 9 -> 7 in batch FW with `intraExpressionInferences` and `override19`:
+# the parser keeps an un-inlined copy of a bounded `declare function`'s
+# signature, so call-site inference can still say which argument `T` was.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 9
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 7
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

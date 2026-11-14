@@ -285,6 +285,9 @@ pub struct Parser {
   // the type cannot answer and the modifier needs its own channel.
   // Drained per class into `<optional-member:...>` sentinels.
   optional_member_names : Array[String]
+  // `declare function` signatures with bounded type parameters, re-parsed
+  // without bound inlining (see `TsModule.raw_generic_signatures`).
+  raw_generic_signatures : Map[String, @ast.TsType]
   // `NAME\u{0}LITERAL` for an unannotated READONLY instance field whose
   // initializer is a literal. Drained per class into a
   // `<readonly-literal:…>` sentinel: such a field has the literal type,
@@ -498,6 +501,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    raw_generic_signatures: {},
     readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],
@@ -828,6 +832,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_class_dups: [],
     quoted_member_names: [],
     optional_member_names: [],
+    raw_generic_signatures: {},
     readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],

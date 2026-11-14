@@ -613,3 +613,39 @@ test "batch FV: overload sets as values, lib object types into primitives" {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
+
+///|
+test "batch FW: un-inlined generic signatures for call inference and mixin bases" {
+  let src =
+    #|class Wrapper<T = any> { public value?: T; }
+    #|type WrappedMap = Record<string, Wrapper>;
+    #|type Unwrap<D extends WrappedMap> = { [K in keyof D]: D[K] extends Wrapper<infer T> ? T : never; };
+    #|type MC<I extends WrappedMap, O extends WrappedMap> = { setup(): { inputs: I; outputs: O }; map?: (inputs: Unwrap<I>) => Unwrap<O>; };
+    #|declare function createMC<I extends WrappedMap, O extends WrappedMap>(def: MC<I, O>): void;
+    #|function badIntraInference() {
+    #|  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: inputs.nonexistent }; } });
+    #|}
+    #|function okIntraInference() {
+    #|  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: inputs.num }; } });
+    #|}
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okIntraInference"), msg="okIntraInference")
+  assert_true(eff_has(issues, "badIntraInference"), msg="badIntraInference")
+  let mixin_src =
+    #|// @noImplicitOverride: true
+    #|type Foo = abstract new(...args: any) => any;
+    #|declare function CreateMixin<C extends Foo, T extends Foo>(Context: C, Base: T): T & { new (...args: any[]): { context: InstanceType<C> } }
+    #|class Context {}
+    #|class A { doSomething() {} }
+    #|class Bad extends CreateMixin(Context, A) { override foo() {} }
+    #|class OkOverride extends CreateMixin(Context, A) { override doSomething() {} }
+    #|class OkContext extends CreateMixin(Context, A) { override context: Context = new Context(); }
+    #|class OkNoModifier extends CreateMixin(Context, A) { doSomething() {} }
+  let m = parse_module_or_empty(mixin_src)
+  let oi = check_override_modifiers(m)
+  let has = fn(c : String) { oi.iter().any(fn(i) { i.path == "class \{c}" }) }
+  assert_true(has("Bad"))
+  assert_false(has("OkOverride"))
+  assert_false(has("OkContext"))
+  assert_false(has("OkNoModifier"))
+}

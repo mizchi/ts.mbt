@@ -1863,6 +1863,11 @@ fn Resolver::ingest_module(
   for v in module_.values {
     r.globals[prefix + v.name] = v.type_
   }
+  for name, sig in module_.raw_generic_signatures {
+    if sig is Func(_, _) {
+      r.globals["@raw-sig:" + prefix + name] = sig
+    }
+  }
   for imp in module_.imports {
     // Drop a leading `this` parameter (`declare function f(this: T, a)`): it
     // declares the callee's `this` type, not an argument position.
@@ -12034,6 +12039,114 @@ fn lib_object_type_into_primitive(
   } else {
     None
   }
+}
+
+///|
+/// Whether `t` carries an object key that is this checker's member marker
+/// (`@@get:x`, `@@set:x`, `@@spread:…`, `@@computed:…`) rather than a
+/// property name — an inferred object-literal type, not one a program
+/// could write.
+fn type_has_member_marker_key(t : @ast.TsType) -> Bool {
+  match t {
+    Object(fs) =>
+      fs.iter().any(fn(f) {
+        (f.0 is Literal(k) && k.has_prefix("@@") && !k.has_prefix("@@iterator")) ||
+        type_has_member_marker_key(f.1)
+      })
+    Union(ms) | Intersection(ms) | Tuple(ms) =>
+      ms.iter().any(type_has_member_marker_key)
+    Array(e) => type_has_member_marker_key(e)
+    _ => false
+  }
+}
+
+///|
+/// `p` with a type-ALIAS application at its head replaced by the alias
+/// body (arguments substituted), repeatedly — what inference needs to see
+/// a `MappingComponent<I, O>` parameter as the object type it names.
+fn expand_alias_head(
+  resolver : Resolver,
+  p : @ast.TsType,
+  depth : Int32,
+) -> @ast.TsType {
+  if depth > 4 {
+    return p
+  }
+  match p {
+    Applied(n, args) =>
+      match resolver.type_aliases.get(n) {
+        Some(a) if a.type_params.length() == args.length() && args.length() > 0 => {
+          let b : Map[String, @ast.TsType] = Map([])
+          for i, tp in a.type_params {
+            b[tp] = args[i]
+          }
+          expand_alias_head(resolver, substitute_params(a.type_, b), depth + 1)
+        }
+        _ => p
+      }
+    _ => p
+  }
+}
+
+///|
+/// The parameters a call to a BOUNDED generic `declare function` is
+/// checked against, instantiated from its un-inlined signature
+/// (`TsModule.raw_generic_signatures`): the type arguments are solved from
+/// the call against parameters that still say `I` and `O`, and a parameter
+/// is instantiated only when every type parameter it mentions was solved
+/// to something checkable — otherwise it keeps the bound-inlined form the
+/// call was always checked against. So `createMappingComponent({ setup()
+/// { return { inputs, outputs } }, map(inputs) { … } })` checks `map`
+/// against `Unwrap<typeof inputs>` where it used to see
+/// `Unwrap<WrappedMap>`. `None` when there is no such signature.
+fn instantiate_raw_generic_params(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  type_params : Array[String],
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  sig : Array[@ast.TsParam]?,
+) -> Array[@ast.TsType]? {
+  guard env.lookup(name) is None else { return None }
+  guard resolver.globals.get("@raw-sig:" + name) is Some(Func(raw, _)) else {
+    return None
+  }
+  if raw.length() != params.length() {
+    return None
+  }
+  let expanded = raw.map(fn(p) { expand_alias_head(resolver, p, 0) })
+  let bindings = solve_generic_bindings(
+    env, resolver, type_params, expanded, args, sig,
+  )
+  // The fallback is exactly what the call was checked against before:
+  // the bound-inlined parameters with THEIR solved bindings substituted.
+  let inlined = substitute_params_array(
+    params,
+    solve_generic_bindings(env, resolver, type_params, params, args, sig),
+  )
+  let out : Array[@ast.TsType] = []
+  for i, p in raw {
+    let mentioned = type_params.filter(fn(tp) { type_param_occurs(tp, p) })
+    let solved = mentioned.iter().all(fn(tp) {
+      match bindings.get(tp) {
+        Some(b) =>
+          is_checkable(b) && !(b is Any) && !type_has_member_marker_key(b)
+        None => false
+      }
+    })
+    // A parameter that IS a bare type parameter instantiates to the
+    // argument's own type, which can only re-check the argument against
+    // itself — and an object literal's inferred type spells a getter as
+    // `@@get:x`, so it would not even do that.
+    let bare = p is Named(n) && type_params.contains(n)
+    if mentioned.length() > 0 && solved && !bare {
+      out.push(substitute_params(p, bindings))
+    } else {
+      out.push(inlined[i])
+    }
+  }
+  Some(out)
 }
 
 ///|
@@ -26755,15 +26868,29 @@ fn check_call_args_in_expr(
             None => []
           }
           let substituted_params = if type_params.length() > 0 {
-            let bindings = solve_generic_bindings(
-              env,
-              ctx.resolver,
-              type_params,
-              params,
-              args,
-              sig,
-            )
-            substitute_params_array(params, bindings)
+            match
+              instantiate_raw_generic_params(
+                env,
+                ctx.resolver,
+                name,
+                type_params,
+                params,
+                args,
+                sig,
+              ) {
+              Some(ps) => ps
+              None => {
+                let bindings = solve_generic_bindings(
+                  env,
+                  ctx.resolver,
+                  type_params,
+                  params,
+                  args,
+                  sig,
+                )
+                substitute_params_array(params, bindings)
+              }
+            }
           } else {
             params
           }
@@ -36799,6 +36926,89 @@ priv struct BaseChainMembers {
 /// missing-member abstention, and a second copy of a walk whose failure mode
 /// is a false positive is the last thing this file needs — see the two
 /// `super` walkers that had drifted apart.
+///|
+/// The base member set of `class C extends f(…, Base, …)` where `f` is a
+/// `declare function` whose UN-INLINED return type is `T & { new (…): S }`
+/// (`TsModule.raw_generic_signatures`) and the argument at the parameter
+/// typed `T` names a class: the instance side is `Base`'s chain plus `S`'s
+/// members, the static side `Base`'s plus the object part's own members.
+/// The bound-inlined signature cannot say which argument `T` was — both
+/// parameters of `CreateMixin<C extends Foo, T extends Foo>(Context: C,
+/// Base: T)` read as `Foo` — which is why `override19` was out of reach.
+/// `None` for any other shape, so the caller keeps abstaining.
+fn mixin_call_base_chain(
+  module_ : @ast.TsModule,
+  cls : @ast.TsClassDecl,
+  class_by_name : Map[String, @ast.TsClassDecl],
+  iface_by_name : Map[String, @ast.TsInterface],
+) -> BaseChainMembers? {
+  guard cls.base_names == ["<expr-base>"] && cls.base_expr is Some(Call(f, args)) else {
+    return None
+  }
+  guard module_.raw_generic_signatures.get(f) is Some(Func(rp, Intersection(parts))) else {
+    return None
+  }
+  let instance : Map[String, Unit] = Map([])
+  let static_ : Map[String, Unit] = Map([])
+  let abstract_ : Map[String, Unit] = Map([])
+  let mut has_class = false
+  let mut has_opaque = false
+  for part in parts {
+    match part {
+      Named(t) => {
+        guard rp.search_by(fn(p) { p == Named(t) }) is Some(i) else {
+          return None
+        }
+        guard args.get(i) is Some(Var(cn)) && class_by_name.get(cn) is Some(c) else {
+          return None
+        }
+        // `cn` itself is the first link: walk from a stand-in whose only
+        // base is `cn`.
+        let chain = resolve_base_chain_members(
+          { ..cls, base_names: [cn], base_expr: None },
+          class_by_name,
+          iface_by_name,
+        )
+        if !chain.resolvable {
+          return None
+        }
+        for k, _ in chain.instance {
+          instance[k] = ()
+        }
+        for k, _ in chain.static_ {
+          static_[k] = ()
+        }
+        for k, _ in chain.abstract_ {
+          abstract_[k] = ()
+        }
+        has_opaque = has_opaque || chain.has_opaque
+        ignore(c)
+        has_class = true
+      }
+      Object(fields) =>
+        for fl in fields {
+          match fl {
+            (Literal("<new>"), Func(_, Object(inst))) =>
+              for g in inst {
+                match g.0 {
+                  Literal(k) => instance[k] = ()
+                  _ => has_opaque = true
+                }
+              }
+            (Literal(k), _) => static_[k] = ()
+            _ => has_opaque = true
+          }
+        }
+      _ => return None
+    }
+  }
+  if !has_class {
+    return None
+  }
+  Some({ instance, static_, abstract_, resolvable: true, has_opaque })
+}
+
+///|
 fn resolve_base_chain_members(
   cls : @ast.TsClassDecl,
   class_by_name : Map[String, @ast.TsClassDecl],
@@ -36960,7 +37170,13 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
     // Resolve the transitive base member set. Bail (conservatively) when
     // any base is generic, expression-shaped, or not declared in-module.
-    let chain = resolve_base_chain_members(cls, class_by_name, iface_by_name)
+    let mixin_chain = mixin_call_base_chain(
+      module_, cls, class_by_name, iface_by_name,
+    )
+    let chain = match mixin_chain {
+      Some(c) => c
+      None => resolve_base_chain_members(cls, class_by_name, iface_by_name)
+    }
     let base_instance = chain.instance
     let base_static = chain.static_
     let base_abstract = chain.abstract_
@@ -37012,8 +37228,13 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
         })
       }
     }
-    // TS4114: genuine overrides missing the modifier.
-    if no_implicit_override {
+    // TS4114: genuine overrides missing the modifier. Not through a mixin
+    // call: tsc does not ask for the modifier when the base is the
+    // intersection a mixin returns (probed — `class G extends
+    // CreateMixin(Context, A) { doSomething() {} }` is ACCEPTED under
+    // `noImplicitOverride`), while it does reject an `override` that
+    // intersection does not declare.
+    if no_implicit_override && mixin_chain is None {
       let flag_missing = fn(name : String, is_static_m : Bool) -> Unit {
         if name == "constructor" ||
           name == "<computed>" ||
