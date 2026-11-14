@@ -1639,14 +1639,15 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
             }
           }
         }
-        return TypeOf(query)
-      }
-      let saved_pos = self.pos
-      self.parse_typeof_type_query() catch {
-        _ => {
-          self.pos = saved_pos
-          self.skip_typeof_operand()
-          Any
+        TypeOf(query)
+      } else {
+        let saved_pos = self.pos
+        self.parse_typeof_type_query() catch {
+          _ => {
+            self.pos = saved_pos
+            self.skip_typeof_operand()
+            Any
+          }
         }
       }
     }
