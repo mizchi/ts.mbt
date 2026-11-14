@@ -243,6 +243,7 @@ fn try_lift_iife_value(
     index_signatures: [],
     static_index_signatures: [],
     decorators: [],
+    member_decorators: [],
     is_declare: false,
     private_members: [],
     protected_members: [],

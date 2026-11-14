@@ -301,3 +301,143 @@ test "TS 7.1: ES2026 lib static guards and augmented lib interfaces" {
   assert_false(eff_has(issues, "okRaw"))
   assert_true(eff_has(issues, "badMine"))
 }
+
+///|
+test "effect: batch FU narrowing — switch typeof, optional discriminant, guards" {
+  let src =
+    #|interface Constraint { readonly mut: string }
+    #|interface declare<T> extends Constraint { readonly t: T }
+    #|interface Rec extends declare<number> { readonly r: number }
+    #|function okDeclareBase(r: Rec): string { return r.mut }
+    #|const one = BigInt(1)
+    #|function okBigUnion(m: bigint | undefined, b: bigint): bigint {
+    #|  const d = m === undefined ? -one : one
+    #|  return b * d
+    #|}
+    #|function okSwitchTypeof(x: number | bigint | string): string {
+    #|  switch (typeof x) {
+    #|    case "number": return x.toFixed(1)
+    #|    case "bigint": return x.toString()
+    #|    default: return x.toUpperCase()
+    #|  }
+    #|}
+    #|function badSwitchTypeof(x: number | string): boolean {
+    #|  switch (typeof x) {
+    #|    case "number": { const b: boolean = x; return b }
+    #|  }
+    #|  return false
+    #|}
+    #|interface Lit { readonly _tag: "Lit"; readonly value: string }
+    #|interface Chr { readonly _tag: "Chr"; readonly intervals: number[] }
+    #|declare function esc(): Lit | Chr | undefined
+    #|function okOptDisc(): number[] | undefined {
+    #|  const e = esc()
+    #|  return e?._tag === "Chr" ? e.intervals : undefined
+    #|}
+    #|function badOptDisc(): string | undefined {
+    #|  const e = esc()
+    #|  return e?._tag === "Chr" ? e.value : undefined
+    #|}
+    #|interface Eq { eq(that: Eq): boolean }
+    #|interface V4 extends Eq { readonly _tag: "V4"; toJSON(): unknown }
+    #|interface V6 extends Eq { readonly _tag: "V6"; words(): number[] }
+    #|declare function isV4(u: unknown): u is V4
+    #|declare function v4(a: V4): number
+    #|declare function v6(a: V6): number
+    #|function okSubtypeGuard(that: Eq) { if (isV4(that)) { v4(that) } }
+    #|function badSubtypeGuard(that: Eq) { if (isV4(that)) { v6(that) } }
+    #|function okAlias(value: object) {
+    #|  const isArr = Array.isArray(value)
+    #|  return isArr ? value.length : 0
+    #|}
+    #|function badAlias(value: object) {
+    #|  const isArr = Array.isArray(value)
+    #|  if (!isArr) { return value.length }
+    #|  return 0
+    #|}
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okDeclareBase"))
+  assert_false(eff_has(issues, "okBigUnion"))
+  assert_false(eff_has(issues, "okSwitchTypeof"))
+  assert_true(eff_has(issues, "badSwitchTypeof"))
+  assert_false(eff_has(issues, "okOptDisc"))
+  assert_true(eff_has(issues, "badOptDisc"))
+  assert_false(eff_has(issues, "okSubtypeGuard"))
+  assert_true(eff_has(issues, "badSubtypeGuard"))
+  assert_false(eff_has(issues, "okAlias"))
+  assert_true(eff_has(issues, "badAlias"))
+}
+
+///|
+test "effect: batch FU control flow and unknown" {
+  let src =
+    #|interface S { _tag: "S" } interface N { _tag: "N" }
+    #|function okEmptyLabels(a: S | N): boolean {
+    #|  switch (a._tag) {
+    #|    case "S":
+    #|    case "N":
+    #|      return true
+    #|    default:
+    #|      return false
+    #|  }
+    #|}
+    #|function fail(e: unknown): never { throw e }
+    #|function noop(e: unknown): void { }
+    #|function okNeverCall(f: () => number): number {
+    #|  try { return f() } catch (e) { fail(e) }
+    #|}
+    #|function badVoidCall(f: () => number): number {
+    #|  try { return f() } catch (e) { noop(e) }
+    #|}
+    #|interface J { [x: string]: unknown; req: number }
+    #|function okDeleteIndexed(j: J) { delete j.extra }
+    #|function badDeleteRequired(j: J) { delete j.req }
+    #|declare function obj(x: object): void
+    #|function okUnknownTruthy(x: unknown) {
+    #|  if (!x) { return }
+    #|  if (typeof x === "object") { obj(x) }
+    #|}
+    #|function okUnknownNotNull(x: unknown) {
+    #|  if (x === null) { return }
+    #|  if (typeof x === "object") { obj(x) }
+    #|}
+    #|function badUnknownTypeof(x: unknown) {
+    #|  if (typeof x === "object") { obj(x) }
+    #|}
+  let issues = eff_issues(src)
+  assert_false(eff_has(issues, "okEmptyLabels"))
+  assert_false(eff_has(issues, "okNeverCall"))
+  assert_true(eff_has(issues, "badVoidCall"))
+  assert_false(eff_has(issues, "okDeleteIndexed"))
+  assert_true(eff_has(issues, "badDeleteRequired"))
+  assert_false(eff_has(issues, "okUnknownTruthy"))
+  assert_false(eff_has(issues, "okUnknownNotNull"))
+  assert_true(eff_has(issues, "badUnknownTypeof"))
+}
+
+///|
+test "batch FU: private-name clash, readonly literal fields, local classes" {
+  let src =
+    #|class E { static #a() {} #a() {} }
+    #|class H { get #f() { return 0 } set #f(v: number) {} static #g = 1 }
+    #|class D {
+    #|  readonly noWiden = 1
+    #|  readonly typed: number = 1
+    #|  constructor() { this.noWiden = 5; this.typed = 7 }
+    #|  m() { let y = this.noWiden; y = 2; return y }
+    #|}
+    #|function outer(tag: string) {
+    #|  class Local { readonly t = tag; m() { return tag } }
+    #|  return Local
+    #|}
+  let issues = eff_issues(src)
+  let msgs = issues.map(fn(i) { i.path + ": " + i.message })
+  assert_true(
+    msgs.iter().any(fn(m) { m.contains("class E") && m.contains("#a") }),
+  )
+  assert_false(msgs.iter().any(fn(m) { m.contains("class H") }))
+  assert_true(msgs.iter().any(fn(m) { m.contains(".noWiden") }))
+  assert_false(msgs.iter().any(fn(m) { m.contains(".typed") }))
+  assert_false(msgs.iter().any(fn(m) { m.contains("D.m") }))
+  assert_false(msgs.iter().any(fn(m) { m.contains("cannot find name `tag`") }))
+}

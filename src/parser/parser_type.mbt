@@ -416,6 +416,9 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
       self.pos = saved_pos
       return None
     }
+    // A mapped key is a type binder; `<infer-bound-ref:…>` must not read
+    // it as an undeclared name.
+    self.grammar_misuses.push("<type-binder:\{key_param}>")
     let keys_type = self.parse_type()
     let remap : @ast.TsType? = if self.match_(As) || self.match_ident("as") {
       Some(self.parse_type())
@@ -1614,12 +1617,37 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // typeof T
     Typeof => {
       let _ = self.advance()
-      let saved_pos = self.pos
-      self.parse_typeof_type_query() catch {
-        _ => {
-          self.pos = saved_pos
-          self.skip_typeof_operand()
-          Any
+      // `typeof this` / `typeof this.a.b`: kept as `TypeOf("this…")` so the
+      // checker can see the `this` reference (TS2683 in a plain function);
+      // every consumer that resolves a query base treats `this` as opaque.
+      if self.peek().kind is Ident("this") {
+        let _ = self.advance()
+        let mut query = "this"
+        while self.check(Dot) {
+          let save = self.pos
+          let _ = self.advance()
+          let seg : String? = try self.parse_typeof_query_segment() catch {
+            _ => None
+          } noraise {
+            s => Some(s)
+          }
+          match seg {
+            Some(sg) => query += "." + sg
+            None => {
+              self.pos = save
+              break
+            }
+          }
+        }
+        TypeOf(query)
+      } else {
+        let saved_pos = self.pos
+        self.parse_typeof_type_query() catch {
+          _ => {
+            self.pos = saved_pos
+            self.skip_typeof_operand()
+            Any
+          }
         }
       }
     }
@@ -1700,6 +1728,7 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Ident("infer") => {
       let _ = self.advance()
       let name = if self.is_ident() { self.parse_binding_ident() } else { "_" }
+      self.grammar_misuses.push("<type-binder:\{name}>")
       // May have extends constraint. Capture the bound as a second
       // marker argument so the renderer can fall back to it when the
       // surrounding conditional fails to resolve at the bridge boundary
@@ -1709,6 +1738,14 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       if self.check(Extends) {
         let _ = self.advance()
         let bound = self.parse_primary_type() catch { _ => @ast.TsType::Any }
+        // TS2304 evidence for an undeclared bound (`infer A extends B`):
+        // the type parser REDUCES a conditional it can decide, so the bound
+        // may never reach the checker at all — the name rides a marker.
+        match bound {
+          Named(b) if !b.contains(".") && b != name =>
+            self.grammar_misuses.push("<infer-bound-ref:\{b}>")
+          _ => ()
+        }
         Applied("__tsmbt_infer", [Named(name), bound])
       } else {
         Applied("__tsmbt_infer", [Named(name)])

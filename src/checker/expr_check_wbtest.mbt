@@ -7643,20 +7643,39 @@ fn ts62_issue_count(src : String) -> Int32 {
 }
 
 ///|
-test "expr_check: bare type param unions across argument positions (no FP)" {
-  // All-bare `T` — `string | number`, accepted by tsc.
-  @test.assert_eq(
+test "expr_check: bare type param candidates across argument positions" {
+  // This test used to assert that tsc ACCEPTS `f("a", 1)` (unioning the
+  // two candidates to `string | number`) and that this checker stays
+  // silent. TypeScript 7.1 reports it — TS2345, `1` is not assignable to
+  // `"a"`, because `T` is fixed by the first candidate — so the old
+  // assertion was pinning a gap (probed with scripts/tsc_probe.mjs).
+  assert_true(
     ts62_issue_count(
       "function f<T>(x: T, y: T): T { return x; }\n" +
       "function g(): void { f(\"a\", 1); }",
-    ),
-    0,
+    ) >=
+    1,
   )
-  // Three bare positions union too.
-  @test.assert_eq(
+  assert_true(
     ts62_issue_count(
       "function pick<T>(a: T, b: T, c: T): T { return a; }\n" +
       "function g(): void { pick(1, \"x\", true); }",
+    ) >=
+    1,
+  )
+  // Same family, and a union candidate, stay silent (both accepted).
+  @test.assert_eq(
+    ts62_issue_count(
+      "function pick<T>(a: T, b: T, c: T): T { return a; }\n" +
+      "function g(): void { pick(1, 2, 3); }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    ts62_issue_count(
+      "function pick<T>(a: T, b: T, c: T): T { return a; }\n" +
+      "declare const n: number | string\n" +
+      "function g(): void { pick(n, 1, \"s\"); }",
     ),
     0,
   )
@@ -16915,9 +16934,11 @@ test "member decorator arity" {
       "declare function dec(...a: string[]): void;\nclass C { @dec prop; }", "declare function dec(a: string, b: string, ...r: string[]): void;\nclass C { @dec prop; }",
       "declare function dec(a?: string, b?: string): void;\nclass C { @dec prop; }",
       // A decorator whose signature is not in hand abstains: an
-      // undeclared name, and a CALLED factory (whose result type carries
+      // `any`-typed name, and a CALLED factory (whose result type carries
       // no optionality information, so the arity range would be a guess).
-       "class C { @unknownDec prop; }", "declare function dec(): (a: string) => void;\nclass C { @dec() prop; }",
+      // (An UNDECLARED name is TS2304 now that member decorator
+      // expressions are walked — tsc reports it too.)
+       "declare const unknownDec: any;\nclass C { @unknownDec prop; }", "declare function dec(): (a: string) => void;\nclass C { @dec() prop; }",
       // An inline expression form is not read at all.
        "class C { @((a: string) => {}) prop; }",
     ] {

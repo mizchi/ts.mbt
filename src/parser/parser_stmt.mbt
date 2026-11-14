@@ -1055,12 +1055,14 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
   let mut catch_name = ""
   let mut had_annotation = false
   if self.match_(Catch) {
+    let mut catch_annot_unknown = false
     if self.match_(LParen) {
       let binding = self.parse_binding_pattern()
       had_annotation = self.check(Colon)
       if self.check(Colon) {
         let _ = self.advance()
         let catch_type = self.parse_type()
+        catch_annot_unknown = catch_type is Unknown
         // TS1196: "Catch clause variable type annotation must be 'any' or
         // 'unknown' if specified." A `throw` can carry any value, so
         // narrowing the caught binding would be a claim TypeScript will not
@@ -1080,6 +1082,23 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
       catch_name = match binding {
         @ast.TsBinding::Ident(n) => n
         _ => ""
+      }
+    }
+    // Which catch bindings the CHECKER should type `unknown`: an
+    // unannotated one under `useUnknownInCatchVariables`, or `: unknown`
+    // written out. Keyed by name, so a `catch (e: any)` anywhere in the file
+    // keeps every `e` at `any` (`<catch-any:…>`) — the AST's catch binding
+    // carries no annotation, and a coarse answer only loses findings.
+    if catch_name != "" {
+      let is_unknown = if had_annotation {
+        catch_annot_unknown
+      } else {
+        self.unknown_catch_variables
+      }
+      if is_unknown {
+        self.grammar_misuses.push("<catch-unknown:\{catch_name}>")
+      } else {
+        self.grammar_misuses.push("<catch-any:\{catch_name}>")
       }
     }
     let catch_body_start = self.pos
@@ -2288,7 +2307,30 @@ fn Parser::parse_var_decl_item(
       }
     }
   }
+  // A WRITTEN `: any` and an absent annotation are the same `Any`
+  // downstream, and only the second takes its type from the initializer:
+  // `const full: any = {}; full.path ??= []` is legal (zod's
+  // `finalizeIssue`), and reading `full` as `{}` reported it. Flat and
+  // scope-blind like the markers below, so a same-named un-annotated
+  // binding elsewhere also keeps `any` — a lost finding, never an invented
+  // one.
+  if annotated && type_ is Any {
+    match binding {
+      @ast.TsBinding::Ident(name) =>
+        self.grammar_misuses.push("<written-any-decl:\{name}>")
+      _ => ()
+    }
+  }
   if !annotated {
+    // TS7010 / TS7011 for a function EXPRESSION that IS the initializer:
+    // an unannotated declaration gives it no contextual return type, so its
+    // own nullish returns widen to `any` exactly as a declaration's do.
+    match init {
+      FuncExpr(f) if !self.last_fn_expr_return_annotated &&
+        !f.is_generator &&
+        !f.is_async => self.record_nullish_widened_return(f.name, f.body)
+      _ => ()
+    }
     self.record_tuple_index_out_of_range(binding, init)
     // TS7031 / TS7018: a `null` / `undefined` literal standing where the
     // declaration's type has to be inferred. Gated on the annotation

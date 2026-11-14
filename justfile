@@ -260,9 +260,15 @@ checker-miss-buckets *ARGS:
 # flagged only for `d.rawJSON` on an un-narrowed `unknown`; `JSON.isRawJSON`
 # narrows now, and its real error (TS2540, writing the readonly lib member)
 # needs ES2026's `RawJSON` modelled.
+#
+# 50 -> 15 in batch FU, one file at a time and each with its legal
+# neighbour probed against TS 7.1; the 15 left each need machinery (generic
+# inference through overloads and conditional types, object-literal
+# normalization, mixin heritage, template-literal relations) rather than a
+# rule. The batch notes in CLAUDE.md list what took each file.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 50
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 15
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

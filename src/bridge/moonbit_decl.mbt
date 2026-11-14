@@ -2746,6 +2746,7 @@ fn collect_exported_decls(
               is_local: false,
               index_signatures: [],
               decorators: [],
+              member_decorators: [],
               is_declare: false,
             },
           })
@@ -12001,6 +12002,7 @@ fn clone_exported_class(
     index_signatures: [],
     static_index_signatures: [],
     decorators: [],
+    member_decorators: [],
     is_declare: false,
     private_members: exported.class_.private_members,
     protected_members: exported.class_.protected_members,
