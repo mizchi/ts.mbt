@@ -3289,6 +3289,24 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // field names so `keyof MyInterface` resolves to a string literal union.
       Keyof(inner) => {
         let resolved_inner = self.unwrap(inner)
+        // `keyof` a TUPLE: `number`, each index as a string literal
+        // (`"0"`, `"1"`, …) and the array members, which is what tsc gives
+        // `keyof [A, B]` — so `Extract<keyof T, `${number}`>` over a tuple
+        // is its index literals. A variadic tuple abstains.
+        match resolved_inner {
+          Tuple(items) if !items.iter().any(fn(t) { t is Rest(_) }) => {
+            let keys : Array[@ast.TsType] = [Number]
+            for i, _ in items {
+              keys.push(Literal(i.to_string()))
+            }
+            for m in array_member_names() {
+              keys.push(Literal(m))
+            }
+            cur = Union(keys)
+            continue
+          }
+          _ => ()
+        }
         let fields = collect_declared_fields(resolved_inner, self)
         if fields.length() == 0 {
           keep_going = false
@@ -6050,6 +6068,49 @@ fn instantiate_method_call_params(
 }
 
 ///|
+/// Undo the parser's bound inlining inside a member type: a subtree equal
+/// to the bound of an interface type parameter `P` is put back as the
+/// receiver's argument for `P`. The interface's own parameters are inlined
+/// into its members, so `get<I extends IndicesOf<TDef>>` with `TDef extends
+/// readonly FieldDefinition[]` arrives as `IndicesOf<readonly
+/// FieldDefinition[]>` and the receiver's tuple never reached it. Only a
+/// bound that no other parameter shares and that is not a primitive (a
+/// primitive also occurs where nobody wrote the parameter), and only in
+/// the positions walked here.
+fn reinstate_inlined_bounds(
+  t : @ast.TsType,
+  bounds : Array[(String, @ast.TsType)],
+  bindings : Map[String, @ast.TsType],
+  depth : Int32,
+) -> @ast.TsType {
+  if depth > 12 || bounds.length() == 0 {
+    return t
+  }
+  for b in bounds {
+    if b.1 == t && !is_primitive_shaped(t) &&
+      bounds.iter().filter(fn(o) { o.1 == t }).count() == 1 {
+      match bindings.get(b.0) {
+        Some(arg) => return arg
+        None => ()
+      }
+    }
+  }
+  let go = fn(x : @ast.TsType) {
+    reinstate_inlined_bounds(x, bounds, bindings, depth + 1)
+  }
+  match t {
+    Applied(n, args) => Applied(n, args.map(go))
+    Union(ms) => Union(ms.map(go))
+    Intersection(ms) => Intersection(ms.map(go))
+    Array(e) => Array(go(e))
+    Tuple(items) => Tuple(items.map(go))
+    Keyof(x) => Keyof(go(x))
+    IndexedAccess(a, k) => IndexedAccess(go(a), go(k))
+    _ => t
+  }
+}
+
+///|
 /// A primitive, a primitive literal, or a union made only of those.
 fn is_primitive_shaped(t : @ast.TsType) -> Bool {
   match t {
@@ -6083,6 +6144,17 @@ fn interface_method_params_with_bounds(
     Named(n) => (n, [])
     Applied(n, a) => (n, a)
     Struct(n, _) => (n, [])
+    // An intersection receiver (`type Point = Members<TDef> & Named<TDef>`)
+    // takes the bounds from the part that declares the method.
+    Intersection(parts) => {
+      for part in parts {
+        let r = interface_method_params_with_bounds(resolver, part, meth, params)
+        if r != params {
+          return r
+        }
+      }
+      return params
+    }
     _ => return params
   }
   guard resolver.interfaces.get(name) is Some(iface) else { return params }
@@ -6130,7 +6202,12 @@ fn interface_method_params_with_bounds(
               // whose bound describes the whole argument TUPLE, not one
               // argument. A rest parameter cannot have a primitive type,
               // so a primitive bound rules the second out by construction.
-              let sub = substitute_params(bound, iface_bindings)
+              let sub = reinstate_inlined_bounds(
+                substitute_params(bound, iface_bindings),
+                iface.type_param_bounds,
+                iface_bindings,
+                0,
+              )
               if is_primitive_shaped(resolver.unwrap(sub)) {
                 sub
               } else {
@@ -11989,6 +12066,143 @@ fn widen_fresh_literal_bindings(
 }
 
 ///|
+/// A GENERIC signature against a generic signature that is the SAME one
+/// up to the names of its type parameters and their constraints — the
+/// only generic-to-generic relation this decides. tsc instantiates the
+/// source with the target's (opaque, constrained) type parameters, which
+/// for identical shapes succeeds exactly when every target constraint is
+/// assignable to the source's: `<T extends 1 | 2 | 3>(x: `${T}`) =>
+/// NMap[T]` into the same signature over `1 | 2 | 3 | 4` is TS2322 and over
+/// `1 | 2` is legal. An unconstrained source parameter accepts anything,
+/// an unconstrained target one is `unknown`. `Some(true)` = mismatch,
+/// `Some(false)` = assignable, `None` = not this shape.
+fn generic_signature_constraint_mismatch(
+  resolver : Resolver,
+  src : @ast.TsType,
+  expected : @ast.TsType,
+) -> Bool? {
+  let tgt = match expected {
+    Named(n) =>
+      match resolver.type_aliases.get(n) {
+        Some(a) if a.type_params.length() == 0 => a.type_
+        _ => expected
+      }
+    _ => expected
+  }
+  guard (src, tgt) is (GenericFunc(sn, sb, sinner), GenericFunc(tn, tb, tinner)) else {
+    return None
+  }
+  if sn.length() != tn.length() || sn.length() == 0 {
+    return None
+  }
+  let rename : Map[String, @ast.TsType] = Map([])
+  for i, n in tn {
+    rename[n] = Named(sn[i])
+  }
+  if substitute_params(tinner, rename) != sinner {
+    return None
+  }
+  guard sinner is Func(sparams, _) else { return None }
+  for n in sn {
+    if !sparams.iter().any(fn(p) { type_param_occurs(n, p) }) {
+      return None
+    }
+  }
+  for i, n in sn {
+    let sbound = match sb.search_by(fn(b) { b.0 == n }) {
+      Some(j) => sb[j].1
+      None => continue
+    }
+    let tbound = match tb.search_by(fn(b) { b.0 == tn[i] }) {
+      Some(j) => substitute_params(tb[j].1, rename)
+      None => @ast.TsType::Unknown
+    }
+    if !is_checkable(sbound) || !is_checkable(tbound) {
+      return None
+    }
+    if type_references_any(sbound, sn) || type_references_any(tbound, sn) {
+      // A RECURSIVE constraint (`<T extends I2<T>>`) mentions the very
+      // parameter being related, so the plain relation cannot read it.
+      // With one type parameter the question is still small: inside the
+      // relation `T` is the TARGET's opaque parameter, assignable to
+      // something only through its own constraint (`tbound`).
+      if sn.length() != 1 {
+        return None
+      }
+      match recursive_bound_assignable(resolver, tbound, sbound, n, tbound, 0) {
+        Some(true) => continue
+        Some(false) => return Some(true)
+        None => return None
+      }
+    }
+    if !is_assignable_to(tbound, sbound) {
+      return Some(true)
+    }
+  }
+  Some(false)
+}
+
+///|
+/// `a` assignable to `b` where both may mention the opaque type parameter
+/// `tp`, whose constraint is `constraint`: `tp` is assignable to itself and
+/// to whatever its constraint is assignable to, and nothing else is
+/// assignable to it; two applications of one generic INTERFACE relate
+/// member by member (covariantly, which is what a property-only shape
+/// gives). Depth-bounded, and `None` for anything else.
+fn recursive_bound_assignable(
+  resolver : Resolver,
+  a : @ast.TsType,
+  b : @ast.TsType,
+  tp : String,
+  constraint : @ast.TsType,
+  depth : Int32,
+) -> Bool? {
+  if depth > 6 {
+    return None
+  }
+  if a == b {
+    return Some(true)
+  }
+  match (a, b) {
+    (Named(x), _) if x == tp =>
+      recursive_bound_assignable(resolver, constraint, b, tp, constraint, depth + 1)
+    (_, Named(y)) if y == tp => Some(false)
+    (Applied(n1, args1), Applied(n2, args2)) if n1 == n2 &&
+      args1.length() == args2.length() => {
+      guard resolver.interfaces.get(n1) is Some(iface) &&
+        iface.type_params.length() == args1.length() &&
+        iface.extends_names.length() == 0 &&
+        iface.index_signatures.length() == 0 &&
+        iface.fields.length() > 0 else {
+        return None
+      }
+      let b1 : Map[String, @ast.TsType] = Map([])
+      let b2 : Map[String, @ast.TsType] = Map([])
+      for i, t in iface.type_params {
+        b1[t] = args1[i]
+        b2[t] = args2[i]
+      }
+      for f in iface.fields {
+        match
+          recursive_bound_assignable(
+            resolver,
+            substitute_params(f.1, b1),
+            substitute_params(f.1, b2),
+            tp,
+            constraint,
+            depth + 1,
+          ) {
+          Some(true) => ()
+          other => return other
+        }
+      }
+      Some(true)
+    }
+    _ => None
+  }
+}
+
+///|
 /// `Some(src)` when `src` is one of the lib's always-object types,
 /// undeclared in this program, and `expected` admits only primitives (a
 /// primitive, a literal, `null` / `undefined` / `void`, or a union of
@@ -12039,6 +12253,20 @@ fn lib_object_type_into_primitive(
   } else {
     None
   }
+}
+
+///|
+/// The property names `Array.prototype` contributes to `keyof` an array
+/// or tuple type (lib.es5 through lib.es2023).
+fn array_member_names() -> Array[String] {
+  [
+    "length", "toString", "toLocaleString", "pop", "push", "concat", "join",
+    "reverse", "shift", "slice", "sort", "splice", "unshift", "indexOf", "lastIndexOf",
+    "every", "some", "forEach", "map", "filter", "reduce", "reduceRight", "find",
+    "findIndex", "fill", "copyWithin", "entries", "keys", "values", "includes",
+    "flatMap", "flat", "at", "findLast", "findLastIndex", "toReversed", "toSorted",
+    "toSpliced", "with",
+  ]
 }
 
 ///|
@@ -13483,6 +13711,25 @@ fn check_expr_against(
   // argument against the raw `A` reported `expected A but got number` at
   // every call; abstain instead (`ctx.in_scope_type_params` is where a
   // REAL in-scope parameter lives, and it is honoured as before).
+  // Before the phantom check below: a generic signature's own binders
+  // are exactly the "only ever a type parameter" names it abstains on.
+  match
+    generic_signature_constraint_mismatch(
+      ctx.resolver,
+      infer_expr(env, ctx.resolver, expr),
+      expected,
+    ) {
+    Some(true) => {
+      record(
+        ctx,
+        sub_path,
+        "generic signature is not assignable: the target allows type arguments its type-parameter constraint does not",
+      )
+      return
+    }
+    Some(false) => return
+    None => ()
+  }
   if expected_mentions_phantom_type_param(expected, ctx, sub_path) {
     return
   }
@@ -24712,6 +24959,13 @@ fn narrow_after_assignment(
   // following `y = x` is the TS2322 `conditionalTypes1` writes down.
   match env.lookup_declared(name) {
     Some(Named(tp) as d) if ctx.in_scope_type_params.contains(tp) => {
+      env.narrow(name, d)
+      return
+    }
+    // The same for a GENERIC signature: `x = y` between two generic
+    // function types left `x` holding `y`'s signature, so a following
+    // `y = x` compared `y` with itself.
+    Some(GenericFunc(_, _, _) as d) => {
       env.narrow(name, d)
       return
     }

@@ -229,7 +229,7 @@ fn func_params_assignable(
 fn template_arg_accepts_substring(arg : @ast.TsType, sub : String) -> Bool {
   match arg {
     String_ => true
-    Number => is_number_string(sub)
+    Number => is_js_finite_number_string(sub)
     BigInt => is_bigint_string(sub)
     Boolean => sub == "true" || sub == "false"
     Literal(name) => sub == name
@@ -272,6 +272,128 @@ fn is_number_string(s : String) -> Bool {
     }
   }
   seen_digit
+}
+
+///|
+/// JavaScript's `isFinite(+s)` for a non-empty `s`, which is what tsc asks
+/// of a string matched against a `${number}` placeholder
+/// (`isValidNumberString(s, false)`): surrounding whitespace is allowed,
+/// so are a sign, a fraction, an exponent, and an unsigned `0x` / `0o` /
+/// `0b` integer; `Infinity` is not finite.
+fn is_js_finite_number_string(s : String) -> Bool {
+  let t = s.trim(chars=" \t\n\r").to_owned()
+  if t.length() == 0 {
+    return false
+  }
+  let n = t.length()
+  let c0 = t[0].to_int().unsafe_to_char()
+  // Radix integers (no sign allowed).
+  if n > 2 && c0 == '0' {
+    let c1 = t[1].to_int().unsafe_to_char()
+    let digit_ok = match c1 {
+      'x' | 'X' =>
+        Some(fn(c : Char) {
+          (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+        })
+      'o' | 'O' => Some(fn(c : Char) { c >= '0' && c <= '7' })
+      'b' | 'B' => Some(fn(c : Char) { c == '0' || c == '1' })
+      _ => None
+    }
+    match digit_ok {
+      Some(ok) => {
+        for i in 2..<n {
+          if !ok(t[i].to_int().unsafe_to_char()) {
+            return false
+          }
+        }
+        return true
+      }
+      None => ()
+    }
+  }
+  let mut i = 0
+  if c0 == '+' || c0 == '-' {
+    i = 1
+  }
+  let mut digits = 0
+  while i < n && t[i].to_int().unsafe_to_char() >= '0' &&
+        t[i].to_int().unsafe_to_char() <= '9' {
+    i += 1
+    digits += 1
+  }
+  if i < n && t[i].to_int().unsafe_to_char() == '.' {
+    i += 1
+    while i < n && t[i].to_int().unsafe_to_char() >= '0' &&
+          t[i].to_int().unsafe_to_char() <= '9' {
+      i += 1
+      digits += 1
+    }
+  }
+  if digits == 0 {
+    return false
+  }
+  if i < n && (t[i].to_int().unsafe_to_char() == 'e' || t[i].to_int().unsafe_to_char() == 'E') {
+    i += 1
+    if i < n && (t[i].to_int().unsafe_to_char() == '+' || t[i].to_int().unsafe_to_char() == '-') {
+      i += 1
+    }
+    let start = i
+    while i < n && t[i].to_int().unsafe_to_char() >= '0' &&
+          t[i].to_int().unsafe_to_char() <= '9' {
+      i += 1
+    }
+    if i == start || i - start > 3 {
+      // No exponent digits, or one large enough to overflow to Infinity.
+      return false
+    }
+  }
+  i == n
+}
+
+///|
+/// `s` is the canonical spelling of the number it denotes
+/// (`"" + (+s) === s`), which `infer N extends number` in a template
+/// requires (`isValidNumberString(s, true)`): `"12"`, `"-3"`, `"1.5"`, but
+/// not `"012"`, `"1.0"`, `"-0"`, `" 1"` or `"1e3"`. Restricted to plain
+/// decimals short enough to be exact.
+fn is_round_trip_number_string(s : String) -> Bool {
+  let n = s.length()
+  if n == 0 || n > 15 {
+    return false
+  }
+  let mut i = 0
+  if s[0].to_int().unsafe_to_char() == '-' {
+    i = 1
+    if n == 1 {
+      return false
+    }
+  }
+  let first = i
+  while i < n && s[i].to_int().unsafe_to_char() >= '0' &&
+        s[i].to_int().unsafe_to_char() <= '9' {
+    i += 1
+  }
+  let int_len = i - first
+  if int_len == 0 {
+    return false
+  }
+  if int_len > 1 && s[first].to_int().unsafe_to_char() == '0' {
+    return false
+  }
+  if i == n {
+    // `-0` is not canonical: `"" + (-0)` is `"0"`.
+    return !(first == 1 && int_len == 1 && s[first].to_int().unsafe_to_char() == '0')
+  }
+  if s[i].to_int().unsafe_to_char() != '.' {
+    return false
+  }
+  i += 1
+  let frac_start = i
+  while i < n && s[i].to_int().unsafe_to_char() >= '0' &&
+        s[i].to_int().unsafe_to_char() <= '9' {
+    i += 1
+  }
+  i == n && i > frac_start && s[n - 1].to_int().unsafe_to_char() != '0'
 }
 
 ///|
@@ -1320,6 +1442,10 @@ fn contains_infer_marker(t : @ast.TsType) -> Bool {
       }
       contains_infer_marker(ret)
     }
+    // A template-literal pattern (`${infer N extends number}`) was the
+    // fourth position the infer gate had no arm for, so a conditional
+    // built on one was never run through the infer path at all.
+    TemplateLiteralType(_, args) => args.iter().any(contains_infer_marker)
     Union(items) | Intersection(items) => {
       for it in items {
         if contains_infer_marker(it) {

@@ -286,9 +286,14 @@ checker-miss-buckets *ARGS:
 # 7 -> 6 with `conditionalTypesExcessProperties`: a function DECLARATION's
 # un-inlined signature gives an alias-typed parameter (`sa: Something<A>`)
 # its real assignment target, so the deferred conditional is seen.
+# 6 -> 3: `templateLiteralTypes7` and `assignmentCompatWithGenericCallSignatures4`
+# (a generic signature against the same signature with other constraints,
+# recursive constraints included) and `templateLiteralTypes4` (`keyof` a
+# tuple, a literal against a `${number}` template, `infer N extends
+# number`, and an interface's inlined bound put back inside a method bound).
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 6
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 3
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

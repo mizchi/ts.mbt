@@ -649,3 +649,53 @@ test "batch FW: un-inlined generic signatures for call inference and mixin bases
   assert_false(has("OkContext"))
   assert_false(has("OkNoModifier"))
 }
+
+///|
+test "batch FW: generic signatures that differ only in their constraints" {
+  let src =
+    #|interface NMap { 1: 'A'; 2: 'B'; 3: 'C'; 4: 'D' }
+    #|declare const g: <T extends 1 | 2 | 3>(x: `${T}`) => NMap[T];
+    #|type G2 = <T extends 1 | 2 | 3 | 4>(x: `${T}`) => NMap[T];
+    #|type G3 = <T extends 1 | 2>(x: `${T}`) => NMap[T];
+    #|function badWiderTarget() { const g2: G2 = g; }
+    #|function okNarrowerTarget() { const g3: G3 = g; }
+    #|interface I2<T> { p: T }
+    #|declare var x: <T extends I2<T>>(z: T) => void;
+    #|declare var y: <T extends I2<I2<T>>>(z: T) => void;
+    #|function okRecursive() { x = y; }
+    #|function badRecursive() { y = x; }
+    #|declare const s: <T extends string>(z: T) => void;
+    #|function badUnconstrainedTarget() { const u: <T>(z: T) => void = s; }
+  let issues = eff_issues(src)
+  for ok in ["okNarrowerTarget", "okRecursive"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["badWiderTarget", "badRecursive", "badUnconstrainedTarget"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "batch FW: keyof tuples, template infer, constrained interface methods" {
+  let src =
+    #|type K1 = keyof [string, number];
+    #|function okTupleKey() { const k: K1 = "0"; const m: K1 = "length"; }
+    #|function badTupleKey() { const k: K1 = "5"; }
+    #|type IndexFor<S extends string> = S extends `${infer N extends number}` ? N : never;
+    #|type I1 = IndexFor<"0" | "1" | "length">;
+    #|type I2 = IndexFor<"01">;
+    #|function okIndexFor() { const i: I1 = 1; const j: I2 = 7; }
+    #|function badIndexFor() { const i: I1 = 2; }
+    #|type IndicesOf<T> = IndexFor<Extract<keyof T, string>>;
+    #|interface Def { readonly name: string }
+    #|interface M<TDef extends readonly Def[]> { gi<I extends IndicesOf<TDef>>(index: I): void; }
+    #|function okMethodBound(p: M<[{ name: "x" }, { name: "y" }]>) { p.gi(0); p.gi(1); }
+    #|function badMethodBound(p: M<[{ name: "x" }, { name: "y" }]>) { p.gi(2); }
+  let issues = eff_issues(src)
+  for ok in ["okTupleKey", "okIndexFor", "okMethodBound"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["badTupleKey", "badIndexFor", "badMethodBound"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
