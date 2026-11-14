@@ -44061,6 +44061,25 @@ fn check_class_member_structure(
   for issue in check_alias_index_key_bounds(module_, resolver) {
     issues.push(issue)
   }
+  for gm in module_.grammar_misuses {
+    // TS2304 for a name in an `infer X extends NAME` bound that nothing
+    // declares: no module or lib type, no type parameter anywhere in the
+    // file, no import. Any of those abstains.
+    if gm.has_prefix("<infer-bound-ref:") && gm.has_suffix(">") {
+      let n = gm["<infer-bound-ref:".length():gm.length() - 1].to_owned()
+      if !resolver.interfaces.contains(n) &&
+        !resolver.type_aliases.contains(n) &&
+        !resolver.classes.contains(n) &&
+        !resolver.enums.contains(n) &&
+        !resolver.local_type_names.contains(n) &&
+        !module_.grammar_misuses.contains("<type-binder:\{n}>") &&
+        !module_.imported_binding_names.contains(n) &&
+        !is_lib_global_type(n) &&
+        !module_.namespaces.iter().any(fn(ns) { ns.name == n }) {
+        issues.push({ path: "infer bound", message: "cannot find name `\{n}`", })
+      }
+    }
+  }
   for issue in check_extends_interface_only(module_, resolver) {
     issues.push(issue)
   }
