@@ -963,9 +963,17 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(RParen)
   // return valuetype ()
   let had_return_annotation = self.check(Colon)
+  let mut variadic_generic_return = false
   let return_type = if had_return_annotation {
     let _ = self.advance()
-    self.parse_type()
+    let ret_start = self.pos
+    let t = self.parse_type()
+    variadic_generic_return = self.tokens_are_variadic_type_param_tuple(
+      ret_start,
+      self.pos,
+      type_params,
+    )
+    t
   } else {
     Any // type Any
   }
@@ -1071,6 +1079,9 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   self.record_type_param_body_collisions(type_params)
   if !had_return_annotation && !is_generator && !is_async {
     self.record_nullish_widened_return(name, body)
+  }
+  if variadic_generic_return && !is_generator && !is_async {
+    record_concrete_return_to_variadic(self, body)
   }
   self.in_generator = prev_generator
   self.in_async = prev_async
@@ -1297,6 +1308,69 @@ fn translate_jsdoc_function_type(s : String) -> String? {
     ts_params = ts_params + "_\{k}: \{p}"
   }
   Some("(\{ts_params}) => \{return_type}")
+}
+
+///|
+/// The tokens `[start, end)` spell exactly `[...A, ...B]` (two or more
+/// elements), every element a variadic of one of `type_params`. The
+/// parsed type cannot say so: a bounded type parameter is inlined to its
+/// bound, which turns `[...T, ...P]` into `[...any[], ...any[]]`.
+fn Parser::tokens_are_variadic_type_param_tuple(
+  self : Parser,
+  start : Int32,
+  end : Int32,
+  type_params : Array[String],
+) -> Bool {
+  if end - start < 7 ||
+    !(self.tokens[start].kind is LBracket) ||
+    !(self.tokens[end - 1].kind is RBracket) {
+    return false
+  }
+  let mut i = start + 1
+  let mut count = 0
+  while i < end - 1 {
+    guard self.tokens[i].kind is Ellipsis else { return false }
+    guard self.tokens.get(i + 1) is Some(tok) else { return false }
+    match tok.kind {
+      Ident(n) => if !type_params.contains(n) { return false }
+      _ => return false
+    }
+    count += 1
+    i += 2
+    if i < end - 1 {
+      guard self.tokens[i].kind is Comma else { return false }
+      i += 1
+    }
+  }
+  count >= 2
+}
+
+///|
+/// TS2322: a function returning `[...T, ...P]` over its own type
+/// parameters cannot return a CONCRETE array or tuple — "source provides no
+/// match for variadic element at position 0" (variadicTuples3). Only a
+/// `return x` of a binding the same body declares with an array / tuple
+/// annotation is judged; `any` and everything else abstain.
+fn record_concrete_return_to_variadic(p : Parser, body : @ast.TsBlock) -> Unit {
+  let annotated : Map[String, Bool] = Map([])
+  for st in body.stmts {
+    match st {
+      Let(Ident(n), t, _) | Var(Ident(n), t, _) | Const(Ident(n), t, _) =>
+        annotated[n] = t is (Array(_) | Tuple(_))
+      _ => ()
+    }
+  }
+  for st in body.stmts {
+    match st {
+      Return(Some(Var(n))) if annotated.get(n) is Some(true) => {
+        p.grammar_misuses.push(
+          "type of `\{n}` is not assignable to a tuple of variadic type parameters: source provides no match for variadic element at position 0",
+        )
+        return
+      }
+      _ => ()
+    }
+  }
 }
 
 ///|
