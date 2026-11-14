@@ -16130,6 +16130,50 @@ fn this_context_candidate_names(
 }
 
 ///|
+/// TS2684 for a CLASS method whose declared `this` is the same generic with
+/// `never` at a type-argument position (`then(this: EPromise<never, A>)`)
+/// called on a receiver with a concrete argument there. A batch EP-ET probe
+/// rejected the general comparison because a PHANTOM parameter makes every
+/// instantiation mutually assignable, so the position must be USED by a
+/// property of the class; and `never` is the one target no concrete type
+/// inhabits, which is what makes the verdict independent of variance.
+fn check_class_this_never_context(
+  ctx : CheckCtx,
+  recv_ty : @ast.TsType,
+  meth : String,
+) -> Unit {
+  guard ctx.resolver.unwrap(recv_ty) is Applied(cn, rargs) else { return }
+  guard ctx.resolver.classes.get(cn) is Some(cls) else { return }
+  guard cls.methods.iter().find_first(fn(m) { m.name == meth }) is Some(m) else {
+    return
+  }
+  guard m.params.get(0) is Some(("this", Applied(tn, targs))) else { return }
+  if tn != cn ||
+    targs.length() != rargs.length() ||
+    cls.type_params.length() != targs.length() {
+    return
+  }
+  for i, t in targs {
+    if !(t is Never) {
+      continue
+    }
+    let r = ctx.resolver.unwrap(rargs[i])
+    let concrete = is_concrete_primitive_or_literal(r) && !(r is Never)
+    let used = cls.properties
+      .iter()
+      .any(fn(p) { type_references_any(p.type_, [cls.type_params[i]]) })
+    if concrete && used {
+      record(
+        ctx,
+        "call `\{meth}`",
+        "the `this` context of type `\{type_display(recv_ty)}` is not assignable to the method's `this` of type `\{type_display(m.params[0].1)}`",
+      )
+      return
+    }
+  }
+}
+
+///|
 /// TS2684 for a PLAIN call — no receiver, so the `this` context is `void`.
 /// A call signature declaring `this: <non-void>` can never be satisfied
 /// that way, and for a union callee one such member is enough: every
@@ -26110,6 +26154,7 @@ fn check_call_args_in_expr(
             meth,
             "call `\{meth}`",
           )
+          check_class_this_never_context(ctx, recv_ty, meth)
           if is_nullable_type(recv_ty) {
             record(
               ctx,
