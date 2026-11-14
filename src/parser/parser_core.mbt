@@ -649,6 +649,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
       if !libs.contains("esnext") {
         grammar_misuses.push("<lib-lacks-esnext>")
       }
+      if !lib_list_grants_year(libs, 2015) {
+        grammar_misuses.push("<lib-lacks-es2015>")
+      }
       if !lib_list_grants_year(libs, 2017) {
         grammar_misuses.push("<lib-lacks-es2017>")
       }

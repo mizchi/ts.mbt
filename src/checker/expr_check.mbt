@@ -22444,6 +22444,30 @@ fn check_intl_constructor(
 }
 
 ///|
+/// TS2339 / TS7053: a WRITE through `(x || {})` or `(x ?? {})`. On a read
+/// tsc normalizes the fresh `{}` so `(options || {}).a` is fine, but an
+/// assignment target is widened, and the `{}` member has no `a` at all
+/// (probed: both operators, both spellings). An `any` left side makes
+/// the whole expression `any`, which is legal.
+fn check_write_through_empty_literal(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  prop : String,
+) -> Unit {
+  guard recv is BinOp(Or | Coalesce, l, ObjectLit([])) else { return }
+  let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+  if !is_checkable(lt) || lt is (Any | Unknown) {
+    return
+  }
+  record_unfiltered(
+    ctx,
+    "assign `.\{prop}`",
+    "property `\{prop}` does not exist on type `{}`",
+  )
+}
+
+///|
 fn alias_cond_mentions(enc : @ast.TsType, name : String) -> Bool {
   guard enc is Tuple([Tuple(th), Tuple(el)]) else { return false }
   let prefix = name + "."
@@ -23518,6 +23542,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, value, ctx)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
+      check_write_through_empty_literal(env, ctx, recv, prop)
       // TS2540, at the statement spelling too: `o.x = v` at the top of a
       // list is this node, the same line inside a block is
       // `Expr(PropAssignExpr(…))`, and only the second checked readonly.
@@ -23565,6 +23590,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
     }
     IndexAssign(recv, idx, value) => {
+      match idx {
+        StringLit(k) => check_write_through_empty_literal(env, ctx, recv, k)
+        _ => ()
+      }
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
       check_call_args_in_expr(env, value, ctx)
@@ -27479,6 +27508,7 @@ fn check_call_args_in_expr(
     PropAssignExpr(recv, prop, v) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
+      check_write_through_empty_literal(env, ctx, recv, prop)
       check_private_name_access(ctx, prop)
       check_member_accessibility(env, ctx, recv, prop)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
@@ -43997,6 +44027,9 @@ fn check_class_member_structure(
   for issue in check_class_implements(module_, resolver) {
     issues.push(issue)
   }
+  for issue in check_class_implements_lib_string(module_, resolver) {
+    issues.push(issue)
+  }
   for issue in check_extends_interface_only(module_, resolver) {
     issues.push(issue)
   }
@@ -44297,6 +44330,70 @@ fn check_extends_interface_only(
         path: "class \{cls.name}",
         message: "cannot extend an interface `\{base}`. Did you mean `implements`?",
       })
+    }
+  }
+  issues
+}
+
+///|
+/// TS2420 against the LIB `String` interface, whose members the checker
+/// knows by name: the ES5 surface, plus the ES2015 core methods unless an
+/// explicit `@lib:` list stops below es2015 (TS7 has no es5 target, so the
+/// default lib always has them). Only for a class with no base and no
+/// merged interface, and only when the file does not declare `String`,
+/// since either could supply a member this list cannot see.
+fn check_class_implements_lib_string(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if resolver.interfaces.get("String") is Some(_) ||
+    resolver.classes.get("String") is Some(_) {
+    return issues
+  }
+  let es2015 = !module_.grammar_misuses.contains("<lib-lacks-es2015>")
+  let es5_members = [
+    "toString", "charAt", "charCodeAt", "concat", "indexOf", "lastIndexOf", "localeCompare",
+    "match", "replace", "search", "slice", "split", "substring", "toLowerCase", "toLocaleLowerCase",
+    "toUpperCase", "toLocaleUpperCase", "trim", "length", "substr", "valueOf",
+  ]
+  let es2015_members = [
+    "codePointAt", "includes", "endsWith", "normalize", "repeat", "startsWith",
+  ]
+  for cls in module_.classes {
+    if !cls.implements_names.contains("String") ||
+      cls.base_names.length() > 0 ||
+      cls.base_expr is Some(_) ||
+      resolver.interfaces.get(cls.name) is Some(_) {
+      continue
+    }
+    let have : Map[String, Unit] = Map([])
+    for p in cls.properties {
+      have[p.name] = ()
+    }
+    for m in cls.methods {
+      have[m.name] = ()
+    }
+    match cls.constructor_params {
+      Some(ps) =>
+        for p in ps {
+          have[p.0] = ()
+        }
+      None => ()
+    }
+    let wanted = if es2015 {
+      [..es5_members, ..es2015_members]
+    } else {
+      es5_members
+    }
+    for m in wanted {
+      if !have.contains(m) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "incorrectly implements interface `String`: member `\{m}` is missing",
+        })
+        break
+      }
     }
   }
   issues
