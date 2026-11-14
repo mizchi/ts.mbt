@@ -40300,6 +40300,48 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// A call to a declared generic function returning a bare, unconstrained
+/// type parameter `T` for which no argument is an inference source: every
+/// parameter mentioning `T` is an object type whose `T`-typed members the
+/// argument object literal does not supply. tsc then infers `unknown`.
+fn call_returns_uninferred_type_param(
+  resolver : Resolver,
+  f : String,
+  args : Array[@ast.TsExpr],
+) -> Bool {
+  guard resolver.signatures.get(f) is Some(params) else { return false }
+  guard resolver.func_type_params.get(f) is Some(tps) else { return false }
+  if resolver.globals.contains("@overloads:" + f) {
+    return false
+  }
+  guard resolver.globals.get(f) is Some(ft) else { return false }
+  let ret = match ft {
+    Func(_, r) | GenericFunc(_, _, Func(_, r)) => r
+    _ => return false
+  }
+  guard ret is Named(t) && tps.contains(t) else { return false }
+  for i, p in params {
+    if !type_references_any(p.type_, [t]) {
+      continue
+    }
+    guard p.type_ is Object(fields) else { return false }
+    guard args.get(i) is Some(ObjectLit(entries)) else { return false }
+    for fl in fields {
+      if type_references_any(fl.1, [t]) {
+        match fl.0 {
+          Literal(k) =>
+            if entries.iter().any(fn(e) { e.0 == k }) {
+              return false
+            }
+          _ => return false
+        }
+      }
+    }
+  }
+  true
+}
+
+///|
 /// TS2403 ("Subsequent variable declarations must have the same type"): two
 /// `var` declarations of the same name must declare the *identical* type.
 /// Identity (not assignability) -- `C` and `C | D` are mutually assignable
@@ -40333,6 +40375,12 @@ fn check_var_redeclaration_types(
           _ => decls.push((n, ty))
         }
       }
+      // `var b = bar({})` with `bar<T>(p: { x?: T }): T`: no argument
+      // supplies a candidate for `T`, so tsc infers `unknown`.
+      Var(@ast.TsBinding::Ident(n), ty, Call(f, args)) if !is_checkable(ty) &&
+        !resolver.globals.contains("@written-any:" + n) &&
+        call_returns_uninferred_type_param(resolver, f, args) =>
+        decls.push((n, @ast.TsType::Unknown))
       Var(@ast.TsBinding::Ident(n), ty, _) => decls.push((n, ty))
       _ => ()
     }
