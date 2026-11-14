@@ -10763,7 +10763,28 @@ fn infer_expr_inner(
         // "@@spread:N" key.
         if entry.0.has_prefix("@@spread:") {
           let spread_ty = infer_expr(env, resolver, entry.1)
-          if spread_shape_is_known(spread_ty, resolver) {
+          // A spread of `T | undefined` / `T | null` copies T's members
+          // when there is a value and nothing when there is not, so every
+          // member arrives OPTIONAL (`{ ...u }` with `u: { a: number } |
+          // undefined` is `{ a?: number | undefined }`, probed).
+          let parts = union_components(spread_ty)
+          let nullish = parts.filter(fn(p) { p is (Undefined | Null) })
+          let rest = parts.filter(fn(p) { !(p is (Undefined | Null)) })
+          if nullish.length() > 0 &&
+            rest.length() == 1 &&
+            spread_shape_is_known(rest[0], resolver) {
+            for f in collect_declared_fields(rest[0], resolver) {
+              if f.0.has_prefix("__private_brand__") {
+                continue
+              }
+              let ft = if type_has_undefined(f.1) {
+                f.1
+              } else {
+                @ast.TsType::Union([f.1, Undefined])
+              }
+              fields.push((@ast.TsType::Literal(f.0), ft))
+            }
+          } else if spread_shape_is_known(spread_ty, resolver) {
             for f in collect_declared_fields(spread_ty, resolver) {
               // A `#private` member is NOT copied by a spread — it is not
               // an own enumerable property — so the result does not have
@@ -39422,6 +39443,23 @@ fn check_var_redeclaration_types(
   let decls : Array[(String, @ast.TsType)] = []
   for stmt in module_.top_level_stmts {
     match stmt {
+      // An UNANNOTATED `var o = { ...a, ...b }` declares the spread's type.
+      // Only an object literal made of spreads alone, whose type is the
+      // sources' declared members, is read — every other initializer stays
+      // skipped, as it always was, because an imprecise inference here is
+      // a false TS2403 (spreadUnion2: a spread of `T | undefined` makes
+      // every member optional, which `{} | T` is not identical to).
+      Var(@ast.TsBinding::Ident(n), ty, ObjectLit(entries)) if !is_checkable(ty) &&
+        entries.length() > 0 &&
+        entries.iter().all(fn(e) { e.0.has_prefix("@@spread:") }) &&
+        !resolver.globals.contains("@written-any:" + n) => {
+        let t = infer_expr(ExprEnv::new(), resolver, ObjectLit(entries))
+        match t {
+          Object(fs) if !fs.iter().any(fn(f) { !(f.0 is Literal(_)) }) =>
+            decls.push((n, t))
+          _ => decls.push((n, ty))
+        }
+      }
       Var(@ast.TsBinding::Ident(n), ty, _) => decls.push((n, ty))
       _ => ()
     }
