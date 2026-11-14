@@ -40939,6 +40939,80 @@ fn check_async_named_return_types(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS1238 for a generic class decorator `dec<T>(c: I<T>)` whose interface
+/// pins `T` through `prototype: T` — the decorated class's own instance
+/// type, so `T` is decided — and also asks for a member `m: () => T` the
+/// class's STATIC side provides as a method returning nothing. A body with
+/// no `return <value>` is `void`, which the instance type does not accept
+/// (decoratorCallGeneric). Any other shape abstains.
+fn class_decorator_prototype_mismatch(
+  resolver : Resolver,
+  cls : @ast.TsClassDecl,
+  dn : String,
+) -> String? {
+  guard resolver.signatures.get(dn) is Some([p]) else { return None }
+  guard resolver.func_type_params.get(dn) is Some([t]) else { return None }
+  guard p.type_ is Applied(iname, [Named(tp)]) && tp == t else { return None }
+  guard resolver.interfaces.get(iname) is Some(iface) else { return None }
+  guard iface.type_params is [ip] else { return None }
+  if !iface.fields.iter().any(fn(f) { f.0 == "prototype" && f.1 == Named(ip) }) {
+    return None
+  }
+  for f in iface.fields {
+    match f.1 {
+      Func(_, Named(r)) if r == ip && f.0 != "prototype" =>
+        match
+          cls.methods.iter().find_first(fn(m) { m.name == f.0 && m.is_static }) {
+          Some(m) => {
+            // `body` is `None` for an EMPTY body too; in a runtime class
+            // with a single declaration of the name that is what it means.
+            let single = cls.methods
+              .iter()
+              .filter(fn(x) { x.name == f.0 })
+              .count() ==
+              1
+            let returns_value = match m.body {
+              Some(b) => {
+                let rets : Array[@ast.TsExpr?] = []
+                checker_collect_returns(b, rets)
+                rets.iter().any(fn(r) { r is Some(_) })
+              }
+              None => cls.is_declare || !single
+            }
+            if !returns_value && m.return_type is (Void | Any) {
+              return Some(f.0)
+            }
+          }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+fn checker_collect_returns(
+  block : @ast.TsBlock,
+  out : Array[@ast.TsExpr?],
+) -> Unit {
+  for st in block.stmts {
+    match st {
+      Return(e) => out.push(e)
+      Block(b) => checker_collect_returns(b, out)
+      If(_, t, e) => {
+        checker_collect_returns(t, out)
+        match e {
+          Some(b) => checker_collect_returns(b, out)
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+}
+
+///|
 /// TS1238: a class decorator whose signature cannot match the runtime
 /// invocation. The runtime passes 1 argument under legacy
 /// `experimentalDecorators` and 2 under standard ES decorators, so a
@@ -40962,6 +41036,18 @@ fn check_class_decorator_signatures(
   let runtime_arity = if legacy { 1 } else { 2 }
   for cls in module_.classes {
     for d in cls.decorators {
+      match d {
+        Var(dn) =>
+          match class_decorator_prototype_mismatch(resolver, cls, dn) {
+            Some(member) =>
+              issues.push({
+                path: "class \{cls.name} decorator",
+                message: "unable to resolve signature of class decorator when called as an expression: the types returned by `\{member}()` are incompatible",
+              })
+            None => ()
+          }
+        _ => ()
+      }
       let required : Int32? = match d {
         Var(n) =>
           if resolver.classes.get(n) is Some(_) &&
