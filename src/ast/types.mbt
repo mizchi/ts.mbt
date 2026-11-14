@@ -1093,6 +1093,13 @@ pub(all) struct TsModule {
   // its class rules stop being silent one scope in, which is where
   // TS2420 / TS2415 / TS2564 all were.
   local_classes : Array[TsClassDecl]
+  // A `declare function` with BOUNDED type parameters, keyed by name, as
+  // `Func(params, return)` parsed WITHOUT inlining the bounds. The parser
+  // inlines `T extends B` to `B` in a signature (`imports` carries that
+  // form, and the bridge generator reads it), which erases which argument
+  // a `T` came from; the checker reads this copy for call-site inference
+  // only. Present for a name declared exactly once.
+  raw_generic_signatures : Map[String, TsType]
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
   // Ambient module-augmentation entries (`declare module "foo" { ... }`).

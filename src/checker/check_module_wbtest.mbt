@@ -8,6 +8,7 @@ fn empty_module_for_check() -> @ast.TsModule {
     values: [],
     classes: [],
     local_classes: [],
+    raw_generic_signatures: {},
     namespaces: [],
     enums: [],
     module_augmentations: [],

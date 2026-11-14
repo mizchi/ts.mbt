@@ -234,3 +234,23 @@ test "substitute_inferred_type: leaves non-bound names alone" {
   let result = substitute_inferred_type(body, bindings)
   @test.assert_eq(result, Named("V"))
 }
+
+///|
+test "substitute_inferred_type: a nested conditional's own infer binder is not replaced" {
+  let infer_x = @ast.TsType::Applied("__tsmbt_infer", [Named("X")])
+  let inner = @ast.TsType::Conditional(
+    Literal("b"),
+    TemplateLiteralType(["", ""], [infer_x]),
+    NumberLiteral("1"),
+    Named("X"),
+  )
+  let out = substitute_inferred_type(inner, { "X": Literal("a") })
+  match out {
+    Conditional(_, t, _, f) => {
+      assert_eq(t, TemplateLiteralType(["", ""], [infer_x]))
+      // The false branch sees the OUTER binding.
+      assert_eq(f, Literal("a"))
+    }
+    _ => fail("expected a conditional")
+  }
+}

@@ -266,9 +266,36 @@ checker-miss-buckets *ARGS:
 # inference through overloads and conditional types, object-literal
 # normalization, mixin heritage, template-literal relations) rather than a
 # rule. The batch notes in CLAUDE.md list what took each file.
+#
+# 15 -> 13 in batch FV: `conditionalTypes1` (an unconstrained `T` into
+# `NonNullable<T>`, once assignment stopped narrowing a binding declared as a
+# bare type parameter) and `conditionalTypes2` (the `T & A & B` constraint of
+# a deferred `Extract`). 13 -> 12 with `enumAssignabilityInInheritance`:
+# overload selection lets a primitive into the lib `Object` / `{}`, and a
+# `var` redeclared from an overloaded call takes the selected return.
+# 12 -> 10 with `typeGuardsInRightOperandOfOrOrOperator` (an assignment as a
+# condition narrows its target and its value, `boolean` narrows to `true` /
+# `false`, and a member of a name narrowed to `never` is TS2339) and
+# `objectLiteralNormalization` (an array of flat object literals is the
+# normalized union, each member given the others' keys as `?: undefined`).
+# 10 -> 9 with `mixinAccessors3`: TS2611 through `extends mixin(Base)`, the
+# base being the intersection of the mixin's class expression and `Base`.
+# 9 -> 7 in batch FW with `intraExpressionInferences` and `override19`:
+# the parser keeps an un-inlined copy of a bounded `declare function`'s
+# signature, so call-site inference can still say which argument `T` was.
+# 7 -> 6 with `conditionalTypesExcessProperties`: a function DECLARATION's
+# un-inlined signature gives an alias-typed parameter (`sa: Something<A>`)
+# its real assignment target, so the deferred conditional is seen.
+# 6 -> 3: `templateLiteralTypes7` and `assignmentCompatWithGenericCallSignatures4`
+# (a generic signature against the same signature with other constraints,
+# recursive constraints included) and `templateLiteralTypes4` (`keyof` a
+# tuple, a literal against a `${number}` template, `infer N extends
+# number`, and an interface's inlined bound put back inside a method bound).
+# 3 -> 2 with `genericCallToOverloadedMethodWithOverloadedArguments`: an
+# interface a namespace declares under a lib name shadows the lib type.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 15
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 2
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

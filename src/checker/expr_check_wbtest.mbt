@@ -322,6 +322,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         values: [],
         classes: [],
         local_classes: [],
+        raw_generic_signatures: {},
         namespaces: [],
         enums: [],
         module_augmentations: [],
