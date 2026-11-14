@@ -1069,6 +1069,9 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   // declarations are one declaration space. Read here, right after this
   // body's own `parse_block()`.
   self.record_type_param_body_collisions(type_params)
+  if !had_return_annotation && !is_generator && !is_async {
+    self.record_nullish_widened_return(name, body)
+  }
   self.in_generator = prev_generator
   self.in_async = prev_async
   self.in_function = prev_function
@@ -1297,6 +1300,102 @@ fn translate_jsdoc_function_type(s : String) -> String? {
 }
 
 ///|
+/// TS7010 / TS7011 under `noImplicitAny` with `strictNullChecks` off: a
+/// function with no return annotation whose every `return` yields only
+/// `null` / `undefined` (or an array of them) has a return type that
+/// WIDENS to `any` (`any`, `any[]`, `[any]`). One non-nullish return, or a
+/// bare `return;` (which makes it `void`), and the type is fine; probed
+/// cell by cell, nested functions excluded.
+fn Parser::record_nullish_widened_return(
+  self : Parser,
+  name : String,
+  body : @ast.TsBlock,
+) -> Unit {
+  if !self.no_implicit_any || self.strict_null_checks {
+    return
+  }
+  let rets : Array[@ast.TsExpr?] = []
+  collect_block_returns(body, rets)
+  if rets.length() == 0 {
+    return
+  }
+  for r in rets {
+    match r {
+      Some(e) => if !widens_to_any_nullish(e) { return }
+      None => return
+    }
+  }
+  let what = if name == "" || name == "<anon>" {
+    "function expression"
+  } else {
+    "`\{name}`"
+  }
+  self.grammar_misuses.push(
+    "<noimplicitany>\{what}, which lacks a return-type annotation, implicitly has an `any`-widened return type",
+  )
+}
+
+///|
+fn widens_to_any_nullish(e : @ast.TsExpr) -> Bool {
+  match e {
+    NullLit | Var("undefined") | UnaryOp(Void, _) => true
+    ArrayLit(items) =>
+      items.length() > 0 && items.iter().all(fn(x) { widens_to_any_nullish(x) })
+    AssignExpr(_, rhs) => widens_to_any_nullish(rhs)
+    _ => false
+  }
+}
+
+///|
+/// Every `return` of a block, outside nested functions.
+fn collect_block_returns(
+  block : @ast.TsBlock,
+  out : Array[@ast.TsExpr?],
+) -> Unit {
+  fn stmt(st : @ast.TsStmt) -> Unit {
+    match st {
+      @ast.TsStmt::Return(e) => out.push(e)
+      @ast.TsStmt::Block(b) => collect_block_returns(b, out)
+      @ast.TsStmt::If(_, t, e) => {
+        collect_block_returns(t, out)
+        match e {
+          Some(b) => collect_block_returns(b, out)
+          None => ()
+        }
+      }
+      @ast.TsStmt::While(_, b)
+      | @ast.TsStmt::DoWhile(_, b)
+      | @ast.TsStmt::With(_, b)
+      | @ast.TsStmt::For(_, _, _, b)
+      | @ast.TsStmt::ForOf(_, _, _, _, b)
+      | @ast.TsStmt::ForAwaitOf(_, _, _, _, b)
+      | @ast.TsStmt::ForIn(_, _, _, _, b) => collect_block_returns(b, out)
+      @ast.TsStmt::Try(t, _, c, f) => {
+        collect_block_returns(t, out)
+        match c {
+          Some(b) => collect_block_returns(b, out)
+          None => ()
+        }
+        match f {
+          Some(b) => collect_block_returns(b, out)
+          None => ()
+        }
+      }
+      @ast.TsStmt::Switch(_, cases) =>
+        for c in cases {
+          collect_block_returns(c.body, out)
+        }
+      @ast.TsStmt::Label(_, inner) => stmt(inner)
+      _ => ()
+    }
+  }
+
+  for st in block.stmts {
+    stmt(st)
+  }
+}
+
+///|
 // / functionexpression()
 fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(Function)
@@ -1347,6 +1446,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
+  let fn_expr_annotated = self.check(Colon)
   let return_type = if self.check(Colon) {
     let _ = self.advance()
     self.parse_type()
@@ -1397,6 +1497,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
+  self.last_fn_expr_return_annotated = fn_expr_annotated
   {
     name,
     type_params,

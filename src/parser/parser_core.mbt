@@ -193,6 +193,11 @@ pub struct Parser {
   // the one position where an unannotated parameter can never be
   // contextually typed, so the implicit-any verdict is reliable.
   mut record_implicit_any_params : Bool
+  // Whether the function EXPRESSION parsed last carried a return-type
+  // annotation. The AST cannot say (an absent annotation and `: any` are
+  // the same `Any`), and the var-initializer TS7010 / TS7011 rule needs it
+  // for the function that IS the initializer, which finishes parsing last.
+  mut last_fn_expr_return_annotated : Bool
   // Armed while parsing the body of a *class declaration with no heritage
   // clause* -- with neither `extends` nor `implements`, a method parameter
   // has no contextual-typing source, so the implicit-any verdict is
@@ -480,6 +485,7 @@ pub fn Parser::new_with_strict_and_jsx(
     unknown_catch_variables: false,
     experimental_decorators: true,
     record_implicit_any_params: false,
+    last_fn_expr_return_annotated: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
     param_decorator_owner: "",
@@ -670,6 +676,25 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
         None => ()
       }
   }
+  // ES2023 widened `Intl.NumberFormatOptions.useGrouping` from `boolean`
+  // to the string modes too, so with the default lib of a target below
+  // es2023 a string there is TS2322 (intlNumberFormatES5UseGrouping).
+  if !head_lower.contains("@lib:") {
+    match detect_target_list(head_lower) {
+      Some(targets) =>
+        if targets
+          .split(",")
+          .any(fn(tok) {
+            match es_token_year(tok.trim().to_owned()) {
+              Some(y) => y < 2023
+              None => false
+            }
+          }) {
+          grammar_misuses.push("<lib-lacks-es2023-intl>")
+        }
+      None => ()
+    }
+  }
   // TS2854 evidence: a top-level `await using` needs target >= es2017;
   // conformance files list their variant targets in one directive.
   match detect_target_list(head_lower) {
@@ -772,6 +797,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     experimental_decorators,
     template_invalid_escape_positions: lexer.template_invalid_escape_positions,
     record_implicit_any_params: false,
+    last_fn_expr_return_annotated: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
     param_decorator_owner: "",

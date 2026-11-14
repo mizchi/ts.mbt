@@ -2077,6 +2077,9 @@ fn Resolver::ingest_module(
       let n = gm["<written-any-decl:".length():gm.length() - 1].to_owned()
       r.globals["@written-any:" + n] = Any
     }
+    if gm == "<lib-lacks-es2023-intl>" {
+      r.globals["@lib-lacks-es2023-intl"] = Any
+    }
     if gm.has_prefix("<catch-unknown:") && gm.has_suffix(">") {
       let n = gm["<catch-unknown:".length():gm.length() - 1].to_owned()
       r.globals["@catch-unknown:" + n] = Any
@@ -22363,6 +22366,63 @@ fn record_aliased_condition(
 }
 
 ///|
+/// The lib's `Intl` constructors, by their declared arity: `new
+/// Intl.Locale(tag, options?)` and `new Intl.DisplayNames(locales,
+/// options)` (TS2554), and `useGrouping` being `boolean` only below the
+/// es2023 lib (TS2322). Only for the global `Intl`, unaugmented.
+fn check_intl_constructor(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  callee : @ast.TsExpr,
+  args : Array[@ast.TsExpr],
+) -> Unit {
+  guard callee is PropAccess(Var("Intl"), ctor) else { return }
+  if env.lookup("Intl") is Some(_) ||
+    ctx.resolver.declared_value_names.get("Intl") is Some(_) {
+    return
+  }
+  if args.iter().any(fn(a) { a is Spread(_) }) {
+    return
+  }
+  let (lo, hi) = match ctor {
+    "Locale" => (1, 2)
+    "DisplayNames" => (2, 2)
+    "NumberFormat"
+    | "DateTimeFormat"
+    | "Collator"
+    | "PluralRules"
+    | "RelativeTimeFormat"
+    | "ListFormat"
+    | "Segmenter" => (0, 2)
+    _ => return
+  }
+  let n = args.length()
+  if n < lo || n > hi {
+    let want = if lo == hi { "\{lo}" } else { "\{lo}-\{hi}" }
+    record_unfiltered(
+      ctx,
+      "new `Intl.\{ctor}`",
+      "expected \{want} argument(s), got \{n}",
+    )
+  }
+  if ctor == "NumberFormat" &&
+    ctx.resolver.globals.contains("@lib-lacks-es2023-intl") {
+    match args.get(1) {
+      Some(ObjectLit(fields)) =>
+        for f in fields {
+          if f.0 == "useGrouping" &&
+            f.1 is (StringLit(_) | TemplateLiteral(_, [])) {
+            record_unfiltered(
+              ctx, "new `Intl.NumberFormat` arg[1].useGrouping", "type `string` is not assignable to type `boolean | undefined`",
+            )
+          }
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
 fn alias_cond_mentions(enc : @ast.TsType, name : String) -> Bool {
   guard enc is Tuple([Tuple(th), Tuple(el)]) else { return false }
   let prefix = name + "."
@@ -25927,6 +25987,7 @@ fn check_call_args_in_expr(
       if callee_is_definitely_not_constructable(callee) {
         record_unfiltered(ctx, "new", "this expression is not constructable")
       }
+      check_intl_constructor(env, ctx, callee, args)
       check_call_args_in_expr(env, callee, ctx)
       for a in args {
         check_call_args_in_expr(env, a, ctx)

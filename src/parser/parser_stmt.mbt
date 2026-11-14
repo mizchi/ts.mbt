@@ -2322,6 +2322,15 @@ fn Parser::parse_var_decl_item(
     }
   }
   if !annotated {
+    // TS7010 / TS7011 for a function EXPRESSION that IS the initializer:
+    // an unannotated declaration gives it no contextual return type, so its
+    // own nullish returns widen to `any` exactly as a declaration's do.
+    match init {
+      FuncExpr(f) if !self.last_fn_expr_return_annotated &&
+        !f.is_generator &&
+        !f.is_async => self.record_nullish_widened_return(f.name, f.body)
+      _ => ()
+    }
     self.record_tuple_index_out_of_range(binding, init)
     // TS7031 / TS7018: a `null` / `undefined` literal standing where the
     // declaration's type has to be inferred. Gated on the annotation
