@@ -7670,6 +7670,76 @@ fn new_callee_class_name(callee : @ast.TsExpr) -> String? {
 }
 
 ///|
+/// The single arguments of every `NAME(arg)` call in an executor body,
+/// outside nested functions (which could rebind `NAME`).
+fn promise_executor_literal_resolves(
+  body : @ast.TsArrowBody,
+  name : String,
+) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  fn ex(e : @ast.TsExpr) -> Unit {
+    match e {
+      Call(n, [a]) if n == name => out.push(a)
+      CallExpr(Var(n), [a]) if n == name => out.push(a)
+      BinOp(_, a, b) | Seq(a, b) => {
+        ex(a)
+        ex(b)
+      }
+      Cond(a, b, c) => {
+        ex(a)
+        ex(b)
+        ex(c)
+      }
+      _ => ()
+    }
+  }
+
+  fn st(s : @ast.TsStmt) -> Unit {
+    match s {
+      Expr(e) | Return(Some(e)) => ex(e)
+      Block(b) =>
+        for x in b.stmts {
+          st(x)
+        }
+      If(_, t, e) => {
+        for x in t.stmts {
+          st(x)
+        }
+        match e {
+          Some(b) =>
+            for x in b.stmts {
+              st(x)
+            }
+          None => ()
+        }
+      }
+      Try(t, _, c, _) => {
+        for x in t.stmts {
+          st(x)
+        }
+        match c {
+          Some(b) =>
+            for x in b.stmts {
+              st(x)
+            }
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+
+  match body {
+    ArrowExpr(e) => ex(e)
+    ArrowBlock(b) =>
+      for s in b.stmts {
+        st(s)
+      }
+  }
+  out
+}
+
+///|
 /// Every construct signature the type carries is abstract.
 fn type_is_abstract_constructor(t : @ast.TsType) -> Bool {
   match t {
@@ -12414,6 +12484,56 @@ fn check_expr_against(
   // expected type is `Any` (e.g. an unannotated return where we still want
   // bad calls inside the returned expression to be flagged).
   check_call_args_in_expr(env, expr, ctx)
+  // `new Promise((resolve) => …)` where a `Promise<X>` is expected: the
+  // executor is contextually typed by `Promise<X>`'s constructor, so
+  // `resolve` takes `X | PromiseLike<X>` (`resolve(null)` against
+  // `Promise<void>` is TS2345 under strictNullChecks). Judged for LITERAL
+  // arguments only; anything else could be a `PromiseLike` and abstains.
+  match expr {
+    New("Promise", [ArrowFunc(eps, _, ebody, _), ..])
+    | NewExpr(Var("Promise"), [ArrowFunc(eps, _, ebody, _), ..]) =>
+      match ctx.resolver.unwrap(expected) {
+        Applied("Promise", [x]) if is_checkable(x) &&
+          !(x is (Any | Unknown)) &&
+          env.lookup("Promise") is None &&
+          ctx.resolver.classes.get("Promise") is None => {
+          // A literal argument can never be a `PromiseLike`, so for one the
+          // `X | PromiseLike<X>` question is just "is it an X" — decidable
+          // without the lib's `PromiseLike`, which this checker does not
+          // resolve (a contextual binding of the whole union abstains on it).
+          match eps.get(0) {
+            Some(p) if p.binding is (None | Some(Ident(_))) =>
+              for arg in promise_executor_literal_resolves(ebody, p.name) {
+                match precise_literal_type(arg) {
+                  Some(lit) =>
+                    if !is_assignable_to(lit, x) &&
+                      !is_assignable_to(widen_literal(lit), x) {
+                      record(
+                        ctx,
+                        sub_path + " executor > call `\{p.name}` arg[0]",
+                        "expected `\{type_display(x)} | PromiseLike<\{type_display(x)}>` but got `\{type_display(lit)}`",
+                      )
+                    }
+                  None =>
+                    if arg is NullLit &&
+                      ctx.strict_null_checks &&
+                      !type_has_null(x) {
+                      record(
+                        ctx,
+                        sub_path + " executor > call `\{p.name}` arg[0]",
+                        "expected `\{type_display(x)} | PromiseLike<\{type_display(x)}>` but got `null`",
+                      )
+                    }
+                }
+              }
+            _ => ()
+          }
+          return
+        }
+        _ => ()
+      }
+    _ => ()
+  }
   // A type-predicate return position (`function isX(u): u is X { return
   // typeof u === "object" }`) is checked against `boolean`: the predicate
   // is what the CALLER learns, and the body only produces the boolean.
