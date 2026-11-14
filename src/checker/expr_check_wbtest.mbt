@@ -13609,7 +13609,8 @@ test "expr_check: loop back-edge widening (batch AY)" {
     ),
     0,
   )
-  // A `break` in the body bails out of widening entirely.
+  // An assignment followed by a `break` leaves the loop, so it never
+  // reaches the back edge and does not widen the head.
   @test.assert_eq(
     issues(
       "// @strict: false\ndeclare var cond: boolean;\nfunction len(s: string) { return s.length; }\nfunction bail() {\n  let x: string | number;\n  x = \"\";\n  while (cond) {\n    if (cond) { x = 1; break; }\n    len(x);\n  }\n}",

@@ -21455,75 +21455,84 @@ fn loop_backedge_bindings(
 }
 
 ///|
-/// Collect `x = rhs` assignments in the statement tree (not descending into
-/// nested functions / classes). `break`, `continue` and `switch` used to
-/// make it answer `false` — "bail, don't widen" — which is the unsound
-/// direction for a back-edge JOIN: declining to widen keeps the entry
-/// narrowing at the loop head, so every loop that both exits early and
-/// reassigns a narrowed variable reported its comparisons as having no
-/// overlap. An assignment before a `break` does not reach the head, so
-/// counting it over-approximates the head's type by that assignment's
-/// type, which is the affordable direction. `switch` cases are walked.
+/// Collect the `x = rhs` assignments of a loop body that can reach its
+/// BACK EDGE (not descending into nested functions / classes).
+///
+/// `break`, `continue` and `switch` used to make this answer `false` —
+/// "bail, don't widen" — which is the unsound direction for a join:
+/// declining to widen keeps the entry narrowing at the loop head, so
+/// `while (c) { if (x === "b") break; x = "b" }` reported TS2367 on a loop
+/// tsc accepts. Widening by every assignment is unsound the other way:
+/// `if (c) { x = 1; break; } len(x)` is legal because the `x = 1` leaves
+/// the loop. So a statement list that ENDS in an unconditional exit — a
+/// `return`, a `throw`, a labelled `break`, or a plain `break` that is not
+/// inside an inner loop or `switch` — contributes nothing, and everything
+/// else contributes. That over-approximates (a list ending in an `if` whose
+/// branches both exit still counts), which only ever widens.
 fn collect_loop_assignments(
   b : @ast.TsBlock,
   out : Array[(String, @ast.TsExpr)],
 ) -> Bool {
-  for st in b.stmts {
-    if !collect_loop_assignments_stmt(st, out) {
-      return false
-    }
-  }
+  collect_backedge_assignments(b.stmts, out, false)
   true
 }
 
 ///|
-fn collect_loop_assignments_stmt(
+fn collect_backedge_assignments(
+  stmts : Array[@ast.TsStmt],
+  out : Array[(String, @ast.TsExpr)],
+  in_breakable : Bool,
+) -> Unit {
+  match stmts.last() {
+    Some(Return(_) | Throw(_) | Break(Some(_))) => return
+    Some(Break(None)) if !in_breakable => return
+    _ => ()
+  }
+  for st in stmts {
+    collect_backedge_assignments_stmt(st, out, in_breakable)
+  }
+}
+
+///|
+fn collect_backedge_assignments_stmt(
   st : @ast.TsStmt,
   out : Array[(String, @ast.TsExpr)],
-) -> Bool {
+  in_breakable : Bool,
+) -> Unit {
   match st {
-    Break(_) | Continue(_) => true
-    Switch(_, cases) => {
+    Assign(name, rhs) | Expr(AssignExpr(name, rhs)) => out.push((name, rhs))
+    Block(inner) | With(_, inner) =>
+      collect_backedge_assignments(inner.stmts, out, in_breakable)
+    If(_, then_, else_) => {
+      collect_backedge_assignments(then_.stmts, out, in_breakable)
+      match else_ {
+        Some(e) => collect_backedge_assignments(e.stmts, out, in_breakable)
+        None => ()
+      }
+    }
+    // An inner loop or a `switch` is what a plain `break` leaves, so
+    // inside one a `break` continues this loop's body.
+    While(_, body)
+    | DoWhile(_, body)
+    | For(_, _, _, body)
+    | ForIn(_, _, _, _, body)
+    | ForOf(_, _, _, _, body)
+    | ForAwaitOf(_, _, _, _, body) =>
+      collect_backedge_assignments(body.stmts, out, true)
+    Switch(_, cases) =>
       for c in cases {
-        if !collect_loop_assignments(c.body, out) {
-          return false
+        collect_backedge_assignments(c.body.stmts, out, true)
+      }
+    Try(t, _, c, f) =>
+      for blk in [Some(t), c, f] {
+        match blk {
+          Some(bb) => collect_backedge_assignments(bb.stmts, out, in_breakable)
+          None => ()
         }
       }
-      true
-    }
-    Assign(name, rhs) => {
-      out.push((name, rhs))
-      true
-    }
-    Expr(AssignExpr(name, rhs)) => {
-      out.push((name, rhs))
-      true
-    }
-    Block(inner) => collect_loop_assignments(inner, out)
-    If(_, then_, else_) =>
-      collect_loop_assignments(then_, out) &&
-      (match else_ {
-        Some(e) => collect_loop_assignments(e, out)
-        None => true
-      })
-    While(_, body) | DoWhile(_, body) | With(_, body) =>
-      collect_loop_assignments(body, out)
-    For(_, _, _, body) => collect_loop_assignments(body, out)
-    ForIn(_, _, _, _, body)
-    | ForOf(_, _, _, _, body)
-    | ForAwaitOf(_, _, _, _, body) => collect_loop_assignments(body, out)
-    Try(t, _, c, f) =>
-      collect_loop_assignments(t, out) &&
-      (match c {
-        Some(cb) => collect_loop_assignments(cb, out)
-        None => true
-      }) &&
-      (match f {
-        Some(fb) => collect_loop_assignments(fb, out)
-        None => true
-      })
-    Label(_, inner) => collect_loop_assignments_stmt(inner, out)
-    _ => true
+    Label(_, inner) =>
+      collect_backedge_assignments_stmt(inner, out, in_breakable)
+    _ => ()
   }
 }
 
