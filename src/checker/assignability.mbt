@@ -1513,6 +1513,15 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
   match t {
     Conditional(check, extends, true_branch, false_branch) =>
       if contains_infer_marker(extends) {
+        // A failed match picks the false branch, which is only right when
+        // the matcher could have matched. For a template pattern it can
+        // only decide the bare single hole against a string literal, so
+        // any other template `infer` — a fixed part (`x${infer U}`), a
+        // second hole, a `bigint` bound, a non-literal check type — is
+        // left unreduced rather than answered `false`.
+        if !template_infer_decidable(check, extends) {
+          return t
+        }
         let bindings : Map[String, @ast.TsType] = Map([])
         if match_infer_pattern(check, extends, bindings) {
           substitute_inferred_type(true_branch, bindings)
@@ -1525,6 +1534,38 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
         false_branch
       }
     _ => t
+  }
+}
+
+///|
+/// Whether `match_infer_pattern` decides `check extends pattern` exactly
+/// as far as TEMPLATE patterns go: a pattern with no template `infer`
+/// anywhere, or exactly the bare single hole `${infer X}` (unbounded or
+/// bounded by `string` / `number`) against a string literal.
+fn template_infer_decidable(check : @ast.TsType, pattern : @ast.TsType) -> Bool {
+  fn has_template_infer(t : @ast.TsType) -> Bool {
+    match t {
+      TemplateLiteralType(_, args) =>
+        args
+        .iter()
+        .any(fn(a) { contains_infer_marker(a) || has_template_infer(a) })
+      Array(inner) | Rest(inner) => has_template_infer(inner)
+      Tuple(items) | Union(items) | Intersection(items) | Applied(_, items) =>
+        items.iter().any(has_template_infer)
+      Object(fields) => fields.iter().any(fn(f) { has_template_infer(f.1) })
+      Func(ps, r) | Constructor(ps, r, _) =>
+        ps.iter().any(has_template_infer) || has_template_infer(r)
+      _ => false
+    }
+  }
+  if !has_template_infer(pattern) {
+    return true
+  }
+  match (check, pattern) {
+    (Literal(_), TemplateLiteralType(["", ""], [hole])) =>
+      infer_marker_name(hole) is Some(_) &&
+      infer_marker_bound(hole) is (None | Some(String_) | Some(Number))
+    _ => false
   }
 }
 

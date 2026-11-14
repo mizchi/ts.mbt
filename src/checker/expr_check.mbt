@@ -12556,6 +12556,25 @@ fn binding_provably_violates_bound(
         if required && !have.contains(name) {
           return true
         }
+        // A property both sides declare, with SCALAR types on both, is as
+        // decidable as the top level: `fo<T extends { a: string }>` with
+        // `fo([{ a: 1 }])` binds `a: number`.
+        if have.contains(name) {
+          match
+            (
+              resolver.lookup_field(binding, name),
+              resolver.lookup_field(bound, name),
+            ) {
+            (Some(bt), Some(wt)) => {
+              let bu = resolver.unwrap_containers(bt)
+              let wu = resolver.unwrap_containers(wt)
+              if scalar(bu) && scalar(wu) && !is_assignable_to(bu, wu) {
+                return true
+              }
+            }
+            _ => ()
+          }
+        }
       }
       false
     }

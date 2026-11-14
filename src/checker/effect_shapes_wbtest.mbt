@@ -785,3 +785,22 @@ test "batches FV-FW review: bounds, shadowing and numeric template holes" {
   assert_false(eff_has(issues, "okLocalNonNullable"), msg="okLocalNonNullable")
   assert_true(eff_has(issues, "badLibSpelling"), msg="badLibSpelling")
 }
+
+///|
+test "review: template infer patterns the matcher cannot decide stay unreduced" {
+  let src =
+    #|type A = "x1" extends `x${infer U}` ? number : boolean;
+    #|type B = "12" extends `${infer U extends bigint}` ? number : boolean;
+    #|type C = "7" extends `${infer U extends number}` ? U : never;
+    #|function okFixedPart() { const a: A = 1; return a; }
+    #|function okBigintBound() { const b: B = 1; return b; }
+    #|function okSingleHole() { const c: C = 7; return c; }
+    #|declare function fo<T extends { a: string }>(xs: T[]): void;
+    #|function badPropertyType() { fo([{ a: 1 }]); }
+    #|function okPropertyType() { fo([{ a: "x" }]); }
+  let issues = eff_issues(src)
+  for ok in ["okFixedPart", "okBigintBound", "okSingleHole", "okPropertyType"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  assert_true(eff_has(issues, "badPropertyType"), msg="badPropertyType")
+}
