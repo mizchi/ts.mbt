@@ -25673,6 +25673,25 @@ fn check_call_args_in_expr(
     TypeArgs(targs, inner) => {
       check_explicit_type_args(env, ctx, targs, inner)
       check_untyped_call_type_args(ctx, inner)
+      // TS2349: type arguments on a call of a value whose type is a
+      // PRIMITIVE — nothing primitive has a call signature to instantiate
+      // (`value<string>()` with `value: number`).
+      match inner {
+        Call(n, _) =>
+          match env.lookup(n) {
+            Some(t) =>
+              if ctx.resolver.unwrap(t)
+                is (Number | String_ | Boolean | BigInt | Symbol) {
+                record_unfiltered(
+                  ctx,
+                  "call `\{n}`",
+                  "this expression is not callable: type `\{type_display(t)}` has no call signatures",
+                )
+              }
+            None => ()
+          }
+        _ => ()
+      }
       check_call_args_in_expr(env, inner, ctx)
     }
     // `import(spec)` had NO arm here at all, so the specifier expression
@@ -25704,6 +25723,9 @@ fn check_call_args_in_expr(
       }
     }
     Call(name, args) => {
+      if name == "super" {
+        check_super_call_contextual_args(env, ctx, args)
+      }
       // TS2304: calling a name declared nowhere and not a standard global.
       check_undefined_name(env, ctx, name)
       if env.lookup("<this-required>" + name) is Some(Any) {
@@ -30793,6 +30815,47 @@ fn any_expr_uses_this(es : Array[@ast.TsExpr]) -> Bool {
     }
   }
   false
+}
+
+///|
+/// A FUNCTION-literal argument of `super(…)` is contextually typed by the
+/// base class's constructor parameter, instantiated with the type arguments
+/// of the `extends` clause (`class C extends A<number, string>` with
+/// `constructor(map: (value: T1) => T2)` makes `value` a `number` —
+/// superCallParameterContextualTyping2). Only function literals are checked
+/// here, since the contextual type is what they gain; a base whose
+/// arguments are not recorded, or an arity mismatch, abstains.
+fn check_super_call_contextual_args(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  args : Array[@ast.TsExpr],
+) -> Unit {
+  guard current_enclosing_class(ctx.path_prefix) is Some(cn) else { return }
+  guard ctx.resolver.classes.get(cn) is Some(cls) else { return }
+  guard cls.base_names is [base] else { return }
+  guard ctx.resolver.classes.get(base) is Some(bcls) else { return }
+  guard ctx.resolver.lookup_constructor_sig(base) is Some((formal, _)) else {
+    return
+  }
+  let bindings : Map[String, @ast.TsType] = Map([])
+  if bcls.type_params.length() > 0 {
+    guard ctx.resolver.class_base_args.get(class_base_key(cn, base))
+      is Some(Some(targs)) else {
+      return
+    }
+    if targs.length() != bcls.type_params.length() {
+      return
+    }
+    for i, tp in bcls.type_params {
+      bindings[tp] = targs[i]
+    }
+  }
+  let params = substitute_params_array(formal, bindings)
+  for i, a in args {
+    if i < params.length() && a is (ArrowFunc(_, _, _, _) | FuncExpr(_)) {
+      check_expr_against(env, a, params[i], ctx, "call `super` arg[\{i}]")
+    }
+  }
 }
 
 ///|
