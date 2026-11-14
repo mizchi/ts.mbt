@@ -24331,6 +24331,30 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      // TS2454: a `var` bound by the head is only assigned if the loop
+      // runs, so a read AFTER it is "used before being assigned" when the
+      // element type excludes `undefined` (probed: a top-level read, an
+      // array literal holding it, and a function's `return`). A name bound
+      // before the loop is already assigned and stays silent.
+      match (kind, binding) {
+        (@ast.TsForOfKind::Var, @ast.TsBinding::Ident(n)) => {
+          // `for (var w of [])` iterates `never[]` under strictNullChecks.
+          let elem_for_assign = if iter is ArrayLit([]) &&
+            ctx.strict_null_checks {
+            @ast.TsType::Never
+          } else {
+            elem_ty
+          }
+          if ctx.strict_property_init &&
+            !pre.iter().any(fn(e) { e.0 == n }) &&
+            is_checkable(elem_for_assign) &&
+            !type_accepts_undefined(elem_for_assign) &&
+            !ctx.unassigned.contains(n) {
+            ctx.unassigned[n] = false
+          }
+        }
+        _ => ()
+      }
     }
     ForAwaitOf(_, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
