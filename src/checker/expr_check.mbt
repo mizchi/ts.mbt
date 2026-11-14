@@ -12911,6 +12911,44 @@ fn check_expr_against(
       None => ()
     }
   }
+  // TS2322 / TS2345: a value whose type is a DEFERRED `Extract`-shaped
+  // conditional over a bare unconstrained in-scope `T` — `Extract<T, U>`,
+  // nested `Extract<Extract<T, A>, B>`, or an alias whose body is
+  // `T extends A ? T extends B ? T : never : never`. tsc's constraint of
+  // such a type is `T & A & B`, and an unconstrained `T` contributes no
+  // member, so a target property that none of `A`, `B` declares is
+  // missing ("Property 'bat' is missing in type 'Foo & Bar'"). Only the
+  // MISSING-required half is judged — never member types, never excess —
+  // and only when the target and every constraint part are enumerable.
+  match extract_constraint_parts(ctx, infer_expr(env, ctx.resolver, expr), 0) {
+    Some(parts) if parts.length() > 0 =>
+      match cast_shape_fields(ctx.resolver, expected, 0) {
+        Some(required) => {
+          let provided : Map[String, Unit] = Map([])
+          let mut enumerable = true
+          for p in parts {
+            match cast_shape_fields(ctx.resolver, p, 0) {
+              Some(pf) => for k, _ in pf { provided[k] = () }
+              None => enumerable = false
+            }
+          }
+          if enumerable {
+            for k, req in required {
+              if req && !provided.contains(k) {
+                record(
+                  ctx,
+                  sub_path,
+                  "property `\{k}` is missing in the constraint of `\{type_display(infer_expr(env, ctx.resolver, expr))}` but required in type `\{type_display(expected)}`",
+                )
+                return
+              }
+            }
+          }
+        }
+        None => ()
+      }
+    _ => ()
+  }
   // A bare `A` that is only ever a TYPE PARAMETER in this file — declared
   // by a generic arrow (`const randomWith = <A>(f: (r: Random) => A) => …`,
   // whose `<A>` is not in the AST) and by no interface, alias, class or
@@ -13786,6 +13824,56 @@ fn check_expr_against(
         return
       }
     }
+    // A fresh object literal is never assignable to a DEFERRED conditional
+    // whose check type is an in-scope type parameter referenced in a
+    // branch (`T extends object ? { arg: T } : { arg?: undefined }` inside
+    // a function generic in `T`), nor to an intersection with one: tsc
+    // relates a source to such a conditional only when it IS that
+    // conditional, because a distribution-dependent type has no branch to
+    // compare against until `T` is known ("not assignable to type 'A
+    // extends object ? { arg: A; } : { arg?: undefined; }'"). A
+    // conditional whose branches do not mention `T` is related through
+    // both branches in tsc, and is left alone here.
+    (ObjectLit(_), Conditional(_, _, _, _))
+    | (ObjectLit(_), Intersection(_)) if has_deferred_dependent_conditional(
+        ctx,
+        expected_shape,
+        0,
+      ) => {
+      record(
+        ctx,
+        sub_path,
+        "object literal is not assignable to the deferred conditional type `\{type_display(expected)}`",
+      )
+      return
+    }
+    // An INTERSECTION of enumerable object shapes is one object shape, and
+    // a fresh literal against it gets the excess-property and
+    // missing-property checks a plain object target gets. There was no arm
+    // here, so `let s: { test: string } & { arg: object } = { test, arg,
+    // arr }` — and every `Base & { extra }` target — accepted any key.
+    // Merged only when EVERY part is an anonymous object type whose keys
+    // are all plain names: a type parameter, a primitive brand
+    // (`string & { __brand }`), an index signature, a computed key, an
+    // interface or anything else this cannot enumerate abstains, since
+    // each of those is a shape where a property may be present without
+    // being listed.
+    (ObjectLit(entries), Intersection(parts)) =>
+      match merge_enumerable_object_intersection(ctx.resolver, parts, 0) {
+        Some(fields) => {
+          check_object_lit_against_target(
+            env,
+            entries,
+            Object(fields),
+            ctx.resolver,
+            ctx,
+            sub_path,
+            arg_callee_non_generic~,
+          )
+          return
+        }
+        None => ()
+      }
     // A fresh object literal against a *union* target must satisfy at
     // least one constituent (`{ prop: strOrNumber }` never satisfies
     // `{ prop: string } | { prop: number }` --
@@ -45488,6 +45576,149 @@ fn shapes_definitely_disjoint(
     }
     _ => false
   }
+}
+
+///|
+/// The constraint parts `[A, B, …]` of a deferred `Extract`-shaped
+/// conditional over a bare unconstrained in-scope type parameter — the
+/// `A & B` of tsc's `T & A & B` constraint, with `T` itself contributing
+/// nothing. `None` for any other shape, including a bounded or unresolved
+/// base, a branch that is not exactly `T` / `never`, and an alias that is
+/// not a user alias whose argument count matches.
+fn extract_constraint_parts(
+  ctx : CheckCtx,
+  t : @ast.TsType,
+  depth : Int32,
+) -> Array[@ast.TsType]? {
+  if depth > 8 {
+    return None
+  }
+  match t {
+    Named(n) =>
+      if ctx.in_scope_type_params.contains(n) &&
+        !ctx.type_param_bounds.iter().any(fn(b) { b.0 == n }) &&
+        ctx.resolver.type_aliases.get(n) is None {
+        Some([])
+      } else {
+        None
+      }
+    Applied("Extract", [inner, u]) if ctx.resolver.type_aliases.get("Extract")
+      is None =>
+      match extract_constraint_parts(ctx, inner, depth + 1) {
+        Some(ps) => Some([..ps, u])
+        None => None
+      }
+    // `T extends U ? REST : never`, where REST is `T` or another such
+    // conditional on the SAME `T` — the shape of `Extract` written out.
+    Conditional(Named(c), u, then_, Never) =>
+      match extract_constraint_parts(ctx, Named(c), depth + 1) {
+        Some(_) => {
+          let rest = match then_ {
+            Named(n) if n == c => Some([])
+            Conditional(Named(c2), _, _, Never) if c2 == c =>
+              extract_constraint_parts(ctx, then_, depth + 1)
+            _ => None
+          }
+          match rest {
+            Some(ps) => Some([u, ..ps])
+            None => None
+          }
+        }
+        None => None
+      }
+    Applied(n, args) =>
+      match ctx.resolver.type_aliases.get(n) {
+        Some(a) if a.type_params.length() == args.length() &&
+          a.type_params.length() > 0 => {
+          let bindings : Map[String, @ast.TsType] = Map([])
+          for i, tp in a.type_params {
+            bindings[tp] = args[i]
+          }
+          extract_constraint_parts(
+            ctx,
+            substitute_params(a.type_, bindings),
+            depth + 1,
+          )
+        }
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// `t` (after `unwrap`) is, or is an intersection containing, a conditional
+/// type that tsc DEFERS and can relate nothing but itself to: its check
+/// type is an in-scope type parameter (so it is generic here) that the
+/// true or false branch references (so it is distribution-dependent).
+fn has_deferred_dependent_conditional(
+  ctx : CheckCtx,
+  t : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  match ctx.resolver.unwrap(t) {
+    Conditional(Named(tp), _, a, b) =>
+      ctx.in_scope_type_params.contains(tp) &&
+      (type_param_occurs(tp, a) || type_param_occurs(tp, b))
+    Intersection(parts) =>
+      parts
+      .iter()
+      .any(fn(p) { has_deferred_dependent_conditional(ctx, p, depth + 1) })
+    _ => false
+  }
+}
+
+///|
+/// The fields of an intersection whose every part (after `unwrap`, so an
+/// alias or a decided conditional counts) is an anonymous object type with
+/// plain-name keys, merged into one list. `None` for anything else, and
+/// for a key two parts declare with types that are not equivalent — the
+/// member's type is then their intersection, which the per-field check
+/// would have to judge, and abstaining costs only the finding.
+fn merge_enumerable_object_intersection(
+  resolver : Resolver,
+  parts : Array[@ast.TsType],
+  depth : Int32,
+) -> Array[(@ast.TsType, @ast.TsType)]? {
+  if depth > 8 {
+    return None
+  }
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  for p in parts {
+    // `ThisType<T>` unwraps to an empty shape, but it is the part that sets
+    // the literal's METHODS' `this` — merging it away would judge those
+    // bodies with no `this` at all. The path that already handles
+    // `X & ThisType<T>` keeps it (`mappedTypeInferenceErrors`).
+    if p is Applied("ThisType", _) {
+      return None
+    }
+    let fields = match resolver.unwrap(p) {
+      Object(fs) => fs
+      Intersection(inner) =>
+        match merge_enumerable_object_intersection(resolver, inner, depth + 1) {
+          Some(fs) => fs
+          None => return None
+        }
+      _ => return None
+    }
+    for f in fields {
+      match f.0 {
+        Literal(k) if !k.has_prefix("<") && !k.has_prefix("@@") => ()
+        _ => return None
+      }
+      match out.search_by(fn(o) { o.0 == f.0 }) {
+        Some(i) => if !equivalent(out[i].1, f.1) { return None }
+        None => out.push(f)
+      }
+    }
+  }
+  if out.length() == 0 {
+    return None
+  }
+  Some(out)
 }
 
 ///|

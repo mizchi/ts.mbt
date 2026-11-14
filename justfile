@@ -266,9 +266,14 @@ checker-miss-buckets *ARGS:
 # inference through overloads and conditional types, object-literal
 # normalization, mixin heritage, template-literal relations) rather than a
 # rule. The batch notes in CLAUDE.md list what took each file.
+#
+# 15 -> 13 in batch FV: `conditionalTypes1` (an unconstrained `T` into
+# `NonNullable<T>`, once assignment stopped narrowing a binding declared as a
+# bare type parameter) and `conditionalTypes2` (the `T & A & B` constraint of
+# a deferred `Extract`).
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 15
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 13
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #
