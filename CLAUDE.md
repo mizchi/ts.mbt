@@ -4009,7 +4009,7 @@ product surfaces now.
   needs `as const` kept by the parser (it is erased for the transform
   passes' sake) plus the evaluation order of destructuring defaults
   against computed keys, a distinction no real code draws.
-- `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
+- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
   exports) and `mangle_safety.mbt` + `flow_analysis.mbt` (names that reach a
