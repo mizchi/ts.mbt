@@ -2083,6 +2083,9 @@ fn Resolver::ingest_module(
     if gm == "<const-type-param>" {
       r.globals["@const-type-param"] = Any
     }
+    if gm == "<fn-type-this-param>" {
+      r.globals["@fn-type-this-param"] = Any
+    }
     if gm.has_prefix("<catch-unknown:") && gm.has_suffix(">") {
       let n = gm["<catch-unknown:".length():gm.length() - 1].to_owned()
       r.globals["@catch-unknown:" + n] = Any
@@ -5972,6 +5975,148 @@ fn Resolver::method_type_params_of(
     None => ()
   }
   []
+}
+
+///|
+/// The parameters a generic method call's arguments are checked against:
+/// a parameter that is exactly a constrained method type parameter is
+/// judged against its BOUND (`interface_method_params_with_bounds`), and
+/// every other parameter gets the method's type arguments solved from the
+/// call — the same `solve_generic_bindings` the return type already uses
+/// in `infer_expr`'s MethodCall arm, so the two cannot disagree. Before
+/// this the arguments of a generic method were judged against raw
+/// `Named("U")` parameters, i.e. by nothing: `p.then(f)` with
+/// `then<U>(cb: (x: T) => Promise<U>)` never compared `f` with anything.
+/// An unsolved type parameter binds `any`, which only ever accepts.
+fn instantiate_method_call_params(
+  env : ExprEnv,
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsType] {
+  let bounded = interface_method_params_with_bounds(
+    resolver, recv, meth, params,
+  )
+  let method_tps = resolver.method_type_params_of(recv, meth)
+  // A function TYPE with a leading `this` parameter keeps it as a
+  // positional one (see `<fn-type-this-param>`), so a `(this: This, arg:
+  // Arg) => R` parameter would bind `This` from the argument's FIRST
+  // parameter — effect's `runInAsyncScope(this.evaluate, this, effect)`
+  // then reported `this` against `Primitive`. Abstain in such a file.
+  if method_tps.length() == 0 ||
+    resolver.globals.contains("@fn-type-this-param") {
+    return bounded
+  }
+  let bindings = solve_generic_bindings(
+    env, resolver, method_tps, params, args, None,
+  )
+  let out : Array[@ast.TsType] = []
+  for i, p in params {
+    if bounded[i] != p {
+      out.push(bounded[i])
+    } else {
+      out.push(substitute_params(p, bindings))
+    }
+  }
+  out
+}
+
+///|
+/// A primitive, a primitive literal, or a union made only of those.
+fn is_primitive_shaped(t : @ast.TsType) -> Bool {
+  match t {
+    String_ | Number | Boolean | BigInt | Symbol => true
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) =>
+      true
+    Union(ms) => ms.length() > 0 && ms.iter().all(is_primitive_shaped)
+    _ => false
+  }
+}
+
+///|
+/// An INTERFACE method's parameters with each parameter that is exactly a
+/// constrained method type parameter replaced by its bound. The interface
+/// spelling keeps `get<K extends keyof T>(k: K)` as a bare `K` (a class's
+/// bound is inlined by the parser, which is why only the interface
+/// spelling was silent), and an argument judged against an unresolved `K`
+/// is judged by nothing — while tsc infers `K` from the argument and
+/// requires it to satisfy the constraint, so `store.get("b")` on a
+/// `Store<{ a: 1 }>` is TS2345. The bound is instantiated with the
+/// RECEIVER's type arguments; a bound that mentions another method type
+/// parameter, or an interface parameter the receiver does not supply,
+/// leaves the parameter as it was.
+fn interface_method_params_with_bounds(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  params : Array[@ast.TsType],
+) -> Array[@ast.TsType] {
+  let (name, args) = match resolver.unwrap(recv) {
+    Named(n) => (n, [])
+    Applied(n, a) => (n, a)
+    Struct(n, _) => (n, [])
+    _ => return params
+  }
+  guard resolver.interfaces.get(name) is Some(iface) else { return params }
+  let mut bounds : Array[(String, @ast.TsType)] = []
+  for e in iface.method_type_param_bounds {
+    if e.0 == meth {
+      bounds = e.1
+      break
+    }
+  }
+  if bounds.length() == 0 {
+    return params
+  }
+  let method_tps = resolver.method_type_params_of(recv, meth)
+  let iface_bindings : Map[String, @ast.TsType] = Map([])
+  if args.length() == iface.type_params.length() {
+    for i, tp in iface.type_params {
+      // A method type parameter SHADOWS the interface's of the same name.
+      if !method_tps.contains(tp) {
+        iface_bindings[tp] = args[i]
+      }
+    }
+  }
+  let unbound_iface_tps = iface.type_params.filter(fn(tp) {
+    !iface_bindings.contains(tp) && !method_tps.contains(tp)
+  })
+  params.map(fn(p) {
+    match p {
+      Named(n) if method_tps.contains(n) =>
+        match bounds.search_by(fn(b) { b.0 == n }) {
+          Some(i) => {
+            let bound = bounds[i].1
+            if type_references_any(bound, method_tps) ||
+              type_references_any(bound, unbound_iface_tps) {
+              p
+            } else {
+              // Only a PRIMITIVE-shaped bound — a primitive, a literal, a
+              // union of those, or a `keyof` that reduces to one. Two
+              // reasons, both measured on `partiallyNamedTuples2`: an
+              // interface's own type parameters may already have been
+              // replaced by THEIR bounds (`Keys extends readonly
+              // unknown[]` turned `GetKeys<Keys>` into `GetKeys<unknown[]>`
+              // before this saw it), and a REST parameter typed by the
+              // method parameter (`...key: Key`) arrives as a bare `Key`
+              // whose bound describes the whole argument TUPLE, not one
+              // argument. A rest parameter cannot have a primitive type,
+              // so a primitive bound rules the second out by construction.
+              let sub = substitute_params(bound, iface_bindings)
+              if is_primitive_shaped(resolver.unwrap(sub)) {
+                sub
+              } else {
+                p
+              }
+            }
+          }
+          None => p
+        }
+      _ => p
+    }
+  })
 }
 
 ///|
@@ -12055,7 +12200,7 @@ fn infer_call(
                 // `string | string | null` instead of its first
                 // overload's `string`. The interface spelling of the same
                 // parameter always matched.
-                if !is_assignable_to(arg_types[i], resolver.unwrap(params[i])) {
+                if !overload_param_accepts(resolver, arg_types[i], params[i]) {
                   ok = false
                   break
                 }
@@ -13592,6 +13737,14 @@ fn check_expr_against(
             }
             rets.push(ret)
           }
+          // `undefined` / `null` carry no call signature, so they do not
+          // take part: tsc reads the contextual signature off the
+          // non-nullable part, which is what an OPTIONAL callback member
+          // (`map?: (i: I) => O`, stored as `F | undefined`) is. The arm
+          // used to require every member to be a function, so the
+          // commonest callback slot there is — an `onX?:` in an options
+          // object — judged its body by nothing.
+          Undefined | Null => ()
           _ => uniform = false
         }
       }
@@ -26599,7 +26752,14 @@ fn check_call_args_in_expr(
                 // 'foo'])` against `run(event?: unknown)` is TS2554).
                 check_arguments_with_sig(
                   env,
-                  params,
+                  instantiate_method_call_params(
+                    env,
+                    ctx.resolver,
+                    pruned,
+                    meth,
+                    params,
+                    args,
+                  ),
                   None,
                   args,
                   ctx,
@@ -40651,6 +40811,90 @@ fn call_returns_uninferred_type_param(
 }
 
 ///|
+/// Whether overload selection takes `arg` for a parameter of type `param`.
+/// `is_assignable_to` is resolver-free and has no arm for the two
+/// parameter types EVERY non-nullish value satisfies — the lib `Object`
+/// interface and the empty object type `{}` — so an overload set whose
+/// first member takes one of them skipped it and selected a later member:
+/// `foo16(x: Object): Object; foo16(x: E): E` returned `E` for
+/// `foo16(E.A)`, where tsc picks the first. An `any` / `unknown` argument
+/// keeps the old answer, since tsc's subtype pass treats those
+/// differently and that is not modelled here.
+fn overload_param_accepts(
+  resolver : Resolver,
+  arg : @ast.TsType,
+  param : @ast.TsType,
+) -> Bool {
+  let p = resolver.unwrap(param)
+  if is_assignable_to(arg, p) {
+    return true
+  }
+  let takes_any_object = match p {
+    Named("Object") =>
+      !resolver.interfaces.contains("Object") &&
+      !resolver.classes.contains("Object") &&
+      !resolver.type_aliases.contains("Object")
+    Object([]) => true
+    _ => false
+  }
+  takes_any_object &&
+  !(arg is (Any | Unknown | Undefined | Null | Void | Never)) &&
+  !type_has_undefined(arg) &&
+  !type_has_null(arg)
+}
+
+///|
+/// The return type of the overload a call to the overloaded declaration
+/// `f` selects, when every argument's type is exact — an enum member
+/// (`E.A`) or a literal — and the selected member is a plain non-generic
+/// signature. `None` whenever the selection could be wrong: a generic
+/// member reached before a match, an argument of any other shape, or no
+/// member matching at all.
+fn overload_call_precise_return(
+  resolver : Resolver,
+  f : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsType? {
+  guard resolver.globals.get(f) is Some(Union(parts)) else { return None }
+  let arg_types : Array[@ast.TsType] = []
+  for a in args {
+    match a {
+      // The member's ENUM type, which is what selects `(x: E)`; a
+      // numeric member reads as `number` through `infer_expr`, and that
+      // is not assignable to `E` in the resolver-free relation.
+      PropAccess(Var(e), _) if resolver.enums.contains(e) =>
+        arg_types.push(Named(e))
+      _ =>
+        match precise_literal_type(a) {
+          Some(t) => arg_types.push(t)
+          None => return None
+        }
+    }
+  }
+  for part in parts {
+    match part {
+      Func(params, ret) => {
+        if params.length() != arg_types.length() {
+          continue
+        }
+        let mut ok = true
+        for i, at in arg_types {
+          if !overload_param_accepts(resolver, at, params[i]) {
+            ok = false
+            break
+          }
+        }
+        if ok {
+          return if is_checkable(ret) { Some(ret) } else { None }
+        }
+      }
+      _ => return None
+    }
+  }
+  None
+}
+
+///|
 /// TS2403 ("Subsequent variable declarations must have the same type"): two
 /// `var` declarations of the same name must declare the *identical* type.
 /// Identity (not assignability) -- `C` and `C | D` are mutually assignable
@@ -40690,6 +40934,16 @@ fn check_var_redeclaration_types(
         !resolver.globals.contains("@written-any:" + n) &&
         call_returns_uninferred_type_param(resolver, f, args) =>
         decls.push((n, @ast.TsType::Unknown))
+      // `var r = foo(E.A)` against an OVERLOAD set: the declared type is
+      // the return of the first overload the arguments select, which is
+      // decidable when every argument is an enum member or a literal —
+      // a precise argument type is what makes the selection exact.
+      Var(@ast.TsBinding::Ident(n), ty, Call(f, args)) if !is_checkable(ty) &&
+        !resolver.globals.contains("@written-any:" + n) =>
+        match overload_call_precise_return(resolver, f, args) {
+          Some(r) => decls.push((n, r))
+          None => decls.push((n, ty))
+        }
       Var(@ast.TsBinding::Ident(n), ty, _) => decls.push((n, ty))
       _ => ()
     }

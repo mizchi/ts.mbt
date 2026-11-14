@@ -270,10 +270,12 @@ checker-miss-buckets *ARGS:
 # 15 -> 13 in batch FV: `conditionalTypes1` (an unconstrained `T` into
 # `NonNullable<T>`, once assignment stopped narrowing a binding declared as a
 # bare type parameter) and `conditionalTypes2` (the `T & A & B` constraint of
-# a deferred `Extract`).
+# a deferred `Extract`). 13 -> 12 with `enumAssignabilityInInheritance`:
+# overload selection lets a primitive into the lib `Object` / `{}`, and a
+# `var` redeclared from an overloaded call takes the selected return.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 13
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 12
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #
