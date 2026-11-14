@@ -24771,6 +24771,68 @@ fn is_node_only_global_value(name : String) -> Bool {
 }
 
 ///|
+/// TS2345 for explicit type arguments on a VALUE whose type is an
+/// interface with exactly one generic call (`cg<string>(3)`) or construct
+/// (`new sg<string, number>(3, 4)`) signature: the arguments are pinned to
+/// the substituted parameters, as they are for a declared generic function.
+/// An overloaded signature set, a rest parameter or an arity mismatch
+/// abstains.
+fn check_explicit_type_args_on_signature_value(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  targs : Array[@ast.TsType],
+  inner : @ast.TsExpr,
+  name : String,
+) -> Unit {
+  let (key, args) = match inner {
+    Call(_, a) => ("<call>", a)
+    New(_, a) => ("<new>", a)
+    _ => return
+  }
+  let vt = match env.lookup(name) {
+    Some(t) => t
+    None =>
+      match ctx.resolver.globals.get(name) {
+        Some(t) => t
+        None => return
+      }
+  }
+  let iname = match vt {
+    Named(n) => n
+    _ => return
+  }
+  guard ctx.resolver.interfaces.get(iname) is Some(iface) else { return }
+  let sigs = iface.fields.filter(fn(f) { f.0 == key })
+  guard sigs is [(_, sig)] else { return }
+  // The signature's own binders: kept on the wrapper for some spellings
+  // and in `method_type_params` (keyed `<new>`) for a construct signature.
+  let recorded = iface.method_type_params
+    .iter()
+    .find_first(fn(e) { e.0 == key })
+    .map(fn(e) { e.1 })
+  let (tps, ps) = match (sig, recorded) {
+    (GenericFunc(tps, _, Func(ps, _)), _) => (tps, ps)
+    (GenericFunc(tps, _, Constructor(ps, _, _)), _) => (tps, ps)
+    (Func(ps, _), Some(tps)) => (tps, ps)
+    (Constructor(ps, _, _), Some(tps)) => (tps, ps)
+    _ => return
+  }
+  if tps.length() != targs.length() || ps.iter().any(fn(p) { p is Rest(_) }) {
+    return
+  }
+  let bindings : Map[String, @ast.TsType] = Map([])
+  for i in 0..<tps.length() {
+    bindings[tps[i]] = targs[i]
+  }
+  let formal = substitute_params_array(ps, bindings)
+  for i, a in args {
+    if i < formal.length() && !(a is Spread(_)) {
+      check_expr_against(env, a, formal[i], ctx, "call `\{name}` arg[\{i}]")
+    }
+  }
+}
+
+///|
 /// TS2558 ("Expected N type arguments, but got M") for explicit type arguments
 /// supplied to a callee that is *confidently* non-generic: a declared class or
 /// function that declares zero type parameters. Restricted to that case to
@@ -24908,7 +24970,10 @@ fn check_explicit_type_args(
     _ => None
   }
   guard callee_name is Some(name) else { return }
-  guard declared_type_params(name) is Some(params) else { return }
+  guard declared_type_params(name) is Some(params) else {
+    check_explicit_type_args_on_signature_value(env, ctx, targs, inner, name)
+    return
+  }
   // Supplying *more* type arguments than the callee declares is always an
   // error, regardless of any trailing defaults — defaults make trailing
   // parameters optional but never raise the maximum. (The "too few" direction
