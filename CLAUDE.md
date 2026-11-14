@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2711 / MISS in scope 15 /
+  is a soundness bug, and there are none (TP 2717 / MISS in scope 9 /
   OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
   **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
@@ -3901,6 +3901,70 @@ product surfaces now.
   resolution against the lib `Object` and through overloaded arguments,
   object-literal normalization, conditional types through bound-inlined
   parameters, template-literal relations, mixin heritage through a call.
+  Batch FV took that last sentence as a list to price, and it was wrong
+  about half of it — the label-for-objective substitution once more, in a
+  prediction written by the batch before. MISS 15 -> 9 at FP 0, effect
+  141 -> 139, zod 19, and every one of the 15 was opened, minimized and
+  probed before anything was written. `objectLiteralNormalization` needed
+  no inference machinery: an array of FLAT object literals is the
+  normalized union (each member given the others' keys as `?: undefined`),
+  and assigning a literal to a union of object shapes narrows to the
+  members it fits, which is tsc's `getAssignmentReducedType`; nested object
+  values keep the old `any`, because a union of un-normalized nested shapes
+  would report every read of a key one shape lacks. "Overload resolution
+  against the lib `Object`" was one missing arm — the resolver-free
+  relation has none for the two parameter types every non-nullish value
+  satisfies (`Object`, `{}`) — plus a `var` redeclared from an overloaded
+  call taking the selected return for TS2403, where an enum member's
+  argument type is the ENUM, not the `number` `infer_expr` erases it to.
+  "Mixin heritage" split in two: `mixinAccessors3` is a body-returned class
+  expression and took one rule (the base is the intersection of the mixin's
+  class and its argument, and a member several constituents declare is an
+  accessor only when every declaration is one of the same kind — getter
+  over setter is a PROPERTY, probed), while `override19` returns
+  `T & { new (…): S }` from a DECLARATION, and the parser inlines `T extends
+  Foo` to `Foo` in both parameter positions, so nothing says which argument
+  `T` was.
+  That inlining is now the one architectural blocker, and it decides four
+  of the nine left: `conditionalTypesExcessProperties` (`A extends object`
+  inlines to `any` in a PARAMETER while the same `Something<A>` written in
+  the body keeps `A`), `intraExpressionInferences` (`I extends WrappedMap`
+  is gone before `setup()`'s return can bind it), `override19`, and part of
+  `wrappedAndRecursiveConstraints4`. Undoing it moves what the bridge
+  reads (batch FJ measured 48 files for the interface half), so the
+  shippable shape is a side channel the CHECKER reads for call-site
+  inference, not a change to `TsParam.type_`.
+  The real-code half is worth more than the files. Three false positives
+  on legal code, none reachable from the corpus: React's `useState("")`
+  bound `S = ""` and rejected `setV("a")`, because `solve_generic_bindings`
+  never applied tsc's literal widening (a FRESH literal candidate widens
+  unless the parameter is `const` or sits at the top level of the return
+  type) — fresh meaning written at the call site, or an unannotated
+  `const` holding one, which rides a `<fresh>NAME` env entry compared
+  against the binding so a shadowing parameter cannot inherit it; the same
+  entry fixed `const a = "x"; let b = a; b = "y"`. And a CLOSURE made its
+  copy of a narrowed binding the assignment target, because `bind`'s first
+  write is the declared slot — `if (x === null) return; () => { x = null }`
+  reported "expected `string`" on a line tsc accepts, pre-existing, and the
+  boolean-truthiness narrowing this batch added surfaced it as effect's
+  `let done = false; … () => { done = true }`. Two capability gaps the
+  corpus does not test came with it: a generic interface method's
+  arguments were judged against raw `Named("U")` parameters, i.e. by
+  nothing (`np.then(tstr)`), and `const s: string = fetchName()` with
+  `fetchName(): Promise<string>` — the missing `await` — was silent,
+  because every relation abstains on a lib `Applied` name. The second is
+  judged at bindings, assignments and arguments of resolved non-generic
+  declarations only: at a `return` / `yield` an async body awaits the
+  operand and this site cannot tell async from sync, and at a lib-method
+  argument the member tables are narrower than lib.d.ts
+  (`String.prototype.replace` takes `string` there, `string | RegExp` in
+  the lib — six effect reports the first version shipped). Two file-level
+  abstentions keep the new inference off shapes it would misread: a file
+  declaring any `const` type parameter (whose flags are recorded only for
+  function DECLARATIONS) and one with a function TYPE carrying a leading
+  `this` parameter, which the type parser keeps positionally — effect's
+  `runInAsyncScope(this.evaluate, this, effect)` bound `This` from
+  `evaluate`'s first parameter.
 - `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
