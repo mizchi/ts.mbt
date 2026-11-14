@@ -293,7 +293,9 @@ fn is_js_finite_number_string(s : String) -> Bool {
     let digit_ok = match c1 {
       'x' | 'X' =>
         Some(fn(c : Char) {
-          (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+          (c >= '0' && c <= '9') ||
+          (c >= 'a' && c <= 'f') ||
+          (c >= 'A' && c <= 'F')
         })
       'o' | 'O' => Some(fn(c : Char) { c >= '0' && c <= '7' })
       'b' | 'B' => Some(fn(c : Char) { c == '0' || c == '1' })
@@ -316,14 +318,16 @@ fn is_js_finite_number_string(s : String) -> Bool {
     i = 1
   }
   let mut digits = 0
-  while i < n && t[i].to_int().unsafe_to_char() >= '0' &&
+  while i < n &&
+        t[i].to_int().unsafe_to_char() >= '0' &&
         t[i].to_int().unsafe_to_char() <= '9' {
     i += 1
     digits += 1
   }
   if i < n && t[i].to_int().unsafe_to_char() == '.' {
     i += 1
-    while i < n && t[i].to_int().unsafe_to_char() >= '0' &&
+    while i < n &&
+          t[i].to_int().unsafe_to_char() >= '0' &&
           t[i].to_int().unsafe_to_char() <= '9' {
       i += 1
       digits += 1
@@ -332,13 +336,22 @@ fn is_js_finite_number_string(s : String) -> Bool {
   if digits == 0 {
     return false
   }
-  if i < n && (t[i].to_int().unsafe_to_char() == 'e' || t[i].to_int().unsafe_to_char() == 'E') {
+  if i < n &&
+    (
+      t[i].to_int().unsafe_to_char() == 'e' ||
+      t[i].to_int().unsafe_to_char() == 'E'
+    ) {
     i += 1
-    if i < n && (t[i].to_int().unsafe_to_char() == '+' || t[i].to_int().unsafe_to_char() == '-') {
+    if i < n &&
+      (
+        t[i].to_int().unsafe_to_char() == '+' ||
+        t[i].to_int().unsafe_to_char() == '-'
+      ) {
       i += 1
     }
     let start = i
-    while i < n && t[i].to_int().unsafe_to_char() >= '0' &&
+    while i < n &&
+          t[i].to_int().unsafe_to_char() >= '0' &&
           t[i].to_int().unsafe_to_char() <= '9' {
       i += 1
     }
@@ -369,7 +382,8 @@ fn is_round_trip_number_string(s : String) -> Bool {
     }
   }
   let first = i
-  while i < n && s[i].to_int().unsafe_to_char() >= '0' &&
+  while i < n &&
+        s[i].to_int().unsafe_to_char() >= '0' &&
         s[i].to_int().unsafe_to_char() <= '9' {
     i += 1
   }
@@ -382,14 +396,17 @@ fn is_round_trip_number_string(s : String) -> Bool {
   }
   if i == n {
     // `-0` is not canonical: `"" + (-0)` is `"0"`.
-    return !(first == 1 && int_len == 1 && s[first].to_int().unsafe_to_char() == '0')
+    return !(first == 1 &&
+      int_len == 1 &&
+      s[first].to_int().unsafe_to_char() == '0')
   }
   if s[i].to_int().unsafe_to_char() != '.' {
     return false
   }
   i += 1
   let frac_start = i
-  while i < n && s[i].to_int().unsafe_to_char() >= '0' &&
+  while i < n &&
+        s[i].to_int().unsafe_to_char() >= '0' &&
         s[i].to_int().unsafe_to_char() <= '9' {
     i += 1
   }

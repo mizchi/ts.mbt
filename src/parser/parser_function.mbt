@@ -3408,10 +3408,7 @@ pub fn Parser::parse_declare_function(
 /// `raw_declare_signature` for a function DECLARATION, whose parameters go
 /// through `parse_params` (defaults, patterns, modifiers) rather than the
 /// ambient name-and-type loop.
-fn raw_function_signature(
-  tokens : Array[Token],
-  start : Int32,
-) -> @ast.TsType? {
+fn raw_function_signature(tokens : Array[Token], start : Int32) -> @ast.TsType? {
   let sp = Parser::new(tokens)
   sp.pos = start
   sp.no_bound_inline = true
@@ -3438,10 +3435,7 @@ fn raw_function_signature(
 /// type-parameter scope, so `T extends B` stays `Named("T")` — as
 /// `Func(params, return)`. A leading `this` parameter is dropped, as the
 /// first pass drops it. `None` when the list does not re-parse.
-fn raw_declare_signature(
-  tokens : Array[Token],
-  start : Int32,
-) -> @ast.TsType? {
+fn raw_declare_signature(tokens : Array[Token], start : Int32) -> @ast.TsType? {
   let sp = Parser::new(tokens)
   sp.pos = start
   sp.no_bound_inline = true

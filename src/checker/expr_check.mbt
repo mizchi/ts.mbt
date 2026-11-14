@@ -6061,7 +6061,12 @@ fn instantiate_method_call_params(
     return bounded
   }
   let bindings = solve_generic_bindings(
-    env, resolver, method_tps, params, args, None,
+    env,
+    resolver,
+    method_tps,
+    params,
+    args,
+    None,
   )
   let out : Array[@ast.TsType] = []
   for i, p in params {
@@ -6094,7 +6099,8 @@ fn reinstate_inlined_bounds(
     return t
   }
   for b in bounds {
-    if b.1 == t && !is_primitive_shaped(t) &&
+    if b.1 == t &&
+      !is_primitive_shaped(t) &&
       bounds.iter().filter(fn(o) { o.1 == t }).count() == 1 {
       match bindings.get(b.0) {
         Some(arg) => return arg
@@ -6122,8 +6128,7 @@ fn reinstate_inlined_bounds(
 fn is_primitive_shaped(t : @ast.TsType) -> Bool {
   match t {
     String_ | Number | Boolean | BigInt | Symbol => true
-    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) =>
-      true
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
     Union(ms) => ms.length() > 0 && ms.iter().all(is_primitive_shaped)
     _ => false
   }
@@ -6155,7 +6160,9 @@ fn interface_method_params_with_bounds(
     // takes the bounds from the part that declares the method.
     Intersection(parts) => {
       for part in parts {
-        let r = interface_method_params_with_bounds(resolver, part, meth, params)
+        let r = interface_method_params_with_bounds(
+          resolver, part, meth, params,
+        )
         if r != params {
           return r
         }
@@ -12028,7 +12035,9 @@ fn widen_fresh_literal_bindings(
         Named(n) => n == tp
         Union(ms) =>
           ms.iter().any(fn(m) { m is Named(n) && n == tp }) &&
-          ms.iter().all(fn(m) {
+          ms
+          .iter()
+          .all(fn(m) {
             (m is Named(n) && n == tp) || m is Undefined || m is Null
           })
         _ => false
@@ -12051,10 +12060,14 @@ fn widen_fresh_literal_bindings(
     match bindings.get(tp) {
       Some(b) => {
         let all_literal = match b {
-          Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
-            true
+          Literal(_)
+          | NumberLiteral(_)
+          | BigIntLiteral(_)
+          | BooleanLiteral(_) => true
           Union(ms) =>
-            ms.iter().all(fn(m) {
+            ms
+            .iter()
+            .all(fn(m) {
               m is Literal(_) ||
               m is NumberLiteral(_) ||
               m is BigIntLiteral(_) ||
@@ -12172,7 +12185,14 @@ fn recursive_bound_assignable(
   }
   match (a, b) {
     (Named(x), _) if x == tp =>
-      recursive_bound_assignable(resolver, constraint, b, tp, constraint, depth + 1)
+      recursive_bound_assignable(
+        resolver,
+        constraint,
+        b,
+        tp,
+        constraint,
+        depth + 1,
+      )
     (_, Named(y)) if y == tp => Some(false)
     (Applied(n1, args1), Applied(n2, args2)) if n1 == n2 &&
       args1.length() == args2.length() => {
@@ -12267,12 +12287,11 @@ fn lib_object_type_into_primitive(
 /// or tuple type (lib.es5 through lib.es2023).
 fn array_member_names() -> Array[String] {
   [
-    "length", "toString", "toLocaleString", "pop", "push", "concat", "join",
-    "reverse", "shift", "slice", "sort", "splice", "unshift", "indexOf", "lastIndexOf",
-    "every", "some", "forEach", "map", "filter", "reduce", "reduceRight", "find",
-    "findIndex", "fill", "copyWithin", "entries", "keys", "values", "includes",
-    "flatMap", "flat", "at", "findLast", "findLastIndex", "toReversed", "toSorted",
-    "toSpliced", "with",
+    "length", "toString", "toLocaleString", "pop", "push", "concat", "join", "reverse",
+    "shift", "slice", "sort", "splice", "unshift", "indexOf", "lastIndexOf", "every",
+    "some", "forEach", "map", "filter", "reduce", "reduceRight", "find", "findIndex",
+    "fill", "copyWithin", "entries", "keys", "values", "includes", "flatMap", "flat",
+    "at", "findLast", "findLastIndex", "toReversed", "toSorted", "toSpliced", "with",
   ]
 }
 
@@ -12317,7 +12336,9 @@ fn declare_raw_alias_param_types(
 fn type_has_member_marker_key(t : @ast.TsType) -> Bool {
   match t {
     Object(fs) =>
-      fs.iter().any(fn(f) {
+      fs
+      .iter()
+      .any(fn(f) {
         (f.0 is Literal(k) && k.has_prefix("@@") && !k.has_prefix("@@iterator")) ||
         type_has_member_marker_key(f.1)
       })
@@ -12396,13 +12417,15 @@ fn instantiate_raw_generic_params(
   let out : Array[@ast.TsType] = []
   for i, p in raw {
     let mentioned = type_params.filter(fn(tp) { type_param_occurs(tp, p) })
-    let solved = mentioned.iter().all(fn(tp) {
-      match bindings.get(tp) {
-        Some(b) =>
-          is_checkable(b) && !(b is Any) && !type_has_member_marker_key(b)
-        None => false
-      }
-    })
+    let solved = mentioned
+      .iter()
+      .all(fn(tp) {
+        match bindings.get(tp) {
+          Some(b) =>
+            is_checkable(b) && !(b is Any) && !type_has_member_marker_key(b)
+          None => false
+        }
+      })
     // A parameter that IS a bare type parameter instantiates to the
     // argument's own type, which can only re-check the argument against
     // itself — and an object literal's inferred type spells a getter as
@@ -13654,8 +13677,8 @@ fn check_expr_against(
   if ctx.strict_null_checks {
     let tp_of_nonnullable = match expected {
       Applied("NonNullable", [Named(n)]) => Some(n)
-      Intersection([Named(n), Object([])]) | Intersection([Object([]), Named(n)]) =>
-        Some(n)
+      Intersection([Named(n), Object([])])
+      | Intersection([Object([]), Named(n)]) => Some(n)
       _ => None
     }
     match tp_of_nonnullable {
@@ -13690,7 +13713,10 @@ fn check_expr_against(
           let mut enumerable = true
           for p in parts {
             match cast_shape_fields(ctx.resolver, p, 0) {
-              Some(pf) => for k, _ in pf { provided[k] = () }
+              Some(pf) =>
+                for k, _ in pf {
+                  provided[k] = ()
+                }
               None => enumerable = false
             }
           }
@@ -13728,9 +13754,7 @@ fn check_expr_against(
     ) {
     Some(true) => {
       record(
-        ctx,
-        sub_path,
-        "generic signature is not assignable: the target allows type arguments its type-parameter constraint does not",
+        ctx, sub_path, "generic signature is not assignable: the target allows type arguments its type-parameter constraint does not",
       )
       return
     }
@@ -14681,11 +14705,8 @@ fn check_expr_against(
     // extends object ? { arg: A; } : { arg?: undefined; }'"). A
     // conditional whose branches do not mention `T` is related through
     // both branches in tsc, and is left alone here.
-    (ObjectLit(_), Conditional(_, _, _, _))
-    | (ObjectLit(_), Intersection(_)) if has_deferred_dependent_conditional(
-        ctx,
-        expected_shape,
-        0,
+    (ObjectLit(_), Conditional(_, _, _, _)) | (ObjectLit(_), Intersection(_)) if has_deferred_dependent_conditional(
+        ctx, expected_shape, 0,
       ) => {
       record(
         ctx,
@@ -22269,7 +22290,9 @@ fn collect_narrowing(
         // (`narrowTypeByTruthiness(narrowType(type, expr.right), …)`):
         // after `(z = x)` is falsy, so is `x`.
         if rewritten is Var(_) && v is Var(_) {
-          collect_narrowing(env, resolver, v, then_binds, else_binds, then_sense)
+          collect_narrowing(
+            env, resolver, v, then_binds, else_binds, then_sense,
+          )
         }
         env.restore_from(snap)
       }
@@ -25026,9 +25049,7 @@ fn narrow_after_assignment(
       Some(d) =>
         match ctx.resolver.unwrap(d) {
           Union(ms) if ms.iter().all(fn(m) { m is (Object(_) | Struct(_, _)) }) => {
-            let kept = ms.filter(fn(m) {
-              object_literal_fits_member(new_ty, m)
-            })
+            let kept = ms.filter(fn(m) { object_literal_fits_member(new_ty, m) })
             if kept.length() > 0 {
               env.narrow(name, union_of(kept))
               return
@@ -37221,6 +37242,7 @@ priv struct BaseChainMembers {
 /// missing-member abstention, and a second copy of a walk whose failure mode
 /// is a false positive is the last thing this file needs — see the two
 /// `super` walkers that had drifted apart.
+
 ///|
 /// The base member set of `class C extends f(…, Base, …)` where `f` is a
 /// `declare function` whose UN-INLINED return type is `T & { new (…): S }`
@@ -37237,10 +37259,12 @@ fn mixin_call_base_chain(
   class_by_name : Map[String, @ast.TsClassDecl],
   iface_by_name : Map[String, @ast.TsInterface],
 ) -> BaseChainMembers? {
-  guard cls.base_names == ["<expr-base>"] && cls.base_expr is Some(Call(f, args)) else {
+  guard cls.base_names == ["<expr-base>"] &&
+    cls.base_expr is Some(Call(f, args)) else {
     return None
   }
-  guard module_.raw_generic_signatures.get(f) is Some(Func(rp, Intersection(parts))) else {
+  guard module_.raw_generic_signatures.get(f)
+    is Some(Func(rp, Intersection(parts))) else {
     return None
   }
   let instance : Map[String, Unit] = Map([])
@@ -37260,7 +37284,7 @@ fn mixin_call_base_chain(
         // `cn` itself is the first link: walk from a stand-in whose only
         // base is `cn`.
         let chain = resolve_base_chain_members(
-          { ..cls, base_names: [cn], base_expr: None },
+          { ..cls, base_names: [cn], base_expr: None, },
           class_by_name,
           iface_by_name,
         )
@@ -37300,7 +37324,7 @@ fn mixin_call_base_chain(
   if !has_class {
     return None
   }
-  Some({ instance, static_, abstract_, resolvable: true, has_opaque })
+  Some({ instance, static_, abstract_, resolvable: true, has_opaque, })
 }
 
 ///|
@@ -39447,7 +39471,9 @@ fn check_property_overridden_as_accessor(
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
     if cls.base_names == ["<expr-base>"] {
-      check_mixin_property_overridden_as_accessor(module_, resolver, cls, issues)
+      check_mixin_property_overridden_as_accessor(
+        module_, resolver, cls, issues,
+      )
       continue
     }
     if cls.base_names.length() != 1 {
@@ -39498,9 +39524,7 @@ fn check_mixin_property_overridden_as_accessor(
     return
   }
   let f = module_.funcs[fi]
-  guard f.body.stmts is [Return(Some(NativeClassExpr(anon, _)))] else {
-    return
-  }
+  guard f.body.stmts is [Return(Some(NativeClassExpr(anon, _)))] else { return }
   guard anon.base_names is [param] else { return }
   guard f.params.search_by(fn(p) { p.name == param }) is Some(pi) else {
     return
@@ -39513,7 +39537,9 @@ fn check_mixin_property_overridden_as_accessor(
   fn own_kind(c : @ast.TsClassDecl, name : String) -> Array[String]? {
     let kinds : Array[String] = []
     for m in c.methods {
-      if m.name == name && !m.is_static && m.accessor != "" &&
+      if m.name == name &&
+        !m.is_static &&
+        m.accessor != "" &&
         !kinds.contains(m.accessor) {
         kinds.push(m.accessor)
       }

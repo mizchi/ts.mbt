@@ -477,17 +477,19 @@ test "batch FV: fresh literal widening, NonNullable<T>, intersection and Extract
     #|function badExtractIntersection<T>(y: Extract<T, Foo & Bar>) { fooBat(y); }
     #|function badExtractAlias<T>(z: Extract2<T, Foo, Bar>) { fooBat(z); }
   let issues = eff_issues(src)
-  for ok in [
-    "okUseState", "okUseStateVar", "okBox", "okLetFromConst", "okIdKeepsLiteral",
-    "okNestNotFresh", "okNonNullableBack", "okBothNonNullable", "okExact", "okOptional",
-    "okIndexPart", "okExtract",
-  ] {
+  for
+    ok in [
+      "okUseState", "okUseStateVar", "okBox", "okLetFromConst", "okIdKeepsLiteral",
+      "okNestNotFresh", "okNonNullableBack", "okBothNonNullable", "okExact", "okOptional",
+      "okIndexPart", "okExtract",
+    ] {
     assert_false(eff_has(issues, ok), msg=ok)
   }
-  for bad in [
-    "badIdKeepsLiteral", "badNonNullable", "badEmptyIntersection", "badExcess",
-    "badMissing", "badExtractNested", "badExtractIntersection", "badExtractAlias",
-  ] {
+  for
+    bad in [
+      "badIdKeepsLiteral", "badNonNullable", "badEmptyIntersection", "badExcess",
+      "badMissing", "badExtractNested", "badExtractIntersection", "badExtractAlias",
+    ] {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
@@ -516,9 +518,10 @@ test "batch FV: optional callbacks, generic method arguments, overloads taking O
   for ok in ["okOptionalCallback", "okStoreGet", "okThen", "okObjectOverload"] {
     assert_false(eff_has(issues, ok), msg=ok)
   }
-  for bad in [
-    "badOptionalCallback", "badStoreGet", "badStorePut", "badThen", "badObjectOverload",
-  ] {
+  for
+    bad in [
+      "badOptionalCallback", "badStoreGet", "badStorePut", "badThen", "badObjectOverload",
+    ] {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
@@ -541,15 +544,17 @@ test "batch FV: assignment conditions, regex exec arrays, boolean truthiness" {
     #|function badNormalizedMissing() { let a1 = [{ a: 0 }, { a: 1, b: "x" }][0]; a1 = { b: "y" }; }
     #|function okNormalizedLoop() { const cfgs = [{ name: "a", port: 1 }, { name: "b" }]; for (const c of cfgs) { c.name.toUpperCase(); } }
   let issues = eff_issues(src)
-  for ok in [
-    "okExecLoop", "okAssignCond", "okAssignCmp", "okBoolTruthy", "okNumberOrBool",
-    "okNormalized", "okNormalizedLoop",
-  ] {
+  for
+    ok in [
+      "okExecLoop", "okAssignCond", "okAssignCmp", "okBoolTruthy", "okNumberOrBool",
+      "okNormalized", "okNormalizedLoop",
+    ] {
     assert_false(eff_has(issues, ok), msg=ok)
   }
-  for bad in [
-    "badAssignNegated", "badNeverMember", "badNormalizedWrongType", "badNormalizedMissing",
-  ] {
+  for
+    bad in [
+      "badAssignNegated", "badNeverMember", "badNormalizedWrongType", "badNormalizedMissing",
+    ] {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
@@ -572,7 +577,9 @@ test "batch FV: TS2611 through a mixin heritage clause" {
     parse_module_or_empty(src),
     Resolver::from_module(parse_module_or_empty(src)),
   )
-  let has = fn(c : String) { issues.iter().any(fn(i) { i.path == "class \{c}.name" }) }
+  let has = fn(c : String) {
+    issues.iter().any(fn(i) { i.path == "class \{c}.name" })
+  }
   assert_false(has("M0"))
   assert_true(has("M1"))
   assert_false(has("M2"))
@@ -601,15 +608,17 @@ test "batch FV: overload sets as values, lib object types into primitives" {
     #|function okUnionTarget() { const s: string | Promise<string> = fetchName(); }
     #|function okRegexArg() { "abc".replace(/b/g, ""); }
   let issues = eff_issues(src)
-  for ok in [
-    "okSingleArg", "okOverloadValue", "okAwaited", "okAsyncReturn", "okUnionTarget",
-    "okRegexArg",
-  ] {
+  for
+    ok in [
+      "okSingleArg", "okOverloadValue", "okAwaited", "okAsyncReturn", "okUnionTarget",
+      "okRegexArg",
+    ] {
     assert_false(eff_has(issues, ok), msg=ok)
   }
-  for bad in [
-    "badOverloadArg", "badOverloadValue", "badMissingAwait", "badMissingAwaitArg",
-  ] {
+  for
+    bad in [
+      "badOverloadArg", "badOverloadValue", "badMissingAwait", "badMissingAwaitArg",
+    ] {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }

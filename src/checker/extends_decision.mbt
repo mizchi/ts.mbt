@@ -65,9 +65,10 @@ pub fn extends_decision(source : @ast.TsType, target : @ast.TsType) -> Bool? {
   // `Extract<keyof T, `${number}`>` over a tuple needs. A hole of any
   // other type (a type parameter, an alias) leaves it undecided.
   match (source, target) {
-    (Literal(s), TemplateLiteralType(parts, holes)) if holes.iter().all(fn(h) {
-        template_hole_decidable(h)
-      }) => return Some(literal_matches_template(s, parts, holes, false))
+    (Literal(s), TemplateLiteralType(parts, holes)) if holes
+      .iter()
+      .all(fn(h) { template_hole_decidable(h) }) =>
+      return Some(literal_matches_template(s, parts, holes, false))
     _ => ()
   }
   // Literal narrowing: each literal kind extends its primitive companion.
