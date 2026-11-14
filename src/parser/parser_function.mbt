@@ -956,11 +956,29 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     type_param_bounds,
   )
   let _ = self.expect(LParen)
+  let raw_params_start = self.pos
   let prev_record_nia = self.record_implicit_any_params
   self.record_implicit_any_params = true
   let params = self.parse_params()
   self.record_implicit_any_params = prev_record_nia
   let _ = self.expect(RParen)
+  // The un-inlined signature (see `raw_declare_signature`); a function
+  // DECLARATION is recorded too, for the checker's parameter binding. A
+  // name declared more than once (an overload set) keeps no copy. Only a
+  // MODULE-scope declaration is recorded: the map is keyed by bare name
+  // and read for module-level calls, so a bounded `function id<U extends
+  // number>` nested in another body must not answer for a module-level
+  // `id`.
+  if !self.at_module_scope() {
+    ()
+  } else if self.raw_generic_signatures.contains(name) {
+    self.raw_generic_signatures[name] = Any
+  } else if type_param_bounds.length() > 0 {
+    match raw_function_signature(self.tokens, raw_params_start) {
+      Some(sig) => self.raw_generic_signatures[name] = sig
+      None => ()
+    }
+  }
   // return valuetype ()
   let had_return_annotation = self.check(Colon)
   let mut variadic_generic_return = false
@@ -3300,6 +3318,7 @@ pub fn Parser::parse_declare_function(
   )
   // parameter
   let _ = self.expect(LParen)
+  let params_start = self.pos
   let params : Array[(String, @ast.TsType)] = []
   let param_is_rest : Array[Bool] = []
   while !self.check(RParen) && !self.check(Eof) {
@@ -3371,8 +3390,97 @@ pub fn Parser::parse_declare_function(
     )
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
+  // The un-inlined copy, for the checker's call-site inference. A second
+  // Parser over the same tokens has no type-parameter scope, so nothing is
+  // inlined, and none of the first pass's side channels see its work. A
+  // name declared twice (an overload set) keeps no copy at all, and only a
+  // module-scope declaration is recorded (see `Parser::at_module_scope`).
+  if !self.at_module_scope() {
+    ()
+  } else if type_param_bounds.length() > 0 {
+    if self.raw_generic_signatures.contains(name) {
+      self.raw_generic_signatures[name] = Any
+    } else {
+      match raw_declare_signature(self.tokens, params_start) {
+        Some(sig) => self.raw_generic_signatures[name] = sig
+        None => ()
+      }
+    }
+  } else if self.raw_generic_signatures.contains(name) {
+    self.raw_generic_signatures[name] = Any
+  }
   self.consume_semicolon()
   { name, module_: "env", type_params, params, param_is_rest, return_type, }
+}
+
+///|
+/// Whether the parser is at module (or namespace) top level rather than
+/// inside some body. Every function, method and arrow body is parsed by
+/// `parse_block`, which pushes one `block_binding_nonnumeric` frame for its
+/// whole extent, and a namespace body is parsed by a fresh `Parser`, so an
+/// empty frame stack is exactly "no enclosing body". A declaration's own
+/// body has not been entered when its header is recorded.
+fn Parser::at_module_scope(self : Parser) -> Bool {
+  self.block_binding_nonnumeric.length() == 0
+}
+
+///|
+/// `raw_declare_signature` for a function DECLARATION, whose parameters go
+/// through `parse_params` (defaults, patterns, modifiers) rather than the
+/// ambient name-and-type loop.
+fn raw_function_signature(tokens : Array[Token], start : Int32) -> @ast.TsType? {
+  let sp = Parser::new(tokens)
+  sp.pos = start
+  sp.no_bound_inline = true
+  let parsed = (fn() -> @ast.TsType raise ParseError {
+    let ps = sp.parse_params()
+    let _ = sp.expect(RParen)
+    let ret = if sp.match_(Colon) { sp.parse_type() } else { Any }
+    let types : Array[@ast.TsType] = []
+    for i, p in ps {
+      if !(i == 0 && p.name == "this") {
+        types.push(p.type_)
+      }
+    }
+    Func(types, ret)
+  })() catch {
+    _ => return None
+  }
+  Some(parsed)
+}
+
+///|
+/// The parameter types and return type of a `declare function` whose
+/// parameter list opens at `start`, parsed by a fresh Parser — one with no
+/// type-parameter scope, so `T extends B` stays `Named("T")` — as
+/// `Func(params, return)`. A leading `this` parameter is dropped, as the
+/// first pass drops it. `None` when the list does not re-parse.
+fn raw_declare_signature(tokens : Array[Token], start : Int32) -> @ast.TsType? {
+  let sp = Parser::new(tokens)
+  sp.pos = start
+  sp.no_bound_inline = true
+  let types : Array[@ast.TsType] = []
+  let parsed = (fn() -> @ast.TsType raise ParseError {
+    while !sp.check(RParen) && !sp.check(Eof) {
+      let is_rest = sp.match_ellipsis()
+      let pname = sp.parse_declare_param_name()
+      let is_optional = sp.match_(Question)
+      let ty = if sp.match_(Colon) { sp.parse_type() } else { Any }
+      let ty = if is_optional { wrap_optional_ts_type(ty) } else { ty }
+      if !(pname == "this" && types.length() == 0 && !is_rest) {
+        types.push(ty)
+      }
+      if sp.check(Comma) {
+        let _ = sp.advance()
+      }
+    }
+    let _ = sp.expect(RParen)
+    let ret = if sp.match_(Colon) { sp.parse_type() } else { Any }
+    Func(types, ret)
+  })() catch {
+    _ => return None
+  }
+  Some(parsed)
 }
 
 ///|

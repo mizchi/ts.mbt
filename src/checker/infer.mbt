@@ -71,6 +71,34 @@ pub fn match_infer_pattern(
   if source == pattern {
     return true
   }
+  // `${infer N}` / `${infer N extends number}` over a string literal: the
+  // whole text binds. With a `number` bound the text must be the
+  // CANONICAL spelling of a number (tsc's round-trip rule), and `N` is the
+  // number literal; `"012"` or `"1.0"` does not match. Only the bare
+  // single-hole pattern, where nothing has to be split.
+  match (source, pattern) {
+    (Literal(s), TemplateLiteralType(["", ""], [hole])) =>
+      match infer_marker_name(hole) {
+        Some(name) =>
+          return match infer_marker_bound(hole) {
+            None | Some(String_) => bind_inferred_type(bindings, name, source)
+            // A numeric string that is not the canonical spelling
+            // (`"01"`, `"1.0"`) still satisfies the `number` bound and
+            // infers `number` itself (probed: `IndexFor<"01">` accepts 2).
+            Some(Number) =>
+              if is_round_trip_number_string(s) {
+                bind_inferred_type(bindings, name, NumberLiteral(s))
+              } else if is_js_finite_number_string(s) {
+                bind_inferred_type(bindings, name, Number)
+              } else {
+                false
+              }
+            Some(_) => false
+          }
+        None => ()
+      }
+    _ => ()
+  }
   match (source, pattern) {
     (_, Any) => true
     (Array(s_inner), Array(p_inner)) =>
@@ -312,6 +340,15 @@ pub fn substitute_inferred_type(
         out.push(substitute_inferred_type(arg, bindings))
       }
       Applied(name, out)
+    }
+    // `` `pre${X}` `` keeps its text and takes the binding in its hole, so
+    // a template branch reads `"preab"` rather than an opaque `X`.
+    TemplateLiteralType(parts, args) => {
+      let out : Array[@ast.TsType] = []
+      for arg in args {
+        out.push(substitute_inferred_type(arg, bindings))
+      }
+      TemplateLiteralType(parts, out)
     }
     _ => type_
   }

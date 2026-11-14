@@ -441,3 +441,347 @@ test "batch FU: private-name clash, readonly literal fields, local classes" {
   assert_false(msgs.iter().any(fn(m) { m.contains("D.m") }))
   assert_false(msgs.iter().any(fn(m) { m.contains("cannot find name `tag`") }))
 }
+
+///|
+test "batch FV: fresh literal widening, NonNullable<T>, intersection and Extract targets" {
+  let src =
+    #|declare function useState<S>(init: S): [S, (s: S) => void];
+    #|declare function box<T>(x: T): { get(): T; set(v: T): void };
+    #|declare function id<T>(x: T): T;
+    #|declare function nest<T>(x: T[]): { v: T };
+    #|function okUseState() { const [v, setV] = useState(""); setV("a"); }
+    #|function okUseStateVar() { const initial = ""; const [v, setV] = useState(initial); setV("b"); }
+    #|function okBox() { const b = box("a"); b.set("b"); }
+    #|function okLetFromConst() { const a = "x"; let b = a; b = "y"; }
+    #|function badIdKeepsLiteral() { const s: "q" = id("r"); }
+    #|function okIdKeepsLiteral() { const s: "q" = id("q"); }
+    #|function okNestNotFresh(arr: "z"[]) { const n: "z" = nest(arr).v; }
+    #|function badNonNullable<T>(x: T, y: NonNullable<T>) { x = y; y = x; }
+    #|function badEmptyIntersection<T>(x: T, y: T & {}) { y = x; }
+    #|function okNonNullableBack<T>(x: T, y: NonNullable<T>) { x = y; }
+    #|function okBothNonNullable<T>(x: NonNullable<T>, y: NonNullable<T>) { y = x; }
+    #|type A = { a: number };
+    #|type B = { b: string };
+    #|function badExcess() { let ab: A & B = { a: 1, b: "x", c: 2 }; }
+    #|function badMissing() { let ab: A & B = { a: 1 }; }
+    #|function okExact() { let ab: A & B = { a: 1, b: "x" }; }
+    #|function okOptional() { let ab: A & { b?: string } = { a: 1 }; }
+    #|function okIndexPart() { let ab: A & { [k: string]: number } = { a: 1, zz: 2 }; }
+    #|type Foo = { foo: string };
+    #|type Bar = { bar: string };
+    #|declare function fooBar(x: { foo: string, bar: string }): void;
+    #|declare function fooBat(x: { foo: string, bat: string }): void;
+    #|type Extract2<T, U, V> = T extends U ? T extends V ? T : never : never;
+    #|function okExtract<T>(x: Extract<Extract<T, Foo>, Bar>, y: Extract<T, Foo & Bar>, z: Extract2<T, Foo, Bar>) { fooBar(x); fooBar(y); fooBar(z); }
+    #|function badExtractNested<T>(x: Extract<Extract<T, Foo>, Bar>) { fooBat(x); }
+    #|function badExtractIntersection<T>(y: Extract<T, Foo & Bar>) { fooBat(y); }
+    #|function badExtractAlias<T>(z: Extract2<T, Foo, Bar>) { fooBat(z); }
+  let issues = eff_issues(src)
+  for
+    ok in [
+      "okUseState", "okUseStateVar", "okBox", "okLetFromConst", "okIdKeepsLiteral",
+      "okNestNotFresh", "okNonNullableBack", "okBothNonNullable", "okExact", "okOptional",
+      "okIndexPart", "okExtract",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badIdKeepsLiteral", "badNonNullable", "badEmptyIntersection", "badExcess",
+      "badMissing", "badExtractNested", "badExtractIntersection", "badExtractAlias",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "batch FV: optional callbacks, generic method arguments, overloads taking Object" {
+  let src =
+    #|interface Opts { map?: (i: { num: number }) => void }
+    #|declare function use(o: Opts): void;
+    #|function badOptionalCallback() { use({ map(i) { i.nonexistent; } }); }
+    #|function okOptionalCallback() { use({ map: (i) => { i.num.toFixed(); } }); }
+    #|interface Store<T> { get<K extends keyof T>(k: K): T[K]; put<K extends string>(k: K): void }
+    #|function okStoreGet(st: Store<{ a: 1 }>) { st.get("a"); st.put("x"); }
+    #|function badStoreGet(st: Store<{ a: 1 }>) { st.get("b"); }
+    #|function badStorePut(st: Store<{ a: 1 }>) { st.put(1); }
+    #|interface P<T> { then<U>(cb: (x: T) => P<U>): P<U> }
+    #|declare function tfn(n: number): P<number>;
+    #|declare function tstr(s: string): P<string>;
+    #|function okThen(np: P<number>) { np.then(tfn); }
+    #|function badThen(np: P<number>) { np.then(tstr); }
+    #|declare function takesObject(x: Object): string;
+    #|declare function takesObject(x: number): number;
+    #|function badObjectOverload() { const r: number = takesObject(1); }
+    #|function okObjectOverload() { const r: string = takesObject(1); }
+  let issues = eff_issues(src)
+  for ok in ["okOptionalCallback", "okStoreGet", "okThen", "okObjectOverload"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badOptionalCallback", "badStoreGet", "badStorePut", "badThen", "badObjectOverload",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "batch FV: assignment conditions, regex exec arrays, boolean truthiness" {
+  let src =
+    #|function okExecLoop(re: RegExp, s: string) {
+    #|  let m: RegExpExecArray | null;
+    #|  while ((m = re.exec(s))) { m.index; m.input; m[0].length; }
+    #|}
+    #|function okAssignCond(x: string | null) { let z: string | null; if ((z = x)) { z.length; } }
+    #|function okAssignCmp(x: string | null) { let z: string | null; if ((z = x) !== null) { z.length; } }
+    #|function badAssignNegated(x: string | null) { let z: string | null; if (!(z = x)) { z.length; } }
+    #|function okBoolTruthy(b: boolean) { if (b) { const t: true = b; } else { const f: false = b; } }
+    #|function badNeverMember(b: boolean) { if (b) { if (!b) { b.toString(); } } }
+    #|function okNumberOrBool(x: number | boolean) { if (!x) { x.toString(); } }
+    #|function okNormalized() { let a1 = [{ a: 0 }, { a: 1, b: "x" }][0]; a1 = { a: 1 }; const b: string | undefined = a1.b; }
+    #|function badNormalizedWrongType() { let a1 = [{ a: 0 }, { a: 1, b: "x" }][0]; a1 = { a: 0, b: 0 }; }
+    #|function badNormalizedMissing() { let a1 = [{ a: 0 }, { a: 1, b: "x" }][0]; a1 = { b: "y" }; }
+    #|function okNormalizedLoop() { const cfgs = [{ name: "a", port: 1 }, { name: "b" }]; for (const c of cfgs) { c.name.toUpperCase(); } }
+  let issues = eff_issues(src)
+  for
+    ok in [
+      "okExecLoop", "okAssignCond", "okAssignCmp", "okBoolTruthy", "okNumberOrBool",
+      "okNormalized", "okNormalizedLoop",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badAssignNegated", "badNeverMember", "badNormalizedWrongType", "badNormalizedMissing",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "batch FV: TS2611 through a mixin heritage clause" {
+  let src =
+    #|function mixin<T extends { new (...args: any[]): {} }>(superclass: T) {
+    #|  return class extends superclass { get name() { return ""; } };
+    #|}
+    #|class B0 { }
+    #|class B1 { set name(v: string) {} }
+    #|class B2 { get name() { return "" } }
+    #|class B3 { name = "" }
+    #|class M0 extends mixin(B0) { get name() { return ""; } }
+    #|class M1 extends mixin(B1) { get name() { return ""; } }
+    #|class M2 extends mixin(B2) { get name() { return ""; } }
+    #|class M3 extends mixin(B3) { get name() { return ""; } }
+  let issues = check_property_overridden_as_accessor(
+    parse_module_or_empty(src),
+    Resolver::from_module(parse_module_or_empty(src)),
+  )
+  let has = fn(c : String) {
+    issues.iter().any(fn(i) { i.path == "class \{c}.name" })
+  }
+  assert_false(has("M0"))
+  assert_true(has("M1"))
+  assert_false(has("M2"))
+  assert_true(has("M3"))
+}
+
+///|
+test "batch FV: overload sets as values, lib object types into primitives" {
+  let src =
+    #|interface P<T> { then<U>(cb: (x: T) => P<U>): P<U> }
+    #|declare function tf2(n: number): P<number>;
+    #|declare function tf2(s: string): P<string>;
+    #|declare function tf3(n: number): number;
+    #|declare function tf3(s: string): number;
+    #|declare function single(n: number): P<number>;
+    #|function badOverloadArg(np: P<number>) { np.then(tf2); }
+    #|function okSingleArg(np: P<number>) { np.then(single); }
+    #|function badOverloadValue() { const cb: (x: boolean) => number = tf3; }
+    #|function okOverloadValue() { const cb: (x: number) => number = tf3; }
+    #|declare function fetchName(): Promise<string>;
+    #|function takesString(s: string) {}
+    #|function badMissingAwait() { const s: string = fetchName(); }
+    #|function badMissingAwaitArg() { takesString(fetchName()); }
+    #|async function okAwaited() { const s: string = await fetchName(); }
+    #|async function okAsyncReturn(): Promise<string> { return fetchName(); }
+    #|function okUnionTarget() { const s: string | Promise<string> = fetchName(); }
+    #|function okRegexArg() { "abc".replace(/b/g, ""); }
+  let issues = eff_issues(src)
+  for
+    ok in [
+      "okSingleArg", "okOverloadValue", "okAwaited", "okAsyncReturn", "okUnionTarget",
+      "okRegexArg",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badOverloadArg", "badOverloadValue", "badMissingAwait", "badMissingAwaitArg",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "batch FW: un-inlined generic signatures for call inference and mixin bases" {
+  let src =
+    #|class Wrapper<T = any> { public value?: T; }
+    #|type WrappedMap = Record<string, Wrapper>;
+    #|type Unwrap<D extends WrappedMap> = { [K in keyof D]: D[K] extends Wrapper<infer T> ? T : never; };
+    #|type MC<I extends WrappedMap, O extends WrappedMap> = { setup(): { inputs: I; outputs: O }; map?: (inputs: Unwrap<I>) => Unwrap<O>; };
+    #|declare function createMC<I extends WrappedMap, O extends WrappedMap>(def: MC<I, O>): void;
+    #|function badIntraInference() {
+    #|  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: inputs.nonexistent }; } });
+    #|}
+    #|function okIntraInference() {
+    #|  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: !!inputs.num }; } });
+    #|}
+  let issues = eff_issues(src)
+  // `map` returns `!!inputs.num`, a boolean, for the `Wrapper<boolean>`
+  // output. Returning `inputs.num` itself is TS2322 in tsc (`number` is not
+  // `boolean`) and is a MISS here, so the legal spelling is the one pinned.
+  assert_false(eff_has(issues, "okIntraInference"), msg="okIntraInference")
+  assert_true(eff_has(issues, "badIntraInference"), msg="badIntraInference")
+  let mixin_src =
+    #|// @noImplicitOverride: true
+    #|type Foo = abstract new(...args: any) => any;
+    #|declare function CreateMixin<C extends Foo, T extends Foo>(Context: C, Base: T): T & { new (...args: any[]): { context: InstanceType<C> } }
+    #|class Context {}
+    #|class A { doSomething() {} }
+    #|class Bad extends CreateMixin(Context, A) { override foo() {} }
+    #|class OkOverride extends CreateMixin(Context, A) { override doSomething() {} }
+    #|class OkContext extends CreateMixin(Context, A) { override context: Context = new Context(); }
+    #|class OkNoModifier extends CreateMixin(Context, A) { doSomething() {} }
+  let m = parse_module_or_empty(mixin_src)
+  let oi = check_override_modifiers(m)
+  let has = fn(c : String) { oi.iter().any(fn(i) { i.path == "class \{c}" }) }
+  assert_true(has("Bad"))
+  assert_false(has("OkOverride"))
+  assert_false(has("OkContext"))
+  assert_false(has("OkNoModifier"))
+}
+
+///|
+test "batch FW: generic signatures that differ only in their constraints" {
+  let src =
+    #|interface NMap { 1: 'A'; 2: 'B'; 3: 'C'; 4: 'D' }
+    #|declare const g: <T extends 1 | 2 | 3>(x: `${T}`) => NMap[T];
+    #|type G2 = <T extends 1 | 2 | 3 | 4>(x: `${T}`) => NMap[T];
+    #|type G3 = <T extends 1 | 2>(x: `${T}`) => NMap[T];
+    #|function badWiderTarget() { const g2: G2 = g; }
+    #|function okNarrowerTarget() { const g3: G3 = g; }
+    #|interface I2<T> { p: T }
+    #|declare var x: <T extends I2<T>>(z: T) => void;
+    #|declare var y: <T extends I2<I2<T>>>(z: T) => void;
+    #|function okRecursive() { x = y; }
+    #|function badRecursive() { y = x; }
+    #|declare const s: <T extends string>(z: T) => void;
+    #|function badUnconstrainedTarget() { const u: <T>(z: T) => void = s; }
+  let issues = eff_issues(src)
+  for ok in ["okNarrowerTarget", "okRecursive"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["badWiderTarget", "badRecursive", "badUnconstrainedTarget"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "batch FW: keyof tuples, template infer, constrained interface methods" {
+  let src =
+    #|type K1 = keyof [string, number];
+    #|function okTupleKey() { const k: K1 = "0"; const m: K1 = "length"; }
+    #|function badTupleKey() { const k: K1 = "5"; }
+    #|type IndexFor<S extends string> = S extends `${infer N extends number}` ? N : never;
+    #|type I1 = IndexFor<"0" | "1" | "length">;
+    #|type I2 = IndexFor<"01">;
+    #|function okIndexFor() { const i: I1 = 1; const j: I2 = 7; }
+    #|function badIndexFor() { const i: I1 = 2; }
+    #|type IndicesOf<T> = IndexFor<Extract<keyof T, string>>;
+    #|interface Def { readonly name: string }
+    #|interface M<TDef extends readonly Def[]> { gi<I extends IndicesOf<TDef>>(index: I): void; }
+    #|function okMethodBound(p: M<[{ name: "x" }, { name: "y" }]>) { p.gi(0); p.gi(1); }
+    #|function badMethodBound(p: M<[{ name: "x" }, { name: "y" }]>) { p.gi(2); }
+  let issues = eff_issues(src)
+  for ok in ["okTupleKey", "okIndexFor", "okMethodBound"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["badTupleKey", "badIndexFor", "badMethodBound"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "batch FW: a namespace-local interface shadows a lib generic" {
+  let src =
+    #|namespace m1 {
+    #|  interface Promise<T> { then<U>(cb: (x: T) => Promise<U>): Promise<U>; }
+    #|  declare function single(n: number): Promise<number>;
+    #|  declare var np: Promise<number>;
+    #|  var ok = np.then(single);
+    #|}
+    #|namespace m2 {
+    #|  interface Promise<T> { then<U>(cb: (x: T) => Promise<U>): Promise<U>; }
+    #|  declare function tf(n: number): Promise<number>;
+    #|  declare function tf(s: string): Promise<string>;
+    #|  declare var np: Promise<number>;
+    #|  var bad = np.then(tf);
+    #|}
+  let issues = eff_issues(src)
+  assert_false(issues.iter().any(fn(i) { i.path.has_prefix("namespace m1") }))
+  assert_true(issues.iter().any(fn(i) { i.path.has_prefix("namespace m2") }))
+}
+
+///|
+test "batches FV-FW review: bounds, shadowing and numeric template holes" {
+  let src =
+    #|declare function fb<T extends string>(xs: T[]): void;
+    #|declare function fo<T extends { a: string }>(xs: T[]): void;
+    #|function badBoundViolated() { fb([123]); }
+    #|function badObjectBoundViolated() { fo([{ b: 1 }]); }
+    #|function okBoundSatisfied() { fb(["ok"]); fo([{ a: "x" }]); }
+    #|function okShadowFresh() { const x = "a"; const g = (x: "a") => { let y = x; const z: "a" = y; return z; }; return [x, g]; }
+    #|function badClosureParamAssign(x: string | null) { const g = (x: string) => { x = null; return x; }; return g; }
+    #|function okClosureOuterAssign(x: string | null) { const g = () => { x = null; }; return g; }
+    #|type IsBig<S> = S extends `${bigint}` ? 1 : 0;
+    #|function okBigintSign() { const a: IsBig<"-"> = 0; const b: IsBig<"+5"> = 0; const c: IsBig<"0x10"> = 1; const d: IsBig<"007"> = 0; return [a, b, c, d]; }
+    #|type IsNum<S> = S extends `${number}` ? 1 : 0;
+    #|function okNumFiniteness() { const a: IsNum<"1e309"> = 0; const b: IsNum<"1e-1000"> = 1; const c: IsNum<" 1"> = 1; const d: IsNum<"+0x10"> = 0; return [a, b, c, d]; }
+    #|type N<S> = S extends `${infer X extends number}` ? X : never;
+    #|function okNumRoundTrip() { const a: N<"0.0000001"> = 2; const b: N<"1000000000000000"> = 1000000000000000; return [a, b]; }
+    #|type P<S> = S extends `${infer X}` ? `pre${X}` : never;
+    #|function okTemplateSubstitution() { const p: P<"ab"> = "preab"; return p; }
+    #|function id<T>(x: T): T { return x; }
+    #|function outer() { function id<U extends number>(x: U): U { return x; } return id(1); }
+    #|function okNestedRawSig() { const s: string = id("ok"); return s; }
+    #|function outer2() { function id2<U extends number>(x: U[]): U { return x[0]; } return id2([1]); }
+    #|function id2<T>(x: T): T { return x; }
+    #|function okNestedRawSigFirst() { const s: string[] = id2(["ok"]); return s; }
+    #|declare const re: RegExp;
+    #|function okExecDestructure(s: string) { const m = re.exec(s); if (m) { const [all, g1] = m; return all.toUpperCase() + g1.toUpperCase(); } return ""; }
+    #|function badExecDestructure(s: string) { const m = re.exec(s); if (m) { const [all] = m; const n: number = all; return n; } return 0; }
+  let issues = eff_issues(src)
+  for
+    ok in [
+      "okBoundSatisfied", "okShadowFresh", "okClosureOuterAssign", "okBigintSign",
+      "okNumFiniteness", "okNumRoundTrip", "okTemplateSubstitution", "okNestedRawSig",
+      "okNestedRawSigFirst", "okExecDestructure",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badBoundViolated", "badObjectBoundViolated", "badClosureParamAssign", "badExecDestructure",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+  // A file's own `NonNullable` is not the lib utility.
+  let local_nonnullable =
+    #|type NonNullable<T> = T;
+    #|function okLocalNonNullable<T>(x: T) { const y: NonNullable<T> = x; return y; }
+    #|function badLibSpelling<T>(x: T) { const y: T & {} = x; return y; }
+  let issues = eff_issues(local_nonnullable)
+  assert_false(eff_has(issues, "okLocalNonNullable"), msg="okLocalNonNullable")
+  assert_true(eff_has(issues, "badLibSpelling"), msg="badLibSpelling")
+}

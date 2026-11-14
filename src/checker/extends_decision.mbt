@@ -59,6 +59,18 @@ pub fn extends_decision(source : @ast.TsType, target : @ast.TsType) -> Bool? {
     Int if target == Number => return Some(true)
     _ => ()
   }
+  // A string literal against a TEMPLATE-literal type whose holes are all
+  // primitives or literals is decided by matching the text:
+  // `"0" extends `${number}`` is true and `"length"` false, which is what
+  // `Extract<keyof T, `${number}`>` over a tuple needs. A hole of any
+  // other type (a type parameter, an alias) leaves it undecided.
+  match (source, target) {
+    (Literal(s), TemplateLiteralType(parts, holes)) if holes
+      .iter()
+      .all(fn(h) { template_hole_decidable(h) }) =>
+      return Some(literal_matches_template(s, parts, holes, false))
+    _ => ()
+  }
   // Literal narrowing: each literal kind extends its primitive companion.
   match (source, target) {
     (Literal(_), String_) => return Some(true)
@@ -167,4 +179,16 @@ pub fn extends_decision_with_generics(
   let s = expand_generic(source, resolve, [])
   let t = expand_generic(target, resolve, [])
   extends_decision(s, t)
+}
+
+///|
+/// A template-literal hole whose acceptance of a substring
+/// `template_arg_accepts_substring` decides exactly.
+fn template_hole_decidable(h : @ast.TsType) -> Bool {
+  match h {
+    String_ | Number | BigInt | Boolean => true
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
+    Union(ms) => ms.iter().all(template_hole_decidable)
+    _ => false
+  }
 }

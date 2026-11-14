@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2711 / MISS in scope 15 /
+  is a soundness bug, and there are none (TP 2724 / MISS in scope 2 /
   OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
   **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
@@ -3901,7 +3901,156 @@ product surfaces now.
   resolution against the lib `Object` and through overloaded arguments,
   object-literal normalization, conditional types through bound-inlined
   parameters, template-literal relations, mixin heritage through a call.
-- `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
+  Batch FV took that last sentence as a list to price, and it was wrong
+  about half of it — the label-for-objective substitution once more, in a
+  prediction written by the batch before. MISS 15 -> 9 at FP 0, effect
+  141 -> 139, zod 19, and every one of the 15 was opened, minimized and
+  probed before anything was written. `objectLiteralNormalization` needed
+  no inference machinery: an array of FLAT object literals is the
+  normalized union (each member given the others' keys as `?: undefined`),
+  and assigning a literal to a union of object shapes narrows to the
+  members it fits, which is tsc's `getAssignmentReducedType`; nested object
+  values keep the old `any`, because a union of un-normalized nested shapes
+  would report every read of a key one shape lacks. "Overload resolution
+  against the lib `Object`" was one missing arm — the resolver-free
+  relation has none for the two parameter types every non-nullish value
+  satisfies (`Object`, `{}`) — plus a `var` redeclared from an overloaded
+  call taking the selected return for TS2403, where an enum member's
+  argument type is the ENUM, not the `number` `infer_expr` erases it to.
+  "Mixin heritage" split in two: `mixinAccessors3` is a body-returned class
+  expression and took one rule (the base is the intersection of the mixin's
+  class and its argument, and a member several constituents declare is an
+  accessor only when every declaration is one of the same kind — getter
+  over setter is a PROPERTY, probed), while `override19` returns
+  `T & { new (…): S }` from a DECLARATION, and the parser inlines `T extends
+  Foo` to `Foo` in both parameter positions, so nothing says which argument
+  `T` was.
+  That inlining is now the one architectural blocker, and it decides four
+  of the nine left: `conditionalTypesExcessProperties` (`A extends object`
+  inlines to `any` in a PARAMETER while the same `Something<A>` written in
+  the body keeps `A`), `intraExpressionInferences` (`I extends WrappedMap`
+  is gone before `setup()`'s return can bind it), `override19`, and part of
+  `wrappedAndRecursiveConstraints4`. Undoing it moves what the bridge
+  reads (batch FJ measured 48 files for the interface half), so the
+  shippable shape is a side channel the CHECKER reads for call-site
+  inference, not a change to `TsParam.type_`.
+  The real-code half is worth more than the files. Three false positives
+  on legal code, none reachable from the corpus: React's `useState("")`
+  bound `S = ""` and rejected `setV("a")`, because `solve_generic_bindings`
+  never applied tsc's literal widening (a FRESH literal candidate widens
+  unless the parameter is `const` or sits at the top level of the return
+  type) — fresh meaning written at the call site, or an unannotated
+  `const` holding one, which rides a `<fresh>NAME` env entry compared
+  against the binding so a shadowing parameter cannot inherit it; the same
+  entry fixed `const a = "x"; let b = a; b = "y"`. And a CLOSURE made its
+  copy of a narrowed binding the assignment target, because `bind`'s first
+  write is the declared slot — `if (x === null) return; () => { x = null }`
+  reported "expected `string`" on a line tsc accepts, pre-existing, and the
+  boolean-truthiness narrowing this batch added surfaced it as effect's
+  `let done = false; … () => { done = true }`. Two capability gaps the
+  corpus does not test came with it: a generic interface method's
+  arguments were judged against raw `Named("U")` parameters, i.e. by
+  nothing (`np.then(tstr)`), and `const s: string = fetchName()` with
+  `fetchName(): Promise<string>` — the missing `await` — was silent,
+  because every relation abstains on a lib `Applied` name. The second is
+  judged at bindings, assignments and arguments of resolved non-generic
+  declarations only: at a `return` / `yield` an async body awaits the
+  operand and this site cannot tell async from sync, and at a lib-method
+  argument the member tables are narrower than lib.d.ts
+  (`String.prototype.replace` takes `string` there, `string | RegExp` in
+  the lib — six effect reports the first version shipped). Two file-level
+  abstentions keep the new inference off shapes it would misread: a file
+  declaring any `const` type parameter (whose flags are recorded only for
+  function DECLARATIONS) and one with a function TYPE carrying a leading
+  `this` parameter, which the type parser keeps positionally — effect's
+  `runInAsyncScope(this.evaluate, this, effect)` bound `This` from
+  `evaluate`'s first parameter.
+  Batch FW took the blocker that note named and buys MISS 9 -> 2, effect
+  139, zod 19, the real `.d.ts` entries 0, all unchanged on real code. The
+  bound inlining was NOT undone: a bounded `declare function` or function
+  declaration also records an UN-INLINED copy of its signature
+  (`TsModule.raw_generic_signatures`), re-parsed by a second `Parser` over
+  the same tokens — one with no type-parameter scope, so nothing inlines,
+  and whose side effects (markers, recorders) land in a throwaway — and
+  only the CHECKER reads it, which is why the bridge's generated output
+  has nothing new to read. Three uses: call-site inference instantiates a
+  parameter from the raw signature only when every type parameter it
+  mentions solved to something checkable (a bare `T` parameter never,
+  since that re-checks the argument against itself, and an inferred
+  object-literal type spelling a getter `@@get:x` would not even do that —
+  `accessorsOverrideProperty8`'s false positive); a parameter typed by an
+  alias over a bounded parameter takes the raw type as its DECLARED slot
+  only, so assignments see `Something<A>` while reads keep the inlined
+  type every other rule was written against; and a mixin call's
+  `T & { new (…): S }` return says which argument the base is.
+  The generic-signature relation was the other blocker and is decided
+  only where it is exact: the same signature up to type-parameter names,
+  where assignability is "every target constraint fits the source's", and
+  a recursive constraint (`<T extends I2<T>>`) is related with `T` as the
+  target's opaque parameter. It needed two fixes that are the recurring
+  shapes here — the hook had to move ABOVE the phantom-type-parameter
+  abstention, whose "only ever a type parameter" names are exactly a
+  generic signature's binders, and assignment had to stop narrowing a
+  binding DECLARED with a generic signature, or `x = y; y = x` compared `y`
+  with itself. `templateLiteralTypes4` needed `keyof` a tuple, a literal
+  decided against a `${number}` template (JavaScript's `isFinite(+s)`, so
+  `"0x10"` matches), `infer N extends number` in a template (the number
+  literal for a canonical spelling, `number` for `"01"` — probed, the cell
+  reasoning gets wrong), the infer gate's missing template arm, and an
+  interface's own bound put back inside a METHOD's bound, where the parser
+  had inlined `TDef` to `readonly FieldDefinition[]` before the receiver's
+  tuple could reach it. And a namespace-local `interface Promise<T>`
+  SHADOWS the lib type (at a script's top level it merges), which the
+  member lookup could not see because the built-in tables answer first.
+  The two left are priced rather than attempted.
+  `wrappedAndRecursiveConstraints4` needs a method's return type inferred
+  from a nested generic FUNCTION declaration it returns and that
+  `GenericFunc` instantiated at the call; `controlFlowBindingPatternOrder`
+  needs `as const` kept by the parser (it is erased for the transform
+  passes' sake) plus the evaluation order of destructuring defaults
+  against computed keys, a distinction no real code draws.
+  The review of FV-FW found eleven candidate defects, and probing them
+  against tsc is what separated them. Five were false positives on code
+  tsc accepts:
+  - a file's own `type NonNullable<T> = T` read as the lib utility;
+  - a parameter `(x: "a")` inheriting the freshness of the `const x = "a"`
+    it shadows, because the marker was compared by literal VALUE in an env
+    with no scope identity;
+  - `"-"` read as a `${bigint}`;
+  - the numeric template checks deciding finiteness from the exponent's
+    digit count (`"1e309"` matched, `"1e-1000"` did not);
+  - `"0.0000001"` read as a canonical number spelling.
+
+  Three were missed errors:
+  - the raw signature dropped a bound violation (`f<T extends string>(xs:
+    T[])` with `f([123])`);
+  - a closure parameter kept the captured declared type of the outer
+    binding it shadows;
+  - an intersection with an array member destructured as `any`.
+
+  Two did not reproduce and were fixed anyway, being one-arm omissions: a
+  nested declaration's raw signature leaking into the module-wide map, and
+  `TemplateLiteralType` missing from the inferred-type substitution. The
+  last was a test pinning silence on a line tsc reports as TS2322 (the
+  sixteenth test here found asserting a gap).
+
+  The numeric cells were settled one at a time. `${number}` is JS `+s`
+  plus `isFinite`, so `" 1"`, `"  "` and a leading NBSP all match. The
+  canonical spelling is decided by parse-and-reprint, since
+  `Double::to_string` prints `Number.prototype.toString`'s form on every
+  probed value.
+
+  The bound fix was measured twice, and the first version proved its own
+  point wrong. Requiring a PROOF that the binding satisfies its bound lost
+  `intraExpressionInferences` (a `{ num: Wrapper<number> }` against
+  `Record<string, Wrapper>` is legal and unprovable here). So the raw form
+  is refused only when a violation is PROVEN, for scalar shapes and for a
+  missing required property. A `declare function` carries no bounds at
+  all — it is ingested as a `TsImport` — and its bounds are read back by
+  walking the raw and inlined signatures in parallel. Inlining is a
+  structural substitution, so the two differ exactly where a bound
+  stands.
+- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
   exports) and `mangle_safety.mbt` + `flow_analysis.mbt` (names that reach a

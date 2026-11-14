@@ -151,11 +151,22 @@ fn Parser::parse_paren_or_function_type(
   let mut can_be_function_type = true
   while true {
     let is_rest = self.match_ellipsis()
-    let _ = self.parse_declare_param_name() catch {
+    let pname = self.parse_declare_param_name() catch {
       _ => {
         can_be_function_type = false
         break
       }
+    }
+    // Marker, not an error: a function TYPE with a leading `this`
+    // parameter. That parameter types the receiver and occupies no
+    // argument position, but this parser keeps it in the `Func` it builds
+    // (`(this: T, a: A) => R` reads as two parameters), and the checker's
+    // generic-method argument inference would align it with the first
+    // argument. Dropping it here is the real fix and changes what the
+    // bridge generator reads, so until that diff is measured the checker
+    // abstains file-wide on the inference this spelling would mislead.
+    if param_types.length() == 0 && !is_rest && pname == "this" {
+      self.grammar_misuses.push("<fn-type-this-param>")
     }
     for r in self.last_param_pattern_renamings {
       renamings.push(r)

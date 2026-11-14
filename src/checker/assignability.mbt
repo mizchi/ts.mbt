@@ -229,7 +229,7 @@ fn func_params_assignable(
 fn template_arg_accepts_substring(arg : @ast.TsType, sub : String) -> Bool {
   match arg {
     String_ => true
-    Number => is_number_string(sub)
+    Number => is_js_finite_number_string(sub)
     BigInt => is_bigint_string(sub)
     Boolean => sub == "true" || sub == "false"
     Literal(name) => sub == name
@@ -275,17 +275,241 @@ fn is_number_string(s : String) -> Bool {
 }
 
 ///|
-fn is_bigint_string(s : String) -> Bool {
+/// JavaScript's `isFinite(+s)` for a non-empty `s`, which is what tsc asks
+/// of a string matched against a `${number}` placeholder
+/// (`isValidNumberString(s, false)`, probed cell by cell). `+s` is
+/// `StringToNumber`: it trims JS whitespace and line terminators — so
+/// `" 1"`, `"\t1"`, `" 1"` and even `"  "` (which is `0`) match —
+/// then reads a signed decimal with an optional fraction and exponent, or
+/// an UNSIGNED `0x` / `0o` / `0b` integer (`"+0x10"` and `"-0x10"` are
+/// NaN). Finiteness is decided on the parsed value rather than on the
+/// spelling: `"1e309"` overflows to Infinity and does not match, while
+/// `"1e-1000"` underflows to 0 and `"1e0001"` is 10, and both do.
+fn is_js_finite_number_string(s : String) -> Bool {
   if s.length() == 0 {
     return false
   }
-  for i in 0..<s.length() {
-    let c = s[i].to_int().unsafe_to_char()
-    if c >= '0' && c <= '9' {
-      ()
-    } else if (c == '-' || c == '+') && i == 0 {
-      ()
-    } else {
+  let t = js_trim(s)
+  let n = t.length()
+  if n == 0 {
+    // `+"  "` is 0.
+    return true
+  }
+  let c0 = t[0].to_int().unsafe_to_char()
+  // Radix integers (no sign allowed).
+  if n >= 2 && c0 == '0' {
+    let c1 = t[1].to_int().unsafe_to_char()
+    let radix = match c1 {
+      'x' | 'X' => 16
+      'o' | 'O' => 8
+      'b' | 'B' => 2
+      _ => 0
+    }
+    if radix != 0 {
+      if n == 2 {
+        return false
+      }
+      let mut lead = 2
+      while lead < n && t[lead].to_int().unsafe_to_char() == '0' {
+        lead += 1
+      }
+      for i in 2..<n {
+        if radix_digit_value(t[i].to_int().unsafe_to_char()) >= radix {
+          return false
+        }
+      }
+      if lead == n {
+        return true
+      }
+      // Bit length of the value: every digit after the first significant
+      // one adds log2(radix) bits. A double is finite below 2^1024.
+      let per_digit = match radix {
+        16 => 4
+        8 => 3
+        _ => 1
+      }
+      let first = radix_digit_value(t[lead].to_int().unsafe_to_char())
+      let mut first_bits = 0
+      let mut v = first
+      while v > 0 {
+        first_bits += 1
+        v = v / 2
+      }
+      return (n - lead - 1) * per_digit + first_bits <= 1024
+    }
+  }
+  let mut i = 0
+  if c0 == '+' || c0 == '-' {
+    i = 1
+  }
+  let mut digits = 0
+  while i < n &&
+        t[i].to_int().unsafe_to_char() >= '0' &&
+        t[i].to_int().unsafe_to_char() <= '9' {
+    i += 1
+    digits += 1
+  }
+  if i < n && t[i].to_int().unsafe_to_char() == '.' {
+    i += 1
+    while i < n &&
+          t[i].to_int().unsafe_to_char() >= '0' &&
+          t[i].to_int().unsafe_to_char() <= '9' {
+      i += 1
+      digits += 1
+    }
+  }
+  if digits == 0 {
+    // Includes `Infinity`, which is a number and not a finite one.
+    return false
+  }
+  if i < n &&
+    (
+      t[i].to_int().unsafe_to_char() == 'e' ||
+      t[i].to_int().unsafe_to_char() == 'E'
+    ) {
+    i += 1
+    if i < n &&
+      (
+        t[i].to_int().unsafe_to_char() == '+' ||
+        t[i].to_int().unsafe_to_char() == '-'
+      ) {
+      i += 1
+    }
+    let start = i
+    while i < n &&
+          t[i].to_int().unsafe_to_char() >= '0' &&
+          t[i].to_int().unsafe_to_char() <= '9' {
+      i += 1
+    }
+    if i == start {
+      return false
+    }
+  }
+  if i != n {
+    return false
+  }
+  // The spelling is a StrDecimalLiteral; whether it is FINITE is a fact
+  // about its value. `parse_double` raises on overflow.
+  try @string.parse_double(t) catch {
+    _ => false
+  } noraise {
+    d => is_finite_double(d)
+  }
+}
+
+///|
+fn is_finite_double(d : Double) -> Bool {
+  d == d && d != 1.0 / 0.0 && d != -1.0 / 0.0
+}
+
+///|
+/// The value of a digit in radixes up to 16, and 99 for anything else.
+fn radix_digit_value(c : Char) -> Int32 {
+  if c >= '0' && c <= '9' {
+    c.to_int() - '0'.to_int()
+  } else if c >= 'a' && c <= 'f' {
+    c.to_int() - 'a'.to_int() + 10
+  } else if c >= 'A' && c <= 'F' {
+    c.to_int() - 'A'.to_int() + 10
+  } else {
+    99
+  }
+}
+
+///|
+/// `s` without the leading and trailing characters `StringToNumber` skips:
+/// ECMAScript `WhiteSpace` (TAB, VT, FF, SP, NBSP, ZWNBSP and the `Zs`
+/// category) and `LineTerminator` (LF, CR, LS, PS). All are in the BMP, so
+/// comparing UTF-16 code units is exact.
+fn js_trim(s : String) -> String {
+  fn is_ws(u : Int32) -> Bool {
+    match u {
+      0x09
+      | 0x0A
+      | 0x0B
+      | 0x0C
+      | 0x0D
+      | 0x20
+      | 0xA0
+      | 0x1680
+      | 0x2028
+      | 0x2029
+      | 0x202F
+      | 0x205F
+      | 0x3000
+      | 0xFEFF => true
+      _ => u >= 0x2000 && u <= 0x200A
+    }
+  }
+  let mut start = 0
+  let mut end = s.length()
+  while start < end && is_ws(s[start].to_int()) {
+    start += 1
+  }
+  while end > start && is_ws(s[end - 1].to_int()) {
+    end -= 1
+  }
+  s[start:end].to_owned()
+}
+
+///|
+/// `s` is the canonical spelling of the finite number it denotes
+/// (`isFinite(+s) && "" + (+s) === s`), which `infer N extends number` in a
+/// template requires (`isValidNumberString(s, true)`): `"12"`, `"-3"`,
+/// `"1.5"`, `"1e-7"`, `"1e+21"` and `"1000000000000000"`, but not `"012"`,
+/// `"1.0"`, `"-0"`, `" 1"`, `"1e3"` or `"0.0000001"` (whose canonical
+/// spelling is `"1e-7"`). Decided by parsing and re-printing, because the
+/// canonical spelling is a property of the VALUE: `Double::to_string`
+/// prints `Number.prototype.toString`'s shortest round-trip form with the
+/// same exponent thresholds (pinned in `assignability_wbtest.mbt`).
+fn is_round_trip_number_string(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  try @string.parse_double(s) catch {
+    _ => false
+  } noraise {
+    d => is_finite_double(d) && d.to_string() == s
+  }
+}
+
+///|
+/// tsc's `isValidBigIntString(s, false)`, which is what a `${bigint}`
+/// placeholder asks: `s + "n"` scans as one BigInt literal, optionally
+/// after a single `-` token. So a decimal with no leading zero (`"0"`,
+/// `"5"`, `"-0"`) or a `0x` / `0o` / `0b` integer (`"0x10"`, `"-0x10"`)
+/// matches, and `""`, `"-"`, `"+5"`, `"00"`, `"007"`, `"1_0"`, `"1e3"`,
+/// `" 5"` and `"0x"` do not — every cell probed.
+fn is_bigint_string(s : String) -> Bool {
+  let n = s.length()
+  let mut i = 0
+  if n > 0 && s[0].to_int().unsafe_to_char() == '-' {
+    i = 1
+  }
+  if i >= n {
+    return false
+  }
+  let c0 = s[i].to_int().unsafe_to_char()
+  if c0 == '0' && i + 1 < n {
+    let radix = match s[i + 1].to_int().unsafe_to_char() {
+      'x' | 'X' => 16
+      'o' | 'O' => 8
+      'b' | 'B' => 2
+      _ => return false // a leading zero: `00`, `007`
+    }
+    if i + 2 >= n {
+      return false
+    }
+    for j in (i + 2)..<n {
+      if radix_digit_value(s[j].to_int().unsafe_to_char()) >= radix {
+        return false
+      }
+    }
+    return true
+  }
+  for j in i..<n {
+    let c = s[j].to_int().unsafe_to_char()
+    if c < '0' || c > '9' {
       return false
     }
   }
@@ -1320,6 +1544,10 @@ fn contains_infer_marker(t : @ast.TsType) -> Bool {
       }
       contains_infer_marker(ret)
     }
+    // A template-literal pattern (`${infer N extends number}`) was the
+    // fourth position the infer gate had no arm for, so a conditional
+    // built on one was never run through the infer path at all.
+    TemplateLiteralType(_, args) => args.iter().any(contains_infer_marker)
     Union(items) | Intersection(items) => {
       for it in items {
         if contains_infer_marker(it) {

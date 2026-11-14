@@ -422,6 +422,7 @@ pub(all) struct TsModule {
   values : Array[TsValueDecl]
   classes : Array[TsClassDecl]
   local_classes : Array[TsClassDecl]
+  raw_generic_signatures : Map[String, TsType]
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
   module_augmentations : Array[(String, TsModule)]
