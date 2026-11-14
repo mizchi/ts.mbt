@@ -539,3 +539,35 @@ test "is_assignable_to: a primitive flows into its boxed wrapper" {
   assert_true(is_assignable_to(Boolean, Named("Boolean")))
   assert_false(is_assignable_to(Named("Number"), Number))
 }
+
+///|
+test "numeric and bigint template holes follow tsc's isValidNumberString / isValidBigIntString" {
+  // `${number}`: JS `+s` (whitespace trimmed) and finite — every cell probed.
+  for
+    s in [
+      " 1", "1 ", "\n1", "+5", ".5", "1.", "0x10", "0b1", "0X1F", "1e-1000", "1e0001",
+      "-0", "00", "1e3", "  ", "\u00a01",
+    ] {
+    assert_true(is_js_finite_number_string(s), msg=s)
+  }
+  for s in ["", "-", "1_0", "-0x10", "+0x10", "Infinity", "1e309", "0x"] {
+    assert_false(is_js_finite_number_string(s), msg=s)
+  }
+  // `infer N extends number`: the canonical spelling of a finite number.
+  for s in ["12", "-3", "1.5", "1e-7", "1e+21", "1000000000000000", "0"] {
+    assert_true(is_round_trip_number_string(s), msg=s)
+  }
+  for
+    s in [
+      "", "012", "1.0", "-0", " 1", "1e3", "0.0000001", "1e21", "Infinity", "NaN",
+    ] {
+    assert_false(is_round_trip_number_string(s), msg=s)
+  }
+  // `${bigint}`: one BigInt literal token, optionally after `-`.
+  for s in ["0", "5", "-5", "-0", "0x10", "-0x10", "0b1", "0o7", "0X1F"] {
+    assert_true(is_bigint_string(s), msg=s)
+  }
+  for s in ["", "-", "+5", "00", "007", "-00", "1_0", "1e3", " 5", "0x"] {
+    assert_false(is_bigint_string(s), msg=s)
+  }
+}

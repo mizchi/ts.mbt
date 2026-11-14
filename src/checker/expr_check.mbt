@@ -6789,6 +6789,18 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 }
 
 ///|
+/// Drop the `<fresh>NAME` marker a same-named OUTER `const` left behind.
+/// Called wherever a binding of `name` is introduced without writing one:
+/// the marker belongs to the binding it was written for, and the env is a
+/// flat map with no scope identity, so comparing the marker's literal with
+/// the current binding cannot tell `(x: "a") => …` from the outer
+/// `const x = "a"` it shadows. A scope's snapshot restores the marker on
+/// exit.
+fn ExprEnv::forget_freshness(self : ExprEnv, name : String) -> Unit {
+  let _ = self.vars.remove("<fresh>" + name)
+}
+
+///|
 /// Look up the *declared* type for `name` -- i.e. the type the
 /// variable was bound with at its declaration site, ignoring any
 /// later flow narrowing. Returns `None` when no declared entry
@@ -12414,6 +12426,34 @@ fn instantiate_raw_generic_params(
     params,
     solve_generic_bindings(env, resolver, type_params, params, args, sig),
   )
+  // The inlined parameter carries each type parameter's BOUND in its place,
+  // and the raw one carries the binding instead — so the raw form is only
+  // as strict as the call when every binding it uses provably satisfies
+  // its bound. `declare function f<T extends string>(xs: T[]): void` with
+  // `f([123])` solves `T = number`, and checking against `number[]` would
+  // accept the call tsc rejects (TS2322); the inlined `string[]` does not.
+  //
+  // A function DECLARATION's bounds are in `func_type_param_bounds`; a
+  // `declare function` is ingested as a `TsImport`, which carries none, so
+  // its bounds are read back off the two signatures instead — inlining is a
+  // structural substitution of each bound for its parameter, so the
+  // inlined parameter holds the bound exactly where the raw one holds the
+  // name (`align_inlined_bounds`). A parameter neither source can speak for
+  // has an UNKNOWN bound and keeps the inlined form.
+  let known_bounds : Map[String, @ast.TsType?] = Map([])
+  match resolver.func_type_param_bounds.get(name) {
+    Some(bs) =>
+      for tp in type_params {
+        known_bounds[tp] = match bs.search_by(fn(b) { b.0 == tp }) {
+          Some(bi) => Some(bs[bi].1)
+          None => None
+        }
+      }
+    None =>
+      for i, rp in raw {
+        align_inlined_bounds(rp, params[i], type_params, known_bounds, 0)
+      }
+  }
   let out : Array[@ast.TsType] = []
   for i, p in raw {
     let mentioned = type_params.filter(fn(tp) { type_param_occurs(tp, p) })
@@ -12422,7 +12462,16 @@ fn instantiate_raw_generic_params(
       .all(fn(tp) {
         match bindings.get(tp) {
           Some(b) =>
-            is_checkable(b) && !(b is Any) && !type_has_member_marker_key(b)
+            is_checkable(b) &&
+            !(b is Any) &&
+            !type_has_member_marker_key(b) &&
+            binding_satisfies_declared_bound(
+              resolver,
+              type_params,
+              bindings,
+              known_bounds.get(tp),
+              b,
+            )
           None => false
         }
       })
@@ -12438,6 +12487,131 @@ fn instantiate_raw_generic_params(
     }
   }
   Some(out)
+}
+
+///|
+/// Whether a binding SOLVED at a call may stand in for its type parameter
+/// in the raw signature. `known` is `Some(None)` for a parameter known to
+/// be unbounded, `Some(Some(b))` for bound `b` and `None` when the bound is
+/// unknown. The other bindings are substituted into the bound first
+/// (`K extends keyof T`).
+///
+/// The answer is `false` — keep the bound-inlined parameter, which is what
+/// the call was checked against before raw signatures existed — when the
+/// bound is unknown, still mentions a type parameter, or is provably
+/// VIOLATED (`binding_provably_violates_bound`). A bound this cannot decide
+/// either way answers `true`: requiring a PROOF of the bound was measured
+/// and loses `intraExpressionInferences`, whose `I = { num: Wrapper<number>
+/// }` against `Record<string, Wrapper>` is legal and unprovable here.
+fn binding_satisfies_declared_bound(
+  resolver : Resolver,
+  type_params : Array[String],
+  bindings : Map[String, @ast.TsType],
+  known : @ast.TsType??,
+  binding : @ast.TsType,
+) -> Bool {
+  let bound = match known {
+    None => return false
+    Some(None) => return true
+    Some(Some(b)) => substitute_params(b, bindings)
+  }
+  if type_params.iter().any(fn(t) { type_param_occurs(t, bound) }) {
+    return false
+  }
+  !binding_provably_violates_bound(resolver, binding, bound)
+}
+
+///|
+/// `binding` definitely does not satisfy `bound`, in the two cases where
+/// that is decidable without a full relation: both sides are SCALAR shapes
+/// (primitives, literals, and arrays / tuples / unions of those), where
+/// `is_assignable_to` is exact — `number` against `string` is the call
+/// `f<T extends string>(xs: T[])` with `f([123])` — or both are enumerable
+/// object shapes and the bound REQUIRES a property the binding lacks.
+fn binding_provably_violates_bound(
+  resolver : Resolver,
+  binding : @ast.TsType,
+  bound : @ast.TsType,
+) -> Bool {
+  fn scalar(t : @ast.TsType) -> Bool {
+    match t {
+      Array(inner) => scalar(inner)
+      Tuple(items) => items.iter().all(scalar)
+      Union(ms) => ms.length() > 0 && ms.iter().all(scalar)
+      _ => is_primitive_shaped(t)
+    }
+  }
+  let b = resolver.unwrap_containers(binding)
+  let t = resolver.unwrap_containers(bound)
+  if scalar(b) && scalar(t) {
+    return !is_assignable_to(b, t)
+  }
+  match
+    (
+      cast_shape_fields(resolver, binding, 0),
+      cast_shape_fields(resolver, bound, 0),
+    ) {
+    (Some(have), Some(want)) => {
+      for name, required in want {
+        if required && !have.contains(name) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// Read each type parameter's bound back off a raw (un-inlined) parameter
+/// and its bound-inlined twin, which differ exactly where the raw one names
+/// a type parameter: there the inlined one holds the bound, or the same
+/// name when the parameter is unbounded. The two are walked in parallel
+/// and a shape the walk does not model, or two shapes that disagree, records
+/// nothing, so the parameter's bound stays UNKNOWN rather than guessed.
+fn align_inlined_bounds(
+  raw : @ast.TsType,
+  inlined : @ast.TsType,
+  type_params : Array[String],
+  out : Map[String, @ast.TsType?],
+  depth : Int32,
+) -> Unit {
+  if depth > 16 {
+    return
+  }
+  fn zip(
+    xs : Array[@ast.TsType],
+    ys : Array[@ast.TsType],
+    type_params : Array[String],
+    out : Map[String, @ast.TsType?],
+    depth : Int32,
+  ) -> Unit {
+    if xs.length() == ys.length() {
+      for i, x in xs {
+        align_inlined_bounds(x, ys[i], type_params, out, depth + 1)
+      }
+    }
+  }
+  match (raw, inlined) {
+    (Named(n), b) if type_params.contains(n) =>
+      if !out.contains(n) {
+        out[n] = if b == Named(n) { None } else { Some(b) }
+      }
+    (Array(a), Array(b)) | (Rest(a), Rest(b)) =>
+      align_inlined_bounds(a, b, type_params, out, depth + 1)
+    (Tuple(xs), Tuple(ys))
+    | (Union(xs), Union(ys))
+    | (Intersection(xs), Intersection(ys)) =>
+      zip(xs, ys, type_params, out, depth)
+    (Applied(n1, xs), Applied(n2, ys)) if n1 == n2 =>
+      zip(xs, ys, type_params, out, depth)
+    (Func(ps, r), Func(qs, t)) if ps.length() == qs.length() => {
+      zip(ps, qs, type_params, out, depth)
+      align_inlined_bounds(r, t, type_params, out, depth + 1)
+    }
+    _ => ()
+  }
 }
 
 ///|
@@ -13674,9 +13848,16 @@ fn check_expr_against(
   // and every later arm abstains on it. A constrained `T` never reaches
   // here as `Named(T)` (the parser inlines its bound), and the opposite
   // direction — `NonNullable<T>` into `T` — is legal and is not this shape.
+  // A file that declares its own `NonNullable` means something else by the
+  // name (`type NonNullable<T> = T` is an identity), so only the lib
+  // utility's spelling is read here; `T & {}` is the same claim whatever
+  // the file declares.
   if ctx.strict_null_checks {
     let tp_of_nonnullable = match expected {
-      Applied("NonNullable", [Named(n)]) => Some(n)
+      Applied("NonNullable", [Named(n)]) if !ctx.resolver.type_aliases.contains(
+          "NonNullable",
+        ) &&
+        !ctx.resolver.interfaces.contains("NonNullable") => Some(n)
       Intersection([Named(n), Object([])])
       | Intersection([Object([]), Named(n)]) => Some(n)
       _ => None
@@ -16927,9 +17108,10 @@ fn is_fresh_literal_expr(e : @ast.TsExpr) -> Bool {
 /// `is_fresh_literal_expr`, plus a NAME whose binding is an unannotated
 /// `const` holding a fresh literal (`<fresh>NAME`, written by
 /// `check_ident_binding_decl`). The marker carries the literal it was
-/// written for and must still equal the name's current binding, so a
-/// shadowing parameter or pattern binding — which writes no marker — reads
-/// as not fresh unless it happens to hold the identical literal.
+/// written for and must still equal the name's current binding. A
+/// shadowing parameter, pattern or declaration writes no marker and
+/// REMOVES the outer one (`ExprEnv::forget_freshness`): comparing literals
+/// alone cannot tell `(x: "a") => …` from the `const x = "a"` it shadows.
 fn is_fresh_literal_in_env(env : ExprEnv, e : @ast.TsExpr) -> Bool {
   if is_fresh_literal_expr(e) {
     return true
@@ -21303,7 +21485,18 @@ fn bind_array_pattern(
   ab : @ast.TsArrayBinding,
   source : @ast.TsType,
 ) -> Unit {
-  let unwrapped = ctx.resolver.unwrap(source)
+  // An intersection with an array member (`RegExpExecArray`, modelled as
+  // `string[] & { index; input; groups }`) destructures as that array: the
+  // other members only add properties. `unwrap` does not expand an
+  // intersection, so without this every element bound `any`.
+  let unwrapped = match ctx.resolver.unwrap(source) {
+    Intersection(parts) =>
+      match parts.search_by(fn(p) { p is Array(_) }) {
+        Some(ai) => parts[ai]
+        None => Intersection(parts)
+      }
+    other => other
+  }
   let mut i = 0
   while i < ab.items.length() {
     match ab.items[i] {
@@ -21539,7 +21732,10 @@ fn bind_pattern(
   ty : @ast.TsType,
 ) -> Unit {
   match binding {
-    Ident(name) => env.bind(name, ty)
+    Ident(name) => {
+      env.bind(name, ty)
+      env.forget_freshness(name)
+    }
     Array(ab) => bind_array_pattern(env, ctx, ab, ty)
     Object(ob) => bind_object_pattern(env, ctx, ob, ty)
     Target(_) => ()
@@ -21579,6 +21775,7 @@ fn bind_callable_param(
     Named(n) if is_phantom_type_param_name(ctx, n) => @ast.TsType::Any
     _ => ty
   }
+  let first_new = names.length()
   match p.binding {
     Some(b) =>
       if b is (Object(_) | Array(_)) {
@@ -21592,6 +21789,19 @@ fn bind_callable_param(
       env.bind(p.name, ty)
       names.push(p.name)
     }
+  }
+  // A parameter is a NEW binding, so nothing the enclosing scope recorded
+  // under the same name applies to it: not the declared slot a closure
+  // copies in for its captured bindings (`keep_outer_declared`), which made
+  // `x = null` inside `(x: string) => …` check against an outer
+  // `x: string | null`, and not an outer `const`'s freshness marker.
+  for i in first_new..<names.length() {
+    let n = names[i]
+    match env.lookup(n) {
+      Some(t) => env.declare_type(n, t)
+      None => ()
+    }
+    env.forget_freshness(n)
   }
 }
 
@@ -24368,6 +24578,8 @@ fn check_ident_binding_decl(
   // a destructured name) from inheriting an outer `const`'s freshness.
   if !mutable_ && !is_checkable(declared) && is_fresh_literal_in_env(env, init) {
     env.bind("<fresh>" + name, bound_type)
+  } else {
+    env.forget_freshness(name)
   }
   // Make sure the *declared* slot reflects the source annotation
   // (which `bind` set on first write -- subsequent narrowing

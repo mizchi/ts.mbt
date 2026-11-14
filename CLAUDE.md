@@ -4009,6 +4009,47 @@ product surfaces now.
   needs `as const` kept by the parser (it is erased for the transform
   passes' sake) plus the evaluation order of destructuring defaults
   against computed keys, a distinction no real code draws.
+  The review of FV-FW found eleven candidate defects, and probing them
+  against tsc is what separated them. Five were false positives on code
+  tsc accepts:
+  - a file's own `type NonNullable<T> = T` read as the lib utility;
+  - a parameter `(x: "a")` inheriting the freshness of the `const x = "a"`
+    it shadows, because the marker was compared by literal VALUE in an env
+    with no scope identity;
+  - `"-"` read as a `${bigint}`;
+  - the numeric template checks deciding finiteness from the exponent's
+    digit count (`"1e309"` matched, `"1e-1000"` did not);
+  - `"0.0000001"` read as a canonical number spelling.
+
+  Three were missed errors:
+  - the raw signature dropped a bound violation (`f<T extends string>(xs:
+    T[])` with `f([123])`);
+  - a closure parameter kept the captured declared type of the outer
+    binding it shadows;
+  - an intersection with an array member destructured as `any`.
+
+  Two did not reproduce and were fixed anyway, being one-arm omissions: a
+  nested declaration's raw signature leaking into the module-wide map, and
+  `TemplateLiteralType` missing from the inferred-type substitution. The
+  last was a test pinning silence on a line tsc reports as TS2322 (the
+  sixteenth test here found asserting a gap).
+
+  The numeric cells were settled one at a time. `${number}` is JS `+s`
+  plus `isFinite`, so `" 1"`, `"  "` and a leading NBSP all match. The
+  canonical spelling is decided by parse-and-reprint, since
+  `Double::to_string` prints `Number.prototype.toString`'s form on every
+  probed value.
+
+  The bound fix was measured twice, and the first version proved its own
+  point wrong. Requiring a PROOF that the binding satisfies its bound lost
+  `intraExpressionInferences` (a `{ num: Wrapper<number> }` against
+  `Record<string, Wrapper>` is legal and unprovable here). So the raw form
+  is refused only when a violation is PROVEN, for scalar shapes and for a
+  missing required property. A `declare function` carries no bounds at
+  all — it is ingested as a `TsImport` — and its bounds are read back by
+  walking the raw and inlined signatures in parallel. Inlining is a
+  structural substitution, so the two differ exactly where a bound
+  stands.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

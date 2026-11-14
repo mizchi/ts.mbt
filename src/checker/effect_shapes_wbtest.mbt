@@ -635,9 +635,12 @@ test "batch FW: un-inlined generic signatures for call inference and mixin bases
     #|  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: inputs.nonexistent }; } });
     #|}
     #|function okIntraInference() {
-    #|  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: inputs.num }; } });
+    #|  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: !!inputs.num }; } });
     #|}
   let issues = eff_issues(src)
+  // `map` returns `!!inputs.num`, a boolean, for the `Wrapper<boolean>`
+  // output. Returning `inputs.num` itself is TS2322 in tsc (`number` is not
+  // `boolean`) and is a MISS here, so the legal spelling is the one pinned.
   assert_false(eff_has(issues, "okIntraInference"), msg="okIntraInference")
   assert_true(eff_has(issues, "badIntraInference"), msg="badIntraInference")
   let mixin_src =
@@ -728,4 +731,57 @@ test "batch FW: a namespace-local interface shadows a lib generic" {
   let issues = eff_issues(src)
   assert_false(issues.iter().any(fn(i) { i.path.has_prefix("namespace m1") }))
   assert_true(issues.iter().any(fn(i) { i.path.has_prefix("namespace m2") }))
+}
+
+///|
+test "batches FV-FW review: bounds, shadowing and numeric template holes" {
+  let src =
+    #|declare function fb<T extends string>(xs: T[]): void;
+    #|declare function fo<T extends { a: string }>(xs: T[]): void;
+    #|function badBoundViolated() { fb([123]); }
+    #|function badObjectBoundViolated() { fo([{ b: 1 }]); }
+    #|function okBoundSatisfied() { fb(["ok"]); fo([{ a: "x" }]); }
+    #|function okShadowFresh() { const x = "a"; const g = (x: "a") => { let y = x; const z: "a" = y; return z; }; return [x, g]; }
+    #|function badClosureParamAssign(x: string | null) { const g = (x: string) => { x = null; return x; }; return g; }
+    #|function okClosureOuterAssign(x: string | null) { const g = () => { x = null; }; return g; }
+    #|type IsBig<S> = S extends `${bigint}` ? 1 : 0;
+    #|function okBigintSign() { const a: IsBig<"-"> = 0; const b: IsBig<"+5"> = 0; const c: IsBig<"0x10"> = 1; const d: IsBig<"007"> = 0; return [a, b, c, d]; }
+    #|type IsNum<S> = S extends `${number}` ? 1 : 0;
+    #|function okNumFiniteness() { const a: IsNum<"1e309"> = 0; const b: IsNum<"1e-1000"> = 1; const c: IsNum<" 1"> = 1; const d: IsNum<"+0x10"> = 0; return [a, b, c, d]; }
+    #|type N<S> = S extends `${infer X extends number}` ? X : never;
+    #|function okNumRoundTrip() { const a: N<"0.0000001"> = 2; const b: N<"1000000000000000"> = 1000000000000000; return [a, b]; }
+    #|type P<S> = S extends `${infer X}` ? `pre${X}` : never;
+    #|function okTemplateSubstitution() { const p: P<"ab"> = "preab"; return p; }
+    #|function id<T>(x: T): T { return x; }
+    #|function outer() { function id<U extends number>(x: U): U { return x; } return id(1); }
+    #|function okNestedRawSig() { const s: string = id("ok"); return s; }
+    #|function outer2() { function id2<U extends number>(x: U[]): U { return x[0]; } return id2([1]); }
+    #|function id2<T>(x: T): T { return x; }
+    #|function okNestedRawSigFirst() { const s: string[] = id2(["ok"]); return s; }
+    #|declare const re: RegExp;
+    #|function okExecDestructure(s: string) { const m = re.exec(s); if (m) { const [all, g1] = m; return all.toUpperCase() + g1.toUpperCase(); } return ""; }
+    #|function badExecDestructure(s: string) { const m = re.exec(s); if (m) { const [all] = m; const n: number = all; return n; } return 0; }
+  let issues = eff_issues(src)
+  for
+    ok in [
+      "okBoundSatisfied", "okShadowFresh", "okClosureOuterAssign", "okBigintSign",
+      "okNumFiniteness", "okNumRoundTrip", "okTemplateSubstitution", "okNestedRawSig",
+      "okNestedRawSigFirst", "okExecDestructure",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badBoundViolated", "badObjectBoundViolated", "badClosureParamAssign", "badExecDestructure",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+  // A file's own `NonNullable` is not the lib utility.
+  let local_nonnullable =
+    #|type NonNullable<T> = T;
+    #|function okLocalNonNullable<T>(x: T) { const y: NonNullable<T> = x; return y; }
+    #|function badLibSpelling<T>(x: T) { const y: T & {} = x; return y; }
+  let issues = eff_issues(local_nonnullable)
+  assert_false(eff_has(issues, "okLocalNonNullable"), msg="okLocalNonNullable")
+  assert_true(eff_has(issues, "badLibSpelling"), msg="badLibSpelling")
 }

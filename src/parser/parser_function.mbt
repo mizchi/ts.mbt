@@ -964,8 +964,14 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(RParen)
   // The un-inlined signature (see `raw_declare_signature`); a function
   // DECLARATION is recorded too, for the checker's parameter binding. A
-  // name declared more than once (an overload set) keeps no copy.
-  if self.raw_generic_signatures.contains(name) {
+  // name declared more than once (an overload set) keeps no copy. Only a
+  // MODULE-scope declaration is recorded: the map is keyed by bare name
+  // and read for module-level calls, so a bounded `function id<U extends
+  // number>` nested in another body must not answer for a module-level
+  // `id`.
+  if !self.at_module_scope() {
+    ()
+  } else if self.raw_generic_signatures.contains(name) {
     self.raw_generic_signatures[name] = Any
   } else if type_param_bounds.length() > 0 {
     match raw_function_signature(self.tokens, raw_params_start) {
@@ -3387,8 +3393,11 @@ pub fn Parser::parse_declare_function(
   // The un-inlined copy, for the checker's call-site inference. A second
   // Parser over the same tokens has no type-parameter scope, so nothing is
   // inlined, and none of the first pass's side channels see its work. A
-  // name declared twice (an overload set) keeps no copy at all.
-  if type_param_bounds.length() > 0 {
+  // name declared twice (an overload set) keeps no copy at all, and only a
+  // module-scope declaration is recorded (see `Parser::at_module_scope`).
+  if !self.at_module_scope() {
+    ()
+  } else if type_param_bounds.length() > 0 {
     if self.raw_generic_signatures.contains(name) {
       self.raw_generic_signatures[name] = Any
     } else {
@@ -3402,6 +3411,17 @@ pub fn Parser::parse_declare_function(
   }
   self.consume_semicolon()
   { name, module_: "env", type_params, params, param_is_rest, return_type, }
+}
+
+///|
+/// Whether the parser is at module (or namespace) top level rather than
+/// inside some body. Every function, method and arrow body is parsed by
+/// `parse_block`, which pushes one `block_binding_nonnumeric` frame for its
+/// whole extent, and a namespace body is parsed by a fresh `Parser`, so an
+/// empty frame stack is exactly "no enclosing body". A declaration's own
+/// body has not been entered when its header is recorded.
+fn Parser::at_module_scope(self : Parser) -> Bool {
+  self.block_binding_nonnumeric.length() == 0
 }
 
 ///|

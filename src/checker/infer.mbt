@@ -341,6 +341,15 @@ pub fn substitute_inferred_type(
       }
       Applied(name, out)
     }
+    // `` `pre${X}` `` keeps its text and takes the binding in its hole, so
+    // a template branch reads `"preab"` rather than an opaque `X`.
+    TemplateLiteralType(parts, args) => {
+      let out : Array[@ast.TsType] = []
+      for arg in args {
+        out.push(substitute_inferred_type(arg, bindings))
+      }
+      TemplateLiteralType(parts, out)
+    }
     _ => type_
   }
 }
