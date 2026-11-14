@@ -967,6 +967,10 @@ pub(all) struct TsClassDecl {
   // tooling (NestJS / TypeORM-style scanners) can inspect them; the
   // checker does not currently interpret them.
   decorators : Array[TsExpr]
+  // MEMBER decorator expressions (`@(…) m() {}`), in source order. They are
+  // evaluated where the class is defined, so the checker walks them in that
+  // scope; nothing else reads them.
+  member_decorators : Array[TsExpr]
   // True for ambient `declare class` declarations and false for
   // native runtime `class` declarations. Used by the checker to
   // gate strict-property-initialization (TS2564) -- TS itself does

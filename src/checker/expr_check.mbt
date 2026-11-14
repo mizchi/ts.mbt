@@ -42061,6 +42061,44 @@ fn check_module_function_bodies_layered(
       all.push(issue)
     }
   }
+  // MEMBER decorator expressions are evaluated where the class is defined,
+  // in the module scope (for a top-level class): an arrow written there is
+  // ordinary code, and `@((x, p, d) => { func(3) })` with `func(s: string)`
+  // is TS2345 (decoratorChecksFunctionBodies). A local class's decorators
+  // run in the enclosing function, whose bindings this env lacks, so only
+  // top-level classes are walked.
+  for cls in module_.classes {
+    if cls.is_local || cls.member_decorators.length() == 0 {
+      continue
+    }
+    let dec_ctx : CheckCtx = {
+      path_prefix: "class \{cls.name} member decorator",
+      script_top_level: false,
+      return_type: @ast.TsType::Any,
+      yield_type: @ast.TsType::Any,
+      yield_next_type: @ast.TsType::Any,
+      widen_generator_return: false,
+      resolver,
+      issues: [],
+      in_scope_type_params: [],
+      type_param_bounds: [],
+      permissive,
+      unassigned: {},
+      strict_property_init,
+      strict_null_checks,
+      in_computed_key: false,
+    }
+    let env = ExprEnv::new()
+    for v in module_.values {
+      env.bind(v.name, v.type_)
+    }
+    for d in cls.member_decorators {
+      check_call_args_in_expr(env, d, dec_ctx)
+    }
+    for issue in dec_ctx.issues {
+      all.push(issue)
+    }
+  }
   // Class field initializers (`class C { x = expr; static y = expr }`).
   // These were previously never walked, so member-access checks (e.g.
   // accessing another class's `private`/`protected` member from an
@@ -44998,15 +45036,15 @@ fn check_alias_index_key_bounds(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  for alias in module_.type_aliases {
-    if alias.type_param_bounds.length() == 0 {
+  for ta in module_.type_aliases {
+    if ta.type_param_bounds.length() == 0 {
       continue
     }
     let bounds : Map[String, @ast.TsType] = Map([])
-    for b in alias.type_param_bounds {
+    for b in ta.type_param_bounds {
       bounds[b.0] = b.1
     }
-    let tops = match alias.type_ {
+    let tops = match ta.type_ {
       Union(parts) => parts
       t => [t]
     }
@@ -45021,7 +45059,7 @@ fn check_alias_index_key_bounds(
       }
       if wanted.iter().any(fn(w) { !keys.contains(w) }) {
         issues.push({
-          path: "type \{alias.name}",
+          path: "type \{ta.name}",
           message: "type `\{k}` cannot be used to index type `\{type_display(obj)}`",
         })
       }

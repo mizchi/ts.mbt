@@ -1166,6 +1166,7 @@ fn build_runtime_class_decl(
     // `Parser::take_pending_decorators` after build returns; the
     // builder is parser-agnostic so it leaves the slot empty.
     decorators: [],
+    member_decorators: [],
     is_declare: false,
     private_members,
     protected_members,
@@ -4143,12 +4144,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       )
       let pending_base_expr = self.pending_class_base_expr
       self.pending_class_base_expr = None
-      let _ = self.take_pending_decorators()
+      let member_decorators = self.take_pending_decorators()
       let decorated : @ast.TsClassDecl = {
         ..runtime_decl,
         base_names: [base_name],
         base_expr: pending_base_expr,
         decorators: class_decorators,
+        member_decorators,
         is_declare: false,
       }
       self.record_runtime_class_decl(decorated)
@@ -4295,10 +4297,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     is_abstract: runtime_decl.is_abstract,
     is_constructible: runtime_decl.is_constructible,
     is_local: false,
-    decorators: {
-      let _ = self.take_pending_decorators()
-      class_decorators
-    },
+    decorators: class_decorators,
+    member_decorators: self.take_pending_decorators(),
     is_declare: false,
     private_members: runtime_decl.private_members,
     protected_members: runtime_decl.protected_members,
@@ -4988,10 +4988,11 @@ fn Parser::parse_class_decl_with_abstract(
   // parse (the checker's TS1238 decorator-signature rules read
   // `decl.decorators`), and drain any MEMBER decorators the body parse
   // pushed so they don't leak onto the next declaration.
-  let _ = self.take_pending_decorators()
+  let member_decorators = self.take_pending_decorators()
   let runtime_decl : @ast.TsClassDecl = {
     ..runtime_decl,
     decorators: class_decorators,
+    member_decorators,
   }
   self.record_runtime_class_decl(runtime_decl)
   // When the class extends another class, the IIFE desugar below

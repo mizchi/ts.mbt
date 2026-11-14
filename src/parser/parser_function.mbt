@@ -4369,6 +4369,7 @@ fn Parser::parse_declare_class(
     is_constructible,
     is_local: false,
     decorators: self.take_pending_decorators(),
+    member_decorators: [],
     is_declare: true,
     private_members,
     protected_members,
