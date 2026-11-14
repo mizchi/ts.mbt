@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2717 / MISS in scope 9 /
+  is a soundness bug, and there are none (TP 2724 / MISS in scope 2 /
   OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
   **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
@@ -3965,7 +3965,51 @@ product surfaces now.
   `this` parameter, which the type parser keeps positionally — effect's
   `runInAsyncScope(this.evaluate, this, effect)` bound `This` from
   `evaluate`'s first parameter.
-- `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
+  Batch FW took the blocker that note named and buys MISS 9 -> 2, effect
+  139, zod 19, the real `.d.ts` entries 0, all unchanged on real code. The
+  bound inlining was NOT undone: a bounded `declare function` or function
+  declaration also records an UN-INLINED copy of its signature
+  (`TsModule.raw_generic_signatures`), re-parsed by a second `Parser` over
+  the same tokens — one with no type-parameter scope, so nothing inlines,
+  and whose side effects (markers, recorders) land in a throwaway — and
+  only the CHECKER reads it, which is why the bridge's generated output
+  has nothing new to read. Three uses: call-site inference instantiates a
+  parameter from the raw signature only when every type parameter it
+  mentions solved to something checkable (a bare `T` parameter never,
+  since that re-checks the argument against itself, and an inferred
+  object-literal type spelling a getter `@@get:x` would not even do that —
+  `accessorsOverrideProperty8`'s false positive); a parameter typed by an
+  alias over a bounded parameter takes the raw type as its DECLARED slot
+  only, so assignments see `Something<A>` while reads keep the inlined
+  type every other rule was written against; and a mixin call's
+  `T & { new (…): S }` return says which argument the base is.
+  The generic-signature relation was the other blocker and is decided
+  only where it is exact: the same signature up to type-parameter names,
+  where assignability is "every target constraint fits the source's", and
+  a recursive constraint (`<T extends I2<T>>`) is related with `T` as the
+  target's opaque parameter. It needed two fixes that are the recurring
+  shapes here — the hook had to move ABOVE the phantom-type-parameter
+  abstention, whose "only ever a type parameter" names are exactly a
+  generic signature's binders, and assignment had to stop narrowing a
+  binding DECLARED with a generic signature, or `x = y; y = x` compared `y`
+  with itself. `templateLiteralTypes4` needed `keyof` a tuple, a literal
+  decided against a `${number}` template (JavaScript's `isFinite(+s)`, so
+  `"0x10"` matches), `infer N extends number` in a template (the number
+  literal for a canonical spelling, `number` for `"01"` — probed, the cell
+  reasoning gets wrong), the infer gate's missing template arm, and an
+  interface's own bound put back inside a METHOD's bound, where the parser
+  had inlined `TDef` to `readonly FieldDefinition[]` before the receiver's
+  tuple could reach it. And a namespace-local `interface Promise<T>`
+  SHADOWS the lib type (at a script's top level it merges), which the
+  member lookup could not see because the built-in tables answer first.
+  The two left are priced rather than attempted.
+  `wrappedAndRecursiveConstraints4` needs a method's return type inferred
+  from a nested generic FUNCTION declaration it returns and that
+  `GenericFunc` instantiated at the call; `controlFlowBindingPatternOrder`
+  needs `as const` kept by the parser (it is erased for the transform
+  passes' sake) plus the evaluation order of destructuring defaults
+  against computed keys, a distinction no real code draws.
+- `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
   exports) and `mangle_safety.mbt` + `flow_analysis.mbt` (names that reach a
