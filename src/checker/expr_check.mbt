@@ -40453,6 +40453,34 @@ fn check_generator_interface_returns(
         if !extends_iter_proto {
           continue
         }
+        // TS2322: an interface that is an `Iterator<X>` AND an
+        // `Iterable<Y>` with X and Y definitely different cannot type a
+        // generator — the generator's yield type comes from one and the
+        // other's `next()` result then disagrees (generatorTypeCheck8).
+        let mut iter_arg : @ast.TsType? = None
+        let mut iterable_arg : @ast.TsType? = None
+        for i, en in iface.extends_names {
+          match iface.extends_args.get(i) {
+            Some([a]) =>
+              if en == "Iterator" {
+                iter_arg = Some(a)
+              } else if en == "Iterable" {
+                iterable_arg = Some(a)
+              }
+            _ => ()
+          }
+        }
+        match (iter_arg, iterable_arg) {
+          (Some(a), Some(b)) =>
+            if types_definitely_differ(resolver, a, b) {
+              issues.push({
+                path: "function \{f.name}",
+                message: "the generator type is not assignable to `\{ret_name}`: `Iterator<\{type_display(a)}>` and `Iterable<\{type_display(b)}>` disagree",
+              })
+              continue
+            }
+          _ => ()
+        }
         for fl in iface.fields {
           if !fl.0.has_prefix("<") &&
             !fl.0.has_prefix("@@") &&
@@ -44030,6 +44058,9 @@ fn check_class_member_structure(
   for issue in check_class_implements_lib_string(module_, resolver) {
     issues.push(issue)
   }
+  for issue in check_alias_index_key_bounds(module_, resolver) {
+    issues.push(issue)
+  }
   for issue in check_extends_interface_only(module_, resolver) {
     issues.push(issue)
   }
@@ -44333,6 +44364,152 @@ fn check_extends_interface_only(
     }
   }
   issues
+}
+
+///|
+/// TS2536 ("Type 'K' cannot be used to index type 'X'") in a type alias
+/// body: `X[K]` where `K` is one of the alias's own type parameters, its
+/// constraint is a union of string literals, and `X` resolves to a shape
+/// whose key set is FINITE and known — a mapped type over a literal union,
+/// or an object type with only named members. A constraint literal the key
+/// set lacks makes the access invalid (`type T3 = { [k in "a"]: true };
+/// type T4<K extends "a" | "b"> = T3[K]`). Any key set that does not
+/// resolve to literals — a generic mapped source, an index signature —
+/// abstains.
+fn check_alias_index_key_bounds(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for alias in module_.type_aliases {
+    if alias.type_param_bounds.length() == 0 {
+      continue
+    }
+    let bounds : Map[String, @ast.TsType] = Map([])
+    for b in alias.type_param_bounds {
+      bounds[b.0] = b.1
+    }
+    let tops = match alias.type_ {
+      Union(parts) => parts
+      t => [t]
+    }
+    for t in tops {
+      guard t is IndexedAccess(obj, Named(k)) else { continue }
+      guard bounds.get(k) is Some(bound) else { continue }
+      guard string_literal_set(resolver, bound) is Some(wanted) else {
+        continue
+      }
+      guard finite_key_set(resolver, obj, bounds) is Some(keys) else {
+        continue
+      }
+      if wanted.iter().any(fn(w) { !keys.contains(w) }) {
+        issues.push({
+          path: "type \{alias.name}",
+          message: "type `\{k}` cannot be used to index type `\{type_display(obj)}`",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// The string literals a mapped type's KEY type stands for: a literal union
+/// directly, an alias to one, or an indexed access whose index is a type
+/// parameter (read through its constraint) or `keyof` of a finite shape —
+/// `AB[keyof AB]` and `AB[S]` with `S extends "a" | "b"` both evaluate
+/// member by member. Anything else is `None`.
+fn key_literals(
+  resolver : Resolver,
+  t : @ast.TsType,
+  bounds : Map[String, @ast.TsType],
+  depth : Int32,
+) -> Array[String]? {
+  if depth > 6 {
+    return None
+  }
+  match string_literal_set(resolver, t) {
+    Some(s) => return Some(s)
+    None => ()
+  }
+  let t = match t {
+    Named(n) if bounds.get(n) is None =>
+      match resolver.type_aliases.get(n) {
+        Some(a) if a.type_params.length() == 0 => a.type_
+        _ => t
+      }
+    _ => t
+  }
+  match t {
+    IndexedAccess(o, idx) => {
+      let idx_keys = match idx {
+        Named(p) if bounds.get(p) is Some(b) => string_literal_set(resolver, b)
+        Keyof(o2) => finite_key_set(resolver, o2, bounds)
+        other => string_literal_set(resolver, other)
+      }
+      guard idx_keys is Some(ks) else { return None }
+      let out : Array[String] = []
+      for k in ks {
+        match resolver.lookup_field(o, k) {
+          Some(ft) =>
+            match string_literal_set(resolver, ft) {
+              Some(ls) =>
+                for l in ls {
+                  if !out.contains(l) {
+                    out.push(l)
+                  }
+                }
+              None => return None
+            }
+          None => return None
+        }
+      }
+      if out.length() == 0 {
+        None
+      } else {
+        Some(out)
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+fn string_literal_set(resolver : Resolver, t : @ast.TsType) -> Array[String]? {
+  let out : Array[String] = []
+  for p in union_components(resolver.unwrap(t)) {
+    match resolver.unwrap(p) {
+      Literal(s) => out.push(s)
+      _ => return None
+    }
+  }
+  if out.length() == 0 {
+    None
+  } else {
+    Some(out)
+  }
+}
+
+///|
+fn finite_key_set(
+  resolver : Resolver,
+  obj : @ast.TsType,
+  bounds : Map[String, @ast.TsType],
+) -> Array[String]? {
+  match resolver.unwrap(obj) {
+    MappedType(_, key_ty, _, _) => key_literals(resolver, key_ty, bounds, 0)
+    Object(fields) => {
+      let out : Array[String] = []
+      for f in fields {
+        match f.0 {
+          Literal(k) if !k.has_prefix("<") && !k.has_prefix("@@") => out.push(k)
+          _ => return None
+        }
+      }
+      Some(out)
+    }
+    _ => None
+  }
 }
 
 ///|
