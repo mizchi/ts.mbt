@@ -1815,7 +1815,14 @@ fn Parser::parse_extends_clause_until_body(
   let mut angle_depth = 0
   let mut expect_name = true
   while !self.check(Eof) {
-    match self.peek().kind {
+    // `declare` lexes as its own token, and effect names an interface that
+    // (`interface DnsARecord extends declare<Dns_.A>`) — without the remap
+    // the base was skipped and every inherited member read as missing.
+    let kind = match self.peek().kind {
+      Declare => Ident("declare")
+      k => k
+    }
+    match kind {
       LBrace if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 =>
         break
       // TS2499 ("An interface can only extend an identifier /

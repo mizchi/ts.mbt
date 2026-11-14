@@ -11946,12 +11946,59 @@ fn falsy_subset(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+fn bigint_union_collapsed(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
+  if is_bigint_operand(resolver, t, 0) {
+    @ast.TsType::BigInt
+  } else {
+    t
+  }
+}
+
+///|
+/// A bigint, a union of bigints, or a BRANDED bigint (`bigint & { … }`,
+/// effect's `Brand.Branded<bigint, …>`): every value is a bigint, so
+/// arithmetic on it stays bigint where tsc says so.
+fn is_bigint_operand(
+  resolver : Resolver,
+  t : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  match t {
+    BigInt | BigIntLiteral(_) => true
+    Union(_) => {
+      let parts = union_components(t)
+      parts.length() > 0 &&
+      parts.iter().all(fn(p) { is_bigint_operand(resolver, p, depth + 1) })
+    }
+    Intersection(parts) =>
+      parts.iter().any(fn(p) { p is (BigInt | BigIntLiteral(_)) })
+    Named(_) | Applied(_, _) => {
+      let u = resolver.unwrap(t)
+      if u == t {
+        false
+      } else {
+        is_bigint_operand(resolver, u, depth + 1)
+      }
+    }
+    _ => false
+  }
+}
+
+///|
 fn infer_binop(
   op : @ast.TsBinOp,
   l : @ast.TsType,
   r : @ast.TsType,
   resolver : Resolver,
 ) -> @ast.TsType {
+  // A union whose every member is a bigint (`c ? -one : one` infers as
+  // `bigint | bigint` here) is a bigint operand; without this the
+  // arithmetic arms below saw a `Union` and answered `number`.
+  let l = bigint_union_collapsed(resolver, l)
+  let r = bigint_union_collapsed(resolver, r)
   match op {
     Add =>
       match (l, r) {
@@ -12295,7 +12342,7 @@ fn check_expr_against(
   // argument against the raw `A` reported `expected A but got number` at
   // every call; abstain instead (`ctx.in_scope_type_params` is where a
   // REAL in-scope parameter lives, and it is honoured as before).
-  if expected_mentions_phantom_type_param(expected, ctx) {
+  if expected_mentions_phantom_type_param(expected, ctx, sub_path) {
     return
   }
   // Contextual typing for arrow / function expressions: when the value being
@@ -19905,13 +19952,16 @@ fn check_compound_assign(
     )
     return
   }
-  check_expr_against(
-    env,
-    rhs,
-    @ast.TsType::Number,
-    ctx,
-    "compound-assign `\{name}`",
-  )
+  // An `any` target takes either arithmetic: tsc types `any * bigint` as
+  // `bigint`, so `out *= n` with `out` from an `any`-typed `BigInt(1)`
+  // (effect's `const BigInt = globalThis.BigInt`) is legal, while a string
+  // operand is still TS2362 / TS2363.
+  let rhs_target = if target is Any {
+    @ast.TsType::Union([@ast.TsType::Number, @ast.TsType::BigInt])
+  } else {
+    @ast.TsType::Number
+  }
+  check_expr_against(env, rhs, rhs_target, ctx, "compound-assign `\{name}`")
 }
 
 ///|
@@ -20917,7 +20967,11 @@ fn optional_chain_equality_narrowing(
   guard side is Some(out) else { return }
   for g in guarded {
     match narrowing_key_for_expr(g) {
-      Some(key) =>
+      // A key the equality analysis already narrowed keeps that answer:
+      // `escaped?._tag === "Character"` narrows `escaped` to `Character`,
+      // and pushing the bare non-nullish type after it overwrote that with
+      // the whole union.
+      Some(key) if !out.iter().any(fn(b) { b.0 == key }) =>
         out.push(
           (
             key,
@@ -20927,7 +20981,7 @@ fn optional_chain_equality_narrowing(
             ),
           ),
         )
-      None => ()
+      _ => ()
     }
   }
   // The chain itself is non-nullish on that side too, and for a
@@ -22010,38 +22064,67 @@ fn join_branch_types(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+fn sub_path_callee_name(sub_path : String) -> String? {
+  let marker = "call `"
+  match sub_path.rev_find(marker) {
+    Some(i) => {
+      let rest = sub_path[i + marker.length():].to_owned()
+      match rest.find("`") {
+        Some(j) => Some(rest[:j].to_owned())
+        None => None
+      }
+    }
+    None => None
+  }
+}
+
+///|
 fn expected_mentions_phantom_type_param(
   expected : @ast.TsType,
   ctx : CheckCtx,
+  sub_path : String,
 ) -> Bool {
   let r = ctx.resolver
   if r.local_type_names.length() == 0 {
     return false
   }
-  // A name some function DECLARATION binds is a binder the call path
-  // instantiates (or deliberately judges, `foo6<T>(cb: { new(x: T) … })`),
-  // so only names no declaration binds are phantoms.
+  // A name the CALLEE function declaration binds is a binder the call
+  // path instantiates (or deliberately judges, `foo6<T>(cb: { new(x: T)
+  // … })`), so it is not a phantom there. The callee is the innermost
+  // `call \`NAME\`` segment of the path; any other position (an arrow
+  // body, a `return`) has no declaration to instantiate it.
   let declared_binders : Map[String, Unit] = Map([])
-  for _, ps in r.func_overload_type_params {
-    for p in ps {
-      declared_binders[p] = ()
-    }
-  }
-  for _, ps in r.func_type_params {
-    for p in ps {
-      declared_binders[p] = ()
-    }
+  match sub_path_callee_name(sub_path) {
+    Some(callee) =>
+      for
+        ps in [
+          r.func_overload_type_params.get(callee).unwrap_or([]),
+          r.func_type_params.get(callee).unwrap_or([]),
+        ] {
+        for p in ps {
+          declared_binders[p] = ()
+        }
+      }
+    None => ()
   }
   let phantoms : Array[String] = []
   for n, _ in r.local_type_names {
     if declared_binders.contains(n) {
       continue
     }
-    if !r.interfaces.contains(n) &&
-      !r.type_aliases.contains(n) &&
-      !r.classes.contains(n) &&
-      !r.enums.contains(n) &&
-      !ctx.in_scope_type_params.contains(n) {
+    // A type ANOTHER module declares (effect's `net/Dns.ts` has an
+    // `interface A` for the DNS record) reaches this resolver at its bare
+    // name in a graph check, but it is not in scope here unqualified — so
+    // it does not make a generic `A` real. `type_name_origin` records
+    // exactly the foreign declarations.
+    let declared_here = (
+        r.interfaces.contains(n) ||
+        r.type_aliases.contains(n) ||
+        r.classes.contains(n) ||
+        r.enums.contains(n)
+      ) &&
+      !r.type_name_origin.contains(n)
+    if !declared_here && !ctx.in_scope_type_params.contains(n) {
       phantoms.push(n)
     }
   }
@@ -23619,6 +23702,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           }
         _ => None
       }
+      let typeof_scrutinee_key = match scrutinee {
+        UnaryOp(Typeof, operand) => narrowing_key_for_expr(operand)
+        _ => None
+      }
       let scrutinee_ty = ctx.resolver.unwrap(
         infer_expr(env, ctx.resolver, scrutinee),
       )
@@ -23703,9 +23790,21 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         let narrow_target = match (scrutinee_name, scrutinee_disc) {
           (Some(name), _) => Some(name)
           (_, Some((obj_name, _))) => Some(obj_name)
-          _ => None
+          _ => typeof_scrutinee_key
         }
         let apply_label = fn(t : @ast.TsExpr) {
+          // `switch (typeof x) { case "bigint": … }` narrows `x` exactly as
+          // `typeof x === "bigint"` does, so it reuses that analysis.
+          if typeof_scrutinee_key is Some(_) {
+            let eff = analyze_narrowing(
+              env,
+              ctx.resolver,
+              @ast.TsExpr::BinOp(BinEq, scrutinee, t),
+            )
+            for b in eff.then_binds {
+              env.narrow(b.0, b.1)
+            }
+          }
           match scrutinee_name {
             Some(name) =>
               apply_switch_case_narrowing(env, ctx.resolver, name, t)
@@ -23736,6 +23835,35 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
                 env.restore_from(pre)
                 if all && parts.length() > 0 {
                   env.narrow(target, flatten_union_exact(parts))
+                }
+              }
+              None => ()
+            }
+          }
+        }
+        // `default:` under `switch (typeof x)` sees `x` with every listed
+        // tag removed — only when nothing can fall into it, since a
+        // preceding label or a non-exiting body would make a removed tag
+        // live again.
+        if typeof_scrutinee_key is Some(_) &&
+          case_.test_expr is None &&
+          (
+            case_index == 0 ||
+            (
+              cases[case_index - 1].body.stmts.length() > 0 &&
+              block_always_exits(cases[case_index - 1].body)
+            )
+          ) {
+          for other in cases {
+            match other.test_expr {
+              Some(t) => {
+                let eff = analyze_narrowing(
+                  env,
+                  ctx.resolver,
+                  @ast.TsExpr::BinOp(BinEq, scrutinee, t),
+                )
+                for b in eff.else_binds {
+                  env.narrow(b.0, b.1)
                 }
               }
               None => ()
@@ -43422,7 +43550,17 @@ fn cast_shape_fields(
   if depth > 8 {
     return None
   }
-  match resolver.unwrap(t) {
+  // `unwrap` expands an interface it can resolve into `Struct(name, …)`,
+  // whose field list has already dropped whatever a GENERIC base would
+  // contribute — the exact case the `Named` arm below abstains on. So a
+  // struct that names an interface is decided through that arm:
+  // `interface DnsARecord extends declare<Dns_.A>` lost every inherited
+  // member and read as missing `"~encoded.mutability"` twelve times.
+  let unwrapped = match resolver.unwrap(t) {
+    Struct(n, _) if resolver.interfaces.contains(n) => @ast.TsType::Named(n)
+    other => other
+  }
+  match unwrapped {
     Named(n) => {
       guard resolver.interfaces.get(n) is Some(iface) else { return None }
       if iface.type_params.length() > 0 || iface.index_signatures.length() > 0 {
