@@ -2077,6 +2077,14 @@ fn Resolver::ingest_module(
       let n = gm["<written-any-decl:".length():gm.length() - 1].to_owned()
       r.globals["@written-any:" + n] = Any
     }
+    if gm.has_prefix("<catch-unknown:") && gm.has_suffix(">") {
+      let n = gm["<catch-unknown:".length():gm.length() - 1].to_owned()
+      r.globals["@catch-unknown:" + n] = Any
+    }
+    if gm.has_prefix("<catch-any:") && gm.has_suffix(">") {
+      let n = gm["<catch-any:".length():gm.length() - 1].to_owned()
+      r.globals["@catch-any:" + n] = Any
+    }
     if gm.has_prefix("<local-type-name>") {
       // Unprefixed: the question is whether the spelling names a type
       // somewhere in the file, which no namespace prefix narrows.
@@ -4117,6 +4125,13 @@ fn is_readonly_field(
     other => candidates.push(other)
   }
   for ty in candidates {
+    // ES2026 `interface RawJSON { readonly rawJSON: string }`, while the
+    // file does not declare / augment the name itself.
+    if ty is Named("RawJSON") &&
+      field == "rawJSON" &&
+      resolver.interfaces.get("RawJSON") is None {
+      return true
+    }
     match ty {
       Named(n) | Applied(n, _) =>
         match resolver.interfaces.get(n) {
@@ -5497,6 +5512,8 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     // `JSON.stringify(x, null, 2)` is the commonest pretty-printing call
     // there is and was "expected 1 argument(s), got 3".
     ("JSON", "parse") => Some(@ast.TsType::Func([s, optional_any_param()], any))
+    // ES2026 `rawJSON(text: string): RawJSON`.
+    ("JSON", "rawJSON") => Some(@ast.TsType::Func([s], Named("RawJSON")))
     ("JSON", "stringify") =>
       Some(
         @ast.TsType::Func([any, optional_any_param(), optional_any_param()], s),
@@ -20733,6 +20750,10 @@ fn collect_narrowing(
           let lhs_key = narrowing_key_for_expr(left)
           let class_name_opt = match right {
             Var(c) => Some(c)
+            // `x instanceof globalThis.Date` names the lib class through the
+            // global object, how effect spells it beside a module `Date`.
+            PropAccess(Var("globalThis"), c) if env.lookup("globalThis") is None =>
+              Some(c)
             _ => None
           }
           match (lhs_key, class_name_opt) {
@@ -22342,6 +22363,22 @@ fn record_aliased_condition(
 }
 
 ///|
+fn alias_cond_mentions(enc : @ast.TsType, name : String) -> Bool {
+  guard enc is Tuple([Tuple(th), Tuple(el)]) else { return false }
+  let prefix = name + "."
+  for t in [..th, ..el] {
+    match t {
+      Tuple([Literal(key), _, _]) =>
+        if key == name || key.has_prefix(prefix) {
+          return true
+        }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
 /// The stored narrowing of an aliased condition, for the side that holds.
 fn aliased_condition_binds(
   env : ExprEnv,
@@ -23098,6 +23135,23 @@ fn narrow_after_assignment(
   name : String,
   value : @ast.TsExpr,
 ) -> Unit {
+  // An assignment cancels every aliased condition that narrows this name:
+  // tsc refuses to see through an alias to a reference that is assigned.
+  let stale : Array[String] = []
+  for k, v in env.vars {
+    if k.has_prefix("<alias-cond>") && alias_cond_mentions(v, name) {
+      stale.push(k)
+    }
+  }
+  for k in stale {
+    env.narrow(k, @ast.TsType::Tuple([]))
+  }
+  // A binding DECLARED `unknown` is not narrowed by assignment in tsc
+  // (`e = 1; e.toFixed()` is TS18046), and neither is a catch binding.
+  if env.lookup_declared(name) is Some(Unknown) {
+    env.narrow(name, @ast.TsType::Unknown)
+    return
+  }
   // `new C<T>()` arrives wrapped in `TypeArgs`, which says nothing about
   // the value — peel it, or the shape test below never sees the `new`.
   let shape = match value {
@@ -23383,6 +23437,18 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, value, ctx)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
+      // TS2540, at the statement spelling too: `o.x = v` at the top of a
+      // list is this node, the same line inside a block is
+      // `Expr(PropAssignExpr(…))`, and only the second checked readonly.
+      if !prop.has_prefix("__private_brand__") &&
+        !readonly_write_in_own_constructor(ctx, recv, recv_ty, prop) &&
+        is_readonly_field(ctx.resolver, recv_ty, prop) {
+        record(
+          ctx,
+          "assign `.\{prop}`",
+          "cannot assign to `\{prop}` because it is read-only",
+        )
+      }
       match ctx.resolver.lookup_field(recv_ty, prop) {
         Some(target_ty) => {
           // When the field carries no annotation (`x = 1`) its declared type is
@@ -24152,8 +24218,22 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           // `Any` matches the prior semantics — the caller still has to
           // narrow before use.
           match catch_binding {
-            Some(@ast.TsBinding::Ident(name)) =>
-              env.bind(name, @ast.TsType::Any)
+            Some(@ast.TsBinding::Ident(name)) => {
+              // `unknown` when the parser says so for every catch of this
+              // name (`useUnknownInCatchVariables`, or `: unknown` written),
+              // so the flow narrowing — `typeof e`, `instanceof`, an aliased
+              // condition — decides each use.
+              let ty = if ctx.resolver.globals.contains(
+                  "@catch-unknown:" + name,
+                ) &&
+                !ctx.resolver.globals.contains("@catch-any:" + name) {
+                @ast.TsType::Unknown
+              } else {
+                @ast.TsType::Any
+              }
+              env.bind(name, ty)
+              env.declare_type(name, ty)
+            }
             _ => ()
           }
           check_block(env, cb, ctx)
@@ -25524,6 +25604,11 @@ fn check_call_args_in_expr(
                 // method, flag it — but be conservative and skip Any/primitives
                 // (which have many built-in methods we don't model).
                 match ctx.resolver.unwrap(pruned) {
+                  // TS18046: nothing can be called on an `unknown` before it
+                  // is narrowed — the property-read spelling has been
+                  // reported for a long time and the call spelling was not.
+                  Unknown =>
+                    record(ctx, "call `\{meth}`", "object is of type `unknown`")
                   // Table-modeled lib surfaces (`Error` / `Date`) decide
                   // even though the Named ref is unresolved
                   // (narrowFromAnyWithInstanceof's `d.getHuors()`).

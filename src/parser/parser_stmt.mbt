@@ -1055,12 +1055,14 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
   let mut catch_name = ""
   let mut had_annotation = false
   if self.match_(Catch) {
+    let mut catch_annot_unknown = false
     if self.match_(LParen) {
       let binding = self.parse_binding_pattern()
       had_annotation = self.check(Colon)
       if self.check(Colon) {
         let _ = self.advance()
         let catch_type = self.parse_type()
+        catch_annot_unknown = catch_type is Unknown
         // TS1196: "Catch clause variable type annotation must be 'any' or
         // 'unknown' if specified." A `throw` can carry any value, so
         // narrowing the caught binding would be a claim TypeScript will not
@@ -1080,6 +1082,23 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
       catch_name = match binding {
         @ast.TsBinding::Ident(n) => n
         _ => ""
+      }
+    }
+    // Which catch bindings the CHECKER should type `unknown`: an
+    // unannotated one under `useUnknownInCatchVariables`, or `: unknown`
+    // written out. Keyed by name, so a `catch (e: any)` anywhere in the file
+    // keeps every `e` at `any` (`<catch-any:…>`) — the AST's catch binding
+    // carries no annotation, and a coarse answer only loses findings.
+    if catch_name != "" {
+      let is_unknown = if had_annotation {
+        catch_annot_unknown
+      } else {
+        self.unknown_catch_variables
+      }
+      if is_unknown {
+        self.grammar_misuses.push("<catch-unknown:\{catch_name}>")
+      } else {
+        self.grammar_misuses.push("<catch-any:\{catch_name}>")
       }
     }
     let catch_body_start = self.pos
