@@ -971,13 +971,16 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   // `id`.
   if !self.at_module_scope() {
     ()
-  } else if self.raw_generic_signatures.contains(name) {
+  } else if self.raw_sig_seen_names.contains(name) {
     self.raw_generic_signatures[name] = Any
   } else if type_param_bounds.length() > 0 {
     match raw_function_signature(self.tokens, raw_params_start) {
       Some(sig) => self.raw_generic_signatures[name] = sig
       None => ()
     }
+  }
+  if self.at_module_scope() {
+    self.raw_sig_seen_names[name] = ()
   }
   // return valuetype ()
   let had_return_annotation = self.check(Colon)
@@ -3397,6 +3400,8 @@ pub fn Parser::parse_declare_function(
   // module-scope declaration is recorded (see `Parser::at_module_scope`).
   if !self.at_module_scope() {
     ()
+  } else if self.raw_sig_seen_names.contains(name) {
+    self.raw_generic_signatures[name] = Any
   } else if type_param_bounds.length() > 0 {
     if self.raw_generic_signatures.contains(name) {
       self.raw_generic_signatures[name] = Any
@@ -3408,6 +3413,9 @@ pub fn Parser::parse_declare_function(
     }
   } else if self.raw_generic_signatures.contains(name) {
     self.raw_generic_signatures[name] = Any
+  }
+  if self.at_module_scope() {
+    self.raw_sig_seen_names[name] = ()
   }
   self.consume_semicolon()
   { name, module_: "env", type_params, params, param_is_rest, return_type, }

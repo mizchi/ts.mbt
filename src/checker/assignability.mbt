@@ -335,7 +335,33 @@ fn is_js_finite_number_string(s : String) -> Bool {
         first_bits += 1
         v = v / 2
       }
-      return (n - lead - 1) * per_digit + first_bits <= 1024
+      let bits = (n - lead - 1) * per_digit + first_bits
+      if bits != 1024 {
+        return bits < 1024
+      }
+      // A 1024-bit integer is finite unless it rounds UP to 2^1024: the
+      // largest double is 2^1024 - 2^971, and round-to-nearest-even sends
+      // everything from the midpoint 2^1024 - 2^970 upward to Infinity —
+      // exactly the values whose top 54 bits are all ones (`"0x"` and 256
+      // `f`s is one; `"0x"`, `f` x 13 then `7` and zeros is not).
+      let mut ones = 0
+      for i in lead..<n {
+        let d = radix_digit_value(t[i].to_int().unsafe_to_char())
+        let width = if i == lead { first_bits } else { per_digit }
+        let mut b = width - 1
+        while b >= 0 && ones < 54 {
+          if (d >> b) % 2 == 1 {
+            ones += 1
+          } else {
+            return true
+          }
+          b -= 1
+        }
+        if ones >= 54 {
+          return false
+        }
+      }
+      return ones < 54
     }
   }
   let mut i = 0

@@ -571,3 +571,20 @@ test "numeric and bigint template holes follow tsc's isValidNumberString / isVal
     assert_false(is_bigint_string(s), msg=s)
   }
 }
+
+///|
+test "a 1024-bit radix integer is finite unless it rounds up to 2^1024" {
+  let all_f = "0x" + "f".repeat(256)
+  assert_false(is_js_finite_number_string(all_f))
+  // The largest double, 2^1024 - 2^971: 53 one-bits then zeros.
+  let max_double = "0x" + "f".repeat(13) + "8" + "0".repeat(242)
+  assert_true(is_js_finite_number_string(max_double))
+  // Just below the midpoint 2^1024 - 2^970: still finite.
+  let below_mid = "0x" + "f".repeat(13) + "b" + "f".repeat(242)
+  assert_true(is_js_finite_number_string(below_mid))
+  // The midpoint itself rounds to even, which is 2^1024.
+  let mid = "0x" + "f".repeat(13) + "c" + "0".repeat(242)
+  assert_false(is_js_finite_number_string(mid))
+  assert_true(is_js_finite_number_string("0x1" + "0".repeat(255)))
+  assert_false(is_js_finite_number_string("0x1" + "0".repeat(256)))
+}

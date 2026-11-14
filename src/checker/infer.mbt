@@ -327,13 +327,33 @@ pub fn substitute_inferred_type(
       }
       Intersection(out)
     }
-    Conditional(s, t, true_type, false_type) =>
+    // A nested conditional's own `infer X` declares a NEW `X`, scoped to
+    // its extends clause and true branch, so an outer binding of the same
+    // name must not reach either: `S extends `${infer X}` ? ("b" extends
+    // `${infer X}` ? 1 : 0) : never` is `1`, and substituting the outer
+    // `X` into the inner clause made it `"b" extends "a"`. The check type
+    // and the false branch still see the outer binding.
+    Conditional(s, t, true_type, false_type) => {
+      let inner : Array[String] = []
+      collect_infer_binders(t, inner)
+      let scoped = if inner.iter().any(fn(n) { bindings.contains(n) }) {
+        let m : Map[String, @ast.TsType] = Map([])
+        for k, v in bindings {
+          if !inner.contains(k) {
+            m[k] = v
+          }
+        }
+        m
+      } else {
+        bindings
+      }
       Conditional(
         substitute_inferred_type(s, bindings),
-        substitute_inferred_type(t, bindings),
-        substitute_inferred_type(true_type, bindings),
+        substitute_inferred_type(t, scoped),
+        substitute_inferred_type(true_type, scoped),
         substitute_inferred_type(false_type, bindings),
       )
+    }
     Applied(name, args) => {
       let out : Array[@ast.TsType] = []
       for arg in args {

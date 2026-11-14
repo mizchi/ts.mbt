@@ -288,6 +288,12 @@ pub struct Parser {
   // `declare function` signatures with bounded type parameters, re-parsed
   // without bound inlining (see `TsModule.raw_generic_signatures`).
   raw_generic_signatures : Map[String, @ast.TsType]
+  // Every module-scope function name declared so far, bounded or not. An
+  // overload set keeps no raw signature whichever member carries a bound,
+  // and `raw_generic_signatures` alone records only the bounded ones, so an
+  // unbounded first overload left no trace and a later bounded one kept a
+  // copy the checker read as the whole set's signature.
+  raw_sig_seen_names : Map[String, Unit]
   // `NAME\u{0}LITERAL` for an unannotated READONLY instance field whose
   // initializer is a literal. Drained per class into a
   // `<readonly-literal:…>` sentinel: such a field has the literal type,
@@ -502,6 +508,7 @@ pub fn Parser::new_with_strict_and_jsx(
     quoted_member_names: [],
     optional_member_names: [],
     raw_generic_signatures: {},
+    raw_sig_seen_names: {},
     readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],
@@ -833,6 +840,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     quoted_member_names: [],
     optional_member_names: [],
     raw_generic_signatures: {},
+    raw_sig_seen_names: {},
     readonly_literal_members: [],
     unannotated_return_members: [],
     protocol_return_names: [],
