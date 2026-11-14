@@ -7670,6 +7670,18 @@ fn new_callee_class_name(callee : @ast.TsExpr) -> String? {
 }
 
 ///|
+/// Every construct signature the type carries is abstract.
+fn type_is_abstract_constructor(t : @ast.TsType) -> Bool {
+  match t {
+    Constructor(_, _, true) => true
+    Intersection(ps) =>
+      ps.iter().any(fn(p) { p is Constructor(_, _, true) }) &&
+      !ps.iter().any(fn(p) { p is Constructor(_, _, false) })
+    _ => false
+  }
+}
+
+///|
 /// TS2511 ("Cannot create an instance of an abstract class"): when
 /// `new X` names a class declared `abstract`, the construction is
 /// illegal. Only fires on a direct class reference -- constructing a
@@ -7698,8 +7710,30 @@ fn check_abstract_instantiation(
   // lines below the `New` call site already consults for the same
   // question, so the fact was available and used in one of the two
   // places.
-  if env.lookup(class_name) is Some(_) {
-    return
+  // A binding whose TYPE is an abstract construct signature
+  // (`declare const A: abstract new () => object`) is not constructible
+  // either: TS2511 judged by the value's type rather than a class name.
+  let bound = match env.lookup(class_name) {
+    Some(t) => Some(t)
+    None =>
+      if ctx.resolver.classes.contains(class_name) {
+        None
+      } else {
+        ctx.resolver.globals.get(class_name)
+      }
+  }
+  match bound {
+    Some(t) => {
+      if type_is_abstract_constructor(ctx.resolver.unwrap(t)) {
+        record(
+          ctx,
+          "new `\{class_name}`",
+          "cannot create an instance of an abstract class",
+        )
+      }
+      return
+    }
+    None => ()
   }
   let decl = match ctx.resolver.classes.get(class_name) {
     Some(d) => d
