@@ -2080,6 +2080,9 @@ fn Resolver::ingest_module(
     if gm == "<lib-lacks-es2023-intl>" {
       r.globals["@lib-lacks-es2023-intl"] = Any
     }
+    if gm == "<const-type-param>" {
+      r.globals["@const-type-param"] = Any
+    }
     if gm.has_prefix("<catch-unknown:") && gm.has_suffix(">") {
       let n = gm["<catch-unknown:".length():gm.length() - 1].to_owned()
       r.globals["@catch-unknown:" + n] = Any
@@ -10517,6 +10520,16 @@ fn infer_expr_inner(
                 }
               None => ()
             }
+            let bindings = widen_fresh_literal_bindings(
+              env,
+              resolver,
+              bindings,
+              type_params,
+              resolver.func_const_type_params.get(name),
+              params,
+              args,
+              ret,
+            )
             return substitute_params(ret, bindings)
           }
           _ => ()
@@ -10836,13 +10849,22 @@ fn infer_expr_inner(
           let instantiated = if method_tps.length() > 0 {
             substitute_params(
               ret,
-              solve_generic_bindings(
+              widen_fresh_literal_bindings(
                 env,
                 resolver,
+                solve_generic_bindings(
+                  env,
+                  resolver,
+                  method_tps,
+                  params,
+                  args,
+                  None,
+                ),
                 method_tps,
+                None,
                 params,
                 args,
-                None,
+                ret,
               ),
             )
           } else {
@@ -11671,6 +11693,122 @@ fn solve_generic_bindings(
 }
 
 ///|
+/// tsc's `isTypeParameterAtTopLevel`: the parameter IS the type, or is a
+/// member of a top-level union / intersection, or a branch of a top-level
+/// conditional. A predicate return asks about its asserted type.
+fn type_param_at_top_level(t : @ast.TsType, tp : String) -> Bool {
+  match t {
+    Named(n) => n == tp
+    Union(ms) | Intersection(ms) =>
+      ms.iter().any(fn(m) { type_param_at_top_level(m, tp) })
+    Conditional(_, _, a, b) =>
+      type_param_at_top_level(a, tp) || type_param_at_top_level(b, tp)
+    TypePredicate(_, p) => type_param_at_top_level(p, tp)
+    _ => false
+  }
+}
+
+///|
+/// The literal-widening half of tsc's `getCovariantInference`, which
+/// `solve_generic_bindings` never applied: a FRESH literal candidate for a
+/// type parameter widens to its primitive unless the parameter is `const`,
+/// has a primitive constraint, or occurs at the TOP LEVEL of the return
+/// type. So `declare function useState<S>(init: S): [S, (s: S) => void]`
+/// gives `S = string` for `useState("")` — and `setV("a")` is legal —
+/// while `id<T>(x: T): T` keeps `"q"`. Without this the binding stayed
+/// `""` and React's commonest hook reported `expected "" but got string`
+/// at every setter call, on code tsc accepts.
+///
+/// Deliberately narrower than tsc, and only ever WIDER than before, so it
+/// can lose a finding but never invent one:
+/// - the parameter must occur only at a top-level parameter position
+///   (`x: T`, or `x?: T`, stored as `T | undefined`), never nested — a
+///   nested candidate need not be fresh (`declare const a: "z"[];
+///   nest(a)` keeps `"z"` in tsc), and that is not decidable from here;
+/// - every argument there must be a literal written at the call site
+///   (`is_fresh_literal_expr`), since a name's literal type is fresh in tsc
+///   only when ITS initializer was, and the env does not carry that;
+/// - a constrained parameter never reaches here: the parser inlines a
+///   bound into the signature, so the name no longer occurs at all.
+/// `const_flags` is `None` where the callee's `const` modifiers were not
+/// recorded (a method, a call signature, a generic function type), and a
+/// file that declares any `const` type parameter then abstains wholesale.
+fn widen_fresh_literal_bindings(
+  env : ExprEnv,
+  resolver : Resolver,
+  bindings : Map[String, @ast.TsType],
+  type_params : Array[String],
+  const_flags : Array[Bool]?,
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  ret : @ast.TsType,
+) -> Map[String, @ast.TsType] {
+  if const_flags is None && resolver.globals.contains("@const-type-param") {
+    return bindings
+  }
+  for k, tp in type_params {
+    match const_flags {
+      Some(f) => if k < f.length() && f[k] { continue }
+      None => ()
+    }
+    if type_param_at_top_level(ret, tp) {
+      continue
+    }
+    let mut ok = true
+    let mut fresh_args = 0
+    for i, p in params {
+      if !type_param_occurs(tp, p) {
+        continue
+      }
+      let top = match p {
+        Named(n) => n == tp
+        Union(ms) =>
+          ms.iter().any(fn(m) { m is Named(n) && n == tp }) &&
+          ms.iter().all(fn(m) {
+            (m is Named(n) && n == tp) || m is Undefined || m is Null
+          })
+        _ => false
+      }
+      if !top {
+        ok = false
+        break
+      }
+      if i < args.length() {
+        if !is_fresh_literal_in_env(env, args[i]) {
+          ok = false
+          break
+        }
+        fresh_args = fresh_args + 1
+      }
+    }
+    if !ok || fresh_args == 0 {
+      continue
+    }
+    match bindings.get(tp) {
+      Some(b) => {
+        let all_literal = match b {
+          Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+            true
+          Union(ms) =>
+            ms.iter().all(fn(m) {
+              m is Literal(_) ||
+              m is NumberLiteral(_) ||
+              m is BigIntLiteral(_) ||
+              m is BooleanLiteral(_)
+            })
+          _ => false
+        }
+        if all_literal {
+          bindings[tp] = widen_literal_deep(b)
+        }
+      }
+      None => ()
+    }
+  }
+  bindings
+}
+
+///|
 /// Element type produced by iterating a hand-rolled iterator class: one that
 /// declares `[Symbol.iterator]()` and whose `next()` yields `{ value: V }`.
 /// `V` comes from the annotated return type when present, otherwise from a
@@ -11848,7 +11986,16 @@ fn infer_call(
       reduce_conditional(
         substitute_params(
           ret,
-          solve_generic_bindings(env, resolver, names, params, args, None),
+          widen_fresh_literal_bindings(
+            env,
+            resolver,
+            solve_generic_bindings(env, resolver, names, params, args, None),
+            names,
+            None,
+            params,
+            args,
+            ret,
+          ),
         ),
       )
     // Union of callable types (overload set): resolve to the overload whose
@@ -11931,13 +12078,15 @@ fn infer_call(
       }
       for g in generics {
         let (names, gps, gret) = g
-        let bindings = solve_generic_bindings(
+        let bindings = widen_fresh_literal_bindings(
           env,
           resolver,
+          solve_generic_bindings(env, resolver, names, gps, args, None),
           names,
+          None,
           gps,
           args,
-          None,
+          gret,
         )
         let r = reduce_conditional(substitute_params(gret, bindings))
         let sps = substitute_params_array(gps, bindings)
@@ -12731,6 +12880,36 @@ fn check_expr_against(
       return
     }
     _ => ()
+  }
+  // TS2322: a bare UNCONSTRAINED in-scope `T` into `NonNullable<T>` or its
+  // lib spelling `T & {}`. `T` may be instantiated with `null` /
+  // `undefined`, which the target excludes — tsc's elaboration is "Type 'T'
+  // is not assignable to type '{}'". Read off the WRITTEN target, because
+  // the utility table's conditional encoding is undecidable for a bare `T`
+  // and every later arm abstains on it. A constrained `T` never reaches
+  // here as `Named(T)` (the parser inlines its bound), and the opposite
+  // direction — `NonNullable<T>` into `T` — is legal and is not this shape.
+  if ctx.strict_null_checks {
+    let tp_of_nonnullable = match expected {
+      Applied("NonNullable", [Named(n)]) => Some(n)
+      Intersection([Named(n), Object([])]) | Intersection([Object([]), Named(n)]) =>
+        Some(n)
+      _ => None
+    }
+    match tp_of_nonnullable {
+      Some(tp) =>
+        if ctx.in_scope_type_params.contains(tp) &&
+          !ctx.type_param_bounds.iter().any(fn(b) { b.0 == tp }) &&
+          infer_expr(env, ctx.resolver, expr) == Named(tp) {
+          record(
+            ctx,
+            sub_path,
+            "type `\{tp}` is not assignable to type `\{type_display(expected)}`: `\{tp}` may be `null` or `undefined`",
+          )
+          return
+        }
+      None => ()
+    }
   }
   // A bare `A` that is only ever a TYPE PARAMETER in this file — declared
   // by a generic arrow (`const randomWith = <A>(f: (r: Random) => A) => …`,
@@ -15785,6 +15964,27 @@ fn is_fresh_literal_expr(e : @ast.TsExpr) -> Bool {
   match e {
     TemplateLiteral(_, _) => true
     _ => precise_literal_type(e) is Some(_)
+  }
+}
+
+///|
+/// `is_fresh_literal_expr`, plus a NAME whose binding is an unannotated
+/// `const` holding a fresh literal (`<fresh>NAME`, written by
+/// `check_ident_binding_decl`). The marker carries the literal it was
+/// written for and must still equal the name's current binding, so a
+/// shadowing parameter or pattern binding — which writes no marker — reads
+/// as not fresh unless it happens to hold the identical literal.
+fn is_fresh_literal_in_env(env : ExprEnv, e : @ast.TsExpr) -> Bool {
+  if is_fresh_literal_expr(e) {
+    return true
+  }
+  match e {
+    Var(n) =>
+      match (env.lookup("<fresh>" + n), env.lookup(n)) {
+        (Some(a), Some(b)) => a == b
+        _ => false
+      }
+    _ => false
   }
 }
 
@@ -23089,11 +23289,20 @@ fn check_ident_binding_decl(
     // always, a scalar literal only for a MUTABLE binding.
     binding_init_type(
       mutable_,
-      is_fresh_literal_expr(init),
+      is_fresh_literal_in_env(env, init),
       infer_expr(env, ctx.resolver, init),
     )
   }
   env.bind(name, bound_type)
+  // A `const` keeps its initializer's FRESH literal type — tsc widens
+  // `const a = "x"; let b = a` to `string` exactly as it widens
+  // `let b = "x"` — so record the freshness beside the binding, as the
+  // literal it is about. `is_fresh_literal_in_env` compares the two, which
+  // is what keeps a SHADOWING binding this site never sees (a parameter,
+  // a destructured name) from inheriting an outer `const`'s freshness.
+  if !mutable_ && !is_checkable(declared) && is_fresh_literal_in_env(env, init) {
+    env.bind("<fresh>" + name, bound_type)
+  }
   // Make sure the *declared* slot reflects the source annotation
   // (which `bind` set on first write -- subsequent narrowing
   // mutates `vars` only). When the declared annotation was
@@ -23706,6 +23915,18 @@ fn narrow_after_assignment(
   if env.lookup_declared(name) is Some(Unknown) {
     env.narrow(name, @ast.TsType::Unknown)
     return
+  }
+  // Nor is one DECLARED as a bare type parameter: tsc reduces an assigned
+  // type against the declared type only when the declared type is a
+  // UNION, and otherwise the flow type is the declaration itself. So after
+  // `x = y` with `x: T` and `y: NonNullable<T>`, `x` is still `T`, and a
+  // following `y = x` is the TS2322 `conditionalTypes1` writes down.
+  match env.lookup_declared(name) {
+    Some(Named(tp) as d) if ctx.in_scope_type_params.contains(tp) => {
+      env.narrow(name, d)
+      return
+    }
+    _ => ()
   }
   // `new C<T>()` arrives wrapped in `TypeArgs`, which says nothing about
   // the value — peel it, or the shape test below never sees the `new`.

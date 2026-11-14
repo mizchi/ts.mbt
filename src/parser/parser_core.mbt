@@ -567,6 +567,22 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
   }
+  // Marker, not an error: the file declares a `const` type parameter
+  // somewhere (`<const T>` / `<A, const B>`). The checker widens a fresh
+  // literal argument bound to a type parameter the way tsc does, and a
+  // `const` parameter is the one place it must not — but the flag is
+  // recorded per declaration only for function DECLARATIONS, so a method,
+  // a call signature or a generic function TYPE abstains file-wide on this
+  // instead. A token scan is complete by construction: a `const` after `<`
+  // or `,` and before a name is a type-parameter modifier and nothing else.
+  for i in 1..<(tokens.length() - 1) {
+    if tokens[i].kind is Const &&
+      (tokens[i - 1].kind is Lt || tokens[i - 1].kind is Comma) &&
+      tokens[i + 1].kind is Ident(_) {
+      grammar_misuses.push("<const-type-param>")
+      break
+    }
+  }
   if lexer.unterminated_block_comment {
     grammar_misuses.push("`*/` expected")
   }
