@@ -278,9 +278,11 @@ checker-miss-buckets *ARGS:
 # `false`, and a member of a name narrowed to `never` is TS2339) and
 # `objectLiteralNormalization` (an array of flat object literals is the
 # normalized union, each member given the others' keys as `?: undefined`).
+# 10 -> 9 with `mixinAccessors3`: TS2611 through `extends mixin(Base)`, the
+# base being the intersection of the mixin's class expression and `Base`.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 10
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 9
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

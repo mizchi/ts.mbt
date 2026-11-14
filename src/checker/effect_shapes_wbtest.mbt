@@ -553,3 +553,28 @@ test "batch FV: assignment conditions, regex exec arrays, boolean truthiness" {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
+
+///|
+test "batch FV: TS2611 through a mixin heritage clause" {
+  let src =
+    #|function mixin<T extends { new (...args: any[]): {} }>(superclass: T) {
+    #|  return class extends superclass { get name() { return ""; } };
+    #|}
+    #|class B0 { }
+    #|class B1 { set name(v: string) {} }
+    #|class B2 { get name() { return "" } }
+    #|class B3 { name = "" }
+    #|class M0 extends mixin(B0) { get name() { return ""; } }
+    #|class M1 extends mixin(B1) { get name() { return ""; } }
+    #|class M2 extends mixin(B2) { get name() { return ""; } }
+    #|class M3 extends mixin(B3) { get name() { return ""; } }
+  let issues = check_property_overridden_as_accessor(
+    parse_module_or_empty(src),
+    Resolver::from_module(parse_module_or_empty(src)),
+  )
+  let has = fn(c : String) { issues.iter().any(fn(i) { i.path == "class \{c}.name" }) }
+  assert_false(has("M0"))
+  assert_true(has("M1"))
+  assert_false(has("M2"))
+  assert_true(has("M3"))
+}

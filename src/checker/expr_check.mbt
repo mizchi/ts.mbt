@@ -38759,7 +38759,11 @@ fn check_property_overridden_as_accessor(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
-    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+    if cls.base_names == ["<expr-base>"] {
+      check_mixin_property_overridden_as_accessor(module_, resolver, cls, issues)
+      continue
+    }
+    if cls.base_names.length() != 1 {
       continue
     }
     let base = cls.base_names[0]
@@ -38782,6 +38786,124 @@ fn check_property_overridden_as_accessor(
     }
   }
   issues
+}
+
+///|
+/// TS2611 through a MIXIN heritage clause, `class C extends mixin(Base)`,
+/// where `mixin` is a function in this module whose whole body is
+/// `return class extends <param> { … }` and the argument at that parameter
+/// names a class. The base is then the intersection of the class
+/// expression and `Base`, and tsc's rule for a member of an intersection
+/// was probed cell by cell: a member ONE constituent declares keeps that
+/// declaration's kind, while one declared by several is an accessor only
+/// when every declaration is an accessor of the same kind — a getter in
+/// the mixin over a setter in the base, or over a data field, is a
+/// PROPERTY, and overriding it with an accessor is TS2611. Any other shape
+/// of heritage expression is not judged.
+fn check_mixin_property_overridden_as_accessor(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+  cls : @ast.TsClassDecl,
+  issues : Array[ExprIssue],
+) -> Unit {
+  guard cls.base_expr is Some(Call(fname, args)) else { return }
+  guard module_.funcs.search_by(fn(f) { f.name == fname }) is Some(fi) else {
+    return
+  }
+  let f = module_.funcs[fi]
+  guard f.body.stmts is [Return(Some(NativeClassExpr(anon, _)))] else {
+    return
+  }
+  guard anon.base_names is [param] else { return }
+  guard f.params.search_by(fn(p) { p.name == param }) is Some(pi) else {
+    return
+  }
+  guard args.get(pi) is Some(Var(base)) && resolver.classes.get(base) is Some(_) else {
+    return
+  }
+  // A member's kind on one constituent: `Some([])` a data property,
+  // `Some(kinds)` an accessor with those halves, `None` not declared.
+  fn own_kind(c : @ast.TsClassDecl, name : String) -> Array[String]? {
+    let kinds : Array[String] = []
+    for m in c.methods {
+      if m.name == name && !m.is_static && m.accessor != "" &&
+        !kinds.contains(m.accessor) {
+        kinds.push(m.accessor)
+      }
+    }
+    if kinds.length() > 0 {
+      kinds.sort()
+      return Some(kinds)
+    }
+    for p in c.properties {
+      if p.name == name && !p.is_static {
+        return if p.is_accessor || c.abstract_members.contains(name) {
+          Some(["auto"])
+        } else {
+          Some([])
+        }
+      }
+    }
+    None
+  }
+
+  fn chain_kind(
+    resolver : Resolver,
+    start : String,
+    name : String,
+  ) -> Array[String]?? {
+    let seen : Map[String, Unit] = Map([])
+    let mut cur = start
+    while !seen.contains(cur) {
+      seen[cur] = ()
+      guard resolver.classes.get(cur) is Some(c) else { return None }
+      match own_kind(c, name) {
+        Some(k) => return Some(Some(k))
+        None => ()
+      }
+      if c.base_names.length() == 0 {
+        return Some(None)
+      }
+      if c.base_names.length() != 1 || c.base_names[0] == "<expr-base>" {
+        return None
+      }
+      cur = c.base_names[0]
+    }
+    None
+  }
+
+  let reported : Map[String, Unit] = Map([])
+  for m in cls.methods {
+    if m.accessor == "" || m.is_static || reported.contains(m.name) {
+      continue
+    }
+    // An unresolvable base chain abstains.
+    guard chain_kind(resolver, base, m.name) is Some(base_kind) else {
+      continue
+    }
+    let declared : Array[Array[String]] = []
+    match own_kind(anon, m.name) {
+      Some(k) => declared.push(k)
+      None => ()
+    }
+    match base_kind {
+      Some(k) => declared.push(k)
+      None => ()
+    }
+    let is_property = match declared {
+      [] => false
+      [k] => k.length() == 0
+      [first, ..] =>
+        !declared.iter().all(fn(k) { k.length() > 0 && k == first })
+    }
+    if is_property {
+      reported[m.name] = ()
+      issues.push({
+        path: "class \{cls.name}.\{m.name}",
+        message: "`\{m.name}` is defined as a property in the mixin base `\{fname}(\{base})` but is overridden here as an accessor",
+      })
+    }
+  }
 }
 
 ///|
