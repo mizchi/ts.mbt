@@ -895,11 +895,14 @@ test "a const-asserted destructuring default keeps an any element" {
     #|function badEmpty() { const [y = "d" as const] = []; const n: number = y; return n; }
     #|declare const t: [x?: any];
     #|function okOptionalAny() { const [x = "d" as const] = t; const n: number = x; return n; }
+    #|function badEmptyTupleSpread() { const xs = [1, ...([] as const)]; const s: string = xs[0]; return s; }
   let issues = eff_issues_checking(src)
   for ok in ["okArr", "okObj", "okEmpty", "okOptionalAny"] {
     assert_false(eff_has(issues, ok), msg=ok)
   }
   assert_true(eff_has(issues, "badEmpty"), msg="badEmpty")
+  // `...([] as const)` adds no element, so `xs` is `number[]` (TS2322).
+  assert_true(eff_has(issues, "badEmptyTupleSpread"), msg="badEmptyTupleSpread")
 }
 
 ///|

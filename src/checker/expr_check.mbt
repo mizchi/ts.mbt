@@ -10713,7 +10713,9 @@ fn infer_expr_inner(
       for item in items {
         // `...[]` contributes no element. Its `[]` infers with element type
         // `any`, which the `any` arm below would make the whole literal's,
-        // so `[1, ...[]]` read as `any[]` where tsc says `number[]`.
+        // so `[1, ...[]]` read as `any[]` where tsc says `number[]`. An
+        // operand whose type is the empty tuple (`...([] as const)`) is the
+        // same case, decided below once its type is known.
         if item is Spread(ArrayLit([])) {
           continue
         }
@@ -10722,6 +10724,7 @@ fn infer_expr_inner(
           // so `[...arr]` where `arr: string[]` infers `string[]`, not `any[]`.
           Spread(inner) =>
             match resolver.unwrap(infer_expr(env, resolver, inner)) {
+              Tuple([]) => continue
               Array(inner_elem) => inner_elem
               Applied("Array", [inner_elem])
               | Applied("ReadonlyArray", [inner_elem]) => inner_elem
@@ -20806,15 +20809,19 @@ fn infer_block_return(
   let mut acc : @ast.TsType = @ast.TsType::Undefined
   let mut first = true
   // Read as top-level statements too: a declarator group
-  // (`const a = 1, b = 2`), and the body of a `try` with no `catch`, which
-  // runs in the same straight line. The second is the shape a block with a
-  // `using` declaration is lowered to (`lower_using_block`), so
-  // `() => { using r = res(); return 5 }` read as returning `undefined`.
+  // (`const a = 1, b = 2`), and the `try` the parser lowers a block with a
+  // `using` declaration to, so `() => { using r = res(); return 5 }` no
+  // longer reads as returning `undefined`. That `try` holds every statement
+  // of its block and its `finally` only disposes
+  // (`@ast.is_using_dispose_finally`), so its body IS the block's top level.
+  // A hand-written `try` is not: two of them can declare the same name, and
+  // a `return` in a `finally` overrides the one in the body.
   let flat : Array[@ast.TsStmt] = []
   fn flatten(stmts : Array[@ast.TsStmt]) -> Unit {
     for st in stmts {
       match st {
-        Try(body, None, None, _) => flatten(body.stmts)
+        Try(body, None, None, Some(fin)) if @ast.is_using_dispose_finally(fin) =>
+          flatten(body.stmts)
         Block({ stmts: inner, stmt_positions, }) if stmt_positions ==
           [@ast.DECL_GROUP_POSITION] => flatten(inner)
         _ => flat.push(st)

@@ -8,6 +8,10 @@ import {
 // Values
 pub const DECL_GROUP_POSITION : Int32 = -1
 
+pub const USING_HOLDER_PREFIX : String = "__ts_using_"
+
+pub fn is_using_dispose_finally(TsBlock) -> Bool
+
 // Errors
 
 // Types and methods

@@ -4345,6 +4345,10 @@ product surfaces now.
     disposal. The first version moved it past any `finally`, and a
     hand-written `exit: { … try { for … } finally { break exit } }` then
     lost its target.
+  - `await using` read only `[Symbol.asyncDispose]`, so a synchronous
+    disposable was never disposed. It now falls back to
+    `[Symbol.dispose]`, calls exactly one of the two, and discards the
+    synchronous result.
 
   The first fix for the second `using` nested each later declaration's
   scope inside the one before it. A second review found that the nesting
@@ -4356,14 +4360,20 @@ product surfaces now.
   lowered as tsc's downlevel does it: ONE `try` around every statement
   after the directive prologue. Each binding stays a `const` in place, as
   `const a = (h0 = x)`, and the `finally` disposes the holders last first.
-  The checker reads that shape too. `infer_block_return` reads only a
-  block's top-level statements, so it now also reads the body of a `try`
-  with no `catch`; otherwise `() => { using r = res(); return 5 }` read as
-  returning `undefined`.
-  - `await using` read only `[Symbol.asyncDispose]`, so a synchronous
-    disposable was never disposed. It now falls back to
-    `[Symbol.dispose]`, calls exactly one of the two, and discards the
-    synchronous result.
+  The C-style `for (using a = …, b = …;;)` head had the same nesting, so
+  a closure in `a`'s initializer could not see `b`; it goes through the
+  same one-`try` lowering now. The checker reads that shape too.
+  `infer_block_return` reads only a block's top-level statements, so it
+  now also reads the body of the generated `try`, recognised by
+  `@ast.is_using_dispose_finally`; otherwise
+  `() => { using r = res(); return 5 }` read as returning `undefined`. A
+  hand-written `try` is not read through, because two of them can declare
+  one name and a `finally` can return.
+
+  One shape still emits invalid JavaScript, on purpose: a `var g` beside
+  a `function g` in the same lowered block, which ECMAScript rejects once
+  both are in one `try` block. tsc's own downlevel emits the same
+  SyntaxError, and tsc rejects the source with TS2300 first.
 
   The `any` fix widened a hole underneath it. A destructuring default
   replaced an `any` element with the default's type, so
@@ -4375,7 +4385,8 @@ product surfaces now.
   cells, each probed against tsc:
   - a `[]` default feeding a nested pattern is the empty tuple too;
   - an element that only CONTAINS `any` (`[x?: any]`) stays `any`;
-  - `...[]` adds no element to an array literal.
+  - `...[]` adds no element to an array literal, and neither does a
+    spread whose type is the empty tuple (`...([] as const)`).
 
   `const [x = 0]: any = []` still binds `number` where tsc binds `any`.
   That is the absent-versus-`: any` blocker again, and it predates this

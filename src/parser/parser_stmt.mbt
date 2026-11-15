@@ -1358,9 +1358,9 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   // `for (using x of ...)` — ES2023 disposable binding. It parses like
   // `for (const x of ...)`, and it is NOT only a type-level shape: each
   // iteration's value is disposed when that iteration ends, `continue`,
-  // `break` and `return` included, so the body is lowered through
-  // `lower_using_declaration` below. Tagging it `Let` and stopping there
-  // emitted `for (let x of …)` with no disposal at all.
+  // `break` and `return` included, so the body is wrapped in a `try` below.
+  // Tagging it `Let` and stopping there emitted `for (let x of …)` with no
+  // disposal at all.
   let mut using_kw = ""
   let head_pos = self.peek().pos
   let using_declaration = if self.is_using_declaration_start() {
@@ -1510,7 +1510,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     // A `using` head is read as `let`: a missing initializer is TS1155,
     // recorded above, where `const` would raise a parse error instead.
-    // `lower_using_declaration` emits the binding as `const`.
+    // `using_declaration_with_holders` emits the binding as `const`.
     let var_kind = match kind {
       _ if using_declaration => VarKind::Let
       @ast.TsForOfKind::Var => VarKind::Var
@@ -1522,20 +1522,32 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     let _ = self.expect(Semicolon)
     if using_declaration {
       // `for (using x = e; c; u) body` disposes `x` ONCE, when the loop is
-      // left, not per iteration: `{ const x = e; try { for (; c; u) body }
-      // finally { dispose(x) } }`. The binding is never reassigned, so
-      // moving it out of the head loses nothing a per-iteration copy had.
-      let loop_stmt = self.parse_for_rest(None)
-      let lowered = lower_using_declaration(
+      // left, not per iteration: `{ let h; try { const x = (h = e); for (;
+      // c; u) body } finally { dispose(h) } }`. The binding is never
+      // reassigned, so moving it out of the head loses nothing a
+      // per-iteration copy had. Every declarator of the head stays in ONE
+      // scope, through `lower_using_block`: the first lowering nested one
+      // `try` per declarator, so in `for (using a = make(() => b), b = …;;)`
+      // the closure read a `b` from outside and threw `ReferenceError`.
+      let holders : Array[(String, Bool)] = []
+      let decl = using_declaration_with_holders(
         self.merge_decl_stmts(stmts),
         using_kw == "await using",
-        { stmts: [loop_stmt], stmt_positions: [head_pos], },
-        head_pos,
+        holders,
       )
-      return Block({
-        stmts: lowered,
-        stmt_positions: lowered.map(fn(_) { head_pos }),
-      })
+      if holders.length() == 0 {
+        // A pattern (TS1492) or a missing initializer (TS1155): nothing
+        // to dispose, so the head stays a plain declaration.
+        return self.parse_for_rest(Some(decl))
+      }
+      let loop_stmt = self.parse_for_rest(None)
+      let (lowered, positions) = lower_using_block(
+        [decl, loop_stmt],
+        [head_pos, head_pos],
+        0,
+        holders,
+      )
+      return Block({ stmts: lowered, stmt_positions: positions, })
     }
     let init : @ast.TsStmt? = Some(self.merge_decl_stmts(stmts))
     return self.parse_for_rest(init)
@@ -2013,20 +2025,17 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
 ///|
 /// `name: stmt`. A C-style `for (using …)` is lowered to a BLOCK that
 /// declares its bindings and runs the loop inside a `try`
-/// (`lower_using_declaration`), and a label on that block is not a label on
+/// (`lower_using_block`), and a label on that block is not a label on
 /// an iteration statement: `outer: for (using r = e; c; u) { continue outer }`
 /// emitted `continue outer` against a block, a SyntaxError in the output.
 /// So the label goes on the loop, and every label of a chain
 /// (`a: b: for (using …)`) ends up there in source order.
 ///
 /// That changes nothing a `break` can observe. In the lowered shape the
-/// loop is the last statement of each `try` body around it, and every
-/// `try` is the last statement of its block, so leaving the loop and
-/// leaving the block run the same `finally` clauses and nothing else. Each
-/// of those `finally` clauses must be exactly the disposal of the binding
-/// declared before it (`is_using_dispose_of`): a `finally` holding anything
-/// else can hold a `break name`, which has no target once the label moves
-/// to the loop. Anything not of that shape is labelled as written.
+/// loop is the last statement of the `try` body and the `try` is the last
+/// statement of its block, so leaving the loop and leaving the block run
+/// the same `finally` and nothing else. Anything not of that shape is
+/// labelled as written (`relabel_using_loop`).
 fn label_statement(name : String, stmt : @ast.TsStmt) -> @ast.TsStmt {
   match stmt {
     Block(b) =>
@@ -2040,77 +2049,49 @@ fn label_statement(name : String, stmt : @ast.TsStmt) -> @ast.TsStmt {
 
 ///|
 /// The statements of a lowered `for (using …)` block with `name` moved onto
-/// its loop, or `None` when `stmts` is not that shape: zero or more `const`
-/// declarations followed by either the loop (possibly already labelled) or
-/// a `try` with no `catch` whose body is that shape again.
+/// its loop, or `None` when `stmts` is not that shape: the holder
+/// declarations, then a `try` with no `catch` whose body ends with the
+/// loop (possibly already labelled) and whose `finally` is exactly the
+/// generated disposal (`@ast.is_using_dispose_finally`). A `finally` holding
+/// anything else can hold a `break name`, which would lose its target once
+/// the label moves to the loop.
 fn relabel_using_loop(
   name : String,
   stmts : Array[@ast.TsStmt],
 ) -> Array[@ast.TsStmt]? {
-  guard stmts.last() is Some(last) else { return None }
-  let n = stmts.length()
-  for i in 0..<(n - 1) {
-    guard stmts[i] is Const(_, _, _) else { return None }
+  guard stmts is [holders, Try(body, None, None, Some(fin))] else {
+    return None
   }
-  let replaced = match last {
-    For(_, _, _, _) => Some(@ast.TsStmt::Label(name, last))
-    Label(_, _) if labelled_for_loop(last) =>
-      Some(@ast.TsStmt::Label(name, last))
-    Try(body, None, None, Some(fin)) if n > 1 &&
-      (match stmts[n - 2] {
-        Const(Ident(bound), _, _) => is_using_dispose_of(fin, bound)
-        _ => false
-      }) =>
-      match relabel_using_loop(name, body.stmts) {
-        Some(inner) =>
-          Some(
-            @ast.TsStmt::Try(
-              { stmts: inner, stmt_positions: body.stmt_positions, },
-              None,
-              None,
-              Some(fin),
-            ),
-          )
-        None => None
-      }
-    _ => None
+  guard is_using_holder_decl(holders) && @ast.is_using_dispose_finally(fin) else {
+    return None
   }
-  guard replaced is Some(r) else { return None }
-  let out = stmts[0:n - 1].to_owned()
-  out.push(r)
-  Some(out)
+  guard body.stmts.last() is Some(last) && labelled_for_loop(last) else {
+    return None
+  }
+  let inner = body.stmts[0:body.stmts.length() - 1].to_owned()
+  inner.push(@ast.TsStmt::Label(name, last))
+  Some([
+    holders,
+    Try(
+      { stmts: inner, stmt_positions: body.stmt_positions, },
+      None,
+      None,
+      Some(fin),
+    ),
+  ])
 }
 
 ///|
-/// Whether `fin` is exactly the disposal `using_dispose_stmt` builds for
-/// `name`, in either form, and nothing else.
-fn is_using_dispose_of(fin : @ast.TsBlock, name : String) -> Bool {
-  guard fin.stmts is [Expr(e)] else { return false }
-  match e {
-    Await(
-      Cond(BinOp(AbstractNe, OptionalChain(m), NullLit), a, UnaryOp(Void, c))
-    ) =>
-      is_dispose_member_of(m, name, "asyncDispose") &&
-      is_dispose_call_of(a, name, "asyncDispose") &&
-      is_dispose_call_of(c, name, "dispose")
-    _ => is_dispose_call_of(e, name, "dispose")
+/// `let h0, h1;` as `lower_using_block` declares its holders.
+fn is_using_holder_decl(stmt : @ast.TsStmt) -> Bool {
+  let is_holder = fn(s : @ast.TsStmt) {
+    s is Let(Ident(h), _, Var("__ts_no_init__")) &&
+    h.has_prefix(@ast.USING_HOLDER_PREFIX)
   }
-}
-
-///|
-fn is_dispose_call_of(e : @ast.TsExpr, name : String, key : String) -> Bool {
-  match e {
-    OptionalChain(CallExpr(OptionalChain(m), [])) =>
-      is_dispose_member_of(m, name, key)
-    _ => false
-  }
-}
-
-///|
-fn is_dispose_member_of(e : @ast.TsExpr, name : String, key : String) -> Bool {
-  match e {
-    IndexAccess(Var(n), PropAccess(Var("Symbol"), k)) => n == name && k == key
-    _ => false
+  match stmt {
+    Block({ stmts, stmt_positions, }) if stmt_positions ==
+      [@ast.DECL_GROUP_POSITION] => stmts.iter().all(is_holder)
+    _ => is_holder(stmt)
   }
 }
 
@@ -2158,6 +2139,20 @@ fn Parser::parse_using_declaration(
   let _ = self.advance() // `using`
   let using_kw = if is_await_using { "await using" } else { "using" }
   let decl = self.parse_var_like(VarKind::Let, pos, using_kw~)
+  using_declaration_with_holders(decl, is_await_using, holders)
+}
+
+///|
+/// `decl` (one declarator, or a `DECL_GROUP_POSITION` group) as `const`
+/// declarations that store each resource in a holder, appending
+/// `(holder, is_await)` to `holders` in declaration order. A binding
+/// pattern (TS1492) and a missing initializer (TS1155) have nothing to
+/// dispose and stay plain `const`s.
+fn using_declaration_with_holders(
+  decl : @ast.TsStmt,
+  is_await : Bool,
+  holders : Array[(String, Bool)],
+) -> @ast.TsStmt {
   let decls = match decl {
     Block({ stmts, stmt_positions, }) if stmt_positions ==
       [@ast.DECL_GROUP_POSITION] => stmts
@@ -2169,8 +2164,8 @@ fn Parser::parse_using_declaration(
       Var(Ident(_) as b, t, e)
       | Let(Ident(_) as b, t, e)
       | Const(Ident(_) as b, t, e) if !(e is Var("__ts_no_init__")) => {
-        let holder = "__ts_using_\{holders.length()}"
-        holders.push((holder, is_await_using))
+        let holder = @ast.USING_HOLDER_PREFIX + holders.length().to_string()
+        holders.push((holder, is_await))
         out.push(@ast.TsStmt::Const(b, t, @ast.TsExpr::AssignExpr(holder, e)))
       }
       Var(b, t, e) | Let(b, t, e) | Const(b, t, e) =>
@@ -2335,62 +2330,6 @@ fn using_dispose_call(name : String, key : String) -> @ast.TsExpr {
       [],
     ),
   )
-}
-
-///|
-/// Lower one `using` declaration around `rest`, the code its bindings are
-/// in scope for. `decl` is what `parse_var_like` returned: one declarator,
-/// or a `DECL_GROUP_POSITION` group of them.
-///
-///   using a = x, b = y;  rest
-///   =>
-///   const a = x;
-///   try { const b = y; try { rest } finally { dispose(b) } }
-///   finally { dispose(a) }
-///
-/// One `try` per declarator, nested, so the bindings are disposed in
-/// reverse order and `a` is still disposed when `y` throws. A binding
-/// pattern is TS1492 and has no single name to dispose, so it gets no
-/// `try`. This is the C-style `for` head's lowering, where `rest` is the
-/// loop and nothing else shares the scope; a block's statements need one
-/// scope for all of them, and go through `lower_using_block` instead.
-fn lower_using_declaration(
-  decl : @ast.TsStmt,
-  is_await : Bool,
-  rest : @ast.TsBlock,
-  pos : Int32,
-) -> Array[@ast.TsStmt] {
-  let decls = match decl {
-    Block({ stmts, stmt_positions, }) if stmt_positions ==
-      [@ast.DECL_GROUP_POSITION] => stmts
-    _ => [decl]
-  }
-  let mut body = rest
-  for i = decls.length() - 1; i >= 0; i = i - 1 {
-    let (binding, const_decl) = match decls[i] {
-      Var(b, t, e) | Let(b, t, e) | Const(b, t, e) =>
-        (Some(b), @ast.TsStmt::Const(b, t, e))
-      other => (None, other)
-    }
-    let stmts = match binding {
-      Some(Ident(name)) =>
-        [
-          const_decl,
-          @ast.TsStmt::Try(
-            body,
-            None,
-            None,
-            Some({
-              stmts: [using_dispose_stmt(name, is_await)],
-              stmt_positions: [],
-            }),
-          ),
-        ]
-      _ => [const_decl, ..body.stmts]
-    }
-    body = { stmts, stmt_positions: stmts.map(fn(_) { pos }), }
-  }
-  body.stmts
 }
 
 ///|

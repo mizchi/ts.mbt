@@ -3539,18 +3539,24 @@ test "bundler: every `using` declaration site lowers its disposal" {
       // for-of: a `const` head, and the disposal inside the loop body.
       assert_true(at("for (const d of xs)") < at("d?.[Symbol.dispose]?.()"))
       assert_false(js.contains("for (let d of"))
-      // C-style for: the binding is declared before the loop it outlives.
-      assert_true(at("const e = res()") < at("for (;;)"))
-      assert_true(at("for (;;)") < at("e?.[Symbol.dispose]?.()"))
+      // C-style for: the binding is declared before the loop it outlives,
+      // and its holder is disposed after the loop.
+      assert_true(at("const e = __ts_using_0 = res()") < at("for (;;)"))
+      assert_true(at("for (;;)") < at("__ts_using_0?.[Symbol.dispose]?.()"))
       // Two declarators, two bindings, each stored in its own holder and
       // disposed in reverse order.
       assert_true(
         js.contains("const p = __ts_using_0 = res(), q = __ts_using_1 = res()"),
       )
-      assert_true(
-        at("__ts_using_1?.[Symbol.dispose]?.()") <
-        at("__ts_using_0?.[Symbol.dispose]?.()"),
-      )
+      let c_js = js[at("function c()"):].to_owned()
+      match
+        (
+          c_js.find("__ts_using_1?.[Symbol.dispose]?.()"),
+          c_js.find("__ts_using_0?.[Symbol.dispose]?.()"),
+        ) {
+        (Some(q_at), Some(p_at)) => assert_true(q_at < p_at)
+        _ => fail("expected both disposals in:\n\{c_js}")
+      }
       assert_false(js.contains("q = res()),"))
       // `await using` waits for the disposal, and falls back to
       // `[Symbol.dispose]` for a resource without `[Symbol.asyncDispose]`.
@@ -3585,6 +3591,10 @@ test "bundler: a later using in a block and a labelled using loop" {
     #|  outer: for (using r = res(); more(); ) { continue outer; }
     #|  x: y: for (using s = res(); more(); ) { if (more()) continue x; break y; }
     #|}
+    #|declare function mk(f: () => Disposable): Disposable;
+    #|export function h() {
+    #|  for (using a = mk(() => b), b = res(); more(); ) { break; }
+    #|}
   let files = vfs([("entry.ts", src)])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
@@ -3606,11 +3616,19 @@ test "bundler: a later using in a block and a labelled using loop" {
       )
       assert_false(js.contains("let b"))
       // The label is on the loop, inside the binding's scope.
-      assert_true(at("const r = res()") < at("outer: for (;"))
-      assert_true(at("outer: for (;") < at("r?.[Symbol.dispose]?.()"))
+      assert_true(at("const r = __ts_using_0 = res()") < at("outer: for (;"))
       assert_false(js.contains("outer: {"))
-      assert_true(at("const s = res()") < at("x: y: for (;"))
+      assert_true(at("const s = __ts_using_0 = res()") < at("x: y: for (;"))
       assert_false(js.contains("x: {"))
+      // Every declarator of a C-style head shares ONE scope, so a closure
+      // in the first initializer reads the second binding. One `try` per
+      // declarator put `b` in an inner block, out of the closure's reach.
+      assert_true(
+        js.contains(
+          "const a = __ts_using_0 = mk(() => b), b = __ts_using_1 = res();",
+        ),
+      )
+      assert_true(at("b = __ts_using_1 = res();") < at("for (; more();)"))
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -3643,6 +3661,7 @@ test "bundler: a block with using keeps one scope, and a written label stays" {
     #|}
     #|export function g(c: boolean) {
     #|  exit: { const r = 1; try { for (;;) { break; } } finally { if (c) break exit; } }
+    #|  exit2: { let __ts_using_0; try { for (;;) { break; } } finally { if (c) break exit2; } }
     #|}
   let files = vfs([("entry.ts", src)])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -3662,8 +3681,11 @@ test "bundler: a block with using keeps one scope, and a written label stays" {
       assert_true(at("setup();") < at("const a = __ts_using_0 = res()"))
       assert_true(at("const later = 1") < at("function setup()"))
       assert_true(at("function setup()") < at("} finally {"))
-      // The written label is still on the block.
+      // The written labels are still on their blocks, including one whose
+      // holder declaration looks generated: its `finally` is not the
+      // disposal, so it can hold the `break`.
       assert_true(js.contains("exit: {"))
+      assert_true(js.contains("exit2: {"))
     }
     Err(e) => fail("bundle error: \{e}")
   }

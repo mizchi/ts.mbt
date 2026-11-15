@@ -23216,4 +23216,14 @@ test "using bodies, nested empty defaults, any unions and empty spreads" {
     ) >
     0,
   )
+  // Only the `try` the `using` lowering builds is read through. Two
+  // hand-written ones can declare the same name, so reading both as one
+  // scope bound the first `x` (`number`) for the second's `return x`. tsc
+  // gives `f` the type `string`, so `string | undefined` accepts it.
+  @test.assert_eq(
+    n(
+      "function g() {\n  const f = () => { try { const x = 1; } finally {} try { const x = \"ok\"; return x; } finally {} };\n  const s: string | undefined = f();\n}",
+    ),
+    0,
+  )
 }
