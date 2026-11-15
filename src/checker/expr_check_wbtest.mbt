@@ -23226,4 +23226,13 @@ test "using bodies, nested empty defaults, any unions and empty spreads" {
     ),
     0,
   )
+  // The same two blocks whose `finally` LOOKS generated: the shape test is
+  // on the whole block (holders, then one `try`), so two `try`s in a row
+  // are never read as one scope, whatever their `finally` holds.
+  @test.assert_eq(
+    n(
+      "declare const __ts_using_manual: Disposable;\nfunction g() {\n  const f = () => {\n    try { const x = 1; } finally { __ts_using_manual?.[Symbol.dispose]?.(); }\n    try { const x = \"ok\"; return x; } finally { __ts_using_manual?.[Symbol.dispose]?.(); }\n  };\n  const s: string | undefined = f();\n}",
+    ),
+    0,
+  )
 }

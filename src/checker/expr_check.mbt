@@ -20809,26 +20809,28 @@ fn infer_block_return(
   let mut acc : @ast.TsType = @ast.TsType::Undefined
   let mut first = true
   // Read as top-level statements too: a declarator group
-  // (`const a = 1, b = 2`), and the `try` the parser lowers a block with a
-  // `using` declaration to, so `() => { using r = res(); return 5 }` no
-  // longer reads as returning `undefined`. That `try` holds every statement
-  // of its block and its `finally` only disposes
-  // (`@ast.is_using_dispose_finally`), so its body IS the block's top level.
-  // A hand-written `try` is not: two of them can declare the same name, and
-  // a `return` in a `finally` overrides the one in the body.
+  // (`const a = 1, b = 2`), and the body of a block lowered for a `using`
+  // declaration, so `() => { using r = res(); return 5 }` no longer reads
+  // as returning `undefined`. `@ast.lowered_using_try_body` matches only a
+  // block that is directives, holder declarations and ONE disposal-only
+  // `try`, so that body is the block's whole scope. Any other `try` is not
+  // read through: two of them can declare the same name, and a `return` in
+  // a `finally` overrides the one in the body.
+  let top = match @ast.lowered_using_try_body(block.stmts) {
+    Some(body) => body.stmts
+    None => block.stmts
+  }
   let flat : Array[@ast.TsStmt] = []
   fn flatten(stmts : Array[@ast.TsStmt]) -> Unit {
     for st in stmts {
       match st {
-        Try(body, None, None, Some(fin)) if @ast.is_using_dispose_finally(fin) =>
-          flatten(body.stmts)
         Block({ stmts: inner, stmt_positions, }) if stmt_positions ==
           [@ast.DECL_GROUP_POSITION] => flatten(inner)
         _ => flat.push(st)
       }
     }
   }
-  flatten(block.stmts)
+  flatten(top)
   for stmt in flat {
     match stmt {
       Var(@ast.TsBinding::Ident(name), declared, init)

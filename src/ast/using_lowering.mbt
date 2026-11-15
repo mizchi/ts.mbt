@@ -63,3 +63,44 @@ fn using_dispose_member_holder(e : TsExpr, key : String) -> String? {
     _ => None
   }
 }
+
+///|
+/// The `try` body of a block lowered for `using` declarations, or `None`
+/// when `stmts` is not one: zero or more directive statements, then the
+/// holder declarations, then a single `try` with no `catch` whose
+/// `finally` only disposes (`is_using_dispose_finally`). That is the whole
+/// block `lower_using_block` emits.
+///
+/// Reading the `try` body as the block's own top level is exact for any
+/// block of this shape, whoever wrote it: nothing else in the block
+/// declares a name the body could shadow, and a disposal-only `finally`
+/// cannot return or declare.
+pub fn lowered_using_try_body(stmts : Array[TsStmt]) -> TsBlock? {
+  let n = stmts.length()
+  guard n >= 2 else { return None }
+  guard stmts[n - 1] is Try(body, None, None, Some(fin)) &&
+    is_using_dispose_finally(fin) &&
+    is_using_holder_decl(stmts[n - 2]) else {
+    return None
+  }
+  for i in 0..<(n - 2) {
+    guard stmts[i] is Expr(StringLit(_)) else { return None }
+  }
+  Some(body)
+}
+
+///|
+/// `let h0, h1;` as the `using` lowering declares its holders: one
+/// declaration, or a `DECL_GROUP_POSITION` group of them, each a `let` of a
+/// `USING_HOLDER_PREFIX` name with no initializer.
+pub fn is_using_holder_decl(stmt : TsStmt) -> Bool {
+  let is_holder = fn(s : TsStmt) {
+    s is Let(Ident(h), _, Var("__ts_no_init__")) &&
+    h.has_prefix(USING_HOLDER_PREFIX)
+  }
+  match stmt {
+    Block({ stmts, stmt_positions, }) if stmt_positions == [DECL_GROUP_POSITION] =>
+      stmts.iter().all(is_holder)
+    _ => is_holder(stmt)
+  }
+}

@@ -2066,10 +2066,10 @@ fn relabel_using_loop(
   name : String,
   stmts : Array[@ast.TsStmt],
 ) -> Array[@ast.TsStmt]? {
-  guard stmts is [holders, Try(body, None, None, Some(fin))] else {
-    return None
-  }
-  guard is_using_holder_decl(holders) && @ast.is_using_dispose_finally(fin) else {
+  // A lowered head is exactly the holders and the `try`, with no
+  // directives in front.
+  guard stmts is [holders, Try(_, None, None, Some(fin))] &&
+    @ast.lowered_using_try_body(stmts) is Some(body) else {
     return None
   }
   guard body.stmts.last() is Some(last) && labelled_for_loop(last) else {
@@ -2098,20 +2098,6 @@ fn is_const_decl(stmt : @ast.TsStmt) -> Bool {
       [@ast.DECL_GROUP_POSITION] =>
       stmts.iter().all(fn(s) { s is Const(_, _, _) })
     _ => false
-  }
-}
-
-///|
-/// `let h0, h1;` as `lower_using_block` declares its holders.
-fn is_using_holder_decl(stmt : @ast.TsStmt) -> Bool {
-  let is_holder = fn(s : @ast.TsStmt) {
-    s is Let(Ident(h), _, Var("__ts_no_init__")) &&
-    h.has_prefix(@ast.USING_HOLDER_PREFIX)
-  }
-  match stmt {
-    Block({ stmts, stmt_positions, }) if stmt_positions ==
-      [@ast.DECL_GROUP_POSITION] => stmts.iter().all(is_holder)
-    _ => is_holder(stmt)
   }
 }
 
