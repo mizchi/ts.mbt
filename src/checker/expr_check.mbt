@@ -27942,8 +27942,13 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         for k, _ in cands {
           // A path a branch FORGOT is gone after the `if`, so it is not
           // joined: falling back to `pre_map` for the side that forgot it
-          // would restore the very narrowing `drop_forgotten` just removed
-          // (`if (c) { o = other } else { o.p = 1 }` left `o.p` narrowed).
+          // would restore the very narrowing `drop_forgotten` just removed.
+          // The other branch has to narrow the path to something NEW for it
+          // to be a candidate at all — a write here only removes the
+          // nullish members, so `else { o.p = 1 }` after a pre-`if` write
+          // changes nothing — and `else { if (typeof o.p !== "string")
+          // return }` beside `if (c) { o = other }` is the shape that left
+          // `o.p` narrowed.
           if !k.has_prefix("<") &&
             (k.contains(".") || k.contains("[")) &&
             pre_map.contains(k) &&
