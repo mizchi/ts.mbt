@@ -1959,12 +1959,11 @@ fn value_decl_static_array_rest_expr_with_depth(
     @ast.TsExpr::ArrayLit(items) => {
       let rest_items : Array[@ast.TsExpr] = []
       for i, item in items {
-        if i < start_index {
-          continue
-        }
+        // A spread anywhere, the skipped prefix included, makes every
+        // later position unknown.
         match item {
           @ast.TsExpr::Spread(_) => return None
-          _ => rest_items.push(item)
+          _ => if i >= start_index { rest_items.push(item) }
         }
       }
       Some(@ast.TsExpr::ArrayLit(rest_items))

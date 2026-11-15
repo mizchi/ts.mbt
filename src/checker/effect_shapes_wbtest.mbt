@@ -963,12 +963,19 @@ test "review: every write that reaches the back edge joins, and only those" {
     #|function okOverwritten(c: boolean) { let x: string | number = "a"; let y: string | number = "a"; while (c) { acceptString(x); x = y; y = 1; y = "s"; } }
     #|function okBareVarRedecl(c: boolean) { var x: string | number; x = "s"; while (c) { acceptString(x); var x: string | number; } }
     #|function badLastWriteWins(c: boolean) { let x: string | number = "a"; while (c) { acceptString(x); x = "s"; x = 1; } }
+    #|function okContinueBypass(c: boolean, d: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; x = "b"; if (d) continue; x = "a"; } }
+    #|function okReadBeforeOverwrite(c: boolean) { let x: "a" | "b" = "a"; let y: "a" | "b" = "a"; while (c) { if (x === "b") break; y = "b"; x = y; y = "a"; } }
+    #|function badContinueCarries(c: boolean, skip: boolean) { let x: string | number = "s"; while (c) { acceptString(x); x = 1; if (skip) continue; x = "s"; } }
+    #|function okCondThenPlain(c: boolean) { let x: string | number = "a"; while (c) { acceptString(x); if (c) { x = 1; } x = "s"; } }
+    #|function okNestedRead(c: boolean) { let x: "a" | "b" = "a"; let y: "a" | "b" = "a"; while (c) { if (x === "b") break; { y = "b"; x = y; } y = "a"; } }
+    #|function badTryCaught(c: boolean) { let x: string | number = "s"; while (c) { acceptString(x); try { x = 1; JSON.parse("x"); x = "s"; } catch {} } }
   let issues = eff_issues_checking(src)
   for
     ok in [
       "okDependent", "okForUpdateAfterBreak", "okInnerLabel", "okPatternWrite", "okForHeadWrite",
       "okExprWrite", "okContinuePath", "okSelfStep", "okOuterHeadSelfAssign", "okOverwritten",
-      "okBareVarRedecl",
+      "okBareVarRedecl", "okContinueBypass", "okReadBeforeOverwrite", "okCondThenPlain",
+      "okNestedRead",
     ] {
     assert_false(eff_has(issues, ok), msg=ok)
   }

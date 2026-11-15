@@ -21880,39 +21880,114 @@ fn backedge_walk_list(
   if backedge_list_exits(stmts, in_breakable, throw_caught, inner_labels) {
     return
   }
-  // A write that a LATER statement of the same list overwrites never
-  // reaches the back edge: `y = 1; y = "s"` leaves `y` a string on every
-  // iteration, and joining the `1` as well fed `string | number` through
-  // the fixpoint into an `x = y` above it. Only a plain statement-level
-  // assignment counts as overwriting — it runs whenever the list reaches
-  // it, and a list that exits first contributes nothing anyway.
-  let last_plain : Map[String, Int32] = Map([])
-  for i, st in stmts {
-    match st {
-      Assign(n, _) | Expr(AssignExpr(n, _)) => last_plain[n] = i
-      _ => ()
-    }
-  }
   for i, st in stmts {
     let one : BackedgeWrites = { assigns: [], other: Map([]), }
     backedge_walk_stmt(st, one, true, in_breakable, throw_caught, inner_labels)
-    fn overwritten(n : String) -> Bool {
-      match last_plain.get(n) {
-        Some(j) => j > i
-        None => false
-      }
-    }
-
     for a in one.assigns {
-      if !overwritten(a.0) {
-        w.assigns.push(a)
+      if !throw_caught && backedge_write_overwritten(stmts, i, a.0) {
+        continue
       }
+      w.assigns.push(a)
     }
     for n, _ in one.other {
-      if !overwritten(n) {
-        w.other[n] = ()
+      if !throw_caught && backedge_write_overwritten(stmts, i, n) {
+        continue
       }
+      w.other[n] = ()
     }
+  }
+}
+
+///|
+/// True when the statement-level write `stmts[i]` (`name = …`) is
+/// overwritten before any path from it can reach the back edge: `y = 1;
+/// y = "s"` leaves `y` a string on every iteration, and joining the `1`
+/// fed `string | number` through the fixpoint into an `x = y` above it.
+///
+/// Every condition is one way the earlier value can still escape, and each
+/// was a report on a loop tsc accepts when it was missing: a write nested
+/// in a compound statement counts only when that statement cannot jump and
+/// never reads the name (`{ y = "b"; x = y }` reads it); no statement in between may `continue` or `break`, since
+/// either can carry the value past the later assignment (`x = "b"; if (d)
+/// continue; x = "a"`); and nothing in between, nor the later assignment's
+/// own right-hand side, may READ the name, because each right-hand side is
+/// inferred at the loop head and so cannot see the in-body value it reads
+/// (`y = "b"; x = y; y = "a"`). The caller also skips this inside a `try`
+/// whose `catch` resumes, where any statement in between may throw.
+fn backedge_write_overwritten(
+  stmts : Array[@ast.TsStmt],
+  i : Int32,
+  name : String,
+) -> Bool {
+  let needle = "Var(\"" + name + "\")"
+  match stmts[i] {
+    Assign(n, _) | Expr(AssignExpr(n, _)) if n == name => ()
+    // A write nested in a compound statement (`if (c) { x = 1 }`) is dead
+    // on the same terms, provided that statement cannot jump past the
+    // later assignment and does not read the name after writing it.
+    st => if stmt_may_jump(st) || "\{st}".contains(needle) { return false }
+  }
+  for j in (i + 1)..<stmts.length() {
+    match stmts[j] {
+      Assign(n, rhs) | Expr(AssignExpr(n, rhs)) if n == name =>
+        return !"\{rhs}".contains(needle)
+      st => if stmt_may_jump(st) || "\{st}".contains(needle) { return false }
+    }
+  }
+  false
+}
+
+///|
+/// True when a `continue` or a `break` appears in `st` outside any nested
+/// function: either can leave the rest of a statement list unexecuted and
+/// still go round the loop. Exhaustive over `TsStmt` for the reason
+/// `collect_backedge_writes` is.
+fn stmt_may_jump(st : @ast.TsStmt) -> Bool {
+  fn blk(b : @ast.TsBlock) -> Bool {
+    b.stmts.any(stmt_may_jump)
+  }
+
+  match st {
+    Continue(_) | Break(_) => true
+    Block(b)
+    | While(_, b)
+    | DoWhile(_, b)
+    | With(_, b)
+    | For(_, _, _, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b) => blk(b)
+    If(_, t, e) =>
+      blk(t) ||
+      (match e {
+        Some(x) => blk(x)
+        None => false
+      })
+    Try(t, _, c, f) =>
+      blk(t) ||
+      (match c {
+        Some(x) => blk(x)
+        None => false
+      }) ||
+      (match f {
+        Some(x) => blk(x)
+        None => false
+      })
+    Switch(_, cases) => cases.any(fn(c) { blk(c.body) })
+    Label(_, inner) => stmt_may_jump(inner)
+    Var(_, _, _)
+    | Let(_, _, _)
+    | Const(_, _, _)
+    | Assign(_, _)
+    | CompoundAssign(_, _, _)
+    | IndexAssign(_, _, _)
+    | PropAssign(_, _, _)
+    | Expr(_)
+    | Empty
+    | Return(_)
+    | Throw(_)
+    | Debugger
+    | NativeClassStmt(_, _) => false
   }
 }
 
