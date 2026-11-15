@@ -3662,6 +3662,7 @@ test "bundler: a block with using keeps one scope, and a written label stays" {
     #|export function g(c: boolean) {
     #|  exit: { const r = 1; try { for (;;) { break; } } finally { if (c) break exit; } }
     #|  exit2: { let __ts_using_0; try { for (;;) { break; } } finally { if (c) break exit2; } }
+    #|  exit3: { using r = res(); if (c) break exit3; for (;;) { break; } }
     #|}
   let files = vfs([("entry.ts", src)])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -3686,6 +3687,10 @@ test "bundler: a block with using keeps one scope, and a written label stays" {
       // disposal, so it can hold the `break`.
       assert_true(js.contains("exit: {"))
       assert_true(js.contains("exit2: {"))
+      // A labelled block with a `using` lowers to the same holders and
+      // `finally`; its `break exit3` sits before the loop, so the label
+      // stays on the block.
+      assert_true(js.contains("exit3: {"))
     }
     Err(e) => fail("bundle error: \{e}")
   }

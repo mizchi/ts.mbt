@@ -2050,11 +2050,18 @@ fn label_statement(name : String, stmt : @ast.TsStmt) -> @ast.TsStmt {
 ///|
 /// The statements of a lowered `for (using …)` block with `name` moved onto
 /// its loop, or `None` when `stmts` is not that shape: the holder
-/// declarations, then a `try` with no `catch` whose body ends with the
-/// loop (possibly already labelled) and whose `finally` is exactly the
-/// generated disposal (`@ast.is_using_dispose_finally`). A `finally` holding
-/// anything else can hold a `break name`, which would lose its target once
-/// the label moves to the loop.
+/// declarations, then a `try` with no `catch` whose body is `const`
+/// declarations followed by the loop (possibly already labelled), and whose
+/// `finally` is exactly the generated disposal
+/// (`@ast.is_using_dispose_finally`).
+///
+/// Each condition keeps a `break name` from losing its target once the
+/// label moves to the loop. A `finally` holding anything else can hold one.
+/// So can any statement before the loop: a labelled BLOCK with a `using`
+/// lowers to the same holders and `finally`, and
+/// `exit: { using r = res(); if (c) break exit; for (;;) {} }` must keep
+/// its label on the block. A `const` initializer is an expression and
+/// cannot hold a `break`.
 fn relabel_using_loop(
   name : String,
   stmts : Array[@ast.TsStmt],
@@ -2069,6 +2076,7 @@ fn relabel_using_loop(
     return None
   }
   let inner = body.stmts[0:body.stmts.length() - 1].to_owned()
+  guard inner.iter().all(is_const_decl) else { return None }
   inner.push(@ast.TsStmt::Label(name, last))
   Some([
     holders,
@@ -2079,6 +2087,18 @@ fn relabel_using_loop(
       Some(fin),
     ),
   ])
+}
+
+///|
+/// A `const` declaration, or a `DECL_GROUP_POSITION` group of them.
+fn is_const_decl(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Const(_, _, _) => true
+    Block({ stmts, stmt_positions, }) if stmt_positions ==
+      [@ast.DECL_GROUP_POSITION] =>
+      stmts.iter().all(fn(s) { s is Const(_, _, _) })
+    _ => false
+  }
 }
 
 ///|
