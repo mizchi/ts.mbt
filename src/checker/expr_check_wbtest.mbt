@@ -22948,6 +22948,17 @@ test "a property-path narrowing does not survive rebinding its receiver" {
     0,
   )
   let nullish = "interface O { p: string | null }\nfunction f(o: O | undefined, other: O) {\n  if (o) { o.p = \"\"; }\n  o ??= other;\n  const s: string = o.p;\n}"
+  // The expression spellings: an assignment nested in a call argument, an
+  // initializer, and a condition (all TS2322 in tsc, probed). Passing the
+  // object without rebinding it stays legal.
+  assert_true(n("o.p = \"\";\nString(o = other);\nconst s: string = o.p;") > 0)
+  assert_true(
+    n("o.p = \"\";\nconst t = (o = other);\nconst s: string = o.p;") > 0,
+  )
+  assert_true(
+    n("o.p = \"\";\nif ((o = other)) { }\nconst s: string = o.p;") > 0,
+  )
+  @test.assert_eq(n("o.p = \"\";\nString(o);\nconst s: string = o.p;"), 0)
   assert_true(
     check_module_function_bodies(parse_module_or_empty(nullish)).length() > 0,
   )

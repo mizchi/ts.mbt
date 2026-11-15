@@ -23249,6 +23249,9 @@ fn join_conditional_assignments(
   walk(e, found)
   for pair in found {
     let (name, rhs) = pair
+    // An assignment that may run may rebind the name, and then the paths
+    // narrowed below it describe the old object either way.
+    forget_paths_below(env, name)
     guard env.lookup(name) is Some(cur) else { continue }
     let declared = match env.lookup_declared(name) {
       Some(d) => d
@@ -23500,7 +23503,8 @@ fn bind_object_pattern(
     // statement would; any other one drops back to the declared type, so a
     // later key never reads the stale entry narrowing.
     match prop.key_expr {
-      Some(AssignExpr(n, v)) =>
+      Some(AssignExpr(n, v)) => {
+        forget_paths_below(env, n)
         match precise_literal_type(v) {
           Some(t) => env.narrow(n, t)
           None =>
@@ -23509,6 +23513,7 @@ fn bind_object_pattern(
               None => ()
             }
         }
+      }
       _ => ()
     }
     let field_ty = match computed_ty {
@@ -31609,7 +31614,11 @@ fn check_call_args_in_expr(
       }
       // Narrow-by-assignment: the variable's effective type now
       // reflects the assigned value's type. Narrowing-only -- don't
-      // touch the declared slot.
+      // touch the declared slot. A rebound name also forgets every path
+      // narrowed below it, as the statement spelling does
+      // (`narrow_after_assignment`): `consume(o = other)` leaves `o.p`
+      // describing `other`.
+      forget_paths_below(env, name)
       let new_ty = infer_expr(env, ctx.resolver, v)
       if is_checkable(new_ty) {
         env.narrow(name, new_ty)
