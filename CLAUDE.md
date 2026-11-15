@@ -4109,6 +4109,55 @@ product surfaces now.
     `overrideInterfaceProperty`.
   - TS2344: `Parameters<Function>`, through a sentinel bound only a
     definitely-non-callable argument violates.
+
+  Batch FY is a performance batch. Every gate is unchanged: the oracle
+  is identical, effect stays at 139 lines and zod at 19, the real
+  `.d.ts` entries at 0, and the generated bridge packages are
+  byte-identical. Every change was profiled with `valgrind
+  --tool=callgrind` (there is no `perf` in the image) on a throwaway
+  `main` package that replays the bench inputs.
+
+  The real-code win is one defect. `graph_type_modules` pushed the
+  target of every import EDGE, so a module imported from k places was
+  ingested k times by every checked module. Each repeat merged its
+  interfaces with themselves, and `merge_interfaces` CONCATENATES
+  `extends`, index signatures and method type parameters, so the arrays
+  grew on every repeat. On zod's `util.ts` program that was 820,000
+  self-merges and half the check. Each module is now kept once, at its
+  LAST position in the same walk, because later ingestion overwrites a
+  class or alias that two modules both declare. Keeping the FIRST
+  position changed three effect diagnostics; the last position changes
+  none. Measured:
+  - effect `index.ts --noEmit`: 16 -> 4 s
+  - the zod sweep: 76 -> 25 s
+  - effect `Data.ts`: 13.1 -> 3.8 s
+
+  The dedup also exposed a false positive that the repeated `extends`
+  entries had been hiding. It is reachable from one file too, so it is
+  older than this change: `Json` assigned to `cause?: Json`, where
+  `Json` is a self-referential alias that `unwrap_containers` leaves as
+  a name, read as not admitting `null`. `target_admits_nullish` follows
+  alias members.
+
+  The bench-side wins are per-call waste in passes that run once per
+  module and per namespace:
+  - `check_module`'s layered caller keeps four issue kinds, and now skips
+    the steps that produce only the others (`unresolved_type_references`
+    among them).
+  - `expected_mentions_phantom_type_param` walked every type-parameter
+    spelling in the file per argument; it now walks the argument.
+  - Name tables are built lazily or not at all when nothing can read
+    them.
+  - Path strings are concatenated rather than interpolated.
+  - JSDoc trimming and splitting avoid the library defaults, which
+    rebuild a character set per call.
+
+  Measured on a release build:
+  - wide500: 1.78 -> 0.75 ms
+  - wide5000: 20.4 -> 11.1 ms
+  - small: 40 -> 30 µs
+  - generic-heavy 400: 20.8 -> 16.8 ms
+  - JSDoc-heavy parse: 2.27 -> 1.97 ms
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
