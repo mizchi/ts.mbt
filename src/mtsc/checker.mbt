@@ -641,9 +641,8 @@ fn graph_namespace_type_aliases(
 ) -> Array[(String, String, String)] {
   let out : Array[(String, String, String)] = []
   for imp in module_.module_block.imports {
-    let ns = match imp.namespace_binding {
-      Some(ns) => ns
-      None => continue
+    if imp.namespace_binding is None && imp.named_bindings.length() == 0 {
+      continue
     }
     let target = match
       find_graph_target(edges, module_.source.path, imp.module_spec) {
@@ -654,7 +653,40 @@ fn graph_namespace_type_aliases(
         }
       None => continue
     }
-    graph_exposed_type_names(target, modules, edges, {}, out, ns + ".", 0)
+    match imp.namespace_binding {
+      Some(ns) =>
+        graph_exposed_type_names(target, modules, edges, {}, out, ns + ".", 0)
+      None => ()
+    }
+    // A NAMED import binds the local name to one module's declaration,
+    // and the bare table cannot say which when two reachable modules
+    // declare the name: it holds their merge. univer's `@univerjs/core`
+    // and `@univerjs/protocol` both export `ICommand`, `IRange`,
+    // `ICellData` and `BooleanNumber`, so `import { ICommand } from
+    // '@univerjs/core'` was asked for protocol's `data` member. The pair
+    // `(local, bare, origin)` lets `alias_namespace_import_types` point the
+    // local spelling at `bare@origin` exactly as it does for `ns.X`; for a
+    // name only one module declares it adds nothing the bare entry does
+    // not already hold.
+    if imp.named_bindings.length() > 0 {
+      let exposed : Array[(String, String, String)] = []
+      graph_exposed_type_names(target, modules, edges, {}, exposed, "", 0)
+      if exposed.length() > 0 {
+        let by_name : Map[String, (String, String)] = Map([])
+        for e in exposed {
+          if !by_name.contains(e.0) {
+            by_name[e.0] = (e.1, e.2)
+          }
+        }
+        for binding in imp.named_bindings {
+          let (imported, local_name) = binding
+          match by_name.get(imported) {
+            Some((bare, origin)) => out.push((local_name, bare, origin))
+            None => ()
+          }
+        }
+      }
+    }
   }
   out
 }
@@ -1036,42 +1068,15 @@ fn collect_parsed_graph_issues(
 
 ///|
 pub fn check_module_graph(graph : MtscModuleGraph) -> String {
-  let parsed_modules : Array[ParsedMtscModule] = []
+  // The string ABI is a FORMAT over `collect_module_graph_issues`, not a
+  // second checker. It used to carry its own copy of the per-module loop,
+  // and that copy had fallen behind the one the CLI runs: no per-module
+  // type keys (so a name two modules declare was their merge — univer's
+  // `ICommand`), no ambient `.d.ts` scope, and no reset of the type-module
+  // cache between programs. One loop, two renderings.
   let diagnostics : Array[String] = []
-  for source in graph.modules {
-    match parse_graph_module(source) {
-      Ok(module_) => parsed_modules.push(module_)
-      Err(e) => diagnostics.push("\{source.path}: parse error: \{e}")
-    }
-  }
-  for module_ in parsed_modules {
-    let (globals, import_diagnostics) = graph_import_globals(
-      module_,
-      parsed_modules,
-      graph.edges,
-    )
-    for diagnostic in import_diagnostics {
-      diagnostics.push("\{module_.source.path}: \{diagnostic}")
-    }
-    let type_modules = graph_type_modules(module_, parsed_modules, graph.edges)
-    let namespace_type_aliases = graph_namespace_type_aliases(
-      module_,
-      parsed_modules,
-      graph.edges,
-    )
-    match
-      collect_type_issues_from_module(
-        module_.module_,
-        globals,
-        type_modules,
-        namespace_type_aliases~,
-      ) {
-      Err(e) => diagnostics.push("\{module_.source.path}: parse error: \{e}")
-      Ok(issues) =>
-        for issue in issues {
-          diagnostics.push("\{module_.source.path}: \{issue.message}")
-        }
-    }
+  for issue in collect_module_graph_issues(graph) {
+    diagnostics.push("\{issue.modulePath}: \{issue.message}")
   }
   diagnostics.join("\n")
 }

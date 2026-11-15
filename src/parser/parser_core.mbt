@@ -138,6 +138,11 @@ pub struct Parser {
   invalid_decorator_uses : Array[String]
   // Always-error grammar misuses (complete messages; see TsModule).
   grammar_misuses : Array[String]
+  // Opening-quote positions of the lexer's unterminated strings, kept only
+  // in JSX mode: a JSX attribute value may span lines, and the lexer could
+  // not tell. Shared by every `{ ..self }` copy, so a speculative parser
+  // that consumes a JSX element forgives them for all of them.
+  jsx_unterminated_strings : Array[Int32]
   // Local binding names introduced by ES `import` statements (default,
   // namespace, and named/aliased specifiers). The import statements
   // themselves are consumed and discarded, but the *names* must stay
@@ -499,6 +504,7 @@ pub fn Parser::new_with_strict_and_jsx(
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses: [],
+    jsx_unterminated_strings: [],
     imported_binding_names: [],
     import_module_specs: [],
     multi_file_source: false,
@@ -851,6 +857,11 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses,
+    jsx_unterminated_strings: if allow_jsx {
+      lexer.unterminated_string_starts
+    } else {
+      []
+    },
     imported_binding_names: [],
     import_module_specs: [],
     multi_file_source: has_filename_directive,

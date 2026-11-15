@@ -1386,6 +1386,28 @@ fn Resolver::alias_namespace_import_types(
         r.type_aliases.contains(key) ||
         r.enums.contains(key) {
         r.qualified_names[qualified] = key
+        // A NAMED import (`qualified == bare`): in the checked module the
+        // bare spelling IS that import, so the bare entry — the merge of
+        // every declarer — is replaced by the import's own declaration.
+        // `qualified_names` only reaches what goes through `unwrap`, and
+        // twenty-odd sites look an enum up by a value's NAME
+        // (`BooleanNumber.TRUE` read `enums["BooleanNumber"]`, which was
+        // whichever module ingested last — univer's protocol, whose
+        // members are `BOOLEAN_NUMBER_TRUE`).
+        if qualified == bare {
+          match r.interfaces.get(key) {
+            Some(i) => r.interfaces[bare] = i
+            None => ()
+          }
+          match r.type_aliases.get(key) {
+            Some(a) => r.type_aliases[bare] = a
+            None => ()
+          }
+          match r.enums.get(key) {
+            Some(e) => r.enums[bare] = e
+            None => ()
+          }
+        }
         continue
       }
     }
@@ -18728,7 +18750,15 @@ fn method_override_incompatible(
           (Rest(_), _) | (_, Rest(_)) => return false
           _ => ()
         }
-        if !is_assignable_to_bivariant(dp, bp) {
+        // METHOD parameters are bivariant (strictFunctionTypes exempts
+        // methods), so either direction suffices. Only the derived-to-base
+        // one was asked, which reported the commonest legal widening there
+        // is — univer's `deleteConfig(id: string | symbol)` implementing
+        // `deleteConfig(id: string)` (probed: tsc accepts it, and the
+        // narrower override too). `is_assignable_to_bivariant` is about
+        // parameters NESTED inside these types, not this level.
+        if !is_assignable_to_bivariant(dp, bp) &&
+          !is_assignable_to_bivariant(bp, dp) {
           return true
         }
       }
@@ -24894,9 +24924,9 @@ fn collect_narrowing(
         let truthy = if cur is Unknown {
           @ast.TsType::Object([])
         } else if refine_bool {
-          boolean_truthiness(non_nullable(cur), true)
+          boolean_truthiness(truthy_non_nullish(resolver, cur), true)
         } else {
-          non_nullable(cur)
+          truthy_non_nullish(resolver, cur)
         }
         if then_sense {
           then_binds.push((key, truthy))
@@ -25047,6 +25077,20 @@ fn optional_chain_equality_narrowing(
       None => ()
     }
   }
+}
+
+///|
+/// What a truthy test leaves of `cur`: `non_nullable`, plus `void`, which
+/// is falsy (its only value is `undefined`) — and an alias to a union is
+/// unwrapped first, or univer's `Nullable<T> = T | null | undefined |
+/// void` stayed one opaque variant and `if (s) use(s)` reported the whole
+/// alias. Only a union is taken, so any other type keeps its shape.
+fn truthy_non_nullish(resolver : Resolver, cur : @ast.TsType) -> @ast.TsType {
+  let ty = match resolver.unwrap(cur) {
+    Union(_) as u => u
+    _ => cur
+  }
+  narrow_remove(non_nullable(ty), fn(v) { v is Void })
 }
 
 ///|
@@ -25957,7 +26001,11 @@ fn analyze_equality(
               }
             })
           } else {
-            narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
+            // `typeof x === "undefined"` is also true of `void`, whose only
+            // value is `undefined`, so the else side drops it too (probed).
+            narrow_remove(cur, fn(v) {
+              type_eq(v, narrowed) || (narrowed is Undefined && v is Void)
+            })
           }
           false_side.push((name, stripped))
         }
@@ -26005,14 +26053,25 @@ fn analyze_equality(
   }
   match null_match {
     Some((key, tag)) => {
-      let cur = narrowing_current_type(env, resolver, key)
+      // An alias to a union (univer's `Nullable<T> = T | null | undefined
+      // | void`) is one opaque variant until it is unwrapped, so `s ==
+      // null` removed nothing and every later `use(s)` reported the whole
+      // alias. Only a union is taken, as the `typeof` arm below does.
+      let cur0 = narrowing_current_type(env, resolver, key)
+      let cur = match resolver.unwrap(cur0) {
+        Union(_) as u => u
+        _ => cur0
+      }
       // Loose `== null` / `== undefined` matches *both* `null` and
       // `undefined` (in JS `null == undefined`), so the equal side is the
       // nullish pair and the not-equal side strips both. Strict `===` keeps
       // the exact tag only.
+      // `void` narrows exactly like `undefined` here: tsc removes it on
+      // the not-equal side of `== null`, `!= undefined` and `!== undefined`
+      // and keeps it after `!== null` (probed on all four).
       let is_nullish = fn(v : @ast.TsType) -> Bool {
         match v {
-          Null | Undefined => true
+          Null | Undefined | Void => true
           _ => false
         }
       }
@@ -26050,7 +26109,14 @@ fn analyze_equality(
         if !type_definitely_non_nullish(resolver, cur) {
           true_side.push((key, tag))
         }
-        false_side.push((key, narrow_remove(cur, fn(v) { type_eq(v, tag) })))
+        false_side.push(
+          (
+            key,
+            narrow_remove(cur, fn(v) {
+              type_eq(v, tag) || (tag is Undefined && v is Void)
+            }),
+          ),
+        )
       }
     }
     None => ()

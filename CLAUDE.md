@@ -4391,6 +4391,63 @@ product surfaces now.
   `const [x = 0]: any = []` still binds `number` where tsc binds `any`.
   That is the absent-versus-`: any` blocker again, and it predates this
   work.
+
+  Batch GD adds **univer** (dream-num/univer v1.5.0) as field data:
+  `scripts/field_univer.sh` clones it outside the repo, installs with
+  `--ignore-scripts` and checks each of the 58 packages from its
+  `src/index.ts`. univer's own CI runs `tsrs --noEmit`, a port of
+  TypeScript 7.1, and the TS7 nightly here reports nothing on it but the
+  four generated files `--ignore-scripts` skips and their cascades. So
+  every `mtsc` report on it is a false positive. The first run had
+  **3,687**, and they named six defects, every one the
+  applied-in-some-places family:
+  - **The graph loader dropped edges.** `aliases` is keyed by the bare
+    specifier alone, and every importer after the first one to resolve
+    `@univerjs/core` got no edge at all. The checker reads one edge per
+    importer, so whether a file's bare imports existed depended on the
+    walk's queue order. Fixed in the loader; the bundler's alias map is
+    unchanged.
+  - **A named import meant the merge of every declarer.** univer's
+    `@univerjs/core` and `@univerjs/protocol` both export `ICommand`,
+    `IRange`, `ICellData`, `IMutation` and `BooleanNumber`. Batch FR's
+    per-module keys reached `ns.X` and never `import { X }`. The value
+    side looked `BooleanNumber.TRUE` up by NAME and got whichever module
+    was ingested last — protocol's, whose members are
+    `BOOLEAN_NUMBER_TRUE`. Pre-existing on main, order-dependent, and
+    reproduced in three files.
+  - **`check_module_graph`, the string ABI, was a second copy of the
+    graph loop** that had fallen behind the CLI's. It had no per-module
+    keys, no ambient `.d.ts` scope and no cache reset. It is now a format
+    over `collect_module_graph_issues`.
+  - **univer's `Nullable<T> = T | null | undefined | void`** was one
+    opaque variant to the `== null` and truthiness arms, so no guard
+    narrowed it, and `void` survived every guard even when written out.
+    tsc removes `void` wherever it removes `undefined` except after
+    `!== null`; nine cells were probed.
+  - **Two parser rules.** A JSX attribute string may span lines, and the
+    lexer, which runs before any parsing, recorded TS1002 for it. The JSX
+    element now forgives the strings it contains. And the
+    parameter-property modifier order is accessibility, then `override`,
+    then `readonly`. The rule only knew the first pair, so it reported
+    `override readonly x` — the legal spelling, and how univer writes
+    every injected service — and missed `readonly override x`.
+  - **Method parameters are bivariant.** `method_override_incompatible`
+    asked only derived-to-base, so `deleteConfig(id: string | symbol)`
+    implementing `deleteConfig(id: string)` was reported.
+
+  What the batch did NOT fix is stated with its measurements. tsconfig
+  `compilerOptions` never reach the checker, which reads options only
+  from `// @option:` file headers. univer sets `experimentalDecorators`
+  and `strictPropertyInitialization: false`, and prepending the
+  equivalent headers to every source removed **826** reports and added
+  none. So the headers were applied for every measurement here, and
+  plumbing tsconfig through is the first item filed. The loader fix made
+  the checker see MORE of the program: the UI packages are 4-4.6x slower
+  per entry, and newly visible code carries its own families. The
+  largest is an imported OVERLOADED function whose optional parameters
+  read as required (`useObservable(x)` is "expected at least 4
+  arguments" 125 times). Before the loader fix, those files' imports were
+  simply missing.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

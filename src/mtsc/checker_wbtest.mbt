@@ -348,3 +348,95 @@ test "mtsc graph checker keeps a literal for a primitive-constrained import" {
     "",
   )
 }
+
+///|
+/// Two reachable modules declaring the same interface name used to share
+/// one bare entry holding their MERGE, so a named import meant both.
+/// univer's `@univerjs/core` and `@univerjs/protocol` both export
+/// `ICommand`, and `import { ICommand } from '@univerjs/core'` was asked
+/// for protocol's `data` member. A named import now binds the local name
+/// to the declaring module's own key, as `ns.X` already did.
+test "mtsc graph checker binds a named import to its own module's declaration" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import type { ICommand } from \"./a\";\nimport type { ICommand as P } from \"./b\";\nexport const ok: ICommand = { id: \"a\", type: 1 };\nexport const ok2: P = { id: \"a\", data: \"s\" };\nexport const bad: ICommand = { id: \"a\", data: \"s\" };",
+        allowJsx: false,
+      },
+      {
+        path: "/src/a.ts",
+        source: "export interface ICommand { id: string; type: number }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/b.ts",
+        source: "export interface ICommand { id: string; data: string }",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./b",
+        targetPath: "/src/b.ts",
+      },
+    ],
+  })
+  let flagged = fn(binding : String) -> Bool {
+    issues.iter().any(fn(i) { i.path.contains("binding `\{binding}` ") })
+  }
+  assert_false(flagged("ok"))
+  assert_false(flagged("ok2"))
+  assert_true(flagged("bad"))
+}
+
+///|
+/// The VALUE side of the same collision: an enum member is looked up by
+/// the value's name, so `BooleanNumber.TRUE` read whichever module's
+/// `enum BooleanNumber` was ingested last — univer's protocol declares one
+/// with `BOOLEAN_NUMBER_TRUE`, and every core `BooleanNumber.TRUE` became
+/// "does not exist", depending on import order.
+test "mtsc graph checker reads an imported enum's own members" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import { BooleanNumber } from \"./a\";\nimport { B } from \"./b\";\nexport const ok: number = BooleanNumber.TRUE + B;\nexport const bad = BooleanNumber.BOOLEAN_NUMBER_TRUE;",
+        allowJsx: false,
+      },
+      {
+        path: "/src/a.ts",
+        source: "export enum BooleanNumber { FALSE = 0, TRUE = 1 }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/b.ts",
+        source: "export enum BooleanNumber { BOOLEAN_NUMBER_FALSE = 0, BOOLEAN_NUMBER_TRUE = 1 }\nexport const B = 1;",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./b",
+        targetPath: "/src/b.ts",
+      },
+    ],
+  })
+  let messages = issues.map(fn(i) { i.message })
+  assert_false(messages.iter().any(fn(m) { m.contains("`TRUE`") }))
+  assert_true(
+    messages.iter().any(fn(m) { m.contains("`BOOLEAN_NUMBER_TRUE`") }),
+  )
+}

@@ -631,8 +631,24 @@ async fn mtsc_load_bundle_files(
       if externals.contains(spec) {
         continue
       }
-      if aliases.contains(spec) {
-        continue
+      // The bundler resolves a bare specifier once (`aliases` is keyed by
+      // the specifier alone), but the CHECKER reads one edge per
+      // importer: `find_graph_target` asks "where does THIS file's
+      // `@univerjs/core` go". Skipping the edge for every importer after
+      // the first left those files' bare imports unresolved — which file
+      // came first depended on the queue order, and univer's
+      // `replay.command.ts` lost its `@univerjs/core` edge whenever a
+      // sibling was walked before it.
+      match aliases.get(spec) {
+        Some(found) => {
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: found,
+          })
+          continue
+        }
+        None => ()
       }
       let bare_started = @bench.monotonic_clock_start()
       let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
@@ -675,8 +691,24 @@ async fn mtsc_load_bundle_files(
       if externals.contains(spec) {
         continue
       }
-      if aliases.contains(spec) {
-        continue
+      // The bundler resolves a bare specifier once (`aliases` is keyed by
+      // the specifier alone), but the CHECKER reads one edge per
+      // importer: `find_graph_target` asks "where does THIS file's
+      // `@univerjs/core` go". Skipping the edge for every importer after
+      // the first left those files' bare imports unresolved — which file
+      // came first depended on the queue order, and univer's
+      // `replay.command.ts` lost its `@univerjs/core` edge whenever a
+      // sibling was walked before it.
+      match aliases.get(spec) {
+        Some(found) => {
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: found,
+          })
+          continue
+        }
+        None => ()
       }
       let bare_started = @bench.monotonic_clock_start()
       let bare = @parser.resolve_runtime_module_specifier(resolved, spec)

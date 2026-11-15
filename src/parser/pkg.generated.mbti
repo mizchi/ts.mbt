@@ -139,6 +139,7 @@ pub struct Lexer {
   mut unterminated_block_comment : Bool
   mut unterminated_regex : Bool
   mut unterminated_string : Bool
+  unterminated_string_starts : Array[Int32]
   mut empty_radix_literal_count : Int32
   mut escaped_keyword_count : Int32
   mut unbalanced_regex_group_count : Int32
@@ -201,6 +202,7 @@ pub struct Parser {
   strict_mode_misuses : Array[String]
   invalid_decorator_uses : Array[String]
   grammar_misuses : Array[String]
+  jsx_unterminated_strings : Array[Int32]
   imported_binding_names : Array[String]
   import_module_specs : Array[String]
   multi_file_source : Bool

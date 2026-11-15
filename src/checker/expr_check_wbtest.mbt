@@ -23236,3 +23236,79 @@ test "using bodies, nested empty defaults, any unions and empty spreads" {
     0,
   )
 }
+
+///|
+/// univer's `Nullable<T> = T | null | undefined | void`: an alias to a
+/// union was one opaque variant to the `== null` and truthiness arms, so no
+/// guard removed anything, and `void` survived every guard even when the
+/// union was written out. tsc treats `void` like `undefined` here — it goes
+/// on the not-equal side of `== null`, `!= undefined` and `!== undefined`,
+/// on the truthy side, and after `typeof x === "undefined"` — and keeps it
+/// after `!== null`, which is the one cell still reported (probed).
+test "a nullable alias with void narrows under every nullish guard" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let prelude = "type Nullable<T> = T | null | undefined | void;\ninterface S { a: number }\ndeclare function get(): Nullable<S>;\ndeclare function getv(): S | null | void;\ndeclare function use(s: S): void;\n"
+  for
+    body in [
+      "function f() { const s = get(); if (s == null) return; use(s); }", "function f() { const s = get(); if (!s) return; use(s); }",
+      "function f() { const s = get(); if (s) use(s); }", "function f() { const s = get(); if (s != null) { s.a; } }",
+      "function f() { const s = get(); if (s === null || s === undefined) return; use(s); }",
+      "function f() { const s = getv(); if (s == null) return; use(s); }", "function f() { const s = getv(); if (!s) return; use(s); }",
+      "function f() { const s = getv(); if (s === null || s === undefined) return; use(s); }",
+      "function f() { const s = getv(); if (s === null || typeof s === \"undefined\") return; use(s); }",
+    ] {
+    @test.assert_eq(n(prelude + body), 0)
+  }
+  // `!== null` leaves `void` (and `undefined`) behind.
+  assert_true(
+    n(prelude + "function f() { const s = getv(); if (s !== null) use(s); }") >
+    0,
+  )
+  assert_true(
+    n(prelude + "function f() { const s = get(); if (s !== null) use(s); }") > 0,
+  )
+}
+
+///|
+/// The parameter-property modifier order is accessibility, `override`,
+/// `readonly`. The rule used to know only that accessibility precedes
+/// `override`, and reported `override readonly x` — the legal spelling —
+/// as "`readonly` modifier must precede `override`".
+test "parameter property modifiers follow tsc's order" {
+  let msgs = fn(src : String) -> Array[String] {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).map(fn(
+      i,
+    ) {
+      i.message
+    })
+  }
+  let cls = fn(params : String) -> String {
+    "class B { constructor(readonly x: number) {} }\nclass D extends B { constructor(" +
+    params +
+    ") { super(x); } }"
+  }
+  for
+    ok in [
+      "override readonly x: number", "public override readonly x: number", "public readonly x: number",
+      "private readonly x: number", "protected override x: number",
+    ] {
+    @test.assert_eq(
+      msgs(cls(ok)).filter(fn(m) { m.contains("must precede") }),
+      [],
+    )
+  }
+  let order = fn(params : String) -> Array[String] {
+    msgs(cls(params)).filter(fn(m) { m.contains("must precede") })
+  }
+  @test.assert_eq(order("readonly override x: number"), [
+    "`override` modifier must precede `readonly` modifier",
+  ])
+  @test.assert_eq(order("override public x: number"), [
+    "`public` modifier must precede `override` modifier",
+  ])
+  @test.assert_eq(order("readonly public x: number"), [
+    "`public` modifier must precede `readonly` modifier",
+  ])
+}

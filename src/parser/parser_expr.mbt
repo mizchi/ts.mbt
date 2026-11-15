@@ -2086,6 +2086,7 @@ fn Parser::try_parse_parenthesized_jsx_expr(
     }
   }
   if j < self.src.length() && self.src[j].to_int().unsafe_to_char() == ')' {
+    self.forgive_jsx_string_artifacts(i, jsx_end)
     self.advance_to_source_pos(j + 1)
     return (true, embeds)
   }
@@ -2193,6 +2194,7 @@ fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
   let start = self.peek().pos
   match self.parse_jsx_element_at_source(start) {
     Some((end, element)) => {
+      self.forgive_jsx_string_artifacts(start, end)
       self.advance_to_source_pos(end)
       element
     }
@@ -2202,8 +2204,48 @@ fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
       let (end, tag, attrs, child_embeds) = self.scan_jsx_source_end_with_structure(
         start,
       )
+      self.forgive_jsx_string_artifacts(start, end)
       self.advance_to_source_pos(end)
       @ast.TsExpr::JsxElement(tag, attrs, child_embeds)
+    }
+  }
+}
+
+///|
+/// TS1002 ("unterminated string literal") is decided by the LEXER, which
+/// runs over the whole file before any parsing and so reads JSX text and
+/// attribute values as if they were JavaScript. A JSX attribute string may
+/// span lines — `className="\n  a b\n"` is legal, and univer writes a
+/// long Tailwind class list that way in a hundred components — so an
+/// unterminated string whose opening quote turns out to lie inside a JSX
+/// element is an artifact of lexing out of context, not an error. Each
+/// JSX element this parser consumes forgives the ones in its source
+/// range; once none is left, the diagnostic goes too. A string outside
+/// every JSX element still reports, which keeps `const s = "a` an error
+/// in a `.tsx` file.
+fn Parser::forgive_jsx_string_artifacts(
+  self : Parser,
+  start : Int32,
+  end : Int32,
+) -> Unit {
+  let pending = self.jsx_unterminated_strings
+  if pending.length() == 0 {
+    return
+  }
+  let kept = pending.filter(fn(p) { p < start || p >= end })
+  if kept.length() == pending.length() {
+    return
+  }
+  pending.clear()
+  for p in kept {
+    pending.push(p)
+  }
+  if pending.length() == 0 {
+    match self.grammar_misuses.search("unterminated string literal") {
+      Some(i) => {
+        let _ = self.grammar_misuses.remove(i)
+      }
+      None => ()
     }
   }
 }

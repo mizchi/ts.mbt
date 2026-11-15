@@ -8421,3 +8421,42 @@ test "a const-asserted rest source still feeds a computed key" {
   guard found is Some(v) else { abort("id not recorded") }
   assert_true(v.type_ is Number)
 }
+
+///|
+/// A JSX attribute string may span lines; the lexer runs before the parser
+/// and cannot know a quote opens one, so it recorded TS1002 for univer's
+/// multi-line `className="…"` lists. The JSX element forgives the strings
+/// it contains, and a string outside every element still reports.
+test "parser: a multi-line JSX attribute string is not unterminated" {
+  let misuses = fn(src : String) -> Array[String] raise {
+    let module_ = Parser::from_source_with_jsx(src, true).parse_module()
+    module_.grammar_misuses.filter(fn(m) { m == "unterminated string literal" })
+  }
+  let multi =
+    #|export function F() {
+    #|  return (
+    #|    <div
+    #|      className="
+    #|        a b
+    #|      "
+    #|    >
+    #|      hi
+    #|    </div>
+    #|  );
+    #|}
+  assert_eq(misuses(multi), [])
+  assert_eq(
+    misuses("export const a = <div title='p\nq' />;\nexport const b = 1;\n"),
+    [],
+  )
+  // Outside JSX, before or after an element, it is still TS1002.
+  assert_eq(
+    misuses(
+      "export const a = <div className=\"\n x\n\">ok</div>;\nexport const s = \"broken\n;\n",
+    ),
+    ["unterminated string literal"],
+  )
+  assert_eq(misuses("export const s = \"broken\n;\n"), [
+    "unterminated string literal",
+  ])
+}

@@ -120,3 +120,64 @@ test "mtsc resolve: a .js specifier may name a .ts file" {
   assert_eq(mtsc_ts_equivalents("./external.ts").length(), 0)
   assert_eq(mtsc_ts_equivalents("./styles.css").length(), 0)
 }
+
+///|
+/// The bundler resolves a bare specifier once, keyed by the specifier
+/// alone, and the loader used to skip the EDGE for every later importer
+/// of it. The checker reads one edge per importer, so whichever file the
+/// queue happened to reach second lost its `@univerjs/core` import
+/// outright — and with it the per-module key a named import needs when two
+/// packages declare the same interface name.
+async test "mtsc loader: every importer of a bare specifier gets its own edge" {
+  let root = "/tmp/ts_mbt_mtsc_bare_edges"
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  @fs.mkdir(root + "/node_modules/lib", permission=0o755, recursive=true)
+  @fs.write_file(
+    root + "/node_modules/lib/package.json",
+    "{\"name\":\"lib\",\"main\":\"./index.ts\"}\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/node_modules/lib/index.ts",
+    "export const v = 1;\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/a.ts",
+    "import { v } from \"lib\";\nexport const a = v;\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/b.ts",
+    "import { v } from \"lib\";\nexport const b = v;\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/entry.ts",
+    "import { a } from \"./a\";\nimport { b } from \"./b\";\nexport const s = a + b;\n",
+    create=0o644,
+  )
+  let edges : Array[@mtsc_core.MtscModuleEdge] = []
+  let loaded = mtsc_load_bundle_files(
+    root + "/entry.ts",
+    {},
+    {},
+    {},
+    {},
+    false,
+    [],
+    {},
+    edges,
+  )
+  assert_true(loaded is Ok(_))
+  let importers : Array[String] = []
+  for edge in edges {
+    if edge.moduleSpecifier == "lib" {
+      importers.push(edge.importerPath)
+    }
+  }
+  importers.sort()
+  assert_eq(importers, [root + "/a.ts", root + "/b.ts"])
+}
