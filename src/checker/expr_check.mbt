@@ -21880,8 +21880,39 @@ fn backedge_walk_list(
   if backedge_list_exits(stmts, in_breakable, throw_caught, inner_labels) {
     return
   }
-  for st in stmts {
-    backedge_walk_stmt(st, w, true, in_breakable, throw_caught, inner_labels)
+  // A write that a LATER statement of the same list overwrites never
+  // reaches the back edge: `y = 1; y = "s"` leaves `y` a string on every
+  // iteration, and joining the `1` as well fed `string | number` through
+  // the fixpoint into an `x = y` above it. Only a plain statement-level
+  // assignment counts as overwriting — it runs whenever the list reaches
+  // it, and a list that exits first contributes nothing anyway.
+  let last_plain : Map[String, Int32] = Map([])
+  for i, st in stmts {
+    match st {
+      Assign(n, _) | Expr(AssignExpr(n, _)) => last_plain[n] = i
+      _ => ()
+    }
+  }
+  for i, st in stmts {
+    let one : BackedgeWrites = { assigns: [], other: Map([]), }
+    backedge_walk_stmt(st, one, true, in_breakable, throw_caught, inner_labels)
+    fn overwritten(n : String) -> Bool {
+      match last_plain.get(n) {
+        Some(j) => j > i
+        None => false
+      }
+    }
+
+    for a in one.assigns {
+      if !overwritten(a.0) {
+        w.assigns.push(a)
+      }
+    }
+    for n, _ in one.other {
+      if !overwritten(n) {
+        w.other[n] = ()
+      }
+    }
   }
 }
 
@@ -21912,7 +21943,11 @@ fn backedge_walk_stmt(
       collect_flow_writes_expr(e, other)
     }
     // A `var` redeclaration is the SAME function-scoped binding, so its
-    // initializer writes it; `let` / `const` declare a new one.
+    // initializer writes it; `let` / `const` declare a new one, and so
+    // does nothing a `var x: T;` with no initializer — it is a write of
+    // nothing, and counting it widened `x` to its whole declared type.
+    Var(b, _, Var("__ts_no_init__")) =>
+      collect_flow_writes_binding_exprs(b, other)
     Var(b, _, e) => {
       collect_flow_writes_binding(b, other)
       collect_flow_writes_expr(e, other)

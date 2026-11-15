@@ -8391,3 +8391,16 @@ test "a const-asserted computed key resolves like the bare literal" {
   guard found is Some(v) else { abort("id not recorded") }
   assert_true(v.type_ is Number)
 }
+
+///|
+test "a const-asserted rest source still feeds a computed key" {
+  let parser = Parser::from_source_with_jsx(
+    "const [...KEYS] = [\"id\"] as const;\nexport const { [KEYS[0]]: id } = { id: 1 };",
+    false,
+  )
+  parser.keep_const_assertions()
+  let m = parser.parse_module() catch { _ => abort("parse") }
+  let found = m.values.iter().find_first(fn(v) { v.name == "id" })
+  guard found is Some(v) else { abort("id not recorded") }
+  assert_true(v.type_ is Number)
+}

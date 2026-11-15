@@ -1949,6 +1949,13 @@ fn value_decl_static_array_rest_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_array_rest_expr_with_depth(
+        inner,
+        start_index,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ArrayLit(items) => {
       let rest_items : Array[@ast.TsExpr] = []
       for i, item in items {
@@ -2019,6 +2026,13 @@ fn value_decl_static_object_rest_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_object_rest_expr_with_depth(
+        inner,
+        obj_binding,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ObjectLit(props) => {
       let excluded_keys : Array[String] = []
       for prop in obj_binding.props {

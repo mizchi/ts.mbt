@@ -960,17 +960,21 @@ test "review: every write that reaches the back edge joins, and only those" {
     #|function badLeavesLoop(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; x = "b"; break; } }
     #|function badOuterLabel(c: boolean) { let x: "a" | "b" = "a"; outer: while (c) { if (x === "b") break; while (c) { x = "b"; break outer; } } }
     #|function badUpdateReached(c: boolean) { let x: string | number = "a"; for (; c; c = false) { acceptString(x); if (c) { x = 1; continue; } break; } }
+    #|function okOverwritten(c: boolean) { let x: string | number = "a"; let y: string | number = "a"; while (c) { acceptString(x); x = y; y = 1; y = "s"; } }
+    #|function okBareVarRedecl(c: boolean) { var x: string | number; x = "s"; while (c) { acceptString(x); var x: string | number; } }
+    #|function badLastWriteWins(c: boolean) { let x: string | number = "a"; while (c) { acceptString(x); x = "s"; x = 1; } }
   let issues = eff_issues_checking(src)
   for
     ok in [
       "okDependent", "okForUpdateAfterBreak", "okInnerLabel", "okPatternWrite", "okForHeadWrite",
-      "okExprWrite", "okContinuePath", "okSelfStep",
+      "okExprWrite", "okContinuePath", "okSelfStep", "okOuterHeadSelfAssign", "okOverwritten",
+      "okBareVarRedecl",
     ] {
     assert_false(eff_has(issues, ok), msg=ok)
   }
   for
     bad in [
-      "badClosureWrite", "badLeavesLoop", "badOuterLabel", "badUpdateReached",
+      "badClosureWrite", "badLeavesLoop", "badOuterLabel", "badUpdateReached", "badLastWriteWins",
     ] {
     assert_true(eff_has(issues, bad), msg=bad)
   }
