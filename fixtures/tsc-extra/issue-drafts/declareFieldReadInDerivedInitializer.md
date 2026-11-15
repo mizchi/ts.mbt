@@ -18,16 +18,17 @@ TS2729, used before its initialization, declare field, declare modifier, useDefi
 
 - This changed between versions 4.2.3 and 4.3.5.
 - This changed in commit or PR #43194 ("Consider class field properties to redeclare parent definitions", the fix for #42319).
-- It still reproduces in 5.9.3, 6.0.3 and `7.1.0-dev.20261114.1`.
+- It still reproduces in 5.9.3, 6.0.3 and `7.1.0-dev.20261114.1`. I checked 7.1 with the CLI (`typescript@next`). The Playground's "Nightly" is `6.0.0-dev.20260416`, not TypeScript 7.
 
 ## ⏯ Playground Link
 
-https://www.typescriptlang.org/play/?target=99#code/MYGwhgzhAEBCkFNoG8BQ0PQEYC5oDsBXAWywQCdoBeaARgG5UBfVVUSGABXAEt9oEADwAuCfABMY8CEjSZo46tGEALHhAB0WetAD0u6AHkA0s1bso0AHJhy5APYB3BIqGiJUxCnSZxCduRIuHTQAD7QAEyM8oo0qupaOvoCdvaUACoAyhEA7BEAnHicDgAOFMIAntAA5FjV0OrQhDKKZABmaUg8wjB83TxgIDwAXmDCPPb4GmZskxD2IAgaIPYA5gAU+AiO1rYOzuLrAJQa4kdJBrSoQA
+https://www.typescriptlang.org/play/?useDefineForClassFields=true&target=99&ts=6.0.3#code/MYGwhgzhAEBCkFNoG8BQ0PQEYC5oDsBXAWywQCdoBeaARgG5UBfVVUSGABXAEt9oEADwAuCfABMY8CEjSZo46tGEALHhAB0WetAD0u6AHkA0s1bso0AHJhy5APYB3BIqGiJUxCnSZxCduRIuHTQAD7QAEyM8oo0qupaOvoCdvaUACoAyhEA7BEAnHicDgAOFMIAntAA5FjV0OrQhDKKZABmaUg8wjB83TxgIDwAXmDCPPb4GmZskxD2IAgaIPYA5gAU+AiO1rYOzuLrAJQa4kdJBrSoQA
 
 ## 💻 Code
 
+Running `tsc` with `target: esnext` reproduces it, because `useDefineForClassFields` then defaults to `true`. The Playground does not derive that default from the target and keeps `useDefineForClassFields: false`, so the link above turns the option on explicitly.
+
 ```ts
-// @target: esnext  (so useDefineForClassFields is true)
 class Base {
     b: number = 1;
 }
