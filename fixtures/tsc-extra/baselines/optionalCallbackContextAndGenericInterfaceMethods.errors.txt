@@ -1,0 +1,44 @@
+optionalCallbackContextAndGenericInterfaceMethods.ts(7,51): error TS2339: Property 'nonexistent' does not exist on type '{ num: number; }'.
+optionalCallbackContextAndGenericInterfaceMethods.ts(11,52): error TS2345: Argument of type '"b"' is not assignable to parameter of type '"a"'.
+optionalCallbackContextAndGenericInterfaceMethods.ts(12,52): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+optionalCallbackContextAndGenericInterfaceMethods.ts(17,43): error TS2345: Argument of type '(s: string) => P<string>' is not assignable to parameter of type '(x: number) => P<string>'.
+  Types of parameters 's' and 'x' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+optionalCallbackContextAndGenericInterfaceMethods.ts(20,38): error TS2322: Type 'string' is not assignable to type 'number'.
+
+
+==== optionalCallbackContextAndGenericInterfaceMethods.ts (5 errors) ====
+    // An optional method-typed property contextually types an object-literal
+    // method; a generic interface method's arguments are checked against its
+    // instantiated parameters; an overload taking `Object` accepts a number.
+    
+    interface Opts { map?: (i: { num: number }) => void }
+    declare function use(o: Opts): void;
+    function badOptionalCallback() { use({ map(i) { i.nonexistent; } }); }
+                                                      ~~~~~~~~~~~
+!!! error TS2339: Property 'nonexistent' does not exist on type '{ num: number; }'.
+    function okOptionalCallback() { use({ map: (i) => { i.num.toFixed(); } }); }
+    interface Store<T> { get<K extends keyof T>(k: K): T[K]; put<K extends string>(k: K): void }
+    function okStoreGet(st: Store<{ a: 1 }>) { st.get("a"); st.put("x"); }
+    function badStoreGet(st: Store<{ a: 1 }>) { st.get("b"); }
+                                                       ~~~
+!!! error TS2345: Argument of type '"b"' is not assignable to parameter of type '"a"'.
+    function badStorePut(st: Store<{ a: 1 }>) { st.put(1); }
+                                                       ~
+!!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+    interface P<T> { then<U>(cb: (x: T) => P<U>): P<U> }
+    declare function tfn(n: number): P<number>;
+    declare function tstr(s: string): P<string>;
+    function okThen(np: P<number>) { np.then(tfn); }
+    function badThen(np: P<number>) { np.then(tstr); }
+                                              ~~~~
+!!! error TS2345: Argument of type '(s: string) => P<string>' is not assignable to parameter of type '(x: number) => P<string>'.
+!!! error TS2345:   Types of parameters 's' and 'x' are incompatible.
+!!! error TS2345:     Type 'number' is not assignable to type 'string'.
+    declare function takesObject(x: Object): string;
+    declare function takesObject(x: number): number;
+    function badObjectOverload() { const r: number = takesObject(1); }
+                                         ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    function okObjectOverload() { const r: string = takesObject(1); }
+    

@@ -261,6 +261,12 @@ checker-miss-buckets *ARGS:
 # narrows now, and its real error (TS2540, writing the readonly lib member)
 # needs ES2026's `RawJSON` modelled.
 #
+# The nightly `7.1.0-dev.20261114.1` (main at 6bdcb54d) added one case,
+# `importAliasMergedNamespace`, which TS7 accepts and which was an FP:
+# `export import E = M; new E.C()` read `E` as undeclared, because an
+# `export import` alias records no `values` entry (the bridge reads those).
+# The error set is unchanged and the budget stays 0.
+#
 # 50 -> 15 in batch FU, one file at a time and each with its legal
 # neighbour probed against TS 7.1; the 15 left each need machinery (generic
 # inference through overloads and conditional types, object-literal
@@ -306,6 +312,20 @@ checker-miss-buckets *ARGS:
 verify-checker-soundness:
     moon build --target native --release
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 0
+
+# Test cases the upstream TypeScript suite does not contain, in its harness
+# format, kept so they can be contributed back (`fixtures/tsc-extra`).
+#
+# Three questions, each meaningful only once the one before holds: does
+# TypeScript 7 still say what the committed `.errors.txt` baseline says (a
+# drift there is a finding about tsc, not about mtsc); does every `ok…` /
+# `bad…` declaration's name agree with tsc's own spans; and does
+# `mtsc check --strict` agree — a report on an `ok…` declaration is a false
+# positive and fails, a silent `bad…` is a MISS that must be declared in
+# `fixtures/tsc-extra/mtsc-misses.txt`. `--update` rewrites the baselines.
+verify-tsc-extra *ARGS:
+    moon build --target native --release
+    node scripts/verify_tsc_extra.mjs {{ ARGS }}
 
 # Is any checker rule superlinear in the size of a module-wide list?
 #

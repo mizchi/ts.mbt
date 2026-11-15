@@ -1,0 +1,26 @@
+templateLiteralNumberWhitespace.ts(15,9): error TS2345: Argument of type '""' is not assignable to parameter of type '`${number}`'.
+templateLiteralNumberWhitespace.ts(16,9): error TS2345: Argument of type '"1_000"' is not assignable to parameter of type '`${number}`'.
+
+
+==== templateLiteralNumberWhitespace.ts (2 errors) ====
+    // `${number}` admits a string when `+s` is finite and `s` is not empty
+    // (`templateLiteralTypesPatterns` pins `"0x1"`, `"1e21"`, ... as accepted and
+    // `""` as rejected). That makes whitespace a number: `+" "` is `0`, so a
+    // string of spaces, a newline, a no-break space and a padded numeral all
+    // satisfy `${number}`. Nothing upstream pins these; whether they are meant
+    // to is the question.
+    declare function numbers(x: `${number}`): void;
+    
+    numbers(" ");       // accepted
+    numbers("   ");     // accepted
+    numbers("\n");      // accepted
+    numbers(" ");  // accepted
+    numbers(" 1");      // accepted
+    numbers("1 ");      // accepted
+    numbers("");        // TS2345
+            ~~
+!!! error TS2345: Argument of type '""' is not assignable to parameter of type '`${number}`'.
+    numbers("1_000");   // TS2345
+            ~~~~~~~
+!!! error TS2345: Argument of type '"1_000"' is not assignable to parameter of type '`${number}`'.
+    

@@ -1,0 +1,21 @@
+errorIsErrorAndAugmentedRawJSON.ts(7,55): error TS2322: Type 'string' is not assignable to type 'number'.
+errorIsErrorAndAugmentedRawJSON.ts(11,38): error TS2339: Property 'nope' does not exist on type 'Mine'.
+
+
+==== errorIsErrorAndAugmentedRawJSON.ts (2 errors) ====
+    // ES2026 lib: `Error.isError` narrows its argument; a `declare global`
+    // augmentation of `RawJSON` merges with the lib declaration.
+    
+    export {};
+    declare const v: unknown;
+    function okIsError() { if (Error.isError(v)) { const m: string = v.message; return m } return "" }
+    function badIsError() { if (Error.isError(v)) { const n: number = v.message; return n } return 0 }
+                                                          ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    declare global { interface RawJSON { f?(): string } }
+    function okRaw(x: RawJSON): string { return x.rawJSON }
+    interface Mine { a: number }
+    function badMine(m: Mine) { return m.nope }
+                                         ~~~~
+!!! error TS2339: Property 'nope' does not exist on type 'Mine'.
+    

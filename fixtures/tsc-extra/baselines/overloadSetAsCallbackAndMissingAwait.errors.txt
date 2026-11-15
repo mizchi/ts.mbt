@@ -1,0 +1,47 @@
+overloadSetAsCallbackAndMissingAwait.ts(11,50): error TS2345: Argument of type '{ (n: number): P<number>; (s: string): P<string>; }' is not assignable to parameter of type '(x: number) => P<string>'.
+  Type 'P<number>' is not assignable to type 'P<string>'.
+    Type 'number' is not assignable to type 'string'.
+overloadSetAsCallbackAndMissingAwait.ts(13,37): error TS2322: Type '{ (n: number): number; (s: string): number; }' is not assignable to type '(x: boolean) => number'.
+  Types of parameters 'n' and 'x' are incompatible.
+    Type 'boolean' is not assignable to type 'number'.
+overloadSetAsCallbackAndMissingAwait.ts(17,36): error TS2322: Type 'Promise<string>' is not assignable to type 'string'.
+overloadSetAsCallbackAndMissingAwait.ts(18,45): error TS2345: Argument of type 'Promise<string>' is not assignable to parameter of type 'string'.
+
+
+==== overloadSetAsCallbackAndMissingAwait.ts (4 errors) ====
+    // An overload set passed where a single signature is expected is checked
+    // against the matching overload; `Promise<string>` where `string` is
+    // expected (a forgotten `await`) is TS2322 / TS2345.
+    
+    interface P<T> { then<U>(cb: (x: T) => P<U>): P<U> }
+    declare function tf2(n: number): P<number>;
+    declare function tf2(s: string): P<string>;
+    declare function tf3(n: number): number;
+    declare function tf3(s: string): number;
+    declare function single(n: number): P<number>;
+    function badOverloadArg(np: P<number>) { np.then(tf2); }
+                                                     ~~~
+!!! error TS2345: Argument of type '{ (n: number): P<number>; (s: string): P<string>; }' is not assignable to parameter of type '(x: number) => P<string>'.
+!!! error TS2345:   Type 'P<number>' is not assignable to type 'P<string>'.
+!!! error TS2345:     Type 'number' is not assignable to type 'string'.
+    function okSingleArg(np: P<number>) { np.then(single); }
+    function badOverloadValue() { const cb: (x: boolean) => number = tf3; }
+                                        ~~
+!!! error TS2322: Type '{ (n: number): number; (s: string): number; }' is not assignable to type '(x: boolean) => number'.
+!!! error TS2322:   Types of parameters 'n' and 'x' are incompatible.
+!!! error TS2322:     Type 'boolean' is not assignable to type 'number'.
+    function okOverloadValue() { const cb: (x: number) => number = tf3; }
+    declare function fetchName(): Promise<string>;
+    function takesString(s: string) {}
+    function badMissingAwait() { const s: string = fetchName(); }
+                                       ~
+!!! error TS2322: Type 'Promise<string>' is not assignable to type 'string'.
+    function badMissingAwaitArg() { takesString(fetchName()); }
+                                                ~~~~~~~~~~~
+!!! error TS2345: Argument of type 'Promise<string>' is not assignable to parameter of type 'string'.
+!!! related TS2773 overloadSetAsCallbackAndMissingAwait.ts:18:45: Did you forget to use 'await'?
+    async function okAwaited() { const s: string = await fetchName(); }
+    async function okAsyncReturn(): Promise<string> { return fetchName(); }
+    function okUnionTarget() { const s: string | Promise<string> = fetchName(); }
+    function okRegexArg() { "abc".replace(/b/g, ""); }
+    

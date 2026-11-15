@@ -1,0 +1,38 @@
+assignmentInConditionAndNormalizedArrayLiterals.ts(11,85): error TS18047: 'z' is possibly 'null'.
+assignmentInConditionAndNormalizedArrayLiterals.ts(13,60): error TS2339: Property 'toString' does not exist on type 'never'.
+assignmentInConditionAndNormalizedArrayLiterals.ts(16,92): error TS2322: Type 'number' is not assignable to type 'string'.
+assignmentInConditionAndNormalizedArrayLiterals.ts(17,77): error TS2322: Type '{ b: string; }' is not assignable to type '{ a: number; b?: undefined; } | { a: number; b: string; }'.
+  Property 'a' is missing in type '{ b: string; }' but required in type '{ a: number; b: string; }'.
+
+
+==== assignmentInConditionAndNormalizedArrayLiterals.ts (4 errors) ====
+    // Narrowing by an assignment used as a condition (`while ((m = re.exec(s)))`),
+    // boolean truthiness to `true` / `false`, and the normalized union of an
+    // array of object literals with different keys.
+    
+    function okExecLoop(re: RegExp, s: string) {
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(s))) { m.index; m.input; m[0].length; }
+    }
+    function okAssignCond(x: string | null) { let z: string | null; if ((z = x)) { z.length; } }
+    function okAssignCmp(x: string | null) { let z: string | null; if ((z = x) !== null) { z.length; } }
+    function badAssignNegated(x: string | null) { let z: string | null; if (!(z = x)) { z.length; } }
+                                                                                        ~
+!!! error TS18047: 'z' is possibly 'null'.
+    function okBoolTruthy(b: boolean) { if (b) { const t: true = b; } else { const f: false = b; } }
+    function badNeverMember(b: boolean) { if (b) { if (!b) { b.toString(); } } }
+                                                               ~~~~~~~~
+!!! error TS2339: Property 'toString' does not exist on type 'never'.
+    function okNumberOrBool(x: number | boolean) { if (!x) { x.toString(); } }
+    function okNormalized() { let a1 = [{ a: 0 }, { a: 1, b: "x" }][0]; a1 = { a: 1 }; const b: string | undefined = a1.b; }
+    function badNormalizedWrongType() { let a1 = [{ a: 0 }, { a: 1, b: "x" }][0]; a1 = { a: 0, b: 0 }; }
+                                                                                               ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+!!! related TS6500 assignmentInConditionAndNormalizedArrayLiterals.ts:16:65: The expected type comes from property 'b' which is declared here on type '{ a: number; b?: undefined; } | { a: number; b: string; }'
+    function badNormalizedMissing() { let a1 = [{ a: 0 }, { a: 1, b: "x" }][0]; a1 = { b: "y" }; }
+                                                                                ~~
+!!! error TS2322: Type '{ b: string; }' is not assignable to type '{ a: number; b?: undefined; } | { a: number; b: string; }'.
+!!! error TS2322:   Property 'a' is missing in type '{ b: string; }' but required in type '{ a: number; b: string; }'.
+!!! related TS2728 assignmentInConditionAndNormalizedArrayLiterals.ts:17:57: 'a' is declared here.
+    function okNormalizedLoop() { const cfgs = [{ name: "a", port: 1 }, { name: "b" }]; for (const c of cfgs) { c.name.toUpperCase(); } }
+    

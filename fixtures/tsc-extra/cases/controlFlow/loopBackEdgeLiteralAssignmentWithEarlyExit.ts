@@ -1,0 +1,18 @@
+// @strict: true
+// @target: esnext
+
+// A literal assigned at the end of a loop body reaches the next iteration's
+// comparison through the back edge, whichever loop kind it is and whatever
+// `break` / `continue` / `switch` exits the body early.
+
+declare const c: boolean;
+declare const xs: number[];
+function okWhile() { let x: "a" | "b"; x = "a"; while (c) { if (x === "b") { break; } x = "b"; } }
+function okFor() { let x: "a" | "b"; x = "a"; for (;;) { if (x === "b") { break; } x = "b"; } }
+function okForOf() { let x: "a" | "b"; x = "a"; for (const n of xs) { if (x === "b") { continue; } x = "b"; } }
+function okForIn() { let x: "a" | "b"; x = "a"; for (const k in xs) { if (x === "b") { continue; } x = "b"; } }
+function okDoWhile() { let x: "a" | "b"; x = "a"; do { if (x === "b") { break; } x = "b"; } while (c); }
+function okSwitch() { let x: "a" | "b"; x = "a"; while (c) { switch (x) { case "b": break; } x = "b"; } }
+function okDeclInit() { let x: "a" | "b" = "a"; while (c) { if (x === "b") { break; } x = "b"; } }
+function badNoAssignment() { let x: "a" | "b"; x = "a"; while (c) { if (x === "b") { break; } } }
+function badDeclInit() { let x: "a" | "b" = "a"; if (x === "b") { } }

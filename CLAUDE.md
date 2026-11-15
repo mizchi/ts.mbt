@@ -33,13 +33,15 @@ product surfaces now.
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
   is a soundness bug, and there are none (TP 2726 / MISS in scope 0 /
-  OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
-  **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
+  OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1764, against
+  **TypeScript 7.1.0-dev.20261114.1**, the nightly on `main` at
+  `6bdcb54d` — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
   answers both: `node_modules/typescript` was 6.0.3 when the notes
-  below were written and is now **TypeScript 7.1.0-beta** (tsgo, through
+  below were written and is now the same nightly,
+  **TypeScript 7.1.0-dev.20261114.1** (tsgo, through
   its `typescript/sync` API — 7.0's `unstable/sync` subpath and its
   `updateSnapshot({ openProject })` form are gone, replaced by
   `createSnapshot({ openProjects })` plus an explicit `dispose()`), and
@@ -4167,6 +4169,148 @@ product surfaces now.
   2.27 -> 1.97 ms: that was ONE run against noisy neighbours, and
   best-of-5 on both binaries reads 1.9 ms each. A single timing is not a
   measurement; the instruction count is the number that settles it.
+
+  Batch FZ turns back to real code. At an unchanged oracle (TP 2726 /
+  MISS 0 / FP 0), zod goes 19 -> 9 and effect 139 -> 126, with no report
+  at a new location. Three of zod's nine are `process` / `module` /
+  `require` in its benchmarks. tsc reports those too in this checkout,
+  since `@types/node` is not installed, so six real false positives are
+  left. Almost every fix is one fact some site had and another lacked:
+  - A property path now narrows by assignment, as a binding does.
+    `this._cached = {…}; return this._cached` was "`T | null`".
+  - `o.p ??= v` narrows the path.
+  - A literal's own `get path()` defines `path` in the excess-property
+    check; the missing-property check already stripped `@@get:`.
+  - `util.assertNever(x)` ends a path as a bare `assertNever(x)` does.
+  - A non-nullish initializer removes the nullish members of a declared
+    union, at `const` too.
+  - An `asserts x is T` keeps `x`'s declared type when it already fits
+    `T`.
+  - An object literal whose discriminant is a union of literals is split
+    against a discriminated union, as tsc does since 3.5 (25
+    combinations at most).
+
+  Three are graph-mode gaps:
+  - An imported namespace had no value type, so every `util.x` was
+    `any`. The lowered `var util = …` shadowed it in `values`.
+  - An imported function's defaulted parameters read as required.
+  - An imported bounded generic was the inlined `Func`, so a callback
+    was judged against the bound. It is now a binder over the raw
+    signature, solved at the call. `infer_call` unwraps a `GenericFunc`
+    before it reaches the binder arm, so the by-name `Call` path solves
+    it first, gated on an `@import-generic:` marker.
+
+  Two things were measured and cut back:
+  - Erasing a generic arrow's phantom binder to `any` in every generic
+    solve cost a new effect report. It now runs on the imported path
+    only.
+  - Skipping any argument whose type names a phantom binder lost two
+    corpus TPs. A construct signature's own `<T>` is not carried, so the
+    skip could not tell a bound `T` from a phantom one. It was removed.
+
+  `fixtures/tsc-extra` holds the probed cases the upstream suite does not
+  contain, in its harness format, so they can be contributed back. 44
+  cases: 39 coverage cases from the unit tests, and five `feedback/` cases
+  where TS7 itself looks inconsistent (for example, `void 0 ?? y` is TS2869
+  "never nullish"). Its README lists each case with the nearest upstream
+  test. `just verify-tsc-extra` is now a CI step. It checks three things:
+  - TS7 still produces each committed `.errors.txt`.
+  - Every `ok…` / `bad…` declaration name agrees with tsc's own spans.
+  - `mtsc check --strict` reports nothing on an `ok…`. A silent `bad…`
+    must be declared in `mtsc-misses.txt`.
+
+  The baseline generator is a port of the harness's
+  `iterateErrorBaseline`. It reproduces 498 of 500 sampled vendored TS7
+  baselines byte for byte.
+
+  Building it found two defects in `scripts/lib/tsc-probe.mjs`, the
+  instrument behind every "probed" claim in this file. Both failed
+  silently.
+  - A header option off a fixed list was dropped, and the file was checked
+    without it. `noImplicitOverride` was off the list. That is how "tsc
+    exempts a mixin base from TS4114" got written into
+    `check_override_modifiers` as a probed fact. TS7 reports TS4114
+    through a mixin, statics included. The exemption is gone, and the
+    unit test that pinned it (`OkNoModifier`) asserts the report. That is
+    the seventeenth test here found pinning a gap.
+  - `getGlobalDiagnostics()` was never called, so TS2318 under
+    `@lib` / `@noLib` read as ACCEPTED.
+
+  The probe now honours every header option the upstream corpus spells
+  that can change a diagnostic, and warns about any other.
+
+  The `ok…` / `bad…` check caught one more mistake in the unit tests. A
+  file's own `type NonNullable<T> = T` is local only in a MODULE. In a
+  script it is TS2300 against the lib, and the case was written as a
+  script.
+
+  Batch GA moves the oracle, the probe and those baselines from
+  7.1.0-beta to the nightly `7.1.0-dev.20261114.1` (`main` at
+  `6bdcb54d`), so a report filed upstream is checked against the
+  compiler upstream is shipping. `typescript@next` is the channel:
+  `@typescript/native-preview` stopped publishing in July, and from 7.1
+  the nightly comes out of `microsoft/TypeScript` itself. The `package.json`
+  pin and the submodule are the same commit, so the corpus and the
+  compiler that answers questions about it cannot drift apart.
+
+  The move was small, and each part was measured rather than assumed:
+  - Between the two commits, the case set gained one case and edited
+    four. No name in the error set changed.
+  - `lib_globals.mbt` regenerated byte-identical after `moon fmt`.
+  - All 44 `tsc-extra` baselines came out byte-identical.
+  - All five feedback cases reproduce unchanged, so none was fixed
+    between the beta and current `main`.
+  - Name collisions and text similarity were re-checked against the
+    13,053 upstream cases at the nightly.
+  - The `.errors.txt` generator still matches the vendored baselines.
+
+  The one new case was an FP. In `importAliasMergedNamespace`,
+  `export import E = M; new E.C()` read `E` as undeclared. Batch CM had
+  deliberately kept that alias out of `values`, because the bridge reads
+  `values` to decide what to import. The name now rides an
+  `<import-eq-alias>` marker into the `declared_value_names` backstop, so
+  the bridge's input is untouched. If `M` holds only types, the use is
+  TS2708 in tsc and a MISS here, which is the affordable direction.
+
+  Batch GB fixes the false positives that extracting `tsc-extra` turned
+  up. Running the unit tests' snippets through TS7 found **twelve
+  snippets that mtsc reported and tsc accepts**, and nine tests asserted
+  the report outright — the 18th to 26th tests in this file found
+  pinning a bug. The oracle, effect (126), zod
+  (9) and the three `.d.ts` entries are all unchanged, because none of
+  these shapes is in the corpus. Each fix was probed cell by cell
+  against the nightly:
+  - TS2774 is reported only for an `if`, a ternary and an `&&` operand.
+    `while (f)`, `do … while (f)`, `for (; f;)` and `f || 1` are
+    accepted.
+  - An interface extending a CALL or CONSTRUCT signature is not
+    checked against the base signature: tsc concatenates them as
+    overloads.
+  - `b?.name` on an interface-typed `b` adds no `undefined`.
+  - TS2366: the `true` / `false` KEYWORD as a condition makes the
+    other branch unreachable in tsc's binder, so
+    `if (true) { return 1 }` needs no ending return. `if (1)` still
+    does, because the binder only looks at the keyword.
+  - An EMPTY class or interface is `{}`, so `const x: C = "s"` is
+    legal. `null` is still TS2322 under strictNullChecks.
+  - TS2767 is reported where the iterator protocol is used (`for…of`,
+    spread, `yield*`, array destructuring), never at the class.
+  - An accessor overriding an accessor read as a field, because the
+    class parsers record a `get` in both `methods` and `properties`.
+  - `new (a + 1)` with `a: any` is accepted, since `any + 1` is `any`.
+    `new ("x" + a)` is still TS2351.
+  - `filter` infers TS 5.5's type predicate. tsc's rule is an IFF, so
+    `x => !!x` over strings infers nothing (an empty string is falsy),
+    while the same callback over object types does.
+  - `matchAll` yields `RegExpExecArray`s rather than a `string[]`.
+
+  One of them was an EMIT bug as well as a checker one. `using x = null`
+  lowered to `x[Symbol.dispose]?.()`, which threw `TypeError` at block
+  exit under plain `--bundle`, and the checker reported the same
+  lowering. It is `x?.[Symbol.dispose]?.()` now. A `for (using d of …)`
+  head does not dispose at all; that is filed rather than fixed. Array
+  types of unions also print as `(string | null)[]` now, not
+  `string | null[]`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -134,6 +134,12 @@ jobs:
         # watcher silently never rebuilds.
         run: just verify-cli-node
 
+      - name: Verify tsc-extra fixtures
+        # Cases the upstream TypeScript suite lacks: TS7's answer must
+        # still match each committed baseline, every `ok…` / `bad…` name
+        # must agree with tsc, and mtsc may not report on an `ok…`.
+        run: just verify-tsc-extra
+
       - name: Verify mbti -> .d.ts
         run: just verify-mbti-dts
 

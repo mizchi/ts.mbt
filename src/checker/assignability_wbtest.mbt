@@ -610,3 +610,150 @@ test "a spread tuple inside a tuple is judged slot by slot against T[]" {
     is_assignable_to(Tuple([Rest(Tuple([Number])), Number]), Array(Number)),
   )
 }
+
+///|
+test "is_assignable_to: an undecided conditional is not a definite mismatch" {
+  // "y1" extends `x${infer U}` ? number : boolean — the fixed `x` prefix
+  // makes the template pattern undecidable here, so `reduce_conditional`
+  // leaves it alone. tsc takes the false branch and accepts a `boolean`;
+  // the `_ => false` fallback used to call that a definite mismatch.
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  assert_true(is_undecided_conditional(cond))
+  assert_true(is_assignable_to(Boolean, cond))
+  assert_true(is_assignable_to(cond, Boolean))
+  // A decidable conditional still decides: string extends number takes the
+  // false branch, and `boolean` is not the `Number` it picked.
+  let decided : @ast.TsType = Conditional(String_, Number, Boolean, Number)
+  assert_false(is_undecided_conditional(decided))
+  assert_false(is_assignable_to(Boolean, decided))
+}
+
+///|
+test "normalization does not read an undecided conditional's true as proof" {
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  // `C | string` keeps both members: `string` flows into an undecided `C`,
+  // which proves nothing about `C` covering it.
+  let simplified = simplify_union([cond, String_])
+  assert_eq(simplified.length(), 2)
+  assert_false(equivalent(cond, String_))
+  assert_true(equivalent(cond, cond))
+  // An identical repeat is still folded.
+  assert_eq(simplify_union([cond, cond]).length(), 1)
+}
+
+///|
+/// Review of mizchi/ts.mbt#285: `true` for an undecided conditional proves
+/// nothing, and three callers read it as proof one level down from where
+/// the first guard looked.
+test "an undecided conditional proves nothing at any depth" {
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  // Branch selection. tsc decides `C` as `boolean`, so `C extends string ?
+  // number : boolean` is `boolean`; reading the undecided `C` against
+  // `string` as `true` picked `number` and rejected a `boolean`. The outer
+  // conditional is undecided now, and flows like `C` does.
+  let outer : @ast.TsType = Conditional(cond, String_, Number, Boolean)
+  assert_true(is_undecided_conditional(outer))
+  assert_true(is_assignable_to(Boolean, outer))
+  assert_true(is_assignable_to(outer, Boolean))
+  // A nested `C`: `C[]` against `string[]` reaches `C` against `string`.
+  let nested : @ast.TsType = Conditional(
+    Array(cond),
+    Array(String_),
+    Number,
+    Boolean,
+  )
+  assert_true(is_undecided_conditional(nested))
+  // Equivalence and union subsumption, both member orders.
+  assert_false(equivalent(Array(cond), Array(String_)))
+  assert_true(equivalent(Array(cond), Array(cond)))
+  assert_eq(simplify_union([Array(cond), Array(String_)]).length(), 2)
+  assert_eq(simplify_union([Array(String_), Array(cond)]).length(), 2)
+  // An alias whose body is `C` is a `Named` until expanded.
+  let resolve = fn(n : String) -> @ast.TsType? {
+    if n == "A" {
+      Some(cond)
+    } else {
+      None
+    }
+  }
+  assert_false(equivalent_with(Named("A"), String_, resolve))
+  let resolve_g = fn(n : String) -> AliasBinding? {
+    if n == "A" {
+      Some({ type_params: [], body: cond, })
+    } else {
+      None
+    }
+  }
+  assert_false(equivalent_with_generics(Named("A"), String_, resolve_g))
+  // A decidable conditional still decides through the same path.
+  let decided : @ast.TsType = Conditional(String_, Number, Boolean, Number)
+  let outer_decided : @ast.TsType = Conditional(
+    decided,
+    Number,
+    String_,
+    Boolean,
+  )
+  assert_eq(reduce_conditional(outer_decided), String_)
+}
+
+///|
+/// Review of mizchi/ts.mbt#285, round 3: the walk that finds an undecided
+/// conditional has to see one that a computed type RESOLVES to, and has to
+/// answer "cannot tell" when it runs out of depth, because the relation it
+/// guards reaches the conditional either way.
+test "an undecided conditional is found behind an indexed access and past the depth limit" {
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  let via_index : @ast.TsType = IndexedAccess(
+    Object([(Literal("x"), cond)]),
+    Literal("x"),
+  )
+  // The deep case has to be compared against the same 40 layers around
+  // `string`, or the array-versus-string shape decides before the walk
+  // reaches the conditional, and a regressed depth limit would still pass.
+  let mut deep = cond
+  let mut deep_str : @ast.TsType = String_
+  for _ in 0..<40 {
+    deep = Array(deep)
+    deep_str = Array(deep_str)
+  }
+  for pair in [(via_index, @ast.TsType::String_), (deep, deep_str)] {
+    let (t, other) = pair
+    // Branch selection declines rather than picking `number`.
+    assert_true(
+      reduce_conditional(Conditional(t, other, Number, Boolean)) != Number,
+    )
+    // Equivalence and union subsumption keep the two apart, both orders.
+    assert_false(equivalent(t, other))
+    assert_eq(simplify_union([t, other]).length(), 2)
+    assert_eq(simplify_union([other, t]).length(), 2)
+  }
+  // An indexed access with no conditional anywhere still decides.
+  let plain : @ast.TsType = IndexedAccess(
+    Object([(Literal("x"), String_)]),
+    Literal("x"),
+  )
+  assert_eq(
+    reduce_conditional(Conditional(plain, String_, Number, Boolean)),
+    Number,
+  )
+}

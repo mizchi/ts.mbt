@@ -1,0 +1,22 @@
+bindingPatternDefaultsWithConstTuplesAndComputedKeys.ts(5,90): error TS2322: Type '0 | 9' is not assignable to type '9'.
+  Type '0' is not assignable to type '9'.
+bindingPatternDefaultsWithConstTuplesAndComputedKeys.ts(9,72): error TS2322: Type '9' is not assignable to type '0'.
+
+
+==== bindingPatternDefaultsWithConstTuplesAndComputedKeys.ts (2 errors) ====
+    // A destructuring default typed by an `as const` tuple, a computed key that
+    // assigns the key variable, and the order in which the two are evaluated.
+    
+    function ok1() { let a: 0 | 1 = 0; const [{ [(a = 1)]: b } = [9, a] as const] = []; const bb: 0 = b; return bb; }
+    function bad2() { let a: 0 | 1 = 1; const [{ [a]: b } = [9, a = 0] as const] = []; const bb: 9 = b; return bb; }
+                                                                                             ~~
+!!! error TS2322: Type '0 | 9' is not assignable to type '9'.
+!!! error TS2322:   Type '0' is not assignable to type '9'.
+    function ok3() { let a: 0 | 1 | 2 = 1; const [{ [a]: b } = [9, a = 0, 5] as const] = []; const bb: 0 | 9 = b; return bb; }
+    function ok4() { let a: 0 | 1 = 0; const [{ [(a = 1)]: b } = [9, a] as const] = [[9, 8] as const]; const bb: 0 | 8 = b; return bb; }
+    function okIndex() { const [{ [0]: c } = [9, 0] as const] = []; const cc: 9 = c; return cc; }
+    function badIndex() { const [{ [0]: c } = [9, 0] as const] = []; const cc: 0 = c; return cc; }
+                                                                           ~~
+!!! error TS2322: Type '9' is not assignable to type '0'.
+    function okSatisfies() { const arr = [1, 2, 3] as const satisfies readonly unknown[]; return arr; }
+    

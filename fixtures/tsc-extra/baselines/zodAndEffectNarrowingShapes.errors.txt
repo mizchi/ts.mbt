@@ -1,0 +1,51 @@
+zodAndEffectNarrowingShapes.ts(27,59): error TS18048: 'c' is possibly 'undefined'.
+zodAndEffectNarrowingShapes.ts(28,85): error TS2322: Type '"min" | "other"' is not assignable to type '"int" | "max" | "min"'.
+  Type '"other"' is not assignable to type '"int" | "max" | "min"'.
+zodAndEffectNarrowingShapes.ts(29,89): error TS2353: Object literal may only specify known properties, and 'nope' does not exist in type 'Ctx'.
+zodAndEffectNarrowingShapes.ts(30,63): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+
+==== zodAndEffectNarrowingShapes.ts (4 errors) ====
+    // zod and effect: narrowing by a non-nullish declaration initializer, a
+    // property path narrowed by assignment and by `??=`, a getter key in the
+    // excess-property check, a `never`-returning method ending a path, an
+    // `asserts` predicate that already holds, and a discriminant union split.
+    
+    interface N { next?: N; visit(): void }
+    declare const root: N;
+    declare function maybe(): N | undefined;
+    type Check = { kind: "min"; value: number } | { kind: "max"; value: number } | { kind: "int" };
+    type Ctx = { addIssue: (a: string) => void; readonly path: (string | number)[] };
+    declare const p: (string | number)[];
+    declare const o: { fail(m: string): never };
+    interface Trait { _zod: unknown }
+    interface Ctor<T extends Trait> { init(inst: T): asserts inst is T }
+    interface ZErr extends Trait { name: string }
+    declare const ZCtor: Ctor<ZErr>;
+    function okPatternLiteral() { let x: "a" | "b" = "a"; [x] = ["b"]; return x; }
+    function okDeclNarrow() { let c: N | undefined = root; c.visit(); }
+    function okDeclNarrowConst() { const c: N | null | undefined = root; c.visit(); }
+    function okDefensiveCheck(c: N) { if (c === undefined) {} c.visit(); }
+    class ResultCache { _c: { v: number } | null = null; get(): { v: number } { if (this._c !== null) return this._c; this._c = { v: 1 }; return this._c; } }
+    function okSplitDiscriminant(kind: "min" | "max", value: number) { const c: Check = { kind, value }; return c; }
+    function okGetterKey() { const c: Ctx = { addIssue: (a: string) => {}, get path() { return p; } }; return c; }
+    function okNeverMethod(c: Check): number { if (c.kind === "min") return 1; o.fail("x"); }
+    function okPropCoalesce(m: { message?: string }): string { m.message ??= "x"; return m.message; }
+    function okAssertsKeepsDeclared(inst: ZErr) { ZCtor.init(inst); return inst.name; }
+    function badDeclMaybe() { let c: N | undefined = maybe(); c.visit(); }
+                                                              ~
+!!! error TS18048: 'c' is possibly 'undefined'.
+    function badSplitOutside(kind: "min" | "other", value: number) { const c: Check = { kind, value }; return c; }
+                                                                                        ~~~~
+!!! error TS2322: Type '"min" | "other"' is not assignable to type '"int" | "max" | "min"'.
+!!! error TS2322:   Type '"other"' is not assignable to type '"int" | "max" | "min"'.
+!!! related TS6500 zodAndEffectNarrowingShapes.ts:9:16: The expected type comes from property 'kind' which is declared here on type 'Check'
+    function badGetterExcess() { const c: Ctx = { addIssue: (a: string) => {}, path: p, get nope() { return 1; } }; return c; }
+                                                                                            ~~~~
+!!! error TS2353: Object literal may only specify known properties, and 'nope' does not exist in type 'Ctx'.
+    function badPropNoCoalesce(m: { message?: string }): string { return m.message; }
+                                                                  ~~~~~~
+!!! error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'string'.
+    

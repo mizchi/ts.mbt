@@ -1,0 +1,11 @@
+# `bad…` declarations (or whole files) that tsc reports and `mtsc check
+# --strict` does not. `scripts/verify_tsc_extra.mjs` fails on a MISS that is
+# not listed here, and on a listed one that no longer misses (STALE), so
+# this file can only shrink by fixing the checker.
+#
+# <case>:<declaration>   reason            (`<case>:*` for a whole-file case)
+
+# Feedback cases: tsc's own report is the behaviour in question, and the
+# checker deliberately does not reproduce it.
+declareFieldReadInDerivedInitializer:*  mtsc folds `declare` into `!`, so a declare field is never "used before initialization"; tsc's TS2729 here is the questioned behaviour
+nullishCoalescingVoidLeftOperand:*      mtsc has no TS2871, and skips `void 0 ?? y` for TS2869 on purpose: tsc's TS2869 there is the questioned behaviour

@@ -652,14 +652,18 @@ test "batch FW: un-inlined generic signatures for call inference and mixin bases
     #|class Bad extends CreateMixin(Context, A) { override foo() {} }
     #|class OkOverride extends CreateMixin(Context, A) { override doSomething() {} }
     #|class OkContext extends CreateMixin(Context, A) { override context: Context = new Context(); }
-    #|class OkNoModifier extends CreateMixin(Context, A) { doSomething() {} }
+    #|class BadNoModifier extends CreateMixin(Context, A) { doSomething() {} }
   let m = parse_module_or_empty(mixin_src)
   let oi = check_override_modifiers(m)
   let has = fn(c : String) { oi.iter().any(fn(i) { i.path == "class \{c}" }) }
   assert_true(has("Bad"))
   assert_false(has("OkOverride"))
   assert_false(has("OkContext"))
-  assert_false(has("OkNoModifier"))
+  // This class was `OkNoModifier` and asserted SILENT, on the strength of a
+  // probe that had dropped the `@noImplicitOverride` header (see
+  // `check_override_modifiers`). Under the flag TS7 reports TS4114 here: the
+  // seventeenth test in this repo found pinning a gap.
+  assert_true(has("BadNoModifier"))
 }
 
 ///|
@@ -986,4 +990,84 @@ test "review: every write that reaches the back edge joins, and only those" {
     ] {
     assert_true(eff_has(issues, bad), msg=bad)
   }
+  // The issue is the one tsc reports (TS2345 at `acceptString(x)`), not
+  // merely some issue in the function.
+  for bad in ["badLastWriteWins", "badContinueCarries", "badTryCaught"] {
+    assert_true(
+      issues
+      .iter()
+      .any(fn(i) {
+        i.path.contains("function \{bad} ") &&
+        i.path.contains("call `acceptString` arg[0]") &&
+        i.message.contains("expected `string`")
+      }),
+      msg=bad,
+    )
+  }
+}
+
+///|
+test "real code: zod and effect shapes tsc accepts stay legal" {
+  let src =
+    #|interface N { next?: N; visit(): void }
+    #|declare const root: N;
+    #|declare function maybe(): N | undefined;
+    #|type Check = { kind: "min"; value: number } | { kind: "max"; value: number } | { kind: "int" };
+    #|type Ctx = { addIssue: (a: string) => void; readonly path: (string | number)[] };
+    #|declare const p: (string | number)[];
+    #|declare const o: { fail(m: string): never };
+    #|interface Trait { _zod: unknown }
+    #|interface Ctor<T extends Trait> { init(inst: T): asserts inst is T }
+    #|interface ZErr extends Trait { name: string }
+    #|declare const ZCtor: Ctor<ZErr>;
+    #|function okPatternLiteral() { let x: "a" | "b" = "a"; [x] = ["b"]; return x; }
+    #|function okDeclNarrow() { let c: N | undefined = root; c.visit(); }
+    #|function okDeclNarrowConst() { const c: N | null | undefined = root; c.visit(); }
+    #|function okDefensiveCheck(c: N) { if (c === undefined) {} c.visit(); }
+    #|class ResultCache { _c: { v: number } | null = null; get(): { v: number } { if (this._c !== null) return this._c; this._c = { v: 1 }; return this._c; } }
+    #|function okSplitDiscriminant(kind: "min" | "max", value: number) { const c: Check = { kind, value }; return c; }
+    #|function okGetterKey() { const c: Ctx = { addIssue: (a: string) => {}, get path() { return p; } }; return c; }
+    #|function okNeverMethod(c: Check): number { if (c.kind === "min") return 1; o.fail("x"); }
+    #|function okPropCoalesce(m: { message?: string }): string { m.message ??= "x"; return m.message; }
+    #|function okAssertsKeepsDeclared(inst: ZErr) { ZCtor.init(inst); return inst.name; }
+    #|function badDeclMaybe() { let c: N | undefined = maybe(); c.visit(); }
+    #|function badSplitOutside(kind: "min" | "other", value: number) { const c: Check = { kind, value }; return c; }
+    #|function badGetterExcess() { const c: Ctx = { addIssue: (a: string) => {}, path: p, get nope() { return 1; } }; return c; }
+    #|function badPropNoCoalesce(m: { message?: string }): string { return m.message; }
+  let issues = eff_issues_checking(src)
+  for
+    ok in [
+      "okPatternLiteral", "okDeclNarrow", "okDeclNarrowConst", "okDefensiveCheck",
+      "ResultCache.get", "okSplitDiscriminant", "okGetterKey", "okNeverMethod", "okPropCoalesce",
+      "okAssertsKeepsDeclared",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badDeclMaybe", "badSplitOutside", "badGetterExcess", "badPropNoCoalesce",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}
+
+///|
+test "an `export import` alias is a binding name resolution can see" {
+  // `importAliasMergedNamespace`, added to the TS7 corpus after 7.1-beta:
+  // the alias records no `values` entry (the bridge reads `values`), so
+  // `new E.C()` read `E` as undeclared on a file tsc accepts.
+  let src =
+    #|namespace M { export class C {} }
+    #|namespace N { export import E = M; new E.C(); }
+    #|export import H = M;
+    #|new H.C();
+    #|new Q.C();
+  let issues = eff_issues(src)
+  let undeclared = fn(n : String) {
+    issues.iter().any(fn(i) { i.message == "cannot find name `\{n}`" })
+  }
+  assert_false(undeclared("E"))
+  assert_false(undeclared("H"))
+  // The neighbour that must still report: nothing declares `Q`.
+  assert_true(undeclared("Q"))
 }

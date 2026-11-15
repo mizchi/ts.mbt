@@ -1,0 +1,45 @@
+boundViolationsShadowingAndNumericTemplates.ts(7,35): error TS2322: Type 'number' is not assignable to type 'string'.
+boundViolationsShadowingAndNumericTemplates.ts(8,43): error TS2353: Object literal may only specify known properties, and 'b' does not exist in type '{ a: string; }'.
+boundViolationsShadowingAndNumericTemplates.ts(11,79): error TS2322: Type 'null' is not assignable to type 'string'.
+boundViolationsShadowingAndNumericTemplates.ts(29,96): error TS2322: Type 'string' is not assignable to type 'number'.
+
+
+==== boundViolationsShadowingAndNumericTemplates.ts (4 errors) ====
+    // Bound violations through an array argument, closure parameters that shadow
+    // an outer binding, and `${bigint}` / `${number}` / `infer X extends number`
+    // on edge-case spellings (`"-"`, `"1e309"`, `" 1"`, `"0.0000001"`).
+    
+    declare function fb<T extends string>(xs: T[]): void;
+    declare function fo<T extends { a: string }>(xs: T[]): void;
+    function badBoundViolated() { fb([123]); }
+                                      ~~~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    function badObjectBoundViolated() { fo([{ b: 1 }]); }
+                                              ~
+!!! error TS2353: Object literal may only specify known properties, and 'b' does not exist in type '{ a: string; }'.
+    function okBoundSatisfied() { fb(["ok"]); fo([{ a: "x" }]); }
+    function okShadowFresh() { const x = "a"; const g = (x: "a") => { let y = x; const z: "a" = y; return z; }; return [x, g]; }
+    function badClosureParamAssign(x: string | null) { const g = (x: string) => { x = null; return x; }; return g; }
+                                                                                  ~
+!!! error TS2322: Type 'null' is not assignable to type 'string'.
+    function okClosureOuterAssign(x: string | null) { const g = () => { x = null; }; return g; }
+    type IsBig<S> = S extends `${bigint}` ? 1 : 0;
+    function okBigintSign() { const a: IsBig<"-"> = 0; const b: IsBig<"+5"> = 0; const c: IsBig<"0x10"> = 1; const d: IsBig<"007"> = 0; return [a, b, c, d]; }
+    type IsNum<S> = S extends `${number}` ? 1 : 0;
+    function okNumFiniteness() { const a: IsNum<"1e309"> = 0; const b: IsNum<"1e-1000"> = 1; const c: IsNum<" 1"> = 1; const d: IsNum<"+0x10"> = 0; return [a, b, c, d]; }
+    type N<S> = S extends `${infer X extends number}` ? X : never;
+    function okNumRoundTrip() { const a: N<"0.0000001"> = 2; const b: N<"1000000000000000"> = 1000000000000000; return [a, b]; }
+    type P<S> = S extends `${infer X}` ? `pre${X}` : never;
+    function okTemplateSubstitution() { const p: P<"ab"> = "preab"; return p; }
+    function id<T>(x: T): T { return x; }
+    function outer() { function id<U extends number>(x: U): U { return x; } return id(1); }
+    function okNestedRawSig() { const s: string = id("ok"); return s; }
+    function outer2() { function id2<U extends number>(x: U[]): U { return x[0]; } return id2([1]); }
+    function id2<T>(x: T): T { return x; }
+    function okNestedRawSigFirst() { const s: string[] = id2(["ok"]); return s; }
+    declare const re: RegExp;
+    function okExecDestructure(s: string) { const m = re.exec(s); if (m) { const [all, g1] = m; return all.toUpperCase() + g1.toUpperCase(); } return ""; }
+    function badExecDestructure(s: string) { const m = re.exec(s); if (m) { const [all] = m; const n: number = all; return n; } return 0; }
+                                                                                                   ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    

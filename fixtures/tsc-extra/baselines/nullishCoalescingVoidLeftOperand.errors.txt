@@ -1,0 +1,28 @@
+nullishCoalescingVoidLeftOperand.ts(9,22): error TS2871: This expression is always nullish.
+nullishCoalescingVoidLeftOperand.ts(10,21): error TS2869: Right operand of ?? is unreachable because the left operand is never nullish.
+nullishCoalescingVoidLeftOperand.ts(11,31): error TS2869: Right operand of ?? is unreachable because the left operand is never nullish.
+nullishCoalescingVoidLeftOperand.ts(12,21): error TS2869: Right operand of ?? is unreachable because the left operand is never nullish.
+
+
+==== nullishCoalescingVoidLeftOperand.ts (4 errors) ====
+    // `void <expr>` always evaluates to `undefined`, so the right operand of `??`
+    // is ALWAYS reached. The literal spelling gets TS2871 ("This expression is
+    // always nullish"); every `void` spelling gets TS2869 ("Right operand of ?? is
+    // unreachable because the left operand is never nullish"), which is the
+    // opposite claim. Expected: TS2871 (or no diagnostic) on the `void` lines.
+    declare let y: number;
+    declare function sideEffect(): void;
+    
+    const viaUndefined = undefined ?? y;
+                         ~~~~~~~~~
+!!! error TS2871: This expression is always nullish.
+    const viaVoidZero = void 0 ?? y;
+                        ~~~~~~
+!!! error TS2869: Right operand of ?? is unreachable because the left operand is never nullish.
+    const viaVoidParenthesized = (void 0) ?? y;
+                                  ~~~~~~
+!!! error TS2869: Right operand of ?? is unreachable because the left operand is never nullish.
+    const viaVoidCall = void sideEffect() ?? y;
+                        ~~~~~~~~~~~~~~~~~
+!!! error TS2869: Right operand of ?? is unreachable because the left operand is never nullish.
+    

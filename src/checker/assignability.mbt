@@ -1208,8 +1208,81 @@ fn is_assignable_to_inner(
       }
       true
     }
+    // A conditional that `reduce_conditional` above could not decide is
+    // UNDECIDED, not unrelated: `"y1" extends \`x${infer U}\` ? number :
+    // boolean` accepts a `boolean`, and the fallback below would call it a
+    // definite mismatch. It flows freely, which is what an unresolvable
+    // `IndexedAccess` already does at the top of this function, and what
+    // `check_expr_against` gets by abstaining on an unmodelled conditional.
+    // The two normalization helpers that read `true` as PROOF
+    // (`equivalent`, `simplify_union`) exclude it explicitly.
+    (Conditional(_, _, _, _), _) | (_, Conditional(_, _, _, _)) => true
     _ => false
   }
+}
+
+///|
+/// True for a conditional type `reduce_conditional` leaves undecided —
+/// the shape `is_assignable_to` answers `true` for without proving
+/// anything.
+fn is_undecided_conditional(t : @ast.TsType) -> Bool {
+  t is Conditional(_, _, _, _) &&
+  reduce_conditional(t) is Conditional(_, _, _, _)
+}
+
+///|
+/// True when an undecided conditional occurs ANYWHERE in `t`, not just at
+/// the top. `is_assignable_to` compares structurally, so `C[]` against
+/// `string[]` reaches the undecided `C` against `string` and answers
+/// `true` without proving anything. Every caller that reads `true` as
+/// PROOF has to look inside: `reduce_conditional` choosing a branch, the
+/// `equivalent` family, and `simplify_union`'s subsumption. A shape this
+/// walk does not open (a `Named` reference, a mapped type) is not looked
+/// into, which matches `is_assignable_to`, since it does not expand those
+/// either.
+fn contains_undecided_conditional(t : @ast.TsType) -> Bool {
+  fn walk(t : @ast.TsType, depth : Int32) -> Bool {
+    // Out of depth means "cannot rule one out", and the callers read `true`
+    // as the cautious answer: a conditional stays unreduced, and two types
+    // stay distinct.
+    if depth > 32 {
+      return true
+    }
+    let d = depth + 1
+    match t {
+      Conditional(_, _, _, _) =>
+        if is_undecided_conditional(t) {
+          true
+        } else {
+          walk(reduce_conditional(t), d)
+        }
+      Array(inner) | Rest(inner) => walk(inner, d)
+      Tuple(items) | Union(items) | Intersection(items) | Applied(_, items) =>
+        items.iter().any(fn(x) { walk(x, d) })
+      Object(fields) =>
+        fields.iter().any(fn(f) { walk(f.0, d) || walk(f.1, d) })
+      Struct(_, fields) => fields.iter().any(fn(f) { walk(f.1, d) })
+      Func(ps, r) | Constructor(ps, r, _) =>
+        ps.iter().any(fn(x) { walk(x, d) }) || walk(r, d)
+      GenericFunc(_, bounds, inner) =>
+        bounds.iter().any(fn(b) { walk(b.1, d) }) || walk(inner, d)
+      CallableMeta(inner, _) | Keyof(inner) | TypePredicate(_, inner) =>
+        walk(inner, d)
+      AssertsPredicate(_, Some(inner)) => walk(inner, d)
+      // A computed type can RESOLVE to a conditional (`{ x: C }["x"]` is `C`
+      // to `is_assignable_to`), so any conditional among its parts counts.
+      // That over-approximates, which only ever answers "cannot tell".
+      IndexedAccess(a, b) => walk(a, d) || walk(b, d)
+      MappedType(_, a, b, _) => walk(a, d) || walk(b, d)
+      MappedTypeRemap(_, a, b, c, _) => walk(a, d) || walk(b, d) || walk(c, d)
+      TemplateLiteralType(_, parts) => parts.iter().any(fn(x) { walk(x, d) })
+      // Leaves, and `Named` / `TypeOf`, which the resolver-free relation
+      // cannot expand either.
+      _ => false
+    }
+  }
+
+  walk(t, 0)
 }
 
 ///|
@@ -1554,6 +1627,14 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
         } else {
           false_branch
         }
+      } else if contains_undecided_conditional(check) ||
+        contains_undecided_conditional(extends) {
+        // `is_assignable_to` answers `true` for an undecided conditional
+        // without proving anything, so reading it here would pick the
+        // TRUE branch on no evidence: with `C` undecided, `C extends
+        // string ? number : boolean` became `number`. The outer
+        // conditional is undecided too.
+        t
       } else if is_assignable_to(check, extends) {
         true_branch
       } else {

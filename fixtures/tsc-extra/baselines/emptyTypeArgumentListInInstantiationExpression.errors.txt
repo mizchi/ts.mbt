@@ -1,0 +1,12 @@
+emptyTypeArgumentListInInstantiationExpression.ts(4,37): error TS1099: Type argument list cannot be empty.
+
+
+==== emptyTypeArgumentListInInstantiationExpression.ts (1 errors) ====
+    // `fx<>` is TS1099; `fx<string>` is a legal instantiation expression.
+    
+    declare function fx<T>(x: T): T;
+    function bad1(): unknown { return fx<>; }
+                                        ~~
+!!! error TS1099: Type argument list cannot be empty.
+    function ok1(): unknown { return fx<string>; }
+    

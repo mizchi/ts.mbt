@@ -17,9 +17,16 @@ from the baseline FILE NAMES alone, so the repo vendors only name lists:
   (`name(target=es2015)`) are stripped; a test counts as erroring if any
   ran variant errors.
 
-Provenance: microsoft/TypeScript tag `v7.1-beta`
-(`3e9236361fa97a9e6c685f4833ac457ae2d8c50a`, the `gitHead` npm records for
-`typescript@7.1.0-beta`). From 7.1 the native compiler lives in
+Provenance: microsoft/TypeScript `main` at
+`6bdcb54d23f41bc7098c1f3488ac599c75b852ca`, the `gitHead` npm records for
+the nightly `typescript@7.1.0-dev.20261114.1` (`typescript@next` on
+2026-11-15), which is also the compiler `package.json` pins for the probes
+— the corpus and the compiler that answers questions about it are the same
+commit. The move from tag `v7.1-beta` (`3e9236361fa9…`) added one
+conformance case (`importAliasMergedNamespace`, accepted), edited four, and
+changed no name in the error set; `lib_globals.mbt` regenerated
+byte-identical. From
+7.1 the native compiler lives in
 microsoft/TypeScript itself, with its own conformance cases and baselines in
 the same tree:
 
@@ -34,9 +41,12 @@ longer the conformance corpus.
 Regenerate with:
 
 ```bash
+# The commit: `npm view typescript@<version> gitHead` (a tag also works,
+# with `--branch vX.Y-tag` on the clone).
 git clone --filter=blob:none --no-checkout --depth 1 \
-  --branch vX.Y-tag https://github.com/microsoft/TypeScript /tmp/ts7
+  https://github.com/microsoft/TypeScript /tmp/ts7
 cd /tmp/ts7
+git fetch --depth 1 origin <gitHead> && git checkout <gitHead>
 git ls-tree -r HEAD tsc/testdata/baselines/reference/conformance --name-only \
   | sed 's|.*/||' > names.txt
 grep '\.errors\.txt$' names.txt \

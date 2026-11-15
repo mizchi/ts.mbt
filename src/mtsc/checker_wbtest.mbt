@@ -248,3 +248,103 @@ test "mtsc graph checker accepts JSX when the module opts in" {
   })
   assert_false(diagnostics.contains("parse error"))
 }
+
+///|
+fn graph2(entry : String, lib : String) -> String {
+  check_module_graph({
+    modules: [
+      { path: "/src/entry.ts", source: entry, allowJsx: false, },
+      { path: "/src/lib.ts", source: lib, allowJsx: false, },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./lib",
+        targetPath: "/src/lib.ts",
+      },
+    ],
+  })
+}
+
+///|
+test "mtsc graph checker types an imported namespace by its members" {
+  let lib = "export namespace util {\n  export function assertNever(_x: never): never { throw new Error(); }\n  export const n = 1;\n  export function join(xs: string[], sep = \",\"): string { return xs.join(sep); }\n}"
+  // A member's type is checked (`util.n` is a number) ...
+  assert_true(
+    graph2(
+      "import { util } from \"./lib\";\nexport const s: string = util.n;", lib,
+    ).contains("expected `string` but got `number`"),
+  )
+  // ... a never-returning member ends a path, and a defaulted parameter
+  // may be omitted.
+  let ok = graph2(
+    "import { util } from \"./lib\";\ntype E = { type: \"a\" } | { type: \"b\" };\nexport function f(e: E): number {\n  if (e.type === \"a\") return 1;\n  if (e.type === \"b\") return 2;\n  util.assertNever(e);\n}\nexport const j: string = util.join([\"a\"]);",
+    lib,
+  )
+  assert_eq(ok, "")
+}
+
+///|
+test "mtsc graph checker infers an imported bounded generic at the call" {
+  let lib = "export interface Trait { _zod: { def: unknown } }\nexport interface Ctor<T extends Trait> { new (def: unknown): T }\nexport function make<T extends Trait>(name: string, init: (inst: T, def: unknown) => void): Ctor<T> { return null as any; }"
+  let diags = graph2(
+    "import { make, type Ctor, type Trait } from \"./lib\";\ninterface E extends Trait { issues: string[]; _zod: { def: string[] } }\nconst init = (inst: E, issues: unknown) => { inst.issues = []; };\nexport const E: Ctor<E> = make(\"E\", init);",
+    lib,
+  )
+  assert_eq(diags, "")
+}
+
+///|
+/// The DEFAULT-import spelling of the call-site solve. The named-import
+/// branch marks an imported generic function (`@import-generic:`) and an
+/// imported `Any` (`@imported:`), and the default-import branch marked
+/// neither (review of mizchi/ts.mbt#285). A default import is usually bound
+/// under another name, and then nothing else finds the declaration, so the
+/// call came back with `T` unsolved and the mismatch below was silent while
+/// the named spelling reported it, as tsc does.
+test "mtsc graph checker solves a default-imported generic at the call" {
+  let lib = "export default function ident<T extends { a: number }>(x: T): T { return x; }\nexport function named<T extends { a: number }>(x: T): T { return x; }"
+  let named = graph2(
+    "import { named as nn } from \"./lib\";\nexport const s: string = nn({ a: 1 });",
+    lib,
+  )
+  let dflt = graph2(
+    "import idd from \"./lib\";\nexport const s: string = idd({ a: 1 });", lib,
+  )
+  assert_true(named.contains("expected `string`"), msg=named)
+  assert_true(dflt.contains("expected `string`"), msg=dflt)
+  // The legal call stays silent.
+  assert_eq(
+    graph2(
+      "import idd from \"./lib\";\nexport const s: { a: number } = idd({ a: 1 });",
+      lib,
+    ),
+    "",
+  )
+}
+
+///|
+/// Review of mizchi/ts.mbt#285: the imported binder is over the
+/// UN-inlined signature, so a constrained type parameter still occurs in
+/// it, and a fresh literal for one whose constraint can be a primitive is
+/// not widened (tsc's `getCovariantInference`, probed). Widening it made
+/// `wrap("a")` a `string[]` and rejected the legal `"a"[]` target.
+test "mtsc graph checker keeps a literal for a primitive-constrained import" {
+  let lib = "export function wrap<T extends string>(x: T): T[] { return [x]; }\nexport function wrapU<T>(x: T): T[] { return [x]; }"
+  assert_eq(
+    graph2(
+      "import { wrap } from \"./lib\";\nexport const r: \"a\"[] = wrap(\"a\");",
+      lib,
+    ),
+    "",
+  )
+  // The unconstrained parameter still widens: pushing another string onto
+  // its result is legal.
+  assert_eq(
+    graph2(
+      "import { wrapU } from \"./lib\";\nconst q = wrapU(\"a\");\nq.push(\"b\");\nexport {};",
+      lib,
+    ),
+    "",
+  )
+}

@@ -29,7 +29,8 @@
 // Usage:
 //   node scripts/tsc_probe.mjs [--version] [--raw] <file.ts> [more.ts ...]
 import path from "node:path";
-import { ts, probe } from "./lib/tsc-probe.mjs";
+import fs from "node:fs";
+import { ts, probe, unhonoured } from "./lib/tsc-probe.mjs";
 
 const argv = process.argv.slice(2);
 if (argv.includes("--version")) {
@@ -50,6 +51,12 @@ for (const file of files) {
       .map(([k, v]) => `${k}=${v}`)
       .join(" ") || "defaults";
   if (!raw) console.log(`--- ${path.basename(file)}  [${shown}]`);
+  // A header option the probe does not pass to the compiler means the
+  // answer below is for a DIFFERENT configuration than the file asks for.
+  const ignored = unhonoured(fs.readFileSync(file, "utf8"));
+  if (ignored.length > 0) {
+    console.log(`  WARNING: header option(s) not passed to tsc: ${ignored.join(", ")}`);
+  }
   if (diags.length === 0) {
     console.log("  (accepted)");
     continue;

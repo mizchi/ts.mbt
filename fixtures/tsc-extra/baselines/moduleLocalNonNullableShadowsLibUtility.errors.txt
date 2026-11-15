@@ -1,0 +1,18 @@
+moduleLocalNonNullableShadowsLibUtility.ts(7,42): error TS2322: Type 'T' is not assignable to type 'T & {}'.
+  Type 'T' is not assignable to type '{}'.
+
+
+==== moduleLocalNonNullableShadowsLibUtility.ts (1 errors) ====
+    // In a MODULE, a file's own `type NonNullable<T> = T` is not the lib utility.
+    // (In a script the same declaration is TS2300 against the lib.)
+    
+    export {};
+    type NonNullable<T> = T;
+    function okLocalNonNullable<T>(x: T) { const y: NonNullable<T> = x; return y; }
+    function badLibSpelling<T>(x: T) { const y: T & {} = x; return y; }
+                                             ~
+!!! error TS2322: Type 'T' is not assignable to type 'T & {}'.
+!!! error TS2322:   Type 'T' is not assignable to type '{}'.
+!!! related TS2208 moduleLocalNonNullableShadowsLibUtility.ts:7:25: This type parameter might need an `extends {}` constraint.
+!!! related TS2208 moduleLocalNonNullableShadowsLibUtility.ts:7:25: This type parameter might need an `extends T & {}` constraint.
+    
