@@ -19347,6 +19347,19 @@ test "batch EA rules" {
     ),
     0,
   )
+  // A GENERATOR `[Symbol.iterator]` returns a generator object whatever its
+  // body's `return` says, so neither the class's `return` field nor a
+  // missing `next` is a finding (tsc accepts both, probed).
+  for
+    src in [
+      "class G { return = 0;\n  *[Symbol.iterator]() { return this } }\nfor (const x of new G()) { }",
+      "class G { *[Symbol.iterator]() { return this } }\nfor (const x of new G()) { }",
+    ] {
+    @test.assert_eq(
+      check_module_function_bodies(parse_module_or_empty(src)).length(),
+      0,
+    )
+  }
   // --- stays silent
   for
     src in [
@@ -22994,6 +23007,25 @@ test "a property-path narrowing does not survive rebinding its receiver" {
     ),
     0,
   )
+  // One key per property at EVERY segment of a path, so a receiver spelled
+  // with brackets is the same path as the dotted one (tsc reports the
+  // first, accepts the second, probed).
+  let nested = fn(body : String) -> Int32 {
+    check_module_function_bodies(
+      parse_module_or_empty(
+        "function f(o: { p: { q: string | null } }) {\n" + body + "\n}",
+      ),
+    ).length()
+  }
+  assert_true(
+    nested("o[\"p\"].q = \"\";\no.p.q = null;\nconst s: string = o[\"p\"].q;") >
+    0,
+  )
+  @test.assert_eq(nested("o[\"p\"].q = \"\";\nconst s: string = o.p.q;"), 0)
+  // A right-hand side that rebinds the receiver is still narrowed, as tsc
+  // narrows it: `o.p = (o = other, "")` then `const s: string = o.p` is
+  // accepted (probed).
+  @test.assert_eq(n("o.p = (o = other, \"\");\nconst s: string = o.p;"), 0)
   assert_true(
     check_module_function_bodies(parse_module_or_empty(nullish)).length() > 0,
   )

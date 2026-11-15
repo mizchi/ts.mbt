@@ -25523,7 +25523,7 @@ fn narrowing_key_for_expr(expr : @ast.TsExpr) -> String? {
     Var(name) => Some(name)
     PropAccess(inner, prop) =>
       match narrowing_key_for_expr(inner) {
-        Some(prefix) => Some(prefix + "." + prop)
+        Some(prefix) => Some(member_narrowing_key(prefix, prop))
         None => None
       }
     IndexAccess(inner, idx) =>
@@ -25535,7 +25535,10 @@ fn narrowing_key_for_expr(expr : @ast.TsExpr) -> String? {
           let idx_key = match idx {
             IntLit(i) => Some("[\{i}]")
             NumberLit(d) => Some("[\{d}]")
-            StringLit(s) => Some("[\"\{s}\"]")
+            // `m["k"]` is `m.k` whenever `k` can be spelled with a dot, so
+            // the two spellings share one key at every segment of a path
+            // (`o["p"].q` and `o.p.q`), not only the last.
+            StringLit(s) => return Some(member_narrowing_key(prefix, s))
             _ => None
           }
           match idx_key {
@@ -25546,6 +25549,34 @@ fn narrowing_key_for_expr(expr : @ast.TsExpr) -> String? {
         None => None
       }
     _ => None
+  }
+}
+
+///|
+/// The narrowing key of member `prop` of a receiver keyed `prefix`: the
+/// dotted spelling whenever `prop` is one a dot can name, and the bracket
+/// spelling otherwise (`o["a-b"]`). One key per property is what lets a
+/// write through either spelling replace a narrowing made through the
+/// other. Code units from 0x80 up count as identifier characters, as the
+/// lexer's identifier scanner treats them.
+fn member_narrowing_key(prefix : String, prop : String) -> String {
+  let chars = prop.to_array()
+  let mut dotted = chars.length() > 0
+  for i, c in chars {
+    let ok = (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      c == '_' ||
+      c == '$' ||
+      c.to_int() >= 0x80 ||
+      (i > 0 && c >= '0' && c <= '9')
+    if !ok {
+      dotted = false
+    }
+  }
+  if dotted {
+    prefix + "." + prop
+  } else {
+    prefix + "[\"" + prop + "\"]"
   }
 }
 
@@ -26700,8 +26731,12 @@ fn check_iterable_class_protocol(
               }
               if m.name == "@@iterator" {
                 has_sym_iter = true
+                // A generator method returns a generator object, which is an
+                // iterator whatever its body's `return` says, so it never
+                // returns the instance (tsc accepts `*[Symbol.iterator]()
+                // { return this }`, probed).
                 match m.body {
-                  Some(b) => {
+                  Some(b) if !m.is_generator => {
                     let mut all_this = true
                     let mut saw_return = false
                     for st in b.stmts {
@@ -26713,7 +26748,7 @@ fn check_iterable_class_protocol(
                     }
                     sym_iter_returns_this_only = saw_return && all_this
                   }
-                  None => ()
+                  _ => ()
                 }
               }
             }
@@ -27184,7 +27219,11 @@ fn narrow_after_prop_assignment(
 ) -> Unit {
   guard narrowing_key_for_expr(recv) is Some(recv_key) else { return }
   forget_member_paths(env, recv_key, prop)
-  let key = recv_key + "." + prop
+  // `o.p = (o = other, "")` is deliberately still narrowed: the write goes
+  // to the ORIGINAL object, but tsc narrows the reference `o.p` by the
+  // assignment all the same and accepts a later `const s: string = o.p`
+  // (probed), so declining here would report a line tsc accepts.
+  let key = member_narrowing_key(recv_key, prop)
   let recv_ty = infer_expr(env, ctx.resolver, recv)
   guard ctx.resolver.lookup_field(recv_ty, prop) is Some(decl) else { return }
   if !is_checkable(decl) || !(type_has_undefined(decl) || type_has_null(decl)) {
@@ -27218,12 +27257,12 @@ fn narrow_after_prop_assignment(
 
 ///|
 /// Drop every narrowing of the member `prop` of the receiver keyed
-/// `recv_key`, under BOTH spellings of the access — `o.p` and `o["p"]` are
-/// different narrowing keys for one property — and of every path below it.
-/// A write through either spelling changes what both describe: after
-/// `o.p = ""; o["p"] = null`, `o.p` is `null` (tsc reports the read).
+/// `recv_key`, and of every path below it. `o.p` and `o["p"]` share one
+/// key (`member_narrowing_key`), so a write through either spelling
+/// replaces what the other narrowed: after `o.p = ""; o["p"] = null`,
+/// `o.p` is `null` (tsc reports the read).
 fn forget_member_paths(env : ExprEnv, recv_key : String, prop : String) -> Unit {
-  let keys = [recv_key + "." + prop, recv_key + "[\"" + prop + "\"]"]
+  let keys = [member_narrowing_key(recv_key, prop)]
   let stale : Array[String] = []
   for k, _ in env.vars {
     if keys
@@ -37730,6 +37769,9 @@ fn iterator_class_return_not_method(
     .any(fn(m) {
       m.name == "@@iterator" &&
       !m.is_static &&
+      // A generator method returns a generator object, whatever its body's
+      // `return` says, so its iterator is never the instance.
+      !m.is_generator &&
       (match m.body {
         Some({ stmts: [Return(Some(Var("this")))], .. }) => true
         _ => false
