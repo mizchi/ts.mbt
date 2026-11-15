@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2724 / MISS in scope 2 /
+  is a soundness bug, and there are none (TP 2726 / MISS in scope 0 /
   OUT OF SCOPE 18 / FP 0 / PFLEGAL 0 / TN 1763, against
   **TypeScript 7.1.0-beta** — the corpus is the `typescript7` submodule,
   see `scripts/ts7_baselines/README.md`). That gate compares against vendored TS7 name
@@ -4050,6 +4050,123 @@ product surfaces now.
   walking the raw and inlined signatures in parallel. Inlining is a
   structural substitution, so the two differ exactly where a bound
   stands.
+  Batch FX takes **MISS in scope 2 -> 0** (TP 2726 / OUT OF SCOPE 18 /
+  FP 0 / PFLEGAL 0 / TN 1763), with effect, zod and the real `.d.ts`
+  entries unchanged.
+
+  `wrappedAndRecursiveConstraints4` needed a factory's return type: an
+  unannotated generic class method whose body ends by returning a
+  function it declares (`foo<U extends T>(x: U) { function bar<V extends
+  U>(x: V) { … } return bar }`). The AST had inlined `U` and `V` to `T`,
+  so the parser now records both headers un-inlined, bounds included,
+  under `<method>C#foo` and `<nested>C#foo/bar`. The method's binders are
+  solved from the call and substituted into the returned function's
+  BOUNDS, then inlined the way a declared generic function's are.
+
+  Two things nearly shipped wrong:
+  - `type_param_occurs` does not look inside a `GenericFunc`'s bounds,
+    where `U` lives, so the gate requiring an exact binding was skipped.
+    The legal neighbour `wrappedAndRecursiveConstraints3` reported a
+    `string` against `{ length; charAt: (number) => undefined }`, an arrow
+    with a block body inferred as returning `undefined` where tsc says
+    `void`.
+  - A generic callable VALUE's arguments were judged by NOTHING (the call
+    arm had no `GenericFunc` case). Judging only the binder-free positions
+    is what stays quiet on effect: solving a binder and re-checking the
+    argument against it reported `failCause(this._interruptedCause)`,
+    because this checker does not narrow through a `this.x = …` write.
+
+  `controlFlowBindingPatternOrder` needed five pieces:
+  - A CHECKING parse keeps `as const` as `As(e, Named("const"))`
+    (`Parser::keep_const_assertions`, set at the five check-only parse
+    sites). The transform pipeline's parses still erase it, so no pass
+    ever sees the wrapper.
+  - A literal initializer narrows a declared union (`let a: 0 | 1 = 0`).
+  - A default's assignments join conditionally.
+  - A computed key selects from const tuples.
+  - A binding whose type that computation made EXACT is exempt from the
+    "flow-narrowing residue" suppressions that hide every literal-union
+    mismatch (`declare const b: 0 | 9; const bb: 9 = b` is still
+    suppressed; tsc reports it).
+
+  Declaration narrowing exposed a PRE-EXISTING false positive that
+  reached far beyond the corpus. The loop back-edge join gave up on any
+  body containing `break`, `continue` or `switch`, and widened a literal
+  right-hand side to `string` before capping it at the declared literal
+  union. So `while (c) { if (x === "b") break; x = "b" }` reported
+  TS2367 on a loop tsc accepts. The join now walks those statements,
+  keeps the literal, and applies to `for`, `for…of`, `for…in` and
+  `do…while`, which had no join at all.
+
+  Two TPs had been flagged for a WRONG reason. `is_assignable_to` had no
+  `(Tuple, Array)` arm, so a tuple was never assignable to `T[]`; that
+  was reported on `[1, 2, 3] as const satisfies readonly unknown[]` the
+  moment `as const` typed as a tuple. With the arm in place,
+  `readonlyArraysAndTuples` and `genericRestParameters1` went quiet, and
+  each now reports one of its real errors:
+  - TS1354: `readonly` on non-array syntax, probed on fourteen cells. A
+    parenthesized ELEMENT is legal, which a first draft got wrong on
+    `overrideInterfaceProperty`.
+  - TS2344: `Parameters<Function>`, through a sentinel bound only a
+    definitely-non-callable argument violates.
+
+  Batch FY is a performance batch. Every gate is unchanged: the oracle
+  is identical, effect stays at 139 lines and zod at 19, the real
+  `.d.ts` entries at 0, and the generated bridge packages are
+  byte-identical. Every change was profiled with `valgrind
+  --tool=callgrind` (there is no `perf` in the image) on a throwaway
+  `main` package that replays the bench inputs.
+
+  The real-code win is one defect. `graph_type_modules` pushed the
+  target of every import EDGE, so a module imported from k places was
+  ingested k times by every checked module. Each repeat merged its
+  interfaces with themselves, and `merge_interfaces` CONCATENATES
+  `extends`, index signatures and method type parameters, so the arrays
+  grew on every repeat. On zod's `util.ts` program that was 820,000
+  self-merges and half the check. Each module is now kept once, at its
+  LAST position in the same walk, because later ingestion overwrites a
+  class or alias that two modules both declare. Keeping the FIRST
+  position changed three effect diagnostics; the last position changes
+  none. Measured:
+  - effect `index.ts --noEmit`: 16 -> 4 s
+  - the zod sweep: 76 -> 25 s
+  - effect `Data.ts`: 13.1 -> 3.8 s
+
+  The dedup also exposed a false positive that the repeated `extends`
+  entries had been hiding. It is reachable from one file too, so it is
+  older than this change: `Json` assigned to `cause?: Json`, where
+  `Json` is a self-referential alias that `unwrap_containers` leaves as
+  a name, read as not admitting `null`. `target_admits_nullish` follows
+  alias members.
+
+  The bench-side wins are per-call waste in passes that run once per
+  module and per namespace:
+  - `check_module`'s layered caller keeps four issue kinds, and now skips
+    the steps that produce only the others (`unresolved_type_references`
+    among them).
+  - `expected_mentions_phantom_type_param` walked every type-parameter
+    spelling in the file per argument; it now walks the argument.
+  - Name tables are built lazily or not at all when nothing can read
+    them.
+  - Path strings are concatenated rather than interpolated.
+  - JSDoc trimming and splitting avoid the library defaults, which
+    rebuild a character set per call.
+
+  `moon bench` before and after:
+  - checker 500 interfaces: 1.65 -> 0.60 ms
+  - checker 5000 interfaces: 20.4 -> 10.3 ms
+  - checker permissive 2000: 8.51 -> 3.49 ms
+  - checker small: 40.4 -> 30.0 µs
+  - checker advanced types: 40.7 -> 25.8 µs
+  - checker JSX-heavy: 530 -> 369 µs
+  - checker generic-heavy 400: 23.8 -> 18.0 ms
+
+  Every checker bench is 14-65% faster. The parser benches are
+  unchanged within noise. The JSDoc change is -2% in instructions and
+  nothing measurable in wall time. The commit that made it claims
+  2.27 -> 1.97 ms: that was ONE run against noisy neighbours, and
+  best-of-5 on both binaries reads 1.9 ms each. A single timing is not a
+  measurement; the instruction count is the number that settles it.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

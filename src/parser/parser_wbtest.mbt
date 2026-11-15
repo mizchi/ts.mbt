@@ -8342,3 +8342,65 @@ test "parser: TS2300 type parameter vs a local type in the same body (batch FH)"
     }
   }
 }
+
+///|
+test "parser: TS1354 `readonly` applies only to array and tuple type syntax" {
+  let msg = "'readonly' type modifier is only permitted on array and tuple literal types"
+  // `-1` when the source does not parse, which every assertion below fails.
+  fn count(src : String, msg : String) -> Int32 {
+    let m = Parser::from_source(src).parse_module() catch { _ => return -1 }
+    m.grammar_misuses.filter(fn(g) { g == msg }).length()
+  }
+  for
+    src in [
+      "type A = readonly string;", "type B<T> = readonly T;", "type C = readonly { a: 1 };",
+      "type D = readonly Array<string>;", "type E = readonly (string[]);", "type F = readonly readonly string[];",
+    ] {
+    assert_eq(count(src, msg), 1, msg=src)
+  }
+  for
+    src in [
+      "type A = readonly string[];", "type B = readonly [number, number];", "type C = readonly string[][];",
+      "type D = readonly Array<string>[];", "type E<T> = readonly T[];", "type F = readonly [];",
+      "type G = readonly string[] | number;", "type H<K, V> = readonly (readonly [K, V])[];",
+    ] {
+    assert_eq(count(src, msg), 0, msg=src)
+  }
+}
+
+///|
+test "an exported const assertion keeps its operand's value type" {
+  let parser = Parser::from_source_with_jsx(
+    "export const n = 1 as const;", false,
+  )
+  parser.keep_const_assertions()
+  let m = parser.parse_module() catch { _ => abort("parse") }
+  let found = m.values.iter().find_first(fn(v) { v.name == "n" })
+  guard found is Some(v) else { abort("n not recorded") }
+  assert_true(v.type_ is Number)
+}
+
+///|
+test "a const-asserted computed key resolves like the bare literal" {
+  let parser = Parser::from_source_with_jsx(
+    "const KEY = \"id\" as const;\nexport const { [KEY]: id } = { id: 1 };", false,
+  )
+  parser.keep_const_assertions()
+  let m = parser.parse_module() catch { _ => abort("parse") }
+  let found = m.values.iter().find_first(fn(v) { v.name == "id" })
+  guard found is Some(v) else { abort("id not recorded") }
+  assert_true(v.type_ is Number)
+}
+
+///|
+test "a const-asserted rest source still feeds a computed key" {
+  let parser = Parser::from_source_with_jsx(
+    "const [...KEYS] = [\"id\"] as const;\nexport const { [KEYS[0]]: id } = { id: 1 };",
+    false,
+  )
+  parser.keep_const_assertions()
+  let m = parser.parse_module() catch { _ => abort("parse") }
+  let found = m.values.iter().find_first(fn(v) { v.name == "id" })
+  guard found is Some(v) else { abort("id not recorded") }
+  assert_true(v.type_ is Number)
+}

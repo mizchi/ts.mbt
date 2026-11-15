@@ -500,12 +500,19 @@ fn Resolver::class_index(r : Resolver) -> ClassIndex {
 }
 
 ///|
+/// The standard utility-type table, built once. Every resolver used to
+/// build its own on construction, and the checker builds a resolver per
+/// module and per namespace; the table is only ever read (`get`), so one
+/// shared instance answers every resolver identically.
+let shared_standard_aliases : Map[String, AliasBinding] = standard_utility_types()
+
+///|
 fn Resolver::empty() -> Resolver {
   {
     interfaces: {},
     classes: {},
     type_aliases: {},
-    standard_aliases: standard_utility_types(),
+    standard_aliases: shared_standard_aliases,
     qualified_names: {},
     lookup_depth: { val: 0, },
     lookup_active: {},
@@ -1864,7 +1871,7 @@ fn Resolver::ingest_module(
     r.globals[prefix + v.name] = v.type_
   }
   for name, sig in module_.raw_generic_signatures {
-    if sig is Func(_, _) {
+    if sig is (Func(_, _) | GenericFunc(_, _, _)) {
       r.globals["@raw-sig:" + prefix + name] = sig
     }
   }
@@ -6798,6 +6805,8 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 /// exit.
 fn ExprEnv::forget_freshness(self : ExprEnv, name : String) -> Unit {
   let _ = self.vars.remove("<fresh>" + name)
+  // The same holds for the `<exact>` marker of `bind_object_pattern`.
+  let _ = self.vars.remove("<exact>" + name)
 }
 
 ///|
@@ -9019,6 +9028,43 @@ fn type_has_undefined(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Whether the TARGET of an assignment admits `null` (`want_null`) or
+/// `undefined`, following an alias member of a union. `unwrap_containers`
+/// leaves a self-referential alias as its name, so `Json | undefined` with
+/// `type Json = null | … | JsonArray` and `interface JsonArray extends
+/// ReadonlyArray<Json>` read as not admitting `null`, and assigning a
+/// `Json` to a `cause?: Json` field was reported (tsc accepts it). A name
+/// that resolves to itself admits nothing extra, and running out of depth
+/// answers "admits", which can only lose a report.
+fn target_admits_nullish(
+  resolver : Resolver,
+  ty : @ast.TsType,
+  want_null : Bool,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return true
+  }
+  match ty {
+    Null => want_null
+    Undefined => !want_null
+    Union(_) =>
+      union_components(ty)
+      .iter()
+      .any(fn(p) { target_admits_nullish(resolver, p, want_null, depth + 1) })
+    Named(_) | Applied(_, _) => {
+      let u = resolver.unwrap(ty)
+      if u == ty {
+        false
+      } else {
+        target_admits_nullish(resolver, u, want_null, depth + 1)
+      }
+    }
+    _ => false
+  }
+}
+
+///|
 fn type_has_null(ty : @ast.TsType) -> Bool {
   match ty {
     Null => true
@@ -11116,6 +11162,10 @@ fn infer_expr_inner(
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
       match resolver.lookup_method_sig(pruned_recv, meth) {
+        Some((_, Any)) if nested_function_method_return(
+            env, resolver, pruned_recv, meth, args,
+          )
+          is Some(t) => t
         Some((params, ret)) => {
           // A generic METHOD's type parameters are solved from the
           // arguments exactly as a generic FUNCTION's are in the `Call`
@@ -11459,6 +11509,13 @@ fn infer_expr_inner(
           Some(s) => @ast.TsType::Literal(s)
           None => @ast.TsType::String_
         }
+      }
+    // `x as const` (kept only by a checking parse): the const-context
+    // type of `x` — see `const_context_type`.
+    As(inner, Named("const")) =>
+      match const_context_type(env, resolver, inner) {
+        Some(t) => t
+        None => infer_expr(env, resolver, inner)
       }
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.
@@ -12487,6 +12544,245 @@ fn instantiate_raw_generic_params(
     }
   }
   Some(out)
+}
+
+///|
+/// What a call to an UNANNOTATED generic class method returns when the
+/// method's body ends by returning a function it declares itself —
+/// `foo<U extends T>(x: U) { function bar<V extends U>(x: V) { … } return
+/// bar }` — which is a factory's shape, and `any` before this existed.
+///
+/// The parser inlines every bounded type parameter to its bound, so in the
+/// AST `bar`'s parameter is `T` and the call `c.foo("")` could only ever
+/// answer `(x: { length: number }) => …`. The un-inlined headers
+/// (`<method>C#foo`, `<nested>C#foo/bar`) still say `U` and `V extends U`,
+/// so the method's binders are solved from the call — `U = string` — and
+/// substituted into the returned function's BOUNDS before those are
+/// inlined the way the parser inlines a declared generic function's. The
+/// result is `<V extends string>(x: string) => …`, which is tsc's answer
+/// (wrappedAndRecursiveConstraints4).
+///
+/// Every condition abstains to `None` (the old `any`): an overloaded or
+/// static method, an annotated return, a body with any other `return`, a
+/// statement this cannot walk for returns, or a binder the call leaves
+/// unsolved.
+fn nested_function_method_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsType? {
+  let cls = match recv {
+    Named(n) | Applied(n, _) => n
+    _ => return None
+  }
+  guard resolver.classes.get(cls) is Some(decl) else { return None }
+  let (prefix, base) = match cls.rev_find(".") {
+    Some(i) => (cls[:i + 1].to_owned(), cls[i + 1:].to_owned())
+    None => ("", cls)
+  }
+  guard resolver.globals.get(
+      "@raw-sig:" + prefix + "<method>" + base + "#" + meth,
+    )
+    is Some(GenericFunc(mtps, _, Func(mparams, Named("<no-annotation>")))) else {
+    return None
+  }
+  let same_name = decl.methods.filter(fn(m) { m.name == meth })
+  // A generator method's call is a generator, never the function its body
+  // returns, so it keeps the existing fallback.
+  guard same_name is [m] &&
+    !m.is_static &&
+    !m.is_generator &&
+    m.body is Some(body) else {
+    return None
+  }
+  guard body.stmts.last() is Some(Return(Some(Var(fname)))) else { return None }
+  guard stmts_return_count(body.stmts) is Some(1) else { return None }
+  let declared_here = body.stmts
+    .iter()
+    .any(fn(st) {
+      match st {
+        Let(Ident(n), _, FuncExpr(f)) => n == fname && f.name == fname
+        _ => false
+      }
+    })
+  if !declared_here {
+    return None
+  }
+  guard resolver.globals.get(
+      "@raw-sig:" + prefix + "<nested>" + base + "#" + meth + "/" + fname,
+    )
+    is Some(GenericFunc(ntps, nbounds, Func(nparams, nret))) else {
+    return None
+  }
+  let raw_ret = @ast.TsType::GenericFunc(ntps, nbounds, Func(nparams, nret))
+  let bindings = widen_fresh_literal_bindings(
+    env,
+    resolver,
+    solve_generic_bindings(env, resolver, mtps, mparams, args, None),
+    mtps,
+    None,
+    mparams,
+    args,
+    raw_ret,
+  )
+  // A binding substituted into a BOUND becomes a parameter type every call
+  // of the result is judged against, so it has to be one this checker
+  // infers exactly. A function-valued member is not: `(x: number) => { '' }`
+  // infers here as returning `undefined` where tsc says `void`, and
+  // `wrappedAndRecursiveConstraints3` — this file's legal neighbour, which
+  // binds `U` to `{ length: number; charAt: … }` — then rejected
+  // `r('')`, whose `string` does satisfy that shape. Scalars and objects
+  // made of them are exact.
+  //
+  // A LITERAL inside an object is not exact either: a fresh object
+  // literal's properties are mutable, so `foo({ kind: "a" })` against
+  // `U extends { kind: string }` infers `U = { kind: string }` in tsc, while
+  // `infer_expr` keeps `"a"` there — and the returned function then
+  // rejected `{ kind: "b" }`. A top-level literal binding is widened by
+  // `widen_fresh_literal_bindings` before it gets here.
+  fn exact_shape_at(t : @ast.TsType, in_object : Bool) -> Bool {
+    match t {
+      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) if in_object =>
+        false
+      Array(inner) => exact_shape_at(inner, in_object)
+      Tuple(items) => items.iter().all(fn(i) { exact_shape_at(i, in_object) })
+      Union(ms) =>
+        ms.length() > 0 && ms.iter().all(fn(m) { exact_shape_at(m, in_object) })
+      Object(fields) => fields.iter().all(fn(f) { exact_shape_at(f.1, true) })
+      _ => is_primitive_shaped(t)
+    }
+  }
+
+  fn exact_shape(t : @ast.TsType) -> Bool {
+    exact_shape_at(t, false)
+  }
+  // `type_param_occurs` does not look inside a `GenericFunc`'s BOUNDS, and
+  // a bound is exactly where `U` lives in `<V extends U>(x: V) => …`.
+  for tp in mtps {
+    if type_param_occurs(tp, raw_ret) ||
+      nbounds.iter().any(fn(b) { type_param_occurs(tp, b.1) }) {
+      match bindings.get(tp) {
+        Some(b) if is_checkable(b) && !(b is Any) && exact_shape(b) => ()
+        _ => return None
+      }
+    }
+  }
+  // The nested function's own binders SHADOW the method's: in
+  // `foo<U extends string>(x: U) { function bar<U extends number>(v: U) … }`
+  // the `U` inside `bar` is `bar`'s, so the method's `U = string` must not
+  // reach it.
+  let bindings : Map[String, @ast.TsType] = {
+    let outer : Map[String, @ast.TsType] = Map([])
+    for k, v in bindings {
+      if !ntps.contains(k) {
+        outer[k] = v
+      }
+    }
+    outer
+  }
+  let bounds_out = nbounds.map(fn(b) { (b.0, substitute_params(b.1, bindings)) })
+  let inline : Map[String, @ast.TsType] = Map([])
+  for b in bounds_out {
+    inline[b.0] = b.1
+  }
+  let params_out = nparams.map(fn(p) {
+    substitute_params(substitute_params(p, bindings), inline)
+  })
+  let ret_out = match nret {
+    Named("<no-annotation>") => @ast.TsType::Any
+    r => substitute_params(substitute_params(r, bindings), inline)
+  }
+  if ntps.length() == 0 {
+    Some(Func(params_out, ret_out))
+  } else {
+    Some(GenericFunc(ntps, bounds_out, Func(params_out, ret_out)))
+  }
+}
+
+///|
+/// How many `return` statements `stmts` holds, not counting those inside a
+/// nested function (an expression, which this never enters). `None` for a
+/// statement whose nested statements this does not walk, so a caller that
+/// needs the count to be exact abstains instead of under-counting.
+fn stmts_return_count(stmts : Array[@ast.TsStmt]) -> Int32? {
+  let mut n = 0
+  for st in stmts {
+    let k = match st {
+      Return(_) => Some(1)
+      If(_, t, e) =>
+        match (stmts_return_count(t.stmts), e) {
+          (Some(a), None) => Some(a)
+          (Some(a), Some(b)) =>
+            match stmts_return_count(b.stmts) {
+              Some(c) => Some(a + c)
+              None => None
+            }
+          _ => None
+        }
+      While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+        stmts_return_count(b.stmts)
+      For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => stmts_return_count(b.stmts)
+      Label(_, inner) => stmts_return_count([inner])
+      Try(t, _, c, f) => {
+        let mut total = 0
+        let mut ok = true
+        for blk in [Some(t), c, f] {
+          match blk {
+            Some(bb) =>
+              match stmts_return_count(bb.stmts) {
+                Some(x) => total += x
+                None => ok = false
+              }
+            None => ()
+          }
+        }
+        if ok {
+          Some(total)
+        } else {
+          None
+        }
+      }
+      Switch(_, cases) => {
+        let mut total = 0
+        let mut ok = true
+        for c in cases {
+          match stmts_return_count(c.body.stmts) {
+            Some(x) => total += x
+            None => ok = false
+          }
+        }
+        if ok {
+          Some(total)
+        } else {
+          None
+        }
+      }
+      Var(_, _, _)
+      | Let(_, _, _)
+      | Const(_, _, _)
+      | Assign(_, _)
+      | CompoundAssign(_, _, _)
+      | IndexAssign(_, _, _)
+      | PropAssign(_, _, _)
+      | Expr(_)
+      | Empty
+      | Throw(_)
+      | Debugger
+      | NativeClassStmt(_, _)
+      | Break(_)
+      | Continue(_) => Some(0)
+    }
+    match k {
+      Some(x) => n += x
+      None => return None
+    }
+  }
+  Some(n)
 }
 
 ///|
@@ -15529,8 +15825,9 @@ fn check_expr_against(
     }
     if !target_open && is_checkable(expected_u) {
       let leaks_undef = type_has_undefined(inferred_u) &&
-        !type_has_undefined(expected_u)
-      let leaks_null = type_has_null(inferred_u) && !type_has_null(expected_u)
+        !target_admits_nullish(ctx.resolver, expected_u, false, 0)
+      let leaks_null = type_has_null(inferred_u) &&
+        !target_admits_nullish(ctx.resolver, expected_u, true, 0)
       if leaks_undef || leaks_null {
         record(
           ctx,
@@ -15663,8 +15960,20 @@ fn check_expr_against(
   // `expected "foo" but got "foo" | "bar"`), TypeScript has narrowed the source
   // to a compatible value at this point. We don't model flow narrowing, so the
   // source still looks like its full declared union — stay silent.
+  //
+  // Except for a binding whose type is known EXACT (`<exact>NAME`, written
+  // where a computed key selected it from a const-asserted tuple) and is
+  // still that type: nothing narrowed it, so there is no residue to hide.
+  let exact_source = match expr {
+    Var(n) =>
+      match (env.lookup("<exact>" + n), env.lookup(n)) {
+        (Some(a), Some(b)) => a == b
+        _ => false
+      }
+    _ => false
+  }
   match (literal_union_members(expected_u), literal_union_members(inferred_u)) {
-    (Some(exp_lits), Some(inf_lits)) =>
+    (Some(exp_lits), Some(inf_lits)) if !exact_source =>
       if exp_lits.iter().all(fn(e) { inf_lits.iter().any(fn(i) { i == e }) }) {
         return
       }
@@ -15955,7 +16264,8 @@ fn check_expr_against(
     // a guard that narrows one side; absent flow tracking we still see
     // both as unions and the diagnostic is almost always wrong. Stay
     // silent rather than emit a false mismatch.
-    (Union(_), Union(_)) => return
+    // A source known EXACT (`exact_source` above) is not that residue.
+    (Union(_), Union(_)) if !exact_source => return
     // A union target with a generic `Applied` member (`Generator<...> |
     // AsyncGenerator<...>`) carries inference we don't track — the generator
     // `return`/`yield` contributes to a type argument, not the whole union.
@@ -16083,7 +16393,28 @@ fn check_expr_against(
     // the context a single-target assignment — never a call argument
     // (`… arg[i]`), where overload / specialized-signature resolution can
     // legitimately accept a literal that the checked signature rejects.
-    let precise_literal_mismatch = precise_literal_type(expr) is Some(_) &&
+    // A source that is a UNION OF LITERALS is not a widening residue
+    // either: erasure turns a literal into its primitive (`number`), never
+    // into a union of literals, so `0 | 9` can only come from an annotation
+    // or from narrowing — and `declare const b: 0 | 9; const bb: 9 = b` is
+    // TS2322 that widening the display to `number` had hidden.
+    let literal_union_source = match inferred_u {
+      Union(ms) =>
+        ms.length() > 1 &&
+        ms
+        .iter()
+        .all(fn(m) {
+          m
+          is (NumberLiteral(_)
+          | Literal(_)
+          | BooleanLiteral(_)
+          | BigIntLiteral(_))
+        })
+      _ => false
+    }
+    let precise_literal_mismatch = (
+        precise_literal_type(expr) is Some(_) || literal_union_source
+      ) &&
       literal_union_members(expected_u) is Some(_) &&
       !sub_path.contains("arg[")
     let shown = if precise_literal_mismatch {
@@ -16795,11 +17126,12 @@ fn lib_interface_members_modeled(name : String) -> Bool {
 /// match other call signatures structurally in ways we don't model, so member
 /// existence and structural assignability against them would false-flag.
 fn shape_is_callable(ty : @ast.TsType, resolver : Resolver) -> Bool {
-  match resolver.unwrap(ty) {
+  let unwrapped = resolver.unwrap(ty)
+  match unwrapped {
     Func(_, _) | Constructor(_, _, _) => return true
     _ => ()
   }
-  for f in collect_declared_fields(ty, resolver) {
+  for f in collect_declared_fields_of_unwrapped(unwrapped, resolver) {
     if f.0 == "<call>" || f.0 == "<new>" {
       return true
     }
@@ -17120,6 +17452,47 @@ fn is_fresh_literal_expr(e : @ast.TsExpr) -> Bool {
   match e {
     TemplateLiteral(_, _) => true
     _ => precise_literal_type(e) is Some(_)
+  }
+}
+
+///|
+/// The type of `e` in a CONST CONTEXT (`e as const`), for the shapes this
+/// can type exactly: a literal is its literal type, an array literal a
+/// tuple of its elements' const types (readonly is not modelled, which
+/// only ever accepts more), an assignment the const type of its right-hand
+/// side, and a nested `as const` the same again. `None` for anything else
+/// containing an array or object literal — an object literal, a spread —
+/// so the caller keeps the old answer rather than a half-const one. Other
+/// expressions keep their ordinary type, which is what a const context
+/// does to a reference: `[9, a] as const` with `a: 0` is `readonly [9, 0]`.
+fn const_context_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  e : @ast.TsExpr,
+) -> @ast.TsType? {
+  match precise_literal_type(e) {
+    Some(t) => return Some(t)
+    None => ()
+  }
+  match e {
+    ArrayLit(elems) => {
+      let items : Array[@ast.TsType] = []
+      for el in elems {
+        match el {
+          Spread(_) => return None
+          _ =>
+            match const_context_type(env, resolver, el) {
+              Some(t) => items.push(t)
+              None => return None
+            }
+        }
+      }
+      Some(Tuple(items))
+    }
+    AssignExpr(_, v) | As(v, Named("const")) =>
+      const_context_type(env, resolver, v)
+    ObjectLit(_) | Spread(_) | TemplateLiteral(_, _) => None
+    _ => Some(infer_expr(env, resolver, e))
   }
 }
 
@@ -19257,7 +19630,29 @@ fn collect_declared_fields(
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Array[(String, @ast.TsType)] {
-  collect_declared_fields_at(target, resolver, 0, {})
+  collect_declared_fields_of_unwrapped(resolver.unwrap(target), resolver)
+}
+
+///|
+/// `collect_declared_fields` for a type the caller has ALREADY passed
+/// through `resolver.unwrap`, so a caller that needs the unwrapped type
+/// for its own test does not unwrap it a second time. A shape with no
+/// arm below (a primitive, a literal, an array, a function type, ...)
+/// collects nothing, so it returns before the visited set is built.
+fn collect_declared_fields_of_unwrapped(
+  unwrapped : @ast.TsType,
+  resolver : Resolver,
+) -> Array[(String, @ast.TsType)] {
+  match unwrapped {
+    Object(_)
+    | Struct(_, _)
+    | Named(_)
+    | Applied(_, _)
+    | Intersection(_)
+    | Union(_) =>
+      collect_declared_fields_unwrapped_at(unwrapped, resolver, 0, {})
+    _ => []
+  }
 }
 
 ///|
@@ -19267,7 +19662,6 @@ fn collect_declared_fields_at(
   depth : Int32,
   visited : Map[String, Unit],
 ) -> Array[(String, @ast.TsType)] {
-  let out : Array[(String, @ast.TsType)] = []
   // Bounded like `types_definitely_differ` and the indexed-access lookup:
   // a recursive generic interface whose base mentions itself through an
   // argument (effect's `Option` graph) re-expanded forever and ended the
@@ -19275,9 +19669,28 @@ fn collect_declared_fields_at(
   // been collected, which only drops members deeper than any real
   // hierarchy has.
   if depth > 24 {
+    return []
+  }
+  collect_declared_fields_unwrapped_at(
+    resolver.unwrap(target),
+    resolver,
+    depth,
+    visited,
+  )
+}
+
+///|
+/// The body of `collect_declared_fields_at`, over the unwrapped type.
+fn collect_declared_fields_unwrapped_at(
+  unwrapped : @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+  visited : Map[String, Unit],
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  if depth > 24 {
     return out
   }
-  let unwrapped = resolver.unwrap(target)
   match unwrapped {
     Object(entries) =>
       for entry in entries {
@@ -21114,20 +21527,201 @@ fn loop_backedge_bindings(
   cond : @ast.TsExpr,
   body : @ast.TsBlock,
 ) -> Array[(String, @ast.TsType)] {
+  loop_backedge_bindings_where(env, ctx, body, fn(name) {
+    !expr_mentions_name(cond, name)
+  })
+}
+
+///|
+/// The back-edge join for exactly the names the loop CONDITION reads,
+/// which `loop_backedge_bindings` leaves out. The condition is evaluated at
+/// the loop head, so it has to see the joined type: with
+/// `let x: "a" | "b" = "a"`, `while (x !== "b") { x = "b" }` compared the
+/// entry narrowing `"a"` against `"b"` and reported TS2367 on a loop tsc
+/// accepts.
+fn loop_backedge_cond_bindings(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+) -> Array[(String, @ast.TsType)] {
+  loop_backedge_bindings_where(env, ctx, body, fn(name) {
+    expr_mentions_name(cond, name)
+  })
+}
+
+///|
+/// The back-edge join of a `for…of` / `for…in` body, without the names the
+/// HEAD binds: the head assigns those afresh before every iteration, so a
+/// body assignment never reaches the next one. `for (x of ["a"]) {
+/// acceptString(x); x = 1 }` joined the `1` into `x` and reported the call.
+fn loop_backedge_head_bindings(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  head : @ast.TsBinding,
+  body : @ast.TsBlock,
+) -> Array[(String, @ast.TsType)] {
+  let head_names : Array[String] = []
+  collect_binding_names(head, head_names)
+  loop_backedge_bindings_where(env, ctx, body, fn(name) {
+    !head_names.contains(name)
+  })
+}
+
+///|
+/// The back-edge join for the names `admit` accepts.
+///
+/// Every RHS is inferred in the ENTRY env, which is exact only while no
+/// RHS reads a name the body writes: `x = y; y = "b"` joined `y`'s entry
+/// `"a"` into `x` and missed the `"b"` a later iteration copies across, so
+/// `if (x === "b") break` read as always false. When some RHS does, the
+/// join is iterated with the previous pass's result bound — a small
+/// fixpoint — and a dependent name that has not settled after three
+/// passes takes its whole declared type. Taking the declared type at once
+/// would be simpler and wrong the other way: `cur = cur.next!` under
+/// `let cur: Node | undefined = root` joins to `Node`, and the declared
+/// `Node | undefined` would report every `cur.visit()` above it.
+fn loop_backedge_bindings_where(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  body : @ast.TsBlock,
+  admit : (String) -> Bool,
+) -> Array[(String, @ast.TsType)] {
   let out : Array[(String, @ast.TsType)] = []
-  let assigns : Array[(String, @ast.TsExpr)] = []
-  if !collect_loop_assignments(body, assigns) {
+  let bw = collect_backedge_writes(body)
+  let written : Map[String, Unit] = Map([])
+  for name, _ in bw.other {
+    written[name] = ()
+  }
+  for a in bw.assigns {
+    written[a.0] = ()
+  }
+  if written.is_empty() {
     return out
   }
-  let merged : Map[String, @ast.TsType] = Map([])
-  for a in assigns {
-    let (name, rhs) = a
-    if expr_mentions_name(cond, name) {
+  // A name written by any spelling the walk cannot type (a pattern, a
+  // `for` head, an assignment inside an expression, `++`, `??=`) joins its
+  // whole DECLARED type: that over-approximates every value the write can
+  // store, and widening is the direction the join exists for.
+  let whole : Map[String, @ast.TsType] = Map([])
+  for name, _ in bw.other {
+    guard env.lookup(name) is Some(_) else { continue }
+    guard env.lookup_declared(name) is Some(decl) else { continue }
+    whole[name] = decl
+  }
+  let entry : Map[String, @ast.TsType] = Map([])
+  for name, _ in written {
+    match env.lookup(name) {
+      Some(t) => entry[name] = t
+      None => ()
+    }
+  }
+  fn reads_written(rhs : @ast.TsExpr) -> Bool {
+    let rendered = "\{rhs}"
+    for w, _ in written {
+      if rendered_mentions_name(rendered, w) {
+        return true
+      }
+    }
+    false
+  }
+
+  let mut joined = backedge_join_pass(env, ctx, bw.assigns, whole, entry)
+  if bw.assigns.any(fn(a) { !whole.contains(a.0) && reads_written(a.1) }) {
+    let mut settled = false
+    // `narrow`, never `bind`: the first `bind` of a name this env does not
+    // hold yet writes its DECLARED slot, so binding an outer `x` here made
+    // the passing join its assignment target and `for (x of obj) { x =
+    // x.toExponential() }` reported `expected number` on a line tsc
+    // accepts. The snapshot puts `vars` back as it was.
+    let snap = env.full_snapshot()
+    for _ in 0..<3 {
+      for name, t in entry {
+        env.narrow(name, joined.get(name).unwrap_or(t))
+      }
+      let next = backedge_join_pass(env, ctx, bw.assigns, whole, entry)
+      // A pass whose inference of an RHS fails under the bound join keeps
+      // that name's previous answer, so the iteration only ever grows.
+      for name, t in joined {
+        if !next.contains(name) {
+          next[name] = t
+        }
+      }
+      let same = next.length() == joined.length() &&
+        next.iter().all(fn(kv) { joined.get(kv.0) == Some(kv.1) })
+      joined = next
+      if same {
+        settled = true
+        break
+      }
+    }
+    env.restore_from(snap)
+    if !settled {
+      for a in bw.assigns {
+        if !whole.contains(a.0) && reads_written(a.1) {
+          match env.lookup_declared(a.0) {
+            Some(decl) => joined[a.0] = decl
+            None => ()
+          }
+        }
+      }
+    }
+  }
+  for name, t in joined {
+    if !admit(name) {
       continue
     }
-    guard env.lookup(name) is Some(cur) else { continue }
+    match env.lookup(name) {
+      Some(cur) if cur != t => out.push((name, t))
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// One pass of the back-edge join: each written name's ENTRY type joined
+/// with the types of the `x = rhs` assignments that reach the back edge,
+/// with every RHS inferred in `env` as the caller has bound it.
+fn backedge_join_pass(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  assigns : Array[(String, @ast.TsExpr)],
+  whole : Map[String, @ast.TsType],
+  entry : Map[String, @ast.TsType],
+) -> Map[String, @ast.TsType] {
+  let merged : Map[String, @ast.TsType] = Map([])
+  for name, t in whole {
+    merged[name] = t
+  }
+  for a in assigns {
+    let (name, rhs) = a
+    if whole.contains(name) {
+      continue
+    }
+    guard entry.get(name) is Some(cur) else { continue }
     guard env.lookup_declared(name) is Some(decl) else { continue }
-    let rhs_ty = widen_literal(infer_expr(env, ctx.resolver, rhs))
+    // A value of a declared LITERAL union keeps its literal type — that is
+    // what assignment narrowing gives it, and widening it first made
+    // `x = "b"` read as `string`, which the declared-type cap below then
+    // threw away, so `x` stayed `"a"` at the loop head and `while (c) { if
+    // (x === "b") break; x = "b" }` reported TS2367 on a loop tsc accepts.
+    // The same holds for an RHS that READS such a value (`x = y`).
+    let rhs_ty = match precise_literal_type(rhs) {
+      Some(l) if is_checkable(decl) && is_assignable_to(l, decl) => l
+      _ => {
+        let raw = infer_expr(env, ctx.resolver, rhs)
+        let widened = widen_literal(raw)
+        if is_checkable(decl) &&
+          !is_assignable_to(widened, decl) &&
+          is_checkable(raw) &&
+          is_assignable_to(raw, decl) {
+          raw
+        } else {
+          widened
+        }
+      }
+    }
     if rhs_ty is Any || !is_checkable(rhs_ty) {
       continue
     }
@@ -21141,71 +21735,621 @@ fn loop_backedge_bindings(
     }
     merged[name] = narrow_union(base, rhs_ty)
   }
-  for name, t in merged {
-    match env.lookup(name) {
-      Some(cur) if cur != t => out.push((name, t))
+  merged
+}
+
+///|
+/// What a loop body's walk toward its BACK EDGE found: the statement-level
+/// `x = rhs` assignments, which the join types from their right-hand side,
+/// and every name written by any OTHER spelling, which it cannot.
+priv struct BackedgeWrites {
+  assigns : Array[(String, @ast.TsExpr)]
+  other : Map[String, Unit]
+}
+
+///|
+/// Walk a loop body for the writes that can reach its back edge (not
+/// descending into nested functions / classes).
+///
+/// `break`, `continue` and `switch` used to make this bail — "don't
+/// widen" — which is the unsound direction for a join: declining to widen
+/// keeps the entry narrowing at the loop head, so `while (c) { if (x ===
+/// "b") break; x = "b" }` reported TS2367 on a loop tsc accepts. Widening
+/// by every assignment is unsound the other way: `if (c) { x = 1; break; }
+/// len(x)` is legal because the `x = 1` leaves the loop. So a statement
+/// list that ENDS in an unconditional exit contributes nothing (see
+/// `backedge_list_exits`), and everything else contributes. That
+/// over-approximates (a list ending in an `if` whose branches both exit
+/// still counts), which only ever widens.
+///
+/// Only one write spelling can be typed, the statement-level `x = rhs`;
+/// every other one — `[x] = ["b"] as const`, `({ x } = …)`, `for (x of
+/// xs)`, `c && (x = "b")`, `x++`, `x ??= "b"` — used to be invisible here,
+/// so the entry narrowing survived the back edge and each reported
+/// `x === "b"` as always false on a loop tsc accepts. They land in
+/// `other`, and the join gives those names their whole declared type.
+///
+/// EXHAUSTIVE over `TsStmt`, `TsExpr` and `TsBinding`, with no wildcard
+/// arm: a walk that misses a node kind fails OPEN here — the write it
+/// misses keeps a narrowing tsc drops — so a new AST node has to be
+/// classified before this compiles. Function and class bodies are not
+/// entered, because tsc does not drop a narrowing for a write inside a
+/// closure (`const set = () => { x = "b" }; while (c) { if (x === "b")
+/// break; set() }` is TS2367 in tsc too).
+fn collect_backedge_writes(b : @ast.TsBlock) -> BackedgeWrites {
+  let w : BackedgeWrites = { assigns: [], other: Map([]), }
+  backedge_walk_list(b.stmts, w, false, false, [])
+  w
+}
+
+///|
+/// True when a loop body's statement list ENDS in an unconditional exit
+/// from the loop, so nothing in it reaches the back edge.
+///
+/// A list that can `continue` is never one: `if (d) { x = "b"; continue }
+/// break` ends in a `break` and still carries `"b"` around the loop. And a
+/// `for` loop's update runs only on paths that reach it, so the caller
+/// drops the update with the body when this holds — appending it first
+/// made `for (; c; c = false) { use(x); x = 1; break }` end in `c = false`,
+/// and the `x = 1` that never iterates again was joined into `x`.
+fn backedge_list_exits(
+  stmts : Array[@ast.TsStmt],
+  in_breakable : Bool,
+  throw_caught : Bool,
+  inner_labels : Array[String],
+) -> Bool {
+  let exits = match stmts.last() {
+    Some(Return(_)) => true
+    // A labelled `break` leaves the LOOP only when its label is not one
+    // declared inside the body: `inner: { x = "b"; break inner }` resumes
+    // after the labelled block and still reaches the back edge.
+    Some(Break(Some(l))) => !inner_labels.contains(l)
+    Some(Throw(_)) => !throw_caught
+    Some(Break(None)) => !in_breakable
+    _ => false
+  }
+  exits && !stmts.any(stmt_may_continue)
+}
+
+///|
+/// True when a `continue` appears in `st` outside any nested function. An
+/// inner loop's own `continue` counts too, which only ever widens.
+/// Exhaustive over `TsStmt` for the reason `collect_backedge_writes` is.
+fn stmt_may_continue(st : @ast.TsStmt) -> Bool {
+  fn blk(b : @ast.TsBlock) -> Bool {
+    b.stmts.any(stmt_may_continue)
+  }
+
+  match st {
+    Continue(_) => true
+    Block(b)
+    | While(_, b)
+    | DoWhile(_, b)
+    | With(_, b)
+    | For(_, _, _, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b) => blk(b)
+    If(_, t, e) =>
+      blk(t) ||
+      (match e {
+        Some(x) => blk(x)
+        None => false
+      })
+    Try(t, _, c, f) =>
+      blk(t) ||
+      (match c {
+        Some(x) => blk(x)
+        None => false
+      }) ||
+      (match f {
+        Some(x) => blk(x)
+        None => false
+      })
+    Switch(_, cases) => cases.any(fn(c) { blk(c.body) })
+    Label(_, inner) => stmt_may_continue(inner)
+    Var(_, _, _)
+    | Let(_, _, _)
+    | Const(_, _, _)
+    | Assign(_, _)
+    | CompoundAssign(_, _, _)
+    | IndexAssign(_, _, _)
+    | PropAssign(_, _, _)
+    | Expr(_)
+    | Empty
+    | Return(_)
+    | Throw(_)
+    | Debugger
+    | NativeClassStmt(_, _)
+    | Break(_) => false
+  }
+}
+
+///|
+/// `throw_caught` is set inside the `try` block of a `try` that has a
+/// `catch`: a `throw` there resumes in the catch and can still reach the
+/// back edge, so a list ending in one is not an exit. `inner_labels` are
+/// the labels declared inside the analysed body (see `backedge_list_exits`).
+fn backedge_walk_list(
+  stmts : Array[@ast.TsStmt],
+  w : BackedgeWrites,
+  in_breakable : Bool,
+  throw_caught : Bool,
+  inner_labels : Array[String],
+) -> Unit {
+  if backedge_list_exits(stmts, in_breakable, throw_caught, inner_labels) {
+    return
+  }
+  // Only a name assigned again by a LATER plain statement can be
+  // overwritten, so the scan below runs for those names alone, and each
+  // statement is rendered at most once however many writes ask about it.
+  let last_plain : Map[String, Int32] = Map([])
+  for j, st in stmts {
+    match st {
+      Assign(n, _) | Expr(AssignExpr(n, _)) => last_plain[n] = j
       _ => ()
     }
   }
-  out
-}
-
-///|
-/// Collect `x = rhs` assignments in the statement tree (not descending into
-/// nested functions / classes). Returns `false` — meaning "bail, don't
-/// widen" — when the body contains `break` / `continue` / `switch`.
-fn collect_loop_assignments(
-  b : @ast.TsBlock,
-  out : Array[(String, @ast.TsExpr)],
-) -> Bool {
-  for st in b.stmts {
-    if !collect_loop_assignments_stmt(st, out) {
-      return false
+  let rendered : Array[String?] = Array::make(stmts.length(), None)
+  fn render(j : Int32) -> String {
+    match rendered[j] {
+      Some(r) => r
+      None => {
+        let r = "\{stmts[j]}"
+        rendered[j] = Some(r)
+        r
+      }
     }
   }
-  true
+
+  fn dropped(i : Int32, n : String) -> Bool {
+    !throw_caught &&
+    (match last_plain.get(n) {
+      Some(j) => j > i
+      None => false
+    }) &&
+    backedge_write_overwritten(stmts, i, n, render)
+  }
+
+  for i, st in stmts {
+    let one : BackedgeWrites = { assigns: [], other: Map([]), }
+    backedge_walk_stmt(st, one, true, in_breakable, throw_caught, inner_labels)
+    for a in one.assigns {
+      if !dropped(i, a.0) {
+        w.assigns.push(a)
+      }
+    }
+    for n, _ in one.other {
+      if !dropped(i, n) {
+        w.other[n] = ()
+      }
+    }
+  }
 }
 
 ///|
-fn collect_loop_assignments_stmt(
-  st : @ast.TsStmt,
-  out : Array[(String, @ast.TsExpr)],
+/// True when the statement-level write `stmts[i]` (`name = …`) is
+/// overwritten before any path from it can reach the back edge: `y = 1;
+/// y = "s"` leaves `y` a string on every iteration, and joining the `1`
+/// fed `string | number` through the fixpoint into an `x = y` above it.
+///
+/// Every condition is one way the earlier value can still escape, and each
+/// was a report on a loop tsc accepts when it was missing: a write nested
+/// in a compound statement counts only when that statement cannot jump and
+/// never reads the name (`{ y = "b"; x = y }` reads it); no statement in between may `continue` or `break`, since
+/// either can carry the value past the later assignment (`x = "b"; if (d)
+/// continue; x = "a"`); and nothing in between, nor the later assignment's
+/// own right-hand side, may READ the name, because each right-hand side is
+/// inferred at the loop head and so cannot see the in-body value it reads
+/// (`y = "b"; x = y; y = "a"`). The caller also skips this inside a `try`
+/// whose `catch` resumes, where any statement in between may throw.
+fn backedge_write_overwritten(
+  stmts : Array[@ast.TsStmt],
+  i : Int32,
+  name : String,
+  render : (Int32) -> String,
 ) -> Bool {
+  match stmts[i] {
+    Assign(n, _) | Expr(AssignExpr(n, _)) if n == name => ()
+    // A write nested in a compound statement (`if (c) { x = 1 }`) is dead
+    // on the same terms, provided that statement cannot jump past the
+    // later assignment and does not read the name after writing it.
+    st =>
+      if stmt_may_jump(st) || rendered_mentions_name(render(i), name) {
+        return false
+      }
+  }
+  for j in (i + 1)..<stmts.length() {
+    match stmts[j] {
+      Assign(n, rhs) | Expr(AssignExpr(n, rhs)) if n == name =>
+        return !rendered_mentions_name("\{rhs}", name)
+      st =>
+        if stmt_may_jump(st) || rendered_mentions_name(render(j), name) {
+          return false
+        }
+    }
+  }
+  false
+}
+
+///|
+/// True when a `continue` or a `break` appears in `st` outside any nested
+/// function: either can leave the rest of a statement list unexecuted and
+/// still go round the loop. Exhaustive over `TsStmt` for the reason
+/// `collect_backedge_writes` is.
+fn stmt_may_jump(st : @ast.TsStmt) -> Bool {
+  fn blk(b : @ast.TsBlock) -> Bool {
+    b.stmts.any(stmt_may_jump)
+  }
+
   match st {
-    Break(_) | Continue(_) | Switch(_, _) => false
-    Assign(name, rhs) => {
-      out.push((name, rhs))
-      true
-    }
-    Expr(AssignExpr(name, rhs)) => {
-      out.push((name, rhs))
-      true
-    }
-    Block(inner) => collect_loop_assignments(inner, out)
-    If(_, then_, else_) =>
-      collect_loop_assignments(then_, out) &&
-      (match else_ {
-        Some(e) => collect_loop_assignments(e, out)
-        None => true
+    Continue(_) | Break(_) => true
+    Block(b)
+    | While(_, b)
+    | DoWhile(_, b)
+    | With(_, b)
+    | For(_, _, _, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b) => blk(b)
+    If(_, t, e) =>
+      blk(t) ||
+      (match e {
+        Some(x) => blk(x)
+        None => false
       })
-    While(_, body) | DoWhile(_, body) | With(_, body) =>
-      collect_loop_assignments(body, out)
-    For(_, _, _, body) => collect_loop_assignments(body, out)
-    ForIn(_, _, _, _, body)
-    | ForOf(_, _, _, _, body)
-    | ForAwaitOf(_, _, _, _, body) => collect_loop_assignments(body, out)
     Try(t, _, c, f) =>
-      collect_loop_assignments(t, out) &&
+      blk(t) ||
       (match c {
-        Some(cb) => collect_loop_assignments(cb, out)
-        None => true
-      }) &&
+        Some(x) => blk(x)
+        None => false
+      }) ||
       (match f {
-        Some(fb) => collect_loop_assignments(fb, out)
-        None => true
+        Some(x) => blk(x)
+        None => false
       })
-    Label(_, inner) => collect_loop_assignments_stmt(inner, out)
-    _ => true
+    Switch(_, cases) => cases.any(fn(c) { blk(c.body) })
+    Label(_, inner) => stmt_may_jump(inner)
+    Var(_, _, _)
+    | Let(_, _, _)
+    | Const(_, _, _)
+    | Assign(_, _)
+    | CompoundAssign(_, _, _)
+    | IndexAssign(_, _, _)
+    | PropAssign(_, _, _)
+    | Expr(_)
+    | Empty
+    | Return(_)
+    | Throw(_)
+    | Debugger
+    | NativeClassStmt(_, _) => false
+  }
+}
+
+///|
+/// `listed` is true for a statement that sits in one of the walked
+/// statement lists; a `for` head's init and update are not, so a plain
+/// assignment there is an `other` write.
+fn backedge_walk_stmt(
+  st : @ast.TsStmt,
+  w : BackedgeWrites,
+  listed : Bool,
+  in_breakable : Bool,
+  throw_caught : Bool,
+  inner_labels : Array[String],
+) -> Unit {
+  fn list(stmts : Array[@ast.TsStmt], breakable : Bool, caught : Bool) {
+    backedge_walk_list(stmts, w, breakable, caught, inner_labels)
+  }
+
+  let other = w.other
+  match st {
+    Assign(n, e) | Expr(AssignExpr(n, e)) => {
+      if listed {
+        w.assigns.push((n, e))
+      } else {
+        other[n] = ()
+      }
+      collect_flow_writes_expr(e, other)
+    }
+    // A `var` redeclaration is the SAME function-scoped binding, so its
+    // initializer writes it; `let` / `const` declare a new one, and so
+    // does nothing a `var x: T;` with no initializer — it is a write of
+    // nothing, and counting it widened `x` to its whole declared type.
+    Var(b, _, Var("__ts_no_init__")) =>
+      collect_flow_writes_binding_exprs(b, other)
+    Var(b, _, e) => {
+      collect_flow_writes_binding(b, other)
+      collect_flow_writes_expr(e, other)
+    }
+    Let(b, _, e) | Const(b, _, e) => {
+      collect_flow_writes_binding_exprs(b, other)
+      collect_flow_writes_expr(e, other)
+    }
+    CompoundAssign(n, _, e) => {
+      other[n] = ()
+      collect_flow_writes_expr(e, other)
+    }
+    IndexAssign(a, b, c) => {
+      collect_flow_writes_expr(a, other)
+      collect_flow_writes_expr(b, other)
+      collect_flow_writes_expr(c, other)
+    }
+    PropAssign(o, _, v) => {
+      collect_flow_writes_expr(o, other)
+      collect_flow_writes_expr(v, other)
+    }
+    Expr(e) | Throw(e) | Return(Some(e)) => collect_flow_writes_expr(e, other)
+    Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
+    Block(inner) => list(inner.stmts, in_breakable, throw_caught)
+    With(e, inner) => {
+      collect_flow_writes_expr(e, other)
+      list(inner.stmts, in_breakable, throw_caught)
+    }
+    If(c, then_, else_) => {
+      collect_flow_writes_expr(c, other)
+      list(then_.stmts, in_breakable, throw_caught)
+      match else_ {
+        Some(e) => list(e.stmts, in_breakable, throw_caught)
+        None => ()
+      }
+    }
+    // An inner loop or a `switch` is what a plain `break` leaves, so
+    // inside one a `break` continues this loop's body.
+    While(c, body) | DoWhile(c, body) => {
+      collect_flow_writes_expr(c, other)
+      list(body.stmts, true, throw_caught)
+    }
+    For(init, cond, update, body) => {
+      for x in [init, update] {
+        match x {
+          Some(s) =>
+            backedge_walk_stmt(
+              s, w, false, in_breakable, throw_caught, inner_labels,
+            )
+          None => ()
+        }
+      }
+      match cond {
+        Some(e) => collect_flow_writes_expr(e, other)
+        None => ()
+      }
+      list(body.stmts, true, throw_caught)
+    }
+    ForOf(kind, b, _, it, body)
+    | ForAwaitOf(kind, b, _, it, body)
+    | ForIn(kind, b, _, it, body) => {
+      match kind {
+        Assign | Var => collect_flow_writes_binding(b, other)
+        Let | Const => collect_flow_writes_binding_exprs(b, other)
+      }
+      collect_flow_writes_expr(it, other)
+      list(body.stmts, true, throw_caught)
+    }
+    Switch(e, cases) => {
+      collect_flow_writes_expr(e, other)
+      for c in cases {
+        match c.test_expr {
+          Some(t) => collect_flow_writes_expr(t, other)
+          None => ()
+        }
+        list(c.body.stmts, true, throw_caught)
+      }
+    }
+    Try(t, _, c, f) => {
+      list(t.stmts, in_breakable, throw_caught || c is Some(_))
+      for blk in [c, f] {
+        match blk {
+          Some(bb) => list(bb.stmts, in_breakable, throw_caught)
+          None => ()
+        }
+      }
+    }
+    Label(l, inner) =>
+      backedge_walk_stmt(
+        inner,
+        w,
+        listed,
+        in_breakable,
+        throw_caught,
+        [..inner_labels, l],
+      )
+    NativeClassStmt(_, _) => ()
+  }
+}
+
+///|
+/// The names an assignment TARGET writes, plus the writes inside its
+/// defaults and computed keys.
+fn collect_flow_writes_binding(
+  b : @ast.TsBinding,
+  out : Map[String, Unit],
+) -> Unit {
+  match b {
+    Ident(n) => out[n] = ()
+    Target(Var(n)) => out[n] = ()
+    Target(e) => collect_flow_writes_expr(e, out)
+    Array(ab) => {
+      for it in ab.items {
+        match it {
+          Some(elem) => {
+            collect_flow_writes_binding(elem.binding, out)
+            match elem.default {
+              Some(d) => collect_flow_writes_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_flow_writes_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => collect_flow_writes_expr(k, out)
+          None => ()
+        }
+        collect_flow_writes_binding(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_flow_writes_expr(d, out)
+          None => ()
+        }
+      }
+      match ob.rest {
+        Some(r) => out[r] = ()
+        None => ()
+      }
+    }
+  }
+}
+
+///|
+/// A DECLARATION's pattern binds new names and writes none, but its
+/// defaults and computed keys are expressions that can.
+fn collect_flow_writes_binding_exprs(
+  b : @ast.TsBinding,
+  out : Map[String, Unit],
+) -> Unit {
+  match b {
+    Ident(_) => ()
+    Target(e) => collect_flow_writes_expr(e, out)
+    Array(ab) => {
+      for it in ab.items {
+        match it {
+          Some(elem) => {
+            collect_flow_writes_binding_exprs(elem.binding, out)
+            match elem.default {
+              Some(d) => collect_flow_writes_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_flow_writes_binding_exprs(r, out)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => collect_flow_writes_expr(k, out)
+          None => ()
+        }
+        collect_flow_writes_binding_exprs(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_flow_writes_expr(d, out)
+          None => ()
+        }
+      }
+  }
+}
+
+///|
+fn collect_flow_writes_expr(e : @ast.TsExpr, out : Map[String, Unit]) -> Unit {
+  fn all(xs : Array[@ast.TsExpr]) -> Unit {
+    for x in xs {
+      collect_flow_writes_expr(x, out)
+    }
+  }
+
+  match e {
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole
+    | Var(_)
+    | ImportMeta => ()
+    // Function and class bodies: see `collect_backedge_writes`.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => ()
+    UnaryOp(op, x) => {
+      match (op, x) {
+        (PreInc | PreDec | PostInc | PostDec, Var(n)) => out[n] = ()
+        _ => ()
+      }
+      collect_flow_writes_expr(x, out)
+    }
+    AssignExpr(n, x) => {
+      out[n] = ()
+      collect_flow_writes_expr(x, out)
+    }
+    AssignPattern(b, x) => {
+      collect_flow_writes_binding(b, out)
+      collect_flow_writes_expr(x, out)
+    }
+    CompoundAssignExpr(t, _, x) => {
+      match t {
+        Var(n) => out[n] = ()
+        _ => collect_flow_writes_expr(t, out)
+      }
+      collect_flow_writes_expr(x, out)
+    }
+    BinOp(_, a, b)
+    | Seq(a, b)
+    | IndexAccess(a, b)
+    | ComputedProp(a, b)
+    | PropAssignExpr(a, _, b) => {
+      collect_flow_writes_expr(a, out)
+      collect_flow_writes_expr(b, out)
+    }
+    Cond(a, b, c) | IndexAssignExpr(a, b, c) => {
+      collect_flow_writes_expr(a, out)
+      collect_flow_writes_expr(b, out)
+      collect_flow_writes_expr(c, out)
+    }
+    TypeArgs(_, x)
+    | Spread(x)
+    | PropAccess(x, _)
+    | PureCall(x)
+    | YieldStar(x)
+    | Await(x)
+    | As(x, _)
+    | Satisfies(x, _)
+    | NonNull(x)
+    | OptionalChain(x) => collect_flow_writes_expr(x, out)
+    Yield(x) =>
+      match x {
+        Some(y) => collect_flow_writes_expr(y, out)
+        None => ()
+      }
+    Call(_, args) | New(_, args) | ArrayLit(args) => all(args)
+    CallExpr(c, args) | NewExpr(c, args) | MethodCall(c, _, args) => {
+      collect_flow_writes_expr(c, out)
+      all(args)
+    }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_flow_writes_expr(ent.1, out)
+      }
+    DynamicImport(a, b) => {
+      collect_flow_writes_expr(a, out)
+      match b {
+        Some(y) => collect_flow_writes_expr(y, out)
+        None => ()
+      }
+    }
+    TaggedTemplate(tag, _, _, xs) => {
+      collect_flow_writes_expr(tag, out)
+      all(xs)
+    }
+    TemplateLiteral(_, xs) => all(xs)
+    JsxElement(_, attrs, children) => {
+      for a in attrs {
+        match a.1 {
+          Some(v) => collect_flow_writes_expr(v, out)
+          None => ()
+        }
+      }
+      all(children)
+    }
   }
 }
 
@@ -21215,8 +22359,23 @@ fn collect_loop_assignments_stmt(
 /// spelling in the Debug tree, so shadowed uses count too) — used only to
 /// make back-edge widening MORE conservative, never less.
 fn expr_mentions_name(e : @ast.TsExpr, name : String) -> Bool {
-  let rendered = "\{e}"
-  rendered.contains("Var(\"" + name + "\")")
+  rendered_mentions_name("\{e}", name)
+}
+
+///|
+/// True when a rendered Debug tree READS `name`: as a variable, or as the
+/// callee of a call or a `new` spelled by name (`read()` is
+/// `Call("read", …)` and carries no `Var("read")`, so a back-edge write
+/// read only through a call looked unread and was dropped). The rendering
+/// is pretty-printed, so it is compared with whitespace removed; names hold
+/// none, and a string literal that loses its spaces can only over-match,
+/// which only ever keeps a write.
+fn rendered_mentions_name(rendered : String, name : String) -> Bool {
+  let flat = rendered.replace_all(old=" ", new="").replace_all(old="\n", new="")
+  let quoted = "\"" + name + "\""
+  flat.contains("Var(" + quoted + ")") ||
+  flat.contains("Call(" + quoted + ",") ||
+  flat.contains("New(" + quoted + ",")
 }
 
 ///|
@@ -21470,6 +22629,26 @@ fn apply_binding_default(
 ) -> @ast.TsType {
   match default {
     None => ty
+    // A CONST-ASSERTED default is typed exactly, and its type is what tsc
+    // unions in whatever the element is — `(element minus undefined) |
+    // default`, with no widening, since a const context is not a fresh
+    // literal (probed: `const [x = "d"] = ["s"] as const` gives
+    // `"d" | "s"`). The general arm below keeps the old approximation for
+    // every other default, whose inferred type is not exact enough to
+    // widen a binding by.
+    Some(As(_, Named("const")) as d) => {
+      let default_ty = infer_expr(env, ctx.resolver, d)
+      let kept : Array[@ast.TsType] = []
+      for m in union_components(ty) {
+        if !(m is (Undefined | Any)) && !kept.contains(m) {
+          kept.push(m)
+        }
+      }
+      if !kept.contains(default_ty) {
+        kept.push(default_ty)
+      }
+      union_of(kept)
+    }
     Some(d) => {
       let default_ty = widen_literal(infer_expr(env, ctx.resolver, d))
       match ty {
@@ -21494,6 +22673,86 @@ fn apply_binding_default(
         _ => ty
       }
     }
+  }
+}
+
+///|
+/// Join each `name = rhs` that `e` performs (outside any nested function)
+/// into `name`'s current narrowing: the expression is one that may or may
+/// not run, so afterwards the binding is either what it was or what was
+/// assigned. A literal right-hand side keeps its literal type when the
+/// declared type admits it — assignment narrowing — and anything this
+/// cannot type joins in the declared type, which only widens.
+fn join_conditional_assignments(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  e : @ast.TsExpr,
+) -> Unit {
+  let found : Array[(String, @ast.TsExpr)] = []
+  fn walk(x : @ast.TsExpr, out : Array[(String, @ast.TsExpr)]) -> Unit {
+    match x {
+      AssignExpr(n, v) => {
+        walk(v, out)
+        out.push((n, v))
+      }
+      ArrayLit(items) =>
+        for it in items {
+          walk(it, out)
+        }
+      ObjectLit(entries) =>
+        for en in entries {
+          walk(en.1, out)
+        }
+      BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) => {
+        walk(a, out)
+        walk(b, out)
+      }
+      Cond(c, a, b) => {
+        walk(c, out)
+        walk(a, out)
+        walk(b, out)
+      }
+      UnaryOp(_, a)
+      | Spread(a)
+      | As(a, _)
+      | Satisfies(a, _)
+      | NonNull(a)
+      | PropAccess(a, _)
+      | PureCall(a)
+      | Await(a) => walk(a, out)
+      Call(_, args) | New(_, args) =>
+        for a in args {
+          walk(a, out)
+        }
+      CallExpr(f, args) | NewExpr(f, args) | MethodCall(f, _, args) => {
+        walk(f, out)
+        for a in args {
+          walk(a, out)
+        }
+      }
+      _ => ()
+    }
+  }
+  walk(e, found)
+  for pair in found {
+    let (name, rhs) = pair
+    guard env.lookup(name) is Some(cur) else { continue }
+    let declared = match env.lookup_declared(name) {
+      Some(d) => d
+      None => cur
+    }
+    let assigned = match precise_literal_type(rhs) {
+      Some(l) if is_checkable(declared) && is_assignable_to(l, declared) => l
+      _ => {
+        let t = widen_literal(infer_expr(env, ctx.resolver, rhs))
+        if is_checkable(declared) && is_assignable_to(t, declared) {
+          t
+        } else {
+          declared
+        }
+      }
+    }
+    env.narrow(name, union_of(simplify_union([cur, assigned])))
   }
 }
 
@@ -21540,6 +22799,15 @@ fn bind_array_pattern(
           _ => @ast.TsType::Undefined
         }
         let elem_ty = apply_binding_default(env, ctx, elem_ty, elem.default)
+        // The default runs BEFORE the nested pattern's computed keys and
+        // only when the element is `undefined`, so a binding it assigns
+        // reaches those keys — and the code after — as the join of its
+        // old type and the assigned one (controlFlowBindingPatternOrder:
+        // `[{ [a]: b } = [9, a = 0] as const]` reads `a` as `0 | 1`).
+        match elem.default {
+          Some(d) => join_conditional_assignments(env, ctx, d)
+          None => ()
+        }
         bind_pattern(env, ctx, elem.binding, elem_ty)
       }
       None => ()
@@ -21631,6 +22899,58 @@ fn check_object_pattern_over_array(
 }
 
 ///|
+/// The element type a COMPUTED key selects from a tuple source — `const
+/// [{ [a]: b } = [9, 0] as const] = []` with `a: 0 | 1` binds `b` to
+/// `9 | 0`. Decided only when every source member is a tuple and every key
+/// the expression can produce is an in-range integer literal: the key is a
+/// literal, an assignment of one (`[(a = 1)]`), or a binding whose current
+/// type is a union of such literals. `None` otherwise, and the caller keeps
+/// its name-based lookup.
+fn computed_key_tuple_element(
+  env : ExprEnv,
+  resolver : Resolver,
+  source : @ast.TsType,
+  key : @ast.TsExpr,
+) -> @ast.TsType? {
+  let key_ty = match key {
+    AssignExpr(_, v) => precise_literal_type(v)
+    Var(n) => env.lookup(n)
+    _ => precise_literal_type(key)
+  }
+  guard key_ty is Some(kt) else { return None }
+  let indices : Array[Int32] = []
+  for k in union_components(kt) {
+    guard k is NumberLiteral(text) else { return None }
+    let i = @string.parse_int(text) catch { _ => return None }
+    if i < 0 {
+      return None
+    }
+    indices.push(i)
+  }
+  if indices.length() == 0 {
+    return None
+  }
+  let out : Array[@ast.TsType] = []
+  for m in union_components(resolver.unwrap(source)) {
+    guard m is Tuple(items) else { return None }
+    // A variadic tuple has no fixed element at a position past its rest
+    // (`[...number[], string]` at `[1]` is `number | string`).
+    if items.iter().any(fn(it) { it is Rest(_) }) {
+      return None
+    }
+    for i in indices {
+      if i >= items.length() {
+        return None
+      }
+      if !out.contains(items[i]) {
+        out.push(items[i])
+      }
+    }
+  }
+  Some(union_of(out))
+}
+
+///|
 fn bind_object_pattern(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -21656,63 +22976,95 @@ fn bind_object_pattern(
         )
       _ => ()
     }
-    let field_ty = match ctx.resolver.lookup_field(source, prop.key) {
+    let computed_ty = match prop.key_expr {
+      Some(k) => computed_key_tuple_element(env, ctx.resolver, source, k)
+      None => None
+    }
+    // A computed key is evaluated in property order, so an assignment in
+    // one (`{ [(k = 1)]: first, [k]: second }`) is what the next key reads.
+    // A literal right-hand side narrows the name exactly as an assignment
+    // statement would; any other one drops back to the declared type, so a
+    // later key never reads the stale entry narrowing.
+    match prop.key_expr {
+      Some(AssignExpr(n, v)) =>
+        match precise_literal_type(v) {
+          Some(t) => env.narrow(n, t)
+          None =>
+            match env.lookup_declared(n) {
+              Some(d) => env.narrow(n, d)
+              None => ()
+            }
+        }
+      _ => ()
+    }
+    let field_ty = match computed_ty {
       Some(t) => t
       None =>
-        // Union receiver: distribute field lookup across each member and
-        // union the results so `{ kind } = (A | B)` gives "a" | "b" when
-        // every member declares `kind`.
-        match ctx.resolver.unwrap(source) {
-          Union(parts) => {
-            let member_types : Array[@ast.TsType] = []
-            let mut all_found = true
-            for part in parts {
-              match ctx.resolver.lookup_field(part, prop.key) {
-                Some(t) => member_types.push(t)
-                None => all_found = false
+        match ctx.resolver.lookup_field(source, prop.key) {
+          Some(t) => t
+          None =>
+            // Union receiver: distribute field lookup across each member and
+            // union the results so `{ kind } = (A | B)` gives "a" | "b" when
+            // every member declares `kind`.
+            match ctx.resolver.unwrap(source) {
+              Union(parts) => {
+                let member_types : Array[@ast.TsType] = []
+                let mut all_found = true
+                for part in parts {
+                  match ctx.resolver.lookup_field(part, prop.key) {
+                    Some(t) => member_types.push(t)
+                    None => all_found = false
+                  }
+                }
+                if member_types.length() == 0 {
+                  @ast.TsType::Any
+                } else if member_types.length() == 1 {
+                  if all_found {
+                    member_types[0]
+                  } else {
+                    narrow_union(member_types[0], @ast.TsType::Undefined)
+                  }
+                } else {
+                  let acc = member_types[0]
+                  let mut u = acc
+                  let mut i = 1
+                  while i < member_types.length() {
+                    u = narrow_union(u, member_types[i])
+                    i = i + 1
+                  }
+                  if all_found {
+                    u
+                  } else {
+                    narrow_union(u, @ast.TsType::Undefined)
+                  }
+                }
               }
-            }
-            if member_types.length() == 0 {
-              @ast.TsType::Any
-            } else if member_types.length() == 1 {
-              if all_found {
-                member_types[0]
-              } else {
-                narrow_union(member_types[0], @ast.TsType::Undefined)
-              }
-            } else {
-              let acc = member_types[0]
-              let mut u = acc
-              let mut i = 1
-              while i < member_types.length() {
-                u = narrow_union(u, member_types[i])
-                i = i + 1
-              }
-              if all_found {
-                u
-              } else {
-                narrow_union(u, @ast.TsType::Undefined)
-              }
-            }
-          }
-          // Non-union source with no matching field: the property is absent,
-          // which in JS evaluates to `undefined` at runtime — but only a
-          // shape whose members are ENUMERABLE can say "absent". A mapped
-          // type over a generic, an unresolved alias or an applied generic
-          // read as `undefined` too, so effect's `toCode: ({ typeParameters
-          // }) => typeParameters[0]` against a contextual type it could not
-          // expand reported "cannot index into `undefined`" nineteen times.
-          // The array-pattern fallback makes the same split.
-          _ =>
-            if ctx.resolver.enumerable_object_shape(source, 0) {
-              @ast.TsType::Undefined
-            } else {
-              @ast.TsType::Any
+              // Non-union source with no matching field: the property is absent,
+              // which in JS evaluates to `undefined` at runtime — but only a
+              // shape whose members are ENUMERABLE can say "absent". A mapped
+              // type over a generic, an unresolved alias or an applied generic
+              // read as `undefined` too, so effect's `toCode: ({ typeParameters
+              // }) => typeParameters[0]` against a contextual type it could not
+              // expand reported "cannot index into `undefined`" nineteen times.
+              // The array-pattern fallback makes the same split.
+              _ =>
+                if ctx.resolver.enumerable_object_shape(source, 0) {
+                  @ast.TsType::Undefined
+                } else {
+                  @ast.TsType::Any
+                }
             }
         }
     }
     let field_ty = apply_binding_default(env, ctx, field_ty, prop.default)
     bind_pattern(env, ctx, prop.binding, field_ty)
+    // A type a computed key selected from a const-asserted tuple is exact
+    // (see `check_expr_against`'s flow-residue suppression), as long as no
+    // default widened it.
+    match (computed_ty, prop.default, prop.binding) {
+      (Some(_), None, Ident(n)) => env.bind("<exact>" + n, field_ty)
+      _ => ()
+    }
   }
   // Rest pattern `{ a, b, ...rest }`: `rest` takes an object type with the
   // source's remaining (non-destructured) fields. Mirror the object-spread
@@ -24181,30 +25533,43 @@ fn expected_mentions_phantom_type_param(
   // … })`), so it is not a phantom there. The callee is the innermost
   // `call \`NAME\`` segment of the path; any other position (an arrow
   // body, a `return`) has no declaration to instantiate it.
-  let declared_binders : Map[String, Unit] = Map([])
-  match sub_path_callee_name(sub_path) {
-    Some(callee) =>
-      for
-        ps in [
-          r.func_overload_type_params.get(callee).unwrap_or([]),
-          r.func_type_params.get(callee).unwrap_or([]),
-        ] {
-        for p in ps {
-          declared_binders[p] = ()
+  //
+  // The walk goes over `expected`'s own references and asks about each
+  // one, rather than enumerating every phantom name in the file and then
+  // asking whether `expected` mentions one of them: this runs once per
+  // argument checked, `local_type_names` holds every type-parameter
+  // spelling in the file, and `expected` is almost always a handful of
+  // nodes with no candidate in it at all — so the binder set is built
+  // only when a candidate is actually reached. The answer is the same
+  // set membership either way, through the same structural walk.
+  let mut declared_binders : Map[String, Unit]? = None
+  type_references_where(expected, fn(n) {
+    if !is_phantom_type_param_name(ctx, n) {
+      return false
+    }
+    let binders = match declared_binders {
+      Some(b) => b
+      None => {
+        let b : Map[String, Unit] = Map([])
+        match sub_path_callee_name(sub_path) {
+          Some(callee) =>
+            for
+              ps in [
+                r.func_overload_type_params.get(callee).unwrap_or([]),
+                r.func_type_params.get(callee).unwrap_or([]),
+              ] {
+              for p in ps {
+                b[p] = ()
+              }
+            }
+          None => ()
         }
+        declared_binders = Some(b)
+        b
       }
-    None => ()
-  }
-  let phantoms : Array[String] = []
-  for n, _ in r.local_type_names {
-    if declared_binders.contains(n) {
-      continue
     }
-    if is_phantom_type_param_name(ctx, n) {
-      phantoms.push(n)
-    }
-  }
-  type_references_any(expected, phantoms)
+    !binders.contains(n)
+  })
 }
 
 ///|
@@ -24607,6 +25972,20 @@ fn check_ident_binding_decl(
   // when not, we leave declared as the inferred-from-init type
   // since that's what TS widens to anyway.
   env.declare_type(name, bound_type)
+  // Declared-type narrowing on initialization: `let a: 0 | 1 = 0` makes `a`
+  // `0` until something assigns it, exactly as `a = 0` would, while the
+  // declared slot stays the union every later assignment is checked
+  // against. Only a LITERAL initializer into a declared UNION narrows —
+  // that is where the literal is decidable and where tsc narrows — and the
+  // loop back-edge join is what keeps a reassignment inside a loop from
+  // being read as never happening.
+  if mutable_ && declared is Union(_) {
+    match precise_literal_type(init) {
+      Some(l) if is_assignable_to(l, declared) && l != declared =>
+        env.narrow(name, l)
+      _ => ()
+    }
+  }
   if !mutable_ && block_scoped {
     record_aliased_condition(env, ctx.resolver, name, init)
   }
@@ -25776,6 +27155,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     While(cond, body) => {
       record_function_as_condition(env, ctx, cond)
+      // The condition runs at the loop head, so a name it reads that the
+      // body reassigns is checked at its joined type (see
+      // `loop_backedge_cond_bindings`), and so is the body that follows.
+      // After the loop the name returns to its entry binding, as before.
+      let cond_joins = loop_backedge_cond_bindings(env, ctx, cond, body)
+      let cond_entry = cond_joins.map(fn(wb) { (wb.0, env.lookup(wb.0)) })
+      for wb in cond_joins {
+        env.bind(wb.0, wb.1)
+      }
       check_call_args_in_expr(env, cond, ctx)
       // The body only runs when the condition holds, so its then-narrowing
       // applies at the top of the body (`while (x !== undefined) { x.foo }`).
@@ -25797,14 +27185,26 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      for e in cond_entry {
+        match e.1 {
+          Some(t) => env.bind(e.0, t)
+          None => ()
+        }
+      }
     }
     DoWhile(cond, body) => {
       record_function_as_condition(env, ctx, cond)
       // `do { … } while (cond)`: the body runs once *before* the condition is
       // ever evaluated, so the condition's narrowing must NOT apply to it.
-      // (Back-edge widening is deliberately not applied here: this arm's
-      // in-body rebinds intentionally leak past the loop, and a snapshot /
-      // restore to contain a widened binding would change that.)
+      // The back-edge join is applied with no snapshot around it: this
+      // arm's in-body rebinds intentionally leak past the loop, and the
+      // widened entry binding is re-narrowed by any assignment the body
+      // makes, so what leaks is what the body last assigned — or the join,
+      // when a path through the body assigns nothing, which is what
+      // reaches the code after the loop on that path too.
+      for wb in loop_backedge_bindings(env, ctx, cond, body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       check_call_args_in_expr(env, cond, ctx)
     }
@@ -25813,6 +27213,30 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       match init {
         Some(s) => check_stmt(env, s, ctx)
         None => ()
+      }
+      // Loop back-edge join, as for `while`, over the body AND the update,
+      // which both run before the condition is read again.
+      // The update is appended only when the body can reach it: a body
+      // that ends in an exit never runs the update (`backedge_list_exits`).
+      let backedge_body : @ast.TsBlock = match update {
+        Some(u) if !backedge_list_exits(body.stmts, false, false, []) =>
+          { stmts: [..body.stmts, u], stmt_positions: [], }
+        _ => body
+      }
+      let backedge_cond = match cond {
+        Some(e) => e
+        None => BoolLit(true)
+      }
+      for wb in loop_backedge_bindings(env, ctx, backedge_cond, backedge_body) {
+        env.bind(wb.0, wb.1)
+      }
+      // As for `while`: the condition reads its names at their joined
+      // type. The whole arm is undone by `restore_from(pre)` below.
+      for
+        wb in loop_backedge_cond_bindings(
+          env, ctx, backedge_cond, backedge_body,
+        ) {
+        env.bind(wb.0, wb.1)
       }
       match cond {
         Some(e) => check_call_args_in_expr(env, e, ctx)
@@ -26005,6 +27429,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
         _ => bind_pattern(env, ctx, binding, elem_ty)
       }
+      // Loop back-edge join, as for `while`: a binding the body
+      // reassigns reaches the next iteration with the union of its entry
+      // type and the assigned types.
+      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       env.restore_from(pre)
       // TS2454: a `var` bound by the head is only assigned if the loop
@@ -26072,6 +27502,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let pre = env.full_snapshot()
       clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, elem_ty)
+      // Loop back-edge join, as for `while`: a binding the body
+      // reassigns reaches the next iteration with the union of its entry
+      // type and the assigned types.
+      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
@@ -26119,6 +27555,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // (`for (k in obj) ...`) shouldn't trip use-before-assign.
       clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, key_ty)
+      // Loop back-edge join, as for `while`: a binding the body
+      // reassigns reaches the next iteration with the union of its entry
+      // type and the assigned types.
+      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
+        env.bind(wb.0, wb.1)
+      }
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
@@ -27478,6 +28920,37 @@ fn check_call_args_in_expr(
               sig is Some(_),
           )
         }
+        // A GENERIC callable VALUE had no arm here, so its arguments were
+        // judged by nothing — not even a position whose parameter type
+        // mentions no binder at all, which is what a bounded binder
+        // becomes once inlined to its bound (`<V extends string>(x: string)
+        // => …`, the shape `nested_function_method_return` builds). Only
+        // those positions are judged. One that mentions a binder is
+        // skipped even after solving it from the call: the solved binding
+        // re-checks the argument against a type derived from the argument,
+        // and measured on effect that only ever adds noise — `failCause(
+        // this._interruptedCause)` read the field's declared `| undefined`
+        // because this checker does not narrow through a `this.x = …`
+        // write, and reported it against `Cause<E>` with `E` solved.
+        GenericFunc(names, _, Func(params, _))
+        | GenericFunc(names, _, CallableMeta(Func(params, _), _)) if !args
+          .iter()
+          .any(fn(a) { a is Spread(_) }) =>
+          for i, a in args {
+            if i >= params.length() || params[i] is Rest(_) {
+              break
+            }
+            if is_checkable(params[i]) &&
+              !names.iter().any(fn(n) { type_param_occurs(n, params[i]) }) {
+              check_expr_against(
+                env,
+                a,
+                params[i],
+                ctx,
+                "call `\{name}` arg[\{i}]",
+              )
+            }
+          }
         other =>
           // A union callee whose members share one identical call signature
           // (`{ (a:number):X } | { (a:number):Y }`) is callable with those
@@ -29962,6 +31435,8 @@ fn check_call_args_in_expr(
     // New AST wrappers: recurse into the inner expression so call-site
     // checks inside `(call(badArg) as T)` / `call(badArg)!` / `obj?.m()`
     // still fire.
+    // A const assertion asserts no TYPE, so there is no cast to judge.
+    As(inner, Named("const")) => check_call_args_in_expr(env, inner, ctx)
     As(inner, asserted) => {
       check_call_args_in_expr(env, inner, ctx)
       // TS2300: an object type-literal in the asserted type (`<{a;a}>x`,
@@ -32200,7 +33675,7 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for cls in module_.classes {
     if !cls.is_abstract && cls.abstract_members.length() > 0 {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "abstract methods can only appear within an abstract class",
       })
     }
@@ -32215,7 +33690,7 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for n in cls.abstract_members {
       if private_set.contains(n) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "`private` modifier cannot be used with `abstract` modifier",
         })
       }
@@ -32224,7 +33699,7 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
     // constructor.
     if abstract_set.contains("constructor") {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "`abstract` modifier can only appear on a class, method, or property declaration",
       })
     }
@@ -32263,6 +33738,10 @@ fn circular_type_param_names(
   type_params : Array[String],
   bounds : Array[(String, @ast.TsType)],
 ) -> Array[String] {
+  // A cycle is a chain of bounds, so a parameter list with none has none.
+  if bounds.length() == 0 {
+    return []
+  }
   let tp_set : Map[String, Unit] = Map([])
   for p in type_params {
     tp_set[p] = ()
@@ -32321,17 +33800,27 @@ fn check_circular_type_params(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
 
+  // A declaration with no bounds cannot have a circular one, so its owner
+  // path is not built.
   for f in module_.funcs {
-    emit("function \{f.name}", f.type_params, f.type_param_bounds)
+    if f.type_param_bounds.length() > 0 {
+      emit("function " + f.name, f.type_params, f.type_param_bounds)
+    }
   }
   for c in module_.classes {
-    emit("class \{c.name}", c.type_params, c.type_param_bounds)
+    if c.type_param_bounds.length() > 0 {
+      emit("class " + c.name, c.type_params, c.type_param_bounds)
+    }
     for m in c.methods {
-      emit("method \{c.name}.\{m.name}", m.type_params, m.type_param_bounds)
+      if m.type_param_bounds.length() > 0 {
+        emit("method \{c.name}.\{m.name}", m.type_params, m.type_param_bounds)
+      }
     }
   }
   for a in module_.type_aliases {
-    emit("type \{a.name}", a.type_params, a.type_param_bounds)
+    if a.type_param_bounds.length() > 0 {
+      emit("type " + a.name, a.type_params, a.type_param_bounds)
+    }
   }
   for ns in module_.namespaces {
     for issue in check_circular_type_params(ns.module_) {
@@ -33077,11 +34566,11 @@ fn check_param_forward_refs(module_ : @ast.TsModule) -> Array[ExprIssue] {
       defaults.push(p.default)
       bindings.push(p.binding)
     }
-    check_one(names, defaults, Some(f.body), "function \{f.name}", bindings)
+    check_one(names, defaults, Some(f.body), "function " + f.name, bindings)
     for st in f.body.stmts {
       match st {
         Var(_, _, init) | Let(_, _, init) | Const(_, _, init) | Expr(init) =>
-          scan_callable_expr(init, "function \{f.name}")
+          scan_callable_expr(init, "function " + f.name)
         _ => ()
       }
     }
@@ -33165,7 +34654,7 @@ fn check_implicit_any_this(
   }
   for f in module_.funcs {
     let plain = !(f.params.length() > 0 && f.params[0].name == "this")
-    ts2683_walk_stmts(issues, f.body.stmts, plain, "function \{f.name}")
+    ts2683_walk_stmts(issues, f.body.stmts, plain, "function " + f.name)
   }
   // A true top level's `this` is `globalThis` (legal); a NAMESPACE
   // body is an IIFE whose `this` is implicit any
@@ -33487,7 +34976,7 @@ fn check_computed_key_type_param(
 ) -> Unit {
   if expr_type_positions_reference_any(key, decl.type_params) {
     issues.push({
-      path: "class \{decl.name}",
+      path: "class " + decl.name,
       message: "a computed property name cannot reference a type parameter from its containing type",
     })
   }
@@ -33508,7 +34997,7 @@ fn check_computed_key_type_param(
   // name reading as the class.
   if decl.name != "" && expr_mentions_var_outside_fn(key, decl.name) {
     issues.push({
-      path: "class \{decl.name}",
+      path: "class " + decl.name,
       message: "class `\{decl.name}` used before its declaration",
     })
   }
@@ -33801,7 +35290,7 @@ fn check_super_in_objlit_computed_keys(
     }
     if hit {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "`super` cannot be referenced in a computed property name",
       })
     }
@@ -33826,7 +35315,7 @@ fn check_this_in_computed_keys(
     for ke in decl.computed_field_keys {
       if expr_uses_this_outside_fn(ke) {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`this` cannot be referenced in a computed property name",
         })
       }
@@ -33834,7 +35323,7 @@ fn check_this_in_computed_keys(
       // (computedPropertyNames24/27/30's `[super.bar()]`).
       if computed_key_mentions_super(ke) {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`super` cannot be referenced in a computed property name",
         })
       }
@@ -33848,7 +35337,7 @@ fn check_this_in_computed_keys(
         CallExpr(Var(cn), _) | Call(cn, _) =>
           if resolver.globals.get(cn) is Some(Any) {
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "a computed property name in a class property declaration must have a simple literal type",
             })
           }
@@ -33860,13 +35349,13 @@ fn check_this_in_computed_keys(
         Some(ke) => {
           if expr_uses_this_outside_fn(ke) {
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "`this` cannot be referenced in a computed property name",
             })
           }
           if computed_key_mentions_super(ke) {
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "`super` cannot be referenced in a computed property name",
             })
           }
@@ -34253,7 +35742,7 @@ fn rest_walk_expr(e : @ast.TsExpr, out : Array[ExprIssue]) -> Unit {
     FuncExpr(f) => {
       if rest_param_misplaced(f.params) {
         out.push({
-          path: "function \{f.name}",
+          path: "function " + f.name,
           message: "a rest parameter must be last in a parameter list",
         })
       }
@@ -34330,7 +35819,7 @@ fn check_rest_param_position(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for f in module_.funcs {
     if rest_param_misplaced(f.params) {
       issues.push({
-        path: "function \{f.name}",
+        path: "function " + f.name,
         message: "a rest parameter must be last in a parameter list",
       })
     }
@@ -34387,27 +35876,27 @@ fn check_misplaced_type_predicates(module_ : @ast.TsModule) -> Array[ExprIssue] 
   for f in module_.funcs {
     for p in f.params {
       if p.type_ is TypePredicate(_, _) {
-        issues.push({ path: "function \{f.name}", message: msg, })
+        issues.push({ path: "function " + f.name, message: msg, })
       }
     }
   }
   for imp in module_.imports {
     for p in imp.params {
       if p.1 is TypePredicate(_, _) {
-        issues.push({ path: "function \{imp.name}", message: msg, })
+        issues.push({ path: "function " + imp.name, message: msg, })
       }
     }
   }
   for iface in module_.interfaces {
     for fld in iface.fields {
       if fld.1 is TypePredicate(_, _) {
-        issues.push({ path: "interface \{iface.name}", message: msg, })
+        issues.push({ path: "interface " + iface.name, message: msg, })
       }
     }
   }
   for ta in module_.type_aliases {
     if ta.type_ is TypePredicate(_, _) {
-      issues.push({ path: "type \{ta.name}", message: msg, })
+      issues.push({ path: "type " + ta.name, message: msg, })
     }
   }
   issues
@@ -34469,12 +35958,12 @@ fn check_interface_extends_class_private(
         }
         if base.private_members.contains(fname) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends class `\{base_name}`: property `\{fname}` is private in `\{base_name}` but not in `\{iface.name}`",
           })
         } else if base.protected_members.contains(fname) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends class `\{base_name}`: property `\{fname}` is protected in `\{base_name}` but not in `\{iface.name}`",
           })
         }
@@ -34944,7 +36433,7 @@ fn check_interface_conflicting_bases(
               for rty in tys {
                 if types_definitely_differ(resolver, lty, rty) {
                   issues.push({
-                    path: "interface \{iface.name}",
+                    path: "interface " + iface.name,
                     message: "interface `\{iface.name}` cannot simultaneously extend types `\{iface.extends_names[i]}` and `\{iface.extends_names[j]}`: named property `\{lname}` of types `\{type_display(lty)}` and `\{type_display(rty)}` are not identical",
                   })
                   done = true
@@ -34994,6 +36483,10 @@ fn check_merged_export_modifiers(
       1
   }
   let _ = resolver
+  // Every finding below is about a name the file `export type`s.
+  if exported.length() == 0 {
+    return issues
+  }
   // Count declarations per NAME in one pass each, rather than rescanning
   // both lists per exported name. The loop below used to be
   // O(exported x (aliases + interfaces)), which on a 4,000-interface
@@ -35342,7 +36835,7 @@ fn check_iterator_return_property(
       if is_definite_primitive_type(ty) {
         reported = true
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "the `return` property of an iterator must be a method",
         })
       }
@@ -35354,7 +36847,7 @@ fn check_iterator_return_property(
       let (fname, fexpr) = init
       if fname == "return" && expr_is_definitely_not_a_function(fexpr) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "the `return` property of an iterator must be a method",
         })
         break
@@ -35409,12 +36902,12 @@ fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for cls in module_.classes {
     if is_predefined_type_name(cls.name) {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "class name cannot be `\{cls.name}`",
       })
     } else if commonjs && cls.name == "Object" && !cls.is_declare {
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "class name cannot be `Object` when targeting ES5 and above with module CommonJS",
       })
     }
@@ -35430,7 +36923,7 @@ fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   for iface in module_.interfaces {
     if is_predefined_type_name(iface.name) {
       issues.push({
-        path: "interface \{iface.name}",
+        path: "interface " + iface.name,
         message: "interface name cannot be `\{iface.name}`",
       })
     }
@@ -35454,7 +36947,7 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in cls.base_names {
       if cls.type_params.contains(base) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "cannot find name `\{base}` (a type parameter cannot be used as a base class)",
         })
       }
@@ -35464,7 +36957,7 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in iface.extends_names {
       if iface.type_params.contains(base) {
         issues.push({
-          path: "interface \{iface.name}",
+          path: "interface " + iface.name,
           message: "cannot find name `\{base}` (a type parameter cannot be extended)",
         })
       }
@@ -35517,7 +37010,7 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in cls.base_names {
       if class_index.get(base) is Some(j) && j > i {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "class `\{base}` used before its declaration",
         })
       }
@@ -35539,6 +37032,15 @@ fn check_class_interface_merge_modifiers(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // Only a class with a private or protected member can conflict, so
+  // without one the interface table below is not built at all.
+  if !module_.classes
+    .iter()
+    .any(fn(cls) {
+      cls.private_members.length() > 0 || cls.protected_members.length() > 0
+    }) {
+    return issues
+  }
   // Index interfaces by name once so the per-class lookup is O(1) rather than
   // an inner scan over every interface (which made this O(classes ×
   // interfaces) on files that declare many of both).
@@ -35565,7 +37067,7 @@ fn check_class_interface_merge_modifiers(
           if iface_field_names.get(name) is Some(_) && seen.get(name) is None {
             seen[name] = ()
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "all declarations of `\{name}` must have identical modifiers",
             })
           }
@@ -35574,7 +37076,7 @@ fn check_class_interface_merge_modifiers(
           if iface_field_names.get(name) is Some(_) && seen.get(name) is None {
             seen[name] = ()
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "all declarations of `\{name}` must have identical modifiers",
             })
           }
@@ -35618,7 +37120,7 @@ fn check_index_signature_enum_violation(
             Named(n) =>
               if resolver.enums.get(n) is Some(_) {
                 issues.push({
-                  path: "interface \{iface.name}",
+                  path: "interface " + iface.name,
                   message: "property `\{field.0}` of type `\{n}` is not assignable to `\{type_display(idx_ty)}` index type",
                 })
               }
@@ -36041,7 +37543,7 @@ fn check_derived_indexer_compat(
           }
           if concrete {
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "class `\{cls.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
             })
           }
@@ -36062,7 +37564,7 @@ fn check_derived_indexer_compat(
           ) &&
           !is_structurally_assignable_named(derived_val, base_val, resolver) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "class `\{cls.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
           })
         }
@@ -36134,7 +37636,7 @@ fn check_derived_indexer_compat(
           }
           if concrete {
             issues.push({
-              path: "class \{iface.name}",
+              path: "class " + iface.name,
               message: "class `\{iface.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
             })
           }
@@ -36154,7 +37656,7 @@ fn check_derived_indexer_compat(
           ) &&
           !is_structurally_assignable_named(derived_val, base_val, resolver) {
           issues.push({
-            path: "class \{iface.name}",
+            path: "class " + iface.name,
             message: "class `\{iface.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
           })
         }
@@ -36282,7 +37784,7 @@ fn check_symbol_index_members(
         !is_assignable_to_bivariant(member_ty, idx_value) &&
         !is_structurally_assignable_named(member_ty, idx_value, resolver) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "property `[Symbol.\{wk}]` is not assignable to the `symbol` index signature type",
         })
       }
@@ -36393,7 +37895,7 @@ fn check_accessor_pair_types(
         !is_assignable_to(resolver.unwrap(get_ty), resolver.unwrap(set_ty)) &&
         !is_structurally_assignable_named(get_ty, set_ty, resolver) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "the getter type is not assignable to its setter parameter type",
         })
       }
@@ -36978,7 +38480,7 @@ fn check_interface_extends_member_compat(
           !type_deeply_contains_unmodeled(bty, resolver) &&
           !type_has_call_signature(bty, resolver) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends interface `\{base_name}`: types of property `\{fname}` are incompatible",
           })
           continue
@@ -37023,7 +38525,7 @@ fn check_interface_extends_member_compat(
           ) &&
           !tuple_covariant_by_extends(fty, bty, resolver) {
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "interface `\{iface.name}` incorrectly extends interface `\{base_name}`: types of property `\{fname}` are incompatible",
           })
         }
@@ -37681,6 +39183,10 @@ fn resolve_base_chain_members(
 ///     computed/private names are exempt.
 fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // Every finding below is about a class member.
+  if module_.classes.length() == 0 {
+    return issues
+  }
   let mut no_implicit_override = false
   for gm in module_.grammar_misuses {
     if gm == "<noimplicitoverride-on>" {
@@ -37712,7 +39218,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
     if !has_heritage {
       if overrides.length() > 0 {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "this member cannot have an `override` modifier because its containing class does not extend another class",
         })
       }
@@ -37760,7 +39266,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
           base_abstract.length() == 0 &&
           !chain.has_opaque {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "this member cannot have an `override` modifier because it is not declared in the base class",
           })
         }
@@ -37773,7 +39279,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
       }
       if !known {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "this member cannot have an `override` modifier because it is not declared in the base class",
         })
       }
@@ -37811,7 +39317,7 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
         let key = (if is_static_m { "s:" } else { "i:" }) + name
         if in_base && !overrides.contains(key) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "this member must have an `override` modifier because it overrides a member in the base class",
           })
         }
@@ -37916,7 +39422,7 @@ fn check_use_strict_with_non_simple_params(
 
   fn walk_module(m : @ast.TsModule) -> Unit {
     for f in m.funcs {
-      judge(f, "function \{f.name}")
+      judge(f, "function " + f.name)
     }
     for ns in m.namespaces {
       walk_module(ns.module_)
@@ -38332,6 +39838,12 @@ fn check_expando_use_before_assign(module_ : @ast.TsModule) -> Array[ExprIssue] 
 }
 
 ///|
+/// The read set of a statement scanned before any holder exists: always
+/// empty, and shared rather than allocated per statement. Nothing writes
+/// to it — `expando_scan_stmt_list` only iterates it.
+let expando_no_reads : Map[String, Unit] = Map([])
+
+///|
 /// One ordered pass over `stmts`, then a recursion into every nested
 /// statement list so an inner function body gets its own holders and its
 /// own definite / possible states. See
@@ -38355,8 +39867,17 @@ fn expando_scan_stmt_list(
   for st in stmts {
     // Reads first: a statement that both reads and writes reads the old
     // value (`d.q = d.q`), and the corpus's shapes are one or the other.
-    let reads : Map[String, Unit] = Map([])
-    expando_reads_in_stmt(st, holders, reads)
+    //
+    // Both the read and the write collectors record only names in
+    // `holders`, so while there is no holder yet neither walk can find
+    // anything — and most statement lists never get one.
+    let reads : Map[String, Unit] = if holders.length() > 0 {
+      let m : Map[String, Unit] = Map([])
+      expando_reads_in_stmt(st, holders, m)
+      m
+    } else {
+      expando_no_reads
+    }
     for kv in reads {
       let holder = match kv.0.find(".") {
         Some(i) => kv.0[:i].to_owned()
@@ -38385,6 +39906,9 @@ fn expando_scan_stmt_list(
           holders[n] = ()
         }
       _ => ()
+    }
+    if holders.length() == 0 {
+      continue
     }
     match st {
       If(_, then_b, else_b) => {
@@ -39133,7 +40657,7 @@ fn check_class_namespace_static_merge(
           !flagged.contains(name) {
           flagged[name] = ()
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "duplicate identifier `\{name}`",
           })
         }
@@ -39176,7 +40700,7 @@ fn check_duplicate_computed_accessors(
               wk
             if seen.contains(key) {
               issues.push({
-                path: "class \{cls.name}",
+                path: "class " + cls.name,
                 message: "duplicate identifier `[Symbol.\{wk}]`",
               })
             } else {
@@ -39193,6 +40717,10 @@ fn check_duplicate_computed_accessors(
 
 ///|
 fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  // Every finding below is about a class's base name.
+  if !module_.classes.iter().any(fn(c) { c.base_names.length() > 0 }) {
+    return []
+  }
   let func_names : Map[String, Unit] = Map([])
   for f in module_.funcs {
     func_names[f.name] = ()
@@ -39209,7 +40737,7 @@ fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
     for base in cls.base_names {
       if func_names.get(base) is Some(_) && non_function_decls.get(base) is None {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "type of `\{base}` is not a constructor function type",
         })
       }
@@ -39227,7 +40755,7 @@ fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] 
   for ta in module_.type_aliases {
     if is_predefined_type_name(ta.name) {
       issues.push({
-        path: "type \{ta.name}",
+        path: "type " + ta.name,
         message: "type alias name cannot be `\{ta.name}`",
       })
     }
@@ -39310,7 +40838,6 @@ fn collect_invalid_primitive_type_names(
 fn check_invalid_primitive_type_names(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
-  let declared = module_declared_names(module_)
   let found : Array[String] = []
   for v in module_.values {
     collect_invalid_primitive_type_names(v.type_, found)
@@ -39340,6 +40867,12 @@ fn check_invalid_primitive_type_names(
     }
   }
   let issues : Array[ExprIssue] = []
+  // The declared-name list is only consulted for a spelling actually found,
+  // which almost no module has.
+  if found.length() == 0 {
+    return issues
+  }
+  let declared = module_declared_names(module_)
   for name in found {
     if !declared.contains(name) {
       issues.push({
@@ -39963,7 +41496,7 @@ fn check_unimplemented_abstract_members(
       if resolver.nearest_member_decl_kind(cls.name, name) is Some(2) {
         reported[name] = ()
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "non-abstract class does not implement inherited abstract member `\{name}`",
         })
       }
@@ -40096,7 +41629,7 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
         if !(reported.get(em.name) is Some(_)) {
           reported[em.name] = true
           issues.push({
-            path: "enum \{e.name}",
+            path: "enum " + e.name,
             message: "duplicate identifier `\{em.name}`",
           })
         }
@@ -40109,7 +41642,7 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // synthesized into an interface by the parser, so the interface loop
   // below already covers it -- no separate type-alias pass is needed.
   for iface in module_.interfaces {
-    let ipath = "interface \{iface.name}"
+    let ipath = "interface " + iface.name
     for name in member_name_duplicates(iface.fields) {
       issues.push({ path: ipath, message: "duplicate identifier `\{name}`", })
     }
@@ -40125,25 +41658,25 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // (and its nested literals) -- skip it here to avoid a double report.
   for ta in module_.type_aliases {
     if !(ta.type_ is Object(_)) {
-      collect_type_dup_issues(ta.type_, "type \{ta.name}", issues)
+      collect_type_dup_issues(ta.type_, "type " + ta.name, issues)
     }
   }
   for f in module_.funcs {
-    let fpath = "function \{f.name}"
+    let fpath = "function " + f.name
     for p in f.params {
       collect_type_dup_issues(p.type_, fpath, issues)
     }
     collect_type_dup_issues(f.return_type, fpath, issues)
   }
   for imp in module_.imports {
-    let ipath = "function \{imp.name}"
+    let ipath = "function " + imp.name
     for p in imp.params {
       collect_type_dup_issues(p.1, ipath, issues)
     }
     collect_type_dup_issues(imp.return_type, ipath, issues)
   }
   for v in module_.values {
-    collect_type_dup_issues(v.type_, "value \{v.name}", issues)
+    collect_type_dup_issues(v.type_, "value " + v.name, issues)
   }
   issues
 }
@@ -40173,7 +41706,7 @@ fn check_interface_merge_type_params(
           !interface_type_params_identical(resolver, prev, iface) {
           reported[iface.name] = true
           issues.push({
-            path: "interface \{iface.name}",
+            path: "interface " + iface.name,
             message: "all declarations of `\{iface.name}` must have identical type parameters",
           })
         }
@@ -40834,7 +42367,7 @@ fn walk_module_undeclared_tps(
 ) -> Unit {
   for f in module_.funcs {
     let scope = scope_extend(tp_scope, f.type_params)
-    let fpath = "function \{f.name}"
+    let fpath = "function " + f.name
     for p in f.params {
       check_type_undeclared_tps(p.type_, scope, declared, issues, fpath)
     }
@@ -40842,7 +42375,7 @@ fn walk_module_undeclared_tps(
   }
   for imp in module_.imports {
     let scope = scope_extend(tp_scope, imp.type_params)
-    let ipath = "function \{imp.name}"
+    let ipath = "function " + imp.name
     for p in imp.params {
       check_type_undeclared_tps(p.1, scope, declared, issues, ipath)
     }
@@ -40850,7 +42383,7 @@ fn walk_module_undeclared_tps(
   }
   for iface in module_.interfaces {
     let iscope = scope_extend(tp_scope, iface.type_params)
-    let ipath = "interface \{iface.name}"
+    let ipath = "interface " + iface.name
     // A generic method field carries its own fresh type parameters.
     // Accumulate across ALL same-name entries: an overloaded method has
     // one entry per overload (lib.dom's `querySelector<K>` /
@@ -40858,6 +42391,7 @@ fn walk_module_undeclared_tps(
     // so each field must see the union of the overloads' binders.
     // Group once per interface — the per-field linear scan over
     // `method_type_params` was quadratic on lib.dom-sized interfaces.
+    let has_method_tps = iface.method_type_params.length() > 0
     let method_tps_by_name : Map[String, Array[String]] = Map([])
     for entry in iface.method_type_params {
       match method_tps_by_name.get(entry.0) {
@@ -40876,16 +42410,20 @@ fn walk_module_undeclared_tps(
       if is_signature_sentinel(field.0) {
         continue
       }
-      let mscope = match method_tps_by_name.get(field.0) {
-        Some(tps) => scope_extend(iscope, tps)
-        None => iscope
+      let mscope = if !has_method_tps {
+        iscope
+      } else {
+        match method_tps_by_name.get(field.0) {
+          Some(tps) => scope_extend(iscope, tps)
+          None => iscope
+        }
       }
       check_type_undeclared_tps(field.1, mscope, declared, issues, ipath)
     }
   }
   for c in module_.classes {
     let cscope = scope_extend(tp_scope, c.type_params)
-    let cpath = "class \{c.name}"
+    let cpath = "class " + c.name
     for prop in c.properties {
       check_type_undeclared_tps(prop.type_, cscope, declared, issues, cpath)
     }
@@ -40903,7 +42441,7 @@ fn walk_module_undeclared_tps(
       tp_scope,
       declared,
       issues,
-      "value \{v.name}",
+      "value " + v.name,
     )
   }
   for ns in module_.namespaces {
@@ -40929,6 +42467,24 @@ fn scope_extend(base : Array[String], extra : Array[String]) -> Array[String] {
 }
 
 ///|
+/// The leaf test of `check_type_undeclared_tps`. A top-level function
+/// rather than a local closure: the walk runs once per declared member
+/// type, and a closure capturing four values is an allocation per call.
+fn report_undeclared_tp(
+  n : String,
+  scope : Array[String],
+  declared : Map[String, Unit],
+  issues : Array[ExprIssue],
+  path : String,
+) -> Unit {
+  if is_single_upper_letter(n) &&
+    !scope.contains(n) &&
+    !(declared.get(n) is Some(_)) {
+    issues.push({ path, message: "cannot find name `\{n}`", })
+  }
+}
+
+///|
 /// Recurse a type position, reporting single-letter type references that are
 /// neither in `scope` nor `declared`. Binder / computed forms are not
 /// descended into (see `check_undeclared_type_parameters`).
@@ -40939,18 +42495,10 @@ fn check_type_undeclared_tps(
   issues : Array[ExprIssue],
   path : String,
 ) -> Unit {
-  fn report(n : String) -> Unit {
-    if is_single_upper_letter(n) &&
-      !scope.contains(n) &&
-      !(declared.get(n) is Some(_)) {
-      issues.push({ path, message: "cannot find name `\{n}`", })
-    }
-  }
-
   match ty {
-    Named(n) => report(n)
+    Named(n) => report_undeclared_tp(n, scope, declared, issues, path)
     Applied(n, args) => {
-      report(n)
+      report_undeclared_tp(n, scope, declared, issues, path)
       for a in args {
         check_type_undeclared_tps(a, scope, declared, issues, path)
       }
@@ -42296,6 +43844,17 @@ fn var_redeclaration_issues(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // A name declared once cannot be redeclared with another type, and its
+  // identity key is the expensive part of this loop — so only names that
+  // occur at least twice are judged. A judged name sees exactly the same
+  // sequence of declarations as before.
+  if decls.length() < 2 {
+    return issues
+  }
+  let occurrences : Map[String, Int32] = Map([])
+  for decl in decls {
+    occurrences[decl.0] = occurrences.get(decl.0).unwrap_or(0) + 1
+  }
   let first_key : Map[String, String] = Map([])
   // The first declaration's TYPE as well as its key, because
   // `identity_key` abstains for shapes it cannot normalize and the
@@ -42304,6 +43863,9 @@ fn var_redeclaration_issues(
   let reported : Map[String, Unit] = Map([])
   for decl in decls {
     let (name, ty) = decl
+    if occurrences.get(name).unwrap_or(0) < 2 {
+      continue
+    }
     if !is_checkable(ty) {
       continue
     }
@@ -43073,7 +44635,10 @@ fn check_async_named_return_types(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
 
-  collect(module_, "")
+  // The name tables are only read for an `async` non-generator with a
+  // named return type, so they are collected on the first one rather than
+  // for every module.
+  let mut collected = false
   let rejected = fn(
     is_async : Bool,
     is_generator : Bool,
@@ -43085,6 +44650,10 @@ fn check_async_named_return_types(module_ : @ast.TsModule) -> Array[ExprIssue] {
     let n = match rt {
       Named(n) | Applied(n, _) => n
       _ => return None
+    }
+    if !collected {
+      collect(module_, "")
+      collected = true
     }
     // The global `Promise` is what the rule demands, and an in-file
     // `interface Promise<T>` merges INTO it.
@@ -43346,7 +44915,7 @@ fn check_generator_interface_returns(
           (Some(a), Some(b)) =>
             if types_definitely_differ(resolver, a, b) {
               issues.push({
-                path: "function \{f.name}",
+                path: "function " + f.name,
                 message: "the generator type is not assignable to `\{ret_name}`: `Iterator<\{type_display(a)}>` and `Iterable<\{type_display(b)}>` disagree",
               })
               continue
@@ -43358,7 +44927,7 @@ fn check_generator_interface_returns(
             !fl.0.has_prefix("@@") &&
             !type_accepts_undefined(fl.1) {
             issues.push({
-              path: "function \{f.name}",
+              path: "function " + f.name,
               message: "property `\{fl.0}` is missing in the generator object but required in type `\{ret_name}`",
             })
             break
@@ -43400,10 +44969,10 @@ fn check_duplicate_index_signatures(
     }
   }
   for iface in module_.interfaces {
-    scan("interface \{iface.name}", iface.index_signatures)
+    scan("interface " + iface.name, iface.index_signatures)
   }
   for c in module_.classes {
-    scan("class \{c.name}", c.index_signatures)
+    scan("class " + c.name, c.index_signatures)
   }
   issues
 }
@@ -43461,17 +45030,26 @@ fn member_name_duplicates(
         continue
       }
       let mut n = 1
-      let mut has_property = !is_method_type(fields[i].1)
       for j in (i + 1)..<fields.length() {
         if fields[j].0 == name {
           n += 1
-          if !is_method_type(fields[j].1) {
+        }
+      }
+      // Whether an occurrence is a property only matters for a repeated
+      // name, so the type is not inspected for the (usual) unique one.
+      if n >= 2 {
+        let mut has_property = !is_method_type(fields[i].1)
+        for j in (i + 1)..<fields.length() {
+          if has_property {
+            break
+          }
+          if fields[j].0 == name && !is_method_type(fields[j].1) {
             has_property = true
           }
         }
-      }
-      if n >= 2 && has_property {
-        dups.push(name)
+        if has_property {
+          dups.push(name)
+        }
       }
     }
     return dups
@@ -43584,7 +45162,7 @@ fn collect_globalthis_bad_index_issues(
 fn check_globalthis_bad_index(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for ta in module_.type_aliases {
-    collect_globalthis_bad_index_issues(ta.type_, "type \{ta.name}", issues)
+    collect_globalthis_bad_index_issues(ta.type_, "type " + ta.name, issues)
   }
   for v in module_.values {
     collect_globalthis_bad_index_issues(v.type_, "var \{v.name}", issues)
@@ -43962,20 +45540,25 @@ fn check_module_function_bodies_layered(
   } else {
     module_
   }
-  for i in own_root.interfaces {
-    own_type_names[i.name] = ()
-  }
-  for c in own_root.classes {
-    own_type_names[c.name] = ()
-  }
-  for a in own_root.type_aliases {
-    own_type_names[a.name] = ()
-  }
-  for e in own_root.enums {
-    own_type_names[e.name] = ()
-  }
-  for q in namespace_qualified_type_names(own_root) {
-    own_type_names[q] = ()
+  // Both tables below are read only while ingesting `type_modules`, so a
+  // single-module check (no imported type modules) builds neither.
+  let has_type_modules = type_modules.length() > 0
+  if has_type_modules {
+    for i in own_root.interfaces {
+      own_type_names[i.name] = ()
+    }
+    for c in own_root.classes {
+      own_type_names[c.name] = ()
+    }
+    for a in own_root.type_aliases {
+      own_type_names[a.name] = ()
+    }
+    for e in own_root.enums {
+      own_type_names[e.name] = ()
+    }
+    for q in namespace_qualified_type_names(own_root) {
+      own_type_names[q] = ()
+    }
   }
   // Which top-level type names more than one reachable module declares
   // (the checked module counting as one): those get a per-module key.
@@ -44007,7 +45590,9 @@ fn check_module_function_bodies_layered(
       add(q)
     }
   }
-  note_declared(own_root, "<checked>")
+  if has_type_modules {
+    note_declared(own_root, "<checked>")
+  }
   for i, type_module in type_modules {
     if i < type_module_keys.length() {
       note_declared(type_module, type_module_keys[i])
@@ -45435,7 +47020,7 @@ fn check_module_function_bodies_layered(
     //     `check_constraints` abstains on `infer` markers and forwarded
     //     (in-scope) type parameters, so only a concrete argument that
     //     definitely violates a concrete bound fires.
-    for issue in check_module(module_).issues {
+    for issue in check_module_kinds(module_, false).issues {
       let keep = match issue.kind {
         CircularTypeAlias
         | InterfaceExtendsCycle
@@ -45493,7 +47078,7 @@ fn check_module_function_bodies_layered(
     let prefix = if ns.name == "<global>" {
       "declare global"
     } else {
-      "namespace \{ns.name}"
+      "namespace " + ns.name
     }
     for issue in issues {
       all.push({ path: "\{prefix} > \{issue.path}", message: issue.message, })
@@ -46381,7 +47966,7 @@ fn check_native_class_property_initializers(
           is_checkable(prop.type_) &&
           !type_accepts_undefined(resolver.unwrap(prop.type_)) {
           issues.push({
-            path: "class \{decl.name}",
+            path: "class " + decl.name,
             message: "computed property has no initializer and is not definitely assigned",
           })
         }
@@ -46413,7 +47998,7 @@ fn check_native_class_property_initializers(
         continue
       }
       issues.push({
-        path: "class \{decl.name}",
+        path: "class " + decl.name,
         message: "property `\{prop.name}` has no initializer and is not definitely assigned",
       })
     }
@@ -46648,7 +48233,7 @@ fn check_class_member_structure(
         !reported_brand_modifier.contains(name) {
         reported_brand_modifier[name] = ()
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "an accessibility modifier cannot be used with a private identifier",
         })
       }
@@ -46658,7 +48243,7 @@ fn check_class_member_structure(
         !reported_brand_modifier.contains(name) {
         reported_brand_modifier[name] = ()
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "an accessibility modifier cannot be used with a private identifier",
         })
       }
@@ -46677,7 +48262,7 @@ fn check_class_member_structure(
       if is_brand_constructor(p.name) && !reported_hash_ctor {
         reported_hash_ctor = true
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`#constructor` is a reserved word",
         })
       }
@@ -46686,7 +48271,7 @@ fn check_class_member_structure(
       if is_brand_constructor(m.name) && !reported_hash_ctor {
         reported_hash_ctor = true
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`#constructor` is a reserved word",
         })
       }
@@ -46712,7 +48297,7 @@ fn check_class_member_structure(
         !reported_ctor_field {
         reported_ctor_field = true
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "classes may not have a field named `constructor`",
         })
       }
@@ -46736,7 +48321,7 @@ fn check_class_member_structure(
         block_mentions_super(body, AnyRef)
       if in_ctor || class_mentions_super_outside_ctor(decl, AnyRef) {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`super` can only be referenced in a derived class",
         })
       }
@@ -46749,7 +48334,7 @@ fn check_class_member_structure(
       // the derived branch because a non-derived class is already reported
       // above with the more specific TS2335.
       issues.push({
-        path: "class \{decl.name}",
+        path: "class " + decl.name,
         message: "super calls are not permitted outside constructors",
       })
     }
@@ -46761,7 +48346,7 @@ fn check_class_member_structure(
     for base in decl.base_names {
       if base == decl.name {
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "`\{decl.name}` is referenced directly in its own base expression",
         })
         break
@@ -46787,7 +48372,7 @@ fn check_class_member_structure(
         if !reported_dup.contains(key) {
           reported_dup[key] = ()
           issues.push({
-            path: "class \{decl.name}",
+            path: "class " + decl.name,
             message: "duplicate identifier `\{m.name}`",
           })
         }
@@ -46811,7 +48396,7 @@ fn check_class_member_structure(
           if bodied_method.contains(key) && !reported_dup.contains(key) {
             reported_dup[key] = ()
             issues.push({
-              path: "class \{decl.name}",
+              path: "class " + decl.name,
               message: "duplicate identifier `\{m.name}`",
             })
           }
@@ -46837,7 +48422,7 @@ fn check_class_member_structure(
       if regular_method.contains(key) && !reported_dup.contains(key) {
         reported_dup[key] = ()
         issues.push({
-          path: "class \{decl.name}",
+          path: "class " + decl.name,
           message: "duplicate identifier `\{prop.name}`",
         })
       }
@@ -46903,7 +48488,7 @@ fn check_class_member_structure(
           for name, _ in this_fields {
             if base_accessors.contains(name) {
               issues.push({
-                path: "class \{decl.name}",
+                path: "class " + decl.name,
                 message: "`\{name}` is defined as an accessor in the base class but is overridden here as a property",
               })
             }
@@ -46913,7 +48498,7 @@ fn check_class_member_structure(
           for name, _ in this_accessors {
             if base_fields.contains(name) {
               issues.push({
-                path: "class \{decl.name}",
+                path: "class " + decl.name,
                 message: "`\{name}` is defined as a property in the base class but is overridden here as an accessor",
               })
             }
@@ -46955,7 +48540,7 @@ fn check_class_member_structure(
               Some(btype) =>
                 if member_override_incompatible(p.type_, btype, resolver) {
                   issues.push({
-                    path: "class \{decl.name}",
+                    path: "class " + decl.name,
                     message: "property `\{p.name}` of type `\{type_display(p.type_)}` is not assignable to the same property `\{type_display(btype)}` in base type `\{base.name}`",
                   })
                 }
@@ -47076,7 +48661,7 @@ fn check_abstract_implementation(
     for name, from_class in abstract_needed {
       if !concrete.contains(name) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "non-abstract class `\{cls.name}` does not implement inherited abstract member `\{name}` from class `\{from_class}`",
         })
       }
@@ -47441,7 +49026,7 @@ fn check_extends_interface_only(
         continue
       }
       issues.push({
-        path: "class \{cls.name}",
+        path: "class " + cls.name,
         message: "cannot extend an interface `\{base}`. Did you mean `implements`?",
       })
     }
@@ -47487,7 +49072,7 @@ fn check_alias_index_key_bounds(
       }
       if wanted.iter().any(fn(w) { !keys.contains(w) }) {
         issues.push({
-          path: "type \{ta.name}",
+          path: "type " + ta.name,
           message: "type `\{k}` cannot be used to index type `\{type_display(obj)}`",
         })
       }
@@ -47649,7 +49234,7 @@ fn check_class_implements_lib_string(
     for m in wanted {
       if !have.contains(m) {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class " + cls.name,
           message: "incorrectly implements interface `String`: member `\{m}` is missing",
         })
         break
@@ -47702,6 +49287,15 @@ fn check_class_implements(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // Only a non-generic class with an `implements` clause is checked
+  // below, so without one neither name table is built.
+  if !module_.classes
+    .iter()
+    .any(fn(c) {
+      c.implements_names.length() > 0 && c.type_params.length() == 0
+    }) {
+    return issues
+  }
   let class_by_name : Map[String, @ast.TsClassDecl] = Map([])
   for c in module_.classes {
     class_by_name[c.name] = c
@@ -47896,7 +49490,7 @@ fn check_class_implements(
           if member_override_incompatible(csig.1, isig.1, resolver) {
             let kind = if want_number { "number" } else { "string" }
             issues.push({
-              path: "class \{cls.name}",
+              path: "class " + cls.name,
               message: "incorrectly implements interface `\{iname}`: `\{kind}` index signature of type `\{type_display(csig.1)}` is not assignable to `\{type_display(isig.1)}`",
             })
             reported = true
@@ -47915,7 +49509,7 @@ fn check_class_implements(
         // Interface member implemented with non-public visibility.
         if nonpublic.get(mname) is Some(_) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "incorrectly implements interface `\{iname}`: member `\{mname}` is not public",
           })
           reported = true
@@ -47926,7 +49520,7 @@ fn check_class_implements(
           Some(ctype) =>
             if member_override_incompatible(ctype, f.1, resolver) {
               issues.push({
-                path: "class \{cls.name}",
+                path: "class " + cls.name,
                 message: "incorrectly implements interface `\{iname}`: property `\{mname}` of type `\{type_display(ctype)}` is not assignable to `\{type_display(f.1)}`",
               })
               reported = true
@@ -47943,7 +49537,7 @@ fn check_class_implements(
             Some(mtype) =>
               if method_override_incompatible(mtype, f.1, resolver) {
                 issues.push({
-                  path: "class \{cls.name}",
+                  path: "class " + cls.name,
                   message: "incorrectly implements interface `\{iname}`: method `\{mname}` of type `\{type_display(mtype)}` is not assignable to `\{type_display(f.1)}`",
                 })
                 reported = true
@@ -47961,7 +49555,7 @@ fn check_class_implements(
           !type_has_undefined(f.1) &&
           !supplied.contains(mname) {
           issues.push({
-            path: "class \{cls.name}",
+            path: "class " + cls.name,
             message: "incorrectly implements interface `\{iname}`: member `\{mname}` is missing",
           })
           reported = true
@@ -48047,10 +49641,25 @@ fn check_interface_extends_compat(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // Index declared interfaces by name (non-generic only).
-  let iface_by_name : Map[String, @ast.TsInterface] = Map([])
-  for iface in module_.interfaces {
-    if iface.type_params.length() == 0 {
-      iface_by_name[iface.name] = iface
+  //
+  // Both name tables below are built on first use rather than up front.
+  // They are only consulted along an `extends` edge or an index
+  // signature, and most declarations have neither — a `.d.ts` of plain
+  // interfaces paid for two module-sized maps per call and read neither.
+  let mut iface_by_name_cache : Map[String, @ast.TsInterface]? = None
+  fn iface_by_name() -> Map[String, @ast.TsInterface] {
+    match iface_by_name_cache {
+      Some(m) => m
+      None => {
+        let m : Map[String, @ast.TsInterface] = Map([])
+        for iface in module_.interfaces {
+          if iface.type_params.length() == 0 {
+            m[iface.name] = iface
+          }
+        }
+        iface_by_name_cache = Some(m)
+        m
+      }
     }
   }
   // Object-shaped declared names (interfaces or classes) -- used to
@@ -48058,15 +49667,25 @@ fn check_interface_extends_compat(
   // scalar override against it. Seeded with outer-scope names so a
   // namespaced interface extending a member typed by a top-level
   // interface is still recognised.
-  let object_shaped : Map[String, Unit] = Map([])
-  for name, _ in outer_object_names {
-    object_shaped[name] = ()
-  }
-  for iface in module_.interfaces {
-    object_shaped[iface.name] = ()
-  }
-  for c in module_.classes {
-    object_shaped[c.name] = ()
+  let mut object_shaped_cache : Map[String, Unit]? = None
+  fn object_shaped() -> Map[String, Unit] {
+    match object_shaped_cache {
+      Some(m) => m
+      None => {
+        let m : Map[String, Unit] = Map([])
+        for name, _ in outer_object_names {
+          m[name] = ()
+        }
+        for iface in module_.interfaces {
+          m[iface.name] = ()
+        }
+        for c in module_.classes {
+          m[c.name] = ()
+        }
+        object_shaped_cache = Some(m)
+        m
+      }
+    }
   }
   // Strip a trailing `| undefined` / `| null` (the parser's encoding of
   // `x?: T`) so the scalar-vs-object comparison sees the payload type.
@@ -48106,8 +49725,8 @@ fn check_interface_extends_compat(
   fn is_object_shaped(t : @ast.TsType) -> Bool {
     match t {
       Object(_) | Struct(_, _) => true
-      Named(n) => object_shaped.contains(n)
-      Applied(n, _) => object_shaped.contains(n)
+      Named(n) => object_shaped().contains(n)
+      Applied(n, _) => object_shaped().contains(n)
       _ => false
     }
   }
@@ -48167,7 +49786,7 @@ fn check_interface_extends_compat(
       if bi < iface.extends_args.length() && iface.extends_args[bi].length() > 0 {
         continue
       }
-      let base = match iface_by_name.get(base_name) {
+      let base = match iface_by_name().get(base_name) {
         Some(b) => b
         None => continue
       }
@@ -48207,7 +49826,7 @@ fn check_interface_extends_compat(
               continue
             }
             visited[n] = ()
-            match iface_by_name.get(n) {
+            match iface_by_name().get(n) {
               Some(i) =>
                 for en in i.extends_names {
                   if en == to {
@@ -48280,7 +49899,7 @@ fn check_interface_extends_compat(
             }
             if is_scalar(d_payload) && is_object_shaped(b_payload) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
             } else if both_plain_named &&
@@ -48308,7 +49927,7 @@ fn check_interface_extends_compat(
                 _ => false
               }) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
             } else if !member_is_overloaded(df.0) &&
@@ -48323,7 +49942,7 @@ fn check_interface_extends_compat(
                 ignore_return=df.0 == "<call>" || df.0 == "<new>",
               ) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: member `\{df.0}` signature is not assignable to the base signature",
               })
             } else if d_optional && !b_optional && !(df.1 is Any) {
@@ -48331,7 +49950,7 @@ fn check_interface_extends_compat(
               // lib.dom overrides `returnValue: boolean` with
               // `returnValue: any` legally.
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` is optional but required in the base",
               })
             }
@@ -48360,7 +49979,7 @@ fn check_interface_extends_compat(
             if both_plain_named &&
               !struct_assignable_named_rec(dv, bv, resolver, []) {
               issues.push({
-                path: "interface \{iface.name}",
+                path: "interface " + iface.name,
                 message: "interface incorrectly extends `\{base_name}`: index signatures are incompatible",
               })
             }
@@ -48729,13 +50348,17 @@ fn check_interface_extends_compat(
     if iface_decl_counts.get(iface.name) is Some(n) && n > 1 {
       continue
     }
-    check_index_props(
-      iface.index_signatures,
-      iface.fields,
-      "interface \{iface.name}",
-    )
-    if iface.type_params.length() == 0 {
-      check_num_vs_str_sigs(iface.index_signatures, "interface \{iface.name}")
+    // Both checks iterate the interface's own index signatures, so with
+    // none there is nothing to report and the owner path is not built.
+    if iface.index_signatures.length() > 0 {
+      check_index_props(
+        iface.index_signatures,
+        iface.fields,
+        "interface " + iface.name,
+      )
+      if iface.type_params.length() == 0 {
+        check_num_vs_str_sigs(iface.index_signatures, "interface " + iface.name)
+      }
     }
     // Inherited index signatures constrain a derived interface's members
     // too (`interface D extends B { 1: { y } }` where `B` has a numeric
@@ -48758,7 +50381,7 @@ fn check_interface_extends_compat(
           continue
         }
         visited[n] = ()
-        match iface_by_name.get(n) {
+        match iface_by_name().get(n) {
           Some(b) => {
             for sig in b.index_signatures {
               inherited.push(sig)
@@ -48771,7 +50394,7 @@ fn check_interface_extends_compat(
         }
       }
       if inherited.length() > 0 {
-        check_index_props(inherited, iface.fields, "interface \{iface.name}")
+        check_index_props(inherited, iface.fields, "interface " + iface.name)
       }
     }
   }
@@ -48792,12 +50415,12 @@ fn check_interface_extends_compat(
         check_index_props(
           merged.index_signatures,
           merged.fields,
-          "interface \{merged.name}",
+          "interface " + merged.name,
         )
         if merged.type_params.length() == 0 {
           check_num_vs_str_sigs(
             merged.index_signatures,
-            "interface \{merged.name}",
+            "interface " + merged.name,
           )
         }
       }
@@ -48909,19 +50532,19 @@ fn check_interface_extends_compat(
           None => ()
         }
       }
-      check_index_props(c.index_signatures, fields, "class \{c.name}")
+      check_index_props(c.index_signatures, fields, "class " + c.name)
       if inherited_sigs.length() > 0 {
-        check_index_props(inherited_sigs, fields, "class \{c.name}")
+        check_index_props(inherited_sigs, fields, "class " + c.name)
       }
       if c.index_signatures.length() > 0 && inherited_fields.length() > 0 {
         check_index_props(
           c.index_signatures,
           inherited_fields,
-          "class \{c.name}",
+          "class " + c.name,
         )
       }
-      check_num_vs_str_sigs(c.index_signatures, "class \{c.name}")
-      check_num_vs_str_sigs(c.static_index_signatures, "class \{c.name}")
+      check_num_vs_str_sigs(c.index_signatures, "class " + c.name)
+      check_num_vs_str_sigs(c.static_index_signatures, "class " + c.name)
       // Static side: `static [k: string]: V` constrains static fields and
       // methods (never instance members, and vice versa). A field with no
       // annotation recovers its widened primitive from the recorded static
@@ -48971,7 +50594,7 @@ fn check_interface_extends_compat(
         check_index_props(
           c.static_index_signatures,
           static_fields,
-          "class \{c.name}",
+          "class " + c.name,
         )
       }
     }
@@ -49317,26 +50940,26 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // Top-level functions.
   for func in module_.funcs {
-    check_dup_type_params("function \{func.name}", func.type_params, issues)
+    check_dup_type_params("function " + func.name, func.type_params, issues)
     let names : Array[String] = []
     for p in func.params {
       names.push(p.name)
     }
-    check_dup_param_names("function \{func.name}", names, issues)
-    check_func_rest_params("function \{func.name}", func.params, issues)
+    check_dup_param_names("function " + func.name, names, issues)
+    check_func_rest_params("function " + func.name, func.params, issues)
   }
   // Ambient `declare function` imports.
   for imp in module_.imports {
-    check_dup_type_params("function \{imp.name}", imp.type_params, issues)
+    check_dup_type_params("function " + imp.name, imp.type_params, issues)
     let names : Array[String] = []
     for p in imp.params {
       names.push(p.0)
     }
-    check_dup_param_names("function \{imp.name}", names, issues)
+    check_dup_param_names("function " + imp.name, names, issues)
   }
   // Classes — own type-param list, plus methods.
   for cls in module_.classes {
-    check_dup_type_params("class \{cls.name}", cls.type_params, issues)
+    check_dup_type_params("class " + cls.name, cls.type_params, issues)
     if cls.type_params.length() > 0 {
       check_static_uses_class_type_params(cls, issues)
     }
@@ -49354,11 +50977,11 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
   }
   // Interfaces.
   for iface in module_.interfaces {
-    check_dup_type_params("interface \{iface.name}", iface.type_params, issues)
+    check_dup_type_params("interface " + iface.name, iface.type_params, issues)
   }
   // Type aliases.
   for ta in module_.type_aliases {
-    check_dup_type_params("type \{ta.name}", ta.type_params, issues)
+    check_dup_type_params("type " + ta.name, ta.type_params, issues)
   }
   issues
 }
@@ -49863,6 +51486,68 @@ fn type_references_any(ty : @ast.TsType, names : Array[String]) -> Bool {
       false
     }
     Rest(inner) => type_references_any(inner, names)
+    _ => false
+  }
+}
+
+///|
+/// `type_references_any` with a predicate in place of the name list: true
+/// when `ty` (or anything nested inside it) is `Named(n)` with `pred(n)`.
+/// The walk is the same one, arm for arm, so a caller can swap between
+/// the two without changing which references count.
+fn type_references_where(ty : @ast.TsType, pred : (String) -> Bool) -> Bool {
+  match ty {
+    Named(n) => pred(n)
+    Applied(_, args) => {
+      for a in args {
+        if type_references_where(a, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) => type_references_where(inner, pred)
+    Union(parts) | Intersection(parts) => {
+      for p in parts {
+        if type_references_where(p, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Tuple(parts) => {
+      for p in parts {
+        if type_references_where(p, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if type_references_where(p, pred) {
+          return true
+        }
+      }
+      type_references_where(ret, pred)
+    }
+    Object(fields) => {
+      for f in fields {
+        if type_references_where(f.0, pred) || type_references_where(f.1, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for f in fields {
+        if type_references_where(f.1, pred) {
+          return true
+        }
+      }
+      false
+    }
+    Rest(inner) => type_references_where(inner, pred)
     _ => false
   }
 }

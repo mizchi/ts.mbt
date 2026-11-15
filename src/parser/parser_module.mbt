@@ -1227,9 +1227,7 @@ fn Parser::parse_namespace_decl_with_mode(
         // reads it goes back to reporting one level in. `typescript.d.ts`
         // is where that shows: its false positives are on
         // `namespace ts > namespace server > class Project`.
-        if self.in_declaration_file {
-          parser.mark_declaration_file()
-        }
+        self.inherit_source_flags(parser)
         let body = parser.parse_module_with_seeded_const_values_internal(
           {},
           true,
@@ -1245,9 +1243,7 @@ fn Parser::parse_namespace_decl_with_mode(
           body_source,
           self.allow_jsx,
         )
-        if self.in_declaration_file {
-          runtime_parser.mark_declaration_file()
-        }
+        self.inherit_source_flags(runtime_parser)
         try
           runtime_parser.parse_module_with_seeded_const_values_internal(
             {},
@@ -1259,9 +1255,7 @@ fn Parser::parse_namespace_decl_with_mode(
               body_source,
               self.allow_jsx,
             )
-            if self.in_declaration_file {
-              ambient_parser.mark_declaration_file()
-            }
+            self.inherit_source_flags(ambient_parser)
             let body = ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
               true,
@@ -1641,6 +1635,13 @@ fn value_decl_static_object_prop_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_object_prop_expr_with_depth(
+        inner,
+        key,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ObjectLit(props) => {
       for prop in props {
         if prop.0 == key {
@@ -1798,6 +1799,13 @@ fn value_decl_static_array_item_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_array_item_expr_with_depth(
+        inner,
+        index,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ArrayLit(items) =>
       match items.get(index) {
         Some(item) =>
@@ -1941,15 +1949,21 @@ fn value_decl_static_array_rest_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_array_rest_expr_with_depth(
+        inner,
+        start_index,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ArrayLit(items) => {
       let rest_items : Array[@ast.TsExpr] = []
       for i, item in items {
-        if i < start_index {
-          continue
-        }
+        // A spread anywhere, the skipped prefix included, makes every
+        // later position unknown.
         match item {
           @ast.TsExpr::Spread(_) => return None
-          _ => rest_items.push(item)
+          _ => if i >= start_index { rest_items.push(item) }
         }
       }
       Some(@ast.TsExpr::ArrayLit(rest_items))
@@ -2011,6 +2025,13 @@ fn value_decl_static_object_rest_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_object_rest_expr_with_depth(
+        inner,
+        obj_binding,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ObjectLit(props) => {
       let excluded_keys : Array[String] = []
       for prop in obj_binding.props {
@@ -2225,6 +2246,13 @@ fn value_decl_infer_type_from_expr(expr : @ast.TsExpr) -> @ast.TsType {
       }
       @ast.TsType::Object(prop_types)
     }
+    // A checking parse keeps `as const` as this node (see
+    // `Parser::keep_const_assertions`); every other parse erases it to the
+    // operand. The recorded type is the operand's either way, so an
+    // `export const n = 1 as const` keeps the `number` an importer is
+    // checked against instead of falling to `Any`.
+    @ast.TsExpr::As(inner, Named("const")) =>
+      value_decl_infer_type_from_expr(inner)
     _ => @ast.TsType::Any
   }
 }
@@ -2385,6 +2413,11 @@ fn value_decl_static_key_from_expr_with_depth(
           )
         None => None
       }
+    // A checking parse keeps `as const` (`keep_const_assertion_nodes`), so
+    // `const KEY = "id" as const` holds the wrapper; the key is the value
+    // inside it, exactly as the erasing parse already sees it.
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_key_from_expr_with_depth(inner, const_values, depth - 1)
     @ast.TsExpr::NumberLit(key) =>
       if key.to_int().to_double() == key {
         Some(key.to_int().to_string())

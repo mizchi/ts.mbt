@@ -79,6 +79,9 @@ fn Parser::consume_trailing_assertions_wrap(
         if self.check(Const) {
           let _ = self.advance()
           self.grammar_misuses.push("<const-assertion>")
+          if self.keep_const_assertion_nodes {
+            wrapped = @ast.TsExpr::As(wrapped, Named("const"))
+          }
         } else {
           let ty = self.parse_type()
           wrapped = @ast.TsExpr::As(wrapped, ty)
@@ -1439,6 +1442,9 @@ fn Parser::parse_parenthesized_expr(
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
   }
+  // The same source, so the same source-level flags: a checking parse
+  // keeps `as const`, and `([1, 2] as const)` must keep it too.
+  self.inherit_source_flags(temp)
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async
   temp.in_function = self.in_function
@@ -1523,6 +1529,9 @@ fn Parser::parse_expr_until_top_level(
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
   }
+  // The same source, so the same source-level flags: a checking parse
+  // keeps `as const`, and `([1, 2] as const)` must keep it too.
+  self.inherit_source_flags(temp)
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async
   temp.in_function = self.in_function
@@ -1849,6 +1858,7 @@ fn Parser::parse_jsx_opening_tag(
               trimmed.to_owned()
             }
             let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+            self.inherit_source_flags(sub)
             try sub.parse_expr() catch {
               _ => attrs.push((attr_name, None))
             } noraise {
@@ -1921,6 +1931,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
             trimmed.to_owned()
           }
           let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          self.inherit_source_flags(sub)
           try sub.parse_expr() catch {
             _ => ()
           } noraise {
@@ -2006,6 +2017,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
                   payload_str,
                   self.allow_jsx,
                 )
+                self.inherit_source_flags(sub)
                 try sub.parse_expr() catch {
                   _ => ()
                 } noraise {
@@ -2359,6 +2371,7 @@ fn Parser::parse_jsx_opening_header(
         if trimmed.length() > 0 && trimmed.has_prefix("...") {
           let payload_str = trimmed[3:].to_owned().trim().to_owned()
           let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          self.inherit_source_flags(sub)
           try sub.parse_expr() catch {
             _ => ()
           } noraise {
@@ -2420,6 +2433,7 @@ fn Parser::parse_jsx_opening_header(
               trimmed.to_owned()
             }
             let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+            self.inherit_source_flags(sub)
             try sub.parse_expr() catch {
               _ => attrs.push((attr_name, None))
             } noraise {
@@ -2510,6 +2524,7 @@ fn Parser::parse_jsx_children(
           trimmed.to_owned()
         }
         let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+        self.inherit_source_flags(sub)
         try sub.parse_expr() catch {
           _ => ()
         } noraise {
@@ -2730,6 +2745,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
           let exprs : Array[@ast.TsExpr] = []
           for src in expr_sources {
             let sub_parser = Parser::from_source(src)
+            self.inherit_source_flags(sub_parser)
             sub_parser.current_class_brand = self.current_class_brand
             let sub_expr = sub_parser.parse_expr()
             exprs.push(sub_expr)
@@ -3115,6 +3131,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       let exprs : Array[@ast.TsExpr] = []
       for src in expr_sources {
         let sub_parser = Parser::from_source(src)
+        self.inherit_source_flags(sub_parser)
         sub_parser.current_class_brand = self.current_class_brand
         let expr = sub_parser.parse_expr()
         exprs.push(expr)

@@ -560,6 +560,7 @@ fn sb_walk_expr(
     | YieldStar(x)
     | PureCall(x)
     | TypeArgs(_, x)
+    | As(x, _)
     | AssignExpr(_, x)
     | AssignPattern(_, x) => sb_walk_expr(x, cname, later, hits)
     CompoundAssignExpr(a, _, b) => {
@@ -3076,6 +3077,7 @@ fn Parser::parse_class_body(
     // still TS1092 (plus TS1098 for the empty list), so the count cannot
     // answer the question. Read by the constructor grammar checks below.
     let had_type_param_list = self.check(Lt)
+    let method_header_start = self.pos
     if self.check(Lt) {
       let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
       method_type_param_names = names
@@ -3428,7 +3430,17 @@ fn Parser::parse_class_body(
         let prev_function = self.in_function
         self.in_generator = is_generator
         self.in_function = true
+        let prev_raw_scope = self.raw_sig_scope
+        if self.current_class_name != "" && !is_static {
+          self.record_method_raw_header(
+            method_name, method_header_start, method_type_param_bounds,
+          )
+          self.raw_sig_scope = self.current_class_name + "#" + method_name
+        } else {
+          self.raw_sig_scope = ""
+        }
         let body = self.parse_block()
+        self.raw_sig_scope = prev_raw_scope
         // TS2300: a METHOD's own type parameters share a declaration space
         // with its body's top-level local types. The enclosing CLASS's type
         // parameters do NOT — `class L<T> { m() { interface T { } } }` is
@@ -3948,6 +3960,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.class_id += 1
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
+  // An anonymous or expression class has no stable key, so its methods
+  // record no un-inlined header (`Parser::record_method_raw_header`).
+  let prev_class_name = self.current_class_name
+  self.current_class_name = ""
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
@@ -3976,6 +3992,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.class_decl_no_heritage = prev_no_heritage_expr
   self.in_class_expr_body = prev_in_class_expr
   self.current_class_brand = prev_brand
+  self.current_class_name = prev_class_name
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   // Class *expressions* (`const C = class { … }`) build their result through
   // several branches below, none of which record the class-body structural
@@ -4807,6 +4824,8 @@ fn Parser::parse_class_decl_with_abstract(
   self.class_id += 1
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
+  let prev_class_name = self.current_class_name
+  self.current_class_name = name
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
   let optional_names_start = self.optional_member_names.length()
@@ -4834,6 +4853,7 @@ fn Parser::parse_class_decl_with_abstract(
   ) = self.parse_class_body(class_type_params)
   self.class_decl_no_heritage = prev_no_heritage
   self.current_class_brand = prev_brand
+  self.current_class_name = prev_class_name
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
     name, class_type_params, class_type_param_bounds, ctor_opt, elements, is_abstract,

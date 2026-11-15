@@ -86,8 +86,44 @@ pub fn TypeCheckReport::count_of_kind(
 
 ///|
 pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
-  let issues : Array[TypeIssue] = []
+  check_module_kinds(module_, true)
+}
 
+///|
+/// `check_module` with the option of skipping the steps whose issue kinds
+/// a caller is going to throw away. The layered body checker keeps exactly
+/// four kinds — `CircularTypeAlias`, `InterfaceExtendsCycle`,
+/// `TypeAliasArityMismatch` and `TypeParameterConstraintViolation` — and
+/// discards the rest, and it calls this once per module and namespace;
+/// `unresolved_type_references` alone was a quarter of that call on a
+/// declaration-heavy module. With `all_kinds` false, steps 1, 2, 3c, 3d
+/// and 4 are not run. Each of them only ever produces one of the discarded
+/// kinds and none of them feeds a later step, so the kept issues come out
+/// identical and in the same order. With `all_kinds` true the steps run in
+/// their original order, so `check_module`'s report is unchanged too.
+fn check_module_kinds(
+  module_ : @ast.TsModule,
+  all_kinds : Bool,
+) -> TypeCheckReport {
+  let issues : Array[TypeIssue] = []
+  if all_kinds {
+    check_module_duplicates_and_unresolved(module_, issues)
+  }
+  check_module_cycles(module_, issues)
+  if all_kinds {
+    check_module_member_duplicates(module_, issues)
+  }
+  check_module_arity_and_constraints(module_, issues)
+  { issues, }
+}
+
+///|
+/// Steps 1 and 2 of `check_module` (`DuplicateDeclaration`,
+/// `UnresolvedReference`).
+fn check_module_duplicates_and_unresolved(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 1. Duplicate declarations across all top-level kinds.
   let seen_names : Map[String, Unit] = Map([])
   let dup_set : Map[String, Unit] = Map([])
@@ -123,7 +159,15 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       detail: "no top-level interface, alias, class, enum, or namespace declares this name",
     })
   }
+}
 
+///|
+/// Steps 3 and 3b of `check_module` (`CircularTypeAlias`,
+/// `InterfaceExtendsCycle`).
+fn check_module_cycles(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 3. Circular type-alias chains: a type alias whose body recursively reaches
   //    itself only through other Named references (not through generic args
   //    or compound shapes that interrupt the cycle).
@@ -144,6 +188,12 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   //     instead of rescanning every declaration at every step.
   let iface_edges : Map[String, Array[String]] = Map([])
   for iface in module_.interfaces {
+    // An interface with no `extends` contributes no edge, and an absent
+    // entry and an empty one answer `iface_extends_reaches` identically
+    // (neither has a successor), so it is left out of the table.
+    if iface.extends_names.length() == 0 {
+      continue
+    }
     match iface_edges.get(iface.name) {
       Some(edges) =>
         for n in iface.extends_names {
@@ -153,6 +203,10 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
     }
   }
   for iface in module_.interfaces {
+    // No `extends`, no cycle through this declaration.
+    if iface.extends_names.length() == 0 {
+      continue
+    }
     let visited : Map[String, Unit] = Map([])
     if iface_extends_reaches(
         iface_edges,
@@ -167,7 +221,15 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       })
     }
   }
+}
 
+///|
+/// Steps 3c, 3d and 4 of `check_module` (`EnumMemberDuplicate`,
+/// `ClassPropertyDuplicate`, `InterfaceFieldDuplicate`).
+fn check_module_member_duplicates(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 3c. Enum member duplicates: same member name listed twice in an enum.
   for e in module_.enums {
     let seen : Array[String] = []
@@ -248,7 +310,15 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       })
     }
   }
+}
 
+///|
+/// Steps 5 and 6 of `check_module` (`TypeAliasArityMismatch`,
+/// `TypeParameterConstraintViolation`).
+fn check_module_arity_and_constraints(
+  module_ : @ast.TsModule,
+  issues : Array[TypeIssue],
+) -> Unit {
   // 5. Type-argument arity mismatches: every `Applied(Name, args)` that
   //    resolves to a top-level declared type must use that type's declared
   //    type-parameter count. Covers type aliases (`type T<P> = ...`),
@@ -433,20 +503,70 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   // machinery flags a non-string argument (`Uppercase<42>`) as TS2344. This
   // also makes `alias_bounds` non-empty, so the constraint walk below always
   // runs even in files that declare no generics of their own.
+  // Only ten names are ever looked up in this set (the intrinsics, the
+  // function-shaped utilities and `Function` / `Object` below), so only
+  // those are recorded rather than every declaration in the module.
   let user_declared_type_names : Map[String, Unit] = Map([])
+  fn note_user_declared(name : String) -> Unit {
+    match name {
+      "Uppercase"
+      | "Lowercase"
+      | "Capitalize"
+      | "Uncapitalize"
+      | "Parameters"
+      | "ReturnType"
+      | "ConstructorParameters"
+      | "InstanceType"
+      | "Function"
+      | "Object" => user_declared_type_names[name] = ()
+      _ => ()
+    }
+  }
+
   for ta in module_.type_aliases {
-    user_declared_type_names[ta.name] = ()
+    note_user_declared(ta.name)
   }
   for iface in module_.interfaces {
-    user_declared_type_names[iface.name] = ()
+    note_user_declared(iface.name)
   }
   for cls in module_.classes {
-    user_declared_type_names[cls.name] = ()
+    note_user_declared(cls.name)
+  }
+  // An imported name shadows the utility as surely as a local declaration
+  // does: `import type { Identity as Parameters } from "./types"` makes
+  // `Parameters<string>` the import's, not the lib's callable-bounded one.
+  for n in module_.imported_binding_names {
+    note_user_declared(n)
   }
   for intrinsic in ["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"] {
     if user_declared_type_names.get(intrinsic) is None {
       alias_params[intrinsic] = ["S"]
       alias_bounds[intrinsic] = [("S", @ast.TsType::String_)]
+    }
+  }
+  // The function-shaped utilities bound their parameter by a callable
+  // (`Parameters<T extends (...args: any) => any>`) or constructable type.
+  // The relation below cannot decide a callable bound, so these carry a
+  // sentinel bound read by `definitely_not_function_type`, which reports
+  // only an argument that can never be one — a primitive, a literal,
+  // `unknown`, or the lib `Function` / `Object` interfaces, which declare
+  // no call signature (`Parameters<Function>` is TS2344). Anything it
+  // cannot classify abstains.
+  for
+    util in [
+      "Parameters", "ReturnType", "ConstructorParameters", "InstanceType",
+    ] {
+    if user_declared_type_names.get(util) is None {
+      alias_params[util] = ["T"]
+      alias_bounds[util] = [("T", @ast.TsType::Named("<callable-bound>"))]
+    }
+  }
+  if !module_.strict_null_checks {
+    alias_params["<no-strict-null-checks>"] = []
+  }
+  for lib_name in ["Function", "Object"] {
+    if user_declared_type_names.get(lib_name) is Some(_) {
+      alias_params["<user-declared:" + lib_name + ">"] = []
     }
   }
   let resolve = fn(name : String) -> @ast.TsType? {
@@ -571,7 +691,6 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       }
     }
   }
-  { issues, }
 }
 
 ///|
@@ -641,7 +760,14 @@ fn check_constraints(
                   // confirming with `is_assignable_to` (the actual constraint
                   // relation) removes that false positive while keeping genuine
                   // violations, where both agree.
-                  let violates = if unverifiable {
+                  // The callable-bound sentinel takes the same scope guard:
+                  // `type P<Function extends (...a: any) => any> =
+                  // Parameters<Function>` names the TYPE PARAMETER, not the
+                  // lib interface.
+                  let violates = if target is Named("<callable-bound>") {
+                    !unverifiable &&
+                    definitely_not_function_type(arg, alias_params)
+                  } else if unverifiable {
                     false
                   } else {
                     extends_decision_with(arg, target, resolve) is Some(false) &&
@@ -737,6 +863,40 @@ fn check_constraints(
       check_constraints(k, scope, alias_params, alias_bounds, resolve, issues)
     }
     _ => ()
+  }
+}
+
+///|
+/// An argument that can never satisfy a callable or constructable bound
+/// (the sentinel `<callable-bound>` of the function-shaped utilities). Only
+/// the shapes with no call signature by construction qualify; a union does
+/// when any member does, since the whole union must satisfy the bound.
+fn definitely_not_function_type(
+  t : @ast.TsType,
+  alias_params : Map[String, Array[String]],
+) -> Bool {
+  match t {
+    String_
+    | Number
+    | Boolean
+    | BigInt
+    | Symbol
+    | Void
+    | Unknown
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_)
+    | BigIntLiteral(_) => true
+    // Without `strictNullChecks`, `null` and `undefined` are assignable to
+    // every type, a function type included, so `Parameters<null>` is legal.
+    // The flag rides `alias_params` the way the `<user-declared:…>` entries
+    // do, rather than as a parameter of every `check_constraints` call.
+    Null | Undefined => !alias_params.contains("<no-strict-null-checks>")
+    Named("Function" as n) | Named("Object" as n) =>
+      !alias_params.contains("<user-declared:" + n + ">")
+    Union(ms) =>
+      ms.iter().any(fn(m) { definitely_not_function_type(m, alias_params) })
+    _ => false
   }
 }
 

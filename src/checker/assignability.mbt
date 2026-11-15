@@ -1033,6 +1033,10 @@ fn is_assignable_to_inner(
       is_assignable_to_inner(s_inner, t_inner, bivariant_params)
     // Tuples are iterable: `[A, B]` is assignable to `Iterable<A | B>` etc.
     // The element type is the union of the tuple's slot types.
+    // `Array<T>` is the same target as `T[]`, so it takes the tuple arm
+    // below rather than the iterable-name list, which does not name it.
+    (Tuple(_), Applied("Array", [t_inner])) =>
+      is_assignable_to_inner(source, Array(t_inner), bivariant_params)
     (Tuple(s_items), Applied(t_name, [t_inner])) =>
       if is_array_like_iterable_name(t_name) {
         s_items
@@ -1043,6 +1047,28 @@ fn is_assignable_to_inner(
       }
     (Tuple(s_items), Tuple(t_items)) =>
       tuple_assignable(s_items, t_items, bivariant_params)
+    // A tuple is an array of the union of its slots, so it flows into `T[]`
+    // whenever every slot does. The arm was missing, so `declare const t:
+    // [1, 2, 3]; const w: number[] = t` — and `[1, 2, 3] as const
+    // satisfies readonly unknown[]` once a const assertion types as a
+    // tuple — reported a mismatch on a line tsc accepts. A variadic slot
+    // contributes its element type; one this cannot read accepts, which
+    // only ever loses a finding. (Readonly-ness is not modelled, so the
+    // readonly-to-mutable error is a MISS here.)
+    (Tuple(s_items), Array(t_inner)) =>
+      s_items
+      .iter()
+      .all(fn(it) {
+        match it {
+          Rest(Array(e)) | Rest(Applied("Array" | "ReadonlyArray", [e])) =>
+            is_assignable_to_inner(e, t_inner, bivariant_params)
+          // A spread TUPLE has known slots, so it is judged the same way.
+          Rest(Tuple(_) as inner) =>
+            is_assignable_to_inner(inner, Array(t_inner), bivariant_params)
+          Rest(_) => true
+          _ => is_assignable_to_inner(it, t_inner, bivariant_params)
+        }
+      })
     // Rest parameter types: `...args: T[]` — delegate to the inner array type.
     (Rest(s), Rest(t)) => is_assignable_to_inner(s, t, bivariant_params)
     (Rest(s), Array(t)) => is_assignable_to_inner(s, t, bivariant_params)
