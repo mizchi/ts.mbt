@@ -1208,8 +1208,26 @@ fn is_assignable_to_inner(
       }
       true
     }
+    // A conditional that `reduce_conditional` above could not decide is
+    // UNDECIDED, not unrelated: `"y1" extends \`x${infer U}\` ? number :
+    // boolean` accepts a `boolean`, and the fallback below would call it a
+    // definite mismatch. It flows freely, which is what an unresolvable
+    // `IndexedAccess` already does at the top of this function, and what
+    // `check_expr_against` gets by abstaining on an unmodelled conditional.
+    // The two normalization helpers that read `true` as PROOF
+    // (`equivalent`, `simplify_union`) exclude it explicitly.
+    (Conditional(_, _, _, _), _) | (_, Conditional(_, _, _, _)) => true
     _ => false
   }
+}
+
+///|
+/// True for a conditional type `reduce_conditional` leaves undecided —
+/// the shape `is_assignable_to` answers `true` for without proving
+/// anything.
+fn is_undecided_conditional(t : @ast.TsType) -> Bool {
+  t is Conditional(_, _, _, _) &&
+  reduce_conditional(t) is Conditional(_, _, _, _)
 }
 
 ///|

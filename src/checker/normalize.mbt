@@ -5,6 +5,11 @@
 // This is bidirectional structural assignability; it is order-insensitive on
 // Union/Intersection because their members are checked symmetrically.
 pub fn equivalent(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  // An undecided conditional is assignable both ways without that proving
+  // anything, so it is equivalent only to itself.
+  if a != b && (is_undecided_conditional(a) || is_undecided_conditional(b)) {
+    return false
+  }
   is_assignable_to(a, b) && is_assignable_to(b, a)
 }
 
@@ -16,6 +21,9 @@ pub fn equivalent_with(
   b : @ast.TsType,
   resolve : (String) -> @ast.TsType?,
 ) -> Bool {
+  if a != b && (is_undecided_conditional(a) || is_undecided_conditional(b)) {
+    return false
+  }
   is_assignable_to_with(a, b, resolve) && is_assignable_to_with(b, a, resolve)
 }
 
@@ -76,10 +84,20 @@ pub fn simplify_union(members : Array[@ast.TsType]) -> Array[@ast.TsType] {
     flattened
   }
   let kept : Array[@ast.TsType] = []
+  // Subsumption is a PROOF that one member covers another, and an undecided
+  // conditional is assignable both ways without proving anything — so it
+  // neither subsumes nor is subsumed (an identical repeat is still folded).
+  let subsumes = fn(m : @ast.TsType, k : @ast.TsType) -> Bool {
+    if m != k && (is_undecided_conditional(m) || is_undecided_conditional(k)) {
+      false
+    } else {
+      is_assignable_to(m, k)
+    }
+  }
   for m in flattened {
     let mut subsumed = false
     for k in kept {
-      if is_assignable_to(m, k) {
+      if subsumes(m, k) {
         subsumed = true
         break
       }
@@ -91,7 +109,7 @@ pub fn simplify_union(members : Array[@ast.TsType]) -> Array[@ast.TsType] {
     // itself subsumes, then push m.
     let surviving : Array[@ast.TsType] = []
     for k in kept {
-      if !is_assignable_to(k, m) {
+      if !subsumes(k, m) {
         surviving.push(k)
       }
     }

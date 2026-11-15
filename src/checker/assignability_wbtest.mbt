@@ -610,3 +610,43 @@ test "a spread tuple inside a tuple is judged slot by slot against T[]" {
     is_assignable_to(Tuple([Rest(Tuple([Number])), Number]), Array(Number)),
   )
 }
+
+///|
+test "is_assignable_to: an undecided conditional is not a definite mismatch" {
+  // "y1" extends `x${infer U}` ? number : boolean — the fixed `x` prefix
+  // makes the template pattern undecidable here, so `reduce_conditional`
+  // leaves it alone. tsc takes the false branch and accepts a `boolean`;
+  // the `_ => false` fallback used to call that a definite mismatch.
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  assert_true(is_undecided_conditional(cond))
+  assert_true(is_assignable_to(Boolean, cond))
+  assert_true(is_assignable_to(cond, Boolean))
+  // A decidable conditional still decides: string extends number takes the
+  // false branch, and `boolean` is not the `Number` it picked.
+  let decided : @ast.TsType = Conditional(String_, Number, Boolean, Number)
+  assert_false(is_undecided_conditional(decided))
+  assert_false(is_assignable_to(Boolean, decided))
+}
+
+///|
+test "normalization does not read an undecided conditional's true as proof" {
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  // `C | string` keeps both members: `string` flows into an undecided `C`,
+  // which proves nothing about `C` covering it.
+  let simplified = simplify_union([cond, String_])
+  assert_eq(simplified.length(), 2)
+  assert_false(equivalent(cond, String_))
+  assert_true(equivalent(cond, cond))
+  // An identical repeat is still folded.
+  assert_eq(simplify_union([cond, cond]).length(), 1)
+}
