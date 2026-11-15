@@ -19336,6 +19336,17 @@ test "batch EA rules" {
   assert_true(only(iter("{}"), ret) > 0)
   assert_true(only(iter("[1]"), ret) > 0)
   assert_true(only(iter("true"), ret) > 0)
+  // The class's own `return` is the iterator's only when `@@iterator`
+  // returns the instance. One returning an array iterator is iterated
+  // through THAT object, so its `return = 0` is an unrelated field (tsc
+  // accepts it, probed; review of mizchi/ts.mbt#285).
+  @test.assert_eq(
+    only(
+      "class I { return = 0;\n  [Symbol.iterator]() { return [1, 2].values() } }\nfor (const x of new I()) { }",
+      ret,
+    ),
+    0,
+  )
   // --- stays silent
   for
     src in [
@@ -22959,6 +22970,30 @@ test "a property-path narrowing does not survive rebinding its receiver" {
     n("o.p = \"\";\nif ((o = other)) { }\nconst s: string = o.p;") > 0,
   )
   @test.assert_eq(n("o.p = \"\";\nString(o);\nconst s: string = o.p;"), 0)
+  // `o.p` and `o["p"]` are one property, so a write through either
+  // spelling replaces what the other narrowed — as a statement and nested
+  // in an expression (tsc reports all three, probed). A write of a value
+  // that fits keeps the narrowing.
+  assert_true(n("o.p = \"\";\no[\"p\"] = null;\nconst s: string = o.p;") > 0)
+  assert_true(
+    n("o.p = \"\";\nString(o[\"p\"] = null);\nconst s: string = o.p;") > 0,
+  )
+  assert_true(
+    n(
+      "if (o[\"p\"] !== null) {\n  o.p = null;\n  const s: string = o[\"p\"];\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n("o.p = \"\";\no[\"p\"] = \"x\";\nconst s: string = o.p;"),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "if (o.p !== null) {\n  String(o.p = \"x\");\n  const s: string = o.p;\n}",
+    ),
+    0,
+  )
   assert_true(
     check_module_function_bodies(parse_module_or_empty(nullish)).length() > 0,
   )

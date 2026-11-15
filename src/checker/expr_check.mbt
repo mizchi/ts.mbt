@@ -27182,18 +27182,9 @@ fn narrow_after_prop_assignment(
   prop : String,
   value : @ast.TsExpr,
 ) -> Unit {
-  guard narrowing_key_for_expr(@ast.TsExpr::PropAccess(recv, prop)) is Some(key) else {
-    return
-  }
-  let stale : Array[String] = []
-  for k, _ in env.vars {
-    if k == key || k.has_prefix(key + ".") || k.has_prefix(key + "[") {
-      stale.push(k)
-    }
-  }
-  for k in stale {
-    let _ = env.vars.remove(k)
-  }
+  guard narrowing_key_for_expr(recv) is Some(recv_key) else { return }
+  forget_member_paths(env, recv_key, prop)
+  let key = recv_key + "." + prop
   let recv_ty = infer_expr(env, ctx.resolver, recv)
   guard ctx.resolver.lookup_field(recv_ty, prop) is Some(decl) else { return }
   if !is_checkable(decl) || !(type_has_undefined(decl) || type_has_null(decl)) {
@@ -27222,6 +27213,61 @@ fn narrow_after_prop_assignment(
       Never => ()
       t => env.narrow(key, t)
     }
+  }
+}
+
+///|
+/// Drop every narrowing of the member `prop` of the receiver keyed
+/// `recv_key`, under BOTH spellings of the access — `o.p` and `o["p"]` are
+/// different narrowing keys for one property — and of every path below it.
+/// A write through either spelling changes what both describe: after
+/// `o.p = ""; o["p"] = null`, `o.p` is `null` (tsc reports the read).
+fn forget_member_paths(env : ExprEnv, recv_key : String, prop : String) -> Unit {
+  let keys = [recv_key + "." + prop, recv_key + "[\"" + prop + "\"]"]
+  let stale : Array[String] = []
+  for k, _ in env.vars {
+    if keys
+      .iter()
+      .any(fn(key) {
+        k == key || k.has_prefix(key + ".") || k.has_prefix(key + "[")
+      }) {
+      stale.push(k)
+    }
+  }
+  for k in stale {
+    let _ = env.vars.remove(k)
+  }
+}
+
+///|
+/// A write `recv[idx] = value`. A string-literal key is the same property
+/// as `recv.key`, so it narrows and forgets exactly as the dotted write
+/// does. Any other key that has a narrowing key of its own (`arr[0]`) only
+/// forgets that path; a computed key has none to forget.
+fn narrow_after_index_assignment(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  idx : @ast.TsExpr,
+  value : @ast.TsExpr,
+) -> Unit {
+  match idx {
+    StringLit(k) => narrow_after_prop_assignment(env, ctx, recv, k, value)
+    _ =>
+      match narrowing_key_for_expr(@ast.TsExpr::IndexAccess(recv, idx)) {
+        Some(key) => {
+          let stale : Array[String] = []
+          for k, _ in env.vars {
+            if k == key || k.has_prefix(key + ".") || k.has_prefix(key + "[") {
+              stale.push(k)
+            }
+          }
+          for k in stale {
+            let _ = env.vars.remove(k)
+          }
+        }
+        None => ()
+      }
   }
 }
 
@@ -27744,6 +27790,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           }
         }
       }
+      narrow_after_index_assignment(env, ctx, recv, idx, value)
     }
     Return(opt) =>
       match opt {
@@ -32008,6 +32055,10 @@ fn check_call_args_in_expr(
             }
           }
       }
+      // A write nested in an expression (`f(o.p = v)`) changes the path as
+      // the statement spelling does; `AssignExpr` above already treats a
+      // nested name write the same way.
+      narrow_after_prop_assignment(env, ctx, recv, prop, v)
     }
     IndexAssignExpr(recv, idx, v) => {
       check_call_args_in_expr(env, recv, ctx)
@@ -32045,6 +32096,9 @@ fn check_call_args_in_expr(
           }
         }
       }
+      // A nested write narrows as a statement one does (and the statement
+      // spelling `Expr(IndexAssignExpr(…))` reaches here too).
+      narrow_after_index_assignment(env, ctx, recv, idx, v)
     }
     Seq(a, b) => {
       check_call_args_in_expr(env, a, ctx)
@@ -37660,7 +37714,23 @@ fn iterator_class_return_not_method(
   cls : @ast.TsClassDecl,
   resolver : Resolver,
 ) -> Bool {
-  if !cls.methods.iter().any(fn(m) { m.name == "@@iterator" }) {
+  // The class's own `return` is the iterator's only when `[Symbol.iterator]()`
+  // hands back the instance itself. A class whose `@@iterator` returns some
+  // other iterator (`return [1, 2].values()`) is iterated through THAT
+  // object, and its own `return = 0` is an unrelated field (tsc accepts it,
+  // probed). An allowlist: the body must be exactly `return this`, so any
+  // other body is a MISS rather than a finding.
+  let returns_this = cls.methods
+    .iter()
+    .any(fn(m) {
+      m.name == "@@iterator" &&
+      !m.is_static &&
+      (match m.body {
+        Some({ stmts: [Return(Some(Var("this")))], .. }) => true
+        _ => false
+      })
+    })
+  if !returns_this {
     return false
   }
   for p in cls.properties {
