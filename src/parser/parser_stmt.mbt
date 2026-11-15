@@ -2009,13 +2009,23 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
         rest_positions.push(self.peek().pos)
         rest_stmts.push(self.parse_stmt())
       }
-      // Synthesize `x[Symbol.dispose]?.()` (or Symbol.asyncDispose).
+      // Synthesize `x?.[Symbol.dispose]?.()` (or Symbol.asyncDispose).
+      // The `?.` on the RECEIVER is what `using x = null` needs: a nullish
+      // initializer is legal and disposes nothing, so the old
+      // `x[Symbol.dispose]?.()` threw `TypeError: Cannot read properties
+      // of null` at block exit in the EMITTED program, and the checker,
+      // reading the same lowering, reported "cannot index into `null`" on
+      // a declaration tsc accepts. The shape is the one the expression
+      // parser builds for that source text: one `OptionalChain` per `?.`,
+      // wrapping the step it guards.
       let dispose_key = if is_await_using { "asyncDispose" } else { "dispose" }
       let dispose_expr = @ast.TsExpr::OptionalChain(
         @ast.TsExpr::CallExpr(
-          @ast.TsExpr::IndexAccess(
-            @ast.TsExpr::Var(binding_name),
-            @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), dispose_key),
+          @ast.TsExpr::OptionalChain(
+            @ast.TsExpr::IndexAccess(
+              @ast.TsExpr::Var(binding_name),
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), dispose_key),
+            ),
           ),
           [],
         ),

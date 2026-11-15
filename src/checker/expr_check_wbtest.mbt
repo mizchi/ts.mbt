@@ -1049,21 +1049,36 @@ test "expr_check: && compound narrowing applies both effects" {
 
 ///|
 test "expr_check: missing return path on number function" {
-  let src =
-    #|function f(): number {
-    #|  if (true) {
-    #|    return 1;
-    #|  }
-    #|}
-  let module_ = parse_module_or_empty(src)
-  let issues = check_module_function_bodies(module_)
-  let mut found = false
-  for i in issues {
-    if i.message.contains("not all paths return") {
-      found = true
-    }
+  // `if (1)` leaves the else path reachable, so the end of the body is
+  // reachable and TS2366 applies. The test used to be written with
+  // `if (true)`, which tsc's binder treats as making the else path
+  // UNREACHABLE (`createFlowCondition` on the `true` keyword), so tsc 7
+  // ACCEPTS it — probed — and the test pinned a false positive.
+  let reports = fn(cond : String) -> Bool {
+    let src = "function f(): number {\n  if (" +
+      cond +
+      ") {\n    return 1;\n  }\n}"
+    check_module_function_bodies(parse_module_or_empty(src))
+    .iter()
+    .any(fn(i) { i.message.contains("not all paths return") })
   }
-  assert_true(found)
+  assert_true(reports("1"))
+  assert_true(reports("Math.random() > 0.5"))
+  assert_false(reports("true"))
+  assert_false(reports("!false"))
+  // The keyword only: the else branch of `if (false)` is the live one.
+  let k = "function f(): number { if (false) { } else { return 1 } }"
+  assert_false(
+    check_module_function_bodies(parse_module_or_empty(k))
+    .iter()
+    .any(fn(i) { i.message.contains("not all paths return") }),
+  )
+  let k2 = "function f(): number { if (false) { return 1 } }"
+  assert_true(
+    check_module_function_bodies(parse_module_or_empty(k2))
+    .iter()
+    .any(fn(i) { i.message.contains("not all paths return") }),
+  )
 }
 
 ///|
@@ -1732,22 +1747,32 @@ test "expr_check: `x!` strips null/undefined" {
 
 ///|
 test "expr_check: `a?.b` widens result with undefined" {
-  // The optional chain bubbles `undefined`, so the return type becomes
-  // `string | undefined`, not assignable to bare `string`.
-  let src =
-    #|interface Bag { name: string }
-    #|function f(b: Bag): string {
-    #|  return b?.name;
-    #|}
-  let module_ = parse_module_or_empty(src)
-  let issues = check_module_function_bodies(module_)
-  let mut found = false
-  for i in issues {
-    if i.message.contains("string") && i.message.contains("undefined") {
-      found = true
-    }
+  // The optional chain bubbles `undefined` only when the receiver CAN be
+  // nullish. This test used to assert the report for `b: Bag`, a
+  // non-nullable receiver tsc 7 ACCEPTS (probed) — the twentieth test
+  // here found pinning a false positive. `b?: Bag` is the real error.
+  let issues_of = fn(src : String) -> Bool {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .iter()
+    .any(fn(i) {
+      i.message.contains("string") && i.message.contains("undefined")
+    })
   }
-  assert_true(found)
+  assert_false(
+    issues_of(
+      "interface Bag { name: string }\nfunction f(b: Bag): string {\n  return b?.name;\n}",
+    ),
+  )
+  assert_true(
+    issues_of(
+      "interface Bag { name: string }\nfunction f(b?: Bag): string {\n  return b?.name;\n}",
+    ),
+  )
+  assert_true(
+    issues_of(
+      "interface Bag { name: string }\nfunction f(b: Bag | undefined): string {\n  return b?.name;\n}",
+    ),
+  )
 }
 
 ///|
@@ -2598,25 +2623,42 @@ test "expr_check: arr.filter with type predicate narrows result element" {
 
 ///|
 test "expr_check: arr.filter without predicate keeps element type" {
-  let src =
-    #|function nonNull(arr: (string | null)[]): string[] {
-    #|  return arr.filter(x => x !== null);
-    #|}
-  match parse_function_named(src, "nonNull") {
-    Some(f) => {
-      // Without the predicate, the result is still `(string | null)[]`,
-      // not assignable to `string[]` — should flag.
-      let issues = check_function_body(f)
-      let mut found = false
-      for i in issues {
-        if i.message.contains("string") {
-          found = true
-        }
-      }
-      assert_true(found)
+  // TS 5.5 INFERS `x is string` for `x => x !== null`, so this is legal
+  // (probed, tsc 7 accepts) — the test used to assert a report on it. The
+  // callback that infers NO predicate is `x => !!x` over strings, since an
+  // empty string is falsy; that one still keeps `(string | null)[]`.
+  let reports = fn(body : String) -> Bool {
+    let src = "function nonNull(arr: (string | null)[]): string[] {\n  return arr.filter(" +
+      body +
+      ");\n}"
+    match parse_function_named(src, "nonNull") {
+      Some(f) =>
+        check_function_body(f)
+        .iter()
+        .any(fn(i) { i.message.contains("string") })
+      None => abort("function nonNull not found")
     }
-    None => fail("function nonNull not found")
   }
+  assert_false(reports("x => x !== null"))
+  assert_false(reports("(x) => x != null"))
+  assert_false(reports("function (x) { return x !== null }"))
+  assert_false(reports("x => typeof x === \"string\""))
+  assert_true(reports("x => !!x"))
+  assert_true(reports("x => x !== null && x.length > 0"))
+  // An explicit `: boolean` return annotation opts out of inference.
+  assert_true(reports("(x): boolean => x !== null"))
+  // Over object types `!!x` does infer one: an object is never falsy.
+  let obj = "interface Foo { a: number }\nfunction g(fs: (Foo | null | undefined)[]): Foo[] {\n  return fs.filter(x => !!x);\n}"
+  @test.assert_eq(
+    check_module_function_bodies(parse_module_or_empty(obj)).length(),
+    0,
+  )
+  // A callback that returns the element itself is not boolean, and tsc
+  // infers nothing for it.
+  let ident = "interface Foo { a: number }\nfunction g(fs: (Foo | null | undefined)[]): Foo[] {\n  return fs.filter(x => x);\n}"
+  assert_true(
+    check_module_function_bodies(parse_module_or_empty(ident)).length() > 0,
+  )
 }
 
 ///|
@@ -8642,17 +8684,23 @@ test "expr_check: interface extends with too many required params" {
     ) >
     0,
   )
-  // A derived interface whose own call signature has an incompatible
-  // parameter type incorrectly extends the base's call signature.
-  assert_true(
+  // A bare `<call>` / `<new>` signature does not *override* the base's --
+  // TS concatenates the base's signatures into the derived interface, so
+  // ANY difference is accepted, not a TS2430. The parameter-type case
+  // below used to be asserted as an error; tsc 7 accepts it (probed) —
+  // the nineteenth test here found pinning a false positive.
+  @test.assert_eq(
     issues(
       "interface B { (x: number): number }\ninterface I extends B { (x: string): number }",
-    ) >
+    ),
     0,
   )
-  // A bare `<call>` / `<new>` signature does not *override* the base's --
-  // TS merges them into an overload set, so a return-type-only difference
-  // (`(): number` extending `(): string`) is accepted, not a TS2430.
+  @test.assert_eq(
+    issues(
+      "interface B { (x: number): number }\ninterface I extends B { (x: string): string }",
+    ),
+    0,
+  )
   @test.assert_eq(
     issues("interface B { (): string }\ninterface I extends B { (): number }"),
     0,
@@ -17164,8 +17212,8 @@ test "batch CY rules" {
     src in [
       // TS2351: the value of an arithmetic expression has no construct
       // signature (exponentiationOperatorWithNew).
-      "declare var a: any;\ndeclare var b: any;\nnew (a ** b);", "declare var a: any;\nnew (a + 1);",
-      "new (1);", "declare var a: any;\nnew (a < 1);",
+      "declare var a: any;\ndeclare var b: any;\nnew (a ** b);", "declare var a: any;\nnew (\"x\" + a);",
+      "new (1);", "declare var a: any;\nnew (a < 1);", "declare var a: any;\nnew ((a - 1) + 1);",
       // TS2532: destructuring reads properties off the source, so a
       // `void` one is possibly-undefined
       // (destructuringVoidStrictNullChecks).
@@ -17183,6 +17231,9 @@ test "batch CY rules" {
       // the callee -- the same file's legal half. An identifier, a call
       // and a property access all abstain.
       "declare var a: any;\ndeclare var b: any;\nnew a ** b;", "declare var a: any;\nnew a();",
+      // `any + 1` and `any + any` are `any`, which tsc accepts as a callee
+      // (probed); this list used to have `new (a + 1)` as an error.
+       "declare var a: any;\nnew (a + 1);", "declare var a: any;\ndeclare var b: any;\nnew (a + b);",
       "declare var a: any;\nnew (a);", "class K {}\nnew K();", "declare var ns: any;\nnew ns.Thing();",
       // TS2532 abstains when strictNullChecks is explicitly OFF, and for
       // an ordinary object source. (The flag's DEFAULT in this checker is
@@ -17409,13 +17460,15 @@ test "batch DC rules" {
     }
     n
   }
-  // --- fires, at every condition position (one helper, so they cannot
-  // come to hold for the `if` and not the `while`)
+  // --- fires, at tsc's condition positions: an `if`, a conditional
+  // expression and the left of `&&`. The `while` and `do … while` cases
+  // used to sit here; tsc 7 ACCEPTS both (probed), so they asserted a
+  // false positive — the eighteenth test here found pinning one.
   for
     src in [
       "declare function f(): boolean;\nif (f) { }", "declare function f(): boolean;\nlet c = f ? 1 : 2;",
-      "declare function f(): boolean;\nwhile (f) { break }", "declare function f(): boolean;\ndo { break } while (f);",
       "declare function f(): boolean;\nlet c = f && 1;", "function f(): boolean { return true }\nif (f) { }",
+      "declare function f(): boolean;\nif (f && true) { }",
     ] {
     assert_true(only(src, "did you mean to call it instead") > 0)
   }
@@ -17442,6 +17495,9 @@ test "batch DC rules" {
       // An OBJECT pattern with an object default is the ordinary
       // spelling and must not be caught by the array rule.
        "function ok3({ a } = {}) {}",
+      // Positions tsc does not test for TS2774 (probed).
+       "declare function f(): boolean;\nwhile (f) { break }", "declare function f(): boolean;\ndo { break } while (f);",
+      "declare function f(): boolean;\nfor (; f; ) { break }", "declare function f(): boolean;\nlet c = f || 1;",
     ] {
     @test.assert_eq(
       only(src, "did you mean to call it instead") +
@@ -17485,11 +17541,29 @@ test "batch DF rules" {
     ) >
     0,
   )
+  // TS2767 is reported where the protocol is consulted — the `for…of`
+  // head, the array destructuring — and NOT at the class: tsc 7 accepts
+  // the declaration alone (probed), which this test used to assert as an
+  // error.
   assert_true(
+    only(
+      "class I { next() { return { done: false, value: \"\" } }\n  return: number = 0;\n  [Symbol.iterator]() { return this } }\nfor (const x of new I()) { }",
+      "must be a method",
+    ) ==
+    1,
+  )
+  assert_true(
+    only(
+      "class I { next() { return { done: false, value: \"\" } }\n  return: number = 0;\n  [Symbol.iterator]() { return this } }\nconst [a] = new I();",
+      "must be a method",
+    ) ==
+    1,
+  )
+  @test.assert_eq(
     only(
       "class I { next() { return { done: false, value: \"\" } }\n  return: number = 0;\n  [Symbol.iterator]() { return this } }",
       "must be a method",
-    ) >
+    ),
     0,
   )
   // --- stays silent
@@ -17923,10 +17997,19 @@ test "expr_check: InstanceType / ConstructorParameters through a construct signa
     check_module_function_bodies(parse_module_or_empty(src)).length()
   }
   // No `typeof`: this is the case that isolates `contains_infer_marker`.
+  // The class has a member: an EMPTY class is `{}`, which a string is
+  // assignable to (tsc 7 accepts the `class C {}` spelling, probed — this
+  // test used to assert a report there).
   assert_true(
     n(
-      "class C {}\nfunction f() { const x: InstanceType<new () => C> = \"s\"; return x }",
+      "class C { m(): void {} }\nfunction f() { const x: InstanceType<new () => C> = \"s\"; return x }",
     ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "class C {}\nfunction f() { const x: InstanceType<new () => C> = \"s\"; return x }",
+    ),
     0,
   )
   @test.assert_eq(
@@ -19223,10 +19306,12 @@ test "batch EA rules" {
   )
   // --- TS2767 fires: an unannotated field whose initializer cannot be a
   // function, at each literal shape the allowlist covers.
+  // Each class is iterated once, because TS2767 is reported at the use
+  // site; the declaration alone is accepted (see batch DF).
   let iter = fn(init : String) -> String {
     "class I { next() { return { done: false, value: \"\" } }\n  return = " +
     init +
-    ";\n  [Symbol.iterator]() { return this } }"
+    ";\n  [Symbol.iterator]() { return this } }\nfor (const x of new I()) { }"
   }
   assert_true(only(iter("0"), ret) > 0)
   assert_true(only(iter("\"x\""), ret) > 0)

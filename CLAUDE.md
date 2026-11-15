@@ -4271,6 +4271,46 @@ product surfaces now.
   `<import-eq-alias>` marker into the `declared_value_names` backstop, so
   the bridge's input is untouched. If `M` holds only types, the use is
   TS2708 in tsc and a MISS here, which is the affordable direction.
+
+  Batch GB fixes the false positives that extracting `tsc-extra` turned
+  up. Running the unit tests' snippets through TS7 found **twelve
+  snippets that mtsc reported and tsc accepts**, and nine tests asserted
+  the report outright — the 18th to 26th tests in this file found
+  pinning a bug. The oracle, effect (126), zod
+  (9) and the three `.d.ts` entries are all unchanged, because none of
+  these shapes is in the corpus. Each fix was probed cell by cell
+  against the nightly:
+  - TS2774 is reported only for an `if`, a ternary and an `&&` operand.
+    `while (f)`, `do … while (f)`, `for (; f;)` and `f || 1` are
+    accepted.
+  - An interface extending a CALL or CONSTRUCT signature is not
+    checked against the base signature: tsc concatenates them as
+    overloads.
+  - `b?.name` on an interface-typed `b` adds no `undefined`.
+  - TS2366: the `true` / `false` KEYWORD as a condition makes the
+    other branch unreachable in tsc's binder, so
+    `if (true) { return 1 }` needs no ending return. `if (1)` still
+    does, because the binder only looks at the keyword.
+  - An EMPTY class or interface is `{}`, so `const x: C = "s"` is
+    legal. `null` is still TS2322 under strictNullChecks.
+  - TS2767 is reported where the iterator protocol is used (`for…of`,
+    spread, `yield*`, array destructuring), never at the class.
+  - An accessor overriding an accessor read as a field, because the
+    class parsers record a `get` in both `methods` and `properties`.
+  - `new (a + 1)` with `a: any` is accepted, since `any + 1` is `any`.
+    `new ("x" + a)` is still TS2351.
+  - `filter` infers TS 5.5's type predicate. tsc's rule is an IFF, so
+    `x => !!x` over strings infers nothing (an empty string is falsy),
+    while the same callback over object types does.
+  - `matchAll` yields `RegExpExecArray`s rather than a `string[]`.
+
+  One of them was an EMIT bug as well as a checker one. `using x = null`
+  lowered to `x[Symbol.dispose]?.()`, which threw `TypeError` at block
+  exit under plain `--bundle`, and the checker reported the same
+  lowering. It is `x?.[Symbol.dispose]?.()` now. A `for (using d of …)`
+  head does not dispose at all; that is filed rather than fixed. Array
+  types of unions also print as `(string | null)[]` now, not
+  `string | null[]`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

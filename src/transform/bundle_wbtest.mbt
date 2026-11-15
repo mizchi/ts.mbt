@@ -3458,7 +3458,7 @@ test "type_fold: .length RHS infers Number so typeof check folds" {
 ///|
 test "bundler: `using` declaration emits try-finally with Symbol.dispose" {
   // ES2023 `using x = getResource()` must lower to
-  // `const x = getResource(); try { ...rest } finally { x[Symbol.dispose]?.() }`
+  // `const x = getResource(); try { ...rest } finally { x?.[Symbol.dispose]?.() }`
   let src =
     #|const log: string[] = [];
     #|function run() {
@@ -3478,6 +3478,31 @@ test "bundler: `using` declaration emits try-finally with Symbol.dispose" {
         out.js.contains("finally"),
         msg="expected finally block in bundle",
       )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `using x = null` is legal and disposes nothing, so the receiver of the
+/// synthesized dispose call needs its own `?.`: the old
+/// `x[Symbol.dispose]?.()` threw `TypeError: Cannot read properties of
+/// null` at block exit, under plain `--bundle`.
+test "bundler: `using` a nullish value guards the dispose receiver" {
+  let src =
+    #|function run(): number {
+    #|  using r = null;
+    #|  return 1;
+    #|}
+    #|console.log(run());
+  let files = vfs([("entry.ts", src)])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("r?.[Symbol.dispose]?.()"),
+        msg="expected a nullish-guarded dispose call, got:\n\{out.js}",
+      )
+      assert_false(out.js.contains("r[Symbol.dispose]"))
     }
     Err(e) => fail("bundle error: \{e}")
   }

@@ -2098,7 +2098,8 @@ test "parser: class can `extends null`" {
 ///|
 test "parser: `using` declaration lowers to const + try-finally" {
   // ES2023 `using x = expr;` — lowers to `const x = expr; try { rest }
-  // finally { x[Symbol.dispose]?.() }` so disposal runs at block exit.
+  // finally { x?.[Symbol.dispose]?.() }` so disposal runs at block exit
+  // (and a nullish initializer disposes nothing).
   let src =
     #|function f() {
     #|  using d1 = { [Symbol.dispose]() {} };
@@ -2119,10 +2120,10 @@ test "parser: `using` declaration lowers to const + try-finally" {
         @ast.TsStmt::Const(@ast.TsBinding::Ident("d1"), _, _) => ()
         _ => fail("expected Const(d1)")
       }
-      // Second stmt: try { ... } finally { d1[Symbol.dispose]?.() }
+      // Second stmt: try { ... } finally { d1?.[Symbol.dispose]?.() }
       match func_body.stmts[1] {
         @ast.TsStmt::Try(_, None, None, Some(fb)) =>
-          // finally block has one statement: d1[Symbol.dispose]?.()
+          // finally block has one statement: d1?.[Symbol.dispose]?.()
           assert_eq(fb.stmts.length(), 1)
         _ => fail("expected Try with finally for d1")
       }
