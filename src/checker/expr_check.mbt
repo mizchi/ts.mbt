@@ -10859,6 +10859,45 @@ fn infer_expr_inner(
           _ => ()
         }
       }
+      // A generic callee that arrives as a VALUE by name — an IMPORTED
+      // generic function in a graph check (`@import-generic:`), whose type
+      // is the binder over its un-inlined signature. `infer_call` would `unwrap` it first,
+      // and `unwrap` peels the binder, so the raw return came back with
+      // its type parameter unsubstituted: `memoizeIdempotent(<A extends
+      // AST>(…) => …)` read as `(a: A) => A`, with `A` then resolving to
+      // an unrelated `interface A` another module declares.
+      //
+      // Only when every binding resolves: a binding that is itself an
+      // enclosing function's type parameter (`decodeEffect(schema)` inside
+      // `decodePromise<S>`) instantiates into a type this cannot judge, and
+      // the old path's unsubstituted return was what kept that quiet.
+      match callee_ty {
+        GenericFunc(names, _, Func(params, ret))
+        | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) if resolver.globals.contains(
+            "@import-generic:" + name,
+          ) &&
+          env.lookup(name) is None => {
+          let bindings = widen_fresh_literal_bindings(
+            env,
+            resolver,
+            erase_phantom_bindings(
+              resolver,
+              solve_generic_bindings(env, resolver, names, params, args, None),
+            ),
+            names,
+            None,
+            params,
+            args,
+            ret,
+          )
+          if !bindings
+            .values()
+            .any(fn(v) { type_contains_unresolved_named(v, resolver) }) {
+            return reduce_conditional(substitute_params(ret, bindings))
+          }
+        }
+        _ => ()
+      }
       // An OVERLOAD SET whose members include a generic signature. The
       // members are ingested as plain `Func`s with their type parameters
       // recorded per NAME, so `infer_call`'s union arm compares a `boolean`
@@ -11916,6 +11955,45 @@ fn infer_generic_overload_call(
     }
   }
   None
+}
+
+///|
+/// A binding solved from a generic ARROW argument can carry that arrow's
+/// own type parameter, which the AST does not keep: `memoizeIdempotent(<A
+/// extends AST>(ast: A): A => …)` binds the callee's `A` to a bare
+/// `Named("A")`. A bare name then resolves against whatever type of that
+/// name another module declares (effect's `net/Dns.ts` has an `interface
+/// A`), and `applyToLastLink(mutableKey)` was reported against it. Such a
+/// name binds as `any`, as `bind_callable_param` does for a parameter.
+///
+/// Applied on the imported-generic call path only: run for every generic
+/// call it erased bindings that local inference had been relying on, and
+/// a callback over the erased type was then judged (effect's
+/// `toReadonlyArray(self).forEach(f)` inside a generic arrow).
+fn erase_phantom_bindings(
+  resolver : Resolver,
+  bindings : Map[String, @ast.TsType],
+) -> Map[String, @ast.TsType] {
+  let phantom : Map[String, @ast.TsType] = Map([])
+  for n, _ in resolver.local_type_names {
+    if !((
+        resolver.interfaces.contains(n) ||
+        resolver.type_aliases.contains(n) ||
+        resolver.classes.contains(n) ||
+        resolver.enums.contains(n)
+      ) &&
+      !resolver.type_name_origin.contains(n)) {
+      phantom[n] = @ast.TsType::Any
+    }
+  }
+  if phantom.is_empty() {
+    return bindings
+  }
+  let out : Map[String, @ast.TsType] = Map([])
+  for k, v in bindings {
+    out[k] = substitute_params(v, phantom)
+  }
+  out
 }
 
 ///|
@@ -18962,49 +19040,95 @@ fn object_lit_never_satisfies_union(
     }
     entry_types.push((entry.0, t))
   }
-  for shape in member_shapes {
-    let field_by_name : Map[String, @ast.TsType] = Map([])
-    for f in shape {
-      field_by_name[f.0] = f.1
-    }
-    let mut satisfied = true
-    // Required members must be provided.
-    for f in shape {
-      if !type_accepts_undefined(resolver.unwrap(f.1)) {
-        let mut provided = false
-        for e in entry_types {
-          if e.0 == f.0 {
-            provided = true
-          }
-        }
-        if !provided {
-          satisfied = false
-        }
+  fn some_member_fits(entry_types : Array[(String, @ast.TsType)]) -> Bool {
+    for shape in member_shapes {
+      let field_by_name : Map[String, @ast.TsType] = Map([])
+      for f in shape {
+        field_by_name[f.0] = f.1
       }
-    }
-    // Provided entries must fit; excess entries fail the constituent.
-    for e in entry_types {
-      match field_by_name.get(e.0) {
-        Some(ft) => {
-          // Uncertain inference counts as satisfying. Fresh literal
-          // entries keep their literal types -- a `kind: "a"` discriminant
-          // must match `kind: "a"` members, so no widening here.
-          let et = resolver.unwrap(e.1)
-          if is_checkable(et) &&
-            !type_contains_unresolved_named(et, resolver) &&
-            !type_deeply_contains_unmodeled(et, resolver) &&
-            !is_assignable_to(et, resolver.unwrap(ft)) {
+      let mut satisfied = true
+      // Required members must be provided.
+      for f in shape {
+        if !type_accepts_undefined(resolver.unwrap(f.1)) {
+          let mut provided = false
+          for e in entry_types {
+            if e.0 == f.0 {
+              provided = true
+            }
+          }
+          if !provided {
             satisfied = false
           }
         }
-        None => satisfied = false
+      }
+      // Provided entries must fit; excess entries fail the constituent.
+      for e in entry_types {
+        match field_by_name.get(e.0) {
+          Some(ft) => {
+            // Uncertain inference counts as satisfying. Fresh literal
+            // entries keep their literal types -- a `kind: "a"` discriminant
+            // must match `kind: "a"` members, so no widening here.
+            let et = resolver.unwrap(e.1)
+            if is_checkable(et) &&
+              !type_contains_unresolved_named(et, resolver) &&
+              !type_deeply_contains_unmodeled(et, resolver) &&
+              !is_assignable_to(et, resolver.unwrap(ft)) {
+              satisfied = false
+            }
+          }
+          None => satisfied = false
+        }
+      }
+      if satisfied {
+        return true
       }
     }
-    if satisfied {
-      return false
+    false
+  }
+
+  if some_member_fits(entry_types) {
+    return false
+  }
+  // A discriminant written as a UNION of literals is split the way tsc
+  // relates a source to a discriminated union (TS 3.5+): `{ kind, value }`
+  // with `kind: "min" | "max"` fits `{ kind: "min"; … } | { kind: "max";
+  // … }` when EVERY combination fits some member — zod's `setLimit` builds
+  // its check objects that way. tsc caps the combinations at 25, and so
+  // does this; past it the literal is judged whole, as before.
+  let splits : Array[(Int32, Array[@ast.TsType])] = []
+  for idx, e in entry_types {
+    match resolver.unwrap(e.1) {
+      Union(parts) if parts.length() > 1 &&
+        parts
+        .iter()
+        .all(fn(p) { p is (Literal(_) | NumberLiteral(_) | BooleanLiteral(_)) }) =>
+        splits.push((idx, parts))
+      _ => ()
     }
   }
-  true
+  if splits.is_empty() {
+    return true
+  }
+  let mut combos = 1
+  for sp in splits {
+    combos = combos * sp.1.length()
+    if combos > 25 {
+      return true
+    }
+  }
+  for n in 0..<combos {
+    let candidate = entry_types.copy()
+    let mut rest = n
+    for sp in splits {
+      let k = sp.1.length()
+      candidate[sp.0] = (candidate[sp.0].0, sp.1[rest % k])
+      rest = rest / k
+    }
+    if !some_member_fits(candidate) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -19233,6 +19357,24 @@ fn check_object_lit_against_target(
           }
         }
         _ => ()
+      }
+      continue
+    }
+    // The literal's own accessor (`{ get path() { … } }`) is stored under
+    // `@@get:path` / `@@set:path` and DEFINES the property `path`: zod's
+    // `ZodEffects` builds its `RefinementCtx` exactly that way, and the
+    // internal spelling was reported as an excess property nobody wrote.
+    // The missing-required check below already strips the prefix. The
+    // accessor's body is not judged against the declared type here.
+    if (key.has_prefix("@@get:") || key.has_prefix("@@set:")) &&
+      resolver.lookup_field(target, key) is None {
+      let prop = key[6:].to_owned()
+      if resolver.lookup_field(target, prop) is None && !suppress_excess {
+        record(
+          ctx,
+          "\{sub_path}.\{prop}",
+          "property `\{prop}` does not exist on target type",
+        )
       }
       continue
     }
@@ -23542,6 +23684,69 @@ fn typeof_string_to_type(s : String) -> @ast.TsType? {
 }
 
 ///|
+/// The nullish half of declared-type narrowing on initialization: an
+/// initializer that cannot be nullish removes `undefined` / `null` / `void`
+/// from a declared union, exactly as the assignment `x = init` would. So
+/// `let cur: Node | undefined = root; cur.visit()` is legal in tsc and was
+/// reported as "possibly undefined" here, on the commonest way a cursor or
+/// an optional accumulator is declared, at `let`, `var` and `const` alike.
+///
+/// Only the nullish members are removed, and only when the initializer's
+/// type is KNOWN to have none: `any`, `unknown`, a type parameter, a name
+/// this checker cannot resolve and a nullish part each abstain. Removing
+/// any other member would need assignability against each declared member,
+/// which the resolver-free relation cannot decide for structurally related
+/// names, and narrowing too far is the direction that invents findings.
+fn narrow_declared_nullish_by_init(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  declared : @ast.TsType,
+  init : @ast.TsExpr,
+) -> Unit {
+  if init is Var("__ts_no_init__") {
+    return
+  }
+  let members = union_components(declared)
+  let kept = members.filter(fn(m) { !(m is (Undefined | Null | Void)) })
+  if kept.length() == members.length() || kept.length() == 0 {
+    return
+  }
+  let init_ty = infer_expr(env, ctx.resolver, init)
+  if is_in_scope_type_param(ctx, init_ty) ||
+    !type_definitely_non_nullish(ctx.resolver, init_ty) {
+    return
+  }
+  env.narrow(name, union_of(kept))
+}
+
+///|
+/// True only when `t` is KNOWN to admit neither `null` nor `undefined`:
+/// `any`, `unknown`, `never`, `void`, a name this checker cannot resolve (a
+/// type parameter among them) and anything uncheckable all answer false.
+/// An alias can hide a nullish member a level down, so the parts are
+/// unwrapped recursively, to a bounded depth.
+fn type_definitely_non_nullish(resolver : Resolver, t : @ast.TsType) -> Bool {
+  fn go(t : @ast.TsType, depth : Int32) -> Bool {
+    if depth == 0 ||
+      !is_checkable(t) ||
+      type_contains_unresolved_named(t, resolver) {
+      return false
+    }
+    for part in union_components(resolver.unwrap(t)) {
+      match resolver.unwrap(part) {
+        Undefined | Null | Void | Any | Unknown | Never => return false
+        Union(_) as u => if !go(u, depth - 1) { return false }
+        p => if !is_checkable(p) { return false }
+      }
+    }
+    true
+  }
+
+  go(t, 4)
+}
+
+///|
 /// Split `ty` into its union components (single-element list if it isn't a
 /// union).
 fn union_components(ty : @ast.TsType) -> Array[@ast.TsType] {
@@ -24786,7 +24991,16 @@ fn apply_assertion_predicate_effect(
       let narrowed : @ast.TsType = match target_opt {
         // `asserts x is T` — narrow to T.
         Some(target) => {
-          let kept = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+          let kept = narrow_keep(cur, fn(v) {
+            is_assignable_to(v, target) ||
+            is_structurally_assignable_named(v, target, resolver)
+          })
+          // tsc keeps the declared type when it already fits the asserted
+          // one, and only otherwise narrows to the target. The resolver-
+          // free test alone cannot see an interface hierarchy, so zod's
+          // `$ZodError.init(inst, issues)` — `asserts inst is T`, with the
+          // parser having inlined `T` to its bound `ZodTrait` — replaced
+          // `inst: ZodError` with `ZodTrait`, and `inst.name` was reported.
           match kept {
             Never => target
             _ => kept
@@ -25338,10 +25552,22 @@ fn analyze_equality(
           false_side.push((key, @ast.TsType::Union([empty, other])))
         }
       } else if loose {
-        true_side.push((key, @ast.TsType::Union([Null, Undefined])))
+        // A binding that cannot be nullish makes the equal side
+        // unreachable (tsc gives it `never`). Narrowing it to the nullish
+        // tag instead put `undefined` back into the type at the merge
+        // after `if (c === undefined) {}`, so a defensive check on a
+        // `c: Node` parameter reported every later `c.visit()` as
+        // "possibly undefined". It is left as it was: `never` would be
+        // exact, but this site cannot see `strictNullChecks`, and with it
+        // off every type admits `undefined`.
+        if !type_definitely_non_nullish(resolver, cur) {
+          true_side.push((key, @ast.TsType::Union([Null, Undefined])))
+        }
         false_side.push((key, narrow_remove(cur, is_nullish)))
       } else {
-        true_side.push((key, tag))
+        if !type_definitely_non_nullish(resolver, cur) {
+          true_side.push((key, tag))
+        }
         false_side.push((key, narrow_remove(cur, fn(v) { type_eq(v, tag) })))
       }
     }
@@ -25983,8 +26209,10 @@ fn check_ident_binding_decl(
     match precise_literal_type(init) {
       Some(l) if is_assignable_to(l, declared) && l != declared =>
         env.narrow(name, l)
-      _ => ()
+      _ => narrow_declared_nullish_by_init(env, ctx, name, declared, init)
     }
+  } else if declared is Union(_) {
+    narrow_declared_nullish_by_init(env, ctx, name, declared, init)
   }
   if !mutable_ && block_scoped {
     record_aliased_condition(env, ctx.resolver, name, init)
@@ -26556,6 +26784,70 @@ fn collect_binding_names(b : @ast.TsBinding, out : Array[String]) -> Unit {
 }
 
 ///|
+/// After `recv.prop = value`, the PROPERTY PATH narrows by assignment the
+/// way a binding does: `this._cached = { shape, keys }; return
+/// this._cached` is legal in tsc and was reported as returning `T | null`,
+/// and after `if (this._cached !== null) return this._cached` it read back
+/// as `null` — the lazy-cache idiom, which zod writes in `_getCached`.
+///
+/// Every narrowing of the path and of the paths below it is stale once the
+/// path is written, so they are dropped first. The path is then narrowed
+/// only when the field's declared type is known and the value cannot be
+/// nullish: the declaration loses its nullish members, which is what tsc's
+/// assignment narrowing leaves for any value that fits it. Anything less
+/// certain falls back to the declared type, which is what the read saw
+/// before this existed.
+fn narrow_after_prop_assignment(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  prop : String,
+  value : @ast.TsExpr,
+) -> Unit {
+  guard narrowing_key_for_expr(@ast.TsExpr::PropAccess(recv, prop)) is Some(key) else {
+    return
+  }
+  let stale : Array[String] = []
+  for k, _ in env.vars {
+    if k == key || k.has_prefix(key + ".") || k.has_prefix(key + "[") {
+      stale.push(k)
+    }
+  }
+  for k in stale {
+    let _ = env.vars.remove(k)
+  }
+  let recv_ty = infer_expr(env, ctx.resolver, recv)
+  guard ctx.resolver.lookup_field(recv_ty, prop) is Some(decl) else { return }
+  if !is_checkable(decl) || !(type_has_undefined(decl) || type_has_null(decl)) {
+    return
+  }
+  let shape = match value {
+    TypeArgs(_, inner) | PureCall(inner) => inner
+    _ => value
+  }
+  let never_nullish = match shape {
+    New(_, _)
+    | NewExpr(_, _)
+    | ObjectLit(_)
+    | ArrayLit(_)
+    | ArrowFunc(_, _, _, _)
+    | FuncExpr(_)
+    | NativeClassExpr(_, _) => true
+    _ => {
+      let vt = infer_expr(env, ctx.resolver, value)
+      !is_in_scope_type_param(ctx, vt) &&
+      type_definitely_non_nullish(ctx.resolver, vt)
+    }
+  }
+  if never_nullish {
+    match non_nullable(decl) {
+      Never => ()
+      t => env.narrow(key, t)
+    }
+  }
+}
+
+///|
 /// After `name = value`, the binding's effective type is the assigned
 /// value's type (TypeScript narrows by assignment); `narrow` rather than
 /// `bind` keeps the declared slot, so a later assignment is still checked
@@ -26720,6 +27012,37 @@ fn narrow_after_nullish_assign(
 }
 
 ///|
+/// The property-path spelling of `narrow_after_nullish_assign`: after
+/// `o.p ??= v` (or `||=`) the path `o.p` is no longer nullish. zod's
+/// `_getMessage` writes `internals.message ??= JSON.stringify(…)` and then
+/// returns `internals.message` from a function declared `: string`.
+fn narrow_after_prop_nullish_assign(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  target : @ast.TsExpr,
+  op : @ast.TsCompoundOp,
+  value : @ast.TsExpr,
+) -> Unit {
+  if !(op is (CoalesceAssign | OrAssign)) {
+    return
+  }
+  guard target is PropAccess(_, _) else { return }
+  guard narrowing_key_for_expr(target) is Some(key) else { return }
+  let cur = infer_expr(env, ctx.resolver, target)
+  let kept = non_nullable_resolved(ctx.resolver, cur)
+  if kept is Never || kept is Any || !is_checkable(kept) {
+    return
+  }
+  let v = infer_expr(env, ctx.resolver, value)
+  let next = if v is Any || !is_checkable(v) {
+    kept
+  } else {
+    flatten_union_exact([kept, v])
+  }
+  env.narrow(key, next)
+}
+
+///|
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
@@ -26850,6 +27173,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         AssignExpr(name, v) => narrow_after_assignment(env, ctx, name, v)
         CompoundAssignExpr(Var(name), op, v) =>
           narrow_after_nullish_assign(env, ctx, name, op, v)
+        PropAssignExpr(recv, prop, v) =>
+          narrow_after_prop_assignment(env, ctx, recv, prop, v)
+        CompoundAssignExpr(PropAccess(_, _) as t, op, v) =>
+          narrow_after_prop_nullish_assign(env, ctx, t, op, v)
         _ => ()
       }
     }
@@ -26964,6 +27291,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             }
           }
       }
+      narrow_after_prop_assignment(env, ctx, recv, prop, value)
     }
     IndexAssign(recv, idx, value) => {
       match idx {
@@ -31093,6 +31421,14 @@ fn check_call_args_in_expr(
                             ctx.resolver,
                           ) &&
                           !type_deeply_contains_unmodeled(slot_ty, ctx.resolver) &&
+                          // The target CONTEXTUALLY types the source, so a
+                          // literal element keeps its literal type: `[x] =
+                          // ["b"]` into `let x: "a" | "b"` is legal, and only
+                          // judging the widened `string` reported it.
+                          !is_assignable_to(
+                            ctx.resolver.unwrap(slot_ty),
+                            ctx.resolver.unwrap(target_ty),
+                          ) &&
                           !is_assignable_to(
                             ctx.resolver.unwrap(widen_literal(slot_ty)),
                             ctx.resolver.unwrap(target_ty),
@@ -31884,6 +32220,15 @@ fn stmt_always_exits_with(
     // assertion-call analysis — `catch (e) { throwDefect(e) }`.
     Expr(Call(name, _)) | Expr(CallExpr(Var(name), _)) =>
       callee_declared_never(env, resolver, name)
+    // The property-access spelling is the same analysis in tsc (an
+    // assertion call may be `x.y.f()`), and it is how a helper namespace
+    // is called: zod's `util.assertNever(effect)` ends `ZodEffects._parse`,
+    // and a missing return was reported on every path that reaches it.
+    Expr(MethodCall(recv, m, _)) =>
+      match resolver.unwrap(infer_expr(env, resolver, PropAccess(recv, m))) {
+        Func(_, Never) | GenericFunc(_, _, Func(_, Never)) => true
+        _ => false
+      }
     Switch(scrutinee, cases) => {
       // Every case body must exit, except an EMPTY one that is not last:
       // `case "a": case "b": return x` falls through to the shared body.

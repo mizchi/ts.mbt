@@ -248,3 +248,49 @@ test "mtsc graph checker accepts JSX when the module opts in" {
   })
   assert_false(diagnostics.contains("parse error"))
 }
+
+///|
+fn graph2(entry : String, lib : String) -> String {
+  check_module_graph({
+    modules: [
+      { path: "/src/entry.ts", source: entry, allowJsx: false, },
+      { path: "/src/lib.ts", source: lib, allowJsx: false, },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./lib",
+        targetPath: "/src/lib.ts",
+      },
+    ],
+  })
+}
+
+///|
+test "mtsc graph checker types an imported namespace by its members" {
+  let lib = "export namespace util {\n  export function assertNever(_x: never): never { throw new Error(); }\n  export const n = 1;\n  export function join(xs: string[], sep = \",\"): string { return xs.join(sep); }\n}"
+  // A member's type is checked (`util.n` is a number) ...
+  assert_true(
+    graph2(
+      "import { util } from \"./lib\";\nexport const s: string = util.n;", lib,
+    ).contains("expected `string` but got `number`"),
+  )
+  // ... a never-returning member ends a path, and a defaulted parameter
+  // may be omitted.
+  let ok = graph2(
+    "import { util } from \"./lib\";\ntype E = { type: \"a\" } | { type: \"b\" };\nexport function f(e: E): number {\n  if (e.type === \"a\") return 1;\n  if (e.type === \"b\") return 2;\n  util.assertNever(e);\n}\nexport const j: string = util.join([\"a\"]);",
+    lib,
+  )
+  assert_false(ok.contains("not all paths return"), msg=ok)
+  assert_false(ok.contains("argument(s)"), msg=ok)
+}
+
+///|
+test "mtsc graph checker infers an imported bounded generic at the call" {
+  let lib = "export interface Trait { _zod: { def: unknown } }\nexport interface Ctor<T extends Trait> { new (def: unknown): T }\nexport function make<T extends Trait>(name: string, init: (inst: T, def: unknown) => void): Ctor<T> { return null as any; }"
+  let diags = graph2(
+    "import { make, type Ctor, type Trait } from \"./lib\";\ninterface E extends Trait { issues: string[]; _zod: { def: string[] } }\nconst init = (inst: E, issues: unknown) => { inst.issues = []; };\nexport const E: Ctor<E> = make(\"E\", init);",
+    lib,
+  )
+  assert_false(diags.contains("expected"), msg=diags)
+}

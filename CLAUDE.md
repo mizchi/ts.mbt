@@ -4167,6 +4167,44 @@ product surfaces now.
   2.27 -> 1.97 ms: that was ONE run against noisy neighbours, and
   best-of-5 on both binaries reads 1.9 ms each. A single timing is not a
   measurement; the instruction count is the number that settles it.
+
+  Batch FZ turns back to real code. At an unchanged oracle (TP 2726 /
+  MISS 0 / FP 0), zod goes 19 -> 9 and effect 139 -> 126, with no report
+  at a new location. Three of zod's nine are `process` / `module` /
+  `require` in its benchmarks. tsc reports those too in this checkout,
+  since `@types/node` is not installed, so six real false positives are
+  left. Almost every fix is one fact some site had and another lacked:
+  - A property path now narrows by assignment, as a binding does.
+    `this._cached = {…}; return this._cached` was "`T | null`".
+  - `o.p ??= v` narrows the path.
+  - A literal's own `get path()` defines `path` in the excess-property
+    check; the missing-property check already stripped `@@get:`.
+  - `util.assertNever(x)` ends a path as a bare `assertNever(x)` does.
+  - A non-nullish initializer removes the nullish members of a declared
+    union, at `const` too.
+  - An `asserts x is T` keeps `x`'s declared type when it already fits
+    `T`.
+  - An object literal whose discriminant is a union of literals is split
+    against a discriminated union, as tsc does since 3.5 (25
+    combinations at most).
+
+  Three are graph-mode gaps:
+  - An imported namespace had no value type, so every `util.x` was
+    `any`. The lowered `var util = …` shadowed it in `values`.
+  - An imported function's defaulted parameters read as required.
+  - An imported bounded generic was the inlined `Func`, so a callback
+    was judged against the bound. It is now a binder over the raw
+    signature, solved at the call. `infer_call` unwraps a `GenericFunc`
+    before it reaches the binder arm, so the by-name `Call` path solves
+    it first, gated on an `@import-generic:` marker.
+
+  Two things were measured and cut back:
+  - Erasing a generic arrow's phantom binder to `any` in every generic
+    solve cost a new effect report. It now runs on the imported path
+    only.
+  - Skipping any argument whose type names a phantom binder lost two
+    corpus TPs. A construct signature's own `<T>` is not carried, so the
+    skip could not tell a bound `T` from a phantom one. It was removed.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

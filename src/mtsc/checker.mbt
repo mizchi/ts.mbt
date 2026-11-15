@@ -167,6 +167,17 @@ fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
   for param in func.params {
     if param.is_rest {
       params.push(@ast.TsType::Rest(param.type_))
+    } else if param.is_optional || param.default is Some(_) {
+      // A parameter written `x?` or with a default may be omitted, and a
+      // `Func` says so the way the checker reads it: `T | undefined`.
+      // Without it, an imported `joinValues(array, separator = " | ")`
+      // demanded two arguments at every call.
+      params.push(
+        match param.type_ {
+          Union(parts) if parts.contains(Undefined) => param.type_
+          t => @ast.TsType::Union([t, Undefined])
+        },
+      )
     } else {
       params.push(param.type_)
     }
@@ -176,6 +187,17 @@ fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
 
 ///|
 fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
+  // A namespace is lowered to `var N = N || {}`, so `values` holds it as
+  // `any` and has to be passed over. A function or class of the same name
+  // is a declaration merge whose value is that function or class.
+  if !module_.funcs.iter().any(fn(f) { f.name == name }) &&
+    !module_.classes.iter().any(fn(c) { c.name == name }) {
+    for ns in module_.namespaces {
+      if ns.name == name && !ns.is_declare {
+        return Some(namespace_value_type(ns.module_))
+      }
+    }
+  }
   for value in module_.values {
     if value.name == name {
       match value.type_ {
@@ -206,7 +228,45 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
   }
   match sigs.length() {
     0 => ()
-    1 => return Some(sigs[0])
+    // A BOUNDED generic function's parameters arrive with the bound
+    // inlined (`T extends Trait` stored as `Trait`), which made an importer
+    // judge `make("E", init)` against `(inst: Trait) => void` and reject an
+    // `init` taking the subtype tsc infers `T` from. The un-inlined copy
+    // the parser keeps for call-site inference is the real signature, and
+    // a binder over it lets the importer solve `T` the way a local caller
+    // does.
+    1 =>
+      match
+        (
+          module_.raw_generic_signatures.get(name),
+          module_.funcs.iter().find_first(fn(f) { f.name == name }),
+        ) {
+        (Some(Func(raw_params, raw_ret)), Some(func)) if !func.type_params.is_empty() &&
+          raw_params.length() == func.params.length() => {
+          // The raw copy keeps the TYPES and not the optionality, which
+          // `function_value_type` reads off the declaration: without it
+          // `joinValues(array, separator = " | ")` demanded two arguments.
+          let params = raw_params.mapi(fn(i, t) {
+            let p = func.params[i]
+            if !p.is_rest && (p.is_optional || p.default is Some(_)) {
+              match t {
+                Union(parts) if parts.contains(Undefined) => t
+                _ => @ast.TsType::Union([t, Undefined])
+              }
+            } else {
+              t
+            }
+          })
+          return Some(
+            @ast.TsType::GenericFunc(
+              func.type_params,
+              [],
+              Func(params, raw_ret),
+            ),
+          )
+        }
+        _ => return Some(sigs[0])
+      }
     _ => return Some(@ast.TsType::Union(sigs))
   }
   for import_ in module_.imports {
@@ -229,6 +289,70 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
     }
   }
   None
+}
+
+///|
+/// The VALUE an imported namespace stands for: an object of its members.
+/// `import { util } from "./util"` gave `util` no type at all, so every
+/// `util.x` was `any` — zod's `util.assertNever(effect)` could not end a
+/// path, and `const s: string = util.n` was silent.
+///
+/// A member whose type names a type declared INSIDE the namespace stays
+/// `any`: the importer would resolve that bare name in its own scope,
+/// where it means something else or nothing, and a wrong type is the
+/// direction that invents findings. Whether a member is `export`ed is not
+/// recorded in the AST, which only ever makes an unexported `N.x` read as
+/// legal.
+fn namespace_value_type(body : @ast.TsModule) -> @ast.TsType {
+  let local_types : Array[String] = []
+  for i in body.interfaces {
+    local_types.push(i.name)
+  }
+  for a in body.type_aliases {
+    local_types.push(a.name)
+  }
+  for c in body.classes {
+    local_types.push(c.name)
+  }
+  for e in body.enums {
+    local_types.push(e.name)
+  }
+  for n in body.namespaces {
+    local_types.push(n.name)
+  }
+  fn mentions_local(t : @ast.TsType) -> Bool {
+    if local_types.is_empty() {
+      return false
+    }
+    let flat = "\{t}".replace_all(old=" ", new="").replace_all(old="\n", new="")
+    local_types
+    .iter()
+    .any(fn(n) {
+      flat.contains("Named(\"" + n + "\")") ||
+      flat.contains("Applied(\"" + n + "\",")
+    })
+  }
+
+  let names : Array[String] = []
+  for v in body.values {
+    if !names.contains(v.name) {
+      names.push(v.name)
+    }
+  }
+  for f in body.funcs {
+    if !names.contains(f.name) {
+      names.push(f.name)
+    }
+  }
+  let fields : Array[(@ast.TsType, @ast.TsType)] = []
+  for n in names {
+    let t = match local_value_type(body, n) {
+      Some(t) if !mentions_local(t) => t
+      _ => @ast.TsType::Any
+    }
+    fields.push((@ast.TsType::Literal(n), t))
+  }
+  @ast.TsType::Object(fields)
 }
 
 ///|
@@ -690,6 +814,13 @@ fn graph_import_globals(
       match exported_value_type(target, imported_name, modules, edges, []) {
         Some(type_) => {
           globals.push((local_name, type_))
+          // An imported GENERIC function arrives as a binder over its raw
+          // signature; this marks the binding as imported so the checker's
+          // by-name call path solves it (see the `GenericFunc` arm of the
+          // `Call` case in `infer_expr`).
+          if type_ is GenericFunc(_, _, _) {
+            globals.push(("@import-generic:" + local_name, Any))
+          }
           // An imported value's `Any` is usually an exporter whose type
           // this checker could not compute (`export const identity = <A>(a:
           // A): A => a` — an arrow's own `<A>` is not in the AST), not a
