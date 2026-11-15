@@ -500,11 +500,15 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             // existing `pure_marker_positions` /
             // `internal_marker_positions` tables for callers that
             // only need a flag.
-            if comment_text.contains("@__PURE__") {
-              self.pending_pure_marker = true
-            }
-            if comment_text.contains("@internal") {
-              self.pending_internal_marker = true
+            // Both markers start with `@`, so a comment without one —
+            // most of them — skips the two substring searches.
+            if comment_text.contains_char('@') {
+              if comment_text.contains("@__PURE__") {
+                self.pending_pure_marker = true
+              }
+              if comment_text.contains("@internal") {
+                self.pending_internal_marker = true
+              }
             }
             // Structured JSDoc — only fires for `/** … */`. The
             // last block wins when multiple stack up before one

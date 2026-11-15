@@ -17049,11 +17049,12 @@ fn lib_interface_members_modeled(name : String) -> Bool {
 /// match other call signatures structurally in ways we don't model, so member
 /// existence and structural assignability against them would false-flag.
 fn shape_is_callable(ty : @ast.TsType, resolver : Resolver) -> Bool {
-  match resolver.unwrap(ty) {
+  let unwrapped = resolver.unwrap(ty)
+  match unwrapped {
     Func(_, _) | Constructor(_, _, _) => return true
     _ => ()
   }
-  for f in collect_declared_fields(ty, resolver) {
+  for f in collect_declared_fields_of_unwrapped(unwrapped, resolver) {
     if f.0 == "<call>" || f.0 == "<new>" {
       return true
     }
@@ -19552,7 +19553,28 @@ fn collect_declared_fields(
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Array[(String, @ast.TsType)] {
-  collect_declared_fields_at(target, resolver, 0, {})
+  collect_declared_fields_of_unwrapped(resolver.unwrap(target), resolver)
+}
+
+///|
+/// `collect_declared_fields` for a type the caller has ALREADY passed
+/// through `resolver.unwrap`, so a caller that needs the unwrapped type
+/// for its own test does not unwrap it a second time. A shape with no
+/// arm below (a primitive, a literal, an array, a function type, ...)
+/// collects nothing, so it returns before the visited set is built.
+fn collect_declared_fields_of_unwrapped(
+  unwrapped : @ast.TsType,
+  resolver : Resolver,
+) -> Array[(String, @ast.TsType)] {
+  match unwrapped {
+    Object(_)
+    | Struct(_, _)
+    | Named(_)
+    | Applied(_, _)
+    | Intersection(_)
+    | Union(_) => collect_declared_fields_unwrapped_at(unwrapped, resolver, 0, {})
+    _ => []
+  }
 }
 
 ///|
@@ -19562,7 +19584,6 @@ fn collect_declared_fields_at(
   depth : Int32,
   visited : Map[String, Unit],
 ) -> Array[(String, @ast.TsType)] {
-  let out : Array[(String, @ast.TsType)] = []
   // Bounded like `types_definitely_differ` and the indexed-access lookup:
   // a recursive generic interface whose base mentions itself through an
   // argument (effect's `Option` graph) re-expanded forever and ended the
@@ -19570,9 +19591,28 @@ fn collect_declared_fields_at(
   // been collected, which only drops members deeper than any real
   // hierarchy has.
   if depth > 24 {
+    return []
+  }
+  collect_declared_fields_unwrapped_at(
+    resolver.unwrap(target),
+    resolver,
+    depth,
+    visited,
+  )
+}
+
+///|
+/// The body of `collect_declared_fields_at`, over the unwrapped type.
+fn collect_declared_fields_unwrapped_at(
+  unwrapped : @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+  visited : Map[String, Unit],
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  if depth > 24 {
     return out
   }
-  let unwrapped = resolver.unwrap(target)
   match unwrapped {
     Object(entries) =>
       for entry in entries {
@@ -32858,6 +32898,10 @@ fn circular_type_param_names(
   type_params : Array[String],
   bounds : Array[(String, @ast.TsType)],
 ) -> Array[String] {
+  // A cycle is a chain of bounds, so a parameter list with none has none.
+  if bounds.length() == 0 {
+    return []
+  }
   let tp_set : Map[String, Unit] = Map([])
   for p in type_params {
     tp_set[p] = ()
@@ -32916,17 +32960,27 @@ fn check_circular_type_params(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
 
+  // A declaration with no bounds cannot have a circular one, so its owner
+  // path is not built.
   for f in module_.funcs {
-    emit("function " + f.name, f.type_params, f.type_param_bounds)
+    if f.type_param_bounds.length() > 0 {
+      emit("function " + f.name, f.type_params, f.type_param_bounds)
+    }
   }
   for c in module_.classes {
-    emit("class " + c.name, c.type_params, c.type_param_bounds)
+    if c.type_param_bounds.length() > 0 {
+      emit("class " + c.name, c.type_params, c.type_param_bounds)
+    }
     for m in c.methods {
-      emit("method \{c.name}.\{m.name}", m.type_params, m.type_param_bounds)
+      if m.type_param_bounds.length() > 0 {
+        emit("method \{c.name}.\{m.name}", m.type_params, m.type_param_bounds)
+      }
     }
   }
   for a in module_.type_aliases {
-    emit("type " + a.name, a.type_params, a.type_param_bounds)
+    if a.type_param_bounds.length() > 0 {
+      emit("type " + a.name, a.type_params, a.type_param_bounds)
+    }
   }
   for ns in module_.namespaces {
     for issue in check_circular_type_params(ns.module_) {
@@ -35589,6 +35643,10 @@ fn check_merged_export_modifiers(
       1
   }
   let _ = resolver
+  // Every finding below is about a name the file `export type`s.
+  if exported.length() == 0 {
+    return issues
+  }
   // Count declarations per NAME in one pass each, rather than rescanning
   // both lists per exported name. The loop below used to be
   // O(exported x (aliases + interfaces)), which on a 4,000-interface
@@ -38285,6 +38343,10 @@ fn resolve_base_chain_members(
 ///     computed/private names are exempt.
 fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // Every finding below is about a class member.
+  if module_.classes.length() == 0 {
+    return issues
+  }
   let mut no_implicit_override = false
   for gm in module_.grammar_misuses {
     if gm == "<noimplicitoverride-on>" {
@@ -38936,6 +38998,12 @@ fn check_expando_use_before_assign(module_ : @ast.TsModule) -> Array[ExprIssue] 
 }
 
 ///|
+/// The read set of a statement scanned before any holder exists: always
+/// empty, and shared rather than allocated per statement. Nothing writes
+/// to it — `expando_scan_stmt_list` only iterates it.
+let expando_no_reads : Map[String, Unit] = Map([])
+
+///|
 /// One ordered pass over `stmts`, then a recursion into every nested
 /// statement list so an inner function body gets its own holders and its
 /// own definite / possible states. See
@@ -38959,8 +39027,17 @@ fn expando_scan_stmt_list(
   for st in stmts {
     // Reads first: a statement that both reads and writes reads the old
     // value (`d.q = d.q`), and the corpus's shapes are one or the other.
-    let reads : Map[String, Unit] = Map([])
-    expando_reads_in_stmt(st, holders, reads)
+    //
+    // Both the read and the write collectors record only names in
+    // `holders`, so while there is no holder yet neither walk can find
+    // anything — and most statement lists never get one.
+    let reads : Map[String, Unit] = if holders.length() > 0 {
+      let m : Map[String, Unit] = Map([])
+      expando_reads_in_stmt(st, holders, m)
+      m
+    } else {
+      expando_no_reads
+    }
     for kv in reads {
       let holder = match kv.0.find(".") {
         Some(i) => kv.0[:i].to_owned()
@@ -38989,6 +39066,9 @@ fn expando_scan_stmt_list(
           holders[n] = ()
         }
       _ => ()
+    }
+    if holders.length() == 0 {
+      continue
     }
     match st {
       If(_, then_b, else_b) => {
@@ -39797,6 +39877,10 @@ fn check_duplicate_computed_accessors(
 
 ///|
 fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  // Every finding below is about a class's base name.
+  if !module_.classes.iter().any(fn(c) { c.base_names.length() > 0 }) {
+    return []
+  }
   let func_names : Map[String, Unit] = Map([])
   for f in module_.funcs {
     func_names[f.name] = ()
@@ -48349,6 +48433,13 @@ fn check_class_implements(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // Only a non-generic class with an `implements` clause is checked
+  // below, so without one neither name table is built.
+  if !module_.classes
+    .iter()
+    .any(fn(c) { c.implements_names.length() > 0 && c.type_params.length() == 0 }) {
+    return issues
+  }
   let class_by_name : Map[String, @ast.TsClassDecl] = Map([])
   for c in module_.classes {
     class_by_name[c.name] = c

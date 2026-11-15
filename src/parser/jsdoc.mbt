@@ -342,9 +342,15 @@ fn jsdoc_trim(v : StringView) -> StringView {
 /// `@__PURE__`, visibility markers, `@template`, `@typedef`) are left out,
 /// and so is a block that ends up with nothing to say.
 pub fn jsdoc_doc_lines(jb : JsdocBlock) -> Array[String] {
+  // Every declaration's doc block goes through here while parsing, so the
+  // trims are `jsdoc_trim*` (the library defaults rebuild their character
+  // set on each call) and the line splits are `jsdoc_split_lines` (the
+  // library iterator cost more than the lines). Both are the same
+  // operations: the `"\t\n\r "` default set, and every `\n`-delimited
+  // piece including a trailing empty one.
   let out : Array[String] = []
-  for line in jb.description.trim().split("\n") {
-    out.push(line.trim_end().to_owned())
+  for line in jsdoc_split_lines(jsdoc_trim(jb.description[:])) {
+    out.push(jsdoc_trim_end(line).to_owned())
   }
   if out.length() == 1 && out[0] == "" {
     let _ = out.pop()
@@ -352,26 +358,26 @@ pub fn jsdoc_doc_lines(jb : JsdocBlock) -> Array[String] {
   let tags : Array[String] = []
   for t in jb.tags {
     match t {
-      Param(name, _, desc) => tags.push("- `\{name}`: \{desc.trim()}")
-      Returns(_, desc) if desc.trim() != "" =>
-        tags.push("Returns: \{desc.trim()}")
-      Throws(_, desc) if desc.trim() != "" =>
-        tags.push("Throws: \{desc.trim()}")
+      Param(name, _, desc) => tags.push("- `\{name}`: \{jsdoc_trim(desc[:])}")
+      Returns(_, desc) if jsdoc_trim(desc[:]).length() > 0 =>
+        tags.push("Returns: \{jsdoc_trim(desc[:])}")
+      Throws(_, desc) if jsdoc_trim(desc[:]).length() > 0 =>
+        tags.push("Throws: \{jsdoc_trim(desc[:])}")
       Deprecated(msg) =>
         tags.push(
-          if msg.trim() == "" {
+          if jsdoc_trim(msg[:]).length() == 0 {
             "Deprecated."
           } else {
-            "Deprecated: \{msg.trim()}"
+            "Deprecated: \{jsdoc_trim(msg[:])}"
           },
         )
-      See(target) => tags.push("See: \{target.trim()}")
+      See(target) => tags.push("See: \{jsdoc_trim(target[:])}")
       // Doc comments are Markdown, and an `@example` is code.
       Example(code) => {
         tags.push("Example:")
         tags.push("```")
-        for line in code.trim().split("\n") {
-          tags.push(line.trim_end().to_owned())
+        for line in jsdoc_split_lines(jsdoc_trim(code[:])) {
+          tags.push(jsdoc_trim_end(line).to_owned())
         }
         tags.push("```")
       }
@@ -390,11 +396,30 @@ pub fn jsdoc_doc_lines(jb : JsdocBlock) -> Array[String] {
   // as bare source text.
   let flat : Array[String] = []
   for entry in out {
-    for line in entry.split("\n") {
-      flat.push(jsdoc_inline_links(line.trim_end().to_owned()))
+    for line in jsdoc_split_lines(entry[:]) {
+      flat.push(jsdoc_inline_links(jsdoc_trim_end(line).to_owned()))
     }
   }
   flat
+}
+
+///|
+/// The `\n`-delimited pieces of `s`, as `s.split("\n")` yields them: a
+/// trailing `\n` gives a final empty piece and an empty `s` gives one
+/// empty piece. A newline is a single UTF-16 code unit and never part of a
+/// surrogate pair, so scanning code units finds exactly the same breaks.
+fn jsdoc_split_lines(s : StringView) -> Array[StringView] {
+  let out : Array[StringView] = []
+  let n = s.length()
+  let mut start = 0
+  for k in 0..<=n {
+    if k < n && s[k] != '\n' {
+      continue
+    }
+    out.push(s[start:k])
+    start = k + 1
+  }
+  out
 }
 
 ///|
