@@ -19617,7 +19617,8 @@ fn collect_declared_fields_of_unwrapped(
     | Named(_)
     | Applied(_, _)
     | Intersection(_)
-    | Union(_) => collect_declared_fields_unwrapped_at(unwrapped, resolver, 0, {})
+    | Union(_) =>
+      collect_declared_fields_unwrapped_at(unwrapped, resolver, 0, {})
     _ => []
   }
 }
@@ -48496,7 +48497,9 @@ fn check_class_implements(
   // below, so without one neither name table is built.
   if !module_.classes
     .iter()
-    .any(fn(c) { c.implements_names.length() > 0 && c.type_params.length() == 0 }) {
+    .any(fn(c) {
+      c.implements_names.length() > 0 && c.type_params.length() == 0
+    }) {
     return issues
   }
   let class_by_name : Map[String, @ast.TsClassDecl] = Map([])
