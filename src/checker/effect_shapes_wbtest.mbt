@@ -938,3 +938,40 @@ test "review: loop heads, nested binders and fresh object properties stay legal"
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
+
+///|
+test "review: every write that reaches the back edge joins, and only those" {
+  let src =
+    #|declare function acceptString(x: string): void;
+    #|interface N { next?: N; visit(): void }
+    #|declare const root: N;
+    #|function okDependent(c: boolean) { let x: "a" | "b" = "a"; let y: "a" | "b" = "a"; while (c) { if (x === "b") break; x = y; y = "b"; } }
+    #|function okForUpdateAfterBreak(c: boolean) { let x: string | number = "a"; for (; c; c = false) { acceptString(x); x = 1; break; } }
+    #|function okInnerLabel(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; inner: { x = "b"; break inner; } } }
+    #|function okPatternWrite(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; ({ x } = { x: "b" as const }); } }
+    #|function okForHeadWrite(c: boolean, xs: ("a" | "b")[]) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; for (x of xs) {} } }
+    #|function okExprWrite(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; c && (x = "b"); } }
+    #|function okContinuePath(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; if (c) { x = "b"; continue; } break; } }
+    #|function okSelfStep(c: boolean) { let cur: N | undefined = root; while (c) { cur = cur.next!; } }
+    #|let outer: string | number | boolean;
+    #|declare const nums: number[];
+    #|function okOuterHeadSelfAssign() { outer = true; for (outer of nums) { outer = outer.toExponential(); } }
+    #|function badClosureWrite(c: boolean) { let x: "a" | "b" = "a"; const set = (v: "a" | "b") => { x = v; }; while (c) { if (x === "b") break; set("b"); } }
+    #|function badLeavesLoop(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; x = "b"; break; } }
+    #|function badOuterLabel(c: boolean) { let x: "a" | "b" = "a"; outer: while (c) { if (x === "b") break; while (c) { x = "b"; break outer; } } }
+    #|function badUpdateReached(c: boolean) { let x: string | number = "a"; for (; c; c = false) { acceptString(x); if (c) { x = 1; continue; } break; } }
+  let issues = eff_issues_checking(src)
+  for
+    ok in [
+      "okDependent", "okForUpdateAfterBreak", "okInnerLabel", "okPatternWrite", "okForHeadWrite",
+      "okExprWrite", "okContinuePath", "okSelfStep",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for
+    bad in [
+      "badClosureWrite", "badLeavesLoop", "badOuterLabel", "badUpdateReached",
+    ] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}

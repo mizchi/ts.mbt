@@ -12589,7 +12589,12 @@ fn nested_function_method_return(
     return None
   }
   let same_name = decl.methods.filter(fn(m) { m.name == meth })
-  guard same_name is [m] && !m.is_static && m.body is Some(body) else {
+  // A generator method's call is a generator, never the function its body
+  // returns, so it keeps the existing fallback.
+  guard same_name is [m] &&
+    !m.is_static &&
+    !m.is_generator &&
+    m.body is Some(body) else {
     return None
   }
   guard body.stmts.last() is Some(Return(Some(Var(fname)))) else { return None }
@@ -21565,6 +21570,17 @@ fn loop_backedge_head_bindings(
 
 ///|
 /// The back-edge join for the names `admit` accepts.
+///
+/// Every RHS is inferred in the ENTRY env, which is exact only while no
+/// RHS reads a name the body writes: `x = y; y = "b"` joined `y`'s entry
+/// `"a"` into `x` and missed the `"b"` a later iteration copies across, so
+/// `if (x === "b") break` read as always false. When some RHS does, the
+/// join is iterated with the previous pass's result bound — a small
+/// fixpoint — and a dependent name that has not settled after three
+/// passes takes its whole declared type. Taking the declared type at once
+/// would be simpler and wrong the other way: `cur = cur.next!` under
+/// `let cur: Node | undefined = root` joins to `Node`, and the declared
+/// `Node | undefined` would report every `cur.visit()` above it.
 fn loop_backedge_bindings_where(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -21572,27 +21588,139 @@ fn loop_backedge_bindings_where(
   admit : (String) -> Bool,
 ) -> Array[(String, @ast.TsType)] {
   let out : Array[(String, @ast.TsType)] = []
-  let assigns : Array[(String, @ast.TsExpr)] = []
-  if !collect_loop_assignments(body, assigns) {
+  let bw = collect_backedge_writes(body)
+  let written : Map[String, Unit] = Map([])
+  for name, _ in bw.other {
+    written[name] = ()
+  }
+  for a in bw.assigns {
+    written[a.0] = ()
+  }
+  if written.is_empty() {
     return out
   }
-  let merged : Map[String, @ast.TsType] = Map([])
-  for a in assigns {
-    let (name, rhs) = a
+  // A name written by any spelling the walk cannot type (a pattern, a
+  // `for` head, an assignment inside an expression, `++`, `??=`) joins its
+  // whole DECLARED type: that over-approximates every value the write can
+  // store, and widening is the direction the join exists for.
+  let whole : Map[String, @ast.TsType] = Map([])
+  for name, _ in bw.other {
+    guard env.lookup(name) is Some(_) else { continue }
+    guard env.lookup_declared(name) is Some(decl) else { continue }
+    whole[name] = decl
+  }
+  let entry : Map[String, @ast.TsType] = Map([])
+  for name, _ in written {
+    match env.lookup(name) {
+      Some(t) => entry[name] = t
+      None => ()
+    }
+  }
+  fn reads_written(rhs : @ast.TsExpr) -> Bool {
+    let rendered = "\{rhs}"
+    for w, _ in written {
+      if rendered.contains("Var(\"" + w + "\")") {
+        return true
+      }
+    }
+    false
+  }
+
+  let mut joined = backedge_join_pass(env, ctx, bw.assigns, whole, entry)
+  if bw.assigns.any(fn(a) { !whole.contains(a.0) && reads_written(a.1) }) {
+    let mut settled = false
+    // `narrow`, never `bind`: the first `bind` of a name this env does not
+    // hold yet writes its DECLARED slot, so binding an outer `x` here made
+    // the passing join its assignment target and `for (x of obj) { x =
+    // x.toExponential() }` reported `expected number` on a line tsc
+    // accepts. The snapshot puts `vars` back as it was.
+    let snap = env.full_snapshot()
+    for _ in 0..<3 {
+      for name, t in entry {
+        env.narrow(name, joined.get(name).unwrap_or(t))
+      }
+      let next = backedge_join_pass(env, ctx, bw.assigns, whole, entry)
+      // A pass whose inference of an RHS fails under the bound join keeps
+      // that name's previous answer, so the iteration only ever grows.
+      for name, t in joined {
+        if !next.contains(name) {
+          next[name] = t
+        }
+      }
+      let same = next.length() == joined.length() &&
+        next.iter().all(fn(kv) { joined.get(kv.0) == Some(kv.1) })
+      joined = next
+      if same {
+        settled = true
+        break
+      }
+    }
+    env.restore_from(snap)
+    if !settled {
+      for a in bw.assigns {
+        if !whole.contains(a.0) && reads_written(a.1) {
+          match env.lookup_declared(a.0) {
+            Some(decl) => joined[a.0] = decl
+            None => ()
+          }
+        }
+      }
+    }
+  }
+  for name, t in joined {
     if !admit(name) {
       continue
     }
-    guard env.lookup(name) is Some(cur) else { continue }
+    match env.lookup(name) {
+      Some(cur) if cur != t => out.push((name, t))
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// One pass of the back-edge join: each written name's ENTRY type joined
+/// with the types of the `x = rhs` assignments that reach the back edge,
+/// with every RHS inferred in `env` as the caller has bound it.
+fn backedge_join_pass(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  assigns : Array[(String, @ast.TsExpr)],
+  whole : Map[String, @ast.TsType],
+  entry : Map[String, @ast.TsType],
+) -> Map[String, @ast.TsType] {
+  let merged : Map[String, @ast.TsType] = Map([])
+  for name, t in whole {
+    merged[name] = t
+  }
+  for a in assigns {
+    let (name, rhs) = a
+    if whole.contains(name) {
+      continue
+    }
+    guard entry.get(name) is Some(cur) else { continue }
     guard env.lookup_declared(name) is Some(decl) else { continue }
-    // A literal assigned into a declared LITERAL union keeps its literal
-    // type — that is what assignment narrowing gives it, and widening it
-    // first made `x = "b"` read as `string`, which the declared-type cap
-    // below then threw away, so `x` stayed `"a"` at the loop head and
-    // `while (c) { if (x === "b") break; x = "b" }` reported TS2367 on a
-    // loop tsc accepts.
+    // A value of a declared LITERAL union keeps its literal type — that is
+    // what assignment narrowing gives it, and widening it first made
+    // `x = "b"` read as `string`, which the declared-type cap below then
+    // threw away, so `x` stayed `"a"` at the loop head and `while (c) { if
+    // (x === "b") break; x = "b" }` reported TS2367 on a loop tsc accepts.
+    // The same holds for an RHS that READS such a value (`x = y`).
     let rhs_ty = match precise_literal_type(rhs) {
       Some(l) if is_checkable(decl) && is_assignable_to(l, decl) => l
-      _ => widen_literal(infer_expr(env, ctx.resolver, rhs))
+      _ => {
+        let raw = infer_expr(env, ctx.resolver, rhs)
+        let widened = widen_literal(raw)
+        if is_checkable(decl) &&
+          !is_assignable_to(widened, decl) &&
+          is_checkable(raw) &&
+          is_assignable_to(raw, decl) {
+          raw
+        } else {
+          widened
+        }
+      }
     }
     if rhs_ty is Any || !is_checkable(rhs_ty) {
       continue
@@ -21607,114 +21735,476 @@ fn loop_backedge_bindings_where(
     }
     merged[name] = narrow_union(base, rhs_ty)
   }
-  for name, t in merged {
-    match env.lookup(name) {
-      Some(cur) if cur != t => out.push((name, t))
-      _ => ()
-    }
-  }
-  out
+  merged
 }
 
 ///|
-/// Collect the `x = rhs` assignments of a loop body that can reach its
-/// BACK EDGE (not descending into nested functions / classes).
+/// What a loop body's walk toward its BACK EDGE found: the statement-level
+/// `x = rhs` assignments, which the join types from their right-hand side,
+/// and every name written by any OTHER spelling, which it cannot.
+priv struct BackedgeWrites {
+  assigns : Array[(String, @ast.TsExpr)]
+  other : Map[String, Unit]
+}
+
+///|
+/// Walk a loop body for the writes that can reach its back edge (not
+/// descending into nested functions / classes).
 ///
-/// `break`, `continue` and `switch` used to make this answer `false` —
-/// "bail, don't widen" — which is the unsound direction for a join:
-/// declining to widen keeps the entry narrowing at the loop head, so
-/// `while (c) { if (x === "b") break; x = "b" }` reported TS2367 on a loop
-/// tsc accepts. Widening by every assignment is unsound the other way:
-/// `if (c) { x = 1; break; } len(x)` is legal because the `x = 1` leaves
-/// the loop. So a statement list that ENDS in an unconditional exit — a
-/// `return`, a `throw`, a labelled `break`, or a plain `break` that is not
-/// inside an inner loop or `switch` — contributes nothing, and everything
-/// else contributes. That over-approximates (a list ending in an `if` whose
-/// branches both exit still counts), which only ever widens.
-fn collect_loop_assignments(
-  b : @ast.TsBlock,
-  out : Array[(String, @ast.TsExpr)],
+/// `break`, `continue` and `switch` used to make this bail — "don't
+/// widen" — which is the unsound direction for a join: declining to widen
+/// keeps the entry narrowing at the loop head, so `while (c) { if (x ===
+/// "b") break; x = "b" }` reported TS2367 on a loop tsc accepts. Widening
+/// by every assignment is unsound the other way: `if (c) { x = 1; break; }
+/// len(x)` is legal because the `x = 1` leaves the loop. So a statement
+/// list that ENDS in an unconditional exit contributes nothing (see
+/// `backedge_list_exits`), and everything else contributes. That
+/// over-approximates (a list ending in an `if` whose branches both exit
+/// still counts), which only ever widens.
+///
+/// Only one write spelling can be typed, the statement-level `x = rhs`;
+/// every other one — `[x] = ["b"] as const`, `({ x } = …)`, `for (x of
+/// xs)`, `c && (x = "b")`, `x++`, `x ??= "b"` — used to be invisible here,
+/// so the entry narrowing survived the back edge and each reported
+/// `x === "b"` as always false on a loop tsc accepts. They land in
+/// `other`, and the join gives those names their whole declared type.
+///
+/// EXHAUSTIVE over `TsStmt`, `TsExpr` and `TsBinding`, with no wildcard
+/// arm: a walk that misses a node kind fails OPEN here — the write it
+/// misses keeps a narrowing tsc drops — so a new AST node has to be
+/// classified before this compiles. Function and class bodies are not
+/// entered, because tsc does not drop a narrowing for a write inside a
+/// closure (`const set = () => { x = "b" }; while (c) { if (x === "b")
+/// break; set() }` is TS2367 in tsc too).
+fn collect_backedge_writes(b : @ast.TsBlock) -> BackedgeWrites {
+  let w : BackedgeWrites = { assigns: [], other: Map([]), }
+  backedge_walk_list(b.stmts, w, false, false, [])
+  w
+}
+
+///|
+/// True when a loop body's statement list ENDS in an unconditional exit
+/// from the loop, so nothing in it reaches the back edge.
+///
+/// A list that can `continue` is never one: `if (d) { x = "b"; continue }
+/// break` ends in a `break` and still carries `"b"` around the loop. And a
+/// `for` loop's update runs only on paths that reach it, so the caller
+/// drops the update with the body when this holds — appending it first
+/// made `for (; c; c = false) { use(x); x = 1; break }` end in `c = false`,
+/// and the `x = 1` that never iterates again was joined into `x`.
+fn backedge_list_exits(
+  stmts : Array[@ast.TsStmt],
+  in_breakable : Bool,
+  throw_caught : Bool,
+  inner_labels : Array[String],
 ) -> Bool {
-  collect_backedge_assignments(b.stmts, out, false, false)
-  true
+  let exits = match stmts.last() {
+    Some(Return(_)) => true
+    // A labelled `break` leaves the LOOP only when its label is not one
+    // declared inside the body: `inner: { x = "b"; break inner }` resumes
+    // after the labelled block and still reaches the back edge.
+    Some(Break(Some(l))) => !inner_labels.contains(l)
+    Some(Throw(_)) => !throw_caught
+    Some(Break(None)) => !in_breakable
+    _ => false
+  }
+  exits && !stmts.any(stmt_may_continue)
+}
+
+///|
+/// True when a `continue` appears in `st` outside any nested function. An
+/// inner loop's own `continue` counts too, which only ever widens.
+/// Exhaustive over `TsStmt` for the reason `collect_backedge_writes` is.
+fn stmt_may_continue(st : @ast.TsStmt) -> Bool {
+  fn blk(b : @ast.TsBlock) -> Bool {
+    b.stmts.any(stmt_may_continue)
+  }
+
+  match st {
+    Continue(_) => true
+    Block(b)
+    | While(_, b)
+    | DoWhile(_, b)
+    | With(_, b)
+    | For(_, _, _, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b) => blk(b)
+    If(_, t, e) =>
+      blk(t) ||
+      (match e {
+        Some(x) => blk(x)
+        None => false
+      })
+    Try(t, _, c, f) =>
+      blk(t) ||
+      (match c {
+        Some(x) => blk(x)
+        None => false
+      }) ||
+      (match f {
+        Some(x) => blk(x)
+        None => false
+      })
+    Switch(_, cases) => cases.any(fn(c) { blk(c.body) })
+    Label(_, inner) => stmt_may_continue(inner)
+    Var(_, _, _)
+    | Let(_, _, _)
+    | Const(_, _, _)
+    | Assign(_, _)
+    | CompoundAssign(_, _, _)
+    | IndexAssign(_, _, _)
+    | PropAssign(_, _, _)
+    | Expr(_)
+    | Empty
+    | Return(_)
+    | Throw(_)
+    | Debugger
+    | NativeClassStmt(_, _)
+    | Break(_) => false
+  }
 }
 
 ///|
 /// `throw_caught` is set inside the `try` block of a `try` that has a
 /// `catch`: a `throw` there resumes in the catch and can still reach the
-/// back edge, so a list ending in one is not an exit.
-fn collect_backedge_assignments(
+/// back edge, so a list ending in one is not an exit. `inner_labels` are
+/// the labels declared inside the analysed body (see `backedge_list_exits`).
+fn backedge_walk_list(
   stmts : Array[@ast.TsStmt],
-  out : Array[(String, @ast.TsExpr)],
+  w : BackedgeWrites,
   in_breakable : Bool,
   throw_caught : Bool,
+  inner_labels : Array[String],
 ) -> Unit {
-  match stmts.last() {
-    Some(Return(_) | Break(Some(_))) => return
-    Some(Throw(_)) if !throw_caught => return
-    Some(Break(None)) if !in_breakable => return
-    _ => ()
+  if backedge_list_exits(stmts, in_breakable, throw_caught, inner_labels) {
+    return
   }
   for st in stmts {
-    collect_backedge_assignments_stmt(st, out, in_breakable, throw_caught)
+    backedge_walk_stmt(st, w, true, in_breakable, throw_caught, inner_labels)
   }
 }
 
 ///|
-fn collect_backedge_assignments_stmt(
+/// `listed` is true for a statement that sits in one of the walked
+/// statement lists; a `for` head's init and update are not, so a plain
+/// assignment there is an `other` write.
+fn backedge_walk_stmt(
   st : @ast.TsStmt,
-  out : Array[(String, @ast.TsExpr)],
+  w : BackedgeWrites,
+  listed : Bool,
   in_breakable : Bool,
   throw_caught : Bool,
+  inner_labels : Array[String],
 ) -> Unit {
+  fn list(stmts : Array[@ast.TsStmt], breakable : Bool, caught : Bool) {
+    backedge_walk_list(stmts, w, breakable, caught, inner_labels)
+  }
+
+  let other = w.other
   match st {
-    Assign(name, rhs) | Expr(AssignExpr(name, rhs)) => out.push((name, rhs))
-    Block(inner) | With(_, inner) =>
-      collect_backedge_assignments(inner.stmts, out, in_breakable, throw_caught)
-    If(_, then_, else_) => {
-      collect_backedge_assignments(then_.stmts, out, in_breakable, throw_caught)
+    Assign(n, e) | Expr(AssignExpr(n, e)) => {
+      if listed {
+        w.assigns.push((n, e))
+      } else {
+        other[n] = ()
+      }
+      collect_flow_writes_expr(e, other)
+    }
+    // A `var` redeclaration is the SAME function-scoped binding, so its
+    // initializer writes it; `let` / `const` declare a new one.
+    Var(b, _, e) => {
+      collect_flow_writes_binding(b, other)
+      collect_flow_writes_expr(e, other)
+    }
+    Let(b, _, e) | Const(b, _, e) => {
+      collect_flow_writes_binding_exprs(b, other)
+      collect_flow_writes_expr(e, other)
+    }
+    CompoundAssign(n, _, e) => {
+      other[n] = ()
+      collect_flow_writes_expr(e, other)
+    }
+    IndexAssign(a, b, c) => {
+      collect_flow_writes_expr(a, other)
+      collect_flow_writes_expr(b, other)
+      collect_flow_writes_expr(c, other)
+    }
+    PropAssign(o, _, v) => {
+      collect_flow_writes_expr(o, other)
+      collect_flow_writes_expr(v, other)
+    }
+    Expr(e) | Throw(e) | Return(Some(e)) => collect_flow_writes_expr(e, other)
+    Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
+    Block(inner) => list(inner.stmts, in_breakable, throw_caught)
+    With(e, inner) => {
+      collect_flow_writes_expr(e, other)
+      list(inner.stmts, in_breakable, throw_caught)
+    }
+    If(c, then_, else_) => {
+      collect_flow_writes_expr(c, other)
+      list(then_.stmts, in_breakable, throw_caught)
       match else_ {
-        Some(e) =>
-          collect_backedge_assignments(e.stmts, out, in_breakable, throw_caught)
+        Some(e) => list(e.stmts, in_breakable, throw_caught)
         None => ()
       }
     }
     // An inner loop or a `switch` is what a plain `break` leaves, so
     // inside one a `break` continues this loop's body.
-    While(_, body)
-    | DoWhile(_, body)
-    | For(_, _, _, body)
-    | ForIn(_, _, _, _, body)
-    | ForOf(_, _, _, _, body)
-    | ForAwaitOf(_, _, _, _, body) =>
-      collect_backedge_assignments(body.stmts, out, true, throw_caught)
-    Switch(_, cases) =>
-      for c in cases {
-        collect_backedge_assignments(c.body.stmts, out, true, throw_caught)
-      }
-    Try(t, _, c, f) => {
-      collect_backedge_assignments(
-        t.stmts,
-        out,
-        in_breakable,
-        throw_caught || c is Some(_),
-      )
-      for blk in [c, f] {
-        match blk {
-          Some(bb) =>
-            collect_backedge_assignments(
-              bb.stmts,
-              out,
-              in_breakable,
-              throw_caught,
+    While(c, body) | DoWhile(c, body) => {
+      collect_flow_writes_expr(c, other)
+      list(body.stmts, true, throw_caught)
+    }
+    For(init, cond, update, body) => {
+      for x in [init, update] {
+        match x {
+          Some(s) =>
+            backedge_walk_stmt(
+              s, w, false, in_breakable, throw_caught, inner_labels,
             )
           None => ()
         }
       }
+      match cond {
+        Some(e) => collect_flow_writes_expr(e, other)
+        None => ()
+      }
+      list(body.stmts, true, throw_caught)
     }
-    Label(_, inner) =>
-      collect_backedge_assignments_stmt(inner, out, in_breakable, throw_caught)
-    _ => ()
+    ForOf(kind, b, _, it, body)
+    | ForAwaitOf(kind, b, _, it, body)
+    | ForIn(kind, b, _, it, body) => {
+      match kind {
+        Assign | Var => collect_flow_writes_binding(b, other)
+        Let | Const => collect_flow_writes_binding_exprs(b, other)
+      }
+      collect_flow_writes_expr(it, other)
+      list(body.stmts, true, throw_caught)
+    }
+    Switch(e, cases) => {
+      collect_flow_writes_expr(e, other)
+      for c in cases {
+        match c.test_expr {
+          Some(t) => collect_flow_writes_expr(t, other)
+          None => ()
+        }
+        list(c.body.stmts, true, throw_caught)
+      }
+    }
+    Try(t, _, c, f) => {
+      list(t.stmts, in_breakable, throw_caught || c is Some(_))
+      for blk in [c, f] {
+        match blk {
+          Some(bb) => list(bb.stmts, in_breakable, throw_caught)
+          None => ()
+        }
+      }
+    }
+    Label(l, inner) =>
+      backedge_walk_stmt(
+        inner,
+        w,
+        listed,
+        in_breakable,
+        throw_caught,
+        [..inner_labels, l],
+      )
+    NativeClassStmt(_, _) => ()
+  }
+}
+
+///|
+/// The names an assignment TARGET writes, plus the writes inside its
+/// defaults and computed keys.
+fn collect_flow_writes_binding(
+  b : @ast.TsBinding,
+  out : Map[String, Unit],
+) -> Unit {
+  match b {
+    Ident(n) => out[n] = ()
+    Target(Var(n)) => out[n] = ()
+    Target(e) => collect_flow_writes_expr(e, out)
+    Array(ab) => {
+      for it in ab.items {
+        match it {
+          Some(elem) => {
+            collect_flow_writes_binding(elem.binding, out)
+            match elem.default {
+              Some(d) => collect_flow_writes_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_flow_writes_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => collect_flow_writes_expr(k, out)
+          None => ()
+        }
+        collect_flow_writes_binding(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_flow_writes_expr(d, out)
+          None => ()
+        }
+      }
+      match ob.rest {
+        Some(r) => out[r] = ()
+        None => ()
+      }
+    }
+  }
+}
+
+///|
+/// A DECLARATION's pattern binds new names and writes none, but its
+/// defaults and computed keys are expressions that can.
+fn collect_flow_writes_binding_exprs(
+  b : @ast.TsBinding,
+  out : Map[String, Unit],
+) -> Unit {
+  match b {
+    Ident(_) => ()
+    Target(e) => collect_flow_writes_expr(e, out)
+    Array(ab) => {
+      for it in ab.items {
+        match it {
+          Some(elem) => {
+            collect_flow_writes_binding_exprs(elem.binding, out)
+            match elem.default {
+              Some(d) => collect_flow_writes_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_flow_writes_binding_exprs(r, out)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => collect_flow_writes_expr(k, out)
+          None => ()
+        }
+        collect_flow_writes_binding_exprs(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_flow_writes_expr(d, out)
+          None => ()
+        }
+      }
+  }
+}
+
+///|
+fn collect_flow_writes_expr(e : @ast.TsExpr, out : Map[String, Unit]) -> Unit {
+  fn all(xs : Array[@ast.TsExpr]) -> Unit {
+    for x in xs {
+      collect_flow_writes_expr(x, out)
+    }
+  }
+
+  match e {
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole
+    | Var(_)
+    | ImportMeta => ()
+    // Function and class bodies: see `collect_backedge_writes`.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => ()
+    UnaryOp(op, x) => {
+      match (op, x) {
+        (PreInc | PreDec | PostInc | PostDec, Var(n)) => out[n] = ()
+        _ => ()
+      }
+      collect_flow_writes_expr(x, out)
+    }
+    AssignExpr(n, x) => {
+      out[n] = ()
+      collect_flow_writes_expr(x, out)
+    }
+    AssignPattern(b, x) => {
+      collect_flow_writes_binding(b, out)
+      collect_flow_writes_expr(x, out)
+    }
+    CompoundAssignExpr(t, _, x) => {
+      match t {
+        Var(n) => out[n] = ()
+        _ => collect_flow_writes_expr(t, out)
+      }
+      collect_flow_writes_expr(x, out)
+    }
+    BinOp(_, a, b)
+    | Seq(a, b)
+    | IndexAccess(a, b)
+    | ComputedProp(a, b)
+    | PropAssignExpr(a, _, b) => {
+      collect_flow_writes_expr(a, out)
+      collect_flow_writes_expr(b, out)
+    }
+    Cond(a, b, c) | IndexAssignExpr(a, b, c) => {
+      collect_flow_writes_expr(a, out)
+      collect_flow_writes_expr(b, out)
+      collect_flow_writes_expr(c, out)
+    }
+    TypeArgs(_, x)
+    | Spread(x)
+    | PropAccess(x, _)
+    | PureCall(x)
+    | YieldStar(x)
+    | Await(x)
+    | As(x, _)
+    | Satisfies(x, _)
+    | NonNull(x)
+    | OptionalChain(x) => collect_flow_writes_expr(x, out)
+    Yield(x) =>
+      match x {
+        Some(y) => collect_flow_writes_expr(y, out)
+        None => ()
+      }
+    Call(_, args) | New(_, args) | ArrayLit(args) => all(args)
+    CallExpr(c, args) | NewExpr(c, args) | MethodCall(c, _, args) => {
+      collect_flow_writes_expr(c, out)
+      all(args)
+    }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_flow_writes_expr(ent.1, out)
+      }
+    DynamicImport(a, b) => {
+      collect_flow_writes_expr(a, out)
+      match b {
+        Some(y) => collect_flow_writes_expr(y, out)
+        None => ()
+      }
+    }
+    TaggedTemplate(tag, _, _, xs) => {
+      collect_flow_writes_expr(tag, out)
+      all(xs)
+    }
+    TemplateLiteral(_, xs) => all(xs)
+    JsxElement(_, attrs, children) => {
+      for a in attrs {
+        match a.1 {
+          Some(v) => collect_flow_writes_expr(v, out)
+          None => ()
+        }
+      }
+      all(children)
+    }
   }
 }
 
@@ -26566,9 +27056,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       // Loop back-edge join, as for `while`, over the body AND the update,
       // which both run before the condition is read again.
+      // The update is appended only when the body can reach it: a body
+      // that ends in an exit never runs the update (`backedge_list_exits`).
       let backedge_body : @ast.TsBlock = match update {
-        Some(u) => { stmts: [..body.stmts, u], stmt_positions: [], }
-        None => body
+        Some(u) if !backedge_list_exits(body.stmts, false, false, []) =>
+          { stmts: [..body.stmts, u], stmt_positions: [], }
+        _ => body
       }
       let backedge_cond = match cond {
         Some(e) => e

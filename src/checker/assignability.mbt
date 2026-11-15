@@ -1062,6 +1062,9 @@ fn is_assignable_to_inner(
         match it {
           Rest(Array(e)) | Rest(Applied("Array" | "ReadonlyArray", [e])) =>
             is_assignable_to_inner(e, t_inner, bivariant_params)
+          // A spread TUPLE has known slots, so it is judged the same way.
+          Rest(Tuple(_) as inner) =>
+            is_assignable_to_inner(inner, Array(t_inner), bivariant_params)
           Rest(_) => true
           _ => is_assignable_to_inner(it, t_inner, bivariant_params)
         }

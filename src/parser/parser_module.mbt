@@ -1635,6 +1635,13 @@ fn value_decl_static_object_prop_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_object_prop_expr_with_depth(
+        inner,
+        key,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ObjectLit(props) => {
       for prop in props {
         if prop.0 == key {
@@ -1792,6 +1799,13 @@ fn value_decl_static_array_item_expr_with_depth(
     return None
   }
   match expr {
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_array_item_expr_with_depth(
+        inner,
+        index,
+        const_values,
+        depth - 1,
+      )
     @ast.TsExpr::ArrayLit(items) =>
       match items.get(index) {
         Some(item) =>
@@ -2386,6 +2400,11 @@ fn value_decl_static_key_from_expr_with_depth(
           )
         None => None
       }
+    // A checking parse keeps `as const` (`keep_const_assertion_nodes`), so
+    // `const KEY = "id" as const` holds the wrapper; the key is the value
+    // inside it, exactly as the erasing parse already sees it.
+    @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
+      value_decl_static_key_from_expr_with_depth(inner, const_values, depth - 1)
     @ast.TsExpr::NumberLit(key) =>
       if key.to_int().to_double() == key {
         Some(key.to_int().to_string())

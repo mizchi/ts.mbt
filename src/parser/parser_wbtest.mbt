@@ -8379,3 +8379,15 @@ test "an exported const assertion keeps its operand's value type" {
   guard found is Some(v) else { abort("n not recorded") }
   assert_true(v.type_ is Number)
 }
+
+///|
+test "a const-asserted computed key resolves like the bare literal" {
+  let parser = Parser::from_source_with_jsx(
+    "const KEY = \"id\" as const;\nexport const { [KEY]: id } = { id: 1 };", false,
+  )
+  parser.keep_const_assertions()
+  let m = parser.parse_module() catch { _ => abort("parse") }
+  let found = m.values.iter().find_first(fn(v) { v.name == "id" })
+  guard found is Some(v) else { abort("id not recorded") }
+  assert_true(v.type_ is Number)
+}

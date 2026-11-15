@@ -1858,6 +1858,7 @@ fn Parser::parse_jsx_opening_tag(
               trimmed.to_owned()
             }
             let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+            self.inherit_source_flags(sub)
             try sub.parse_expr() catch {
               _ => attrs.push((attr_name, None))
             } noraise {
@@ -1930,6 +1931,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
             trimmed.to_owned()
           }
           let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          self.inherit_source_flags(sub)
           try sub.parse_expr() catch {
             _ => ()
           } noraise {
@@ -2015,6 +2017,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
                   payload_str,
                   self.allow_jsx,
                 )
+                self.inherit_source_flags(sub)
                 try sub.parse_expr() catch {
                   _ => ()
                 } noraise {
@@ -2368,6 +2371,7 @@ fn Parser::parse_jsx_opening_header(
         if trimmed.length() > 0 && trimmed.has_prefix("...") {
           let payload_str = trimmed[3:].to_owned().trim().to_owned()
           let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          self.inherit_source_flags(sub)
           try sub.parse_expr() catch {
             _ => ()
           } noraise {
@@ -2429,6 +2433,7 @@ fn Parser::parse_jsx_opening_header(
               trimmed.to_owned()
             }
             let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+            self.inherit_source_flags(sub)
             try sub.parse_expr() catch {
               _ => attrs.push((attr_name, None))
             } noraise {
@@ -2519,6 +2524,7 @@ fn Parser::parse_jsx_children(
           trimmed.to_owned()
         }
         let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+        self.inherit_source_flags(sub)
         try sub.parse_expr() catch {
           _ => ()
         } noraise {
@@ -2739,6 +2745,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
           let exprs : Array[@ast.TsExpr] = []
           for src in expr_sources {
             let sub_parser = Parser::from_source(src)
+            self.inherit_source_flags(sub_parser)
             sub_parser.current_class_brand = self.current_class_brand
             let sub_expr = sub_parser.parse_expr()
             exprs.push(sub_expr)
@@ -3124,6 +3131,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       let exprs : Array[@ast.TsExpr] = []
       for src in expr_sources {
         let sub_parser = Parser::from_source(src)
+        self.inherit_source_flags(sub_parser)
         sub_parser.current_class_brand = self.current_class_brand
         let expr = sub_parser.parse_expr()
         exprs.push(expr)

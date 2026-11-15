@@ -602,3 +602,11 @@ test "is_assignable_to: a tuple flows into an array of its slots' union" {
   assert_true(is_assignable_to(t, Applied("Array", [Number])))
   assert_false(is_assignable_to(t, Applied("Array", [String_])))
 }
+
+///|
+test "a spread tuple inside a tuple is judged slot by slot against T[]" {
+  assert_false(is_assignable_to(Tuple([Rest(Tuple([String_]))]), Array(Number)))
+  assert_true(
+    is_assignable_to(Tuple([Rest(Tuple([Number])), Number]), Array(Number)),
+  )
+}
