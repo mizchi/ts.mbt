@@ -4447,7 +4447,10 @@ product surfaces now.
   largest is an imported OVERLOADED function whose optional parameters
   read as required (`useObservable(x)` is "expected at least 4
   arguments" 125 times). Before the loader fix, those files' imports were
-  simply missing.
+  simply missing. With the headers applied, the batch takes univer from
+  2,861 reports to **2,807 in 750 files**. That number nets the fixes
+  against the newly visible code: `ICommand` 135 -> 4, `IMutation`
+  25 -> 0, and TS1002 / TS1029 / the bivariance cell all reach zero.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
