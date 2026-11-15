@@ -3886,6 +3886,16 @@ fn Parser::parse_export_stmt(
     // at parse time, so neither answer is right for both consumers.
     // `namespace_is_instantiated` gets the fact from `type_aliases`
     // instead, where this path already records it.
+    //
+    // The name is still a BINDING, and name resolution needs that fact
+    // even though `values` cannot carry it: `export import E = M;
+    // new E.C()` read as "cannot find name `E`", a false positive on a
+    // file tsc accepts (`importAliasMergedNamespace`, new in the TS7
+    // corpus after 7.1-beta). The marker feeds only the checker's
+    // `declared_value_names` backstop, so the bridge's import decision is
+    // untouched; if `M` turns out to hold only types, the use is TS2708
+    // in tsc and a MISS here, which is the affordable direction.
+    self.grammar_misuses.push("<import-eq-alias>" + name)
     self.skip_until_semicolon()
     return
   }

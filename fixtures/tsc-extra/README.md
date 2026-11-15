@@ -47,7 +47,8 @@ just verify-tsc-extra
 ```
 
 The script runs `scripts/verify_tsc_extra.mjs` against
-`node_modules/typescript` (**TypeScript 7.1.0-beta**) and answers three
+`node_modules/typescript` (**TypeScript 7.1.0-dev.20261114.1**, the
+nightly on `main` that the oracle's corpus is pinned to) and answers three
 questions, in order:
 
 1. **Baseline.** Does TypeScript 7 still produce the committed
@@ -77,8 +78,8 @@ generates `.types` / `.symbols` / `.js` and this harness does not.
 - **Names.** No case basename matches an upstream test name. The check runs
   against `scripts/ts7_baselines/tsgo_ran_set.txt` every time. Pass
   `--upstream DIR` to also check every case under a checkout of
-  `tsc/testdata/tests/cases` (compiler and conformance, 12,974 files at
-  `v7.1-beta`).
+  `tsc/testdata/tests/cases` (compiler and conformance: 12,974 files at
+  `v7.1-beta`, 13,053 at the `main` nightly `6bdcb54d`; checked at both).
 - **Text.** For every case, the share of its non-trivial lines that appear
   verbatim in any single upstream case is **at most 0.33**. Most cases
   score 0, so none is a copy of an upstream test.
@@ -89,8 +90,10 @@ generates `.types` / `.symbols` / `.js` and this harness does not.
 
 ## Feedback candidates
 
-Each was verified on TypeScript 7.1.0-beta. The upstream issue tracker has
-not been searched yet; do that before filing.
+Each was verified on TypeScript 7.1.0-beta and again on the nightly
+`7.1.0-dev.20261114.1` (`main` at `6bdcb54d`), where all five reproduce
+unchanged — so none was fixed between the beta and current `main`. The
+upstream issue tracker has not been searched yet; do that before filing.
 
 | Case | What looks wrong | Compare |
 | --- | --- | --- |

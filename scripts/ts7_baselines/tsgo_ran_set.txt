@@ -2249,6 +2249,7 @@ implementingAnInterfaceExtendingClassWithPrivates2
 implementingAnInterfaceExtendingClassWithProtecteds
 implementsClause
 importAliasIdentifiers
+importAliasMergedNamespace
 importAliasModuleExports
 importAssertion1
 importAssertion2

@@ -261,6 +261,12 @@ checker-miss-buckets *ARGS:
 # narrows now, and its real error (TS2540, writing the readonly lib member)
 # needs ES2026's `RawJSON` modelled.
 #
+# The nightly `7.1.0-dev.20261114.1` (main at 6bdcb54d) added one case,
+# `importAliasMergedNamespace`, which TS7 accepts and which was an FP:
+# `export import E = M; new E.C()` read `E` as undeclared, because an
+# `export import` alias records no `values` entry (the bridge reads those).
+# The error set is unchanged and the budget stays 0.
+#
 # 50 -> 15 in batch FU, one file at a time and each with its legal
 # neighbour probed against TS 7.1; the 15 left each need machinery (generic
 # inference through overloads and conditional types, object-literal

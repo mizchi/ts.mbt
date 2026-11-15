@@ -1,4 +1,10 @@
 {
+  "dependencies": {
+    "@tsmbt-bridge/vitest": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_old/vitest/vitest",
+    "@tsmbt-bridge/hono": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_old/hono/hono",
+    "@tsmbt-bridge/vitest": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_new/vitest/vitest",
+    "@tsmbt-bridge/hono": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_new/hono/hono"
+  },
   "name": "typescript-mbt-oracle",
   "private": true,
   "type": "module",
@@ -20,7 +26,7 @@
     "react": "^19.3.1",
     "rolldown": "^1.2.16",
     "terser": "^5.51.2",
-    "typescript": "7.1.0-beta",
+    "typescript": "7.1.0-dev.20261114.1",
     "typescript-6": "npm:typescript@6.0.3",
     "vitest": "^5.0.5",
     "yjs": "^13.6.33",

@@ -1050,3 +1050,24 @@ test "real code: zod and effect shapes tsc accepts stay legal" {
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
+
+///|
+test "an `export import` alias is a binding name resolution can see" {
+  // `importAliasMergedNamespace`, added to the TS7 corpus after 7.1-beta:
+  // the alias records no `values` entry (the bridge reads `values`), so
+  // `new E.C()` read `E` as undeclared on a file tsc accepts.
+  let src =
+    #|namespace M { export class C {} }
+    #|namespace N { export import E = M; new E.C(); }
+    #|export import H = M;
+    #|new H.C();
+    #|new Q.C();
+  let issues = eff_issues(src)
+  let undeclared = fn(n : String) {
+    issues.iter().any(fn(i) { i.message == "cannot find name `\{n}`" })
+  }
+  assert_false(undeclared("E"))
+  assert_false(undeclared("H"))
+  // The neighbour that must still report: nothing declares `Q`.
+  assert_true(undeclared("Q"))
+}

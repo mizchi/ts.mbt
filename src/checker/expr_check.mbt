@@ -1456,6 +1456,15 @@ fn collect_module_value_names(
   for stmt in module_.top_level_stmts {
     collect_stmt_value_names(stmt, out)
   }
+  // `export import E = M` binds `E` without a `values` entry (the bridge
+  // reads `values` to decide what to import, and whether the alias is a
+  // value depends on a target the parser does not resolve), so the
+  // parser leaves the name here instead.
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<import-eq-alias>") {
+      out[gm["<import-eq-alias>".length():].to_owned()] = true
+    }
+  }
 }
 
 ///|
@@ -47149,6 +47158,11 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: an exported value declaration's name,
       // consumed by the class/namespace static-merge check.
       if gm.has_prefix("<export-value>") {
+        continue
+      }
+      // Marker, not an error: an `export import X = …` alias name,
+      // consumed by the `declared_value_names` backstop.
+      if gm.has_prefix("<import-eq-alias>") {
         continue
       }
       // Marker, not an error: a default-export occurrence, consumed by the
