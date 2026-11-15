@@ -23162,3 +23162,58 @@ test "a destructuring default keeps an any element" {
     0,
   )
 }
+
+///|
+/// Four more cells from review, each probed against tsc:
+///
+/// - an empty array DEFAULT feeding a nested pattern is the empty tuple, so
+///   `const [[y = 0] = []] = [undefined]` binds `y` as `number` (TS2322
+///   against `string`), as does the object-pattern spelling;
+/// - an element that only CONTAINS `any` (`[x?: any]`, read as
+///   `any | undefined`) stays `any` through a default (accepted);
+/// - `...[]` adds no element, so `[1, ...[]]` is `number[]` (TS2322);
+/// - a callback body with a `using` is lowered into a `try`, and its
+///   `return` is still the callback's return type: tsc accepts
+///   `const k: number = f()` for `const f = () => { using r = res();
+///   return 5 }`, and this read it as `undefined`.
+test "using bodies, nested empty defaults, any unions and empty spreads" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    n(
+      "function f() {\n  const [[y = 0] = []] = [undefined];\n  const s: string = y;\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      "function f() {\n  const { p: [z = 0] = [] } = { p: undefined };\n  const s: string = z;\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const t: [x?: any];\nfunction f() {\n  const [w = 1] = t;\n  const m: string = w;\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n(
+      "function f() {\n  const arr = [1, ...[]];\n  const s: string = arr[0];\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare function res(): Disposable;\nfunction g() {\n  const inferred = () => { using r = res(); return 5; };\n  const k: number = inferred();\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n(
+      "declare function res(): Disposable;\nfunction g() {\n  const inferred = () => { using r = res(); return 5; };\n  const k: string = inferred();\n}",
+    ) >
+    0,
+  )
+}

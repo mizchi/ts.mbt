@@ -10711,6 +10711,12 @@ fn infer_expr_inner(
       let mut elem : @ast.TsType = Any
       let mut first = true
       for item in items {
+        // `...[]` contributes no element. Its `[]` infers with element type
+        // `any`, which the `any` arm below would make the whole literal's,
+        // so `[1, ...[]]` read as `any[]` where tsc says `number[]`.
+        if item is Spread(ArrayLit([])) {
+          continue
+        }
         let t = match item {
           // Spread: infer the spread arg's type and extract its element type
           // so `[...arr]` where `arr: string[]` infers `string[]`, not `any[]`.
@@ -20799,7 +20805,24 @@ fn infer_block_return(
   let added : Array[String] = []
   let mut acc : @ast.TsType = @ast.TsType::Undefined
   let mut first = true
-  for stmt in block.stmts {
+  // Read as top-level statements too: a declarator group
+  // (`const a = 1, b = 2`), and the body of a `try` with no `catch`, which
+  // runs in the same straight line. The second is the shape a block with a
+  // `using` declaration is lowered to (`lower_using_block`), so
+  // `() => { using r = res(); return 5 }` read as returning `undefined`.
+  let flat : Array[@ast.TsStmt] = []
+  fn flatten(stmts : Array[@ast.TsStmt]) -> Unit {
+    for st in stmts {
+      match st {
+        Try(body, None, None, _) => flatten(body.stmts)
+        Block({ stmts: inner, stmt_positions, }) if stmt_positions ==
+          [@ast.DECL_GROUP_POSITION] => flatten(inner)
+        _ => flat.push(st)
+      }
+    }
+  }
+  flatten(block.stmts)
+  for stmt in flat {
     match stmt {
       Var(@ast.TsBinding::Ident(name), declared, init)
       | Let(@ast.TsBinding::Ident(name), declared, init)
@@ -23143,22 +23166,31 @@ fn type_display(ty : @ast.TsType) -> String {
 /// source element is `undefined`, so the binding's type drops `undefined`
 /// and gains the default's (widened) type. Matches TS, where `let [x = 0] =
 /// arr` types `x` as the element type with `undefined` replaced by `number`.
+///
+/// `pattern` says the binding the default feeds is itself a pattern. An
+/// EMPTY array literal default is then the empty tuple, as it is to tsc in
+/// a destructuring position: `const [[y = 0] = []] = [undefined]` binds `y`
+/// from the inner default (`number`). For a plain name the default keeps
+/// its inferred type.
 fn apply_binding_default(
   env : ExprEnv,
   ctx : CheckCtx,
   ty : @ast.TsType,
   default : @ast.TsExpr?,
+  pattern~ : Bool = false,
 ) -> @ast.TsType {
   match default {
     None => ty
     // An `any` element stays `any` whatever the default is: tsc types
     // `const [x = 0] = xs` with `xs: any[]`, and `const { a = 0 } = o` with
     // `o: any`, as `any`. Reading it as the default's type reported
-    // `const s: string = x` on code tsc accepts. The `any` an EMPTY array
-    // literal used to contribute is not this case — `const [x = 0] = []`
-    // is `number` in tsc — and the declaration site hands that source over
-    // as the empty tuple, whose element 0 is `undefined`.
-    Some(_) if ty is Any => ty
+    // `const s: string = x` on code tsc accepts. An element that only
+    // CONTAINS `any` is `any` too (`[x?: any]` reads as `any | undefined`),
+    // since `any | T` is `any`. The `any` an EMPTY array literal used to
+    // contribute is not this case — `const [x = 0] = []` is `number` in tsc
+    // — and the declaration site hands that source over as the empty
+    // tuple, whose element 0 is `undefined`.
+    Some(_) if union_components(ty).contains(Any) => Any
     // A CONST-ASSERTED default is typed exactly, and its type is what tsc
     // unions in whatever the element is — `(element minus undefined) |
     // default`, with no widening, since a const context is not a fresh
@@ -23180,7 +23212,11 @@ fn apply_binding_default(
       union_of(kept)
     }
     Some(d) => {
-      let default_ty = widen_literal(infer_expr(env, ctx.resolver, d))
+      let default_ty = if pattern && d is ArrayLit([]) {
+        @ast.TsType::Tuple([])
+      } else {
+        widen_literal(infer_expr(env, ctx.resolver, d))
+      }
       match ty {
         Undefined => default_ty
         // Flattened and deduplicated: an optional field read off a union
@@ -23332,7 +23368,13 @@ fn bind_array_pattern(
           // Unknown iterable shape: infer undefined (element may not exist).
           _ => @ast.TsType::Undefined
         }
-        let elem_ty = apply_binding_default(env, ctx, elem_ty, elem.default)
+        let elem_ty = apply_binding_default(
+          env,
+          ctx,
+          elem_ty,
+          elem.default,
+          pattern=elem.binding is (Array(_) | Object(_)),
+        )
         // The default runs BEFORE the nested pattern's computed keys and
         // only when the element is `undefined`, so a binding it assigns
         // reaches those keys — and the code after — as the join of its
@@ -23592,7 +23634,13 @@ fn bind_object_pattern(
             }
         }
     }
-    let field_ty = apply_binding_default(env, ctx, field_ty, prop.default)
+    let field_ty = apply_binding_default(
+      env,
+      ctx,
+      field_ty,
+      prop.default,
+      pattern=prop.binding is (Array(_) | Object(_)),
+    )
     bind_pattern(env, ctx, prop.binding, field_ty)
     // A type a computed key selected from a const-asserted tuple is exact
     // (see `check_expr_against`'s flow-residue suppression), as long as no

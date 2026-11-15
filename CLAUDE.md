@@ -4336,13 +4336,30 @@ product surfaces now.
   downlevel output under Node:
   - A SECOND `using` in a block was parsed by `parse_stmt`, which leaves
     a `using` outside any block a plain `let`, so
-    `{ using a = x; using b = y }` never disposed `b`. Each later
-    declaration now opens a scope nested in the one before it.
+    `{ using a = x; using b = y }` never disposed `b`.
   - A label on a C-style `for (using …)` labelled the block the lowering
     builds around the loop, so `continue outer` in the output was a
     SyntaxError. tsc's own es2022 downlevel emits the same invalid
     `continue`. The label is moved onto the loop, which no `break` can
-    tell apart.
+    tell apart, but only past a `finally` that is exactly the generated
+    disposal. The first version moved it past any `finally`, and a
+    hand-written `exit: { … try { for … } finally { break exit } }` then
+    lost its target.
+
+  The first fix for the second `using` nested each later declaration's
+  scope inside the one before it. A second review found that the nesting
+  was the bug itself, and it predates this work for the first `using`: the
+  statements after a `using` went into a `try` of their own, so their
+  declarations moved into an inner scope. A function declared after the
+  `using` and called before it, or a closure created before it that reads
+  a later `const`, threw `ReferenceError` in the output. The block is now
+  lowered as tsc's downlevel does it: ONE `try` around every statement
+  after the directive prologue. Each binding stays a `const` in place, as
+  `const a = (h0 = x)`, and the `finally` disposes the holders last first.
+  The checker reads that shape too. `infer_block_return` reads only a
+  block's top-level statements, so it now also reads the body of a `try`
+  with no `catch`; otherwise `() => { using r = res(); return 5 }` read as
+  returning `undefined`.
   - `await using` read only `[Symbol.asyncDispose]`, so a synchronous
     disposable was never disposed. It now falls back to
     `[Symbol.dispose]`, calls exactly one of the two, and discards the
@@ -4354,7 +4371,15 @@ product surfaces now.
   `any`. The only `any` that should take the default was an EMPTY array
   literal's (`const [x = 0] = []` is `number`), and the declaration site
   now passes that source as the empty tuple. The `as const` default arm
-  had the same hole before any of this.
+  had the same hole before any of this. Review then found three more
+  cells, each probed against tsc:
+  - a `[]` default feeding a nested pattern is the empty tuple too;
+  - an element that only CONTAINS `any` (`[x?: any]`) stays `any`;
+  - `...[]` adds no element to an array literal.
+
+  `const [x = 0]: any = []` still binds `number` where tsc binds `any`.
+  That is the absent-versus-`: any` blocker again, and it predates this
+  work.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
