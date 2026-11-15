@@ -4205,6 +4205,42 @@ product surfaces now.
   - Skipping any argument whose type names a phantom binder lost two
     corpus TPs. A construct signature's own `<T>` is not carried, so the
     skip could not tell a bound `T` from a phantom one. It was removed.
+
+  `fixtures/tsc-extra` holds the probed cases the upstream suite does not
+  contain, in its harness format, so they can be contributed back. 44
+  cases: 39 coverage cases from the unit tests, and five `feedback/` cases
+  where TS7 itself looks inconsistent (for example, `void 0 ?? y` is TS2869
+  "never nullish"). Its README lists each case with the nearest upstream
+  test. `just verify-tsc-extra` is now a CI step. It checks three things:
+  - TS7 still produces each committed `.errors.txt`.
+  - Every `ok…` / `bad…` declaration name agrees with tsc's own spans.
+  - `mtsc check --strict` reports nothing on an `ok…`. A silent `bad…`
+    must be declared in `mtsc-misses.txt`.
+
+  The baseline generator is a port of the harness's
+  `iterateErrorBaseline`. It reproduces 498 of 500 sampled vendored TS7
+  baselines byte for byte.
+
+  Building it found two defects in `scripts/lib/tsc-probe.mjs`, the
+  instrument behind every "probed" claim in this file. Both failed
+  silently.
+  - A header option off a fixed list was dropped, and the file was checked
+    without it. `noImplicitOverride` was off the list. That is how "tsc
+    exempts a mixin base from TS4114" got written into
+    `check_override_modifiers` as a probed fact. TS7 reports TS4114
+    through a mixin, statics included. The exemption is gone, and the
+    unit test that pinned it (`OkNoModifier`) asserts the report. That is
+    the seventeenth test here found pinning a gap.
+  - `getGlobalDiagnostics()` was never called, so TS2318 under
+    `@lib` / `@noLib` read as ACCEPTED.
+
+  The probe now honours every header option the upstream corpus spells
+  that can change a diagnostic, and warns about any other.
+
+  The `ok…` / `bad…` check caught one more mistake in the unit tests. A
+  file's own `type NonNullable<T> = T` is local only in a MODULE. In a
+  script it is TS2300 against the lib, and the case was written as a
+  script.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

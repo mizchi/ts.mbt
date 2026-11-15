@@ -1,0 +1,16 @@
+// @strict: true
+// @target: esnext
+
+// effect `Pipeable`: an inherited set of generic overloads with `this`
+// parameters is resolved as a set, not by its first member.
+
+interface Pipeable {
+  pipe<A>(this: A): A
+  pipe<A, B = never>(this: A, ab: (_: A) => B): B
+}
+interface Eff<A> extends Pipeable { readonly a: A }
+interface One { m(x: number): number }
+declare const e: Eff<number>;
+declare const o: One;
+function ok(): unknown { return e.pipe((x) => x); }
+function bad(): unknown { return o.m(1, 2); }

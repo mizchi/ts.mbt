@@ -39629,13 +39629,21 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
         })
       }
     }
-    // TS4114: genuine overrides missing the modifier. Not through a mixin
-    // call: tsc does not ask for the modifier when the base is the
-    // intersection a mixin returns (probed — `class G extends
-    // CreateMixin(Context, A) { doSomething() {} }` is ACCEPTED under
-    // `noImplicitOverride`), while it does reject an `override` that
-    // intersection does not declare.
-    if no_implicit_override && mixin_chain is None {
+    // TS4114: genuine overrides missing the modifier — through a mixin
+    // call as well. This used to exempt a mixin base, citing a probe that
+    // found `class G extends CreateMixin(Context, A) { doSomething() {} }`
+    // ACCEPTED under `noImplicitOverride`. The probe had dropped the
+    // header: `scripts/lib/tsc-probe.mjs` passed only a fixed list of
+    // options to the compiler and `noImplicitOverride` was not on it, so
+    // the file was checked with the flag OFF. TS7 reports TS4114 on every
+    // member the intersection a mixin returns declares, instance and
+    // static, for an intersection-returning declaration and for a function
+    // returning a class expression alike
+    // (`fixtures/tsc-extra/cases/classes/noImplicitOverrideThroughMixinBase.ts`).
+    // Only the first reaches a resolvable chain here
+    // (`mixin_call_base_chain`); a class-expression mixin leaves the chain
+    // unresolvable above, which is a MISS rather than a guess.
+    if no_implicit_override {
       let flag_missing = fn(name : String, is_static_m : Bool) -> Unit {
         if name == "constructor" ||
           name == "<computed>" ||

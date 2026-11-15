@@ -652,14 +652,18 @@ test "batch FW: un-inlined generic signatures for call inference and mixin bases
     #|class Bad extends CreateMixin(Context, A) { override foo() {} }
     #|class OkOverride extends CreateMixin(Context, A) { override doSomething() {} }
     #|class OkContext extends CreateMixin(Context, A) { override context: Context = new Context(); }
-    #|class OkNoModifier extends CreateMixin(Context, A) { doSomething() {} }
+    #|class BadNoModifier extends CreateMixin(Context, A) { doSomething() {} }
   let m = parse_module_or_empty(mixin_src)
   let oi = check_override_modifiers(m)
   let has = fn(c : String) { oi.iter().any(fn(i) { i.path == "class \{c}" }) }
   assert_true(has("Bad"))
   assert_false(has("OkOverride"))
   assert_false(has("OkContext"))
-  assert_false(has("OkNoModifier"))
+  // This class was `OkNoModifier` and asserted SILENT, on the strength of a
+  // probe that had dropped the `@noImplicitOverride` header (see
+  // `check_override_modifiers`). Under the flag TS7 reports TS4114 here: the
+  // seventeenth test in this repo found pinning a gap.
+  assert_true(has("BadNoModifier"))
 }
 
 ///|

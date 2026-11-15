@@ -1,0 +1,13 @@
+// @strict: true
+// @target: esnext
+
+// effect `Predicate.hasProperty`: a type predicate returned by an overloaded
+// `const`, and `"k" in u` narrowing `object`.
+
+declare const hasProperty: {
+  <P extends PropertyKey>(property: P): (self: unknown) => self is { [K in P]: unknown }
+  <P extends PropertyKey>(self: unknown, property: P): self is { [K in P]: unknown }
+}
+function ok1(u: unknown): unknown { if (hasProperty(u, "then")) { return u.then } return 0 }
+function ok2(u: object): unknown { if ("then" in u) { return u.then } return 0 }
+function bad(u: object): unknown { return u.then }

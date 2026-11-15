@@ -1,0 +1,29 @@
+privateNameStaticClashAndReadonlyLiteralField.ts(5,18): error TS2804: Duplicate identifier '#a'. Static and instance elements cannot share the same private name.
+privateNameStaticClashAndReadonlyLiteralField.ts(5,26): error TS2804: Duplicate identifier '#a'. Static and instance elements cannot share the same private name.
+privateNameStaticClashAndReadonlyLiteralField.ts(10,19): error TS2322: Type '5' is not assignable to type '1'.
+
+
+==== privateNameStaticClashAndReadonlyLiteralField.ts (3 errors) ====
+    // `static #a` beside `#a` (TS2804), and a `readonly` field without an
+    // annotation having its LITERAL type: the constructor write is TS2322 while a
+    // read into a mutable `let` widens again.
+    
+    class E { static #a() {} #a() {} }
+                     ~~
+!!! error TS2804: Duplicate identifier '#a'. Static and instance elements cannot share the same private name.
+                             ~~
+!!! error TS2804: Duplicate identifier '#a'. Static and instance elements cannot share the same private name.
+    class H { get #f() { return 0 } set #f(v: number) {} static #g = 1 }
+    class D {
+      readonly noWiden = 1
+      readonly typed: number = 1
+      constructor() { this.noWiden = 5; this.typed = 7 }
+                      ~~~~~~~~~~~~
+!!! error TS2322: Type '5' is not assignable to type '1'.
+      m() { let y = this.noWiden; y = 2; return y }
+    }
+    function outer(tag: string) {
+      class Local { readonly t = tag; m() { return tag } }
+      return Local
+    }
+    

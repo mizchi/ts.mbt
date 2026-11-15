@@ -1,0 +1,30 @@
+// @strict: true
+// @target: esnext
+
+// An unannotated generic method whose body returns a generic function it
+// declares: the call's binding for `U` flows into the returned function's
+// bound `V extends U`.
+
+class C<T extends { length: number }> {
+  constructor(x: T) { }
+  foo<U extends T>(x: U) {
+    function bar<V extends U>(x: V) { return x; }
+    return bar;
+  }
+  annotated<U extends T>(x: U): any {
+    function bar<V extends U>(x: V) { return x; }
+    return bar;
+  }
+  twoReturns<U extends T>(x: U, b: boolean) {
+    function bar<V extends U>(x: V) { return x; }
+    if (b) { return (y: number) => y; }
+    return bar;
+  }
+}
+function badFactoryBound() { const c = new C({ length: 2 }); const r = c.foo(""); r({ length: 3 }); }
+function okFactoryString() { const c = new C({ length: 2 }); const r = c.foo(""); r("abc"); }
+function okFactoryObjectBound() { const c = new C({ length: 2 }); const r = c.foo({ length: 3, charAt: (x: number) => { "" } }); r(""); }
+function okAnnotatedAny() { const c = new C({ length: 2 }); const r = c.annotated(""); r({ length: 3 }); }
+function abstainTwoReturns() { const c = new C({ length: 2 }); const r = c.twoReturns("", true); r({ length: 3 }); }
+declare const h: <V extends string>(x: string) => V;
+function badGenericValueConcreteParam() { h({ length: 3 }); }

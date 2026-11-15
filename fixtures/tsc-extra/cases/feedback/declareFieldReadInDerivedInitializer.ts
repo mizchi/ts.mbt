@@ -1,0 +1,25 @@
+// @strict: true
+// @target: esnext
+// @useDefineForClassFields: true
+
+// A `declare` field emits nothing; it only re-types a property the base
+// class already initializes. The base constructor (and with it `b = 1`) has
+// run before any of `Derived`'s own field initializers, so `this.b` is
+// initialized when `d` reads it — `new Derived().d === 1` at runtime — yet
+// tsc reports TS2729 ("Property 'b' is used before its initialization").
+// The same read without the redeclaration is accepted, and so is the
+// redeclaration under `useDefineForClassFields: false`.
+class Base {
+    b = 1;
+}
+class Plain extends Base {
+    d = this.b;
+}
+class Derived extends Base {
+    declare b: number;
+    d = this.b;
+}
+class DerivedNarrowed extends Base {
+    declare b: 1 | 2;
+    d = this.b;
+}

@@ -1,0 +1,17 @@
+// @strict: true
+// @target: esnext
+
+// Inference of `I` from `setup()`'s return feeds the contextual type of a
+// sibling method `map(inputs)` in the same object literal.
+
+class Wrapper<T = any> { public value?: T; }
+type WrappedMap = Record<string, Wrapper>;
+type Unwrap<D extends WrappedMap> = { [K in keyof D]: D[K] extends Wrapper<infer T> ? T : never; };
+type MC<I extends WrappedMap, O extends WrappedMap> = { setup(): { inputs: I; outputs: O }; map?: (inputs: Unwrap<I>) => Unwrap<O>; };
+declare function createMC<I extends WrappedMap, O extends WrappedMap>(def: MC<I, O>): void;
+function badIntraInference() {
+  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: inputs.nonexistent }; } });
+}
+function okIntraInference() {
+  createMC({ setup() { return { inputs: { num: new Wrapper<number>() }, outputs: { b: new Wrapper<boolean>() } }; }, map(inputs) { return { b: !!inputs.num }; } });
+}

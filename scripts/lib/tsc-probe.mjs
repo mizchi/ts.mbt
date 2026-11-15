@@ -25,11 +25,21 @@ const require_ = createRequire(import.meta.url);
 export const ts = require_("typescript");
 
 // Harness header directives. Only the ones that change what is an error
-// are honoured; emit-shape options are irrelevant here.
+// are honoured; emit-shape options (`outDir`, `sourceMap`, ...) and the
+// harness's own keys (`filename`, `noTypesAndSymbols`, ...) are not.
 // Lower-cased directive name -> the option's canonical spelling. The
 // harness accepts `// @noImplicitAny` in any case; `convertCompilerOptions`
 // does not, and rejects a miscased key with TS5025, which reads like a
 // finding about the FILE and is a bug in the probe.
+//
+// This list used to stop at the options the conformance oracle happened to
+// need, and a header option NOT on it was dropped without a word — the file
+// was then checked under the default, and the answer printed as if it were
+// the file's. `// @noImplicitOverride` was one of them, so "a mixin base is
+// exempt from TS4114" was measured with the flag OFF and written into the
+// checker as a probed fact; TS7 reports TS4114 through a mixin. Every option
+// the upstream corpus spells in a header and that can change a diagnostic is
+// here now, and `unhonoured()` names any other one instead of hiding it.
 const HONOURED = new Map(
   [
     "target", "lib", "module", "strict", "strictNullChecks", "noImplicitAny",
@@ -39,8 +49,54 @@ const HONOURED = new Map(
     "verbatimModuleSyntax", "noPropertyAccessFromIndexSignature", "importHelpers",
     "noUnusedLocals", "noUnusedParameters", "downlevelIteration",
     "strictFunctionTypes", "strictPropertyInitialization", "strictBindCallApply",
+    "noImplicitOverride", "noImplicitReturns", "noFallthroughCasesInSwitch",
+    "allowUnreachableCode", "allowUnusedLabels", "alwaysStrict",
+    "useUnknownInCatchVariables", "strictBuiltinIteratorReturn",
+    "noUncheckedSideEffectImports", "esModuleInterop", "allowSyntheticDefaultImports",
+    "resolveJsonModule", "types", "typeRoots", "noLib", "skipLibCheck",
+    "skipDefaultLibCheck", "isolatedDeclarations", "erasableSyntaxOnly",
+    "preserveConstEnums", "noImplicitUseStrict", "moduleDetection",
+    "allowArbitraryExtensions", "allowImportingTsExtensions",
+    "rewriteRelativeImportExtensions", "jsxFactory", "jsxFragmentFactory",
+    "jsxImportSource", "reactNamespace", "ignoreDeprecations", "noResolve",
+    "maxNodeModuleJsDepth", "resolvePackageJsonExports", "declaration",
+    "emitDeclarationOnly", "keyofStringsOnly", "importsNotUsedAsValues",
+    "preserveValueImports", "noErrorTruncation", "libReplacement",
   ].map((k) => [k.toLowerCase(), k]),
 );
+
+// Keys the harness reads for itself, or that only shape emitted output.
+const NOT_DIAGNOSTIC = new Set(
+  [
+    "filename", "noTypesAndSymbols", "noImplicitReferences", "currentDirectory",
+    "link", "symlink", "fullEmitPaths", "runExternalCode", "captureSuggestions",
+    "typeScriptVersion", "baselineFile", "suppressOutputPathCheck", "traceResolution",
+    "noEmit", "noEmitHelpers", "outDir", "outFile", "out", "rootDir", "sourceMap",
+    "inlineSourceMap", "inlineSources", "sourceRoot", "mapRoot", "declarationMap",
+    "declarationDir", "removeComments", "pretty", "newLine", "stripInternal",
+    "incremental", "composite", "tsBuildInfoFile", "noEmitOnError", "baseUrl",
+    "useCaseSensitiveFileNames", "noCheck",
+  ].map((k) => k.toLowerCase()),
+);
+
+/**
+ * Header option names that are neither honoured nor known to be
+ * diagnostic-neutral — a probe of such a file may be answering under the
+ * wrong configuration, so callers say so instead of staying quiet.
+ */
+export function unhonoured(src) {
+  const out = [];
+  for (const line of src.split("\n")) {
+    const m = line.match(/^\s*\/\/\s*@(\w+)\s*:\s*(.*?)\s*$/);
+    if (!m) {
+      if (line.trim() !== "" && !line.trim().startsWith("//")) break;
+      continue;
+    }
+    const k = m[1].toLowerCase();
+    if (!HONOURED.has(k) && !NOT_DIAGNOSTIC.has(k)) out.push(m[1]);
+  }
+  return out;
+}
 
 /** Honoured `// @option: value` directives from a case file's header. */
 export function directives(src) {
@@ -71,12 +127,15 @@ export function optionsJson(dirs) {
     // reads like a finding and is not one — the header spells them
     // `@strict: false`.
     opts[k] =
-      k === "lib"
+      k === "lib" || k === "types" || k === "typeRoots"
         // `lib` is an array option, and the harness spells it
         // `// @lib: esnext,dom`. Passing the raw string is TS5024; the
         // JSON form wants the bare names, not `lib.esnext.d.ts` file
-        // names (that spelling is TS6046).
-        ? v.split(",").map((x) => x.trim())
+        // names (that spelling is TS6046). `types` and `typeRoots` are
+        // lists the same way.
+        ? v.split(",").map((x) => x.trim()).filter((x) => x !== "")
+        : k === "maxNodeModuleJsDepth"
+          ? Number(first)
         : first === "true"
           ? true
           : first === "false"
@@ -164,13 +223,11 @@ function rejectedOptionDiagnostics(client, tsconfig, opts) {
 }
 
 /**
- * Check one file under its own header. Returns
- * `{ opts, diags: [{ code, line, col, msg }], otherFiles }`.
+ * Every diagnostic TS7 reports for a one-file project rooted at `abs`
+ * under `opts`: rejected header options, program, syntactic and semantic
+ * diagnostics, for that file AND for any other file the program checked.
  */
-export function probe(file) {
-  const src = fs.readFileSync(file, "utf8");
-  const opts = optionsJson(directives(src));
-  const abs = path.resolve(file);
+function runProject(abs, opts) {
   // The project is a real tsconfig on disk: the TS7 API opens projects, not
   // option objects. Options it rejects come back as PROGRAM diagnostics,
   // which is where `convertCompilerOptionsFromJson`'s errors used to go.
@@ -181,7 +238,6 @@ export function probe(file) {
     JSON.stringify({ compilerOptions: { ...opts, noEmit: true }, files: [abs] }),
   );
   const client = getApi();
-  let all;
   try {
     const configErrors = rejectedOptionDiagnostics(client, tsconfig, opts);
     // TS 7.1's sync API creates a fresh snapshot per request and requires it
@@ -191,21 +247,88 @@ export function probe(file) {
     const snapshot = client.createSnapshot({ openProjects: [tsconfig] });
     try {
       const program = snapshot.getConfiguredProject(tsconfig).program;
-      all = [
+      // GLOBAL diagnostics are their own channel: TS2318 ("Cannot find
+      // global type 'IterableIterator'") under a restricted `@lib` or
+      // `@noLib` is reported by `tsc` and by none of the other three, so a
+      // probe without it called such a file ACCEPTED. Semantic diagnostics
+      // already include the binder's.
+      const all = [
         ...configErrors,
         ...program.getProgramDiagnostics(),
+        ...program.getGlobalDiagnostics(),
         ...program.getSyntacticDiagnostics(),
         ...program.getSemanticDiagnostics(),
+        // Under `declaration` the harness emits, and its baseline carries
+        // the declaration emitter's errors (TS2527, TS4xxx, TS9xxx) too.
+        ...(opts.declaration === true || opts.isolatedDeclarations === true
+          ? program.getDeclarationDiagnostics()
+          : []),
       ];
       // Projects are reference-counted per client, so the probe's throwaway
       // project is closed explicitly before its snapshots are released.
       snapshot.update({ closeProjects: [tsconfig] }).dispose();
+      return all;
     } finally {
       snapshot.dispose();
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** True when diagnostic `d` belongs to the probed file `abs` (see `probe`). */
+function belongsTo(d, abs) {
+  return (
+    !d.fileName ||
+    path.resolve(d.fileName) === abs ||
+    path.basename(d.fileName) === "tsconfig.json"
+  );
+}
+
+/**
+ * Check `content` as a one-file program named `name` (a basename such as
+ * `foo.ts`) under `opts`, the way the upstream harness checks a case after
+ * stripping its `// @option:` header. Returns this file's diagnostics with
+ * their SPANS — `{ code, pos, end, text, chain }`, positions into `content`
+ * — which is what an `.errors.txt` baseline needs and `probe` throws away.
+ */
+export function probeContent(name, content, opts) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tsc-probe-src-"));
+  const abs = path.join(dir, name);
+  fs.writeFileSync(abs, content);
+  try {
+    return runProject(abs, opts)
+      .filter((d) => belongsTo(d, abs))
+      .map((d) => ({
+        code: d.code,
+        category: d.category,
+        pos: d.fileName ? d.pos : undefined,
+        end: d.fileName ? d.end : undefined,
+        text: d.text,
+        chain: d.messageChain ?? [],
+        // `.errors.txt` prints these as `!!! related TS2728 file:line:col:`.
+        related: (d.relatedInformation ?? []).map((r) => ({
+          code: r.code,
+          text: r.text,
+          file: r.fileName ? path.basename(r.fileName) : null,
+          line: r.startPosition ? r.startPosition.line + 1 : 0,
+          col: r.startPosition ? r.startPosition.character + 1 : 0,
+        })),
+      }));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Check one file under its own header. Returns
+ * `{ opts, diags: [{ code, line, col, msg }], otherFiles }`.
+ */
+export function probe(file) {
+  const src = fs.readFileSync(file, "utf8");
+  const opts = optionsJson(directives(src));
+  const abs = path.resolve(file);
+  const all = runProject(abs, opts);
   // `getSemanticDiagnostics()` with no argument returns EVERY file's
   // diagnostics, including the vendored `lib.*.d.ts` — and a test that
   // augments `interface Object` under `@skipDefaultLibCheck: false` makes
@@ -215,8 +338,7 @@ export function probe(file) {
   // file, such as TS2318 "Cannot find global type", belongs here too),
   // and `otherFiles` keeps the rest so the information is reported rather
   // than lost.
-  const mine = (d) =>
-    !d.fileName || path.resolve(d.fileName) === abs || path.basename(d.fileName) === "tsconfig.json";
+  const mine = (d) => belongsTo(d, abs);
   const texts = new Map([[abs, src]]);
   const shape = (d) => {
     let line = 0;
