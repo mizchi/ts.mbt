@@ -8,25 +8,24 @@ Duplicate search (2026-11-15): no existing report. The closest are #42319
 
 # Title
 
-A `declare` field that narrows an inherited property gets TS2729 when a field initializer reads it (since #43194)
+TS2729 when a field initializer reads an inherited property redeclared with `declare`
 
 ## 🔎 Search Terms
 
-TS2729, used before its initialization, declare field, declare modifier, useDefineForClassFields, redeclare base class property, field initializer
+TS2729, used before its initialization, declare, useDefineForClassFields
 
 ## 🕗 Version & Regression Information
 
-- This changed between versions 4.2.3 and 4.3.5.
-- This changed in commit or PR #43194 ("Consider class field properties to redeclare parent definitions", the fix for #42319).
-- It still reproduces in 5.9.3, 6.0.3 and `7.1.0-dev.20261114.1`. I checked 7.1 with the CLI (`typescript@next`). The Playground's "Nightly" is `6.0.0-dev.20260416`, not TypeScript 7.
+- This changed between versions 4.2.3 and 4.3.5 (#43194).
+- It still reproduces in 6.0.3 and `7.1.0-dev.20261114.1`. From 6.0 the default target enables `useDefineForClassFields`, so it reproduces with no options set.
 
 ## ⏯ Playground Link
 
 https://www.typescriptlang.org/play/?useDefineForClassFields=true&target=99&ts=6.0.3#code/MYGwhgzhAEBCkFNoG8BQ0PQEYC5oDsBXAWywQCdoBeaARgG5UBfVVUSGABXAEt9oEADwAuCfABMY8CEjSZo46tGEALHhAB0WetAD0u6AHkA0s1bso0AHJhy5APYB3BIqGiJUxCnSZxCduRIuHTQAD7QAEyM8oo0qupaOvoCdvaUACoAyhEA7BEAnHicDgAOFMIAntAA5FjV0OrQhDKKZABmaUg8wjB83TxgIDwAXmDCPPb4GmZskxD2IAgaIPYA5gAU+AiO1rYOzuLrAJQa4kdJBrSoQA
 
-## 💻 Code
+(The Playground does not derive `useDefineForClassFields` from the target, so the link enables it explicitly.)
 
-Running `tsc` with `target: esnext` reproduces it, because `useDefineForClassFields` then defaults to `true`. The Playground does not derive that default from the target and keeps `useDefineForClassFields: false`, so the link above turns the option on explicitly.
+## 💻 Code
 
 ```ts
 class Base {
@@ -47,19 +46,15 @@ console.log(new Narrowed().d); // 1
 
 ## 🙁 Actual behavior
 
-`this.b` in `Narrowed`'s field initializer reports TS2729: "Property 'b' is used before its initialization."
+`this.b` in `Narrowed` reports TS2729.
 
 ## 🙂 Expected behavior
 
-No error, the same as in `Plain`.
-
-`declare b` emits nothing, so `b` is still the base class's property. `super()` runs `Base`'s initializer (`b = 1`) before `Narrowed`'s own field initializers, so `this.b` is already initialized when `d` reads it. The emitted program prints `1`.
-
-#42319, the issue this check was added for, lists exactly this case under its "Expected behavior": "`c` is allowed because of the `declare` modifier".
+No error, as in `Plain`. Per the spec, the base class's fields are initialized inside `super()`, and the derived class's fields right after `super()` returns ([SuperCall evaluation](https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation)). `declare` emits nothing, so `b` is already initialized (`1`) when `d` is initialized. #42319 also lists this as expected: "`c` is allowed because of the `declare` modifier".
 
 ## Additional information about the issue
 
-- #43194 changed the condition in the property-access check to `(compilerOptions.useDefineForClassFields || !isPropertyDeclaredInAncestorClass(prop))`. Under `useDefineForClassFields`, this drops the ancestor exemption for every redeclaration, including `declare` ones. The test it added (`redeclaredProperty.ts`) covers only the non-`declare` case `b;`, which really is `undefined` at that point.
-- TS2612 tells the user to do exactly this. Without the modifier, `b: 1 | 2;` reports "Property 'b' will overwrite the base property in 'Base'. … Otherwise, add a 'declare' modifier". Adding `declare` then produces TS2729.
-- There is no error with `useDefineForClassFields: false`.
-- #42319 also listed two more expected-OK reads that are reported today: a field whose initializer reads its own base value (`d: number = this.d`), and a field read before it is redeclared without an initializer (`e`). This report is only about the `declare` case, the one where the derived class declares nothing at runtime.
+- #43194 removed the ancestor-class exemption under `useDefineForClassFields`, for the case where a redeclaration without an initializer (`b;`) overwrites the property with `undefined` ([DefineField](https://tc39.es/ecma262/#sec-definefield)). It also catches `declare` redeclarations, which emit nothing. The test it added covers only the case without `declare`.
+- TS2612 suggests adding `declare` to such a redeclaration, and doing so produces this error.
+- The same error occurs with `declare context: React.ContextType<…>`, as recommended by `@types/react`, when a field initializer reads `this.context`.
+- Found while testing my own TypeScript compiler (https://github.com/mizchi/ts.mbt).
