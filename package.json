@@ -1,10 +1,4 @@
 {
-  "dependencies": {
-    "@tsmbt-bridge/vitest": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_old/vitest/vitest",
-    "@tsmbt-bridge/hono": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_old/hono/hono",
-    "@tsmbt-bridge/vitest": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_new/vitest/vitest",
-    "@tsmbt-bridge/hono": "file:.//tmp/claude-0/-home-user-ts-mbt/cfd38506-6417-58b3-8e5c-d1aafb38913c/scratchpad/gen_new/hono/hono"
-  },
   "name": "typescript-mbt-oracle",
   "private": true,
   "type": "module",
