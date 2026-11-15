@@ -1231,6 +1231,45 @@ fn is_undecided_conditional(t : @ast.TsType) -> Bool {
 }
 
 ///|
+/// True when an undecided conditional occurs ANYWHERE in `t`, not just at
+/// the top. `is_assignable_to` compares structurally, so `C[]` against
+/// `string[]` reaches the undecided `C` against `string` and answers
+/// `true` without proving anything. Every caller that reads `true` as
+/// PROOF has to look inside: `reduce_conditional` choosing a branch, the
+/// `equivalent` family, and `simplify_union`'s subsumption. A shape this
+/// walk does not open (a `Named` reference, a mapped type) is not looked
+/// into, which matches `is_assignable_to`, since it does not expand those
+/// either.
+fn contains_undecided_conditional(t : @ast.TsType) -> Bool {
+  fn walk(t : @ast.TsType, depth : Int32) -> Bool {
+    if depth > 32 {
+      return false
+    }
+    let d = depth + 1
+    match t {
+      Conditional(_, _, _, _) =>
+        if is_undecided_conditional(t) {
+          true
+        } else {
+          walk(reduce_conditional(t), d)
+        }
+      Array(inner) | Rest(inner) => walk(inner, d)
+      Tuple(items) | Union(items) | Intersection(items) | Applied(_, items) =>
+        items.iter().any(fn(x) { walk(x, d) })
+      Object(fields) =>
+        fields.iter().any(fn(f) { walk(f.0, d) || walk(f.1, d) })
+      Struct(_, fields) => fields.iter().any(fn(f) { walk(f.1, d) })
+      Func(ps, r) | Constructor(ps, r, _) =>
+        ps.iter().any(fn(x) { walk(x, d) }) || walk(r, d)
+      GenericFunc(_, _, inner) => walk(inner, d)
+      _ => false
+    }
+  }
+
+  walk(t, 0)
+}
+
+///|
 // Object-like field list for an `Object`/`Struct`, or `None` for anything
 // that is not a property bag (so an intersection containing a primitive or
 // named reference declines the merge and uses the per-component rule).
@@ -1572,6 +1611,14 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
         } else {
           false_branch
         }
+      } else if contains_undecided_conditional(check) ||
+        contains_undecided_conditional(extends) {
+        // `is_assignable_to` answers `true` for an undecided conditional
+        // without proving anything, so reading it here would pick the
+        // TRUE branch on no evidence: with `C` undecided, `C extends
+        // string ? number : boolean` became `number`. The outer
+        // conditional is undecided too.
+        t
       } else if is_assignable_to(check, extends) {
         true_branch
       } else {

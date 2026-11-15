@@ -281,8 +281,7 @@ test "mtsc graph checker types an imported namespace by its members" {
     "import { util } from \"./lib\";\ntype E = { type: \"a\" } | { type: \"b\" };\nexport function f(e: E): number {\n  if (e.type === \"a\") return 1;\n  if (e.type === \"b\") return 2;\n  util.assertNever(e);\n}\nexport const j: string = util.join([\"a\"]);",
     lib,
   )
-  assert_false(ok.contains("not all paths return"), msg=ok)
-  assert_false(ok.contains("argument(s)"), msg=ok)
+  assert_eq(ok, "")
 }
 
 ///|
@@ -292,5 +291,34 @@ test "mtsc graph checker infers an imported bounded generic at the call" {
     "import { make, type Ctor, type Trait } from \"./lib\";\ninterface E extends Trait { issues: string[]; _zod: { def: string[] } }\nconst init = (inst: E, issues: unknown) => { inst.issues = []; };\nexport const E: Ctor<E> = make(\"E\", init);",
     lib,
   )
-  assert_false(diags.contains("expected"), msg=diags)
+  assert_eq(diags, "")
+}
+
+///|
+/// The DEFAULT-import spelling of the call-site solve. The named-import
+/// branch marks an imported generic function (`@import-generic:`) and an
+/// imported `Any` (`@imported:`), and the default-import branch marked
+/// neither (review of mizchi/ts.mbt#285). A default import is usually bound
+/// under another name, and then nothing else finds the declaration, so the
+/// call came back with `T` unsolved and the mismatch below was silent while
+/// the named spelling reported it, as tsc does.
+test "mtsc graph checker solves a default-imported generic at the call" {
+  let lib = "export default function ident<T extends { a: number }>(x: T): T { return x; }\nexport function named<T extends { a: number }>(x: T): T { return x; }"
+  let named = graph2(
+    "import { named as nn } from \"./lib\";\nexport const s: string = nn({ a: 1 });",
+    lib,
+  )
+  let dflt = graph2(
+    "import idd from \"./lib\";\nexport const s: string = idd({ a: 1 });", lib,
+  )
+  assert_true(named.contains("expected `string`"), msg=named)
+  assert_true(dflt.contains("expected `string`"), msg=dflt)
+  // The legal call stays silent.
+  assert_eq(
+    graph2(
+      "import idd from \"./lib\";\nexport const s: { a: number } = idd({ a: 1 });",
+      lib,
+    ),
+    "",
+  )
 }

@@ -265,7 +265,14 @@ function mtscBinary() {
   return ok[0];
 }
 
-/** `{ parseError: string|null, issues: [{ path, message }] }`. */
+/**
+ * `{ crashed: string|null, parseError: string|null, issues: [{ path, message }] }`.
+ *
+ * `mtsc check` exits 0 whatever it finds, a parse error included, so any
+ * other ending is the checker not completing. That is kept apart from a
+ * parse error, because a file tsc also rejects makes a parse error look
+ * like an acceptable answer, and a crash there would otherwise pass.
+ */
 function runMtsc(bin, file) {
   // `--strict` is the unfiltered checker the unit tests call
   // (`check_module_function_bodies`); the default is the permissive filter
@@ -281,8 +288,11 @@ function runMtsc(bin, file) {
     const p = line.match(/^parse error: (.*)$/);
     if (p) parseError = p[1];
   }
-  if (r.status !== 0 && parseError === null) parseError = `exit ${r.status}: ${r.stderr.trim()}`;
-  return { parseError, issues };
+  const crashed =
+    r.status === 0
+      ? null
+      : `${r.error ? r.error.message : r.signal ? `signal ${r.signal}` : `exit ${r.status}`}: ${(r.stderr ?? "").trim()}`;
+  return { crashed, parseError, issues };
 }
 
 /**
@@ -412,6 +422,10 @@ for (const file of files) {
       failures.push(`${rel}: mtsc MISS not declared in mtsc-misses.txt — ${key}: ${why}`);
     }
   };
+  if (m.crashed !== null) {
+    failures.push(`${rel}: mtsc check did not complete — ${m.crashed}`);
+    continue;
+  }
   if (m.parseError !== null) {
     if (diags.length === 0) fp(`parse failure on a file tsc accepts: ${m.parseError}`);
     else if (decls.length === 0) miss(`${stem}:*`, `parse failure (${m.parseError})`);

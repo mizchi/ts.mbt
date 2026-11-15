@@ -20288,6 +20288,15 @@ fn inferred_filter_predicate(
     Some(p) if p.binding is (None | Some(Ident(_))) && !p.is_rest => p
     _ => return None
   }
+  // tsc infers no predicate for a callback that reassigns its parameter:
+  // `x => (x = "", x !== null)` is true for every element, `null` ones
+  // included, so reading only the last operand would make the result
+  // `string[]`. Only an assignment or a closure can rebind the parameter,
+  // so the body is accepted only when it is built from nodes that can do
+  // neither. An allowlist, so a node it does not name abstains.
+  if !predicate_body_cannot_rebind(body_expr) {
+    return None
+  }
   let declared = if is_checkable(p.type_) { p.type_ } else { elem }
   if !is_checkable(declared) || resolver.unwrap(declared) is (Any | Unknown) {
     return None
@@ -20321,6 +20330,16 @@ fn inferred_filter_predicate(
   let true_ty = match pick(eff.then_binds) {
     Some(t) => t
     None => return None
+  }
+  // `filter<S extends T>` needs the predicate's type to fit the element
+  // type. With a parameter annotated WIDER than the element
+  // (`nums.filter((x: string | number) => typeof x === "string")`) the
+  // predicate `x is string` does not, tsc picks the plain overload, and
+  // the result stays `number[]`. Without an annotation the narrowed type
+  // comes from the element type itself, so only the annotated case asks.
+  if is_checkable(p.type_) &&
+    !is_assignable_to(resolver.unwrap(true_ty), resolver.unwrap(elem)) {
+    return None
   }
   // `!!x`'s false side is the FALSY part of the declared type. The engine
   // keeps every non-boolean member there (its own comment: deciding that
@@ -20366,6 +20385,48 @@ fn inferred_filter_predicate(
     }
   }
   Some(true_ty)
+}
+
+///|
+/// True when `e` is built only from nodes that cannot rebind a variable:
+/// no assignment, no `++` / `--`, no `delete`, and no function or class
+/// body that could hold one. Used by `inferred_filter_predicate`, where a
+/// rebinding of the parameter means tsc infers no predicate.
+fn predicate_body_cannot_rebind(e : @ast.TsExpr) -> Bool {
+  let all = fn(es : Array[@ast.TsExpr]) -> Bool {
+    es.iter().all(predicate_body_cannot_rebind)
+  }
+  match e {
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | Var(_) => true
+    BinOp(_, l, r) =>
+      predicate_body_cannot_rebind(l) && predicate_body_cannot_rebind(r)
+    UnaryOp(PreInc | PreDec | PostInc | PostDec | Delete, _) => false
+    UnaryOp(_, inner)
+    | PropAccess(inner, _)
+    | OptionalChain(inner)
+    | NonNull(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | TypeArgs(_, inner)
+    | PureCall(inner) => predicate_body_cannot_rebind(inner)
+    IndexAccess(a, b) =>
+      predicate_body_cannot_rebind(a) && predicate_body_cannot_rebind(b)
+    Cond(c, t, f) =>
+      predicate_body_cannot_rebind(c) &&
+      predicate_body_cannot_rebind(t) &&
+      predicate_body_cannot_rebind(f)
+    Call(_, args) => all(args)
+    CallExpr(callee, args) | MethodCall(callee, _, args) =>
+      predicate_body_cannot_rebind(callee) && all(args)
+    TemplateLiteral(_, es) => all(es)
+    _ => false
+  }
 }
 
 ///|
@@ -27111,6 +27172,26 @@ fn narrow_after_prop_assignment(
 }
 
 ///|
+/// Drop every narrowing of a property path below `name` (`name.p`,
+/// `name.p.q`, `name[0]`). Once the binding is rebound those describe the
+/// OLD object: after `o.p = ""; o = other`, `o.p` is `other.p`, whose
+/// declared type may still be nullable, and keeping the narrowing accepted
+/// `const s: string = o.p`, which tsc rejects (probed, in both the
+/// statement and the expression spelling). `narrow_after_prop_assignment`
+/// does the same for a written PATH; this is the binding itself.
+fn forget_paths_below(env : ExprEnv, name : String) -> Unit {
+  let stale : Array[String] = []
+  for k, _ in env.vars {
+    if k.has_prefix(name + ".") || k.has_prefix(name + "[") {
+      stale.push(k)
+    }
+  }
+  for k in stale {
+    let _ = env.vars.remove(k)
+  }
+}
+
+///|
 /// After `name = value`, the binding's effective type is the assigned
 /// value's type (TypeScript narrows by assignment); `narrow` rather than
 /// `bind` keeps the declared slot, so a later assignment is still checked
@@ -27126,6 +27207,7 @@ fn narrow_after_assignment(
   name : String,
   value : @ast.TsExpr,
 ) -> Unit {
+  forget_paths_below(env, name)
   // A reassignment also drops a detached-method `this` requirement.
   if env.lookup("<this-required>" + name) is Some(_) {
     env.narrow("<this-required>" + name, @ast.TsType::Never)
@@ -27254,7 +27336,13 @@ fn narrow_after_nullish_assign(
   op : @ast.TsCompoundOp,
   value : @ast.TsExpr,
 ) -> Unit {
-  if !(op is (CoalesceAssign | OrAssign)) {
+  if !(op is (CoalesceAssign | OrAssign | AndAssign)) {
+    return
+  }
+  // Any of the three may rebind the name, and then every narrowed path
+  // below it describes the old object.
+  forget_paths_below(env, name)
+  if op is AndAssign {
     return
   }
   let cur = match env.lookup(name) {
@@ -27696,19 +27784,42 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           (m, false)
         }
       }
+      // A property-path narrowing that a continuing branch DROPPED (its
+      // receiver was rebound there, or the path was written) is stale after
+      // the `if` as well. The join below only looks at keys whose value
+      // CHANGED, so a dropped key kept its pre-`if` narrowing: `o.p = "";
+      // if (c) { o = other } const s: string = o.p` was accepted, and tsc
+      // rejects it (probed).
+      let drop_forgotten = fn(exit : Map[String, @ast.TsType]) {
+        let gone : Array[String] = []
+        for k, _ in pre_map {
+          if !k.has_prefix("<") &&
+            (k.contains(".") || k.contains("[")) &&
+            exit.get(k) is None {
+            gone.push(k)
+          }
+        }
+        for k in gone {
+          let _ = env.vars.remove(k)
+        }
+      }
       // Narrowing after early return: when one branch unconditionally exits,
       // the surrounding scope continues with the opposite branch's effect
       // applied — so `if (x === null) return; ... /* x is non-null */`
       // works out of the box.
       if then_exits && !else_exits {
+        drop_forgotten(else_exit)
         for b in effect.else_binds {
           env.bind(b.0, b.1)
         }
       } else if else_exits && !then_exits {
+        drop_forgotten(then_exit)
         for b in effect.then_binds {
           env.bind(b.0, b.1)
         }
       } else if !then_exits && !else_exits {
+        drop_forgotten(then_exit)
+        drop_forgotten(else_exit)
         // Merge-point join: a variable's type after the `if` is the union of
         // its type at the end of each branch (covering both the condition's
         // narrowing and in-branch reassignment). This makes

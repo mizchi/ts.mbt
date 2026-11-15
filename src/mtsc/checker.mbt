@@ -758,7 +758,21 @@ fn graph_import_globals(
     match import_.default_binding {
       Some(local_name) =>
         match exported_value_type(target, "default", modules, edges, []) {
-          Some(type_) => globals.push((local_name, type_))
+          // The same two markers the named-import branch below records.
+          // A default import is the spelling that is USUALLY bound under
+          // another name (`import ident from "./lib"`), so without the
+          // `@import-generic:` marker the call never solved its type
+          // parameters and `const s: string = ident({ a: 1 })` was silent
+          // where the named spelling reports.
+          Some(type_) => {
+            globals.push((local_name, type_))
+            if type_ is GenericFunc(_, _, _) {
+              globals.push(("@import-generic:" + local_name, Any))
+            }
+            if type_ is Any {
+              globals.push(("@imported:" + local_name, Any))
+            }
+          }
           None =>
             diagnostics.push(
               "module `\{import_.module_spec}` has no default value export",

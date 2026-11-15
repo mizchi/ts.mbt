@@ -2647,6 +2647,24 @@ test "expr_check: arr.filter without predicate keeps element type" {
   assert_true(reports("x => x !== null && x.length > 0"))
   // An explicit `: boolean` return annotation opts out of inference.
   assert_true(reports("(x): boolean => x !== null"))
+  // A callback that reassigns its parameter infers nothing: this one is
+  // true for every element, `null` ones included (probed).
+  assert_true(reports("x => (x = \"\", x !== null)"))
+  // `filter<S extends T>`: a predicate wider than the element type does
+  // not apply, so `nums.filter((x: string | number) => typeof x ===
+  // "string")` stays `number[]` (probed) — assigning it to `number[]` is
+  // legal and to `string[]` is not.
+  let wide = fn(target : String) -> Int32 {
+    check_module_function_bodies(
+      parse_module_or_empty(
+        "function g(nums: number[]): " +
+        target +
+        " {\n  return nums.filter((x: string | number) => typeof x === \"string\");\n}",
+      ),
+    ).length()
+  }
+  @test.assert_eq(wide("number[]"), 0)
+  assert_true(wide("string[]") > 0)
   // Over object types `!!x` does infer one: an object is never falsy.
   let obj = "interface Foo { a: number }\nfunction g(fs: (Foo | null | undefined)[]): Foo[] {\n  return fs.filter(x => !!x);\n}"
   @test.assert_eq(
@@ -22897,4 +22915,40 @@ test "checker: TS2430 nominal reach through classes, intersections, generics (ba
     ] {
     assert_true(issues(src) > 0)
   }
+}
+
+///|
+/// Review of mizchi/ts.mbt#285: a property-path narrowing by assignment
+/// (`o.p = ""` makes `o.p` a `string`) describes the OBJECT, so it has to go
+/// when the binding is rebound — by a statement, inside an `if` (where the
+/// join used to keep the pre-`if` narrowing of a key one branch dropped),
+/// or through `??=`. tsc reports all four (probed); the legal neighbours
+/// with no rebinding stay silent.
+test "a property-path narrowing does not survive rebinding its receiver" {
+  let n = fn(body : String) -> Int32 {
+    check_module_function_bodies(
+      parse_module_or_empty(
+        "interface O { p: string | null }\nfunction f(o: O, other: O, c: boolean) {\n" +
+        body +
+        "\n}",
+      ),
+    ).length()
+  }
+  assert_true(n("o.p = \"\";\no = other;\nconst s: string = o.p;") > 0)
+  assert_true(
+    n("o.p = \"\";\nif (c) { o = other; }\nconst s: string = o.p;") > 0,
+  )
+  assert_true(
+    n("o.p = \"\";\nif (c) { o = other; } else { }\nconst s: string = o.p;") > 0,
+  )
+  @test.assert_eq(n("o.p = \"\";\nconst s: string = o.p;"), 0)
+  @test.assert_eq(n("if (o.p !== null) { const s: string = o.p; }"), 0)
+  @test.assert_eq(
+    n("o.p = \"\";\nif (c) { other.p = null; }\nconst s: string = o.p;"),
+    0,
+  )
+  let nullish = "interface O { p: string | null }\nfunction f(o: O | undefined, other: O) {\n  if (o) { o.p = \"\"; }\n  o ??= other;\n  const s: string = o.p;\n}"
+  assert_true(
+    check_module_function_bodies(parse_module_or_empty(nullish)).length() > 0,
+  )
 }

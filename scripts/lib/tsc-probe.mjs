@@ -62,6 +62,10 @@ const HONOURED = new Map(
     "maxNodeModuleJsDepth", "resolvePackageJsonExports", "declaration",
     "emitDeclarationOnly", "keyofStringsOnly", "importsNotUsedAsValues",
     "preserveValueImports", "noErrorTruncation", "libReplacement",
+    // `noCheck` turns semantic checking off, so it is anything but
+    // diagnostic-neutral: listing it below made the probe check a file the
+    // harness would not.
+    "noCheck",
   ].map((k) => [k.toLowerCase(), k]),
 );
 
@@ -75,7 +79,7 @@ const NOT_DIAGNOSTIC = new Set(
     "inlineSourceMap", "inlineSources", "sourceRoot", "mapRoot", "declarationMap",
     "declarationDir", "removeComments", "pretty", "newLine", "stripInternal",
     "incremental", "composite", "tsBuildInfoFile", "noEmitOnError", "baseUrl",
-    "useCaseSensitiveFileNames", "noCheck",
+    "useCaseSensitiveFileNames",
   ].map((k) => k.toLowerCase()),
 );
 

@@ -650,3 +650,63 @@ test "normalization does not read an undecided conditional's true as proof" {
   // An identical repeat is still folded.
   assert_eq(simplify_union([cond, cond]).length(), 1)
 }
+
+///|
+/// Review of mizchi/ts.mbt#285: `true` for an undecided conditional proves
+/// nothing, and three callers read it as proof one level down from where
+/// the first guard looked.
+test "an undecided conditional proves nothing at any depth" {
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  // Branch selection. tsc decides `C` as `boolean`, so `C extends string ?
+  // number : boolean` is `boolean`; reading the undecided `C` against
+  // `string` as `true` picked `number` and rejected a `boolean`. The outer
+  // conditional is undecided now, and flows like `C` does.
+  let outer : @ast.TsType = Conditional(cond, String_, Number, Boolean)
+  assert_true(is_undecided_conditional(outer))
+  assert_true(is_assignable_to(Boolean, outer))
+  assert_true(is_assignable_to(outer, Boolean))
+  // A nested `C`: `C[]` against `string[]` reaches `C` against `string`.
+  let nested : @ast.TsType = Conditional(
+    Array(cond),
+    Array(String_),
+    Number,
+    Boolean,
+  )
+  assert_true(is_undecided_conditional(nested))
+  // Equivalence and union subsumption, both member orders.
+  assert_false(equivalent(Array(cond), Array(String_)))
+  assert_true(equivalent(Array(cond), Array(cond)))
+  assert_eq(simplify_union([Array(cond), Array(String_)]).length(), 2)
+  assert_eq(simplify_union([Array(String_), Array(cond)]).length(), 2)
+  // An alias whose body is `C` is a `Named` until expanded.
+  let resolve = fn(n : String) -> @ast.TsType? {
+    if n == "A" {
+      Some(cond)
+    } else {
+      None
+    }
+  }
+  assert_false(equivalent_with(Named("A"), String_, resolve))
+  let resolve_g = fn(n : String) -> AliasBinding? {
+    if n == "A" {
+      Some({ type_params: [], body: cond, })
+    } else {
+      None
+    }
+  }
+  assert_false(equivalent_with_generics(Named("A"), String_, resolve_g))
+  // A decidable conditional still decides through the same path.
+  let decided : @ast.TsType = Conditional(String_, Number, Boolean, Number)
+  let outer_decided : @ast.TsType = Conditional(
+    decided,
+    Number,
+    String_,
+    Boolean,
+  )
+  assert_eq(reduce_conditional(outer_decided), String_)
+}
