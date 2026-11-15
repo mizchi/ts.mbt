@@ -543,34 +543,59 @@ fn graph_type_modules(
   keys~ : Array[String] = [],
 ) -> Array[@ast.TsModule] {
   let type_modules : Array[@ast.TsModule] = []
-  let visited_paths : Array[String] = []
+  // Each reachable module is ingested ONCE. Every import edge used to
+  // push its target, so a module imported from k places was ingested k
+  // times and every interface it declares was merged with itself on each
+  // repeat — `extends`, index signatures and method type parameters
+  // concatenated k times. On zod's `util.ts` program that was 820,000
+  // self-merges and half of the whole check.
+  //
+  // The edge order is still walked as before, and each module is kept at
+  // its LAST position in it. Later ingestion overwrites a class or alias
+  // that two modules both declare (and decides which declaration's field
+  // wins in a cross-module interface merge), so the last position is the
+  // one that keeps every such winner what it was.
+  let order : Array[ParsedMtscModule] = []
+  let visited_paths : Map[String, Unit] = Map([])
+  let modules_by_path : Map[String, ParsedMtscModule] = Map([])
+  for m in modules {
+    if !modules_by_path.contains(m.source.path) {
+      modules_by_path[m.source.path] = m
+    }
+  }
+  let edges_by_importer : Map[String, Array[String]] = Map([])
+  for edge in edges {
+    match edges_by_importer.get(edge.importerPath) {
+      Some(targets) => targets.push(edge.targetPath)
+      None => edges_by_importer[edge.importerPath] = [edge.targetPath]
+    }
+  }
   let pending_paths : Array[String] = [module_.source.path]
   let mut cursor = 0
   while cursor < pending_paths.length() {
     let importer_path = pending_paths[cursor]
     cursor = cursor + 1
-    let mut already_visited = false
-    for path in visited_paths {
-      if path == importer_path {
-        already_visited = true
-        break
-      }
-    }
-    if already_visited {
+    if visited_paths.contains(importer_path) {
       continue
     }
-    visited_paths.push(importer_path)
-    for edge in edges {
-      if edge.importerPath != importer_path {
-        continue
-      }
-      let target = match find_graph_module(modules, edge.targetPath) {
+    visited_paths[importer_path] = ()
+    for target_path in edges_by_importer.get(importer_path).unwrap_or([]) {
+      let target = match modules_by_path.get(target_path) {
         Some(target) => target
         None => continue
       }
-      type_modules.push(target.module_)
-      keys.push(target.source.path)
+      order.push(target)
       pending_paths.push(target.source.path)
+    }
+  }
+  let last_index : Map[String, Int32] = Map([])
+  for i, t in order {
+    last_index[t.source.path] = i
+  }
+  for i, t in order {
+    if last_index.get(t.source.path) == Some(i) {
+      type_modules.push(t.module_)
+      keys.push(t.source.path)
     }
   }
   type_modules

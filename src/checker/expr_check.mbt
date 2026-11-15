@@ -500,12 +500,19 @@ fn Resolver::class_index(r : Resolver) -> ClassIndex {
 }
 
 ///|
+/// The standard utility-type table, built once. Every resolver used to
+/// build its own on construction, and the checker builds a resolver per
+/// module and per namespace; the table is only ever read (`get`), so one
+/// shared instance answers every resolver identically.
+let shared_standard_aliases : Map[String, AliasBinding] = standard_utility_types()
+
+///|
 fn Resolver::empty() -> Resolver {
   {
     interfaces: {},
     classes: {},
     type_aliases: {},
-    standard_aliases: standard_utility_types(),
+    standard_aliases: shared_standard_aliases,
     qualified_names: {},
     lookup_depth: { val: 0, },
     lookup_active: {},
@@ -9021,6 +9028,43 @@ fn type_has_undefined(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Whether the TARGET of an assignment admits `null` (`want_null`) or
+/// `undefined`, following an alias member of a union. `unwrap_containers`
+/// leaves a self-referential alias as its name, so `Json | undefined` with
+/// `type Json = null | … | JsonArray` and `interface JsonArray extends
+/// ReadonlyArray<Json>` read as not admitting `null`, and assigning a
+/// `Json` to a `cause?: Json` field was reported (tsc accepts it). A name
+/// that resolves to itself admits nothing extra, and running out of depth
+/// answers "admits", which can only lose a report.
+fn target_admits_nullish(
+  resolver : Resolver,
+  ty : @ast.TsType,
+  want_null : Bool,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return true
+  }
+  match ty {
+    Null => want_null
+    Undefined => !want_null
+    Union(_) =>
+      union_components(ty)
+      .iter()
+      .any(fn(p) { target_admits_nullish(resolver, p, want_null, depth + 1) })
+    Named(_) | Applied(_, _) => {
+      let u = resolver.unwrap(ty)
+      if u == ty {
+        false
+      } else {
+        target_admits_nullish(resolver, u, want_null, depth + 1)
+      }
+    }
+    _ => false
+  }
+}
+
+///|
 fn type_has_null(ty : @ast.TsType) -> Bool {
   match ty {
     Null => true
@@ -15749,8 +15793,9 @@ fn check_expr_against(
     }
     if !target_open && is_checkable(expected_u) {
       let leaks_undef = type_has_undefined(inferred_u) &&
-        !type_has_undefined(expected_u)
-      let leaks_null = type_has_null(inferred_u) && !type_has_null(expected_u)
+        !target_admits_nullish(ctx.resolver, expected_u, false, 0)
+      let leaks_null = type_has_null(inferred_u) &&
+        !target_admits_nullish(ctx.resolver, expected_u, true, 0)
       if leaks_undef || leaks_null {
         record(
           ctx,
@@ -43004,6 +43049,17 @@ fn var_redeclaration_issues(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  // A name declared once cannot be redeclared with another type, and its
+  // identity key is the expensive part of this loop — so only names that
+  // occur at least twice are judged. A judged name sees exactly the same
+  // sequence of declarations as before.
+  if decls.length() < 2 {
+    return issues
+  }
+  let occurrences : Map[String, Int32] = Map([])
+  for decl in decls {
+    occurrences[decl.0] = occurrences.get(decl.0).unwrap_or(0) + 1
+  }
   let first_key : Map[String, String] = Map([])
   // The first declaration's TYPE as well as its key, because
   // `identity_key` abstains for shapes it cannot normalize and the
@@ -43012,6 +43068,9 @@ fn var_redeclaration_issues(
   let reported : Map[String, Unit] = Map([])
   for decl in decls {
     let (name, ty) = decl
+    if occurrences.get(name).unwrap_or(0) < 2 {
+      continue
+    }
     if !is_checkable(ty) {
       continue
     }
