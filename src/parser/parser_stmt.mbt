@@ -674,7 +674,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       let stmt = self.parse_stmt_no_lexical(false)
       // Remove label from context
       let _ = self.labels.pop()
-      Label(name, stmt)
+      label_statement(name, stmt)
     }
     // yield as label identifier in non-strict mode
     Yield if !self.in_strict && self.peek_at(1).kind == Colon => {
@@ -684,7 +684,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.enter_label(name)
       let stmt = self.parse_stmt_no_lexical(false)
       let _ = self.labels.pop()
-      Label(name, stmt)
+      label_statement(name, stmt)
     }
     _ =>
       // assignment or expressionstatement
@@ -1974,36 +1974,9 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
     // to parse ONE declarator with `parse_expr`, so `using a = x, b = y`
     // became `const a = (x, b = y)`: the wrong value for `a`, and an
     // assignment to an undeclared `b` that throws in a module.
-    let is_using = self.is_using_declaration_start()
-    let is_await_using = if !is_using {
-      self.is_await_using_declaration_start()
-    } else {
-      false
-    }
-    if is_using || is_await_using {
+    if self.using_declaration_kind() is Some(is_await_using) {
       let pos = self.peek().pos
-      if is_using {
-        let _ = self.advance() // `using`
-      } else {
-        let _ = self.advance() // `await`
-        let _ = self.advance() // `using`
-      }
-      let using_kw = if is_await_using { "await using" } else { "using" }
-      let decl = self.parse_var_like(VarKind::Let, pos, using_kw~)
-      // Parse the remaining statements in this block into the try body.
-      let rest_stmts : Array[@ast.TsStmt] = []
-      let rest_positions : Array[Int32] = []
-      while !self.check(RBrace) && !self.check(Eof) {
-        rest_positions.push(self.peek().pos)
-        rest_stmts.push(self.parse_stmt())
-      }
-      for
-        st in lower_using_declaration(
-          decl,
-          is_await_using,
-          { stmts: rest_stmts, stmt_positions: rest_positions, },
-          pos,
-        ) {
+      for st in self.parse_using_scope(is_await_using) {
         stmts.push(st)
         stmt_positions.push(pos)
       }
@@ -2031,9 +2004,143 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
 }
 
 ///|
+/// `name: stmt`. A C-style `for (using …)` is lowered to a BLOCK that
+/// declares its bindings and runs the loop inside a `try`
+/// (`lower_using_declaration`), and a label on that block is not a label on
+/// an iteration statement: `outer: for (using r = e; c; u) { continue outer }`
+/// emitted `continue outer` against a block, a SyntaxError in the output.
+/// So the label goes on the loop, and every label of a chain
+/// (`a: b: for (using …)`) ends up there in source order.
+///
+/// That changes nothing a `break` can observe. In the lowered shape the
+/// loop is the last statement of each `try` body around it, and every
+/// `try` is the last statement of its block, so leaving the loop and
+/// leaving the block run the same `finally` clauses and nothing else.
+/// Anything not of that shape is labelled as written.
+fn label_statement(name : String, stmt : @ast.TsStmt) -> @ast.TsStmt {
+  match stmt {
+    Block(b) =>
+      match relabel_using_loop(name, b.stmts) {
+        Some(stmts) => Block({ stmts, stmt_positions: b.stmt_positions, })
+        None => Label(name, stmt)
+      }
+    _ => Label(name, stmt)
+  }
+}
+
+///|
+/// The statements of a lowered `for (using …)` block with `name` moved onto
+/// its loop, or `None` when `stmts` is not that shape: zero or more `const`
+/// declarations followed by either the loop (possibly already labelled) or
+/// a `try` with no `catch` whose body is that shape again.
+fn relabel_using_loop(
+  name : String,
+  stmts : Array[@ast.TsStmt],
+) -> Array[@ast.TsStmt]? {
+  guard stmts.last() is Some(last) else { return None }
+  let n = stmts.length()
+  for i in 0..<(n - 1) {
+    guard stmts[i] is Const(_, _, _) else { return None }
+  }
+  let replaced = match last {
+    For(_, _, _, _) => Some(@ast.TsStmt::Label(name, last))
+    Label(_, _) if labelled_for_loop(last) =>
+      Some(@ast.TsStmt::Label(name, last))
+    Try(body, None, None, Some(fin)) if n > 1 =>
+      match relabel_using_loop(name, body.stmts) {
+        Some(inner) =>
+          Some(
+            @ast.TsStmt::Try(
+              { stmts: inner, stmt_positions: body.stmt_positions, },
+              None,
+              None,
+              Some(fin),
+            ),
+          )
+        None => None
+      }
+    _ => None
+  }
+  guard replaced is Some(r) else { return None }
+  let out = stmts[0:n - 1].to_owned()
+  out.push(r)
+  Some(out)
+}
+
+///|
+fn labelled_for_loop(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    For(_, _, _, _) => true
+    Label(_, inner) => labelled_for_loop(inner)
+    _ => false
+  }
+}
+
+///|
+/// `Some(is_await)` when the cursor is on a `using` (`false`) or an
+/// `await using` (`true`) declaration, `None` otherwise.
+fn Parser::using_declaration_kind(self : Parser) -> Bool? {
+  if self.is_using_declaration_start() {
+    Some(false)
+  } else if self.is_await_using_declaration_start() {
+    Some(true)
+  } else {
+    None
+  }
+}
+
+///|
+/// Parse a `using` / `await using` declaration (the cursor is on its first
+/// keyword) and every statement after it up to the enclosing block's `}`,
+/// which is the scope its bindings are disposed at the end of, and return
+/// the lowered statements.
+///
+/// A LATER `using` in the same block opens a scope nested inside this one,
+/// so it is parsed here too, recursively, rather than by `parse_stmt`:
+/// `parse_stmt` has to handle a `using` it reaches outside any block (a
+/// module's top level) and leaves it a plain `let`, which made
+/// `{ using a = x; using b = y; }` dispose `a` and never `b`. Nesting gives
+/// the order the language requires, `b` before `a`.
+fn Parser::parse_using_scope(
+  self : Parser,
+  is_await_using : Bool,
+) -> Array[@ast.TsStmt] raise ParseError {
+  let pos = self.peek().pos
+  if is_await_using {
+    let _ = self.advance() // `await`
+  }
+  let _ = self.advance() // `using`
+  let using_kw = if is_await_using { "await using" } else { "using" }
+  let decl = self.parse_var_like(VarKind::Let, pos, using_kw~)
+  let rest_stmts : Array[@ast.TsStmt] = []
+  let rest_positions : Array[Int32] = []
+  while !self.check(RBrace) && !self.check(Eof) {
+    if self.using_declaration_kind() is Some(inner_await) {
+      let inner_pos = self.peek().pos
+      for st in self.parse_using_scope(inner_await) {
+        rest_stmts.push(st)
+        rest_positions.push(inner_pos)
+      }
+      break
+    }
+    rest_positions.push(self.peek().pos)
+    rest_stmts.push(self.parse_stmt())
+  }
+  lower_using_declaration(
+    decl,
+    is_await_using,
+    { stmts: rest_stmts, stmt_positions: rest_positions, },
+    pos,
+  )
+}
+
+///|
 /// The statement that disposes the `using` binding `name` at the end of
 /// its scope: `name?.[Symbol.dispose]?.()`, and for `await using`
-/// `await name?.[Symbol.asyncDispose]?.()`.
+///
+///   await (name?.[Symbol.asyncDispose] != null
+///     ? name?.[Symbol.asyncDispose]?.()
+///     : void name?.[Symbol.dispose]?.())
 ///
 /// The `?.` on the RECEIVER is what `using x = null` needs: a nullish
 /// initializer is legal and disposes nothing, so the old
@@ -2043,26 +2150,57 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
 /// tsc accepts. The shape is the one the expression parser builds for that
 /// source text: one `OptionalChain` per `?.`, wrapping the step it guards.
 ///
-/// The `await` is what makes `await using` wait for the disposal before
-/// the code after the scope runs, which is the point of the async form.
-/// What is NOT modelled: `await using` falling back to `[Symbol.dispose]`
-/// when there is no `[Symbol.asyncDispose]`, the TypeError a non-nullish
-/// value without the method throws at the declaration, and aggregating
+/// `await using` takes a resource's `[Symbol.dispose]` when it has no
+/// `[Symbol.asyncDispose]`, which is how a synchronous disposable is
+/// written; the async-only form disposed nothing for one. Exactly one of
+/// the two methods runs, called on the resource, and the synchronous
+/// one's result is discarded (`void`), as the language does: its value is
+/// not awaited, and only `undefined` is. The `await` itself is what makes
+/// the code after the scope wait for the disposal, and it runs for a
+/// nullish resource too.
+///
+/// What is NOT modelled: the methods are looked up at the END of the scope
+/// rather than at the declaration, the TypeError a non-nullish value
+/// without either method throws at the declaration, and aggregating
 /// several disposal errors into a `SuppressedError`.
 fn using_dispose_stmt(name : String, is_await : Bool) -> @ast.TsStmt {
-  let key = if is_await { "asyncDispose" } else { "dispose" }
-  let call = @ast.TsExpr::OptionalChain(
-    @ast.TsExpr::CallExpr(
-      @ast.TsExpr::OptionalChain(
-        @ast.TsExpr::IndexAccess(
-          @ast.TsExpr::Var(name),
-          @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), key),
-        ),
+  if !is_await {
+    return @ast.TsStmt::Expr(using_dispose_call(name, "dispose"))
+  }
+  let has_async = @ast.TsExpr::BinOp(
+    AbstractNe,
+    @ast.TsExpr::OptionalChain(using_dispose_member(name, "asyncDispose")),
+    @ast.TsExpr::NullLit,
+  )
+  @ast.TsStmt::Expr(
+    @ast.TsExpr::Await(
+      @ast.TsExpr::Cond(
+        has_async,
+        using_dispose_call(name, "asyncDispose"),
+        @ast.TsExpr::UnaryOp(Void, using_dispose_call(name, "dispose")),
       ),
+    ),
+  )
+}
+
+///|
+/// `name[Symbol.key]`, the member a disposal reads.
+fn using_dispose_member(name : String, key : String) -> @ast.TsExpr {
+  @ast.TsExpr::IndexAccess(
+    @ast.TsExpr::Var(name),
+    @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), key),
+  )
+}
+
+///|
+/// `name?.[Symbol.key]?.()`.
+fn using_dispose_call(name : String, key : String) -> @ast.TsExpr {
+  @ast.TsExpr::OptionalChain(
+    @ast.TsExpr::CallExpr(
+      @ast.TsExpr::OptionalChain(using_dispose_member(name, key)),
       [],
     ),
   )
-  @ast.TsStmt::Expr(if is_await { @ast.TsExpr::Await(call) } else { call })
 }
 
 ///|

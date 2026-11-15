@@ -23120,3 +23120,45 @@ test "an any element widens an array literal's element type to any" {
     n("function f() {\n  const c = [1, 2];\n  const n: string[] = c;\n}") > 0,
   )
 }
+
+///|
+/// A destructuring default does not replace an `any` element: tsc types
+/// `x` in `const [x = 0] = xs` with `xs: any[]` as `any`, and the same for
+/// `const { a = 0 } = o` with `o: any` (probed: every line below is
+/// accepted). Reading `any` as "use the default's type" bound `number` and
+/// reported `const s: string = x`. An EMPTY array literal is the one source
+/// whose element must still come from the default — `const [y = 0] = []`
+/// is `number` in tsc, and assigning it to `string` is TS2322 — so the
+/// declaration site hands it over as the empty tuple.
+test "a destructuring default keeps an any element" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  const xs = [\"a\", q];\n  const [x = 0] = xs;\n  const s: string = x;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  let [w = 0] = [q];\n  const s: string = w;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const o: any;\nfunction f() {\n  const { a = 0 } = o;\n  const s: string = a;\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n("function f() {\n  const [y = 0] = [];\n  const s: string = y;\n}") > 0,
+  )
+  assert_true(
+    n(
+      "function f() {\n  const [y = 0] = [undefined];\n  const s: string = y;\n}",
+    ) >
+    0,
+  )
+}

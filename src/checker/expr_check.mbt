@@ -23151,6 +23151,14 @@ fn apply_binding_default(
 ) -> @ast.TsType {
   match default {
     None => ty
+    // An `any` element stays `any` whatever the default is: tsc types
+    // `const [x = 0] = xs` with `xs: any[]`, and `const { a = 0 } = o` with
+    // `o: any`, as `any`. Reading it as the default's type reported
+    // `const s: string = x` on code tsc accepts. The `any` an EMPTY array
+    // literal used to contribute is not this case — `const [x = 0] = []`
+    // is `number` in tsc — and the declaration site hands that source over
+    // as the empty tuple, whose element 0 is `undefined`.
+    Some(_) if ty is Any => ty
     // A CONST-ASSERTED default is typed exactly, and its type is what tsc
     // unions in whatever the element is — `(element minus undefined) |
     // default`, with no widening, since a const context is not a fresh
@@ -23174,7 +23182,7 @@ fn apply_binding_default(
     Some(d) => {
       let default_ty = widen_literal(infer_expr(env, ctx.resolver, d))
       match ty {
-        Undefined | Any => default_ty
+        Undefined => default_ty
         // Flattened and deduplicated: an optional field read off a union
         // (or an alias carrying `undefined`) arrives as a union of unions,
         // and the one-level split left the inner `undefined` behind —
@@ -27581,8 +27589,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           declared,
         )
       }
+      // An empty array literal is the empty TUPLE here, as it is to tsc
+      // in a destructuring position: `const [x = 0] = []` binds `x` from
+      // the default (`number`), while `infer_expr` gives `[]` the element
+      // type `any`, which `apply_binding_default` keeps as `any`.
       let source_ty = if is_checkable(declared) {
         declared
+      } else if init is ArrayLit([]) {
+        @ast.TsType::Tuple([])
       } else {
         infer_expr(env, ctx.resolver, init)
       }

@@ -880,6 +880,25 @@ test "binding-pattern defaults: const tuples, computed keys and the conditional 
 }
 
 ///|
+/// A const-asserted default over an `any` element is `any`, like any other
+/// default (tsc accepts all four). The const arm filtered `any` out of the
+/// element and kept only the default's literal, so `x` read as `"d"`.
+test "a const-asserted destructuring default keeps an any element" {
+  let src =
+    #|declare const xs: any[];
+    #|declare const o: any;
+    #|function okArr() { const [x = "d" as const] = xs; const n: number = x; return n; }
+    #|function okObj() { const { a = "e" as const } = o; const m: number = a; return m; }
+    #|function okEmpty() { const [y = "d" as const] = []; const s: "d" = y; return s; }
+    #|function badEmpty() { const [y = "d" as const] = []; const n: number = y; return n; }
+  let issues = eff_issues_checking(src)
+  for ok in ["okArr", "okObj", "okEmpty"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  assert_true(eff_has(issues, "badEmpty"), msg="badEmpty")
+}
+
+///|
 test "a loop's back edge joins what the body assigns, whatever exits the loop early" {
   let src =
     #|declare const c: boolean;

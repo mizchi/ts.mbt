@@ -3546,8 +3546,59 @@ test "bundler: every `using` declaration site lowers its disposal" {
       assert_true(at("const p = res()") < at("const q = res()"))
       assert_true(at("q?.[Symbol.dispose]?.()") < at("p?.[Symbol.dispose]?.()"))
       assert_false(js.contains("q = res()),"))
-      // `await using` waits for the disposal.
-      assert_true(js.contains("await r?.[Symbol.asyncDispose]?.()"))
+      // `await using` waits for the disposal, and falls back to
+      // `[Symbol.dispose]` for a resource without `[Symbol.asyncDispose]`.
+      assert_true(
+        js.contains(
+          "await (r?.[Symbol.asyncDispose] != null ? r?.[Symbol.asyncDispose]?.() : void r?.[Symbol.dispose]?.())",
+        ),
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// Two more `using` shapes the first lowering got wrong, both checked
+/// against tsc's downlevel output run under Node.
+///
+/// A SECOND `using` in a block opens a scope inside the first one, and was
+/// parsed by `parse_stmt`, which leaves a `using` it reaches a plain `let`:
+/// `b` was never disposed. And a C-style `for (using …)` is lowered to a
+/// block around the loop, so a label on it labelled the BLOCK and
+/// `continue outer` in the output was a SyntaxError ("'outer' does not
+/// denote an iteration statement") — tsc's own es2022 downlevel emits the
+/// same invalid `continue`. The label now sits on the loop, chains
+/// included.
+test "bundler: a later using in a block and a labelled using loop" {
+  let src =
+    #|declare function res(): Disposable;
+    #|declare function more(): boolean;
+    #|export function f() { using a = res(); more(); using b = res(); return 1; }
+    #|export function g() {
+    #|  outer: for (using r = res(); more(); ) { continue outer; }
+    #|  x: y: for (using s = res(); more(); ) { if (more()) continue x; break y; }
+    #|}
+  let files = vfs([("entry.ts", src)])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      let js = out.js
+      let at = fn(needle : String) -> Int32 raise {
+        match js.find(needle) {
+          Some(i) => i
+          None => fail("expected `\{needle}` in:\n\{js}")
+        }
+      }
+      // `b` is a binding and is disposed, before `a`.
+      assert_true(at("const a = res()") < at("const b = res()"))
+      assert_true(at("b?.[Symbol.dispose]?.()") < at("a?.[Symbol.dispose]?.()"))
+      assert_false(js.contains("let b"))
+      // The label is on the loop, inside the binding's scope.
+      assert_true(at("const r = res()") < at("outer: for (;"))
+      assert_true(at("outer: for (;") < at("r?.[Symbol.dispose]?.()"))
+      assert_false(js.contains("outer: {"))
+      assert_true(at("const s = res()") < at("x: y: for (;"))
+      assert_false(js.contains("x: {"))
     }
     Err(e) => fail("bundle error: \{e}")
   }

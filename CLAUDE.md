@@ -4330,6 +4330,31 @@ product surfaces now.
   its declarations hoisted the way tsc's downlevel does it; the site says
   so. The same batch fixed an `any` array element being skipped by the
   element-type union (`[null, q]` with `q: any` read as `null[]`).
+
+  Review then found three more `using` defects, each one site or one
+  shape the first pass had not reached. Each was checked against tsc's
+  downlevel output under Node:
+  - A SECOND `using` in a block was parsed by `parse_stmt`, which leaves
+    a `using` outside any block a plain `let`, so
+    `{ using a = x; using b = y }` never disposed `b`. Each later
+    declaration now opens a scope nested in the one before it.
+  - A label on a C-style `for (using …)` labelled the block the lowering
+    builds around the loop, so `continue outer` in the output was a
+    SyntaxError. tsc's own es2022 downlevel emits the same invalid
+    `continue`. The label is moved onto the loop, which no `break` can
+    tell apart.
+  - `await using` read only `[Symbol.asyncDispose]`, so a synchronous
+    disposable was never disposed. It now falls back to
+    `[Symbol.dispose]`, calls exactly one of the two, and discards the
+    synchronous result.
+
+  The `any` fix widened a hole underneath it. A destructuring default
+  replaced an `any` element with the default's type, so
+  `const [x = 0] = xs` with `xs: any[]` bound `number` where tsc binds
+  `any`. The only `any` that should take the default was an EMPTY array
+  literal's (`const [x = 0] = []` is `number`), and the declaration site
+  now passes that source as the empty tuple. The `as const` default arm
+  had the same hole before any of this.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
