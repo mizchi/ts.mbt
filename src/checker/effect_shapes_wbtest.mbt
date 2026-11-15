@@ -982,6 +982,7 @@ test "review: every write that reaches the back edge joins, and only those" {
   for
     bad in [
       "badClosureWrite", "badLeavesLoop", "badOuterLabel", "badUpdateReached", "badLastWriteWins",
+      "badContinueCarries", "badTryCaught",
     ] {
     assert_true(eff_has(issues, bad), msg=bad)
   }

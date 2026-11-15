@@ -21619,7 +21619,7 @@ fn loop_backedge_bindings_where(
   fn reads_written(rhs : @ast.TsExpr) -> Bool {
     let rendered = "\{rhs}"
     for w, _ in written {
-      if rendered.contains("Var(\"" + w + "\")") {
+      if rendered_mentions_name(rendered, w) {
         return true
       }
     }
@@ -21880,20 +21880,49 @@ fn backedge_walk_list(
   if backedge_list_exits(stmts, in_breakable, throw_caught, inner_labels) {
     return
   }
+  // Only a name assigned again by a LATER plain statement can be
+  // overwritten, so the scan below runs for those names alone, and each
+  // statement is rendered at most once however many writes ask about it.
+  let last_plain : Map[String, Int32] = Map([])
+  for j, st in stmts {
+    match st {
+      Assign(n, _) | Expr(AssignExpr(n, _)) => last_plain[n] = j
+      _ => ()
+    }
+  }
+  let rendered : Array[String?] = Array::make(stmts.length(), None)
+  fn render(j : Int32) -> String {
+    match rendered[j] {
+      Some(r) => r
+      None => {
+        let r = "\{stmts[j]}"
+        rendered[j] = Some(r)
+        r
+      }
+    }
+  }
+
+  fn dropped(i : Int32, n : String) -> Bool {
+    !throw_caught &&
+    (match last_plain.get(n) {
+      Some(j) => j > i
+      None => false
+    }) &&
+    backedge_write_overwritten(stmts, i, n, render)
+  }
+
   for i, st in stmts {
     let one : BackedgeWrites = { assigns: [], other: Map([]), }
     backedge_walk_stmt(st, one, true, in_breakable, throw_caught, inner_labels)
     for a in one.assigns {
-      if !throw_caught && backedge_write_overwritten(stmts, i, a.0) {
-        continue
+      if !dropped(i, a.0) {
+        w.assigns.push(a)
       }
-      w.assigns.push(a)
     }
     for n, _ in one.other {
-      if !throw_caught && backedge_write_overwritten(stmts, i, n) {
-        continue
+      if !dropped(i, n) {
+        w.other[n] = ()
       }
-      w.other[n] = ()
     }
   }
 }
@@ -21918,20 +21947,26 @@ fn backedge_write_overwritten(
   stmts : Array[@ast.TsStmt],
   i : Int32,
   name : String,
+  render : (Int32) -> String,
 ) -> Bool {
-  let needle = "Var(\"" + name + "\")"
   match stmts[i] {
     Assign(n, _) | Expr(AssignExpr(n, _)) if n == name => ()
     // A write nested in a compound statement (`if (c) { x = 1 }`) is dead
     // on the same terms, provided that statement cannot jump past the
     // later assignment and does not read the name after writing it.
-    st => if stmt_may_jump(st) || "\{st}".contains(needle) { return false }
+    st =>
+      if stmt_may_jump(st) || rendered_mentions_name(render(i), name) {
+        return false
+      }
   }
   for j in (i + 1)..<stmts.length() {
     match stmts[j] {
       Assign(n, rhs) | Expr(AssignExpr(n, rhs)) if n == name =>
-        return !"\{rhs}".contains(needle)
-      st => if stmt_may_jump(st) || "\{st}".contains(needle) { return false }
+        return !rendered_mentions_name("\{rhs}", name)
+      st =>
+        if stmt_may_jump(st) || rendered_mentions_name(render(j), name) {
+          return false
+        }
     }
   }
   false
@@ -22324,8 +22359,23 @@ fn collect_flow_writes_expr(e : @ast.TsExpr, out : Map[String, Unit]) -> Unit {
 /// spelling in the Debug tree, so shadowed uses count too) — used only to
 /// make back-edge widening MORE conservative, never less.
 fn expr_mentions_name(e : @ast.TsExpr, name : String) -> Bool {
-  let rendered = "\{e}"
-  rendered.contains("Var(\"" + name + "\")")
+  rendered_mentions_name("\{e}", name)
+}
+
+///|
+/// True when a rendered Debug tree READS `name`: as a variable, or as the
+/// callee of a call or a `new` spelled by name (`read()` is
+/// `Call("read", …)` and carries no `Var("read")`, so a back-edge write
+/// read only through a call looked unread and was dropped). The rendering
+/// is pretty-printed, so it is compared with whitespace removed; names hold
+/// none, and a string literal that loses its spaces can only over-match,
+/// which only ever keeps a write.
+fn rendered_mentions_name(rendered : String, name : String) -> Bool {
+  let flat = rendered.replace_all(old=" ", new="").replace_all(old="\n", new="")
+  let quoted = "\"" + name + "\""
+  flat.contains("Var(" + quoted + ")") ||
+  flat.contains("Call(" + quoted + ",") ||
+  flat.contains("New(" + quoted + ",")
 }
 
 ///|
