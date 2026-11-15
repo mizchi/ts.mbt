@@ -628,3 +628,38 @@ test "check_module: a function-shaped utility rejects an argument with no call s
   )
   assert_eq(check_module(m).count_of_kind(TypeParameterConstraintViolation), 0)
 }
+
+///|
+test "check_module: the callable-bound sentinel respects scope, imports and strictNullChecks" {
+  fn violations(src : String) -> Int32 {
+    check_module(parse_module_or_empty(src)).count_of_kind(
+      TypeParameterConstraintViolation,
+    )
+  }
+
+  // The lib utility still rejects a non-callable argument.
+  assert_eq(violations("type R = Parameters<string>;"), 1)
+  // A type PARAMETER named `Function` is not the lib interface.
+  assert_eq(
+    violations(
+      "type P<Function extends (...args: any[]) => any> = Parameters<Function>;",
+    ),
+    0,
+  )
+  // An imported `Parameters` is the import's, not the lib's.
+  assert_eq(
+    violations(
+      "import type { Identity as Parameters } from \"./types\";\ntype Q = Parameters<string>;",
+    ),
+    0,
+  )
+  // `null` is assignable to a function type without strictNullChecks.
+  assert_eq(
+    violations("// @strictNullChecks: false\ntype S = Parameters<null>;"),
+    0,
+  )
+  assert_eq(
+    violations("// @strictNullChecks: true\ntype S = Parameters<null>;"),
+    1,
+  )
+}

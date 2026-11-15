@@ -12630,14 +12630,28 @@ fn nested_function_method_return(
   // binds `U` to `{ length: number; charAt: … }` — then rejected
   // `r('')`, whose `string` does satisfy that shape. Scalars and objects
   // made of them are exact.
-  fn exact_shape(t : @ast.TsType) -> Bool {
+  //
+  // A LITERAL inside an object is not exact either: a fresh object
+  // literal's properties are mutable, so `foo({ kind: "a" })` against
+  // `U extends { kind: string }` infers `U = { kind: string }` in tsc, while
+  // `infer_expr` keeps `"a"` there — and the returned function then
+  // rejected `{ kind: "b" }`. A top-level literal binding is widened by
+  // `widen_fresh_literal_bindings` before it gets here.
+  fn exact_shape_at(t : @ast.TsType, in_object : Bool) -> Bool {
     match t {
-      Array(inner) => exact_shape(inner)
-      Tuple(items) => items.iter().all(exact_shape)
-      Union(ms) => ms.length() > 0 && ms.iter().all(exact_shape)
-      Object(fields) => fields.iter().all(fn(f) { exact_shape(f.1) })
+      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) if in_object =>
+        false
+      Array(inner) => exact_shape_at(inner, in_object)
+      Tuple(items) => items.iter().all(fn(i) { exact_shape_at(i, in_object) })
+      Union(ms) =>
+        ms.length() > 0 && ms.iter().all(fn(m) { exact_shape_at(m, in_object) })
+      Object(fields) => fields.iter().all(fn(f) { exact_shape_at(f.1, true) })
       _ => is_primitive_shaped(t)
     }
+  }
+
+  fn exact_shape(t : @ast.TsType) -> Bool {
+    exact_shape_at(t, false)
   }
   // `type_param_occurs` does not look inside a `GenericFunc`'s BOUNDS, and
   // a bound is exactly where `U` lives in `<V extends U>(x: V) => …`.
@@ -12649,6 +12663,19 @@ fn nested_function_method_return(
         _ => return None
       }
     }
+  }
+  // The nested function's own binders SHADOW the method's: in
+  // `foo<U extends string>(x: U) { function bar<U extends number>(v: U) … }`
+  // the `U` inside `bar` is `bar`'s, so the method's `U = string` must not
+  // reach it.
+  let bindings : Map[String, @ast.TsType] = {
+    let outer : Map[String, @ast.TsType] = Map([])
+    for k, v in bindings {
+      if !ntps.contains(k) {
+        outer[k] = v
+      }
+    }
+    outer
   }
   let bounds_out = nbounds.map(fn(b) { (b.0, substitute_params(b.1, bindings)) })
   let inline : Map[String, @ast.TsType] = Map([])
@@ -21495,6 +21522,55 @@ fn loop_backedge_bindings(
   cond : @ast.TsExpr,
   body : @ast.TsBlock,
 ) -> Array[(String, @ast.TsType)] {
+  loop_backedge_bindings_where(env, ctx, body, fn(name) {
+    !expr_mentions_name(cond, name)
+  })
+}
+
+///|
+/// The back-edge join for exactly the names the loop CONDITION reads,
+/// which `loop_backedge_bindings` leaves out. The condition is evaluated at
+/// the loop head, so it has to see the joined type: with
+/// `let x: "a" | "b" = "a"`, `while (x !== "b") { x = "b" }` compared the
+/// entry narrowing `"a"` against `"b"` and reported TS2367 on a loop tsc
+/// accepts.
+fn loop_backedge_cond_bindings(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+) -> Array[(String, @ast.TsType)] {
+  loop_backedge_bindings_where(env, ctx, body, fn(name) {
+    expr_mentions_name(cond, name)
+  })
+}
+
+///|
+/// The back-edge join of a `for…of` / `for…in` body, without the names the
+/// HEAD binds: the head assigns those afresh before every iteration, so a
+/// body assignment never reaches the next one. `for (x of ["a"]) {
+/// acceptString(x); x = 1 }` joined the `1` into `x` and reported the call.
+fn loop_backedge_head_bindings(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  head : @ast.TsBinding,
+  body : @ast.TsBlock,
+) -> Array[(String, @ast.TsType)] {
+  let head_names : Array[String] = []
+  collect_binding_names(head, head_names)
+  loop_backedge_bindings_where(env, ctx, body, fn(name) {
+    !head_names.contains(name)
+  })
+}
+
+///|
+/// The back-edge join for the names `admit` accepts.
+fn loop_backedge_bindings_where(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  body : @ast.TsBlock,
+  admit : (String) -> Bool,
+) -> Array[(String, @ast.TsType)] {
   let out : Array[(String, @ast.TsType)] = []
   let assigns : Array[(String, @ast.TsExpr)] = []
   if !collect_loop_assignments(body, assigns) {
@@ -21503,7 +21579,7 @@ fn loop_backedge_bindings(
   let merged : Map[String, @ast.TsType] = Map([])
   for a in assigns {
     let (name, rhs) = a
-    if expr_mentions_name(cond, name) {
+    if !admit(name) {
       continue
     }
     guard env.lookup(name) is Some(cur) else { continue }
@@ -21559,23 +21635,28 @@ fn collect_loop_assignments(
   b : @ast.TsBlock,
   out : Array[(String, @ast.TsExpr)],
 ) -> Bool {
-  collect_backedge_assignments(b.stmts, out, false)
+  collect_backedge_assignments(b.stmts, out, false, false)
   true
 }
 
 ///|
+/// `throw_caught` is set inside the `try` block of a `try` that has a
+/// `catch`: a `throw` there resumes in the catch and can still reach the
+/// back edge, so a list ending in one is not an exit.
 fn collect_backedge_assignments(
   stmts : Array[@ast.TsStmt],
   out : Array[(String, @ast.TsExpr)],
   in_breakable : Bool,
+  throw_caught : Bool,
 ) -> Unit {
   match stmts.last() {
-    Some(Return(_) | Throw(_) | Break(Some(_))) => return
+    Some(Return(_) | Break(Some(_))) => return
+    Some(Throw(_)) if !throw_caught => return
     Some(Break(None)) if !in_breakable => return
     _ => ()
   }
   for st in stmts {
-    collect_backedge_assignments_stmt(st, out, in_breakable)
+    collect_backedge_assignments_stmt(st, out, in_breakable, throw_caught)
   }
 }
 
@@ -21584,15 +21665,17 @@ fn collect_backedge_assignments_stmt(
   st : @ast.TsStmt,
   out : Array[(String, @ast.TsExpr)],
   in_breakable : Bool,
+  throw_caught : Bool,
 ) -> Unit {
   match st {
     Assign(name, rhs) | Expr(AssignExpr(name, rhs)) => out.push((name, rhs))
     Block(inner) | With(_, inner) =>
-      collect_backedge_assignments(inner.stmts, out, in_breakable)
+      collect_backedge_assignments(inner.stmts, out, in_breakable, throw_caught)
     If(_, then_, else_) => {
-      collect_backedge_assignments(then_.stmts, out, in_breakable)
+      collect_backedge_assignments(then_.stmts, out, in_breakable, throw_caught)
       match else_ {
-        Some(e) => collect_backedge_assignments(e.stmts, out, in_breakable)
+        Some(e) =>
+          collect_backedge_assignments(e.stmts, out, in_breakable, throw_caught)
         None => ()
       }
     }
@@ -21604,20 +21687,33 @@ fn collect_backedge_assignments_stmt(
     | ForIn(_, _, _, _, body)
     | ForOf(_, _, _, _, body)
     | ForAwaitOf(_, _, _, _, body) =>
-      collect_backedge_assignments(body.stmts, out, true)
+      collect_backedge_assignments(body.stmts, out, true, throw_caught)
     Switch(_, cases) =>
       for c in cases {
-        collect_backedge_assignments(c.body.stmts, out, true)
+        collect_backedge_assignments(c.body.stmts, out, true, throw_caught)
       }
-    Try(t, _, c, f) =>
-      for blk in [Some(t), c, f] {
+    Try(t, _, c, f) => {
+      collect_backedge_assignments(
+        t.stmts,
+        out,
+        in_breakable,
+        throw_caught || c is Some(_),
+      )
+      for blk in [c, f] {
         match blk {
-          Some(bb) => collect_backedge_assignments(bb.stmts, out, in_breakable)
+          Some(bb) =>
+            collect_backedge_assignments(
+              bb.stmts,
+              out,
+              in_breakable,
+              throw_caught,
+            )
           None => ()
         }
       }
+    }
     Label(_, inner) =>
-      collect_backedge_assignments_stmt(inner, out, in_breakable)
+      collect_backedge_assignments_stmt(inner, out, in_breakable, throw_caught)
     _ => ()
   }
 }
@@ -22187,6 +22283,11 @@ fn computed_key_tuple_element(
   let out : Array[@ast.TsType] = []
   for m in union_components(resolver.unwrap(source)) {
     guard m is Tuple(items) else { return None }
+    // A variadic tuple has no fixed element at a position past its rest
+    // (`[...number[], string]` at `[1]` is `number | string`).
+    if items.iter().any(fn(it) { it is Rest(_) }) {
+      return None
+    }
     for i in indices {
       if i >= items.length() {
         return None
@@ -22228,6 +22329,23 @@ fn bind_object_pattern(
     let computed_ty = match prop.key_expr {
       Some(k) => computed_key_tuple_element(env, ctx.resolver, source, k)
       None => None
+    }
+    // A computed key is evaluated in property order, so an assignment in
+    // one (`{ [(k = 1)]: first, [k]: second }`) is what the next key reads.
+    // A literal right-hand side narrows the name exactly as an assignment
+    // statement would; any other one drops back to the declared type, so a
+    // later key never reads the stale entry narrowing.
+    match prop.key_expr {
+      Some(AssignExpr(n, v)) =>
+        match precise_literal_type(v) {
+          Some(t) => env.narrow(n, t)
+          None =>
+            match env.lookup_declared(n) {
+              Some(d) => env.narrow(n, d)
+              None => ()
+            }
+        }
+      _ => ()
     }
     let field_ty = match computed_ty {
       Some(t) => t
@@ -26387,6 +26505,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     While(cond, body) => {
       record_function_as_condition(env, ctx, cond)
+      // The condition runs at the loop head, so a name it reads that the
+      // body reassigns is checked at its joined type (see
+      // `loop_backedge_cond_bindings`), and so is the body that follows.
+      // After the loop the name returns to its entry binding, as before.
+      let cond_joins = loop_backedge_cond_bindings(env, ctx, cond, body)
+      let cond_entry = cond_joins.map(fn(wb) { (wb.0, env.lookup(wb.0)) })
+      for wb in cond_joins {
+        env.bind(wb.0, wb.1)
+      }
       check_call_args_in_expr(env, cond, ctx)
       // The body only runs when the condition holds, so its then-narrowing
       // applies at the top of the body (`while (x !== undefined) { x.foo }`).
@@ -26408,6 +26535,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      for e in cond_entry {
+        match e.1 {
+          Some(t) => env.bind(e.0, t)
+          None => ()
+        }
+      }
     }
     DoWhile(cond, body) => {
       record_function_as_condition(env, ctx, cond)
@@ -26442,6 +26575,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None => BoolLit(true)
       }
       for wb in loop_backedge_bindings(env, ctx, backedge_cond, backedge_body) {
+        env.bind(wb.0, wb.1)
+      }
+      // As for `while`: the condition reads its names at their joined
+      // type. The whole arm is undone by `restore_from(pre)` below.
+      for
+        wb in loop_backedge_cond_bindings(
+          env, ctx, backedge_cond, backedge_body,
+        ) {
         env.bind(wb.0, wb.1)
       }
       match cond {
@@ -26638,7 +26779,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // Loop back-edge join, as for `while`: a binding the body
       // reassigns reaches the next iteration with the union of its entry
       // type and the assigned types.
-      for wb in loop_backedge_bindings(env, ctx, BoolLit(true), body) {
+      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
         env.bind(wb.0, wb.1)
       }
       check_block(env, body, ctx)
@@ -26711,7 +26852,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // Loop back-edge join, as for `while`: a binding the body
       // reassigns reaches the next iteration with the union of its entry
       // type and the assigned types.
-      for wb in loop_backedge_bindings(env, ctx, BoolLit(true), body) {
+      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
         env.bind(wb.0, wb.1)
       }
       check_block(env, body, ctx)
@@ -26764,7 +26905,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // Loop back-edge join, as for `while`: a binding the body
       // reassigns reaches the next iteration with the union of its entry
       // type and the assigned types.
-      for wb in loop_backedge_bindings(env, ctx, BoolLit(true), body) {
+      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
         env.bind(wb.0, wb.1)
       }
       check_block(env, body, ctx)

@@ -560,6 +560,7 @@ fn sb_walk_expr(
     | YieldStar(x)
     | PureCall(x)
     | TypeArgs(_, x)
+    | As(x, _)
     | AssignExpr(_, x)
     | AssignPattern(_, x) => sb_walk_expr(x, cname, later, hits)
     CompoundAssignExpr(a, _, b) => {

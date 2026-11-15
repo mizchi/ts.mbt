@@ -1442,6 +1442,9 @@ fn Parser::parse_parenthesized_expr(
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
   }
+  // The same source, so the same source-level flags: a checking parse
+  // keeps `as const`, and `([1, 2] as const)` must keep it too.
+  self.inherit_source_flags(temp)
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async
   temp.in_function = self.in_function
@@ -1526,6 +1529,9 @@ fn Parser::parse_expr_until_top_level(
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
   }
+  // The same source, so the same source-level flags: a checking parse
+  // keeps `as const`, and `([1, 2] as const)` must keep it too.
+  self.inherit_source_flags(temp)
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async
   temp.in_function = self.in_function

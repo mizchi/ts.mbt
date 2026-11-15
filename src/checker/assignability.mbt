@@ -1033,6 +1033,10 @@ fn is_assignable_to_inner(
       is_assignable_to_inner(s_inner, t_inner, bivariant_params)
     // Tuples are iterable: `[A, B]` is assignable to `Iterable<A | B>` etc.
     // The element type is the union of the tuple's slot types.
+    // `Array<T>` is the same target as `T[]`, so it takes the tuple arm
+    // below rather than the iterable-name list, which does not name it.
+    (Tuple(_), Applied("Array", [t_inner])) =>
+      is_assignable_to_inner(source, Array(t_inner), bivariant_params)
     (Tuple(s_items), Applied(t_name, [t_inner])) =>
       if is_array_like_iterable_name(t_name) {
         s_items

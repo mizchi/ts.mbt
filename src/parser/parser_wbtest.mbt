@@ -8367,3 +8367,15 @@ test "parser: TS1354 `readonly` applies only to array and tuple type syntax" {
     assert_eq(count(src, msg), 0, msg=src)
   }
 }
+
+///|
+test "an exported const assertion keeps its operand's value type" {
+  let parser = Parser::from_source_with_jsx(
+    "export const n = 1 as const;", false,
+  )
+  parser.keep_const_assertions()
+  let m = parser.parse_module() catch { _ => abort("parse") }
+  let found = m.values.iter().find_first(fn(v) { v.name == "n" })
+  guard found is Some(v) else { abort("n not recorded") }
+  assert_true(v.type_ is Number)
+}

@@ -598,4 +598,7 @@ test "is_assignable_to: a tuple flows into an array of its slots' union" {
   let variadic = @ast.TsType::Tuple([String_, Rest(Array(Number))])
   assert_true(is_assignable_to(variadic, Array(Union([String_, Number]))))
   assert_false(is_assignable_to(variadic, Array(String_)))
+  // `Array<T>` is the same target spelled as an application.
+  assert_true(is_assignable_to(t, Applied("Array", [Number])))
+  assert_false(is_assignable_to(t, Applied("Array", [String_])))
 }

@@ -2219,6 +2219,13 @@ fn value_decl_infer_type_from_expr(expr : @ast.TsExpr) -> @ast.TsType {
       }
       @ast.TsType::Object(prop_types)
     }
+    // A checking parse keeps `as const` as this node (see
+    // `Parser::keep_const_assertions`); every other parse erases it to the
+    // operand. The recorded type is the operand's either way, so an
+    // `export const n = 1 as const` keeps the `number` an importer is
+    // checked against instead of falling to `Any`.
+    @ast.TsExpr::As(inner, Named("const")) =>
+      value_decl_infer_type_from_expr(inner)
     _ => @ast.TsType::Any
   }
 }

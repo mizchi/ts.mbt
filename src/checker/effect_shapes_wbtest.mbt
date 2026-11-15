@@ -900,3 +900,41 @@ test "a loop's back edge joins what the body assigns, whatever exits the loop ea
     assert_true(eff_has(issues, bad), msg=bad)
   }
 }
+
+///|
+test "review: loop heads, nested binders and fresh object properties stay legal" {
+  let src =
+    #|declare function acceptString(x: string): void;
+    #|class C1 {
+    #|  foo<U extends { kind: string }>(x: U) {
+    #|    function bar<V extends U>(v: V) { return v; }
+    #|    return bar;
+    #|  }
+    #|}
+    #|class C2 {
+    #|  foo<U extends string>(x: U) {
+    #|    function bar<U extends number>(v: U) { return v; }
+    #|    return bar;
+    #|  }
+    #|}
+    #|function okFreshObjectProperty() { const r = new C1().foo({ kind: "a" }); r({ kind: "b" }); }
+    #|function okShadowedBinder() { const r = new C2().foo("a"); r(1); }
+    #|function okCaughtThrow(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; try { x = "b"; throw 0; } catch {} } }
+    #|function okWhileCondition() { let x: "a" | "b" = "a"; while (x !== "b") { x = "b"; } }
+    #|function okForOfHead() { let x: string | number; for (x of ["a"]) { acceptString(x); x = 1; } }
+    #|function okComputedKeyOrder() { let k: 0 | 1 = 0; const { [(k = 1)]: first, [k]: second } = ["a", "b"] as const; const value: "b" = second; return [first, value]; }
+    #|function badUncaughtThrow(c: boolean) { let x: "a" | "b" = "a"; while (c) { if (x === "b") break; x = "b"; throw 0; } }
+    #|function badBodyJoin() { let y: string | number = "s"; for (const v of [1]) { acceptString(y); y = v; } }
+    #|function badWhileBody() { let x: "a" | "b" = "a"; while (x !== "b") { const z: "b" = x; x = "b"; } }
+  let issues = eff_issues_checking(src)
+  for
+    ok in [
+      "okFreshObjectProperty", "okShadowedBinder", "okCaughtThrow", "okWhileCondition",
+      "okForOfHead", "okComputedKeyOrder",
+    ] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  for bad in ["badUncaughtThrow", "badBodyJoin", "badWhileBody"] {
+    assert_true(eff_has(issues, bad), msg=bad)
+  }
+}

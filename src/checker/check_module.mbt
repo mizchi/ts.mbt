@@ -532,6 +532,12 @@ fn check_module_arity_and_constraints(
   for cls in module_.classes {
     note_user_declared(cls.name)
   }
+  // An imported name shadows the utility as surely as a local declaration
+  // does: `import type { Identity as Parameters } from "./types"` makes
+  // `Parameters<string>` the import's, not the lib's callable-bounded one.
+  for n in module_.imported_binding_names {
+    note_user_declared(n)
+  }
   for intrinsic in ["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"] {
     if user_declared_type_names.get(intrinsic) is None {
       alias_params[intrinsic] = ["S"]
@@ -554,6 +560,9 @@ fn check_module_arity_and_constraints(
       alias_params[util] = ["T"]
       alias_bounds[util] = [("T", @ast.TsType::Named("<callable-bound>"))]
     }
+  }
+  if !module_.strict_null_checks {
+    alias_params["<no-strict-null-checks>"] = []
   }
   for lib_name in ["Function", "Object"] {
     if user_declared_type_names.get(lib_name) is Some(_) {
@@ -751,7 +760,12 @@ fn check_constraints(
                   // confirming with `is_assignable_to` (the actual constraint
                   // relation) removes that false positive while keeping genuine
                   // violations, where both agree.
+                  // The callable-bound sentinel takes the same scope guard:
+                  // `type P<Function extends (...a: any) => any> =
+                  // Parameters<Function>` names the TYPE PARAMETER, not the
+                  // lib interface.
                   let violates = if target is Named("<callable-bound>") {
+                    !unverifiable &&
                     definitely_not_function_type(arg, alias_params)
                   } else if unverifiable {
                     false
@@ -867,14 +881,17 @@ fn definitely_not_function_type(
     | Boolean
     | BigInt
     | Symbol
-    | Null
-    | Undefined
     | Void
     | Unknown
     | Literal(_)
     | NumberLiteral(_)
     | BooleanLiteral(_)
     | BigIntLiteral(_) => true
+    // Without `strictNullChecks`, `null` and `undefined` are assignable to
+    // every type, a function type included, so `Parameters<null>` is legal.
+    // The flag rides `alias_params` the way the `<user-declared:…>` entries
+    // do, rather than as a parameter of every `check_constraints` call.
+    Null | Undefined => !alias_params.contains("<no-strict-null-checks>")
     Named("Function" as n) | Named("Object" as n) =>
       !alias_params.contains("<user-declared:" + n + ">")
     Union(ms) =>

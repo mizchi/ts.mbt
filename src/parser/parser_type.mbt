@@ -1786,7 +1786,7 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let ends_in_bracket = self.pos > 0 &&
         self.tokens[self.pos - 1].kind is RBracket
       if !ends_in_bracket || operand_start is Ident("readonly") {
-        self.grammar_misuses.push(
+        self.record_suppressible_grammar_misuse(
           "'readonly' type modifier is only permitted on array and tuple literal types",
         )
       }
