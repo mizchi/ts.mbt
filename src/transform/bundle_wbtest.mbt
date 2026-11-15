@@ -3509,6 +3509,51 @@ test "bundler: `using` a nullish value guards the dispose receiver" {
 }
 
 ///|
+/// Every `using` declaration site disposes, not only a block's. The
+/// for-of head disposes once per iteration (its body is wrapped, so
+/// `continue` / `break` / `return` dispose too); the C-style head once,
+/// when the loop is left; a multi-declarator declaration gets one `try` per
+/// binding, nested so they are disposed in reverse order; and `await
+/// using` awaits its disposal. Each shape was checked against tsc's
+/// downlevel run under Node; before, the two for-heads emitted `let` with
+/// no disposal and `using a = x, b = y` emitted `const a = (x, b = y)`.
+test "bundler: every `using` declaration site lowers its disposal" {
+  let src =
+    #|declare const xs: Disposable[];
+    #|declare function res(): Disposable;
+    #|declare function ares(): AsyncDisposable;
+    #|export function a() { for (using d of xs) { if (!d) continue; } }
+    #|export function b() { for (using e = res(); ; ) { break; } }
+    #|export function c() { using p = res(), q = res(); return 1; }
+    #|export async function f() { await using r = ares(); }
+  let files = vfs([("entry.ts", src)])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      let js = out.js
+      let at = fn(needle : String) -> Int32 raise {
+        match js.find(needle) {
+          Some(i) => i
+          None => fail("expected `\{needle}` in:\n\{js}")
+        }
+      }
+      // for-of: a `const` head, and the disposal inside the loop body.
+      assert_true(at("for (const d of xs)") < at("d?.[Symbol.dispose]?.()"))
+      assert_false(js.contains("for (let d of"))
+      // C-style for: the binding is declared before the loop it outlives.
+      assert_true(at("const e = res()") < at("for (;;)"))
+      assert_true(at("for (;;)") < at("e?.[Symbol.dispose]?.()"))
+      // Two declarators, two bindings, disposed in reverse order.
+      assert_true(at("const p = res()") < at("const q = res()"))
+      assert_true(at("q?.[Symbol.dispose]?.()") < at("p?.[Symbol.dispose]?.()"))
+      assert_false(js.contains("q = res()),"))
+      // `await using` waits for the disposal.
+      assert_true(js.contains("await r?.[Symbol.asyncDispose]?.()"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 /// The bundler resolves through the same rule as the CLI loader: a
 /// `.js`-spelled specifier may name a `.ts` file, which is what
 /// TypeScript's `node16` / `nodenext` / `bundler` resolution prescribes.

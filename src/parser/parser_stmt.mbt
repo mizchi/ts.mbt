@@ -409,9 +409,15 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       } else {
         self.parse_let()
       }
-    // `using x = expr;` and `await using x = expr;` (ES2023). Treat as a
-    // `let` declaration for parsing — the auto-disposal semantics don't
-    // affect the type-level shape.
+    // `using x = expr;` and `await using x = expr;` (ES2023) reached
+    // OUTSIDE a block: in practice only at the top level of a module or
+    // script, since a function body and every `{ … }` go through
+    // `parse_block`, which lowers the declaration with its disposal. Here
+    // it stays a plain `let` and is NOT disposed. Disposing at the end of
+    // a module body needs that body wrapped in `try`, with its top-level
+    // declarations hoisted out as `var` the way tsc's downlevel does it,
+    // and that restructures what every transform pass reads as the
+    // module's top level.
     Ident("using") if self.is_using_declaration_start() => {
       let kw_pos = self.peek().pos
       let _ = self.advance()
@@ -1349,11 +1355,14 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   }
   let _ = self.expect(LParen)
 
-  // `for (using x of ...)` — ES2023 disposable binding. Same shape as
-  // `for (let x of ...)` for parsing purposes; we tag the binding with
-  // `TsForOfKind::Let` since the auto-disposal semantics don't affect the
-  // type-level shape the checker cares about.
+  // `for (using x of ...)` — ES2023 disposable binding. It parses like
+  // `for (const x of ...)`, and it is NOT only a type-level shape: each
+  // iteration's value is disposed when that iteration ends, `continue`,
+  // `break` and `return` included, so the body is lowered through
+  // `lower_using_declaration` below. Tagging it `Let` and stopping there
+  // emitted `for (let x of …)` with no disposal at all.
   let mut using_kw = ""
+  let head_pos = self.peek().pos
   let using_declaration = if self.is_using_declaration_start() {
     let _ = self.advance()
     using_kw = "using"
@@ -1372,7 +1381,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     self.check(Const) ||
     self.check(Var) {
     let kind = if using_declaration {
-      @ast.TsForOfKind::Let
+      @ast.TsForOfKind::Const
     } else {
       match self.advance().kind {
         Let => @ast.TsForOfKind::Let
@@ -1449,6 +1458,33 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       self.record_for_head_binding_misuses(
         kind, binding, var_type, head_annotated, iterable, body,
       )
+      // `for (using x of xs) body` -> `for (const x of xs) { try { body }
+      // finally { dispose(x) } }`: one disposal per iteration, run on every
+      // way out of the body. `for…in` with `using` is TS1493 and is left
+      // as it is.
+      let body = if using_declaration && !is_in {
+        match binding {
+          Ident(name) => {
+            let try_stmt = @ast.TsStmt::Try(
+              body,
+              None,
+              None,
+              Some({
+                stmts: [using_dispose_stmt(name, using_kw == "await using")],
+                stmt_positions: [],
+              }),
+            )
+            let wrapped : @ast.TsBlock = {
+              stmts: [try_stmt],
+              stmt_positions: [head_pos],
+            }
+            wrapped
+          }
+          _ => body
+        }
+      } else {
+        body
+      }
       // Preserve the explicit type annotation on the loop binding when
       // present; `parse_var_decl_type` returns `Any` otherwise.
       if is_in {
@@ -1472,7 +1508,11 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         "'\{using_kw}' declarations must be initialized",
       )
     }
+    // A `using` head is read as `let`: a missing initializer is TS1155,
+    // recorded above, where `const` would raise a parse error instead.
+    // `lower_using_declaration` emits the binding as `const`.
     let var_kind = match kind {
+      _ if using_declaration => VarKind::Let
       @ast.TsForOfKind::Var => VarKind::Var
       @ast.TsForOfKind::Let => VarKind::Let
       @ast.TsForOfKind::Const => VarKind::Const
@@ -1480,6 +1520,23 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     let stmts = self.parse_var_decl_list_from(binding, var_type, var_kind)
     let _ = self.expect(Semicolon)
+    if using_declaration {
+      // `for (using x = e; c; u) body` disposes `x` ONCE, when the loop is
+      // left, not per iteration: `{ const x = e; try { for (; c; u) body }
+      // finally { dispose(x) } }`. The binding is never reassigned, so
+      // moving it out of the head loses nothing a per-iteration copy had.
+      let loop_stmt = self.parse_for_rest(None)
+      let lowered = lower_using_declaration(
+        self.merge_decl_stmts(stmts),
+        using_kw == "await using",
+        { stmts: [loop_stmt], stmt_positions: [head_pos], },
+        head_pos,
+      )
+      return Block({
+        stmts: lowered,
+        stmt_positions: lowered.map(fn(_) { head_pos }),
+      })
+    }
     let init : @ast.TsStmt? = Some(self.merge_decl_stmts(stmts))
     return self.parse_for_rest(init)
   }
@@ -1908,9 +1965,15 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let prev_strict = self.in_strict
   let mut in_directive = true
   while !self.check(RBrace) && !self.check(Eof) {
-    // `using x = expr` / `await using x = expr` (ES2023). Lower to
-    // `const x = expr; try { ...rest } finally { x[Symbol.dispose]?.() }`
-    // so the disposal semantics survive in the emitted JS.
+    // `using x = expr` / `await using x = expr` (ES2023), lowered to
+    // `const x = expr; try { ...rest } finally { dispose(x) }` so the
+    // disposal semantics survive in the emitted JS. The declaration itself
+    // goes through `parse_var_like`, the statement-level parser, which
+    // reads every declarator and runs every `using` grammar rule (TS1155,
+    // TS1492, TS2850, TS7018, the `await using` context). This site used
+    // to parse ONE declarator with `parse_expr`, so `using a = x, b = y`
+    // became `const a = (x, b = y)`: the wrong value for `a`, and an
+    // assignment to an undeclared `b` that throws in a module.
     let is_using = self.is_using_declaration_start()
     let is_await_using = if !is_using {
       self.is_await_using_declaration_start()
@@ -1925,83 +1988,8 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
         let _ = self.advance() // `await`
         let _ = self.advance() // `using`
       }
-      let binding_name = self.parse_binding_ident()
-      let has_annotation = self.check(Colon)
-      let ty = if has_annotation {
-        let _ = self.advance()
-        self.parse_type()
-      } else {
-        @ast.TsType::Any
-      }
-      let _ = self.expect(Eq)
-      let init = self.parse_expr()
-      let _ = self.match_(Semicolon)
       let using_kw = if is_await_using { "await using" } else { "using" }
-      // Marker for the lib-directive TS2318 rule (`Disposable` global —
-      // usingDeclarations.9's block-scoped form lowers here, not through
-      // `parse_var_like`).
-      self.grammar_misuses.push("<has-using>")
-      self.record_await_using_context(using_kw)
-      // Later declarators of a multi-declarator `using` land inside the
-      // init as a comma chain (`using a = null, [b] = null, c = null`
-      // parses `null, ([b] = null), (c = null)`). A destructuring
-      // assignment operand is exactly a pattern declarator — TS1492.
-      // The FIRST operand is the real initializer: an object LITERAL
-      // whose keys are all plain (no symbol-keyed / computed / spread
-      // entry) provably lacks `[Symbol.dispose]()` — TS2850/2851.
-      fn using_first_operand(e : @ast.TsExpr) -> @ast.TsExpr {
-        match e {
-          Seq(a, _) => using_first_operand(a)
-          _ => e
-        }
-      }
-      fn scan_using_declarators(p : Parser, e : @ast.TsExpr) -> Unit {
-        match e {
-          Seq(a, b) => {
-            scan_using_declarators(p, a)
-            scan_using_declarators(p, b)
-          }
-          AssignPattern(_, _) =>
-            p.grammar_misuses.push(
-              "'\{using_kw}' declarations may not have binding patterns",
-            )
-          _ => ()
-        }
-      }
-      scan_using_declarators(self, init)
-      // An annotated declaration (`using d: T = {...}`) type-checks the
-      // literal against `T` instead — only the unannotated form decides.
-      match (has_annotation, using_first_operand(init)) {
-        (false, ObjectLit(entries)) => {
-          let mut keys_plain = true
-          for e in entries {
-            if e.0.has_prefix("@@") || e.0.has_prefix("<") {
-              keys_plain = false
-            }
-          }
-          if keys_plain {
-            self.grammar_misuses.push(
-              "the initializer of a '\{using_kw}' declaration must be an object with a `[Symbol.dispose]()` method, or `null` / `undefined`",
-            )
-          }
-        }
-        _ => ()
-      }
-      // TS7018, the same rule `parse_var_decl_item` runs for a `var` /
-      // `let` / `const` declarator: a `null` / `undefined` literal
-      // standing where the declaration's type has to be inferred. This is
-      // the BLOCK-statement `using` path — the second of the three
-      // declaration sites batch CG records for this form, and the one
-      // every `usingDeclarations` conformance test actually writes, so a
-      // recorder placed only at `parse_var_like` reaches none of them.
-      // The `using` binding is always a plain name (a pattern is TS1492
-      // above), so only the object-literal half can apply.
-      if !has_annotation {
-        self.record_nullish_inferred_declaration(
-          @ast.TsBinding::Ident(binding_name),
-          using_first_operand(init),
-        )
-      }
+      let decl = self.parse_var_like(VarKind::Let, pos, using_kw~)
       // Parse the remaining statements in this block into the try body.
       let rest_stmts : Array[@ast.TsStmt] = []
       let rest_positions : Array[Int32] = []
@@ -2009,44 +1997,16 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
         rest_positions.push(self.peek().pos)
         rest_stmts.push(self.parse_stmt())
       }
-      // Synthesize `x?.[Symbol.dispose]?.()` (or Symbol.asyncDispose).
-      // The `?.` on the RECEIVER is what `using x = null` needs: a nullish
-      // initializer is legal and disposes nothing, so the old
-      // `x[Symbol.dispose]?.()` threw `TypeError: Cannot read properties
-      // of null` at block exit in the EMITTED program, and the checker,
-      // reading the same lowering, reported "cannot index into `null`" on
-      // a declaration tsc accepts. The shape is the one the expression
-      // parser builds for that source text: one `OptionalChain` per `?.`,
-      // wrapping the step it guards.
-      let dispose_key = if is_await_using { "asyncDispose" } else { "dispose" }
-      let dispose_expr = @ast.TsExpr::OptionalChain(
-        @ast.TsExpr::CallExpr(
-          @ast.TsExpr::OptionalChain(
-            @ast.TsExpr::IndexAccess(
-              @ast.TsExpr::Var(binding_name),
-              @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), dispose_key),
-            ),
-          ),
-          [],
-        ),
-      )
-      let finally_block : @ast.TsBlock = {
-        stmts: [@ast.TsStmt::Expr(dispose_expr)],
-        stmt_positions: [],
-      }
-      stmts.push(
-        @ast.TsStmt::Const(@ast.TsBinding::Ident(binding_name), ty, init),
-      )
-      stmts.push(
-        @ast.TsStmt::Try(
+      for
+        st in lower_using_declaration(
+          decl,
+          is_await_using,
           { stmts: rest_stmts, stmt_positions: rest_positions, },
-          None,
-          None,
-          Some(finally_block),
-        ),
-      )
-      stmt_positions.push(pos)
-      stmt_positions.push(pos)
+          pos,
+        ) {
+        stmts.push(st)
+        stmt_positions.push(pos)
+      }
       break
     }
     stmt_positions.push(self.peek().pos)
@@ -2068,6 +2028,97 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
     None => []
   }
   { stmts, stmt_positions, }
+}
+
+///|
+/// The statement that disposes the `using` binding `name` at the end of
+/// its scope: `name?.[Symbol.dispose]?.()`, and for `await using`
+/// `await name?.[Symbol.asyncDispose]?.()`.
+///
+/// The `?.` on the RECEIVER is what `using x = null` needs: a nullish
+/// initializer is legal and disposes nothing, so the old
+/// `x[Symbol.dispose]?.()` threw `TypeError: Cannot read properties of
+/// null` at block exit in the EMITTED program, and the checker, reading
+/// the same lowering, reported "cannot index into `null`" on a declaration
+/// tsc accepts. The shape is the one the expression parser builds for that
+/// source text: one `OptionalChain` per `?.`, wrapping the step it guards.
+///
+/// The `await` is what makes `await using` wait for the disposal before
+/// the code after the scope runs, which is the point of the async form.
+/// What is NOT modelled: `await using` falling back to `[Symbol.dispose]`
+/// when there is no `[Symbol.asyncDispose]`, the TypeError a non-nullish
+/// value without the method throws at the declaration, and aggregating
+/// several disposal errors into a `SuppressedError`.
+fn using_dispose_stmt(name : String, is_await : Bool) -> @ast.TsStmt {
+  let key = if is_await { "asyncDispose" } else { "dispose" }
+  let call = @ast.TsExpr::OptionalChain(
+    @ast.TsExpr::CallExpr(
+      @ast.TsExpr::OptionalChain(
+        @ast.TsExpr::IndexAccess(
+          @ast.TsExpr::Var(name),
+          @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), key),
+        ),
+      ),
+      [],
+    ),
+  )
+  @ast.TsStmt::Expr(if is_await { @ast.TsExpr::Await(call) } else { call })
+}
+
+///|
+/// Lower one `using` declaration around `rest`, the code its bindings are
+/// in scope for. `decl` is what `parse_var_like` returned: one declarator,
+/// or a `DECL_GROUP_POSITION` group of them.
+///
+///   using a = x, b = y;  rest
+///   =>
+///   const a = x;
+///   try { const b = y; try { rest } finally { dispose(b) } }
+///   finally { dispose(a) }
+///
+/// One `try` per declarator, nested, so the bindings are disposed in
+/// reverse order and `a` is still disposed when `y` throws. A binding
+/// pattern is TS1492 and has no single name to dispose, so it gets no
+/// `try`. Every declaration site — a block, a `for…of` head, a C-style
+/// `for` head — lowers through here, so they cannot disagree about the
+/// shape.
+fn lower_using_declaration(
+  decl : @ast.TsStmt,
+  is_await : Bool,
+  rest : @ast.TsBlock,
+  pos : Int32,
+) -> Array[@ast.TsStmt] {
+  let decls = match decl {
+    Block({ stmts, stmt_positions, }) if stmt_positions ==
+      [@ast.DECL_GROUP_POSITION] => stmts
+    _ => [decl]
+  }
+  let mut body = rest
+  for i = decls.length() - 1; i >= 0; i = i - 1 {
+    let (binding, const_decl) = match decls[i] {
+      Var(b, t, e) | Let(b, t, e) | Const(b, t, e) =>
+        (Some(b), @ast.TsStmt::Const(b, t, e))
+      other => (None, other)
+    }
+    let stmts = match binding {
+      Some(Ident(name)) =>
+        [
+          const_decl,
+          @ast.TsStmt::Try(
+            body,
+            None,
+            None,
+            Some({
+              stmts: [using_dispose_stmt(name, is_await)],
+              stmt_positions: [],
+            }),
+          ),
+        ]
+      _ => [const_decl, ..body.stmts]
+    }
+    body = { stmts, stmt_positions: stmts.map(fn(_) { pos }), }
+  }
+  body.stmts
 }
 
 ///|

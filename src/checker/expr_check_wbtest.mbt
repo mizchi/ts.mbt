@@ -23092,3 +23092,31 @@ test "an if join does not restore a path a branch forgot" {
     0,
   )
 }
+
+///|
+/// An `any` element makes an array literal's element type `any`, as in
+/// tsc. `equivalent` calls `any` equivalent to everything, so the element
+/// used to be skipped: `[null, q]` with `q: any` read as `null[]`, which
+/// made the non-null branch of every narrowing `never`, and `[1, q]` read
+/// as `number[]`. Both are accepted by tsc (probed); the arrays without an
+/// `any` element still report.
+test "an any element widens an array literal's element type to any" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  const b = [null, q][0];\n  const s: string = b === null ? \"null\" : b.name;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  const c = [1, q];\n  const n: string[] = c;\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n("function f() {\n  const c = [1, 2];\n  const n: string[] = c;\n}") > 0,
+  )
+}

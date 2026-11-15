@@ -10741,6 +10741,15 @@ fn infer_expr_inner(
         if first {
           elem = t
           first = false
+        } else if t is Any {
+          // An `any` element makes the whole element type `any`, as in tsc
+          // (`[null, q]` with `q: any` is `any[]`). `equivalent` calls `any`
+          // equivalent to everything, so this element used to be skipped:
+          // `[null, q]` read as `null[]` (every non-null branch of a
+          // narrowing was then `never`) and `[1, q]` as `number[]`. An
+          // element whose type this checker could not compute is `Any` too,
+          // so both readings fail closed.
+          elem = Any
         } else if !equivalent(elem, t) {
           // Mixed element types: TS infers the union. Only concrete
           // scalars union here (`[0, ""]` -> `(number | string)[]`,

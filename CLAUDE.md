@@ -4307,10 +4307,29 @@ product surfaces now.
   One of them was an EMIT bug as well as a checker one. `using x = null`
   lowered to `x[Symbol.dispose]?.()`, which threw `TypeError` at block
   exit under plain `--bundle`, and the checker reported the same
-  lowering. It is `x?.[Symbol.dispose]?.()` now. A `for (using d of …)`
-  head does not dispose at all; that is filed rather than fixed. Array
+  lowering. It is `x?.[Symbol.dispose]?.()` now. Array
   types of unions also print as `(string | null)[]` now, not
   `string | null[]`.
+
+  Batch GC is the `using` lowering at its other declaration sites, and it
+  is the applied-in-some-places family in the EMIT. Only a block's
+  `using` was lowered to `const x = e; try { … } finally { dispose(x) }`:
+  - `for (using d of xs)` emitted `for (let d of xs)` and never disposed;
+  - `for (using d = e; c; u)` emitted `let d` and never disposed;
+  - `using a = x, b = y` in a block read ONE declarator with
+    `parse_expr`, so it emitted `const a = (x, b = y)`, the wrong value
+    for `a` and an assignment to an undeclared `b`;
+  - `await using` did not await its disposal.
+
+  The block site now parses through `parse_var_like`, the statement-level
+  parser, which already read every declarator and ran every `using`
+  grammar rule, and every site lowers through one helper
+  (`lower_using_declaration`). All five shapes were checked against tsc's
+  downlevel run under Node. Still not disposed: a `using` at the top
+  level of a module or script, which needs the module body wrapped and
+  its declarations hoisted the way tsc's downlevel does it; the site says
+  so. The same batch fixed an `any` array element being skipped by the
+  element-type union (`[null, q]` with `q: any` read as `null[]`).
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
