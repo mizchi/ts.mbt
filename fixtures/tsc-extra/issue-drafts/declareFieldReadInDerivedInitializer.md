@@ -1,6 +1,7 @@
 <!--
 Draft for microsoft/TypeScript, "Bug report" template.
 Fixture: ../cases/feedback/declareFieldReadInDerivedInitializer.ts
+Filed as microsoft/TypeScript#65514 on 2026-11-15.
 Duplicate search (2026-11-15): no existing report. The closest are #42319
 (whose own "Expected behavior" lists this case as allowed) and its fix
 #43194, which introduced the behaviour below.

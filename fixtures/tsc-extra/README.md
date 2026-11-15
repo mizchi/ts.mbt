@@ -98,14 +98,15 @@ unchanged — so none was fixed between the beta and current `main`.
 
 The upstream trackers (microsoft/TypeScript, and the archived
 microsoft/typescript-go) were searched on 2026-11-15. Two cases are already
-reported, and the other three have a draft in `issue-drafts/`. The drafts
-are written to be filed by hand, after checking them against the
-Playground nightly.
+reported, and the other three have a draft in `issue-drafts/`. The
+`declare` field case is filed; the other two drafts are not, by decision
+(a missed error with little real-world reach, and a diagnostic-message
+choice).
 
 | Case | What looks wrong | Compare | Upstream |
 | --- | --- | --- | --- |
 | `feedback/nullishCoalescingVoidLeftOperand` | `void 0 ?? y` (and `(void 0)`, `void f()`) is **TS2869** "the left operand is never nullish". `void` always yields `undefined`, so the right operand is always reached. | `undefined ?? y` is TS2871 "always nullish" | **Duplicate of #60276** (`void 22 ?? true`), closed as Working as Intended: the rule "in the vast majority of cases, catches operator precedence bugs". Locked. Do not file. |
-| `feedback/declareFieldReadInDerivedInitializer` | `declare b: number; d = this.b` in a subclass is **TS2729** "used before its initialization". The base's `b = 1` has already run, and `new Derived().d === 1`. | the same read without `declare b` is accepted, and so is the redeclaration under `useDefineForClassFields: false` | No report. A regression from #43194 (TS 4.3), the fix for #42319, whose own "Expected behavior" lists this case as allowed. 4.2.3 accepts it, and 4.3.5 through 7.1 report it. [Draft](issue-drafts/declareFieldReadInDerivedInitializer.md) |
+| `feedback/declareFieldReadInDerivedInitializer` | `declare b: number; d = this.b` in a subclass is **TS2729** "used before its initialization". The base's `b = 1` has already run, and `new Derived().d === 1`. | the same read without `declare b` is accepted, and so is the redeclaration under `useDefineForClassFields: false` | **Filed as [microsoft/TypeScript#65514](https://github.com/microsoft/TypeScript/issues/65514)** (2026-11-15). A regression from #43194 (TS 4.3), the fix for #42319, whose own "Expected behavior" lists this case as allowed. 4.2.3 accepts it, and 4.3.5 through 7.1 report it. [Draft](issue-drafts/declareFieldReadInDerivedInitializer.md) |
 | `feedback/expandoElementAccessAssignmentInBranch` | An expando property assigned only in one branch is TS2565 when the write is `fn.q = 1`. When the write is `fn["q"] = 1`, the same later read is **accepted**. Both READ spellings are checked. | `typeFromPropertyAssignment36` (dotted writes only) | No report. microsoft/typescript-go#4134 restored the dotted-write case in tsgo. The element-access write behaves the same from 4.9.5 through 7.1. [Draft](issue-drafts/expandoElementAccessAssignmentInBranch.md) |
 | `feedback/superCallInObjectLiteralComputedKey` | `super()` in an object literal's computed key is accepted directly in a constructor and **TS2466** inside an arrow, where a bare `super()` gets **TS2337**. The arrow is what differs, so one of the two codes is the wrong one. | `computedPropertyNames28` / `30` | No report. Unchanged from 4.2.3 through 7.1. The lowest impact of the three, since only the diagnostic differs. [Draft](issue-drafts/superCallInObjectLiteralComputedKey.md) |
 | `feedback/templateLiteralNumberWhitespace` | `" "`, `"\n"`, `" "`, `" 1"` and `"1 "` all satisfy `` `${number}` `` (`+" "` is `0`). Upstream pins `"0x1"`, `"1e21"`, … and rejects `""`. No test says whether whitespace is meant to pass. | `templateLiteralTypesPatterns` | **Covered by #46109** (open, Needs Investigation, assigned). @ahejlsberg wrote there that whitespace-only strings are accepted because JavaScript's conversion allows them, and that "it makes more sense to not permit any whitespace". Do not file. |
