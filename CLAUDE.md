@@ -4152,12 +4152,21 @@ product surfaces now.
   - JSDoc trimming and splitting avoid the library defaults, which
     rebuild a character set per call.
 
-  Measured on a release build:
-  - wide500: 1.78 -> 0.75 ms
-  - wide5000: 20.4 -> 11.1 ms
-  - small: 40 -> 30 µs
-  - generic-heavy 400: 20.8 -> 16.8 ms
-  - JSDoc-heavy parse: 2.27 -> 1.97 ms
+  `moon bench` before and after:
+  - checker 500 interfaces: 1.65 -> 0.60 ms
+  - checker 5000 interfaces: 20.4 -> 10.3 ms
+  - checker permissive 2000: 8.51 -> 3.49 ms
+  - checker small: 40.4 -> 30.0 µs
+  - checker advanced types: 40.7 -> 25.8 µs
+  - checker JSX-heavy: 530 -> 369 µs
+  - checker generic-heavy 400: 23.8 -> 18.0 ms
+
+  Every checker bench is 14-65% faster. The parser benches are
+  unchanged within noise. The JSDoc change is -2% in instructions and
+  nothing measurable in wall time. The commit that made it claims
+  2.27 -> 1.97 ms: that was ONE run against noisy neighbours, and
+  best-of-5 on both binaries reads 1.9 ms each. A single timing is not a
+  measurement; the instruction count is the number that settles it.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
