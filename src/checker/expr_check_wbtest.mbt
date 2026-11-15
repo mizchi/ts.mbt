@@ -23092,3 +23092,147 @@ test "an if join does not restore a path a branch forgot" {
     0,
   )
 }
+
+///|
+/// An `any` element makes an array literal's element type `any`, as in
+/// tsc. `equivalent` calls `any` equivalent to everything, so the element
+/// used to be skipped: `[null, q]` with `q: any` read as `null[]`, which
+/// made the non-null branch of every narrowing `never`, and `[1, q]` read
+/// as `number[]`. Both are accepted by tsc (probed); the arrays without an
+/// `any` element still report.
+test "an any element widens an array literal's element type to any" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  const b = [null, q][0];\n  const s: string = b === null ? \"null\" : b.name;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  const c = [1, q];\n  const n: string[] = c;\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n("function f() {\n  const c = [1, 2];\n  const n: string[] = c;\n}") > 0,
+  )
+}
+
+///|
+/// A destructuring default does not replace an `any` element: tsc types
+/// `x` in `const [x = 0] = xs` with `xs: any[]` as `any`, and the same for
+/// `const { a = 0 } = o` with `o: any` (probed: every line below is
+/// accepted). Reading `any` as "use the default's type" bound `number` and
+/// reported `const s: string = x`. An EMPTY array literal is the one source
+/// whose element must still come from the default — `const [y = 0] = []`
+/// is `number` in tsc, and assigning it to `string` is TS2322 — so the
+/// declaration site hands it over as the empty tuple.
+test "a destructuring default keeps an any element" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  const xs = [\"a\", q];\n  const [x = 0] = xs;\n  const s: string = x;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const q: any;\nfunction f() {\n  let [w = 0] = [q];\n  const s: string = w;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const o: any;\nfunction f() {\n  const { a = 0 } = o;\n  const s: string = a;\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n("function f() {\n  const [y = 0] = [];\n  const s: string = y;\n}") > 0,
+  )
+  assert_true(
+    n(
+      "function f() {\n  const [y = 0] = [undefined];\n  const s: string = y;\n}",
+    ) >
+    0,
+  )
+}
+
+///|
+/// Four more cells from review, each probed against tsc:
+///
+/// - an empty array DEFAULT feeding a nested pattern is the empty tuple, so
+///   `const [[y = 0] = []] = [undefined]` binds `y` as `number` (TS2322
+///   against `string`), as does the object-pattern spelling;
+/// - an element that only CONTAINS `any` (`[x?: any]`, read as
+///   `any | undefined`) stays `any` through a default (accepted);
+/// - `...[]` adds no element, so `[1, ...[]]` is `number[]` (TS2322);
+/// - a callback body with a `using` is lowered into a `try`, and its
+///   `return` is still the callback's return type: tsc accepts
+///   `const k: number = f()` for `const f = () => { using r = res();
+///   return 5 }`, and this read it as `undefined`.
+test "using bodies, nested empty defaults, any unions and empty spreads" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    n(
+      "function f() {\n  const [[y = 0] = []] = [undefined];\n  const s: string = y;\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    n(
+      "function f() {\n  const { p: [z = 0] = [] } = { p: undefined };\n  const s: string = z;\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare const t: [x?: any];\nfunction f() {\n  const [w = 1] = t;\n  const m: string = w;\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n(
+      "function f() {\n  const arr = [1, ...[]];\n  const s: string = arr[0];\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    n(
+      "declare function res(): Disposable;\nfunction g() {\n  const inferred = () => { using r = res(); return 5; };\n  const k: number = inferred();\n}",
+    ),
+    0,
+  )
+  assert_true(
+    n(
+      "declare function res(): Disposable;\nfunction g() {\n  const inferred = () => { using r = res(); return 5; };\n  const k: string = inferred();\n}",
+    ) >
+    0,
+  )
+  // Only the `try` the `using` lowering builds is read through. Two
+  // hand-written ones can declare the same name, so reading both as one
+  // scope bound the first `x` (`number`) for the second's `return x`. tsc
+  // gives `f` the type `string`, so `string | undefined` accepts it.
+  @test.assert_eq(
+    n(
+      "function g() {\n  const f = () => { try { const x = 1; } finally {} try { const x = \"ok\"; return x; } finally {} };\n  const s: string | undefined = f();\n}",
+    ),
+    0,
+  )
+  // The same two blocks whose `finally` LOOKS generated: the shape test is
+  // on the whole block (holders, then one `try`), so two `try`s in a row
+  // are never read as one scope, whatever their `finally` holds.
+  @test.assert_eq(
+    n(
+      "declare const __ts_using_manual: Disposable;\nfunction g() {\n  const f = () => {\n    try { const x = 1; } finally { __ts_using_manual?.[Symbol.dispose]?.(); }\n    try { const x = \"ok\"; return x; } finally { __ts_using_manual?.[Symbol.dispose]?.(); }\n  };\n  const s: string | undefined = f();\n}",
+    ),
+    0,
+  )
+}

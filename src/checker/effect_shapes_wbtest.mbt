@@ -880,6 +880,32 @@ test "binding-pattern defaults: const tuples, computed keys and the conditional 
 }
 
 ///|
+/// A const-asserted default over an `any` element is `any`, like any other
+/// default, and so is one over an element that only contains `any`
+/// (`[x?: any]`). tsc accepts every `ok` line. The const arm filtered `any`
+/// out of the element and kept only the default's literal, so `x` read as
+/// `"d"`.
+test "a const-asserted destructuring default keeps an any element" {
+  let src =
+    #|declare const xs: any[];
+    #|declare const o: any;
+    #|function okArr() { const [x = "d" as const] = xs; const n: number = x; return n; }
+    #|function okObj() { const { a = "e" as const } = o; const m: number = a; return m; }
+    #|function okEmpty() { const [y = "d" as const] = []; const s: "d" = y; return s; }
+    #|function badEmpty() { const [y = "d" as const] = []; const n: number = y; return n; }
+    #|declare const t: [x?: any];
+    #|function okOptionalAny() { const [x = "d" as const] = t; const n: number = x; return n; }
+    #|function badEmptyTupleSpread() { const xs = [1, ...([] as const)]; const s: string = xs[0]; return s; }
+  let issues = eff_issues_checking(src)
+  for ok in ["okArr", "okObj", "okEmpty", "okOptionalAny"] {
+    assert_false(eff_has(issues, ok), msg=ok)
+  }
+  assert_true(eff_has(issues, "badEmpty"), msg="badEmpty")
+  // `...([] as const)` adds no element, so `xs` is `number[]` (TS2322).
+  assert_true(eff_has(issues, "badEmptyTupleSpread"), msg="badEmptyTupleSpread")
+}
+
+///|
 test "a loop's back edge joins what the body assigns, whatever exits the loop early" {
   let src =
     #|declare const c: boolean;

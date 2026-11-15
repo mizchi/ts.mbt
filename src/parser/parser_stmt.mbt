@@ -409,9 +409,15 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       } else {
         self.parse_let()
       }
-    // `using x = expr;` and `await using x = expr;` (ES2023). Treat as a
-    // `let` declaration for parsing — the auto-disposal semantics don't
-    // affect the type-level shape.
+    // `using x = expr;` and `await using x = expr;` (ES2023) reached
+    // OUTSIDE a block: in practice only at the top level of a module or
+    // script, since a function body and every `{ … }` go through
+    // `parse_block`, which lowers the declaration with its disposal. Here
+    // it stays a plain `let` and is NOT disposed. Disposing at the end of
+    // a module body needs that body wrapped in `try`, with its top-level
+    // declarations hoisted out as `var` the way tsc's downlevel does it,
+    // and that restructures what every transform pass reads as the
+    // module's top level.
     Ident("using") if self.is_using_declaration_start() => {
       let kw_pos = self.peek().pos
       let _ = self.advance()
@@ -668,7 +674,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       let stmt = self.parse_stmt_no_lexical(false)
       // Remove label from context
       let _ = self.labels.pop()
-      Label(name, stmt)
+      label_statement(name, stmt)
     }
     // yield as label identifier in non-strict mode
     Yield if !self.in_strict && self.peek_at(1).kind == Colon => {
@@ -678,7 +684,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.enter_label(name)
       let stmt = self.parse_stmt_no_lexical(false)
       let _ = self.labels.pop()
-      Label(name, stmt)
+      label_statement(name, stmt)
     }
     _ =>
       // assignment or expressionstatement
@@ -1349,11 +1355,14 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   }
   let _ = self.expect(LParen)
 
-  // `for (using x of ...)` — ES2023 disposable binding. Same shape as
-  // `for (let x of ...)` for parsing purposes; we tag the binding with
-  // `TsForOfKind::Let` since the auto-disposal semantics don't affect the
-  // type-level shape the checker cares about.
+  // `for (using x of ...)` — ES2023 disposable binding. It parses like
+  // `for (const x of ...)`, and it is NOT only a type-level shape: each
+  // iteration's value is disposed when that iteration ends, `continue`,
+  // `break` and `return` included, so the body is wrapped in a `try` below.
+  // Tagging it `Let` and stopping there emitted `for (let x of …)` with no
+  // disposal at all.
   let mut using_kw = ""
+  let head_pos = self.peek().pos
   let using_declaration = if self.is_using_declaration_start() {
     let _ = self.advance()
     using_kw = "using"
@@ -1372,7 +1381,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     self.check(Const) ||
     self.check(Var) {
     let kind = if using_declaration {
-      @ast.TsForOfKind::Let
+      @ast.TsForOfKind::Const
     } else {
       match self.advance().kind {
         Let => @ast.TsForOfKind::Let
@@ -1449,6 +1458,33 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       self.record_for_head_binding_misuses(
         kind, binding, var_type, head_annotated, iterable, body,
       )
+      // `for (using x of xs) body` -> `for (const x of xs) { try { body }
+      // finally { dispose(x) } }`: one disposal per iteration, run on every
+      // way out of the body. `for…in` with `using` is TS1493 and is left
+      // as it is.
+      let body = if using_declaration && !is_in {
+        match binding {
+          Ident(name) => {
+            let try_stmt = @ast.TsStmt::Try(
+              body,
+              None,
+              None,
+              Some({
+                stmts: [using_dispose_stmt(name, using_kw == "await using")],
+                stmt_positions: [],
+              }),
+            )
+            let wrapped : @ast.TsBlock = {
+              stmts: [try_stmt],
+              stmt_positions: [head_pos],
+            }
+            wrapped
+          }
+          _ => body
+        }
+      } else {
+        body
+      }
       // Preserve the explicit type annotation on the loop binding when
       // present; `parse_var_decl_type` returns `Any` otherwise.
       if is_in {
@@ -1472,7 +1508,11 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         "'\{using_kw}' declarations must be initialized",
       )
     }
+    // A `using` head is read as `let`: a missing initializer is TS1155,
+    // recorded above, where `const` would raise a parse error instead.
+    // `using_declaration_with_holders` emits the binding as `const`.
     let var_kind = match kind {
+      _ if using_declaration => VarKind::Let
       @ast.TsForOfKind::Var => VarKind::Var
       @ast.TsForOfKind::Let => VarKind::Let
       @ast.TsForOfKind::Const => VarKind::Const
@@ -1480,6 +1520,35 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     let stmts = self.parse_var_decl_list_from(binding, var_type, var_kind)
     let _ = self.expect(Semicolon)
+    if using_declaration {
+      // `for (using x = e; c; u) body` disposes `x` ONCE, when the loop is
+      // left, not per iteration: `{ let h; try { const x = (h = e); for (;
+      // c; u) body } finally { dispose(h) } }`. The binding is never
+      // reassigned, so moving it out of the head loses nothing a
+      // per-iteration copy had. Every declarator of the head stays in ONE
+      // scope, through `lower_using_block`: the first lowering nested one
+      // `try` per declarator, so in `for (using a = make(() => b), b = …;;)`
+      // the closure read a `b` from outside and threw `ReferenceError`.
+      let holders : Array[(String, Bool)] = []
+      let decl = using_declaration_with_holders(
+        self.merge_decl_stmts(stmts),
+        using_kw == "await using",
+        holders,
+      )
+      if holders.length() == 0 {
+        // A pattern (TS1492) or a missing initializer (TS1155): nothing
+        // to dispose, so the head stays a plain declaration.
+        return self.parse_for_rest(Some(decl))
+      }
+      let loop_stmt = self.parse_for_rest(None)
+      let (lowered, positions) = lower_using_block(
+        [decl, loop_stmt],
+        [head_pos, head_pos],
+        0,
+        holders,
+      )
+      return Block({ stmts: lowered, stmt_positions: positions, })
+    }
     let init : @ast.TsStmt? = Some(self.merge_decl_stmts(stmts))
     return self.parse_for_rest(init)
   }
@@ -1907,158 +1976,41 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let stmt_positions : Array[Int32] = []
   let prev_strict = self.in_strict
   let mut in_directive = true
+  // The leading directive statements (`"use strict"`), which have to stay
+  // first in a function body, so `lower_using_block` keeps them outside.
+  let mut directive_count = 0
+  // One `(holder, is_await)` per `using` binding in this block, in order.
+  let using_holders : Array[(String, Bool)] = []
   while !self.check(RBrace) && !self.check(Eof) {
-    // `using x = expr` / `await using x = expr` (ES2023). Lower to
-    // `const x = expr; try { ...rest } finally { x[Symbol.dispose]?.() }`
-    // so the disposal semantics survive in the emitted JS.
-    let is_using = self.is_using_declaration_start()
-    let is_await_using = if !is_using {
-      self.is_await_using_declaration_start()
-    } else {
-      false
-    }
-    if is_using || is_await_using {
-      let pos = self.peek().pos
-      if is_using {
-        let _ = self.advance() // `using`
-      } else {
-        let _ = self.advance() // `await`
-        let _ = self.advance() // `using`
-      }
-      let binding_name = self.parse_binding_ident()
-      let has_annotation = self.check(Colon)
-      let ty = if has_annotation {
-        let _ = self.advance()
-        self.parse_type()
-      } else {
-        @ast.TsType::Any
-      }
-      let _ = self.expect(Eq)
-      let init = self.parse_expr()
-      let _ = self.match_(Semicolon)
-      let using_kw = if is_await_using { "await using" } else { "using" }
-      // Marker for the lib-directive TS2318 rule (`Disposable` global —
-      // usingDeclarations.9's block-scoped form lowers here, not through
-      // `parse_var_like`).
-      self.grammar_misuses.push("<has-using>")
-      self.record_await_using_context(using_kw)
-      // Later declarators of a multi-declarator `using` land inside the
-      // init as a comma chain (`using a = null, [b] = null, c = null`
-      // parses `null, ([b] = null), (c = null)`). A destructuring
-      // assignment operand is exactly a pattern declarator — TS1492.
-      // The FIRST operand is the real initializer: an object LITERAL
-      // whose keys are all plain (no symbol-keyed / computed / spread
-      // entry) provably lacks `[Symbol.dispose]()` — TS2850/2851.
-      fn using_first_operand(e : @ast.TsExpr) -> @ast.TsExpr {
-        match e {
-          Seq(a, _) => using_first_operand(a)
-          _ => e
-        }
-      }
-      fn scan_using_declarators(p : Parser, e : @ast.TsExpr) -> Unit {
-        match e {
-          Seq(a, b) => {
-            scan_using_declarators(p, a)
-            scan_using_declarators(p, b)
-          }
-          AssignPattern(_, _) =>
-            p.grammar_misuses.push(
-              "'\{using_kw}' declarations may not have binding patterns",
-            )
-          _ => ()
-        }
-      }
-      scan_using_declarators(self, init)
-      // An annotated declaration (`using d: T = {...}`) type-checks the
-      // literal against `T` instead — only the unannotated form decides.
-      match (has_annotation, using_first_operand(init)) {
-        (false, ObjectLit(entries)) => {
-          let mut keys_plain = true
-          for e in entries {
-            if e.0.has_prefix("@@") || e.0.has_prefix("<") {
-              keys_plain = false
-            }
-          }
-          if keys_plain {
-            self.grammar_misuses.push(
-              "the initializer of a '\{using_kw}' declaration must be an object with a `[Symbol.dispose]()` method, or `null` / `undefined`",
-            )
-          }
-        }
-        _ => ()
-      }
-      // TS7018, the same rule `parse_var_decl_item` runs for a `var` /
-      // `let` / `const` declarator: a `null` / `undefined` literal
-      // standing where the declaration's type has to be inferred. This is
-      // the BLOCK-statement `using` path — the second of the three
-      // declaration sites batch CG records for this form, and the one
-      // every `usingDeclarations` conformance test actually writes, so a
-      // recorder placed only at `parse_var_like` reaches none of them.
-      // The `using` binding is always a plain name (a pattern is TS1492
-      // above), so only the object-literal half can apply.
-      if !has_annotation {
-        self.record_nullish_inferred_declaration(
-          @ast.TsBinding::Ident(binding_name),
-          using_first_operand(init),
-        )
-      }
-      // Parse the remaining statements in this block into the try body.
-      let rest_stmts : Array[@ast.TsStmt] = []
-      let rest_positions : Array[Int32] = []
-      while !self.check(RBrace) && !self.check(Eof) {
-        rest_positions.push(self.peek().pos)
-        rest_stmts.push(self.parse_stmt())
-      }
-      // Synthesize `x?.[Symbol.dispose]?.()` (or Symbol.asyncDispose).
-      // The `?.` on the RECEIVER is what `using x = null` needs: a nullish
-      // initializer is legal and disposes nothing, so the old
-      // `x[Symbol.dispose]?.()` threw `TypeError: Cannot read properties
-      // of null` at block exit in the EMITTED program, and the checker,
-      // reading the same lowering, reported "cannot index into `null`" on
-      // a declaration tsc accepts. The shape is the one the expression
-      // parser builds for that source text: one `OptionalChain` per `?.`,
-      // wrapping the step it guards.
-      let dispose_key = if is_await_using { "asyncDispose" } else { "dispose" }
-      let dispose_expr = @ast.TsExpr::OptionalChain(
-        @ast.TsExpr::CallExpr(
-          @ast.TsExpr::OptionalChain(
-            @ast.TsExpr::IndexAccess(
-              @ast.TsExpr::Var(binding_name),
-              @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), dispose_key),
-            ),
-          ),
-          [],
-        ),
-      )
-      let finally_block : @ast.TsBlock = {
-        stmts: [@ast.TsStmt::Expr(dispose_expr)],
-        stmt_positions: [],
-      }
-      stmts.push(
-        @ast.TsStmt::Const(@ast.TsBinding::Ident(binding_name), ty, init),
-      )
-      stmts.push(
-        @ast.TsStmt::Try(
-          { stmts: rest_stmts, stmt_positions: rest_positions, },
-          None,
-          None,
-          Some(finally_block),
-        ),
-      )
-      stmt_positions.push(pos)
-      stmt_positions.push(pos)
-      break
+    // `using x = expr` / `await using x = expr` (ES2023). The declaration
+    // goes through `parse_var_like`, the statement-level parser, which
+    // reads every declarator and runs every `using` grammar rule (TS1155,
+    // TS1492, TS2850, TS7018, the `await using` context), and the block is
+    // lowered once it is complete (`lower_using_block`).
+    if self.using_declaration_kind() is Some(is_await_using) {
+      in_directive = false
+      stmt_positions.push(self.peek().pos)
+      stmts.push(self.parse_using_declaration(is_await_using, using_holders))
+      continue
     }
     stmt_positions.push(self.peek().pos)
     let stmt = self.parse_stmt()
     if in_directive {
       match stmt {
-        Expr(StringLit("use strict")) => self.in_strict = true
-        Expr(StringLit(_)) => ()
+        Expr(StringLit("use strict")) => {
+          self.in_strict = true
+          directive_count = directive_count + 1
+        }
+        Expr(StringLit(_)) => directive_count = directive_count + 1
         _ => in_directive = false
       }
     }
     stmts.push(stmt)
+  }
+  let (stmts, stmt_positions) = if using_holders.length() > 0 {
+    lower_using_block(stmts, stmt_positions, directive_count, using_holders)
+  } else {
+    (stmts, stmt_positions)
   }
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
@@ -2068,6 +2020,322 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
     None => []
   }
   { stmts, stmt_positions, }
+}
+
+///|
+/// `name: stmt`. A C-style `for (using …)` is lowered to a BLOCK that
+/// declares its bindings and runs the loop inside a `try`
+/// (`lower_using_block`), and a label on that block is not a label on
+/// an iteration statement: `outer: for (using r = e; c; u) { continue outer }`
+/// emitted `continue outer` against a block, a SyntaxError in the output.
+/// So the label goes on the loop, and every label of a chain
+/// (`a: b: for (using …)`) ends up there in source order.
+///
+/// That changes nothing a `break` can observe. In the lowered shape the
+/// loop is the last statement of the `try` body and the `try` is the last
+/// statement of its block, so leaving the loop and leaving the block run
+/// the same `finally` and nothing else. Anything not of that shape is
+/// labelled as written (`relabel_using_loop`).
+fn label_statement(name : String, stmt : @ast.TsStmt) -> @ast.TsStmt {
+  match stmt {
+    Block(b) =>
+      match relabel_using_loop(name, b.stmts) {
+        Some(stmts) => Block({ stmts, stmt_positions: b.stmt_positions, })
+        None => Label(name, stmt)
+      }
+    _ => Label(name, stmt)
+  }
+}
+
+///|
+/// The statements of a lowered `for (using …)` block with `name` moved onto
+/// its loop, or `None` when `stmts` is not that shape: the holder
+/// declarations, then a `try` with no `catch` whose body is `const`
+/// declarations followed by the loop (possibly already labelled), and whose
+/// `finally` is exactly the generated disposal
+/// (`@ast.is_using_dispose_finally`).
+///
+/// Each condition keeps a `break name` from losing its target once the
+/// label moves to the loop. A `finally` holding anything else can hold one.
+/// So can any statement before the loop: a labelled BLOCK with a `using`
+/// lowers to the same holders and `finally`, and
+/// `exit: { using r = res(); if (c) break exit; for (;;) {} }` must keep
+/// its label on the block. A `const` initializer is an expression and
+/// cannot hold a `break`.
+fn relabel_using_loop(
+  name : String,
+  stmts : Array[@ast.TsStmt],
+) -> Array[@ast.TsStmt]? {
+  // A lowered head is exactly the holders and the `try`, with no
+  // directives in front.
+  guard stmts is [holders, Try(_, None, None, Some(fin))] &&
+    @ast.lowered_using_try_body(stmts) is Some(body) else {
+    return None
+  }
+  guard body.stmts.last() is Some(last) && labelled_for_loop(last) else {
+    return None
+  }
+  let inner = body.stmts[0:body.stmts.length() - 1].to_owned()
+  guard inner.iter().all(is_const_decl) else { return None }
+  inner.push(@ast.TsStmt::Label(name, last))
+  Some([
+    holders,
+    Try(
+      { stmts: inner, stmt_positions: body.stmt_positions, },
+      None,
+      None,
+      Some(fin),
+    ),
+  ])
+}
+
+///|
+/// A `const` declaration, or a `DECL_GROUP_POSITION` group of them.
+fn is_const_decl(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Const(_, _, _) => true
+    Block({ stmts, stmt_positions, }) if stmt_positions ==
+      [@ast.DECL_GROUP_POSITION] =>
+      stmts.iter().all(fn(s) { s is Const(_, _, _) })
+    _ => false
+  }
+}
+
+///|
+fn labelled_for_loop(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    For(_, _, _, _) => true
+    Label(_, inner) => labelled_for_loop(inner)
+    _ => false
+  }
+}
+
+///|
+/// `Some(is_await)` when the cursor is on a `using` (`false`) or an
+/// `await using` (`true`) declaration, `None` otherwise.
+fn Parser::using_declaration_kind(self : Parser) -> Bool? {
+  if self.is_using_declaration_start() {
+    Some(false)
+  } else if self.is_await_using_declaration_start() {
+    Some(true)
+  } else {
+    None
+  }
+}
+
+///|
+/// Parse a `using` / `await using` declaration (the cursor is on its first
+/// keyword) in a block, and return it as `const` declarations that also
+/// store each resource in a holder: `using a = x, b = y` becomes
+/// `const a = (h0 = x), b = (h1 = y)`, with `(h0, is_await)` and
+/// `(h1, is_await)` appended to `holders`. `lower_using_block` declares the
+/// holders and disposes them.
+///
+/// A binding pattern is TS1492 and has no single name to dispose, and a
+/// missing initializer is TS1155; both stay plain `const`s with no holder.
+fn Parser::parse_using_declaration(
+  self : Parser,
+  is_await_using : Bool,
+  holders : Array[(String, Bool)],
+) -> @ast.TsStmt raise ParseError {
+  let pos = self.peek().pos
+  if is_await_using {
+    let _ = self.advance() // `await`
+  }
+  let _ = self.advance() // `using`
+  let using_kw = if is_await_using { "await using" } else { "using" }
+  let decl = self.parse_var_like(VarKind::Let, pos, using_kw~)
+  using_declaration_with_holders(decl, is_await_using, holders)
+}
+
+///|
+/// `decl` (one declarator, or a `DECL_GROUP_POSITION` group) as `const`
+/// declarations that store each resource in a holder, appending
+/// `(holder, is_await)` to `holders` in declaration order. A binding
+/// pattern (TS1492) and a missing initializer (TS1155) have nothing to
+/// dispose and stay plain `const`s.
+fn using_declaration_with_holders(
+  decl : @ast.TsStmt,
+  is_await : Bool,
+  holders : Array[(String, Bool)],
+) -> @ast.TsStmt {
+  let decls = match decl {
+    Block({ stmts, stmt_positions, }) if stmt_positions ==
+      [@ast.DECL_GROUP_POSITION] => stmts
+    _ => [decl]
+  }
+  let out : Array[@ast.TsStmt] = []
+  for d in decls {
+    match d {
+      Var(Ident(_) as b, t, e)
+      | Let(Ident(_) as b, t, e)
+      | Const(Ident(_) as b, t, e) if !(e is Var("__ts_no_init__")) => {
+        let holder = @ast.USING_HOLDER_PREFIX + holders.length().to_string()
+        holders.push((holder, is_await))
+        out.push(@ast.TsStmt::Const(b, t, @ast.TsExpr::AssignExpr(holder, e)))
+      }
+      Var(b, t, e) | Let(b, t, e) | Const(b, t, e) =>
+        out.push(@ast.TsStmt::Const(b, t, e))
+      other => out.push(other)
+    }
+  }
+  if out.length() == 1 {
+    out[0]
+  } else {
+    Block({ stmts: out, stmt_positions: [@ast.DECL_GROUP_POSITION], })
+  }
+}
+
+///|
+/// Lower a block holding `using` declarations, the way tsc's downlevel does:
+/// ONE `try` around every statement of the block, and a `finally` that
+/// disposes every resource acquired, last first.
+///
+///   { "use strict"; S1; using a = x; S2; using b = y; S3 }
+///   =>
+///   { "use strict"; let h0, h1;
+///     try { S1; const a = (h0 = x); S2; const b = (h1 = y); S3 }
+///     finally { try { dispose(h1) } finally { dispose(h0) } } }
+///
+/// The statements stay together in one scope. The first lowering put the
+/// statements AFTER each `using` into a `try` of their own, which moved
+/// their declarations into a nested scope: a function declared after the
+/// `using` and called before it, or a closure created before it that reads
+/// a later `const`, threw `ReferenceError` in the output. Each binding is
+/// still a `const` in place, with its type and its temporal dead zone; the
+/// holder is what the `finally` can see. A holder whose declaration was
+/// never reached is still `undefined`, which disposes nothing.
+///
+/// What this does not model: an `await using` whose declaration is never
+/// reached still costs one `await` on the way out, which the language does
+/// not do. The leading directives stay outside the `try`, because a
+/// directive is only one at the start of a function body.
+fn lower_using_block(
+  stmts : Array[@ast.TsStmt],
+  positions : Array[Int32],
+  directive_count : Int32,
+  holders : Array[(String, Bool)],
+) -> (Array[@ast.TsStmt], Array[Int32]) {
+  let n = stmts.length()
+  let aligned = positions.length() == n
+  let pos_at = fn(i : Int32) -> Int32 {
+    if aligned && i < n {
+      positions[i]
+    } else if positions.length() > 0 {
+      positions[positions.length() - 1]
+    } else {
+      0
+    }
+  }
+  let out : Array[@ast.TsStmt] = []
+  let out_positions : Array[Int32] = []
+  for i in 0..<directive_count {
+    out.push(stmts[i])
+    out_positions.push(pos_at(i))
+  }
+  let body_pos = pos_at(directive_count)
+  let lets = holders.map(fn(h) {
+    @ast.TsStmt::Let(Ident(h.0), Any, @ast.TsExpr::Var("__ts_no_init__"))
+  })
+  out.push(
+    if lets.length() == 1 {
+      lets[0]
+    } else {
+      Block({ stmts: lets, stmt_positions: [@ast.DECL_GROUP_POSITION], })
+    },
+  )
+  out_positions.push(body_pos)
+  let mut fin : @ast.TsBlock = {
+    stmts: [using_dispose_stmt(holders[0].0, holders[0].1)],
+    stmt_positions: [],
+  }
+  for i in 1..<holders.length() {
+    let dispose : @ast.TsBlock = {
+      stmts: [using_dispose_stmt(holders[i].0, holders[i].1)],
+      stmt_positions: [],
+    }
+    fin = { stmts: [Try(dispose, None, None, Some(fin))], stmt_positions: [], }
+  }
+  let body : @ast.TsBlock = {
+    stmts: stmts[directive_count:].to_owned(),
+    stmt_positions: if aligned {
+      positions[directive_count:].to_owned()
+    } else {
+      []
+    },
+  }
+  out.push(Try(body, None, None, Some(fin)))
+  out_positions.push(body_pos)
+  (out, out_positions)
+}
+
+///|
+/// The statement that disposes the `using` binding `name` at the end of
+/// its scope: `name?.[Symbol.dispose]?.()`, and for `await using`
+///
+///   await (name?.[Symbol.asyncDispose] != null
+///     ? name?.[Symbol.asyncDispose]?.()
+///     : void name?.[Symbol.dispose]?.())
+///
+/// The `?.` on the RECEIVER is what `using x = null` needs: a nullish
+/// initializer is legal and disposes nothing, so the old
+/// `x[Symbol.dispose]?.()` threw `TypeError: Cannot read properties of
+/// null` at block exit in the EMITTED program, and the checker, reading
+/// the same lowering, reported "cannot index into `null`" on a declaration
+/// tsc accepts. The shape is the one the expression parser builds for that
+/// source text: one `OptionalChain` per `?.`, wrapping the step it guards.
+///
+/// `await using` takes a resource's `[Symbol.dispose]` when it has no
+/// `[Symbol.asyncDispose]`, which is how a synchronous disposable is
+/// written; the async-only form disposed nothing for one. Exactly one of
+/// the two methods runs, called on the resource, and the synchronous
+/// one's result is discarded (`void`), as the language does: its value is
+/// not awaited, and only `undefined` is. The `await` itself is what makes
+/// the code after the scope wait for the disposal, and it runs for a
+/// nullish resource too.
+///
+/// What is NOT modelled: the methods are looked up at the END of the scope
+/// rather than at the declaration, the TypeError a non-nullish value
+/// without either method throws at the declaration, and aggregating
+/// several disposal errors into a `SuppressedError`.
+fn using_dispose_stmt(name : String, is_await : Bool) -> @ast.TsStmt {
+  if !is_await {
+    return @ast.TsStmt::Expr(using_dispose_call(name, "dispose"))
+  }
+  let has_async = @ast.TsExpr::BinOp(
+    AbstractNe,
+    @ast.TsExpr::OptionalChain(using_dispose_member(name, "asyncDispose")),
+    @ast.TsExpr::NullLit,
+  )
+  @ast.TsStmt::Expr(
+    @ast.TsExpr::Await(
+      @ast.TsExpr::Cond(
+        has_async,
+        using_dispose_call(name, "asyncDispose"),
+        @ast.TsExpr::UnaryOp(Void, using_dispose_call(name, "dispose")),
+      ),
+    ),
+  )
+}
+
+///|
+/// `name[Symbol.key]`, the member a disposal reads.
+fn using_dispose_member(name : String, key : String) -> @ast.TsExpr {
+  @ast.TsExpr::IndexAccess(
+    @ast.TsExpr::Var(name),
+    @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), key),
+  )
+}
+
+///|
+/// `name?.[Symbol.key]?.()`.
+fn using_dispose_call(name : String, key : String) -> @ast.TsExpr {
+  @ast.TsExpr::OptionalChain(
+    @ast.TsExpr::CallExpr(
+      @ast.TsExpr::OptionalChain(using_dispose_member(name, key)),
+      [],
+    ),
+  )
 }
 
 ///|

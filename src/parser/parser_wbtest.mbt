@@ -2097,9 +2097,12 @@ test "parser: class can `extends null`" {
 
 ///|
 test "parser: `using` declaration lowers to const + try-finally" {
-  // ES2023 `using x = expr;` — lowers to `const x = expr; try { rest }
-  // finally { x?.[Symbol.dispose]?.() }` so disposal runs at block exit
-  // (and a nullish initializer disposes nothing).
+  // ES2023 `using x = expr;` — the block is lowered to
+  // `let h0, h1; try { const d1 = (h0 = …); const d2 = (h1 = null); }
+  // finally { try { dispose(h1) } finally { dispose(h0) } }`: ONE `try`
+  // for the whole block, so its statements keep one scope, each binding a
+  // `const` in place, disposed last first (and a nullish initializer
+  // disposes nothing).
   let src =
     #|function f() {
     #|  using d1 = { [Symbol.dispose]() {} };
@@ -2115,17 +2118,30 @@ test "parser: `using` declaration lowers to const + try-finally" {
         Some(f) => f.body
         None => fail("function f not found")
       }
-      // First stmt: `const d1 = ...`
+      // First stmt: `let __ts_using_0, __ts_using_1`.
       match func_body.stmts[0] {
-        @ast.TsStmt::Const(@ast.TsBinding::Ident("d1"), _, _) => ()
-        _ => fail("expected Const(d1)")
+        @ast.TsStmt::Block({ stmts: holders, stmt_positions, }) if stmt_positions ==
+          [@ast.DECL_GROUP_POSITION] => assert_eq(holders.length(), 2)
+        _ => fail("expected the holder declarations")
       }
-      // Second stmt: try { ... } finally { d1?.[Symbol.dispose]?.() }
+      // Second stmt: the try around both bindings, and a finally that
+      // disposes `d2`'s holder first, `d1`'s in a nested finally.
       match func_body.stmts[1] {
-        @ast.TsStmt::Try(_, None, None, Some(fb)) =>
-          // finally block has one statement: d1?.[Symbol.dispose]?.()
-          assert_eq(fb.stmts.length(), 1)
-        _ => fail("expected Try with finally for d1")
+        @ast.TsStmt::Try(body, None, None, Some(fb)) => {
+          match body.stmts {
+            [
+              Const(Ident("d1"), _, AssignExpr("__ts_using_0", _)),
+              Const(Ident("d2"), _, AssignExpr("__ts_using_1", NullLit)),
+            ] => ()
+            _ => fail("expected both bindings inside the try")
+          }
+          match fb.stmts {
+            [Try(_, None, None, Some(inner))] =>
+              assert_eq(inner.stmts.length(), 1)
+            _ => fail("expected the nested disposal")
+          }
+        }
+        _ => fail("expected Try with finally")
       }
     }
   }
