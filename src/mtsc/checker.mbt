@@ -257,10 +257,13 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
               t
             }
           })
+          // The declared bounds ride along: a primitive-constrained
+          // parameter keeps a fresh literal at the call (see the
+          // `@import-generic:` arm of `infer_expr`).
           return Some(
             @ast.TsType::GenericFunc(
               func.type_params,
-              [],
+              func.type_param_bounds,
               Func(params, raw_ret),
             ),
           )

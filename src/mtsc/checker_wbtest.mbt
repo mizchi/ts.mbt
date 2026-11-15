@@ -322,3 +322,29 @@ test "mtsc graph checker solves a default-imported generic at the call" {
     "",
   )
 }
+
+///|
+/// Review of mizchi/ts.mbt#285: the imported binder is over the
+/// UN-inlined signature, so a constrained type parameter still occurs in
+/// it, and a fresh literal for one whose constraint can be a primitive is
+/// not widened (tsc's `getCovariantInference`, probed). Widening it made
+/// `wrap("a")` a `string[]` and rejected the legal `"a"[]` target.
+test "mtsc graph checker keeps a literal for a primitive-constrained import" {
+  let lib = "export function wrap<T extends string>(x: T): T[] { return [x]; }\nexport function wrapU<T>(x: T): T[] { return [x]; }"
+  assert_eq(
+    graph2(
+      "import { wrap } from \"./lib\";\nexport const r: \"a\"[] = wrap(\"a\");",
+      lib,
+    ),
+    "",
+  )
+  // The unconstrained parameter still widens: pushing another string onto
+  // its result is legal.
+  assert_eq(
+    graph2(
+      "import { wrapU } from \"./lib\";\nconst q = wrapU(\"a\");\nq.push(\"b\");\nexport {};",
+      lib,
+    ),
+    "",
+  )
+}

@@ -79,7 +79,10 @@ const NOT_DIAGNOSTIC = new Set(
     "inlineSourceMap", "inlineSources", "sourceRoot", "mapRoot", "declarationMap",
     "declarationDir", "removeComments", "pretty", "newLine", "stripInternal",
     "incremental", "composite", "tsBuildInfoFile", "noEmitOnError", "baseUrl",
-    "useCaseSensitiveFileNames",
+    // NOT `useCaseSensitiveFileNames`: the harness applies it to its virtual
+    // filesystem, which changes how a differently-cased import resolves, and
+    // this probe checks a real file on whatever filesystem it runs on. It is
+    // left out of both lists so `unhonoured()` warns about it.
   ].map((k) => k.toLowerCase()),
 );
 

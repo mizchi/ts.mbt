@@ -710,3 +710,44 @@ test "an undecided conditional proves nothing at any depth" {
   )
   assert_eq(reduce_conditional(outer_decided), String_)
 }
+
+///|
+/// Review of mizchi/ts.mbt#285, round 3: the walk that finds an undecided
+/// conditional has to see one that a computed type RESOLVES to, and has to
+/// answer "cannot tell" when it runs out of depth, because the relation it
+/// guards reaches the conditional either way.
+test "an undecided conditional is found behind an indexed access and past the depth limit" {
+  let cond : @ast.TsType = Conditional(
+    Literal("y1"),
+    TemplateLiteralType(["x", ""], [Applied("__tsmbt_infer", [Named("U")])]),
+    Number,
+    Boolean,
+  )
+  let via_index : @ast.TsType = IndexedAccess(
+    Object([(Literal("x"), cond)]),
+    Literal("x"),
+  )
+  let mut deep = cond
+  for _ in 0..<40 {
+    deep = Array(deep)
+  }
+  for t in [via_index, deep] {
+    // Branch selection declines rather than picking `number`.
+    assert_true(
+      reduce_conditional(Conditional(t, String_, Number, Boolean)) != Number,
+    )
+    // Equivalence and union subsumption keep the two apart, both orders.
+    assert_false(equivalent(t, String_))
+    assert_eq(simplify_union([t, String_]).length(), 2)
+    assert_eq(simplify_union([String_, t]).length(), 2)
+  }
+  // An indexed access with no conditional anywhere still decides.
+  let plain : @ast.TsType = IndexedAccess(
+    Object([(Literal("x"), String_)]),
+    Literal("x"),
+  )
+  assert_eq(
+    reduce_conditional(Conditional(plain, String_, Number, Boolean)),
+    Number,
+  )
+}

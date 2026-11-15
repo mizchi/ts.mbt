@@ -22952,3 +22952,65 @@ test "a property-path narrowing does not survive rebinding its receiver" {
     check_module_function_bodies(parse_module_or_empty(nullish)).length() > 0,
   )
 }
+
+///|
+/// Review of mizchi/ts.mbt#285, round 3: two more cells of the inferred
+/// `filter` predicate, and the `if` join for a path one branch forgot. tsc
+/// accepts the first two and reports the third (probed).
+test "filter predicates through a sequence and a same-shape interface" {
+  let n = fn(src : String) -> Int32 {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  // A sequence body narrows by its final operand.
+  @test.assert_eq(
+    n(
+      "declare const xs: (string | null)[];\nfunction f() {\n  const ys: string[] = xs.filter(x => (String(x), x !== null));\n}",
+    ),
+    0,
+  )
+  // ...unless an earlier operand rebinds the parameter.
+  assert_true(
+    n(
+      "declare const xs: (string | null)[];\nfunction f() {\n  const ys: string[] = xs.filter(x => (x = \"\", x !== null));\n}",
+    ) >
+    0,
+  )
+  // `S extends T` holds structurally: `B` and `A` declare the same members.
+  @test.assert_eq(
+    n(
+      "interface A { p: string }\ninterface B { p: string }\ndeclare const xs: (A | null)[];\nfunction f() {\n  const ys: A[] = xs.filter((x: B | null) => x !== null);\n}",
+    ),
+    0,
+  )
+}
+
+///|
+test "an if join does not restore a path a branch forgot" {
+  let n = fn(body : String) -> Int32 {
+    check_module_function_bodies(
+      parse_module_or_empty(
+        "interface O { p: string | number | null }\nfunction f(o: O, other: O, c: boolean) {\n  o.p = \"s\";\n" +
+        body +
+        "\n}",
+      ),
+    ).length()
+  }
+  // `o.p` is narrowed by the write before the `if`. The then-branch
+  // rebinds `o`; the else-branch narrows `o.p` further, which makes it a
+  // join candidate. After the `if`, `o.p` may be `other.p`, which can be
+  // `null`, and the join used to restore the pre-`if` narrowing for the
+  // side that forgot it.
+  assert_true(
+    n(
+      "if (c) { o = other; } else { if (typeof o.p !== \"string\") { return; } }\nconst v: string | number = o.p;",
+    ) >
+    0,
+  )
+  // No rebinding: both sides still describe the same object.
+  @test.assert_eq(
+    n(
+      "if (c) { o.p = 1; } else { if (typeof o.p !== \"string\") { return; } }\nconst v: string | number = o.p;",
+    ),
+    0,
+  )
+}

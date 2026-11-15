@@ -1242,8 +1242,11 @@ fn is_undecided_conditional(t : @ast.TsType) -> Bool {
 /// either.
 fn contains_undecided_conditional(t : @ast.TsType) -> Bool {
   fn walk(t : @ast.TsType, depth : Int32) -> Bool {
+    // Out of depth means "cannot rule one out", and the callers read `true`
+    // as the cautious answer: a conditional stays unreduced, and two types
+    // stay distinct.
     if depth > 32 {
-      return false
+      return true
     }
     let d = depth + 1
     match t {
@@ -1261,7 +1264,20 @@ fn contains_undecided_conditional(t : @ast.TsType) -> Bool {
       Struct(_, fields) => fields.iter().any(fn(f) { walk(f.1, d) })
       Func(ps, r) | Constructor(ps, r, _) =>
         ps.iter().any(fn(x) { walk(x, d) }) || walk(r, d)
-      GenericFunc(_, _, inner) => walk(inner, d)
+      GenericFunc(_, bounds, inner) =>
+        bounds.iter().any(fn(b) { walk(b.1, d) }) || walk(inner, d)
+      CallableMeta(inner, _) | Keyof(inner) | TypePredicate(_, inner) =>
+        walk(inner, d)
+      AssertsPredicate(_, Some(inner)) => walk(inner, d)
+      // A computed type can RESOLVE to a conditional (`{ x: C }["x"]` is `C`
+      // to `is_assignable_to`), so any conditional among its parts counts.
+      // That over-approximates, which only ever answers "cannot tell".
+      IndexedAccess(a, b) => walk(a, d) || walk(b, d)
+      MappedType(_, a, b, _) => walk(a, d) || walk(b, d)
+      MappedTypeRemap(_, a, b, c, _) => walk(a, d) || walk(b, d) || walk(c, d)
+      TemplateLiteralType(_, parts) => parts.iter().any(fn(x) { walk(x, d) })
+      // Leaves, and `Named` / `TypeOf`, which the resolver-free relation
+      // cannot expand either.
       _ => false
     }
   }

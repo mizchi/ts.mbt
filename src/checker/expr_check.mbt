@@ -10901,11 +10901,22 @@ fn infer_expr_inner(
       // `decodePromise<S>`) instantiates into a type this cannot judge, and
       // the old path's unsubstituted return was what kept that quiet.
       match callee_ty {
-        GenericFunc(names, _, Func(params, ret))
-        | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) if resolver.globals.contains(
+        GenericFunc(names, bounds, Func(params, ret))
+        | GenericFunc(names, bounds, CallableMeta(Func(params, ret), _)) if resolver.globals.contains(
             "@import-generic:" + name,
           ) &&
           env.lookup(name) is None => {
+          // This binder is over the UN-inlined signature, so a constrained
+          // parameter still occurs in it — unlike a local callee, whose
+          // bound the parser inlines. tsc keeps a fresh literal for one
+          // whose constraint can be a primitive (`getCovariantInference`),
+          // so `wrap<T extends string>(x: T): T[]` makes `wrap("a")` a
+          // `"a"[]`, and widening it made that a `string[]`.
+          let widen_names = names.filter(fn(n) {
+            !bounds
+            .iter()
+            .any(fn(b) { b.0 == n && is_primitive_constraint(b.1) })
+          })
           let bindings = widen_fresh_literal_bindings(
             env,
             resolver,
@@ -10913,7 +10924,7 @@ fn infer_expr_inner(
               resolver,
               solve_generic_bindings(env, resolver, names, params, args, None),
             ),
-            names,
+            widen_names,
             None,
             params,
             args,
@@ -12163,6 +12174,35 @@ fn type_param_at_top_level(t : @ast.TsType, tp : String) -> Bool {
     Conditional(_, _, a, b) =>
       type_param_at_top_level(a, tp) || type_param_at_top_level(b, tp)
     TypePredicate(_, p) => type_param_at_top_level(p, tp)
+    _ => false
+  }
+}
+
+///|
+/// tsc's `hasPrimitiveConstraint`: a constraint that can be a primitive,
+/// for which a fresh literal inference candidate is not widened. Read off
+/// the written type only; a `Named` constraint (an alias, an enum) answers
+/// `false`, which keeps the widening `widen_fresh_literal_bindings` already
+/// does there.
+fn is_primitive_constraint(t : @ast.TsType) -> Bool {
+  match t {
+    String_
+    | Number
+    | Int
+    | Boolean
+    | BigInt
+    | Symbol
+    | UniqueSymbol(_)
+    | Null
+    | Undefined
+    | Void
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_)
+    | TemplateLiteralType(_, _)
+    | Keyof(_) => true
+    Union(ms) | Intersection(ms) => ms.iter().any(is_primitive_constraint)
     _ => false
   }
 }
@@ -20337,8 +20377,12 @@ fn inferred_filter_predicate(
   // predicate `x is string` does not, tsc picks the plain overload, and
   // the result stays `number[]`. Without an annotation the narrowed type
   // comes from the element type itself, so only the annotated case asks.
+  // Structurally as well as nominally: `unwrap` keeps an interface's NAME,
+  // so `B` against `A | null` with `A` and `B` the same shape fails the
+  // resolver-free relation, and tsc accepts that predicate (probed).
   if is_checkable(p.type_) &&
-    !is_assignable_to(resolver.unwrap(true_ty), resolver.unwrap(elem)) {
+    !is_assignable_to(resolver.unwrap(true_ty), resolver.unwrap(elem)) &&
+    !structural_oneway_assignable(true_ty, elem, resolver) {
     return None
   }
   // `!!x`'s false side is the FALSY part of the declared type. The engine
@@ -20425,6 +20469,11 @@ fn predicate_body_cannot_rebind(e : @ast.TsExpr) -> Bool {
     CallExpr(callee, args) | MethodCall(callee, _, args) =>
       predicate_body_cannot_rebind(callee) && all(args)
     TemplateLiteral(_, es) => all(es)
+    // `x => (log(x), x !== null)`: tsc infers this predicate (probed), and
+    // `collect_narrowing` reads a sequence by its final operand. A
+    // sequence rebinds only through an operand, which is checked here.
+    Seq(a, b) =>
+      predicate_body_cannot_rebind(a) && predicate_body_cannot_rebind(b)
     _ => false
   }
 }
@@ -27839,6 +27888,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           }
         }
         for k, _ in cands {
+          // A path a branch FORGOT is gone after the `if`, so it is not
+          // joined: falling back to `pre_map` for the side that forgot it
+          // would restore the very narrowing `drop_forgotten` just removed
+          // (`if (c) { o = other } else { o.p = 1 }` left `o.p` narrowed).
+          if !k.has_prefix("<") &&
+            (k.contains(".") || k.contains("[")) &&
+            pre_map.contains(k) &&
+            (then_exit.get(k) is None || else_exit.get(k) is None) {
+            continue
+          }
           let tt = match then_exit.get(k) {
             Some(t) => Some(t)
             None => pre_map.get(k)
