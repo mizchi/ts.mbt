@@ -727,19 +727,25 @@ test "an undecided conditional is found behind an indexed access and past the de
     Object([(Literal("x"), cond)]),
     Literal("x"),
   )
+  // The deep case has to be compared against the same 40 layers around
+  // `string`, or the array-versus-string shape decides before the walk
+  // reaches the conditional, and a regressed depth limit would still pass.
   let mut deep = cond
+  let mut deep_str : @ast.TsType = String_
   for _ in 0..<40 {
     deep = Array(deep)
+    deep_str = Array(deep_str)
   }
-  for t in [via_index, deep] {
+  for pair in [(via_index, @ast.TsType::String_), (deep, deep_str)] {
+    let (t, other) = pair
     // Branch selection declines rather than picking `number`.
     assert_true(
-      reduce_conditional(Conditional(t, String_, Number, Boolean)) != Number,
+      reduce_conditional(Conditional(t, other, Number, Boolean)) != Number,
     )
     // Equivalence and union subsumption keep the two apart, both orders.
-    assert_false(equivalent(t, String_))
-    assert_eq(simplify_union([t, String_]).length(), 2)
-    assert_eq(simplify_union([String_, t]).length(), 2)
+    assert_false(equivalent(t, other))
+    assert_eq(simplify_union([t, other]).length(), 2)
+    assert_eq(simplify_union([other, t]).length(), 2)
   }
   // An indexed access with no conditional anywhere still decides.
   let plain : @ast.TsType = IndexedAccess(
