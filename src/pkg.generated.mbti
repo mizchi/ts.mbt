@@ -2,7 +2,7 @@
 package "mizchi/ts"
 
 // Values
-pub const CLI_VERSION : String = "0.5.2"
+pub const CLI_VERSION : String = "0.7.0"
 
 pub fn bridge_help_lines() -> Array[String]
 

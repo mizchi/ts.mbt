@@ -42,6 +42,29 @@ async test "mtsc JavaScript module exposes only the Vite graph checker ABI" {
 }
 
 ///|
+/// `CLI_VERSION` is what `mtsc --version` prints, and it is a hand-written
+/// copy of moon.mod's `version`. It went stale twice: `0.4.0` under a
+/// `0.5.2` moon.mod, then `0.5.2` under `0.6.0`, and a `tsc`-compatible
+/// `--version` that names the wrong release is a wrong answer.
+async test "CLI_VERSION matches the moon.mod version" {
+  let manifest = @fs.read_file("moon.mod").text() catch {
+    e => fail("failed to read moon.mod: \{e}")
+  }
+  let mut declared : String? = None
+  for line in manifest.split("\n") {
+    match line.strip_prefix("version = \"") {
+      Some(rest) =>
+        match rest.strip_suffix("\"") {
+          Some(v) => declared = Some(v.to_owned())
+          None => ()
+        }
+      None => ()
+    }
+  }
+  assert_eq(declared, Some(CLI_VERSION))
+}
+
+///|
 async test "write_text_file preserves UTF-8 text in generated outputs" {
   let root = wbtest_tmp_project_benchmark_root("write_text_file_utf8")
   @fs.rmdir(root, recursive=true) catch {
