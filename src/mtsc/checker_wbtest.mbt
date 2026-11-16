@@ -1151,3 +1151,28 @@ test "mtsc graph checker does not type an imported class value as an instance" {
     ).contains("expected `number`"),
   )
 }
+
+///|
+/// An overload set's IMPLEMENTATION is not callable when overload
+/// signatures exist. Imported with the rest it was the one non-generic
+/// member, tried first and accepting any call, so effect's `pipe(a, f)`
+/// came back `unknown` from `pipe(a: unknown, …): unknown`.
+test "mtsc graph checker leaves an imported overload set's implementation out" {
+  let lib = "export function pipe<A>(a: A): A;\nexport function pipe<A, B>(a: A, ab: (a: A) => B): B;\nexport function pipe(a: unknown, ab?: (a: unknown) => unknown): unknown { return ab ? ab(a) : a; }"
+  assert_eq(
+    graph2(
+      "import { pipe } from \"./lib\";\nexport const n: number = pipe(1, (x: number) => x + 1);",
+      lib,
+    ),
+    "",
+  )
+  // The one-argument overload solves `A` from the argument, so a wrong
+  // use reports. (`B` from a callback's return is not inferred, so the
+  // two-argument form is `any` — a MISS, not a finding.)
+  assert_true(
+    graph2(
+      "import { pipe } from \"./lib\";\nexport const s: string = pipe(1);",
+      lib,
+    ).contains("expected `string` but got `number`"),
+  )
+}

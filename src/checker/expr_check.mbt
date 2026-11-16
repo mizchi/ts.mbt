@@ -13649,7 +13649,7 @@ fn infer_call(
     GenericFunc(names, _, Func(params, ret))
     | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) =>
       if !(ret is TypePredicate(_, _)) && !(ret is AssertsPredicate(_, _)) {
-        return reduce_conditional(
+        let r = reduce_conditional(
           substitute_params(
             ret,
             bind_unsolved_to_any(
@@ -13667,6 +13667,19 @@ fn infer_call(
             ),
           ),
         )
+        // An indexed access the substitution left behind is one this
+        // checker cannot reduce, and judging it is how a binding to an
+        // INLINED bound becomes a finding: effect's
+        // `decodeEffect(schema)` inside `decodePromise<S extends
+        // ConstraintDecoder<unknown>>` solved `S` to that bound, returned
+        // `Effect<Bound["Type"], Issue, Bound["DecodingServices"]>`, and
+        // `asPromise`'s `Effect<T, Issue>` parameter then rejected the
+        // third argument on a line tsc accepts, where `S` stays generic.
+        return if type_contains_indexed_access(r) {
+          @ast.TsType::Any
+        } else {
+          r
+        }
       }
     _ => ()
   }

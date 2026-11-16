@@ -299,9 +299,21 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
   // bodiless `function` in a `.d.ts`, not a `declare function` — as a name
   // it could not resolve, and `const [n, setN] = useState(0)` came back
   // with `setN: undefined`, "not callable" on every state update.
+  //
+  // An overload set's IMPLEMENTATION is not part of its callable surface
+  // when overload signatures exist, in tsc as in `Resolver::ingest_module`
+  // (`has_sig_only`). Kept here it was the one non-generic member, which
+  // the overload matcher tries first, and it accepts any call: effect's
+  // `pipe(a, f, g, …)` came back `unknown` from `pipe(a: unknown, …):
+  // unknown` instead of solving the overload written for that many
+  // arguments.
+  let has_signature_only = module_.funcs
+    .iter()
+    .any(fn(f) { f.name == name && f.body.stmts.length() == 0 })
   let sigs : Array[@ast.TsType] = []
   for func in module_.funcs {
-    if func.name == name {
+    if func.name == name &&
+      (!has_signature_only || func.body.stmts.length() == 0) {
       sigs.push(generic_function_value_type(func))
     }
   }
