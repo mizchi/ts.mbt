@@ -891,3 +891,43 @@ test "mtsc graph checker keeps a renamed import off a name the checked module re
   })
   assert_eq(issues.map(fn(i) { i.message }), [])
 }
+
+///|
+/// A method's own type parameter shadows a renamed import inside that
+/// method. `c.ts` imports `Item as It` and declares `identity<It>`; the
+/// renamed-import mapping rewrote the binder's uses to `Item` too, so
+/// `api.identity(1)` was "expected `Item` but got `number`".
+test "mtsc graph checker keeps a method's own type parameter out of a rename" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import { api } from \"./c\";\nexport const n: number = api.identity(1);\napi.take({ a: \"x\" });\napi.take({ a: 1 });",
+      ),
+      module_("/src/a.ts", "export interface Item { a: string }"),
+      module_(
+        "/src/c.ts", "import type { Item as It } from \"./a\";\nexport interface Api { identity<It>(x: It): It; take(x: It): void }\nexport declare const api: Api;",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./c", "/src/c.ts"),
+      edge("/src/c.ts", "./a", "/src/a.ts"),
+    ],
+  })
+  // `take` still reads the import, so only its bad call is reported.
+  assert_eq(
+    issues
+    .map(fn(i) { i.path })
+    .filter(fn(p) { p.contains("identity") || p.contains("binding `n`") }),
+    [],
+  )
+  assert_eq(
+    issues.filter(fn(i) { i.path.contains("call `take` arg[0].a") }).length(),
+    1,
+  )
+}

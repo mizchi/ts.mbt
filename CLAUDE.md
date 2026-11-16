@@ -4609,7 +4609,11 @@ product surfaces now.
     positive the review caught. Skipping costs a MISS there. The
     checked-module side is not fixed: when another module declares `Item`,
     that renamed import still reads it as that module's declaration, which
-    main does too.
+    main does too. Adding local alias names to the rename map also exposed
+    an older gap. `rename_interface_refs` excluded the interface's own type
+    parameters and not a METHOD's, which live in `method_type_params`. So
+    `identity<It>(x: It)` beside `import { Item as It }` read its binder as
+    `Item`. Each field now drops its method's binders.
   - **`rename_type_refs` had no `AssertsPredicate` arm.** An imported
     `asserts x is T` kept the bare `T` while every other position of the
     same signature moved to the key. That is the twelfth fail-open wrapper

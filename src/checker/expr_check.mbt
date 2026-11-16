@@ -898,9 +898,33 @@ fn rename_interface_refs(
   if r.length() == 0 {
     return i
   }
+  // A METHOD's own type parameters (`identity<It>(x: It): It`) shadow a
+  // renamed name inside that method's type, the way the interface's own
+  // do above for every member. They are kept per method NAME in
+  // `method_type_params`, one entry per overload, while the field holds a
+  // plain `Func`.
+  let method_binders : Map[String, Array[String]] = Map([])
+  for entry in i.method_type_params {
+    match method_binders.get(entry.0) {
+      Some(names) => names.append(entry.1)
+      None => method_binders[entry.0] = entry.1.copy()
+    }
+  }
   let fields : Array[(String, @ast.TsType)] = []
   for f in i.fields {
-    fields.push((f.0, rename_type_refs(f.1, r)))
+    let field_r = match method_binders.get(f.0) {
+      Some(binders) if binders.iter().any(fn(b) { r.contains(b) }) => {
+        let own : Map[String, String] = Map([])
+        for k, v in r {
+          if !binders.contains(k) {
+            own[k] = v
+          }
+        }
+        own
+      }
+      _ => r
+    }
+    fields.push((f.0, rename_type_refs(f.1, field_r)))
   }
   let extends_args : Array[Array[@ast.TsType]] = []
   for args in i.extends_args {
