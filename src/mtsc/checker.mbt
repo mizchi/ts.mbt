@@ -657,6 +657,72 @@ fn exported_value_site(
 }
 
 ///|
+/// Whether `module_`'s `export_name` may come from a module OUTSIDE the
+/// checked graph: a value re-export that could provide the name, whose
+/// target has no edge (a bare package the loader did not follow, a
+/// relative file that is not there, an import the host skipped) or was
+/// never loaded. tsc binds such an alias to an unknown symbol and reports
+/// nothing on the importer, so `exported_value_site` coming back empty is
+/// not, on its own, a missing export.
+fn export_may_come_from_outside(
+  module_ : ParsedMtscModule,
+  export_name : String,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  seen : Array[(String, String)],
+) -> Bool {
+  for item in seen {
+    if item.0 == module_.source.path && item.1 == export_name {
+      return false
+    }
+  }
+  let next_seen = seen.copy()
+  next_seen.push((module_.source.path, export_name))
+  for reexport_ in module_.module_block.reexports {
+    if reexport_.type_only {
+      continue
+    }
+    // The name this re-export would ask its target for, or `None` when it
+    // cannot provide `export_name` at all.
+    let asked = match reexport_.kind {
+      @ast.TsReExportKind::Named(items) => {
+        let mut found : String? = None
+        for item in items {
+          if item.1 == export_name {
+            found = Some(item.0)
+            break
+          }
+        }
+        found
+      }
+      @ast.TsReExportKind::All =>
+        if export_name == "default" {
+          None
+        } else {
+          Some(export_name)
+        }
+      @ast.TsReExportKind::Namespace(_) => None
+    }
+    guard asked is Some(asked_name) else { continue }
+    let target = match
+      find_graph_target(edges, module_.source.path, reexport_.module_spec) {
+      Some(path) => find_graph_module(modules, path)
+      None => None
+    }
+    match target {
+      None => return true
+      Some(target) =>
+        if export_may_come_from_outside(
+            target, asked_name, modules, edges, next_seen,
+          ) {
+          return true
+        }
+    }
+  }
+  false
+}
+
+///|
 /// The last index built over a module list / an edge list, reused while
 /// the same array (by identity, at the same length) is asked about.
 ///
@@ -1210,9 +1276,14 @@ fn graph_import_globals(
             }
           }
           None =>
-            diagnostics.push(
-              "module `\{import_.module_spec}` has no default value export",
-            )
+            if export_may_come_from_outside(target, "default", modules, edges, []) {
+              globals.push((local_name, Any))
+              globals.push(("@imported:" + local_name, Any))
+            } else {
+              diagnostics.push(
+                "module `\{import_.module_spec}` has no default value export",
+              )
+            }
         }
       None => ()
     }
@@ -1294,9 +1365,20 @@ fn graph_import_globals(
           }
         }
         None =>
-          diagnostics.push(
-            "module `\{import_.module_spec}` has no value export `\{imported_name}`",
-          )
+          if export_may_come_from_outside(
+              target,
+              imported_name,
+              modules,
+              edges,
+              [],
+            ) {
+            globals.push((local_name, Any))
+            globals.push(("@imported:" + local_name, Any))
+          } else {
+            diagnostics.push(
+              "module `\{import_.module_spec}` has no value export `\{imported_name}`",
+            )
+          }
       }
     }
   }

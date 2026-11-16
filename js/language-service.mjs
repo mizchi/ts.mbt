@@ -94,7 +94,9 @@ const bindings = await loadBindings();
  *   Asked before a package directory's manifest is read. Absent means
  *   "yes", and the file probes decide, as in TypeScript.
  * @property {(path: string) => string} [realpath] Symlinks resolved, so
- *   one pnpm package reached through several links loads once.
+ *   one pnpm package reached through several links loads once. Applied to
+ *   the built-in resolution's answers only: a `resolveModuleNames` path is
+ *   used as given, so a host canonicalizes its own answers.
  * @property {(moduleNames: string[], containingFile: string) => ({ resolvedFileName: string } | undefined | null)[]} [resolveModuleNames]
  *   The host's own resolution, asked first. `undefined` for a name means
  *   "use the built-in resolution"; `null` means "do not follow it".

@@ -4930,8 +4930,12 @@ product surfaces now.
   - **`MtscHost` gains three methods**, each implemented by every host
     because the trait has no defaults:
     - `directory_exists`;
-    - `realpath`, which canonicalizes a bare specifier's answer, so one
-      pnpm package reached through two links loads once;
+    - `realpath`, which canonicalizes the built-in resolution's answer
+      for a bare specifier, so one pnpm package reached through two links
+      loads once. A `ResolvedTo` answer from the host's own hook is used
+      as given (normalized, never passed through `realpath`), as
+      TypeScript trusts what `resolveModuleNames` returns, so a host that
+      returns its own paths canonicalizes them itself;
     - `resolve_module_name`, TypeScript's `resolveModuleNames`, asked
       first: `UseDefault`, `ResolvedTo(path)`, or `External`. On the JS
       side, `undefined` defers to the built-in resolution, so a host that

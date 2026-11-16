@@ -1637,3 +1637,47 @@ test "mtsc graph checker keeps an ambient module's own type beside a renamed imp
     "top-level > binding `bad` init :: expected `string` but got `number`", "top-level > binding `bad2` init.z :: expected `number` but got `string`",
   ])
 }
+
+///|
+/// A barrel that re-exports from a module OUTSIDE the checked graph — a
+/// bare package with no edge, a relative file that is not there — gives
+/// the importer an alias whose origin is unknown. tsc binds such an alias
+/// to an unknown symbol and reports nothing on the importer, so neither
+/// does this. A name that no re-export chain can provide still reports.
+test "mtsc graph checker leaves a re-export from outside the graph unknown" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/main.ts", "import { x, y, z, w } from \"./barrel\";\nimport d from \"./barrel2\";\nexport const a = x;\nexport const b = y;\nexport const c = z;\nexport const e = d;",
+      ),
+      module_(
+        "/src/barrel.ts", "export { x } from \"ext-pkg\";\nexport { y } from \"./gone\";\nexport * from \"other-pkg\";\nexport const z = 1;",
+      ),
+      module_("/src/barrel2.ts", "export { default } from \"ext-pkg\";"),
+      module_("/src/plain.ts", "export const q = 1;"),
+    ],
+    edges: [
+      edge("/src/main.ts", "./barrel", "/src/barrel.ts"),
+      edge("/src/main.ts", "./barrel2", "/src/barrel2.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [])
+  let missing = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/main.ts", "import { x, nope } from \"./barrel\";\nexport const a = x;",
+      ),
+      module_("/src/barrel.ts", "export { x } from \"ext-pkg\";"),
+    ],
+    edges: [edge("/src/main.ts", "./barrel", "/src/barrel.ts")],
+  })
+  assert_eq(missing.map(fn(i) { i.message }), [
+    "module `./barrel` has no value export `nope`",
+  ])
+}
