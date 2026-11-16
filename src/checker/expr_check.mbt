@@ -2519,6 +2519,31 @@ fn required_arity_at_call(
 }
 
 ///|
+/// `bindings` with every binder in `names` it does not solve bound to
+/// `any`, for substituting into a RETURN type. Left out, the binder's bare
+/// name flowed out of the call and was resolved like any other type
+/// reference — so wherever the program declares a type that happens to be
+/// called `T` (a dependency's `.d.ts` is enough), redi's
+/// `injector.get(ICommandService).registerCommand(…)` read as "method
+/// `registerCommand` does not exist on `T`". An unsolved binder is
+/// unknown, and `any` is the answer that cannot invent a finding.
+fn bind_unsolved_to_any(
+  names : Array[String],
+  bindings : Map[String, @ast.TsType],
+) -> Map[String, @ast.TsType] {
+  if names.iter().all(fn(n) { bindings.contains(n) }) {
+    return bindings
+  }
+  let out = bindings.copy()
+  for n in names {
+    if !out.contains(n) {
+      out[n] = @ast.TsType::Any
+    }
+  }
+  out
+}
+
+///|
 /// Whether `n` arguments fit a callable's parameter list: at least the
 /// required count (a trailing optional, `void` or rest parameter may be
 /// omitted) and at most the parameter count, unless a rest takes the rest.
@@ -3952,7 +3977,10 @@ fn Resolver::lookup_field(
     None
   }
   self.lookup_depth.val = self.lookup_depth.val + 1
-  let found = self.lookup_field_core(recv, field)
+  let found = match generic_func_prototype_member(recv, field) {
+    Some(t) => Some(t)
+    None => self.lookup_field_core(recv, field)
+  }
   self.lookup_depth.val = self.lookup_depth.val - 1
   match key {
     Some(k) => self.lookup_active.remove(k)
@@ -5423,6 +5451,60 @@ fn weakset_prototype_member(t : @ast.TsType, field : String) -> @ast.TsType? {
 }
 
 ///|
+/// `bind` / `call` / `apply` on a GENERIC callable, or on an overload set
+/// that has generic members, read before `unwrap` peels the binders.
+/// Peeled, `injector.get.bind(injector)` — how univer's tests take redi's
+/// `get` — was a plain function whose return was the bare `T`, and every
+/// `get(ICommandService).registerCommand(…)` then read `T` as whatever the
+/// program happens to declare under that name. `bind` with no partial
+/// arguments keeps the signature, binders included; `call` and `apply`
+/// solve nothing here, so their return binds each binder to `any`.
+fn generic_func_prototype_member(
+  recv : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  fn has_generic(t : @ast.TsType) -> Bool {
+    match t {
+      GenericFunc(_, _, _) => true
+      Union(parts) => parts.iter().any(fn(p) { p is GenericFunc(_, _, _) })
+      _ => false
+    }
+  }
+
+  if !has_generic(recv) {
+    return None
+  }
+  match field {
+    "bind" => Some(@ast.TsType::Func([@ast.TsType::Any], recv))
+    "call" | "apply" =>
+      match recv {
+        GenericFunc(names, _, Func(params, ret))
+        | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) => {
+          let erased = bind_unsolved_to_any(names, Map([]))
+          let ret = substitute_params(ret, erased)
+          if field == "call" {
+            let call_params : Array[@ast.TsType] = [@ast.TsType::Any]
+            for p in params {
+              call_params.push(substitute_params(p, erased))
+            }
+            Some(@ast.TsType::Func(call_params, ret))
+          } else {
+            Some(
+              @ast.TsType::Func(
+                [@ast.TsType::Any, @ast.TsType::Array(@ast.TsType::Any)],
+                ret,
+              ),
+            )
+          }
+        }
+        // An overload set has no single signature to call through.
+        _ => Some(@ast.TsType::Any)
+      }
+    _ => None
+  }
+}
+
+///|
 /// `Function.prototype.{call, apply, bind, length, name}` members.
 /// `call` / `apply` return the inner function's return type; `bind`
 /// returns the same `Func(...)` shape (we don't model partial
@@ -6096,8 +6178,20 @@ fn Resolver::lookup_class_field(
   }
   if idx.inst_meth.get(class_key) is Some(meths) && meths.get(field) is Some(i) {
     let m = cls.methods[i]
+    let f = @ast.TsType::Func(method_callable_param_types(m), m.return_type)
+    // A GENERIC method keeps its binders when it is read as a value
+    // (`Injector['get']`, `injector.get.bind(injector)`), the way a generic
+    // function declaration's value does. The bare `Func` left `T` free, and
+    // a call through the value returned it unsolved: univer's test beds
+    // type `get` as `Injector['get']`, and every `get(ICommandService)`
+    // then read `T` as engine-formula's spreadsheet `class T`. A call on
+    // the member itself still solves through `method_type_params_of`.
     return Some(
-      @ast.TsType::Func(method_callable_param_types(m), m.return_type),
+      if m.type_params.is_empty() {
+        f
+      } else {
+        @ast.TsType::GenericFunc(m.type_params, m.type_param_bounds, f)
+      },
     )
   }
   for base in cls.base_names {
@@ -6713,7 +6807,7 @@ fn Resolver::resolve_method_overload(
   recv : @ast.TsType,
   meth : String,
   arg_types : Array[@ast.TsType],
-) -> @ast.TsType? {
+) -> (Array[@ast.TsType], @ast.TsType)? {
   let candidates = self.method_overload_signatures(recv, meth)
   // Only meaningful for an overload set: a single signature is already
   // handled by the first-match `lookup_method_sig` path.
@@ -6722,21 +6816,66 @@ fn Resolver::resolve_method_overload(
   }
   for c in candidates {
     let (params, ret) = c
-    if params.length() != arg_types.length() {
+    // The argument count has to fit the member's arity, not equal its
+    // parameter count: redi's `get<T>(id, lookUp?)` is called as
+    // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
+    // matched its own signature.
+    if !overload_arity_accepts(params, arg_types.length()) {
       continue
     }
     let mut ok = true
     for i in 0..<arg_types.length() {
-      if !is_assignable_to(arg_types[i], params[i]) {
+      if !is_assignable_to(arg_types[i], overload_param_at(params, i)) {
         ok = false
         break
       }
     }
     if ok {
-      return Some(ret)
+      // The PARAMETERS come back with the return so the caller can solve
+      // the member's own type parameters from the arguments, as it does
+      // for a single signature: the return of `get<T>(…): T` is the bare
+      // `T` until it does.
+      return Some((params, ret))
     }
   }
   None
+}
+
+///|
+/// A method return with the method's own type parameters solved from the
+/// call's arguments, and any it cannot solve bound to `any` (see
+/// `bind_unsolved_to_any`). The overload path and the single-signature
+/// path both use it, so a generic method answers the same way whether or
+/// not it is overloaded.
+fn instantiate_method_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  ret : @ast.TsType,
+) -> @ast.TsType {
+  let method_tps = resolver.method_type_params_of(recv, meth)
+  if method_tps.length() == 0 {
+    return ret
+  }
+  substitute_params(
+    ret,
+    bind_unsolved_to_any(
+      method_tps,
+      widen_fresh_literal_bindings(
+        env,
+        resolver,
+        solve_generic_bindings(env, resolver, method_tps, params, args, None),
+        method_tps,
+        None,
+        params,
+        args,
+        ret,
+      ),
+    ),
+  )
 }
 
 ///|
@@ -10744,8 +10883,10 @@ fn infer_expr_inner(
       // argument(s)", while the annotated `const s: Subject<void>` was
       // right. Only an exact count is taken; a class whose arguments were
       // defaulted or mis-counted keeps the bare name, as before.
+      // The inner `new` may already have instantiated the class from its
+      // constructor arguments; the written arguments win over that.
       match (inner, inner_ty) {
-        (New(_, _) | NewExpr(_, _), Named(n)) =>
+        (New(_, _) | NewExpr(_, _), Named(n) | Applied(n, _)) =>
           match resolver.classes.get(n) {
             Some(cls) if cls.type_params.length() == targs.length() &&
               targs.length() > 0 => @ast.TsType::Applied(n, targs)
@@ -11170,13 +11311,15 @@ fn infer_expr_inner(
           for a in args {
             arg_types.push(infer_expr(env, resolver, a))
           }
-          match
-            resolver.resolve_method_overload(
-              prune_nullish(resolver, recv_ty),
-              meth,
-              arg_types,
-            ) {
-            Some(ret) => return substitute_this_type(ret, recv_ty)
+          let pruned = prune_nullish(resolver, recv_ty)
+          match resolver.resolve_method_overload(pruned, meth, arg_types) {
+            Some((params, ret)) =>
+              return substitute_this_type(
+                instantiate_method_return(
+                  env, resolver, pruned, meth, params, args, ret,
+                ),
+                recv_ty,
+              )
             None => ()
           }
         }
@@ -11199,10 +11342,48 @@ fn infer_expr_inner(
       }
     New(class_name, args) =>
       match resolver.lookup_constructor(class_name) {
-        Some(_) =>
+        Some(ctor_params) =>
           // Validate args at the call site via `check_arguments`; here we
           // just return the instance type.
-          @ast.TsType::Named(class_name)
+          //
+          // A GENERIC class written without type arguments is instantiated
+          // from the constructor's arguments, as tsc infers it, and a
+          // parameter the arguments do not pin is `any`. The bare name
+          // left every member typed by the class parameter as the unbound
+          // `T`, which then resolved to whatever the program declares
+          // under that name: univer's `new ObjectMatrix(cellValue)` met
+          // engine-formula's spreadsheet `class T`, and `value?.s` in the
+          // matrix callback read as "`s` does not exist on `T`".
+          match resolver.classes.get(class_name) {
+            Some(cls) if cls.type_params.length() > 0 => {
+              let names = cls.type_params
+              let bindings = bind_unsolved_to_any(
+                names,
+                widen_fresh_literal_bindings(
+                  env,
+                  resolver,
+                  solve_generic_bindings(
+                    env,
+                    resolver,
+                    names,
+                    ctor_params,
+                    args,
+                    None,
+                  ),
+                  names,
+                  None,
+                  ctor_params,
+                  args,
+                  @ast.TsType::Named(class_name),
+                ),
+              )
+              @ast.TsType::Applied(
+                class_name,
+                names.map(fn(n) { bindings.get(n).unwrap_or(@ast.TsType::Any) }),
+              )
+            }
+            _ => @ast.TsType::Named(class_name)
+          }
         None => {
           // A lib `SharedArrayBuffer` instance keeps its Named type so the
           // fully-table-modeled member surface applies (`foge.length` —
@@ -11411,7 +11592,13 @@ fn infer_expr_inner(
         arg_types.push(infer_expr(env, resolver, a))
       }
       match resolver.resolve_method_overload(pruned_recv, meth, arg_types) {
-        Some(ret) => return substitute_this_type(ret, recv_ty)
+        Some((params, ret)) =>
+          return substitute_this_type(
+            instantiate_method_return(
+              env, resolver, pruned_recv, meth, params, args, ret,
+            ),
+            recv_ty,
+          )
         None => ()
       }
       // Nullable receiver: strip null/undefined members and retry so
@@ -11428,31 +11615,9 @@ fn infer_expr_inner(
           // cannot answer differently. Without it the return came back
           // as a bare `Named("T")`, which every downstream check reads
           // as unknowable.
-          let method_tps = resolver.method_type_params_of(pruned_recv, meth)
-          let instantiated = if method_tps.length() > 0 {
-            substitute_params(
-              ret,
-              widen_fresh_literal_bindings(
-                env,
-                resolver,
-                solve_generic_bindings(
-                  env,
-                  resolver,
-                  method_tps,
-                  params,
-                  args,
-                  None,
-                ),
-                method_tps,
-                None,
-                params,
-                args,
-                ret,
-              ),
-            )
-          } else {
-            ret
-          }
+          let instantiated = instantiate_method_return(
+            env, resolver, pruned_recv, meth, params, args, ret,
+          )
           // `this`-typed return: when an interface / class method is
           // declared as `m(): this` (or wrapped in `this & T` etc.),
           // substitute the receiver in for `this` so the chain
@@ -13465,6 +13630,35 @@ fn infer_call(
       }
     _ => ()
   }
+  // A generic callable VALUE is solved before `unwrap`, which peels the
+  // binders: past that line the arm below that was written for it could
+  // never match, and `const g = injector.get.bind(injector); g(ID)` came
+  // back with its `T` unsolved.
+  match callee {
+    GenericFunc(names, _, Func(params, ret))
+    | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) =>
+      if !(ret is TypePredicate(_, _)) && !(ret is AssertsPredicate(_, _)) {
+        return reduce_conditional(
+          substitute_params(
+            ret,
+            bind_unsolved_to_any(
+              names,
+              widen_fresh_literal_bindings(
+                env,
+                resolver,
+                solve_generic_bindings(env, resolver, names, params, args, None),
+                names,
+                None,
+                params,
+                args,
+                ret,
+              ),
+            ),
+          ),
+        )
+      }
+    _ => ()
+  }
   let callee = resolver.unwrap(callee)
   match callee {
     // `paramName is T` is a boolean at the value level — calls to a type
@@ -13488,15 +13682,18 @@ fn infer_call(
       reduce_conditional(
         substitute_params(
           ret,
-          widen_fresh_literal_bindings(
-            env,
-            resolver,
-            solve_generic_bindings(env, resolver, names, params, args, None),
+          bind_unsolved_to_any(
             names,
-            None,
-            params,
-            args,
-            ret,
+            widen_fresh_literal_bindings(
+              env,
+              resolver,
+              solve_generic_bindings(env, resolver, names, params, args, None),
+              names,
+              None,
+              params,
+              args,
+              ret,
+            ),
           ),
         ),
       )
@@ -13597,7 +13794,9 @@ fn infer_call(
           args,
           gret,
         )
-        let r = reduce_conditional(substitute_params(gret, bindings))
+        let r = reduce_conditional(
+          substitute_params(gret, bind_unsolved_to_any(names, bindings)),
+        )
         let sps = substitute_params_array(gps, bindings)
         // The same arity rule as a concrete member: redi's
         // `useDependency<T>(id, lookUp?)` is called with ONE argument at

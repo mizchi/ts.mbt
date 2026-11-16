@@ -23435,3 +23435,36 @@ test "a function type's this parameter is not an argument position" {
     [],
   )
 }
+
+///|
+/// An unsolved type parameter must not leave a call as its bare name: the
+/// name is then resolved like any other type reference, and a program that
+/// declares a type of that spelling (univer's engine-formula has a
+/// spreadsheet `class T`) reads it as THAT type. Three routes leaked it:
+/// `new C(args)` of a generic class with no written arguments, a generic
+/// method read as a value (`Injector['get']`), and `.bind` on one.
+test "an unsolved type parameter does not leak into a call's result" {
+  let prelude = "class T { other = 1 }\nclass Matrix<V> { constructor(public data: V[]) {} forValue(cb: (v: V) => void): void {} first(): V { return this.data[0]; } }\nclass Inj { get<R>(id: new () => R): R { return new id(); } }\nclass Cmd { run(): void {} }\ninterface Bed { get: Inj[\"get\"] }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(b: Bed, i: Inj) { const m = new Matrix([{ s: 1 }]); m.forValue((value) => { const n: number = value.s; }); b.get(Cmd).run(); const g = i.get.bind(i); g(Cmd).run(); }",
+    ),
+    [],
+  )
+  // The instantiation is the constructor's: a wrong use still reports.
+  assert_true(
+    body_issue_messages(
+      prelude +
+      "function g() { const m = new Matrix([{ s: 1 }]); const s: string = m.first().s; }",
+    ).length() >
+    0,
+  )
+  // A written argument list still wins over the inferred one.
+  @test.assert_eq(
+    body_issue_messages(
+      "declare class S<X> { constructor(); next(v: X): void; }\nfunction h() { new S<void>().next(); }",
+    ),
+    [],
+  )
+}
