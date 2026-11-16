@@ -10,7 +10,7 @@ pub fn check_module_sources(Array[MtscModuleSource]) -> String
 
 pub fn check_source(String, Bool) -> String
 
-pub fn collect_module_graph_issues(MtscModuleGraph, compiler_options? : Array[(String, String)]) -> Array[MtscGraphIssue]
+pub fn collect_module_graph_issues(MtscModuleGraph, compiler_options? : Array[(String, String)], context_only? : Map[String, Unit]) -> Array[MtscGraphIssue]
 
 pub fn collect_type_issues(String, Bool, declaration_file? : Bool, compiler_options? : Array[(String, String)]) -> Result[Array[MtscTypeIssue], String]
 

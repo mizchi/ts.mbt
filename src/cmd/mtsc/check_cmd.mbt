@@ -150,7 +150,7 @@ async fn mtsc_run_check(argv : Array[String], start : Int32) -> Unit {
     // A `.d.ts` makes every declaration in it ambient whether or not it
     // writes `declare`. The extension is the only place that fact
     // exists, and this site already keys TS1046 off it below.
-    if path.has_suffix(".d.ts") {
+    if mtsc_is_declaration_path(path) {
       parser.mark_declaration_file()
     }
     let module_ = parser.parse_module() catch {
@@ -168,7 +168,7 @@ async fn mtsc_run_check(argv : Array[String], start : Int32) -> Unit {
       }
       // TS1046 applies only to declaration files -- keyed off the file
       // extension, which the general check pipeline can't see.
-      if path.has_suffix(".d.ts") {
+      if mtsc_is_declaration_path(path) {
         for iss in @checker.check_dts_top_level_modifiers(module_) {
           issues.push(iss)
         }

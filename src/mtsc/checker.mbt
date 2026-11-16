@@ -156,7 +156,11 @@ fn parse_graph_module(
   // A declaration file makes every declaration in it ambient whether or
   // not it writes `declare`; the PATH is the only place that fact lives,
   // and the bodiless-declaration rules read it only to go silent.
-  let is_dts = source.path.has_suffix(".d.ts")
+  // `.d.mts` / `.d.cts` are declaration files too: zod's `types` condition
+  // names `index.d.cts`, and the graph loader reads it.
+  let is_dts = source.path.has_suffix(".d.ts") ||
+    source.path.has_suffix(".d.mts") ||
+    source.path.has_suffix(".d.cts")
   let p1 = @parser.Parser::from_source_with_jsx(
     source.source,
     source.allowJsx,
@@ -181,9 +185,26 @@ fn parse_graph_module(
 }
 
 ///|
+/// `function_value_type` under a binder for the function's own type
+/// parameters, so an importer's call solves them (`@import-generic:`).
+fn generic_function_value_type(func : @ast.TsFunc) -> @ast.TsType {
+  let f = function_value_type(func)
+  if func.type_params.is_empty() {
+    f
+  } else {
+    @ast.TsType::GenericFunc(func.type_params, func.type_param_bounds, f)
+  }
+}
+
+///|
 fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
   let params : Array[@ast.TsType] = []
-  for param in func.params {
+  for i, param in func.params {
+    // A leading `this` parameter types the receiver and takes no argument
+    // position (`declare_function_value_type` drops it the same way).
+    if i == 0 && param.name == "this" && !param.is_rest {
+      continue
+    }
     if param.is_rest {
       params.push(@ast.TsType::Rest(param.type_))
     } else if param.is_optional || param.default is Some(_) {
@@ -202,6 +223,41 @@ fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
     }
   }
   @ast.TsType::Func(params, func.return_type)
+}
+
+///|
+/// The value type of one `declare function` signature, in the shape
+/// `function_value_type` gives a function declaration: a leading `this`
+/// parameter dropped (it types the receiver and takes no argument), a rest
+/// parameter as `Rest(_)`, and the type parameters as a `GenericFunc`
+/// binder so an importer's call solves them (`@import-generic:`).
+///
+/// The parameters are the INLINED ones — a bounded `T extends B` reads as
+/// `B` — so a bounded parameter is judged against its bound, as it was
+/// before; only an unbounded one is left for the call to solve. Optional
+/// parameters already arrive as `T | undefined`, which is how a `Func`
+/// spells "may be omitted".
+fn declare_function_value_type(import_ : @ast.TsImport) -> @ast.TsType {
+  let start = if import_.params.length() > 0 && import_.params[0].0 == "this" {
+    1
+  } else {
+    0
+  }
+  let params : Array[@ast.TsType] = []
+  for i in start..<import_.params.length() {
+    let t = import_.params[i].1
+    if i < import_.param_is_rest.length() && import_.param_is_rest[i] {
+      params.push(@ast.TsType::Rest(t))
+    } else {
+      params.push(t)
+    }
+  }
+  let f = @ast.TsType::Func(params, import_.return_type)
+  if import_.type_params.is_empty() {
+    f
+  } else {
+    @ast.TsType::GenericFunc(import_.type_params, [], f)
+  }
 }
 
 ///|
@@ -239,10 +295,45 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
   // twenty, and handing an importer the first made every call with more
   // arguments "expected 1 argument(s)". A union of the declarations' types
   // is the overload-set shape the checker ingests a local one as.
+  //
+  // Each signature carries its own type parameters as a `GenericFunc`
+  // binder, as a `declare function` does (`declare_function_value_type`):
+  // without one an importer read `S` in preact's
+  // `function useState<S>(init: S | (() => S)): [S, Dispatch<…>]` — a
+  // bodiless `function` in a `.d.ts`, not a `declare function` — as a name
+  // it could not resolve, and `const [n, setN] = useState(0)` came back
+  // with `setN: undefined`, "not callable" on every state update.
+  //
+  // An overload set's IMPLEMENTATION is not part of its callable surface
+  // when overload signatures exist, in tsc as in `Resolver::ingest_module`
+  // (`has_sig_only`). Kept here it was the one non-generic member, which
+  // the overload matcher tries first, and it accepts any call: effect's
+  // `pipe(a, f, g, …)` came back `unknown` from `pipe(a: unknown, …):
+  // unknown` instead of solving the overload written for that many
+  // arguments.
+  //
+  // Which declaration IS the implementation is a parse-time fact: the
+  // parser's `<fn-impl:NAME>` marker says one exists, and tsc requires it
+  // to follow its signatures directly, so it is the LAST declaration of
+  // the name. An empty statement list cannot tell `f(x: any): void {}`
+  // from a signature, and that implementation then stayed callable, so
+  // `f(123)` was accepted against `f(x: string): void`. Where no marker
+  // exists (a declaration file, or a set with no implementation) the
+  // statement count is the remaining evidence.
+  let decls = module_.funcs.filter(fn(f) { f.name == name })
+  let has_impl = module_.grammar_misuses.contains("<fn-impl:\{name}>")
+  let has_signature_only = decls
+    .iter()
+    .any(fn(f) { f.body.stmts.length() == 0 })
   let sigs : Array[@ast.TsType] = []
-  for func in module_.funcs {
-    if func.name == name {
-      sigs.push(function_value_type(func))
+  for i, func in decls {
+    let callable = if has_impl && decls.length() > 1 {
+      i < decls.length() - 1
+    } else {
+      !has_signature_only || func.body.stmts.length() == 0
+    }
+    if callable {
+      sigs.push(generic_function_value_type(func))
     }
   }
   match sigs.length() {
@@ -291,23 +382,43 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
       }
     _ => return Some(@ast.TsType::Union(sigs))
   }
+  // A `declare function` — every function a `.d.ts` declares — is held as
+  // a `TsImport`, and this branch used to read the FIRST one as a bare
+  // `Func`: an overload set lost every signature but one (drizzle's
+  // `integer()` / `integer(config?)` / `integer(name, config?)` made
+  // `integer("id")` "expected 0 argument(s)"), a rest parameter read as a
+  // single array argument (`and(...conditions)` became "expected 1"), and
+  // a type parameter was an unbound name (preact's `useState<S>`). None of
+  // it showed while a package's declarations were never loaded; the
+  // types-mode check graph loads them. The shape now matches what the
+  // `funcs` branch above builds for a function declaration.
+  let declared : Array[@ast.TsType] = []
   for import_ in module_.imports {
     if import_.name == name {
-      let params : Array[@ast.TsType] = []
-      for param in import_.params {
-        params.push(param.1)
-      }
-      return Some(@ast.TsType::Func(params, import_.return_type))
+      declared.push(declare_function_value_type(import_))
     }
+  }
+  match declared.length() {
+    0 => ()
+    1 => return Some(declared[0])
+    _ => return Some(@ast.TsType::Union(declared))
   }
   for enum_ in module_.enums {
     if enum_.name == name {
       return Some(@ast.TsType::Named(name))
     }
   }
+  // A class used as a VALUE is its constructor, not an instance, and this
+  // checker has no constructor-type spelling an importer can use — a
+  // class declared in the SAME file is `any` as a value for that reason.
+  // `Named(name)` here is the INSTANCE type, so an imported class read as
+  // a value was wrong in both directions: redi's `injector.add([Svc])`
+  // compared `Svc[]` (instances) against `[Ctor<T>]` and reported, and a
+  // static member was looked up among the instance's. The importer now
+  // sees what a local use sees.
   for class_ in module_.classes {
     if class_.name == name {
-      return Some(@ast.TsType::Named(name))
+      return Some(@ast.TsType::Any)
     }
   }
   None
@@ -417,18 +528,27 @@ fn arrow_const_predicate_type(
 }
 
 ///|
-/// True when `module_` exports `name` as a function declared more than once.
-fn exported_is_overload_set(module_ : ParsedMtscModule, name : String) -> Bool {
-  let mut local_ = name
-  for export_ in module_.module_block.exports {
-    if export_.export_name == name {
-      local_ = export_.local_name
-      break
-    }
-  }
+/// True when `local_` names a function `module_` declares more than once.
+///
+/// It takes the DECLARING module, which is what `exported_value_site`
+/// returns. It used to take the module an import NAMES and look only at
+/// that module's own declarations, so an overload set re-exported through
+/// a barrel (`export * from "./integer.js"`, how drizzle's `sqlite-core`
+/// publishes `integer`) read as a single function, lost its `@overloads:`
+/// marker, and was judged by the every-member arity rule a union-typed
+/// VALUE takes — "expected at least 2 argument(s)" on `integer("id")`,
+/// which the direct `columns/integer` import accepted.
+fn declares_overload_set(module_ : ParsedMtscModule, local_ : String) -> Bool {
   let mut n = 0
   for f in module_.module_.funcs {
     if f.name == local_ {
+      n = n + 1
+    }
+  }
+  // A `.d.ts` declares its overloads with `declare function`, which the
+  // parser keeps in `imports`.
+  for imp in module_.module_.imports {
+    if imp.name == local_ {
       n = n + 1
     }
   }
@@ -449,22 +569,24 @@ fn is_predicate_value_type(ty : @ast.TsType) -> Bool {
 }
 
 ///|
-/// The type of the value `module_` exports as `export_name`, following
-/// value re-exports, with the path of the module that DECLARES the value.
-/// The type is written in that module's scope — its bare `I` means the `I`
-/// it declares or imports — so the checker reads it there (see the
-/// `@value-origin:` marker in `graph_import_globals`).
-fn exported_value_binding(
+/// The value `module_` exports as `export_name`, following value
+/// re-exports: the module that DECLARES it, the name it has there, and its
+/// type. The type is written in that module's scope — its bare `I` means
+/// the `I` it declares or imports — so the checker reads it there (see the
+/// `@value-origin:` marker in `graph_import_globals`), and a fact about the
+/// declaration itself (is it an overload set?) has to be asked of that
+/// module too, under that name, since a re-export can rename it.
+fn exported_value_site(
   module_ : ParsedMtscModule,
   export_name : String,
   modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
   seen : Array[(String, String)],
-) -> (@ast.TsType, String)? {
+) -> (ParsedMtscModule, String, @ast.TsType)? {
   for export_ in module_.module_block.exports {
     if export_.export_name == export_name {
       return local_value_type(module_.module_, export_.local_name).map(fn(t) {
-        (t, module_.source.path)
+        (module_, export_.local_name, t)
       })
     }
   }
@@ -500,10 +622,10 @@ fn exported_value_binding(
           let (imported_name, reexported_name) = item
           if reexported_name == export_name {
             match
-              exported_value_binding(
+              exported_value_site(
                 target, imported_name, modules, edges, next_seen,
               ) {
-              Some(type_) => return Some(type_)
+              Some(site) => return Some(site)
               None => ()
             }
           }
@@ -511,10 +633,8 @@ fn exported_value_binding(
       @ast.TsReExportKind::All =>
         if export_name != "default" {
           match
-            exported_value_binding(
-              target, export_name, modules, edges, next_seen,
-            ) {
-            Some(type_) => return Some(type_)
+            exported_value_site(target, export_name, modules, edges, next_seen) {
+            Some(site) => return Some(site)
             None => ()
           }
         }
@@ -1048,21 +1168,28 @@ fn graph_import_globals(
     }
     match import_.default_binding {
       Some(local_name) =>
-        match exported_value_binding(target, "default", modules, edges, []) {
+        match exported_value_site(target, "default", modules, edges, []) {
           // The same two markers the named-import branch below records.
           // A default import is the spelling that is USUALLY bound under
           // another name (`import ident from "./lib"`), so without the
           // `@import-generic:` marker the call never solved its type
           // parameters and `const s: string = ident({ a: 1 })` was silent
           // where the named spelling reports.
-          Some((type_, origin)) => {
+          Some((declarer, declared_name, type_)) => {
             globals.push((local_name, type_))
-            globals.push(("@value-origin:" + local_name, Named(origin)))
+            globals.push(
+              ("@value-origin:" + local_name, Named(declarer.source.path)),
+            )
             if type_ is GenericFunc(_, _, _) {
               globals.push(("@import-generic:" + local_name, Any))
             }
             if type_ is Any {
               globals.push(("@imported:" + local_name, Any))
+            }
+            // `export default function f(a); export default function
+            // f(a, b)` is an overload set, the same as a named one.
+            if declares_overload_set(declarer, declared_name) {
+              globals.push(("@overloads:" + local_name, Any))
             }
           }
           None =>
@@ -1117,8 +1244,9 @@ fn graph_import_globals(
         continue
       }
       let (imported_name, local_name) = binding
-      match exported_value_binding(target, imported_name, modules, edges, []) {
-        Some((type_, origin)) => {
+      match exported_value_site(target, imported_name, modules, edges, []) {
+        Some((declarer, declared_name, type_)) => {
+          let origin = declarer.source.path
           globals.push((local_name, type_))
           // The module the type is WRITTEN in. When it shares a type name
           // with another reachable module, the checker reads the type
@@ -1144,7 +1272,7 @@ fn graph_import_globals(
           // arity rules (one overload must accept, against every member).
           // Locally that is told apart by the function declaration's entry
           // in `signatures`; across a module boundary this marker says it.
-          if exported_is_overload_set(target, imported_name) {
+          if declares_overload_set(declarer, declared_name) {
             globals.push(("@overloads:" + local_name, Any))
           }
         }
@@ -1223,6 +1351,14 @@ fn module_value_bindings(
 pub fn collect_module_graph_issues(
   graph : MtscModuleGraph,
   compiler_options~ : Array[(String, String)] = [],
+  // Modules that take part in the program as CONTEXT only: their
+  // declarations are visible to every module that imports them, and their
+  // own diagnostics are not computed. A dependency's `.d.ts` is the case
+  // this exists for — `tsc` with `skipLibCheck` does the same — and
+  // skipping the per-module check rather than filtering its output is
+  // what keeps a package's hundreds of declaration files from costing a
+  // check each.
+  context_only~ : Map[String, Unit] = Map([]),
 ) -> Array[MtscGraphIssue] {
   let parsed_modules : Array[ParsedMtscModule] = []
   let issues : Array[MtscGraphIssue] = []
@@ -1238,7 +1374,12 @@ pub fn collect_module_graph_issues(
         })
     }
   }
-  collect_parsed_graph_issues(parsed_modules, graph.edges, issues)
+  collect_parsed_graph_issues(
+    parsed_modules,
+    graph.edges,
+    issues,
+    context_only~,
+  )
   issues
 }
 
@@ -1260,6 +1401,7 @@ fn collect_parsed_graph_issues(
   parsed_modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
   issues : Array[MtscGraphIssue],
+  context_only~ : Map[String, Unit] = Map([]),
 ) -> Unit {
   // Ambient declaration files are part of every module's scope: that is
   // what makes `declare const MyGlobal: …` in an `env.d.ts` visible from
@@ -1285,6 +1427,13 @@ fn collect_parsed_graph_issues(
     }
   }
   for module_ in parsed_modules {
+    // Still parsed and still ingested by every module that reaches it —
+    // only its OWN check is skipped. The ambient scan above runs over
+    // every module for the same reason: a context-only `.d.ts` that
+    // declares globals still declares them.
+    if context_only.contains(module_.source.path) {
+      continue
+    }
     let (globals, import_diagnostics) = graph_import_globals(
       module_, parsed_modules, edges,
     )

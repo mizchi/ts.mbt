@@ -933,3 +933,276 @@ test "mtsc graph checker keeps a method's own type parameter out of a rename" {
     1,
   )
 }
+
+///|
+/// A `.d.ts` beside the entry, imported by path: how a package's
+/// declarations reach an importer once the check graph loads them.
+fn graph_dts(entry : String, dts : String) -> String {
+  check_module_graph({
+    modules: [
+      { path: "/src/entry.ts", source: entry, allowJsx: false, },
+      { path: "/src/lib.d.ts", source: dts, allowJsx: false, },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./lib",
+        targetPath: "/src/lib.d.ts",
+      },
+    ],
+  })
+}
+
+///|
+/// A `declare function` is held as a `TsImport`, and its value type used to
+/// be the FIRST declaration as a bare `Func`. Each of the three ways that
+/// went wrong is a false positive on code `tsc` accepts — drizzle's
+/// `integer("id")`, its `and(a, b)` and preact's `useState(0)` — and each
+/// legal call stays silent next to a real error of the same shape.
+test "mtsc graph checker types an imported declare function like a declaration" {
+  let dts =
+    #|export declare function integer(): number;
+    #|export declare function integer<M extends string>(config?: { mode: M }): number;
+    #|export declare function integer<N extends string, M extends string>(name: N, config?: { mode: M }): number;
+    #|export declare function and(...conditions: (string | undefined)[]): string | undefined;
+    #|export declare function id<T>(x: T): T;
+    #|export declare function bind(this: Window, n: number): void;
+  // An overload set: any one signature may accept the call.
+  assert_eq(
+    graph_dts(
+      "import { integer } from \"./lib\";\nexport const a = integer(\"id\");\nexport const b = integer();",
+      dts,
+    ),
+    "",
+  )
+  assert_true(
+    graph_dts(
+      "import { integer } from \"./lib\";\nexport const a: string = integer();",
+      dts,
+    ).contains("expected `string` but got `number`"),
+  )
+  // A rest parameter takes each argument against its element type.
+  assert_eq(
+    graph_dts(
+      "import { and } from \"./lib\";\nexport const a = and(\"x\", \"y\", undefined);",
+      dts,
+    ),
+    "",
+  )
+  assert_true(
+    graph_dts("import { and } from \"./lib\";\nexport const a = and(1);", dts).contains(
+      "expected `string | undefined` but got `number`",
+    ),
+  )
+  // A type parameter is solved at the call rather than left unbound.
+  assert_true(
+    graph_dts(
+      "import { id } from \"./lib\";\nexport const s: string = id(1);", dts,
+    ).contains("expected `string` but got `number`"),
+  )
+  assert_eq(
+    graph_dts(
+      "import { id } from \"./lib\";\nexport const n: number = id(1);", dts,
+    ),
+    "",
+  )
+  // A leading `this` parameter takes no argument.
+  assert_eq(graph_dts("import { bind } from \"./lib\";\nbind(1);", dts), "")
+}
+
+///|
+/// A bodiless `function` overload set in a `.d.ts` — preact's hooks are
+/// written that way, not with `declare function` — carries its type
+/// parameters too: without them `S` was an unbound name and the setter of
+/// `const [n, setN] = useState(0)` came back `undefined`.
+test "mtsc graph checker binds the type parameters of an imported overload set" {
+  let dts =
+    #|export function useState<S>(init: S | (() => S)): [S, (v: S) => void];
+    #|export function useState<S = undefined>(): [S | undefined, (v: S | undefined) => void];
+    #|export function id<T>(x: T): T;
+    #|export function pair<S>(x: S): [S, (v: S) => void];
+    #|export function pair<S = undefined>(): [S | undefined, (v: S | undefined) => void];
+  assert_eq(
+    graph_dts(
+      "import { useState } from \"./lib\";\nexport function f() { const [n, setN] = useState(0); setN(n + 1); }",
+      dts,
+    ),
+    "",
+  )
+  // `S` is solved where the parameter IS `S`. Through `S | (() => S)` it
+  // comes out `any`, so `const s: string = n` after `useState(0)` is a
+  // MISS — a limit of union-parameter inference, in the safe direction.
+  assert_true(
+    graph_dts(
+      "import { pair } from \"./lib\";\nexport function f() { const [n, set] = pair(0); set(n); const s: string = n; }",
+      dts,
+    ).contains("expected `string` but got `number`"),
+  )
+  assert_true(
+    graph_dts(
+      "import { id } from \"./lib\";\nexport const s: string = id(1);", dts,
+    ).contains("expected `string` but got `number`"),
+  )
+}
+
+///|
+/// Whether an import names an OVERLOAD set is a fact about the module that
+/// DECLARES it, and the check used to ask the module the import named. An
+/// overload set re-exported through a barrel — drizzle's `sqlite-core`
+/// publishes `integer` with `export * from "./integer.js"` — read as a
+/// union-typed value and took the every-member arity rule: "expected at
+/// least 2 argument(s)" on `integer("id")`.
+test "mtsc graph checker sees an overload set through a barrel re-export" {
+  let diagnostics = check_module_graph({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import { integer, int } from \"./index\";\nexport const a = integer(\"id\");\nexport const b = int(\"id\");",
+        allowJsx: false,
+      },
+      {
+        path: "/src/index.d.ts",
+        source: "export * from \"./integer\";\nexport { integer as int } from \"./integer\";",
+        allowJsx: false,
+      },
+      {
+        path: "/src/integer.d.ts",
+        source: "export declare function integer(): number;\nexport declare function integer(name: string, config: { mode: string }): number;\nexport declare function integer(name: string): number;",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./index",
+        targetPath: "/src/index.d.ts",
+      },
+      {
+        importerPath: "/src/index.d.ts",
+        moduleSpecifier: "./integer",
+        targetPath: "/src/integer.d.ts",
+      },
+    ],
+  })
+  assert_eq(diagnostics, "")
+}
+
+///|
+/// A module the CLI marks as context — a dependency's `.d.ts` — is read for
+/// its declarations and not checked itself.
+test "mtsc graph checker does not report inside a context-only module" {
+  let graph : MtscModuleGraph = {
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import { v } from \"./lib\";\nexport const s: string = v;",
+        allowJsx: false,
+      },
+      {
+        path: "/src/lib.d.ts",
+        source: "export declare const v: number;\nexport declare const w: Undeclared;",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./lib",
+        targetPath: "/src/lib.d.ts",
+      },
+    ],
+  }
+  let all = collect_module_graph_issues(graph)
+  assert_true(all.iter().any(fn(i) { i.modulePath == "/src/lib.d.ts" }))
+  let context = collect_module_graph_issues(graph, context_only={
+    "/src/lib.d.ts": (),
+  })
+  assert_false(context.iter().any(fn(i) { i.modulePath == "/src/lib.d.ts" }))
+  // Its declarations still type the importer.
+  assert_true(
+    context
+    .iter()
+    .any(fn(i) {
+      i.modulePath == "/src/entry.ts" &&
+      i.message.contains("expected `string` but got `number`")
+    }),
+  )
+}
+
+///|
+/// An imported class read as a VALUE is its constructor, not an instance.
+/// It used to arrive as the INSTANCE type, so redi's `injector.add([Svc])`
+/// compared `Svc[]` against `[Ctor<T>]` and reported a line tsc accepts.
+/// A class declared in the same file is `any` as a value, and the importer
+/// now sees the same.
+test "mtsc graph checker does not type an imported class value as an instance" {
+  let lib = "export class Svc { run(): void {} }"
+  assert_eq(
+    graph2(
+      "import { Svc } from \"./lib\";\ndeclare function add(dep: [new () => unknown]): void;\nadd([Svc]);\nexport const s: Svc = new Svc();",
+      lib,
+    ),
+    "",
+  )
+  // Its instance type is still the class's.
+  assert_true(
+    graph2(
+      "import { Svc } from \"./lib\";\nexport const n: number = new Svc();", lib,
+    ).contains("expected `number`"),
+  )
+}
+
+///|
+/// An overload set's IMPLEMENTATION is not callable when overload
+/// signatures exist. Imported with the rest it was the one non-generic
+/// member, tried first and accepting any call, so effect's `pipe(a, f)`
+/// came back `unknown` from `pipe(a: unknown, …): unknown`.
+test "mtsc graph checker leaves an imported overload set's implementation out" {
+  let lib = "export function pipe<A>(a: A): A;\nexport function pipe<A, B>(a: A, ab: (a: A) => B): B;\nexport function pipe(a: unknown, ab?: (a: unknown) => unknown): unknown { return ab ? ab(a) : a; }"
+  assert_eq(
+    graph2(
+      "import { pipe } from \"./lib\";\nexport const n: number = pipe(1, (x: number) => x + 1);",
+      lib,
+    ),
+    "",
+  )
+  // The one-argument overload solves `A` from the argument, so a wrong
+  // use reports. (`B` from a callback's return is not inferred, so the
+  // two-argument form is `any` — a MISS, not a finding.)
+  assert_true(
+    graph2(
+      "import { pipe } from \"./lib\";\nexport const s: string = pipe(1);", lib,
+    ).contains("expected `string` but got `number`"),
+  )
+}
+
+///|
+/// The implementation of an overload set is its LAST declaration, which
+/// the parser marks (`<fn-impl:NAME>`); an empty body cannot tell it from
+/// a signature by statement count, and kept callable it accepted any
+/// argument through its `any` parameter.
+test "mtsc graph checker leaves an empty-bodied implementation out" {
+  let lib = "export function f(x: string): void;\nexport function f(x: any): void {}\n"
+  assert_true(
+    graph2("import { f } from \"./lib\";\nf(123);", lib).contains(
+      "expected `string` but got `number`",
+    ),
+  )
+  assert_eq(graph2("import { f } from \"./lib\";\nf(\"s\");", lib), "")
+}
+
+///|
+/// A generic declared function's rest arguments are judged against the
+/// rest element when it mentions no type parameter.
+test "mtsc graph checker checks an imported generic function's rest arguments" {
+  let dts = "export declare function f<T>(x: T, ...rest: string[]): void;\n"
+  assert_true(
+    graph_dts("import { f } from \"./lib\";\nf(0, 1);", dts).contains(
+      "expected `string` but got `number`",
+    ),
+  )
+  assert_eq(
+    graph_dts("import { f } from \"./lib\";\nf(0, \"a\", \"b\");", dts),
+    "",
+  )
+}

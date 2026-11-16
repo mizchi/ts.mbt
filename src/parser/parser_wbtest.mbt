@@ -1843,6 +1843,86 @@ test "parser: parse declare class in module" {
 }
 
 ///|
+/// Any IdentifierName is a member name. The `declare class` member parser
+/// kept its own list of the reserved words it accepted, and it was missing
+/// the type-keyword tokens: zod v3's `ZodNumber.int()`, which storybook
+/// bundles into a `dist/chunk-*.d.ts`, failed to parse.
+test "parser: a declare class member may be named by any keyword" {
+  let src =
+    #|declare class A {
+    #|  int(): number;
+    #|  number: string;
+    #|  string(): void;
+    #|  boolean: number;
+    #|  null: 1;
+    #|  true: 2;
+    #|  false: 3;
+    #|  of(): void;
+    #|  return(): void;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let names : Array[String] = []
+  for m in module_.classes[0].methods {
+    names.push(m.name)
+  }
+  for name in ["int", "string", "of", "return"] {
+    assert_true(names.contains(name))
+  }
+}
+
+///|
+/// A type argument list whose first argument is a generic function type
+/// opens with `<<`, which the lexer scans as a shift. effect's
+/// `FiberSet.runtime` is written that way; a shift stays a shift.
+test "parser: a type argument may open with a generic function type" {
+  let src =
+    #|interface Box<F> { f: F }
+    #|declare const b: Box<<T extends string>(x: T) => T>;
+    #|declare const c: Box<<T, U>(x: T, y: U) => U>;
+    #|declare const d: Box<<T>() => T>;
+    #|declare const e: Box<<const T>(x: T) => T>;
+    #|export const s = 1 << 2;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  // `b`, `c`, `d`, `e` and the exported `s`.
+  assert_eq(module_.values.length(), 5)
+  match module_.values[0].type_ {
+    Applied("Box", [GenericFunc(_, _, _)]) => ()
+    t => fail("expected a generic function type argument, got \{t}")
+  }
+}
+
+///|
+/// A `declare class` member's rest flags are recorded beside its
+/// parameters, where they used to be read and discarded.
+test "parser: a declare class member records its rest parameters" {
+  let src =
+    #|declare class C {
+    #|  constructor(a: number, ...b: string[]);
+    #|  m(x: number, ...rest: string[]): void;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let c = module_.classes[0]
+  assert_eq(c.constructor_param_is_rest, [false, true])
+  assert_eq(c.methods[0].param_is_rest, [false, true])
+}
+
+///|
 test "parser: substitute declare class method generic bounds" {
   let src =
     #|interface Events {
@@ -8609,4 +8689,41 @@ test "parser: a multi-line JSX attribute inside a namespace is not TS1002" {
     "namespace N {\n  export const s = \"a\nb\";\n}\n", true,
   ).parse_module()
   assert_true(unterminated(bad) > 0)
+}
+
+///|
+/// The `<<` split runs on a lookahead (`<< Name >`), and `1 as N << shift
+/// > 0` passes it without being a type argument list. When no list closes,
+/// the token is put back and the shift and the comparison parse as before;
+/// the skip used to consume them silently, and the emit lost them.
+test "parser: a split << that closes no type argument list is a shift again" {
+  let src =
+    #|type N = number;
+    #|declare const shift: number;
+    #|export const s = 1 as N << shift > 0;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  fn has_shl(e : @ast.TsExpr) -> Bool {
+    match e {
+      BinOp(Shl, _, _) => true
+      BinOp(_, l, r) => has_shl(l) || has_shl(r)
+      As(x, _) => has_shl(x)
+      _ => false
+    }
+  }
+
+  assert_true(
+    module_.top_level_stmts
+    .iter()
+    .any(fn(st) {
+      match st {
+        Const(_, _, e) => has_shl(e)
+        _ => false
+      }
+    }),
+  )
 }
