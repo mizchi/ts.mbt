@@ -153,6 +153,21 @@ check("a root name containing a newline survives the host boundary", () => {
   );
 });
 
+if (WASM) {
+  check("wasm: a root name containing NUL is refused, not split", () => {
+    const service = createLanguageService(
+      createMemoryHost({ "/p/a\u0000b.ts": "export const s: string = 1;" }),
+    );
+    let message = "";
+    try {
+      service.getProgramDiagnostics();
+    } catch (error) {
+      message = String(error && error.message);
+    }
+    assert(message.includes("contains NUL"), `expected a NUL refusal, got ${JSON.stringify(message)}`);
+  });
+}
+
 check("memory host: diagnostics carry no fabricated span", () => {
   // The API documents that `start` / `length` are absent because the
   // checker has no offsets. If they ever appear, either the checker

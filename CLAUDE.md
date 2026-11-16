@@ -4910,7 +4910,10 @@ product surfaces now.
       the one character no POSIX or Windows path can contain, and a JSON
       array would have needed a `moonbitlang/core/json` import that is
       unused on two of the three targets. The harness case for it fails
-      only when both sides are put back to the newline protocol.
+      only when both sides are put back to the newline protocol. A host's
+      VIRTUAL name could still hold a NUL, and splitting it would silently
+      check two files that do not exist, so the wasm facade refuses such a
+      root with a `TypeError` and the `.d.ts` states the contract.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

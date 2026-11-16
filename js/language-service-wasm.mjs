@@ -129,10 +129,21 @@ export async function loadLanguageService(source) {
         return "";
       },
       // NUL-separated: the one character no path can contain, so a root
-      // whose name holds a newline survives the crossing.
+      // whose name holds a newline survives the crossing. A host's VIRTUAL
+      // name could still hold one, and splitting it would silently check
+      // two files that do not exist, so such a name is refused instead.
       getScriptFileNames: () => {
         const names = current.getScriptFileNames();
-        return Array.isArray(names) ? names.map(String).join("\u0000") : "";
+        if (!Array.isArray(names)) return "";
+        const roots = names.map(String);
+        for (const name of roots) {
+          if (name.includes("\u0000")) {
+            throw new TypeError(
+              `root file name ${JSON.stringify(name)} contains NUL, which the wasm-gc build cannot pass across its boundary`,
+            );
+          }
+        }
+        return roots.join("\u0000");
       },
       getCurrentDirectory: () => {
         if (typeof current.getCurrentDirectory !== "function") return ".";
