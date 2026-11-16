@@ -26273,7 +26273,9 @@ fn predicate_narrowing_source(
         Union(parts) => {
           let members : Array[@ast.TsType] = []
           for p in parts {
-            collect_narrowing_members(resolver, p, members, 0)
+            if !collect_narrowing_members(resolver, p, members, 0) {
+              return cur
+            }
           }
           if members.iter().all(is_decidable_narrowing_member) {
             Union(members)
@@ -26288,32 +26290,61 @@ fn predicate_narrowing_source(
 }
 
 ///|
+/// The most union members `collect_narrowing_members` will produce. The
+/// depth bound alone did not bound the OUTPUT: an alias DAG that unions
+/// several aliases of the level below at each level grows as `b^depth`, so
+/// fan-out 4 produced 16,384 entries at six levels and 262,144 at the
+/// depth limit. A real alias union is far below this, and past it both
+/// callers fall back to the type as written.
+const NARROWING_MEMBER_BUDGET : Int32 = 1024
+
+///|
 /// Push `t` into `out` with an alias member expanded and a nested union
-/// flattened. Bounded, because an alias can name itself through a union.
+/// flattened. The depth bound stops an alias that names itself through a
+/// union, and `NARROWING_MEMBER_BUDGET` stops one whose expansion fans
+/// out. Returns `false` when the budget ran out, in which case `out` is
+/// partial and the caller must not use it.
 fn collect_narrowing_members(
   resolver : Resolver,
   t : @ast.TsType,
   out : Array[@ast.TsType],
   depth : Int32,
-) -> Unit {
+) -> Bool {
+  if out.length() >= NARROWING_MEMBER_BUDGET {
+    return false
+  }
   if depth > 8 {
     out.push(t)
-    return
+    return true
   }
   match t {
-    Union(parts) =>
+    Union(parts) => {
       for p in parts {
-        collect_narrowing_members(resolver, p, out, depth + 1)
+        if !collect_narrowing_members(resolver, p, out, depth + 1) {
+          return false
+        }
       }
+      true
+    }
     Named(name) | Applied(name, _) if resolver.type_aliases.contains(name) =>
       match resolver.unwrap(t) {
-        Union(parts) =>
+        Union(parts) => {
           for p in parts {
-            collect_narrowing_members(resolver, p, out, depth + 1)
+            if !collect_narrowing_members(resolver, p, out, depth + 1) {
+              return false
+            }
           }
-        q => out.push(q)
+          true
+        }
+        q => {
+          out.push(q)
+          true
+        }
       }
-    _ => out.push(t)
+    _ => {
+      out.push(t)
+      true
+    }
   }
 }
 
@@ -26398,7 +26429,9 @@ fn predicate_comparison_target(
   match target {
     Named(name) | Applied(name, _) if resolver.type_aliases.contains(name) => {
       let members : Array[@ast.TsType] = []
-      collect_narrowing_members(resolver, target, members, 0)
+      if !collect_narrowing_members(resolver, target, members, 0) {
+        return target
+      }
       if members.is_empty() ||
         !members.iter().all(is_decidable_narrowing_member) {
         target
