@@ -372,3 +372,90 @@ test "a guard's recorded subject position decides an ambiguous call" {
     [],
   )
 }
+
+///|
+/// A first parameter typed through an alias of `unknown` is still the
+/// subject: read raw, `Input` accepted nothing, the second parameter
+/// accepted nothing either, and narrowing was skipped.
+test "a guard's aliased first parameter stays its subject" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/main.ts", "type Input = unknown;\ndeclare const guards: { isText(value: Input, flag: boolean): value is string; isText2(value: Input, other: unknown): value is string };\nexport function f(value: Input, other: unknown): string {\n  if (guards.isText(value, true)) {\n    return value.toUpperCase();\n  }\n  if (guards.isText2(value, other)) {\n    return value.toUpperCase();\n  }\n  return \"\";\n}\ninterface Wrapper<T> { w: T }\ninterface Box<T> extends Wrapper<T> { b: T }\ndeclare const g: { isBox<T>(x: Wrapper<T>, flag: boolean): x is Box<T> };\nexport function f3(x: Wrapper<number>): number {\n  if (g.isBox(x, true)) {\n    return x.b;\n  }\n  return 0;\n}",
+        ),
+      ],
+      [],
+    ),
+    [],
+  )
+}
+
+///|
+/// When the relation proves no parameter accepts the target, the FIRST
+/// parameter stays the subject. `{}` against `string` and an alias `P`
+/// against `P & { q: string }` are both legal predicates in tsc, and
+/// neither is provable here, so narrowing nothing would report the
+/// then-branch reads.
+test "a guard whose subject the relation cannot prove keeps the first parameter" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/main.ts", "declare const g: { isS(x: {}, flag: boolean): x is string };\nexport function f(x: {}): number {\n  if (g.isS(x, true)) {\n    return x.length;\n  }\n  return 0;\n}\ntype P = { a: number };\ntype Q = P & { q: string };\ndeclare const h: { isQ(x: P, flag: boolean): x is Q };\nexport function f2(x: P): string {\n  if (h.isQ(x, true)) {\n    return x.q;\n  }\n  return \"\";\n}",
+        ),
+      ],
+      [],
+    ),
+    [],
+  )
+}
+
+///|
+/// A namespace holding only a nested TYPE namespace has no value, so a
+/// `declare const` of the same name keeps its type. The nested
+/// namespace's lowered `var` counted as a value, and the namespace's
+/// empty object shadowed `N: number`.
+test "a namespace of nested type namespaces does not shadow a const" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/n.d.ts", "export declare const N: number;\nexport declare namespace N { namespace Types { interface I {} } }",
+        ),
+        (
+          "/src/main.ts", "import { N } from \"./n\";\nexport const ok: number = N;\nexport const bad: string = N;",
+        ),
+      ],
+      [("/src/main.ts", "./n", "/src/n.d.ts")],
+    ),
+    ["top-level > binding `bad` init :: expected `string` but got `number`"],
+  )
+}
+
+///|
+/// A declaration file's NAMED import of a namespace export (`import {
+/// Models } from "./barrel"` of `export * as Models`) resolves its
+/// `Models.I` for an importer too.
+test "declaration file: a named namespace import's qualified names resolve" {
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/models.d.ts", "export interface I { x: number }"),
+        ("/src/barrel.d.ts", "export * as Models from \"./models\";"),
+        (
+          "/src/lib.d.ts", "import { Models } from \"./barrel\";\nexport declare function mk(): Models.I;",
+        ),
+        (
+          "/src/main.ts", "import { mk } from \"./lib\";\nexport const ok: number = mk().x;\nexport const bad: string = mk().x;",
+        ),
+      ],
+      [
+        ("/src/barrel.d.ts", "./models", "/src/models.d.ts"),
+        ("/src/lib.d.ts", "./barrel", "/src/barrel.d.ts"),
+        ("/src/main.ts", "./lib", "/src/lib.d.ts"),
+      ],
+    ),
+    ["top-level > binding `bad` init :: expected `string` but got `number`"],
+  )
+}

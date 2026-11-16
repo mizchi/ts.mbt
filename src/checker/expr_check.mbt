@@ -13173,12 +13173,9 @@ fn lib_object_type_into_primitive(
     !resolver.type_aliases.contains(name) &&
     !resolver.enums.contains(name) &&
     !is_lib_global_type(name) &&
+    primitive_only_type(resolver.unwrap(expected)) &&
     resolver.lookup_field(src, "then") is None {
-    return if primitive_only_type(resolver.unwrap(expected)) {
-      Some(src)
-    } else {
-      None
-    }
+    return Some(src)
   }
   let lib_object = match name {
     "Promise"
@@ -26188,12 +26185,14 @@ fn predicate_subject_index(
   params : Array[@ast.TsType],
   target : @ast.TsType,
 ) -> Int32? {
+  // Through the resolver: `isText(value: Input, …)` with `type Input =
+  // unknown` takes anything, and read raw it took nothing.
   fn accepts(p : @ast.TsType) -> Bool {
-    match p {
+    match resolver.unwrap(p) {
       Any | Unknown => true
-      _ =>
-        is_assignable_to(target, p) ||
-        is_structurally_assignable_named(target, p, resolver)
+      q =>
+        is_assignable_to(target, q) ||
+        is_structurally_assignable_named(target, q, resolver)
     }
   }
 
@@ -26209,7 +26208,13 @@ fn predicate_subject_index(
       found = Some(i)
     }
   }
-  found
+  // No parameter accepts the target as far as this relation can tell,
+  // which says the relation is short, not that the guard is malformed:
+  // keep the first argument, the answer before any of this.
+  match found {
+    Some(_) => found
+    None => Some(0)
+  }
 }
 
 ///|

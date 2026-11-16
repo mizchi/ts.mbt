@@ -312,7 +312,7 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
     }
   }
   for value in module_.values {
-    if value.name == name {
+    if value.name == name && !is_namespace_lowering_value(module_, value) {
       match value.type_ {
         Any =>
           match arrow_const_predicate_type(module_, name) {
@@ -504,10 +504,26 @@ fn callable_with_members(
 }
 
 ///|
+/// A `values` entry that is the `var N = N || {}` a nested namespace is
+/// lowered to rather than a declaration of the body's own: `any`, under
+/// the name of a namespace the body declares. Counted as a value, a
+/// namespace holding only `namespace Types { interface I {} }` read as
+/// instantiated, and its empty object shadowed a `declare const` of the
+/// same name. A real `const Types: T` beside a type-only `namespace
+/// Types` keeps its written type, so it is not mistaken for one.
+fn is_namespace_lowering_value(
+  body : @ast.TsModule,
+  value : @ast.TsValueDecl,
+) -> Bool {
+  value.type_ is Any &&
+  body.namespaces.iter().any(fn(n) { n.name == value.name })
+}
+
+///|
 /// Whether a namespace body declares anything that exists at run time,
 /// which is what gives the namespace a value.
 fn namespace_is_instantiated(body : @ast.TsModule) -> Bool {
-  !body.values.is_empty() ||
+  body.values.iter().any(fn(v) { !is_namespace_lowering_value(body, v) }) ||
   !body.funcs.is_empty() ||
   !body.imports.is_empty() ||
   !body.classes.is_empty() ||
@@ -1632,6 +1648,35 @@ fn graph_declaration_namespace_aliases(
           out.push((ns + "." + e.0, e.1, e.2))
         }
       None => ()
+    }
+  }
+  // A NAMED import of a namespace export (`import { Models } from
+  // "./barrel"` of `export * as Models`) binds the same namespace by
+  // another route, the case `graph_namespace_type_aliases` handles for
+  // the checked module.
+  for imp in module_.module_block.imports {
+    if imp.type_only {
+      continue
+    }
+    let target = match
+      graph_target_module(module_, imp.module_spec, modules, edges) {
+      Some(t) => t
+      None => continue
+    }
+    for index, binding in imp.named_bindings {
+      let type_only = index < imp.named_type_only.length() &&
+        imp.named_type_only[index]
+      if type_only {
+        continue
+      }
+      let (imported, local_name) = binding
+      match graph_namespace_export_target(target, imported, modules, edges, 0) {
+        Some(ns_target) =>
+          for e in graph_exposed_types(ns_target, modules, edges) {
+            out.push((local_name + "." + e.0, e.1, e.2))
+          }
+        None => ()
+      }
     }
   }
   graph_declaration_namespace_alias_cache[module_.source.path] = out
