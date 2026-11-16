@@ -1827,8 +1827,12 @@ fn graph_with_ambient_modules(
       routed.push(e)
     }
   }
+  // A body's own import of a module a shorthand declares is untyped too:
+  // the copied edge would read the file the resolver found instead.
   for e in body_edges {
-    routed.push(e)
+    if !untyped.contains(e.importerPath + "\u{0}" + e.moduleSpecifier) {
+      routed.push(e)
+    }
   }
   (modules, routed, virtual_paths, untyped)
 }

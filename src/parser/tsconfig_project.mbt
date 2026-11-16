@@ -358,7 +358,13 @@ pub fn triple_slash_references(source : String) -> Array[(String, String)] {
   let mut i = 0
   while i < n {
     let c = source[i]
-    if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\u{FEFF}' {
+    if c == ' ' ||
+      c == '\t' ||
+      c == '\n' ||
+      c == '\r' ||
+      c == '\u{2028}' ||
+      c == '\u{2029}' ||
+      c == '\u{FEFF}' {
       i = i + 1
       continue
     }

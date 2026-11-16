@@ -69,9 +69,12 @@ export interface LanguageServiceHost {
    * It is applied to the BUILT-IN resolution's answer for a bare specifier
    * (a package) only — TypeScript realpaths a package file and not a
    * relative one. A path this host returns from `resolveModuleNames` is
-   * used as given (normalized, never passed through `realpath`), as
-   * TypeScript trusts the paths `resolveModuleNames` returns, so a host
-   * that returns its own paths canonicalizes them itself.
+   * never passed through `realpath`, as TypeScript trusts the paths
+   * `resolveModuleNames` returns, so a host that returns its own paths
+   * canonicalizes them itself. Such a path IS normalized lexically (empty,
+   * `.` and `..` segments are removed), so a URL-like name such as
+   * `https://cdn/x.d.ts` comes back as `https:/cdn/x.d.ts`: key the host's
+   * files by the normalized spelling.
    */
   realpath?(path: string): string;
   /**

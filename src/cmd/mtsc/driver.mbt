@@ -241,7 +241,7 @@ async fn mtsc_typecheck_entries(
 /// The type roots: `typeRoots` as configured, or every `node_modules/@types`
 /// from the project's directory up, which is TypeScript's default
 /// (`getDefaultTypeRoots`).
-async fn mtsc_type_roots(opts : MtscOptions) -> Array[String] {
+async fn mtsc_type_roots(opts : MtscOptions, cwd? : String) -> Array[String] {
   match opts.type_roots {
     Some(roots) => return roots
     None => ()
@@ -257,16 +257,37 @@ async fn mtsc_type_roots(opts : MtscOptions) -> Array[String] {
   // `@types/node` — was never asked. TypeScript walks the ABSOLUTE
   // directory, so this does too.
   if !dir.has_prefix("/") {
-    dir = mtsc_normalize(mtsc_join_path(@parser.canonical_file_path("."), dir))
+    let base = match cwd {
+      Some(c) => c
+      None => @parser.canonical_file_path(".")
+    }
+    dir = mtsc_normalize(mtsc_join_path(base, dir))
   }
-  while true {
-    let candidate = mtsc_normalize(mtsc_join_path(dir, "node_modules/@types"))
+  for candidate in mtsc_type_root_candidates(dir) {
     let is_dir = (@fs.kind(candidate) catch { _ => @fs.FileKind::Unknown })
       is @fs.FileKind::Directory
     if is_dir {
       out.push(candidate)
     }
+  }
+  out
+}
+
+///|
+/// `node_modules/@types` in `dir` and in every directory above it, nearest
+/// first, `/` included: `mtsc_dirname("/packages")` is `""`, which ended
+/// the walk one level short of a workspace directly under the root.
+fn mtsc_type_root_candidates(start : String) -> Array[String] {
+  let out : Array[String] = []
+  let mut dir = start
+  while true {
+    out.push(mtsc_normalize(mtsc_join_path(dir, "node_modules/@types")))
     let parent = mtsc_dirname(dir)
+    let parent = if parent == "" && dir.has_prefix("/") && dir != "/" {
+      "/"
+    } else {
+      parent
+    }
     if parent == dir || parent == "" || parent == "." {
       break
     }
