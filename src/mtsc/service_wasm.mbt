@@ -41,8 +41,10 @@ fn wasm_host_resolve_module_name(
 ) -> String = "mtsc_host" "resolveModuleName"
 
 ///|
-/// The roots, one per line: a path cannot contain a newline, and a
-/// string crosses the boundary where an array would need a protocol.
+/// The roots, separated by NUL. A string crosses the boundary where an
+/// array would need a protocol, and NUL is the one character no POSIX or
+/// Windows path can contain, so this is lossless where a newline was not:
+/// a POSIX path may contain a newline.
 fn wasm_host_script_file_names() -> String = "mtsc_host" "getScriptFileNames"
 
 ///|
@@ -73,9 +75,9 @@ impl MtscHost for MtscWasmHost with fn read_file(_, path) {
 ///|
 impl MtscHost for MtscWasmHost with fn script_file_names(_) {
   let out : Array[String] = []
-  for line in wasm_host_script_file_names().split("\n") {
-    if line.length() > 0 {
-      out.push(line.to_owned())
+  for name in wasm_host_script_file_names().split("\u{0}") {
+    if name.length() > 0 {
+      out.push(name.to_owned())
     }
   }
   out

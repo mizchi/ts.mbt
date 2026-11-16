@@ -171,20 +171,6 @@ fn[H : MtscHost] mtsc_resolve_import(
 }
 
 ///|
-/// `mtsc_resolve_import`, as the loader reads it: a path or nothing.
-fn[H : MtscHost] mtsc_resolve_module(
-  host : H,
-  cache : MtscSourceCache,
-  importer : String,
-  specifier : String,
-) -> String? {
-  match mtsc_resolve_import(host, cache, importer, specifier) {
-    Found(path) => Some(path)
-    Skipped | NotFound => None
-  }
-}
-
-///|
 /// A root file name made absolute-ish against the host's directory.
 ///
 /// A root is allowed to be written relative (`"src/main.ts"`), and the

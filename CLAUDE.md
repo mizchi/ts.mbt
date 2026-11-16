@@ -4880,6 +4880,37 @@ product surfaces now.
     not build for `wasm-gc`. Three of the async resolver's helpers carry
     `#warnings("-unused_async")`: `mizchi/x/fs` is synchronous on wasm-gc
     alone.
+  - **Review found five more defects, and two of them predate this batch.**
+    - **A package target could re-enter its own manifest forever.**
+      `{ "types": "./" }` resolved the target back to the package
+      directory, which read the same `package.json` again. The async
+      walk did this on main too, and a mutation proves it: without the
+      fix the test binary dies with SIGSEGV. Both walks now read a
+      directory reached through a `types` / `main` / `exports` /
+      `imports` target by its `index` only, never by its manifest. That
+      is TypeScript's own rule ("Don't do package.json lookup
+      recursively, because Node.js' package lookup doesn't"), so a
+      nested `package.json` under a `types` directory is ignored as tsc
+      ignores it.
+    - **`from "."` stopped resolving in the library.** The deleted
+      candidate table treated `.` and `..` as relative, and the parser
+      resolver it delegates to now did not. That was a regression in
+      this batch. Both walks now treat them as relative, and as a
+      DIRECTORY only, as a trailing `/` is too. So `import "."` from
+      `pkg/main.ts` reads `pkg/index.ts` and never a sibling `pkg.ts`,
+      which is tsc's `normalizePathForCJSResolution`.
+    - **A relative import the host skipped was reported as missing.**
+      `External` leaves no edge, exactly like a file that is not there,
+      so the loader now records skipped imports and
+      `graph_import_globals` stays silent for those alone.
+    - **`MtscMemoryHost` had no directory `.`.** Its prefix test looked
+      for `./`, so with relative keys `import "."` found no barrel.
+    - **The wasm boundary joined root names with a newline.** A POSIX
+      path may contain one, so the names are NUL-separated now. NUL is
+      the one character no POSIX or Windows path can contain, and a JSON
+      array would have needed a `moonbitlang/core/json` import that is
+      unused on two of the three targets. The harness case for it fails
+      only when both sides are put back to the newline protocol.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

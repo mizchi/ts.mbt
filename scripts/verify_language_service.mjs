@@ -137,6 +137,22 @@ check("memory host: the program includes files reached only by import", () => {
   assert(files.includes("/p/score.ts"), "transitive file missing from program");
 });
 
+check("a root name containing a newline survives the host boundary", () => {
+  // The wasm build used to join root names with "\n", which split this
+  // one in two: the file was never read, and two missing files were
+  // reported instead of its type error.
+  const name = "/p/line\nbreak.ts";
+  const service = createLanguageService(
+    createMemoryHost({ [name]: "export const s: string = 1;" }),
+  );
+  const diagnostics = service.getProgramDiagnostics();
+  assertEqual(
+    diagnostics.map((d) => [d.file, d.source]),
+    [[name, "semantic"]],
+    `wrong diagnostics: ${JSON.stringify(diagnostics)}`,
+  );
+});
+
 check("memory host: diagnostics carry no fabricated span", () => {
   // The API documents that `start` / `length` are absent because the
   // checker has no offsets. If they ever appear, either the checker

@@ -90,6 +90,10 @@ priv struct MtscProgram {
   // Reported as diagnostics rather than dropped, because a root that
   // silently does not exist is a program that silently checks nothing.
   missing_files : Array[String]
+  // Imports the host answered `External` for, keyed
+  // `importer + "\u{0}" + specifier`. They have no edge, and without
+  // this a RELATIVE one read as a missing local module.
+  skipped_imports : Map[String, Unit]
 }
 
 ///|
@@ -124,6 +128,7 @@ fn[H : MtscHost] mtsc_load_program(host : H) -> MtscProgram {
   let edges : Array[MtscModuleEdge] = []
   let parse_errors : Array[(String, String)] = []
   let missing_files : Array[String] = []
+  let skipped_imports : Map[String, Unit] = Map([])
   let seen : Map[String, Bool] = Map([])
   let pending : Array[String] = []
 
@@ -164,8 +169,8 @@ fn[H : MtscHost] mtsc_load_program(host : H) -> MtscProgram {
     }
     modules.push(parsed)
     for specifier in mtsc_module_specifiers(parsed) {
-      match mtsc_resolve_module(host, cache, path, specifier) {
-        Some(target) => {
+      match mtsc_resolve_import(host, cache, path, specifier) {
+        Found(target) => {
           edges.push({
             importerPath: path,
             moduleSpecifier: specifier,
@@ -176,16 +181,19 @@ fn[H : MtscHost] mtsc_load_program(host : H) -> MtscProgram {
             pending.push(target)
           }
         }
+        // The host said not to follow it. No edge, and no diagnostic
+        // either, which `graph_import_globals` can only know if told.
+        Skipped => skipped_imports[path + "\u{0}" + specifier] = ()
         // Unresolved. No edge, and deliberately no diagnostic here:
         // `graph_import_globals` already reports an unresolvable LOCAL
         // specifier and stays silent on a bare one, so a rule written
         // here would be a second copy of that judgement — and the two
         // could only disagree.
-        None => ()
+        NotFound => ()
       }
     }
   }
-  { modules, edges, parse_errors, missing_files, }
+  { modules, edges, parse_errors, missing_files, skipped_imports, }
 }
 
 ///|
@@ -271,6 +279,7 @@ pub fn[H : MtscHost] get_program_diagnostics(host : H) -> Array[MtscDiagnostic] 
     program.edges,
     issues,
     context_only=mtsc_context_only(host, program),
+    skipped_imports=program.skipped_imports,
   )
   for issue in issues {
     out.push({

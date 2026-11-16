@@ -1137,10 +1137,14 @@ fn graph_type_modules(
 }
 
 ///|
+/// `skipped_imports` holds the imports a host chose not to follow, keyed
+/// `importer + "\u{0}" + specifier`: they have no edge by design, so a
+/// relative one is not reported as a missing local module.
 fn graph_import_globals(
   module_ : ParsedMtscModule,
   modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
+  skipped_imports : Map[String, Unit],
 ) -> (Array[(String, @ast.TsType)], Array[String]) {
   let globals : Array[(String, @ast.TsType)] = []
   let diagnostics : Array[String] = []
@@ -1149,7 +1153,10 @@ fn graph_import_globals(
       find_graph_target(edges, module_.source.path, import_.module_spec) {
       Some(path) => path
       None => {
-        if is_local_module_specifier(import_.module_spec) {
+        if is_local_module_specifier(import_.module_spec) &&
+          !skipped_imports.contains(
+            module_.source.path + "\u{0}" + import_.module_spec,
+          ) {
           diagnostics.push(
             "cannot resolve local module `\{import_.module_spec}`",
           )
@@ -1402,6 +1409,7 @@ fn collect_parsed_graph_issues(
   edges : Array[MtscModuleEdge],
   issues : Array[MtscGraphIssue],
   context_only~ : Map[String, Unit] = Map([]),
+  skipped_imports~ : Map[String, Unit] = Map([]),
 ) -> Unit {
   // Ambient declaration files are part of every module's scope: that is
   // what makes `declare const MyGlobal: …` in an `env.d.ts` visible from
@@ -1435,7 +1443,7 @@ fn collect_parsed_graph_issues(
       continue
     }
     let (globals, import_diagnostics) = graph_import_globals(
-      module_, parsed_modules, edges,
+      module_, parsed_modules, edges, skipped_imports,
     )
     for entry in ambient_globals {
       globals.push(entry)

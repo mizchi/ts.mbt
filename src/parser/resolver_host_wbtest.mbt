@@ -192,6 +192,17 @@ async test "parser: the injected-host resolver agrees on a tree built to separat
     ("node_modules/@scoped/p/package.json", "{\"main\":\"i.js\"}"),
     ("node_modules/@scoped/p/i.js", ""),
     ("node_modules/@types/scoped__p/index.d.ts", ""),
+    ("src/index.ts", ""),
+    ("src.ts", ""),
+    ("src/dirpkg/index.ts", ""),
+    ("src/dirpkg/main.ts", ""),
+    ("src/dirpkg.ts", ""),
+    ("node_modules/selfref/package.json", "{\"types\":\"./\"}"),
+    ("node_modules/selfref/index.d.ts", ""),
+    ("node_modules/nested/package.json", "{\"types\":\"./lib\"}"),
+    ("node_modules/nested/lib/package.json", "{\"types\":\"other.d.ts\"}"),
+    ("node_modules/nested/lib/other.d.ts", ""),
+    ("node_modules/nested/lib/index.d.ts", ""),
     ("packages/ws/package.json", "{\"types\":\"index.d.ts\"}"),
     ("packages/ws/index.d.ts", ""),
     ("packages/node_modules/shared/index.d.ts", ""),
@@ -212,7 +223,13 @@ async test "parser: the injected-host resolver agrees on a tree built to separat
   snapshot_walk(host, root)
   let main = root + "/src/main.ts"
   let linked = root + "/node_modules/ws/index.d.ts"
+  let dir_main = root + "/src/dirpkg/main.ts"
   let cases : Array[(String, String)] = [
+    (dir_main, "."),
+    (dir_main, "./"),
+    (dir_main, ".."),
+    (main, "selfref"),
+    (main, "nested"),
     (main, "order"),
     (main, "jsmain"),
     (main, "onlyjs"),
@@ -237,6 +254,28 @@ async test "parser: the injected-host resolver agrees on a tree built to separat
     resolve_type_module_specifier(linked, "shared")
     .unwrap_or("")
     .has_suffix("/packages/node_modules/shared/index.d.ts"),
+  )
+  // `.`, `./` and `..` name a DIRECTORY, so the sibling `dirpkg.ts` and
+  // `src.ts` are never read for them.
+  assert_eq(
+    resolve_type_module_specifier(dir_main, "."),
+    Some(root + "/src/dirpkg/index.ts"),
+  )
+  assert_eq(
+    resolve_type_module_specifier(dir_main, ".."),
+    Some(root + "/src/index.ts"),
+  )
+  // A package target that names a directory reads that directory's index,
+  // never its manifest: `{ "types": "./" }` would otherwise re-enter the
+  // manifest that named it forever, and a nested `package.json` under a
+  // `types` directory is ignored, as TypeScript ignores it.
+  assert_eq(
+    resolve_type_module_specifier(main, "selfref"),
+    Some(root + "/node_modules/selfref/index.d.ts"),
+  )
+  assert_eq(
+    resolve_type_module_specifier(main, "nested"),
+    Some(root + "/node_modules/nested/lib/index.d.ts"),
   )
   for case in cases {
     let (base, specifier) = case

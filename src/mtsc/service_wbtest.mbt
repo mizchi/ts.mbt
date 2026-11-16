@@ -558,3 +558,40 @@ test "language service: the host's own resolution answers first" {
   assert_eq(skipped.resolvedFileName, "")
   assert_true(skipped.isExternal)
 }
+
+///|
+/// A RELATIVE specifier the host skips has no edge, exactly like a missing
+/// one, so `graph_import_globals` used to report it as an unresolvable
+/// local module. Skipping is not a failure. A relative import nothing
+/// resolves is still reported beside it.
+test "language service: a host-skipped relative import is not a missing module" {
+  let host : MappingHost = {
+    inner: {
+      files: {
+        "/p/entry.ts": "import { rt } from \"./runtime\";\nimport { gone } from \"./absent\";\nexport const n: number = 1;",
+      },
+      roots: ["/p/entry.ts"],
+      cwd: ".",
+      options: { jsx: false, skipLibCheck: false, },
+    },
+    answers: { "./runtime": External },
+  }
+  let messages = get_program_diagnostics(host).map(fn(d) { d.messageText })
+  assert_eq(messages, ["cannot resolve local module `./absent`"])
+}
+
+///|
+/// `.` is the directory every relative key lives under. With `cwd: "."`
+/// and keys like `main.ts`, `import "."` resolves its directory to `.`,
+/// and a `./` prefix test found no file there, so the barrel was missing.
+test "language service: the memory host finds a barrel at the relative root" {
+  let host = MtscMemoryHost::over({
+    "main.ts": "import { a } from \".\";\nimport { b } from \"./\";\nexport const s: string = a;\nexport const t: number = b;",
+    "index.ts": "export const a: number = 1;\nexport const b: number = 2;",
+  })
+  let diagnostics = get_program_diagnostics(host)
+  assert_eq(diagnostics.map(fn(d) { d.source }), ["semantic"])
+  assert_true(
+    diagnostics[0].messageText.contains("expected `string` but got `number`"),
+  )
+}

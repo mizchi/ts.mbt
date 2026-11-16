@@ -128,9 +128,11 @@ export async function loadLanguageService(source) {
         }
         return "";
       },
+      // NUL-separated: the one character no path can contain, so a root
+      // whose name holds a newline survives the crossing.
       getScriptFileNames: () => {
         const names = current.getScriptFileNames();
-        return Array.isArray(names) ? names.map(String).join("\n") : "";
+        return Array.isArray(names) ? names.map(String).join("\u0000") : "";
       },
       getCurrentDirectory: () => {
         if (typeof current.getCurrentDirectory !== "function") return ".";

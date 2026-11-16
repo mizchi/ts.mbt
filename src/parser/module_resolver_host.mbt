@@ -347,7 +347,7 @@ fn[H : ModuleResolutionHost] host_resolve_package_target(
   } else {
     normalize_path(join_path(package_root, "./" + target))
   }
-  host_resolve_path_like(host, candidate, mode)
+  host_resolve_path_like(host, candidate, mode, manifest=false)
 }
 
 ///|
@@ -437,18 +437,22 @@ fn[H : ModuleResolutionHost] host_resolve_package_entry(
 }
 
 ///|
+/// `resolve_as_directory`, including its `manifest` flag.
 fn[H : ModuleResolutionHost] host_resolve_as_directory(
   host : H,
   candidate : String,
   mode : ModuleResolutionMode,
+  manifest~ : Bool = true,
 ) -> String? {
   let normalized = normalize_path(candidate)
   if !host.directory_exists(normalized) {
     return None
   }
-  match host_resolve_package_entry(host, normalized, "", mode) {
-    Some(path) => return Some(path)
-    None => ()
+  if manifest {
+    match host_resolve_package_entry(host, normalized, "", mode) {
+      Some(path) => return Some(path)
+      None => ()
+    }
   }
   host_resolve_as_file(
     host,
@@ -462,11 +466,12 @@ fn[H : ModuleResolutionHost] host_resolve_path_like(
   host : H,
   candidate : String,
   mode : ModuleResolutionMode,
+  manifest~ : Bool = true,
 ) -> String? {
   let normalized = normalize_path(candidate)
   match host_resolve_as_file(host, normalized, mode) {
     Some(path) => Some(path)
-    None => host_resolve_as_directory(host, normalized, mode)
+    None => host_resolve_as_directory(host, normalized, mode, manifest~)
   }
 }
 
@@ -588,12 +593,14 @@ fn[H : ModuleResolutionHost] host_resolve_module_specifier(
   mode : ModuleResolutionMode,
 ) -> String? {
   let normalized_base = normalize_path(base_path)
-  if specifier.has_prefix("./") || specifier.has_prefix("../") {
-    return host_resolve_path_like(
-      host,
-      normalize_path(join_path(dirname(normalized_base), specifier)),
-      mode,
+  if is_relative_module_specifier(specifier) {
+    let candidate = normalize_path(
+      join_path(dirname(normalized_base), specifier),
     )
+    if is_relative_directory_specifier(specifier) {
+      return host_resolve_as_directory(host, candidate, mode)
+    }
+    return host_resolve_path_like(host, candidate, mode)
   }
   if specifier.has_prefix("/") {
     return host_resolve_path_like(host, normalize_path(specifier), mode)
