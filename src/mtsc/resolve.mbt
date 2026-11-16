@@ -1,23 +1,22 @@
 // Module resolution, driven through the host.
 //
-// `src/parser/module_resolver.mbt` already resolves modules — npm
-// `exports`, `typesVersions`, `node:*`, `@types/*`, tsconfig `paths` —
-// and none of it is reachable from here, because every one of its 26
-// entry points is `async` over a real filesystem. That resolver is what
-// the CLI uses. This one answers the smaller question a
-// `LanguageServiceHost` can answer synchronously: given an importer and
-// a specifier, which path does the host hold the module at?
+// The algorithm is the parser's: `@parser.resolve_type_module_specifier_with`
+// is the same walk the CLI runs over the real filesystem — relative
+// paths with TypeScript's TYPES candidate ordering, `node_modules`
+// (`exports` with the `types` condition, `types` / `typings`,
+// `typesVersions`, `index.d.ts`, `@types/<name>`), `node:` builtins
+// through `@types/node`, tsconfig `paths` / `baseUrl` and package
+// `imports` — with every filesystem question asked of the host. That is
+// what lets a browser or a wasm-gc embedding check a program that
+// imports npm packages: it supplies the files, and resolution is ours.
 //
-// What it covers is RELATIVE specifiers, which is the part a bundler
-// plugin and an in-memory program actually need, with TypeScript's
-// candidate ordering. What it does not cover is bare specifiers
-// (`react`, `node:fs`, `@types/*`): resolving those means reading
-// directories and package manifests, and a host that can do it can also
-// resolve the specifier itself and say so through
-// `MtscResolvedModule`. That limit is reported rather than guessed at —
-// an unresolved relative import becomes a diagnostic, an unresolved bare
-// one is left alone, which is the existing `graph_import_globals`
-// behaviour and the reason this file adds no rule of its own for it.
+// This file used to carry its own candidate table for relative
+// specifiers, "mirroring" the parser's. Two copies of one ordering are
+// how a program comes to check differently in the CLI and in the
+// library, so it calls the parser's instead.
+//
+// A host that maps specifiers itself answers first, through
+// `MtscHost::resolve_module_name` — TypeScript's `resolveModuleNames`.
 
 ///|
 /// True for a specifier that names a file rather than a package.
@@ -78,23 +77,6 @@ fn mtsc_normalize_path(path : String) -> String {
 }
 
 ///|
-/// The directory containing `path`.
-fn mtsc_dirname(path : String) -> String {
-  let normalized = mtsc_normalize_path(path)
-  match normalized.rev_find("/") {
-    Some(0) => "/"
-    Some(index) => normalized[:index].to_owned()
-    None => "."
-  }
-}
-
-///|
-/// `path` without its trailing `suffix`.
-fn mtsc_strip_suffix(path : String, suffix : String) -> String {
-  path[:path.length() - suffix.length()].to_owned()
-}
-
-///|
 fn mtsc_push_unique(paths : Array[String], path : String) -> Unit {
   if !paths.contains(path) {
     paths.push(path)
@@ -102,122 +84,104 @@ fn mtsc_push_unique(paths : Array[String], path : String) -> Unit {
 }
 
 ///|
-/// Paths `specifier` could name, most-preferred first.
+/// The host's filesystem, seen as a `@parser.ModuleResolutionHost`.
 ///
-/// This is the TYPES ordering, which is the one a type checker wants: a
-/// `.d.ts` beats the implementation it describes, because that is the
-/// file carrying the declarations. The ordering mirrors
-/// `append_resolution_candidates` in `src/parser/module_resolver.mbt`
-/// for its `Types` mode; the runtime mode, which prefers the emitted
-/// `.js`, has no consumer here.
-///
-/// The `.js` arm is the one worth naming: in TypeScript source under
-/// ESM, `import "./util.js"` means the module whose source is
-/// `./util.ts`. Probing the written extension first would resolve it to
-/// an emitted artifact sitting next to the source, and check the wrong
-/// file.
-fn mtsc_resolution_candidates(specifier : String) -> Array[String] {
-  let out : Array[String] = []
-  if specifier.has_suffix(".js") {
-    let stem = mtsc_strip_suffix(specifier, ".js")
-    mtsc_push_unique(out, stem + ".d.ts")
-    mtsc_push_unique(out, stem + ".ts")
-    mtsc_push_unique(out, stem + ".tsx")
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  if specifier.has_suffix(".mjs") {
-    let stem = mtsc_strip_suffix(specifier, ".mjs")
-    mtsc_push_unique(out, stem + ".d.mts")
-    mtsc_push_unique(out, stem + ".mts")
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  if specifier.has_suffix(".cjs") {
-    let stem = mtsc_strip_suffix(specifier, ".cjs")
-    mtsc_push_unique(out, stem + ".d.cts")
-    mtsc_push_unique(out, stem + ".cts")
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  if specifier.has_suffix(".d.ts") ||
-    specifier.has_suffix(".d.mts") ||
-    specifier.has_suffix(".d.cts") ||
-    specifier.has_suffix(".json") {
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  if specifier.has_suffix(".ts") {
-    let stem = mtsc_strip_suffix(specifier, ".ts")
-    mtsc_push_unique(out, stem + ".d.ts")
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  if specifier.has_suffix(".tsx") {
-    mtsc_push_unique(out, mtsc_strip_suffix(specifier, ".tsx") + ".d.ts")
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  if specifier.has_suffix(".mts") {
-    mtsc_push_unique(out, mtsc_strip_suffix(specifier, ".mts") + ".d.mts")
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  if specifier.has_suffix(".cts") {
-    mtsc_push_unique(out, mtsc_strip_suffix(specifier, ".cts") + ".d.cts")
-    mtsc_push_unique(out, specifier)
-    return out
-  }
-  // No extension written: the specifier names a stem, and every
-  // extension a declaration could live under is a candidate.
-  mtsc_push_unique(out, specifier + ".d.ts")
-  mtsc_push_unique(out, specifier + ".d.mts")
-  mtsc_push_unique(out, specifier + ".d.cts")
-  mtsc_push_unique(out, specifier + ".ts")
-  mtsc_push_unique(out, specifier + ".tsx")
-  mtsc_push_unique(out, specifier + ".mts")
-  mtsc_push_unique(out, specifier + ".cts")
-  mtsc_push_unique(out, specifier + ".js")
-  mtsc_push_unique(out, specifier + ".jsx")
-  mtsc_push_unique(out, specifier + ".mjs")
-  mtsc_push_unique(out, specifier + ".cjs")
-  out
+/// Every read goes through the operation's `MtscSourceCache`, so a
+/// candidate probed by resolution and then loaded is read once, and a
+/// miss is asked about once.
+priv struct MtscResolutionFs[H] {
+  host : H
+  cache : MtscSourceCache
 }
 
 ///|
-/// Where `specifier`, imported from `importer`, resolves — or `None`.
+impl[H : MtscHost] @parser.ModuleResolutionHost for MtscResolutionFs[H] with fn file_exists(
+  self,
+  path,
+) {
+  self.cache.read(self.host, path) is Some(_)
+}
+
+///|
+impl[H : MtscHost] @parser.ModuleResolutionHost for MtscResolutionFs[H] with fn directory_exists(
+  self,
+  path,
+) {
+  self.host.directory_exists(path)
+}
+
+///|
+impl[H : MtscHost] @parser.ModuleResolutionHost for MtscResolutionFs[H] with fn read_file(
+  self,
+  path,
+) {
+  self.cache.read(self.host, path)
+}
+
+///|
+impl[H : MtscHost] @parser.ModuleResolutionHost for MtscResolutionFs[H] with fn realpath(
+  self,
+  path,
+) {
+  self.host.realpath(path)
+}
+
+///|
+/// How one import resolved.
+priv enum MtscResolved {
+  /// The module is at this path.
+  Found(String)
+  /// The host said not to follow it.
+  Skipped
+  /// Nothing resolved it.
+  NotFound
+}
+
+///|
+/// Where `specifier`, imported from `importer`, resolves.
 ///
-/// `None` covers both "no such file" and "not our job" (a bare
-/// specifier), and the caller distinguishes them with
-/// `mtsc_is_relative_specifier`. Merging them here would lose the
-/// distinction that decides whether an unresolved import is a
-/// diagnostic.
+/// The host's own answer wins; otherwise the shared resolver runs. A
+/// bare specifier's answer is canonicalized with `realpath`, as tsc does
+/// for a package file, so one package reached through several pnpm links
+/// enters the program once; a relative answer keeps its spelling, which
+/// is already relative to a canonical importer.
+fn[H : MtscHost] mtsc_resolve_import(
+  host : H,
+  cache : MtscSourceCache,
+  importer : String,
+  specifier : String,
+) -> MtscResolved {
+  match host.resolve_module_name(specifier, importer) {
+    ResolvedTo(path) => return Found(mtsc_normalize_path(path))
+    External => return Skipped
+    UseDefault => ()
+  }
+  let fs : MtscResolutionFs[H] = { host, cache, }
+  match @parser.resolve_type_module_specifier_with(fs, importer, specifier) {
+    Some(path) =>
+      Found(
+        if mtsc_is_relative_specifier(specifier) {
+          path
+        } else {
+          host.realpath(path)
+        },
+      )
+    None => NotFound
+  }
+}
+
+///|
+/// `mtsc_resolve_import`, as the loader reads it: a path or nothing.
 fn[H : MtscHost] mtsc_resolve_module(
   host : H,
   cache : MtscSourceCache,
   importer : String,
   specifier : String,
 ) -> String? {
-  if !mtsc_is_relative_specifier(specifier) {
-    return None
+  match mtsc_resolve_import(host, cache, importer, specifier) {
+    Found(path) => Some(path)
+    Skipped | NotFound => None
   }
-  let joined = mtsc_normalize_path(
-    mtsc_join_path(mtsc_dirname(importer), specifier),
-  )
-  for candidate in mtsc_resolution_candidates(joined) {
-    if cache.read(host, candidate) is Some(_) {
-      return Some(candidate)
-    }
-  }
-  // `./dir` naming a directory holding `index.*`. Probed only after the
-  // file candidates, so a sibling `dir.ts` wins over `dir/index.ts` the
-  // way it does in TypeScript.
-  for candidate in mtsc_resolution_candidates(mtsc_join_path(joined, "index")) {
-    if cache.read(host, candidate) is Some(_) {
-      return Some(candidate)
-    }
-  }
-  None
 }
 
 ///|

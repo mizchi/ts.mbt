@@ -436,7 +436,7 @@ pub(all) struct TsconfigProject {
 // Type aliases
 
 // Traits
-pub trait ModuleResolutionHost {
+pub(open) trait ModuleResolutionHost {
   fn file_exists(Self, String) -> Bool
   fn directory_exists(Self, String) -> Bool
   fn read_file(Self, String) -> String?

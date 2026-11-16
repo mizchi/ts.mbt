@@ -97,6 +97,75 @@ extern "js" fn mtsc_js_host_jsx(host : MtscJsHost) -> Bool =
   #| }
 
 ///|
+/// `host.getCompilationSettings().skipLibCheck`, read as a boolean.
+extern "js" fn mtsc_js_host_skip_lib_check(host : MtscJsHost) -> Bool =
+  #| function(host) {
+  #|   if (typeof host.getCompilationSettings !== "function") return false;
+  #|   const options = host.getCompilationSettings();
+  #|   return !!(options && options.skipLibCheck);
+  #| }
+
+///|
+/// `host.directoryExists(path)`, or `true` when the host has none — the
+/// same default TypeScript applies, so the file probes decide.
+extern "js" fn mtsc_js_host_directory_exists(
+  host : MtscJsHost,
+  path : String,
+) -> Bool =
+  #| function(host, path) {
+  #|   if (typeof host.directoryExists !== "function") return true;
+  #|   try { return !!host.directoryExists(path); } catch (e) { return false; }
+  #| }
+
+///|
+/// `host.realpath(path)`, or `path` when the host has none.
+extern "js" fn mtsc_js_host_realpath(
+  host : MtscJsHost,
+  path : String,
+) -> String =
+  #| function(host, path) {
+  #|   if (typeof host.realpath !== "function") return path;
+  #|   try {
+  #|     const real = host.realpath(path);
+  #|     return (typeof real === "string" && real.length > 0) ? real : path;
+  #|   } catch (e) {
+  #|     return path;
+  #|   }
+  #| }
+
+///|
+/// `host.resolveModuleNames([specifier], containingFile)[0]`, encoded as
+/// one string: `""` for "use the built-in resolution", `"\u0000"` for
+/// "do not follow", anything else a path.
+///
+/// TypeScript's hook takes a batch and returns `ResolvedModule |
+/// undefined` per name. `undefined` here means the host has no opinion —
+/// a host that maps only its own aliases should not have to reimplement
+/// `node_modules` — and `null` means "external", which TypeScript has no
+/// spelling for and a CDN-backed host needs.
+extern "js" fn mtsc_js_host_resolve_module_name(
+  host : MtscJsHost,
+  specifier : String,
+  containing_file : String,
+) -> String =
+  #| function(host, specifier, containingFile) {
+  #|   if (typeof host.resolveModuleNames !== "function") return "";
+  #|   let answer;
+  #|   try {
+  #|     const out = host.resolveModuleNames([specifier], containingFile);
+  #|     answer = Array.isArray(out) ? out[0] : undefined;
+  #|   } catch (e) {
+  #|     return "";
+  #|   }
+  #|   if (answer === null) return "\u0000";
+  #|   if (answer && typeof answer.resolvedFileName === "string" &&
+  #|       answer.resolvedFileName.length > 0) {
+  #|     return answer.resolvedFileName;
+  #|   }
+  #|   return "";
+  #| }
+
+///|
 impl MtscHost for MtscJsHost with fn read_file(self, path) {
   mtsc_js_host_read_file(self, path)
 }
@@ -118,5 +187,31 @@ impl MtscHost for MtscJsHost with fn current_directory(self) {
 
 ///|
 impl MtscHost for MtscJsHost with fn compilation_settings(self) {
-  { jsx: mtsc_js_host_jsx(self), }
+  {
+    jsx: mtsc_js_host_jsx(self),
+    skipLibCheck: mtsc_js_host_skip_lib_check(self),
+  }
+}
+
+///|
+impl MtscHost for MtscJsHost with fn directory_exists(self, path) {
+  mtsc_js_host_directory_exists(self, path)
+}
+
+///|
+impl MtscHost for MtscJsHost with fn realpath(self, path) {
+  mtsc_js_host_realpath(self, path)
+}
+
+///|
+impl MtscHost for MtscJsHost with fn resolve_module_name(
+  self,
+  specifier,
+  containing_file,
+) {
+  match mtsc_js_host_resolve_module_name(self, specifier, containing_file) {
+    "" => UseDefault
+    "\u{0}" => External
+    path => ResolvedTo(path)
+  }
 }

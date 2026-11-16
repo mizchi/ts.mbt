@@ -16,6 +16,12 @@ export interface CompilerOptions {
    * decides it from the extension.
    */
   jsx?: boolean;
+  /**
+   * Report nothing inside declaration files that are not roots. A
+   * dependency's `.d.ts` under `node_modules` is read for its
+   * declarations and never reported on either way.
+   */
+  skipLibCheck?: boolean;
 }
 
 /** A snapshot of a file's text, as `ts.IScriptSnapshot`. */
@@ -50,6 +56,29 @@ export interface LanguageServiceHost {
   /** Base for resolving a relative root name. Defaults to `"."`. */
   getCurrentDirectory?(): string;
   getCompilationSettings?(): CompilerOptions;
+  /**
+   * Whether `directoryName` is a directory. Asked before a package
+   * directory's manifest is read; absent means "yes", and the file probes
+   * decide, as in TypeScript.
+   */
+  directoryExists?(directoryName: string): boolean;
+  /**
+   * `path` with symlinks resolved. Absent means `path`. With it, one pnpm
+   * package reached through several links enters the program once.
+   */
+  realpath?(path: string): string;
+  /**
+   * The host's own resolution, asked before the built-in one — the
+   * `ts.LanguageServiceHost` hook of the same name. Called with one name
+   * at a time. For each name, `undefined` means "use the built-in
+   * resolution" (so a host that maps only its own aliases need not
+   * reimplement `node_modules`), and `null` means "do not follow this
+   * import", which reports nothing for it.
+   */
+  resolveModuleNames?(
+    moduleNames: string[],
+    containingFile: string,
+  ): ({ resolvedFileName: string } | undefined | null)[];
 }
 
 /**
@@ -90,12 +119,15 @@ export interface ResolvedModule {
   /** The resolved path, or `""` when nothing resolved. */
   resolvedFileName: string;
   /**
-   * `true` when the specifier was a bare package name.
+   * `true` when the import is not followed: a bare specifier nothing
+   * resolved, or one the host's `resolveModuleNames` answered `null` for.
    *
-   * This separates "no such file" from "not this resolver's job".
-   * Package resolution — npm `exports`, `typesVersions`, `node:*`,
-   * `@types/*` — is not done here; a host that can resolve those should
-   * present the result as a file the host can read.
+   * This separates "no such file" (a relative import with nothing there,
+   * which is reported) from "not followed" (which is not). Package
+   * resolution — npm `exports` with the `types` condition, `types`,
+   * `typesVersions`, `@types/*`, `node:*` through `@types/node`, tsconfig
+   * `paths`, package `imports` — is done here, every file read through
+   * the host.
    */
   isExternal: boolean;
 }

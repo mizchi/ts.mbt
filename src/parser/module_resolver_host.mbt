@@ -33,7 +33,7 @@
 /// answers `directory_exists` with `true` and lets the file probes decide,
 /// which is what TypeScript does when `directoryExists` is absent; a host
 /// with no symlinks answers `realpath` with its argument.
-pub trait ModuleResolutionHost {
+pub(open) trait ModuleResolutionHost {
   /// Whether `path` names a readable file.
   fn file_exists(Self, String) -> Bool
   /// Whether `path` names a directory.

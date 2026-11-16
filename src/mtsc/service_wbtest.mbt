@@ -71,7 +71,7 @@ test "an extensionless specifier resolves to the .ts file" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -93,7 +93,7 @@ test "a .js specifier resolves to the .ts source beside it" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -116,7 +116,7 @@ test "a .d.ts wins over the .ts beside it" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -135,7 +135,7 @@ test "a directory specifier resolves to its index file" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -157,7 +157,7 @@ test "a sibling file wins over a same-named directory index" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -176,7 +176,7 @@ test "a parent-relative specifier resolves across directories" {
     },
     roots: ["src/entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -218,7 +218,7 @@ test "a root the host cannot read is reported" {
     files: { "entry.ts": "export const score: number = 1;" },
     roots: ["entry.ts", "absent.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(get_program_diagnostics(host), "cannot read file"),
@@ -301,7 +301,7 @@ test "the program includes imported files that were never roots" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   let files = get_program_file_names(host)
   assert_eq(files.length(), 3)
@@ -366,13 +366,13 @@ test "the jsx option covers a .ts file the extension does not" {
     files: { "view.ts": source },
     roots: ["view.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   let with_jsx : MtscMemoryHost = {
     files: { "view.ts": source },
     roots: ["view.ts"],
     cwd: ".",
-    options: { jsx: true, },
+    options: { jsx: true, skipLibCheck: false, },
   }
   // Both directions, so this measures the option rather than the parser.
   assert_true(get_program_diagnostics(without).length() > 0)
@@ -385,7 +385,7 @@ test "a relative root is resolved against the host directory" {
     files: { "/work/src/entry.ts": "export const label: string = 1;" },
     roots: ["src/entry.ts"],
     cwd: "/work",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   let diagnostics = get_program_diagnostics(host)
   assert_true(wbtest_any_contains(diagnostics, "/work/src/entry.ts"))
@@ -403,7 +403,7 @@ test "a file queried by its root spelling matches its resolved path" {
     files: { "/work/entry.ts": "export const label: string = 1;" },
     roots: ["entry.ts"],
     cwd: "/work",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(get_semantic_diagnostics(host, "entry.ts").length() > 0)
   assert_true(get_semantic_diagnostics(host, "/work/entry.ts").length() > 0)

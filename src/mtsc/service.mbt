@@ -207,6 +207,44 @@ fn mtsc_diagnostic_source(issue_path : String) -> String {
 }
 
 ///|
+/// True for a declaration file: `.d.ts`, `.d.mts` or `.d.cts`.
+fn mtsc_is_declaration_file(path : String) -> Bool {
+  path.has_suffix(".d.ts") ||
+  path.has_suffix(".d.mts") ||
+  path.has_suffix(".d.cts")
+}
+
+///|
+/// The declaration files the program reads for their declarations and
+/// does not report on — the CLI's `mtsc_context_only_modules`, over a
+/// host: a dependency's `.d.ts` (one under `node_modules`) that is not a
+/// root, and with `skipLibCheck` every declaration file that is not one.
+/// A declaration file named as a root is checked; only `skipLibCheck`
+/// exempts it.
+fn[H : MtscHost] mtsc_context_only(
+  host : H,
+  program : MtscProgram,
+) -> Map[String, Unit] {
+  let skip_lib_check = host.compilation_settings().skipLibCheck
+  let roots : Map[String, Unit] = Map([])
+  for root in host.script_file_names() {
+    roots[mtsc_root_path(host, root)] = ()
+  }
+  let out : Map[String, Unit] = Map([])
+  for module_ in program.modules {
+    let path = module_.source.path
+    if !mtsc_is_declaration_file(path) {
+      continue
+    }
+    if skip_lib_check ||
+      (path.contains("/node_modules/") && !roots.contains(path)) {
+      out[path] = ()
+    }
+  }
+  out
+}
+
+///|
 /// Every diagnostic for the whole program.
 pub fn[H : MtscHost] get_program_diagnostics(host : H) -> Array[MtscDiagnostic] {
   let program = mtsc_load_program(host)
@@ -228,7 +266,12 @@ pub fn[H : MtscHost] get_program_diagnostics(host : H) -> Array[MtscDiagnostic] 
       message: "parse error: \{failure.1}",
     })
   }
-  collect_parsed_graph_issues(program.modules, program.edges, issues)
+  collect_parsed_graph_issues(
+    program.modules,
+    program.edges,
+    issues,
+    context_only=mtsc_context_only(host, program),
+  )
   for issue in issues {
     out.push({
       file: issue.modulePath,
@@ -361,9 +404,10 @@ pub fn[H : MtscHost] resolve_module_name(
 ) -> MtscResolvedModule {
   let cache = MtscSourceCache::new()
   let from = mtsc_root_path(host, importer)
-  match mtsc_resolve_module(host, cache, from, specifier) {
-    Some(path) => { resolvedFileName: path, isExternal: false, }
-    None =>
+  match mtsc_resolve_import(host, cache, from, specifier) {
+    Found(path) => { resolvedFileName: path, isExternal: false, }
+    Skipped => { resolvedFileName: "", isExternal: true, }
+    NotFound =>
       {
         resolvedFileName: "",
         isExternal: !mtsc_is_relative_specifier(specifier),

@@ -19,7 +19,7 @@
 // `src/mtsc/service.mbt`), so those methods would be a shape with
 // nothing behind them.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,6 +76,9 @@ const bindings = await loadBindings();
  * @typedef {object} CompilerOptions
  * @property {boolean} [jsx] Parse JSX in files whose extension does not
  *   already imply it. `.tsx` / `.jsx` always allow it.
+ * @property {boolean} [skipLibCheck] Report nothing inside declaration
+ *   files that are not roots. A dependency's `.d.ts` under
+ *   `node_modules` is never reported on either way.
  */
 
 /**
@@ -87,6 +90,14 @@ const bindings = await loadBindings();
  *   works unchanged.
  * @property {() => string} [getCurrentDirectory]
  * @property {() => CompilerOptions} [getCompilationSettings]
+ * @property {(directoryName: string) => boolean} [directoryExists]
+ *   Asked before a package directory's manifest is read. Absent means
+ *   "yes", and the file probes decide, as in TypeScript.
+ * @property {(path: string) => string} [realpath] Symlinks resolved, so
+ *   one pnpm package reached through several links loads once.
+ * @property {(moduleNames: string[], containingFile: string) => ({ resolvedFileName: string } | undefined | null)[]} [resolveModuleNames]
+ *   The host's own resolution, asked first. `undefined` for a name means
+ *   "use the built-in resolution"; `null` means "do not follow it".
  */
 
 /**
@@ -135,11 +146,14 @@ export function createLanguageService(host) {
     /** Roots plus everything they reach. @returns {string[]} */
     getProgramFileNames: () => bindings.getProgramFileNames(host),
     /**
-     * Resolve one specifier as the loader would.
+     * Resolve one specifier as the loader would: the host's
+     * `resolveModuleNames` first, then relative paths, `node_modules`
+     * (`exports` with the `types` condition, `types`, `typesVersions`,
+     * `@types`), `node:` builtins, tsconfig `paths` and package `imports`,
+     * every file read through the host.
      *
-     * `isExternal` separates "no such file" from "not this resolver's
-     * job": a bare specifier like `react` needs package resolution,
-     * which this service does not do.
+     * `isExternal` separates "no such file" from "not followed": a bare
+     * specifier nothing resolves, or one the host answered `null` for.
      */
     resolveModuleName: (containingFile, moduleName) =>
       bindings.resolveModuleName(host, containingFile, moduleName),
@@ -170,14 +184,22 @@ export function createMemoryHost(files, options = {}) {
       Object.prototype.hasOwnProperty.call(files, fileName)
         ? files[fileName]
         : undefined,
+    // A directory exists when some file lives under it; answering `true`
+    // everywhere would make every package probe read a manifest that is
+    // not there.
+    directoryExists: (directoryName) => {
+      const prefix = directoryName.endsWith("/") ? directoryName : directoryName + "/";
+      return Object.keys(files).some((f) => f.startsWith(prefix));
+    },
   };
 }
 
 /**
  * A host that reads the real filesystem.
  *
- * Ten lines, and that is the argument for the abstraction: the checker
- * has no filesystem in it, so this is all it takes to give it one.
+ * A few lines, and that is the argument for the abstraction: the checker
+ * has no filesystem in it, so this is all it takes to give it one —
+ * `node_modules` resolution included, since that only ever asks the host.
  *
  * @param {string[]} rootNames
  * @param {{ currentDirectory?: string, compilerOptions?: CompilerOptions }} [options]
@@ -201,6 +223,20 @@ export function createNodeHost(rootNames, options = {}) {
         // fault; anything else (EACCES, EISDIR) is equally "no source
         // here" from the checker's point of view.
         return undefined;
+      }
+    },
+    directoryExists: (directoryName) => {
+      try {
+        return statSync(directoryName).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+    realpath: (path) => {
+      try {
+        return realpathSync(path);
+      } catch {
+        return path;
       }
     },
   };
