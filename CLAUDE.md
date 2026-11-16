@@ -4653,6 +4653,19 @@ product surfaces now.
     interface, alias or enum over a registered class. The checked
     module's own `Item` then reads the class and abstains where the shapes
     differ, which is a MISS (`badm: Item = { z: "s" }`).
+  - **Review found two more routes, both false positives on legal code.**
+    - The class guard ran after the keyed redirect, which `continue`s. So
+      when two modules declare `Other`, `Item` still went to `Other@x`
+      through `qualified_names`, which `unwrap` reads before any table, and
+      the class's own `mk().n` was reported. The guard now runs first.
+    - A module with no per-module key gets no `renames`. That covers an
+      ambient `.d.ts` and a caller of the public entry point that passes no
+      keys. Reserving the renamed `Item` against such a module skipped its
+      `interface Item` and left its `Holder.item: Item` to the redirect, so
+      the legal `holder.item.n` read the checked module's `Other`. Its own
+      declarations of such a name now move to `Item@<unkeyed>`, and its
+      references move with them, so `Holder.item` still reads its own
+      `Item`.
 
   Batch GG is the first item of the "what does real use lack" survey,
   and it turned out to be a RESOLUTION defect that every gate here was

@@ -988,6 +988,54 @@ fn qualify_namespace_local_refs(
 }
 
 ///|
+/// `m` with each top-level interface, type alias and enum whose name is in
+/// `reserved` moved to `name@<unkeyed>`, and every reference to it in `m`'s
+/// interfaces and aliases moved with it — the rewrite a keyed module gets
+/// from `renames`, for a module that has no key (see the caller in
+/// `check_module_function_bodies_layered`).
+fn move_unkeyed_reserved_type_names(
+  m : @ast.TsModule,
+  reserved : Map[String, Unit],
+) -> @ast.TsModule {
+  let renames : Map[String, String] = Map([])
+  let note = fn(n : String) {
+    if reserved.contains(n) {
+      renames[n] = n + "@<unkeyed>"
+    }
+  }
+  for i in m.interfaces {
+    note(i.name)
+  }
+  for a in m.type_aliases {
+    note(a.name)
+  }
+  for e in m.enums {
+    note(e.name)
+  }
+  if renames.length() == 0 {
+    return m
+  }
+  let moved = fn(n : String) { renames.get(n).unwrap_or(n) }
+  let aliases = m.type_aliases.map(fn(a) {
+    let own : Map[String, String] = Map([])
+    for k, v in renames {
+      if !a.type_params.contains(k) {
+        own[k] = v
+      }
+    }
+    { ..a, name: moved(a.name), type_: rename_type_refs(a.type_, own), }
+  })
+  {
+    ..m,
+    interfaces: m.interfaces.map(fn(i) {
+      { ..rename_interface_refs(i, renames), name: moved(i.name), }
+    }),
+    type_aliases: aliases,
+    enums: m.enums.map(fn(e) { { ..e, name: moved(e.name), } }),
+  }
+}
+
+///|
 /// Import only type declarations from another ES module. Value declarations
 /// intentionally stay out of `globals`: an embedding must still provide the
 /// concrete bindings it resolved for the current module's runtime imports.
@@ -1413,6 +1461,18 @@ fn Resolver::alias_namespace_import_types(
     if shadowed.contains(qualified) {
       continue
     }
+    // A renamed import spelled like a CLASS another module declares
+    // (`import { Other as Item }` beside a foreign `class Item`) must not
+    // put anything under that name: lookups read interfaces, aliases and
+    // enums before classes, and `unwrap` reads `qualified_names` before
+    // either, so the class's own module would see `mk(): Item` and
+    // `extends Item` as `Other`. The class keeps the name, and the checked
+    // module's reference to it abstains where the shapes differ. This runs
+    // before the keyed redirect below, which `continue`s past anything
+    // after it.
+    if qualified != bare && r.classes.get(qualified) is Some(_) {
+      continue
+    }
     // When two modules declare `bare`, its bare entry is their merge, and
     // the qualified spelling must still mean ITS module's declaration,
     // which ingestion registered under `bare@origin`.
@@ -1454,15 +1514,6 @@ fn Resolver::alias_namespace_import_types(
       r.enums.get(qualified) is Some(_)
     if !declared_here && qualified != bare {
       r.qualified_names[qualified] = bare
-    }
-    // A renamed import spelled like a CLASS another module declares
-    // (`import { Other as Item }` beside a foreign `class Item`) must not
-    // put an interface, alias or enum under that name: lookups read those
-    // before classes, so the class's own module would see `mk(): Item` and
-    // `extends Item` as `Other`. The class keeps the name, and the checked
-    // module's reference to it abstains where the shapes differ.
-    if r.classes.get(qualified) is Some(_) && qualified != bare {
-      continue
     }
     match r.interfaces.get(bare) {
       Some(i) =>
@@ -47452,6 +47503,19 @@ fn check_module_function_bodies_layered(
       renames.length() > 0 &&
       !renames_by_key.contains(cache_key) {
       renames_by_key[cache_key] = renames
+    }
+    // A module with NO key (an ambient `.d.ts`, or a caller of the public
+    // entry point that passes none) gets no `renames`, so nothing rewrites
+    // its references. Reserving the checked module's renamed `Item`
+    // against it skipped its `interface Item` and left its
+    // `Holder.item: Item` to the redirect, which reads the checked
+    // module's import: the legal `get().item.n` was reported. Its own
+    // declarations of such a name move to `Item@<unkeyed>` instead, and
+    // its references move with them.
+    let type_module = if cache_key == "" && checked_renamed_locals.length() > 0 {
+      move_unkeyed_reserved_type_names(type_module, checked_renamed_locals)
+    } else {
+      type_module
     }
     Resolver::ingest_type_module(
       resolver,

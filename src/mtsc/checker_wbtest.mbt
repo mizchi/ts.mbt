@@ -1007,6 +1007,73 @@ test "mtsc graph checker leaves a foreign class its name beside a renamed import
 }
 
 ///|
+/// The same class guard when the renamed import's TARGET collides. Two
+/// modules declare `Other`, so the redirect takes the keyed path
+/// (`Item` -> `Other@x.ts`), and that path returned before the guard ran:
+/// the class's own module then read `mk(): Item` as `Other@x.ts`, and the
+/// legal `mk().n` was reported.
+test "mtsc graph checker leaves a foreign class its name beside a renamed colliding import" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { yv } from \"./y\";\nimport { mk } from \"./a\";\nexport const k: number = mk().n + yv;\nexport const bad: string = mk().n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/y.ts", "export interface Other { w: string }\nexport declare const yv: number;",
+      ),
+      module_(
+        "/src/a.ts", "export class Item { n = 1 }\nexport function mk(): Item { return new Item() }",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./x", "/src/x.ts"),
+      edge("/src/root.ts", "./y", "/src/y.ts"),
+      edge("/src/root.ts", "./a", "/src/a.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.path }), ["top-level > binding `bad` init"])
+}
+
+///|
+/// A module with no per-module key — an ambient `.d.ts`, whose
+/// declarations every module sees — cannot have its references rewritten,
+/// so reserving the checked module's renamed `Item` against it skipped
+/// its `interface Item` and left its `Holder.item: Item` to the redirect:
+/// the legal `holder.item.n` read `Other` and was reported. `bad2` is the same
+/// read against `string`, so the ambient `Item` must resolve rather than
+/// merely abstain.
+test "mtsc graph checker keeps an ambient declaration's own name beside a renamed import" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nexport const m: Item = { z: 1 };\nexport const bad: Item = { z: \"s\" };\nexport const k: number = holder.item.n;\nexport const bad2: string = holder.item.n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/env.d.ts", "interface Item { n: number }\ninterface Holder { item: Item }\ndeclare const holder: Holder;",
+      ),
+    ],
+    edges: [edge("/src/root.ts", "./x", "/src/x.ts")],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
+    "top-level > binding `bad` init.z :: expected `number` but got `string`", "top-level > binding `bad2` init :: expected `string` but got `number`",
+  ])
+}
+
+///|
 /// A `.d.ts` beside the entry, imported by path: how a package's
 /// declarations reach an importer once the check graph loads them.
 fn graph_dts(entry : String, dts : String) -> String {
