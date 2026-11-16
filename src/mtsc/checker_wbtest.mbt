@@ -1206,3 +1206,113 @@ test "mtsc graph checker checks an imported generic function's rest arguments" {
     "",
   )
 }
+
+///|
+/// `declare module "m" { … }` in a script-shaped `.d.ts` declares a module
+/// that an import of `"m"` reads. Every declaration in the body is exported
+/// whether or not it writes `export` (probed: `const hidden` beside an
+/// exported `const n` imports cleanly), a renamed import reads it like any
+/// other, and the body's types are importable too.
+test "mtsc graph checker reads an ambient module declaration as the imported module" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/env.d.ts", "declare module \"m1\" { const n: number; function f(): string; interface I { x: number } }\ndeclare module \"m2\" { export const n: number; const hidden: number; }",
+      ),
+      module_(
+        "/src/main.ts", "import { n, f, type I } from \"m1\";\nimport { n as n2, hidden } from \"m2\";\nexport const s1: string = n;\nexport const s2: number = f();\nexport const i: I = { x: \"s\" };\nexport const s3: string = n2;\nexport const h: number = hidden;\nexport const ok1: number = n + n2;\nexport const ok2: I = { x: 1 };",
+      ),
+    ],
+    edges: [],
+  })
+  assert_eq(issues.map(fn(i) { i.path }), [
+    "top-level > binding `s1` init", "top-level > binding `s2` init", "top-level > binding `i` init.x",
+    "top-level > binding `s3` init",
+  ])
+}
+
+///|
+/// A PATTERN (`"*.css"`) answers only where resolution found nothing the
+/// program reads: `./a.css` resolves to a file the checker does not read,
+/// and the longest prefix wins. An EXACT ambient name wins over a module the
+/// resolver did find — a `declare module "dup"` beside a real `dup` package
+/// is what `"dup"` means (probed: `a` reads as the ambient `number`).
+test "mtsc graph checker applies ambient module precedence" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/env.d.ts", "declare module \"*.css\" { const c: { [k: string]: number }; export default c; }\ndeclare module \"icons/*\" { const v: number; export default v; }\ndeclare module \"icons/big/*\" { const v: string; export default v; }\ndeclare module \"dup\" { export const a: number; }",
+      ),
+      module_("/node_modules/dup/index.d.ts", "export declare const a: string;"),
+      module_(
+        "/src/main.ts", "import c from \"./a.css\";\nimport small from \"icons/x\";\nimport big from \"icons/big/y\";\nimport { a } from \"dup\";\nexport const s1: string = c.x;\nexport const s2: string = small;\nexport const n1: number = big;\nexport const ok: number = a;",
+      ),
+    ],
+    edges: [
+      edge("/src/main.ts", "./a.css", "/src/a.css"),
+      edge("/src/main.ts", "dup", "/node_modules/dup/index.d.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.path }), [
+    "top-level > binding `s1` init", "top-level > binding `s2` init", "top-level > binding `n1` init",
+  ])
+}
+
+///|
+/// A script-shaped declaration file that also holds a `declare module` is
+/// still a script. Its block's export list collects the ambient bodies'
+/// `export`s, and reading that list made the file a module, so its
+/// `declare const G` was invisible to every other file.
+test "mtsc graph checker keeps a script's globals beside an ambient module" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/env.d.ts", "declare module \"m\" { export const n: number; }\ndeclare const G: number;",
+      ),
+      module_(
+        "/src/main.ts", "export const ok: number = G;\nexport const bad: string = G;",
+      ),
+    ],
+    edges: [],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
+    "top-level > binding `bad` init :: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// An ambient declaration file's types are global: a module that never
+/// imports `Holder` still names it, as an annotation and as a member type.
+/// The single-file rule behind TS2304 knew only the module's own and
+/// imported names, so `const h: Holder = get()` read as `cannot find name`.
+test "mtsc graph checker sees an ambient interface as a global type" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/env.d.ts", "interface Holder { item: { n: number } }\ndeclare function get(): Holder;",
+      ),
+      module_(
+        "/src/root.ts", "export const h: Holder = get();\nexport const k: number = h.item.n;\nexport const bad: string = h.item.n;\nexport const q: Missing = 1;",
+      ),
+    ],
+    edges: [],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
+    "top-level > binding `bad` init :: expected `string` but got `number`", "var q :: cannot find name `Missing`",
+  ])
+}

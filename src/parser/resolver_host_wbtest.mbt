@@ -287,3 +287,21 @@ async test "parser: the injected-host resolver agrees on a tree built to separat
     )
   }
 }
+
+///|
+/// A triple-slash directive counts only in the leading trivia: after
+/// comments and other directives, before the first token of code. Both
+/// quote styles name a value, `lib` is not a reference, and a `///` line
+/// below the code is an ordinary comment.
+test "parser: triple-slash references are read from the leading trivia only" {
+  let source = "// header\n/* block\n   comment */\n/// <reference path=\"../g/globals.d.ts\" />\n///<reference types='node'/>\n/// <reference lib=\"es2020\" />\nexport const x = 1;\n/// <reference path=\"late.d.ts\" />\n"
+  assert_eq(triple_slash_references(source), [
+    ("path", "../g/globals.d.ts"),
+    ("types", "node"),
+  ])
+  assert_eq(
+    triple_slash_references("const a = 1;\n/// <reference path=\"x.d.ts\" />"),
+    [],
+  )
+  assert_eq(triple_slash_references(""), [])
+}

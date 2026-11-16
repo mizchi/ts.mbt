@@ -339,3 +339,76 @@ fn tsconfig_parse_bool_at(src : String, start_ : Int32, end_ : Int32) -> Bool? {
     _ => None
   }
 }
+
+///|
+/// The `/// <reference path="…" />` and `/// <reference types="…" />`
+/// directives at the top of `source`, as `(kind, value)` with `kind`
+/// `"path"` or `"types"`.
+///
+/// A triple-slash directive counts only in the file's leading trivia: it may
+/// follow other comments and other directives, and the first token of code
+/// ends the region (TypeScript's `processReferenceComments`). So this reads
+/// comments and whitespace and stops at anything else, which is also what
+/// keeps a `///` line inside a function body from being read as one. `lib`
+/// and `no-default-lib` directives are skipped: the lib set is chosen by
+/// `--lib`, not per file.
+pub fn triple_slash_references(source : String) -> Array[(String, String)] {
+  let out : Array[(String, String)] = []
+  let n = source.length()
+  let mut i = 0
+  while i < n {
+    let c = source[i]
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\u{FEFF}' {
+      i = i + 1
+      continue
+    }
+    if c == '/' && i + 1 < n && source[i + 1] == '*' {
+      let mut j = i + 2
+      while j + 1 < n && !(source[j] == '*' && source[j + 1] == '/') {
+        j = j + 1
+      }
+      i = j + 2
+      continue
+    }
+    if c == '/' && i + 1 < n && source[i + 1] == '/' {
+      let mut j = i
+      while j < n && source[j] != '\n' {
+        j = j + 1
+      }
+      let line = source[i:j].to_owned()
+      if line.has_prefix("///") {
+        match triple_slash_reference(line) {
+          Some(entry) => out.push(entry)
+          None => ()
+        }
+      }
+      i = j
+      continue
+    }
+    break
+  }
+  out
+}
+
+///|
+/// One `/// <reference … />` line, if it names a `path` or `types`.
+fn triple_slash_reference(line : String) -> (String, String)? {
+  let body = line[3:].trim().to_owned()
+  guard body.has_prefix("<reference") else { return None }
+  for kind in ["path", "types"] {
+    for quote in ["\"", "'"] {
+      let key = kind + "=" + quote
+      match body.find(key) {
+        Some(at) => {
+          let rest = body[at + key.length():].to_owned()
+          match rest.find(quote) {
+            Some(end) => return Some((kind, rest[:end].to_owned()))
+            None => ()
+          }
+        }
+        None => ()
+      }
+    }
+  }
+  None
+}

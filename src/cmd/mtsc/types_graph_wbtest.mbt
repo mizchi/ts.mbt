@@ -395,3 +395,91 @@ async test "mtsc watch: a linked workspace package is watched" {
   assert_true(watched.iter().any(fn(p) { p.has_suffix("/ws/index.d.ts") }))
   assert_false(watched.iter().any(fn(p) { p.has_suffix("/dep/index.d.ts") }))
 }
+
+///|
+/// A project's program includes files nothing imports. With no `types`
+/// option every package in `node_modules/@types` is included, and its
+/// `/// <reference path>` and its `declare module "node:os"` come with it,
+/// so `process` and `import { cpus } from "node:os"` both read
+/// `@types/node`. Each legal line has an illegal twin that must report.
+async test "mtsc check graph: a project includes its @types and their references" {
+  let root = "/tmp/ts_mbt_types_graph_auto_types"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true},\"include\":[\"src\"]}",
+    ),
+    (
+      "node_modules/@types/node/package.json", "{\"name\":\"@types/node\",\"types\":\"index.d.ts\"}",
+    ),
+    (
+      "node_modules/@types/node/index.d.ts", "/// <reference path=\"globals.d.ts\" />\ndeclare module \"node:os\" { export function cpus(): number; }\n",
+    ),
+    (
+      "node_modules/@types/node/globals.d.ts", "declare var process: { pid: number };\n",
+    ),
+    (
+      "src/main.ts", "import { cpus } from \"node:os\";\nexport const a: number = process.pid;\nexport const b: number = cpus();\n",
+    ),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+  @fs.write_file(
+    root + "/src/main.ts",
+    "import { cpus } from \"node:os\";\nexport const a: string = process.pid;\nexport const b: string = cpus();\n",
+    create=0o644,
+  )
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_true(mtsc_compile_all(opts, entries) > 0)
+  // `types: []` turns automatic inclusion off, so `process` is undeclared.
+  // Its own directory: the parser memoizes a config's text per path, so a
+  // config rewritten in place would be read as before within this process.
+  let none = "/tmp/ts_mbt_types_graph_no_types"
+  types_graph_fixture(none, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"types\":[]},\"include\":[\"src\"]}",
+    ),
+    (
+      "node_modules/@types/node/index.d.ts", "declare var process: { pid: number };\n",
+    ),
+    ("src/main.ts", "export const a: number = process.pid;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(none)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_true(mtsc_compile_all(opts, entries) > 0)
+}
+
+///|
+/// `typeRoots` replaces the default roots, and a source file's own
+/// `/// <reference types>` and `/// <reference path>` load what they name.
+async test "mtsc check graph: typeRoots and a file's own references" {
+  let root = "/tmp/ts_mbt_types_graph_type_roots"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"./typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/g/index.d.ts", "declare var G: number;\n"),
+    ("typings/h/index.d.ts", "declare var H: number;\n"),
+    ("other/extra.d.ts", "declare var X: number;\n"),
+    (
+      "src/main.ts", "/// <reference types=\"h\" />\n/// <reference path=\"../other/extra.d.ts\" />\nexport const ok: number = G + H + X;\n",
+    ),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+  @fs.write_file(
+    root + "/src/main.ts",
+    "/// <reference types=\"h\" />\n/// <reference path=\"../other/extra.d.ts\" />\nexport const bad: string = G + H + X;\n",
+    create=0o644,
+  )
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_true(mtsc_compile_all(opts, entries) > 0)
+}

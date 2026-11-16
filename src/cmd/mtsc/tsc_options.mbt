@@ -386,6 +386,13 @@ priv struct MtscOptions {
   // when neither the command line nor the project set it, so the command
   // line can win over a config the way it does for every other option.
   mut skip_lib_check : Bool?
+  // The project's directory, for the default type roots: every
+  // `node_modules/@types` from here up. `None` without a config.
+  mut config_dir : String?
+  // `compilerOptions.types` and `typeRoots`, the roots already resolved
+  // against the config directory. `None` when the config does not say.
+  mut types : Array[String]?
+  mut type_roots : Array[String]?
 }
 
 ///|
@@ -431,6 +438,9 @@ fn mtsc_options_new() -> MtscOptions {
     ignored: [],
     checker_options: [],
     skip_lib_check: None,
+    config_dir: None,
+    types: None,
+    type_roots: None,
   }
 }
 

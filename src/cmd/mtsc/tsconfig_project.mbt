@@ -388,6 +388,32 @@ async fn mtsc_apply_project_compiler_options(
     Some(v) => if opts.skip_lib_check is None { opts.skip_lib_check = Some(v) }
     None => ()
   }
+  // The type directives the program loads by itself (see
+  // `mtsc_type_directive_roots`). `typeRoots` entries are relative to the
+  // config that names them; the leaf config's directory stands in for it,
+  // which is the common case and the one a `extends` base rarely changes.
+  let config_dir = mtsc_dirname(config_path)
+  opts.config_dir = Some(config_dir)
+  match @parser.tsconfig_compiler_option_string_array_at(config_path, "types") {
+    Some(names) => opts.types = Some(names)
+    None => ()
+  }
+  match
+    @parser.tsconfig_compiler_option_string_array_at(config_path, "typeRoots") {
+    Some(roots) =>
+      opts.type_roots = Some(
+        roots.map(fn(r) {
+          mtsc_normalize(
+            if r.has_prefix("/") {
+              r
+            } else {
+              mtsc_join_path(config_dir, r)
+            },
+          )
+        }),
+      )
+    None => ()
+  }
   // The options the CHECKER reads. They are passed on as written and the
   // `strict` family's defaults are decided where they are used
   // (`@mtsc_core.compiler_option_header`), so `-p` and the library

@@ -256,6 +256,7 @@ fn mtsc_empty_module() -> @ast.TsModule {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    ambient_module_sources: [],
     strict_property_initialization: true,
     no_implicit_any: true,
     strict_null_checks: true,
@@ -669,7 +670,10 @@ async fn mtsc_load_bundle_files(
         // The side-effect form (`import "./x.scss"`) is correct and
         // stays silent — all 76 of Excalidraw's stylesheet imports are
         // that form, which is why this cannot warn on every stylesheet.
-        if is_stylesheet_path(spec) &&
+        // Runtime walks only: a CHECK emits nothing, and there the module
+        // is whatever a `declare module "*.css"` says it is.
+        if !types_resolution &&
+          is_stylesheet_path(spec) &&
           (
             imp.default_binding is Some(_) ||
             imp.namespace_binding is Some(_) ||
@@ -1684,6 +1688,7 @@ async fn mtsc_compile_entry(
           namespaces: [],
           enums: [],
           module_augmentations: [],
+          ambient_module_sources: [],
           strict_property_initialization: true,
           no_implicit_any: true,
           strict_null_checks: true,
@@ -1881,6 +1886,7 @@ async fn mtsc_compile_entry(
             namespaces: [],
             enums: [],
             module_augmentations: [],
+            ambient_module_sources: [],
             strict_property_initialization: true,
             no_implicit_any: true,
             strict_null_checks: true,

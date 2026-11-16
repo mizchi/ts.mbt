@@ -434,6 +434,7 @@ pub(all) struct TsModule {
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
   module_augmentations : Array[(String, TsModule)]
+  ambient_module_sources : Array[(String, String)]
   top_level_stmts : Array[TsStmt]
   strict_property_initialization : Bool
   no_implicit_any : Bool

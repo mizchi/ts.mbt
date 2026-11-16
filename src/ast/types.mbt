@@ -1108,6 +1108,13 @@ pub(all) struct TsModule {
   // aliases / values into the matching module lookup so user code that
   // imports from `"foo"` sees the augmented shape.
   module_augmentations : Array[(String, TsModule)]
+  // The SOURCE of each `declare module "spec" { … }` body above, as
+  // `(spec, text)`, in the same order. In a script-shaped declaration file
+  // such a block declares a module that an import of `"spec"` resolves
+  // to, and the graph checker re-parses the text as that module, so the
+  // body is checked by exactly the machinery a real file gets instead of
+  // a second model of one.
+  ambient_module_sources : Array[(String, String)]
   // Top-level executable statements (const/let/var with type annotations,
   // class expressions, etc.) from non-ambient modules. Empty for .d.ts files.
   top_level_stmts : Array[TsStmt]

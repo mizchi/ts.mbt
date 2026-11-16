@@ -152,6 +152,8 @@ pub fn check_module_sources(modules : Array[MtscModuleSource]) -> String {
 fn parse_graph_module(
   source : MtscModuleSource,
   option_header~ : String = "",
+  // The source is an ambient module BODY (`graph_with_ambient_modules`).
+  ambient_body~ : Bool = false,
 ) -> Result[ParsedMtscModule, String] {
   // A declaration file makes every declaration in it ambient whether or
   // not it writes `declare`; the PATH is the only place that fact lives,
@@ -170,7 +172,15 @@ fn parse_graph_module(
   if is_dts {
     p1.mark_declaration_file()
   }
-  let module_ = p1.parse_module() catch { e => return Err("\{e}") }
+  let module_ = try {
+    if ambient_body {
+      p1.parse_ambient_module_body()
+    } else {
+      p1.parse_module()
+    }
+  } catch {
+    e => return Err("\{e}")
+  }
   let p2 = @parser.Parser::from_source_with_jsx(
     source.source,
     source.allowJsx,
@@ -1308,13 +1318,31 @@ pub(all) struct MtscGraphIssue {
 /// True for a `.d.ts` whose declarations are ambient — global to the
 /// whole program. A declaration file that imports or exports anything is
 /// a module in its own right, so its declarations stay local to it.
+///
+/// A file is a module when ITS OWN top level imports or exports anything.
+/// That is read from two facts an ambient `declare module "x" { … }` body
+/// cannot touch: the block's import list, and the `<module-syntax>` /
+/// `<export-…>` markers every `export` form leaves in the file's own
+/// parser (a body is parsed by a child parser, which keeps its own). The
+/// block's EXPORT list is not one of them: it collects the bodies'
+/// `export`s too, so a `globals.d.ts` holding any `declare module` read as
+/// a module, and none of its `declare const` globals were visible.
 fn is_ambient_script_module(module_ : ParsedMtscModule) -> Bool {
   if !module_.source.path.has_suffix(".d.ts") {
     return false
   }
-  module_.module_block.imports.is_empty() &&
-  module_.module_block.exports.is_empty() &&
-  module_.module_block.reexports.is_empty()
+  if !module_.module_block.imports.is_empty() {
+    return false
+  }
+  for gm in module_.module_.grammar_misuses {
+    if gm == "<module-syntax>" ||
+      gm.has_prefix("<export-value>") ||
+      gm.has_prefix("<export-default>") ||
+      gm.has_prefix("<export-eq>") {
+      return false
+    }
+  }
+  true
 }
 
 ///|
@@ -1337,6 +1365,182 @@ fn module_value_bindings(
     out.push((enum_.name, @ast.TsType::Named(enum_.name)))
   }
   out
+}
+
+///|
+/// Where the module an ambient `declare module "spec"` declares lives in
+/// the program. Not a path any file can have, so it cannot collide with
+/// one, and it ends in `.d.ts` so the body is parsed as declarations.
+fn ambient_module_path(spec : String) -> String {
+  "/@ambient-module/" + spec + ".d.ts"
+}
+
+///|
+/// `parsed` with an export entry for every value it declares. Every
+/// declaration in an ambient module body is exported, with or without
+/// `export` — probed: `declare module "m" { const n: number }` imports as
+/// `import { n } from "m"` with no error, and so does an unexported `const`
+/// beside an exported one. Types need nothing, because the graph checker
+/// exposes a module's type declarations whether or not they are exported.
+fn with_implicit_exports(parsed : ParsedMtscModule) -> ParsedMtscModule {
+  let exported : Map[String, Unit] = Map([])
+  for e in parsed.module_block.exports {
+    exported[e.export_name] = ()
+  }
+  let exports = parsed.module_block.exports.copy()
+  for entry in module_value_bindings(parsed.module_) {
+    if !exported.contains(entry.0) {
+      exported[entry.0] = ()
+      exports.push({ local_name: entry.0, export_name: entry.0, })
+    }
+  }
+  { ..parsed, module_block: { ..parsed.module_block, exports, }, }
+}
+
+///|
+/// The program with every AMBIENT module declaration as a module of its
+/// own, and the imports that name one routed to it.
+///
+/// `declare module "virtual:cfg" { … }` in a script-shaped declaration file
+/// declares a module, and an import of `"virtual:cfg"` reads it. Each body
+/// is re-parsed from its source (`TsModule.ambient_module_sources`) as a
+/// module at `ambient_module_path`, so its exports, its types and its own
+/// imports go through exactly the code a real file does. Bodies declaring
+/// one name in several files are concatenated, which is how TypeScript
+/// merges them.
+///
+/// Which import reads one follows `resolveExternalModule`, and each rule was
+/// probed:
+/// - an EXACT ambient name wins over a file the resolver found, so a
+///   `declare module "dup"` beside a real `dup` package is what `"dup"`
+///   means;
+/// - a PATTERN (`"*.css"`, at most one `*`) applies only when resolution
+///   found nothing the program reads, and the one with the longest prefix
+///   wins. `./a.css` resolves to a file the checker cannot read, which is
+///   exactly where the pattern answers;
+/// - a relative specifier never names an ambient module exactly (a relative
+///   ambient name is an error, TS2436).
+///
+/// A `declare module` inside a file with its own imports or exports is an
+/// AUGMENTATION of an existing module, not a declaration, and is left
+/// alone here.
+///
+/// The third result is the virtual modules' paths. They hold declarations
+/// only and nothing reports on them.
+fn graph_with_ambient_modules(
+  parsed_modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> (Array[ParsedMtscModule], Array[MtscModuleEdge], Map[String, Unit]) {
+  let bodies : Map[String, String] = Map([])
+  let order : Array[String] = []
+  for m in parsed_modules {
+    if !is_ambient_script_module(m) {
+      continue
+    }
+    for entry in m.module_.ambient_module_sources {
+      let (spec, body) = entry
+      match bodies.get(spec) {
+        Some(prev) => bodies[spec] = prev + "\n" + body
+        None => {
+          bodies[spec] = body
+          order.push(spec)
+        }
+      }
+    }
+  }
+  let virtual_paths : Map[String, Unit] = Map([])
+  if order.length() == 0 {
+    return (parsed_modules, edges, virtual_paths)
+  }
+  let modules = parsed_modules.copy()
+  let exact : Map[String, String] = Map([])
+  let patterns : Array[(String, String, String)] = []
+  for spec in order {
+    let path = ambient_module_path(spec)
+    let source : MtscModuleSource = {
+      path,
+      source: bodies.get(spec).unwrap_or(""),
+      allowJsx: false,
+    }
+    match parse_graph_module(source, ambient_body=true) {
+      Ok(parsed) => {
+        modules.push(with_implicit_exports(parsed))
+        virtual_paths[path] = ()
+        match spec.find("*") {
+          Some(i) =>
+            patterns.push((spec[:i].to_owned(), spec[i + 1:].to_owned(), path))
+          None => exact[spec] = path
+        }
+      }
+      // A body that does not parse declares nothing here; the file that
+      // holds it reports its own syntax.
+      Err(_) => ()
+    }
+  }
+  let parsed_paths : Map[String, Unit] = Map([])
+  for m in modules {
+    parsed_paths[m.source.path] = ()
+  }
+  let targets : Map[String, String] = Map([])
+  for e in edges {
+    let k = e.importerPath + "\u{0}" + e.moduleSpecifier
+    if !targets.contains(k) {
+      targets[k] = e.targetPath
+    }
+  }
+  let routed : Array[MtscModuleEdge] = []
+  for m in modules {
+    for spec in mtsc_module_specifiers(m) {
+      let importer = m.source.path
+      if !is_local_module_specifier(spec) {
+        match exact.get(spec) {
+          Some(path) => {
+            routed.push({
+              importerPath: importer,
+              moduleSpecifier: spec,
+              targetPath: path,
+            })
+            continue
+          }
+          None => ()
+        }
+      }
+      let resolved = match targets.get(importer + "\u{0}" + spec) {
+        Some(target) => parsed_paths.contains(target)
+        None => false
+      }
+      if resolved {
+        continue
+      }
+      let mut best : (Int32, String)? = None
+      for pattern in patterns {
+        let (prefix, suffix, path) = pattern
+        if spec.length() >= prefix.length() + suffix.length() &&
+          spec.has_prefix(prefix) &&
+          spec.has_suffix(suffix) {
+          match best {
+            Some((len, _)) if len >= prefix.length() => ()
+            _ => best = Some((prefix.length(), path))
+          }
+        }
+      }
+      match best {
+        Some((_, path)) =>
+          routed.push({
+            importerPath: importer,
+            moduleSpecifier: spec,
+            targetPath: path,
+          })
+        None => ()
+      }
+    }
+  }
+  // First edge per (importer, specifier) wins in `find_graph_target`, so the
+  // routed edges go in front of the resolver's.
+  for e in edges {
+    routed.push(e)
+  }
+  (modules, routed, virtual_paths)
 }
 
 ///|
@@ -1423,6 +1627,21 @@ fn collect_parsed_graph_issues(
   graph_import_alias_cache.clear()
   graph_module_index.clear()
   graph_edge_index.clear()
+  let (parsed_modules, edges, ambient_module_paths) = graph_with_ambient_modules(
+    parsed_modules, edges,
+  )
+  let context_only = if ambient_module_paths.length() == 0 {
+    context_only
+  } else {
+    let all : Map[String, Unit] = Map([])
+    for k, _ in context_only {
+      all[k] = ()
+    }
+    for k, _ in ambient_module_paths {
+      all[k] = ()
+    }
+    all
+  }
   let ambient_globals : Array[(String, @ast.TsType)] = []
   let ambient_modules : Array[@ast.TsModule] = []
   for module_ in parsed_modules {
