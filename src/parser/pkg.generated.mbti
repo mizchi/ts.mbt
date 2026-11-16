@@ -67,6 +67,8 @@ pub async fn resolve_tsconfig_extends(String, String) -> String?
 
 pub async fn resolve_type_module_specifier(String, String) -> String?
 
+pub fn[H : ModuleResolutionHost] resolve_type_module_specifier_with(H, String, String) -> String?
+
 pub async fn tsconfig_compiler_option(String, String) -> String?
 
 pub async fn tsconfig_compiler_option_at(String, String) -> String?
@@ -434,3 +436,9 @@ pub(all) struct TsconfigProject {
 // Type aliases
 
 // Traits
+pub trait ModuleResolutionHost {
+  fn file_exists(Self, String) -> Bool
+  fn directory_exists(Self, String) -> Bool
+  fn read_file(Self, String) -> String?
+  fn realpath(Self, String) -> String
+}

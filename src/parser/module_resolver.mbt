@@ -1342,7 +1342,15 @@ async fn resolve_package_entry(
         }
       }
     }
-    None => ()
+    // No manifest: the directory is a package all the same, and its root
+    // is `index`, as tsc reads it. `@types/scope__name` is commonly
+    // published without one, and so is a hoisted workspace helper; both
+    // used to resolve to nothing, which made a scoped `@types` package
+    // invisible and let the untyped `.js` beside it win.
+    None =>
+      if subpath == "" {
+        return resolve_as_file(join_path(package_root, "index"), mode)
+      }
   }
   if subpath != "" {
     return resolve_path_like(
