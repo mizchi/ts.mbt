@@ -46770,6 +46770,16 @@ fn check_module_function_bodies_layered(
       note_declared(type_module, type_module_keys[i])
     }
   }
+  // The checked module's RENAMED imports (`import { Other as Item }`):
+  // `alias_namespace_import_types` redirects each local name once
+  // ingestion is done, so a bare destination spelled like one of them is
+  // redirected with it and cannot stand for another module's declaration.
+  let checked_renamed_locals : Map[String, Unit] = Map([])
+  for checked_alias in namespace_type_aliases {
+    if checked_alias.0 != checked_alias.1 {
+      checked_renamed_locals[checked_alias.0] = ()
+    }
+  }
   // Each reachable module's renames, by key: an imported VALUE's type is
   // written in its declaring module's scope and is read through them below.
   let renames_by_key : Map[String, Map[String, String]] = Map([])
@@ -46866,7 +46876,9 @@ fn check_module_function_bodies_layered(
               Some(set) => set.length() == 1 && set.contains(origin)
               None => false
             }
-            if local_name != bare && origin_is_sole_declarer {
+            if local_name != bare &&
+              origin_is_sole_declarer &&
+              !checked_renamed_locals.contains(bare) {
               renames[local_name] = bare
             }
             continue

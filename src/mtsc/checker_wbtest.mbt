@@ -857,3 +857,37 @@ test "mtsc graph checker resolves a renamed import of a uniquely declared type" 
     1,
   )
 }
+
+///|
+/// The renamed-import mapping above must not land on a name the CHECKED
+/// module redirects: its `import { Other as Item }` (with `Other` declared
+/// twice) points `Item` at `Other@x1`, so mapping `b.ts`'s `It` to the bare
+/// `Item` read `make()` as `Other` and reported `.n` as missing.
+test "mtsc graph checker keeps a renamed import off a name the checked module redirects" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import { make } from \"./b\";\nimport type { Other as Item } from \"./x1\";\nimport type { Other as O2 } from \"./x2\";\nexport const m: Item = { z: \"s\" };\nexport const o: O2 = { w: true };\nexport const k: number = make().n;",
+      ),
+      module_("/src/a.ts", "export interface Item { n: number }"),
+      module_(
+        "/src/b.ts", "import type { Item as It } from \"./a\";\nexport declare function make(): It;",
+      ),
+      module_("/src/x1.ts", "export interface Other { z: string }"),
+      module_("/src/x2.ts", "export interface Other { w: boolean }"),
+    ],
+    edges: [
+      edge("/src/root.ts", "./b", "/src/b.ts"),
+      edge("/src/root.ts", "./x1", "/src/x1.ts"),
+      edge("/src/root.ts", "./x2", "/src/x2.ts"),
+      edge("/src/b.ts", "./a", "/src/a.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.message }), [])
+}
