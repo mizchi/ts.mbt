@@ -5300,6 +5300,37 @@ product surfaces now.
         NAMED import of a namespace export (`import { Models }` of
         `export * as Models`), so `Models.I` stayed unresolved for an
         importer.
+    - **The third round found four more, and one was this PR's own
+      regression.**
+      - `func_prototype_member` builds `call`'s signature by PREPENDING
+        `thisArg`, and it kept the predicate return. The recorded subject
+        position, 1, then named `first` in `g.call(null, first, value)`,
+        so `first` was narrowed and `value` was not. tsc narrows neither,
+        because `call` infers its `R` and a predicate does not survive
+        that. So the predicate is dropped there. Probed: `apply` already
+        narrowed nothing, since its arguments are one array, and `bind`
+        keeps the predicate in tsc and here.
+      - A MEMBER of the expanded alias union could itself be an alias.
+        `type Choice<T> = Text<T> | number` kept `Text<string>` in the
+        else branch, so `const n: number = value` was reported. main
+        reports it too. Alias members are now expanded and flattened.
+        Interfaces stay named, because the keep / remove tests were
+        written against that shape.
+      - The lowering check matched a `var` by SHAPE (`any`, named after a
+        namespace), which also matches a written `declare const Foo: any`.
+        `TsValueDecl` holds only a name and a type, so the two are the
+        same entry. The parser records one `any` entry per namespace
+        BLOCK, so `declared_values` drops one per block, and a real `any`
+        value survives as the one left over. No import path could observe
+        the old answer, because an `any` value and an unknown one both
+        abstain. So the test asserts `declared_values` directly.
+      - The `.d.ts` emitter names a callable's parameters `arg0`, `arg1`,
+        and so on, and printed a predicate's SOURCE name, so
+        `(arg0: unknown, arg1: unknown) => value is string` named a
+        parameter it does not declare. A recorded position now prints
+        `arg<N>`. Position 0 is not encoded and still prints its source
+        name. That is pre-existing: main emits
+        `(arg0: unknown) => x is string`.
     - A union-typed member of an `export =` namespace (`mode: "dev" |
       "prod"`) read as absent. Only a union of signatures, which is an
       overload set, binds as `any`.
