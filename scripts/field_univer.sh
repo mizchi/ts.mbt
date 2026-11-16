@@ -103,15 +103,20 @@ if [ "${FIELD_TS7:-0}" = 1 ]; then
     exit 2
   fi
   # `tsc` exits 0 for a clean program and 1 or 2 for one with
-  # diagnostics; anything else (`node` missing, a crash, a signal) means
-  # the reference was not computed for that package, and an empty error
-  # list from it must not read as "TS7 accepts this".
+  # diagnostics; anything else (`node` missing, a signal) means the
+  # reference was not computed for that package, and an empty error list
+  # from it must not read as "TS7 accepts this". Node also exits 1 for an
+  # uncaught exception, so a 1 or 2 counts as a diagnostic exit only when
+  # tsc printed a diagnostic; otherwise it is recorded as `crash`.
   for c in $(cat "$OUT/entries.txt"); do
     p=$(echo "$c" | cut -d/ -f2)
     set +e
     node "$TSC" -p "$c" --noEmit > "$OUT/$p.ts7.txt" 2>&1
     code=$?
     set -e
+    if { [ "$code" = 1 ] || [ "$code" = 2 ]; } && ! grep -q 'error TS[0-9]' "$OUT/$p.ts7.txt"; then
+      code=crash
+    fi
     echo "$p $code" >> "$OUT/ts7-status.txt"
   done
   ts7_incomplete=$(awk '$2 != 0 && $2 != 1 && $2 != 2' "$OUT/ts7-status.txt" | sort)
