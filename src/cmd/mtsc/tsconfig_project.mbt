@@ -402,7 +402,23 @@ async fn mtsc_apply_project_compiler_options(
     @parser.tsconfig_compiler_option_string_array_at(config_path, "typeRoots") {
     Some(roots) =>
       opts.type_roots = Some(
-        roots.map(fn(r) {
+        roots.map(fn(written) {
+          // `${configDir}` is TypeScript's template for the directory of
+          // the config in use, which is the one this reads against.
+          let r = if written.has_prefix("${configDir}") {
+            let rest = written[12:].to_owned()
+            if config_dir == "" {
+              if rest.has_prefix("/") {
+                "." + rest
+              } else {
+                "." + "/" + rest
+              }
+            } else {
+              config_dir + rest
+            }
+          } else {
+            written
+          }
           mtsc_normalize(
             if r.has_prefix("/") {
               r

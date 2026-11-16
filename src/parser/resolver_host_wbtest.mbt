@@ -304,4 +304,20 @@ test "parser: triple-slash references are read from the leading trivia only" {
     [],
   )
   assert_eq(triple_slash_references(""), [])
+  // A CR-only file: a line comment ends at CR as well, or the header
+  // comment swallows the directive after it.
+  assert_eq(
+    triple_slash_references(
+      "// header\r/// <reference path=\"globals.d.ts\" />\rexport {};",
+    ),
+    [("path", "globals.d.ts")],
+  )
+  // Whitespace around `=`, which TypeScript accepts, for both kinds; and a
+  // `types` inside another attribute's value is not the attribute.
+  assert_eq(
+    triple_slash_references(
+      "/// <reference path = \"a.d.ts\" />\n/// <reference types =  'node' />\n/// <reference path=\"types=x.d.ts\" />\n",
+    ),
+    [("path", "a.d.ts"), ("types", "node"), ("path", "types=x.d.ts")],
+  )
 }

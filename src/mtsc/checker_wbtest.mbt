@@ -1681,3 +1681,273 @@ test "mtsc graph checker leaves a re-export from outside the graph unknown" {
     "module `./barrel` has no value export `nope`",
   ])
 }
+
+///|
+fn graph_messages(
+  modules : Array[(String, String)],
+  edges : Array[(String, String, String)],
+) -> Array[String] {
+  let issues = collect_module_graph_issues({
+    modules: modules.map(fn(m) { { path: m.0, source: m.1, allowJsx: false, } }),
+    edges: edges.map(fn(e) {
+      { importerPath: e.0, moduleSpecifier: e.1, targetPath: e.2, }
+    }),
+  })
+  issues.map(fn(i) { i.path + " :: " + i.message })
+}
+
+///|
+/// `import { I } from "./x"` of an interface or a type alias is legal
+/// without `type` — only `verbatimModuleSyntax` asks for it — and it read
+/// as "has no value export". A type export is not a missing value; a name
+/// the module does not export at all still reports.
+test "mtsc graph checker accepts an ordinary import of a type" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/x.ts", "export interface I { n: number }\nexport type T = { n: number };",
+        ),
+        (
+          "/src/root.ts", "import { I, T } from \"./x\";\nexport const a: I = { n: 1 };\nexport const b: T = { n: 1 };",
+        ),
+      ],
+      [("/src/root.ts", "./x", "/src/x.ts")],
+    ),
+    [],
+  )
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/env.d.ts", "declare module \"m\" { export interface I { n: number } }",
+        ),
+        (
+          "/src/root.ts", "import { I } from \"m\";\nexport const ok: I = { n: 1 };\nexport const bad: I = { n: \"s\" };",
+        ),
+      ],
+      [],
+    ),
+    ["top-level > binding `bad` init.n :: expected `number` but got `string`"],
+  )
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/x.ts", "export interface I { n: number }"),
+        (
+          "/src/root.ts", "import { Nope } from \"./x\";\nexport const a = Nope;",
+        ),
+      ],
+      [("/src/root.ts", "./x", "/src/x.ts")],
+    ),
+    ["import :: module `./x` has no value export `Nope`"],
+  )
+}
+
+///|
+/// `import { n } from "./a"; export { n }` is how a barrel re-exports, and
+/// the export names an IMPORT binding, which has no declaration in the
+/// barrel. The value is the one the import names, in its own module; a
+/// renamed import and a default import follow the same way, a namespace
+/// import is a value this checker does not model, and an import from
+/// outside the graph is unknown rather than missing.
+test "mtsc graph checker follows a barrel's export of an import binding" {
+  let edges = [
+    ("/src/b.ts", "./a", "/src/a.ts"),
+    ("/src/root.ts", "./b", "/src/b.ts"),
+  ]
+  let a = (
+    "/src/a.ts", "export const n: number = 1;\nexport default function d(): number { return 1 }",
+  )
+  assert_eq(
+    graph_messages(
+      [
+        a,
+        (
+          "/src/b.ts", "import { n as m } from \"./a\";\nimport d from \"./a\";\nimport * as ns from \"./a\";\nimport { gone } from \"ext-pkg\";\nexport { m as k, d, ns, gone };",
+        ),
+        (
+          "/src/root.ts", "import { k, d, ns, gone } from \"./b\";\nexport const bad: string = k;\nexport const bad2: string = d();\nexport const ok = [ns, gone];",
+        ),
+      ],
+      edges,
+    ),
+    [
+      "top-level > binding `bad` init :: expected `string` but got `number`", "top-level > binding `bad2` init :: expected `string` but got `number`",
+    ],
+  )
+}
+
+///|
+/// A `declare module "m" { … }` body is a MODULE. Its virtual file carries
+/// no import or export marker, so it read as a script: `hidden` became a
+/// global of the whole program, and two bodies each declaring `interface
+/// I` merged into one shape, so a legal `I` from `"a"` was missing `y`.
+test "mtsc graph checker keeps an ambient module body out of the global scope" {
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/env.d.ts", "declare module \"m\" { const hidden: number; }"),
+        ("/src/root.ts", "export const x: string = hidden;"),
+      ],
+      [],
+    ),
+    ["top-level > use `hidden` :: cannot find name `hidden`"],
+  )
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/env.d.ts", "declare module \"a\" { interface I { x: number } }\ndeclare module \"b\" { interface I { y: string } }",
+        ),
+        (
+          "/src/root.ts", "import type { I } from \"a\";\nexport const ok: I = { x: 1 };\nexport const bad: I = { x: \"s\" };",
+        ),
+      ],
+      [],
+    ),
+    ["top-level > binding `bad` init.x :: expected `number` but got `string`"],
+  )
+}
+
+///|
+/// An ambient body's own imports and re-exports were resolved relative to
+/// the file that holds it, so their edges are keyed by that file. The
+/// virtual module is a different importer, so `export { n } from "dep"`
+/// and a body-local `import { T } from "dep"` reached nothing.
+test "mtsc graph checker follows an ambient body's own imports" {
+  let dep = (
+    "/node_modules/dep/index.d.ts", "export declare const n: number;\nexport interface T { k: number }",
+  )
+  let edges = [("/src/env.d.ts", "dep", "/node_modules/dep/index.d.ts")]
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/env.d.ts", "declare module \"m\" { export { n } from \"dep\"; import { T } from \"dep\"; export function f(): T; }",
+        ),
+        dep,
+        (
+          "/src/root.ts", "import { n, f } from \"m\";\nexport const bad: string = n;\nexport const bad2: string = f().k;\nexport const ok: number = n + f().k;",
+        ),
+      ],
+      edges,
+    ),
+    [
+      "top-level > binding `bad` init :: expected `string` but got `number`", "top-level > binding `bad2` init :: expected `string` but got `number`",
+    ],
+  )
+}
+
+///|
+/// `declare module "spec";` with no body makes every import from it `any`
+/// — exact, a pattern such as `"*.svg"` for a relative import, and over a
+/// file the resolver did find. And a default import of a DECLARATION file
+/// with no default export (an empty braced body, a `.d.ts` package) gets
+/// the synthetic default: TypeScript 7 removed
+/// `allowSyntheticDefaultImports: false`, so tsc accepts all of these and
+/// still reports TS1192 for the same import of a `.ts` file.
+test "mtsc graph checker types shorthand ambient modules and synthetic defaults" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/env.d.ts", "declare module \"spec\";\ndeclare module \"*.svg\";\ndeclare module \"dup\";\ndeclare module \"empty\" {}",
+        ),
+        ("/node_modules/dup/index.d.ts", "export declare const a: string;"),
+        ("/node_modules/p/index.d.ts", "export declare const k: number;"),
+        (
+          "/src/root.ts", "import v, { w } from \"spec\";\nimport logo from \"./logo.svg\";\nimport { a } from \"dup\";\nimport e from \"empty\";\nimport p from \"p\";\nexport const x1: number = v;\nexport const x2: string = w;\nexport const x3: number = logo;\nexport const x4: number = a;\nexport const x5 = [e, p];",
+        ),
+      ],
+      [
+        ("/src/root.ts", "dup", "/node_modules/dup/index.d.ts"),
+        ("/src/root.ts", "p", "/node_modules/p/index.d.ts"),
+      ],
+    ),
+    [],
+  )
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/real.ts", "export const k: number = 1;"),
+        ("/src/root.ts", "import d from \"./real\";\nexport const a = d;"),
+      ],
+      [("/src/root.ts", "./real", "/src/real.ts")],
+    ),
+    ["import :: module `./real` has no default value export"],
+  )
+}
+
+///|
+/// Two more places ambient type names are global: the members of a
+/// `declare global { … }` block in a reachable MODULE, and the single-letter
+/// type-parameter check, which asked only the checked module.
+test "mtsc graph checker sees declare-global and single-letter ambient types" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/g.d.ts", "export declare const tag: number;\ndeclare global { interface Holder { n: number } function get(): Holder; }",
+        ),
+        (
+          "/src/root.ts", "import { tag } from \"./g\";\nexport const t = tag;\nexport const h: Holder = get();\nexport const bad: string = h.n;",
+        ),
+      ],
+      [("/src/root.ts", "./g", "/src/g.d.ts")],
+    ),
+    ["top-level > binding `bad` init :: expected `string` but got `number`"],
+  )
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/env.d.ts", "interface A { n: number }"),
+        (
+          "/src/root.ts", "declare const value: A;\nexport const bad: string = value.n;",
+        ),
+      ],
+      [],
+    ),
+    ["top-level > binding `bad` init :: expected `string` but got `number`"],
+  )
+}
+
+///|
+/// A reserved name moved in a file with no key has to move inside its
+/// namespace bodies too: `declare namespace N { interface Holder { item:
+/// Item } }` read the checked module's renamed `Other`. A namespace that
+/// declares its own `Item` keeps it.
+test "mtsc graph checker moves a reserved name inside an ambient namespace" {
+  let x = ("/src/x.ts", "export interface Other { z: number }")
+  let edges = [("/src/root.ts", "./x", "/src/x.ts")]
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/root.ts", "import type { Other as Item } from \"./x\";\nexport const m: Item = { z: 1 };\nexport const k: number = holder.item.n;\nexport const bad: string = holder.item.n;",
+        ),
+        x,
+        (
+          "/src/env.d.ts", "interface Item { n: number }\ndeclare namespace N { interface Holder { item: Item } }\ndeclare const holder: N.Holder;",
+        ),
+      ],
+      edges,
+    ),
+    ["top-level > binding `bad` init :: expected `string` but got `number`"],
+  )
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/root.ts", "import type { Other as Item } from \"./x\";\nexport const m: Item = { z: 1 };\nexport const k: string = holder.item.s;",
+        ),
+        x,
+        (
+          "/src/env.d.ts", "interface Item { n: number }\ndeclare namespace N { interface Item { s: string } interface Holder { item: Item } }\ndeclare const holder: N.Holder;",
+        ),
+      ],
+      edges,
+    ),
+    [],
+  )
+}

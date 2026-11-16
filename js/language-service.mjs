@@ -95,8 +95,9 @@ const bindings = await loadBindings();
  *   "yes", and the file probes decide, as in TypeScript.
  * @property {(path: string) => string} [realpath] Symlinks resolved, so
  *   one pnpm package reached through several links loads once. Applied to
- *   the built-in resolution's answers only: a `resolveModuleNames` path is
- *   used as given, so a host canonicalizes its own answers.
+ *   the built-in resolution's answer for a bare specifier only (as tsc
+ *   realpaths a package file, not a relative one); a `resolveModuleNames`
+ *   path is used as given, so a host canonicalizes its own answers.
  * @property {(moduleNames: string[], containingFile: string) => ({ resolvedFileName: string } | undefined | null)[]} [resolveModuleNames]
  *   The host's own resolution, asked first. `undefined` for a name means
  *   "use the built-in resolution"; `null` means "do not follow it".

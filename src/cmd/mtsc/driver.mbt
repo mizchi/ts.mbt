@@ -251,6 +251,14 @@ async fn mtsc_type_roots(opts : MtscOptions) -> Array[String] {
     Some(d) => d
     None => return out
   }
+  // `-p packages/app` leaves the directory relative, and a relative walk
+  // stops at its own first segment: `packages` has the parent `""`, so the
+  // workspace root's `node_modules/@types` — where a monorepo hoists
+  // `@types/node` — was never asked. TypeScript walks the ABSOLUTE
+  // directory, so this does too.
+  if !dir.has_prefix("/") {
+    dir = mtsc_normalize(mtsc_join_path(@parser.canonical_file_path("."), dir))
+  }
   while true {
     let candidate = mtsc_normalize(mtsc_join_path(dir, "node_modules/@types"))
     let is_dir = (@fs.kind(candidate) catch { _ => @fs.FileKind::Unknown })

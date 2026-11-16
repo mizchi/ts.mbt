@@ -143,8 +143,10 @@ priv enum MtscResolved {
 /// The host's own answer wins; otherwise the shared resolver runs. A
 /// bare specifier's answer is canonicalized with `realpath`, as tsc does
 /// for a package file, so one package reached through several pnpm links
-/// enters the program once; a relative answer keeps its spelling, which
-/// is already relative to a canonical importer.
+/// enters the program once; a relative answer keeps its spelling. That is
+/// tsc's split too: `nodeModuleNameResolverWorker` realpaths only the
+/// non-relative branch, so two relative routes through a symlinked
+/// directory load one file under two names in tsc as well.
 fn[H : MtscHost] mtsc_resolve_import(
   host : H,
   cache : MtscSourceCache,

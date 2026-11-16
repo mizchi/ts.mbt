@@ -66,11 +66,12 @@ export interface LanguageServiceHost {
    * `path` with symlinks resolved. Absent means `path`. With it, one pnpm
    * package reached through several links enters the program once.
    *
-   * It is applied to the BUILT-IN resolution's answers only. A path this
-   * host returns from `resolveModuleNames` is used as given (normalized,
-   * never passed through `realpath`), as TypeScript trusts the paths
-   * `resolveModuleNames` returns — so a host that returns its own paths
-   * canonicalizes them itself.
+   * It is applied to the BUILT-IN resolution's answer for a bare specifier
+   * (a package) only — TypeScript realpaths a package file and not a
+   * relative one. A path this host returns from `resolveModuleNames` is
+   * used as given (normalized, never passed through `realpath`), as
+   * TypeScript trusts the paths `resolveModuleNames` returns, so a host
+   * that returns its own paths canonicalizes them itself.
    */
   realpath?(path: string): string;
   /**
