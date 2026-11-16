@@ -998,6 +998,26 @@ fn rename_interface_refs(
   for b in i.type_param_bounds {
     type_param_bounds.push((b.0, rename_type_refs(b.1, r)))
   }
+  // A METHOD's bounds (`take<K extends keyof Item>(k: K)`) are written in
+  // the interface's scope too, with that method's own binders shadowing.
+  let method_type_param_bounds : Array[(String, Array[(String, @ast.TsType)])] = []
+  for entry in i.method_type_param_bounds {
+    let own : Map[String, String] = match method_binders.get(entry.0) {
+      Some(binders) => {
+        let own : Map[String, String] = Map([])
+        for k, v in r {
+          if !binders.contains(k) {
+            own[k] = v
+          }
+        }
+        own
+      }
+      None => r
+    }
+    method_type_param_bounds.push(
+      (entry.0, entry.1.map(fn(b) { (b.0, rename_type_refs(b.1, own)) })),
+    )
+  }
   {
     ..i,
     extends_names: i.extends_names.map(fn(n) { r.get(n).unwrap_or(n) }),
@@ -1005,6 +1025,7 @@ fn rename_interface_refs(
     fields,
     index_signatures,
     type_param_bounds,
+    method_type_param_bounds,
   }
 }
 
@@ -1046,32 +1067,20 @@ fn qualify_namespace_local_refs(
 }
 
 ///|
-/// `m` with each top-level interface, type alias and enum whose name is in
-/// `reserved` moved to `name@<unkeyed>`, and every reference to it in `m`'s
-/// interfaces, aliases and class members moved with it, plus the renames
-/// applied — the rewrite a keyed module gets from `renames`, for a module
-/// that has no key (see the caller in `check_module_function_bodies_layered`).
+/// `m` with each top-level interface, type alias and enum named in
+/// `renames` moved to its key, and every reference to one in `m`'s
+/// interfaces, aliases and class members moved with it — the rewrite a
+/// keyed module gets from its own `renames`, for a module that has no key.
+/// The map is shared by every module without a key (see the caller in
+/// `check_module_function_bodies_layered`), because an ambient `.d.ts`
+/// shares one global scope with the others: `b.d.ts`'s `Holder.item: Item`
+/// means `a.d.ts`'s `interface Item`.
 fn move_unkeyed_reserved_type_names(
   m : @ast.TsModule,
-  reserved : Map[String, Unit],
-) -> (@ast.TsModule, Map[String, String]) {
-  let renames : Map[String, String] = Map([])
-  let note = fn(n : String) {
-    if reserved.contains(n) {
-      renames[n] = n + "@<unkeyed>"
-    }
-  }
-  for i in m.interfaces {
-    note(i.name)
-  }
-  for a in m.type_aliases {
-    note(a.name)
-  }
-  for e in m.enums {
-    note(e.name)
-  }
+  renames : Map[String, String],
+) -> @ast.TsModule {
   if renames.length() == 0 {
-    return (m, renames)
+    return m
   }
   let moved = fn(n : String) { renames.get(n).unwrap_or(n) }
   let aliases = m.type_aliases.map(fn(a) {
@@ -1083,7 +1092,7 @@ fn move_unkeyed_reserved_type_names(
     }
     { ..a, name: moved(a.name), type_: rename_type_refs(a.type_, own), }
   })
-  let out = {
+  {
     ..m,
     interfaces: m.interfaces.map(fn(i) {
       { ..rename_interface_refs(i, renames), name: moved(i.name), }
@@ -1092,7 +1101,6 @@ fn move_unkeyed_reserved_type_names(
     enums: m.enums.map(fn(e) { { ..e, name: moved(e.name), } }),
     classes: m.classes.map(fn(c) { rename_class_refs(c, renames) }),
   }
-  (out, renames)
 }
 
 ///|
@@ -47476,6 +47484,27 @@ fn check_module_function_bodies_layered(
   // too (`declare const ambientItem: Item`), and their types are supplied
   // by the caller, marked `@value-origin:NAME` -> `<unkeyed>`.
   let unkeyed_renames : Map[String, String] = Map([])
+  if checked_renamed_locals.length() > 0 {
+    for i, type_module in type_modules {
+      if i < type_module_keys.length() {
+        continue
+      }
+      let note = fn(n : String) {
+        if checked_renamed_locals.contains(n) {
+          unkeyed_renames[n] = n + "@<unkeyed>"
+        }
+      }
+      for d in type_module.interfaces {
+        note(d.name)
+      }
+      for d in type_module.type_aliases {
+        note(d.name)
+      }
+      for d in type_module.enums {
+        note(d.name)
+      }
+    }
+  }
   for i, type_module in type_modules {
     let cache_key = if i < type_module_keys.length() {
       type_module_keys[i]
@@ -47600,14 +47629,8 @@ fn check_module_function_bodies_layered(
     // module's import: the legal `get().item.n` was reported. Its own
     // declarations of such a name move to `Item@<unkeyed>` instead, and
     // its references move with them.
-    let type_module = if cache_key == "" && checked_renamed_locals.length() > 0 {
-      let (moved, moved_names) = move_unkeyed_reserved_type_names(
-        type_module, checked_renamed_locals,
-      )
-      for k, v in moved_names {
-        unkeyed_renames[k] = v
-      }
-      moved
+    let type_module = if cache_key == "" {
+      move_unkeyed_reserved_type_names(type_module, unkeyed_renames)
     } else {
       type_module
     }
@@ -47696,18 +47719,16 @@ fn check_module_function_bodies_layered(
       note_shadow(outer_modules[k])
     }
   }
-  let namespace_type_aliases = if ambiguous_class_locals.length() == 0 {
+  // Only the aliases installed HERE are filtered. The namespace recursion
+  // below gets the original list, so a nested scope reserves the name too.
+  let installed_aliases = if ambiguous_class_locals.length() == 0 {
     namespace_type_aliases
   } else {
     namespace_type_aliases.filter(fn(a) {
       !ambiguous_class_locals.contains(a.0)
     })
   }
-  Resolver::alias_namespace_import_types(
-    resolver,
-    namespace_type_aliases,
-    shadowed~,
-  )
+  Resolver::alias_namespace_import_types(resolver, installed_aliases, shadowed~)
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
   // `@strict: ...` directive, so they inherit. Reuses the same root

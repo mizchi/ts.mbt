@@ -1410,3 +1410,91 @@ test "mtsc graph checker keeps a dependency class member's own type beside a ren
     "top-level > binding `bad` init :: expected `string` but got `number`",
   ])
 }
+
+///|
+/// A nested namespace gets the checked module's aliases again. Filtering
+/// the ambiguous class name out BEFORE that recursion lost the reservation
+/// one scope in, so the class was registered there and `x.z` read it.
+test "mtsc graph checker keeps an ambiguous class name opaque inside a namespace" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { mk } from \"./a\";\nexport namespace N {\n  export function read(x: Item): number { return x.z }\n}\nexport const k: number = mk().n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/a.ts", "export class Item { n = 1 }\nexport function mk(): Item { return new Item() }",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./x", "/src/x.ts"),
+      edge("/src/root.ts", "./a", "/src/a.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [])
+}
+
+///|
+/// An interface METHOD's bound (`take<K extends keyof Item>`) is written in
+/// the interface's scope, so it has to move with the keyed `Item` like the
+/// method's parameters do. Left bare, the bound read the checked module's
+/// `Other` and the legal `holder.take("n")` was judged against `"z"`.
+test "mtsc graph checker renames a dependency method's bound beside a renamed import" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { holder } from \"./b\";\nexport const m: Item = { z: 1 };\nholder.take(\"n\");",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/b.ts", "export interface Item { n: number }\nexport interface Taker { take<K extends keyof Item>(k: K): void }\nexport declare const holder: Taker;",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./x", "/src/x.ts"),
+      edge("/src/root.ts", "./b", "/src/b.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [])
+}
+
+///|
+/// Ambient files share one scope: `env2.d.ts`'s `Holder.item: Item` means
+/// `env1.d.ts`'s `interface Item`. A per-file rename map moved the
+/// declaration and left the other file's reference bare.
+test "mtsc graph checker moves a reserved name across ambient files" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nexport const m: Item = { z: 1 };\nexport const k: number = amb.item.n;\nexport const bad: string = amb.item.n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_("/src/env1.d.ts", "interface Item { n: number }"),
+      module_(
+        "/src/env2.d.ts", "interface Holder { item: Item }\ndeclare const amb: Holder;",
+      ),
+    ],
+    edges: [edge("/src/root.ts", "./x", "/src/x.ts")],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
+    "top-level > binding `bad` init :: expected `string` but got `number`",
+  ])
+}

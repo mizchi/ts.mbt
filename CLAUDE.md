@@ -4684,6 +4684,15 @@ product surfaces now.
       through what the unkeyed modules moved. The class rewrite also
       applies to every ordinary collision between two dependencies, so
       it was measured on effect and zod.
+    - And three more. An interface METHOD's bound
+      (`take<K extends keyof Item>`) is written in the interface's scope
+      and was not renamed. The unkeyed map was built per file, while
+      ambient files share one scope, so `b.d.ts`'s `Holder.item: Item`
+      missed `a.d.ts`'s moved `Item`; it is one map across every module
+      with no key now. And the ambiguous-class filter was applied to
+      the alias list the namespace recursion receives, so a nested
+      namespace lost the reservation and registered the class again.
+      Only the list installed at this level is filtered now.
   - **The CI `test` job failed on a race unrelated to the checker.** The
     generated async test driver runs up to ten tests at once. Two scaffold
     tests each put a `__tsmbt_glue__*` package inside
