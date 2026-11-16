@@ -4666,6 +4666,17 @@ product surfaces now.
       declarations of such a name now move to `Item@<unkeyed>`, and its
       references move with them, so `Holder.item` still reads its own
       `Item`.
+  - **The CI `test` job failed on a race unrelated to the checker.** The
+    generated async test driver runs up to ten tests at once. Two scaffold
+    tests each put a `__tsmbt_glue__*` package inside
+    `examples/moonbit-to-typescript`, ran `moon build` there, and deleted
+    it. `moon build` discovers every package of the module, so one build's
+    discovery listed the other's glue directory just before it was deleted,
+    and failed with "Failed when discovering packages … No such file or
+    directory". This was reproduced directly by deleting sibling
+    directories in a loop during `moon build`. `with_glue_build_lock` now
+    holds an `@async.Mutex` per module root around the build. Two separate
+    processes against one module can still race.
 
   Batch GG is the first item of the "what does real use lack" survey,
   and it turned out to be a RESOLUTION defect that every gate here was
