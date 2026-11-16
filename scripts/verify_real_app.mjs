@@ -77,7 +77,16 @@ function runTsc(dir) {
   const out = new Map();
   for (const line of `${r.stdout}\n${r.stderr}`.split("\n")) {
     const m = /^(.+?)\(\d+,\d+\): error (TS\d+):/.exec(line.trim());
-    if (!m) continue;
+    if (!m) {
+      // A diagnostic with no location is about the configuration
+      // (`error TS5023: Unknown compiler option`), and it is a finding
+      // like any other: kept under one key so the baseline can fail on it.
+      if (/^error TS\d+:/.test(line.trim())) {
+        if (!out.has("<config>")) out.set("<config>", []);
+        out.get("<config>").push(line.trim());
+      }
+      continue;
+    }
     const file = m[1].replaceAll("\\", "/");
     if (!out.has(file)) out.set(file, []);
     out.get(file).push(`${m[2]} ${line.trim()}`);
@@ -153,6 +162,9 @@ if (!flag("--no-tsc")) {
 const misses = readMisses();
 const bad = runMtsc(badDir);
 const ok = runMtsc(okDir);
+// A clean `ok/` exits 0. A nonzero exit with no line this harness reads as
+// a report (a graph that failed to load, for example) is a failure too.
+if (ok.status !== 0) fail(`mtsc exited with status ${ok.status} on ok/`);
 
 for (const [f, lines] of ok.byFile) fail(`false positive in ok/${f}:\n    ${lines.join("\n    ")}`);
 for (const line of ok.other) fail(`false positive in ok/: ${line}`);
@@ -167,6 +179,12 @@ for (const f of badFiles) {
   const key = `bad/${f}`;
   const reported = bad.byFile.has(f);
   if (reported) caught++;
+  // Exactly the planted error: a second report in the file is a false
+  // positive on one of its legal lines, which counting the file as caught
+  // would hide.
+  if (reported && bad.byFile.get(f).length > 1) {
+    fail(`bad/${f}: mtsc reports ${bad.byFile.get(f).length} errors, expected exactly 1:\n    ${bad.byFile.get(f).join("\n    ")}`);
+  }
   if (misses.has(key)) {
     declared++;
     if (reported) fail(`STALE: ${key} is declared a miss in mtsc-misses.txt and mtsc now reports it — remove the entry`);

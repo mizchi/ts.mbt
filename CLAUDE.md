@@ -5183,6 +5183,176 @@ product surfaces now.
       `/// <reference types>`, and tsc does not apply one there: it
       still walks `node_modules` and finds both `@types/g` and a plain
       `g` package. That half was declined, and gating it fails a test.
+  Batch GK is the survey's fourth step: the eight planted errors
+  `fixtures/real-app` declared as misses. Five are reported now (effect,
+  React, preact, drizzle, express), so mtsc catches 8 of the 11 with 0
+  false positives. The oracle, zod (9), the four real `.d.ts` entries
+  and four of univer's five packages are unchanged. effect goes 124 ->
+  122 and univer `ui` 1,097 -> 1,075, and neither gains a report.
+  - **A namespace object is a value now.** `import * as ns`,
+    `export * as ns from`, and an exported `import * as z` binding (zod's
+    `z`) each bind an object of the target's value exports. Each export is
+    typed where it is declared, through a per-member form of
+    `@value-origin:`.
+    - Only a DECLARATION file's members are typed. The first version
+      typed every module's, and effect's own sources gained 311 false
+      positives. Each one was a coarse inference the old `any` had been
+      hiding: an erased `as const` widening to `string`, or an arrow's
+      `<A>`, which is not in the AST. A package's `.d.ts` is what an
+      application's namespace import reaches, and it says what it means.
+    - An overload set, and a callable object made of call signatures
+      only (effect's `dual` APIs), are spread into one field per
+      signature. That is the only shape the method-call path resolves
+      overloads in. Kept whole, the call was judged by nothing.
+    - A predicate member still narrows through the published `@ns:`
+      form first. The binding's member type is in the declaring module's
+      terms, which is right for a call's result and wrong for a narrowing
+      target.
+  - **A function merged with a namespace is both.** It is callable, with
+    the namespace's members on it: preact's `h`, drizzle's `sql`, and
+    express's `e`. In `local_value_type`, the `var` that lowering a
+    namespace produces is in `values` as `any`, and it answered before
+    the function did. The value is an Object of `<call>` entries plus the
+    members. A namespace that holds only types is not instantiated and
+    contributes nothing, so a `const` merged with it keeps its type. Before
+    this, an empty object shadowed the `const`.
+  - **`export =` over a namespace.** `import * as R` reads the assigned
+    value's members, and so does a named import (`esModuleInterop`). An
+    overloaded member is left out, because a `Union` of signatures with no
+    `@overloads:` marker reads as a union-typed value.
+  - **A declaration file's own qualified names resolve.** The shared
+    resolver maps `ns.X` through the CHECKED module's `import * as ns`. A
+    qualified name written inside another module therefore resolved only
+    when the checked module bound the same `ns` itself, and otherwise
+    abstained. zod writes `core.X` throughout, so `z.string` was
+    unknowable. A declaration file now passes every namespace alias it
+    has. A `.ts` source keeps the conflicting-only rule.
+  - **A generic interface instance is not a primitive.** No object type
+    is assignable to `number`, whatever its type arguments are. But
+    `Box<number>` reached the structural relations as `Applied` and fell
+    through all of them, even when `Box` was declared in the same file.
+    Thenables are excluded, because `await q` of a custom thenable is
+    inferred as the thenable itself here (drizzle's query builders). A lib
+    type name is excluded too, because an interface of that name augments
+    the lib type.
+  - **A pre-existing false positive the probe for this found.** A generic
+    guard over a generic ALIAS union (`Result<A, E> = Success<A> |
+    Failure<E>`) never narrowed the else branch, so `r.success` after
+    `if (isFailure(r)) return` was reported on code tsc accepts. Two
+    causes were behind it:
+    - `narrow_remove` saw the alias as one opaque member;
+    - through a namespace, the target was `R.Failure<any>` while the
+      source expanded to `Failure<string>`.
+    The source is expanded when it is an alias to a union, and the
+    target's qualified names are canonicalized. This is the Option /
+    Result shape every functional library uses, and it is effect's two:
+    `isSemVerRange(input) ? … : parse(input)` over `type Input =
+    SemVerRange | string` was reported on the `parse` side. The expansion is limited
+    to unions whose members the relation can decide. effect's `WrapKey<A>`
+    is a union of conditionals, and expanding it emptied the else branch
+    to `never`. The full gate run caught that on effect's own sources,
+    which no unit test had covered.
+  - **`export default function (): T;` parses in a declaration file.**
+    zod's ESM locale files write it. The parse error took every importer
+    down to the single-file check, silently. The value is still `any`.
+  - **The real-app harness took #292's three findings.** A locationless
+    tsc diagnostic (`error TS2688`) is a baseline failure. A nonzero
+    mtsc exit on `ok/` is a failure. A planted file must get exactly one
+    report. Each was shown to fire by mutation. So were all fourteen
+    checker changes above, each against its own test.
+  - **#293's review found three defects, each reproduced against tsc
+    first.**
+    - A guard whose subject is not its first parameter narrowed the
+      first argument. This happened through a namespace, an object method
+      and a named import alike, and it was pre-existing on main for all
+      three. `isText(options, value): value is string` turned `options`
+      into `string`.
+      - A callable type carries no parameter names, so the subject is now
+        told by type, using TypeScript's own rule (TS2677: a predicate's
+        type must be assignable to its parameter's type).
+      - The first version abstained on two candidates. That cost univer
+        three false positives in every package, because an unannotated
+        `allowZero = true` reads as `any` and accepts anything. So the
+        first parameter now answers whenever it can be the subject.
+      - That rule still cannot decide `isText(first: unknown, value:
+        unknown): value is string`, where both parameters accept. So the
+        POSITION is recorded wherever a callable type is built from named
+        parameters: an interface or object-type method, a function type,
+        and a declaration's value in the graph checker. A subject at
+        position 1 or later is spelled `"\u{1}<position>\u{1}<name>"`, and
+        position 0 is left as written, so nearly every predicate is
+        unchanged. Everything that prints the name reads it through
+        `@ast.predicate_subject_name`, and the `.d.ts` emitter's output is
+        byte-identical. The type rule is now the fallback for a predicate
+        whose position was never recorded.
+    - **The second review round found three more.**
+      - The type rule tested the parameter as written, so an alias to
+        `unknown` (`type Input = unknown`) accepted nothing and a guard
+        over it narrowed nothing. It tests the unwrapped type now. When no
+        parameter is provably the subject, the first one is. `{}` against
+        `string`, and an alias `P` against `P & { q: string }`, are legal
+        predicates in tsc that the relation cannot prove, and narrowing
+        nothing reported their then-branch reads.
+      - A namespace's own lowered `var`, which is `any` and named after a
+        nested namespace, counted as a value. So a namespace holding only
+        a nested TYPE namespace shadowed a `const` of the same name.
+      - A declaration file passed its `import * as` aliases and not a
+        NAMED import of a namespace export (`import { Models }` of
+        `export * as Models`), so `Models.I` stayed unresolved for an
+        importer.
+    - **The third round found four more, and one was this PR's own
+      regression.**
+      - `func_prototype_member` builds `call`'s signature by PREPENDING
+        `thisArg`, and it kept the predicate return. The recorded subject
+        position, 1, then named `first` in `g.call(null, first, value)`,
+        so `first` was narrowed and `value` was not. tsc narrows neither,
+        because `call` infers its `R` and a predicate does not survive
+        that. So the predicate is dropped there. Probed: `apply` already
+        narrowed nothing, since its arguments are one array, and `bind`
+        keeps the predicate in tsc and here.
+      - A MEMBER of the expanded alias union could itself be an alias.
+        `type Choice<T> = Text<T> | number` kept `Text<string>` in the
+        else branch, so `const n: number = value` was reported. main
+        reports it too. Alias members are now expanded and flattened.
+        Interfaces stay named, because the keep / remove tests were
+        written against that shape.
+      - The lowering check matched a `var` by SHAPE (`any`, named after a
+        namespace), which also matches a written `declare const Foo: any`.
+        `TsValueDecl` holds only a name and a type, so the two are the
+        same entry. The parser records one `any` entry per namespace
+        BLOCK, so `declared_values` drops one per block, and a real `any`
+        value survives as the one left over. No import path could observe
+        the old answer, because an `any` value and an unknown one both
+        abstain. So the test asserts `declared_values` directly.
+      - The `.d.ts` emitter names a callable's parameters `arg0`, `arg1`,
+        and so on, and printed a predicate's SOURCE name, so
+        `(arg0: unknown, arg1: unknown) => value is string` named a
+        parameter it does not declare. A recorded position now prints
+        `arg<N>`. Position 0 is not encoded and still prints its source
+        name. That is pre-existing: main emits
+        `(arg0: unknown) => x is string`.
+    - **The fourth round caught round 3's alias expansion breaking a
+      neighbour, which is this file's recurring shape: a fix on one side of
+      a comparison.** Expanding only the SOURCE's alias members put the two
+      sides in different terms, so `value is Text<string>` over a `Choice`
+      that now read `string | number` matched nothing, and the else branch
+      kept `string`. The target is now expanded by the same rule, and each
+      member is matched against BOTH forms. The expanded form alone broke
+      `v is Box` over `Box | string`, whose source member stays a name. Both
+      forms name one type, so matching either cannot over-remove. `v is AB`,
+      an alias to a union of interfaces, now narrows too, and main reports it.
+    - A union-typed member of an `export =` namespace (`mode: "dev" |
+      "prod"`) read as absent. Only a union of signatures, which is an
+      overload set, binds as `any`.
+    - An `export * as N` reached through `export *` answered before an
+      explicit `export * as N` in the same barrel. Explicit re-exports now
+      come first, the precedence `graph_exported_type` already follows.
+  - **The three misses left are machinery, not rules.**
+    - hono's `app.fetch` names the DOM lib's `Request`.
+    - React's `useState` is an overloaded member of an `export =`
+      namespace, inferred against `S | (() => S)`.
+    - zod's `s.parse(x)` returns `core.output<this>`, a conditional over
+      `this` read through generic internals.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

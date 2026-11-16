@@ -48,9 +48,11 @@ fn callable_func_type_from_params(
   } else {
     0
   }
+  let names : Array[String] = []
   let mut pi = start
   while pi < params.length() {
     let param = params[pi]
+    names.push(param.name)
     // Declaration-style rest parameters already carry their array-shaped
     // element type (`...checks: string[]` -> `Array[String]`). Keep the
     // existing representation used by interface/object members; function
@@ -60,7 +62,7 @@ fn callable_func_type_from_params(
     pi += 1
   }
   callable_type_with_optionality(
-    @ast.TsType::Func(types, return_type),
+    @ast.TsType::Func(types, @ast.index_predicate_subject(return_type, names)),
     optional,
   )
 }
@@ -141,6 +143,7 @@ fn Parser::parse_paren_or_function_type(
   }
 
   let param_types : Array[@ast.TsType] = []
+  let param_names : Array[String] = []
   let param_optional : Array[Bool] = []
   // TS2842, held until the `=>` below commits this to a function TYPE.
   // `type T = ([{ a: b }, { b: a }])` reaches this loop too and is
@@ -199,6 +202,7 @@ fn Parser::parse_paren_or_function_type(
     // what it guards now abstains only where it no longer has to.
     if !is_this_param {
       param_types.push(if is_rest { Rest(pty) } else { pty })
+      param_names.push(pname)
       param_optional.push(is_optional)
     }
     if self.match_(Comma) {
@@ -212,7 +216,10 @@ fn Parser::parse_paren_or_function_type(
   if can_be_function_type && self.match_(RParen) && self.match_(Arrow) {
     self.record_param_pattern_renamings(renamings)
     return callable_type_with_optionality(
-      Func(param_types, self.parse_type()),
+      Func(
+        param_types,
+        @ast.index_predicate_subject(self.parse_type(), param_names),
+      ),
       param_optional,
     )
   }

@@ -715,7 +715,17 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
       buf.write_string(" }")
     }
     TypePredicate(name, target) => {
-      buf.write_string(name)
+      // A callable's parameters are emitted as `arg0`, `arg1`, …, so a
+      // subject whose position was recorded is printed by that position:
+      // its source name names no parameter of the emitted signature. A
+      // subject at position 0 is not encoded and keeps its source name.
+      match @ast.predicate_subject_position(name) {
+        Some(position) => {
+          buf.write_string("arg")
+          buf.write_string(position.to_string())
+        }
+        None => buf.write_string(@ast.predicate_subject_name(name))
+      }
       buf.write_string(" is ")
       emit_type(buf, target)
     }

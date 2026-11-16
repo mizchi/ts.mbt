@@ -209,12 +209,14 @@ fn generic_function_value_type(func : @ast.TsFunc) -> @ast.TsType {
 ///|
 fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
   let params : Array[@ast.TsType] = []
+  let names : Array[String] = []
   for i, param in func.params {
     // A leading `this` parameter types the receiver and takes no argument
     // position (`declare_function_value_type` drops it the same way).
     if i == 0 && param.name == "this" && !param.is_rest {
       continue
     }
+    names.push(param.name)
     if param.is_rest {
       params.push(@ast.TsType::Rest(param.type_))
     } else if param.is_optional || param.default is Some(_) {
@@ -232,7 +234,10 @@ fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
       params.push(param.type_)
     }
   }
-  @ast.TsType::Func(params, func.return_type)
+  @ast.TsType::Func(
+    params,
+    @ast.index_predicate_subject(func.return_type, names),
+  )
 }
 
 ///|
@@ -262,7 +267,11 @@ fn declare_function_value_type(import_ : @ast.TsImport) -> @ast.TsType {
       params.push(t)
     }
   }
-  let f = @ast.TsType::Func(params, import_.return_type)
+  let names = import_.params[start:].iter().map(fn(p) { p.0 }).collect()
+  let f = @ast.TsType::Func(
+    params,
+    @ast.index_predicate_subject(import_.return_type, names),
+  )
   if import_.type_params.is_empty() {
     f
   } else {
@@ -273,17 +282,36 @@ fn declare_function_value_type(import_ : @ast.TsImport) -> @ast.TsType {
 ///|
 fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
   // A namespace is lowered to `var N = N || {}`, so `values` holds it as
-  // `any` and has to be passed over. A function or class of the same name
-  // is a declaration merge whose value is that function or class.
-  if !module_.funcs.iter().any(fn(f) { f.name == name }) &&
-    !module_.classes.iter().any(fn(c) { c.name == name }) {
+  // `any` and has to be passed over. A class of the same name is a
+  // declaration merge whose value is that class. A FUNCTION of the same
+  // name is one too, and its value is both: callable, with the
+  // namespace's members on it — preact's `h` (five overloads plus
+  // `namespace h { … }`), drizzle's `sql`, express's `e`. The lowered
+  // `var` used to answer first there, so all three were `any`.
+  //
+  // Only an INSTANTIATED namespace contributes a value. A type-only one
+  // (`export const Foo = …` beside `export namespace Foo { type T = … }`,
+  // a common way to give a value a namespace of types) has no runtime
+  // binding, and reading it as an empty object shadowed the `const`.
+  if !module_.classes.iter().any(fn(c) { c.name == name }) {
     for ns in module_.namespaces {
-      if ns.name == name && !ns.is_declare {
-        return Some(namespace_value_type(ns.module_))
+      if ns.name != name {
+        continue
       }
+      match local_function_value_type(module_, name) {
+        Some(callable) =>
+          return Some(
+            callable_with_members(callable, namespace_value_type(ns.module_)),
+          )
+        None =>
+          if namespace_is_instantiated(ns.module_) {
+            return Some(namespace_value_type(ns.module_))
+          }
+      }
+      break
     }
   }
-  for value in module_.values {
+  for value in declared_values(module_) {
     if value.name == name {
       match value.type_ {
         Any =>
@@ -300,6 +328,39 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
     Some(t) => return Some(t)
     None => ()
   }
+  match local_function_value_type(module_, name) {
+    Some(t) => return Some(t)
+    None => ()
+  }
+  for enum_ in module_.enums {
+    if enum_.name == name {
+      return Some(@ast.TsType::Named(name))
+    }
+  }
+  // A class used as a VALUE is its constructor, not an instance, and this
+  // checker has no constructor-type spelling an importer can use — a
+  // class declared in the SAME file is `any` as a value for that reason.
+  // `Named(name)` here is the INSTANCE type, so an imported class read as
+  // a value was wrong in both directions: redi's `injector.add([Svc])`
+  // compared `Svc[]` (instances) against `[Ctor<T>]` and reported, and a
+  // static member was looked up among the instance's. The importer now
+  // sees what a local use sees.
+  for class_ in module_.classes {
+    if class_.name == name {
+      return Some(@ast.TsType::Any)
+    }
+  }
+  None
+}
+
+///|
+/// The value of a function `name` declares, as a function declaration
+/// (`funcs`) or a `declare function` (`imports`): one signature, or the
+/// `Union` an overload set is.
+fn local_function_value_type(
+  module_ : @ast.TsModule,
+  name : String,
+) -> @ast.TsType? {
   // An OVERLOADED function is several declarations of one name, and the
   // first is only one of its signatures: effect's `pipe` / `flow` have
   // twenty, and handing an importer the first made every call with more
@@ -413,25 +474,74 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
     1 => return Some(declared[0])
     _ => return Some(@ast.TsType::Union(declared))
   }
-  for enum_ in module_.enums {
-    if enum_.name == name {
-      return Some(@ast.TsType::Named(name))
-    }
-  }
-  // A class used as a VALUE is its constructor, not an instance, and this
-  // checker has no constructor-type spelling an importer can use — a
-  // class declared in the SAME file is `any` as a value for that reason.
-  // `Named(name)` here is the INSTANCE type, so an imported class read as
-  // a value was wrong in both directions: redi's `injector.add([Svc])`
-  // compared `Svc[]` (instances) against `[Ctor<T>]` and reported, and a
-  // static member was looked up among the instance's. The importer now
-  // sees what a local use sees.
-  for class_ in module_.classes {
-    if class_.name == name {
-      return Some(@ast.TsType::Any)
-    }
-  }
   None
+}
+
+///|
+/// A function merged with a namespace: its signatures as `<call>` entries,
+/// which is how an object type literal holds call signatures, beside the
+/// namespace's members.
+fn callable_with_members(
+  callable : @ast.TsType,
+  members : @ast.TsType,
+) -> @ast.TsType {
+  let fields : Array[(@ast.TsType, @ast.TsType)] = []
+  match callable {
+    Union(parts) =>
+      for part in parts {
+        fields.push((Literal("<call>"), part))
+      }
+    _ => fields.push((Literal("<call>"), callable))
+  }
+  match members {
+    Object(entries) =>
+      for entry in entries {
+        fields.push(entry)
+      }
+    _ => ()
+  }
+  Object(fields)
+}
+
+///|
+/// The `values` entries a body DECLARES, without the `var N = N || {}`
+/// each `namespace N` block is lowered to. Counted as a value, a namespace
+/// holding only `namespace Types { interface I {} }` read as instantiated,
+/// and its empty object shadowed a `declare const` of the same name.
+///
+/// The parser records the lowering as one `any` entry per namespace
+/// block, and a written `declare const N: any` is the same entry, so the
+/// two are told apart by COUNT rather than by shape: one `any` entry named
+/// `N` is dropped per `namespace N` block. A real `const N: T` keeps its
+/// type and is never dropped, and a real `const N: any` beside a
+/// type-only `namespace N` survives as the one entry left over.
+fn declared_values(body : @ast.TsModule) -> Array[@ast.TsValueDecl] {
+  let lowered : Map[String, Int32] = Map([])
+  for n in body.namespaces {
+    lowered[n.name] = lowered.get(n.name).unwrap_or(0) + 1
+  }
+  let out : Array[@ast.TsValueDecl] = []
+  for v in body.values {
+    let left = lowered.get(v.name).unwrap_or(0)
+    if left > 0 && v.type_ is Any {
+      lowered[v.name] = left - 1
+      continue
+    }
+    out.push(v)
+  }
+  out
+}
+
+///|
+/// Whether a namespace body declares anything that exists at run time,
+/// which is what gives the namespace a value.
+fn namespace_is_instantiated(body : @ast.TsModule) -> Bool {
+  !declared_values(body).is_empty() ||
+  !body.funcs.is_empty() ||
+  !body.imports.is_empty() ||
+  !body.classes.is_empty() ||
+  !body.enums.is_empty() ||
+  body.namespaces.iter().any(fn(n) { namespace_is_instantiated(n.module_) })
 }
 
 ///|
@@ -476,15 +586,39 @@ fn namespace_value_type(body : @ast.TsModule) -> @ast.TsType {
     })
   }
 
+  // Every runtime member a body can declare. A `declare function` lives
+  // in `imports` (every function an ambient body declares, so React's
+  // `declare namespace React { function useState… }` had none), and a
+  // class, an enum or an instantiated nested namespace is a member too:
+  // left out, `N.Inner.x` read as a property `N` does not have, where
+  // `any` loses nothing.
   let names : Array[String] = []
-  for v in body.values {
-    if !names.contains(v.name) {
-      names.push(v.name)
+  let seen : Map[String, Unit] = Map([])
+  fn add(n : String) {
+    if !seen.contains(n) {
+      seen[n] = ()
+      names.push(n)
     }
   }
+
+  for v in body.values {
+    add(v.name)
+  }
   for f in body.funcs {
-    if !names.contains(f.name) {
-      names.push(f.name)
+    add(f.name)
+  }
+  for i in body.imports {
+    add(i.name)
+  }
+  for c in body.classes {
+    add(c.name)
+  }
+  for e in body.enums {
+    add(e.name)
+  }
+  for n in body.namespaces {
+    if namespace_is_instantiated(n.module_) {
+      add(n.name)
     }
   }
   let fields : Array[(@ast.TsType, @ast.TsType)] = []
@@ -702,7 +836,371 @@ fn exported_value_site(
       @ast.TsReExportKind::Namespace(_) => ()
     }
   }
+  // `import { version } from "react"` of an `export = React` module names
+  // a MEMBER of the assigned value (`esModuleInterop`). A member that is an
+  // overload set — a `Union` whose parts are all signatures — would arrive
+  // with no `@overloads:` marker, which the checker reads as a union-typed
+  // value every member must accept, so it binds as `any`. A union-typed
+  // VALUE (`const mode: "dev" | "prod"`) is an ordinary member, and it was
+  // read as absent.
+  if export_name != "default" &&
+    module_.module_block.has_export_equals &&
+    mtsc_is_declaration_file(module_.source.path) {
+    match exported_value_site(module_, "default", modules, edges, next_seen) {
+      Some((declarer, _, Object(entries))) => {
+        let found = entries.filter(fn(e) {
+          e.0 is Literal(k) && k == export_name
+        })
+        if found.length() == 1 {
+          let value_type = match found[0].1 {
+            Union(parts) if parts
+              .iter()
+              .all(fn(t) {
+                t is (Func(_, _) | GenericFunc(_, _, _) | CallableMeta(_, _))
+              }) => @ast.TsType::Any
+            t => t
+          }
+          return Some((declarer, export_name, value_type))
+        }
+      }
+      _ => ()
+    }
+  }
   None
+}
+
+///|
+/// The module `spec` names from `importer`, when the graph holds it.
+fn graph_target_module(
+  importer : ParsedMtscModule,
+  spec : String,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> ParsedMtscModule? {
+  match find_graph_target(edges, importer.source.path, spec) {
+    Some(path) => find_graph_module(modules, path)
+    None => None
+  }
+}
+
+///|
+/// The value names `module_` exports, local exports first, then its
+/// re-exports in order, following `export *`. `export *` does not carry
+/// `default`, as in ECMAScript, so only the outermost module contributes
+/// one.
+fn graph_value_export_names(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  seen : Map[String, Unit],
+  out : Array[String],
+  present : Map[String, Unit],
+  include_default : Bool,
+) -> Unit {
+  if seen.contains(module_.source.path) {
+    return
+  }
+  seen[module_.source.path] = ()
+  fn add(name : String) {
+    if (include_default || name != "default") && !present.contains(name) {
+      present[name] = ()
+      out.push(name)
+    }
+  }
+
+  for export_ in module_.module_block.exports {
+    add(export_.export_name)
+  }
+  for reexport_ in module_.module_block.reexports {
+    if reexport_.type_only {
+      continue
+    }
+    match reexport_.kind {
+      @ast.TsReExportKind::Named(items) =>
+        for item in items {
+          add(item.1)
+        }
+      @ast.TsReExportKind::Namespace(name) => add(name)
+      @ast.TsReExportKind::All =>
+        match
+          graph_target_module(module_, reexport_.module_spec, modules, edges) {
+          Some(target) =>
+            graph_value_export_names(
+              target, modules, edges, seen, out, present, false,
+            )
+          None => ()
+        }
+    }
+  }
+}
+
+///|
+/// The module whose NAMESPACE OBJECT `module_` exports as `export_name`:
+/// `export * as name from "./m"` (effect's `index.ts` exports every module
+/// that way), or an `import * as ns` binding exported by name
+/// (`import * as z from "./external"; export { z }`, zod's spelling),
+/// followed through named re-exports, `export *` and import bindings. A
+/// local declaration of the name answers first, and is not one.
+fn graph_namespace_export_target(
+  module_ : ParsedMtscModule,
+  export_name : String,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  depth : Int32,
+) -> ParsedMtscModule? {
+  if depth > 8 {
+    return None
+  }
+  for export_ in module_.module_block.exports {
+    if export_.export_name != export_name {
+      continue
+    }
+    if local_value_type(module_.module_, export_.local_name) is Some(_) {
+      return None
+    }
+    match graph_import_binding(module_, export_.local_name) {
+      Some((spec, None)) =>
+        return graph_target_module(module_, spec, modules, edges)
+      Some((spec, Some(imported))) =>
+        match graph_target_module(module_, spec, modules, edges) {
+          Some(target) =>
+            return graph_namespace_export_target(
+              target,
+              imported,
+              modules,
+              edges,
+              depth + 1,
+            )
+          None => return None
+        }
+      None => return None
+    }
+  }
+  for reexport_ in module_.module_block.reexports {
+    if reexport_.type_only {
+      continue
+    }
+    let target = match
+      graph_target_module(module_, reexport_.module_spec, modules, edges) {
+      Some(t) => t
+      None => continue
+    }
+    match reexport_.kind {
+      @ast.TsReExportKind::Namespace(name) =>
+        if name == export_name {
+          return Some(target)
+        }
+      @ast.TsReExportKind::Named(items) =>
+        for item in items {
+          if item.1 == export_name {
+            match
+              graph_namespace_export_target(
+                target,
+                item.0,
+                modules,
+                edges,
+                depth + 1,
+              ) {
+              Some(m) => return Some(m)
+              None => ()
+            }
+          }
+        }
+      // `export *` answers only where no explicit re-export does, the
+      // precedence `graph_exported_type` follows (second pass below).
+      @ast.TsReExportKind::All => ()
+    }
+  }
+  if export_name == "default" {
+    return None
+  }
+  for reexport_ in module_.module_block.reexports {
+    if reexport_.type_only || !(reexport_.kind is @ast.TsReExportKind::All) {
+      continue
+    }
+    match graph_target_module(module_, reexport_.module_spec, modules, edges) {
+      Some(target) =>
+        match
+          graph_namespace_export_target(
+            target,
+            export_name,
+            modules,
+            edges,
+            depth + 1,
+          ) {
+          Some(m) => return Some(m)
+          None => ()
+        }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+/// A module's namespace object as a value: one member per value export,
+/// typed where it is DECLARED, and the declaring module of each member, so
+/// the checker reads a member's type through that module's renames (the
+/// per-member form of `@value-origin:`).
+///
+/// An overload set is one member per signature, which is how an object
+/// type literal holds overloaded methods. A member whose type this cannot
+/// compute — a class (a class value is `any` here), an enum, a nested
+/// namespace, an export from outside the graph — is not listed, and the
+/// `[k: string]: any` signature makes it read as unknown rather than
+/// absent. The cost is a missed TS2339 on a typo'd member, which is the
+/// affordable direction.
+///
+/// Cached per module for one graph check: effect's modules each import
+/// several large namespaces (`import * as core`), and building one is a
+/// pass over every export.
+fn graph_namespace_object(
+  target : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  cache : Map[String, (@ast.TsType, Array[(String, String)])],
+) -> (@ast.TsType, Array[(String, String)]) {
+  match cache.get(target.source.path) {
+    Some(hit) => return hit
+    None => ()
+  }
+  // `import * as React from "react"` of an `export = React` module is the
+  // ASSIGNED value — what `esModuleInterop` makes of a CommonJS module's
+  // namespace import — so its members are that value's.
+  if target.module_block.has_export_equals &&
+    mtsc_is_declaration_file(target.source.path) {
+    match exported_value_site(target, "default", modules, edges, []) {
+      Some((declarer, _, Object(entries))) => {
+        let origins : Array[(String, String)] = []
+        for entry in entries {
+          match entry.0 {
+            Literal(k) => origins.push((k, declarer.source.path))
+            _ => ()
+          }
+        }
+        let fields = entries.filter(fn(e) { !(e.0 is Literal("<call>")) })
+        fields.push((String_, Any))
+        let value = (@ast.TsType::Object(fields), origins)
+        cache[target.source.path] = value
+        return value
+      }
+      _ => ()
+    }
+  }
+  let names : Array[String] = []
+  graph_value_export_names(
+    target,
+    modules,
+    edges,
+    Map([]),
+    names,
+    Map([]),
+    true,
+  )
+  let fields : Array[(@ast.TsType, @ast.TsType)] = []
+  let origins : Array[(String, String)] = []
+  for name in names {
+    match exported_value_site(target, name, modules, edges, []) {
+      Some((declarer, declared_name, type_)) => {
+        // Only a DECLARATION file's export is a written type. A `.ts`
+        // source's unannotated `export const` is the parser's coarse
+        // inference — an erased `as const` widens to `string`, an arrow's
+        // own `<A>` is not in the AST — and typing those members of
+        // effect's `import * as core` put 311 false positives on its own
+        // sources, every one a coarse answer the namespace object had been
+        // hiding as `any`. A package's `.d.ts`, which is what an
+        // application's namespace import reaches, says what it means.
+        if type_ is Any || !mtsc_is_declaration_file(declarer.source.path) {
+          continue
+        }
+        for sig in namespace_member_signatures(declarer, declared_name, type_) {
+          fields.push((Literal(name), sig))
+        }
+        origins.push((name, declarer.source.path))
+      }
+      None => ()
+    }
+  }
+  fields.push((String_, Any))
+  let value = (@ast.TsType::Object(fields), origins)
+  cache[target.source.path] = value
+  value
+}
+
+///|
+/// The fields one namespace member contributes. An object type literal
+/// holds an overloaded method as one field per signature, and the method
+/// call path reads overloads only in that shape, so an overload set (a
+/// `Union` of signatures) and a callable object with nothing BUT call
+/// signatures — how effect's `dual` APIs are declared, `{ (that): (self)
+/// => R; (self, that): R }` — are each spread into one field per
+/// signature. Kept whole, `Equal.equals(a, b)` was judged against the
+/// first signature alone: "expected 1 argument(s), got 2".
+fn namespace_member_signatures(
+  declarer : ParsedMtscModule,
+  declared_name : String,
+  type_ : @ast.TsType,
+) -> Array[@ast.TsType] {
+  match type_ {
+    Union(parts) if declares_overload_set(declarer, declared_name) => parts
+    Object(entries) if entries.length() > 1 &&
+      entries.iter().all(fn(e) { e.0 is Literal("<call>") }) =>
+      entries.map(fn(e) { e.1 })
+    _ => [type_]
+  }
+}
+
+///|
+/// Bind `local_name` to `target`'s namespace object (see
+/// `graph_namespace_object`).
+fn push_graph_namespace_binding(
+  globals : Array[(String, @ast.TsType)],
+  local_name : String,
+  target : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  cache : Map[String, (@ast.TsType, Array[(String, String)])],
+) -> Unit {
+  let (type_, origins) = graph_namespace_object(target, modules, edges, cache)
+  globals.push((local_name, type_))
+  for origin in origins {
+    globals.push(
+      (
+        "@value-origin-member:" + local_name + "\u{0}" + origin.0,
+        Named(origin.1),
+      ),
+    )
+  }
+  // `Predicate.isObject(u)` narrows through the namespace — effect calls
+  // nearly every guard that way. Its PREDICATE exports are published
+  // under an `@ns:` key the narrowing reads first (see
+  // `apply_method_type_predicate_narrowing`).
+  for export_ in target.module_block.exports {
+    match local_value_type(target.module_, export_.local_name) {
+      Some(t) if is_predicate_value_type(t) => {
+        // The type is written in the TARGET's scope: its bare
+        // `Success` means the target's own, which in the importer is
+        // reached as `ns.Success`.
+        let renames : Map[String, String] = Map([])
+        for i in target.module_.interfaces {
+          renames[i.name] = local_name + "." + i.name
+        }
+        for a in target.module_.type_aliases {
+          renames[a.name] = local_name + "." + a.name
+        }
+        for c in target.module_.classes {
+          renames[c.name] = local_name + "." + c.name
+        }
+        globals.push(
+          (
+            "@ns:" + local_name + "." + export_.export_name,
+            @checker.rename_type_refs(t, renames),
+          ),
+        )
+      }
+      _ => ()
+    }
+  }
 }
 
 ///|
@@ -1026,6 +1524,42 @@ fn graph_namespace_type_aliases(
       out.push((ns + "." + e.0, e.1, e.2))
     }
   }
+  // A named or default import of a NAMESPACE export (`import { Effect }
+  // from "effect"` of `export * as Effect`) is the same binding by
+  // another route, and `Effect.Effect<A>` in an annotation means the type
+  // that module exposes.
+  for imp in module_.module_block.imports {
+    if imp.type_only {
+      continue
+    }
+    let target = match
+      graph_target_module(module_, imp.module_spec, modules, edges) {
+      Some(t) => t
+      None => continue
+    }
+    let bindings : Array[(String, String)] = []
+    match imp.default_binding {
+      Some(local_name) => bindings.push(("default", local_name))
+      None => ()
+    }
+    for index, binding in imp.named_bindings {
+      let type_only = index < imp.named_type_only.length() &&
+        imp.named_type_only[index]
+      if !type_only {
+        bindings.push(binding)
+      }
+    }
+    for binding in bindings {
+      let (imported, local_name) = binding
+      match graph_namespace_export_target(target, imported, modules, edges, 0) {
+        Some(ns_target) =>
+          for e in graph_exposed_types(ns_target, modules, edges) {
+            out.push((local_name + "." + e.0, e.1, e.2))
+          }
+        None => ()
+      }
+    }
+  }
   for pair in graph_named_import_aliases(module_, modules, edges) {
     out.push(pair)
   }
@@ -1082,6 +1616,83 @@ fn graph_named_import_aliases(
     }
   }
   graph_import_alias_cache[module_.source.path] = out
+  out
+}
+
+///|
+/// `graph_declaration_namespace_aliases(m, …)` per module path, for one
+/// graph check.
+let graph_declaration_namespace_alias_cache : Map[
+  String,
+  Array[(String, String, String)],
+] = Map([])
+
+///|
+/// `(ns.X, bare, origin)` for EVERY namespace import of a declaration file.
+///
+/// The shared resolver maps `ns.X` through the CHECKED module's own
+/// `import * as ns`, so a qualified name written inside another module
+/// resolves only where the checked module happens to bind the same `ns` to
+/// the same target, and otherwise abstains. zod's declarations are written
+/// that way throughout — `string(params?: string | core.$ZodStringParams):
+/// ZodString` — so an application's `z.string` was unknowable, and so was
+/// every member of a zod interface that names a `core.` type. For a
+/// declaration file the qualified name is a written type and resolving it
+/// in its own module's terms is exact; a `.ts` source keeps the narrower
+/// conflicting-only rule (see `graph_conflicting_namespace_aliases`).
+fn graph_declaration_namespace_aliases(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> Array[(String, String, String)] {
+  match graph_declaration_namespace_alias_cache.get(module_.source.path) {
+    Some(hit) => return hit
+    None => ()
+  }
+  let out : Array[(String, String, String)] = []
+  for imp in module_.module_block.imports {
+    let ns = match imp.namespace_binding {
+      Some(ns) => ns
+      None => continue
+    }
+    match graph_target_module(module_, imp.module_spec, modules, edges) {
+      Some(target) =>
+        for e in graph_exposed_types(target, modules, edges) {
+          out.push((ns + "." + e.0, e.1, e.2))
+        }
+      None => ()
+    }
+  }
+  // A NAMED import of a namespace export (`import { Models } from
+  // "./barrel"` of `export * as Models`) binds the same namespace by
+  // another route, the case `graph_namespace_type_aliases` handles for
+  // the checked module.
+  for imp in module_.module_block.imports {
+    if imp.type_only {
+      continue
+    }
+    let target = match
+      graph_target_module(module_, imp.module_spec, modules, edges) {
+      Some(t) => t
+      None => continue
+    }
+    for index, binding in imp.named_bindings {
+      let type_only = index < imp.named_type_only.length() &&
+        imp.named_type_only[index]
+      if type_only {
+        continue
+      }
+      let (imported, local_name) = binding
+      match graph_namespace_export_target(target, imported, modules, edges, 0) {
+        Some(ns_target) =>
+          for e in graph_exposed_types(ns_target, modules, edges) {
+            out.push((local_name + "." + e.0, e.1, e.2))
+          }
+        None => ()
+      }
+    }
+  }
+  graph_declaration_namespace_alias_cache[module_.source.path] = out
   out
 }
 
@@ -1298,6 +1909,7 @@ fn graph_import_globals(
   modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
   skipped_imports : Map[String, Unit],
+  namespace_cache : Map[String, (@ast.TsType, Array[(String, String)])],
 ) -> (Array[(String, @ast.TsType)], Array[String]) {
   let globals : Array[(String, @ast.TsType)] = []
   let diagnostics : Array[String] = []
@@ -1353,7 +1965,22 @@ fn graph_import_globals(
             }
           }
           None =>
-            if export_may_come_from_outside(target, "default", modules, edges, []) {
+            if graph_namespace_export_target(
+                target, "default", modules, edges, 0,
+              )
+              is Some(ns_target) {
+              // `import z from "zod"` of `export default z`, where `z` is
+              // the namespace object of another module.
+              push_graph_namespace_binding(
+                globals, local_name, ns_target, modules, edges, namespace_cache,
+              )
+            } else if export_may_come_from_outside(
+                target,
+                "default",
+                modules,
+                edges,
+                [],
+              ) {
               globals.push((local_name, Any))
               globals.push(("@imported:" + local_name, Any))
             } else if graph_exported_type(target, modules, edges, "default", 0)
@@ -1387,32 +2014,9 @@ fn graph_import_globals(
     // changes meaning.
     match import_.namespace_binding {
       Some(ns) =>
-        for export_ in target.module_block.exports {
-          match local_value_type(target.module_, export_.local_name) {
-            Some(t) if is_predicate_value_type(t) => {
-              // The type is written in the TARGET's scope: its bare
-              // `Success` means the target's own, which in the importer is
-              // reached as `ns.Success`.
-              let renames : Map[String, String] = Map([])
-              for i in target.module_.interfaces {
-                renames[i.name] = ns + "." + i.name
-              }
-              for a in target.module_.type_aliases {
-                renames[a.name] = ns + "." + a.name
-              }
-              for c in target.module_.classes {
-                renames[c.name] = ns + "." + c.name
-              }
-              globals.push(
-                (
-                  "@ns:" + ns + "." + export_.export_name,
-                  @checker.rename_type_refs(t, renames),
-                ),
-              )
-            }
-            _ => ()
-          }
-        }
+        push_graph_namespace_binding(
+          globals, ns, target, modules, edges, namespace_cache,
+        )
       None => ()
     }
     for index, binding in import_.named_bindings {
@@ -1458,7 +2062,15 @@ fn graph_import_globals(
           }
         }
         None =>
-          if export_may_come_from_outside(
+          if graph_namespace_export_target(
+              target, imported_name, modules, edges, 0,
+            )
+            is Some(ns_target) {
+            // `import { Effect } from "effect"` of `export * as Effect`.
+            push_graph_namespace_binding(
+              globals, local_name, ns_target, modules, edges, namespace_cache,
+            )
+          } else if export_may_come_from_outside(
               target,
               imported_name,
               modules,
@@ -1919,6 +2531,7 @@ fn collect_parsed_graph_issues(
   @checker.clear_type_module_cache()
   graph_exposed_cache.clear()
   graph_import_alias_cache.clear()
+  graph_declaration_namespace_alias_cache.clear()
   graph_module_index.clear()
   graph_edge_index.clear()
   let (parsed_modules, edges, ambient_module_paths, untyped_imports) = graph_with_ambient_modules(
@@ -1950,6 +2563,8 @@ fn collect_parsed_graph_issues(
   }
   let ambient_globals : Array[(String, @ast.TsType)] = []
   let ambient_modules : Array[@ast.TsModule] = []
+  let namespace_cache : Map[String, (@ast.TsType, Array[(String, String)])] = Map([],
+  )
   for module_ in parsed_modules {
     if !is_ambient_script_module(module_) {
       continue
@@ -1972,7 +2587,7 @@ fn collect_parsed_graph_issues(
       continue
     }
     let (globals, import_diagnostics) = graph_import_globals(
-      module_, parsed_modules, edges, skipped_imports,
+      module_, parsed_modules, edges, skipped_imports, namespace_cache,
     )
     for entry in ambient_globals {
       globals.push(entry)
@@ -2025,9 +2640,13 @@ fn collect_parsed_graph_issues(
         match find_graph_module(parsed_modules, key) {
           Some(m) => {
             let named = graph_named_import_aliases(m, parsed_modules, edges)
-            let conflicting = graph_conflicting_namespace_aliases(
-              m, own_namespaces, parsed_modules, edges,
-            )
+            let conflicting = if mtsc_is_declaration_file(m.source.path) {
+              graph_declaration_namespace_aliases(m, parsed_modules, edges)
+            } else {
+              graph_conflicting_namespace_aliases(
+                m, own_namespaces, parsed_modules, edges,
+              )
+            }
             if conflicting.length() == 0 {
               named
             } else {

@@ -10,11 +10,17 @@ pub const DECL_GROUP_POSITION : Int32 = -1
 
 pub const USING_HOLDER_PREFIX : String = "__ts_using_"
 
+pub fn index_predicate_subject(TsType, Array[String]) -> TsType
+
 pub fn is_using_dispose_finally(TsBlock) -> Bool
 
 pub fn is_using_holder_decl(TsStmt) -> Bool
 
 pub fn lowered_using_try_body(Array[TsStmt]) -> TsBlock?
+
+pub fn predicate_subject_name(String) -> String
+
+pub fn predicate_subject_position(String) -> Int32?
 
 pub let shorthand_ambient_module_body : String
 

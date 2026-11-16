@@ -5752,12 +5752,22 @@ fn func_prototype_member(
   match field {
     // `call(thisArg, ...args)` — thisArg comes first, followed by the
     // function's own parameter list. Returns the function's `ret`.
+    // A type predicate does not survive into `call`'s result: its `R` is
+    // inferred, so tsc narrows nothing through `g.call(null, x)`. Kept, the
+    // prepended `thisArg` also moved a recorded subject position onto the
+    // argument before the real one. `apply` passes its arguments as one
+    // array, which no position can name, and `bind` keeps the predicate,
+    // as tsc's does.
     "call" => {
       let call_params : Array[@ast.TsType] = [any]
       for p in params {
         call_params.push(p)
       }
-      Some(@ast.TsType::Func(call_params, ret))
+      let call_ret = match ret {
+        TypePredicate(_, _) => @ast.TsType::Boolean
+        _ => ret
+      }
+      Some(@ast.TsType::Func(call_params, call_ret))
     }
     "apply" => Some(@ast.TsType::Func([any, @ast.TsType::Array(any)], ret))
     "bind" => Some(@ast.TsType::Func([any], @ast.TsType::Func(params, ret)))
@@ -13158,6 +13168,25 @@ fn lib_object_type_into_primitive(
     Applied(n, _) | Named(n) => n
     _ => return None
   }
+  // An instance of a GENERIC interface the program declares (`Box<number>`,
+  // effect's `Effect<A>`, zod's `ZodType<T>`) is the same kind of value:
+  // every interface instance is an object, and no object type is ever
+  // assignable to a primitive, so the type arguments decide nothing. A
+  // NON-generic one is `Named` and was already judged structurally; the
+  // `Applied` spelling fell through every relation below. Two exclusions:
+  // a THENABLE (it declares or inherits `then`), because `await q` of a
+  // custom thenable is inferred as the thenable itself here where tsc
+  // unwraps it — drizzle's query builders are exactly that; and a lib type
+  // name, which an interface of that name AUGMENTS rather than replaces.
+  if src is Applied(_, _) &&
+    resolver.interfaces.contains(name) &&
+    !resolver.type_aliases.contains(name) &&
+    !resolver.enums.contains(name) &&
+    !is_lib_global_type(name) &&
+    primitive_only_type(resolver.unwrap(expected)) &&
+    resolver.lookup_field(src, "then") is None {
+    return Some(src)
+  }
   let lib_object = match name {
     "Promise"
     | "Map"
@@ -13179,21 +13208,23 @@ fn lib_object_type_into_primitive(
     resolver.enums.contains(name) {
     return None
   }
-  fn primitive_only(t : @ast.TsType) -> Bool {
-    match t {
-      String_ | Number | Boolean | BigInt | Symbol => true
-      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) =>
-        true
-      // Not `void`: a callback typed `() => void` may return anything.
-      Undefined | Null => true
-      Union(ms) => ms.length() > 0 && ms.iter().all(primitive_only)
-      _ => false
-    }
-  }
-  if primitive_only(resolver.unwrap(expected)) {
+  if primitive_only_type(resolver.unwrap(expected)) {
     Some(src)
   } else {
     None
+  }
+}
+
+///|
+/// A type every value of which is a primitive (or `null` / `undefined`).
+fn primitive_only_type(t : @ast.TsType) -> Bool {
+  match t {
+    String_ | Number | Boolean | BigInt | Symbol => true
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    // Not `void`: a callback typed `() => void` may return anything.
+    Undefined | Null => true
+    Union(ms) => ms.length() > 0 && ms.iter().all(primitive_only_type)
+    _ => false
   }
 }
 
@@ -23811,7 +23842,8 @@ fn strip_type_qualifiers(s : String) -> String {
 ///|
 fn type_display(ty : @ast.TsType) -> String {
   match ty {
-    TypePredicate(param, target) => "\{param} is \{type_display(target)}"
+    TypePredicate(param, target) =>
+      "\{@ast.predicate_subject_name(param)} is \{type_display(target)}"
     Number => "number"
     Int => "int"
     Boolean => "boolean"
@@ -25993,9 +26025,15 @@ fn apply_type_predicate_narrowing(
     None => return
   }
   let sig = resolver.signatures.get(callee_name)
-  // Map predicate's parameter name to argument index.
-  let idx = match sig {
-    Some(params) => {
+  // Map predicate's parameter name to argument index: a recorded position
+  // first (`@ast.index_predicate_subject`), then the declaration's names,
+  // and with neither — an imported function whose type was built without
+  // names — by type (`predicate_subject_index`).
+  let recorded = @ast.predicate_subject_position(param_name)
+  let param_name = @ast.predicate_subject_name(param_name)
+  let idx = match (recorded, sig) {
+    (Some(i), _) => i
+    (None, Some(params)) => {
       let mut found : Int32 = -1
       let mut i = 0
       while i < params.length() {
@@ -26007,7 +26045,12 @@ fn apply_type_predicate_narrowing(
       }
       found
     }
-    None => 0
+    (None, None) =>
+      match predicate_callable_params(callee_ty) {
+        Some(params) =>
+          predicate_subject_index(resolver, params, target).unwrap_or(-1)
+        None => 0
+      }
   }
   if idx < 0 || idx >= args.length() {
     return
@@ -26081,6 +26124,9 @@ fn narrow_by_predicate_target(
   pair_neg : Array[(String, @ast.TsType)],
   loose_target~ : Bool = false,
 ) -> Unit {
+  let cur = predicate_narrowing_source(resolver, cur)
+  let target = predicate_canonical_target(resolver, target)
+  let test_target = predicate_comparison_target(resolver, target)
   // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
   // single Named that isn't assignable to `target` but the source
   // type genuinely supports the predicate, like
@@ -26088,7 +26134,9 @@ fn narrow_by_predicate_target(
   // intersection `cur & target` — TS narrows to that intersection,
   // not just to `target`, so subsequent calls expecting `cur` still
   // accept the narrowed value.
-  let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+  let then_ty = narrow_keep(cur, fn(v) {
+    predicate_target_matches(v, target, test_target)
+  })
   let then_resolved = match cur {
     // `unknown` has no members to keep, so the narrowing is the target
     // itself, as tsc gives it.
@@ -26115,7 +26163,9 @@ fn narrow_by_predicate_target(
   }
   pair_pos.push((arg_name, then_resolved))
   // Negative: strip members that fit T.
-  let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+  let else_ty = narrow_remove(cur, fn(v) {
+    predicate_target_matches(v, target, test_target)
+  })
   // A `loose_target` is a generic predicate's target with its unsolved
   // type parameters read as `any` (or left unbound, for an arrow whose
   // `<A>` the AST does not keep). That is a fine upper bound for the
@@ -26128,6 +26178,248 @@ fn narrow_by_predicate_target(
     (Never, _) if loose_target => ()
     _ => pair_neg.push((arg_name, else_ty))
   }
+}
+
+///|
+/// The index of a type predicate's subject among `params`, for a callable
+/// TYPE, which carries parameter types and not names.
+///
+/// The FIRST parameter is the answer whenever it can be the subject, which
+/// is what every caller of this read before. TypeScript's own rule says
+/// when it cannot: a predicate's type must be assignable to its
+/// parameter's type (TS2677). `isText(options: { enabled: boolean }, value:
+/// unknown): value is string` cannot have `options` as its subject, and
+/// narrowing the first argument there turned `options` into `string`.
+/// Then the one other parameter that accepts the target is the subject, and
+/// more than one, or none, abstains. Preferring the first parameter matters
+/// because an unannotated parameter reads as `any` and accepts everything:
+/// univer's `isValidSheetDimension(value: unknown, allowZero = true)` has
+/// two candidates by type and one subject.
+fn predicate_subject_index(
+  resolver : Resolver,
+  params : Array[@ast.TsType],
+  target : @ast.TsType,
+) -> Int32? {
+  // Through the resolver: `isText(value: Input, …)` with `type Input =
+  // unknown` takes anything, and read raw it took nothing.
+  fn accepts(p : @ast.TsType) -> Bool {
+    match resolver.unwrap(p) {
+      Any | Unknown => true
+      q =>
+        is_assignable_to(target, q) ||
+        is_structurally_assignable_named(target, q, resolver)
+    }
+  }
+
+  if params.length() <= 1 || accepts(params[0]) {
+    return Some(0)
+  }
+  let mut found : Int32? = None
+  for i, p in params {
+    if i > 0 && accepts(p) {
+      if found is Some(_) {
+        return None
+      }
+      found = Some(i)
+    }
+  }
+  // No parameter accepts the target as far as this relation can tell,
+  // which says the relation is short, not that the guard is malformed:
+  // keep the first argument, the answer before any of this.
+  match found {
+    Some(_) => found
+    None => Some(0)
+  }
+}
+
+///|
+/// The parameter types of a callable `ty`, generic or not.
+fn predicate_callable_params(ty : @ast.TsType?) -> Array[@ast.TsType]? {
+  match ty {
+    Some(Func(ps, _)) => Some(ps)
+    Some(GenericFunc(_, _, Func(ps, _))) => Some(ps)
+    _ => None
+  }
+}
+
+///|
+/// The type a type predicate narrows, with an ALIAS to a union expanded
+/// into that union. `narrow_keep` / `narrow_remove` split a union one
+/// level and cannot resolve a name, so `r: Result<number, string>` with
+/// `type Result<A, E> = Success<A> | Failure<E>` reached them as ONE
+/// opaque member: `isFailure(r)` removed nothing from it, and the else
+/// branch's `r.success` was reported on a union where only one member has
+/// it — the Option / Result / Either shape every functional library uses.
+/// Only a union is taken, so a non-alias type keeps its shape (the rule
+/// the `"key" in v` and `typeof` arms follow), and only one whose every
+/// member is a type the relation can decide. effect's `type WrapKey<A> =
+/// (A extends AesKw ? Key<A> : never) | (A extends RsaOaep ? PublicKey<A>
+/// : never)` expands to undecided conditionals, and narrowing those
+/// emptied the else branch to `never`.
+///
+/// A MEMBER that is itself an alias is expanded too, and a union it
+/// expands to is flattened in. `type Choice<T> = Text<T> | number` with
+/// `type Text<T> = T` reached the remove test as `Text<string>`, which the
+/// resolver-free relation cannot see is `string`, so `!isS(value)` kept it
+/// and `const n: number = value` was reported. Interfaces and classes stay
+/// named, which is the shape the keep / remove tests were written against.
+fn predicate_narrowing_source(
+  resolver : Resolver,
+  cur : @ast.TsType,
+) -> @ast.TsType {
+  match cur {
+    Named(_) | Applied(_, _) =>
+      match resolver.unwrap(cur) {
+        Union(parts) => {
+          let members : Array[@ast.TsType] = []
+          for p in parts {
+            collect_narrowing_members(resolver, p, members, 0)
+          }
+          if members.iter().all(is_decidable_narrowing_member) {
+            Union(members)
+          } else {
+            cur
+          }
+        }
+        _ => cur
+      }
+    _ => cur
+  }
+}
+
+///|
+/// Push `t` into `out` with an alias member expanded and a nested union
+/// flattened. Bounded, because an alias can name itself through a union.
+fn collect_narrowing_members(
+  resolver : Resolver,
+  t : @ast.TsType,
+  out : Array[@ast.TsType],
+  depth : Int32,
+) -> Unit {
+  if depth > 8 {
+    out.push(t)
+    return
+  }
+  match t {
+    Union(parts) =>
+      for p in parts {
+        collect_narrowing_members(resolver, p, out, depth + 1)
+      }
+    Named(name) | Applied(name, _) if resolver.type_aliases.contains(name) =>
+      match resolver.unwrap(t) {
+        Union(parts) =>
+          for p in parts {
+            collect_narrowing_members(resolver, p, out, depth + 1)
+          }
+        q => out.push(q)
+      }
+    _ => out.push(t)
+  }
+}
+
+///|
+/// A union member a predicate's keep / remove test can decide on: a named
+/// or applied type, an object shape, or a primitive or literal.
+fn is_decidable_narrowing_member(t : @ast.TsType) -> Bool {
+  match t {
+    Named(_)
+    | Applied(_, _)
+    | Struct(_, _)
+    | Object(_)
+    | Tuple(_)
+    | Array(_)
+    | String_
+    | Number
+    | Boolean
+    | BigInt
+    | Symbol
+    | Null
+    | Undefined
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_)
+    | BigIntLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// A predicate TARGET with its qualified names resolved to the names they
+/// stand for. A guard reached through a namespace import names its target
+/// in the importer's terms (`R.Failure<any>`), while the source a guard
+/// narrows expands to the declaring module's (`Failure<string>`), and the
+/// resolver-free relation the narrowing asks cannot see that the two are
+/// one declaration.
+fn predicate_canonical_target(
+  resolver : Resolver,
+  target : @ast.TsType,
+) -> @ast.TsType {
+  if resolver.qualified_names.length() == 0 {
+    return target
+  }
+  match target {
+    Named(n) =>
+      match resolver.qualified_names.get(n) {
+        Some(b) => Named(b)
+        None => target
+      }
+    Applied(n, args) =>
+      match resolver.qualified_names.get(n) {
+        Some(b) => Applied(b, args)
+        None => target
+      }
+    Union(parts) =>
+      Union(parts.map(fn(p) { predicate_canonical_target(resolver, p) }))
+    _ => target
+  }
+}
+
+///|
+/// The predicate target the keep / remove tests compare against: an alias
+/// target expanded by the same rule as the source's members
+/// (`collect_narrowing_members`). Expanding only the source left the two
+/// sides in different terms, so `value is Text<string>` over a `Choice` that
+/// had expanded to `string | number` matched nothing, kept `string` in the
+/// else branch, and reported `const n: number = value`. A target that
+/// expands to anything the relation cannot decide is compared as written.
+/// The unexpanded target is still what a narrowing falls back to, so a
+/// diagnostic names the alias the guard was written with.
+///
+/// A member is compared against BOTH forms (`predicate_target_matches`).
+/// The source expands only the alias members the rule reaches, so a
+/// `Box | string` parameter keeps `Box` as a name while `v is Box`
+/// expands to `{ b: number }`, and the two then match only as written.
+/// Both forms name one type, so matching either cannot remove a member
+/// the other would keep.
+fn predicate_comparison_target(
+  resolver : Resolver,
+  target : @ast.TsType,
+) -> @ast.TsType {
+  match target {
+    Named(name) | Applied(name, _) if resolver.type_aliases.contains(name) => {
+      let members : Array[@ast.TsType] = []
+      collect_narrowing_members(resolver, target, members, 0)
+      if members.is_empty() ||
+        !members.iter().all(is_decidable_narrowing_member) {
+        target
+      } else if members.length() == 1 {
+        members[0]
+      } else {
+        Union(members)
+      }
+    }
+    _ => target
+  }
+}
+
+///|
+fn predicate_target_matches(
+  v : @ast.TsType,
+  target : @ast.TsType,
+  expanded : @ast.TsType,
+) -> Bool {
+  is_assignable_to(v, target) ||
+  (!physical_equal(expanded, target) && is_assignable_to(v, expanded))
 }
 
 ///|
@@ -26254,15 +26546,42 @@ fn apply_method_type_predicate_narrowing(
   pair_pos : Array[(String, @ast.TsType)],
   pair_neg : Array[(String, @ast.TsType)],
 ) -> Unit {
+  // A predicate export of a namespace binding is published as
+  // `@ns:NS.member`, with its target's own types qualified as `NS.X` so
+  // they resolve where the guard is called. The binding's value type holds
+  // the same member typed in its DECLARING module's terms, which is the
+  // right reading for a call's result and the wrong one for a narrowing
+  // target, so the published form answers first.
+  let ns_predicate = match receiver {
+    Var(ns) if env.lookup(ns) is None =>
+      resolver.globals.get("@ns:" + ns + "." + method_name)
+    _ => None
+  }
   let recv_ty = infer_expr(env, resolver, receiver)
-  let ret = match resolver.lookup_method_sig(recv_ty, method_name) {
-    Some((_, ret)) => ret
+  // The parameter types of the signature the predicate came from, to tell
+  // its subject apart (`predicate_subject_index`); `None` keeps the first
+  // argument, as an overloaded guard's idiom has it.
+  let mut predicate_params : Array[@ast.TsType]? = None
+  let ret = match
+    (if ns_predicate is Some(_) {
+      None
+    } else {
+      resolver.lookup_method_sig(recv_ty, method_name)
+    }) {
+    Some((ps, ret)) => {
+      predicate_params = Some(ps)
+      ret
+    }
+    None if ns_predicate is Some(_) => @ast.TsType::Any
     None =>
       // Arrow-function class field predicate: `isElite = (): this is T =>
       // {...}` is stored as a `Func`-typed property, not a method, so
       // `lookup_method_sig` misses it. Fall back to the field's return type.
       match resolver.lookup_field(recv_ty, method_name) {
-        Some(Func(_, r)) => r
+        Some(Func(ps, r)) => {
+          predicate_params = Some(ps)
+          r
+        }
         // Not a method here: the namespace-import route below may still
         // know it as a predicate.
         _ => @ast.TsType::Any
@@ -26281,19 +26600,22 @@ fn apply_method_type_predicate_narrowing(
     // at all; the embedding publishes the target's predicate exports as
     // `@ns:NS.member`.
     _ => {
-      let field_ty = match resolver.lookup_field(recv_ty, method_name) {
-        Some(t) if !(t is Any) => Some(t)
-        _ =>
-          match receiver {
-            Var(ns) if env.lookup(ns) is None =>
-              resolver.globals.get("@ns:" + ns + "." + method_name)
+      let field_ty = match ns_predicate {
+        Some(t) => Some(t)
+        None =>
+          match resolver.lookup_field(recv_ty, method_name) {
+            Some(t) if !(t is Any) => Some(t)
             _ => None
           }
       }
       loose = true
       match field_ty {
-        Some(Func(_, TypePredicate(p, t))) => (p, t)
-        Some(GenericFunc(tps, _, Func(_, TypePredicate(p, t)))) => {
+        Some(Func(ps, TypePredicate(p, t))) => {
+          predicate_params = Some(ps)
+          (p, t)
+        }
+        Some(GenericFunc(tps, _, Func(ps, TypePredicate(p, t)))) => {
+          predicate_params = Some(ps)
           let bindings : Map[String, @ast.TsType] = Map([])
           for tp in tps {
             bindings[tp] = Any
@@ -26309,41 +26631,68 @@ fn apply_method_type_predicate_narrowing(
       }
     }
   }
+  let target = predicate_canonical_target(resolver, target)
+  let test_target = predicate_comparison_target(resolver, target)
   // `this is T` predicate (`isLeader(): this is LeadGuard`): the guard
   // narrows the *receiver* itself, not a positional argument. Narrow the
   // receiver's binding (`if (a.isLeader()) { a.lead() }`).
   if param_name == "this" {
     match narrowing_key_for_expr(receiver) {
       Some(key) => {
-        let cur = narrowing_current_type(env, resolver, key)
-        let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+        let cur = predicate_narrowing_source(
+          resolver,
+          narrowing_current_type(env, resolver, key),
+        )
+        let then_ty = narrow_keep(cur, fn(v) {
+          predicate_target_matches(v, target, test_target)
+        })
         let then_resolved = match then_ty {
           Never => target
           _ => then_ty
         }
         pair_pos.push((key, then_resolved))
-        let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+        let else_ty = narrow_remove(cur, fn(v) {
+          predicate_target_matches(v, target, test_target)
+        })
         pair_neg.push((key, else_ty))
       }
       None => ()
     }
     return
   }
-  // Without per-method TsParam metadata, fall back to first positional arg.
-  let _ = param_name
-  if args.length() == 0 {
+  // A callable type has no parameter names, so the subject is told by
+  // type. An overloaded guard (`predicate_params` unset) keeps the first
+  // argument, which is its idiom's subject.
+  let idx = match
+    (@ast.predicate_subject_position(param_name), predicate_params) {
+    (Some(i), _) => i
+    (None, Some(ps)) =>
+      match predicate_subject_index(resolver, ps, target) {
+        Some(i) => i
+        None => return
+      }
+    (None, None) => 0
+  }
+  if idx >= args.length() {
     return
   }
-  match args[0] {
+  match args[idx] {
     Var(arg_name) => {
-      let cur = env_lookup_full(env, resolver, arg_name)
-      let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+      let cur = predicate_narrowing_source(
+        resolver,
+        env_lookup_full(env, resolver, arg_name),
+      )
+      let then_ty = narrow_keep(cur, fn(v) {
+        predicate_target_matches(v, target, test_target)
+      })
       let then_resolved = match then_ty {
         Never => target
         _ => then_ty
       }
       pair_pos.push((arg_name, then_resolved))
-      let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+      let else_ty = narrow_remove(cur, fn(v) {
+        predicate_target_matches(v, target, test_target)
+      })
       if !(loose && else_ty is Never && !(cur is Never)) {
         pair_neg.push((arg_name, else_ty))
       }
@@ -47817,9 +48166,27 @@ fn check_module_function_bodies_layered(
   // `@value-origin:NAME` says which module an imported value's type is
   // written in (see `graph_import_globals`).
   let value_origins : Map[String, String] = Map([])
+  // `@value-origin-member:NAME\u{0}FIELD` is the same fact for one member
+  // of a namespace object, whose members can each be declared in a
+  // different module (`export *` gathers them).
+  let member_origins : Map[String, Map[String, String]] = Map([])
   for global in extra_globals {
     if global.0.has_prefix("@value-origin:") && global.1 is Named(origin) {
       value_origins[global.0["@value-origin:".length():].to_owned()] = origin
+    } else if global.0.has_prefix("@value-origin-member:") &&
+      global.1 is Named(origin) {
+      let rest = global.0["@value-origin-member:".length():].to_owned()
+      match rest.find("\u{0}") {
+        Some(i) => {
+          let name = rest[:i].to_owned()
+          let field = rest[i + 1:].to_owned()
+          match member_origins.get(name) {
+            Some(m) => m[field] = origin
+            None => member_origins[name] = Map([(field, origin)])
+          }
+        }
+        None => ()
+      }
     }
   }
   for global in extra_globals {
@@ -47830,6 +48197,26 @@ fn check_module_function_bodies_layered(
           None => global.1
         }
       None => global.1
+    }
+    let ty = match (member_origins.get(global.0), ty) {
+      (Some(origins), Object(fields)) =>
+        @ast.TsType::Object(
+          fields.map(fn(f) {
+            let renames = match f.0 {
+              Literal(k) =>
+                match origins.get(k) {
+                  Some(origin) => renames_by_key.get(origin)
+                  None => None
+                }
+              _ => None
+            }
+            match renames {
+              Some(r) => (f.0, rename_type_refs(f.1, r))
+              None => f
+            }
+          }),
+        )
+      _ => ty
     }
     resolver.globals[global.0] = ty
     resolver.declared_value_names[global.0] = true

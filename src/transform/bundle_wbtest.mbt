@@ -565,6 +565,24 @@ test "dts: optional field round-trips to `x?: T` instead of `T | undefined`" {
 }
 
 ///|
+/// A callable's parameters are emitted as `arg0`, `arg1`, …, so a
+/// predicate whose subject is a later parameter names it by position. Its
+/// source name, `value`, named no parameter of the emitted signature.
+test "dts: a predicate on a later parameter names it by position" {
+  let src = "export type F = (first: unknown, value: unknown) => value is string;\n" +
+    "export interface G { isText(first: unknown, value: unknown): value is string }\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let dts = emit_entry_dts(module_, ["F", "G"], {})
+  assert_true(
+    dts.contains("type F = (arg0: unknown, arg1: unknown) => arg1 is string"),
+  )
+  assert_true(
+    dts.contains("isText: (arg0: unknown, arg1: unknown) => arg1 is string"),
+  )
+  assert_false(dts.contains("value is string"))
+}
+
+///|
 test "dts: preserves callable optional syntax and generic constraints" {
   let src = "export type Callback = <T extends string>(value?: T) => T;\n" +
     "export type Maker = new <U extends number>(value?: U) => U;\n" +
