@@ -412,6 +412,81 @@ test "a guard whose subject the relation cannot prove keeps the first parameter"
 }
 
 ///|
+/// A member of the narrowed alias union that is ITSELF an alias is
+/// expanded before the keep / remove tests. `Text<string>` read as a name
+/// the relation could not see was `string`, so the else branch of
+/// `isS(value)` kept it and `const n: number = value` was reported. A
+/// plain `string | number` narrows as it always did.
+test "a guard over an alias union whose member is an alias narrows both branches" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/main.ts", "type Text<T> = T;\ntype Choice<T> = Text<T> | number;\ndeclare function isS(v: unknown): v is string;\nexport function f(value: Choice<string>): number {\n  if (!isS(value)) {\n    const n: number = value;\n    return n;\n  }\n  const s: string = value;\n  return s.length;\n}\nexport function g(value: string | number): number {\n  if (!isS(value)) {\n    const n: number = value;\n    return n;\n  }\n  const s: string = value;\n  return s.length;\n}",
+        ),
+      ],
+      [],
+    ),
+    [],
+  )
+}
+
+///|
+/// `call` infers its result, so a predicate does not survive it: tsc
+/// narrows NEITHER argument of `g.call(null, first, value)`. The predicate
+/// used to stay on the signature `call` builds, and its recorded subject
+/// position, 1, then named `first` once `thisArg` was prepended.
+test "a guard called through `call` narrows nothing" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/main.ts", "declare const g: (first: unknown, value: unknown) => value is string;\nexport function f(first: unknown, value: unknown): string {\n  if (g.call(null, first, value)) {\n    const a: string = value;\n    const b: string = first;\n    return a + b;\n  }\n  return \"\";\n}",
+        ),
+      ],
+      [],
+    ),
+    [
+      "function f > binding `a` init :: expected `string` but got `unknown`", "function f > binding `b` init :: expected `string` but got `unknown`",
+    ],
+  )
+}
+
+///|
+/// The `var` a namespace block is lowered to and a written `declare const
+/// N: any` are the same `values` entry, so the lowering is dropped by
+/// COUNT, one per block, and a real `any` value beside a type-only
+/// namespace survives. Read by shape, the written value was dropped too.
+test "a namespace's lowered var is told from a written any value by count" {
+  fn names(source : String) -> Array[String] {
+    let parser = @parser.Parser::from_source_with_jsx(source, false)
+    parser.mark_declaration_file()
+    let m = parser.parse_module() catch { e => abort("\{e}") }
+    declared_values(m).map(fn(v) { v.name })
+  }
+
+  assert_eq(names("export declare namespace Foo { interface T {} }"), [])
+  assert_eq(
+    names(
+      "export declare const Foo: any;\nexport declare namespace Foo { interface T {} }",
+    ),
+    ["Foo"],
+  )
+  assert_eq(
+    names(
+      "export declare const Foo: any;\nexport declare namespace Foo { interface T {} }\nexport declare namespace Foo { interface U {} }",
+    ),
+    ["Foo"],
+  )
+  assert_eq(
+    names(
+      "export declare const Foo: number;\nexport declare namespace Foo { interface T {} }",
+    ),
+    ["Foo"],
+  )
+}
+
+///|
 /// A namespace holding only a nested TYPE namespace has no value, so a
 /// `declare const` of the same name keeps its type. The nested
 /// namespace's lowered `var` counted as a value, and the namespace's

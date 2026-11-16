@@ -311,8 +311,8 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
       break
     }
   }
-  for value in module_.values {
-    if value.name == name && !is_namespace_lowering_value(module_, value) {
+  for value in declared_values(module_) {
+    if value.name == name {
       match value.type_ {
         Any =>
           match arrow_const_predicate_type(module_, name) {
@@ -504,26 +504,39 @@ fn callable_with_members(
 }
 
 ///|
-/// A `values` entry that is the `var N = N || {}` a nested namespace is
-/// lowered to rather than a declaration of the body's own: `any`, under
-/// the name of a namespace the body declares. Counted as a value, a
-/// namespace holding only `namespace Types { interface I {} }` read as
-/// instantiated, and its empty object shadowed a `declare const` of the
-/// same name. A real `const Types: T` beside a type-only `namespace
-/// Types` keeps its written type, so it is not mistaken for one.
-fn is_namespace_lowering_value(
-  body : @ast.TsModule,
-  value : @ast.TsValueDecl,
-) -> Bool {
-  value.type_ is Any &&
-  body.namespaces.iter().any(fn(n) { n.name == value.name })
+/// The `values` entries a body DECLARES, without the `var N = N || {}`
+/// each `namespace N` block is lowered to. Counted as a value, a namespace
+/// holding only `namespace Types { interface I {} }` read as instantiated,
+/// and its empty object shadowed a `declare const` of the same name.
+///
+/// The parser records the lowering as one `any` entry per namespace
+/// block, and a written `declare const N: any` is the same entry, so the
+/// two are told apart by COUNT rather than by shape: one `any` entry named
+/// `N` is dropped per `namespace N` block. A real `const N: T` keeps its
+/// type and is never dropped, and a real `const N: any` beside a
+/// type-only `namespace N` survives as the one entry left over.
+fn declared_values(body : @ast.TsModule) -> Array[@ast.TsValueDecl] {
+  let lowered : Map[String, Int32] = Map([])
+  for n in body.namespaces {
+    lowered[n.name] = lowered.get(n.name).unwrap_or(0) + 1
+  }
+  let out : Array[@ast.TsValueDecl] = []
+  for v in body.values {
+    let left = lowered.get(v.name).unwrap_or(0)
+    if left > 0 && v.type_ is Any {
+      lowered[v.name] = left - 1
+      continue
+    }
+    out.push(v)
+  }
+  out
 }
 
 ///|
 /// Whether a namespace body declares anything that exists at run time,
 /// which is what gives the namespace a value.
 fn namespace_is_instantiated(body : @ast.TsModule) -> Bool {
-  body.values.iter().any(fn(v) { !is_namespace_lowering_value(body, v) }) ||
+  !declared_values(body).is_empty() ||
   !body.funcs.is_empty() ||
   !body.imports.is_empty() ||
   !body.classes.is_empty() ||

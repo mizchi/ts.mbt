@@ -5752,12 +5752,22 @@ fn func_prototype_member(
   match field {
     // `call(thisArg, ...args)` — thisArg comes first, followed by the
     // function's own parameter list. Returns the function's `ret`.
+    // A type predicate does not survive into `call`'s result: its `R` is
+    // inferred, so tsc narrows nothing through `g.call(null, x)`. Kept, the
+    // prepended `thisArg` also moved a recorded subject position onto the
+    // argument before the real one. `apply` passes its arguments as one
+    // array, which no position can name, and `bind` keeps the predicate,
+    // as tsc's does.
     "call" => {
       let call_params : Array[@ast.TsType] = [any]
       for p in params {
         call_params.push(p)
       }
-      Some(@ast.TsType::Func(call_params, ret))
+      let call_ret = match ret {
+        TypePredicate(_, _) => @ast.TsType::Boolean
+        _ => ret
+      }
+      Some(@ast.TsType::Func(call_params, call_ret))
     }
     "apply" => Some(@ast.TsType::Func([any, @ast.TsType::Array(any)], ret))
     "bind" => Some(@ast.TsType::Func([any], @ast.TsType::Func(params, ret)))
@@ -26241,6 +26251,13 @@ fn predicate_callable_params(ty : @ast.TsType?) -> Array[@ast.TsType]? {
 /// (A extends AesKw ? Key<A> : never) | (A extends RsaOaep ? PublicKey<A>
 /// : never)` expands to undecided conditionals, and narrowing those
 /// emptied the else branch to `never`.
+///
+/// A MEMBER that is itself an alias is expanded too, and a union it
+/// expands to is flattened in. `type Choice<T> = Text<T> | number` with
+/// `type Text<T> = T` reached the remove test as `Text<string>`, which the
+/// resolver-free relation cannot see is `string`, so `!isS(value)` kept it
+/// and `const n: number = value` was reported. Interfaces and classes stay
+/// named, which is the shape the keep / remove tests were written against.
 fn predicate_narrowing_source(
   resolver : Resolver,
   cur : @ast.TsType,
@@ -26248,11 +26265,50 @@ fn predicate_narrowing_source(
   match cur {
     Named(_) | Applied(_, _) =>
       match resolver.unwrap(cur) {
-        Union(parts) as u if parts.iter().all(is_decidable_narrowing_member) =>
-          u
+        Union(parts) => {
+          let members : Array[@ast.TsType] = []
+          for p in parts {
+            collect_narrowing_members(resolver, p, members, 0)
+          }
+          if members.iter().all(is_decidable_narrowing_member) {
+            Union(members)
+          } else {
+            cur
+          }
+        }
         _ => cur
       }
     _ => cur
+  }
+}
+
+///|
+/// Push `t` into `out` with an alias member expanded and a nested union
+/// flattened. Bounded, because an alias can name itself through a union.
+fn collect_narrowing_members(
+  resolver : Resolver,
+  t : @ast.TsType,
+  out : Array[@ast.TsType],
+  depth : Int32,
+) -> Unit {
+  if depth > 8 {
+    out.push(t)
+    return
+  }
+  match t {
+    Union(parts) =>
+      for p in parts {
+        collect_narrowing_members(resolver, p, out, depth + 1)
+      }
+    Named(name) | Applied(name, _) if resolver.type_aliases.contains(name) =>
+      match resolver.unwrap(t) {
+        Union(parts) =>
+          for p in parts {
+            collect_narrowing_members(resolver, p, out, depth + 1)
+          }
+        q => out.push(q)
+      }
+    _ => out.push(t)
   }
 }
 
