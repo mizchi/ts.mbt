@@ -1,6 +1,7 @@
 import {
   "mizchi/x/fs",
   "mizchi/x/process",
+  "moonbitlang/async",
   "moonbitlang/async/fs" @async_fs,
   "moonbitlang/core/json",
   "mizchi/ts/parser",
@@ -8,7 +9,6 @@ import {
 }
 
 import {
-  "moonbitlang/async",
   "moonbitlang/core/test",
   "mizchi/ts/ast",
   "mizchi/ts/checker",

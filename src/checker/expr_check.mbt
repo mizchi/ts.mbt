@@ -883,6 +883,64 @@ pub fn rename_type_refs(
 }
 
 ///|
+/// A class with the type references in its members rewritten
+/// (`rename_type_refs`), its own type parameters and a method's shadowing
+/// a rename. The class keeps its own name and its heritage NAMES, because
+/// class lookups and `extends` walks go through bare names; only the types
+/// its members are written with move.
+fn rename_class_refs(
+  c : @ast.TsClassDecl,
+  renames : Map[String, String],
+) -> @ast.TsClassDecl {
+  let r : Map[String, String] = Map([])
+  for k, v in renames {
+    if !c.type_params.contains(k) {
+      r[k] = v
+    }
+  }
+  if r.length() == 0 {
+    return c
+  }
+  let go = fn(t : @ast.TsType) { rename_type_refs(t, r) }
+  let methods = c.methods.map(fn(m) {
+    let own : Map[String, String] = if m.type_params
+      .iter()
+      .any(fn(b) { r.contains(b) }) {
+      let own : Map[String, String] = Map([])
+      for k, v in r {
+        if !m.type_params.contains(k) {
+          own[k] = v
+        }
+      }
+      own
+    } else {
+      r
+    }
+    {
+      ..m,
+      type_param_bounds: m.type_param_bounds.map(fn(b) {
+        (b.0, rename_type_refs(b.1, own))
+      }),
+      params: m.params.map(fn(p) { (p.0, rename_type_refs(p.1, own)) }),
+      return_type: rename_type_refs(m.return_type, own),
+    }
+  })
+  {
+    ..c,
+    type_param_bounds: c.type_param_bounds.map(fn(b) { (b.0, go(b.1)) }),
+    constructor_params: c.constructor_params.map(fn(ps) {
+      ps.map(fn(p) { (p.0, go(p.1)) })
+    }),
+    properties: c.properties.map(fn(p) { { ..p, type_: go(p.type_), } }),
+    methods,
+    index_signatures: c.index_signatures.map(fn(sig) { (go(sig.0), go(sig.1)) }),
+    static_index_signatures: c.static_index_signatures.map(fn(sig) {
+      (go(sig.0), go(sig.1))
+    }),
+  }
+}
+
+///|
 /// An interface with its references rewritten (`rename_type_refs`), its
 /// own type parameters shadowing a rename.
 fn rename_interface_refs(
@@ -940,6 +998,26 @@ fn rename_interface_refs(
   for b in i.type_param_bounds {
     type_param_bounds.push((b.0, rename_type_refs(b.1, r)))
   }
+  // A METHOD's bounds (`take<K extends keyof Item>(k: K)`) are written in
+  // the interface's scope too, with that method's own binders shadowing.
+  let method_type_param_bounds : Array[(String, Array[(String, @ast.TsType)])] = []
+  for entry in i.method_type_param_bounds {
+    let own : Map[String, String] = match method_binders.get(entry.0) {
+      Some(binders) => {
+        let own : Map[String, String] = Map([])
+        for k, v in r {
+          if !binders.contains(k) {
+            own[k] = v
+          }
+        }
+        own
+      }
+      None => r
+    }
+    method_type_param_bounds.push(
+      (entry.0, entry.1.map(fn(b) { (b.0, rename_type_refs(b.1, own)) })),
+    )
+  }
   {
     ..i,
     extends_names: i.extends_names.map(fn(n) { r.get(n).unwrap_or(n) }),
@@ -947,6 +1025,7 @@ fn rename_interface_refs(
     fields,
     index_signatures,
     type_param_bounds,
+    method_type_param_bounds,
   }
 }
 
@@ -984,6 +1063,43 @@ fn qualify_namespace_local_refs(
     ..m,
     interfaces: m.interfaces.map(fn(i) { rename_interface_refs(i, renames) }),
     type_aliases: aliases,
+  }
+}
+
+///|
+/// `m` with each top-level interface, type alias and enum named in
+/// `renames` moved to its key, and every reference to one in `m`'s
+/// interfaces, aliases and class members moved with it — the rewrite a
+/// keyed module gets from its own `renames`, for a module that has no key.
+/// The map is shared by every module without a key (see the caller in
+/// `check_module_function_bodies_layered`), because an ambient `.d.ts`
+/// shares one global scope with the others: `b.d.ts`'s `Holder.item: Item`
+/// means `a.d.ts`'s `interface Item`.
+fn move_unkeyed_reserved_type_names(
+  m : @ast.TsModule,
+  renames : Map[String, String],
+) -> @ast.TsModule {
+  if renames.length() == 0 {
+    return m
+  }
+  let moved = fn(n : String) { renames.get(n).unwrap_or(n) }
+  let aliases = m.type_aliases.map(fn(a) {
+    let own : Map[String, String] = Map([])
+    for k, v in renames {
+      if !a.type_params.contains(k) {
+        own[k] = v
+      }
+    }
+    { ..a, name: moved(a.name), type_: rename_type_refs(a.type_, own), }
+  })
+  {
+    ..m,
+    interfaces: m.interfaces.map(fn(i) {
+      { ..rename_interface_refs(i, renames), name: moved(i.name), }
+    }),
+    type_aliases: aliases,
+    enums: m.enums.map(fn(e) { { ..e, name: moved(e.name), } }),
+    classes: m.classes.map(fn(c) { rename_class_refs(c, renames) }),
   }
 }
 
@@ -1127,14 +1243,22 @@ fn Resolver::ingest_type_module(
           }
           aliases[name] = { ..a, type_: rename_type_refs(a.type_, own), }
         }
-        renamed_type_module_cache[rkey] = (ifaces, aliases)
-        Some((ifaces, aliases))
+        // A class member written with a renamed name (`item!: Item` beside
+        // this module's keyed `interface Item`) reads the key too. Left
+        // alone it read the shared bare entry, which can be another
+        // module's `Item` or the checked module's renamed import.
+        let classes : Map[String, @ast.TsClassDecl] = Map([])
+        for name, c in types.classes {
+          classes[name] = rename_class_refs(c, renames)
+        }
+        renamed_type_module_cache[rkey] = (ifaces, aliases, classes)
+        Some((ifaces, aliases, classes))
       }
     }
   }
   for name, interface_ in types.interfaces {
     let interface_ = match renamed {
-      Some((ifaces, _)) => ifaces.get(name).unwrap_or(interface_)
+      Some((ifaces, _, _)) => ifaces.get(name).unwrap_or(interface_)
       None => interface_
     }
     match renames.get(name) {
@@ -1157,6 +1281,10 @@ fn Resolver::ingest_type_module(
     }
   }
   for name, class_ in types.classes {
+    let class_ = match renamed {
+      Some((_, _, classes)) => classes.get(name).unwrap_or(class_)
+      None => class_
+    }
     match renames.get(name) {
       Some(key) => {
         Resolver::put_class(r, key, class_)
@@ -1174,7 +1302,7 @@ fn Resolver::ingest_type_module(
   }
   for name, alias_ in types.type_aliases {
     let alias_ = match renamed {
-      Some((_, aliases)) => aliases.get(name).unwrap_or(alias_)
+      Some((_, aliases, _)) => aliases.get(name).unwrap_or(alias_)
       None => alias_
     }
     match renames.get(name) {
@@ -1221,7 +1349,11 @@ let type_module_cache : Map[String, Resolver] = Map([])
 /// set; cleared with `type_module_cache`.
 let renamed_type_module_cache : Map[
   String,
-  (Map[String, @ast.TsInterface], Map[String, @ast.TsTypeAlias]),
+  (
+    Map[String, @ast.TsInterface],
+    Map[String, @ast.TsTypeAlias],
+    Map[String, @ast.TsClassDecl],
+  ),
 ] = Map([])
 
 ///|
@@ -1411,6 +1543,18 @@ fn Resolver::alias_namespace_import_types(
     // `enum E` beside the file's `import { E }`) is that declaration in
     // here, not the import, so nothing is redirected for it.
     if shadowed.contains(qualified) {
+      continue
+    }
+    // A renamed import spelled like a CLASS that is registered here must
+    // not put anything under that name: lookups read interfaces, aliases
+    // and enums before classes, and `unwrap` reads `qualified_names`
+    // before either, so every `Item` would read `Other`. A class ANOTHER
+    // module declares never reaches this point (the caller leaves such an
+    // alias out, see `ambiguous_class_locals`); what does is a class the
+    // checked module declares inside a function, which joins `classes`.
+    // This runs before the keyed redirect below, which `continue`s past
+    // anything after it.
+    if qualified != bare && r.classes.get(qualified) is Some(_) {
       continue
     }
     // When two modules declare `bare`, its bare entry is their merge, and
@@ -47236,6 +47380,51 @@ fn check_module_function_bodies_layered(
       own_type_names[q] = ()
     }
   }
+  // A RENAMED import (`import { Other as Item }`) binds `Item` in the
+  // checked module as surely as a declaration does, and
+  // `alias_namespace_import_types` points that name at `Other` once
+  // ingestion is done. Left out of these tables, another reachable
+  // module's own `interface Item` was registered at the bare name, the
+  // redirect then read `Item` as already declared and skipped, and the
+  // checked module's `const m: Item = { z: 1 }` was judged against the
+  // wrong `Item`. Counted here, that module's `Item` collides, is keyed
+  // `Item@<path>` like any other collision, and stays off the bare name.
+  // A `ns.X` spelling has no bare local, and an unrenamed named import
+  // (`import { Item }`) means the declaration itself, so neither counts.
+  //
+  // A CLASS of that name is the exception, because a class cannot be keyed
+  // (it keeps its bare name; see the rename loop below). So the checked
+  // module's `x: Item` (the import) and the class's own `mk(): Item` would
+  // be one name in one table, and no answer is right for both: the import
+  // there made `mk().n` read `Other`, and the class there made the legal
+  // `read(x: Item) { x.z }` read the class. Such a name is registered as
+  // NEITHER. The class is skipped like any reserved name, and the import
+  // is not installed (`ambiguous_class_locals`), so every read of `Item`
+  // in the checked module is unresolved and abstains. That is a MISS for
+  // `bad: string = mk().n`, and it is the only answer with no false
+  // positive on either side.
+  let foreign_class_names : Map[String, Unit] = Map([])
+  if has_type_modules {
+    for type_module in type_modules {
+      for c in type_module.classes {
+        foreign_class_names[c.name] = ()
+      }
+    }
+  }
+  let checked_renamed_locals : Map[String, Unit] = Map([])
+  let ambiguous_class_locals : Map[String, Unit] = Map([])
+  if has_type_modules {
+    for checked_alias in namespace_type_aliases {
+      let (local_name, bare, _) = checked_alias
+      if local_name != bare && !local_name.contains(".") {
+        checked_renamed_locals[local_name] = ()
+        own_type_names[local_name] = ()
+        if foreign_class_names.contains(local_name) {
+          ambiguous_class_locals[local_name] = ()
+        }
+      }
+    }
+  }
   // Which top-level type names more than one reachable module declares
   // (the checked module counting as one): those get a per-module key.
   let declarers : Map[String, Map[String, Unit]] = Map([])
@@ -47268,6 +47457,12 @@ fn check_module_function_bodies_layered(
   }
   if has_type_modules {
     note_declared(own_root, "<checked>")
+    for local_name, _ in checked_renamed_locals {
+      match declarers.get(local_name) {
+        Some(set) => set["<checked>"] = ()
+        None => declarers[local_name] = Map([("<checked>", ())])
+      }
+    }
   }
   let type_modules_by_key : Map[String, @ast.TsModule] = Map([])
   for i, type_module in type_modules {
@@ -47281,19 +47476,35 @@ fn check_module_function_bodies_layered(
       note_declared(type_module, type_module_keys[i])
     }
   }
-  // The checked module's RENAMED imports (`import { Other as Item }`):
-  // `alias_namespace_import_types` redirects each local name once
-  // ingestion is done, so a bare destination spelled like one of them is
-  // redirected with it and cannot stand for another module's declaration.
-  let checked_renamed_locals : Map[String, Unit] = Map([])
-  for checked_alias in namespace_type_aliases {
-    if checked_alias.0 != checked_alias.1 {
-      checked_renamed_locals[checked_alias.0] = ()
-    }
-  }
   // Each reachable module's renames, by key: an imported VALUE's type is
   // written in its declaring module's scope and is read through them below.
   let renames_by_key : Map[String, Map[String, String]] = Map([])
+  // What the modules with no key moved, read as one more entry of
+  // `renames_by_key` under `<unkeyed>`: an ambient `.d.ts` declares VALUES
+  // too (`declare const ambientItem: Item`), and their types are supplied
+  // by the caller, marked `@value-origin:NAME` -> `<unkeyed>`.
+  let unkeyed_renames : Map[String, String] = Map([])
+  if checked_renamed_locals.length() > 0 {
+    for i, type_module in type_modules {
+      if i < type_module_keys.length() {
+        continue
+      }
+      let note = fn(n : String) {
+        if checked_renamed_locals.contains(n) {
+          unkeyed_renames[n] = n + "@<unkeyed>"
+        }
+      }
+      for d in type_module.interfaces {
+        note(d.name)
+      }
+      for d in type_module.type_aliases {
+        note(d.name)
+      }
+      for d in type_module.enums {
+        note(d.name)
+      }
+    }
+  }
   for i, type_module in type_modules {
     let cache_key = if i < type_module_keys.length() {
       type_module_keys[i]
@@ -47382,22 +47593,15 @@ fn check_module_function_bodies_layered(
             // `Item`: left alone, `It` read the shared bare table, which is
             // the CHECKED module's `It` when it declares one. The bare entry
             // is the origin's declaration exactly when the origin is the
-            // name's only declarer (the checked module counts as one).
+            // name's only declarer. The checked module counts as one, its
+            // renamed imports included, so a name it redirects is keyed
+            // and never reaches this path.
             let origin_is_sole_declarer = match declarers.get(bare) {
               Some(set) => set.length() == 1 && set.contains(origin)
               None => false
             }
             if local_name != bare && origin_is_sole_declarer {
-              // When the checked module renames into `bare`, the bare name
-              // is redirected to ITS import, and leaving `It` alone would
-              // read the shared table's `It` (the checked module's own,
-              // say). `bare@origin` is never registered on this path, so
-              // the reference is unresolved and abstains.
-              renames[local_name] = if checked_renamed_locals.contains(bare) {
-                bare + "@" + origin
-              } else {
-                bare
-              }
+              renames[local_name] = bare
             }
             continue
           }
@@ -47417,6 +47621,19 @@ fn check_module_function_bodies_layered(
       !renames_by_key.contains(cache_key) {
       renames_by_key[cache_key] = renames
     }
+    // A module with NO key (an ambient `.d.ts`, or a caller of the public
+    // entry point that passes none) gets no `renames`, so nothing rewrites
+    // its references. Reserving the checked module's renamed `Item`
+    // against it skipped its `interface Item` and left its
+    // `Holder.item: Item` to the redirect, which reads the checked
+    // module's import: the legal `get().item.n` was reported. Its own
+    // declarations of such a name move to `Item@<unkeyed>` instead, and
+    // its references move with them.
+    let type_module = if cache_key == "" {
+      move_unkeyed_reserved_type_names(type_module, unkeyed_renames)
+    } else {
+      type_module
+    }
     Resolver::ingest_type_module(
       resolver,
       type_module,
@@ -47425,6 +47642,9 @@ fn check_module_function_bodies_layered(
       skip=own_type_names,
       renames~,
     )
+  }
+  if unkeyed_renames.length() > 0 {
+    renames_by_key["<unkeyed>"] = unkeyed_renames
   }
   if outer_modules.length() == 0 {
     Resolver::ingest_module(resolver, module_, "")
@@ -47499,11 +47719,16 @@ fn check_module_function_bodies_layered(
       note_shadow(outer_modules[k])
     }
   }
-  Resolver::alias_namespace_import_types(
-    resolver,
-    namespace_type_aliases,
-    shadowed~,
-  )
+  // Only the aliases installed HERE are filtered. The namespace recursion
+  // below gets the original list, so a nested scope reserves the name too.
+  let installed_aliases = if ambiguous_class_locals.length() == 0 {
+    namespace_type_aliases
+  } else {
+    namespace_type_aliases.filter(fn(a) {
+      !ambiguous_class_locals.contains(a.0)
+    })
+  }
+  Resolver::alias_namespace_import_types(resolver, installed_aliases, shadowed~)
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
   // `@strict: ...` directive, so they inherit. Reuses the same root
