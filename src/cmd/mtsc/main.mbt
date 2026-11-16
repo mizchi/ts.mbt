@@ -631,8 +631,45 @@ async fn mtsc_load_bundle_files(
       if externals.contains(spec) {
         continue
       }
-      if aliases.contains(spec) {
-        continue
+      // The bundler resolves a bare specifier once (`aliases` is keyed by
+      // the specifier alone), but the CHECKER reads one edge per
+      // importer: `find_graph_target` asks "where does THIS file's
+      // `@univerjs/core` go". Skipping the edge for every importer after
+      // the first left those files' bare imports unresolved — which file
+      // came first depended on the queue order, and univer's
+      // `replay.command.ts` lost its `@univerjs/core` edge whenever a
+      // sibling was walked before it.
+      //
+      // The edge is resolved from THIS importer, since a nested
+      // `node_modules` can hold another version. When that is the same
+      // FILE as the bundler's alias — pnpm reaches one workspace package
+      // through every dependent's own symlink, so the path differs and the
+      // real path does not — the edge names the alias, which is the module
+      // the loader already holds; a different file is loaded in its own
+      // right. The bundler still links the alias, and walks its graph from
+      // the entry, so a module only the checker reaches is never emitted.
+      match aliases.get(spec) {
+        Some(found) => {
+          let bare_started = @bench.monotonic_clock_start()
+          let own = @parser.resolve_runtime_module_specifier(resolved, spec)
+          let target = match own {
+            Some(o) if o != found &&
+              @parser.canonical_file_path(o) !=
+              @parser.canonical_file_path(found) => {
+              queue.push(o)
+              o
+            }
+            _ => found
+          }
+          bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: target,
+          })
+          continue
+        }
+        None => ()
       }
       let bare_started = @bench.monotonic_clock_start()
       let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
@@ -675,8 +712,45 @@ async fn mtsc_load_bundle_files(
       if externals.contains(spec) {
         continue
       }
-      if aliases.contains(spec) {
-        continue
+      // The bundler resolves a bare specifier once (`aliases` is keyed by
+      // the specifier alone), but the CHECKER reads one edge per
+      // importer: `find_graph_target` asks "where does THIS file's
+      // `@univerjs/core` go". Skipping the edge for every importer after
+      // the first left those files' bare imports unresolved — which file
+      // came first depended on the queue order, and univer's
+      // `replay.command.ts` lost its `@univerjs/core` edge whenever a
+      // sibling was walked before it.
+      //
+      // The edge is resolved from THIS importer, since a nested
+      // `node_modules` can hold another version. When that is the same
+      // FILE as the bundler's alias — pnpm reaches one workspace package
+      // through every dependent's own symlink, so the path differs and the
+      // real path does not — the edge names the alias, which is the module
+      // the loader already holds; a different file is loaded in its own
+      // right. The bundler still links the alias, and walks its graph from
+      // the entry, so a module only the checker reaches is never emitted.
+      match aliases.get(spec) {
+        Some(found) => {
+          let bare_started = @bench.monotonic_clock_start()
+          let own = @parser.resolve_runtime_module_specifier(resolved, spec)
+          let target = match own {
+            Some(o) if o != found &&
+              @parser.canonical_file_path(o) !=
+              @parser.canonical_file_path(found) => {
+              queue.push(o)
+              o
+            }
+            _ => found
+          }
+          bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: target,
+          })
+          continue
+        }
+        None => ()
       }
       let bare_started = @bench.monotonic_clock_start()
       let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
@@ -964,18 +1038,29 @@ fn mtsc_collect_type_issues(
   source : String,
   allow_jsx : Bool,
   declaration_file~ : Bool = false,
+  compiler_options~ : Array[(String, String)] = [],
 ) -> Result[Array[@mtsc_core.MtscTypeIssue], String] {
-  @mtsc_core.collect_type_issues(source, allow_jsx, declaration_file~)
+  @mtsc_core.collect_type_issues(
+    source,
+    allow_jsx,
+    declaration_file~,
+    compiler_options~,
+  )
 }
 
 ///|
 /// Print checker diagnostics for one input and return whether it is clean.
-fn mtsc_typecheck_source(source : String, path : String) -> Bool {
+fn mtsc_typecheck_source(
+  source : String,
+  path : String,
+  compiler_options~ : Array[(String, String)] = [],
+) -> Bool {
   let issues = match
     mtsc_collect_type_issues(
       source,
       path.has_suffix(".tsx"),
       declaration_file=path.has_suffix(".d.ts"),
+      compiler_options~,
     ) {
     Ok(issues) => issues
     Err(e) => {
@@ -1000,9 +1085,14 @@ fn mtsc_typecheck_source(source : String, path : String) -> Bool {
 /// keys `files` by both the resolved path and the extension-less form a
 /// specifier spelled (`./sub` -> `/dir/sub`), and passing the same
 /// source twice would double every diagnostic.
+///
+/// `compiler_options~` are the checker-relevant `compilerOptions` of the
+/// tsconfig this run compiles (`MtscOptions.checker_options`), applied to
+/// every module of the program as `tsc -p` applies them.
 fn mtsc_typecheck_graph(
   files : Map[String, String],
   edges : Array[@mtsc_core.MtscModuleEdge],
+  compiler_options~ : Array[(String, String)] = [],
 ) -> Bool {
   let modules : Array[@mtsc_core.MtscModuleSource] = []
   for path in files.keys() {
@@ -1020,7 +1110,11 @@ fn mtsc_typecheck_graph(
     }
   }
   let reported : Array[@mtsc_core.MtscGraphIssue] = []
-  for issue in @mtsc_core.collect_module_graph_issues({ modules, edges, }) {
+  for
+    issue in @mtsc_core.collect_module_graph_issues(
+      { modules, edges, },
+      compiler_options~,
+    ) {
     // Import-resolution diagnostics are dropped here. They are part of
     // the stricter contract the Vite integration wants, but this CLI
     // cannot tell a type-only use of a value-form import
@@ -1062,32 +1156,7 @@ async fn mtsc_typecheck_program(
   opts : MtscOptions,
   input_path : String,
 ) -> Bool? {
-  let files : Map[String, String] = Map([])
-  let edges : Array[@mtsc_core.MtscModuleEdge] = []
-  let loaded = mtsc_load_bundle_files(
-    input_path,
-    files,
-    Map([]),
-    opts.externals,
-    Map([]),
-    false,
-    [],
-    Map([]),
-    edges,
-  )
-  guard loaded is Ok(_) else { return None }
-  let ts_files : Map[String, String] = Map([])
-  for path, source in files {
-    if path.has_suffix(".ts") ||
-      path.has_suffix(".tsx") ||
-      path.has_suffix(".mts") {
-      ts_files[path] = source
-    }
-  }
-  if ts_files.length() == 0 {
-    return None
-  }
-  Some(mtsc_typecheck_graph(ts_files, edges))
+  mtsc_typecheck_entries(opts, [input_path])
 }
 
 ///|
@@ -1342,7 +1411,11 @@ async fn mtsc_compile_entry(
     // an imported alias reads as a mismatch.
     if !opts.no_check {
       let check_started = @bench.monotonic_clock_start()
-      let check_ok = mtsc_typecheck_graph(files, edges)
+      let check_ok = mtsc_typecheck_graph(
+        files,
+        edges,
+        compiler_options=opts.checker_options,
+      )
       cli_timer.record(
         "cli: typecheck",
         @bench.monotonic_clock_end(check_started),
@@ -1677,11 +1750,20 @@ async fn mtsc_compile_entry(
   if opts.no_check {
     // Unchanged: under `--noCheck` the single-file diagnostics were
     // printed and did not fail the compile.
-    let _ = mtsc_typecheck_source(source, input_path)
+    let _ = mtsc_typecheck_source(
+      source,
+      input_path,
+      compiler_options=opts.checker_options,
+    )
   } else {
     let ok = match mtsc_typecheck_program(opts, input_path) {
       Some(ok) => ok
-      None => mtsc_typecheck_source(source, input_path)
+      None =>
+        mtsc_typecheck_source(
+          source,
+          input_path,
+          compiler_options=opts.checker_options,
+        )
     }
     if !ok {
       return false

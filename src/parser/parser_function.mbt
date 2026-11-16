@@ -155,7 +155,18 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
   // foo` is not. The rule already existed for class MEMBERS; parameter
   // properties never got it, because `skip_param_modifiers` consumed
   // `override` only to discard it (`override11`).
-  let mut saw_override = false
+  //
+  // The order is accessibility, then `override`, then `readonly`, and a
+  // modifier written after one that ranks later is reported against it.
+  // The first version only knew that accessibility comes before
+  // `override`, and reported `readonly` there too: `override readonly x`
+  // — the legal spelling, and how univer writes every injected
+  // `_injector` — was told "`readonly` modifier must precede `override`",
+  // while `readonly override x`, the one tsc reports, was silent. Probed:
+  // `override public`, `readonly override` and `readonly public` are the
+  // three TS1029 cells, and their messages name the earlier-ranked one.
+  let mut max_rank = -1
+  let mut max_name = ""
   while has_modifier {
     has_modifier = false
     match self.peek().kind {
@@ -182,13 +193,19 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
             // other four (public/private/protected/readonly) are.
             if name != "override" {
               saw_property_modifier = true
-              if saw_override {
-                self.grammar_misuses.push(
-                  "`\{name}` modifier must precede `override` modifier",
-                )
-              }
-            } else {
-              saw_override = true
+            }
+            let rank = match name {
+              "override" => 1
+              "readonly" => 2
+              _ => 0
+            }
+            if rank < max_rank {
+              self.grammar_misuses.push(
+                "`\{name}` modifier must precede `\{max_name}` modifier",
+              )
+            } else if rank > max_rank {
+              max_rank = rank
+              max_name = name
             }
             if name == "readonly" {
               saw_readonly = true

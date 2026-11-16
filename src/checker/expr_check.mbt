@@ -877,6 +877,7 @@ pub fn rename_type_refs(
     CallableMeta(inner, optional_params) =>
       CallableMeta(go(inner), optional_params)
     TypePredicate(p, t) => TypePredicate(p, go(t))
+    AssertsPredicate(p, t) => AssertsPredicate(p, t.map(go))
     _ => ty
   }
 }
@@ -897,9 +898,33 @@ fn rename_interface_refs(
   if r.length() == 0 {
     return i
   }
+  // A METHOD's own type parameters (`identity<It>(x: It): It`) shadow a
+  // renamed name inside that method's type, the way the interface's own
+  // do above for every member. They are kept per method NAME in
+  // `method_type_params`, one entry per overload, while the field holds a
+  // plain `Func`.
+  let method_binders : Map[String, Array[String]] = Map([])
+  for entry in i.method_type_params {
+    match method_binders.get(entry.0) {
+      Some(names) => names.append(entry.1)
+      None => method_binders[entry.0] = entry.1.copy()
+    }
+  }
   let fields : Array[(String, @ast.TsType)] = []
   for f in i.fields {
-    fields.push((f.0, rename_type_refs(f.1, r)))
+    let field_r = match method_binders.get(f.0) {
+      Some(binders) if binders.iter().any(fn(b) { r.contains(b) }) => {
+        let own : Map[String, String] = Map([])
+        for k, v in r {
+          if !binders.contains(k) {
+            own[k] = v
+          }
+        }
+        own
+      }
+      _ => r
+    }
+    fields.push((f.0, rename_type_refs(f.1, field_r)))
   }
   let extends_args : Array[Array[@ast.TsType]] = []
   for args in i.extends_args {
@@ -1074,12 +1099,17 @@ fn Resolver::ingest_type_module(
   let renamed = if renames.length() == 0 || cache_key == "" {
     None
   } else {
+    // The DESTINATION is part of the key, not just the renamed name: a
+    // qualified import alias (`ns.Item`) maps to `Item@origin` in a graph
+    // where two reachable modules declare `Item` and to bare `Item` in one
+    // where only one does, and two roots of one graph check reach
+    // different sets.
     let names : Array[String] = []
-    for k, _ in renames {
-      names.push(k)
+    for k, v in renames {
+      names.push(k + "\u{1}" + v)
     }
     names.sort()
-    let rkey = cache_key + "\u{0}" + names.join(",")
+    let rkey = cache_key + "\u{0}" + names.join("\u{2}")
     match renamed_type_module_cache.get(rkey) {
       Some(t) => Some(t)
       None => {
@@ -1373,9 +1403,16 @@ fn distribute_conditional_alias(
 fn Resolver::alias_namespace_import_types(
   r : Resolver,
   aliases : Array[(String, String, String)],
+  shadowed~ : Map[String, Unit] = Map([]),
 ) -> Unit {
   for pair in aliases {
     let (qualified, bare, origin) = pair
+    // A name the scope being checked declares itself (a namespace's own
+    // `enum E` beside the file's `import { E }`) is that declaration in
+    // here, not the import, so nothing is redirected for it.
+    if shadowed.contains(qualified) {
+      continue
+    }
     // When two modules declare `bare`, its bare entry is their merge, and
     // the qualified spelling must still mean ITS module's declaration,
     // which ingestion registered under `bare@origin`.
@@ -1386,6 +1423,28 @@ fn Resolver::alias_namespace_import_types(
         r.type_aliases.contains(key) ||
         r.enums.contains(key) {
         r.qualified_names[qualified] = key
+        // A NAMED import (`qualified == bare`): in the checked module the
+        // bare spelling IS that import, so the bare entry — the merge of
+        // every declarer — is replaced by the import's own declaration.
+        // `qualified_names` only reaches what goes through `unwrap`, and
+        // twenty-odd sites look an enum up by a value's NAME
+        // (`BooleanNumber.TRUE` read `enums["BooleanNumber"]`, which was
+        // whichever module ingested last — univer's protocol, whose
+        // members are `BOOLEAN_NUMBER_TRUE`).
+        if qualified == bare {
+          match r.interfaces.get(key) {
+            Some(i) => r.interfaces[bare] = i
+            None => ()
+          }
+          match r.type_aliases.get(key) {
+            Some(a) => r.type_aliases[bare] = a
+            None => ()
+          }
+          match r.enums.get(key) {
+            Some(e) => r.enums[bare] = e
+            None => ()
+          }
+        }
         continue
       }
     }
@@ -1422,6 +1481,21 @@ fn Resolver::alias_namespace_import_types(
       None => ()
     }
   }
+}
+
+///|
+/// True when `module_` declares `name` at its TOP LEVEL as an interface,
+/// a type alias, an enum or a class — the kinds that get a per-module key.
+/// `module_declares_type_name` asks a different question (any depth, no
+/// enums) for the lib-spelling rules.
+fn module_declares_top_level_type(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Bool {
+  module_.interfaces.iter().any(fn(d) { d.name == name }) ||
+  module_.type_aliases.iter().any(fn(d) { d.name == name }) ||
+  module_.enums.iter().any(fn(d) { d.name == name }) ||
+  module_.classes.iter().any(fn(d) { d.name == name })
 }
 
 ///|
@@ -18728,7 +18802,15 @@ fn method_override_incompatible(
           (Rest(_), _) | (_, Rest(_)) => return false
           _ => ()
         }
-        if !is_assignable_to_bivariant(dp, bp) {
+        // METHOD parameters are bivariant (strictFunctionTypes exempts
+        // methods), so either direction suffices. Only the derived-to-base
+        // one was asked, which reported the commonest legal widening there
+        // is — univer's `deleteConfig(id: string | symbol)` implementing
+        // `deleteConfig(id: string)` (probed: tsc accepts it, and the
+        // narrower override too). `is_assignable_to_bivariant` is about
+        // parameters NESTED inside these types, not this level.
+        if !is_assignable_to_bivariant(dp, bp) &&
+          !is_assignable_to_bivariant(bp, dp) {
           return true
         }
       }
@@ -24894,9 +24976,9 @@ fn collect_narrowing(
         let truthy = if cur is Unknown {
           @ast.TsType::Object([])
         } else if refine_bool {
-          boolean_truthiness(non_nullable(cur), true)
+          boolean_truthiness(truthy_non_nullish(resolver, cur), true)
         } else {
-          non_nullable(cur)
+          truthy_non_nullish(resolver, cur)
         }
         if then_sense {
           then_binds.push((key, truthy))
@@ -25047,6 +25129,20 @@ fn optional_chain_equality_narrowing(
       None => ()
     }
   }
+}
+
+///|
+/// What a truthy test leaves of `cur`: `non_nullable`, plus `void`, which
+/// is falsy (its only value is `undefined`) — and an alias to a union is
+/// unwrapped first, or univer's `Nullable<T> = T | null | undefined |
+/// void` stayed one opaque variant and `if (s) use(s)` reported the whole
+/// alias. Only a union is taken, so any other type keeps its shape.
+fn truthy_non_nullish(resolver : Resolver, cur : @ast.TsType) -> @ast.TsType {
+  let ty = match resolver.unwrap(cur) {
+    Union(_) as u => u
+    _ => cur
+  }
+  narrow_remove(non_nullable(ty), fn(v) { v is Void })
 }
 
 ///|
@@ -25957,7 +26053,11 @@ fn analyze_equality(
               }
             })
           } else {
-            narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
+            // `typeof x === "undefined"` is also true of `void`, whose only
+            // value is `undefined`, so the else side drops it too (probed).
+            narrow_remove(cur, fn(v) {
+              type_eq(v, narrowed) || (narrowed is Undefined && v is Void)
+            })
           }
           false_side.push((name, stripped))
         }
@@ -26005,14 +26105,25 @@ fn analyze_equality(
   }
   match null_match {
     Some((key, tag)) => {
-      let cur = narrowing_current_type(env, resolver, key)
+      // An alias to a union (univer's `Nullable<T> = T | null | undefined
+      // | void`) is one opaque variant until it is unwrapped, so `s ==
+      // null` removed nothing and every later `use(s)` reported the whole
+      // alias. Only a union is taken, as the `typeof` arm below does.
+      let cur0 = narrowing_current_type(env, resolver, key)
+      let cur = match resolver.unwrap(cur0) {
+        Union(_) as u => u
+        _ => cur0
+      }
       // Loose `== null` / `== undefined` matches *both* `null` and
       // `undefined` (in JS `null == undefined`), so the equal side is the
       // nullish pair and the not-equal side strips both. Strict `===` keeps
       // the exact tag only.
+      // `void` narrows exactly like `undefined` here: tsc removes it on
+      // the not-equal side of `== null`, `!= undefined` and `!== undefined`
+      // and keeps it after `!== null` (probed on all four).
       let is_nullish = fn(v : @ast.TsType) -> Bool {
         match v {
-          Null | Undefined => true
+          Null | Undefined | Void => true
           _ => false
         }
       }
@@ -26050,7 +26161,14 @@ fn analyze_equality(
         if !type_definitely_non_nullish(resolver, cur) {
           true_side.push((key, tag))
         }
-        false_side.push((key, narrow_remove(cur, fn(v) { type_eq(v, tag) })))
+        false_side.push(
+          (
+            key,
+            narrow_remove(cur, fn(v) {
+              type_eq(v, tag) || (tag is Undefined && v is Void)
+            }),
+          ),
+        )
       }
     }
     None => ()
@@ -33406,6 +33524,7 @@ pub fn check_module_function_bodies_with_context(
   type_modules : Array[@ast.TsModule],
   namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
+  type_module_import_aliases~ : Array[Array[(String, String, String)]] = [],
 ) -> Array[ExprIssue] {
   check_module_function_bodies_layered(
     module_,
@@ -33415,6 +33534,7 @@ pub fn check_module_function_bodies_with_context(
     globals,
     namespace_type_aliases~,
     type_module_keys~,
+    type_module_import_aliases~,
   )
 }
 
@@ -46533,6 +46653,7 @@ fn check_module_function_bodies_layered(
   backstops~ : RootNameBackstops? = None,
   namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
+  type_module_import_aliases~ : Array[Array[(String, String, String)]] = [],
 ) -> Array[ExprIssue] {
   if outer_modules.length() == 0 {
     walked_arrow_bodies.clear()
@@ -46661,11 +46782,31 @@ fn check_module_function_bodies_layered(
   if has_type_modules {
     note_declared(own_root, "<checked>")
   }
+  let type_modules_by_key : Map[String, @ast.TsModule] = Map([])
+  for i, type_module in type_modules {
+    if i < type_module_keys.length() &&
+      !type_modules_by_key.contains(type_module_keys[i]) {
+      type_modules_by_key[type_module_keys[i]] = type_module
+    }
+  }
   for i, type_module in type_modules {
     if i < type_module_keys.length() {
       note_declared(type_module, type_module_keys[i])
     }
   }
+  // The checked module's RENAMED imports (`import { Other as Item }`):
+  // `alias_namespace_import_types` redirects each local name once
+  // ingestion is done, so a bare destination spelled like one of them is
+  // redirected with it and cannot stand for another module's declaration.
+  let checked_renamed_locals : Map[String, Unit] = Map([])
+  for checked_alias in namespace_type_aliases {
+    if checked_alias.0 != checked_alias.1 {
+      checked_renamed_locals[checked_alias.0] = ()
+    }
+  }
+  // Each reachable module's renames, by key: an imported VALUE's type is
+  // written in its declaring module's scope and is read through them below.
+  let renames_by_key : Map[String, Map[String, String]] = Map([])
   for i, type_module in type_modules {
     let cache_key = if i < type_module_keys.length() {
       type_module_keys[i]
@@ -46715,6 +46856,79 @@ fn check_module_function_bodies_layered(
       for d in type_module.classes {
         renames.remove(d.name)
       }
+      // Its own NAMED imports of a colliding name go to the module they
+      // import from. Without this, a reachable module's `I` read the shared
+      // bare entry, which is the CHECKED module's import of `I` (see
+      // `alias_namespace_import_types`) — so `export function consume(x: I)`
+      // in a third module was judged against the wrong `I`. Only a name
+      // whose origin registered a key qualifies: a class keeps its bare
+      // name, and an origin that is not a type module (the checked module
+      // itself) is what the bare entry already holds.
+      if i < type_module_import_aliases.length() {
+        for import_alias in type_module_import_aliases[i] {
+          let (local_name, bare, origin) = import_alias
+          if renames.contains(local_name) ||
+            module_declares_top_level_type(type_module, local_name) {
+            continue
+          }
+          let multi = match declarers.get(bare) {
+            Some(set) => set.length() > 1
+            None => false
+          }
+          // The same two reasons the declaration got a key above: another
+          // module declares the name, or it shadows a LIB type (an
+          // `interface Error` of the origin's own, which the bare table
+          // never holds).
+          let keyed = multi || is_lib_global_type(bare)
+          // A QUALIFIED alias (`ns.X`, from a namespace import that
+          // disagrees with the checked module's) must not fall through to
+          // the shared `ns.X` mapping, which is the checked module's: a
+          // name only one module declares is its bare entry, and a keyed
+          // one is `X@origin` — unregistered for a class, which keeps its
+          // bare name, so that case is left unresolved and abstains.
+          if local_name.contains(".") {
+            renames[local_name] = if keyed { bare + "@" + origin } else { bare }
+            continue
+          }
+          if !keyed {
+            // A RENAMED import (`import { Item as It }`) still has to reach
+            // `Item`: left alone, `It` read the shared bare table, which is
+            // the CHECKED module's `It` when it declares one. The bare entry
+            // is the origin's declaration exactly when the origin is the
+            // name's only declarer (the checked module counts as one).
+            let origin_is_sole_declarer = match declarers.get(bare) {
+              Some(set) => set.length() == 1 && set.contains(origin)
+              None => false
+            }
+            if local_name != bare && origin_is_sole_declarer {
+              // When the checked module renames into `bare`, the bare name
+              // is redirected to ITS import, and leaving `It` alone would
+              // read the shared table's `It` (the checked module's own,
+              // say). `bare@origin` is never registered on this path, so
+              // the reference is unresolved and abstains.
+              renames[local_name] = if checked_renamed_locals.contains(bare) {
+                bare + "@" + origin
+              } else {
+                bare
+              }
+            }
+            continue
+          }
+          match type_modules_by_key.get(origin) {
+            Some(origin_module) =>
+              if !origin_module.classes.iter().any(fn(c) { c.name == bare }) &&
+                module_declares_top_level_type(origin_module, bare) {
+                renames[local_name] = bare + "@" + origin
+              }
+            None => ()
+          }
+        }
+      }
+    }
+    if cache_key != "" &&
+      renames.length() > 0 &&
+      !renames_by_key.contains(cache_key) {
+      renames_by_key[cache_key] = renames
     }
     Resolver::ingest_type_module(
       resolver,
@@ -46774,7 +46988,35 @@ fn check_module_function_bodies_layered(
       )
     }
   }
-  Resolver::alias_namespace_import_types(resolver, namespace_type_aliases)
+  // The aliases are the ROOT file's imports, and a namespace check gets
+  // them too; a type the namespace (or one between it and the root)
+  // declares shadows the import inside it.
+  let shadowed : Map[String, Unit] = Map([])
+  let note_shadow = fn(m : @ast.TsModule) {
+    for d in m.interfaces {
+      shadowed[d.name] = ()
+    }
+    for d in m.type_aliases {
+      shadowed[d.name] = ()
+    }
+    for d in m.enums {
+      shadowed[d.name] = ()
+    }
+    for d in m.classes {
+      shadowed[d.name] = ()
+    }
+  }
+  if outer_modules.length() > 0 {
+    note_shadow(module_)
+    for k in 1..<outer_modules.length() {
+      note_shadow(outer_modules[k])
+    }
+  }
+  Resolver::alias_namespace_import_types(
+    resolver,
+    namespace_type_aliases,
+    shadowed~,
+  )
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
   // `@strict: ...` directive, so they inherit. Reuses the same root
@@ -46786,8 +47028,24 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  // `@value-origin:NAME` says which module an imported value's type is
+  // written in (see `graph_import_globals`).
+  let value_origins : Map[String, String] = Map([])
   for global in extra_globals {
-    resolver.globals[global.0] = global.1
+    if global.0.has_prefix("@value-origin:") && global.1 is Named(origin) {
+      value_origins[global.0["@value-origin:".length():].to_owned()] = origin
+    }
+  }
+  for global in extra_globals {
+    let ty = match value_origins.get(global.0) {
+      Some(origin) =>
+        match renames_by_key.get(origin) {
+          Some(renames) => rename_type_refs(global.1, renames)
+          None => global.1
+        }
+      None => global.1
+    }
+    resolver.globals[global.0] = ty
     resolver.declared_value_names[global.0] = true
   }
   resolver.no_implicit_any = strict_root.no_implicit_any
@@ -48144,6 +48402,7 @@ fn check_module_function_bodies_layered(
       backstops=Some(nested_backstops),
       namespace_type_aliases~,
       type_module_keys~,
+      type_module_import_aliases~,
     )
     let prefix = if ns.name == "<global>" {
       "declare global"

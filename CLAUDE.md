@@ -4391,6 +4391,238 @@ product surfaces now.
   `const [x = 0]: any = []` still binds `number` where tsc binds `any`.
   That is the absent-versus-`: any` blocker again, and it predates this
   work.
+
+  Batch GD adds **univer** (dream-num/univer v1.5.0) as field data:
+  `scripts/field_univer.sh` clones it outside the repo, installs with
+  `--ignore-scripts` and checks each of the 58 packages from its
+  `src/index.ts`. univer's own CI runs `tsrs --noEmit`, a port of
+  TypeScript 7.1, and the TS7 nightly here reports nothing on it but the
+  four generated files `--ignore-scripts` skips and their cascades. So
+  every `mtsc` report on it is a false positive. The first run had
+  **3,687**, and they named six defects, every one the
+  applied-in-some-places family:
+  - **The graph loader dropped edges.** `aliases` is keyed by the bare
+    specifier alone, and every importer after the first one to resolve
+    `@univerjs/core` got no edge at all. The checker reads one edge per
+    importer, so whether a file's bare imports existed depended on the
+    walk's queue order. Fixed in the loader; the bundler's alias map is
+    unchanged.
+  - **A named import meant the merge of every declarer.** univer's
+    `@univerjs/core` and `@univerjs/protocol` both export `ICommand`,
+    `IRange`, `ICellData`, `IMutation` and `BooleanNumber`. Batch FR's
+    per-module keys reached `ns.X` and never `import { X }`. The value
+    side looked `BooleanNumber.TRUE` up by NAME and got whichever module
+    was ingested last — protocol's, whose members are
+    `BOOLEAN_NUMBER_TRUE`. Pre-existing on main, order-dependent, and
+    reproduced in three files.
+  - **`check_module_graph`, the string ABI, was a second copy of the
+    graph loop** that had fallen behind the CLI's. It had no per-module
+    keys, no ambient `.d.ts` scope and no cache reset. It is now a format
+    over `collect_module_graph_issues`.
+  - **univer's `Nullable<T> = T | null | undefined | void`** was one
+    opaque variant to the `== null` and truthiness arms, so no guard
+    narrowed it, and `void` survived every guard even when written out.
+    tsc removes `void` wherever it removes `undefined` except after
+    `!== null`; nine cells were probed.
+  - **Two parser rules.** A JSX attribute string may span lines, and the
+    lexer, which runs before any parsing, recorded TS1002 for it. The JSX
+    element now forgives the strings it contains. And the
+    parameter-property modifier order is accessibility, then `override`,
+    then `readonly`. The rule only knew the first pair, so it reported
+    `override readonly x` — the legal spelling, and how univer writes
+    every injected service — and missed `readonly override x`.
+  - **Method parameters are bivariant.** `method_override_incompatible`
+    asked only derived-to-base, so `deleteConfig(id: string | symbol)`
+    implementing `deleteConfig(id: string)` was reported.
+
+  What the batch did NOT fix is stated with its measurements. tsconfig
+  `compilerOptions` never reach the checker, which reads options only
+  from `// @option:` file headers. univer sets `experimentalDecorators`
+  and `strictPropertyInitialization: false`, and prepending the
+  equivalent headers to every source removed **826** reports and added
+  none. So the headers were applied for every measurement here, and
+  plumbing tsconfig through is the first item filed. The loader fix made
+  the checker see MORE of the program: the UI packages are 4-4.6x slower
+  per entry, and newly visible code carries its own families. The
+  largest is an imported OVERLOADED function whose optional parameters
+  read as required (`useObservable(x)` is "expected at least 4
+  arguments" 125 times). Before the loader fix, those files' imports were
+  simply missing. With the headers applied, the batch takes univer from
+  2,861 reports to **2,807 in 750 files**. That number nets the fixes
+  against the newly visible code: `ICommand` 135 -> 4, `IMutation`
+  25 -> 0, and TS1002 / TS1029 / the bivariance cell all reach zero.
+
+  Batch GE takes the first item GD filed: a tsconfig's `compilerOptions`
+  now reach the checker. The oracle, effect (126), zod (9) and the four
+  `.d.ts` entries are unchanged, because none of them is checked under a
+  config.
+  - **The detectors were not taught a second vocabulary.** The parser's
+    option detectors read `// @option:` header lines. `-p` now translates
+    a config into exactly those lines (`@mtsc_core.compiler_option_header`).
+    They are prepended to the window the detectors scan, never to the
+    source, so tokens and positions do not move. Namespace bodies, which
+    re-parse with a fresh parser, get the same lines.
+  - **`@strict:` is never written.** The detectors give `@strict: false`
+    precedence over an explicit per-flag `true`, which is the opposite of
+    tsc. So the strict family is resolved per flag, as `explicit ?? strict
+    ?? true`. The `true` default is probed: TS 7's `strict` defaults on,
+    and a config with no `strict` reports TS2322 / TS7006 / TS2564.
+  - **`extends` follows package specifiers.** Every univer package writes
+    `"extends": "@univerjs-infra/shared/tsconfigs/base"`. Joining that
+    onto the package directory named a file that does not exist, so every
+    option in the base read as absent. It now resolves through the nearest
+    `node_modules`, at all three readers.
+  - **The command line is honoured too, and wins.** The boolean checker
+    options (`--strict false`, `--experimentalDecorators`, …) used to be
+    "accepted but not honoured". They now go where a config's would, and a
+    config does not override them. `--target` and `--module` stay in the
+    accepted tier, because they would change only the checker and not the
+    output.
+  - **Several `--noEmit` entries are one program.** A univer package's
+    `include` is a few hundred files over one shared core. Compiling them
+    one at a time re-checked the core per entry and reported a shared
+    file's diagnostic once per entry that reached it.
+
+  Measured on univer with `-p packages/<p>/tsconfig.json`: on the 748
+  files both runs check, the config chain gives 2,793 reports. The
+  hand-injected headers gave 2,807, so the config now reproduces that
+  setup by itself. `-p` checks each package's whole `include`, spec files
+  too, so it covers 1,198 files (4,314 reports) where the `src/index.ts`
+  sweep covered 750. All 58 packages finish, in 1,580 s summed. One is an
+  outlier and is filed: `sheets-filter` takes 341 s, five times the next
+  slowest.
+
+  Checking the spec files found a **pre-existing exponential parse.**
+  Every `{` / `[` in expression position asks whether it starts a
+  destructuring assignment, and answering parsed the whole literal as a
+  pattern first. A literal nested N deep was therefore parsed about 5^N
+  times: depth 10 took 19 s, and univer's 29-deep
+  `doc-event-manager.service.spec.ts` never finished.
+  - The first fix memoized the answer per token. Review showed that was
+    not enough: a parenthesized level (`{ v: [( … )] }`) is parsed by a
+    fresh sub-parser over its own token slice, so a cache on one parser
+    cannot help across it, and depth 10 still did not finish in a minute.
+  - What fixed it is a gate on the necessary condition. A destructuring
+    pattern is a bracket group followed by `=`, so the speculation now runs
+    only when the matching close bracket (from a match table built once per
+    token array) is followed by `=`. A literal never speculates at all.
+    Depth 10 takes 5 ms, depth 200 with parens 17 ms, and the univer file
+    19 ms.
+  - `verify-checker-scaling` has a `nested-literals` axis, with every other
+    level parenthesized, and it is linear (1.24) under the default budget.
+    Its runs are now killed after 120 s, and a run a signal ended is no
+    longer recorded as a timing. An exponential rule shows up as a run that
+    never ends rather than as a large exponent. Against the pre-fix binary
+    the axis fails by name.
+
+  **`timeout` does not stop mtsc.** Its async runtime blocks SIGTERM, so
+  the field script's `timeout 900` never fired, and one package ran for
+  23 minutes. Every harness that bounds an mtsc run has to send SIGKILL.
+
+  The review of GD also found four defects in the graph checker:
+  - **Imported values were read in the importer's scope.** An imported
+    function's type is written in ITS module, so `consume(x: I)` means the
+    `I` that module imports. The checker judged it against the `I` the
+    importer imports, rejected the legal call and accepted the wrong one.
+    The value now carries an `@value-origin:` marker, and its type is read
+    through that module's own renames.
+  - **A named import was found in a list, not the export table.** That
+    list holds every declaration, so a private `interface T` beside
+    `export { T } from "./a"` could win. The binding now goes through
+    `graph_exported_type`, which follows tsc's precedence: local export,
+    then named re-export, then `export *` (a name two `export *` sources
+    provide differently is dropped).
+  - **A namespace's own declaration lost to a file-level import.** The
+    import redirect applied inside a namespace that declares the name
+    itself.
+  - **A bare specifier resolved once for every importer.** A nested
+    `node_modules` can resolve one specifier two ways, so each importer
+    now gets its own edge target.
+
+  The re-review of that push found six more, all real and all fixed:
+  - **A reachable module's `ns.X` read the checked module's `ns`.** The
+    shared resolver maps `ns.X` through the CHECKED module's
+    `import * as ns`. A reachable module whose own `ns` names a different
+    module now carries its `ns.X` aliases, but only where the two disagree.
+    Where they agree the mapping is already right, and where the checked
+    module has no `ns` the reference stays unresolved, which abstains.
+  - **A lib-shadowing import was not renamed.** `import type { Error }`
+    from a module declaring its own `interface Error` has one declarer, but
+    the declaration is still keyed `Error@origin`. The rename now uses the
+    same two reasons the key does.
+  - **A `.cts` entry vanished from the combined check.** The graph check
+    keeps `.ts` / `.tsx` / `.mts`, and a filtered entry beside a checkable
+    one was checked by nothing. Any such entry now sends the run back to
+    entry by entry.
+  - **A JavaScript string in a JSX `{ … }` payload was not TS1002.** The
+    element forgave its whole range, payloads included. Each payload is
+    parsed by a sub-parser that re-lexes it, so whatever that sub-parser
+    still holds after a successful parse is reported. The six payload sites
+    now go through one helper, `parse_jsx_embed`.
+  - **A multi-line JSX attribute inside a namespace was TS1002.** The body
+    is re-parsed by a fresh parser that owns its strings, and the outer
+    parser kept its copies. It now hands that range over when it extracts
+    the body.
+  - **An absolute `extends` was joined onto the config's directory.** It
+    is now read as written.
+
+  `--useUnknownInCatchVariables` was also an unknown option: the checker's
+  boolean list had it, and the no-effect table the option scanner consults
+  first did not.
+
+  A third review round found three more, and one of them reached the emit:
+  - **The renamed-type cache was keyed on the renamed NAMES alone.** A
+    qualified alias `ns.Item` goes to `Item@origin` from a root where two
+    reachable modules declare `Item`, and to bare `Item` from one where
+    only one does. Whichever root ran second reused the first one's
+    rewrite. The key now carries each destination.
+  - **A JSX `{ … }` payload was parsed with no enclosing context.** Its
+    sub-parser did not know it was in a generator, so `{yield <span
+    title="x" />}` read `yield` as a name and reported `span` as
+    undeclared. It did not know the class either, so `{this.#n}` in a
+    method was "not accessible outside its class", and the emit kept
+    `this.#n` while the constructor wrote `this.__private_brand__0__n`.
+    That is a SyntaxError under plain `mtsc file.tsx`, measured on main.
+    The two other expression sub-parsers had copied the same eight context
+    fields word for word, so the copy is one helper now
+    (`inherit_expression_context`) called from all three. A payload's TS1002
+    also counts only strings before the point where its parse stopped,
+    since one after it may sit in an element the parse never reached.
+  - **A `declare module "m"` body's TS1002 was dropped in a `.tsx`
+    file.** The outer parser forgives the body's range for the child, and
+    an augmentation's grammar list is not surfaced, so the report is
+    carried back in JSX mode only. A namespace body in a `.ts` file still
+    reports TS1002 twice, which main does too.
+
+  A fourth round found three more:
+  - **A renamed import of a uniquely declared type was read in the checked
+    module's scope.** The fix is pre-existing in its effect: main has the
+    same false positive. With `import type { Item as It }` in a reachable
+    module, `Item` has one declarer and so gets no per-module key, and `It`
+    read the shared bare table. That table holds the checked module's own
+    `It`, so `consume({ a: "x" })` was judged against the wrong type. The
+    alias now maps to `Item` when the origin is the name's only declarer.
+    The checked module may have its own renamed import spelled `Item`
+    (`import { Other as Item }`). `alias_namespace_import_types` redirects
+    that name after ingestion, so the mapping's first version read
+    `make(): It` as `Other`, a false positive the review caught. In that
+    case `It` now maps to the never-registered `Item@origin` and abstains.
+    Merely skipping the mapping was not enough, since the shared table's
+    `It` could then be the checked module's own `interface It`. The
+    checked-module side is not fixed: when another module declares `Item`,
+    that renamed import still reads it as that module's declaration, which
+    main does too. Adding local alias names to the rename map also exposed
+    an older gap. `rename_interface_refs` excluded the interface's own type
+    parameters and not a METHOD's, which live in `method_type_params`. So
+    `identity<It>(x: It)` beside `import { Item as It }` read its binder as
+    `Item`. Each field now drops its method's binders.
+  - **`rename_type_refs` had no `AssertsPredicate` arm.** An imported
+    `asserts x is T` kept the bare `T` while every other position of the
+    same signature moved to the key. That is the twelfth fail-open wrapper
+    arm in this file's ledger.
+  - **A JSX payload nested in a payload lost its TS1002.** The inner
+    payload's parser reports into its parent sub-parser's grammar list,
+    which the outer payload never read.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

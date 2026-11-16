@@ -1026,6 +1026,15 @@ async fn cached_realpath(path : String) -> String {
 }
 
 ///|
+/// The real path of `path`, memoized with the resolver's other filesystem
+/// facts. Two spellings of one file — pnpm reaches a workspace package
+/// through each dependent's own `node_modules/<name>` symlink — compare
+/// equal here.
+pub async fn canonical_file_path(path : String) -> String {
+  cached_realpath(path)
+}
+
+///|
 async fn read_package_json(package_root : String) -> String? {
   let canonical_root = cached_realpath(package_root)
   let path = normalize_path(join_path(canonical_root, "package.json"))
@@ -1103,15 +1112,17 @@ async fn resolve_tsconfig_specifier_in(
   match find_object_field_value_range(src, 0, src.length(), "extends") {
     Some((start, _)) =>
       match parse_json_string_at(src, start) {
-        Some(parent) => {
-          let joined = normalize_path(join_path(tsconfig_dir, parent))
-          let candidate = if joined.has_suffix(".json") {
-            joined
-          } else {
-            joined + ".json"
+        Some(parent) =>
+          match resolve_tsconfig_extends(parent, tsconfig_dir) {
+            Some(candidate) =>
+              resolve_tsconfig_specifier_in(
+                candidate,
+                specifier,
+                mode,
+                depth + 1,
+              )
+            None => None
           }
-          resolve_tsconfig_specifier_in(candidate, specifier, mode, depth + 1)
-        }
         None => None
       }
     None => None
@@ -1572,15 +1583,12 @@ async fn tsconfig_compiler_option_in(
   match find_object_field_value_range(src, 0, src.length(), "extends") {
     Some((start_, _)) =>
       match parse_json_string_at(src, start_) {
-        Some(parent) => {
-          let joined = normalize_path(join_path(dirname(tsconfig_path), parent))
-          let candidate = if joined.has_suffix(".json") {
-            joined
-          } else {
-            joined + ".json"
+        Some(parent) =>
+          match resolve_tsconfig_extends(parent, dirname(tsconfig_path)) {
+            Some(candidate) =>
+              tsconfig_compiler_option_in(candidate, name, depth + 1)
+            None => None
           }
-          tsconfig_compiler_option_in(candidate, name, depth + 1)
-        }
         None => None
       }
     None => None

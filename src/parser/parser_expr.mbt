@@ -877,6 +877,22 @@ fn Parser::parse_single_param_arrow(
 
 ///|
 fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
+  // The NECESSARY condition first, by token arithmetic: a destructuring
+  // assignment's pattern is a bracket group followed by `=`. A literal is
+  // not, so it never pays for the pattern parse below. Without this gate
+  // every nested `{` / `[` speculated, and a parenthesized level
+  // (`{ v: [( … )] }`) re-parsed its subtree in a fresh sub-parser on each
+  // of two visits per level — 2^depth even with the memo.
+  if !self.bracket_group_followed_by_eq() {
+    return false
+  }
+  let memo_key = self.pos * 4 +
+    (if self.in_generator { 1 } else { 0 }) +
+    (if self.in_async { 2 } else { 0 })
+  match self.destructuring_start_memo.get(memo_key) {
+    Some(known) => return known
+    None => ()
+  }
   let saved_pos = self.pos
   let saved_gen = self.in_generator
   // Speculative binding-pattern parse: roll back any misuse recordings it
@@ -892,7 +908,44 @@ fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   self.rollback_recordings(recordings)
   self.pos = saved_pos
   self.in_generator = saved_gen
+  self.destructuring_start_memo[memo_key] = ok
   ok
+}
+
+///|
+/// Whether the bracket group opening at the current token is followed by
+/// `=` once it closes. Answered from `bracket_close`, a match table built
+/// over the whole token array in one pass the first time it is asked, so
+/// the gate costs O(1) per `{` / `[` rather than a scan per bracket.
+///
+/// A closer pops the innermost opener whatever its kind: on malformed
+/// input the table can pair the wrong brackets, and both wrong answers are
+/// safe — a false `true` only runs the speculation that used to always
+/// run, and a false `false` parses the literal as an expression, whose `=`
+/// arm in `parse_assignment` still builds an `AssignPattern`.
+fn Parser::bracket_group_followed_by_eq(self : Parser) -> Bool {
+  let n = self.tokens.length()
+  if self.bracket_close.length() != n {
+    self.bracket_close.clear()
+    let stack : Array[Int32] = []
+    for i in 0..<n {
+      self.bracket_close.push(-1)
+      match self.tokens[i].kind {
+        LParen | LBracket | LBrace => stack.push(i)
+        RParen | RBracket | RBrace =>
+          match stack.pop() {
+            Some(open) => self.bracket_close[open] = i
+            None => ()
+          }
+        _ => ()
+      }
+    }
+  }
+  if self.pos < 0 || self.pos >= n {
+    return false
+  }
+  let close = self.bracket_close[self.pos]
+  close >= 0 && close + 1 < n && self.tokens[close + 1].kind == Eq
 }
 
 ///|
@@ -1384,6 +1437,25 @@ fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
 }
 
 ///|
+/// A sub-parser over part of this parser's expression reads it in this
+/// parser's context: the function it is in (`yield`, `await`, `return`),
+/// the loops and labels around it (`break`, `continue`), and the class
+/// whose private names it may spell. Every sub-parser of an expression goes
+/// through here, so a context field added later is added once.
+fn Parser::inherit_expression_context(self : Parser, child : Parser) -> Unit {
+  child.in_generator = self.in_generator
+  child.in_async = self.in_async
+  child.in_function = self.in_function
+  child.in_iteration = self.in_iteration
+  child.in_switch = self.in_switch
+  child.class_id = self.class_id
+  child.current_class_brand = self.current_class_brand
+  for label in self.labels {
+    child.labels.push(label)
+  }
+}
+
+///|
 fn Parser::parse_parenthesized_expr(
   self : Parser,
 ) -> @ast.TsExpr raise ParseError {
@@ -1441,20 +1513,14 @@ fn Parser::parse_parenthesized_expr(
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
+    // Same tokens, same source positions: a JSX element parsed in here
+    // forgives the lexer's unterminated strings for the whole file.
+    jsx_unterminated_strings: self.jsx_unterminated_strings,
   }
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
   self.inherit_source_flags(temp)
-  temp.in_generator = self.in_generator
-  temp.in_async = self.in_async
-  temp.in_function = self.in_function
-  temp.in_iteration = self.in_iteration
-  temp.in_switch = self.in_switch
-  temp.class_id = self.class_id
-  temp.current_class_brand = self.current_class_brand
-  for label in self.labels {
-    temp.labels.push(label)
-  }
+  self.inherit_expression_context(temp)
 
   let expr = temp.parse_expr()
   if !temp.check(Eof) {
@@ -1528,20 +1594,14 @@ fn Parser::parse_expr_until_top_level(
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
+    // Same tokens, same source positions: a JSX element parsed in here
+    // forgives the lexer's unterminated strings for the whole file.
+    jsx_unterminated_strings: self.jsx_unterminated_strings,
   }
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
   self.inherit_source_flags(temp)
-  temp.in_generator = self.in_generator
-  temp.in_async = self.in_async
-  temp.in_function = self.in_function
-  temp.in_iteration = self.in_iteration
-  temp.in_switch = self.in_switch
-  temp.class_id = self.class_id
-  temp.current_class_brand = self.current_class_brand
-  for label in self.labels {
-    temp.labels.push(label)
-  }
+  self.inherit_expression_context(temp)
 
   let expr = temp.parse_expr()
   if !temp.check(Eof) {
@@ -1857,9 +1917,7 @@ fn Parser::parse_jsx_opening_tag(
             } else {
               trimmed.to_owned()
             }
-            let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-            self.inherit_source_flags(sub)
-            try sub.parse_expr() catch {
+            try self.parse_jsx_embed(payload_str) catch {
               _ => attrs.push((attr_name, None))
             } noraise {
               e => {
@@ -1930,9 +1988,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
           } else {
             trimmed.to_owned()
           }
-          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-          self.inherit_source_flags(sub)
-          try sub.parse_expr() catch {
+          try self.parse_jsx_embed(payload_str) catch {
             _ => ()
           } noraise {
             e => embeds.push(e)
@@ -2013,12 +2069,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
                 } else {
                   trimmed.to_owned()
                 }
-                let sub = Parser::from_source_with_jsx(
-                  payload_str,
-                  self.allow_jsx,
-                )
-                self.inherit_source_flags(sub)
-                try sub.parse_expr() catch {
+                try self.parse_jsx_embed(payload_str) catch {
                   _ => ()
                 } noraise {
                   e => embeds.push(e)
@@ -2086,6 +2137,7 @@ fn Parser::try_parse_parenthesized_jsx_expr(
     }
   }
   if j < self.src.length() && self.src[j].to_int().unsafe_to_char() == ')' {
+    self.forgive_jsx_string_artifacts(i, jsx_end)
     self.advance_to_source_pos(j + 1)
     return (true, embeds)
   }
@@ -2193,6 +2245,7 @@ fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
   let start = self.peek().pos
   match self.parse_jsx_element_at_source(start) {
     Some((end, element)) => {
+      self.forgive_jsx_string_artifacts(start, end)
       self.advance_to_source_pos(end)
       element
     }
@@ -2202,9 +2255,94 @@ fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
       let (end, tag, attrs, child_embeds) = self.scan_jsx_source_end_with_structure(
         start,
       )
+      self.forgive_jsx_string_artifacts(start, end)
       self.advance_to_source_pos(end)
       @ast.TsExpr::JsxElement(tag, attrs, child_embeds)
     }
+  }
+}
+
+///|
+/// Parse one `{ … }` payload of a JSX element (an attribute value, a spread
+/// or a child expression) with a fresh sub-parser over its text.
+///
+/// The enclosing element forgives every unterminated string the outer
+/// lexer saw in its source range (see `forgive_jsx_string_artifacts`), and
+/// that range includes this payload — which is JavaScript, where a string
+/// may NOT span lines. The sub-parser lexes the payload again and forgives
+/// what ITS JSX elements account for, so anything it still holds is a real
+/// TS1002, reported here. `{"a\nb"}` inside an element was otherwise
+/// silent.
+fn Parser::parse_jsx_embed(
+  self : Parser,
+  payload : String,
+) -> @ast.TsExpr raise ParseError {
+  let sub = Parser::from_source_with_jsx(payload, self.allow_jsx)
+  self.inherit_source_flags(sub)
+  // The payload is an expression of the ENCLOSING function and class:
+  // without this, `{yield <span … />}` in a generator read `yield` as a
+  // name and `<span` as a comparison, and `{this.#n}` in a method was
+  // neither lowered to the class's brand nor known to be inside the class.
+  self.inherit_expression_context(sub)
+  let parsed : Result[@ast.TsExpr, ParseError] = Ok(sub.parse_expr()) catch {
+    e => Err(e)
+  }
+  match parsed {
+    Ok(e) => {
+      // Only after a parse that SUCCEEDED, and only for what it READ: a
+      // nested element forgives its strings when it is parsed, so a
+      // string the parse stopped short of may lie in an element it never
+      // reached, and reporting it would turn a payload this parser cannot
+      // read into a false TS1002. A string before the stop point was read
+      // as JavaScript — `{"a` + newline + `b"}` stops right after it.
+      let stop = sub.peek()
+      let read = fn(p : Int32) { stop.kind is Eof || p < stop.pos }
+      // A payload nested inside this one (`{ok && <b>{"a` + newline +
+      // `b"}</b>}`) is read by the sub-parser's own sub-parser, which
+      // reports into the sub-parser's grammar list.
+      if sub.jsx_unterminated_strings.iter().any(read) ||
+        sub.grammar_misuses.contains("unterminated string literal") {
+        self.grammar_misuses.push("unterminated string literal")
+      }
+      e
+    }
+    Err(e) => raise e
+  }
+}
+
+///|
+/// TS1002 ("unterminated string literal") is decided by the LEXER, which
+/// runs over the whole file before any parsing and so reads JSX text and
+/// attribute values as if they were JavaScript. A JSX attribute string may
+/// span lines — `className="\n  a b\n"` is legal, and univer writes a
+/// long Tailwind class list that way in a hundred components — so an
+/// unterminated string whose opening quote turns out to lie inside a JSX
+/// element is an artifact of lexing out of context, not an error. Each
+/// JSX element this parser consumes forgives the ones in its source
+/// range, and `parse_module` reports TS1002 only for what is left. A
+/// string outside every JSX element still reports, which keeps
+/// `const s = "a` an error in a `.tsx` file.
+///
+/// The positions are SHARED with every sub-parser over the same tokens
+/// (`{ ..self }` copies, and the parenthesized-expression and top-level
+/// sub-parsers, which copy the array reference explicitly), so an element
+/// parsed inside `(cond && <div className="…">)` forgives for the file.
+fn Parser::forgive_jsx_string_artifacts(
+  self : Parser,
+  start : Int32,
+  end : Int32,
+) -> Unit {
+  let pending = self.jsx_unterminated_strings
+  if pending.length() == 0 {
+    return
+  }
+  let kept = pending.filter(fn(p) { p < start || p >= end })
+  if kept.length() == pending.length() {
+    return
+  }
+  pending.clear()
+  for p in kept {
+    pending.push(p)
   }
 }
 
@@ -2370,9 +2508,7 @@ fn Parser::parse_jsx_opening_header(
         let trimmed = inner_src.trim()
         if trimmed.length() > 0 && trimmed.has_prefix("...") {
           let payload_str = trimmed[3:].to_owned().trim().to_owned()
-          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-          self.inherit_source_flags(sub)
-          try sub.parse_expr() catch {
+          try self.parse_jsx_embed(payload_str) catch {
             _ => ()
           } noraise {
             e => attrs.push(("", Some(e)))
@@ -2432,9 +2568,7 @@ fn Parser::parse_jsx_opening_header(
             } else {
               trimmed.to_owned()
             }
-            let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-            self.inherit_source_flags(sub)
-            try sub.parse_expr() catch {
+            try self.parse_jsx_embed(payload_str) catch {
               _ => attrs.push((attr_name, None))
             } noraise {
               e => attrs.push((attr_name, Some(e)))
@@ -2523,9 +2657,7 @@ fn Parser::parse_jsx_children(
         } else {
           trimmed.to_owned()
         }
-        let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-        self.inherit_source_flags(sub)
-        try sub.parse_expr() catch {
+        try self.parse_jsx_embed(payload_str) catch {
           _ => ()
         } noraise {
           e => children.push(e)

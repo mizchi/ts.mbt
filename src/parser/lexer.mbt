@@ -201,6 +201,12 @@ pub struct Lexer {
   // swallowed the rest of the file silently — the same shape as the
   // unterminated-regex case below.
   mut unterminated_string : Bool
+  // Where each unterminated string's opening quote sits. The lexer runs
+  // over the whole file before the parser, so it cannot know that a
+  // quote opens a JSX attribute value, which may span lines
+  // (`className="\n  a b\n"` is legal). The parser forgives the ones a
+  // JSX element turns out to contain — see `forgive_jsx_string_artifacts`.
+  unterminated_string_starts : Array[Int32]
   // TS1125: a radix prefix with no digits after it — `0x`, `0b`, `0o`.
   // The existing `invalid_radix_digit_count` answers a different
   // question ("a digit outside this radix"), so `0x` alone slipped
@@ -306,6 +312,7 @@ pub fn Lexer::new(src : String) -> Lexer {
     unterminated_block_comment: false,
     unterminated_regex: false,
     unterminated_string: false,
+    unterminated_string_starts: [],
     empty_radix_literal_count: 0,
     escaped_keyword_count: 0,
     unbalanced_regex_group_count: 0,
@@ -1426,6 +1433,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
       None => {
         // TS1002: end of file before the closing quote.
         self.unterminated_string = true
+        self.unterminated_string_starts.push(start - 1)
         break
       }
       // TS1002: a RAW line terminator ends a string literal
@@ -1442,6 +1450,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
       // them, because a regex literal still may not cross one.)
       Some('\n') | Some('\r') => {
         self.unterminated_string = true
+        self.unterminated_string_starts.push(start - 1)
         break
       }
       Some(c) =>

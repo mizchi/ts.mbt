@@ -74,6 +74,11 @@ const DEFAULT_RUNGS = [500, 1000, 2000, 4000];
 // in 2 s. `--rungs` still overrides everything.
 const AXIS_RUNGS = {
   namespaces: [125, 250, 500, 1000],
+  // A DEPTH, not a list: every level is one more frame of recursive
+  // descent, so the top rung is bounded by the native stack rather than
+  // by time. 8x between the endpoints still separates linear from
+  // quadratic, and an exponential axis dies at the first rung or two.
+  "nested-literals": [50, 100, 200, 400],
 };
 
 // Per-axis exponent budget. Every axis is held to `--max-exponent` (1.5)
@@ -252,6 +257,29 @@ const AXES = {
     out.push(`}`);
     return out.join("\n") + "\n";
   },
+  // Object and array literals nested N deep, the shape of a test
+  // fixture's expected value. The parser asks of every `{` / `[` in
+  // expression position whether it starts a destructuring ASSIGNMENT, and
+  // answering it used to parse the whole literal as a pattern first: a
+  // literal 10 deep took 19 s and univer's 29-deep
+  // `doc-event-manager.service.spec.ts` never finished — about 5x per
+  // level, which is a hang rather than an exponent, and why runs are
+  // bounded by `RUN_TIMEOUT_MS`. The speculation is now gated on the
+  // matching bracket being followed by `=`, so a literal never pays it and
+  // the axis is linear.
+  //
+  // Every other level is PARENTHESIZED: a parenthesized expression is
+  // parsed by a fresh sub-parser over its own token slice, so a cache that
+  // lives on one parser cannot help across it, and `{ v: [( … )] }` stayed
+  // exponential after the first fix.
+  "nested-literals": (n) => {
+    let lit = "0";
+    for (let i = 0; i < n; i++) {
+      const inner = i % 2 === 1 ? `(${lit})` : lit;
+      lit = `{ k: ${i}, v: [${inner}] }`;
+    }
+    return `export const fixture = ${lit};\n`;
+  },
   // THE CONTROL. Byte count grows with the rung and the declaration
   // count does not (12 interfaces throughout), so this axis stays flat
   // for a list-quadratic rule and grows for a genuinely byte-quadratic
@@ -333,14 +361,35 @@ function findBinary(explicit) {
 // is the right statistic for "how much work is there": noise only ever
 // adds time, so the floor is the closest estimate of the work itself,
 // and a mean would let one scheduler hiccup masquerade as an exponent.
+// One run may take at most this long. An EXPONENTIAL rule does not show
+// up as a large exponent, it shows up as a run that never ends, and a
+// harness that hangs reports nothing. SIGKILL because the binary's async
+// runtime blocks SIGTERM.
+const RUN_TIMEOUT_MS = 120_000;
+
 function timeFile(bin, file, iters, repeats) {
   let best = Infinity;
   for (let r = 0; r < repeats; r++) {
     const t0 = process.hrtime.bigint();
-    const res = spawnSync(bin, ["check", "--iters", String(iters), file], { stdio: "ignore" });
+    const res = spawnSync(bin, ["check", "--iters", String(iters), file], {
+      stdio: "ignore",
+      timeout: RUN_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
     const t1 = process.hrtime.bigint();
-    if (res.status !== 0 && res.status !== null) {
-      return { ms: NaN, error: `exit ${res.status}` };
+    if (res.error && res.error.code === "ETIMEDOUT") {
+      return { ms: NaN, error: `timed out after ${RUN_TIMEOUT_MS / 1000} s` };
+    }
+    // Only a clean exit is a timing sample. A run killed by a signal has
+    // `status: null` — a depth axis can hit the native stack limit and die
+    // with SIGSEGV — and its wall time measures how far it got, not the work.
+    if (res.status !== 0) {
+      const why = res.error
+        ? res.error.message
+        : res.signal
+          ? `killed by ${res.signal}`
+          : `exit ${res.status}`;
+      return { ms: NaN, error: why };
     }
     const ms = Number(t1 - t0) / 1e6 / iters;
     if (ms < best) best = ms;

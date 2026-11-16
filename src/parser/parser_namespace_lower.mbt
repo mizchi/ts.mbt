@@ -89,7 +89,11 @@ fn Parser::parse_lowered_namespace(
     return Some({ name, stmt: namespace_object_decl(name), enums: [], })
   }
   let parsed = try
-    Parser::from_source_with_jsx(body_source, self.allow_jsx).parse_module_block()
+    Parser::from_source_with_jsx(
+      body_source,
+      self.allow_jsx,
+      option_header=self.option_header,
+    ).parse_module_block()
   catch {
     _ => return None
   } noraise {

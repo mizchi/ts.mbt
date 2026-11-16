@@ -893,6 +893,13 @@ fn Parser::parse_declaration_block_source(
     }
   }
   let body_end_pos = self.tokens[self.pos - 1].pos
+  // The body is re-parsed by a FRESH parser over this slice, which lexes it
+  // again and owns its unterminated strings: it forgives the ones a JSX
+  // element accounts for and reports the rest itself. This parser only
+  // skipped the tokens, so its copies of those positions would otherwise
+  // be reported at the end of the module as TS1002 — a multi-line JSX
+  // attribute inside a namespace in a `.tsx` file was an error.
+  self.forgive_jsx_string_artifacts(brace_start_pos + 1, body_end_pos)
   if body_end_pos <= brace_start_pos + 1 {
     ""
   } else {
@@ -908,7 +915,11 @@ fn Parser::parse_ambient_external_module_source(
   if body_source.trim() == "" {
     empty_ts_module()
   } else {
-    let parser = Parser::from_source(body_source)
+    let parser = Parser::from_source_with_jsx(
+      body_source,
+      true,
+      option_header=self.option_header,
+    )
     let module_ = parser.parse_module_with_seeded_const_values_internal(
       {},
       true,
@@ -979,6 +990,16 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
         let body_source = self.parse_declaration_block_source()
         let module_ = self.parse_ambient_external_module_source(body_source)
         self.propagate_suppression_sentinels(module_)
+        // In JSX mode this parser handed the body's unterminated strings to
+        // the child (`parse_declaration_block_source` forgave the range),
+        // and a `declare module "spec"` body lands in
+        // `module_augmentations`, whose grammar list nothing surfaces — so
+        // the child's TS1002 has to come back here. In a `.ts` file the
+        // lexer already reported it for this parser.
+        if self.allow_jsx &&
+          module_.grammar_misuses.contains("unterminated string literal") {
+          self.grammar_misuses.push("unterminated string literal")
+        }
         Some((spec, module_))
       } else {
         self.skip_declaration_block()
@@ -1220,7 +1241,11 @@ fn Parser::parse_namespace_decl_with_mode(
         // Inherit JSX permission from the outer parser so `<T>expr`
         // type assertions inside a `.ts` (non-JSX) source don't get
         // misread as JSX element starts.
-        let parser = Parser::from_source_with_jsx(body_source, self.allow_jsx)
+        let parser = Parser::from_source_with_jsx(
+          body_source,
+          self.allow_jsx,
+          option_header=self.option_header,
+        )
         // A namespace body re-parses with a FRESH parser, so the
         // declaration-file fact — a property of the SOURCE, not of any
         // one declaration — has to be carried across or every rule that
@@ -1242,6 +1267,7 @@ fn Parser::parse_namespace_decl_with_mode(
         let runtime_parser = Parser::from_source_with_jsx(
           body_source,
           self.allow_jsx,
+          option_header=self.option_header,
         )
         self.inherit_source_flags(runtime_parser)
         try
@@ -1254,6 +1280,7 @@ fn Parser::parse_namespace_decl_with_mode(
             let ambient_parser = Parser::from_source_with_jsx(
               body_source,
               self.allow_jsx,
+              option_header=self.option_header,
             )
             self.inherit_source_flags(ambient_parser)
             let body = ambient_parser.parse_module_with_seeded_const_values_internal(
@@ -4403,7 +4430,11 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   }
   // Shared leading window for the directive detectors below (one slice
   // instead of one per detector).
-  let module_head = source_head(self.src)
+  let module_head = self.option_header + source_head(self.src)
+  // TS1002 in JSX mode: whatever no JSX element forgave.
+  if self.jsx_unterminated_strings.length() > 0 {
+    self.grammar_misuses.push("unterminated string literal")
+  }
   self.record_unused_private_members(module_head)
   {
     funcs,

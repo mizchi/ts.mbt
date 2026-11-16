@@ -8421,3 +8421,192 @@ test "a const-asserted rest source still feeds a computed key" {
   guard found is Some(v) else { abort("id not recorded") }
   assert_true(v.type_ is Number)
 }
+
+///|
+/// A JSX attribute string may span lines; the lexer runs before the parser
+/// and cannot know a quote opens one, so it recorded TS1002 for univer's
+/// multi-line `className="…"` lists. The JSX element forgives the strings
+/// it contains, and a string outside every element still reports.
+test "parser: a multi-line JSX attribute string is not unterminated" {
+  let misuses = fn(src : String) -> Array[String] raise {
+    let module_ = Parser::from_source_with_jsx(src, true).parse_module()
+    module_.grammar_misuses.filter(fn(m) { m == "unterminated string literal" })
+  }
+  let multi =
+    #|export function F() {
+    #|  return (
+    #|    <div
+    #|      className="
+    #|        a b
+    #|      "
+    #|    >
+    #|      hi
+    #|    </div>
+    #|  );
+    #|}
+  assert_eq(misuses(multi), [])
+  assert_eq(
+    misuses("export const a = <div title='p\nq' />;\nexport const b = 1;\n"),
+    [],
+  )
+  // Outside JSX, before or after an element, it is still TS1002.
+  assert_eq(
+    misuses(
+      "export const a = <div className=\"\n x\n\">ok</div>;\nexport const s = \"broken\n;\n",
+    ),
+    ["unterminated string literal"],
+  )
+  assert_eq(misuses("export const s = \"broken\n;\n"), [
+    "unterminated string literal",
+  ])
+  // The element sits inside a parenthesized expression or a ternary,
+  // which a CHILD parser reads: the child forgives the string, and the
+  // parent must not report it from its own copy of the lexer's list.
+  assert_eq(
+    misuses(
+      "declare const c: boolean;\nexport const a = (c && <div\n  className=\"\n    x y\n  \"\n>hi</div>);\n",
+    ),
+    [],
+  )
+  assert_eq(
+    misuses(
+      "declare const c: boolean;\nexport const a = (c ? <div\n  title=\"p\nq\"\n/> : null);\n",
+    ),
+    [],
+  )
+  // A `{ … }` payload is JavaScript: a string there may not span lines,
+  // even though the element around it forgives its own attribute strings.
+  assert_eq(
+    misuses("export const view = (true && <div>{\"a\nb\"\n}</div>);\n"),
+    ["unterminated string literal"],
+  )
+  assert_eq(misuses("export const v = <div title={\"a\nb\"} />;\n"), [
+    "unterminated string literal",
+  ])
+  // A multi-line attribute string on an element NESTED in a payload is
+  // still legal: the payload's own parser forgives it.
+  assert_eq(
+    misuses("export const v = <div>{ok && <span title=\"a\nb\" />}</div>;\n"),
+    [],
+  )
+  // A payload nested in a payload is read by the payload parser's own
+  // sub-parser; its TS1002 still reaches the file.
+  assert_eq(
+    misuses("export const v = <div>{ok && <span>{\"a\nb\"}</span>}</div>;\n"),
+    ["unterminated string literal"],
+  )
+  // The payload is an expression of the enclosing function: `yield` and
+  // `await` there take the element as their operand, which the payload
+  // parser reads only if it knows it is in a generator / async function.
+  assert_eq(
+    misuses(
+      "export function* f() {\n  return <div>{yield <span title=\"a\nb\" />}</div>;\n}\n",
+    ),
+    [],
+  )
+  assert_eq(
+    misuses(
+      "export async function g() {\n  return <div>{await <span title=\"a\nb\" />}</div>;\n}\n",
+    ),
+    [],
+  )
+  // A payload the parser stops reading part-way never reached the element
+  // that would forgive the string, so nothing is concluded from it.
+  assert_eq(
+    misuses("export const v = <div>{a b <span title=\"x\ny\" />}</div>;\n"),
+    [],
+  )
+}
+
+///|
+/// A `declare module "m"` body is re-parsed by a child whose grammar list
+/// nothing surfaces, so in a `.tsx` file (where this parser forgave the
+/// body's range for the child) its TS1002 has to be carried back. In a
+/// `.ts` file the lexer already reported it for this parser, once.
+test "parser: TS1002 in a declare module body is reported once in .ts and .tsx" {
+  let count = fn(allow_jsx : Bool) -> Int32 raise {
+    Parser::from_source_with_jsx(
+      "declare module \"m\" {\n  export const s: \"a\n}\nexport {};\n", allow_jsx,
+    ).parse_module().grammar_misuses
+    .filter(fn(g) { g == "unterminated string literal" })
+    .length()
+  }
+  assert_eq(count(true), 1)
+  assert_eq(count(false), 1)
+}
+
+///|
+/// Every `{` / `[` in expression position asks whether it starts a
+/// destructuring assignment, and that answer is memoized per token. The
+/// memo must not change an answer: a destructuring assignment nested inside
+/// literals is still one, the literals around it are still literals, and a
+/// literal nested far deeper than any fixture parses at once (it was ~5x
+/// per level — 19 s at depth 10 — before the memo).
+test "parser: destructuring detection through nested literals" {
+  match parse_expr_from("[{ k: [[p, q] = pair] }]") {
+    ArrayLit(
+      [ObjectLit([("k", ArrayLit([AssignPattern(binding, Var("pair"))]))])]
+    ) =>
+      match binding {
+        @ast.TsBinding::Array(_) => ()
+        _ => fail("expected array binding")
+      }
+    _ => fail("expected the inner element to be a destructuring assignment")
+  }
+  match parse_expr_from("({ a: [{ b }] } = o)") {
+    AssignPattern(_, Var("o")) => ()
+    _ => fail("expected AssignPattern")
+  }
+  // A parenthesized target is still a target.
+  match parse_expr_from("[(a.b)] = xs") {
+    AssignPattern(_, Var("xs")) => ()
+    _ => fail("expected AssignPattern with a parenthesized target")
+  }
+  let mut lit = "0"
+  for i in 0..<60 {
+    lit = "{ k: \{i}, v: [" + lit + "] }"
+  }
+  match parse_expr_from(lit) {
+    ObjectLit(_) => ()
+    _ => fail("expected an object literal")
+  }
+  // Parenthesized levels are parsed by fresh sub-parsers, so a cache on
+  // one parser cannot help across them; this stayed 2^depth (depth 10 did
+  // not finish in a minute) until the `=` gate stopped literals from
+  // speculating at all.
+  let mut paren = "0"
+  for i in 0..<40 {
+    paren = "{ k: \{i}, v: [(" + paren + ")] }"
+  }
+  match parse_expr_from(paren) {
+    ObjectLit(_) => ()
+    _ => fail("expected an object literal")
+  }
+}
+
+///|
+/// A namespace body is re-parsed by a fresh parser, which owns the body's
+/// unterminated strings; the outer parser must not report its own copies.
+test "parser: a multi-line JSX attribute inside a namespace is not TS1002" {
+  let unterminated = fn(m : @ast.TsModule) -> Int32 {
+    let mut n = m.grammar_misuses
+      .filter(fn(g) { g == "unterminated string literal" })
+      .length()
+    for ns in m.namespaces {
+      n = n +
+        ns.module_.grammar_misuses
+        .filter(fn(g) { g == "unterminated string literal" })
+        .length()
+    }
+    n
+  }
+  let ok = Parser::from_source_with_jsx(
+    "namespace N {\n  export const el = <div title=\"a\nb\" />;\n}\n", true,
+  ).parse_module()
+  assert_eq(unterminated(ok), 0)
+  // A real one inside the body is still reported, by the body's parser.
+  let bad = Parser::from_source_with_jsx(
+    "namespace N {\n  export const s = \"a\nb\";\n}\n", true,
+  ).parse_module()
+  assert_true(unterminated(bad) > 0)
+}

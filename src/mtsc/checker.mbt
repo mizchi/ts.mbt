@@ -62,6 +62,7 @@ fn collect_type_issues_from_module(
   type_modules : Array[@ast.TsModule],
   namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
+  type_module_import_aliases~ : Array[Array[(String, String, String)]] = [],
 ) -> Result[Array[MtscTypeIssue], String] {
   let issues : Array[MtscTypeIssue] = []
   for
@@ -71,6 +72,7 @@ fn collect_type_issues_from_module(
       type_modules,
       namespace_type_aliases~,
       type_module_keys~,
+      type_module_import_aliases~,
     ) {
     if !is_unresolved_import_binding(issue, module_.imported_binding_names) {
       issues.push({ path: issue.path, message: issue.message, })
@@ -87,12 +89,20 @@ fn collect_type_issues_from_module(
 /// as before — and because the fact lives in the PATH, which a caller
 /// holding only `source` genuinely cannot supply. The parse flag is read
 /// only to go SILENT, so `false` is today's behaviour.
+///
+/// `compiler_options~` is a tsconfig's `compilerOptions`, as
+/// `compiler_option_header` takes them; empty means none were given.
 pub fn collect_type_issues(
   source : String,
   allow_jsx : Bool,
   declaration_file~ : Bool = false,
+  compiler_options~ : Array[(String, String)] = [],
 ) -> Result[Array[MtscTypeIssue], String] {
-  let parser = @parser.Parser::from_source_with_jsx(source, allow_jsx)
+  let parser = @parser.Parser::from_source_with_jsx(
+    source,
+    allow_jsx,
+    option_header=compiler_option_header(compiler_options),
+  )
   // A checking parse: keep `as const` for the checker (no transform reads
   // this module).
   parser.keep_const_assertions()
@@ -141,18 +151,27 @@ pub fn check_module_sources(modules : Array[MtscModuleSource]) -> String {
 ///|
 fn parse_graph_module(
   source : MtscModuleSource,
+  option_header~ : String = "",
 ) -> Result[ParsedMtscModule, String] {
   // A declaration file makes every declaration in it ambient whether or
   // not it writes `declare`; the PATH is the only place that fact lives,
   // and the bodiless-declaration rules read it only to go silent.
   let is_dts = source.path.has_suffix(".d.ts")
-  let p1 = @parser.Parser::from_source_with_jsx(source.source, source.allowJsx)
+  let p1 = @parser.Parser::from_source_with_jsx(
+    source.source,
+    source.allowJsx,
+    option_header~,
+  )
   p1.keep_const_assertions()
   if is_dts {
     p1.mark_declaration_file()
   }
   let module_ = p1.parse_module() catch { e => return Err("\{e}") }
-  let p2 = @parser.Parser::from_source_with_jsx(source.source, source.allowJsx)
+  let p2 = @parser.Parser::from_source_with_jsx(
+    source.source,
+    source.allowJsx,
+    option_header~,
+  )
   p2.keep_const_assertions()
   if is_dts {
     p2.mark_declaration_file()
@@ -430,16 +449,23 @@ fn is_predicate_value_type(ty : @ast.TsType) -> Bool {
 }
 
 ///|
-fn exported_value_type(
+/// The type of the value `module_` exports as `export_name`, following
+/// value re-exports, with the path of the module that DECLARES the value.
+/// The type is written in that module's scope — its bare `I` means the `I`
+/// it declares or imports — so the checker reads it there (see the
+/// `@value-origin:` marker in `graph_import_globals`).
+fn exported_value_binding(
   module_ : ParsedMtscModule,
   export_name : String,
   modules : Array[ParsedMtscModule],
   edges : Array[MtscModuleEdge],
   seen : Array[(String, String)],
-) -> @ast.TsType? {
+) -> (@ast.TsType, String)? {
   for export_ in module_.module_block.exports {
     if export_.export_name == export_name {
-      return local_value_type(module_.module_, export_.local_name)
+      return local_value_type(module_.module_, export_.local_name).map(fn(t) {
+        (t, module_.source.path)
+      })
     }
   }
   // `export { value } from "./module"` is the ordinary public-barrel style.
@@ -474,7 +500,7 @@ fn exported_value_type(
           let (imported_name, reexported_name) = item
           if reexported_name == export_name {
             match
-              exported_value_type(
+              exported_value_binding(
                 target, imported_name, modules, edges, next_seen,
               ) {
               Some(type_) => return Some(type_)
@@ -485,7 +511,9 @@ fn exported_value_type(
       @ast.TsReExportKind::All =>
         if export_name != "default" {
           match
-            exported_value_type(target, export_name, modules, edges, next_seen) {
+            exported_value_binding(
+              target, export_name, modules, edges, next_seen,
+            ) {
             Some(type_) => return Some(type_)
             None => ()
           }
@@ -499,16 +527,45 @@ fn exported_value_type(
 }
 
 ///|
+/// The last index built over a module list / an edge list, reused while
+/// the same array (by identity, at the same length) is asked about.
+///
+/// Both lookups used to be a linear scan per call, and they are called per
+/// import, per re-export hop and per checked module: on univer's 58-package
+/// graph that is tens of thousands of modules and edges scanned for every
+/// `@univerjs/core` import of every file. One graph check hands the same
+/// two arrays to every helper, so a single slot is enough; a caller with
+/// different arrays (or one that appended to them) gets a fresh index, so
+/// the answer is always the linear scan's — first match wins.
+let graph_module_index : Array[
+  (Array[ParsedMtscModule], Int32, Map[String, ParsedMtscModule]),
+] = []
+
+///|
+let graph_edge_index : Array[
+  (Array[MtscModuleEdge], Int32, Map[String, String]),
+] = []
+
+///|
 fn find_graph_module(
   modules : Array[ParsedMtscModule],
   path : String,
 ) -> ParsedMtscModule? {
-  for module_ in modules {
-    if module_.source.path == path {
-      return Some(module_)
+  if graph_module_index.length() == 1 {
+    let (arr, len, index) = graph_module_index[0]
+    if physical_equal(arr, modules) && len == modules.length() {
+      return index.get(path)
     }
   }
-  None
+  let index : Map[String, ParsedMtscModule] = Map([])
+  for module_ in modules {
+    if !index.contains(module_.source.path) {
+      index[module_.source.path] = module_
+    }
+  }
+  graph_module_index.clear()
+  graph_module_index.push((modules, modules.length(), index))
+  index.get(path)
 }
 
 ///|
@@ -517,14 +574,52 @@ fn find_graph_target(
   importer_path : String,
   module_specifier : String,
 ) -> String? {
-  for edge in edges {
-    if edge.importerPath == importer_path &&
-      edge.moduleSpecifier == module_specifier {
-      return Some(edge.targetPath)
+  let key = importer_path + "\u{0}" + module_specifier
+  if graph_edge_index.length() == 1 {
+    let (arr, len, index) = graph_edge_index[0]
+    if physical_equal(arr, edges) && len == edges.length() {
+      return index.get(key)
     }
   }
-  None
+  let index : Map[String, String] = Map([])
+  for edge in edges {
+    let k = edge.importerPath + "\u{0}" + edge.moduleSpecifier
+    if !index.contains(k) {
+      index[k] = edge.targetPath
+    }
+  }
+  graph_edge_index.clear()
+  graph_edge_index.push((edges, edges.length(), index))
+  index.get(key)
 }
+
+///|
+/// `graph_exposed_type_names(m, …, "", 0)` per module path, for the
+/// duration of one graph check (`collect_parsed_graph_issues` clears it).
+/// What a module exposes does not depend on who imports it, and every
+/// checked module asks again about the same barrels.
+let graph_exposed_cache : Map[String, Array[(String, String, String)]] = Map([])
+
+///|
+fn graph_exposed_types(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> Array[(String, String, String)] {
+  match graph_exposed_cache.get(module_.source.path) {
+    Some(cached) => return cached
+    None => ()
+  }
+  let out : Array[(String, String, String)] = []
+  graph_exposed_type_names(module_, modules, edges, {}, out, "", 0)
+  graph_exposed_cache[module_.source.path] = out
+  out
+}
+
+///|
+/// `graph_named_import_aliases(m, …)` per module path, for one graph check.
+let graph_import_alias_cache : Map[String, Array[(String, String, String)]] = Map([],
+)
 
 ///|
 fn is_local_module_specifier(module_specifier : String) -> Bool {
@@ -654,9 +749,202 @@ fn graph_namespace_type_aliases(
         }
       None => continue
     }
-    graph_exposed_type_names(target, modules, edges, {}, out, ns + ".", 0)
+    for e in graph_exposed_types(target, modules, edges) {
+      out.push((ns + "." + e.0, e.1, e.2))
+    }
+  }
+  for pair in graph_named_import_aliases(module_, modules, edges) {
+    out.push(pair)
   }
   out
+}
+
+///|
+/// `(local, bare, origin)` for every NAMED type import of `module_`.
+///
+/// A named import binds the local name to one module's declaration, and
+/// the bare table cannot say which when two reachable modules declare the
+/// name: it holds their merge. univer's `@univerjs/core` and
+/// `@univerjs/protocol` both export `ICommand`, `IRange`, `ICellData` and
+/// `BooleanNumber`, so `import { ICommand } from '@univerjs/core'` was asked
+/// for protocol's `data` member. The triple lets the checker point the
+/// local spelling at `bare@origin`, exactly as it does for `ns.X`; for a
+/// name only one module declares it adds nothing the bare entry does not
+/// already hold.
+///
+/// The binding is found through the target's EXPORT TABLE
+/// (`graph_exported_type`), not through the list of every declaration
+/// `graph_exposed_types` builds for namespace imports: a module may declare
+/// a private `interface T` beside `export { T } from "./a"`, and the import
+/// means `a.ts`'s.
+fn graph_named_import_aliases(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> Array[(String, String, String)] {
+  match graph_import_alias_cache.get(module_.source.path) {
+    Some(cached) => return cached
+    None => ()
+  }
+  let out : Array[(String, String, String)] = []
+  for imp in module_.module_block.imports {
+    if imp.named_bindings.length() == 0 {
+      continue
+    }
+    let target = match
+      find_graph_target(edges, module_.source.path, imp.module_spec) {
+      Some(path) =>
+        match find_graph_module(modules, path) {
+          Some(t) => t
+          None => continue
+        }
+      None => continue
+    }
+    for binding in imp.named_bindings {
+      let (imported, local_name) = binding
+      match graph_exported_type(target, modules, edges, imported, 0) {
+        Some((bare, origin)) => out.push((local_name, bare, origin))
+        None => ()
+      }
+    }
+  }
+  graph_import_alias_cache[module_.source.path] = out
+  out
+}
+
+///|
+/// `(ns.X, bare, origin)` for each namespace import of `module_` whose
+/// binding name the checked module also binds (`own_namespaces`, name to
+/// target path) to a DIFFERENT module. See the call site.
+fn graph_conflicting_namespace_aliases(
+  module_ : ParsedMtscModule,
+  own_namespaces : Map[String, String],
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> Array[(String, String, String)] {
+  let out : Array[(String, String, String)] = []
+  if own_namespaces.length() == 0 {
+    return out
+  }
+  for imp in module_.module_block.imports {
+    let ns = match imp.namespace_binding {
+      Some(ns) => ns
+      None => continue
+    }
+    let theirs = match own_namespaces.get(ns) {
+      Some(t) => t
+      None => continue
+    }
+    let target_path = match
+      find_graph_target(edges, module_.source.path, imp.module_spec) {
+      Some(path) => path
+      None => continue
+    }
+    if target_path == theirs {
+      continue
+    }
+    match find_graph_module(modules, target_path) {
+      Some(target) =>
+        for e in graph_exposed_types(target, modules, edges) {
+          out.push((ns + "." + e.0, e.1, e.2))
+        }
+      None => ()
+    }
+  }
+  out
+}
+
+///|
+/// The declaration `module_` exports as the TYPE `name`, as
+/// `(bare, origin)`: the name it was declared under and the module that
+/// declares it.
+///
+/// TypeScript's precedence, in order: a local export (`export interface
+/// T`, `export { T }`, `export { U as T }`) — following an `export { T }`
+/// of an IMPORTED `T` back to its module; a named re-export
+/// (`export { T } from`); then `export *`, where a name two `export *`
+/// sources provide differently is excluded from the module's exports
+/// altogether. `None` for anything else — not exported, ambiguous, too
+/// deep, or reached through a module the graph does not hold — and the
+/// caller abstains, which leaves the bare entry: the old answer.
+fn graph_exported_type(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  name : String,
+  depth : Int32,
+) -> (String, String)? {
+  if depth > 8 {
+    return None
+  }
+  let path = module_.source.path
+  let follow = fn(spec : String, imported : String) -> (String, String)? {
+    match find_graph_target(edges, path, spec) {
+      Some(target_path) =>
+        match find_graph_module(modules, target_path) {
+          Some(t) => graph_exported_type(t, modules, edges, imported, depth + 1)
+          None => None
+        }
+      None => None
+    }
+  }
+  for ex in module_.module_block.exports {
+    if ex.export_name != name {
+      continue
+    }
+    if module_declares_top_level_type(module_.module_, ex.local_name) {
+      return Some((ex.local_name, path))
+    }
+    // `import { T } from "./a"; export { T }`.
+    for imp in module_.module_block.imports {
+      for binding in imp.named_bindings {
+        if binding.1 == ex.local_name {
+          return follow(imp.module_spec, binding.0)
+        }
+      }
+    }
+    return None
+  }
+  for re in module_.module_block.reexports {
+    match re.kind {
+      @ast.TsReExportKind::Named(items) =>
+        for item in items {
+          if item.1 == name {
+            return follow(re.module_spec, item.0)
+          }
+        }
+      _ => ()
+    }
+  }
+  let mut found : (String, String)? = None
+  for re in module_.module_block.reexports {
+    match re.kind {
+      @ast.TsReExportKind::All =>
+        match follow(re.module_spec, name) {
+          Some(hit) =>
+            match found {
+              None => found = Some(hit)
+              Some(prev) => if prev != hit { return None }
+            }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  found
+}
+
+///|
+/// True when `module_` declares `name` at its top level as a type: an
+/// interface, a type alias, an enum or a class.
+fn module_declares_top_level_type(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Bool {
+  module_.interfaces.iter().any(fn(d) { d.name == name }) ||
+  module_.type_aliases.iter().any(fn(d) { d.name == name }) ||
+  module_.enums.iter().any(fn(d) { d.name == name }) ||
+  module_.classes.iter().any(fn(d) { d.name == name })
 }
 
 ///|
@@ -760,15 +1048,16 @@ fn graph_import_globals(
     }
     match import_.default_binding {
       Some(local_name) =>
-        match exported_value_type(target, "default", modules, edges, []) {
+        match exported_value_binding(target, "default", modules, edges, []) {
           // The same two markers the named-import branch below records.
           // A default import is the spelling that is USUALLY bound under
           // another name (`import ident from "./lib"`), so without the
           // `@import-generic:` marker the call never solved its type
           // parameters and `const s: string = ident({ a: 1 })` was silent
           // where the named spelling reports.
-          Some(type_) => {
+          Some((type_, origin)) => {
             globals.push((local_name, type_))
+            globals.push(("@value-origin:" + local_name, Named(origin)))
             if type_ is GenericFunc(_, _, _) {
               globals.push(("@import-generic:" + local_name, Any))
             }
@@ -828,9 +1117,14 @@ fn graph_import_globals(
         continue
       }
       let (imported_name, local_name) = binding
-      match exported_value_type(target, imported_name, modules, edges, []) {
-        Some(type_) => {
+      match exported_value_binding(target, imported_name, modules, edges, []) {
+        Some((type_, origin)) => {
           globals.push((local_name, type_))
+          // The module the type is WRITTEN in. When it shares a type name
+          // with another reachable module, the checker reads the type
+          // through that module's own renames, so `consume(x: I)` means the
+          // `I` its module imports rather than the one the importer does.
+          globals.push(("@value-origin:" + local_name, Named(origin)))
           // An imported GENERIC function arrives as a binder over its raw
           // signature; this marks the binding as imported so the checker's
           // by-name call path solves it (see the `GenericFunc` arm of the
@@ -923,13 +1217,18 @@ fn module_value_bindings(
 /// `check_module_graph` flattens the same information into one string
 /// for the JavaScript ABI; the CLI needs it structured so it can format
 /// and count diagnostics itself.
+///
+/// `compiler_options~` applies one tsconfig's `compilerOptions` to every
+/// module, as `tsc -p` does; see `compiler_option_header`.
 pub fn collect_module_graph_issues(
   graph : MtscModuleGraph,
+  compiler_options~ : Array[(String, String)] = [],
 ) -> Array[MtscGraphIssue] {
   let parsed_modules : Array[ParsedMtscModule] = []
   let issues : Array[MtscGraphIssue] = []
+  let option_header = compiler_option_header(compiler_options)
   for source in graph.modules {
-    match parse_graph_module(source) {
+    match parse_graph_module(source, option_header~) {
       Ok(module_) => parsed_modules.push(module_)
       Err(e) =>
         issues.push({
@@ -970,6 +1269,10 @@ fn collect_parsed_graph_issues(
   // Every type-only ingestion below is cached per module path for the
   // duration of THIS check; a previous program's entries must not leak in.
   @checker.clear_type_module_cache()
+  graph_exposed_cache.clear()
+  graph_import_alias_cache.clear()
+  graph_module_index.clear()
+  graph_edge_index.clear()
   let ambient_globals : Array[(String, @ast.TsType)] = []
   let ambient_modules : Array[@ast.TsModule] = []
   for module_ in parsed_modules {
@@ -1008,6 +1311,51 @@ fn collect_parsed_graph_issues(
     let namespace_type_aliases = graph_namespace_type_aliases(
       module_, parsed_modules, edges,
     )
+    // Each reachable module's own named imports, aligned with
+    // `type_module_keys`, so ITS references to a colliding name are
+    // rewritten to the module it imports from rather than read off the
+    // shared bare entry (see `graph_named_import_aliases`).
+    //
+    // Its NAMESPACE imports join them only where they disagree with the
+    // checked module's: the shared resolver maps `ns.X` through the CHECKED
+    // module's `import * as ns`, so a reachable module whose `ns` names a
+    // different module would read the wrong `X`. Where the two agree that
+    // mapping is already right, and where the checked module has no `ns`
+    // the reference stays unresolved, which abstains.
+    let own_namespaces : Map[String, String] = Map([])
+    for imp in module_.module_block.imports {
+      match imp.namespace_binding {
+        Some(ns) =>
+          match find_graph_target(edges, module_.source.path, imp.module_spec) {
+            Some(target) => own_namespaces[ns] = target
+            None => ()
+          }
+        None => ()
+      }
+    }
+    let type_module_import_aliases : Array[Array[(String, String, String)]] = []
+    for key in type_module_keys {
+      type_module_import_aliases.push(
+        match find_graph_module(parsed_modules, key) {
+          Some(m) => {
+            let named = graph_named_import_aliases(m, parsed_modules, edges)
+            let conflicting = graph_conflicting_namespace_aliases(
+              m, own_namespaces, parsed_modules, edges,
+            )
+            if conflicting.length() == 0 {
+              named
+            } else {
+              let all = named.copy()
+              for extra in conflicting {
+                all.push(extra)
+              }
+              all
+            }
+          }
+          None => []
+        },
+      )
+    }
     match
       collect_type_issues_from_module(
         module_.module_,
@@ -1015,6 +1363,7 @@ fn collect_parsed_graph_issues(
         type_modules,
         namespace_type_aliases~,
         type_module_keys~,
+        type_module_import_aliases~,
       ) {
       Err(e) =>
         issues.push({
@@ -1036,42 +1385,15 @@ fn collect_parsed_graph_issues(
 
 ///|
 pub fn check_module_graph(graph : MtscModuleGraph) -> String {
-  let parsed_modules : Array[ParsedMtscModule] = []
+  // The string ABI is a FORMAT over `collect_module_graph_issues`, not a
+  // second checker. It used to carry its own copy of the per-module loop,
+  // and that copy had fallen behind the one the CLI runs: no per-module
+  // type keys (so a name two modules declare was their merge — univer's
+  // `ICommand`), no ambient `.d.ts` scope, and no reset of the type-module
+  // cache between programs. One loop, two renderings.
   let diagnostics : Array[String] = []
-  for source in graph.modules {
-    match parse_graph_module(source) {
-      Ok(module_) => parsed_modules.push(module_)
-      Err(e) => diagnostics.push("\{source.path}: parse error: \{e}")
-    }
-  }
-  for module_ in parsed_modules {
-    let (globals, import_diagnostics) = graph_import_globals(
-      module_,
-      parsed_modules,
-      graph.edges,
-    )
-    for diagnostic in import_diagnostics {
-      diagnostics.push("\{module_.source.path}: \{diagnostic}")
-    }
-    let type_modules = graph_type_modules(module_, parsed_modules, graph.edges)
-    let namespace_type_aliases = graph_namespace_type_aliases(
-      module_,
-      parsed_modules,
-      graph.edges,
-    )
-    match
-      collect_type_issues_from_module(
-        module_.module_,
-        globals,
-        type_modules,
-        namespace_type_aliases~,
-      ) {
-      Err(e) => diagnostics.push("\{module_.source.path}: parse error: \{e}")
-      Ok(issues) =>
-        for issue in issues {
-          diagnostics.push("\{module_.source.path}: \{issue.message}")
-        }
-    }
+  for issue in collect_module_graph_issues(graph) {
+    diagnostics.push("\{issue.modulePath}: \{issue.message}")
   }
   diagnostics.join("\n")
 }
