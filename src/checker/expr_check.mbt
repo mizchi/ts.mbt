@@ -23835,7 +23835,8 @@ fn strip_type_qualifiers(s : String) -> String {
 ///|
 fn type_display(ty : @ast.TsType) -> String {
   match ty {
-    TypePredicate(param, target) => "\{param} is \{type_display(target)}"
+    TypePredicate(param, target) =>
+      "\{@ast.predicate_subject_name(param)} is \{type_display(target)}"
     Number => "number"
     Int => "int"
     Boolean => "boolean"
@@ -26017,11 +26018,15 @@ fn apply_type_predicate_narrowing(
     None => return
   }
   let sig = resolver.signatures.get(callee_name)
-  // Map predicate's parameter name to argument index. With no declaration
-  // in hand (an imported function), the callable type has no parameter
-  // names and the subject is told by type (`predicate_subject_index`).
-  let idx = match sig {
-    Some(params) => {
+  // Map predicate's parameter name to argument index: a recorded position
+  // first (`@ast.index_predicate_subject`), then the declaration's names,
+  // and with neither — an imported function whose type was built without
+  // names — by type (`predicate_subject_index`).
+  let recorded = @ast.predicate_subject_position(param_name)
+  let param_name = @ast.predicate_subject_name(param_name)
+  let idx = match (recorded, sig) {
+    (Some(i), _) => i
+    (None, Some(params)) => {
       let mut found : Int32 = -1
       let mut i = 0
       while i < params.length() {
@@ -26033,7 +26038,7 @@ fn apply_type_predicate_narrowing(
       }
       found
     }
-    None =>
+    (None, None) =>
       match predicate_callable_params(callee_ty) {
         Some(params) =>
           predicate_subject_index(resolver, params, target).unwrap_or(-1)
@@ -26539,14 +26544,15 @@ fn apply_method_type_predicate_narrowing(
   // A callable type has no parameter names, so the subject is told by
   // type. An overloaded guard (`predicate_params` unset) keeps the first
   // argument, which is its idiom's subject.
-  let _ = param_name
-  let idx = match predicate_params {
-    Some(ps) =>
+  let idx = match
+    (@ast.predicate_subject_position(param_name), predicate_params) {
+    (Some(i), _) => i
+    (None, Some(ps)) =>
       match predicate_subject_index(resolver, ps, target) {
         Some(i) => i
         None => return
       }
-    None => 0
+    (None, None) => 0
   }
   if idx >= args.length() {
     return

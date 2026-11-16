@@ -715,7 +715,7 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
       buf.write_string(" }")
     }
     TypePredicate(name, target) => {
-      buf.write_string(name)
+      buf.write_string(@ast.predicate_subject_name(name))
       buf.write_string(" is ")
       emit_type(buf, target)
     }

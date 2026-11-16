@@ -209,12 +209,14 @@ fn generic_function_value_type(func : @ast.TsFunc) -> @ast.TsType {
 ///|
 fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
   let params : Array[@ast.TsType] = []
+  let names : Array[String] = []
   for i, param in func.params {
     // A leading `this` parameter types the receiver and takes no argument
     // position (`declare_function_value_type` drops it the same way).
     if i == 0 && param.name == "this" && !param.is_rest {
       continue
     }
+    names.push(param.name)
     if param.is_rest {
       params.push(@ast.TsType::Rest(param.type_))
     } else if param.is_optional || param.default is Some(_) {
@@ -232,7 +234,10 @@ fn function_value_type(func : @ast.TsFunc) -> @ast.TsType {
       params.push(param.type_)
     }
   }
-  @ast.TsType::Func(params, func.return_type)
+  @ast.TsType::Func(
+    params,
+    @ast.index_predicate_subject(func.return_type, names),
+  )
 }
 
 ///|
@@ -262,7 +267,11 @@ fn declare_function_value_type(import_ : @ast.TsImport) -> @ast.TsType {
       params.push(t)
     }
   }
-  let f = @ast.TsType::Func(params, import_.return_type)
+  let names = import_.params[start:].iter().map(fn(p) { p.0 }).collect()
+  let f = @ast.TsType::Func(
+    params,
+    @ast.index_predicate_subject(import_.return_type, names),
+  )
   if import_.type_params.is_empty() {
     f
   } else {

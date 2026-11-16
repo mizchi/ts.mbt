@@ -348,3 +348,27 @@ test "a guard's first parameter stays its subject when it can be" {
     [],
   )
 }
+
+///|
+/// When both parameters accept the target, their types cannot tell the
+/// subject apart, so the callable type records its POSITION where it is
+/// built from named parameters (`@ast.index_predicate_subject`): an object
+/// type's method, a function type, and a declaration's value reached by
+/// name or through a namespace. `value.toUpperCase()` was reported in all
+/// four, with `first` narrowed instead.
+test "a guard's recorded subject position decides an ambiguous call" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/g.d.ts", "export declare function isText2(first: unknown, value: unknown): value is string;",
+        ),
+        (
+          "/src/main.ts", "import * as G from \"./g\";\nimport { isText2 } from \"./g\";\ndeclare const guards: { isText(first: unknown, value: unknown): value is string };\ndeclare const fnType: (first: unknown, value: unknown) => value is string;\nexport function check(first: unknown, value: unknown): string {\n  if (guards.isText(first, value)) {\n    return value.toUpperCase();\n  }\n  if (fnType(first, value)) {\n    return value.toUpperCase();\n  }\n  if (isText2(first, value)) {\n    return value.toUpperCase();\n  }\n  if (G.isText2(first, value)) {\n    return value.toUpperCase();\n  }\n  return \"\";\n}",
+        ),
+      ],
+      [("/src/main.ts", "./g", "/src/g.d.ts")],
+    ),
+    [],
+  )
+}
