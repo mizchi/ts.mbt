@@ -977,10 +977,12 @@ test "mtsc graph checker reads the checked module's renamed import as its own na
 ///|
 /// A CLASS cannot be keyed (class lookups and `extends` walks go through
 /// the bare name), so when the checked module renames something into the
-/// name another module's class holds, the class keeps that name. Putting
-/// the import's interface there instead made the class's own module read
-/// `mk(): Item` and `class Sub extends Item` as `Other`: `mk().n`,
-/// `mk().m()` and `new Sub().n` were all reported.
+/// name another module's class holds, `x: Item` (the import) and the
+/// class's own `mk(): Item` are one name. Putting the import's interface
+/// there made `mk().n`, `mk().m()` and `new Sub().n` read `Other`; leaving
+/// the class there made the legal `read(x: Item) { x.z }` read the class.
+/// The name is registered as neither, so every line below is silent and
+/// `bad: string = mk().n` is a declared MISS.
 test "mtsc graph checker leaves a foreign class its name beside a renamed import" {
   let module_ = fn(path : String, source : String) -> MtscModuleSource {
     { path, source, allowJsx: false, }
@@ -991,7 +993,7 @@ test "mtsc graph checker leaves a foreign class its name beside a renamed import
   let issues = collect_module_graph_issues({
     modules: [
       module_(
-        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { mk, Sub } from \"./a\";\nexport const m: Item = { z: 1 };\nexport const k: number = mk().n;\nexport const k2: number = mk().m();\nexport const k3: number = new Sub().n;\nexport const bad: string = mk().n;",
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { mk, Sub } from \"./a\";\nexport const m: Item = { z: 1 };\nexport function read(x: Item): number { return x.z }\nexport const k: number = mk().n;\nexport const k2: number = mk().m();\nexport const k3: number = new Sub().n;\nexport const bad: string = mk().n;",
       ),
       module_("/src/x.ts", "export interface Other { z: number }"),
       module_(
@@ -1003,7 +1005,7 @@ test "mtsc graph checker leaves a foreign class its name beside a renamed import
       edge("/src/root.ts", "./a", "/src/a.ts"),
     ],
   })
-  assert_eq(issues.map(fn(i) { i.path }), ["top-level > binding `bad` init"])
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [])
 }
 
 ///|
@@ -1011,7 +1013,8 @@ test "mtsc graph checker leaves a foreign class its name beside a renamed import
 /// modules declare `Other`, so the redirect takes the keyed path
 /// (`Item` -> `Other@x.ts`), and that path returned before the guard ran:
 /// the class's own module then read `mk(): Item` as `Other@x.ts`, and the
-/// legal `mk().n` was reported.
+/// legal `mk().n` was reported. `read` and `bad` are the two sides of the
+/// test above.
 test "mtsc graph checker leaves a foreign class its name beside a renamed colliding import" {
   let module_ = fn(path : String, source : String) -> MtscModuleSource {
     { path, source, allowJsx: false, }
@@ -1022,7 +1025,7 @@ test "mtsc graph checker leaves a foreign class its name beside a renamed collid
   let issues = collect_module_graph_issues({
     modules: [
       module_(
-        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { yv } from \"./y\";\nimport { mk } from \"./a\";\nexport const k: number = mk().n + yv;\nexport const bad: string = mk().n;",
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { yv } from \"./y\";\nimport { mk } from \"./a\";\nexport function read(x: Item): number { return x.z }\nexport const k: number = mk().n + yv;\nexport const bad: string = mk().n;",
       ),
       module_("/src/x.ts", "export interface Other { z: number }"),
       module_(
@@ -1038,7 +1041,7 @@ test "mtsc graph checker leaves a foreign class its name beside a renamed collid
       edge("/src/root.ts", "./a", "/src/a.ts"),
     ],
   })
-  assert_eq(issues.map(fn(i) { i.path }), ["top-level > binding `bad` init"])
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [])
 }
 
 ///|

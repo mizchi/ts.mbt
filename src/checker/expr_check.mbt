@@ -1461,15 +1461,15 @@ fn Resolver::alias_namespace_import_types(
     if shadowed.contains(qualified) {
       continue
     }
-    // A renamed import spelled like a CLASS another module declares
-    // (`import { Other as Item }` beside a foreign `class Item`) must not
-    // put anything under that name: lookups read interfaces, aliases and
-    // enums before classes, and `unwrap` reads `qualified_names` before
-    // either, so the class's own module would see `mk(): Item` and
-    // `extends Item` as `Other`. The class keeps the name, and the checked
-    // module's reference to it abstains where the shapes differ. This runs
-    // before the keyed redirect below, which `continue`s past anything
-    // after it.
+    // A renamed import spelled like a CLASS that is registered here must
+    // not put anything under that name: lookups read interfaces, aliases
+    // and enums before classes, and `unwrap` reads `qualified_names`
+    // before either, so every `Item` would read `Other`. A class ANOTHER
+    // module declares never reaches this point (the caller leaves such an
+    // alias out, see `ambiguous_class_locals`); what does is a class the
+    // checked module declares inside a function, which joins `classes`.
+    // This runs before the keyed redirect below, which `continue`s past
+    // anything after it.
     if qualified != bare && r.classes.get(qualified) is Some(_) {
       continue
     }
@@ -47309,11 +47309,16 @@ fn check_module_function_bodies_layered(
   // (`import { Item }`) means the declaration itself, so neither counts.
   //
   // A CLASS of that name is the exception, because a class cannot be keyed
-  // (it keeps its bare name; see the rename loop below) and skipping it
-  // here would leave it registered nowhere: its own module's `mk(): Item`
-  // and `class Sub extends Item` would read the checked module's `Item`.
-  // Such a name keeps the old behaviour, in which the checked module's
-  // reference reads the class and abstains on a shape it cannot relate.
+  // (it keeps its bare name; see the rename loop below). So the checked
+  // module's `x: Item` (the import) and the class's own `mk(): Item` would
+  // be one name in one table, and no answer is right for both: the import
+  // there made `mk().n` read `Other`, and the class there made the legal
+  // `read(x: Item) { x.z }` read the class. Such a name is registered as
+  // NEITHER. The class is skipped like any reserved name, and the import
+  // is not installed (`ambiguous_class_locals`), so every read of `Item`
+  // in the checked module is unresolved and abstains. That is a MISS for
+  // `bad: string = mk().n`, and it is the only answer with no false
+  // positive on either side.
   let foreign_class_names : Map[String, Unit] = Map([])
   if has_type_modules {
     for type_module in type_modules {
@@ -47323,14 +47328,16 @@ fn check_module_function_bodies_layered(
     }
   }
   let checked_renamed_locals : Map[String, Unit] = Map([])
+  let ambiguous_class_locals : Map[String, Unit] = Map([])
   if has_type_modules {
     for checked_alias in namespace_type_aliases {
       let (local_name, bare, _) = checked_alias
-      if local_name != bare &&
-        !local_name.contains(".") &&
-        !foreign_class_names.contains(local_name) {
+      if local_name != bare && !local_name.contains(".") {
         checked_renamed_locals[local_name] = ()
         own_type_names[local_name] = ()
+        if foreign_class_names.contains(local_name) {
+          ambiguous_class_locals[local_name] = ()
+        }
       }
     }
   }
@@ -47598,6 +47605,13 @@ fn check_module_function_bodies_layered(
     for k in 1..<outer_modules.length() {
       note_shadow(outer_modules[k])
     }
+  }
+  let namespace_type_aliases = if ambiguous_class_locals.length() == 0 {
+    namespace_type_aliases
+  } else {
+    namespace_type_aliases.filter(fn(a) {
+      !ambiguous_class_locals.contains(a.0)
+    })
   }
   Resolver::alias_namespace_import_types(
     resolver,

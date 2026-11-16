@@ -4641,23 +4641,29 @@ product surfaces now.
     can no longer be reached, because `<checked>` is now among that name's
     declarers. It is gone. The cases it made abstain are now judged
     correctly: `make().n` against `bad: string` reports.
-  - **A class is the exception.** A class cannot be keyed: member lookups
-    and `extends` walks go through the bare name, and keying the class was
-    tried and measured as no help. So a name another module declares as a
-    class keeps the old behaviour. That case also needed a new guard. The
-    named-import aliases GE added made `alias_namespace_import_types` put
-    `Other` under `interfaces["Item"]`, and lookups read interfaces before
-    classes. So the class's own `mk(): Item` and `class Sub extends Item`
-    read `Other`, and `mk().n` was reported on code the older main
-    (`362ab4d`) accepted. A renamed import no longer installs an
-    interface, alias or enum over a registered class. The checked
-    module's own `Item` then reads the class and abstains where the shapes
-    differ, which is a MISS (`badm: Item = { z: "s" }`).
+  - **A class is the exception, and it is registered as neither.** A
+    class cannot be keyed: member lookups and `extends` walks go through
+    the bare name, and keying the class was tried and measured as no help.
+    So the checked module's `x: Item` (the import) and the class's own
+    `mk(): Item` are one name in one table, and no answer is right for
+    both. On main, the named-import aliases GE added put `Other` under
+    `interfaces["Item"]`, which lookups read before classes, so the class's
+    `mk().n` and `new Sub().n` were reported on code the older main
+    (`362ab4d`) accepted. The first version of this batch left the class
+    there instead, and claimed the checked module's `Item` would abstain.
+    It did not: the class satisfies every resolved-receiver guard, so the
+    legal `read(x: Item) { x.z }` was reported. Review caught it. Such a
+    name is now skipped like any reserved one AND its import is not
+    installed, so every read of `Item` in the checked module is unresolved
+    and abstains. That is a MISS (`bad: string = mk().n`), and the only
+    answer with no false positive on either side.
   - **Review found two more routes, both false positives on legal code.**
     - The class guard ran after the keyed redirect, which `continue`s. So
       when two modules declare `Other`, `Item` still went to `Other@x`
       through `qualified_names`, which `unwrap` reads before any table, and
-      the class's own `mk().n` was reported. The guard now runs first.
+      the class's own `mk().n` was reported. The caller now leaves such an
+      alias out altogether, and the guard runs first for what remains (a
+      class the checked module declares inside a function).
     - A module with no per-module key gets no `renames`. That covers an
       ambient `.d.ts` and a caller of the public entry point that passes no
       keys. Reserving the renamed `Item` against such a module skipped its
