@@ -30480,22 +30480,23 @@ fn check_call_args_in_expr(
         GenericFunc(names, _, Func(params, _))
         | GenericFunc(names, _, CallableMeta(Func(params, _), _)) if !args
           .iter()
-          .any(fn(a) { a is Spread(_) }) =>
+          .any(fn(a) { a is Spread(_) }) => {
+          // A rest parameter's arguments are judged against its element,
+          // under the same binder rule: `<T>(x: T, ...rest: string[])`
+          // with `f(0, 1)` checks the `1` against `string`.
+          let has_rest = params.length() > 0 &&
+            params[params.length() - 1] is Rest(_)
           for i, a in args {
-            if i >= params.length() || params[i] is Rest(_) {
+            if i >= params.length() && !has_rest {
               break
             }
-            if is_checkable(params[i]) &&
-              !names.iter().any(fn(n) { type_param_occurs(n, params[i]) }) {
-              check_expr_against(
-                env,
-                a,
-                params[i],
-                ctx,
-                "call `\{name}` arg[\{i}]",
-              )
+            let p = overload_param_at(params, i)
+            if is_checkable(p) &&
+              !names.iter().any(fn(n) { type_param_occurs(n, p) }) {
+              check_expr_against(env, a, p, ctx, "call `\{name}` arg[\{i}]")
             }
           }
+        }
         other =>
           // A union callee whose members share one identical call signature
           // (`{ (a:number):X } | { (a:number):Y }`) is callable with those

@@ -4799,6 +4799,21 @@ product surfaces now.
       error in an imported file therefore unwatched the very file whose
       fix would trigger the retry, in both graphs.
     - The `<<` split did not accept `<<const T>`.
+
+    The third round found three MISSes, all on code tsc rejects:
+    - **An empty-bodied implementation stayed callable.** The filter
+      told an implementation from a signature by statement count. So
+      `f(x: any): void {}` beside `f(x: string): void;` accepted
+      `f(123)`. The parser's `<fn-impl:NAME>` marker already says that an
+      implementation exists, and tsc requires it to follow its
+      signatures. So the LAST declaration is left out whenever the marker
+      exists, and the statement count is the evidence only where it does
+      not (a declaration file).
+    - **A generic callable value's rest arguments went unchecked.** The
+      argument loop stopped at the first `Rest`.
+    - **A workspace package linked into `node_modules` was not watched.**
+      The resolver returns the link's spelling, so the watch set decides
+      by `canonical_file_path`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

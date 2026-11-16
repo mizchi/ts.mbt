@@ -1175,3 +1175,34 @@ test "mtsc graph checker leaves an imported overload set's implementation out" {
     ).contains("expected `string` but got `number`"),
   )
 }
+
+///|
+/// The implementation of an overload set is its LAST declaration, which
+/// the parser marks (`<fn-impl:NAME>`); an empty body cannot tell it from
+/// a signature by statement count, and kept callable it accepted any
+/// argument through its `any` parameter.
+test "mtsc graph checker leaves an empty-bodied implementation out" {
+  let lib = "export function f(x: string): void;\nexport function f(x: any): void {}\n"
+  assert_true(
+    graph2("import { f } from \"./lib\";\nf(123);", lib).contains(
+      "expected `string` but got `number`",
+    ),
+  )
+  assert_eq(graph2("import { f } from \"./lib\";\nf(\"s\");", lib), "")
+}
+
+///|
+/// A generic declared function's rest arguments are judged against the
+/// rest element when it mentions no type parameter.
+test "mtsc graph checker checks an imported generic function's rest arguments" {
+  let dts = "export declare function f<T>(x: T, ...rest: string[]): void;\n"
+  assert_true(
+    graph_dts("import { f } from \"./lib\";\nf(0, 1);", dts).contains(
+      "expected `string` but got `number`",
+    ),
+  )
+  assert_eq(
+    graph_dts("import { f } from \"./lib\";\nf(0, \"a\", \"b\");", dts),
+    "",
+  )
+}

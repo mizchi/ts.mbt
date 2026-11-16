@@ -369,3 +369,29 @@ async test "mtsc watch: a file that breaks the load is still watched" {
   let watched = mtsc_watch_program_files(opts, [root + "/a.ts"])
   assert_true(watched.iter().any(fn(p) { p.has_suffix("/b.ts") }))
 }
+
+///|
+/// A workspace package linked into `node_modules` is the program's own
+/// source under a dependency's path: the resolver returns the link's
+/// spelling, so the watch set decides by the REAL path. A real dependency
+/// stays unpolled.
+async test "mtsc watch: a linked workspace package is watched" {
+  let root = "/tmp/ts_mbt_types_graph_watch_linked"
+  types_graph_fixture(root, [
+    ("packages/ws/package.json", "{\"name\":\"ws\",\"types\":\"index.d.ts\"}"),
+    ("packages/ws/index.d.ts", "export interface N { n: number }\n"),
+    (
+      "node_modules/dep/package.json", "{\"name\":\"dep\",\"types\":\"index.d.ts\"}",
+    ),
+    ("node_modules/dep/index.d.ts", "export interface D { d: number }\n"),
+    (
+      "a.ts", "import type { N } from \"ws\";\nimport type { D } from \"dep\";\nexport const x: N | D = { n: 1 };\n",
+    ),
+  ])
+  @fs.symlink(target="../packages/ws", root + "/node_modules/ws")
+  let watched = mtsc_watch_program_files(types_graph_check_opts(), [
+    root + "/a.ts",
+  ])
+  assert_true(watched.iter().any(fn(p) { p.has_suffix("/ws/index.d.ts") }))
+  assert_false(watched.iter().any(fn(p) { p.has_suffix("/dep/index.d.ts") }))
+}

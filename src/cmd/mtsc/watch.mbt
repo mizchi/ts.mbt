@@ -213,8 +213,8 @@ async fn mtsc_watch_program_files(
     // `x.ts`. A file only the check reads still changes the answer, so
     // when checking is on that graph is watched too, minus the files under
     // `node_modules` — a dependency's `.d.ts` does not change under an
-    // edit loop, and a workspace package linked into `node_modules`
-    // arrives here under its real path, outside it. This also covers a
+    // edit loop. A workspace package linked into `node_modules` is kept:
+    // its real path is outside it. This also covers a
     // non-bundle `--noEmit --watch`, which checks the whole import graph
     // and used to poll the entry alone.
     if !opts.no_check {
@@ -235,9 +235,17 @@ async fn mtsc_watch_program_files(
         // A failed load still keeps what it read: a syntax error in an
         // imported file stops the walk there, and that file is already in
         // `files`, so editing it to fix the error triggers the retry.
+        //
+        // A workspace package linked into `node_modules` is the program's
+        // own source under a dependency's path: the loader keeps the
+        // spelling the resolver returned, so the REAL path decides.
         Ok(_) | Err(_) =>
           for path in files.keys() {
-            if mtsc_type_graph_reads(path) && !mtsc_is_dependency_path(path) {
+            if !mtsc_type_graph_reads(path) {
+              continue
+            }
+            if !mtsc_is_dependency_path(path) ||
+              !mtsc_is_dependency_path(@parser.canonical_file_path(path)) {
               add(path)
             }
           }

@@ -311,13 +311,28 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
   // `pipe(a, f, g, …)` came back `unknown` from `pipe(a: unknown, …):
   // unknown` instead of solving the overload written for that many
   // arguments.
-  let has_signature_only = module_.funcs
+  //
+  // Which declaration IS the implementation is a parse-time fact: the
+  // parser's `<fn-impl:NAME>` marker says one exists, and tsc requires it
+  // to follow its signatures directly, so it is the LAST declaration of
+  // the name. An empty statement list cannot tell `f(x: any): void {}`
+  // from a signature, and that implementation then stayed callable, so
+  // `f(123)` was accepted against `f(x: string): void`. Where no marker
+  // exists (a declaration file, or a set with no implementation) the
+  // statement count is the remaining evidence.
+  let decls = module_.funcs.filter(fn(f) { f.name == name })
+  let has_impl = module_.grammar_misuses.contains("<fn-impl:\{name}>")
+  let has_signature_only = decls
     .iter()
-    .any(fn(f) { f.name == name && f.body.stmts.length() == 0 })
+    .any(fn(f) { f.body.stmts.length() == 0 })
   let sigs : Array[@ast.TsType] = []
-  for func in module_.funcs {
-    if func.name == name &&
-      (!has_signature_only || func.body.stmts.length() == 0) {
+  for i, func in decls {
+    let callable = if has_impl && decls.length() > 1 {
+      i < decls.length() - 1
+    } else {
+      !has_signature_only || func.body.stmts.length() == 0
+    }
+    if callable {
       sigs.push(generic_function_value_type(func))
     }
   }
