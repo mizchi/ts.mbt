@@ -6621,3 +6621,38 @@ test "bridge package split classifies a block by its code, not its doc comment" 
     }
   }
 }
+
+///|
+/// Glue builds against one MoonBit module must not overlap, because each
+/// one's `moon build` discovers the other's `__tsmbt_glue__*` package and
+/// fails when it is deleted (see `with_glue_build_lock`). This holds every
+/// task inside the lock across a sleep, so overlapping tasks would record
+/// a second entry before the first exit. A different module is not held
+/// up behind them.
+async test "with_glue_build_lock serializes builds against one module" {
+  let events : Array[String] = []
+  @async.with_task_group(group => {
+    for name in ["a", "b", "c"] {
+      group.spawn_bg(() => {
+        with_glue_build_lock("/module/one", () => {
+          events.push("enter " + name)
+          @async.sleep(30)
+          events.push("exit " + name)
+        })
+      })
+    }
+    group.spawn_bg(() => {
+      @async.sleep(5)
+      with_glue_build_lock("/module/two", () => events.push("other"))
+    })
+  })
+  let one = events.filter(fn(e) { e != "other" })
+  assert_eq(one.length(), 6)
+  for i in 0..<3 {
+    let name = one[2 * i].split(" ").last().unwrap().to_owned()
+    assert_eq(one[2 * i], "enter " + name)
+    assert_eq(one[2 * i + 1], "exit " + name)
+  }
+  // The other module ran while the first was still held.
+  assert_true(events.search("other").unwrap() < events.length() - 1)
+}

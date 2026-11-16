@@ -4609,9 +4609,8 @@ product surfaces now.
     case `It` now maps to the never-registered `Item@origin` and abstains.
     Merely skipping the mapping was not enough, since the shared table's
     `It` could then be the checked module's own `interface It`. The
-    checked-module side is not fixed: when another module declares `Item`,
-    that renamed import still reads it as that module's declaration, which
-    main does too. Adding local alias names to the rename map also exposed
+    checked-module side was left to batch GF. Adding local alias names to
+    the rename map also exposed
     an older gap. `rename_interface_refs` excluded the interface's own type
     parameters and not a METHOD's, which live in `method_type_params`. So
     `identity<It>(x: It)` beside `import { Item as It }` read its binder as
@@ -4623,6 +4622,89 @@ product surfaces now.
   - **A JSX payload nested in a payload lost its TS1002.** The inner
     payload's parser reports into its parent sub-parser's grammar list,
     which the outer payload never read.
+
+  Batch GF fixes the checked-module side that GE's fourth round left. When
+  the checked module has `import type { Other as Item }` and another
+  reachable module declares `interface Item`, the checked module's `Item`
+  was read as that interface, and `const m: Item = { z: 1 }` was reported.
+  main has the same false positive.
+  - **The cause.** A renamed import binds `Item` in the checked module as
+    surely as a declaration does, but it was in neither
+    `own_type_names` nor `declarers`. So the other module's `Item` was
+    registered under the bare name. `alias_namespace_import_types` then
+    read `Item` as already declared and skipped the redirect to `Other`.
+  - **The fix.** A renamed import's local name now counts as one of the
+    checked module's names. The other module's `Item` collides, is keyed
+    `Item@<path>` like any other collision, and stays off the bare name.
+  - **The guard GE added becomes unreachable.** For a name the checked
+    module renames into, the `Item@origin` abstention in the `!keyed` path
+    can no longer be reached, because `<checked>` is now among that name's
+    declarers. It is gone. The cases it made abstain are now judged
+    correctly: `make().n` against `bad: string` reports.
+  - **A class is the exception, and it is registered as neither.** A
+    class cannot be keyed: member lookups and `extends` walks go through
+    the bare name, and keying the class was tried and measured as no help.
+    So the checked module's `x: Item` (the import) and the class's own
+    `mk(): Item` are one name in one table, and no answer is right for
+    both. On main, the named-import aliases GE added put `Other` under
+    `interfaces["Item"]`, which lookups read before classes, so the class's
+    `mk().n` and `new Sub().n` were reported on code the older main
+    (`362ab4d`) accepted. The first version of this batch left the class
+    there instead, and claimed the checked module's `Item` would abstain.
+    It did not: the class satisfies every resolved-receiver guard, so the
+    legal `read(x: Item) { x.z }` was reported. Review caught it. Such a
+    name is now skipped like any reserved one AND its import is not
+    installed, so every read of `Item` in the checked module is unresolved
+    and abstains. That is a MISS (`bad: string = mk().n`), and the only
+    answer with no false positive on either side.
+  - **Review found two more routes, both false positives on legal code.**
+    - The class guard ran after the keyed redirect, which `continue`s. So
+      when two modules declare `Other`, `Item` still went to `Other@x`
+      through `qualified_names`, which `unwrap` reads before any table, and
+      the class's own `mk().n` was reported. The caller now leaves such an
+      alias out altogether, and the guard runs first for what remains (a
+      class the checked module declares inside a function).
+    - A module with no per-module key gets no `renames`. That covers an
+      ambient `.d.ts` and a caller of the public entry point that passes no
+      keys. Reserving the renamed `Item` against such a module skipped its
+      `interface Item` and left its `Holder.item: Item` to the redirect, so
+      the legal `holder.item.n` read the checked module's `Other`. Its own
+      declarations of such a name now move to `Item@<unkeyed>`, and its
+      references move with them, so `Holder.item` still reads its own
+      `Item`.
+    - Two more positions kept the bare name after keying. A
+      dependency's CLASS member (`class Box { item!: Item }` beside its
+      keyed `interface Item`) was copied unchanged, because `renames`
+      rewrote interfaces and aliases only. And an ambient VALUE
+      (`declare const ambientItem: Item`) is typed by the caller, which
+      the unkeyed move never reached. Class members are now rewritten
+      too, with the class's own name and heritage left bare, because
+      class lookups and `extends` walks go through bare names. Ambient
+      values carry `@value-origin:NAME` -> `<unkeyed>`, which is read
+      through what the unkeyed modules moved. The class rewrite also
+      applies to every ordinary collision between two dependencies, so
+      it was measured on effect and zod.
+    - And three more. An interface METHOD's bound
+      (`take<K extends keyof Item>`) is written in the interface's scope
+      and was not renamed. The unkeyed map was built per file, while
+      ambient files share one scope, so `b.d.ts`'s `Holder.item: Item`
+      missed `a.d.ts`'s moved `Item`; it is one map across every module
+      with no key now. And the ambiguous-class filter was applied to
+      the alias list the namespace recursion receives, so a nested
+      namespace lost the reservation and registered the class again.
+      Only the list installed at this level is filtered now.
+  - **The CI `test` job failed on a race unrelated to the checker.** The
+    generated async test driver runs up to ten tests at once. Two scaffold
+    tests each put a `__tsmbt_glue__*` package inside
+    `examples/moonbit-to-typescript`, ran `moon build` there, and deleted
+    it. `moon build` discovers every package of the module, so one build's
+    discovery listed the other's glue directory just before it was deleted,
+    and failed with "Failed when discovering packages … No such file or
+    directory". This was reproduced directly by deleting sibling
+    directories in a loop during `moon build`. `with_glue_build_lock` now
+    holds an `@async.Mutex` per module root around the build. Two separate
+    processes against one module can still race.
+
   Batch GG is the first item of the "what does real use lack" survey,
   and it turned out to be a RESOLUTION defect that every gate here was
   structurally unable to see. **`mtsc --noEmit` never read a package's
