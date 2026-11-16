@@ -554,3 +554,13 @@ async test "mtsc check graph: ${configDir} under a relative project path" {
   assert_eq(opts.type_roots, Some([mtsc_normalize(project + "/typings")]))
   assert_eq(mtsc_compile_all(opts, entries), 0)
 }
+
+///|
+/// The walk reaches `/` itself: `mtsc_dirname("/packages")` is `""`, so a
+/// workspace directly under the root never asked `/node_modules/@types`.
+test "mtsc type roots: the walk includes the filesystem root" {
+  assert_eq(mtsc_type_root_candidates("/packages/app"), [
+    "/packages/app/node_modules/@types", "/packages/node_modules/@types", "/node_modules/@types",
+  ])
+  assert_eq(mtsc_type_root_candidates("/"), ["/node_modules/@types"])
+}

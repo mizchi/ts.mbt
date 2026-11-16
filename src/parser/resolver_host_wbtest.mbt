@@ -320,4 +320,12 @@ test "parser: triple-slash references are read from the leading trivia only" {
     ),
     [("path", "a.d.ts"), ("types", "node"), ("path", "types=x.d.ts")],
   )
+  // U+2028 and U+2029 end a line comment, and the scan steps over them as
+  // the line terminators they are.
+  assert_eq(
+    triple_slash_references(
+      "// a\u{2028}/// <reference path=\"p.d.ts\" />\u{2029}/// <reference types=\"t\" />",
+    ),
+    [("path", "p.d.ts"), ("types", "t")],
+  )
 }
