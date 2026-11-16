@@ -23316,3 +23316,24 @@ test "parameter property modifiers follow tsc's order" {
     "`public` modifier must precede `readonly` modifier",
   ])
 }
+
+///|
+/// An `asserts x is T` return is renamed like any other position: an
+/// imported assertion signature otherwise kept the bare `T` while its
+/// parameters and other returns moved to the module's key.
+test "rename_type_refs renames an asserted target" {
+  let renames : Map[String, String] = Map([("A", "A@/src/m.ts")])
+  let ty = @ast.TsType::Func(
+    [@ast.TsType::Unknown],
+    @ast.TsType::AssertsPredicate("x", Some(@ast.TsType::Named("A"))),
+  )
+  match rename_type_refs(ty, renames) {
+    Func(_, AssertsPredicate("x", Some(Named(n)))) =>
+      assert_eq(n, "A@/src/m.ts")
+    _ => fail("expected the asserted target to be renamed")
+  }
+  match rename_type_refs(@ast.TsType::AssertsPredicate("x", None), renames) {
+    AssertsPredicate("x", None) => ()
+    _ => fail("a bare `asserts x` has no target to rename")
+  }
+}

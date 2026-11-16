@@ -877,6 +877,7 @@ pub fn rename_type_refs(
     CallableMeta(inner, optional_params) =>
       CallableMeta(go(inner), optional_params)
     TypePredicate(p, t) => TypePredicate(p, go(t))
+    AssertsPredicate(p, t) => AssertsPredicate(p, t.map(go))
     _ => ty
   }
 }
@@ -46856,6 +46857,18 @@ fn check_module_function_bodies_layered(
             continue
           }
           if !keyed {
+            // A RENAMED import (`import { Item as It }`) still has to reach
+            // `Item`: left alone, `It` read the shared bare table, which is
+            // the CHECKED module's `It` when it declares one. The bare entry
+            // is the origin's declaration exactly when the origin is the
+            // name's only declarer (the checked module counts as one).
+            let origin_is_sole_declarer = match declarers.get(bare) {
+              Some(set) => set.length() == 1 && set.contains(origin)
+              None => false
+            }
+            if local_name != bare && origin_is_sole_declarer {
+              renames[local_name] = bare
+            }
             continue
           }
           match type_modules_by_key.get(origin) {

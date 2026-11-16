@@ -4593,6 +4593,22 @@ product surfaces now.
     an augmentation's grammar list is not surfaced, so the report is
     carried back in JSX mode only. A namespace body in a `.ts` file still
     reports TS1002 twice, which main does too.
+
+  A fourth round found three more:
+  - **A renamed import of a uniquely declared type was read in the checked
+    module's scope.** The fix is pre-existing in its effect: main has the
+    same false positive. With `import type { Item as It }` in a reachable
+    module, `Item` has one declarer and so gets no per-module key, and `It`
+    read the shared bare table. That table holds the checked module's own
+    `It`, so `consume({ a: "x" })` was judged against the wrong type. The
+    alias now maps to `Item` when the origin is the name's only declarer.
+  - **`rename_type_refs` had no `AssertsPredicate` arm.** An imported
+    `asserts x is T` kept the bare `T` while every other position of the
+    same signature moved to the key. That is the twelfth fail-open wrapper
+    arm in this file's ledger.
+  - **A JSX payload nested in a payload lost its TS1002.** The inner
+    payload's parser reports into its parent sub-parser's grammar list,
+    which the outer payload never read.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

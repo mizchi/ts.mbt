@@ -8489,6 +8489,12 @@ test "parser: a multi-line JSX attribute string is not unterminated" {
     misuses("export const v = <div>{ok && <span title=\"a\nb\" />}</div>;\n"),
     [],
   )
+  // A payload nested in a payload is read by the payload parser's own
+  // sub-parser; its TS1002 still reaches the file.
+  assert_eq(
+    misuses("export const v = <div>{ok && <span>{\"a\nb\"}</span>}</div>;\n"),
+    ["unterminated string literal"],
+  )
   // The payload is an expression of the enclosing function: `yield` and
   // `await` there take the element as their operand, which the payload
   // parser reads only if it knows it is in a generator / async function.

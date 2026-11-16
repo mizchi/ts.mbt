@@ -812,3 +812,48 @@ test "mtsc checker reads a JSX payload in its enclosing function and class" {
     Err(e) => fail(e)
   }
 }
+
+///|
+/// `c.ts` imports `Item` under another name. `Item` has one declarer, so it
+/// gets no per-module key, and `It` used to read the shared bare table —
+/// which holds the CHECKED module's own `It` — so `consume({ a: "x" })` was
+/// judged against `{ b: number }`.
+test "mtsc graph checker resolves a renamed import of a uniquely declared type" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/root.ts",
+        source: "import { consume } from \"./c\";\nexport interface It { b: number }\nexport const mine: It = { b: 1 };\nconsume({ a: \"x\" });\nconsume({ a: 1 });",
+        allowJsx: false,
+      },
+      {
+        path: "/src/a.ts",
+        source: "export interface Item { a: string }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/c.ts",
+        source: "import type { Item as It } from \"./a\";\nexport function consume(x: It): void {}",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/root.ts",
+        moduleSpecifier: "./c",
+        targetPath: "/src/c.ts",
+      },
+      {
+        importerPath: "/src/c.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+    ],
+  })
+  let messages = issues.map(fn(i) { i.message })
+  assert_false(messages.iter().any(fn(m) { m.contains("`b`") }))
+  assert_eq(
+    issues.filter(fn(i) { i.path.contains("call `consume` arg[0].a") }).length(),
+    1,
+  )
+}

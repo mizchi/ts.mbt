@@ -2297,7 +2297,11 @@ fn Parser::parse_jsx_embed(
       // as JavaScript — `{"a` + newline + `b"}` stops right after it.
       let stop = sub.peek()
       let read = fn(p : Int32) { stop.kind is Eof || p < stop.pos }
-      if sub.jsx_unterminated_strings.iter().any(read) {
+      // A payload nested inside this one (`{ok && <b>{"a` + newline +
+      // `b"}</b>}`) is read by the sub-parser's own sub-parser, which
+      // reports into the sub-parser's grammar list.
+      if sub.jsx_unterminated_strings.iter().any(read) ||
+        sub.grammar_misuses.contains("unterminated string literal") {
         self.grammar_misuses.push("unterminated string literal")
       }
       e
