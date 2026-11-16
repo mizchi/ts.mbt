@@ -102,10 +102,22 @@ if [ "${FIELD_TS7:-0}" = 1 ]; then
     echo "field_univer: no TypeScript compiler at $TSC (run npm ci in the repo)" >&2
     exit 2
   fi
+  # `tsc` exits 0 for a clean program and 1 or 2 for one with
+  # diagnostics; anything else (`node` missing, a crash, a signal) means
+  # the reference was not computed for that package, and an empty error
+  # list from it must not read as "TS7 accepts this".
   for c in $(cat "$OUT/entries.txt"); do
     p=$(echo "$c" | cut -d/ -f2)
-    node "$TSC" -p "$c" --noEmit > "$OUT/$p.ts7.txt" 2>&1 || true
+    set +e
+    node "$TSC" -p "$c" --noEmit > "$OUT/$p.ts7.txt" 2>&1
+    code=$?
+    set -e
+    echo "$p $code" >> "$OUT/ts7-status.txt"
   done
+  ts7_incomplete=$(awk '$2 != 0 && $2 != 1 && $2 != 2' "$OUT/ts7-status.txt" | sort)
+  if [ -n "$ts7_incomplete" ]; then
+    incomplete=$(printf '%s\n%s' "$incomplete" "$(echo "$ts7_incomplete" | sed 's/^/ts7:/')" | sed '/^$/d')
+  fi
   # At v1.5.0 every one of these is a missing generated file (TS2307) or
   # its cascade: TS7006 in `clsx.ts`, TS2731 / TS2677 / TS18046 in the
   # emoji picker, TS2322 / TS2345 in `hyphen.spec.ts`.
