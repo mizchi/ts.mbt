@@ -1437,6 +1437,25 @@ fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
 }
 
 ///|
+/// A sub-parser over part of this parser's expression reads it in this
+/// parser's context: the function it is in (`yield`, `await`, `return`),
+/// the loops and labels around it (`break`, `continue`), and the class
+/// whose private names it may spell. Every sub-parser of an expression goes
+/// through here, so a context field added later is added once.
+fn Parser::inherit_expression_context(self : Parser, child : Parser) -> Unit {
+  child.in_generator = self.in_generator
+  child.in_async = self.in_async
+  child.in_function = self.in_function
+  child.in_iteration = self.in_iteration
+  child.in_switch = self.in_switch
+  child.class_id = self.class_id
+  child.current_class_brand = self.current_class_brand
+  for label in self.labels {
+    child.labels.push(label)
+  }
+}
+
+///|
 fn Parser::parse_parenthesized_expr(
   self : Parser,
 ) -> @ast.TsExpr raise ParseError {
@@ -1501,16 +1520,7 @@ fn Parser::parse_parenthesized_expr(
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
   self.inherit_source_flags(temp)
-  temp.in_generator = self.in_generator
-  temp.in_async = self.in_async
-  temp.in_function = self.in_function
-  temp.in_iteration = self.in_iteration
-  temp.in_switch = self.in_switch
-  temp.class_id = self.class_id
-  temp.current_class_brand = self.current_class_brand
-  for label in self.labels {
-    temp.labels.push(label)
-  }
+  self.inherit_expression_context(temp)
 
   let expr = temp.parse_expr()
   if !temp.check(Eof) {
@@ -1591,16 +1601,7 @@ fn Parser::parse_expr_until_top_level(
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
   self.inherit_source_flags(temp)
-  temp.in_generator = self.in_generator
-  temp.in_async = self.in_async
-  temp.in_function = self.in_function
-  temp.in_iteration = self.in_iteration
-  temp.in_switch = self.in_switch
-  temp.class_id = self.class_id
-  temp.current_class_brand = self.current_class_brand
-  for label in self.labels {
-    temp.labels.push(label)
-  }
+  self.inherit_expression_context(temp)
 
   let expr = temp.parse_expr()
   if !temp.check(Eof) {
@@ -2278,16 +2279,25 @@ fn Parser::parse_jsx_embed(
 ) -> @ast.TsExpr raise ParseError {
   let sub = Parser::from_source_with_jsx(payload, self.allow_jsx)
   self.inherit_source_flags(sub)
+  // The payload is an expression of the ENCLOSING function and class:
+  // without this, `{yield <span … />}` in a generator read `yield` as a
+  // name and `<span` as a comparison, and `{this.#n}` in a method was
+  // neither lowered to the class's brand nor known to be inside the class.
+  self.inherit_expression_context(sub)
   let parsed : Result[@ast.TsExpr, ParseError] = Ok(sub.parse_expr()) catch {
     e => Err(e)
   }
   match parsed {
     Ok(e) => {
-      // Only after a parse that SUCCEEDED: a failed one stopped before
-      // the nested elements that would have forgiven their strings, so
-      // what it holds is not evidence of anything — and reporting it would
-      // turn a payload this parser cannot read into a false TS1002.
-      if sub.jsx_unterminated_strings.length() > 0 {
+      // Only after a parse that SUCCEEDED, and only for what it READ: a
+      // nested element forgives its strings when it is parsed, so a
+      // string the parse stopped short of may lie in an element it never
+      // reached, and reporting it would turn a payload this parser cannot
+      // read into a false TS1002. A string before the stop point was read
+      // as JavaScript — `{"a` + newline + `b"}` stops right after it.
+      let stop = sub.peek()
+      let read = fn(p : Int32) { stop.kind is Eof || p < stop.pos }
+      if sub.jsx_unterminated_strings.iter().any(read) {
         self.grammar_misuses.push("unterminated string literal")
       }
       e

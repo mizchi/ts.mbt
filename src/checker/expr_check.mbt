@@ -1074,12 +1074,17 @@ fn Resolver::ingest_type_module(
   let renamed = if renames.length() == 0 || cache_key == "" {
     None
   } else {
+    // The DESTINATION is part of the key, not just the renamed name: a
+    // qualified import alias (`ns.Item`) maps to `Item@origin` in a graph
+    // where two reachable modules declare `Item` and to bare `Item` in one
+    // where only one does, and two roots of one graph check reach
+    // different sets.
     let names : Array[String] = []
-    for k, _ in renames {
-      names.push(k)
+    for k, v in renames {
+      names.push(k + "\u{1}" + v)
     }
     names.sort()
-    let rkey = cache_key + "\u{0}" + names.join(",")
+    let rkey = cache_key + "\u{0}" + names.join("\u{2}")
     match renamed_type_module_cache.get(rkey) {
       Some(t) => Some(t)
       None => {

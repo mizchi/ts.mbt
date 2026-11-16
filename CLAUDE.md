@@ -4569,6 +4569,30 @@ product surfaces now.
   `--useUnknownInCatchVariables` was also an unknown option: the checker's
   boolean list had it, and the no-effect table the option scanner consults
   first did not.
+
+  A third review round found three more, and one of them reached the emit:
+  - **The renamed-type cache was keyed on the renamed NAMES alone.** A
+    qualified alias `ns.Item` goes to `Item@origin` from a root where two
+    reachable modules declare `Item`, and to bare `Item` from one where
+    only one does. Whichever root ran second reused the first one's
+    rewrite. The key now carries each destination.
+  - **A JSX `{ … }` payload was parsed with no enclosing context.** Its
+    sub-parser did not know it was in a generator, so `{yield <span
+    title="x" />}` read `yield` as a name and reported `span` as
+    undeclared. It did not know the class either, so `{this.#n}` in a
+    method was "not accessible outside its class", and the emit kept
+    `this.#n` while the constructor wrote `this.__private_brand__0__n`.
+    That is a SyntaxError under plain `mtsc file.tsx`, measured on main.
+    The two other expression sub-parsers had copied the same eight context
+    fields word for word, so the copy is one helper now
+    (`inherit_expression_context`) called from all three. A payload's TS1002
+    also counts only strings before the point where its parse stopped,
+    since one after it may sit in an element the parse never reached.
+  - **A `declare module "m"` body's TS1002 was dropped in a `.tsx`
+    file.** The outer parser forgives the body's range for the child, and
+    an augmentation's grammar list is not surfaced, so the report is
+    carried back in JSX mode only. A namespace body in a `.ts` file still
+    reports TS1002 twice, which main does too.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

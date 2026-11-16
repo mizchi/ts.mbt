@@ -8489,6 +8489,44 @@ test "parser: a multi-line JSX attribute string is not unterminated" {
     misuses("export const v = <div>{ok && <span title=\"a\nb\" />}</div>;\n"),
     [],
   )
+  // The payload is an expression of the enclosing function: `yield` and
+  // `await` there take the element as their operand, which the payload
+  // parser reads only if it knows it is in a generator / async function.
+  assert_eq(
+    misuses(
+      "export function* f() {\n  return <div>{yield <span title=\"a\nb\" />}</div>;\n}\n",
+    ),
+    [],
+  )
+  assert_eq(
+    misuses(
+      "export async function g() {\n  return <div>{await <span title=\"a\nb\" />}</div>;\n}\n",
+    ),
+    [],
+  )
+  // A payload the parser stops reading part-way never reached the element
+  // that would forgive the string, so nothing is concluded from it.
+  assert_eq(
+    misuses("export const v = <div>{a b <span title=\"x\ny\" />}</div>;\n"),
+    [],
+  )
+}
+
+///|
+/// A `declare module "m"` body is re-parsed by a child whose grammar list
+/// nothing surfaces, so in a `.tsx` file (where this parser forgave the
+/// body's range for the child) its TS1002 has to be carried back. In a
+/// `.ts` file the lexer already reported it for this parser, once.
+test "parser: TS1002 in a declare module body is reported once in .ts and .tsx" {
+  let count = fn(allow_jsx : Bool) -> Int32 raise {
+    Parser::from_source_with_jsx(
+      "declare module \"m\" {\n  export const s: \"a\n}\nexport {};\n", allow_jsx,
+    ).parse_module().grammar_misuses
+    .filter(fn(g) { g == "unterminated string literal" })
+    .length()
+  }
+  assert_eq(count(true), 1)
+  assert_eq(count(false), 1)
 }
 
 ///|

@@ -990,6 +990,16 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
         let body_source = self.parse_declaration_block_source()
         let module_ = self.parse_ambient_external_module_source(body_source)
         self.propagate_suppression_sentinels(module_)
+        // In JSX mode this parser handed the body's unterminated strings to
+        // the child (`parse_declaration_block_source` forgave the range),
+        // and a `declare module "spec"` body lands in
+        // `module_augmentations`, whose grammar list nothing surfaces — so
+        // the child's TS1002 has to come back here. In a `.ts` file the
+        // lexer already reported it for this parser.
+        if self.allow_jsx &&
+          module_.grammar_misuses.contains("unterminated string literal") {
+          self.grammar_misuses.push("unterminated string literal")
+        }
         Some((spec, module_))
       } else {
         self.skip_declaration_block()

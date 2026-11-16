@@ -741,3 +741,74 @@ test "mtsc graph checker keeps an imported lib-shadowing type in its module's sc
   })
   assert_eq(issues.map(fn(i) { i.message }), [])
 }
+
+///|
+/// `c.ts`'s rewritten declarations are cached per (module, rename set), and
+/// the set has to carry each rename's DESTINATION: from `r1` (where `a.ts`
+/// and `b.ts` both declare `Item`) `ns.Item` is `Item@/src/a.ts`, and from
+/// `r2` (where only `a.ts` does) it is the bare `Item`. Keyed on the renamed
+/// names alone, whichever root ran second reused the first one's rewrite.
+test "mtsc graph checker does not share a rewrite across different rename destinations" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let root = fn(ns : String, tag : String) -> String {
+    "import * as ns from \"./\{ns}\";\nimport type { Box } from \"./c\";\nexport const ok\{tag}: Box = { item: { a: \"x\" } };\nexport const bad\{tag}: Box = { item: { a: 1 } };"
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_("/src/r1.ts", root("b", "1")),
+      module_("/src/r2.ts", root("d", "2")),
+      module_("/src/a.ts", "export interface Item { a: string }"),
+      module_("/src/b.ts", "export interface Item { b: number }"),
+      module_("/src/d.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/c.ts", "import * as ns from \"./a\";\nexport interface Box { item: ns.Item }",
+      ),
+    ],
+    edges: [
+      edge("/src/r1.ts", "./b", "/src/b.ts"),
+      edge("/src/r1.ts", "./c", "/src/c.ts"),
+      edge("/src/r2.ts", "./d", "/src/d.ts"),
+      edge("/src/r2.ts", "./c", "/src/c.ts"),
+      edge("/src/c.ts", "./a", "/src/a.ts"),
+    ],
+  })
+  let at = fn(binding : String) -> Bool {
+    issues.iter().any(fn(i) { i.path.contains("binding `\{binding}`") })
+  }
+  assert_false(at("ok1"))
+  assert_false(at("ok2"))
+  assert_true(at("bad1"))
+  assert_true(at("bad2"))
+}
+
+///|
+/// A `{ … }` payload is an expression of the enclosing function and class.
+/// Its parser did not know either: `{yield <span title="x" />}` read
+/// `yield` as a name and `<span` as a comparison (so `span` was
+/// undeclared), and `{this.#n}` in a method was "not accessible outside its
+/// class".
+test "mtsc checker reads a JSX payload in its enclosing function and class" {
+  let src =
+    #|declare global { namespace JSX { interface IntrinsicElements { [k: string]: any } } }
+    #|export function* f(): Generator<any, any, any> {
+    #|  return <div>{yield <span title="x" />}</div>;
+    #|}
+    #|export async function g(p: Promise<any>) {
+    #|  return <div>{await p}</div>;
+    #|}
+    #|export class C {
+    #|  #n = 1;
+    #|  view() {
+    #|    return <div title={String(this.#n)}>{this.#n}</div>;
+    #|  }
+    #|}
+  match collect_type_issues(src, true) {
+    Ok(issues) => assert_eq(issues.map(fn(i) { i.message }), [])
+    Err(e) => fail(e)
+  }
+}

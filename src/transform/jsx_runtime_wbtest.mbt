@@ -339,3 +339,54 @@ test "jsx: the helper set is per call, not cumulative" {
   let (_, second) = lower_block_with_runtime_imports(cfg, without)
   @test.assert_eq(second.length(), 0)
 }
+
+///|
+/// A private name read in a JSX payload is the class's field: the payload's
+/// parser has to lower it to the same brand the class body does. It used to
+/// keep `this.#n` while the constructor wrote the brand, which outside a
+/// `class` body is a SyntaxError.
+test "jsx: a private name in a payload lowers with its class" {
+  let cfg = JsxConfig::default()
+  let src =
+    #|export class C {
+    #|  #n = 1;
+    #|  view() {
+    #|    return <div title={String(this.#n)}>{this.#n}</div>;
+    #|  }
+    #|}
+  match transform_source_with(src, cfg) {
+    Ok(js) => {
+      // Every `this.<member>` spelling of the field: the constructor's
+      // write and the two payload reads must agree.
+      let spellings : Map[String, Int32] = Map([])
+      let parts = js.split("this.").collect()
+      for k, part in parts {
+        if k == 0 {
+          continue
+        }
+        let mut name = ""
+        for ch in part {
+          if ch.is_ascii_alphabetic() ||
+            ch.is_ascii_digit() ||
+            ch == '_' ||
+            ch == '$' ||
+            ch == '#' {
+            name = name + ch.to_string()
+          } else {
+            break
+          }
+        }
+        if name == "#n" || name.has_prefix("__private_brand__") {
+          spellings[name] = spellings.get(name).unwrap_or(0) + 1
+        }
+      }
+      let native = js.contains("class C")
+      if spellings.length() != 1 || (spellings.contains("#n") && !native) {
+        println(js)
+        fail("private field spelled \{spellings.length()} ways")
+      }
+      assert_eq(spellings.values().fold(init=0, fn(a, b) { a + b }), 3)
+    }
+    Err(e) => fail("transform error: \{e}")
+  }
+}
