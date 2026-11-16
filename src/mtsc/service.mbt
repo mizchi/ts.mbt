@@ -90,6 +90,10 @@ priv struct MtscProgram {
   // Reported as diagnostics rather than dropped, because a root that
   // silently does not exist is a program that silently checks nothing.
   missing_files : Array[String]
+  // Imports the host answered `External` for, keyed
+  // `importer + "\u{0}" + specifier`. They have no edge, and without
+  // this a RELATIVE one read as a missing local module.
+  skipped_imports : Map[String, Unit]
 }
 
 ///|
@@ -124,6 +128,7 @@ fn[H : MtscHost] mtsc_load_program(host : H) -> MtscProgram {
   let edges : Array[MtscModuleEdge] = []
   let parse_errors : Array[(String, String)] = []
   let missing_files : Array[String] = []
+  let skipped_imports : Map[String, Unit] = Map([])
   let seen : Map[String, Bool] = Map([])
   let pending : Array[String] = []
 
@@ -164,8 +169,8 @@ fn[H : MtscHost] mtsc_load_program(host : H) -> MtscProgram {
     }
     modules.push(parsed)
     for specifier in mtsc_module_specifiers(parsed) {
-      match mtsc_resolve_module(host, cache, path, specifier) {
-        Some(target) => {
+      match mtsc_resolve_import(host, cache, path, specifier) {
+        Found(target) => {
           edges.push({
             importerPath: path,
             moduleSpecifier: specifier,
@@ -176,16 +181,19 @@ fn[H : MtscHost] mtsc_load_program(host : H) -> MtscProgram {
             pending.push(target)
           }
         }
+        // The host said not to follow it. No edge, and no diagnostic
+        // either, which `graph_import_globals` can only know if told.
+        Skipped => skipped_imports[path + "\u{0}" + specifier] = ()
         // Unresolved. No edge, and deliberately no diagnostic here:
         // `graph_import_globals` already reports an unresolvable LOCAL
         // specifier and stays silent on a bare one, so a rule written
         // here would be a second copy of that judgement — and the two
         // could only disagree.
-        None => ()
+        NotFound => ()
       }
     }
   }
-  { modules, edges, parse_errors, missing_files, }
+  { modules, edges, parse_errors, missing_files, skipped_imports, }
 }
 
 ///|
@@ -204,6 +212,54 @@ fn mtsc_diagnostic_source(issue_path : String) -> String {
     return "import"
   }
   "semantic"
+}
+
+///|
+/// True for a declaration file: `.d.ts`, `.d.mts` or `.d.cts`.
+fn mtsc_is_declaration_file(path : String) -> Bool {
+  path.has_suffix(".d.ts") ||
+  path.has_suffix(".d.mts") ||
+  path.has_suffix(".d.cts")
+}
+
+///|
+/// A path inside a `node_modules` directory: a dependency rather than the
+/// program's own source. A host whose `cwd` is `.` spells its paths
+/// relatively, so `node_modules/lib/index.d.ts` has no `/` in front of
+/// the directory name and a `contains` test alone misses it. The CLI's
+/// `mtsc_is_dependency_path` asks the same question the same way.
+fn mtsc_is_dependency_path(path : String) -> Bool {
+  path.contains("/node_modules/") || path.has_prefix("node_modules/")
+}
+
+///|
+/// The declaration files the program reads for their declarations and
+/// does not report on — the CLI's `mtsc_context_only_modules`, over a
+/// host: a dependency's `.d.ts` (one under `node_modules`) that is not a
+/// root, and with `skipLibCheck` every declaration file that is not one.
+/// A declaration file named as a root is checked; only `skipLibCheck`
+/// exempts it.
+fn[H : MtscHost] mtsc_context_only(
+  host : H,
+  program : MtscProgram,
+) -> Map[String, Unit] {
+  let skip_lib_check = host.compilation_settings().skipLibCheck
+  let roots : Map[String, Unit] = Map([])
+  for root in host.script_file_names() {
+    roots[mtsc_root_path(host, root)] = ()
+  }
+  let out : Map[String, Unit] = Map([])
+  for module_ in program.modules {
+    let path = module_.source.path
+    if !mtsc_is_declaration_file(path) {
+      continue
+    }
+    if skip_lib_check ||
+      (mtsc_is_dependency_path(path) && !roots.contains(path)) {
+      out[path] = ()
+    }
+  }
+  out
 }
 
 ///|
@@ -228,7 +284,13 @@ pub fn[H : MtscHost] get_program_diagnostics(host : H) -> Array[MtscDiagnostic] 
       message: "parse error: \{failure.1}",
     })
   }
-  collect_parsed_graph_issues(program.modules, program.edges, issues)
+  collect_parsed_graph_issues(
+    program.modules,
+    program.edges,
+    issues,
+    context_only=mtsc_context_only(host, program),
+    skipped_imports=program.skipped_imports,
+  )
   for issue in issues {
     out.push({
       file: issue.modulePath,
@@ -361,9 +423,10 @@ pub fn[H : MtscHost] resolve_module_name(
 ) -> MtscResolvedModule {
   let cache = MtscSourceCache::new()
   let from = mtsc_root_path(host, importer)
-  match mtsc_resolve_module(host, cache, from, specifier) {
-    Some(path) => { resolvedFileName: path, isExternal: false, }
-    None =>
+  match mtsc_resolve_import(host, cache, from, specifier) {
+    Found(path) => { resolvedFileName: path, isExternal: false, }
+    Skipped => { resolvedFileName: "", isExternal: true, }
+    NotFound =>
       {
         resolvedFileName: "",
         isExternal: !mtsc_is_relative_specifier(specifier),

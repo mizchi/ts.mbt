@@ -49,6 +49,35 @@ pub(all) struct MtscCompilerOptions {
   /// `tsc` decides it from the extension; this covers a `.ts` file that
   /// the embedding tool knows to be JSX anyway.
   jsx : Bool
+  /// Report nothing inside declaration files the program did not name as
+  /// roots.
+  ///
+  /// A dependency's `.d.ts` reached through `node_modules` is read for its
+  /// declarations and never reported on either way, which is the CLI's
+  /// rule too: a published declaration file `tsc` accepts is the common
+  /// case, so a report there is far likelier to be this checker's gap
+  /// than the package's error. `skipLibCheck` widens that to EVERY
+  /// declaration file that is not a root, as `tsc --skipLibCheck` does.
+  skipLibCheck : Bool
+}
+
+///|
+/// What a host says about one import, before the built-in resolver runs.
+///
+/// TypeScript's `LanguageServiceHost.resolveModuleNames`: a host that
+/// maps specifiers itself (a CDN, an import map, a bundler alias, a
+/// `virtual:` module) answers here, and one that does not answers
+/// `UseDefault` for everything.
+pub(all) enum MtscHostResolution {
+  /// Run the built-in resolution: relative paths, `node_modules`
+  /// (`exports`, `types`, `typesVersions`, `@types`), `node:` builtins,
+  /// tsconfig `paths`, package `imports`.
+  UseDefault
+  /// The module is at this path, which `read_file` must accept.
+  ResolvedTo(String)
+  /// Do not follow this import. It is not a failure: no diagnostic is
+  /// reported for it, exactly as for a bare specifier nothing resolves.
+  External
 }
 
 ///|
@@ -78,6 +107,25 @@ pub trait MtscHost {
 
   /// The options above.
   fn compilation_settings(Self) -> MtscCompilerOptions
+
+  /// Whether `path` names a directory.
+  ///
+  /// Package resolution asks it before reading a package's manifest. A
+  /// host with no notion of directories answers `true` and lets the file
+  /// probes decide, which is what TypeScript does when its host has no
+  /// `directoryExists`.
+  fn directory_exists(Self, String) -> Bool
+
+  /// The canonical spelling of `path`, with symlinks resolved, or `path`.
+  ///
+  /// pnpm reaches one package through a symlink per dependent, so without
+  /// this a file can enter the program under two spellings and declare
+  /// everything twice. A host with no symlinks answers its argument.
+  fn realpath(Self, String) -> String
+
+  /// The host's own answer for importing `specifier` from the file
+  /// `containing_file`, or `UseDefault` — see `MtscHostResolution`.
+  fn resolve_module_name(Self, specifier : String, containing_file : String) -> MtscHostResolution
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +172,32 @@ impl MtscHost for MtscMemoryHost with fn compilation_settings(self) {
 }
 
 ///|
+/// A directory exists when some file lives under it. The map has no
+/// other notion of one, and answering `true` everywhere would make every
+/// probe of a package directory read a manifest that is not there.
+///
+/// `.` is the directory every RELATIVE key lives under: with `cwd: "."`,
+/// `import "."` from `main.ts` resolves its directory to `.`, and a
+/// `./` prefix test would find none of `main.ts`, `index.ts`.
+impl MtscHost for MtscMemoryHost with fn directory_exists(self, path) {
+  if path == "." || path == "" {
+    return self.files.keys().any(fn(f) { !f.has_prefix("/") })
+  }
+  let prefix = if path.has_suffix("/") { path } else { path + "/" }
+  self.files.keys().any(fn(f) { f.has_prefix(prefix) })
+}
+
+///|
+impl MtscHost for MtscMemoryHost with fn realpath(_, path) {
+  path
+}
+
+///|
+impl MtscHost for MtscMemoryHost with fn resolve_module_name(_, _, _) {
+  UseDefault
+}
+
+///|
 /// An `MtscMemoryHost` over `files`, rooted at every one of them.
 ///
 /// The common shape for a test and for a caller who means "check all of
@@ -144,7 +218,7 @@ pub fn MtscMemoryHost::over(
     roots.push(path)
   }
   roots.sort()
-  { files, roots, cwd: ".", options: { jsx, }, }
+  { files, roots, cwd: ".", options: { jsx, skipLibCheck: false, }, }
 }
 
 // ---------------------------------------------------------------------------

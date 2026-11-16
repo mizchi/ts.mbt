@@ -123,6 +123,19 @@ jobs:
         # that is reachable from `moon test`, which runs on native.
         run: just verify-language-service
 
+      - name: Moon check (wasm-gc library)
+        # `src/mtsc/service_wasm.mbt` is compiled on no other backend, so
+        # without this step the wasm boundary is unchecked. The library is
+        # named rather than the module: the CLI's filesystem layer does not
+        # build for `wasm-gc`.
+        run: moon check --target wasm-gc src/mtsc
+
+      - name: Verify language service (wasm-gc)
+        # The same cases as the step above, on the wasm-gc build through
+        # `js/language-service-wasm.mjs`: strings cross as JS strings and
+        # answers as JSON. Needs Node's `js-string` builtins (Node 22+).
+        run: just verify-language-service-wasm
+
       - name: Verify language service types
         run: just verify-language-service-types
 

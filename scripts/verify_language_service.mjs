@@ -27,19 +27,40 @@
 //   node scripts/verify_language_service.mjs
 //   node scripts/verify_language_service.mjs --verbose
 
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
-import {
-  checkModuleGraph,
-  createLanguageService,
-  createMemoryHost,
-  createNodeHost,
-  formatDiagnostics,
-} from "../js/language-service.mjs";
+import { createMemoryHost, formatDiagnostics } from "../js/hosts.mjs";
+import { createNodeHost } from "../js/node-host.mjs";
 
 const VERBOSE = process.argv.includes("--verbose");
+
+// `--wasm` runs every case against the wasm-gc build through
+// `js/language-service-wasm.mjs` instead of the JS build: the same host
+// contract, a different backend and a different boundary. The string ABI
+// (`checkModuleGraph`) is JS-build only, so those cases are skipped there.
+const WASM = process.argv.includes("--wasm");
+const WASM_PATH = new URL("../_build/wasm-gc/release/build/mtsc/mtsc.wasm", import.meta.url);
+
+const { createLanguageService, checkModuleGraph } = WASM
+  ? {
+      createLanguageService: (
+        await (await import("../js/language-service-wasm.mjs")).loadLanguageService(
+          readFileSync(WASM_PATH),
+        )
+      ).createLanguageService,
+      checkModuleGraph: null,
+    }
+  : await import("../js/language-service.mjs");
 
 let passed = 0;
 const failures = [];
@@ -116,6 +137,37 @@ check("memory host: the program includes files reached only by import", () => {
   assert(files.includes("/p/score.ts"), "transitive file missing from program");
 });
 
+check("a root name containing a newline survives the host boundary", () => {
+  // The wasm build used to join root names with "\n", which split this
+  // one in two: the file was never read, and two missing files were
+  // reported instead of its type error.
+  const name = "/p/line\nbreak.ts";
+  const service = createLanguageService(
+    createMemoryHost({ [name]: "export const s: string = 1;" }),
+  );
+  const diagnostics = service.getProgramDiagnostics();
+  assertEqual(
+    diagnostics.map((d) => [d.file, d.source]),
+    [[name, "semantic"]],
+    `wrong diagnostics: ${JSON.stringify(diagnostics)}`,
+  );
+});
+
+if (WASM) {
+  check("wasm: a root name containing NUL is refused, not split", () => {
+    const service = createLanguageService(
+      createMemoryHost({ "/p/a\u0000b.ts": "export const s: string = 1;" }),
+    );
+    let message = "";
+    try {
+      service.getProgramDiagnostics();
+    } catch (error) {
+      message = String(error && error.message);
+    }
+    assert(message.includes("contains NUL"), `expected a NUL refusal, got ${JSON.stringify(message)}`);
+  });
+}
+
 check("memory host: diagnostics carry no fabricated span", () => {
   // The API documents that `start` / `length` are absent because the
   // checker has no offsets. If they ever appear, either the checker
@@ -147,9 +199,10 @@ check("an unresolvable relative import is reported", () => {
   );
 });
 
-check("a bare specifier is left alone rather than reported", () => {
-  // Package resolution is out of scope, and calling that a failure would
-  // send a caller looking for a file that was never meant to exist.
+check("a bare specifier nothing resolves is left alone rather than reported", () => {
+  // There is no `node_modules` here, so nothing resolves `react`, and
+  // calling that a failure would send a caller looking for a file that
+  // was never meant to exist — the CLI's rule as well.
   const service = createLanguageService(
     createMemoryHost({
       "/p/entry.ts": 'import { useState } from "react";\nexport const h = useState;',
@@ -179,6 +232,133 @@ check("resolveModuleName separates a missing file from a package", () => {
     { resolvedFileName: "", isExternal: true },
     "a bare specifier is external",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Package resolution, through the host
+// ---------------------------------------------------------------------------
+
+// A package whose `exports` names its declarations under the `types`
+// condition and its code under `default`: the check must read the
+// declarations, and every byte of it arrives through `readFile`.
+const PACKAGE_FILES = {
+  "/p/node_modules/lib/package.json":
+    '{"name":"lib","exports":{".":{"types":"./dist/i.d.ts","default":"./dist/i.js"}}}',
+  "/p/node_modules/lib/dist/i.d.ts": "export declare function score(): number;",
+  "/p/node_modules/lib/dist/i.js": "export function score() { return 1 }",
+};
+
+check("memory host: a package import is checked against its declarations", () => {
+  const service = createLanguageService(
+    createMemoryHost(
+      {
+        ...PACKAGE_FILES,
+        "/p/entry.ts": 'import { score } from "lib";\nexport const s: string = score();',
+      },
+      { rootNames: ["/p/entry.ts"] },
+    ),
+  );
+  assert(
+    hasMessage(service.getProgramDiagnostics(), "expected `string` but got `number`"),
+    `no package diagnostic: ${JSON.stringify(messages(service.getProgramDiagnostics()))}`,
+  );
+  assertEqual(
+    service.resolveModuleName("/p/entry.ts", "lib"),
+    { resolvedFileName: "/p/node_modules/lib/dist/i.d.ts", isExternal: false },
+    "the types condition, not the code",
+  );
+});
+
+check("memory host: the legal use of the package is silent", () => {
+  const service = createLanguageService(
+    createMemoryHost(
+      {
+        ...PACKAGE_FILES,
+        "/p/entry.ts": 'import { score } from "lib";\nexport const n: number = score();',
+      },
+      { rootNames: ["/p/entry.ts"] },
+    ),
+  );
+  assertEqual(messages(service.getProgramDiagnostics()), [], "expected silence");
+});
+
+check("a dependency's declarations are read but not reported on", () => {
+  // `lib` has a broken declaration of its own. Reporting it would be the
+  // checker's gap far more often than the package's error, which is the
+  // CLI's rule; naming it as a root, or not, is what decides.
+  const files = {
+    "/p/node_modules/lib/package.json": '{"name":"lib","types":"i.d.ts"}',
+    // TS2717: two declarations of one interface property with different
+    // types, which tsc reports in a declaration file too.
+    "/p/node_modules/lib/i.d.ts":
+      "export declare const n: number;\n" +
+      "export interface I { a: number }\nexport interface I { a: string }",
+    "/p/entry.ts": 'import { n } from "lib";\nexport const m: number = n;',
+  };
+  const quiet = createLanguageService(createMemoryHost(files, { rootNames: ["/p/entry.ts"] }));
+  assertEqual(messages(quiet.getProgramDiagnostics()), [], "a dependency is context only");
+  const named = createLanguageService(
+    createMemoryHost(files, { rootNames: ["/p/entry.ts", "/p/node_modules/lib/i.d.ts"] }),
+  );
+  assert(
+    named.getProgramDiagnostics().some((d) => d.file === "/p/node_modules/lib/i.d.ts"),
+    "a declaration file named as a root is checked",
+  );
+  const skipped = createLanguageService(
+    createMemoryHost(files, {
+      rootNames: ["/p/entry.ts", "/p/node_modules/lib/i.d.ts"],
+      compilerOptions: { skipLibCheck: true },
+    }),
+  );
+  assertEqual(messages(skipped.getProgramDiagnostics()), [], "skipLibCheck exempts it");
+});
+
+check("resolveModuleNames answers first; undefined defers, null skips", () => {
+  const files = {
+    "/v/cfg.d.ts": "export declare const port: number;",
+    "/p/entry.ts":
+      'import { port } from "virtual:cfg";\n' +
+      'import { x } from "cdn:thing";\n' +
+      'import { score } from "./score";\n' +
+      "export const p: string = port;",
+    "/p/score.ts": "export const score: number = 1;",
+  };
+  const calls = [];
+  const host = {
+    ...createMemoryHost(files, { rootNames: ["/p/entry.ts"] }),
+    resolveModuleNames(names, containingFile) {
+      calls.push(`${containingFile}:${names.join(",")}`);
+      return names.map((name) =>
+        name === "virtual:cfg"
+          ? { resolvedFileName: "/v/cfg.d.ts" }
+          : name === "cdn:thing"
+            ? null
+            : undefined,
+      );
+    },
+  };
+  const service = createLanguageService(host);
+  const diagnostics = service.getProgramDiagnostics();
+  assert(
+    hasMessage(diagnostics, "expected `string` but got `number`"),
+    `the mapped module was not checked: ${JSON.stringify(messages(diagnostics))}`,
+  );
+  assertEqual(
+    diagnostics.filter((d) => d.source === "import").map((d) => d.messageText),
+    [],
+    "a skipped import is not a diagnostic",
+  );
+  assertEqual(
+    service.getProgramFileNames().sort(),
+    ["/p/entry.ts", "/p/score.ts", "/v/cfg.d.ts"],
+    "the mapped file is in the program, the skipped one is not, `./score` defaulted",
+  );
+  assertEqual(
+    service.resolveModuleName("/p/entry.ts", "cdn:thing"),
+    { resolvedFileName: "", isExternal: true },
+    "null is external",
+  );
+  assert(calls.length > 0, "the hook was never called");
 });
 
 // ---------------------------------------------------------------------------
@@ -420,7 +600,41 @@ try {
   // The original ABI must not have moved
   // -------------------------------------------------------------------------
 
-  check("checkModuleGraph still answers as it did", () => {
+  check("node host: a pnpm-linked package resolves through node_modules, once", () => {
+    // Two importers reach one package through two symlinks, the layout
+    // pnpm writes. With `realpath` on the host the package's declaration
+    // enters the program once, under its real path.
+    write(
+      "pkg/.store/lib@1/node_modules/lib/package.json",
+      '{"name":"lib","types":"index.d.ts"}',
+    );
+    write(
+      "pkg/.store/lib@1/node_modules/lib/index.d.ts",
+      "export declare const n: number;",
+    );
+    mkdirSync(join(root, "pkg/a/node_modules"), { recursive: true });
+    mkdirSync(join(root, "pkg/b/node_modules"), { recursive: true });
+    symlinkSync("../../.store/lib@1/node_modules/lib", join(root, "pkg/a/node_modules/lib"));
+    symlinkSync("../../.store/lib@1/node_modules/lib", join(root, "pkg/b/node_modules/lib"));
+    const a = write("pkg/a/main.ts", 'import { n } from "lib";\nexport const s: string = n;');
+    const b = write("pkg/b/main.ts", 'import { n } from "lib";\nexport const m: number = n;');
+    const service = createLanguageService(createNodeHost([a, b], { currentDirectory: root }));
+    const diagnostics = service.getProgramDiagnostics();
+    assertEqual(
+      messages(diagnostics).filter((m) => m.includes("expected")).length,
+      1,
+      `expected exactly the one type error: ${JSON.stringify(messages(diagnostics))}`,
+    );
+    const real = realpathSync(join(root, "pkg/.store/lib@1/node_modules/lib/index.d.ts"));
+    const files = service.getProgramFileNames();
+    assertEqual(
+      files.filter((f) => f.endsWith("/lib/index.d.ts")),
+      [real],
+      "the package loads once, under its real path",
+    );
+  });
+
+  (WASM ? () => {} : check)("checkModuleGraph still answers as it did", () => {
     // It has consumers outside this repo, and it now shares
     // `collect_parsed_graph_issues` with the host path — so this is the
     // regression check on that extraction.
@@ -452,7 +666,7 @@ try {
     );
   });
 
-  check("checkModuleGraph returns an empty string for a clean graph", () => {
+  (WASM ? () => {} : check)("checkModuleGraph returns an empty string for a clean graph", () => {
     const text = checkModuleGraph({
       modules: [
         { path: "/src/ok.ts", source: "export const ok: number = 1;", allowJsx: false },
@@ -466,7 +680,7 @@ try {
 }
 
 console.log(
-  `\nlanguage service: ${passed} passed, ${failures.length} failed`,
+  `\nlanguage service (${WASM ? "wasm-gc" : "js"}): ${passed} passed, ${failures.length} failed`,
 );
 if (failures.length > 0) {
   process.exit(1);

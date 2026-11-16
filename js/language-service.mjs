@@ -19,7 +19,7 @@
 // `src/mtsc/service.mbt`), so those methods would be a shape with
 // nothing behind them.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,6 +76,9 @@ const bindings = await loadBindings();
  * @typedef {object} CompilerOptions
  * @property {boolean} [jsx] Parse JSX in files whose extension does not
  *   already imply it. `.tsx` / `.jsx` always allow it.
+ * @property {boolean} [skipLibCheck] Report nothing inside declaration
+ *   files that are not roots. A dependency's `.d.ts` under
+ *   `node_modules` is never reported on either way.
  */
 
 /**
@@ -87,6 +90,14 @@ const bindings = await loadBindings();
  *   works unchanged.
  * @property {() => string} [getCurrentDirectory]
  * @property {() => CompilerOptions} [getCompilationSettings]
+ * @property {(directoryName: string) => boolean} [directoryExists]
+ *   Asked before a package directory's manifest is read. Absent means
+ *   "yes", and the file probes decide, as in TypeScript.
+ * @property {(path: string) => string} [realpath] Symlinks resolved, so
+ *   one pnpm package reached through several links loads once.
+ * @property {(moduleNames: string[], containingFile: string) => ({ resolvedFileName: string } | undefined | null)[]} [resolveModuleNames]
+ *   The host's own resolution, asked first. `undefined` for a name means
+ *   "use the built-in resolution"; `null` means "do not follow it".
  */
 
 /**
@@ -135,11 +146,14 @@ export function createLanguageService(host) {
     /** Roots plus everything they reach. @returns {string[]} */
     getProgramFileNames: () => bindings.getProgramFileNames(host),
     /**
-     * Resolve one specifier as the loader would.
+     * Resolve one specifier as the loader would: the host's
+     * `resolveModuleNames` first, then relative paths, `node_modules`
+     * (`exports` with the `types` condition, `types`, `typesVersions`,
+     * `@types`), `node:` builtins, tsconfig `paths` and package `imports`,
+     * every file read through the host.
      *
-     * `isExternal` separates "no such file" from "not this resolver's
-     * job": a bare specifier like `react` needs package resolution,
-     * which this service does not do.
+     * `isExternal` separates "no such file" from "not followed": a bare
+     * specifier nothing resolves, or one the host answered `null` for.
      */
     resolveModuleName: (containingFile, moduleName) =>
       bindings.resolveModuleName(host, containingFile, moduleName),
@@ -147,85 +161,11 @@ export function createLanguageService(host) {
   };
 }
 
-/**
- * A host over an object of `{ [fileName]: sourceText }`.
- *
- * Every file is a root unless `rootNames` says otherwise, which is the
- * common meaning of "check all of this" — a root set that drifts from
- * the file set is a quiet way to check nothing.
- *
- * @param {Record<string, string>} files
- * @param {{ rootNames?: string[], currentDirectory?: string, compilerOptions?: CompilerOptions }} [options]
- * @returns {LanguageServiceHost}
- */
-export function createMemoryHost(files, options = {}) {
-  const roots = options.rootNames ?? Object.keys(files);
-  const cwd = options.currentDirectory ?? ".";
-  const compilerOptions = options.compilerOptions ?? {};
-  return {
-    getScriptFileNames: () => roots,
-    getCurrentDirectory: () => cwd,
-    getCompilationSettings: () => compilerOptions,
-    readFile: (fileName) =>
-      Object.prototype.hasOwnProperty.call(files, fileName)
-        ? files[fileName]
-        : undefined,
-  };
-}
-
-/**
- * A host that reads the real filesystem.
- *
- * Ten lines, and that is the argument for the abstraction: the checker
- * has no filesystem in it, so this is all it takes to give it one.
- *
- * @param {string[]} rootNames
- * @param {{ currentDirectory?: string, compilerOptions?: CompilerOptions }} [options]
- * @returns {LanguageServiceHost}
- */
-export function createNodeHost(rootNames, options = {}) {
-  const cwd = options.currentDirectory ?? process.cwd();
-  const compilerOptions = options.compilerOptions ?? {};
-  return {
-    getScriptFileNames: () => rootNames,
-    getCurrentDirectory: () => cwd,
-    getCompilationSettings: () => compilerOptions,
-    readFile: (fileName) => {
-      try {
-        // A directory is readable but is not a source file, and
-        // resolution probes paths that may be either.
-        if (!statSync(fileName).isFile()) return undefined;
-        return readFileSync(fileName, "utf8");
-      } catch {
-        // ENOENT is the ordinary answer while probing candidates, not a
-        // fault; anything else (EACCES, EISDIR) is equally "no source
-        // here" from the checker's point of view.
-        return undefined;
-      }
-    },
-  };
-}
-
-/**
- * One diagnostic as a line, in `tsc`'s `file: message` shape.
- *
- * The breadcrumb is appended in parentheses because there is no line and
- * column to print: the checker reports where in a declaration the
- * problem is, not where in the text.
- *
- * @param {Diagnostic} diagnostic
- */
-export function formatDiagnostic(diagnostic) {
-  const where = diagnostic.context ? ` (${diagnostic.context})` : "";
-  return `${diagnostic.file}: ${diagnostic.category}: ${diagnostic.messageText}${where}`;
-}
-
-/**
- * @param {Diagnostic[]} diagnostics
- */
-export function formatDiagnostics(diagnostics) {
-  return diagnostics.map(formatDiagnostic).join("\n");
-}
+// The hosts and the formatting live in their own modules so the wasm
+// facade (`language-service-wasm.mjs`) can share them without importing
+// `node:fs`, and are re-exported here so this module's API is unchanged.
+export { createMemoryHost, formatDiagnostic, formatDiagnostics } from "./hosts.mjs";
+export { createNodeHost } from "./node-host.mjs";
 
 /**
  * The original pre-resolved-graph ABI, unchanged.

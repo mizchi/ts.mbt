@@ -31,6 +31,7 @@ pub fn[H : MtscHost] resolve_module_name(H, String, String) -> MtscResolvedModul
 // Types and methods
 pub(all) struct MtscCompilerOptions {
   jsx : Bool
+  skipLibCheck : Bool
 }
 
 pub(all) struct MtscDiagnostic {
@@ -45,6 +46,12 @@ pub(all) struct MtscGraphIssue {
   modulePath : String
   path : String
   message : String
+}
+
+pub(all) enum MtscHostResolution {
+  UseDefault
+  ResolvedTo(String)
+  External
 }
 
 pub(all) struct MtscMemoryHost {
@@ -90,4 +97,7 @@ pub trait MtscHost {
   fn script_file_names(Self) -> Array[String]
   fn current_directory(Self) -> String
   fn compilation_settings(Self) -> MtscCompilerOptions
+  fn directory_exists(Self, String) -> Bool
+  fn realpath(Self, String) -> String
+  fn resolve_module_name(Self, String, String) -> MtscHostResolution
 }

@@ -71,7 +71,7 @@ test "an extensionless specifier resolves to the .ts file" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -93,7 +93,7 @@ test "a .js specifier resolves to the .ts source beside it" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -116,7 +116,7 @@ test "a .d.ts wins over the .ts beside it" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -135,7 +135,7 @@ test "a directory specifier resolves to its index file" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -157,7 +157,7 @@ test "a sibling file wins over a same-named directory index" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -176,7 +176,7 @@ test "a parent-relative specifier resolves across directories" {
     },
     roots: ["src/entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(
@@ -218,7 +218,7 @@ test "a root the host cannot read is reported" {
     files: { "entry.ts": "export const score: number = 1;" },
     roots: ["entry.ts", "absent.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(
     wbtest_any_contains(get_program_diagnostics(host), "cannot read file"),
@@ -301,7 +301,7 @@ test "the program includes imported files that were never roots" {
     },
     roots: ["entry.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   let files = get_program_file_names(host)
   assert_eq(files.length(), 3)
@@ -366,13 +366,13 @@ test "the jsx option covers a .ts file the extension does not" {
     files: { "view.ts": source },
     roots: ["view.ts"],
     cwd: ".",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   let with_jsx : MtscMemoryHost = {
     files: { "view.ts": source },
     roots: ["view.ts"],
     cwd: ".",
-    options: { jsx: true, },
+    options: { jsx: true, skipLibCheck: false, },
   }
   // Both directions, so this measures the option rather than the parser.
   assert_true(get_program_diagnostics(without).length() > 0)
@@ -385,7 +385,7 @@ test "a relative root is resolved against the host directory" {
     files: { "/work/src/entry.ts": "export const label: string = 1;" },
     roots: ["src/entry.ts"],
     cwd: "/work",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   let diagnostics = get_program_diagnostics(host)
   assert_true(wbtest_any_contains(diagnostics, "/work/src/entry.ts"))
@@ -403,7 +403,7 @@ test "a file queried by its root spelling matches its resolved path" {
     files: { "/work/entry.ts": "export const label: string = 1;" },
     roots: ["entry.ts"],
     cwd: "/work",
-    options: { jsx: false, },
+    options: { jsx: false, skipLibCheck: false, },
   }
   assert_true(get_semantic_diagnostics(host, "entry.ts").length() > 0)
   assert_true(get_semantic_diagnostics(host, "/work/entry.ts").length() > 0)
@@ -452,4 +452,190 @@ test "MtscMemoryHost::over roots every file it is given" {
   assert_eq(MtscHost::compilation_settings(host).jsx, false)
   assert_eq(MtscHost::read_file(host, "a.ts"), Some("export const a = 1;"))
   assert_eq(MtscHost::read_file(host, "nope.ts"), None)
+}
+
+///|
+/// A package import is resolved through the host: `exports` with the
+/// `types` condition names the declarations, which the program reads and
+/// checks the importer against, while the code beside them is never read.
+test "language service: a package import is checked against its declarations" {
+  let files : Map[String, String] = {
+    "/p/node_modules/lib/package.json": "{\"name\":\"lib\",\"exports\":{\".\":{\"types\":\"./dist/i.d.ts\",\"default\":\"./dist/i.js\"}}}",
+    "/p/node_modules/lib/dist/i.d.ts": "export declare function score(): number;",
+    "/p/entry.ts": "import { score } from \"lib\";\nexport const s: string = score();",
+  }
+  let host : MtscMemoryHost = {
+    files,
+    roots: ["/p/entry.ts"],
+    cwd: ".",
+    options: { jsx: false, skipLibCheck: false, },
+  }
+  let messages = get_program_diagnostics(host).map(fn(d) { d.messageText })
+  assert_true(
+    messages
+    .iter()
+    .any(fn(m) { m.contains("expected `string` but got `number`") }),
+  )
+  assert_eq(
+    resolve_module_name(host, "/p/entry.ts", "lib").resolvedFileName,
+    "/p/node_modules/lib/dist/i.d.ts",
+  )
+  files["/p/entry.ts"] = "import { score } from \"lib\";\nexport const n: number = score();"
+  assert_eq(get_program_diagnostics(host).length(), 0)
+}
+
+///|
+/// A host that answers some imports itself and defers the rest.
+priv struct MappingHost {
+  inner : MtscMemoryHost
+  answers : Map[String, MtscHostResolution]
+}
+
+///|
+impl MtscHost for MappingHost with fn read_file(self, path) {
+  MtscHost::read_file(self.inner, path)
+}
+
+///|
+impl MtscHost for MappingHost with fn script_file_names(self) {
+  MtscHost::script_file_names(self.inner)
+}
+
+///|
+impl MtscHost for MappingHost with fn current_directory(self) {
+  MtscHost::current_directory(self.inner)
+}
+
+///|
+impl MtscHost for MappingHost with fn compilation_settings(self) {
+  MtscHost::compilation_settings(self.inner)
+}
+
+///|
+impl MtscHost for MappingHost with fn directory_exists(self, path) {
+  MtscHost::directory_exists(self.inner, path)
+}
+
+///|
+impl MtscHost for MappingHost with fn realpath(self, path) {
+  MtscHost::realpath(self.inner, path)
+}
+
+///|
+impl MtscHost for MappingHost with fn resolve_module_name(self, specifier, _) {
+  self.answers.get(specifier).unwrap_or(UseDefault)
+}
+
+///|
+/// The host's resolution answers first: a mapped module is read and
+/// checked, a skipped one is neither loaded nor reported, and everything
+/// else falls through to the built-in resolution.
+test "language service: the host's own resolution answers first" {
+  let host : MappingHost = {
+    inner: {
+      files: {
+        "/v/cfg.d.ts": "export declare const port: number;",
+        "/p/entry.ts": "import { port } from \"virtual:cfg\";\nimport { x } from \"cdn:thing\";\nimport { score } from \"./score\";\nexport const p: string = port;",
+        "/p/score.ts": "export const score: number = 1;",
+      },
+      roots: ["/p/entry.ts"],
+      cwd: ".",
+      options: { jsx: false, skipLibCheck: false, },
+    },
+    answers: { "virtual:cfg": ResolvedTo("/v/cfg.d.ts"), "cdn:thing": External },
+  }
+  let diagnostics = get_program_diagnostics(host)
+  assert_true(
+    diagnostics
+    .iter()
+    .any(fn(d) { d.messageText.contains("expected `string` but got `number`") }),
+  )
+  assert_false(diagnostics.iter().any(fn(d) { d.source == "import" }))
+  let files = get_program_file_names(host)
+  files.sort()
+  assert_eq(files, ["/p/entry.ts", "/p/score.ts", "/v/cfg.d.ts"])
+  let skipped = resolve_module_name(host, "/p/entry.ts", "cdn:thing")
+  assert_eq(skipped.resolvedFileName, "")
+  assert_true(skipped.isExternal)
+}
+
+///|
+/// A RELATIVE specifier the host skips has no edge, exactly like a missing
+/// one, so `graph_import_globals` used to report it as an unresolvable
+/// local module. Skipping is not a failure. A relative import nothing
+/// resolves is still reported beside it.
+test "language service: a host-skipped relative import is not a missing module" {
+  let host : MappingHost = {
+    inner: {
+      files: {
+        "/p/entry.ts": "import { rt } from \"./runtime\";\nimport { gone } from \"./absent\";\nexport const n: number = 1;",
+      },
+      roots: ["/p/entry.ts"],
+      cwd: ".",
+      options: { jsx: false, skipLibCheck: false, },
+    },
+    answers: { "./runtime": External },
+  }
+  let messages = get_program_diagnostics(host).map(fn(d) { d.messageText })
+  assert_eq(messages, ["cannot resolve local module `./absent`"])
+}
+
+///|
+/// `.` is the directory every relative key lives under. With `cwd: "."`
+/// and keys like `main.ts`, `import "."` resolves its directory to `.`,
+/// and a `./` prefix test found no file there, so the barrel was missing.
+test "language service: the memory host finds a barrel at the relative root" {
+  let host = MtscMemoryHost::over({
+    "main.ts": "import { a } from \".\";\nimport { b } from \"./\";\nexport const s: string = a;\nexport const t: number = b;",
+    "index.ts": "export const a: number = 1;\nexport const b: number = 2;",
+  })
+  let diagnostics = get_program_diagnostics(host)
+  assert_eq(diagnostics.map(fn(d) { d.source }), ["semantic"])
+  assert_true(
+    diagnostics[0].messageText.contains("expected `string` but got `number`"),
+  )
+}
+
+///|
+/// A dependency's declarations are context, not a subject, whether the
+/// host spells the path absolutely or relative to `cwd: "."`. The relative
+/// spelling has no `/` before `node_modules/`, so a `contains` test alone
+/// checked the dependency and reported its own errors. A dependency named
+/// as a ROOT is still checked.
+test "language service: a relative node_modules declaration is context only" {
+  let dependency = "export declare function score(): number;\ndeclare var dup: number;\ndeclare var dup: string;"
+  let entry = "import { score } from \"lib\";\nexport const n: number = score();"
+  let relative : MtscMemoryHost = {
+    files: {
+      "node_modules/lib/package.json": "{\"name\":\"lib\",\"types\":\"./index.d.ts\"}",
+      "node_modules/lib/index.d.ts": dependency,
+      "main.ts": entry,
+    },
+    roots: ["main.ts"],
+    cwd: ".",
+    options: { jsx: false, skipLibCheck: false, },
+  }
+  assert_eq(
+    resolve_module_name(relative, "main.ts", "lib").resolvedFileName,
+    "node_modules/lib/index.d.ts",
+  )
+  assert_eq(wbtest_messages(get_program_diagnostics(relative)), [])
+  let absolute : MtscMemoryHost = {
+    files: {
+      "/p/node_modules/lib/package.json": "{\"name\":\"lib\",\"types\":\"./index.d.ts\"}",
+      "/p/node_modules/lib/index.d.ts": dependency,
+      "/p/main.ts": entry,
+    },
+    roots: ["/p/main.ts"],
+    cwd: ".",
+    options: { jsx: false, skipLibCheck: false, },
+  }
+  assert_eq(wbtest_messages(get_program_diagnostics(absolute)), [])
+  relative.roots.push("node_modules/lib/index.d.ts")
+  assert_true(
+    wbtest_any_contains(
+      get_program_diagnostics(relative),
+      "node_modules/lib/index.d.ts: ",
+    ),
+  )
 }

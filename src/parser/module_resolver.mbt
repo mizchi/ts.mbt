@@ -721,6 +721,10 @@ fn append_resolution_candidates(
 let path_kinds : Map[String, @fs.FileKind] = Map([])
 
 ///|
+// `mizchi/x/fs` is synchronous on wasm-gc, so this `async` is useless
+// THERE and needed on native and js; the attribute scopes the exemption to
+// this one declaration rather than to the package.
+#warnings("-unused_async")
 async fn path_kind(path : String) -> @fs.FileKind {
   match path_kinds.get(path) {
     Some(k) => return k
@@ -999,6 +1003,10 @@ fn resolve_types_versions_targets(
 let read_file_texts : Map[String, String?] = Map([])
 
 ///|
+// `mizchi/x/fs` is synchronous on wasm-gc, so this `async` is useless
+// THERE and needed on native and js; the attribute scopes the exemption to
+// this one declaration rather than to the package.
+#warnings("-unused_async")
 async fn read_text_file(path : String) -> String? {
   match read_file_texts.get(path) {
     Some(v) => return v
@@ -1015,6 +1023,10 @@ async fn read_text_file(path : String) -> String? {
 let real_paths : Map[String, String] = Map([])
 
 ///|
+// `mizchi/x/fs` is synchronous on wasm-gc, so this `async` is useless
+// THERE and needed on native and js; the attribute scopes the exemption to
+// this one declaration rather than to the package.
+#warnings("-unused_async")
 async fn cached_realpath(path : String) -> String {
   match real_paths.get(path) {
     Some(v) => return v
@@ -1270,7 +1282,7 @@ async fn resolve_package_target(
   } else {
     normalize_path(join_path(package_root, "./" + target))
   }
-  resolve_path_like(candidate, mode)
+  resolve_path_like(candidate, mode, manifest=false)
 }
 
 ///|
@@ -1342,7 +1354,15 @@ async fn resolve_package_entry(
         }
       }
     }
-    None => ()
+    // No manifest: the directory is a package all the same, and its root
+    // is `index`, as tsc reads it. `@types/scope__name` is commonly
+    // published without one, and so is a hoisted workspace helper; both
+    // used to resolve to nothing, which made a scoped `@types` package
+    // invisible and let the untyped `.js` beside it win.
+    None =>
+      if subpath == "" {
+        return resolve_as_file(join_path(package_root, "index"), mode)
+      }
   }
   if subpath != "" {
     return resolve_path_like(
@@ -1354,17 +1374,26 @@ async fn resolve_package_entry(
 }
 
 ///|
+/// `manifest=false` skips the directory's own `package.json`, for a
+/// directory reached through a package's `types` / `main` / `exports` /
+/// `imports` target. TypeScript does the same ("Don't do package.json
+/// lookup recursively, because Node.js' package lookup doesn't"), and it
+/// is what keeps `{ "types": "./" }` from re-entering the manifest that
+/// named it forever.
 async fn resolve_as_directory(
   candidate : String,
   mode : ModuleResolutionMode,
+  manifest~ : Bool = true,
 ) -> String? {
   let normalized = normalize_path(candidate)
   if !dir_exists(normalized) {
     return None
   }
-  match resolve_package_entry(normalized, "", mode) {
-    Some(path) => return Some(path)
-    None => ()
+  if manifest {
+    match resolve_package_entry(normalized, "", mode) {
+      Some(path) => return Some(path)
+      None => ()
+    }
   }
   resolve_as_file(normalize_path(join_path(normalized, "index")), mode)
 }
@@ -1373,12 +1402,33 @@ async fn resolve_as_directory(
 async fn resolve_path_like(
   candidate : String,
   mode : ModuleResolutionMode,
+  manifest~ : Bool = true,
 ) -> String? {
   let normalized = normalize_path(candidate)
   match resolve_as_file(normalized, mode) {
     Some(path) => Some(path)
-    None => resolve_as_directory(normalized, mode)
+    None => resolve_as_directory(normalized, mode, manifest~)
   }
+}
+
+///|
+/// A specifier that names a path relative to its importer: `./x`, `../x`,
+/// and the exact `.` and `..`, which a package's own modules use to reach
+/// their barrel (`from "."`).
+fn is_relative_module_specifier(specifier : String) -> Bool {
+  specifier == "." ||
+  specifier == ".." ||
+  specifier.has_prefix("./") ||
+  specifier.has_prefix("../")
+}
+
+///|
+/// A relative specifier that can only name a DIRECTORY: `.`, `..`, or one
+/// ending in `/`. TypeScript keeps the trailing separator for these
+/// (`normalizePathForCJSResolution`), so `import "."` from `pkg/main.ts`
+/// reads `pkg/index.ts` and never a sibling `pkg.ts`.
+fn is_relative_directory_specifier(specifier : String) -> Bool {
+  specifier == "." || specifier == ".." || specifier.has_suffix("/")
 }
 
 ///|
@@ -1493,11 +1543,14 @@ async fn resolve_module_specifier(
   mode : ModuleResolutionMode,
 ) -> String? {
   let normalized_base = normalize_path(base_path)
-  if specifier.has_prefix("./") || specifier.has_prefix("../") {
-    return resolve_path_like(
-      normalize_path(join_path(dirname(normalized_base), specifier)),
-      mode,
+  if is_relative_module_specifier(specifier) {
+    let candidate = normalize_path(
+      join_path(dirname(normalized_base), specifier),
     )
+    if is_relative_directory_specifier(specifier) {
+      return resolve_as_directory(candidate, mode)
+    }
+    return resolve_path_like(candidate, mode)
   }
   if specifier.has_prefix("/") {
     return resolve_path_like(normalize_path(specifier), mode)
