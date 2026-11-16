@@ -181,7 +181,7 @@ async fn mtsc_typecheck_entries(
           "path" =>
             Some(
               mtsc_resolve_existing_for_types(
-                mtsc_normalize(mtsc_join_path(mtsc_dirname(path), reference.1)),
+                mtsc_reference_path_target(path, reference.1),
               ),
             )
           _ => mtsc_resolve_type_directive(opts, path, reference.1)
@@ -297,17 +297,52 @@ fn mtsc_type_root_candidates(start : String) -> Array[String] {
 }
 
 ///|
+/// The file a `/// <reference path="…" />` in `referencing` names. A rooted
+/// path is used as written and anything else is relative to the
+/// referencing file's directory, which is `resolveTripleslashReference`.
+/// `mtsc_join_path` does not let an absolute child replace the directory,
+/// so `/w/types/env.d.ts` from `/w/src/main.ts` became
+/// `/w/src/w/types/env.d.ts` and the declarations were never loaded.
+fn mtsc_reference_path_target(referencing : String, target : String) -> String {
+  if target.has_prefix("/") {
+    mtsc_normalize(target)
+  } else {
+    mtsc_normalize(mtsc_join_path(mtsc_dirname(referencing), target))
+  }
+}
+
+///|
 /// Where the type directive `name` (`types: ["node"]`,
-/// `/// <reference types="node" />`) resolves from `containing_file`:
-/// `name/` in a type root, read as a package directory, and otherwise the
-/// `node_modules` walk the types resolver does for an import of `name`.
-/// That is TypeScript's primary and secondary lookup.
+/// `/// <reference types="node" />`) resolves from `containing_file`.
+/// That is TypeScript's primary and secondary lookup:
+///
+/// - **Primary.** `name` in each type root. A CONFIGURED root also takes
+///   the declaration file `name.d.ts` before the package directory
+///   `name/`, since "custom typeRoots resolve as file or directory just like
+///   we do modules"; a default `node_modules/@types` root takes the
+///   directory only.
+/// - **Secondary.** The `node_modules` walk the types resolver does for an
+///   import of `name`. It is skipped for a project's own `types` entries
+///   (`inferred`) when `typeRoots` is configured, which TypeScript 5.1
+///   made the rule: probed, `typeRoots: []` with `types: ["g"]` is TS2688
+///   even with `node_modules/@types/g` installed. A `/// <reference
+///   types>` in a source file still walks, which was probed too: it finds
+///   both `node_modules/@types/g` and a plain `node_modules/g` with
+///   `typeRoots` set.
 async fn mtsc_resolve_type_directive(
   opts : MtscOptions,
   containing_file : String,
   name : String,
+  inferred~ : Bool = false,
 ) -> String? {
+  let custom = opts.type_roots is Some(_)
   for root in mtsc_type_roots(opts) {
+    if custom {
+      let file = mtsc_normalize(mtsc_join_path(root, name + ".d.ts"))
+      if mtsc_file_exists(file) {
+        return Some(file)
+      }
+    }
     // A trailing `/` makes the relative specifier a DIRECTORY only.
     match
       @parser.resolve_type_module_specifier(
@@ -317,6 +352,9 @@ async fn mtsc_resolve_type_directive(
       Some(path) => return Some(path)
       None => ()
     }
+  }
+  if inferred && custom {
+    return None
   }
   @parser.resolve_type_module_specifier(containing_file, name)
 }
@@ -365,7 +403,7 @@ async fn mtsc_type_directive_roots(opts : MtscOptions) -> Array[String] {
     }
   }
   for name in names {
-    match mtsc_resolve_type_directive(opts, containing, name) {
+    match mtsc_resolve_type_directive(opts, containing, name, inferred=true) {
       Some(path) => out.push(path)
       None => ()
     }

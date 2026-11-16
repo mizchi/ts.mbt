@@ -564,3 +564,82 @@ test "mtsc type roots: the walk includes the filesystem root" {
   ])
   assert_eq(mtsc_type_root_candidates("/"), ["/node_modules/@types"])
 }
+
+///|
+/// A CONFIGURED type root resolves `name` as a file before a directory, as
+/// TypeScript resolves a module: `typings/g.d.ts` is what `types: ["g"]`
+/// names under `typeRoots: ["./typings"]` (probed against tsc). Only the
+/// directory `typings/g/` was tried, so `G` was undeclared.
+async test "mtsc check graph: a configured type root takes name.d.ts" {
+  let root = "/tmp/ts_mbt_types_graph_root_file"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"./typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/g.d.ts", "declare var G: number;\n"),
+    ("src/main.ts", "export const ok: number = G;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+}
+
+///|
+/// A rooted `/// <reference path>` is used as written. It was joined onto
+/// the referencing file's directory, which named `<root>/src/<root>/…`.
+async test "mtsc check graph: an absolute reference path" {
+  let root = "/tmp/ts_mbt_types_graph_abs_reference"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"types\":[]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("types/env.d.ts", "declare var E: number;\n"),
+    (
+      "src/main.ts",
+      "/// <reference path=\"" +
+      root +
+      "/types/env.d.ts\" />\nexport const ok: number = E;\n",
+    ),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+}
+
+///|
+/// With `typeRoots` configured, a project's own `types` entry is looked up
+/// in those roots and nowhere else (TypeScript 5.1): `node_modules/@types/g`
+/// is installed and `G` is still undeclared, which tsc reports as TS2688.
+/// A source file's `/// <reference types="g" />` keeps the `node_modules`
+/// walk, so the same package IS loaded from there — both cells probed.
+async test "mtsc check graph: typeRoots stops the walk for config types only" {
+  let root = "/tmp/ts_mbt_types_graph_roots_gate"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"./typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/.keep", ""),
+    ("node_modules/@types/g/index.d.ts", "declare var G: number;\n"),
+    ("src/main.ts", "export const ok: number = G;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_true(mtsc_compile_all(opts, entries) > 0)
+  @fs.write_file(
+    root + "/tsconfig.json",
+    "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"./typings\"],\"types\":[]},\"files\":[\"src/main.ts\"]}",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/src/main.ts",
+    "/// <reference types=\"g\" />\nexport const ok: number = G;\n",
+    create=0o644,
+  )
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+}
