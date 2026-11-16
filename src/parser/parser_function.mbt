@@ -1586,6 +1586,27 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   } else {
     Any
   }
+  // `export default function (): T;` is an ANONYMOUS default declared
+  // without a body, which only a declaration file may write and which
+  // zod's ESM locale `.d.ts` files all do. Everything else that reaches
+  // this parser is an expression and needs its `{`; in a declaration
+  // file the missing one made the whole file fail to parse, which took
+  // every module importing it down to the single-file check.
+  if self.in_declaration_file && !self.check(LBrace) {
+    self.last_fn_expr_return_annotated = fn_expr_annotated
+    return {
+      name,
+      type_params,
+      const_type_params,
+      type_param_bounds,
+      params,
+      return_type,
+      body: { stmts: [], stmt_positions: [], },
+      is_generator,
+      is_async,
+      name_is_member_key: false,
+    }
+  }
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator
   let prev_async = self.in_async

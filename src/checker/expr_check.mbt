@@ -13158,6 +13158,28 @@ fn lib_object_type_into_primitive(
     Applied(n, _) | Named(n) => n
     _ => return None
   }
+  // An instance of a GENERIC interface the program declares (`Box<number>`,
+  // effect's `Effect<A>`, zod's `ZodType<T>`) is the same kind of value:
+  // every interface instance is an object, and no object type is ever
+  // assignable to a primitive, so the type arguments decide nothing. A
+  // NON-generic one is `Named` and was already judged structurally; the
+  // `Applied` spelling fell through every relation below. Two exclusions:
+  // a THENABLE (it declares or inherits `then`), because `await q` of a
+  // custom thenable is inferred as the thenable itself here where tsc
+  // unwraps it — drizzle's query builders are exactly that; and a lib type
+  // name, which an interface of that name AUGMENTS rather than replaces.
+  if src is Applied(_, _) &&
+    resolver.interfaces.contains(name) &&
+    !resolver.type_aliases.contains(name) &&
+    !resolver.enums.contains(name) &&
+    !is_lib_global_type(name) &&
+    resolver.lookup_field(src, "then") is None {
+    return if primitive_only_type(resolver.unwrap(expected)) {
+      Some(src)
+    } else {
+      None
+    }
+  }
   let lib_object = match name {
     "Promise"
     | "Map"
@@ -13179,21 +13201,23 @@ fn lib_object_type_into_primitive(
     resolver.enums.contains(name) {
     return None
   }
-  fn primitive_only(t : @ast.TsType) -> Bool {
-    match t {
-      String_ | Number | Boolean | BigInt | Symbol => true
-      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) =>
-        true
-      // Not `void`: a callback typed `() => void` may return anything.
-      Undefined | Null => true
-      Union(ms) => ms.length() > 0 && ms.iter().all(primitive_only)
-      _ => false
-    }
-  }
-  if primitive_only(resolver.unwrap(expected)) {
+  if primitive_only_type(resolver.unwrap(expected)) {
     Some(src)
   } else {
     None
+  }
+}
+
+///|
+/// A type every value of which is a primitive (or `null` / `undefined`).
+fn primitive_only_type(t : @ast.TsType) -> Bool {
+  match t {
+    String_ | Number | Boolean | BigInt | Symbol => true
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    // Not `void`: a callback typed `() => void` may return anything.
+    Undefined | Null => true
+    Union(ms) => ms.length() > 0 && ms.iter().all(primitive_only_type)
+    _ => false
   }
 }
 
@@ -26081,6 +26105,8 @@ fn narrow_by_predicate_target(
   pair_neg : Array[(String, @ast.TsType)],
   loose_target~ : Bool = false,
 ) -> Unit {
+  let cur = predicate_narrowing_source(resolver, cur)
+  let target = predicate_canonical_target(resolver, target)
   // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
   // single Named that isn't assignable to `target` but the source
   // type genuinely supports the predicate, like
@@ -26127,6 +26153,61 @@ fn narrow_by_predicate_target(
     (Never, Never) => pair_neg.push((arg_name, else_ty))
     (Never, _) if loose_target => ()
     _ => pair_neg.push((arg_name, else_ty))
+  }
+}
+
+///|
+/// The type a type predicate narrows, with an ALIAS to a union expanded
+/// into that union. `narrow_keep` / `narrow_remove` split a union one
+/// level and cannot resolve a name, so `r: Result<number, string>` with
+/// `type Result<A, E> = Success<A> | Failure<E>` reached them as ONE
+/// opaque member: `isFailure(r)` removed nothing from it, and the else
+/// branch's `r.success` was reported on a union where only one member has
+/// it — the Option / Result / Either shape every functional library uses.
+/// Only a union is taken, so a non-alias type keeps its shape (the rule
+/// the `"key" in v` and `typeof` arms follow).
+fn predicate_narrowing_source(
+  resolver : Resolver,
+  cur : @ast.TsType,
+) -> @ast.TsType {
+  match cur {
+    Named(_) | Applied(_, _) =>
+      match resolver.unwrap(cur) {
+        Union(_) as u => u
+        _ => cur
+      }
+    _ => cur
+  }
+}
+
+///|
+/// A predicate TARGET with its qualified names resolved to the names they
+/// stand for. A guard reached through a namespace import names its target
+/// in the importer's terms (`R.Failure<any>`), while the source a guard
+/// narrows expands to the declaring module's (`Failure<string>`), and the
+/// resolver-free relation the narrowing asks cannot see that the two are
+/// one declaration.
+fn predicate_canonical_target(
+  resolver : Resolver,
+  target : @ast.TsType,
+) -> @ast.TsType {
+  if resolver.qualified_names.length() == 0 {
+    return target
+  }
+  match target {
+    Named(n) =>
+      match resolver.qualified_names.get(n) {
+        Some(b) => Named(b)
+        None => target
+      }
+    Applied(n, args) =>
+      match resolver.qualified_names.get(n) {
+        Some(b) => Applied(b, args)
+        None => target
+      }
+    Union(parts) =>
+      Union(parts.map(fn(p) { predicate_canonical_target(resolver, p) }))
+    _ => target
   }
 }
 
@@ -26254,9 +26335,26 @@ fn apply_method_type_predicate_narrowing(
   pair_pos : Array[(String, @ast.TsType)],
   pair_neg : Array[(String, @ast.TsType)],
 ) -> Unit {
+  // A predicate export of a namespace binding is published as
+  // `@ns:NS.member`, with its target's own types qualified as `NS.X` so
+  // they resolve where the guard is called. The binding's value type holds
+  // the same member typed in its DECLARING module's terms, which is the
+  // right reading for a call's result and the wrong one for a narrowing
+  // target, so the published form answers first.
+  let ns_predicate = match receiver {
+    Var(ns) if env.lookup(ns) is None =>
+      resolver.globals.get("@ns:" + ns + "." + method_name)
+    _ => None
+  }
   let recv_ty = infer_expr(env, resolver, receiver)
-  let ret = match resolver.lookup_method_sig(recv_ty, method_name) {
+  let ret = match
+    (if ns_predicate is Some(_) {
+      None
+    } else {
+      resolver.lookup_method_sig(recv_ty, method_name)
+    }) {
     Some((_, ret)) => ret
+    None if ns_predicate is Some(_) => @ast.TsType::Any
     None =>
       // Arrow-function class field predicate: `isElite = (): this is T =>
       // {...}` is stored as a `Func`-typed property, not a method, so
@@ -26281,12 +26379,11 @@ fn apply_method_type_predicate_narrowing(
     // at all; the embedding publishes the target's predicate exports as
     // `@ns:NS.member`.
     _ => {
-      let field_ty = match resolver.lookup_field(recv_ty, method_name) {
-        Some(t) if !(t is Any) => Some(t)
-        _ =>
-          match receiver {
-            Var(ns) if env.lookup(ns) is None =>
-              resolver.globals.get("@ns:" + ns + "." + method_name)
+      let field_ty = match ns_predicate {
+        Some(t) => Some(t)
+        None =>
+          match resolver.lookup_field(recv_ty, method_name) {
+            Some(t) if !(t is Any) => Some(t)
             _ => None
           }
       }
@@ -26309,13 +26406,17 @@ fn apply_method_type_predicate_narrowing(
       }
     }
   }
+  let target = predicate_canonical_target(resolver, target)
   // `this is T` predicate (`isLeader(): this is LeadGuard`): the guard
   // narrows the *receiver* itself, not a positional argument. Narrow the
   // receiver's binding (`if (a.isLeader()) { a.lead() }`).
   if param_name == "this" {
     match narrowing_key_for_expr(receiver) {
       Some(key) => {
-        let cur = narrowing_current_type(env, resolver, key)
+        let cur = predicate_narrowing_source(
+          resolver,
+          narrowing_current_type(env, resolver, key),
+        )
         let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
         let then_resolved = match then_ty {
           Never => target
@@ -26336,7 +26437,10 @@ fn apply_method_type_predicate_narrowing(
   }
   match args[0] {
     Var(arg_name) => {
-      let cur = env_lookup_full(env, resolver, arg_name)
+      let cur = predicate_narrowing_source(
+        resolver,
+        env_lookup_full(env, resolver, arg_name),
+      )
       let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
       let then_resolved = match then_ty {
         Never => target
@@ -47817,9 +47921,27 @@ fn check_module_function_bodies_layered(
   // `@value-origin:NAME` says which module an imported value's type is
   // written in (see `graph_import_globals`).
   let value_origins : Map[String, String] = Map([])
+  // `@value-origin-member:NAME\u{0}FIELD` is the same fact for one member
+  // of a namespace object, whose members can each be declared in a
+  // different module (`export *` gathers them).
+  let member_origins : Map[String, Map[String, String]] = Map([])
   for global in extra_globals {
     if global.0.has_prefix("@value-origin:") && global.1 is Named(origin) {
       value_origins[global.0["@value-origin:".length():].to_owned()] = origin
+    } else if global.0.has_prefix("@value-origin-member:") &&
+      global.1 is Named(origin) {
+      let rest = global.0["@value-origin-member:".length():].to_owned()
+      match rest.find("\u{0}") {
+        Some(i) => {
+          let name = rest[:i].to_owned()
+          let field = rest[i + 1:].to_owned()
+          match member_origins.get(name) {
+            Some(m) => m[field] = origin
+            None => member_origins[name] = Map([(field, origin)])
+          }
+        }
+        None => ()
+      }
     }
   }
   for global in extra_globals {
@@ -47830,6 +47952,26 @@ fn check_module_function_bodies_layered(
           None => global.1
         }
       None => global.1
+    }
+    let ty = match (member_origins.get(global.0), ty) {
+      (Some(origins), Object(fields)) =>
+        @ast.TsType::Object(
+          fields.map(fn(f) {
+            let renames = match f.0 {
+              Literal(k) =>
+                match origins.get(k) {
+                  Some(origin) => renames_by_key.get(origin)
+                  None => None
+                }
+              _ => None
+            }
+            match renames {
+              Some(r) => (f.0, rename_type_refs(f.1, r))
+              None => f
+            }
+          }),
+        )
+      _ => ty
     }
     resolver.globals[global.0] = ty
     resolver.declared_value_names[global.0] = true

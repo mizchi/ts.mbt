@@ -6,11 +6,6 @@
 # tsc and is silent in mtsc). A declared miss that mtsc starts reporting fails
 # the harness as STALE: delete its line in the same change.
 
-bad/src/drizzle.ts    `sql` is a generic function merged with a namespace (`declare function sql<T>(…)` + `declare namespace sql`); a function+namespace merge binds as `any`
-bad/src/effect.ts     `Effect` is `export * as Effect from "./Effect.ts"`; a namespace import or re-export binds no value type, so `Effect.succeed` is `any`
-bad/src/express.ts    `express` is `export = e` over a function merged with a namespace (`declare function e()` + `declare namespace e`); the `export =` default import binds as `any`
 bad/src/hono.ts       `app.fetch` is typed `(request: Request, …) => Response | Promise<Response>`; a member whose type names the DOM lib's `Request` / `Response` abstains
-bad/src/preact.ts     `h` is an overload set merged with a namespace (`export function h(…)` ×5 + `export namespace h`); a function+namespace merge binds as `any`
-bad/src/react.ts      `import * as React` of an `export = React` module; a namespace import binds no value type, so `React.version` is `any`
-bad/src/react_hook.ts `useState<S>(initialState: S | (() => S))`; inference against a union parameter with a callable member leaves `S` unsolved, so `useState("")` is `any`
-bad/src/zod.ts        `z` is `import * as z from "./v4/classic/external.js"` re-exported as `export { z }`; a namespace binding has no value type, so `z.string()` is `any`
+bad/src/react_hook.ts `useState<S>(initialState: S | (() => S))` is an overload set inside `declare namespace React`, reached through `export =`; an overloaded member of an `export =` namespace stays `any`, and inference against a union parameter with a callable member leaves `S` unsolved
+bad/src/zod.ts        `s.parse(x)` returns `core.output<this>`, a conditional type over `this` read through the interface hierarchy's generic `_zod` internals; that composition is not decided, so the call is `unknown`
