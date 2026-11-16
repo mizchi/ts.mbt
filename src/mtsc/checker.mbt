@@ -1651,6 +1651,10 @@ fn collect_parsed_graph_issues(
     ambient_modules.push(module_.module_)
     for entry in module_value_bindings(module_.module_) {
       ambient_globals.push(entry)
+      // Its type is written in the ambient file's scope, which has no key:
+      // the checker reads it through what that file's declarations moved
+      // to (`<unkeyed>`, see `check_module_function_bodies_layered`).
+      ambient_globals.push(("@value-origin:" + entry.0, Named("<unkeyed>")))
     }
   }
   for module_ in parsed_modules {

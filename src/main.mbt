@@ -892,6 +892,54 @@ async fn build_moonbit_js_runtime_from_mbti(
       return false
     }
   }
+  with_glue_build_lock(context.module_root, () => {
+    build_moonbit_js_glue_package(context, output_dir, bundle)
+  })
+}
+
+///|
+/// One lock per MoonBit module root that a JS glue build has used in this
+/// process.
+let glue_build_locks : Map[String, @async.Mutex] = Map([])
+
+///|
+/// Run `f` while no other glue build against `module_root` is in flight in
+/// this process.
+///
+/// A glue build puts a `__tsmbt_glue__*` package inside the consumer's
+/// module and deletes it afterwards, and `moon build` discovers EVERY
+/// package of that module. So two builds against one module race. One
+/// build's discovery lists the other's glue directory, the other deletes
+/// it, and `moon` fails with "Failed when discovering packages … No such
+/// file or directory". The async test driver runs up to ten tests at
+/// once, and two scaffold tests over `examples/moonbit-to-typescript`
+/// were enough to hit this in CI.
+///
+/// Builds against different modules still run concurrently. Two separate
+/// PROCESSES building against one module can still race, because nothing
+/// in this process can see the other one.
+async fn[T] with_glue_build_lock(module_root : String, f : async () -> T) -> T {
+  let lock = match glue_build_locks.get(module_root) {
+    Some(lock) => lock
+    None => {
+      let lock = @async.Mutex()
+      glue_build_locks[module_root] = lock
+      lock
+    }
+  }
+  lock.acquire()
+  defer lock.release()
+  f()
+}
+
+///|
+/// The part of `build_moonbit_js_runtime_from_mbti` that writes, builds and
+/// removes the glue package; it runs under `with_glue_build_lock`.
+async fn build_moonbit_js_glue_package(
+  context : MoonbitJsBuildContext,
+  output_dir : String,
+  bundle : @bridge.MbtiTypescriptScaffoldBundle,
+) -> Bool {
   remove_moonbit_js_glue_dir(context.glue_dir_path)
   let _ = ensure_dir_tree(context.glue_dir_path) catch {
     e => {
