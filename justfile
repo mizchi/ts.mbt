@@ -54,6 +54,28 @@ verify-language-service *ARGS:
     just build-js
     node scripts/verify_language_service.mjs {{ ARGS }}
 
+# The library on the `wasm-gc` backend: the language service with its host
+# imported (`src/mtsc/service_wasm.mbt`), for a runtime that loads a
+# `.wasm` — see `js/language-service-wasm.mjs`. Only the library builds for
+# `wasm-gc`; the CLI's filesystem layer does not, which is why this names
+# the package rather than building the module.
+build-wasm:
+    moon build --target wasm-gc --release src/mtsc
+
+# Does the language service work on wasm-gc?
+#
+# The same cases as `verify-language-service`, through the wasm facade:
+# another backend, and a boundary where strings cross as JS strings and
+# every answer as JSON. The two string-ABI cases are JS-build only.
+verify-language-service-wasm *ARGS:
+    just build-wasm
+    node scripts/verify_language_service.mjs --wasm {{ ARGS }}
+
+# `check-js`'s counterpart for `wasm-gc`, over the library and what it
+# depends on: `service_wasm.mbt` is compiled on no other backend.
+check-wasm:
+    moon check --deny-warn --target wasm-gc src/mtsc
+
 # Does the shipped `js/language-service.d.ts` still describe the API?
 #
 # A declaration file nobody compiles is one that drifts, so a consumer
@@ -82,7 +104,10 @@ verify-language-service-types:
         "lib": ["es2022"],
         "skipLibCheck": false
       },
-      "files": ["../../fixtures/language-service/types_consumer.ts"]
+      "files": [
+        "../../fixtures/language-service/types_consumer.ts",
+        "../../fixtures/language-service/types_consumer_wasm.ts"
+      ]
     }
     EOF
 

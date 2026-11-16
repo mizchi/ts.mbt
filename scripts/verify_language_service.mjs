@@ -30,6 +30,7 @@
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -38,15 +39,28 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
-import {
-  checkModuleGraph,
-  createLanguageService,
-  createMemoryHost,
-  createNodeHost,
-  formatDiagnostics,
-} from "../js/language-service.mjs";
+import { createMemoryHost, formatDiagnostics } from "../js/hosts.mjs";
+import { createNodeHost } from "../js/node-host.mjs";
 
 const VERBOSE = process.argv.includes("--verbose");
+
+// `--wasm` runs every case against the wasm-gc build through
+// `js/language-service-wasm.mjs` instead of the JS build: the same host
+// contract, a different backend and a different boundary. The string ABI
+// (`checkModuleGraph`) is JS-build only, so those cases are skipped there.
+const WASM = process.argv.includes("--wasm");
+const WASM_PATH = new URL("../_build/wasm-gc/release/build/mtsc/mtsc.wasm", import.meta.url);
+
+const { createLanguageService, checkModuleGraph } = WASM
+  ? {
+      createLanguageService: (
+        await (await import("../js/language-service-wasm.mjs")).loadLanguageService(
+          readFileSync(WASM_PATH),
+        )
+      ).createLanguageService,
+      checkModuleGraph: null,
+    }
+  : await import("../js/language-service.mjs");
 
 let passed = 0;
 const failures = [];
@@ -589,7 +603,7 @@ try {
     );
   });
 
-  check("checkModuleGraph still answers as it did", () => {
+  (WASM ? () => {} : check)("checkModuleGraph still answers as it did", () => {
     // It has consumers outside this repo, and it now shares
     // `collect_parsed_graph_issues` with the host path — so this is the
     // regression check on that extraction.
@@ -621,7 +635,7 @@ try {
     );
   });
 
-  check("checkModuleGraph returns an empty string for a clean graph", () => {
+  (WASM ? () => {} : check)("checkModuleGraph returns an empty string for a clean graph", () => {
     const text = checkModuleGraph({
       modules: [
         { path: "/src/ok.ts", source: "export const ok: number = 1;", allowJsx: false },
@@ -635,7 +649,7 @@ try {
 }
 
 console.log(
-  `\nlanguage service: ${passed} passed, ${failures.length} failed`,
+  `\nlanguage service (${WASM ? "wasm-gc" : "js"}): ${passed} passed, ${failures.length} failed`,
 );
 if (failures.length > 0) {
   process.exit(1);

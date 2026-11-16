@@ -19,7 +19,7 @@
 // `src/mtsc/service.mbt`), so those methods would be a shape with
 // nothing behind them.
 
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -161,107 +161,11 @@ export function createLanguageService(host) {
   };
 }
 
-/**
- * A host over an object of `{ [fileName]: sourceText }`.
- *
- * Every file is a root unless `rootNames` says otherwise, which is the
- * common meaning of "check all of this" — a root set that drifts from
- * the file set is a quiet way to check nothing.
- *
- * @param {Record<string, string>} files
- * @param {{ rootNames?: string[], currentDirectory?: string, compilerOptions?: CompilerOptions }} [options]
- * @returns {LanguageServiceHost}
- */
-export function createMemoryHost(files, options = {}) {
-  const roots = options.rootNames ?? Object.keys(files);
-  const cwd = options.currentDirectory ?? ".";
-  const compilerOptions = options.compilerOptions ?? {};
-  return {
-    getScriptFileNames: () => roots,
-    getCurrentDirectory: () => cwd,
-    getCompilationSettings: () => compilerOptions,
-    readFile: (fileName) =>
-      Object.prototype.hasOwnProperty.call(files, fileName)
-        ? files[fileName]
-        : undefined,
-    // A directory exists when some file lives under it; answering `true`
-    // everywhere would make every package probe read a manifest that is
-    // not there.
-    directoryExists: (directoryName) => {
-      const prefix = directoryName.endsWith("/") ? directoryName : directoryName + "/";
-      return Object.keys(files).some((f) => f.startsWith(prefix));
-    },
-  };
-}
-
-/**
- * A host that reads the real filesystem.
- *
- * A few lines, and that is the argument for the abstraction: the checker
- * has no filesystem in it, so this is all it takes to give it one —
- * `node_modules` resolution included, since that only ever asks the host.
- *
- * @param {string[]} rootNames
- * @param {{ currentDirectory?: string, compilerOptions?: CompilerOptions }} [options]
- * @returns {LanguageServiceHost}
- */
-export function createNodeHost(rootNames, options = {}) {
-  const cwd = options.currentDirectory ?? process.cwd();
-  const compilerOptions = options.compilerOptions ?? {};
-  return {
-    getScriptFileNames: () => rootNames,
-    getCurrentDirectory: () => cwd,
-    getCompilationSettings: () => compilerOptions,
-    readFile: (fileName) => {
-      try {
-        // A directory is readable but is not a source file, and
-        // resolution probes paths that may be either.
-        if (!statSync(fileName).isFile()) return undefined;
-        return readFileSync(fileName, "utf8");
-      } catch {
-        // ENOENT is the ordinary answer while probing candidates, not a
-        // fault; anything else (EACCES, EISDIR) is equally "no source
-        // here" from the checker's point of view.
-        return undefined;
-      }
-    },
-    directoryExists: (directoryName) => {
-      try {
-        return statSync(directoryName).isDirectory();
-      } catch {
-        return false;
-      }
-    },
-    realpath: (path) => {
-      try {
-        return realpathSync(path);
-      } catch {
-        return path;
-      }
-    },
-  };
-}
-
-/**
- * One diagnostic as a line, in `tsc`'s `file: message` shape.
- *
- * The breadcrumb is appended in parentheses because there is no line and
- * column to print: the checker reports where in a declaration the
- * problem is, not where in the text.
- *
- * @param {Diagnostic} diagnostic
- */
-export function formatDiagnostic(diagnostic) {
-  const where = diagnostic.context ? ` (${diagnostic.context})` : "";
-  return `${diagnostic.file}: ${diagnostic.category}: ${diagnostic.messageText}${where}`;
-}
-
-/**
- * @param {Diagnostic[]} diagnostics
- */
-export function formatDiagnostics(diagnostics) {
-  return diagnostics.map(formatDiagnostic).join("\n");
-}
+// The hosts and the formatting live in their own modules so the wasm
+// facade (`language-service-wasm.mjs`) can share them without importing
+// `node:fs`, and are re-exported here so this module's API is unchanged.
+export { createMemoryHost, formatDiagnostic, formatDiagnostics } from "./hosts.mjs";
+export { createNodeHost } from "./node-host.mjs";
 
 /**
  * The original pre-resolved-graph ABI, unchanged.

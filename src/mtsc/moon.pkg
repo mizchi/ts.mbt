@@ -11,7 +11,13 @@ options(
   // through `MtscMemoryHost` — which means `moon check --deny-warn` does
   // NOT see these two files, and `moon check --deny-warn --target js` is
   // the run that does.
-  targets: { "host_js.mbt": [ "js" ], "service_js.mbt": [ "js" ] },
+  // `service_wasm.mbt` is the wasm-gc counterpart: its host is a set of
+  // imports, so it only means something on that backend.
+  targets: {
+    "host_js.mbt": [ "js" ],
+    "service_js.mbt": [ "js" ],
+    "service_wasm.mbt": [ "wasm-gc" ],
+  },
   link: {
     "js": {
       // `checkModuleGraph` is the original ABI and stays exactly as it
@@ -33,6 +39,22 @@ options(
         "js_resolve_module_name:resolveModuleName",
       ],
       "format": "esm",
+    },
+    // The same surface for a runtime that loads a `.wasm`. Every answer
+    // is a JSON string and the host is the `mtsc_host` import namespace;
+    // `js/language-service-wasm.mjs` is the facade that hides both.
+    // `use-js-builtin-string` makes a MoonBit `String` a JS string at
+    // the boundary, which needs the engine's `js-string` builtins (Wasm
+    // GC plus `WebAssembly.compile(bytes, { builtins: ["js-string"] })`).
+    "wasm-gc": {
+      "exports": [
+        "wasm_get_program_diagnostics:getProgramDiagnostics",
+        "wasm_get_semantic_diagnostics:getSemanticDiagnostics",
+        "wasm_get_syntactic_diagnostics:getSyntacticDiagnostics",
+        "wasm_get_program_file_names:getProgramFileNames",
+        "wasm_resolve_module_name:resolveModuleName",
+      ],
+      "use-js-builtin-string": true,
     },
   },
 )

@@ -4814,6 +4814,72 @@ product surfaces now.
     - **A workspace package linked into `node_modules` was not watched.**
       The resolver returns the link's spelling, so the watch set decides
       by `canonical_file_path`.
+
+  Batch GH makes the type check runnable without a filesystem: in a
+  browser, a worker, or a wasm-gc embedding. Following TypeScript's
+  `LanguageServiceHost`, file access and module resolution are
+  INJECTED rather than performed.
+  - **Resolution had two shapes, and only one of them could be
+    injected.** `module_resolver.mbt` is `async` throughout because
+    `moonbitlang/async/fs` is. The library (`src/mtsc`) resolved relative
+    specifiers only, through its own copy of the candidate table, and
+    treated every bare specifier as external. So outside the CLI, an
+    `import { z } from "zod"` was `any` — batch GG's defect, one layer
+    out.
+  - **The fix is one algorithm with its IO behind a trait.**
+    `@parser.resolve_type_module_specifier_with` takes a
+    `ModuleResolutionHost` (`file_exists` / `directory_exists` /
+    `read_file` / `realpath`, TypeScript's interface of the same name).
+    Every pure step is the async resolver's own helper, and only the walk
+    is restated. The library's candidate table is gone.
+  - **Two walks can drift, so a differential test pins them.**
+    `resolver_host_wbtest.mbt` snapshots the resolver fixtures and a temp
+    tree, then requires both walks to give the same answer for every
+    specifier. The fixtures alone were not enough: a reordered `types` /
+    `main` lookup and a no-op `realpath` both passed them. The temp tree
+    is built so that every package resolves by exactly one rule, and both
+    mutations fail it.
+  - **That tree found a gap both walks shared.** A package directory with
+    no `package.json` never resolved to its `index.d.ts`. So a scoped
+    `@types/scope__name` published without a manifest was invisible, and
+    the untyped `.js` beside it won. This was case 14 of the 40-case
+    resolution probe. Both walks now read such a root as `index`, so the
+    CLI changed too.
+  - **`MtscHost` gains three methods**, each implemented by every host
+    because the trait has no defaults:
+    - `directory_exists`;
+    - `realpath`, which canonicalizes a bare specifier's answer, so one
+      pnpm package reached through two links loads once;
+    - `resolve_module_name`, TypeScript's `resolveModuleNames`, asked
+      first: `UseDefault`, `ResolvedTo(path)`, or `External`. On the JS
+      side, `undefined` defers to the built-in resolution, so a host that
+      maps only its own aliases need not reimplement `node_modules`;
+      `null` means "do not follow". A CDN, an import map or a `virtual:`
+      module is a few lines.
+  - **Dependency declarations are context only**, as in the CLI, and
+    `skipLibCheck` became a library option.
+  - **The wasm-gc build is a third backend for the library.**
+    `service_wasm.mbt` takes the host as IMPORTS (`mtsc_host.readFile`
+    and siblings), because a wasm module's imports are fixed at
+    instantiation. `js/language-service-wasm.mjs` binds them to a
+    `LanguageServiceHost` object per call, so one instance serves many
+    hosts. Strings cross as JS strings (`use-js-builtin-string`), and
+    every answer leaves as JSON.
+  - **Two boundary facts were probed, not assumed.**
+    - MoonBit imports every string constant from a `_` namespace, which
+      Node 22 does not supply. Passing the constants as plain values,
+      named by their own text, works everywhere.
+    - `wasm:js-string.fromCharCodeArray` cannot be polyfilled from JS,
+      which cannot read a Wasm GC array. So the engine must provide the
+      builtins, and Node 22.23 does, through
+      `WebAssembly.compile(bytes, { builtins: ["js-string"] })`.
+  - **`verify-language-service` runs its cases on both builds.** It has
+    27 cases on JS (22 before) and 25 on wasm-gc; the 2 string-ABI cases
+    are JS-only. `check-wasm` is the `wasm-gc` counterpart of `check-js`.
+    It covers the library only, because the CLI's filesystem layer does
+    not build for `wasm-gc`. Three of the async resolver's helpers carry
+    `#warnings("-unused_async")`: `mizchi/x/fs` is synchronous on wasm-gc
+    alone.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

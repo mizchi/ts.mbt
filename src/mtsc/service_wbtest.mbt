@@ -453,3 +453,108 @@ test "MtscMemoryHost::over roots every file it is given" {
   assert_eq(MtscHost::read_file(host, "a.ts"), Some("export const a = 1;"))
   assert_eq(MtscHost::read_file(host, "nope.ts"), None)
 }
+
+///|
+/// A package import is resolved through the host: `exports` with the
+/// `types` condition names the declarations, which the program reads and
+/// checks the importer against, while the code beside them is never read.
+test "language service: a package import is checked against its declarations" {
+  let files : Map[String, String] = {
+    "/p/node_modules/lib/package.json": "{\"name\":\"lib\",\"exports\":{\".\":{\"types\":\"./dist/i.d.ts\",\"default\":\"./dist/i.js\"}}}",
+    "/p/node_modules/lib/dist/i.d.ts": "export declare function score(): number;",
+    "/p/entry.ts": "import { score } from \"lib\";\nexport const s: string = score();",
+  }
+  let host : MtscMemoryHost = {
+    files,
+    roots: ["/p/entry.ts"],
+    cwd: ".",
+    options: { jsx: false, skipLibCheck: false, },
+  }
+  let messages = get_program_diagnostics(host).map(fn(d) { d.messageText })
+  assert_true(
+    messages
+    .iter()
+    .any(fn(m) { m.contains("expected `string` but got `number`") }),
+  )
+  assert_eq(
+    resolve_module_name(host, "/p/entry.ts", "lib").resolvedFileName,
+    "/p/node_modules/lib/dist/i.d.ts",
+  )
+  files["/p/entry.ts"] = "import { score } from \"lib\";\nexport const n: number = score();"
+  assert_eq(get_program_diagnostics(host).length(), 0)
+}
+
+///|
+/// A host that answers some imports itself and defers the rest.
+priv struct MappingHost {
+  inner : MtscMemoryHost
+  answers : Map[String, MtscHostResolution]
+}
+
+///|
+impl MtscHost for MappingHost with fn read_file(self, path) {
+  MtscHost::read_file(self.inner, path)
+}
+
+///|
+impl MtscHost for MappingHost with fn script_file_names(self) {
+  MtscHost::script_file_names(self.inner)
+}
+
+///|
+impl MtscHost for MappingHost with fn current_directory(self) {
+  MtscHost::current_directory(self.inner)
+}
+
+///|
+impl MtscHost for MappingHost with fn compilation_settings(self) {
+  MtscHost::compilation_settings(self.inner)
+}
+
+///|
+impl MtscHost for MappingHost with fn directory_exists(self, path) {
+  MtscHost::directory_exists(self.inner, path)
+}
+
+///|
+impl MtscHost for MappingHost with fn realpath(self, path) {
+  MtscHost::realpath(self.inner, path)
+}
+
+///|
+impl MtscHost for MappingHost with fn resolve_module_name(self, specifier, _) {
+  self.answers.get(specifier).unwrap_or(UseDefault)
+}
+
+///|
+/// The host's resolution answers first: a mapped module is read and
+/// checked, a skipped one is neither loaded nor reported, and everything
+/// else falls through to the built-in resolution.
+test "language service: the host's own resolution answers first" {
+  let host : MappingHost = {
+    inner: {
+      files: {
+        "/v/cfg.d.ts": "export declare const port: number;",
+        "/p/entry.ts": "import { port } from \"virtual:cfg\";\nimport { x } from \"cdn:thing\";\nimport { score } from \"./score\";\nexport const p: string = port;",
+        "/p/score.ts": "export const score: number = 1;",
+      },
+      roots: ["/p/entry.ts"],
+      cwd: ".",
+      options: { jsx: false, skipLibCheck: false, },
+    },
+    answers: { "virtual:cfg": ResolvedTo("/v/cfg.d.ts"), "cdn:thing": External },
+  }
+  let diagnostics = get_program_diagnostics(host)
+  assert_true(
+    diagnostics
+    .iter()
+    .any(fn(d) { d.messageText.contains("expected `string` but got `number`") }),
+  )
+  assert_false(diagnostics.iter().any(fn(d) { d.source == "import" }))
+  let files = get_program_file_names(host)
+  files.sort()
+  assert_eq(files, ["/p/entry.ts", "/p/score.ts", "/v/cfg.d.ts"])
+  let skipped = resolve_module_name(host, "/p/entry.ts", "cdn:thing")
+  assert_eq(skipped.resolvedFileName, "")
+  assert_true(skipped.isExternal)
+}

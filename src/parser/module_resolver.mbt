@@ -721,6 +721,10 @@ fn append_resolution_candidates(
 let path_kinds : Map[String, @fs.FileKind] = Map([])
 
 ///|
+// `mizchi/x/fs` is synchronous on wasm-gc, so this `async` is useless
+// THERE and needed on native and js; the attribute scopes the exemption to
+// this one declaration rather than to the package.
+#warnings("-unused_async")
 async fn path_kind(path : String) -> @fs.FileKind {
   match path_kinds.get(path) {
     Some(k) => return k
@@ -999,6 +1003,10 @@ fn resolve_types_versions_targets(
 let read_file_texts : Map[String, String?] = Map([])
 
 ///|
+// `mizchi/x/fs` is synchronous on wasm-gc, so this `async` is useless
+// THERE and needed on native and js; the attribute scopes the exemption to
+// this one declaration rather than to the package.
+#warnings("-unused_async")
 async fn read_text_file(path : String) -> String? {
   match read_file_texts.get(path) {
     Some(v) => return v
@@ -1015,6 +1023,10 @@ async fn read_text_file(path : String) -> String? {
 let real_paths : Map[String, String] = Map([])
 
 ///|
+// `mizchi/x/fs` is synchronous on wasm-gc, so this `async` is useless
+// THERE and needed on native and js; the attribute scopes the exemption to
+// this one declaration rather than to the package.
+#warnings("-unused_async")
 async fn cached_realpath(path : String) -> String {
   match real_paths.get(path) {
     Some(v) => return v
