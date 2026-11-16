@@ -883,6 +883,64 @@ pub fn rename_type_refs(
 }
 
 ///|
+/// A class with the type references in its members rewritten
+/// (`rename_type_refs`), its own type parameters and a method's shadowing
+/// a rename. The class keeps its own name and its heritage NAMES, because
+/// class lookups and `extends` walks go through bare names; only the types
+/// its members are written with move.
+fn rename_class_refs(
+  c : @ast.TsClassDecl,
+  renames : Map[String, String],
+) -> @ast.TsClassDecl {
+  let r : Map[String, String] = Map([])
+  for k, v in renames {
+    if !c.type_params.contains(k) {
+      r[k] = v
+    }
+  }
+  if r.length() == 0 {
+    return c
+  }
+  let go = fn(t : @ast.TsType) { rename_type_refs(t, r) }
+  let methods = c.methods.map(fn(m) {
+    let own : Map[String, String] = if m.type_params
+      .iter()
+      .any(fn(b) { r.contains(b) }) {
+      let own : Map[String, String] = Map([])
+      for k, v in r {
+        if !m.type_params.contains(k) {
+          own[k] = v
+        }
+      }
+      own
+    } else {
+      r
+    }
+    {
+      ..m,
+      type_param_bounds: m.type_param_bounds.map(fn(b) {
+        (b.0, rename_type_refs(b.1, own))
+      }),
+      params: m.params.map(fn(p) { (p.0, rename_type_refs(p.1, own)) }),
+      return_type: rename_type_refs(m.return_type, own),
+    }
+  })
+  {
+    ..c,
+    type_param_bounds: c.type_param_bounds.map(fn(b) { (b.0, go(b.1)) }),
+    constructor_params: c.constructor_params.map(fn(ps) {
+      ps.map(fn(p) { (p.0, go(p.1)) })
+    }),
+    properties: c.properties.map(fn(p) { { ..p, type_: go(p.type_), } }),
+    methods,
+    index_signatures: c.index_signatures.map(fn(sig) { (go(sig.0), go(sig.1)) }),
+    static_index_signatures: c.static_index_signatures.map(fn(sig) {
+      (go(sig.0), go(sig.1))
+    }),
+  }
+}
+
+///|
 /// An interface with its references rewritten (`rename_type_refs`), its
 /// own type parameters shadowing a rename.
 fn rename_interface_refs(
@@ -990,13 +1048,13 @@ fn qualify_namespace_local_refs(
 ///|
 /// `m` with each top-level interface, type alias and enum whose name is in
 /// `reserved` moved to `name@<unkeyed>`, and every reference to it in `m`'s
-/// interfaces and aliases moved with it — the rewrite a keyed module gets
-/// from `renames`, for a module that has no key (see the caller in
-/// `check_module_function_bodies_layered`).
+/// interfaces, aliases and class members moved with it, plus the renames
+/// applied — the rewrite a keyed module gets from `renames`, for a module
+/// that has no key (see the caller in `check_module_function_bodies_layered`).
 fn move_unkeyed_reserved_type_names(
   m : @ast.TsModule,
   reserved : Map[String, Unit],
-) -> @ast.TsModule {
+) -> (@ast.TsModule, Map[String, String]) {
   let renames : Map[String, String] = Map([])
   let note = fn(n : String) {
     if reserved.contains(n) {
@@ -1013,7 +1071,7 @@ fn move_unkeyed_reserved_type_names(
     note(e.name)
   }
   if renames.length() == 0 {
-    return m
+    return (m, renames)
   }
   let moved = fn(n : String) { renames.get(n).unwrap_or(n) }
   let aliases = m.type_aliases.map(fn(a) {
@@ -1025,14 +1083,16 @@ fn move_unkeyed_reserved_type_names(
     }
     { ..a, name: moved(a.name), type_: rename_type_refs(a.type_, own), }
   })
-  {
+  let out = {
     ..m,
     interfaces: m.interfaces.map(fn(i) {
       { ..rename_interface_refs(i, renames), name: moved(i.name), }
     }),
     type_aliases: aliases,
     enums: m.enums.map(fn(e) { { ..e, name: moved(e.name), } }),
+    classes: m.classes.map(fn(c) { rename_class_refs(c, renames) }),
   }
+  (out, renames)
 }
 
 ///|
@@ -1175,14 +1235,22 @@ fn Resolver::ingest_type_module(
           }
           aliases[name] = { ..a, type_: rename_type_refs(a.type_, own), }
         }
-        renamed_type_module_cache[rkey] = (ifaces, aliases)
-        Some((ifaces, aliases))
+        // A class member written with a renamed name (`item!: Item` beside
+        // this module's keyed `interface Item`) reads the key too. Left
+        // alone it read the shared bare entry, which can be another
+        // module's `Item` or the checked module's renamed import.
+        let classes : Map[String, @ast.TsClassDecl] = Map([])
+        for name, c in types.classes {
+          classes[name] = rename_class_refs(c, renames)
+        }
+        renamed_type_module_cache[rkey] = (ifaces, aliases, classes)
+        Some((ifaces, aliases, classes))
       }
     }
   }
   for name, interface_ in types.interfaces {
     let interface_ = match renamed {
-      Some((ifaces, _)) => ifaces.get(name).unwrap_or(interface_)
+      Some((ifaces, _, _)) => ifaces.get(name).unwrap_or(interface_)
       None => interface_
     }
     match renames.get(name) {
@@ -1205,6 +1273,10 @@ fn Resolver::ingest_type_module(
     }
   }
   for name, class_ in types.classes {
+    let class_ = match renamed {
+      Some((_, _, classes)) => classes.get(name).unwrap_or(class_)
+      None => class_
+    }
     match renames.get(name) {
       Some(key) => {
         Resolver::put_class(r, key, class_)
@@ -1222,7 +1294,7 @@ fn Resolver::ingest_type_module(
   }
   for name, alias_ in types.type_aliases {
     let alias_ = match renamed {
-      Some((_, aliases)) => aliases.get(name).unwrap_or(alias_)
+      Some((_, aliases, _)) => aliases.get(name).unwrap_or(alias_)
       None => alias_
     }
     match renames.get(name) {
@@ -1269,7 +1341,11 @@ let type_module_cache : Map[String, Resolver] = Map([])
 /// set; cleared with `type_module_cache`.
 let renamed_type_module_cache : Map[
   String,
-  (Map[String, @ast.TsInterface], Map[String, @ast.TsTypeAlias]),
+  (
+    Map[String, @ast.TsInterface],
+    Map[String, @ast.TsTypeAlias],
+    Map[String, @ast.TsClassDecl],
+  ),
 ] = Map([])
 
 ///|
@@ -47395,6 +47471,11 @@ fn check_module_function_bodies_layered(
   // Each reachable module's renames, by key: an imported VALUE's type is
   // written in its declaring module's scope and is read through them below.
   let renames_by_key : Map[String, Map[String, String]] = Map([])
+  // What the modules with no key moved, read as one more entry of
+  // `renames_by_key` under `<unkeyed>`: an ambient `.d.ts` declares VALUES
+  // too (`declare const ambientItem: Item`), and their types are supplied
+  // by the caller, marked `@value-origin:NAME` -> `<unkeyed>`.
+  let unkeyed_renames : Map[String, String] = Map([])
   for i, type_module in type_modules {
     let cache_key = if i < type_module_keys.length() {
       type_module_keys[i]
@@ -47520,7 +47601,13 @@ fn check_module_function_bodies_layered(
     // declarations of such a name move to `Item@<unkeyed>` instead, and
     // its references move with them.
     let type_module = if cache_key == "" && checked_renamed_locals.length() > 0 {
-      move_unkeyed_reserved_type_names(type_module, checked_renamed_locals)
+      let (moved, moved_names) = move_unkeyed_reserved_type_names(
+        type_module, checked_renamed_locals,
+      )
+      for k, v in moved_names {
+        unkeyed_renames[k] = v
+      }
+      moved
     } else {
       type_module
     }
@@ -47532,6 +47619,9 @@ fn check_module_function_bodies_layered(
       skip=own_type_names,
       renames~,
     )
+  }
+  if unkeyed_renames.length() > 0 {
+    renames_by_key["<unkeyed>"] = unkeyed_renames
   }
   if outer_modules.length() == 0 {
     Resolver::ingest_module(resolver, module_, "")

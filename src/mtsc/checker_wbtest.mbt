@@ -1348,3 +1348,65 @@ test "mtsc graph checker checks an imported generic function's rest arguments" {
     "",
   )
 }
+
+///|
+/// An ambient VALUE typed with a name the checked module renames into:
+/// `declare const ambientItem: Item` in an `env.d.ts`. The value's type is
+/// computed outside the checker, so the unkeyed move of the ambient
+/// `interface Item` did not reach it, and the legal `ambientItem.n` read
+/// the checked module's `Other`.
+test "mtsc graph checker keeps an ambient value's own type beside a renamed import" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nexport const m: Item = { z: 1 };\nexport const k: number = ambientItem.n;\nexport const bad: string = ambientItem.n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/env.d.ts", "interface Item { n: number }\ndeclare const ambientItem: Item;",
+      ),
+    ],
+    edges: [edge("/src/root.ts", "./x", "/src/x.ts")],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
+    "top-level > binding `bad` init :: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// A dependency CLASS member typed with that dependency's own `Item`.
+/// Keying moves the dependency's `interface Item` to `Item@/src/b.ts` and
+/// rewrites its interfaces and aliases, but class members were copied
+/// unchanged, so `Box.item: Item` read the checked module's `Other`.
+test "mtsc graph checker keeps a dependency class member's own type beside a renamed import" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { box } from \"./b\";\nexport const m: Item = { z: 1 };\nexport const k: number = box.item.n;\nexport const bad: string = box.item.n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/b.ts", "export interface Item { n: number }\nexport class Box { item!: Item; keep(): void {} }\nexport declare const box: Box;",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./x", "/src/x.ts"),
+      edge("/src/root.ts", "./b", "/src/b.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
+    "top-level > binding `bad` init :: expected `string` but got `number`",
+  ])
+}

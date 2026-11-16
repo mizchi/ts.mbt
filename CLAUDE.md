@@ -4672,6 +4672,18 @@ product surfaces now.
       declarations of such a name now move to `Item@<unkeyed>`, and its
       references move with them, so `Holder.item` still reads its own
       `Item`.
+    - Two more positions kept the bare name after keying. A
+      dependency's CLASS member (`class Box { item!: Item }` beside its
+      keyed `interface Item`) was copied unchanged, because `renames`
+      rewrote interfaces and aliases only. And an ambient VALUE
+      (`declare const ambientItem: Item`) is typed by the caller, which
+      the unkeyed move never reached. Class members are now rewritten
+      too, with the class's own name and heritage left bare, because
+      class lookups and `extends` walks go through bare names. Ambient
+      values carry `@value-origin:NAME` -> `<unkeyed>`, which is read
+      through what the unkeyed modules moved. The class rewrite also
+      applies to every ordinary collision between two dependencies, so
+      it was measured on effect and zod.
   - **The CI `test` job failed on a race unrelated to the checker.** The
     generated async test driver runs up to ten tests at once. Two scaffold
     tests each put a `__tsmbt_glue__*` package inside
