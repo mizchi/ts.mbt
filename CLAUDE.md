@@ -5274,6 +5274,32 @@ product surfaces now.
         three false positives in every package, because an unannotated
         `allowZero = true` reads as `any` and accepts anything. So the
         first parameter now answers whenever it can be the subject.
+      - That rule still cannot decide `isText(first: unknown, value:
+        unknown): value is string`, where both parameters accept. So the
+        POSITION is recorded wherever a callable type is built from named
+        parameters: an interface or object-type method, a function type,
+        and a declaration's value in the graph checker. A subject at
+        position 1 or later is spelled `"\u{1}<position>\u{1}<name>"`, and
+        position 0 is left as written, so nearly every predicate is
+        unchanged. Everything that prints the name reads it through
+        `@ast.predicate_subject_name`, and the `.d.ts` emitter's output is
+        byte-identical. The type rule is now the fallback for a predicate
+        whose position was never recorded.
+    - **The second review round found three more.**
+      - The type rule tested the parameter as written, so an alias to
+        `unknown` (`type Input = unknown`) accepted nothing and a guard
+        over it narrowed nothing. It tests the unwrapped type now. When no
+        parameter is provably the subject, the first one is. `{}` against
+        `string`, and an alias `P` against `P & { q: string }`, are legal
+        predicates in tsc that the relation cannot prove, and narrowing
+        nothing reported their then-branch reads.
+      - A namespace's own lowered `var`, which is `any` and named after a
+        nested namespace, counted as a value. So a namespace holding only
+        a nested TYPE namespace shadowed a `const` of the same name.
+      - A declaration file passed its `import * as` aliases and not a
+        NAMED import of a namespace export (`import { Models }` of
+        `export * as Models`), so `Models.I` stayed unresolved for an
+        importer.
     - A union-typed member of an `export =` namespace (`mode: "dev" |
       "prod"`) read as absent. Only a union of signatures, which is an
       overload set, binds as `any`.
