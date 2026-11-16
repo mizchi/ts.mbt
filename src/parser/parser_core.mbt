@@ -148,15 +148,21 @@ pub struct Parser {
   // that consumes a JSX element forgives them for all of them.
   jsx_unterminated_strings : Array[Int32]
   // `is_destructuring_assignment_start`'s answer per start token, keyed by
-  // `pos * 4 + generator / async bits`. Every `{` / `[` in expression
-  // position asks it, and answering it parses the whole literal as a
-  // pattern first — so a literal nested N deep was parsed ~5^N times (a
-  // univer spec file's 29-deep fixture never finished). The speculation
-  // leaves no trace (position, recordings and `in_generator` are all
-  // restored), so a repeat at the same token in the same context can only
-  // get the same answer. Shared by `{ ..self }` copies, which read the same
-  // token array; a parser over OTHER tokens is built fresh and gets its own.
+  // `pos * 4 + generator / async bits`. The speculation it caches parses a
+  // whole literal as a pattern, and before the `=` gate in front of it
+  // every `{` / `[` in expression position paid that — ~5^N for a literal
+  // nested N deep (a univer spec file's 29-deep fixture never finished).
+  // The speculation leaves no trace (position, recordings and
+  // `in_generator` are all restored), so a repeat at the same token in the
+  // same context can only get the same answer. Shared by `{ ..self }`
+  // copies, which read the same token array; a parser over OTHER tokens is
+  // built fresh and gets its own.
   destructuring_start_memo : Map[Int32, Bool]
+  // For each token index, the index of the token closing the bracket it
+  // opens (`(`, `[`, `{`), or -1. Built on first use by
+  // `bracket_group_followed_by_eq`; shared by `{ ..self }` copies, which
+  // read the same token array, and fresh for a parser over other tokens.
+  bracket_close : Array[Int32]
   // Local binding names introduced by ES `import` statements (default,
   // namespace, and named/aliased specifiers). The import statements
   // themselves are consumed and discarded, but the *names* must stay
@@ -521,6 +527,7 @@ pub fn Parser::new_with_strict_and_jsx(
     option_header: "",
     jsx_unterminated_strings: [],
     destructuring_start_memo: Map([]),
+    bracket_close: [],
     imported_binding_names: [],
     import_module_specs: [],
     multi_file_source: false,
@@ -895,6 +902,7 @@ pub fn Parser::from_source_with_jsx(
     grammar_misuses,
     option_header,
     destructuring_start_memo: Map([]),
+    bracket_close: [],
     jsx_unterminated_strings: if allow_jsx {
       lexer.unterminated_string_starts
     } else {

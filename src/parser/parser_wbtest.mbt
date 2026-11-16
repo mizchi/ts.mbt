@@ -8474,6 +8474,21 @@ test "parser: a multi-line JSX attribute string is not unterminated" {
     ),
     [],
   )
+  // A `{ … }` payload is JavaScript: a string there may not span lines,
+  // even though the element around it forgives its own attribute strings.
+  assert_eq(
+    misuses("export const view = (true && <div>{\"a\nb\"\n}</div>);\n"),
+    ["unterminated string literal"],
+  )
+  assert_eq(misuses("export const v = <div title={\"a\nb\"} />;\n"), [
+    "unterminated string literal",
+  ])
+  // A multi-line attribute string on an element NESTED in a payload is
+  // still legal: the payload's own parser forgives it.
+  assert_eq(
+    misuses("export const v = <div>{ok && <span title=\"a\nb\" />}</div>;\n"),
+    [],
+  )
 }
 
 ///|
@@ -8498,6 +8513,11 @@ test "parser: destructuring detection through nested literals" {
     AssignPattern(_, Var("o")) => ()
     _ => fail("expected AssignPattern")
   }
+  // A parenthesized target is still a target.
+  match parse_expr_from("[(a.b)] = xs") {
+    AssignPattern(_, Var("xs")) => ()
+    _ => fail("expected AssignPattern with a parenthesized target")
+  }
   let mut lit = "0"
   for i in 0..<60 {
     lit = "{ k: \{i}, v: [" + lit + "] }"
@@ -8506,4 +8526,43 @@ test "parser: destructuring detection through nested literals" {
     ObjectLit(_) => ()
     _ => fail("expected an object literal")
   }
+  // Parenthesized levels are parsed by fresh sub-parsers, so a cache on
+  // one parser cannot help across them; this stayed 2^depth (depth 10 did
+  // not finish in a minute) until the `=` gate stopped literals from
+  // speculating at all.
+  let mut paren = "0"
+  for i in 0..<40 {
+    paren = "{ k: \{i}, v: [(" + paren + ")] }"
+  }
+  match parse_expr_from(paren) {
+    ObjectLit(_) => ()
+    _ => fail("expected an object literal")
+  }
+}
+
+///|
+/// A namespace body is re-parsed by a fresh parser, which owns the body's
+/// unterminated strings; the outer parser must not report its own copies.
+test "parser: a multi-line JSX attribute inside a namespace is not TS1002" {
+  let unterminated = fn(m : @ast.TsModule) -> Int32 {
+    let mut n = m.grammar_misuses
+      .filter(fn(g) { g == "unterminated string literal" })
+      .length()
+    for ns in m.namespaces {
+      n = n +
+        ns.module_.grammar_misuses
+        .filter(fn(g) { g == "unterminated string literal" })
+        .length()
+    }
+    n
+  }
+  let ok = Parser::from_source_with_jsx(
+    "namespace N {\n  export const el = <div title=\"a\nb\" />;\n}\n", true,
+  ).parse_module()
+  assert_eq(unterminated(ok), 0)
+  // A real one inside the body is still reported, by the body's parser.
+  let bad = Parser::from_source_with_jsx(
+    "namespace N {\n  export const s = \"a\nb\";\n}\n", true,
+  ).parse_module()
+  assert_true(unterminated(bad) > 0)
 }

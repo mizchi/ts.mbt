@@ -105,6 +105,15 @@ async fn mtsc_compile_all(opts : MtscOptions, entries : Array[String]) -> Int32 
 }
 
 ///|
+/// The sources the GRAPH check takes part in: TypeScript, not JavaScript a
+/// dependency ships (`tsc` does not check that without `allowJs`). Narrower
+/// than `mtsc_is_program_source`, which also admits `.cts` — the graph
+/// checker does not handle that yet.
+fn mtsc_graph_checks_source(path : String) -> Bool {
+  path.has_suffix(".ts") || path.has_suffix(".tsx") || path.has_suffix(".mts")
+}
+
+///|
 /// Type-check `entries` as ONE program: every graph they reach, loaded
 /// into one module map and checked once.
 ///
@@ -115,6 +124,15 @@ async fn mtsc_typecheck_entries(
   opts : MtscOptions,
   entries : Array[String],
 ) -> Bool? {
+  // An entry the graph check would filter out (a `.cts`, a `.js`) must not
+  // vanish because its siblings are checkable: the caller then skips its
+  // own per-entry check, so the file would be checked by nothing. Any
+  // such entry sends the whole run back to the per-entry path.
+  for entry in entries {
+    if !mtsc_graph_checks_source(entry) {
+      return None
+    }
+  }
   let files : Map[String, String] = Map([])
   let edges : Array[@mtsc_core.MtscModuleEdge] = []
   // Shared across entries: `aliases` remembers a bare specifier's
@@ -137,9 +155,7 @@ async fn mtsc_typecheck_entries(
   }
   let ts_files : Map[String, String] = Map([])
   for path, source in files {
-    if path.has_suffix(".ts") ||
-      path.has_suffix(".tsx") ||
-      path.has_suffix(".mts") {
+    if mtsc_graph_checks_source(path) {
       ts_files[path] = source
     }
   }

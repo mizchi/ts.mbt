@@ -893,6 +893,13 @@ fn Parser::parse_declaration_block_source(
     }
   }
   let body_end_pos = self.tokens[self.pos - 1].pos
+  // The body is re-parsed by a FRESH parser over this slice, which lexes it
+  // again and owns its unterminated strings: it forgives the ones a JSX
+  // element accounts for and reports the rest itself. This parser only
+  // skipped the tokens, so its copies of those positions would otherwise
+  // be reported at the end of the module as TS1002 — a multi-line JSX
+  // attribute inside a namespace in a `.tsx` file was an error.
+  self.forgive_jsx_string_artifacts(brace_start_pos + 1, body_end_pos)
   if body_end_pos <= brace_start_pos + 1 {
     ""
   } else {

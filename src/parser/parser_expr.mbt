@@ -877,6 +877,15 @@ fn Parser::parse_single_param_arrow(
 
 ///|
 fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
+  // The NECESSARY condition first, by token arithmetic: a destructuring
+  // assignment's pattern is a bracket group followed by `=`. A literal is
+  // not, so it never pays for the pattern parse below. Without this gate
+  // every nested `{` / `[` speculated, and a parenthesized level
+  // (`{ v: [( … )] }`) re-parsed its subtree in a fresh sub-parser on each
+  // of two visits per level — 2^depth even with the memo.
+  if !self.bracket_group_followed_by_eq() {
+    return false
+  }
   let memo_key = self.pos * 4 +
     (if self.in_generator { 1 } else { 0 }) +
     (if self.in_async { 2 } else { 0 })
@@ -901,6 +910,42 @@ fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   self.in_generator = saved_gen
   self.destructuring_start_memo[memo_key] = ok
   ok
+}
+
+///|
+/// Whether the bracket group opening at the current token is followed by
+/// `=` once it closes. Answered from `bracket_close`, a match table built
+/// over the whole token array in one pass the first time it is asked, so
+/// the gate costs O(1) per `{` / `[` rather than a scan per bracket.
+///
+/// A closer pops the innermost opener whatever its kind: on malformed
+/// input the table can pair the wrong brackets, and both wrong answers are
+/// safe — a false `true` only runs the speculation that used to always
+/// run, and a false `false` parses the literal as an expression, whose `=`
+/// arm in `parse_assignment` still builds an `AssignPattern`.
+fn Parser::bracket_group_followed_by_eq(self : Parser) -> Bool {
+  let n = self.tokens.length()
+  if self.bracket_close.length() != n {
+    self.bracket_close.clear()
+    let stack : Array[Int32] = []
+    for i in 0..<n {
+      self.bracket_close.push(-1)
+      match self.tokens[i].kind {
+        LParen | LBracket | LBrace => stack.push(i)
+        RParen | RBracket | RBrace =>
+          match stack.pop() {
+            Some(open) => self.bracket_close[open] = i
+            None => ()
+          }
+        _ => ()
+      }
+    }
+  }
+  if self.pos < 0 || self.pos >= n {
+    return false
+  }
+  let close = self.bracket_close[self.pos]
+  close >= 0 && close + 1 < n && self.tokens[close + 1].kind == Eq
 }
 
 ///|
@@ -1871,9 +1916,7 @@ fn Parser::parse_jsx_opening_tag(
             } else {
               trimmed.to_owned()
             }
-            let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-            self.inherit_source_flags(sub)
-            try sub.parse_expr() catch {
+            try self.parse_jsx_embed(payload_str) catch {
               _ => attrs.push((attr_name, None))
             } noraise {
               e => {
@@ -1944,9 +1987,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
           } else {
             trimmed.to_owned()
           }
-          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-          self.inherit_source_flags(sub)
-          try sub.parse_expr() catch {
+          try self.parse_jsx_embed(payload_str) catch {
             _ => ()
           } noraise {
             e => embeds.push(e)
@@ -2027,12 +2068,7 @@ fn Parser::scan_jsx_source_end_with_embeds(
                 } else {
                   trimmed.to_owned()
                 }
-                let sub = Parser::from_source_with_jsx(
-                  payload_str,
-                  self.allow_jsx,
-                )
-                self.inherit_source_flags(sub)
-                try sub.parse_expr() catch {
+                try self.parse_jsx_embed(payload_str) catch {
                   _ => ()
                 } noraise {
                   e => embeds.push(e)
@@ -2222,6 +2258,41 @@ fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
       self.advance_to_source_pos(end)
       @ast.TsExpr::JsxElement(tag, attrs, child_embeds)
     }
+  }
+}
+
+///|
+/// Parse one `{ … }` payload of a JSX element (an attribute value, a spread
+/// or a child expression) with a fresh sub-parser over its text.
+///
+/// The enclosing element forgives every unterminated string the outer
+/// lexer saw in its source range (see `forgive_jsx_string_artifacts`), and
+/// that range includes this payload — which is JavaScript, where a string
+/// may NOT span lines. The sub-parser lexes the payload again and forgives
+/// what ITS JSX elements account for, so anything it still holds is a real
+/// TS1002, reported here. `{"a\nb"}` inside an element was otherwise
+/// silent.
+fn Parser::parse_jsx_embed(
+  self : Parser,
+  payload : String,
+) -> @ast.TsExpr raise ParseError {
+  let sub = Parser::from_source_with_jsx(payload, self.allow_jsx)
+  self.inherit_source_flags(sub)
+  let parsed : Result[@ast.TsExpr, ParseError] = Ok(sub.parse_expr()) catch {
+    e => Err(e)
+  }
+  match parsed {
+    Ok(e) => {
+      // Only after a parse that SUCCEEDED: a failed one stopped before
+      // the nested elements that would have forgiven their strings, so
+      // what it holds is not evidence of anything — and reporting it would
+      // turn a payload this parser cannot read into a false TS1002.
+      if sub.jsx_unterminated_strings.length() > 0 {
+        self.grammar_misuses.push("unterminated string literal")
+      }
+      e
+    }
+    Err(e) => raise e
   }
 }
 
@@ -2423,9 +2494,7 @@ fn Parser::parse_jsx_opening_header(
         let trimmed = inner_src.trim()
         if trimmed.length() > 0 && trimmed.has_prefix("...") {
           let payload_str = trimmed[3:].to_owned().trim().to_owned()
-          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-          self.inherit_source_flags(sub)
-          try sub.parse_expr() catch {
+          try self.parse_jsx_embed(payload_str) catch {
             _ => ()
           } noraise {
             e => attrs.push(("", Some(e)))
@@ -2485,9 +2554,7 @@ fn Parser::parse_jsx_opening_header(
             } else {
               trimmed.to_owned()
             }
-            let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-            self.inherit_source_flags(sub)
-            try sub.parse_expr() catch {
+            try self.parse_jsx_embed(payload_str) catch {
               _ => attrs.push((attr_name, None))
             } noraise {
               e => attrs.push((attr_name, Some(e)))
@@ -2576,9 +2643,7 @@ fn Parser::parse_jsx_children(
         } else {
           trimmed.to_owned()
         }
-        let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-        self.inherit_source_flags(sub)
-        try sub.parse_expr() catch {
+        try self.parse_jsx_embed(payload_str) catch {
           _ => ()
         } noraise {
           e => children.push(e)

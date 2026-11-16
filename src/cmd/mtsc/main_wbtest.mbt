@@ -310,6 +310,16 @@ async test "mtsc: checker flags on the command line are honoured" {
   ])
   // `--target` still changes nothing about the output and says so.
   assert_eq(opts.ignored, ["--target"])
+  // A checker boolean the no-effect table does not list is still an
+  // option, not an unknown one.
+  let catch_vars = mtsc_parse_args(
+    ["mtsc", "--useUnknownInCatchVariables", "false", "a.ts"],
+    1,
+  ).unwrap()
+  assert_eq(catch_vars.checker_options, [
+    ("useUnknownInCatchVariables", "false"),
+  ])
+  assert_eq(catch_vars.inputs, ["a.ts"])
   let root = "/tmp/ts_mbt_mtsc_cli_beats_config"
   @fs.rmdir(root, recursive=true) catch {
     _ => ()
@@ -327,4 +337,56 @@ async test "mtsc: checker flags on the command line are honoured" {
   }
   assert_eq(got.get("strict"), Some("false"))
   assert_eq(got.get("noImplicitAny"), Some("true"))
+}
+
+///|
+/// An ABSOLUTE `extends` names the file itself; joining it onto the
+/// config's directory read some other path and lost every inherited
+/// option.
+async test "mtsc -p: an absolute extends path is read as written" {
+  let root = "/tmp/ts_mbt_mtsc_extends_abs"
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  @fs.mkdir(root + "/app", permission=0o755, recursive=true)
+  @fs.mkdir(root + "/shared", permission=0o755, recursive=true)
+  @fs.write_file(
+    root + "/shared/base.json",
+    "{ \"compilerOptions\": { \"experimentalDecorators\": true } }\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/app/tsconfig.json",
+    "{ \"extends\": \"" + root + "/shared/base.json\" }\n",
+    create=0o644,
+  )
+  let opts = mtsc_options_new()
+  mtsc_apply_project_compiler_options(opts, root + "/app/tsconfig.json")
+  assert_eq(opts.checker_options, [("experimentalDecorators", "true")])
+}
+
+///|
+/// Several `--noEmit` entries are one program only when the graph check
+/// takes every one of them. A `.cts` it filters out must not vanish
+/// because a sibling is checkable: the run falls back to entry by entry,
+/// and the `.cts` error is still reported.
+async test "mtsc: a --noEmit entry the graph check cannot take is still checked" {
+  let root = "/tmp/ts_mbt_mtsc_cts_entry"
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  @fs.mkdir(root, permission=0o755, recursive=true)
+  @fs.write_file(root + "/a.ts", "export const a = 1;\n", create=0o644)
+  @fs.write_file(
+    root + "/b.cts",
+    "export const n: number = \"bad\";\n",
+    create=0o644,
+  )
+  let opts = mtsc_options_new()
+  opts.no_emit = true
+  let failed = mtsc_compile_all(opts, [root + "/a.ts", root + "/b.cts"])
+  assert_true(failed > 0)
+  // Two clean `.ts` entries still go through the combined check, cleanly.
+  @fs.write_file(root + "/c.ts", "export const c = 2;\n", create=0o644)
+  assert_eq(mtsc_compile_all(opts, [root + "/a.ts", root + "/c.ts"]), 0)
 }

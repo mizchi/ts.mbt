@@ -211,6 +211,7 @@ pub struct Parser {
   option_header : String
   jsx_unterminated_strings : Array[Int32]
   destructuring_start_memo : Map[Int32, Bool]
+  bracket_close : Array[Int32]
   imported_binding_names : Array[String]
   import_module_specs : Array[String]
   multi_file_source : Bool

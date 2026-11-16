@@ -105,17 +105,6 @@ const AXIS_BUDGET = {
   // `RootNameBackstops`) — worth -22% at n=1000 and nothing measurable
   // on any real file.
   namespaces: 2.15,
-  // KNOWN QUADRATIC in nesting DEPTH, in the parser. The speculative
-  // "does this `{` / `[` start a destructuring assignment" parse is
-  // memoized per token (it was ~5^depth before), but a speculation still
-  // parses its literal's whole subtree in PATTERN mode, so every
-  // enclosing level re-reads the levels below it once: O(depth x size).
-  // Linear needs tsc's cover grammar — parse once as a literal and
-  // reinterpret it as a pattern when an `=` follows — which is a rewrite
-  // of `parse_assignment`. At the stakes measured it is not worth it:
-  // univer's deepest fixture is 29 levels and checks in 19 ms, and the
-  // top rung here (400 levels) is 0.4 s.
-  "nested-literals": 2.15,
 };
 
 // One generator per axis. Each emits N declarations of ONE kind, so a
@@ -270,15 +259,25 @@ const AXES = {
   },
   // Object and array literals nested N deep, the shape of a test
   // fixture's expected value. The parser asks of every `{` / `[` in
-  // expression position whether it starts a destructuring ASSIGNMENT,
-  // and answering it parses the whole literal as a pattern first; before
-  // that answer was memoized, a literal 10 deep took 19 s and univer's
-  // 29-deep `doc-event-manager.service.spec.ts` never finished — about
-  // 5x per level, which is a hang rather than an exponent, and why runs
-  // are bounded by `RUN_TIMEOUT_MS`.
+  // expression position whether it starts a destructuring ASSIGNMENT, and
+  // answering it used to parse the whole literal as a pattern first: a
+  // literal 10 deep took 19 s and univer's 29-deep
+  // `doc-event-manager.service.spec.ts` never finished — about 5x per
+  // level, which is a hang rather than an exponent, and why runs are
+  // bounded by `RUN_TIMEOUT_MS`. The speculation is now gated on the
+  // matching bracket being followed by `=`, so a literal never pays it and
+  // the axis is linear.
+  //
+  // Every other level is PARENTHESIZED: a parenthesized expression is
+  // parsed by a fresh sub-parser over its own token slice, so a cache that
+  // lives on one parser cannot help across it, and `{ v: [( … )] }` stayed
+  // exponential after the first fix.
   "nested-literals": (n) => {
     let lit = "0";
-    for (let i = 0; i < n; i++) lit = `{ k: ${i}, v: [${lit}] }`;
+    for (let i = 0; i < n; i++) {
+      const inner = i % 2 === 1 ? `(${lit})` : lit;
+      lit = `{ k: ${i}, v: [${inner}] }`;
+    }
     return `export const fixture = ${lit};\n`;
   },
   // THE CONTROL. Byte count grows with the rung and the declaration
@@ -381,8 +380,16 @@ function timeFile(bin, file, iters, repeats) {
     if (res.error && res.error.code === "ETIMEDOUT") {
       return { ms: NaN, error: `timed out after ${RUN_TIMEOUT_MS / 1000} s` };
     }
-    if (res.status !== 0 && res.status !== null) {
-      return { ms: NaN, error: `exit ${res.status}` };
+    // Only a clean exit is a timing sample. A run killed by a signal has
+    // `status: null` — a depth axis can hit the native stack limit and die
+    // with SIGSEGV — and its wall time measures how far it got, not the work.
+    if (res.status !== 0) {
+      const why = res.error
+        ? res.error.message
+        : res.signal
+          ? `killed by ${res.signal}`
+          : `exit ${res.status}`;
+      return { ms: NaN, error: why };
     }
     const ms = Number(t1 - t0) / 1e6 / iters;
     if (ms < best) best = ms;

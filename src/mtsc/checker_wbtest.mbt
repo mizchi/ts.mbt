@@ -646,3 +646,98 @@ test "compiler_option_header resolves the strict family flag by flag" {
   assert_true(d.contains("// @noImplicitOverride: true\n"))
   assert_false(d.contains("@alwaysStrict"))
 }
+
+///|
+/// The namespace-import form of the same scoping: `c.ts`'s `ns.I` is the
+/// `I` of the module ITS `ns` names, even when the checked module binds
+/// `ns` to a module whose `I` differs.
+test "mtsc graph checker reads a reachable module's ns.I through its own ns" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import * as ns from \"./a\";\nimport { consume } from \"./c\";\nexport const mine: ns.I = { a: \"x\" };\nconsume({ b: \"ok\" });\nconsume({ a: \"bad\" });",
+        allowJsx: false,
+      },
+      {
+        path: "/src/a.ts",
+        source: "export interface I { a: string }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/b.ts",
+        source: "export interface I { b: string }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/c.ts",
+        source: "import * as ns from \"./b\";\nexport function consume(x: ns.I): void {}",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./c",
+        targetPath: "/src/c.ts",
+      },
+      {
+        importerPath: "/src/c.ts",
+        moduleSpecifier: "./b",
+        targetPath: "/src/b.ts",
+      },
+    ],
+  })
+  let said = fn(text : String) -> Bool {
+    issues.iter().any(fn(i) { i.message.contains(text) })
+  }
+  assert_false(said("property `b` does not exist"))
+  assert_false(said("property `a` is required"))
+  assert_false(issues.iter().any(fn(i) { i.path.contains("binding `mine` ") }))
+  assert_true(said("property `a` does not exist"))
+}
+
+///|
+/// A reachable module's import of a type that shadows a LIB name
+/// (`interface Error`) is renamed like a colliding one: the declaration is
+/// keyed `Error@a.ts`, and `make(): Error` in `b.ts` means it, not the lib
+/// `Error` whose `message` is a string.
+test "mtsc graph checker keeps an imported lib-shadowing type in its module's scope" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import { make } from \"./b\";\nexport const n: number = make().message;",
+        allowJsx: false,
+      },
+      {
+        path: "/src/a.ts",
+        source: "export interface Error { message: number }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/b.ts",
+        source: "import type { Error } from \"./a\";\nexport declare function make(): Error;",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./b",
+        targetPath: "/src/b.ts",
+      },
+      {
+        importerPath: "/src/b.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.message }), [])
+}

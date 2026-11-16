@@ -174,7 +174,13 @@ async fn tsconfig_extends_target(src : String, dir : String) -> String? {
 /// `experimentalDecorators` — read as absent.
 pub async fn resolve_tsconfig_extends(spec : String, dir : String) -> String? {
   if spec.has_prefix(".") || spec.has_prefix("/") {
-    let joined = normalize_path(join_path(dir, spec))
+    // An absolute spec names the file itself; joining it onto `dir` read
+    // `/work/app//shared/base.json` as `/work/app/shared/base.json`.
+    let joined = if spec.has_prefix("/") {
+      normalize_path(spec)
+    } else {
+      normalize_path(join_path(dir, spec))
+    }
     return Some(
       if joined.has_suffix(".json") {
         joined

@@ -813,6 +813,48 @@ fn graph_named_import_aliases(
 }
 
 ///|
+/// `(ns.X, bare, origin)` for each namespace import of `module_` whose
+/// binding name the checked module also binds (`own_namespaces`, name to
+/// target path) to a DIFFERENT module. See the call site.
+fn graph_conflicting_namespace_aliases(
+  module_ : ParsedMtscModule,
+  own_namespaces : Map[String, String],
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> Array[(String, String, String)] {
+  let out : Array[(String, String, String)] = []
+  if own_namespaces.length() == 0 {
+    return out
+  }
+  for imp in module_.module_block.imports {
+    let ns = match imp.namespace_binding {
+      Some(ns) => ns
+      None => continue
+    }
+    let theirs = match own_namespaces.get(ns) {
+      Some(t) => t
+      None => continue
+    }
+    let target_path = match
+      find_graph_target(edges, module_.source.path, imp.module_spec) {
+      Some(path) => path
+      None => continue
+    }
+    if target_path == theirs {
+      continue
+    }
+    match find_graph_module(modules, target_path) {
+      Some(target) =>
+        for e in graph_exposed_types(target, modules, edges) {
+          out.push((ns + "." + e.0, e.1, e.2))
+        }
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 /// The declaration `module_` exports as the TYPE `name`, as
 /// `(bare, origin)`: the name it was declared under and the module that
 /// declares it.
@@ -1273,11 +1315,43 @@ fn collect_parsed_graph_issues(
     // `type_module_keys`, so ITS references to a colliding name are
     // rewritten to the module it imports from rather than read off the
     // shared bare entry (see `graph_named_import_aliases`).
+    //
+    // Its NAMESPACE imports join them only where they disagree with the
+    // checked module's: the shared resolver maps `ns.X` through the CHECKED
+    // module's `import * as ns`, so a reachable module whose `ns` names a
+    // different module would read the wrong `X`. Where the two agree that
+    // mapping is already right, and where the checked module has no `ns`
+    // the reference stays unresolved, which abstains.
+    let own_namespaces : Map[String, String] = Map([])
+    for imp in module_.module_block.imports {
+      match imp.namespace_binding {
+        Some(ns) =>
+          match find_graph_target(edges, module_.source.path, imp.module_spec) {
+            Some(target) => own_namespaces[ns] = target
+            None => ()
+          }
+        None => ()
+      }
+    }
     let type_module_import_aliases : Array[Array[(String, String, String)]] = []
     for key in type_module_keys {
       type_module_import_aliases.push(
         match find_graph_module(parsed_modules, key) {
-          Some(m) => graph_named_import_aliases(m, parsed_modules, edges)
+          Some(m) => {
+            let named = graph_named_import_aliases(m, parsed_modules, edges)
+            let conflicting = graph_conflicting_namespace_aliases(
+              m, own_namespaces, parsed_modules, edges,
+            )
+            if conflicting.length() == 0 {
+              named
+            } else {
+              let all = named.copy()
+              for extra in conflicting {
+                all.push(extra)
+              }
+              all
+            }
+          }
           None => []
         },
       )

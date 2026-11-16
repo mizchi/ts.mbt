@@ -706,7 +706,12 @@ fn mtsc_parse_args(
       }
       // ------------------------------------------- accepted, no effect
       _ =>
-        if mtsc_option_accepted_no_effect(name) {
+        // A checker boolean is accepted whether or not the no-effect table
+        // lists it: the two lists are separate, and an option in the
+        // second but not the first (`useUnknownInCatchVariables`) was an
+        // "unknown option" error.
+        if mtsc_option_accepted_no_effect(name) ||
+          mtsc_checker_bool_option(name) is Some(_) {
           // A boolean in this tier may still carry `true` / `false`.
           let mut flag = true
           if inline_value is None && !mtsc_option_takes_value(name) {

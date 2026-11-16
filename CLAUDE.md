@@ -4494,20 +4494,26 @@ product surfaces now.
 
   Checking the spec files found a **pre-existing exponential parse.**
   Every `{` / `[` in expression position asks whether it starts a
-  destructuring assignment, and answering parses the whole literal as a
+  destructuring assignment, and answering parsed the whole literal as a
   pattern first. A literal nested N deep was therefore parsed about 5^N
   times: depth 10 took 19 s, and univer's 29-deep
   `doc-event-manager.service.spec.ts` never finished.
-  - The answer is now memoized per token and context (the speculation
-    restores everything it touches). Depth 10 takes 5 ms and that file
-    takes 19 ms.
-  - What is left is quadratic in DEPTH, not in size: each enclosing level
-    still reads the levels below it once in pattern mode. Linear needs
-    tsc's cover grammar, a rewrite of `parse_assignment`.
-  - `verify-checker-scaling` has a `nested-literals` axis for it, with that
-    budget declared. Its runs are now killed after 120 s, because an
-    exponential rule shows up as a run that never ends rather than as a
-    large exponent. Against the pre-fix binary the axis fails by name.
+  - The first fix memoized the answer per token. Review showed that was
+    not enough: a parenthesized level (`{ v: [( … )] }`) is parsed by a
+    fresh sub-parser over its own token slice, so a cache on one parser
+    cannot help across it, and depth 10 still did not finish in a minute.
+  - What fixed it is a gate on the necessary condition. A destructuring
+    pattern is a bracket group followed by `=`, so the speculation now runs
+    only when the matching close bracket (from a match table built once per
+    token array) is followed by `=`. A literal never speculates at all.
+    Depth 10 takes 5 ms, depth 200 with parens 17 ms, and the univer file
+    19 ms.
+  - `verify-checker-scaling` has a `nested-literals` axis, with every other
+    level parenthesized, and it is linear (1.24) under the default budget.
+    Its runs are now killed after 120 s, and a run a signal ended is no
+    longer recorded as a timing. An exponential rule shows up as a run that
+    never ends rather than as a large exponent. Against the pre-fix binary
+    the axis fails by name.
 
   **`timeout` does not stop mtsc.** Its async runtime blocks SIGTERM, so
   the field script's `timeout 900` never fired, and one package ran for
@@ -4532,6 +4538,37 @@ product surfaces now.
   - **A bare specifier resolved once for every importer.** A nested
     `node_modules` can resolve one specifier two ways, so each importer
     now gets its own edge target.
+
+  The re-review of that push found six more, all real and all fixed:
+  - **A reachable module's `ns.X` read the checked module's `ns`.** The
+    shared resolver maps `ns.X` through the CHECKED module's
+    `import * as ns`. A reachable module whose own `ns` names a different
+    module now carries its `ns.X` aliases, but only where the two disagree.
+    Where they agree the mapping is already right, and where the checked
+    module has no `ns` the reference stays unresolved, which abstains.
+  - **A lib-shadowing import was not renamed.** `import type { Error }`
+    from a module declaring its own `interface Error` has one declarer, but
+    the declaration is still keyed `Error@origin`. The rename now uses the
+    same two reasons the key does.
+  - **A `.cts` entry vanished from the combined check.** The graph check
+    keeps `.ts` / `.tsx` / `.mts`, and a filtered entry beside a checkable
+    one was checked by nothing. Any such entry now sends the run back to
+    entry by entry.
+  - **A JavaScript string in a JSX `{ … }` payload was not TS1002.** The
+    element forgave its whole range, payloads included. Each payload is
+    parsed by a sub-parser that re-lexes it, so whatever that sub-parser
+    still holds after a successful parse is reported. The six payload sites
+    now go through one helper, `parse_jsx_embed`.
+  - **A multi-line JSX attribute inside a namespace was TS1002.** The body
+    is re-parsed by a fresh parser that owns its strings, and the outer
+    parser kept its copies. It now hands that range over when it extracts
+    the body.
+  - **An absolute `extends` was joined onto the config's directory.** It
+    is now read as written.
+
+  `--useUnknownInCatchVariables` was also an unknown option: the checker's
+  boolean list had it, and the no-effect table the option scanner consults
+  first did not.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

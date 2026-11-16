@@ -46835,7 +46835,22 @@ fn check_module_function_bodies_layered(
             Some(set) => set.length() > 1
             None => false
           }
-          if !multi {
+          // The same two reasons the declaration got a key above: another
+          // module declares the name, or it shadows a LIB type (an
+          // `interface Error` of the origin's own, which the bare table
+          // never holds).
+          let keyed = multi || is_lib_global_type(bare)
+          // A QUALIFIED alias (`ns.X`, from a namespace import that
+          // disagrees with the checked module's) must not fall through to
+          // the shared `ns.X` mapping, which is the checked module's: a
+          // name only one module declares is its bare entry, and a keyed
+          // one is `X@origin` — unregistered for a class, which keeps its
+          // bare name, so that case is left unresolved and abstains.
+          if local_name.contains(".") {
+            renames[local_name] = if keyed { bare + "@" + origin } else { bare }
+            continue
+          }
+          if !keyed {
             continue
           }
           match type_modules_by_key.get(origin) {
