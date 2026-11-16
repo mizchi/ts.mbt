@@ -5130,6 +5130,59 @@ product surfaces now.
     nothing imports is still not seen. That module is outside the checked
     module's type modules, so reaching it is a wider change than this
     round.
+
+  Batch GJ is the survey's third step, and it adds no rule. It makes the
+  check that found the whole survey permanent: `fixtures/real-app` is an
+  application importing the eleven packages in this repo's
+  `devDependencies`, checked with `mtsc -p … --noEmit`, and
+  `just verify-real-app` is a CI step. `bad/` plants one error per file in
+  a package's main API and `ok/` uses the same packages legally. Every
+  other checker gate is single-file or a package's own sources, so none
+  could have seen that `--noEmit` read no package types at all.
+  - **Three questions, the `tsc-extra` shape.**
+    - tsc must report exactly the planted errors.
+    - mtsc must report nothing in `ok/`, and nothing in a `bad/` file
+      beyond its planted error.
+    - A planted error mtsc misses must be declared in `mtsc-misses.txt`
+      with the shape that defeats it. A declared miss that starts being
+      reported fails as STALE.
+    - All five failure modes were shown to fire by mutation.
+  - **The baseline earned itself on its first run.** The scratch legal
+    twin the survey had called "silent under both compilers" was not:
+    under `jsx: react-jsx`, `preact.tsx`'s children are checked against
+    React's types and tsc reports TS2322. The fix is the
+    `@jsxImportSource preact` pragma. The claim had been measured with
+    mtsc alone, which is why the baseline is a step of the harness and
+    not a one-time check.
+  - **The state it records.** mtsc reports 3 of the 11 planted errors
+    (date-fns, vitest, yjs), with 0 false positives. The eight misses
+    come from five shapes, each reproduced in a single-file `.d.ts` that
+    tsc reports and mtsc does not:
+    - a namespace binding has no value type (`import * as ns` and
+      `export * as ns` alike, so `ns.k` is `any`): zod, effect,
+      `React.version`;
+    - a function merged with a namespace binds as `any`: drizzle's `sql`,
+      preact's `h`, and express's `export = e`;
+    - an `export =` default import binds as `any`: express;
+    - a member whose type names the DOM lib's `Request` / `Response`
+      abstains: hono's `app.fetch`;
+    - inference against a union parameter with a callable member
+      (`S | (() => S)`) leaves `S` unsolved: React's `useState("")`.
+    A generic function used as a VALUE against a primitive target is
+    also silent (`const n: number = f` with `f<T>`). No planted error
+    depends on it alone.
+  - **Three type-directive fixes from #291's review ride here**, each
+    probed against the nightly one project per cell.
+    - A CONFIGURED type root takes `name.d.ts` before `name/`, since
+      custom roots resolve as a file or a directory, as a module does.
+    - A rooted `/// <reference path>` is used as written. It was joined
+      onto the referencing file's directory.
+    - With `typeRoots` set, a config `types` entry is looked up in those
+      roots only (TS2688 in tsc, even with `node_modules/@types/g`
+      installed). The review asked for the same gate on
+      `/// <reference types>`, and tsc does not apply one there: it
+      still walks `node_modules` and finds both `@types/g` and a plain
+      `g` package. That half was declined, and gating it fails a test.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

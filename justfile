@@ -352,6 +352,18 @@ verify-tsc-extra *ARGS:
     moon build --target native --release
     node scripts/verify_tsc_extra.mjs {{ ARGS }}
 
+# An application that imports real npm packages, checked with
+# `mtsc -p … --noEmit` the way a user's CI checks one (`fixtures/real-app`).
+# `bad/` plants one error per file in a package's main API and `ok/` uses the
+# same packages legally. tsc must report exactly the planted errors (the
+# baseline), mtsc must report nothing in `ok/` (a false positive fails), and
+# a planted error mtsc is silent on must be declared in
+# `fixtures/real-app/mtsc-misses.txt` — a declared miss mtsc starts reporting
+# fails as STALE.
+verify-real-app *ARGS:
+    moon build --target native --release
+    node scripts/verify_real_app.mjs {{ ARGS }}
+
 # Is any checker rule superlinear in the size of a module-wide list?
 #
 # `verify-checker-soundness` asks whether the answer is RIGHT, over 4,484
@@ -377,7 +389,7 @@ verify-checker-scaling *ARGS:
     node scripts/verify_checker_scaling.mjs {{ ARGS }}
 
 # Full CI check
-ci: fmt check check-js test verify-mbti-dts verify-language-service verify-language-service-types verify-cli-node verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
+ci: fmt check check-js test verify-mbti-dts verify-language-service verify-language-service-types verify-cli-node verify-tsc-extra verify-real-app verify-scaffolds verify-generated-fixtures verify-examples verify-bridge-runtime verify-bridge-enum-returns verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness verify-checker-scaling
 
 # `moon check --deny-warn` for the JavaScript backend.
 #
