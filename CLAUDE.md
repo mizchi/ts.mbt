@@ -4623,6 +4623,124 @@ product surfaces now.
   - **A JSX payload nested in a payload lost its TS1002.** The inner
     payload's parser reports into its parent sub-parser's grammar list,
     which the outer payload never read.
+  Batch GG is the first item of the "what does real use lack" survey,
+  and it turned out to be a RESOLUTION defect that every gate here was
+  structurally unable to see. **`mtsc --noEmit` never read a package's
+  types.** The check walked the BUNDLER's graph, resolved with
+  `resolve_runtime_module_specifier`, so `import { z } from "zod"`
+  reached `index.js`, which the graph checker does not read, and every
+  npm import was `any`. Measured on an app importing eleven real
+  packages with one deliberate error each: tsc reports 11, mtsc reported
+  **0** and exited 0. Nothing could catch it, because zod, effect and
+  univer are measured on their OWN sources through relative and
+  workspace imports, and the conformance corpus is single-file.
+  - **The fix was mostly there.** The parser's types resolver (`exports`
+    `types` conditions, `typesVersions`, `@types/*`, pnpm symlinks,
+    node16 conditions) has existed for the bridge generator all along.
+    `mtsc_load_bundle_files` now takes a required `types_resolution`, and
+    every CHECK walks with it, the bundle path included (its own walk,
+    with the runtime graph as the fallback). Four more rules came with it.
+    A relative `./x.js` names `x.ts` / `x.d.ts` even when `x.js` exists.
+    A `./x.ts` with no `x.ts` names `x.d.ts`, which is how effect and
+    date-fns publish (`rewriteRelativeImportExtensions`), and without it
+    nothing past `index.d.ts` resolved. `import type` from a package is
+    followed. And `.d.cts` is read, since zod's `exports` names
+    `"types": "./index.d.cts"` first. A module the checker cannot read is
+    a leaf. On a 40-case resolution probe (one deliberate error per
+    feature, reported at tsc's own line), 13 agree on main and 22 here; what is left is `types` / `/// <reference>` / `declare module`
+    (the survey's step 2) and edge cases.
+  - **A dependency's `.d.ts` is context, not a subject.** It is read for
+    its declarations and not checked — the `context_only` set — which is
+    a stated departure from tsc with `skipLibCheck` off, in the MISS
+    direction. A declaration file NAMED as an entry is still checked, and
+    `--skipLibCheck` (and the tsconfig option) is honoured now rather
+    than "accepted, no effect".
+  - **One unparsable dependency file used to cost the whole program.**
+    storybook bundles zod v3's types into `dist/chunk-*.d.ts`, whose
+    `int()` method did not parse. The `declare class` member-name list
+    was a shorter copy of `member_access_token_name`, missing `int`,
+    `number`, `string`, `boolean`, `null`, `true`, `false` and `of`. The
+    load then failed, and `-p` fell back to checking each entry on its
+    own: 200 reloads of the same 700 declaration files, univer's `design`
+    0.8 s -> 50 s, three packages past the 900 s kill. Both halves are
+    fixed: the list is the shared one now, and an unparsable dependency
+    declaration is left untyped with a note instead of failing the load.
+    The second fix is what found effect's `Box<<T>(x: T) => T>`: the
+    lexer scans `<<` as a shift, and it is split in place when what
+    follows reads as a type parameter list.
+  - **Loading real declarations exposed the gaps they had always had.**
+    Every one was reproduced on main with a relative `.d.ts` before it was
+    fixed, so none is new behaviour. They come in three families.
+  - **A declared function lost information.** An imported `declare
+    function` kept only its FIRST overload, read a rest parameter as one
+    array argument, and left its type parameters unbound (drizzle's
+    `integer("id")`, its `and(a, b)`, preact's `useState`). A bodiless
+    `function` overload set in a `.d.ts` had no binders either. And the
+    overload marker asked the module an import NAMED rather than the one
+    declaring the function, so a barrel re-export lost it.
+  - **A `declare class` lost information.** `p?: T | null` lost its `?`:
+    `wrap_optional_ts_type` read a union containing `null` as already
+    optional, which made redi's `new Injector()` "expected 2". A member's
+    `...rest` was read and discarded, and method `Func`s ignored
+    `param_is_rest` (redi's `createInstance`). `new C<A>()` dropped its
+    written arguments, which made rxjs's `new Subject<void>().next()`
+    "expected 1". A function TYPE kept its leading `this` as an argument,
+    so rxjs's `new Observable((subscriber) => …)` typed `subscriber` as
+    the Observable. That last one was filed in batch FS pending a
+    generated-corpus diff, and the diff is below. `?.` and `!` kept
+    `void` (univer's `Nullable<T>`).
+  - **Binders leaked out of calls.** An unsolved type parameter left a
+    call as its bare NAME, which was then resolved like any other
+    reference. univer's engine-formula declares a spreadsheet `class T`,
+    so `injector.get(ID).registerCommand(…)` read as "does not exist on
+    `T`". There were five routes:
+    - an overloaded method resolved without solving its binders, and
+      only at its exact parameter count;
+    - a generic method read as a value (`Injector['get']`);
+    - `bind` / `call` / `apply`;
+    - `infer_call` unwrapping a generic value BEFORE the arm written to
+      solve it, so that arm could never run;
+    - `new C(args)` of a generic class with no written arguments.
+
+    Any binder a call cannot solve is `any` in its result now, and an
+    overload member fits a call whose argument count is in its arity
+    RANGE (the fallback union of returns collapses to `any` when a member
+    is `any`).
+  - **What it measures.**
+    - The eleven-package app goes from 0 of 11 to 3 (yjs, vitest,
+      date-fns). The other eight now READ their declarations and stop at
+      a checker capability instead: a class used as a value, an
+      overloaded call's return, a function merged with a namespace,
+      `export * as Ns` values, and `export =` interop (react, express).
+    - The same packages used legally (zod schemas, a hono app, preact and
+      react components, drizzle tables, effect pipes, yjs, vitest)
+      report nothing.
+    - univer goes from 4,314 reports to 3,875, while checking more
+      of the program. `import type` from a workspace package used to be
+      skipped, so data-validation's own program never reached
+      `@univerjs/sheets`. The summed time goes from 1,608 s to
+      2,711 s, which is the price of reading a real `.d.ts` (React's
+      types, `csstype`) and the newly reached files. `sheets-filter`,
+      already the outlier batch GE filed, goes from 366 s to 725 s.
+    - effect goes from 126 to 124 with none added. zod (9), preact,
+      vitest, hono and `typescript.d.ts` (0) are unchanged.
+    - The oracle is identical (TP 2726 / MISS 0 / FP 0 / PFLEGAL 0 / TN
+      1764).
+    - The generated bridge corpus is byte-identical to main's across all
+      894 files, apart from the checkout's absolute path. That is the
+      diff batch FS asked for before the function-type `this` change,
+      and it covers the parser's other changes too.
+  - **Two first versions were wrong, and the field data caught both.**
+    - Truthy narrowing removed only the outer `undefined` of
+      `Nullable<C> | undefined`. That had been silenced by ACCIDENT
+      while `prune_nullish` kept `void`, so making `?.` drop `void`
+      surfaced 150 reports of `cl.rgb` inside `if (cl?.rgb)`. The fix
+      is in the narrowing, not the prune.
+    - An imported class read as a VALUE arrived as its INSTANCE type.
+      redi's `injector.add([Svc])` then compared `Svc[]` against
+      `[Ctor<T>]`, which was more than half of univer's remaining
+      increase. It is `any` as a value now, which is what a class
+      declared in the same file is.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
