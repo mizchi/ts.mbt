@@ -26017,7 +26017,9 @@ fn apply_type_predicate_narrowing(
     None => return
   }
   let sig = resolver.signatures.get(callee_name)
-  // Map predicate's parameter name to argument index.
+  // Map predicate's parameter name to argument index. With no declaration
+  // in hand (an imported function), the callable type has no parameter
+  // names and the subject is told by type (`predicate_subject_index`).
   let idx = match sig {
     Some(params) => {
       let mut found : Int32 = -1
@@ -26031,7 +26033,12 @@ fn apply_type_predicate_narrowing(
       }
       found
     }
-    None => 0
+    None =>
+      match predicate_callable_params(callee_ty) {
+        Some(params) =>
+          predicate_subject_index(resolver, params, target).unwrap_or(-1)
+        None => 0
+      }
   }
   if idx < 0 || idx >= args.length() {
     return
@@ -26153,6 +26160,53 @@ fn narrow_by_predicate_target(
     (Never, Never) => pair_neg.push((arg_name, else_ty))
     (Never, _) if loose_target => ()
     _ => pair_neg.push((arg_name, else_ty))
+  }
+}
+
+///|
+/// The index of a type predicate's subject among `params`, for a callable
+/// TYPE, which carries parameter types and not names.
+///
+/// One parameter is the subject. With several, TypeScript's own rule
+/// decides it: a predicate's type must be assignable to its parameter's
+/// type (TS2677), so the subject is the parameter that accepts the target.
+/// `isText(options: { enabled: boolean }, value: unknown): value is
+/// string` has exactly one such parameter, and narrowing the FIRST
+/// argument there — which every caller of this did — turned `options`
+/// into `string`. More than one candidate, or none, abstains.
+fn predicate_subject_index(
+  resolver : Resolver,
+  params : Array[@ast.TsType],
+  target : @ast.TsType,
+) -> Int32? {
+  if params.length() <= 1 {
+    return Some(0)
+  }
+  let mut found : Int32? = None
+  for i, p in params {
+    let accepts = match p {
+      Any | Unknown => true
+      _ =>
+        is_assignable_to(target, p) ||
+        is_structurally_assignable_named(target, p, resolver)
+    }
+    if accepts {
+      if found is Some(_) {
+        return None
+      }
+      found = Some(i)
+    }
+  }
+  found
+}
+
+///|
+/// The parameter types of a callable `ty`, generic or not.
+fn predicate_callable_params(ty : @ast.TsType?) -> Array[@ast.TsType]? {
+  match ty {
+    Some(Func(ps, _)) => Some(ps)
+    Some(GenericFunc(_, _, Func(ps, _))) => Some(ps)
+    _ => None
   }
 }
 
@@ -26378,20 +26432,30 @@ fn apply_method_type_predicate_narrowing(
     _ => None
   }
   let recv_ty = infer_expr(env, resolver, receiver)
+  // The parameter types of the signature the predicate came from, to tell
+  // its subject apart (`predicate_subject_index`); `None` keeps the first
+  // argument, as an overloaded guard's idiom has it.
+  let mut predicate_params : Array[@ast.TsType]? = None
   let ret = match
     (if ns_predicate is Some(_) {
       None
     } else {
       resolver.lookup_method_sig(recv_ty, method_name)
     }) {
-    Some((_, ret)) => ret
+    Some((ps, ret)) => {
+      predicate_params = Some(ps)
+      ret
+    }
     None if ns_predicate is Some(_) => @ast.TsType::Any
     None =>
       // Arrow-function class field predicate: `isElite = (): this is T =>
       // {...}` is stored as a `Func`-typed property, not a method, so
       // `lookup_method_sig` misses it. Fall back to the field's return type.
       match resolver.lookup_field(recv_ty, method_name) {
-        Some(Func(_, r)) => r
+        Some(Func(ps, r)) => {
+          predicate_params = Some(ps)
+          r
+        }
         // Not a method here: the namespace-import route below may still
         // know it as a predicate.
         _ => @ast.TsType::Any
@@ -26420,8 +26484,12 @@ fn apply_method_type_predicate_narrowing(
       }
       loose = true
       match field_ty {
-        Some(Func(_, TypePredicate(p, t))) => (p, t)
-        Some(GenericFunc(tps, _, Func(_, TypePredicate(p, t)))) => {
+        Some(Func(ps, TypePredicate(p, t))) => {
+          predicate_params = Some(ps)
+          (p, t)
+        }
+        Some(GenericFunc(tps, _, Func(ps, TypePredicate(p, t)))) => {
+          predicate_params = Some(ps)
           let bindings : Map[String, @ast.TsType] = Map([])
           for tp in tps {
             bindings[tp] = Any
@@ -26461,12 +26529,22 @@ fn apply_method_type_predicate_narrowing(
     }
     return
   }
-  // Without per-method TsParam metadata, fall back to first positional arg.
+  // A callable type has no parameter names, so the subject is told by
+  // type. An overloaded guard (`predicate_params` unset) keeps the first
+  // argument, which is its idiom's subject.
   let _ = param_name
-  if args.length() == 0 {
+  let idx = match predicate_params {
+    Some(ps) =>
+      match predicate_subject_index(resolver, ps, target) {
+        Some(i) => i
+        None => return
+      }
+    None => 0
+  }
+  if idx >= args.length() {
     return
   }
-  match args[0] {
+  match args[idx] {
     Var(arg_name) => {
       let cur = predicate_narrowing_source(
         resolver,

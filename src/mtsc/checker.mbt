@@ -799,10 +799,12 @@ fn exported_value_site(
     }
   }
   // `import { version } from "react"` of an `export = React` module names
-  // a MEMBER of the assigned value (`esModuleInterop`). Only a single
-  // signature or a plain value is taken: a `Union` of signatures would
-  // be an overload set arriving with no `@overloads:` marker, which the
-  // checker reads as a union-typed value every member must accept.
+  // a MEMBER of the assigned value (`esModuleInterop`). A member that is an
+  // overload set — a `Union` whose parts are all signatures — would arrive
+  // with no `@overloads:` marker, which the checker reads as a union-typed
+  // value every member must accept, so it binds as `any`. A union-typed
+  // VALUE (`const mode: "dev" | "prod"`) is an ordinary member, and it was
+  // read as absent.
   if export_name != "default" &&
     module_.module_block.has_export_equals &&
     mtsc_is_declaration_file(module_.source.path) {
@@ -811,8 +813,16 @@ fn exported_value_site(
         let found = entries.filter(fn(e) {
           e.0 is Literal(k) && k == export_name
         })
-        if found.length() == 1 && !(found[0].1 is Union(_)) {
-          return Some((declarer, export_name, found[0].1))
+        if found.length() == 1 {
+          let value_type = match found[0].1 {
+            Union(parts) if parts
+              .iter()
+              .all(fn(t) {
+                t is (Func(_, _) | GenericFunc(_, _, _) | CallableMeta(_, _))
+              }) => @ast.TsType::Any
+            t => t
+          }
+          return Some((declarer, export_name, value_type))
         }
       }
       _ => ()
@@ -958,20 +968,32 @@ fn graph_namespace_export_target(
             }
           }
         }
-      @ast.TsReExportKind::All =>
-        if export_name != "default" {
-          match
-            graph_namespace_export_target(
-              target,
-              export_name,
-              modules,
-              edges,
-              depth + 1,
-            ) {
-            Some(m) => return Some(m)
-            None => ()
-          }
+      // `export *` answers only where no explicit re-export does, the
+      // precedence `graph_exported_type` follows (second pass below).
+      @ast.TsReExportKind::All => ()
+    }
+  }
+  if export_name == "default" {
+    return None
+  }
+  for reexport_ in module_.module_block.reexports {
+    if reexport_.type_only || !(reexport_.kind is @ast.TsReExportKind::All) {
+      continue
+    }
+    match graph_target_module(module_, reexport_.module_spec, modules, edges) {
+      Some(target) =>
+        match
+          graph_namespace_export_target(
+            target,
+            export_name,
+            modules,
+            edges,
+            depth + 1,
+          ) {
+          Some(m) => return Some(m)
+          None => ()
         }
+      None => ()
     }
   }
   None

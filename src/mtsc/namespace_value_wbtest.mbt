@@ -266,3 +266,64 @@ test "a guard does not expand an alias to undecided conditionals" {
     [],
   )
 }
+
+///|
+/// A guard whose subject is not its first parameter narrows the argument
+/// in the subject's position, through a namespace, an object method and a
+/// named import alike. A callable type has no parameter names, and every
+/// one of those routes narrowed the FIRST argument: `options` became
+/// `string`, so `options.enabled` was reported, and `value` kept
+/// `unknown`, so `value.length` was too.
+test "a guard narrows the argument in its subject's position" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/g.d.ts", "export declare function isText(options: { enabled: boolean }, value: unknown): value is string;",
+        ),
+        (
+          "/src/main.ts", "import * as G from \"./g\";\nimport { isText } from \"./g\";\ndeclare const guards: { isText(options: { enabled: boolean }, value: unknown): value is string };\nexport function f(options: { enabled: boolean }, value: unknown): boolean {\n  if (G.isText(options, value)) {\n    return options.enabled && value.length > 0;\n  }\n  if (guards.isText(options, value)) {\n    return options.enabled && value.length > 0;\n  }\n  if (isText(options, value)) {\n    return options.enabled && value.length > 0;\n  }\n  return false;\n}",
+        ),
+      ],
+      [("/src/main.ts", "./g", "/src/g.d.ts")],
+    ),
+    [],
+  )
+}
+
+///|
+/// A union-typed VALUE of an `export =` namespace is an ordinary member. It
+/// was read as absent, which the library API reports as "no value export".
+/// An explicit re-export also wins over `export *`, as for types: `N` here
+/// is `b`'s, and `a`'s was answering first.
+test "export assignment union members and re-export precedence" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/c.d.ts", "declare namespace Config { const mode: \"dev\" | \"prod\"; }\nexport = Config;",
+        ),
+        ("/src/a.d.ts", "export declare const k: string;"),
+        ("/src/b.d.ts", "export declare const k: number;"),
+        ("/src/hasN.d.ts", "export * as N from \"./a\";"),
+        (
+          "/src/idx.d.ts", "export * from \"./hasN\";\nexport * as N from \"./b\";",
+        ),
+        (
+          "/src/main.ts", "import { mode } from \"./c\";\nimport { N } from \"./idx\";\nexport const m: \"dev\" | \"prod\" = mode;\nexport const bad1: number = mode;\nexport const s: number = N.k;\nexport const bad2: string = N.k;",
+        ),
+      ],
+      [
+        ("/src/main.ts", "./c", "/src/c.d.ts"),
+        ("/src/main.ts", "./idx", "/src/idx.d.ts"),
+        ("/src/idx.d.ts", "./hasN", "/src/hasN.d.ts"),
+        ("/src/idx.d.ts", "./b", "/src/b.d.ts"),
+        ("/src/hasN.d.ts", "./a", "/src/a.d.ts"),
+      ],
+    ),
+    [
+      "top-level > binding `bad1` init :: expected `number` but got `\"dev\" (string) | \"prod\" (string)`",
+      "top-level > binding `bad2` init :: expected `string` but got `number`",
+    ],
+  )
+}
