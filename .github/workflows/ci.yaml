@@ -153,6 +153,16 @@ jobs:
         # must agree with tsc, and mtsc may not report on an `ok…`.
         run: just verify-tsc-extra
 
+      - name: Verify the real-package app
+        # An application importing eleven real npm packages (the
+        # devDependencies above), checked with `mtsc -p … --noEmit`. Every
+        # other checker gate is single-file or a package's own sources, so
+        # none of them imports a package the way an application does — which
+        # is how `--noEmit` reading no package types at all went unseen. tsc
+        # must report exactly the planted errors, mtsc nothing on the legal
+        # twin, and every planted error mtsc misses must be declared.
+        run: just verify-real-app
+
       - name: Verify mbti -> .d.ts
         run: just verify-mbti-dts
 
