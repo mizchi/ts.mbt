@@ -4027,44 +4027,18 @@ fn Parser::parse_declare_class_member_name(
     Str(s) => s
     Number(n) => "\{n}"
     Int(n) => "\{n}"
-    Return => "return"
-    If => "if"
-    Else => "else"
-    For => "for"
-    While => "while"
-    Break => "break"
-    Continue => "continue"
-    Function => "function"
-    Try => "try"
-    Catch => "catch"
-    Finally => "finally"
-    Throw => "throw"
-    Yield => "yield"
-    Declare => "declare"
-    Type => "type"
-    Let => "let"
-    Const => "const"
-    Var => "var"
-    Class => "class"
-    New => "new"
-    Default => "default"
-    Do => "do"
-    In => "in"
-    Case => "case"
-    VoidType => "void"
-    With => "with"
-    Switch => "switch"
-    Typeof => "typeof"
-    Delete => "delete"
-    Export => "export"
-    Import => "import"
-    Debugger => "debugger"
-    Interface => "interface"
-    Instanceof => "instanceof"
-    Extends => "extends"
-    From => "from"
-    As => "as"
-    k => raise ParseError("Expected class member name, got \{k}")
+    // Any IdentifierName is a member name, reserved words included. This
+    // arm used to carry its own list, and it was the shorter copy of
+    // `member_access_token_name`: `int`, `number`, `string`, `boolean`,
+    // `null`, `true`, `false` and `of` were missing, so a `declare class`
+    // with an `int()` method — zod v3's `ZodNumber`, which storybook ships
+    // inside `dist/chunk-*.d.ts` — failed to parse, and the whole program
+    // check failed with it.
+    k =>
+      match member_access_token_name(k) {
+        Some(n) => n
+        None => raise ParseError("Expected class member name, got \{k}")
+      }
   }
   Some(name)
 }

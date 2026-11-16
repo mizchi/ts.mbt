@@ -350,6 +350,26 @@ async fn mtsc_load_bundle_files(
   // graph checker wants: resolution is the CLI's job, and the checker
   // needs the edges to resolve a type declared in another module.
   edges : Array[@mtsc_core.MtscModuleEdge],
+  // Resolve the way the CHECKER needs rather than the way the BUNDLER
+  // does. The two ask different questions of one specifier: the bundler
+  // wants the JavaScript that runs, `tsc` wants the declarations that
+  // describe it, and for a published package those are different files
+  // (`"exports": { "types": …, "default": … }`, a `.d.ts` beside its
+  // `.js`). Walking the runtime graph for a check made every npm import
+  // `any` — `import { z } from "zod"` reached `index.js`, which the
+  // checker does not read — so `mtsc --noEmit` reported nothing about
+  // any library call. Positional and required: a caller that has not
+  // decided which question it is asking does not compile.
+  //
+  // In this mode a bare specifier goes through the parser's TYPES
+  // resolver (`exports` `types` conditions, `typesVersions`, `@types/*`),
+  // a relative one prefers `x.ts` / `x.d.ts` over an existing `x.js`,
+  // a type-only import of a package is followed, and a module the
+  // checker cannot read (`.js`, `.cjs`, JSON, an asset) is a leaf: its
+  // edge is recorded and it is not read or parsed, which is what `tsc`
+  // does with an untyped module and keeps a dependency's JavaScript out
+  // of the walk entirely.
+  types_resolution : Bool,
 ) -> Result[Unit, String] {
   // Sequential DFS over the import graph. moonbitlang/async runs on
   // a cooperative single-threaded scheduler, so spawning per-file
@@ -383,9 +403,21 @@ async fn mtsc_load_bundle_files(
   // costs on a miss.
   async fn timed_resolve(base : String) -> String {
     let started = @bench.monotonic_clock_start()
-    let r = mtsc_resolve_existing(base)
+    let r = if types_resolution {
+      mtsc_resolve_existing_for_types(base)
+    } else {
+      mtsc_resolve_existing(base)
+    }
     resolve_micros = resolve_micros + @bench.monotonic_clock_end(started)
     r
+  }
+
+  async fn resolve_bare(importer : String, spec : String) -> String? {
+    if types_resolution {
+      @parser.resolve_type_module_specifier(importer, spec)
+    } else {
+      @parser.resolve_runtime_module_specifier(importer, spec)
+    }
   }
 
   let queue : Array[String] = [entry_path]
@@ -445,6 +477,15 @@ async fn mtsc_load_bundle_files(
           None => ()
         }
       }
+      continue
+    }
+    // A module the checker cannot read is a leaf of the CHECK graph. Its
+    // edge is already recorded, so an importer sees an untyped module,
+    // which is what `tsc` gives it; reading and walking it would only
+    // pull a dependency's JavaScript into a walk nothing checks.
+    if types_resolution &&
+      disk_path != entry_path &&
+      !mtsc_type_graph_reads(resolved) {
       continue
     }
     let read_started = @bench.monotonic_clock_start()
@@ -543,7 +584,29 @@ async fn mtsc_load_bundle_files(
       @bench.monotonic_clock_end(tokenize_started)
     let parse_started = @bench.monotonic_clock_start()
     let mb = parser.parse_module_block() catch {
-      e => return Err("parse \{resolved}: \{e}")
+      e => {
+        // A dependency's declaration file this parser cannot read is not
+        // a reason to abandon the CHECK: the program is the user's code,
+        // and one unparsable `.d.ts` deep in `node_modules` (storybook
+        // bundles zod v3's types into a `dist/chunk-*.d.ts`) used to fail
+        // the whole types-mode load, which sent `-p` back to checking
+        // every entry on its own — 200 reloads of the same 700
+        // declaration files. The module becomes untyped, the way an
+        // unresolved one is, and the note says which file it was.
+        if types_resolution &&
+          disk_path != entry_path &&
+          mtsc_is_dependency_path(resolved) {
+          files.remove(resolved)
+          if disk_path != resolved {
+            files.remove(disk_path)
+          }
+          println(
+            "mtsc: could not parse \{resolved} (\{e}) — its declarations are left untyped",
+          )
+          continue
+        }
+        return Err("parse \{resolved}: \{e}")
+      }
     }
     parse_micros = parse_micros + @bench.monotonic_clock_end(parse_started)
     // Keyed exactly like `files` above, including the extension-less
@@ -588,10 +651,11 @@ async fn mtsc_load_bundle_files(
       // skips it — but the CHECKER needs the module that declares the
       // type, or `import type { Loc } from "./types"` leaves `Loc`
       // unresolvable and identical shapes read as mismatches. Load and
-      // edge relative type-only imports; a bare one would drag a whole
-      // package's declarations in, so those stay skipped.
+      // edge relative type-only imports. A bare one drags the package's
+      // declarations in, which the bundler has no use for and the
+      // checker does: under `types_resolution` it is followed.
       let spec = imp.module_spec
-      if imp.type_only && !mtsc_is_local_specifier(spec) {
+      if !types_resolution && imp.type_only && !mtsc_is_local_specifier(spec) {
         continue
       }
       if mtsc_is_local_specifier(spec) {
@@ -651,7 +715,7 @@ async fn mtsc_load_bundle_files(
       match aliases.get(spec) {
         Some(found) => {
           let bare_started = @bench.monotonic_clock_start()
-          let own = @parser.resolve_runtime_module_specifier(resolved, spec)
+          let own = resolve_bare(resolved, spec)
           let target = match own {
             Some(o) if o != found &&
               @parser.canonical_file_path(o) !=
@@ -672,7 +736,7 @@ async fn mtsc_load_bundle_files(
         None => ()
       }
       let bare_started = @bench.monotonic_clock_start()
-      let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
+      let bare = resolve_bare(resolved, spec)
       bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
       match bare {
         Some(found) => {
@@ -692,7 +756,7 @@ async fn mtsc_load_bundle_files(
     for re in mb.reexports {
       // Same reasoning as the type-only import above.
       let spec = re.module_spec
-      if re.type_only && !mtsc_is_local_specifier(spec) {
+      if !types_resolution && re.type_only && !mtsc_is_local_specifier(spec) {
         continue
       }
       if mtsc_is_local_specifier(spec) {
@@ -732,7 +796,7 @@ async fn mtsc_load_bundle_files(
       match aliases.get(spec) {
         Some(found) => {
           let bare_started = @bench.monotonic_clock_start()
-          let own = @parser.resolve_runtime_module_specifier(resolved, spec)
+          let own = resolve_bare(resolved, spec)
           let target = match own {
             Some(o) if o != found &&
               @parser.canonical_file_path(o) !=
@@ -753,7 +817,7 @@ async fn mtsc_load_bundle_files(
         None => ()
       }
       let bare_started = @bench.monotonic_clock_start()
-      let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
+      let bare = resolve_bare(resolved, spec)
       bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
       match bare {
         Some(found) => {
@@ -995,6 +1059,99 @@ async fn mtsc_resolve_existing_uncached(base : String) -> String {
 }
 
 ///|
+/// A path inside a `node_modules` directory: a dependency rather than the
+/// program's own source.
+fn mtsc_is_dependency_path(path : String) -> Bool {
+  path.contains("/node_modules/") || path.has_prefix("node_modules/")
+}
+
+///|
+/// The files a TYPES-mode walk reads: the ones the graph checker can use.
+/// Everything else (`.js`, `.cjs`, a `.cts` source, JSON, assets) is a
+/// leaf. A `.d.cts` is read: it is how a dual package describes its
+/// CommonJS entry, and `"types": "./index.d.cts"` is what zod's `exports`
+/// names first, so leaving it out made every zod import `any`. Its
+/// declarations are ordinary declarations; only a `.cts` SOURCE carries
+/// the CommonJS semantics the graph checker does not model.
+fn mtsc_type_graph_reads(path : String) -> Bool {
+  path.has_suffix(".ts") ||
+  path.has_suffix(".tsx") ||
+  path.has_suffix(".mts") ||
+  path.has_suffix(".d.cts")
+}
+
+///|
+/// `mtsc_resolve_existing` for the CHECKER's graph, which differs in one
+/// rule: a JS-spelled specifier names its TypeScript equivalent even when
+/// the `.js` itself exists. That is TypeScript's own order — `./x.js`
+/// beside `x.d.ts` is the declaration, because the `.js` is what that
+/// declaration describes — and it is the rule every published package
+/// relies on: effect's `dist/index.d.ts` does
+/// `export * as Version from "./Version.js"` next to both `Version.js`
+/// and `Version.d.ts`, and the runtime order took the `.js`, so every
+/// module behind the entry declaration was opaque.
+///
+/// Cached apart from the runtime answer, since one base resolves
+/// differently in the two modes.
+async fn mtsc_resolve_existing_for_types(base : String) -> String {
+  let key = "\u{1}types\u{1}" + base
+  match mtsc_resolved_paths.get(key) {
+    Some(r) => return r
+    None => ()
+  }
+  let r = mtsc_resolve_existing_for_types_uncached(base)
+  mtsc_resolved_paths[key] = r
+  r
+}
+
+///|
+async fn mtsc_resolve_existing_for_types_uncached(base : String) -> String {
+  for cand in mtsc_ts_equivalents(base) {
+    if mtsc_file_exists(cand) {
+      return cand
+    }
+  }
+  // A TypeScript-spelled specifier may name a DECLARATION file:
+  // `./Version.ts` from a `.d.ts` is `Version.d.ts` when there is no
+  // `Version.ts`, which is what a package built with
+  // `rewriteRelativeImportExtensions` publishes — effect's and date-fns's
+  // `index.d.ts` spell every re-export that way. The source wins when
+  // both exist, as in `tsc`.
+  if !mtsc_file_exists(base) {
+    for cand in mtsc_declaration_equivalents(base) {
+      if mtsc_file_exists(cand) {
+        return cand
+      }
+    }
+  }
+  mtsc_resolve_existing_uncached(base)
+}
+
+///|
+/// `./x.ts` -> `./x.d.ts`, `./x.mts` -> `./x.d.mts`, `./x.cts` ->
+/// `./x.d.cts`, `./x.tsx` -> `./x.d.ts`. Empty for a path that is
+/// already a declaration file or carries no TypeScript extension.
+fn mtsc_declaration_equivalents(base : String) -> Array[String] {
+  if base.has_suffix(".d.ts") ||
+    base.has_suffix(".d.mts") ||
+    base.has_suffix(".d.cts") {
+    return []
+  }
+  for
+    pair in [
+      (".tsx", ".d.ts"),
+      (".mts", ".d.mts"),
+      (".cts", ".d.cts"),
+      (".ts", ".d.ts"),
+    ] {
+    if base.has_suffix(pair.0) {
+      return [base[0:base.length() - pair.0.length()].to_owned() + pair.1]
+    }
+  }
+  []
+}
+
+///|
 /// A path that names a readable FILE. `@fs.exists` also answers `true`
 /// for a directory, and a directory is not a module: `import "./client"`
 /// next to a `client/` directory used to resolve to the directory
@@ -1093,6 +1250,7 @@ fn mtsc_typecheck_graph(
   files : Map[String, String],
   edges : Array[@mtsc_core.MtscModuleEdge],
   compiler_options~ : Array[(String, String)] = [],
+  context_only~ : Map[String, Unit] = Map([]),
 ) -> Bool {
   let modules : Array[@mtsc_core.MtscModuleSource] = []
   for path in files.keys() {
@@ -1114,6 +1272,7 @@ fn mtsc_typecheck_graph(
     issue in @mtsc_core.collect_module_graph_issues(
       { modules, edges, },
       compiler_options~,
+      context_only~,
     ) {
     // Import-resolution diagnostics are dropped here. They are part of
     // the stricter contract the Vite integration wants, but this CLI
@@ -1165,6 +1324,7 @@ fn mtsc_is_module_path(path : String) -> Bool {
   path.has_suffix(".ts") ||
   path.has_suffix(".tsx") ||
   path.has_suffix(".mts") ||
+  path.has_suffix(".d.cts") ||
   path.has_suffix(".js") ||
   path.has_suffix(".mjs") ||
   path.has_suffix(".jsx")
@@ -1372,6 +1532,7 @@ async fn mtsc_compile_entry(
         parse_split,
         parsed_blocks,
         edges,
+        false,
       ) {
       Ok(_) => ()
       Err(e) => {
@@ -1409,13 +1570,27 @@ async fn mtsc_compile_entry(
     // leaves every imported type unresolvable, which both hides real
     // errors and invents fake ones — an identical shape compared against
     // an imported alias reads as a mismatch.
+    //
+    // The check walks its OWN graph. The one loaded above is the
+    // bundler's, resolved to the JavaScript that runs, and the checker
+    // needs the declarations instead (`mtsc_load_bundle_files`'s
+    // `types_resolution`); checking the runtime graph is what made every
+    // npm import `any`. The second walk re-reads the program's own
+    // sources, which is the price of asking two questions of one
+    // specifier. The runtime graph is still the fallback for an entry the
+    // types walk cannot take (a `.js` entry, a load that fails), which is
+    // exactly what this check did before.
     if !opts.no_check {
       let check_started = @bench.monotonic_clock_start()
-      let check_ok = mtsc_typecheck_graph(
-        files,
-        edges,
-        compiler_options=opts.checker_options,
-      )
+      let check_ok = match mtsc_typecheck_program(opts, input_path) {
+        Some(ok) => ok
+        None =>
+          mtsc_typecheck_graph(
+            files,
+            edges,
+            compiler_options=opts.checker_options,
+          )
+      }
       cli_timer.record(
         "cli: typecheck",
         @bench.monotonic_clock_end(check_started),

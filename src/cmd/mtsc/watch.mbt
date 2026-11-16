@@ -228,6 +228,11 @@ async fn mtsc_watch_program_files(
         parse_split,
         parsed,
         edges,
+        // The bundle's own graph. The check this run also performs walks
+        // the types graph, whose extra files are declarations a watcher
+        // has no reason to poll: a dependency's `.d.ts` does not change
+        // under an edit loop.
+        false,
       ) {
       Ok(_) =>
         for path in files.keys() {

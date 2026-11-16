@@ -108,9 +108,13 @@ async fn mtsc_compile_all(opts : MtscOptions, entries : Array[String]) -> Int32 
 /// The sources the GRAPH check takes part in: TypeScript, not JavaScript a
 /// dependency ships (`tsc` does not check that without `allowJs`). Narrower
 /// than `mtsc_is_program_source`, which also admits `.cts` — the graph
-/// checker does not handle that yet.
+/// checker does not handle that yet. A `.d.cts` takes part: it holds
+/// declarations only (see `mtsc_type_graph_reads`).
 fn mtsc_graph_checks_source(path : String) -> Bool {
-  path.has_suffix(".ts") || path.has_suffix(".tsx") || path.has_suffix(".mts")
+  path.has_suffix(".ts") ||
+  path.has_suffix(".tsx") ||
+  path.has_suffix(".mts") ||
+  path.has_suffix(".d.cts")
 }
 
 ///|
@@ -150,6 +154,7 @@ async fn mtsc_typecheck_entries(
       [],
       Map([]),
       edges,
+      true,
     )
     guard loaded is Ok(_) else { return None }
   }
@@ -163,8 +168,67 @@ async fn mtsc_typecheck_entries(
     return None
   }
   Some(
-    mtsc_typecheck_graph(ts_files, edges, compiler_options=opts.checker_options),
+    mtsc_typecheck_graph(
+      ts_files,
+      edges,
+      compiler_options=opts.checker_options,
+      context_only=mtsc_context_only_modules(
+        ts_files,
+        entries,
+        opts.skip_lib_check.unwrap_or(false),
+      ),
+    ),
   )
+}
+
+///|
+/// A declaration file: what `skipLibCheck` skips.
+fn mtsc_is_declaration_path(path : String) -> Bool {
+  path.has_suffix(".d.ts") ||
+  path.has_suffix(".d.mts") ||
+  path.has_suffix(".d.cts")
+}
+
+///|
+/// The modules the check reads for their declarations and does not
+/// report on: every declaration file under `skipLibCheck`, and a
+/// DEPENDENCY's declaration files always.
+///
+/// The second half is a deliberate departure from `tsc`, which checks a
+/// package's `.d.ts` when `skipLibCheck` is off. A published declaration
+/// file `tsc` accepts is the overwhelmingly common case, so a report there
+/// is far more likely to be this checker's gap than the package's error,
+/// and the user cannot act on it either way; the cost is a MISS on a
+/// genuinely broken dependency, which is the affordable direction. A
+/// `.ts` SOURCE file reached through `node_modules` (a workspace package
+/// whose `types` is its `src/index.ts`) is still checked, as `tsc` checks
+/// it.
+///
+/// A declaration file NAMED as an entry is not a dependency, wherever it
+/// lives: `mtsc node_modules/preact/src/index.d.ts --noEmit` asks for that
+/// file to be checked, and only `skipLibCheck` exempts it.
+fn mtsc_context_only_modules(
+  ts_files : Map[String, String],
+  entries : Array[String],
+  skip_lib_check : Bool,
+) -> Map[String, Unit] {
+  let named : Map[String, Unit] = Map([])
+  for entry in entries {
+    named[mtsc_normalize(entry)] = ()
+  }
+  let out : Map[String, Unit] = Map([])
+  for path in ts_files.keys() {
+    if !mtsc_is_declaration_path(path) {
+      continue
+    }
+    if skip_lib_check {
+      out[path] = ()
+    } else if mtsc_is_dependency_path(path) &&
+      !named.contains(mtsc_normalize(path)) {
+      out[path] = ()
+    }
+  }
+  out
 }
 
 ///|

@@ -1843,6 +1843,40 @@ test "parser: parse declare class in module" {
 }
 
 ///|
+/// Any IdentifierName is a member name. The `declare class` member parser
+/// kept its own list of the reserved words it accepted, and it was missing
+/// the type-keyword tokens: zod v3's `ZodNumber.int()`, which storybook
+/// bundles into a `dist/chunk-*.d.ts`, failed to parse.
+test "parser: a declare class member may be named by any keyword" {
+  let src =
+    #|declare class A {
+    #|  int(): number;
+    #|  number: string;
+    #|  string(): void;
+    #|  boolean: number;
+    #|  null: 1;
+    #|  true: 2;
+    #|  false: 3;
+    #|  of(): void;
+    #|  return(): void;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let names : Array[String] = []
+  for m in module_.classes[0].methods {
+    names.push(m.name)
+  }
+  for name in ["int", "string", "of", "return"] {
+    assert_true(names.contains(name))
+  }
+}
+
+///|
 test "parser: substitute declare class method generic bounds" {
   let src =
     #|interface Events {

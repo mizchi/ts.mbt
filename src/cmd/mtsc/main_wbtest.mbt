@@ -170,6 +170,7 @@ async test "mtsc loader: every importer of a bare specifier gets its own edge" {
     [],
     {},
     edges,
+    false,
   )
   assert_true(loaded is Ok(_))
   let importers : Array[String] = []
@@ -227,6 +228,7 @@ async test "mtsc loader: a nested node_modules gives its importers their own tar
     [],
     {},
     edges,
+    false,
   )
   assert_true(loaded is Ok(_))
   let target_of = fn(importer_suffix : String) -> String? {
