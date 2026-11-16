@@ -402,30 +402,26 @@ async fn mtsc_apply_project_compiler_options(
     @parser.tsconfig_compiler_option_string_array_at(config_path, "typeRoots") {
     Some(roots) =>
       opts.type_roots = Some(
-        roots.map(fn(written) {
+        roots.map(fn(r) {
           // `${configDir}` is TypeScript's template for the directory of
-          // the config in use, which is the one this reads against.
-          let r = if written.has_prefix("${configDir}") {
-            let rest = written[12:].to_owned()
-            if config_dir == "" {
-              if rest.has_prefix("/") {
-                "." + rest
-              } else {
-                "." + "/" + rest
-              }
+          // the config in use, which is the one this reads against. The
+          // expansion IS that directory, so it is not joined onto it a
+          // second time — with `-p packages/app` that turned
+          // `packages/app/typings` into `packages/app/packages/app/typings`.
+          if r.has_prefix("${configDir}") {
+            let rest = r[12:].to_owned()
+            let rest = if rest.has_prefix("/") {
+              rest[1:].to_owned()
             } else {
-              config_dir + rest
+              rest
             }
+            let dir = if config_dir == "" { "." } else { config_dir }
+            mtsc_normalize(mtsc_join_path(dir, rest))
+          } else if r.has_prefix("/") {
+            mtsc_normalize(r)
           } else {
-            written
+            mtsc_normalize(mtsc_join_path(config_dir, r))
           }
-          mtsc_normalize(
-            if r.has_prefix("/") {
-              r
-            } else {
-              mtsc_join_path(config_dir, r)
-            },
-          )
         }),
       )
     None => ()

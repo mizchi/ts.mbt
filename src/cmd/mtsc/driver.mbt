@@ -241,7 +241,7 @@ async fn mtsc_typecheck_entries(
 /// The type roots: `typeRoots` as configured, or every `node_modules/@types`
 /// from the project's directory up, which is TypeScript's default
 /// (`getDefaultTypeRoots`).
-async fn mtsc_type_roots(opts : MtscOptions) -> Array[String] {
+async fn mtsc_type_roots(opts : MtscOptions, cwd? : String) -> Array[String] {
   match opts.type_roots {
     Some(roots) => return roots
     None => ()
@@ -257,7 +257,11 @@ async fn mtsc_type_roots(opts : MtscOptions) -> Array[String] {
   // `@types/node` — was never asked. TypeScript walks the ABSOLUTE
   // directory, so this does too.
   if !dir.has_prefix("/") {
-    dir = mtsc_normalize(mtsc_join_path(@parser.canonical_file_path("."), dir))
+    let base = match cwd {
+      Some(c) => c
+      None => @parser.canonical_file_path(".")
+    }
+    dir = mtsc_normalize(mtsc_join_path(base, dir))
   }
   while true {
     let candidate = mtsc_normalize(mtsc_join_path(dir, "node_modules/@types"))

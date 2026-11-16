@@ -1880,6 +1880,29 @@ test "mtsc graph checker types shorthand ambient modules and synthetic defaults"
 }
 
 ///|
+/// A body's own import of a module a SHORTHAND declares is untyped as
+/// well. The body's edge is copied from the file that holds it, and that
+/// copy skipped the shorthand filter, so `"short"` read the package file
+/// the resolver had found and `x` came out a `string`.
+test "mtsc graph checker leaves a body's shorthand import untyped" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/env.d.ts", "declare module \"short\";\ndeclare module \"m\" { export { x } from \"short\"; }",
+        ),
+        ("/node_modules/short/index.d.ts", "export declare const x: string;"),
+        (
+          "/src/root.ts", "import { x } from \"m\";\nexport const n: number = x;",
+        ),
+      ],
+      [("/src/env.d.ts", "short", "/node_modules/short/index.d.ts")],
+    ),
+    [],
+  )
+}
+
+///|
 /// Two more places ambient type names are global: the members of a
 /// `declare global { … }` block in a reachable MODULE, and the single-letter
 /// type-parameter check, which asked only the checked module.

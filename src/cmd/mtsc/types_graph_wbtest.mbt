@@ -508,12 +508,49 @@ async test "mtsc check graph: typeRoots expands ${configDir}" {
 /// directory UP, and `-p packages/app` leaves that directory relative: its
 /// walk stopped at the first segment (`packages` has the parent `""`), so a
 /// monorepo's hoisted `@types` at the workspace root were never read. The
-/// walk is over the absolute directory now. This repo's own root has a
-/// `node_modules/@types`, and the test runs below it.
+/// walk is over the absolute directory now, taken against the working
+/// directory — here a fixture's root, so the test owns the `@types` it
+/// expects to find.
 async test "mtsc type roots: a relative config directory walks to the root" {
+  let root = "/tmp/ts_mbt_types_graph_relative_walk"
+  types_graph_fixture(root, [
+    ("node_modules/@types/node/index.d.ts", "declare var process: {};\n"),
+    ("packages/app/tsconfig.json", "{}"),
+  ])
   let opts = mtsc_options_new()
-  opts.config_dir = Some("zz_absent_dir/app")
-  let roots = mtsc_type_roots(opts)
-  assert_true(roots.length() > 0)
-  assert_true(roots.iter().all(fn(r) { r.has_prefix("/") }))
+  opts.config_dir = Some("packages/app")
+  let roots = mtsc_type_roots(opts, cwd=root)
+  assert_true(roots.contains(root + "/node_modules/@types"))
+}
+
+///|
+/// `${configDir}` expands to the config's directory, and that IS the
+/// directory — joining it on again made `-p <relative dir>` look for
+/// `<dir>/<dir>/typings`. The project here is named by a path relative to
+/// the working directory, which is the spelling a user types.
+async test "mtsc check graph: ${configDir} under a relative project path" {
+  let root = "/tmp/ts_mbt_types_graph_config_dir_relative"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"${configDir}/typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/g/index.d.ts", "declare var G: number;\n"),
+    ("src/main.ts", "export const ok: number = G;\n"),
+  ])
+  let cwd = @parser.canonical_file_path(".")
+  let mut up = ""
+  for segment in cwd.split("/") {
+    if segment != "" {
+      up = up + "../"
+    }
+  }
+  let project = up + root[1:].to_owned()
+  let opts = types_graph_check_opts()
+  opts.project = Some(project)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  // The root itself, not only the check's verdict: a path that climbs to `/`
+  // absorbs a doubled `<dir>/<dir>` (the extra `..` stop at the root), so
+  // the program would still find `G` with the bug present.
+  assert_eq(opts.type_roots, Some([mtsc_normalize(project + "/typings")]))
+  assert_eq(mtsc_compile_all(opts, entries), 0)
 }
