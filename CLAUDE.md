@@ -5171,6 +5171,18 @@ product surfaces now.
     A generic function used as a VALUE against a primitive target is
     also silent (`const n: number = f` with `f<T>`). No planted error
     depends on it alone.
+  - **Three type-directive fixes from #291's review ride here**, each
+    probed against the nightly one project per cell.
+    - A CONFIGURED type root takes `name.d.ts` before `name/`, since
+      custom roots resolve as a file or a directory, as a module does.
+    - A rooted `/// <reference path>` is used as written. It was joined
+      onto the referencing file's directory.
+    - With `typeRoots` set, a config `types` entry is looked up in those
+      roots only (TS2688 in tsc, even with `node_modules/@types/g`
+      installed). The review asked for the same gate on
+      `/// <reference types>`, and tsc does not apply one there: it
+      still walks `node_modules` and finds both `@types/g` and a plain
+      `g` package. That half was declined, and gating it fails a test.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
