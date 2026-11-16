@@ -5186,9 +5186,9 @@ product surfaces now.
   Batch GK is the survey's fourth step: the eight planted errors
   `fixtures/real-app` declared as misses. Five are reported now (effect,
   React, preact, drizzle, express), so mtsc catches 8 of the 11 with 0
-  false positives. The oracle, effect (124), zod (9), the four real
-  `.d.ts` entries and four of univer's five packages are unchanged.
-  univer `ui` loses 22 false positives and gains none.
+  false positives. The oracle, zod (9), the four real `.d.ts` entries
+  and four of univer's five packages are unchanged. effect goes 124 ->
+  122 and univer `ui` 1,097 -> 1,075, and neither gains a report.
   - **A namespace object is a value now.** `import * as ns`,
     `export * as ns from`, and an exported `import * as z` binding (zod's
     `z`) each bind an object of the target's value exports. Each export is
@@ -5245,7 +5245,9 @@ product surfaces now.
       source expanded to `Failure<string>`.
     The source is expanded when it is an alias to a union, and the
     target's qualified names are canonicalized. This is the Option /
-    Result shape every functional library uses. The expansion is limited
+    Result shape every functional library uses, and it is effect's two:
+    `isSemVerRange(input) ? … : parse(input)` over `type Input =
+    SemVerRange | string` was reported on the `parse` side. The expansion is limited
     to unions whose members the relation can decide. effect's `WrapKey<A>`
     is a union of conditionals, and expanding it emptied the else branch
     to `never`. The full gate run caught that on effect's own sources,
