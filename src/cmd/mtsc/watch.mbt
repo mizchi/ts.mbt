@@ -232,13 +232,15 @@ async fn mtsc_watch_program_files(
           [],
           true,
         ) {
-        Ok(_) =>
+        // A failed load still keeps what it read: a syntax error in an
+        // imported file stops the walk there, and that file is already in
+        // `files`, so editing it to fix the error triggers the retry.
+        Ok(_) | Err(_) =>
           for path in files.keys() {
             if mtsc_type_graph_reads(path) && !mtsc_is_dependency_path(path) {
               add(path)
             }
           }
-        Err(_) => ()
       }
     }
     if !opts.bundle {
@@ -265,15 +267,15 @@ async fn mtsc_watch_program_files(
         // is added above.
         false,
       ) {
-      Ok(_) =>
+      // A load that failed keeps the files it read, the one that broke it
+      // included, so fixing that file triggers the retry — the entry alone
+      // only covers a break in the entry.
+      Ok(_) | Err(_) =>
         for path in files.keys() {
           if mtsc_is_module_path(path) || path.has_suffix(".d.ts") {
             add(path)
           }
         }
-      // A load that failed still leaves the entry watched, so fixing the
-      // file that broke it triggers the retry.
-      Err(_) => ()
     }
   }
   out

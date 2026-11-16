@@ -350,3 +350,22 @@ async test "mtsc watch: the check's import graph is watched" {
   opts.no_check = true
   assert_eq(mtsc_watch_program_files(opts, [root + "/a.ts"]).length(), 1)
 }
+
+///|
+/// A load that fails still watches what it read: a syntax error in an
+/// imported file stops the walk there, and polling that file is what lets
+/// the fix trigger the retry.
+async test "mtsc watch: a file that breaks the load is still watched" {
+  let root = "/tmp/ts_mbt_types_graph_watch_broken"
+  types_graph_fixture(root, [
+    ("a.ts", "import { b } from \"./b\";\nexport const x: number = b;\n"),
+    ("b.ts", "export const b: number = = 1;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  let watched = mtsc_watch_program_files(opts, [root + "/a.ts"])
+  assert_true(watched.iter().any(fn(p) { p.has_suffix("/b.ts") }))
+  opts.no_check = true
+  opts.bundle = true
+  let watched = mtsc_watch_program_files(opts, [root + "/a.ts"])
+  assert_true(watched.iter().any(fn(p) { p.has_suffix("/b.ts") }))
+}

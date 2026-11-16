@@ -1886,6 +1886,7 @@ test "parser: a type argument may open with a generic function type" {
     #|declare const b: Box<<T extends string>(x: T) => T>;
     #|declare const c: Box<<T, U>(x: T, y: U) => U>;
     #|declare const d: Box<<T>() => T>;
+    #|declare const e: Box<<const T>(x: T) => T>;
     #|export const s = 1 << 2;
   let module_ = Parser::from_source(src).parse_module() catch {
     e => {
@@ -1893,8 +1894,8 @@ test "parser: a type argument may open with a generic function type" {
       return
     }
   }
-  // `b`, `c`, `d` and the exported `s`.
-  assert_eq(module_.values.length(), 4)
+  // `b`, `c`, `d`, `e` and the exported `s`.
+  assert_eq(module_.values.length(), 5)
   match module_.values[0].type_ {
     Applied("Box", [GenericFunc(_, _, _)]) => ()
     t => fail("expected a generic function type argument, got \{t}")

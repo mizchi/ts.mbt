@@ -23546,3 +23546,47 @@ test "an overloaded generic method selects and solves the matching member" {
     2,
   )
 }
+
+///|
+/// Erasing a member's binders makes it accept arguments that contradict
+/// each other, so a member matched that way is re-checked against the
+/// binders the arguments solve: `m<T>(xs: T[], y: T)` with `([1], "s")`
+/// pins `T = number` and rejects `"s"`, and the call is the second
+/// member's, `string`. Literals solve widened, so `("a", "b")` is one
+/// `T = string` rather than a clash.
+test "an overload whose binders the arguments contradict is not selected" {
+  let prelude = "interface I { m<T>(xs: T[], y: T): number; m(xs: number[], y: string): string; }\nclass C { m<T>(xs: T[], y: T): number; m(xs: number[], y: string): string; m(a: any, b: any): any { return a } }\ninterface P { p<T>(x: T, y: T): T[]; p(x: boolean): boolean; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(i: I, c: C, q: P) { const r1: string = i.m([1], \"s\"); const r2: string = c.m([1], \"s\"); const r3: number = i.m([1], 2); const r4: string[] = q.p(\"a\", \"b\"); }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g(i: I) { const bad: number = i.m([1], \"s\"); }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// A rest constructor parameter's arguments widen like a plain parameter's:
+/// `new Box("a")` is `Box<string>`, so a later `box.value = "b"` is legal.
+test "a rest constructor parameter widens a fresh literal" {
+  let prelude = "class Box<T> { value: T; constructor(...values: T[]) { this.value = values[0]; } }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const box = new Box(\"a\"); box.value = \"b\"; const n = new Box(1, 2); n.value = 3; }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g() { const box = new Box(\"a\"); box.value = 1; }",
+    ).length() >
+    0,
+  )
+}

@@ -1387,8 +1387,10 @@ fn Parser::split_ltlt_before_generic_type_arg(self : Parser) -> Token? {
   if !self.check(LtLt) || self.has_line_terminator_before() {
     return None
   }
-  let params_follow = self.peek_at(1).kind is Ident(_) &&
-    (match self.peek_at(2).kind {
+  // `Box<<const T>(x: T) => T>`: a `const` modifier may come first.
+  let name_at = if self.peek_at(1).kind is Const { 2 } else { 1 }
+  let params_follow = self.peek_at(name_at).kind is Ident(_) &&
+    (match self.peek_at(name_at + 1).kind {
       Extends | Comma | Gt | Eq => true
       _ => false
     })

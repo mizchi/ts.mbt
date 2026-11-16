@@ -2553,6 +2553,45 @@ fn overload_arity_accepts(params : Array[@ast.TsType], n : Int32) -> Bool {
 }
 
 ///|
+/// One parameter type per argument: a slot before the rest parameter is
+/// itself, and every argument from the rest parameter on gets its element
+/// type. `sig` carries the rest flag a bare type list does not (a class
+/// constructor records `...values: T[]` as `Array(T)`). Without a rest
+/// parameter the list is returned as is.
+fn rest_expanded_params(
+  params : Array[@ast.TsType],
+  sig : Array[@ast.TsParam]?,
+  n_args : Int32,
+) -> Array[@ast.TsType] {
+  guard sig is Some(s) else { return params }
+  let mut rest_at = -1
+  for i, p in s {
+    if p.is_rest {
+      rest_at = i
+      break
+    }
+  }
+  if rest_at < 0 {
+    return params
+  }
+  if rest_at >= params.length() {
+    return params
+  }
+  let elem = match params[rest_at] {
+    Array(e) | Rest(Array(e)) | Applied("Array", [e]) => e
+    _ => return params
+  }
+  let out : Array[@ast.TsType] = []
+  for i in 0..<rest_at {
+    out.push(params[i])
+  }
+  for _ in rest_at..<n_args {
+    out.push(elem)
+  }
+  out
+}
+
+///|
 /// The parameter the `i`-th argument lands on: its own slot, or the element
 /// of a rest parameter it falls into.
 fn overload_param_at(params : Array[@ast.TsType], i : Int32) -> @ast.TsType {
@@ -6897,6 +6936,43 @@ fn Resolver::resolve_method_overload(
       if !is_assignable_to(arg_types[i], expected) {
         ok = false
         break
+      }
+    }
+    // Erasure alone cannot see arguments that contradict each other:
+    // `m<T>(xs: T[], y: T): number` accepts `([1], "s")` with `T` as
+    // `any`, and tsc goes on to `m(xs: number[], y: string): string`
+    // because `T` is `number` there. So a member that matched only with
+    // its binders erased is re-checked against the binders the arguments
+    // solve. They are solved from the WIDENED argument types, as a
+    // non-`const` type parameter infers (`("a", "b")` is `T = string`,
+    // not a clash between `"a"` and `"b"`), and one left unsolved stays
+    // `any`.
+    if ok &&
+      !erase.is_empty() &&
+      params
+      .iter()
+      .any(fn(p) { erase.keys().any(fn(b) { type_param_occurs(b, p) }) }) {
+      let binders = erase.keys().collect()
+      let solved : Map[String, @ast.TsType] = Map([])
+      for i in 0..<arg_types.length() {
+        infer_param_bindings(
+          binders,
+          overload_param_at(params, i),
+          widen_literal_deep(arg_types[i]),
+          solved,
+          false,
+        )
+      }
+      let inst : Map[String, @ast.TsType] = Map([])
+      for b in binders {
+        inst[b] = solved.get(b).unwrap_or(@ast.TsType::Any)
+      }
+      for i in 0..<arg_types.length() {
+        let expected = substitute_params(overload_param_at(params, i), inst)
+        if !is_assignable_to(arg_types[i], expected) {
+          ok = false
+          break
+        }
       }
     }
     if ok {
@@ -11444,7 +11520,13 @@ fn infer_expr_inner(
                   ),
                   names,
                   None,
-                  ctor_params,
+                  // Widened per ARGUMENT: a rest parameter's arguments each
+                  // land on its element type, so `constructor(...values:
+                  // T[])` with `new Box("a")` widens `T = "a"` to `string`
+                  // like `constructor(value: T)` does. Read as the bare
+                  // `T[]`, `T` sat in a nested position, which the widening
+                  // declines, and `box.value = "b"` was reported.
+                  rest_expanded_params(ctor_params, sig, args.length()),
                   args,
                   @ast.TsType::Named(class_name),
                 ),

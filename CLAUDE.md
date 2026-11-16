@@ -4777,6 +4777,28 @@ product surfaces now.
     and `.bind`. All four are MISSes, because a class used as a value is
     `any` here, so `R` has nothing to bind from. The test that claimed
     "is solved" now says what it guarantees: the binder does not leak.
+  - **The second review round found that two of those fixes were
+    wrong.** Both were false positives on code tsc accepts, and the
+    corpus could not see either one.
+    - **Erasing the binders made a generic member accept contradicting
+      arguments.** `m<T>(xs: T[], y: T): number` took `([1], "s")` with
+      `T` as `any`, while tsc moves on to `m(xs: number[], y: string):
+      string`. So a member that matched only with its binders erased is
+      re-checked against the binders the arguments solve. They are
+      solved from the WIDENED argument types, as a non-`const` type
+      parameter infers, so `("a", "b")` is one `T = string` and not a
+      clash.
+    - **The rich constructor signature inferred `T = "a"` from `new
+      Box("a")`, and the widening never ran.** The widening was still
+      handed the bare `T[]`, where `T` is nested, and it declines a
+      nested parameter, so `box.value = "b"` was reported. It is now
+      handed one parameter per argument (`rest_expanded_params`).
+
+    Two smaller gaps were fixed with them:
+    - A watch-set load that FAILED kept nothing it had read. A syntax
+      error in an imported file therefore unwatched the very file whose
+      fix would trigger the retry, in both graphs.
+    - The `<<` split did not accept `<<const T>`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
