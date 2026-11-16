@@ -181,3 +181,150 @@ async test "mtsc loader: every importer of a bare specifier gets its own edge" {
   importers.sort()
   assert_eq(importers, [root + "/a.ts", root + "/b.ts"])
 }
+
+///|
+/// One bare specifier can name two different packages: a nested
+/// `node_modules` shadows the outer one for the files under it, and each
+/// importer's edge has to point at ITS resolution — the bundler's
+/// specifier-keyed alias is not enough.
+async test "mtsc loader: a nested node_modules gives its importers their own target" {
+  let root = "/tmp/ts_mbt_mtsc_nested_versions"
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  for dir in [root + "/node_modules/lib", root + "/nested/node_modules/lib"] {
+    @fs.mkdir(dir, permission=0o755, recursive=true)
+    @fs.write_file(
+      dir + "/package.json",
+      "{\"name\":\"lib\",\"main\":\"./index.ts\"}\n",
+      create=0o644,
+    )
+    @fs.write_file(dir + "/index.ts", "export const v = 1;\n", create=0o644)
+  }
+  @fs.write_file(
+    root + "/a.ts",
+    "import { v } from \"lib\";\nexport const a = v;\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/nested/b.ts",
+    "import { v } from \"lib\";\nexport const b = v;\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/entry.ts",
+    "import { a } from \"./a\";\nimport { b } from \"./nested/b\";\nexport const s = a + b;\n",
+    create=0o644,
+  )
+  let edges : Array[@mtsc_core.MtscModuleEdge] = []
+  let loaded = mtsc_load_bundle_files(
+    root + "/entry.ts",
+    {},
+    {},
+    {},
+    {},
+    false,
+    [],
+    {},
+    edges,
+  )
+  assert_true(loaded is Ok(_))
+  let target_of = fn(importer_suffix : String) -> String? {
+    for edge in edges {
+      if edge.importerPath.has_suffix(importer_suffix) &&
+        edge.moduleSpecifier == "lib" {
+        return Some(edge.targetPath)
+      }
+    }
+    None
+  }
+  assert_true(
+    target_of("/a.ts")
+    .unwrap_or("")
+    .has_suffix("ts_mbt_mtsc_nested_versions/node_modules/lib/index.ts"),
+  )
+  assert_true(
+    target_of("/nested/b.ts")
+    .unwrap_or("")
+    .has_suffix("nested/node_modules/lib/index.ts"),
+  )
+}
+
+///|
+/// `-p` reads the checker's options through the WHOLE `extends` chain, and
+/// a package specifier (`"extends": "@scope/cfg/tsconfigs/base"`) is
+/// resolved through `node_modules` — univer's packages all extend one that
+/// way, and joining it onto the package directory named nothing.
+async test "mtsc -p: checker options come through a package extends" {
+  let root = "/tmp/ts_mbt_mtsc_extends_pkg"
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  @fs.mkdir(
+    root + "/node_modules/@scope/cfg/tsconfigs",
+    permission=0o755,
+    recursive=true,
+  )
+  @fs.write_file(
+    root + "/node_modules/@scope/cfg/tsconfigs/base.json",
+    "{\n  // JSONC\n  \"compilerOptions\": { \"strict\": true, \"strictPropertyInitialization\": false, \"experimentalDecorators\": true, \"lib\": [\"ESNext\", \"DOM\"] }\n}\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    root + "/tsconfig.json",
+    "{ \"extends\": \"@scope/cfg/tsconfigs/base\", \"compilerOptions\": { \"noImplicitOverride\": true } }\n",
+    create=0o644,
+  )
+  let opts = mtsc_options_new()
+  mtsc_apply_project_compiler_options(opts, root + "/tsconfig.json")
+  let got : Map[String, String] = Map([])
+  for entry in opts.checker_options {
+    got[entry.0] = entry.1
+  }
+  assert_eq(got.get("strict"), Some("true"))
+  assert_eq(got.get("strictPropertyInitialization"), Some("false"))
+  assert_eq(got.get("experimentalDecorators"), Some("true"))
+  assert_eq(got.get("noImplicitOverride"), Some("true"))
+  assert_eq(got.get("lib"), Some("ESNext,DOM"))
+  assert_eq(got.get("noImplicitAny"), None)
+}
+
+///|
+/// The boolean options the checker reads are HONOURED on the command line
+/// (they used to be reported as "accepted but not honoured"), keep their
+/// optional `true` / `false` value off the input list, and win over a
+/// tsconfig that sets the same name.
+async test "mtsc: checker flags on the command line are honoured" {
+  let opts = mtsc_parse_args(
+    [
+      "mtsc", "--strict", "false", "--experimentalDecorators", "--no-implicit-override=true",
+      "--target", "es5", "a.ts",
+    ],
+    1,
+  ).unwrap()
+  assert_eq(opts.inputs, ["a.ts"])
+  assert_eq(opts.checker_options, [
+    ("strict", "false"),
+    ("experimentalDecorators", "true"),
+    ("noImplicitOverride", "true"),
+  ])
+  // `--target` still changes nothing about the output and says so.
+  assert_eq(opts.ignored, ["--target"])
+  let root = "/tmp/ts_mbt_mtsc_cli_beats_config"
+  @fs.rmdir(root, recursive=true) catch {
+    _ => ()
+  }
+  @fs.mkdir(root, permission=0o755, recursive=true)
+  @fs.write_file(
+    root + "/tsconfig.json",
+    "{ \"compilerOptions\": { \"strict\": true, \"noImplicitAny\": true } }\n",
+    create=0o644,
+  )
+  mtsc_apply_project_compiler_options(opts, root + "/tsconfig.json")
+  let got : Map[String, String] = Map([])
+  for entry in opts.checker_options {
+    got[entry.0] = entry.1
+  }
+  assert_eq(got.get("strict"), Some("false"))
+  assert_eq(got.get("noImplicitAny"), Some("true"))
+}

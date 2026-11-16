@@ -4451,6 +4451,87 @@ product surfaces now.
   2,861 reports to **2,807 in 750 files**. That number nets the fixes
   against the newly visible code: `ICommand` 135 -> 4, `IMutation`
   25 -> 0, and TS1002 / TS1029 / the bivariance cell all reach zero.
+
+  Batch GE takes the first item GD filed: a tsconfig's `compilerOptions`
+  now reach the checker. The oracle, effect (126), zod (9) and the four
+  `.d.ts` entries are unchanged, because none of them is checked under a
+  config.
+  - **The detectors were not taught a second vocabulary.** The parser's
+    option detectors read `// @option:` header lines. `-p` now translates
+    a config into exactly those lines (`@mtsc_core.compiler_option_header`).
+    They are prepended to the window the detectors scan, never to the
+    source, so tokens and positions do not move. Namespace bodies, which
+    re-parse with a fresh parser, get the same lines.
+  - **`@strict:` is never written.** The detectors give `@strict: false`
+    precedence over an explicit per-flag `true`, which is the opposite of
+    tsc. So the strict family is resolved per flag, as `explicit ?? strict
+    ?? true`. The `true` default is probed: TS 7's `strict` defaults on,
+    and a config with no `strict` reports TS2322 / TS7006 / TS2564.
+  - **`extends` follows package specifiers.** Every univer package writes
+    `"extends": "@univerjs-infra/shared/tsconfigs/base"`. Joining that
+    onto the package directory named a file that does not exist, so every
+    option in the base read as absent. It now resolves through the nearest
+    `node_modules`, at all three readers.
+  - **The command line is honoured too, and wins.** The boolean checker
+    options (`--strict false`, `--experimentalDecorators`, …) used to be
+    "accepted but not honoured". They now go where a config's would, and a
+    config does not override them. `--target` and `--module` stay in the
+    accepted tier, because they would change only the checker and not the
+    output.
+  - **Several `--noEmit` entries are one program.** A univer package's
+    `include` is a few hundred files over one shared core. Compiling them
+    one at a time re-checked the core per entry and reported a shared
+    file's diagnostic once per entry that reached it.
+
+  Measured on univer with `-p packages/<p>/tsconfig.json`: on the 748
+  files both runs check, the config chain gives 2,793 reports. The
+  hand-injected headers gave 2,807, so the config now reproduces that
+  setup by itself. `-p` checks each package's whole `include`, spec files
+  too, so it covers 1,198 files (4,314 reports) where the `src/index.ts`
+  sweep covered 750. All 58 packages finish, in 1,580 s summed. One is an
+  outlier and is filed: `sheets-filter` takes 341 s, five times the next
+  slowest.
+
+  Checking the spec files found a **pre-existing exponential parse.**
+  Every `{` / `[` in expression position asks whether it starts a
+  destructuring assignment, and answering parses the whole literal as a
+  pattern first. A literal nested N deep was therefore parsed about 5^N
+  times: depth 10 took 19 s, and univer's 29-deep
+  `doc-event-manager.service.spec.ts` never finished.
+  - The answer is now memoized per token and context (the speculation
+    restores everything it touches). Depth 10 takes 5 ms and that file
+    takes 19 ms.
+  - What is left is quadratic in DEPTH, not in size: each enclosing level
+    still reads the levels below it once in pattern mode. Linear needs
+    tsc's cover grammar, a rewrite of `parse_assignment`.
+  - `verify-checker-scaling` has a `nested-literals` axis for it, with that
+    budget declared. Its runs are now killed after 120 s, because an
+    exponential rule shows up as a run that never ends rather than as a
+    large exponent. Against the pre-fix binary the axis fails by name.
+
+  **`timeout` does not stop mtsc.** Its async runtime blocks SIGTERM, so
+  the field script's `timeout 900` never fired, and one package ran for
+  23 minutes. Every harness that bounds an mtsc run has to send SIGKILL.
+
+  The review of GD also found four defects in the graph checker:
+  - **Imported values were read in the importer's scope.** An imported
+    function's type is written in ITS module, so `consume(x: I)` means the
+    `I` that module imports. The checker judged it against the `I` the
+    importer imports, rejected the legal call and accepted the wrong one.
+    The value now carries an `@value-origin:` marker, and its type is read
+    through that module's own renames.
+  - **A named import was found in a list, not the export table.** That
+    list holds every declaration, so a private `interface T` beside
+    `export { T } from "./a"` could win. The binding now goes through
+    `graph_exported_type`, which follows tsc's precedence: local export,
+    then named re-export, then `export *` (a name two `export *` sources
+    provide differently is dropped).
+  - **A namespace's own declaration lost to a file-level import.** The
+    import redirect applied inside a namespace that declares the name
+    itself.
+  - **A bare specifier resolved once for every importer.** A nested
+    `node_modules` can resolve one specifier two ways, so each importer
+    now gets its own edge target.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

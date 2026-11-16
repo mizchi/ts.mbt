@@ -138,11 +138,25 @@ pub struct Parser {
   invalid_decorator_uses : Array[String]
   // Always-error grammar misuses (complete messages; see TsModule).
   grammar_misuses : Array[String]
+  // Compiler options this parse reads as if they led the file — see
+  // `from_source_with_jsx`. `parse_module` prepends it to its own copy of
+  // the leading window, so the two scans of the header agree.
+  option_header : String
   // Opening-quote positions of the lexer's unterminated strings, kept only
   // in JSX mode: a JSX attribute value may span lines, and the lexer could
   // not tell. Shared by every `{ ..self }` copy, so a speculative parser
   // that consumes a JSX element forgives them for all of them.
   jsx_unterminated_strings : Array[Int32]
+  // `is_destructuring_assignment_start`'s answer per start token, keyed by
+  // `pos * 4 + generator / async bits`. Every `{` / `[` in expression
+  // position asks it, and answering it parses the whole literal as a
+  // pattern first — so a literal nested N deep was parsed ~5^N times (a
+  // univer spec file's 29-deep fixture never finished). The speculation
+  // leaves no trace (position, recordings and `in_generator` are all
+  // restored), so a repeat at the same token in the same context can only
+  // get the same answer. Shared by `{ ..self }` copies, which read the same
+  // token array; a parser over OTHER tokens is built fresh and gets its own.
+  destructuring_start_memo : Map[Int32, Bool]
   // Local binding names introduced by ES `import` statements (default,
   // namespace, and named/aliased specifiers). The import statements
   // themselves are consumed and discarded, but the *names* must stay
@@ -504,7 +518,9 @@ pub fn Parser::new_with_strict_and_jsx(
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses: [],
+    option_header: "",
     jsx_unterminated_strings: [],
+    destructuring_start_memo: Map([]),
     imported_binding_names: [],
     import_module_specs: [],
     multi_file_source: false,
@@ -603,7 +619,19 @@ fn Parser::inherit_source_flags(self : Parser, child : Parser) -> Unit {
 }
 
 ///|
-pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
+///
+/// `option_header` is compiler options spelled as the conformance harness
+/// spells them (`// @strictPropertyInitialization: false`, one per line),
+/// read as if they led the file. It is how a `tsconfig.json`'s
+/// `compilerOptions` reach the detectors below, which were written for
+/// those header directives: it is prepended to the leading WINDOW the
+/// detectors scan and never to the source, so tokens, positions and the
+/// `"use strict"` prologue are exactly what the file says.
+pub fn Parser::from_source_with_jsx(
+  src : String,
+  allow_jsx : Bool,
+  option_header~ : String = "",
+) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
   let in_strict = detect_use_strict_prologue(src)
@@ -611,7 +639,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   // window. Slice + lowercase it once — JSX speculation re-enters
   // `from_source_with_jsx` on sub-sources, so per-detector copies used to
   // multiply across every speculative parse.
-  let head = source_head(src)
+  let head = option_header + source_head(src)
   let head_lower = head.to_lower()
   let grammar_misuses : Array[String] = []
   if lexer.invalid_char_count > 0 {
@@ -642,7 +670,11 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_regex {
     grammar_misuses.push("unterminated regular expression literal")
   }
-  if lexer.unterminated_string {
+  // In JSX mode the verdict waits for the parse: a quote inside a JSX
+  // element may open a multi-line attribute value the lexer could not
+  // recognise, and `parse_module` reports only what no element forgave
+  // (see `forgive_jsx_string_artifacts`).
+  if lexer.unterminated_string && !allow_jsx {
     grammar_misuses.push("unterminated string literal")
   }
   for _i in 0..<lexer.empty_radix_literal_count {
@@ -659,6 +691,10 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   let (has_ts_suppression, noimplicitthis_off, has_filename_directive) = scan_source_directive_flags(
     src,
   )
+  // `@noImplicitThis` is the one option read off the whole SOURCE rather
+  // than the leading window, so the option header is scanned for it too.
+  let noimplicitthis_off = noimplicitthis_off ||
+    (option_header != "" && scan_source_directive_flags(option_header).1)
   // Marker: the file uses `@ts-ignore` / `@ts-expect-error` suppression
   // comments somewhere. Our issues carry no line positions, so rules
   // whose corpus counter-examples are suppressed lines (the computed-key
@@ -857,6 +893,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses,
+    option_header,
+    destructuring_start_memo: Map([]),
     jsx_unterminated_strings: if allow_jsx {
       lexer.unterminated_string_starts
     } else {

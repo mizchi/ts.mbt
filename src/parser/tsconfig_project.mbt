@@ -148,24 +148,61 @@ fn tsconfig_top_level_string_array(
 /// ARRAY of bases, and that is a declared gap rather than an oversight:
 /// merging several bases needs a precedence rule per field, and every
 /// config in this repo and its corpus uses the string form.
-fn tsconfig_extends_target(src : String, dir : String) -> String? {
+async fn tsconfig_extends_target(src : String, dir : String) -> String? {
   match find_object_field_value_range(src, 0, src.length(), "extends") {
     Some((start_, _)) =>
       match parse_json_string_at(src, start_) {
-        Some(parent) => {
-          let joined = normalize_path(join_path(dir, parent))
-          Some(
-            if joined.has_suffix(".json") {
-              joined
-            } else {
-              joined + ".json"
-            },
-          )
-        }
+        Some(parent) => resolve_tsconfig_extends(parent, dir)
         None => None
       }
     None => None
   }
+}
+
+///|
+/// Where `"extends": spec` points, from a config in `dir`.
+///
+/// A relative or absolute spec is a path, `.json` appended when missing. A
+/// BARE spec is a package, resolved the way TypeScript resolves it: the
+/// nearest `node_modules/<spec>` up from `dir`, tried as written when it
+/// already ends in `.json`, else with `.json` appended and then as a
+/// directory holding `tsconfig.json`. (A package's `tsconfig` field in
+/// `package.json` is not read.) univer's packages
+/// all write `"extends": "@univerjs-infra/shared/tsconfigs/base"`, and
+/// joining that onto the package directory named a file that does not
+/// exist, so every option the base sets — `strict`,
+/// `experimentalDecorators` — read as absent.
+pub async fn resolve_tsconfig_extends(spec : String, dir : String) -> String? {
+  if spec.has_prefix(".") || spec.has_prefix("/") {
+    let joined = normalize_path(join_path(dir, spec))
+    return Some(
+      if joined.has_suffix(".json") {
+        joined
+      } else {
+        joined + ".json"
+      },
+    )
+  }
+  let mut current = normalize_path(dir)
+  while true {
+    let base = normalize_path(join_path(current, "node_modules/" + spec))
+    let candidates = if base.has_suffix(".json") {
+      [base]
+    } else {
+      [base + ".json", join_path(base, "tsconfig.json")]
+    }
+    for candidate in candidates {
+      if read_text_file(candidate) is Some(_) {
+        return Some(candidate)
+      }
+    }
+    let parent = dirname(current)
+    if parent == current {
+      break
+    }
+    current = parent
+  }
+  None
 }
 
 ///|
@@ -236,6 +273,47 @@ async fn tsconfig_compiler_option_bool_in(
   }
   match tsconfig_extends_target(src, dirname(config_path)) {
     Some(parent) => tsconfig_compiler_option_bool_in(parent, name, depth + 1)
+    None => None
+  }
+}
+
+///|
+/// A STRING-ARRAY `compilerOptions` entry (`lib`) of the config at
+/// `config_path`, following `extends` when that config does not set it.
+pub async fn tsconfig_compiler_option_string_array_at(
+  config_path : String,
+  name : String,
+) -> Array[String]? {
+  tsconfig_compiler_option_string_array_in(normalize_path(config_path), name, 0)
+}
+
+///|
+async fn tsconfig_compiler_option_string_array_in(
+  config_path : String,
+  name : String,
+  depth : Int32,
+) -> Array[String]? {
+  if depth > 8 {
+    return None
+  }
+  let src = match read_text_file(config_path) {
+    Some(t) => t
+    None => return None
+  }
+  match find_named_object_range(src, "compilerOptions") {
+    Some((start_, end_)) =>
+      match find_object_field_value_range(src, start_, end_, name) {
+        Some((vstart, vend)) =>
+          if char_at(src, vstart) == '[' {
+            return Some(parse_json_string_array_at(src, vstart, vend))
+          }
+        None => ()
+      }
+    None => ()
+  }
+  match tsconfig_extends_target(src, dirname(config_path)) {
+    Some(parent) =>
+      tsconfig_compiler_option_string_array_in(parent, name, depth + 1)
     None => None
   }
 }

@@ -877,6 +877,13 @@ fn Parser::parse_single_param_arrow(
 
 ///|
 fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
+  let memo_key = self.pos * 4 +
+    (if self.in_generator { 1 } else { 0 }) +
+    (if self.in_async { 2 } else { 0 })
+  match self.destructuring_start_memo.get(memo_key) {
+    Some(known) => return known
+    None => ()
+  }
   let saved_pos = self.pos
   let saved_gen = self.in_generator
   // Speculative binding-pattern parse: roll back any misuse recordings it
@@ -892,6 +899,7 @@ fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   self.rollback_recordings(recordings)
   self.pos = saved_pos
   self.in_generator = saved_gen
+  self.destructuring_start_memo[memo_key] = ok
   ok
 }
 
@@ -1441,6 +1449,9 @@ fn Parser::parse_parenthesized_expr(
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
+    // Same tokens, same source positions: a JSX element parsed in here
+    // forgives the lexer's unterminated strings for the whole file.
+    jsx_unterminated_strings: self.jsx_unterminated_strings,
   }
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
@@ -1528,6 +1539,9 @@ fn Parser::parse_expr_until_top_level(
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,
     strict_null_checks: self.strict_null_checks,
+    // Same tokens, same source positions: a JSX element parsed in here
+    // forgives the lexer's unterminated strings for the whole file.
+    jsx_unterminated_strings: self.jsx_unterminated_strings,
   }
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
@@ -2220,9 +2234,14 @@ fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
 /// unterminated string whose opening quote turns out to lie inside a JSX
 /// element is an artifact of lexing out of context, not an error. Each
 /// JSX element this parser consumes forgives the ones in its source
-/// range; once none is left, the diagnostic goes too. A string outside
-/// every JSX element still reports, which keeps `const s = "a` an error
-/// in a `.tsx` file.
+/// range, and `parse_module` reports TS1002 only for what is left. A
+/// string outside every JSX element still reports, which keeps
+/// `const s = "a` an error in a `.tsx` file.
+///
+/// The positions are SHARED with every sub-parser over the same tokens
+/// (`{ ..self }` copies, and the parenthesized-expression and top-level
+/// sub-parsers, which copy the array reference explicitly), so an element
+/// parsed inside `(cond && <div className="…">)` forgives for the file.
 fn Parser::forgive_jsx_string_artifacts(
   self : Parser,
   start : Int32,
@@ -2239,14 +2258,6 @@ fn Parser::forgive_jsx_string_artifacts(
   pending.clear()
   for p in kept {
     pending.push(p)
-  }
-  if pending.length() == 0 {
-    match self.grammar_misuses.search("unterminated string literal") {
-      Some(i) => {
-        let _ = self.grammar_misuses.remove(i)
-      }
-      None => ()
-    }
   }
 }
 

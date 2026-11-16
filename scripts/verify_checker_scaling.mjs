@@ -74,6 +74,11 @@ const DEFAULT_RUNGS = [500, 1000, 2000, 4000];
 // in 2 s. `--rungs` still overrides everything.
 const AXIS_RUNGS = {
   namespaces: [125, 250, 500, 1000],
+  // A DEPTH, not a list: every level is one more frame of recursive
+  // descent, so the top rung is bounded by the native stack rather than
+  // by time. 8x between the endpoints still separates linear from
+  // quadratic, and an exponential axis dies at the first rung or two.
+  "nested-literals": [50, 100, 200, 400],
 };
 
 // Per-axis exponent budget. Every axis is held to `--max-exponent` (1.5)
@@ -100,6 +105,17 @@ const AXIS_BUDGET = {
   // `RootNameBackstops`) — worth -22% at n=1000 and nothing measurable
   // on any real file.
   namespaces: 2.15,
+  // KNOWN QUADRATIC in nesting DEPTH, in the parser. The speculative
+  // "does this `{` / `[` start a destructuring assignment" parse is
+  // memoized per token (it was ~5^depth before), but a speculation still
+  // parses its literal's whole subtree in PATTERN mode, so every
+  // enclosing level re-reads the levels below it once: O(depth x size).
+  // Linear needs tsc's cover grammar — parse once as a literal and
+  // reinterpret it as a pattern when an `=` follows — which is a rewrite
+  // of `parse_assignment`. At the stakes measured it is not worth it:
+  // univer's deepest fixture is 29 levels and checks in 19 ms, and the
+  // top rung here (400 levels) is 0.4 s.
+  "nested-literals": 2.15,
 };
 
 // One generator per axis. Each emits N declarations of ONE kind, so a
@@ -252,6 +268,19 @@ const AXES = {
     out.push(`}`);
     return out.join("\n") + "\n";
   },
+  // Object and array literals nested N deep, the shape of a test
+  // fixture's expected value. The parser asks of every `{` / `[` in
+  // expression position whether it starts a destructuring ASSIGNMENT,
+  // and answering it parses the whole literal as a pattern first; before
+  // that answer was memoized, a literal 10 deep took 19 s and univer's
+  // 29-deep `doc-event-manager.service.spec.ts` never finished — about
+  // 5x per level, which is a hang rather than an exponent, and why runs
+  // are bounded by `RUN_TIMEOUT_MS`.
+  "nested-literals": (n) => {
+    let lit = "0";
+    for (let i = 0; i < n; i++) lit = `{ k: ${i}, v: [${lit}] }`;
+    return `export const fixture = ${lit};\n`;
+  },
   // THE CONTROL. Byte count grows with the rung and the declaration
   // count does not (12 interfaces throughout), so this axis stays flat
   // for a list-quadratic rule and grows for a genuinely byte-quadratic
@@ -333,12 +362,25 @@ function findBinary(explicit) {
 // is the right statistic for "how much work is there": noise only ever
 // adds time, so the floor is the closest estimate of the work itself,
 // and a mean would let one scheduler hiccup masquerade as an exponent.
+// One run may take at most this long. An EXPONENTIAL rule does not show
+// up as a large exponent, it shows up as a run that never ends, and a
+// harness that hangs reports nothing. SIGKILL because the binary's async
+// runtime blocks SIGTERM.
+const RUN_TIMEOUT_MS = 120_000;
+
 function timeFile(bin, file, iters, repeats) {
   let best = Infinity;
   for (let r = 0; r < repeats; r++) {
     const t0 = process.hrtime.bigint();
-    const res = spawnSync(bin, ["check", "--iters", String(iters), file], { stdio: "ignore" });
+    const res = spawnSync(bin, ["check", "--iters", String(iters), file], {
+      stdio: "ignore",
+      timeout: RUN_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
     const t1 = process.hrtime.bigint();
+    if (res.error && res.error.code === "ETIMEDOUT") {
+      return { ms: NaN, error: `timed out after ${RUN_TIMEOUT_MS / 1000} s` };
+    }
     if (res.status !== 0 && res.status !== null) {
       return { ms: NaN, error: `exit ${res.status}` };
     }

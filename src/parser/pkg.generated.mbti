@@ -7,6 +7,8 @@ import {
 }
 
 // Values
+pub async fn canonical_file_path(String) -> String
+
 pub fn collect_exported_const_values_from_source(String, Map[String, @ast.TsExpr]) -> Map[String, @ast.TsExpr] raise ParseError
 
 pub fn emit_moonbit_decl(@ast.TsModule) -> String
@@ -61,6 +63,8 @@ pub fn parse_type_from_source(String) -> @ast.TsType raise ParseError
 
 pub async fn resolve_runtime_module_specifier(String, String) -> String?
 
+pub async fn resolve_tsconfig_extends(String, String) -> String?
+
 pub async fn resolve_type_module_specifier(String, String) -> String?
 
 pub async fn tsconfig_compiler_option(String, String) -> String?
@@ -70,6 +74,8 @@ pub async fn tsconfig_compiler_option_at(String, String) -> String?
 pub async fn tsconfig_compiler_option_bool(String, String) -> Bool?
 
 pub async fn tsconfig_compiler_option_bool_at(String, String) -> Bool?
+
+pub async fn tsconfig_compiler_option_string_array_at(String, String) -> Array[String]?
 
 pub fn value_identifier_needs_suffix(String) -> Bool
 
@@ -202,7 +208,9 @@ pub struct Parser {
   strict_mode_misuses : Array[String]
   invalid_decorator_uses : Array[String]
   grammar_misuses : Array[String]
+  option_header : String
   jsx_unterminated_strings : Array[Int32]
+  destructuring_start_memo : Map[Int32, Bool]
   imported_binding_names : Array[String]
   import_module_specs : Array[String]
   multi_file_source : Bool
@@ -257,7 +265,7 @@ pub struct Parser {
   mut last_function_bodiless : Bool
 }
 pub fn Parser::from_source(String) -> Self
-pub fn Parser::from_source_with_jsx(String, Bool) -> Self
+pub fn Parser::from_source_with_jsx(String, Bool, option_header? : String) -> Self
 pub fn Parser::keep_const_assertions(Self) -> Unit
 pub fn Parser::mark_declaration_file(Self) -> Unit
 pub fn Parser::new(Array[Token]) -> Self

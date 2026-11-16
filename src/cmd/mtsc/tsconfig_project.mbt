@@ -384,11 +384,68 @@ async fn mtsc_apply_project_compiler_options(
     Some(v) => if !opts.no_check { opts.no_check = v }
     None => ()
   }
+  // The options the CHECKER reads. They are passed on as written and the
+  // `strict` family's defaults are decided where they are used
+  // (`@mtsc_core.compiler_option_header`), so `-p` and the library
+  // cannot disagree about what an absent `strictNullChecks` means.
+  //
+  // An option the COMMAND LINE already set wins, as in `tsc`: those were
+  // pushed while the arguments were parsed, and the header takes the last
+  // entry for a name, so a config entry must not follow them.
+  let from_command_line : Map[String, Unit] = Map([])
+  for entry in opts.checker_options {
+    from_command_line[entry.0] = ()
+  }
+  let push = fn(name : String, value : String) {
+    if !from_command_line.contains(name) {
+      opts.checker_options.push((name, value))
+    }
+  }
+  for name in mtsc_checker_bool_options {
+    match @parser.tsconfig_compiler_option_bool_at(config_path, name) {
+      Some(v) => push(name, v.to_string())
+      None => ()
+    }
+  }
+  for name in ["target", "module"] {
+    match @parser.tsconfig_compiler_option_at(config_path, name) {
+      Some(v) => push(name, v)
+      None => ()
+    }
+  }
+  match @parser.tsconfig_compiler_option_string_array_at(config_path, "lib") {
+    Some(libs) => push("lib", libs.join(","))
+    None => ()
+  }
   // The JSX settings are NOT read here. `mtsc_build_jsx_config` already
   // reads them per entry, searching up from the entry's own directory,
   // which is the more precise answer in a monorepo where a package's
   // config overrides the base it extends. Reading them twice would mean
   // two precedence orders that can disagree.
+}
+
+///|
+/// The BOOLEAN `compilerOptions` the checker honours, from a tsconfig or
+/// the command line. Everything here is a name the parser's option
+/// detectors read (see `@mtsc_core.compiler_option_header`).
+let mtsc_checker_bool_options : Array[String] = [
+  "strict", "noImplicitAny", "strictNullChecks", "strictPropertyInitialization",
+  "useUnknownInCatchVariables", "noImplicitThis", "alwaysStrict", "experimentalDecorators",
+  "useDefineForClassFields", "noImplicitOverride", "noPropertyAccessFromIndexSignature",
+  "noUnusedLocals", "importHelpers", "allowUnreachableCode", "noLib",
+]
+
+///|
+/// The canonical spelling of a checker boolean option, from the
+/// normalized form the option scanner matches on (lower case, no `-` or
+/// `_`).
+fn mtsc_checker_bool_option(normalized : String) -> String? {
+  for name in mtsc_checker_bool_options {
+    if name.to_lower() == normalized {
+      return Some(name)
+    }
+  }
+  None
 }
 
 ///|
@@ -432,6 +489,22 @@ fn mtsc_print_show_config(
     Some(v) => rows.push("    \"jsxImportSource\": \"\{v}\"")
     None => ()
   }
+  // The options the checker reads, as given (last entry for a name wins,
+  // which is how `compiler_option_header` reads them).
+  let checker : Map[String, String] = Map([])
+  for entry in opts.checker_options {
+    checker[entry.0] = entry.1
+  }
+  for name, value in checker {
+    if name == "lib" {
+      let items = value.split(",").map(fn(l) { "\"\{l}\"" }).collect()
+      rows.push("    \"lib\": [\{items.join(", ")}]")
+    } else if value == "true" || value == "false" {
+      rows.push("    \"\{name}\": \{value}")
+    } else {
+      rows.push("    \"\{name}\": \"\{value}\"")
+    }
+  }
   println(rows.join(",\n"))
   println("  },")
   let quoted : Array[String] = []
@@ -453,8 +526,8 @@ fn mtsc_print_show_config(
 /// options this compiler accepts and ignores.
 fn mtsc_init_tsconfig_text() -> String {
   let lines = [
-    "{", "  \"compilerOptions\": {", "    // mtsc always type-checks strictly and always emits",
-    "    // current-syntax ESM, so `strict`, `target` and `module` are", "    // accepted for tsc compatibility and have no effect.",
+    "{", "  \"compilerOptions\": {", "    // `strict` is honoured by the checker. mtsc always emits",
+    "    // current-syntax ESM, so `target` and `module` are accepted for", "    // tsc compatibility and do not change the output.",
     "    \"strict\": true,", "    \"target\": \"es2022\",", "    \"module\": \"esnext\",",
     "    \"moduleResolution\": \"bundler\",", "    // Honoured by mtsc:", "    \"outDir\": \"dist\",",
     "    \"declaration\": true,", "    \"sourceMap\": false,", "    \"jsx\": \"react-jsx\"",

@@ -1373,9 +1373,16 @@ fn distribute_conditional_alias(
 fn Resolver::alias_namespace_import_types(
   r : Resolver,
   aliases : Array[(String, String, String)],
+  shadowed~ : Map[String, Unit] = Map([]),
 ) -> Unit {
   for pair in aliases {
     let (qualified, bare, origin) = pair
+    // A name the scope being checked declares itself (a namespace's own
+    // `enum E` beside the file's `import { E }`) is that declaration in
+    // here, not the import, so nothing is redirected for it.
+    if shadowed.contains(qualified) {
+      continue
+    }
     // When two modules declare `bare`, its bare entry is their merge, and
     // the qualified spelling must still mean ITS module's declaration,
     // which ingestion registered under `bare@origin`.
@@ -1444,6 +1451,21 @@ fn Resolver::alias_namespace_import_types(
       None => ()
     }
   }
+}
+
+///|
+/// True when `module_` declares `name` at its TOP LEVEL as an interface,
+/// a type alias, an enum or a class — the kinds that get a per-module key.
+/// `module_declares_type_name` asks a different question (any depth, no
+/// enums) for the lib-spelling rules.
+fn module_declares_top_level_type(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Bool {
+  module_.interfaces.iter().any(fn(d) { d.name == name }) ||
+  module_.type_aliases.iter().any(fn(d) { d.name == name }) ||
+  module_.enums.iter().any(fn(d) { d.name == name }) ||
+  module_.classes.iter().any(fn(d) { d.name == name })
 }
 
 ///|
@@ -33472,6 +33494,7 @@ pub fn check_module_function_bodies_with_context(
   type_modules : Array[@ast.TsModule],
   namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
+  type_module_import_aliases~ : Array[Array[(String, String, String)]] = [],
 ) -> Array[ExprIssue] {
   check_module_function_bodies_layered(
     module_,
@@ -33481,6 +33504,7 @@ pub fn check_module_function_bodies_with_context(
     globals,
     namespace_type_aliases~,
     type_module_keys~,
+    type_module_import_aliases~,
   )
 }
 
@@ -46599,6 +46623,7 @@ fn check_module_function_bodies_layered(
   backstops~ : RootNameBackstops? = None,
   namespace_type_aliases~ : Array[(String, String, String)] = [],
   type_module_keys~ : Array[String] = [],
+  type_module_import_aliases~ : Array[Array[(String, String, String)]] = [],
 ) -> Array[ExprIssue] {
   if outer_modules.length() == 0 {
     walked_arrow_bodies.clear()
@@ -46727,11 +46752,21 @@ fn check_module_function_bodies_layered(
   if has_type_modules {
     note_declared(own_root, "<checked>")
   }
+  let type_modules_by_key : Map[String, @ast.TsModule] = Map([])
+  for i, type_module in type_modules {
+    if i < type_module_keys.length() &&
+      !type_modules_by_key.contains(type_module_keys[i]) {
+      type_modules_by_key[type_module_keys[i]] = type_module
+    }
+  }
   for i, type_module in type_modules {
     if i < type_module_keys.length() {
       note_declared(type_module, type_module_keys[i])
     }
   }
+  // Each reachable module's renames, by key: an imported VALUE's type is
+  // written in its declaring module's scope and is read through them below.
+  let renames_by_key : Map[String, Map[String, String]] = Map([])
   for i, type_module in type_modules {
     let cache_key = if i < type_module_keys.length() {
       type_module_keys[i]
@@ -46781,6 +46816,43 @@ fn check_module_function_bodies_layered(
       for d in type_module.classes {
         renames.remove(d.name)
       }
+      // Its own NAMED imports of a colliding name go to the module they
+      // import from. Without this, a reachable module's `I` read the shared
+      // bare entry, which is the CHECKED module's import of `I` (see
+      // `alias_namespace_import_types`) — so `export function consume(x: I)`
+      // in a third module was judged against the wrong `I`. Only a name
+      // whose origin registered a key qualifies: a class keeps its bare
+      // name, and an origin that is not a type module (the checked module
+      // itself) is what the bare entry already holds.
+      if i < type_module_import_aliases.length() {
+        for import_alias in type_module_import_aliases[i] {
+          let (local_name, bare, origin) = import_alias
+          if renames.contains(local_name) ||
+            module_declares_top_level_type(type_module, local_name) {
+            continue
+          }
+          let multi = match declarers.get(bare) {
+            Some(set) => set.length() > 1
+            None => false
+          }
+          if !multi {
+            continue
+          }
+          match type_modules_by_key.get(origin) {
+            Some(origin_module) =>
+              if !origin_module.classes.iter().any(fn(c) { c.name == bare }) &&
+                module_declares_top_level_type(origin_module, bare) {
+                renames[local_name] = bare + "@" + origin
+              }
+            None => ()
+          }
+        }
+      }
+    }
+    if cache_key != "" &&
+      renames.length() > 0 &&
+      !renames_by_key.contains(cache_key) {
+      renames_by_key[cache_key] = renames
     }
     Resolver::ingest_type_module(
       resolver,
@@ -46840,7 +46912,35 @@ fn check_module_function_bodies_layered(
       )
     }
   }
-  Resolver::alias_namespace_import_types(resolver, namespace_type_aliases)
+  // The aliases are the ROOT file's imports, and a namespace check gets
+  // them too; a type the namespace (or one between it and the root)
+  // declares shadows the import inside it.
+  let shadowed : Map[String, Unit] = Map([])
+  let note_shadow = fn(m : @ast.TsModule) {
+    for d in m.interfaces {
+      shadowed[d.name] = ()
+    }
+    for d in m.type_aliases {
+      shadowed[d.name] = ()
+    }
+    for d in m.enums {
+      shadowed[d.name] = ()
+    }
+    for d in m.classes {
+      shadowed[d.name] = ()
+    }
+  }
+  if outer_modules.length() > 0 {
+    note_shadow(module_)
+    for k in 1..<outer_modules.length() {
+      note_shadow(outer_modules[k])
+    }
+  }
+  Resolver::alias_namespace_import_types(
+    resolver,
+    namespace_type_aliases,
+    shadowed~,
+  )
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
   // `@strict: ...` directive, so they inherit. Reuses the same root
@@ -46852,8 +46952,24 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  // `@value-origin:NAME` says which module an imported value's type is
+  // written in (see `graph_import_globals`).
+  let value_origins : Map[String, String] = Map([])
   for global in extra_globals {
-    resolver.globals[global.0] = global.1
+    if global.0.has_prefix("@value-origin:") && global.1 is Named(origin) {
+      value_origins[global.0["@value-origin:".length():].to_owned()] = origin
+    }
+  }
+  for global in extra_globals {
+    let ty = match value_origins.get(global.0) {
+      Some(origin) =>
+        match renames_by_key.get(origin) {
+          Some(renames) => rename_type_refs(global.1, renames)
+          None => global.1
+        }
+      None => global.1
+    }
+    resolver.globals[global.0] = ty
     resolver.declared_value_names[global.0] = true
   }
   resolver.no_implicit_any = strict_root.no_implicit_any
@@ -48210,6 +48326,7 @@ fn check_module_function_bodies_layered(
       backstops=Some(nested_backstops),
       namespace_type_aliases~,
       type_module_keys~,
+      type_module_import_aliases~,
     )
     let prefix = if ns.name == "<global>" {
       "declare global"

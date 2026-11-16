@@ -908,7 +908,11 @@ fn Parser::parse_ambient_external_module_source(
   if body_source.trim() == "" {
     empty_ts_module()
   } else {
-    let parser = Parser::from_source(body_source)
+    let parser = Parser::from_source_with_jsx(
+      body_source,
+      true,
+      option_header=self.option_header,
+    )
     let module_ = parser.parse_module_with_seeded_const_values_internal(
       {},
       true,
@@ -1220,7 +1224,11 @@ fn Parser::parse_namespace_decl_with_mode(
         // Inherit JSX permission from the outer parser so `<T>expr`
         // type assertions inside a `.ts` (non-JSX) source don't get
         // misread as JSX element starts.
-        let parser = Parser::from_source_with_jsx(body_source, self.allow_jsx)
+        let parser = Parser::from_source_with_jsx(
+          body_source,
+          self.allow_jsx,
+          option_header=self.option_header,
+        )
         // A namespace body re-parses with a FRESH parser, so the
         // declaration-file fact — a property of the SOURCE, not of any
         // one declaration — has to be carried across or every rule that
@@ -1242,6 +1250,7 @@ fn Parser::parse_namespace_decl_with_mode(
         let runtime_parser = Parser::from_source_with_jsx(
           body_source,
           self.allow_jsx,
+          option_header=self.option_header,
         )
         self.inherit_source_flags(runtime_parser)
         try
@@ -1254,6 +1263,7 @@ fn Parser::parse_namespace_decl_with_mode(
             let ambient_parser = Parser::from_source_with_jsx(
               body_source,
               self.allow_jsx,
+              option_header=self.option_header,
             )
             self.inherit_source_flags(ambient_parser)
             let body = ambient_parser.parse_module_with_seeded_const_values_internal(
@@ -4403,7 +4413,11 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   }
   // Shared leading window for the directive detectors below (one slice
   // instead of one per detector).
-  let module_head = source_head(self.src)
+  let module_head = self.option_header + source_head(self.src)
+  // TS1002 in JSX mode: whatever no JSX element forgave.
+  if self.jsx_unterminated_strings.length() > 0 {
+    self.grammar_misuses.push("unterminated string literal")
+  }
   self.record_unused_private_members(module_head)
   {
     funcs,

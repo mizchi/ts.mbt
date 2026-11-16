@@ -146,13 +146,13 @@ fn mtsc_option_takes_value(name : String) -> Bool {
 /// rather than inferred from "everything left over", because the leftover
 /// set is exactly where a typo has to land.
 ///
-/// Several of these are honest near-misses worth naming. `--strict` and
-/// the strict family cannot be honoured because `@mtsc_core.collect_type_issues`
-/// takes a source and a JSX flag and nothing else — strictness is read
-/// per-file from the module's own directives — so wiring the flag through
-/// means changing that API rather than this table. `--target` / `--module`
-/// cannot be honoured because mtsc emits one level (ESM, current syntax)
-/// and does not downlevel.
+/// The BOOLEAN options the checker reads (`--strict` and its family,
+/// `--experimentalDecorators`, `--noImplicitOverride`, …; see
+/// `mtsc_checker_bool_options`) are listed here to be PARSED and are then
+/// honoured rather than reported. `--target` / `--module` cannot be
+/// honoured because mtsc emits one level (ESM, current syntax) and does
+/// not downlevel; a tsconfig's `target` / `module` / `lib` do reach the
+/// checker, the command-line spellings stay in this tier.
 fn mtsc_option_accepted_no_effect(name : String) -> Bool {
   match name {
     "target"
@@ -377,6 +377,12 @@ priv struct MtscOptions {
   // they were given. Reported once so an inherited `tsc` command line
   // does not quietly mean something narrower than it says.
   ignored : Array[String]
+  // The project's `compilerOptions` that change what the CHECKER reports
+  // (`strict` and its family, `experimentalDecorators`, `target`, …), as
+  // `(name, value)` in tsconfig's own spelling. Filled from the config a
+  // `-p` or a bare `mtsc` loads, and empty when files are named on the
+  // command line, which is when `tsc` ignores tsconfig.json too.
+  checker_options : Array[(String, String)]
 }
 
 ///|
@@ -420,6 +426,7 @@ fn mtsc_options_new() -> MtscOptions {
     list_files: false,
     list_files_only: false,
     ignored: [],
+    checker_options: [],
   }
 }
 
@@ -701,13 +708,26 @@ fn mtsc_parse_args(
       _ =>
         if mtsc_option_accepted_no_effect(name) {
           // A boolean in this tier may still carry `true` / `false`.
+          let mut flag = true
           if inline_value is None && !mtsc_option_takes_value(name) {
-            let (_, used) = mtsc_read_bool_value(argv, i + 1)
+            let (v, used) = mtsc_read_bool_value(argv, i + 1)
+            flag = v
             if used {
               consumed_next = true
             }
           }
-          opts.ignored.push(name_token)
+          match inline_value {
+            Some(v) => flag = v != "false"
+            None => ()
+          }
+          // The boolean options the CHECKER reads are honoured: they go
+          // where a tsconfig's would, and a later tsconfig does not
+          // override them (`mtsc_apply_project_compiler_options`).
+          match mtsc_checker_bool_option(name) {
+            Some(canonical) =>
+              opts.checker_options.push((canonical, flag.to_string()))
+            None => opts.ignored.push(name_token)
+          }
         } else {
           return Err("unknown option: \{raw}")
         }
@@ -851,6 +871,6 @@ fn mtsc_report_ignored(opts : MtscOptions) -> Unit {
     names.push(name)
   }
   println(
-    "mtsc: accepted but not honoured: \{names.join(", ")} — mtsc emits current-syntax ESM and type-checks strictly, so these have no effect",
+    "mtsc: accepted but not honoured: \{names.join(", ")} — mtsc emits current-syntax ESM and does not model these, so they have no effect",
   )
 }

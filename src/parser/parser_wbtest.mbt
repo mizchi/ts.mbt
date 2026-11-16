@@ -8459,4 +8459,51 @@ test "parser: a multi-line JSX attribute string is not unterminated" {
   assert_eq(misuses("export const s = \"broken\n;\n"), [
     "unterminated string literal",
   ])
+  // The element sits inside a parenthesized expression or a ternary,
+  // which a CHILD parser reads: the child forgives the string, and the
+  // parent must not report it from its own copy of the lexer's list.
+  assert_eq(
+    misuses(
+      "declare const c: boolean;\nexport const a = (c && <div\n  className=\"\n    x y\n  \"\n>hi</div>);\n",
+    ),
+    [],
+  )
+  assert_eq(
+    misuses(
+      "declare const c: boolean;\nexport const a = (c ? <div\n  title=\"p\nq\"\n/> : null);\n",
+    ),
+    [],
+  )
+}
+
+///|
+/// Every `{` / `[` in expression position asks whether it starts a
+/// destructuring assignment, and that answer is memoized per token. The
+/// memo must not change an answer: a destructuring assignment nested inside
+/// literals is still one, the literals around it are still literals, and a
+/// literal nested far deeper than any fixture parses at once (it was ~5x
+/// per level — 19 s at depth 10 — before the memo).
+test "parser: destructuring detection through nested literals" {
+  match parse_expr_from("[{ k: [[p, q] = pair] }]") {
+    ArrayLit(
+      [ObjectLit([("k", ArrayLit([AssignPattern(binding, Var("pair"))]))])]
+    ) =>
+      match binding {
+        @ast.TsBinding::Array(_) => ()
+        _ => fail("expected array binding")
+      }
+    _ => fail("expected the inner element to be a destructuring assignment")
+  }
+  match parse_expr_from("({ a: [{ b }] } = o)") {
+    AssignPattern(_, Var("o")) => ()
+    _ => fail("expected AssignPattern")
+  }
+  let mut lit = "0"
+  for i in 0..<60 {
+    lit = "{ k: \{i}, v: [" + lit + "] }"
+  }
+  match parse_expr_from(lit) {
+    ObjectLit(_) => ()
+    _ => fail("expected an object literal")
+  }
 }

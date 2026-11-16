@@ -440,3 +440,209 @@ test "mtsc graph checker reads an imported enum's own members" {
     messages.iter().any(fn(m) { m.contains("`BOOLEAN_NUMBER_TRUE`") }),
   )
 }
+
+///|
+/// A namespace's OWN `enum E` shadows the file's `import { E }` inside it:
+/// the import redirect (which exists because two reachable modules declare
+/// `E`) must not apply to a name the namespace declares itself.
+test "mtsc graph checker keeps a namespace's own enum over a colliding import" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import { E } from \"./a\";\nimport { B } from \"./b\";\nexport const outer: number = E.A + B;\nexport namespace N {\n  enum E { Local }\n  export const inner = E.Local;\n  export const bad = E.Nope;\n}",
+        allowJsx: false,
+      },
+      { path: "/src/a.ts", source: "export enum E { A }", allowJsx: false, },
+      {
+        path: "/src/b.ts",
+        source: "export enum E { X }\nexport const B = 1;",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./b",
+        targetPath: "/src/b.ts",
+      },
+    ],
+  })
+  let messages = issues.map(fn(i) { i.message })
+  assert_false(messages.iter().any(fn(m) { m.contains("`Local`") }))
+  assert_false(messages.iter().any(fn(m) { m.contains("`A`") }))
+  assert_true(messages.iter().any(fn(m) { m.contains("`Nope`") }))
+}
+
+///|
+/// A third module's OWN import of a colliding name means that module's
+/// declaration, whatever the checked module imports under the same
+/// spelling: `consume(x: I)` in `c.ts` takes `b.ts`'s `I`.
+test "mtsc graph checker judges an imported function by its own module's import" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import type { I } from \"./a\";\nimport { consume } from \"./c\";\nexport const mine: I = { a: \"x\" };\nconsume({ b: \"ok\" });\nconsume({ a: \"bad\" });",
+        allowJsx: false,
+      },
+      {
+        path: "/src/a.ts",
+        source: "export interface I { a: string }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/b.ts",
+        source: "export interface I { b: string }",
+        allowJsx: false,
+      },
+      {
+        path: "/src/c.ts",
+        source: "import type { I } from \"./b\";\nexport function consume(x: I): void {}",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./c",
+        targetPath: "/src/c.ts",
+      },
+      {
+        importerPath: "/src/c.ts",
+        moduleSpecifier: "./b",
+        targetPath: "/src/b.ts",
+      },
+    ],
+  })
+  let messages = issues.map(fn(i) { i.message })
+  let said = fn(text : String) -> Bool {
+    messages.iter().any(fn(m) { m.contains(text) })
+  }
+  // `consume({ b: "ok" })` is legal: its `I` is `b.ts`'s.
+  assert_false(said("property `b` does not exist"))
+  assert_false(said("property `a` is required"))
+  assert_false(issues.iter().any(fn(i) { i.path.contains("binding `mine` ") }))
+  // `consume({ a: "bad" })` is not.
+  assert_true(said("property `a` does not exist"))
+}
+
+///|
+/// A named import goes through the target's EXPORT table: a private
+/// `interface T` beside `export { T } from "./a"` is not what `import { T }`
+/// binds.
+test "mtsc graph checker binds a re-exported name, not a private same-named one" {
+  let issues = collect_module_graph_issues({
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import type { T } from \"./index\";\nexport const ok: T = { a: 1 };\nexport const bad: T = { hidden: 1 };",
+        allowJsx: false,
+      },
+      {
+        path: "/src/index.ts",
+        source: "interface T { hidden: number }\nexport const h: T = { hidden: 1 };\nexport { T } from \"./a\";",
+        allowJsx: false,
+      },
+      {
+        path: "/src/a.ts",
+        source: "export interface T { a: number }",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./index",
+        targetPath: "/src/index.ts",
+      },
+      {
+        importerPath: "/src/index.ts",
+        moduleSpecifier: "./a",
+        targetPath: "/src/a.ts",
+      },
+    ],
+  })
+  let flagged = fn(binding : String) -> Bool {
+    issues.iter().any(fn(i) { i.path.contains("binding `\{binding}` ") })
+  }
+  assert_false(flagged("ok"))
+  assert_false(flagged("h"))
+  assert_true(flagged("bad"))
+}
+
+///|
+/// A tsconfig's `compilerOptions` reach every module of the program: with
+/// `strict: false` a null into a `string` is legal, and with no `strict`
+/// at all it is not, because TypeScript 7's `strict` defaults to true.
+test "mtsc graph checker applies compiler options to every module" {
+  let graph : MtscModuleGraph = {
+    modules: [
+      {
+        path: "/src/entry.ts",
+        source: "import { f } from \"./b\";\nexport const x: string = null;\nexport const y = f();",
+        allowJsx: false,
+      },
+      {
+        path: "/src/b.ts",
+        source: "export function f(): number { const s: string = null; return 1 }",
+        allowJsx: false,
+      },
+    ],
+    edges: [
+      {
+        importerPath: "/src/entry.ts",
+        moduleSpecifier: "./b",
+        targetPath: "/src/b.ts",
+      },
+    ],
+  }
+  let loose = collect_module_graph_issues(graph, compiler_options=[
+    ("strict", "false"),
+  ])
+  assert_eq(loose.length(), 0)
+  let strict = collect_module_graph_issues(graph, compiler_options=[
+    ("experimentalDecorators", "true"),
+  ])
+  assert_true(strict.iter().any(fn(i) { i.modulePath == "/src/entry.ts" }))
+  assert_true(strict.iter().any(fn(i) { i.modulePath == "/src/b.ts" }))
+  // An explicit flag beats `strict`, in either direction.
+  let nulls_only = collect_module_graph_issues(graph, compiler_options=[
+    ("strict", "false"),
+    ("strictNullChecks", "true"),
+  ])
+  assert_true(nulls_only.length() > 0)
+}
+
+///|
+test "compiler_option_header resolves the strict family flag by flag" {
+  assert_eq(compiler_option_header([]), "")
+  let h = compiler_option_header([
+    ("strict", "false"),
+    ("noImplicitAny", "true"),
+    ("target", "ES2022"),
+    ("lib", "ESNext,DOM"),
+  ])
+  assert_true(h.contains("// @noImplicitAny: true\n"))
+  assert_true(h.contains("// @strictNullChecks: false\n"))
+  assert_true(h.contains("// @alwaysStrict: false\n"))
+  assert_true(h.contains("// @target: es2022\n"))
+  assert_true(h.contains("// @lib: esnext,dom\n"))
+  // Never `@strict:` itself: the detectors give `@strict: false`
+  // precedence over a per-flag `true`.
+  assert_false(h.contains("@strict:"))
+  let d = compiler_option_header([("noImplicitOverride", "true")])
+  assert_true(d.contains("// @strictPropertyInitialization: true\n"))
+  assert_true(d.contains("// @noImplicitOverride: true\n"))
+  assert_false(d.contains("@alwaysStrict"))
+}
