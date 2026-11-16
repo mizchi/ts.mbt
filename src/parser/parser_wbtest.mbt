@@ -1893,7 +1893,8 @@ test "parser: a type argument may open with a generic function type" {
       return
     }
   }
-  assert_eq(module_.values.length(), 3)
+  // `b`, `c`, `d` and the exported `s`.
+  assert_eq(module_.values.length(), 4)
   match module_.values[0].type_ {
     Applied("Box", [GenericFunc(_, _, _)]) => ()
     t => fail("expected a generic function type argument, got \{t}")
