@@ -5078,6 +5078,58 @@ product surfaces now.
     "cannot find name". It also reported an exported binding's annotation
     twice, once from `values` and once from `top_level_stmts`, and now
     reports once per site.
+  - **The review of GI found thirteen real defects. Four were false
+    positives on ordinary code, older than the batch.** Each was
+    reproduced against tsc before it was fixed, and each fix has a test
+    that fails when the fix is reverted.
+    - **A barrel that imports, then exports.** `import { n } from "./a";
+      export { n }` is how a barrel re-exports, and the export names an
+      IMPORT binding, which has no declaration in the barrel. So
+      `exported_value_site` found nothing and the importer got "has no
+      value export". `graph_exported_type` has followed that shape for
+      TYPES all along, so this is the applied-in-some-places family
+      again. An import from outside the graph, and a namespace import,
+      are unknown rather than missing.
+    - **An ordinary import of a type.** `import { I } from "./x"` of an
+      interface or type alias, without `type`, read as a missing value
+      export. Only `verbatimModuleSyntax` requires the `type`.
+    - **A default import of a declaration file.** tsc reports TS1192 for
+      a `.ts` file with no default export, and accepts the same import of
+      a `.d.ts` or an ambient module. TS 7 removed
+      `allowSyntheticDefaultImports: false`, so those always get a
+      synthetic default. A package whose types export no default is a
+      declaration file.
+    - **`declare global` in a reachable module.** Its members were
+      ingested and never counted as declared names.
+  - **The rest were in GI's own ambient-module code.**
+    - The virtual `/@ambient-module/*.d.ts` carries no import or export
+      marker, so it read as a SCRIPT. Every body's declarations became
+      globals, and two bodies each declaring `interface I` merged into
+      one shape.
+    - A shorthand `declare module "spec";` was an empty body, so every
+      import from it was "has no value export". The shorthand now
+      carries a body sentinel, and an import it answers gets no edge and
+      is not reported, as tsc types it `any`. That covers patterns such
+      as `"*.svg"` and an exact name over a resolved file.
+    - A body's own imports were resolved relative to the file holding
+      it, so their edges were keyed by that file and the virtual module
+      reached nothing.
+    - Named type imports needed implicit export entries for an ambient
+      body's interfaces and type aliases.
+    - The single-letter type check never got the ambient names.
+    - #288's unkeyed move skipped namespace bodies.
+    - `-p packages/app` left the type-root walk relative, so it stopped
+      before the workspace root.
+    - `${configDir}` in `typeRoots` was not expanded.
+    - The reference scanner ended a line comment only at LF, and
+      required `path="` with no spaces around the `=`.
+  - **One suggestion was declined, because it contradicts tsc.** It was
+    to realpath a relative resolution too. tsc's
+    `nodeModuleNameResolverWorker` realpaths only the non-relative
+    branch, and the docs now say so. A `declare global` in a module
+    nothing imports is still not seen. That module is outside the checked
+    module's type modules, so reaching it is a wider change than this
+    round.
 
   Batch GJ is the survey's third step, and it adds no rule. It makes the
   check that found the whole survey permanent: `fixtures/real-app` is an

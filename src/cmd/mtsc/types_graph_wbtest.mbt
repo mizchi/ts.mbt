@@ -483,3 +483,37 @@ async test "mtsc check graph: typeRoots and a file's own references" {
   let (entries, _) = mtsc_resolve_entries(opts).unwrap()
   assert_true(mtsc_compile_all(opts, entries) > 0)
 }
+
+///|
+/// `${configDir}` in `typeRoots` is TypeScript's template for the config's
+/// own directory. It was joined onto that directory literally, so the root
+/// named a directory that does not exist and `G` was undeclared.
+async test "mtsc check graph: typeRoots expands ${configDir}" {
+  let root = "/tmp/ts_mbt_types_graph_config_dir"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"${configDir}/typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/g/index.d.ts", "declare var G: number;\n"),
+    ("src/main.ts", "export const ok: number = G;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+}
+
+///|
+/// The default type roots are every `node_modules/@types` from the config
+/// directory UP, and `-p packages/app` leaves that directory relative: its
+/// walk stopped at the first segment (`packages` has the parent `""`), so a
+/// monorepo's hoisted `@types` at the workspace root were never read. The
+/// walk is over the absolute directory now. This repo's own root has a
+/// `node_modules/@types`, and the test runs below it.
+async test "mtsc type roots: a relative config directory walks to the root" {
+  let opts = mtsc_options_new()
+  opts.config_dir = Some("zz_absent_dir/app")
+  let roots = mtsc_type_roots(opts)
+  assert_true(roots.length() > 0)
+  assert_true(roots.iter().all(fn(r) { r.has_prefix("/") }))
+}

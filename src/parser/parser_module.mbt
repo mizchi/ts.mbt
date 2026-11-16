@@ -1004,7 +1004,10 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
         Some((spec, module_, body_source))
       } else {
         self.skip_declaration_block()
-        Some((spec, empty_ts_module(), ""))
+        // `declare module "spec";` — a shorthand, whose every import is
+        // untyped. Not the same as an empty braced body, which declares a
+        // module with no exports.
+        Some((spec, empty_ts_module(), @ast.shorthand_ambient_module_body))
       }
     }
     _ => None

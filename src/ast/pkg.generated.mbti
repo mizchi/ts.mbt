@@ -16,6 +16,8 @@ pub fn is_using_holder_decl(TsStmt) -> Bool
 
 pub fn lowered_using_try_body(Array[TsStmt]) -> TsBlock?
 
+pub let shorthand_ambient_module_body : String
+
 // Errors
 
 // Types and methods

@@ -121,9 +121,11 @@ pub trait MtscHost {
   /// pnpm reaches one package through a symlink per dependent, so without
   /// this a file can enter the program under two spellings and declare
   /// everything twice. A host with no symlinks answers its argument.
-  /// Applied to the built-in resolution's answers only: a `ResolvedTo`
-  /// path from `resolve_module_name` is used as given, so a host that
-  /// returns its own paths canonicalizes them itself.
+  /// Applied to the built-in resolution's answer for a BARE specifier only,
+  /// as tsc's `nodeModuleNameResolverWorker` realpaths a package file and
+  /// not a relative one. A `ResolvedTo` path from `resolve_module_name` is
+  /// used as given, so a host that returns its own paths canonicalizes
+  /// them itself.
   fn realpath(Self, String) -> String
 
   /// The host's own answer for importing `specifier` from the file
