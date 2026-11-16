@@ -13633,7 +13633,18 @@ fn infer_call(
   // A generic callable VALUE is solved before `unwrap`, which peels the
   // binders: past that line the arm below that was written for it could
   // never match, and `const g = injector.get.bind(injector); g(ID)` came
-  // back with its `T` unsolved.
+  // back with its `T` unsolved. A member type written as an indexed access
+  // (`get: Injector["get"]`, how univer's test beds declare it) is looked
+  // up first for the same reason, since `unwrap` would resolve it AND peel
+  // what it found.
+  let callee = match callee {
+    IndexedAccess(obj, Literal(member_name)) =>
+      match resolver.lookup_field(obj, member_name) {
+        Some(GenericFunc(_, _, _) as g) => g
+        _ => callee
+      }
+    _ => callee
+  }
   match callee {
     GenericFunc(names, _, Func(params, ret))
     | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) =>
@@ -25439,12 +25450,18 @@ fn optional_chain_equality_narrowing(
 /// unwrapped first, or univer's `Nullable<T> = T | null | undefined |
 /// void` stayed one opaque variant and `if (s) use(s)` reported the whole
 /// alias. Only a union is taken, so any other type keeps its shape.
+///
+/// A union MEMBER that is such an alias is expanded too: an optional
+/// field typed `cl?: Nullable<IColorStyle>` is `Nullable<IColorStyle> |
+/// undefined`, whose outer `undefined` was all `if (cl?.rgb)` removed, so
+/// `cl.rgb` inside the guard still saw the alias's `null | undefined |
+/// void` and read as "object is possibly `undefined`".
 fn truthy_non_nullish(resolver : Resolver, cur : @ast.TsType) -> @ast.TsType {
   let ty = match resolver.unwrap(cur) {
     Union(_) as u => u
     _ => cur
   }
-  narrow_remove(non_nullable(ty), fn(v) { v is Void })
+  narrow_remove(non_nullable_resolved(resolver, ty), fn(v) { v is Void })
 }
 
 ///|

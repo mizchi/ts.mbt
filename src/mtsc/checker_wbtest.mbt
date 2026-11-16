@@ -1128,3 +1128,26 @@ test "mtsc graph checker does not report inside a context-only module" {
     }),
   )
 }
+
+///|
+/// An imported class read as a VALUE is its constructor, not an instance.
+/// It used to arrive as the INSTANCE type, so redi's `injector.add([Svc])`
+/// compared `Svc[]` against `[Ctor<T>]` and reported a line tsc accepts.
+/// A class declared in the same file is `any` as a value, and the importer
+/// now sees the same.
+test "mtsc graph checker does not type an imported class value as an instance" {
+  let lib = "export class Svc { run(): void {} }"
+  assert_eq(
+    graph2(
+      "import { Svc } from \"./lib\";\ndeclare function add(dep: [new () => unknown]): void;\nadd([Svc]);\nexport const s: Svc = new Svc();",
+      lib,
+    ),
+    "",
+  )
+  // Its instance type is still the class's.
+  assert_true(
+    graph2(
+      "import { Svc } from \"./lib\";\nexport const n: number = new Svc();", lib,
+    ).contains("expected `number`"),
+  )
+}

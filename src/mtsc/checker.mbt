@@ -377,9 +377,17 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
       return Some(@ast.TsType::Named(name))
     }
   }
+  // A class used as a VALUE is its constructor, not an instance, and this
+  // checker has no constructor-type spelling an importer can use — a
+  // class declared in the SAME file is `any` as a value for that reason.
+  // `Named(name)` here is the INSTANCE type, so an imported class read as
+  // a value was wrong in both directions: redi's `injector.add([Svc])`
+  // compared `Svc[]` (instances) against `[Ctor<T>]` and reported, and a
+  // static member was looked up among the instance's. The importer now
+  // sees what a local use sees.
   for class_ in module_.classes {
     if class_.name == name {
-      return Some(@ast.TsType::Named(name))
+      return Some(@ast.TsType::Any)
     }
   }
   None

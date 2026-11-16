@@ -23468,3 +23468,30 @@ test "an unsolved type parameter does not leak into a call's result" {
     [],
   )
 }
+
+///|
+/// A truthy test removes the nullish members of an alias that is itself a
+/// MEMBER of the union: `cl?: Nullable<C>` is `Nullable<C> | undefined`,
+/// and `if (cl?.rgb)` used to remove only the outer `undefined`.
+test "a truthy optional chain narrows an alias member of the receiver's union" {
+  let prelude = "type Nullable<T> = T | null | undefined | void;\ninterface C { rgb?: string }\ninterface S { cl?: Nullable<C> }\ndeclare function norm(s: string): string;\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(s: S) { const { cl } = s; if (cl?.rgb) { norm(cl.rgb); } if (cl) { cl.rgb; } }",
+    ),
+    [],
+  )
+}
+
+///|
+/// A member type spelled as an indexed access keeps the binders of the
+/// generic method it names when it is called through a local binding.
+test "a generic method reached through an indexed access type is solved" {
+  @test.assert_eq(
+    body_issue_messages(
+      "class T { other = 1 }\nclass Inj { get<R>(id: new () => R): R { return new id(); } }\nclass Cmd { run(): void {} }\ninterface Bed { get: Inj[\"get\"] }\ndeclare function bed(): Bed;\nfunction f() { const { get } = bed(); get(Cmd).run(); const b = bed(); const g = b.get; g(Cmd).run(); }",
+    ),
+    [],
+  )
+}
