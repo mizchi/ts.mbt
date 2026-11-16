@@ -26126,6 +26126,7 @@ fn narrow_by_predicate_target(
 ) -> Unit {
   let cur = predicate_narrowing_source(resolver, cur)
   let target = predicate_canonical_target(resolver, target)
+  let test_target = predicate_comparison_target(resolver, target)
   // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
   // single Named that isn't assignable to `target` but the source
   // type genuinely supports the predicate, like
@@ -26133,7 +26134,9 @@ fn narrow_by_predicate_target(
   // intersection `cur & target` — TS narrows to that intersection,
   // not just to `target`, so subsequent calls expecting `cur` still
   // accept the narrowed value.
-  let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+  let then_ty = narrow_keep(cur, fn(v) {
+    predicate_target_matches(v, target, test_target)
+  })
   let then_resolved = match cur {
     // `unknown` has no members to keep, so the narrowing is the target
     // itself, as tsc gives it.
@@ -26160,7 +26163,9 @@ fn narrow_by_predicate_target(
   }
   pair_pos.push((arg_name, then_resolved))
   // Negative: strip members that fit T.
-  let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+  let else_ty = narrow_remove(cur, fn(v) {
+    predicate_target_matches(v, target, test_target)
+  })
   // A `loose_target` is a generic predicate's target with its unsolved
   // type parameters read as `any` (or left unbound, for an arrow whose
   // `<A>` the AST does not keep). That is a fine upper bound for the
@@ -26367,6 +26372,54 @@ fn predicate_canonical_target(
       Union(parts.map(fn(p) { predicate_canonical_target(resolver, p) }))
     _ => target
   }
+}
+
+///|
+/// The predicate target the keep / remove tests compare against: an alias
+/// target expanded by the same rule as the source's members
+/// (`collect_narrowing_members`). Expanding only the source left the two
+/// sides in different terms, so `value is Text<string>` over a `Choice` that
+/// had expanded to `string | number` matched nothing, kept `string` in the
+/// else branch, and reported `const n: number = value`. A target that
+/// expands to anything the relation cannot decide is compared as written.
+/// The unexpanded target is still what a narrowing falls back to, so a
+/// diagnostic names the alias the guard was written with.
+///
+/// A member is compared against BOTH forms (`predicate_target_matches`).
+/// The source expands only the alias members the rule reaches, so a
+/// `Box | string` parameter keeps `Box` as a name while `v is Box`
+/// expands to `{ b: number }`, and the two then match only as written.
+/// Both forms name one type, so matching either cannot remove a member
+/// the other would keep.
+fn predicate_comparison_target(
+  resolver : Resolver,
+  target : @ast.TsType,
+) -> @ast.TsType {
+  match target {
+    Named(name) | Applied(name, _) if resolver.type_aliases.contains(name) => {
+      let members : Array[@ast.TsType] = []
+      collect_narrowing_members(resolver, target, members, 0)
+      if members.is_empty() ||
+        !members.iter().all(is_decidable_narrowing_member) {
+        target
+      } else if members.length() == 1 {
+        members[0]
+      } else {
+        Union(members)
+      }
+    }
+    _ => target
+  }
+}
+
+///|
+fn predicate_target_matches(
+  v : @ast.TsType,
+  target : @ast.TsType,
+  expanded : @ast.TsType,
+) -> Bool {
+  is_assignable_to(v, target) ||
+  (!physical_equal(expanded, target) && is_assignable_to(v, expanded))
 }
 
 ///|
@@ -26579,6 +26632,7 @@ fn apply_method_type_predicate_narrowing(
     }
   }
   let target = predicate_canonical_target(resolver, target)
+  let test_target = predicate_comparison_target(resolver, target)
   // `this is T` predicate (`isLeader(): this is LeadGuard`): the guard
   // narrows the *receiver* itself, not a positional argument. Narrow the
   // receiver's binding (`if (a.isLeader()) { a.lead() }`).
@@ -26589,13 +26643,17 @@ fn apply_method_type_predicate_narrowing(
           resolver,
           narrowing_current_type(env, resolver, key),
         )
-        let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+        let then_ty = narrow_keep(cur, fn(v) {
+          predicate_target_matches(v, target, test_target)
+        })
         let then_resolved = match then_ty {
           Never => target
           _ => then_ty
         }
         pair_pos.push((key, then_resolved))
-        let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+        let else_ty = narrow_remove(cur, fn(v) {
+          predicate_target_matches(v, target, test_target)
+        })
         pair_neg.push((key, else_ty))
       }
       None => ()
@@ -26624,13 +26682,17 @@ fn apply_method_type_predicate_narrowing(
         resolver,
         env_lookup_full(env, resolver, arg_name),
       )
-      let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+      let then_ty = narrow_keep(cur, fn(v) {
+        predicate_target_matches(v, target, test_target)
+      })
       let then_resolved = match then_ty {
         Never => target
         _ => then_ty
       }
       pair_pos.push((arg_name, then_resolved))
-      let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+      let else_ty = narrow_remove(cur, fn(v) {
+        predicate_target_matches(v, target, test_target)
+      })
       if !(loose && else_ty is Never && !(cur is Never)) {
         pair_neg.push((arg_name, else_ty))
       }

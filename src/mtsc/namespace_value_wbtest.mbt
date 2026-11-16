@@ -432,6 +432,27 @@ test "a guard over an alias union whose member is an alias narrows both branches
 }
 
 ///|
+/// The predicate TARGET is expanded by the same rule as the source's
+/// members, so the keep / remove tests compare like with like. Expanding
+/// only the source turned `Choice` into `string | number` while
+/// `value is Text<string>` stayed a name, so the else branch kept `string`.
+/// An alias to a union of interfaces (`v is AB`) was never expanded at
+/// all, which main reports too. tsc reports only the planted `bad`.
+test "a guard's alias target is compared in the source's terms" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/main.ts", "type Text<T> = T;\ntype Choice = Text<string> | number;\ndeclare function isText(value: Choice): value is Text<string>;\nexport function f(value: Choice): number {\n  if (!isText(value)) {\n    const n: number = value;\n    return n;\n  }\n  const bad: number = value;\n  return bad;\n}\ninterface A { a: number }\ninterface B { b: string }\ntype AB = A | B;\ndeclare function isAB(v: unknown): v is AB;\nexport function g(v: A | B | number): number {\n  if (!isAB(v)) {\n    const n: number = v;\n    return n;\n  }\n  const x: AB = v;\n  return 0;\n}\ntype Box = { b: number };\ndeclare function isBox(v: Box | string): v is Box;\nexport function h(v: Box | string): number {\n  if (!isBox(v)) {\n    const s: string = v;\n    return s.length;\n  }\n  return v.b;\n}",
+        ),
+      ],
+      [],
+    ),
+    ["function f > binding `bad` init :: expected `number` but got `string`"],
+  )
+}
+
+///|
 /// `call` infers its result, so a predicate does not survive it: tsc
 /// narrows NEITHER argument of `g.call(null, first, value)`. The predicate
 /// used to stay on the signature `call` builds, and its recorded subject
