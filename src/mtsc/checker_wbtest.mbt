@@ -1171,8 +1171,7 @@ test "mtsc graph checker leaves an imported overload set's implementation out" {
   // two-argument form is `any` — a MISS, not a finding.)
   assert_true(
     graph2(
-      "import { pipe } from \"./lib\";\nexport const s: string = pipe(1);",
-      lib,
+      "import { pipe } from \"./lib\";\nexport const s: string = pipe(1);", lib,
     ).contains("expected `string` but got `number`"),
   )
 }
