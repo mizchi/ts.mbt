@@ -5260,6 +5260,26 @@ product surfaces now.
     mtsc exit on `ok/` is a failure. A planted file must get exactly one
     report. Each was shown to fire by mutation. So were all fourteen
     checker changes above, each against its own test.
+  - **#293's review found three defects, each reproduced against tsc
+    first.**
+    - A guard whose subject is not its first parameter narrowed the
+      first argument. This happened through a namespace, an object method
+      and a named import alike, and it was pre-existing on main for all
+      three. `isText(options, value): value is string` turned `options`
+      into `string`.
+      - A callable type carries no parameter names, so the subject is now
+        told by type, using TypeScript's own rule (TS2677: a predicate's
+        type must be assignable to its parameter's type).
+      - The first version abstained on two candidates. That cost univer
+        three false positives in every package, because an unannotated
+        `allowZero = true` reads as `any` and accepts anything. So the
+        first parameter now answers whenever it can be the subject.
+    - A union-typed member of an `export =` namespace (`mode: "dev" |
+      "prod"`) read as absent. Only a union of signatures, which is an
+      overload set, binds as `any`.
+    - An `export * as N` reached through `export *` answered before an
+      explicit `export * as N` in the same barrel. Explicit re-exports now
+      come first, the precedence `graph_exported_type` already follows.
   - **The three misses left are machinery, not rules.**
     - hono's `app.fetch` names the DOM lib's `Request`.
     - React's `useState` is an overloaded member of an `export =`
