@@ -158,6 +158,62 @@ async fn mtsc_typecheck_entries(
     )
     guard loaded is Ok(_) else { return None }
   }
+  // The files the program holds without any import naming them: the
+  // project's type directives, and every `/// <reference path|types>` in a
+  // file already loaded — which can reference more, so this runs to a
+  // fixpoint. Each is loaded the way an import is, so its own imports come
+  // too. A referenced file that cannot be loaded is left out rather than
+  // taking the program with it.
+  let scanned : Map[String, Unit] = Map([])
+  let pending = mtsc_type_directive_roots(opts)
+  while true {
+    let sources : Array[(String, String)] = []
+    for path, source in files {
+      if !scanned.contains(path) && mtsc_graph_checks_source(path) {
+        sources.push((path, source))
+      }
+    }
+    for entry in sources {
+      let (path, source) = entry
+      scanned[path] = ()
+      for reference in @parser.triple_slash_references(source) {
+        let target = match reference.0 {
+          "path" =>
+            Some(
+              mtsc_resolve_existing_for_types(
+                mtsc_normalize(mtsc_join_path(mtsc_dirname(path), reference.1)),
+              ),
+            )
+          _ => mtsc_resolve_type_directive(opts, path, reference.1)
+        }
+        match target {
+          Some(t) => if !files.contains(t) { pending.push(t) }
+          None => ()
+        }
+      }
+    }
+    if pending.length() == 0 {
+      break
+    }
+    for target in pending {
+      if files.contains(target) || !mtsc_file_exists(target) {
+        continue
+      }
+      let _ = mtsc_load_bundle_files(
+        target,
+        files,
+        aliases,
+        opts.externals,
+        Map([]),
+        false,
+        [],
+        Map([]),
+        edges,
+        true,
+      )
+    }
+    pending.clear()
+  }
   let ts_files : Map[String, String] = Map([])
   for path, source in files {
     if mtsc_graph_checks_source(path) {
@@ -179,6 +235,142 @@ async fn mtsc_typecheck_entries(
       ),
     ),
   )
+}
+
+///|
+/// The type roots: `typeRoots` as configured, or every `node_modules/@types`
+/// from the project's directory up, which is TypeScript's default
+/// (`getDefaultTypeRoots`).
+async fn mtsc_type_roots(opts : MtscOptions, cwd? : String) -> Array[String] {
+  match opts.type_roots {
+    Some(roots) => return roots
+    None => ()
+  }
+  let out : Array[String] = []
+  let mut dir = match opts.config_dir {
+    Some(d) => d
+    None => return out
+  }
+  // `-p packages/app` leaves the directory relative, and a relative walk
+  // stops at its own first segment: `packages` has the parent `""`, so the
+  // workspace root's `node_modules/@types` — where a monorepo hoists
+  // `@types/node` — was never asked. TypeScript walks the ABSOLUTE
+  // directory, so this does too.
+  if !dir.has_prefix("/") {
+    let base = match cwd {
+      Some(c) => c
+      None => @parser.canonical_file_path(".")
+    }
+    dir = mtsc_normalize(mtsc_join_path(base, dir))
+  }
+  for candidate in mtsc_type_root_candidates(dir) {
+    let is_dir = (@fs.kind(candidate) catch { _ => @fs.FileKind::Unknown })
+      is @fs.FileKind::Directory
+    if is_dir {
+      out.push(candidate)
+    }
+  }
+  out
+}
+
+///|
+/// `node_modules/@types` in `dir` and in every directory above it, nearest
+/// first, `/` included: `mtsc_dirname("/packages")` is `""`, which ended
+/// the walk one level short of a workspace directly under the root.
+fn mtsc_type_root_candidates(start : String) -> Array[String] {
+  let out : Array[String] = []
+  let mut dir = start
+  while true {
+    out.push(mtsc_normalize(mtsc_join_path(dir, "node_modules/@types")))
+    let parent = mtsc_dirname(dir)
+    let parent = if parent == "" && dir.has_prefix("/") && dir != "/" {
+      "/"
+    } else {
+      parent
+    }
+    if parent == dir || parent == "" || parent == "." {
+      break
+    }
+    dir = parent
+  }
+  out
+}
+
+///|
+/// Where the type directive `name` (`types: ["node"]`,
+/// `/// <reference types="node" />`) resolves from `containing_file`:
+/// `name/` in a type root, read as a package directory, and otherwise the
+/// `node_modules` walk the types resolver does for an import of `name`.
+/// That is TypeScript's primary and secondary lookup.
+async fn mtsc_resolve_type_directive(
+  opts : MtscOptions,
+  containing_file : String,
+  name : String,
+) -> String? {
+  for root in mtsc_type_roots(opts) {
+    // A trailing `/` makes the relative specifier a DIRECTORY only.
+    match
+      @parser.resolve_type_module_specifier(
+        mtsc_join_path(root, "__type_root__.ts"),
+        "./" + name + "/",
+      ) {
+      Some(path) => return Some(path)
+      None => ()
+    }
+  }
+  @parser.resolve_type_module_specifier(containing_file, name)
+}
+
+///|
+/// The type directives a PROJECT loads by itself: `types` when the config
+/// names them, and otherwise every package directory in every type root
+/// (TypeScript's automatic type inclusion).
+///
+/// Project mode only, which is a stated departure: `tsc file.ts` with no
+/// config still includes the `@types` it can see from the working
+/// directory. Doing that here would load React's and Express's types into
+/// every no-config check in a repository that merely has them installed,
+/// and the no-config path is how this repo measures real packages.
+async fn mtsc_type_directive_roots(opts : MtscOptions) -> Array[String] {
+  let out : Array[String] = []
+  let config_dir = match opts.config_dir {
+    Some(d) => d
+    None => return out
+  }
+  let containing = mtsc_join_path(config_dir, "__inferred type names__.ts")
+  let names = match opts.types {
+    Some(names) => names
+    None => {
+      let found : Array[String] = []
+      for root in mtsc_type_roots(opts) {
+        for entry in (fs_readdir(root, sort=true) catch { _ => [] }) {
+          if entry.has_prefix(".") {
+            continue
+          }
+          // A scoped directory (`@types/@scope`) holds packages one level
+          // down, as `@scope/pkg`.
+          if entry.has_prefix("@") {
+            for
+              sub in (fs_readdir(mtsc_join_path(root, entry), sort=true) catch {
+                _ => []
+              }) {
+              found.push(entry + "/" + sub)
+            }
+          } else {
+            found.push(entry)
+          }
+        }
+      }
+      found
+    }
+  }
+  for name in names {
+    match mtsc_resolve_type_directive(opts, containing, name) {
+      Some(path) => out.push(path)
+      None => ()
+    }
+  }
+  out
 }
 
 ///|

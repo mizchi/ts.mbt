@@ -226,6 +226,7 @@ fn empty_ts_module() -> @ast.TsModule {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    ambient_module_sources: [],
     strict_property_initialization: true,
     no_implicit_any: true,
     strict_null_checks: true,
@@ -967,7 +968,7 @@ fn Parser::parse_ambient_external_module_decl(
   self : Parser,
 ) -> @ast.TsModule? raise ParseError {
   match self.parse_ambient_external_module_decl_with_spec() {
-    Some((_, m)) => Some(m)
+    Some((_, m, _)) => Some(m)
     None => None
   }
 }
@@ -979,7 +980,7 @@ fn Parser::parse_ambient_external_module_decl(
 /// `TsModule`.
 fn Parser::parse_ambient_external_module_decl_with_spec(
   self : Parser,
-) -> (String, @ast.TsModule)? raise ParseError {
+) -> (String, @ast.TsModule, String)? raise ParseError {
   if !self.match_ident("module") {
     return None
   }
@@ -1000,10 +1001,13 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
           module_.grammar_misuses.contains("unterminated string literal") {
           self.grammar_misuses.push("unterminated string literal")
         }
-        Some((spec, module_))
+        Some((spec, module_, body_source))
       } else {
         self.skip_declaration_block()
-        Some((spec, empty_ts_module()))
+        // `declare module "spec";` — a shorthand, whose every import is
+        // untyped. Not the same as an empty braced body, which declares a
+        // module with no exports.
+        Some((spec, empty_ts_module(), @ast.shorthand_ambient_module_body))
       }
     }
     _ => None
@@ -4048,6 +4052,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   let namespaces : Array[@ast.TsNamespaceDecl] = []
   let enums : Array[@ast.TsEnumDecl] = []
   let module_augmentations : Array[(String, @ast.TsModule)] = []
+  let ambient_module_sources : Array[(String, String)] = []
   let top_level_stmts : Array[@ast.TsStmt] = []
   let const_values : Map[String, @ast.TsExpr] = Map([])
   for entry in seeded_const_values {
@@ -4199,7 +4204,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
               _ => false
             }) {
             match self.parse_ambient_external_module_decl_with_spec() {
-              Some((spec, module_)) => {
+              Some((spec, module_, body_source)) => {
                 // Record the augmentation so downstream resolvers can
                 // merge it into the imported module's surface; also
                 // append the declarations into the surrounding scope
@@ -4226,10 +4231,21 @@ fn Parser::parse_module_with_seeded_const_values_internal(
                   )
                 }
                 module_augmentations.push((spec, module_))
-                append_module_decls(
-                  module_, funcs, interfaces, type_aliases, imports, values, classes,
-                  namespaces, enums,
-                )
+                ambient_module_sources.push((spec, body_source))
+                // Not in a parse that knows it reads a declaration file: the
+                // graph checker gives the body a module of its own
+                // (`ambient_module_sources`), and appending the body here as
+                // well put its declarations in the FILE's scope — so a
+                // `declare module "icons/*" { const v: number }` beside a
+                // `"icons/big/*"` declaring `const v: string` read as a
+                // conflicting redeclaration, and every body's names became
+                // globals of the whole program.
+                if !self.in_declaration_file {
+                  append_module_decls(
+                    module_, funcs, interfaces, type_aliases, imports, values, classes,
+                    namespaces, enums,
+                  )
+                }
               }
               None => ()
             }
@@ -4448,6 +4464,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     namespaces,
     enums,
     module_augmentations,
+    ambient_module_sources,
     top_level_stmts,
     strict_property_initialization: detect_strict_property_initialization(
       module_head,
@@ -4646,6 +4663,18 @@ fn Parser::parse_module_with_seeded_const_values(
 // /
 pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
   self.parse_module_with_seeded_const_values({})
+}
+
+///|
+/// Parse the source as the BODY of an ambient `declare module "m" { … }`,
+/// the way the parser reads one inside its file: every declaration is
+/// ambient, so `const n: number;` is a value declaration. The graph checker
+/// re-parses each ambient module body this way to give it a module of its
+/// own (see `TsModule.ambient_module_sources`).
+pub fn Parser::parse_ambient_module_body(
+  self : Parser,
+) -> @ast.TsModule raise ParseError {
+  self.parse_module_with_seeded_const_values_internal({}, true)
 }
 
 ///|

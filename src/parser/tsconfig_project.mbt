@@ -339,3 +339,127 @@ fn tsconfig_parse_bool_at(src : String, start_ : Int32, end_ : Int32) -> Bool? {
     _ => None
   }
 }
+
+///|
+/// The `/// <reference path="…" />` and `/// <reference types="…" />`
+/// directives at the top of `source`, as `(kind, value)` with `kind`
+/// `"path"` or `"types"`.
+///
+/// A triple-slash directive counts only in the file's leading trivia: it may
+/// follow other comments and other directives, and the first token of code
+/// ends the region (TypeScript's `processReferenceComments`). So this reads
+/// comments and whitespace and stops at anything else, which is also what
+/// keeps a `///` line inside a function body from being read as one. `lib`
+/// and `no-default-lib` directives are skipped: the lib set is chosen by
+/// `--lib`, not per file.
+pub fn triple_slash_references(source : String) -> Array[(String, String)] {
+  let out : Array[(String, String)] = []
+  let n = source.length()
+  let mut i = 0
+  while i < n {
+    let c = source[i]
+    if c == ' ' ||
+      c == '\t' ||
+      c == '\n' ||
+      c == '\r' ||
+      c == '\u{2028}' ||
+      c == '\u{2029}' ||
+      c == '\u{FEFF}' {
+      i = i + 1
+      continue
+    }
+    if c == '/' && i + 1 < n && source[i + 1] == '*' {
+      let mut j = i + 2
+      while j + 1 < n && !(source[j] == '*' && source[j + 1] == '/') {
+        j = j + 1
+      }
+      i = j + 2
+      continue
+    }
+    if c == '/' && i + 1 < n && source[i + 1] == '/' {
+      // A line comment ends at any line terminator TypeScript's scanner
+      // recognizes, not just LF: a CR-only file is one long line otherwise,
+      // and the first comment swallows every directive after it.
+      let mut j = i
+      while j < n &&
+            source[j] != '\n' &&
+            source[j] != '\r' &&
+            source[j] != '\u{2028}' &&
+            source[j] != '\u{2029}' {
+        j = j + 1
+      }
+      let line = source[i:j].to_owned()
+      if line.has_prefix("///") {
+        match triple_slash_reference(line) {
+          Some(entry) => out.push(entry)
+          None => ()
+        }
+      }
+      i = j
+      continue
+    }
+    break
+  }
+  out
+}
+
+///|
+/// One `/// <reference … />` line, if it names a `path` or `types`.
+fn triple_slash_reference(line : String) -> (String, String)? {
+  let body = line[3:].trim().to_owned()
+  guard body.has_prefix("<reference") else { return None }
+  for kind in ["path", "types"] {
+    match triple_slash_attribute(body, kind) {
+      Some(value) => return Some((kind, value))
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+/// The quoted value of attribute `name` in a `<reference … />` tag, with
+/// optional whitespace on either side of the `=` (`path = "x"` is accepted
+/// by TypeScript as readily as `path="x"`). The name has to start an
+/// attribute — preceded by whitespace — so `types` is not found inside
+/// another attribute's name or value.
+fn triple_slash_attribute(body : String, name : String) -> String? {
+  let n = body.length()
+  let is_space = fn(c : UInt16) { c == ' ' || c == '\t' }
+  let mut from = 0
+  while from < n {
+    let at = match body[from:].find(name) {
+      Some(off) => from + off
+      None => return None
+    }
+    from = at + 1
+    if at == 0 || !is_space(body[at - 1]) {
+      continue
+    }
+    let mut j = at + name.length()
+    while j < n && is_space(body[j]) {
+      j = j + 1
+    }
+    if j >= n || body[j] != '=' {
+      continue
+    }
+    j = j + 1
+    while j < n && is_space(body[j]) {
+      j = j + 1
+    }
+    if j >= n || (body[j] != '"' && body[j] != '\'') {
+      continue
+    }
+    let quote = body[j]
+    let start = j + 1
+    let mut k = start
+    while k < n && body[k] != quote {
+      k = k + 1
+    }
+    if k < n {
+      return Some(body[start:k].to_owned())
+    }
+    return None
+  }
+  None
+}

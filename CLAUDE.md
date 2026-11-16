@@ -4930,8 +4930,12 @@ product surfaces now.
   - **`MtscHost` gains three methods**, each implemented by every host
     because the trait has no defaults:
     - `directory_exists`;
-    - `realpath`, which canonicalizes a bare specifier's answer, so one
-      pnpm package reached through two links loads once;
+    - `realpath`, which canonicalizes the built-in resolution's answer
+      for a bare specifier, so one pnpm package reached through two links
+      loads once. A `ResolvedTo` answer from the host's own hook is used
+      as given (normalized, never passed through `realpath`), as
+      TypeScript trusts what `resolveModuleNames` returns, so a host that
+      returns its own paths canonicalizes them itself;
     - `resolve_module_name`, TypeScript's `resolveModuleNames`, asked
       first: `UseDefault`, `ResolvedTo(path)`, or `External`. On the JS
       side, `undefined` defers to the built-in resolution, so a host that
@@ -4996,6 +5000,136 @@ product surfaces now.
       VIRTUAL name could still hold a NUL, and splitting it would silently
       check two files that do not exist, so the wasm facade refuses such a
       root with a `TypeError` and the `.d.ts` states the contract.
+
+  Batch GI is the survey's second step: the files a program holds without
+  any import naming them, and the modules that exist only as a
+  declaration. All seven probe cases for it now agree with tsc, and so do
+  their legal twins:
+  - **20:** `compilerOptions.types`;
+  - **21:** `/// <reference types>`;
+  - **22:** `/// <reference path>`;
+  - **24:** `declare module "virtual:cfg"`;
+  - **25:** `declare module "*.css"`;
+  - **28:** `node:os` declared inside `@types/node`;
+  - **38:** `typeRoots`.
+
+  The oracle, effect, zod and the `.d.ts` entries are unchanged. univer
+  loses 66 false positives and gains none: it sets `types: ["node"]`, and
+  every `process` read had been "cannot find name".
+  - **An ambient module is a module of its own.** The parser already had
+    each `declare module "x" { … }` body's SOURCE in hand
+    (`parse_declaration_block_source`). It now keeps it
+    (`TsModule.ambient_module_sources`), and the graph checker re-parses
+    each body as a declaration file at `/@ambient-module/<spec>.d.ts`. So
+    its exports, its types and its own imports go through the code a real
+    file does, rather than a second model of one. Several bodies for one
+    name are concatenated, which is how TypeScript merges them.
+  - **Three facts were probed before any of it was written.**
+    - Every declaration in an ambient body is exported, with or without
+      `export`: `const hidden` beside an exported `const n` imports
+      cleanly.
+    - An EXACT ambient name wins over a file the resolver found, so a
+      `declare module "dup"` beside a real `dup` package is what `"dup"`
+      means.
+    - A PATTERN answers only where resolution found nothing the program
+      reads, with the longest prefix winning. That matches
+      `resolveExternalModule`. The edge index keeps the first edge per
+      (importer, specifier), so the routed edges simply go first.
+  - **Three defects stood between the probes and that design.** Each was
+    found by printing what the graph held, not by reading.
+    - `is_ambient_script_module` read the block's EXPORT list, which
+      collects the ambient bodies' `export`s too. So a `globals.d.ts`
+      holding any `declare module` was a module, and none of its
+      `declare const` globals were visible anywhere. It now reads the
+      block's imports and the `<module-syntax>` / `<export-…>` markers,
+      which a body's child parser keeps to itself.
+    - A body's `const n: number;` raised "const declaration requires an
+      initializer" when parsed alone, which dropped the whole module. The
+      rule no longer fires in a declaration file or an ambient body. And
+      the body is parsed with the parser's ambient entry
+      (`parse_ambient_module_body`), so the const is a value declaration.
+    - The parser also APPENDS every ambient body to the surrounding
+      file's scope. The bridge reads that, but in the checker it made two
+      `declare module "icons/*" { const v: … }` patterns a conflicting
+      redeclaration, and made every body's names program-wide globals.
+      It is skipped in a parse that marked a declaration file, which the
+      bridge never does. The redeclaration false positive predates this
+      batch: main reports it once `skipLibCheck` is off.
+  - **The CLI loads what references name.** A triple-slash scanner reads
+    the leading trivia only (`triple_slash_references`), and the check
+    loads every `path` and `types` directive to a fixpoint, the way an
+    import is loaded.
+  - **Type directives resolve as tsc resolves them.** That is `name/` in
+    a type root read as a package directory, then the `node_modules`
+    walk. With no `types` option, every package in every type root is
+    included. Two limits are stated:
+    - Automatic inclusion is PROJECT mode only. `tsc file.ts` with no
+      config still includes the `@types` it can see, and doing that here
+      would load React's types into every no-config measurement this repo
+      takes.
+    - `typeRoots` paths are resolved against the leaf config's directory
+      rather than the config in the `extends` chain that names them.
+  - **The cost is real.** Reading univer's real `@types/node` adds 1.5 s
+    to core (4.1 s to 5.6 s) and 6 s to data-validation (25.9 s to
+    31.9 s). That is the same reading tsc does.
+  - **TS2304 learned the ambient globals.** The single-file rule behind
+    it knew a module's own and imported names, so
+    `const h: Holder = get()` with `interface Holder` in an `env.d.ts` was
+    "cannot find name". It also reported an exported binding's annotation
+    twice, once from `values` and once from `top_level_stmts`, and now
+    reports once per site.
+  - **The review of GI found thirteen real defects. Four were false
+    positives on ordinary code, older than the batch.** Each was
+    reproduced against tsc before it was fixed, and each fix has a test
+    that fails when the fix is reverted.
+    - **A barrel that imports, then exports.** `import { n } from "./a";
+      export { n }` is how a barrel re-exports, and the export names an
+      IMPORT binding, which has no declaration in the barrel. So
+      `exported_value_site` found nothing and the importer got "has no
+      value export". `graph_exported_type` has followed that shape for
+      TYPES all along, so this is the applied-in-some-places family
+      again. An import from outside the graph, and a namespace import,
+      are unknown rather than missing.
+    - **An ordinary import of a type.** `import { I } from "./x"` of an
+      interface or type alias, without `type`, read as a missing value
+      export. Only `verbatimModuleSyntax` requires the `type`.
+    - **A default import of a declaration file.** tsc reports TS1192 for
+      a `.ts` file with no default export, and accepts the same import of
+      a `.d.ts` or an ambient module. TS 7 removed
+      `allowSyntheticDefaultImports: false`, so those always get a
+      synthetic default. A package whose types export no default is a
+      declaration file.
+    - **`declare global` in a reachable module.** Its members were
+      ingested and never counted as declared names.
+  - **The rest were in GI's own ambient-module code.**
+    - The virtual `/@ambient-module/*.d.ts` carries no import or export
+      marker, so it read as a SCRIPT. Every body's declarations became
+      globals, and two bodies each declaring `interface I` merged into
+      one shape.
+    - A shorthand `declare module "spec";` was an empty body, so every
+      import from it was "has no value export". The shorthand now
+      carries a body sentinel, and an import it answers gets no edge and
+      is not reported, as tsc types it `any`. That covers patterns such
+      as `"*.svg"` and an exact name over a resolved file.
+    - A body's own imports were resolved relative to the file holding
+      it, so their edges were keyed by that file and the virtual module
+      reached nothing.
+    - Named type imports needed implicit export entries for an ambient
+      body's interfaces and type aliases.
+    - The single-letter type check never got the ambient names.
+    - #288's unkeyed move skipped namespace bodies.
+    - `-p packages/app` left the type-root walk relative, so it stopped
+      before the workspace root.
+    - `${configDir}` in `typeRoots` was not expanded.
+    - The reference scanner ended a line comment only at LF, and
+      required `path="` with no spaces around the `=`.
+  - **One suggestion was declined, because it contradicts tsc.** It was
+    to realpath a relative resolution too. tsc's
+    `nodeModuleNameResolverWorker` realpaths only the non-relative
+    branch, and the docs now say so. A `declare global` in a module
+    nothing imports is still not seen. That module is outside the checked
+    module's type modules, so reaching it is a wider change than this
+    round.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

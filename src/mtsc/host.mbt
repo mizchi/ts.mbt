@@ -121,6 +121,14 @@ pub trait MtscHost {
   /// pnpm reaches one package through a symlink per dependent, so without
   /// this a file can enter the program under two spellings and declare
   /// everything twice. A host with no symlinks answers its argument.
+  /// Applied to the built-in resolution's answer for a BARE specifier only,
+  /// as tsc's `nodeModuleNameResolverWorker` realpaths a package file and
+  /// not a relative one. A `ResolvedTo` path from `resolve_module_name` is
+  /// not realpathed, so a host that returns its own paths canonicalizes
+  /// them itself. It IS normalized lexically — empty, `.` and `..`
+  /// segments are removed — so a URL-like name such as
+  /// `https://cdn/x.d.ts` comes back as `https:/cdn/x.d.ts`, and the host
+  /// should key its files by the normalized spelling.
   fn realpath(Self, String) -> String
 
   /// The host's own answer for importing `specifier` from the file

@@ -1108,6 +1108,15 @@ pub(all) struct TsModule {
   // aliases / values into the matching module lookup so user code that
   // imports from `"foo"` sees the augmented shape.
   module_augmentations : Array[(String, TsModule)]
+  // The SOURCE of each `declare module "spec" { … }` body above, as
+  // `(spec, text)`, in the same order. In a script-shaped declaration file
+  // such a block declares a module that an import of `"spec"` resolves
+  // to, and the graph checker re-parses the text as that module, so the
+  // body is checked by exactly the machinery a real file gets instead of
+  // a second model of one. A SHORTHAND declaration (`declare module
+  // "spec";`, no body) carries `shorthand_ambient_module_body` as its text:
+  // every import from it is untyped, which an empty braced body is not.
+  ambient_module_sources : Array[(String, String)]
   // Top-level executable statements (const/let/var with type annotations,
   // class expressions, etc.) from non-ambient modules. Empty for .d.ts files.
   top_level_stmts : Array[TsStmt]
@@ -1450,3 +1459,9 @@ pub extend TypedModule with @debug.Debug::{to_repr}
 /// Real positions are source byte offsets, so a negative value cannot
 /// collide with one.
 pub const DECL_GROUP_POSITION : Int32 = -1
+
+///|
+/// The text `TsModule.ambient_module_sources` records for a shorthand
+/// `declare module "spec";`. NUL cannot appear in a body that came from
+/// source text, so it cannot collide with an empty braced body.
+pub let shorthand_ambient_module_body : String = "\u{0}shorthand"

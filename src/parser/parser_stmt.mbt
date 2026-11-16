@@ -2565,7 +2565,12 @@ fn Parser::parse_var_decl_item(
   let init = match init_opt {
     Some(expr) => expr
     None => {
-      if kind is Const {
+      // In a declaration file every declaration is ambient, so
+      // `const n: number;` is how one is written. It is the body of an
+      // ambient `declare module "m" { const n: number; }`, which the
+      // graph checker re-parses as a declaration file of its own, and a
+      // raise here dropped that whole module.
+      if kind is Const && !self.in_declaration_file && !self.in_ambient_module {
         raise ParseError("const declaration requires an initializer")
       }
       match binding {

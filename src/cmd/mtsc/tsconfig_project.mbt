@@ -388,6 +388,44 @@ async fn mtsc_apply_project_compiler_options(
     Some(v) => if opts.skip_lib_check is None { opts.skip_lib_check = Some(v) }
     None => ()
   }
+  // The type directives the program loads by itself (see
+  // `mtsc_type_directive_roots`). `typeRoots` entries are relative to the
+  // config that names them; the leaf config's directory stands in for it,
+  // which is the common case and the one a `extends` base rarely changes.
+  let config_dir = mtsc_dirname(config_path)
+  opts.config_dir = Some(config_dir)
+  match @parser.tsconfig_compiler_option_string_array_at(config_path, "types") {
+    Some(names) => opts.types = Some(names)
+    None => ()
+  }
+  match
+    @parser.tsconfig_compiler_option_string_array_at(config_path, "typeRoots") {
+    Some(roots) =>
+      opts.type_roots = Some(
+        roots.map(fn(r) {
+          // `${configDir}` is TypeScript's template for the directory of
+          // the config in use, which is the one this reads against. The
+          // expansion IS that directory, so it is not joined onto it a
+          // second time — with `-p packages/app` that turned
+          // `packages/app/typings` into `packages/app/packages/app/typings`.
+          if r.has_prefix("${configDir}") {
+            let rest = r[12:].to_owned()
+            let rest = if rest.has_prefix("/") {
+              rest[1:].to_owned()
+            } else {
+              rest
+            }
+            let dir = if config_dir == "" { "." } else { config_dir }
+            mtsc_normalize(mtsc_join_path(dir, rest))
+          } else if r.has_prefix("/") {
+            mtsc_normalize(r)
+          } else {
+            mtsc_normalize(mtsc_join_path(config_dir, r))
+          }
+        }),
+      )
+    None => ()
+  }
   // The options the CHECKER reads. They are passed on as written and the
   // `strict` family's defaults are decided where they are used
   // (`@mtsc_core.compiler_option_header`), so `-p` and the library

@@ -287,3 +287,45 @@ async test "parser: the injected-host resolver agrees on a tree built to separat
     )
   }
 }
+
+///|
+/// A triple-slash directive counts only in the leading trivia: after
+/// comments and other directives, before the first token of code. Both
+/// quote styles name a value, `lib` is not a reference, and a `///` line
+/// below the code is an ordinary comment.
+test "parser: triple-slash references are read from the leading trivia only" {
+  let source = "// header\n/* block\n   comment */\n/// <reference path=\"../g/globals.d.ts\" />\n///<reference types='node'/>\n/// <reference lib=\"es2020\" />\nexport const x = 1;\n/// <reference path=\"late.d.ts\" />\n"
+  assert_eq(triple_slash_references(source), [
+    ("path", "../g/globals.d.ts"),
+    ("types", "node"),
+  ])
+  assert_eq(
+    triple_slash_references("const a = 1;\n/// <reference path=\"x.d.ts\" />"),
+    [],
+  )
+  assert_eq(triple_slash_references(""), [])
+  // A CR-only file: a line comment ends at CR as well, or the header
+  // comment swallows the directive after it.
+  assert_eq(
+    triple_slash_references(
+      "// header\r/// <reference path=\"globals.d.ts\" />\rexport {};",
+    ),
+    [("path", "globals.d.ts")],
+  )
+  // Whitespace around `=`, which TypeScript accepts, for both kinds; and a
+  // `types` inside another attribute's value is not the attribute.
+  assert_eq(
+    triple_slash_references(
+      "/// <reference path = \"a.d.ts\" />\n/// <reference types =  'node' />\n/// <reference path=\"types=x.d.ts\" />\n",
+    ),
+    [("path", "a.d.ts"), ("types", "node"), ("path", "types=x.d.ts")],
+  )
+  // U+2028 and U+2029 end a line comment, and the scan steps over them as
+  // the line terminators they are.
+  assert_eq(
+    triple_slash_references(
+      "// a\u{2028}/// <reference path=\"p.d.ts\" />\u{2029}/// <reference types=\"t\" />",
+    ),
+    [("path", "p.d.ts"), ("types", "t")],
+  )
+}

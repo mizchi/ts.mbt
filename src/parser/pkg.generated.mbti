@@ -69,6 +69,8 @@ pub async fn resolve_type_module_specifier(String, String) -> String?
 
 pub fn[H : ModuleResolutionHost] resolve_type_module_specifier_with(H, String, String) -> String?
 
+pub fn triple_slash_references(String) -> Array[(String, String)]
+
 pub async fn tsconfig_compiler_option(String, String) -> String?
 
 pub async fn tsconfig_compiler_option_at(String, String) -> String?
@@ -275,6 +277,7 @@ pub fn Parser::new(Array[Token]) -> Self
 pub fn Parser::new_with_strict(Array[Token], Bool) -> Self
 pub fn Parser::new_with_strict_and_jsx(Array[Token], Bool, Bool) -> Self
 pub fn Parser::output(Self, &Logger) -> Unit
+pub fn Parser::parse_ambient_module_body(Self) -> @ast.TsModule raise ParseError
 pub fn Parser::parse_block(Self) -> @ast.TsBlock raise ParseError
 pub fn Parser::parse_declare_function(Self) -> @ast.TsImport raise ParseError
 pub fn Parser::parse_expr(Self) -> @ast.TsExpr raise ParseError

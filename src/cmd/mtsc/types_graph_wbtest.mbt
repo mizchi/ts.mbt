@@ -395,3 +395,172 @@ async test "mtsc watch: a linked workspace package is watched" {
   assert_true(watched.iter().any(fn(p) { p.has_suffix("/ws/index.d.ts") }))
   assert_false(watched.iter().any(fn(p) { p.has_suffix("/dep/index.d.ts") }))
 }
+
+///|
+/// A project's program includes files nothing imports. With no `types`
+/// option every package in `node_modules/@types` is included, and its
+/// `/// <reference path>` and its `declare module "node:os"` come with it,
+/// so `process` and `import { cpus } from "node:os"` both read
+/// `@types/node`. Each legal line has an illegal twin that must report.
+async test "mtsc check graph: a project includes its @types and their references" {
+  let root = "/tmp/ts_mbt_types_graph_auto_types"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true},\"include\":[\"src\"]}",
+    ),
+    (
+      "node_modules/@types/node/package.json", "{\"name\":\"@types/node\",\"types\":\"index.d.ts\"}",
+    ),
+    (
+      "node_modules/@types/node/index.d.ts", "/// <reference path=\"globals.d.ts\" />\ndeclare module \"node:os\" { export function cpus(): number; }\n",
+    ),
+    (
+      "node_modules/@types/node/globals.d.ts", "declare var process: { pid: number };\n",
+    ),
+    (
+      "src/main.ts", "import { cpus } from \"node:os\";\nexport const a: number = process.pid;\nexport const b: number = cpus();\n",
+    ),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+  @fs.write_file(
+    root + "/src/main.ts",
+    "import { cpus } from \"node:os\";\nexport const a: string = process.pid;\nexport const b: string = cpus();\n",
+    create=0o644,
+  )
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_true(mtsc_compile_all(opts, entries) > 0)
+  // `types: []` turns automatic inclusion off, so `process` is undeclared.
+  // Its own directory: the parser memoizes a config's text per path, so a
+  // config rewritten in place would be read as before within this process.
+  let none = "/tmp/ts_mbt_types_graph_no_types"
+  types_graph_fixture(none, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"types\":[]},\"include\":[\"src\"]}",
+    ),
+    (
+      "node_modules/@types/node/index.d.ts", "declare var process: { pid: number };\n",
+    ),
+    ("src/main.ts", "export const a: number = process.pid;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(none)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_true(mtsc_compile_all(opts, entries) > 0)
+}
+
+///|
+/// `typeRoots` replaces the default roots, and a source file's own
+/// `/// <reference types>` and `/// <reference path>` load what they name.
+async test "mtsc check graph: typeRoots and a file's own references" {
+  let root = "/tmp/ts_mbt_types_graph_type_roots"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"./typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/g/index.d.ts", "declare var G: number;\n"),
+    ("typings/h/index.d.ts", "declare var H: number;\n"),
+    ("other/extra.d.ts", "declare var X: number;\n"),
+    (
+      "src/main.ts", "/// <reference types=\"h\" />\n/// <reference path=\"../other/extra.d.ts\" />\nexport const ok: number = G + H + X;\n",
+    ),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+  @fs.write_file(
+    root + "/src/main.ts",
+    "/// <reference types=\"h\" />\n/// <reference path=\"../other/extra.d.ts\" />\nexport const bad: string = G + H + X;\n",
+    create=0o644,
+  )
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_true(mtsc_compile_all(opts, entries) > 0)
+}
+
+///|
+/// `${configDir}` in `typeRoots` is TypeScript's template for the config's
+/// own directory. It was joined onto that directory literally, so the root
+/// named a directory that does not exist and `G` was undeclared.
+async test "mtsc check graph: typeRoots expands ${configDir}" {
+  let root = "/tmp/ts_mbt_types_graph_config_dir"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"${configDir}/typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/g/index.d.ts", "declare var G: number;\n"),
+    ("src/main.ts", "export const ok: number = G;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  opts.project = Some(root)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+}
+
+///|
+/// The default type roots are every `node_modules/@types` from the config
+/// directory UP, and `-p packages/app` leaves that directory relative: its
+/// walk stopped at the first segment (`packages` has the parent `""`), so a
+/// monorepo's hoisted `@types` at the workspace root were never read. The
+/// walk is over the absolute directory now, taken against the working
+/// directory — here a fixture's root, so the test owns the `@types` it
+/// expects to find.
+async test "mtsc type roots: a relative config directory walks to the root" {
+  let root = "/tmp/ts_mbt_types_graph_relative_walk"
+  types_graph_fixture(root, [
+    ("node_modules/@types/node/index.d.ts", "declare var process: {};\n"),
+    ("packages/app/tsconfig.json", "{}"),
+  ])
+  let opts = mtsc_options_new()
+  opts.config_dir = Some("packages/app")
+  let roots = mtsc_type_roots(opts, cwd=root)
+  assert_true(roots.contains(root + "/node_modules/@types"))
+}
+
+///|
+/// `${configDir}` expands to the config's directory, and that IS the
+/// directory — joining it on again made `-p <relative dir>` look for
+/// `<dir>/<dir>/typings`. The project here is named by a path relative to
+/// the working directory, which is the spelling a user types.
+async test "mtsc check graph: ${configDir} under a relative project path" {
+  let root = "/tmp/ts_mbt_types_graph_config_dir_relative"
+  types_graph_fixture(root, [
+    (
+      "tsconfig.json", "{\"compilerOptions\":{\"strict\":true,\"typeRoots\":[\"${configDir}/typings\"],\"types\":[\"g\"]},\"files\":[\"src/main.ts\"]}",
+    ),
+    ("typings/g/index.d.ts", "declare var G: number;\n"),
+    ("src/main.ts", "export const ok: number = G;\n"),
+  ])
+  let cwd = @parser.canonical_file_path(".")
+  let mut up = ""
+  for segment in cwd.split("/") {
+    if segment != "" {
+      up = up + "../"
+    }
+  }
+  let project = up + root[1:].to_owned()
+  let opts = types_graph_check_opts()
+  opts.project = Some(project)
+  let (entries, _) = mtsc_resolve_entries(opts).unwrap()
+  // The root itself, not only the check's verdict: a path that climbs to `/`
+  // absorbs a doubled `<dir>/<dir>` (the extra `..` stop at the root), so
+  // the program would still find `G` with the bug present.
+  assert_eq(opts.type_roots, Some([mtsc_normalize(project + "/typings")]))
+  assert_eq(mtsc_compile_all(opts, entries), 0)
+}
+
+///|
+/// The walk reaches `/` itself: `mtsc_dirname("/packages")` is `""`, so a
+/// workspace directly under the root never asked `/node_modules/@types`.
+test "mtsc type roots: the walk includes the filesystem root" {
+  assert_eq(mtsc_type_root_candidates("/packages/app"), [
+    "/packages/app/node_modules/@types", "/packages/node_modules/@types", "/node_modules/@types",
+  ])
+  assert_eq(mtsc_type_root_candidates("/"), ["/node_modules/@types"])
+}

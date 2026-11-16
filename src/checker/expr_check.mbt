@@ -1100,6 +1100,55 @@ fn move_unkeyed_reserved_type_names(
     type_aliases: aliases,
     enums: m.enums.map(fn(e) { { ..e, name: moved(e.name), } }),
     classes: m.classes.map(fn(c) { rename_class_refs(c, renames) }),
+    namespaces: m.namespaces.map(fn(ns) {
+      { ..ns, module_: rename_namespace_body_refs(ns.module_, renames), }
+    }),
+  }
+}
+
+///|
+/// `body` (a namespace's) with its REFERENCES to a moved name rewritten.
+/// Its own declarations keep their names — they are reached as `N.X`, not
+/// as the bare name that moved — and a name the namespace declares itself
+/// shadows the outer one, so it is left alone inside, at every depth.
+fn rename_namespace_body_refs(
+  body : @ast.TsModule,
+  renames : Map[String, String],
+) -> @ast.TsModule {
+  let own : Map[String, String] = Map([])
+  for k, v in renames {
+    let declared = body.interfaces.iter().any(fn(d) { d.name == k }) ||
+      body.type_aliases.iter().any(fn(d) { d.name == k }) ||
+      body.classes.iter().any(fn(d) { d.name == k }) ||
+      body.enums.iter().any(fn(d) { d.name == k }) ||
+      body.namespaces.iter().any(fn(d) { d.name == k })
+    if !declared {
+      own[k] = v
+    }
+  }
+  if own.length() == 0 {
+    return body
+  }
+  {
+    ..body,
+    interfaces: body.interfaces.map(fn(i) {
+      { ..rename_interface_refs(i, own), name: i.name, }
+    }),
+    type_aliases: body.type_aliases.map(fn(a) {
+      let scoped : Map[String, String] = Map([])
+      for k, v in own {
+        if !a.type_params.contains(k) {
+          scoped[k] = v
+        }
+      }
+      { ..a, type_: rename_type_refs(a.type_, scoped), }
+    }),
+    classes: body.classes.map(fn(c) {
+      { ..rename_class_refs(c, own), name: c.name, }
+    }),
+    namespaces: body.namespaces.map(fn(ns) {
+      { ..ns, module_: rename_namespace_body_refs(ns.module_, own), }
+    }),
   }
 }
 
@@ -40370,8 +40419,16 @@ fn type_mentions_callable(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// TS2304 for a type name a declaration's signature or a top-level
+/// annotation names and nothing declares.
+///
+/// `ambient_names` are the type names the program's ambient declaration
+/// files declare (`interface Holder` in an `env.d.ts`). They are global, so
+/// a module that never imports them still names them: without them,
+/// `const h: Holder = get()` read as `cannot find name Holder`.
 fn check_unresolved_signature_type_refs(
   module_ : @ast.TsModule,
+  ambient_names~ : Map[String, Unit] = Map([]),
 ) -> Array[ExprIssue] {
   // Ambient declaration bundles (`declare module "spec" { ... }` files
   // like @types/node's) merge their namespaces ACROSS sibling files —
@@ -40411,6 +40468,9 @@ fn check_unresolved_signature_type_refs(
   }
 
   collect_declared(module_)
+  for name, _ in ambient_names {
+    declared[name] = ()
+  }
   let issues : Array[ExprIssue] = []
   fn resolved(name : String, scope : Array[String]) -> Bool {
     name == "" ||
@@ -40423,9 +40483,16 @@ fn check_unresolved_signature_type_refs(
     is_pseudo_value_keyword(name)
   }
 
+  // An exported binding is in both `values` and `top_level_stmts`, so the
+  // walk below meets its annotation twice; one diagnostic per site.
+  let reported : Map[String, Unit] = Map([])
   fn note(name : String, scope : Array[String], where_ : String) -> Unit {
     if !resolved(name, scope) {
-      issues.push({ path: where_, message: "cannot find name `\{name}`", })
+      let key = where_ + "\u{0}" + name
+      if !reported.contains(key) {
+        reported[key] = ()
+        issues.push({ path: where_, message: "cannot find name `\{name}`", })
+      }
     }
   }
 
@@ -44138,9 +44205,16 @@ fn is_single_upper_letter(name : String) -> Bool {
 /// are not descended into.
 fn check_undeclared_type_parameters(
   module_ : @ast.TsModule,
+  ambient_names~ : Map[String, Unit] = Map([]),
 ) -> Array[ExprIssue] {
   let declared : Map[String, Unit] = Map([])
   collect_declared_type_names(module_, declared)
+  // The program's ambient type names (a script-shaped `.d.ts`, a `declare
+  // global` block): `declare const value: A` with `interface A` in an
+  // `env.d.ts` is legal.
+  for name, _ in ambient_names {
+    declared[name] = ()
+  }
   let issues : Array[ExprIssue] = []
   walk_module_undeclared_tps(module_, [], declared, issues)
   issues
@@ -48244,10 +48318,59 @@ fn check_module_function_bodies_layered(
   // top level — the walker recurses into namespaces itself, so calling it per
   // layered namespace would double-report.
   if outer_modules.length() == 0 {
-    for issue in check_undeclared_type_parameters(module_) {
+    // The type modules with no key are the program's AMBIENT declaration
+    // files (see the ingestion loop above), and their names are global. So
+    // is everything a `declare global { … }` block declares, in ANY module:
+    // the resolver ingests those members globally, keyed module or not.
+    // Built before both checks below, since both ask "is this name
+    // declared".
+    let ambient_names : Map[String, Unit] = Map([])
+    for type_module in type_modules {
+      for ns in type_module.namespaces {
+        if ns.name != "<global>" {
+          continue
+        }
+        for d in ns.module_.interfaces {
+          ambient_names[d.name] = ()
+        }
+        for d in ns.module_.type_aliases {
+          ambient_names[d.name] = ()
+        }
+        for d in ns.module_.classes {
+          ambient_names[d.name] = ()
+        }
+        for d in ns.module_.enums {
+          ambient_names[d.name] = ()
+        }
+        for d in ns.module_.namespaces {
+          ambient_names[d.name] = ()
+        }
+      }
+    }
+    for i, type_module in type_modules {
+      if i < type_module_keys.length() {
+        continue
+      }
+      for d in type_module.interfaces {
+        ambient_names[d.name] = ()
+      }
+      for d in type_module.type_aliases {
+        ambient_names[d.name] = ()
+      }
+      for d in type_module.classes {
+        ambient_names[d.name] = ()
+      }
+      for d in type_module.enums {
+        ambient_names[d.name] = ()
+      }
+      for d in type_module.namespaces {
+        ambient_names[d.name] = ()
+      }
+    }
+    for issue in check_undeclared_type_parameters(module_, ambient_names~) {
       all.push(issue)
     }
-    for issue in check_unresolved_signature_type_refs(module_) {
+    for issue in check_unresolved_signature_type_refs(module_, ambient_names~) {
       all.push(issue)
     }
     // TS2403 for lib-global `var` redeclarations (script scope only).
