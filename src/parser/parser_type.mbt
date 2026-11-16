@@ -149,6 +149,7 @@ fn Parser::parse_paren_or_function_type(
   // spellings is exactly what `destructuringInFunctionType` contains.
   let renamings : Array[(String, String)] = []
   let mut can_be_function_type = true
+  let mut first_param = true
   while true {
     let is_rest = self.match_ellipsis()
     let pname = self.parse_declare_param_name() catch {
@@ -165,7 +166,9 @@ fn Parser::parse_paren_or_function_type(
     // argument. Dropping it here is the real fix and changes what the
     // bridge generator reads, so until that diff is measured the checker
     // abstains file-wide on the inference this spelling would mislead.
-    if param_types.length() == 0 && !is_rest && pname == "this" {
+    let is_this_param = first_param && !is_rest && pname == "this"
+    first_param = false
+    if is_this_param {
       self.grammar_misuses.push("<fn-type-this-param>")
     }
     for r in self.last_param_pattern_renamings {
@@ -186,8 +189,18 @@ fn Parser::parse_paren_or_function_type(
     // `T | undefined`, mirroring declaration parameters, so arity / required-
     // param reasoning sees it as omittable.
     let pty = if is_optional { wrap_optional_ts_type(pty) } else { pty }
-    param_types.push(if is_rest { Rest(pty) } else { pty })
-    param_optional.push(is_optional)
+    // The leading `this` parameter types the receiver and takes no
+    // argument, so it does not enter the `Func`: kept positionally it was
+    // the callback's FIRST parameter, and rxjs's
+    // `new Observable((subscriber) => …)` — whose constructor takes
+    // `(this: Observable<T>, subscriber: Subscriber<T>) => …` — typed
+    // `subscriber` as an `Observable`, so `subscriber.next(v)` read as a
+    // missing method at every univer call site. The marker above stays:
+    // what it guards now abstains only where it no longer has to.
+    if !is_this_param {
+      param_types.push(if is_rest { Rest(pty) } else { pty })
+      param_optional.push(is_optional)
+    }
     if self.match_(Comma) {
       if self.check(RParen) {
         break
@@ -1358,6 +1371,40 @@ fn Parser::is_qualified_type_name_part(self : Parser, offset : Int32) -> Bool {
 }
 
 ///|
+/// `Effect<<E, A>(x: A) => E>`: a type argument list whose FIRST argument
+/// is a generic function type opens with `<<`, which the lexer — knowing
+/// nothing of types — scans as a shift operator. The closing side has the
+/// same problem and `pending_gt` handles it; here the token is split in two
+/// in place. Only when what follows reads as a type parameter list
+/// (`Name` then `extends` / `,` / `>` / `=`), so a `<<` that really is a
+/// shift is never touched. effect's `FiberSet.runtime` and two siblings are
+/// written this way, and the whole declaration file failed to parse.
+fn Parser::split_ltlt_before_generic_type_arg(self : Parser) -> Unit {
+  if !self.check(LtLt) || self.has_line_terminator_before() {
+    return
+  }
+  let params_follow = self.peek_at(1).kind is Ident(_) &&
+    (match self.peek_at(2).kind {
+      Extends | Comma | Gt | Eq => true
+      _ => false
+    })
+  if !params_follow {
+    return
+  }
+  let tok = self.tokens[self.pos]
+  self.tokens[self.pos] = {
+    kind: Lt,
+    pos: tok.pos,
+    has_newline_before: tok.has_newline_before,
+  }
+  self.tokens.insert(self.pos + 1, {
+    kind: Lt,
+    pos: tok.pos + 1,
+    has_newline_before: false,
+  })
+}
+
+///|
 fn Parser::parse_named_type_tail(
   self : Parser,
   first_name : String,
@@ -1385,6 +1432,7 @@ fn Parser::parse_named_type_tail(
   // spells an overload set — read the second signature's `<B>` as type
   // arguments of the first one's return type, and the whole literal
   // failed with "`;` expected".
+  self.split_ltlt_before_generic_type_arg()
   if self.check(Lt) && !self.has_line_terminator_before() {
     match self.try_parse_simple_type_args() {
       Some(type_args) => Applied(full_name, type_args)

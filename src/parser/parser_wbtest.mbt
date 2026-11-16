@@ -1877,6 +1877,50 @@ test "parser: a declare class member may be named by any keyword" {
 }
 
 ///|
+/// A type argument list whose first argument is a generic function type
+/// opens with `<<`, which the lexer scans as a shift. effect's
+/// `FiberSet.runtime` is written that way; a shift stays a shift.
+test "parser: a type argument may open with a generic function type" {
+  let src =
+    #|interface Box<F> { f: F }
+    #|declare const b: Box<<T extends string>(x: T) => T>;
+    #|declare const c: Box<<T, U>(x: T, y: U) => U>;
+    #|declare const d: Box<<T>() => T>;
+    #|export const s = 1 << 2;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  match module_.values[0].type_ {
+    Applied("Box", [GenericFunc(_, _, _)]) => ()
+    t => fail("expected a generic function type argument, got \{t}")
+  }
+}
+
+///|
+/// A `declare class` member's rest flags are recorded beside its
+/// parameters, where they used to be read and discarded.
+test "parser: a declare class member records its rest parameters" {
+  let src =
+    #|declare class C {
+    #|  constructor(a: number, ...b: string[]);
+    #|  m(x: number, ...rest: string[]): void;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let c = module_.classes[0]
+  assert_eq(c.constructor_param_is_rest, [false, true])
+  assert_eq(c.methods[0].param_is_rest, [false, true])
+}
+
+///|
 test "parser: substitute declare class method generic bounds" {
   let src =
     #|interface Events {

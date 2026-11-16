@@ -227,16 +227,22 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
 ///|
 fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
   match type_ {
-    @ast.TsType::Undefined | @ast.TsType::Null =>
-      @ast.TsType::Union([type_, @ast.TsType::Undefined])
+    @ast.TsType::Undefined => type_
+    // A union that already admits `undefined` is already optional. One
+    // that admits only `null` is not: `null` and `undefined` are different
+    // values, and returning `p?: C | null` unchanged made the `?` vanish,
+    // so `new Injector()` against `constructor(deps?: …, parent?: Injector
+    // | null)` — @wendellhu/redi's, which every univer package calls — was
+    // "expected 2 argument(s), got 0". The `undefined` is appended to the
+    // union's own members rather than nesting it, so the result is the
+    // flat union a reader of `T | undefined` expects.
     @ast.TsType::Union(items) => {
-      for item in items {
-        match item {
-          @ast.TsType::Undefined | @ast.TsType::Null => return type_
-          _ => ()
-        }
+      if items.contains(@ast.TsType::Undefined) {
+        return type_
       }
-      @ast.TsType::Union([type_, @ast.TsType::Undefined])
+      let out = items.copy()
+      out.push(@ast.TsType::Undefined)
+      @ast.TsType::Union(out)
     }
     _ => @ast.TsType::Union([type_, @ast.TsType::Undefined])
   }
@@ -3839,13 +3845,21 @@ fn Parser::parse_declare_values(
 }
 
 ///|
+///
+/// The second array is the rest flag of each parameter, aligned with the
+/// first — the shape `TsClassMethodDecl.param_is_rest` takes. It used to be
+/// read and discarded, so a `declare class` method's `...args: T[]` counted
+/// as ONE argument of type `T[]`: redi's
+/// `createInstance(ctor, ...customArgs)` was "expected 2 argument(s), got
+/// 4" at every call univer makes.
 fn Parser::parse_declare_signature_params(
   self : Parser,
-) -> Array[(String, @ast.TsType)] raise ParseError {
+) -> (Array[(String, @ast.TsType)], Array[Bool]) raise ParseError {
   let _ = self.expect(LParen)
   let params : Array[(String, @ast.TsType)] = []
+  let rest_flags : Array[Bool] = []
   while !self.check(RParen) && !self.check(Eof) {
-    let _ = self.match_ellipsis()
+    let is_rest = self.match_ellipsis()
     // A parameter-property modifier (`public` / `private` / `protected` /
     // `readonly`) on a declare-class member signature is always TS2369: these
     // signatures have no implementation. A leading modifier is only a modifier
@@ -3896,13 +3910,14 @@ fn Parser::parse_declare_signature_params(
     // `SyntaxError: Unexpected token 'this'`.
     if !(param_name == "this" && params.length() == 0) {
       params.push((param_name, param_type))
+      rest_flags.push(is_rest)
     }
     if self.check(Comma) {
       let _ = self.advance()
     }
   }
   let _ = self.expect(RParen)
-  params
+  (params, rest_flags)
 }
 
 ///|
@@ -4288,6 +4303,7 @@ fn Parser::parse_declare_class(
   // TS2386 support: `(first_optional, already_reported)` per member key.
   let declare_method_sig_optional : Map[String, (Bool, Bool)] = Map([])
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
+  let mut constructor_param_is_rest : Array[Bool] = []
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false
   while !self.check(RBrace) && !self.check(Eof) {
@@ -4457,7 +4473,7 @@ fn Parser::parse_declare_class(
           )
         _ => ()
       }
-      let params = self.parse_declare_signature_params()
+      let (params, params_rest) = self.parse_declare_signature_params()
       let had_return_annotation = self.check(Colon)
       // TS7010, fourth site: every `declare class` member is bodiless, so
       // a missing return annotation always means an implicit `any`.
@@ -4527,6 +4543,7 @@ fn Parser::parse_declare_class(
                 accessor_kind is None {
                 if is_public {
                   constructor_params = Some(params)
+                  constructor_param_is_rest = params_rest
                   saw_public_constructor = true
                 } else {
                   saw_nonpublic_constructor = true
@@ -4548,7 +4565,7 @@ fn Parser::parse_declare_class(
                   is_async: false,
                   is_generator: false,
                   param_defaults: [],
-                  param_is_rest: [],
+                  param_is_rest: params_rest,
                 })
               }
           }
@@ -4615,7 +4632,7 @@ fn Parser::parse_declare_class(
     constructor_params,
     // The ambient `declare class` param parser does not surface rest flags;
     // leave empty (rest detection just no-ops for these).
-    constructor_param_is_rest: [],
+    constructor_param_is_rest,
     constructor_param_defaults: [],
     constructor_body: None,
     properties,

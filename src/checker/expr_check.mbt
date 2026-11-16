@@ -2432,6 +2432,15 @@ fn method_callable_param_types(
     if i == 0 && p.0 == "this" {
       continue
     }
+    // A rest parameter is `Rest(_)` in a `Func`, which is what the arity
+    // and argument checks read. `param_is_rest` was never consulted here,
+    // so `m(a, ...rest: string[])` took exactly two arguments, the second
+    // an array — redi's `createInstance(ctor, ...args)` and rxjs's
+    // variadic members at every univer call site.
+    if i < m.param_is_rest.length() && m.param_is_rest[i] {
+      out.push(@ast.TsType::Rest(p.1))
+      continue
+    }
     let has_default = i < m.param_defaults.length() &&
       m.param_defaults[i] is Some(_)
     if has_default && !type_accepts_undefined_param(p.1) {
@@ -2480,6 +2489,60 @@ fn required_arity(params : Array[@ast.TsParam]) -> Int32 {
     i = i + 1
   }
   last_required
+}
+
+///|
+/// `required_arity` for a call whose parameter TYPES have been instantiated
+/// (`params`, aligned with `sig`). A parameter whose declared type is a
+/// type parameter is omittable once that parameter is `void` at the call:
+/// rxjs's `Subject<void>.next()` is how a signal is sent, and `next(value:
+/// T)` read with the DECLARED `T` demanded one argument. A `void`-typed
+/// declaration was already optional (`param_is_optional`); this asks the
+/// same question of the instantiated type.
+fn required_arity_at_call(
+  sig : Array[@ast.TsParam],
+  params : Array[@ast.TsType],
+) -> Int32 {
+  let mut last_required = 0
+  for i, p in sig {
+    let instantiated_void = i < params.length() &&
+      (match params[i] {
+        Void => true
+        Union(parts) => parts.contains(Void)
+        _ => false
+      })
+    if !param_is_optional(p) && !instantiated_void {
+      last_required = i + 1
+    }
+  }
+  last_required
+}
+
+///|
+/// Whether `n` arguments fit a callable's parameter list: at least the
+/// required count (a trailing optional, `void` or rest parameter may be
+/// omitted) and at most the parameter count, unless a rest takes the rest.
+fn overload_arity_accepts(params : Array[@ast.TsType], n : Int32) -> Bool {
+  let has_rest = params.iter().any(fn(p) { p is Rest(_) })
+  n >= required_arity_from_types(params) && (has_rest || n <= params.length())
+}
+
+///|
+/// The parameter the `i`-th argument lands on: its own slot, or the element
+/// of a rest parameter it falls into.
+fn overload_param_at(params : Array[@ast.TsType], i : Int32) -> @ast.TsType {
+  let slot = if i < params.length() {
+    params[i]
+  } else if params.length() > 0 {
+    params[params.length() - 1]
+  } else {
+    return @ast.TsType::Any
+  }
+  match slot {
+    Rest(Array(elem)) => elem
+    Rest(_) => @ast.TsType::Any
+    t => t
+  }
 }
 
 ///|
@@ -4809,7 +4872,11 @@ fn prune_nullish(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
       let nn : Array[@ast.TsType] = []
       for p in parts {
         match p {
-          Null | Undefined => ()
+          // `void` goes with them: `x?.m()` and `x!` both remove it in tsc,
+          // and univer's `Nullable<T> = T | null | undefined | void` left
+          // every `this.shape?.show()` reading "`show` does not exist on
+          // `Rect | void`".
+          Null | Undefined | Void => ()
           _ => nn.push(p)
         }
       }
@@ -10669,7 +10736,23 @@ fn infer_expr_inner(
         resolver.interfaces.get("Array") is None {
         return @ast.TsType::Array(targs[0])
       }
-      infer_expr(env, resolver, inner)
+      let inner_ty = infer_expr(env, resolver, inner)
+      // `new C<A>()` is a `C<A>`. The explicit arguments were peeled off
+      // here and thrown away, so the instance read as a bare `C` and every
+      // member typed by a class parameter stayed the unbound `T`: rxjs's
+      // `new Subject<void>()` then made `subject.next()` "expected 1
+      // argument(s)", while the annotated `const s: Subject<void>` was
+      // right. Only an exact count is taken; a class whose arguments were
+      // defaulted or mis-counted keeps the bare name, as before.
+      match (inner, inner_ty) {
+        (New(_, _) | NewExpr(_, _), Named(n)) =>
+          match resolver.classes.get(n) {
+            Some(cls) if cls.type_params.length() == targs.length() &&
+              targs.length() > 0 => @ast.TsType::Applied(n, targs)
+            _ => inner_ty
+          }
+        _ => inner_ty
+      }
     }
     NumberLit(_) | IntLit(_) => @ast.TsType::Number
     BigIntLit(_) => @ast.TsType::BigInt
@@ -13459,11 +13542,14 @@ fn infer_call(
               _ => reduce_conditional(ret)
             }
             rets.push(r)
-            // Best-effort overload match: same arity, every argument
-            // assignable to the corresponding parameter.
-            if params.length() == arg_types.length() {
+            // Best-effort overload match: the argument count fits the
+            // member's arity, and every argument is assignable to the
+            // parameter it lands on. "Fits" used to be "equals the
+            // parameter count", so a member with an optional or rest
+            // parameter could never match a call that omitted it.
+            if overload_arity_accepts(params, arg_types.length()) {
               let mut ok = true
-              for i in 0..<params.length() {
+              for i in 0..<arg_types.length() {
                 // Both sides unwrapped: `arg_types` already are, and a
                 // parameter typed with an object-type ALIAS
                 // (`type S = { k: string }`) stayed the bare name `S`, so
@@ -13474,7 +13560,11 @@ fn infer_call(
                 // `string | string | null` instead of its first
                 // overload's `string`. The interface spelling of the same
                 // parameter always matched.
-                if !overload_param_accepts(resolver, arg_types[i], params[i]) {
+                if !overload_param_accepts(
+                    resolver,
+                    arg_types[i],
+                    overload_param_at(params, i),
+                  ) {
                   ok = false
                   break
                 }
@@ -13509,10 +13599,17 @@ fn infer_call(
         )
         let r = reduce_conditional(substitute_params(gret, bindings))
         let sps = substitute_params_array(gps, bindings)
-        if sps.length() == arg_types.length() {
+        // The same arity rule as a concrete member: redi's
+        // `useDependency<T>(id, lookUp?)` is called with ONE argument at
+        // every univer use site, and requiring two made every member fail,
+        // so the call came back as the union of all six returns.
+        if overload_arity_accepts(sps, arg_types.length()) {
           let mut ok = true
-          for i in 0..<sps.length() {
-            if !is_assignable_to(arg_types[i], resolver.unwrap(sps[i])) {
+          for i in 0..<arg_types.length() {
+            if !is_assignable_to(
+                arg_types[i],
+                resolver.unwrap(overload_param_at(sps, i)),
+              ) {
               ok = false
               break
             }
@@ -13525,6 +13622,12 @@ fn infer_call(
       }
       if rets.length() == 1 {
         rets[0]
+      } else if rets.iter().any(fn(t) { t is Any }) {
+        // A union with an `any` member IS `any` in TypeScript. Kept as a
+        // union it read as `any | any[] | null | …`, and a member access on
+        // it failed on the `any[]` and `null` arms — "property
+        // `currentLocale$` does not exist on `any | any[] | …`".
+        @ast.TsType::Any
       } else {
         @ast.TsType::Union(rets)
       }
@@ -21865,7 +21968,7 @@ fn check_arguments_with_sig(
       if fixed_rest_len >= 0 {
         (required_arity(ps) + fixed_rest_len, ps.length() - 1 + fixed_rest_len)
       } else {
-        let min_ = required_arity(ps)
+        let min_ = required_arity_at_call(ps, params)
         let max_ = if has_rest { -1 } else { ps.length() }
         (min_, max_)
       }

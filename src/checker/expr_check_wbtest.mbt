@@ -23337,3 +23337,101 @@ test "rename_type_refs renames an asserted target" {
     _ => fail("a bare `asserts x` has no target to rename")
   }
 }
+
+///|
+/// Issues in function bodies, parsed directly so a fixture that stopped
+/// parsing fails rather than passing as an empty module.
+fn body_issue_messages(src : String) -> Array[String] raise {
+  check_module_function_bodies(
+    @parser.parse_module_from_source_with_const_values(src, {}),
+  ).map(fn(i) { i.message })
+}
+
+///|
+/// A `declare class` member's `...rest` and a `p?: T | null` parameter were
+/// both read as required single arguments — redi's `new Injector()` and
+/// `createInstance(ctor, ...args)`, which every univer package calls.
+test "a declare class keeps its rest and nullable optional parameters" {
+  let prelude = "declare class Injector { constructor(deps?: number[], parent?: Injector | null); create(ctor: string, ...args: number[]): void; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const i = new Injector(); new Injector([1]); new Injector([1], null); i.create(\"a\", 1, 2, 3); i.create(\"a\"); }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude +
+      "function g() { const i = new Injector(); i.create(\"a\", \"x\"); }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// `new C<A>()` is a `C<A>`. The explicit arguments were dropped, so a
+/// member typed by the class parameter stayed the unbound `T`: rxjs's
+/// `new Subject<void>().next()` read as missing its one argument, and a
+/// wrong argument to `new Subject<number>().next(…)` went unreported.
+test "a new expression keeps its explicit type arguments" {
+  let prelude = "declare class S<T> { next(v: T): void; get(): T; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const s = new S<void>(); s.next(); const n = new S<number>(); n.next(1); const k: number = n.get(); }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g() { const n = new S<number>(); n.next(\"x\"); }",
+    ).length() >
+    0,
+  )
+  assert_true(
+    body_issue_messages(
+      prelude +
+      "function h() { const n = new S<number>(); const s: string = n.get(); }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// An overload member fits a call whose argument count lies in its arity
+/// RANGE. Requiring the exact parameter count made redi's
+/// `useDependency<T>(id, lookUp?)` fail for its one-argument call, and the
+/// fallback union of every return (`T | T[] | T | null | …`) had no
+/// `.x$` on its array arm.
+test "an overload member with an optional parameter matches a shorter call" {
+  let prelude = "declare function use<T>(id: T, lookUp?: number): T;\ndeclare function use<T>(id: T, q: \"many\", lookUp?: number): T[];\nclass L { x$ = 1 }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude + "function f() { const v: number = use(new L()).x$; return v; }",
+    ),
+    [],
+  )
+}
+
+///|
+/// A function TYPE's leading `this` parameter takes no argument. Kept
+/// positionally it was the callback's first parameter, so rxjs's
+/// `new Observable((subscriber) => …)` typed `subscriber` as the
+/// `Observable` itself and `subscriber.next(v)` read as a missing method.
+test "a function type's this parameter is not an argument position" {
+  let prelude = "interface Sub<T> { next(v: T): void }\ndeclare class Obs<T> { constructor(subscribe?: (this: Obs<T>, s: Sub<T>) => void); }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { return new Obs<number>((s) => { s.next(1); }); }",
+    ),
+    [],
+  )
+  @test.assert_eq(
+    body_issue_messages(
+      "declare function cb(f: (this: string, n: number) => void): void;\nfunction g() { cb((n) => { const k: number = n; }); }",
+    ),
+    [],
+  )
+}
