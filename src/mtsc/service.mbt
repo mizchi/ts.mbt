@@ -223,6 +223,16 @@ fn mtsc_is_declaration_file(path : String) -> Bool {
 }
 
 ///|
+/// A path inside a `node_modules` directory: a dependency rather than the
+/// program's own source. A host whose `cwd` is `.` spells its paths
+/// relatively, so `node_modules/lib/index.d.ts` has no `/` in front of
+/// the directory name and a `contains` test alone misses it. The CLI's
+/// `mtsc_is_dependency_path` asks the same question the same way.
+fn mtsc_is_dependency_path(path : String) -> Bool {
+  path.contains("/node_modules/") || path.has_prefix("node_modules/")
+}
+
+///|
 /// The declaration files the program reads for their declarations and
 /// does not report on — the CLI's `mtsc_context_only_modules`, over a
 /// host: a dependency's `.d.ts` (one under `node_modules`) that is not a
@@ -245,7 +255,7 @@ fn[H : MtscHost] mtsc_context_only(
       continue
     }
     if skip_lib_check ||
-      (path.contains("/node_modules/") && !roots.contains(path)) {
+      (mtsc_is_dependency_path(path) && !roots.contains(path)) {
       out[path] = ()
     }
   }

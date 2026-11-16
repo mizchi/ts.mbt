@@ -42,7 +42,13 @@ export type CheckerSource =
 
 /** What `loadLanguageService` returns: one instance, any number of hosts. */
 export interface LanguageServiceFactory {
-  /** The same contract as `createLanguageService` in `language-service`. */
+  /**
+   * The same contract as `createLanguageService` in `language-service`,
+   * with one addition: a root file name may not contain NUL. The roots
+   * cross the wasm boundary NUL-separated, so the service throws a
+   * `TypeError` for such a name rather than checking two files that do
+   * not exist. No real path can contain one.
+   */
   createLanguageService(host: LanguageServiceHost): LanguageService;
 }
 

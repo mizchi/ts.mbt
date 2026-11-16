@@ -595,3 +595,47 @@ test "language service: the memory host finds a barrel at the relative root" {
     diagnostics[0].messageText.contains("expected `string` but got `number`"),
   )
 }
+
+///|
+/// A dependency's declarations are context, not a subject, whether the
+/// host spells the path absolutely or relative to `cwd: "."`. The relative
+/// spelling has no `/` before `node_modules/`, so a `contains` test alone
+/// checked the dependency and reported its own errors. A dependency named
+/// as a ROOT is still checked.
+test "language service: a relative node_modules declaration is context only" {
+  let dependency = "export declare function score(): number;\ndeclare var dup: number;\ndeclare var dup: string;"
+  let entry = "import { score } from \"lib\";\nexport const n: number = score();"
+  let relative : MtscMemoryHost = {
+    files: {
+      "node_modules/lib/package.json": "{\"name\":\"lib\",\"types\":\"./index.d.ts\"}",
+      "node_modules/lib/index.d.ts": dependency,
+      "main.ts": entry,
+    },
+    roots: ["main.ts"],
+    cwd: ".",
+    options: { jsx: false, skipLibCheck: false, },
+  }
+  assert_eq(
+    resolve_module_name(relative, "main.ts", "lib").resolvedFileName,
+    "node_modules/lib/index.d.ts",
+  )
+  assert_eq(wbtest_messages(get_program_diagnostics(relative)), [])
+  let absolute : MtscMemoryHost = {
+    files: {
+      "/p/node_modules/lib/package.json": "{\"name\":\"lib\",\"types\":\"./index.d.ts\"}",
+      "/p/node_modules/lib/index.d.ts": dependency,
+      "/p/main.ts": entry,
+    },
+    roots: ["/p/main.ts"],
+    cwd: ".",
+    options: { jsx: false, skipLibCheck: false, },
+  }
+  assert_eq(wbtest_messages(get_program_diagnostics(absolute)), [])
+  relative.roots.push("node_modules/lib/index.d.ts")
+  assert_true(
+    wbtest_any_contains(
+      get_program_diagnostics(relative),
+      "node_modules/lib/index.d.ts: ",
+    ),
+  )
+}
