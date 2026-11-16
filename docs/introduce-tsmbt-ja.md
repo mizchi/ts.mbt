@@ -8,6 +8,7 @@
 - TS の `infer` + 条件型 + mapped 型の深い推論は再現できない。これは設計上の限界
 - 実用ターゲットは vite-plugin-moonbit。npm の型を MoonBit から消費するため
 - 現在 `mizchi/ts@0.7.0` (mooncakes)。
+- 0.7.0 で `ts2mbt` / `mbt2ts` は `mtsc` に集約された (`ts2mbt X` → `mtsc bridge X`、`mbt2ts X` → `mtsc pkg X`)。以下のコマンドはその名前で書いている。
 
 ## なぜ書いてるか
 
@@ -22,8 +23,8 @@ vite-plugin-moonbit を「ふつうに使えるもの」にしたい。MoonBit �
 drizzle で見せるのが一番分かりやすいので drizzle で。
 
 ```bash
-$ moon install mizchi/ts/cmd/ts2mbt
-$ ts2mbt scaffold node_modules/drizzle-orm/index.d.ts drizzle-orm dist/
+$ moon install mizchi/ts/cmd/mtsc
+$ mtsc bridge scaffold node_modules/drizzle-orm/index.d.ts drizzle-orm dist/
 Wrote MoonBit bridge package to dist
 Wrote scaffold diagnostics to dist/SCAFFOLD_DIAGNOSTICS.md
 $ wc -l dist/*.mbt
@@ -124,7 +125,7 @@ interface BuildRelationalQueryResult {
 
 ## どこまで動くか
 
-実装してる sub-package (現在 0.4.0)。
+実装してる sub-package (0.4.0 時点)。
 
 - `src/parser` — TS / JS パーサー + module resolver。npm `exports`、`typesVersions`、`node:*`、`@types/*` ぜんぶ
 - `src/checker` — declaration-level の型システム。`is_assignable_to` / `extends_decision` / `infer` pattern matching / distributive conditional / `Pick` / `Omit` / `Record` / `Exclude` / `Extract` / `NonNullable` / `Awaited` / `ReturnType` / `Parameters`
@@ -136,13 +137,13 @@ CLI 触り方:
 
 ```bash
 # 単発の .d.ts から bridge 生成
-ts2mbt scaffold node_modules/drizzle-orm/index.d.ts drizzle-orm dist/
+mtsc bridge scaffold node_modules/drizzle-orm/index.d.ts drizzle-orm dist/
 
 # package.json の deps から全部
-ts2mbt generate --package-json package.json --out internal/generated
+mtsc bridge generate --package-json package.json --out internal/generated
 
 # 逆方向: MoonBit pkg.generated.mbti から .d.ts
-mbt2ts decl src/foo/pkg.generated.mbti dist/foo.d.ts
+mtsc pkg decl src/foo/pkg.generated.mbti dist/foo.d.ts
 ```
 
 real-world corpus (現在 24 package) を `just verify-realworld-typescript` で回している。
@@ -171,12 +172,10 @@ just verify-examples
 
 mooncakes 経由なら:
 
-```json
-// moon.mod.json
-{
-  "deps": {
-    "mizchi/ts": "0.4.0"
-  }
+```
+// moon.mod
+import {
+  "mizchi/ts@0.7.0",
 }
 ```
 
