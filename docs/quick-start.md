@@ -22,7 +22,7 @@ Verify:
 
 ```bash
 mtsc --version
-# Version 0.5.2 (mtsc, mizchi/ts)
+# Version 0.7.0 (mtsc, mizchi/ts)
 ```
 
 `~/.moon/bin` must be on `$PATH`.

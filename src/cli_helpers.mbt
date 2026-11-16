@@ -48,7 +48,7 @@ pub fn cli_bail(message : String) -> Unit {
 /// asserted. `mtsc --version` is a tsc-compatible surface now — `tsc -v`
 /// prints a version people act on — so a stale number here is a wrong
 /// answer rather than a cosmetic one.
-pub const CLI_VERSION : String = "0.5.2"
+pub const CLI_VERSION : String = "0.7.0"
 
 ///|
 /// Print the version banner for the given binary name and exit with

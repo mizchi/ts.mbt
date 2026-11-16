@@ -7,7 +7,7 @@
 - drizzle-orm のスキーマを Node 24 の `node:sqlite` に流して INSERT + SELECT が走るところまで動く
 - TS の `infer` + 条件型 + mapped 型の深い推論は再現できない。これは設計上の限界
 - 実用ターゲットは vite-plugin-moonbit。npm の型を MoonBit から消費するため
-- 現在 `mizchi/ts@0.4.0` (mooncakes)。
+- 現在 `mizchi/ts@0.7.0` (mooncakes)。
 
 ## なぜ書いてるか
 
