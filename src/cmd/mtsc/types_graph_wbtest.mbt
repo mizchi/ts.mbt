@@ -287,3 +287,66 @@ test "mtsc flags: --skipLibCheck is read with its value" {
     Err(e) => fail(e)
   }
 }
+
+///|
+/// `--external` keeps a package out of the BUNDLE, and its types still
+/// describe the program: the check's walk follows it. It used to skip the
+/// specifier before resolving it, so `--bundle --noEmit --external p` read
+/// every import from `p` as `any`.
+async test "mtsc check graph: an external package is still type-checked" {
+  let root = "/tmp/ts_mbt_types_graph_external"
+  types_graph_fixture(root, [
+    ("node_modules/p/package.json", "{\"name\":\"p\",\"types\":\"index.d.ts\"}"),
+    (
+      "node_modules/p/index.d.ts", "export declare function f(x: number): string;\n",
+    ),
+    ("node_modules/p/index.js", "exports.f = (x) => String(x);\n"),
+    ("bad.ts", "import { f } from \"p\";\nexport const n: number = f(1);\n"),
+    ("ok.ts", "import { f } from \"p\";\nexport const s: string = f(1);\n"),
+  ])
+  let opts = types_graph_check_opts()
+  opts.bundle = true
+  opts.externals["p"] = true
+  assert_true(mtsc_compile_all(opts, [root + "/bad.ts"]) > 0)
+  assert_eq(mtsc_compile_all(opts, [root + "/ok.ts"]), 0)
+}
+
+///|
+/// A `.d.cts` is a declaration file: a bodiless `export function` and a
+/// destructuring rename in a signature are legal there, as in a `.d.ts`.
+async test "mtsc check graph: a .d.cts entry is a declaration file" {
+  let root = "/tmp/ts_mbt_types_graph_dcts_entry"
+  types_graph_fixture(root, [
+    (
+      "lib.d.cts", "export function g(): void;\nexport function h({ a: b }: { a: number }): void;\n",
+    ),
+  ])
+  assert_eq(
+    mtsc_compile_all(types_graph_check_opts(), [root + "/lib.d.cts"]),
+    0,
+  )
+}
+
+///|
+/// The watch set follows the CHECK's graph when checking is on: a
+/// non-bundle `--noEmit --watch` checks the whole import graph and used to
+/// poll the entry alone, so editing an imported file changed nothing. A
+/// dependency's declarations are not polled.
+async test "mtsc watch: the check's import graph is watched" {
+  let root = "/tmp/ts_mbt_types_graph_watch"
+  types_graph_fixture(root, [
+    ("node_modules/p/package.json", "{\"name\":\"p\",\"types\":\"index.d.ts\"}"),
+    ("node_modules/p/index.d.ts", "export declare const n: number;\n"),
+    (
+      "a.ts", "import { b } from \"./b\";\nimport type { n } from \"p\";\nexport const x: number = b;\n",
+    ),
+    ("b.ts", "export const b: number = 1;\n"),
+  ])
+  let opts = types_graph_check_opts()
+  let watched = mtsc_watch_program_files(opts, [root + "/a.ts"])
+  assert_true(watched.iter().any(fn(p) { p.has_suffix("/b.ts") }))
+  assert_false(watched.iter().any(fn(p) { p.contains("/node_modules/") }))
+  // With checking off, nothing reads the graph and only the entry is polled.
+  opts.no_check = true
+  assert_eq(mtsc_watch_program_files(opts, [root + "/a.ts"]).length(), 1)
+}

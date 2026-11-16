@@ -6297,6 +6297,57 @@ fn Resolver::method_type_params_of(
 }
 
 ///|
+/// Every type-parameter name any declaration of `meth` binds, in first-seen
+/// order. `method_type_params_of` answers with the FIRST generic
+/// declaration, which is right for a single signature and wrong for an
+/// overload set: with `m<T>(x: T[], n: number): T` and `m<U>(x: U, s:
+/// string): U[]`, `c.m(5, "s")` selects the second, and solving against
+/// `[T]` left its `U` unsolved. The union solves the selected signature's
+/// own binders from its parameters; a name only another declaration binds
+/// does not occur in the selected one, or binds `any` where it does, which
+/// can only lose a finding.
+fn Resolver::method_overload_type_params(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> Array[String] {
+  // A copy: the first answer is the declaration's own list, and pushing
+  // into it would edit the AST.
+  let out = self.method_type_params_of(recv, meth).copy()
+  let name = match self.unwrap(recv) {
+    Named(n) => n
+    Applied(n, _) => n
+    _ => return out
+  }
+  let add = fn(names : Array[String]) {
+    for n in names {
+      if !out.contains(n) {
+        out.push(n)
+      }
+    }
+  }
+  match self.interfaces.get(name) {
+    Some(iface) =>
+      for entry in iface.method_type_params {
+        if entry.0 == meth {
+          add(entry.1)
+        }
+      }
+    None => ()
+  }
+  match self.classes.get(name) {
+    Some(cls) =>
+      for m in cls.methods {
+        if m.name == meth {
+          add(m.type_params)
+        }
+      }
+    None => ()
+  }
+  out
+}
+
+///|
 /// The parameters a generic method call's arguments are checked against:
 /// a parameter that is exactly a constrained method type parameter is
 /// judged against its BOUND (`interface_method_params_with_bounds`), and
@@ -6814,6 +6865,18 @@ fn Resolver::resolve_method_overload(
   if candidates.length() <= 1 {
     return None
   }
+  // A member's own type parameters are judged as `any` here: they are
+  // solved from these arguments once the member is selected, so a raw
+  // `Named("V")` can only make a generic member unselectable. With
+  // `m<T>(x: number, f: () => T): T` and `m<V>(x: string, f: () => V):
+  // V[]`, `c.m("s", () => 5)` matched neither, fell back to the first
+  // declaration, and `const a: number[] = c.m("s", () => 5)` was reported
+  // as getting `number`. The binders are the union over the overload set,
+  // which is how they are recorded for an interface.
+  let erase : Map[String, @ast.TsType] = Map([])
+  for b in self.method_overload_type_params(recv, meth) {
+    erase[b] = @ast.TsType::Any
+  }
   for c in candidates {
     let (params, ret) = c
     // The argument count has to fit the member's arity, not equal its
@@ -6825,7 +6888,13 @@ fn Resolver::resolve_method_overload(
     }
     let mut ok = true
     for i in 0..<arg_types.length() {
-      if !is_assignable_to(arg_types[i], overload_param_at(params, i)) {
+      let expected = overload_param_at(params, i)
+      let expected = if erase.is_empty() {
+        expected
+      } else {
+        substitute_params(expected, erase)
+      }
+      if !is_assignable_to(arg_types[i], expected) {
         ok = false
         break
       }
@@ -6856,7 +6925,7 @@ fn instantiate_method_return(
   args : Array[@ast.TsExpr],
   ret : @ast.TsType,
 ) -> @ast.TsType {
-  let method_tps = resolver.method_type_params_of(recv, meth)
+  let method_tps = resolver.method_overload_type_params(recv, meth)
   if method_tps.length() == 0 {
     return ret
   }
@@ -11357,18 +11426,21 @@ fn infer_expr_inner(
           match resolver.classes.get(class_name) {
             Some(cls) if cls.type_params.length() > 0 => {
               let names = cls.type_params
+              // The RICH signature, so a rest parameter solves from each
+              // variadic argument: `constructor(...values: T[])` with
+              // `new Box(["a"])` is `T = string[]`, where the bare
+              // `Array(T)` read as one fixed argument gave `T = string`.
+              let sig = match resolver.lookup_constructor_sig(class_name) {
+                Some((_, sig)) => Some(sig)
+                None => None
+              }
               let bindings = bind_unsolved_to_any(
                 names,
                 widen_fresh_literal_bindings(
                   env,
                   resolver,
                   solve_generic_bindings(
-                    env,
-                    resolver,
-                    names,
-                    ctor_params,
-                    args,
-                    None,
+                    env, resolver, names, ctor_params, args, sig,
                   ),
                   names,
                   None,

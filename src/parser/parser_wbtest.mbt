@@ -8689,3 +8689,40 @@ test "parser: a multi-line JSX attribute inside a namespace is not TS1002" {
   ).parse_module()
   assert_true(unterminated(bad) > 0)
 }
+
+///|
+/// The `<<` split runs on a lookahead (`<< Name >`), and `1 as N << shift
+/// > 0` passes it without being a type argument list. When no list closes,
+/// the token is put back and the shift and the comparison parse as before;
+/// the skip used to consume them silently, and the emit lost them.
+test "parser: a split << that closes no type argument list is a shift again" {
+  let src =
+    #|type N = number;
+    #|declare const shift: number;
+    #|export const s = 1 as N << shift > 0;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  fn has_shl(e : @ast.TsExpr) -> Bool {
+    match e {
+      BinOp(Shl, _, _) => true
+      BinOp(_, l, r) => has_shl(l) || has_shl(r)
+      As(x, _) => has_shl(x)
+      _ => false
+    }
+  }
+
+  assert_true(
+    module_.top_level_stmts
+    .iter()
+    .any(fn(st) {
+      match st {
+        Const(_, _, e) => has_shl(e)
+        _ => false
+      }
+    }),
+  )
+}

@@ -208,6 +208,39 @@ async fn mtsc_watch_program_files(
 
   for entry in entries {
     add(entry)
+    // The CHECK walks the types graph, which follows what the runtime walk
+    // skips: a bare `import type`, and a relative `./x.js` that names
+    // `x.ts`. A file only the check reads still changes the answer, so
+    // when checking is on that graph is watched too, minus the files under
+    // `node_modules` — a dependency's `.d.ts` does not change under an
+    // edit loop, and a workspace package linked into `node_modules`
+    // arrives here under its real path, outside it. This also covers a
+    // non-bundle `--noEmit --watch`, which checks the whole import graph
+    // and used to poll the entry alone.
+    if !opts.no_check {
+      let files : Map[String, String] = Map([])
+      match
+        mtsc_load_bundle_files(
+          entry,
+          files,
+          Map([]),
+          opts.externals,
+          Map([]),
+          false,
+          [],
+          Map([]),
+          [],
+          true,
+        ) {
+        Ok(_) =>
+          for path in files.keys() {
+            if mtsc_type_graph_reads(path) && !mtsc_is_dependency_path(path) {
+              add(path)
+            }
+          }
+        Err(_) => ()
+      }
+    }
     if !opts.bundle {
       continue
     }
@@ -228,10 +261,8 @@ async fn mtsc_watch_program_files(
         parse_split,
         parsed,
         edges,
-        // The bundle's own graph. The check this run also performs walks
-        // the types graph, whose extra files are declarations a watcher
-        // has no reason to poll: a dependency's `.d.ts` does not change
-        // under an edit loop.
+        // The bundle's own graph: what the emit reads. The check's graph
+        // is added above.
         false,
       ) {
       Ok(_) =>

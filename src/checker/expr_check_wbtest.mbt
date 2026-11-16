@@ -23486,12 +23486,63 @@ test "a truthy optional chain narrows an alias member of the receiver's union" {
 
 ///|
 /// A member type spelled as an indexed access keeps the binders of the
-/// generic method it names when it is called through a local binding.
-test "a generic method reached through an indexed access type is solved" {
+/// generic method it names when it is called through a local binding, so
+/// an unsolved one binds `any` instead of leaking out as the bare `R`.
+/// (Not SOLVED here: a class used as a value is `any` in this checker, so
+/// `R` has nothing to bind from `Cmd`, and `const s: string = get(Cmd)` is
+/// a MISS.)
+test "a generic method reached through an indexed access type does not leak its binder" {
   @test.assert_eq(
     body_issue_messages(
       "class T { other = 1 }\nclass Inj { get<R>(id: new () => R): R { return new id(); } }\nclass Cmd { run(): void {} }\ninterface Bed { get: Inj[\"get\"] }\ndeclare function bed(): Bed;\nfunction f() { const { get } = bed(); get(Cmd).run(); const b = bed(); const g = b.get; g(Cmd).run(); }",
     ),
     [],
+  )
+}
+
+///|
+/// A generic class's rest constructor parameter solves from EACH argument:
+/// `constructor(...values: T[])` with `new Box(["a"])` is `T = string[]`.
+/// Solving against the bare `Array(T)` read the rest as one fixed argument
+/// and gave `T = string`, so a legal `string[]` read was reported.
+test "a generic class instantiates through a rest constructor parameter" {
+  let prelude = "class Box<T> { value: T; constructor(...values: T[]) { this.value = values[0]; } }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const v: string = new Box(\"a\").value; const w: string[] = new Box([\"a\"]).value; }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g() { const bad: number = new Box(\"a\").value; }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// Overload selection judges a member's own type parameters as `any`, and
+/// the selected member's binders are solved: with `m<T>(x: number, f: ()
+/// => T): T` and `m<V>(x: string, f: () => V): V[]`, `c.m("s", () => 5)`
+/// is the SECOND, `number[]`. A raw `Named("V")` matched nothing, so the
+/// call fell back to the first declaration and a legal `number[]` read was
+/// reported as getting `number` — on a class and on an interface alike.
+test "an overloaded generic method selects and solves the matching member" {
+  let prelude = "type V = { v: 1 };\nclass C { m<T>(x: number, f: () => T): T; m<V>(x: string, f: () => V): V[]; m(x: any, f: any): any { return x } }\ninterface I { m<T>(x: number, f: () => T): T; m<V>(x: string, f: () => V): V[]; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(c: C, i: I) { const a: number[] = c.m(\"s\", () => 5); const b: number[] = i.m(\"s\", () => 5); const n: number = c.m(1, () => 5); }",
+    ),
+    [],
+  )
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function g(c: C, i: I) { const a: string[] = c.m(\"s\", () => 5); const b: string[] = i.m(\"s\", () => 5); }",
+    ).length(),
+    2,
   )
 }

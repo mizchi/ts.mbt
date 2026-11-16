@@ -156,7 +156,11 @@ fn parse_graph_module(
   // A declaration file makes every declaration in it ambient whether or
   // not it writes `declare`; the PATH is the only place that fact lives,
   // and the bodiless-declaration rules read it only to go silent.
-  let is_dts = source.path.has_suffix(".d.ts")
+  // `.d.mts` / `.d.cts` are declaration files too: zod's `types` condition
+  // names `index.d.cts`, and the graph loader reads it.
+  let is_dts = source.path.has_suffix(".d.ts") ||
+    source.path.has_suffix(".d.mts") ||
+    source.path.has_suffix(".d.cts")
   let p1 = @parser.Parser::from_source_with_jsx(
     source.source,
     source.allowJsx,

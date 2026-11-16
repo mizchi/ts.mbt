@@ -1379,9 +1379,13 @@ fn Parser::is_qualified_type_name_part(self : Parser, offset : Int32) -> Bool {
 /// (`Name` then `extends` / `,` / `>` / `=`), so a `<<` that really is a
 /// shift is never touched. effect's `FiberSet.runtime` and two siblings are
 /// written this way, and the whole declaration file failed to parse.
-fn Parser::split_ltlt_before_generic_type_arg(self : Parser) -> Unit {
+///
+/// Returns the replaced `<<` token, so a caller whose type-argument skip
+/// then fails can put it back (`undo_ltlt_split`): `1 as N << shift > 0`
+/// passes the lookahead and is not a type argument list at all.
+fn Parser::split_ltlt_before_generic_type_arg(self : Parser) -> Token? {
   if !self.check(LtLt) || self.has_line_terminator_before() {
-    return
+    return None
   }
   let params_follow = self.peek_at(1).kind is Ident(_) &&
     (match self.peek_at(2).kind {
@@ -1389,7 +1393,7 @@ fn Parser::split_ltlt_before_generic_type_arg(self : Parser) -> Unit {
       _ => false
     })
   if !params_follow {
-    return
+    return None
   }
   let tok = self.tokens[self.pos]
   self.tokens[self.pos] = {
@@ -1402,6 +1406,16 @@ fn Parser::split_ltlt_before_generic_type_arg(self : Parser) -> Unit {
     pos: tok.pos + 1,
     has_newline_before: false,
   })
+  Some(tok)
+}
+
+///|
+/// Reverses `split_ltlt_before_generic_type_arg` at `at`, the index the
+/// split ran at, and moves back there.
+fn Parser::undo_ltlt_split(self : Parser, at : Int32, tok : Token) -> Unit {
+  self.tokens[at] = tok
+  self.tokens.remove(at + 1) |> ignore
+  self.pos = at
 }
 
 ///|
@@ -1432,14 +1446,28 @@ fn Parser::parse_named_type_tail(
   // spells an overload set — read the second signature's `<B>` as type
   // arguments of the first one's return type, and the whole literal
   // failed with "`;` expected".
-  self.split_ltlt_before_generic_type_arg()
+  let split_at = self.pos
+  let split = self.split_ltlt_before_generic_type_arg()
   if self.check(Lt) && !self.has_line_terminator_before() {
     match self.try_parse_simple_type_args() {
       Some(type_args) => Applied(full_name, type_args)
-      None => {
-        self.skip_type_args()
-        Named(full_name)
-      }
+      None =>
+        match split {
+          // A split `<<` that no type argument list closes was a shift:
+          // put the token back, so the expression parser reads
+          // `N << shift > 0` as it did before the split existed, instead
+          // of the skip consuming it silently.
+          Some(tok) => {
+            if !self.try_skip_type_args() {
+              self.undo_ltlt_split(split_at, tok)
+            }
+            Named(full_name)
+          }
+          None => {
+            self.skip_type_args()
+            Named(full_name)
+          }
+        }
     }
   } else {
     Named(full_name)

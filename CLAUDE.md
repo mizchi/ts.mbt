@@ -4741,6 +4741,42 @@ product surfaces now.
       `[Ctor<T>]`, which was more than half of univer's remaining
       increase. It is `any` as a value now, which is what a class
       declared in the same file is.
+  - **The review found six more, and probing settled each one.**
+    - **Overload selection ignored the member's own binders.** It
+      compared each argument against the raw `Named("V")`, so a generic
+      member never matched. The call fell back to the first
+      declaration, and `const a: number[] = c.m("s", () => 5)` was
+      reported as getting `number`. That was a false positive on main
+      too. The binders are judged as `any` while selecting, and the
+      selected member's binders are solved from the union over the
+      overload set. An interface records its binders per method NAME,
+      so they cannot be matched to the declaration they belong to.
+    - **A generic class's rest constructor solved from the bare
+      `Array(T)`.** So `new Box(["a"])` gave `T = string` and a legal
+      `string[]` read was reported. That was new in this batch. It uses
+      the rich signature, as the constructor's argument check does.
+    - **The `<<` split could not be undone.** `1 as N << shift > 0`
+      passes its lookahead and is not a type argument list at all.
+      The failed skip swallowed the shift, and the emit printed
+      `const s = 1`. tsc rejects that input with TS1005. The token is
+      put back now, so the output is main's again.
+    - **The check's walk still dropped `--external` specifiers.**
+      `--external` keeps a package out of the bundle, but its types
+      still describe the program.
+    - **A `.d.cts` / `.d.mts` entry was parsed as an ordinary module.**
+      So a bodiless `export function` in one was "implementation is
+      missing".
+    - **`--watch` polled only the runtime graph.** A non-bundle
+      `--noEmit --watch` checks the whole import graph and polled the
+      entry alone, so editing an imported file changed nothing. It now
+      also polls the check's graph, minus the files under
+      `node_modules`.
+
+    A suggested set of tests was NOT added. They were controls asserting
+    that `const s: string = get(Cmd)` reports through `Injector['get']`
+    and `.bind`. All four are MISSes, because a class used as a value is
+    `any` here, so `R` has nothing to bind from. The test that claimed
+    "is solved" now says what it guarantees: the binder does not leak.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

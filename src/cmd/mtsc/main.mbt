@@ -692,7 +692,9 @@ async fn mtsc_load_bundle_files(
         queue.push(combined)
         continue
       }
-      if externals.contains(spec) {
+      // `--external` keeps a package out of the BUNDLE; its types still
+      // describe the program, so the check's walk follows it.
+      if !types_resolution && externals.contains(spec) {
         continue
       }
       // The bundler resolves a bare specifier once (`aliases` is keyed by
@@ -773,7 +775,9 @@ async fn mtsc_load_bundle_files(
         queue.push(combined)
         continue
       }
-      if externals.contains(spec) {
+      // `--external` keeps a package out of the BUNDLE; its types still
+      // describe the program, so the check's walk follows it.
+      if !types_resolution && externals.contains(spec) {
         continue
       }
       // The bundler resolves a bare specifier once (`aliases` is keyed by
@@ -1216,7 +1220,7 @@ fn mtsc_typecheck_source(
     mtsc_collect_type_issues(
       source,
       path.has_suffix(".tsx"),
-      declaration_file=path.has_suffix(".d.ts"),
+      declaration_file=mtsc_is_declaration_path(path),
       compiler_options~,
     ) {
     Ok(issues) => issues
