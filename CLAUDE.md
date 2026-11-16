@@ -5341,6 +5341,16 @@ product surfaces now.
       `v is Box` over `Box | string`, whose source member stays a name. Both
       forms name one type, so matching either cannot over-remove. `v is AB`,
       an alias to a union of interfaces, now narrows too, and main reports it.
+    - **The fifth round's Minor was a cost model the depth bound did not
+      supply, and it was measured before it was fixed.** The expansion's
+      depth limit stops an alias that names itself, but not one that FANS
+      OUT: an alias union of four aliases of the level below, four levels
+      deep, is 4^(n + 1) members, so 16,384 at six levels and 262,144 at
+      the depth limit. `NARROWING_MEMBER_BUDGET` (1,024) ends the walk with
+      a failure, and both callers then keep the type as written, which is
+      what they already did for an undecidable member. A depth bound is not
+      a size bound; the same distinction `verify-checker-scaling` draws
+      between a long list and a slow file.
     - A union-typed member of an `export =` namespace (`mode: "dev" |
       "prod"`) read as absent. Only a union of signatures, which is an
       overload set, binds as `any`.
