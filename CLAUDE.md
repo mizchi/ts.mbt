@@ -5183,6 +5183,87 @@ product surfaces now.
       `/// <reference types>`, and tsc does not apply one there: it
       still walks `node_modules` and finds both `@types/g` and a plain
       `g` package. That half was declined, and gating it fails a test.
+  Batch GK is the survey's fourth step: the eight planted errors
+  `fixtures/real-app` declared as misses. Five are reported now (effect,
+  React, preact, drizzle, express), so mtsc catches 8 of the 11 with 0
+  false positives. The oracle, effect (124), zod (9), the four real
+  `.d.ts` entries and four of univer's five packages are unchanged.
+  univer `ui` loses 22 false positives and gains none.
+  - **A namespace object is a value now.** `import * as ns`,
+    `export * as ns from`, and an exported `import * as z` binding (zod's
+    `z`) each bind an object of the target's value exports. Each export is
+    typed where it is declared, through a per-member form of
+    `@value-origin:`.
+    - Only a DECLARATION file's members are typed. The first version
+      typed every module's, and effect's own sources gained 311 false
+      positives. Each one was a coarse inference the old `any` had been
+      hiding: an erased `as const` widening to `string`, or an arrow's
+      `<A>`, which is not in the AST. A package's `.d.ts` is what an
+      application's namespace import reaches, and it says what it means.
+    - An overload set, and a callable object made of call signatures
+      only (effect's `dual` APIs), are spread into one field per
+      signature. That is the only shape the method-call path resolves
+      overloads in. Kept whole, the call was judged by nothing.
+    - A predicate member still narrows through the published `@ns:`
+      form first. The binding's member type is in the declaring module's
+      terms, which is right for a call's result and wrong for a narrowing
+      target.
+  - **A function merged with a namespace is both.** It is callable, with
+    the namespace's members on it: preact's `h`, drizzle's `sql`, and
+    express's `e`. In `local_value_type`, the `var` that lowering a
+    namespace produces is in `values` as `any`, and it answered before
+    the function did. The value is an Object of `<call>` entries plus the
+    members. A namespace that holds only types is not instantiated and
+    contributes nothing, so a `const` merged with it keeps its type. Before
+    this, an empty object shadowed the `const`.
+  - **`export =` over a namespace.** `import * as R` reads the assigned
+    value's members, and so does a named import (`esModuleInterop`). An
+    overloaded member is left out, because a `Union` of signatures with no
+    `@overloads:` marker reads as a union-typed value.
+  - **A declaration file's own qualified names resolve.** The shared
+    resolver maps `ns.X` through the CHECKED module's `import * as ns`. A
+    qualified name written inside another module therefore resolved only
+    when the checked module bound the same `ns` itself, and otherwise
+    abstained. zod writes `core.X` throughout, so `z.string` was
+    unknowable. A declaration file now passes every namespace alias it
+    has. A `.ts` source keeps the conflicting-only rule.
+  - **A generic interface instance is not a primitive.** No object type
+    is assignable to `number`, whatever its type arguments are. But
+    `Box<number>` reached the structural relations as `Applied` and fell
+    through all of them, even when `Box` was declared in the same file.
+    Thenables are excluded, because `await q` of a custom thenable is
+    inferred as the thenable itself here (drizzle's query builders). A lib
+    type name is excluded too, because an interface of that name augments
+    the lib type.
+  - **A pre-existing false positive the probe for this found.** A generic
+    guard over a generic ALIAS union (`Result<A, E> = Success<A> |
+    Failure<E>`) never narrowed the else branch, so `r.success` after
+    `if (isFailure(r)) return` was reported on code tsc accepts. Two
+    causes were behind it:
+    - `narrow_remove` saw the alias as one opaque member;
+    - through a namespace, the target was `R.Failure<any>` while the
+      source expanded to `Failure<string>`.
+    The source is expanded when it is an alias to a union, and the
+    target's qualified names are canonicalized. This is the Option /
+    Result shape every functional library uses. The expansion is limited
+    to unions whose members the relation can decide. effect's `WrapKey<A>`
+    is a union of conditionals, and expanding it emptied the else branch
+    to `never`. The full gate run caught that on effect's own sources,
+    which no unit test had covered.
+  - **`export default function (): T;` parses in a declaration file.**
+    zod's ESM locale files write it. The parse error took every importer
+    down to the single-file check, silently. The value is still `any`.
+  - **The real-app harness took #292's three findings.** A locationless
+    tsc diagnostic (`error TS2688`) is a baseline failure. A nonzero
+    mtsc exit on `ok/` is a failure. A planted file must get exactly one
+    report. Each was shown to fire by mutation. So were all thirteen
+    checker changes above, each against its own test.
+  - **The three misses left are machinery, not rules.**
+    - hono's `app.fetch` names the DOM lib's `Request`.
+    - React's `useState` is an overloaded member of an `export =`
+      namespace, inferred against `S | (() => S)`.
+    - zod's `s.parse(x)` returns `core.output<this>`, a conditional over
+      `this` read through generic internals.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

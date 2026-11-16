@@ -26165,7 +26165,11 @@ fn narrow_by_predicate_target(
 /// branch's `r.success` was reported on a union where only one member has
 /// it — the Option / Result / Either shape every functional library uses.
 /// Only a union is taken, so a non-alias type keeps its shape (the rule
-/// the `"key" in v` and `typeof` arms follow).
+/// the `"key" in v` and `typeof` arms follow), and only one whose every
+/// member is a type the relation can decide. effect's `type WrapKey<A> =
+/// (A extends AesKw ? Key<A> : never) | (A extends RsaOaep ? PublicKey<A>
+/// : never)` expands to undecided conditionals, and narrowing those
+/// emptied the else branch to `never`.
 fn predicate_narrowing_source(
   resolver : Resolver,
   cur : @ast.TsType,
@@ -26173,10 +26177,37 @@ fn predicate_narrowing_source(
   match cur {
     Named(_) | Applied(_, _) =>
       match resolver.unwrap(cur) {
-        Union(_) as u => u
+        Union(parts) as u if parts.iter().all(is_decidable_narrowing_member) =>
+          u
         _ => cur
       }
     _ => cur
+  }
+}
+
+///|
+/// A union member a predicate's keep / remove test can decide on: a named
+/// or applied type, an object shape, or a primitive or literal.
+fn is_decidable_narrowing_member(t : @ast.TsType) -> Bool {
+  match t {
+    Named(_)
+    | Applied(_, _)
+    | Struct(_, _)
+    | Object(_)
+    | Tuple(_)
+    | Array(_)
+    | String_
+    | Number
+    | Boolean
+    | BigInt
+    | Symbol
+    | Null
+    | Undefined
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_)
+    | BigIntLiteral(_) => true
+    _ => false
   }
 }
 

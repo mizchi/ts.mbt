@@ -247,3 +247,22 @@ test "declaration file: a bodiless default function parses" {
     ["top-level > binding `bad` init :: expected `string` but got `number`"],
   )
 }
+
+///|
+/// An alias to a union of CONDITIONAL types (effect's `WrapKey<A> = (A
+/// extends AesKw ? Key<A> : never) | …`) is not expanded for a guard: its
+/// members are undecided, and narrowing them made the guarded branch the
+/// conditionals themselves, so `wrapKey.algorithm` read as missing there.
+test "a guard does not expand an alias to undecided conditionals" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/main.ts", "type AesKw = \"A-KW\";\ntype RsaOaep = \"RSA-OAEP\";\ntype Algorithm = AesKw | RsaOaep;\ninterface Key<out A extends AesKw = AesKw> { readonly k: 1; readonly algorithm: A }\ninterface PublicKey<out A extends RsaOaep = RsaOaep> { readonly p: 1; readonly algorithm: A }\ntype WrapKey<A extends Algorithm = Algorithm> =\n  | (A extends AesKw ? Key<A> : never)\n  | (A extends RsaOaep ? PublicKey<A> : never)\ndeclare const isKey: (u: unknown) => u is Key;\nexport function f(wrapKey: WrapKey): string {\n  if (isKey(wrapKey)) {\n    return wrapKey.algorithm;\n  }\n  return \"rsa\";\n}",
+        ),
+      ],
+      [],
+    ),
+    [],
+  )
+}
