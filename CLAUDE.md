@@ -5331,6 +5331,16 @@ product surfaces now.
         `arg<N>`. Position 0 is not encoded and still prints its source
         name. That is pre-existing: main emits
         `(arg0: unknown) => x is string`.
+    - **The fourth round caught round 3's alias expansion breaking a
+      neighbour, which is this file's recurring shape: a fix on one side of
+      a comparison.** Expanding only the SOURCE's alias members put the two
+      sides in different terms, so `value is Text<string>` over a `Choice`
+      that now read `string | number` matched nothing, and the else branch
+      kept `string`. The target is now expanded by the same rule, and each
+      member is matched against BOTH forms. The expanded form alone broke
+      `v is Box` over `Box | string`, whose source member stays a name. Both
+      forms name one type, so matching either cannot over-remove. `v is AB`,
+      an alias to a union of interfaces, now narrows too, and main reports it.
     - A union-typed member of an `export =` namespace (`mode: "dev" |
       "prod"`) read as absent. Only a union of signatures, which is an
       overload set, binds as `any`.
