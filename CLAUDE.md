@@ -5258,7 +5258,7 @@ product surfaces now.
   - **The real-app harness took #292's three findings.** A locationless
     tsc diagnostic (`error TS2688`) is a baseline failure. A nonzero
     mtsc exit on `ok/` is a failure. A planted file must get exactly one
-    report. Each was shown to fire by mutation. So were all thirteen
+    report. Each was shown to fire by mutation. So were all fourteen
     checker changes above, each against its own test.
   - **The three misses left are machinery, not rules.**
     - hono's `app.fetch` names the DOM lib's `Request`.
