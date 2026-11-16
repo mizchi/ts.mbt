@@ -327,3 +327,24 @@ test "export assignment union members and re-export precedence" {
     ],
   )
 }
+
+///|
+/// The first parameter stays the subject whenever it can be one: an
+/// unannotated `allowZero = true` reads as `any` and also accepts the
+/// target, and abstaining there lost univer's narrowing of `ah`.
+test "a guard's first parameter stays its subject when it can be" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/dim.ts", "export function isValidSheetDimension(value: unknown, allowZero = true): value is number {\n  return typeof value === \"number\" && (allowZero || value !== 0);\n}",
+        ),
+        (
+          "/src/main.ts", "import { isValidSheetDimension } from \"./dim\";\nexport function h(ah: number | undefined): number {\n  let height: number = 0;\n  if (isValidSheetDimension(ah, false)) {\n    height += ah;\n  }\n  return height;\n}",
+        ),
+      ],
+      [("/src/main.ts", "./dim", "/src/dim.ts")],
+    ),
+    [],
+  )
+}

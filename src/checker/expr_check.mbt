@@ -26167,30 +26167,37 @@ fn narrow_by_predicate_target(
 /// The index of a type predicate's subject among `params`, for a callable
 /// TYPE, which carries parameter types and not names.
 ///
-/// One parameter is the subject. With several, TypeScript's own rule
-/// decides it: a predicate's type must be assignable to its parameter's
-/// type (TS2677), so the subject is the parameter that accepts the target.
-/// `isText(options: { enabled: boolean }, value: unknown): value is
-/// string` has exactly one such parameter, and narrowing the FIRST
-/// argument there — which every caller of this did — turned `options`
-/// into `string`. More than one candidate, or none, abstains.
+/// The FIRST parameter is the answer whenever it can be the subject, which
+/// is what every caller of this read before. TypeScript's own rule says
+/// when it cannot: a predicate's type must be assignable to its
+/// parameter's type (TS2677). `isText(options: { enabled: boolean }, value:
+/// unknown): value is string` cannot have `options` as its subject, and
+/// narrowing the first argument there turned `options` into `string`.
+/// Then the one other parameter that accepts the target is the subject, and
+/// more than one, or none, abstains. Preferring the first parameter matters
+/// because an unannotated parameter reads as `any` and accepts everything:
+/// univer's `isValidSheetDimension(value: unknown, allowZero = true)` has
+/// two candidates by type and one subject.
 fn predicate_subject_index(
   resolver : Resolver,
   params : Array[@ast.TsType],
   target : @ast.TsType,
 ) -> Int32? {
-  if params.length() <= 1 {
-    return Some(0)
-  }
-  let mut found : Int32? = None
-  for i, p in params {
-    let accepts = match p {
+  fn accepts(p : @ast.TsType) -> Bool {
+    match p {
       Any | Unknown => true
       _ =>
         is_assignable_to(target, p) ||
         is_structurally_assignable_named(target, p, resolver)
     }
-    if accepts {
+  }
+
+  if params.length() <= 1 || accepts(params[0]) {
+    return Some(0)
+  }
+  let mut found : Int32? = None
+  for i, p in params {
+    if i > 0 && accepts(p) {
       if found is Some(_) {
         return None
       }
