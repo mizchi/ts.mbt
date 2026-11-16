@@ -933,3 +933,75 @@ test "mtsc graph checker keeps a method's own type parameter out of a rename" {
     1,
   )
 }
+
+///|
+/// The checked module's own RENAMED import is its binding of that name:
+/// `import type { Other as Item }` means `x.ts`'s `Other` in here even
+/// though `a.ts` declares an `interface Item` the graph also reaches. That
+/// `Item` used to be registered at the bare name, the redirect then read
+/// `Item` as already declared, and `m: Item = { z: 1 }` was judged against
+/// `{ n: number }`. Counted as the checked module's name, `a.ts`'s `Item`
+/// collides and is keyed, so both sides are judged against their own type.
+test "mtsc graph checker reads the checked module's renamed import as its own name" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { take } from \"./a\";\nexport const m: Item = { z: 1 };\nexport const bad: Item = { z: \"s\" };\nexport namespace N {\n  export const q: Item = { z: 1 };\n}\ntake({ n: 1 });\ntake({ n: \"s\" });",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/a.ts", "export interface Item { n: number }\nexport declare function take(x: Item): void;",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./x", "/src/x.ts"),
+      edge("/src/root.ts", "./a", "/src/a.ts"),
+    ],
+  })
+  let at = fn(text : String) -> Int32 {
+    issues.filter(fn(i) { i.path.contains(text) }).length()
+  }
+  assert_eq(at("binding `m`"), 0)
+  assert_eq(at("binding `q`"), 0)
+  assert_eq(at("binding `bad`"), 1)
+  assert_eq(at("call `take` arg[0].n"), 1)
+  assert_eq(issues.length(), 2)
+}
+
+///|
+/// A CLASS cannot be keyed (class lookups and `extends` walks go through
+/// the bare name), so when the checked module renames something into the
+/// name another module's class holds, the class keeps that name. Putting
+/// the import's interface there instead made the class's own module read
+/// `mk(): Item` and `class Sub extends Item` as `Other`: `mk().n`,
+/// `mk().m()` and `new Sub().n` were all reported.
+test "mtsc graph checker leaves a foreign class its name beside a renamed import" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nimport { mk, Sub } from \"./a\";\nexport const m: Item = { z: 1 };\nexport const k: number = mk().n;\nexport const k2: number = mk().m();\nexport const k3: number = new Sub().n;\nexport const bad: string = mk().n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/a.ts", "export class Item { n = 1; m(): number { return this.n } }\nexport function mk(): Item { return new Item() }\nexport class Sub extends Item { s = \"x\" }",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./x", "/src/x.ts"),
+      edge("/src/root.ts", "./a", "/src/a.ts"),
+    ],
+  })
+  assert_eq(issues.map(fn(i) { i.path }), ["top-level > binding `bad` init"])
+}

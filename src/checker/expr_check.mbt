@@ -1455,6 +1455,15 @@ fn Resolver::alias_namespace_import_types(
     if !declared_here && qualified != bare {
       r.qualified_names[qualified] = bare
     }
+    // A renamed import spelled like a CLASS another module declares
+    // (`import { Other as Item }` beside a foreign `class Item`) must not
+    // put an interface, alias or enum under that name: lookups read those
+    // before classes, so the class's own module would see `mk(): Item` and
+    // `extends Item` as `Other`. The class keeps the name, and the checked
+    // module's reference to it abstains where the shapes differ.
+    if r.classes.get(qualified) is Some(_) && qualified != bare {
+      continue
+    }
     match r.interfaces.get(bare) {
       Some(i) =>
         if r.interfaces.get(qualified) is None {
@@ -46749,6 +46758,44 @@ fn check_module_function_bodies_layered(
       own_type_names[q] = ()
     }
   }
+  // A RENAMED import (`import { Other as Item }`) binds `Item` in the
+  // checked module as surely as a declaration does, and
+  // `alias_namespace_import_types` points that name at `Other` once
+  // ingestion is done. Left out of these tables, another reachable
+  // module's own `interface Item` was registered at the bare name, the
+  // redirect then read `Item` as already declared and skipped, and the
+  // checked module's `const m: Item = { z: 1 }` was judged against the
+  // wrong `Item`. Counted here, that module's `Item` collides, is keyed
+  // `Item@<path>` like any other collision, and stays off the bare name.
+  // A `ns.X` spelling has no bare local, and an unrenamed named import
+  // (`import { Item }`) means the declaration itself, so neither counts.
+  //
+  // A CLASS of that name is the exception, because a class cannot be keyed
+  // (it keeps its bare name; see the rename loop below) and skipping it
+  // here would leave it registered nowhere: its own module's `mk(): Item`
+  // and `class Sub extends Item` would read the checked module's `Item`.
+  // Such a name keeps the old behaviour, in which the checked module's
+  // reference reads the class and abstains on a shape it cannot relate.
+  let foreign_class_names : Map[String, Unit] = Map([])
+  if has_type_modules {
+    for type_module in type_modules {
+      for c in type_module.classes {
+        foreign_class_names[c.name] = ()
+      }
+    }
+  }
+  let checked_renamed_locals : Map[String, Unit] = Map([])
+  if has_type_modules {
+    for checked_alias in namespace_type_aliases {
+      let (local_name, bare, _) = checked_alias
+      if local_name != bare &&
+        !local_name.contains(".") &&
+        !foreign_class_names.contains(local_name) {
+        checked_renamed_locals[local_name] = ()
+        own_type_names[local_name] = ()
+      }
+    }
+  }
   // Which top-level type names more than one reachable module declares
   // (the checked module counting as one): those get a per-module key.
   let declarers : Map[String, Map[String, Unit]] = Map([])
@@ -46781,6 +46828,12 @@ fn check_module_function_bodies_layered(
   }
   if has_type_modules {
     note_declared(own_root, "<checked>")
+    for local_name, _ in checked_renamed_locals {
+      match declarers.get(local_name) {
+        Some(set) => set["<checked>"] = ()
+        None => declarers[local_name] = Map([("<checked>", ())])
+      }
+    }
   }
   let type_modules_by_key : Map[String, @ast.TsModule] = Map([])
   for i, type_module in type_modules {
@@ -46792,16 +46845,6 @@ fn check_module_function_bodies_layered(
   for i, type_module in type_modules {
     if i < type_module_keys.length() {
       note_declared(type_module, type_module_keys[i])
-    }
-  }
-  // The checked module's RENAMED imports (`import { Other as Item }`):
-  // `alias_namespace_import_types` redirects each local name once
-  // ingestion is done, so a bare destination spelled like one of them is
-  // redirected with it and cannot stand for another module's declaration.
-  let checked_renamed_locals : Map[String, Unit] = Map([])
-  for checked_alias in namespace_type_aliases {
-    if checked_alias.0 != checked_alias.1 {
-      checked_renamed_locals[checked_alias.0] = ()
     }
   }
   // Each reachable module's renames, by key: an imported VALUE's type is
@@ -46895,22 +46938,15 @@ fn check_module_function_bodies_layered(
             // `Item`: left alone, `It` read the shared bare table, which is
             // the CHECKED module's `It` when it declares one. The bare entry
             // is the origin's declaration exactly when the origin is the
-            // name's only declarer (the checked module counts as one).
+            // name's only declarer. The checked module counts as one, its
+            // renamed imports included, so a name it redirects is keyed
+            // and never reaches this path.
             let origin_is_sole_declarer = match declarers.get(bare) {
               Some(set) => set.length() == 1 && set.contains(origin)
               None => false
             }
             if local_name != bare && origin_is_sole_declarer {
-              // When the checked module renames into `bare`, the bare name
-              // is redirected to ITS import, and leaving `It` alone would
-              // read the shared table's `It` (the checked module's own,
-              // say). `bare@origin` is never registered on this path, so
-              // the reference is unresolved and abstains.
-              renames[local_name] = if checked_renamed_locals.contains(bare) {
-                bare + "@" + origin
-              } else {
-                bare
-              }
+              renames[local_name] = bare
             }
             continue
           }

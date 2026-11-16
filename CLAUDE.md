@@ -4609,9 +4609,8 @@ product surfaces now.
     case `It` now maps to the never-registered `Item@origin` and abstains.
     Merely skipping the mapping was not enough, since the shared table's
     `It` could then be the checked module's own `interface It`. The
-    checked-module side is not fixed: when another module declares `Item`,
-    that renamed import still reads it as that module's declaration, which
-    main does too. Adding local alias names to the rename map also exposed
+    checked-module side was left to batch GF. Adding local alias names to
+    the rename map also exposed
     an older gap. `rename_interface_refs` excluded the interface's own type
     parameters and not a METHOD's, which live in `method_type_params`. So
     `identity<It>(x: It)` beside `import { Item as It }` read its binder as
@@ -4623,6 +4622,37 @@ product surfaces now.
   - **A JSX payload nested in a payload lost its TS1002.** The inner
     payload's parser reports into its parent sub-parser's grammar list,
     which the outer payload never read.
+
+  Batch GF fixes the checked-module side that GE's fourth round left. When
+  the checked module has `import type { Other as Item }` and another
+  reachable module declares `interface Item`, the checked module's `Item`
+  was read as that interface, and `const m: Item = { z: 1 }` was reported.
+  main has the same false positive.
+  - **The cause.** A renamed import binds `Item` in the checked module as
+    surely as a declaration does, but it was in neither
+    `own_type_names` nor `declarers`. So the other module's `Item` was
+    registered under the bare name. `alias_namespace_import_types` then
+    read `Item` as already declared and skipped the redirect to `Other`.
+  - **The fix.** A renamed import's local name now counts as one of the
+    checked module's names. The other module's `Item` collides, is keyed
+    `Item@<path>` like any other collision, and stays off the bare name.
+  - **The guard GE added becomes unreachable.** For a name the checked
+    module renames into, the `Item@origin` abstention in the `!keyed` path
+    can no longer be reached, because `<checked>` is now among that name's
+    declarers. It is gone. The cases it made abstain are now judged
+    correctly: `make().n` against `bad: string` reports.
+  - **A class is the exception.** A class cannot be keyed: member lookups
+    and `extends` walks go through the bare name, and keying the class was
+    tried and measured as no help. So a name another module declares as a
+    class keeps the old behaviour. That case also needed a new guard. The
+    named-import aliases GE added made `alias_namespace_import_types` put
+    `Other` under `interfaces["Item"]`, and lookups read interfaces before
+    classes. So the class's own `mk(): Item` and `class Sub extends Item`
+    read `Other`, and `mk().n` was reported on code the older main
+    (`362ab4d`) accepted. A renamed import no longer installs an
+    interface, alias or enum over a registered class. The checked
+    module's own `Item` then reads the class and abstains where the shapes
+    differ, which is a MISS (`badm: Item = { z: "s" }`).
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
