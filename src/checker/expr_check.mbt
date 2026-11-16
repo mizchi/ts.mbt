@@ -2441,6 +2441,15 @@ fn method_callable_param_types(
     if i == 0 && p.0 == "this" {
       continue
     }
+    // A rest parameter is `Rest(_)` in a `Func`, which is what the arity
+    // and argument checks read. `param_is_rest` was never consulted here,
+    // so `m(a, ...rest: string[])` took exactly two arguments, the second
+    // an array — redi's `createInstance(ctor, ...args)` and rxjs's
+    // variadic members at every univer call site.
+    if i < m.param_is_rest.length() && m.param_is_rest[i] {
+      out.push(@ast.TsType::Rest(p.1))
+      continue
+    }
     let has_default = i < m.param_defaults.length() &&
       m.param_defaults[i] is Some(_)
     if has_default && !type_accepts_undefined_param(p.1) {
@@ -2489,6 +2498,124 @@ fn required_arity(params : Array[@ast.TsParam]) -> Int32 {
     i = i + 1
   }
   last_required
+}
+
+///|
+/// `required_arity` for a call whose parameter TYPES have been instantiated
+/// (`params`, aligned with `sig`). A parameter whose declared type is a
+/// type parameter is omittable once that parameter is `void` at the call:
+/// rxjs's `Subject<void>.next()` is how a signal is sent, and `next(value:
+/// T)` read with the DECLARED `T` demanded one argument. A `void`-typed
+/// declaration was already optional (`param_is_optional`); this asks the
+/// same question of the instantiated type.
+fn required_arity_at_call(
+  sig : Array[@ast.TsParam],
+  params : Array[@ast.TsType],
+) -> Int32 {
+  let mut last_required = 0
+  for i, p in sig {
+    let instantiated_void = i < params.length() &&
+      (match params[i] {
+        Void => true
+        Union(parts) => parts.contains(Void)
+        _ => false
+      })
+    if !param_is_optional(p) && !instantiated_void {
+      last_required = i + 1
+    }
+  }
+  last_required
+}
+
+///|
+/// `bindings` with every binder in `names` it does not solve bound to
+/// `any`, for substituting into a RETURN type. Left out, the binder's bare
+/// name flowed out of the call and was resolved like any other type
+/// reference — so wherever the program declares a type that happens to be
+/// called `T` (a dependency's `.d.ts` is enough), redi's
+/// `injector.get(ICommandService).registerCommand(…)` read as "method
+/// `registerCommand` does not exist on `T`". An unsolved binder is
+/// unknown, and `any` is the answer that cannot invent a finding.
+fn bind_unsolved_to_any(
+  names : Array[String],
+  bindings : Map[String, @ast.TsType],
+) -> Map[String, @ast.TsType] {
+  if names.iter().all(fn(n) { bindings.contains(n) }) {
+    return bindings
+  }
+  let out = bindings.copy()
+  for n in names {
+    if !out.contains(n) {
+      out[n] = @ast.TsType::Any
+    }
+  }
+  out
+}
+
+///|
+/// Whether `n` arguments fit a callable's parameter list: at least the
+/// required count (a trailing optional, `void` or rest parameter may be
+/// omitted) and at most the parameter count, unless a rest takes the rest.
+fn overload_arity_accepts(params : Array[@ast.TsType], n : Int32) -> Bool {
+  let has_rest = params.iter().any(fn(p) { p is Rest(_) })
+  n >= required_arity_from_types(params) && (has_rest || n <= params.length())
+}
+
+///|
+/// One parameter type per argument: a slot before the rest parameter is
+/// itself, and every argument from the rest parameter on gets its element
+/// type. `sig` carries the rest flag a bare type list does not (a class
+/// constructor records `...values: T[]` as `Array(T)`). Without a rest
+/// parameter the list is returned as is.
+fn rest_expanded_params(
+  params : Array[@ast.TsType],
+  sig : Array[@ast.TsParam]?,
+  n_args : Int32,
+) -> Array[@ast.TsType] {
+  guard sig is Some(s) else { return params }
+  let mut rest_at = -1
+  for i, p in s {
+    if p.is_rest {
+      rest_at = i
+      break
+    }
+  }
+  if rest_at < 0 {
+    return params
+  }
+  if rest_at >= params.length() {
+    return params
+  }
+  let elem = match params[rest_at] {
+    Array(e) | Rest(Array(e)) | Applied("Array", [e]) => e
+    _ => return params
+  }
+  let out : Array[@ast.TsType] = []
+  for i in 0..<rest_at {
+    out.push(params[i])
+  }
+  for _ in rest_at..<n_args {
+    out.push(elem)
+  }
+  out
+}
+
+///|
+/// The parameter the `i`-th argument lands on: its own slot, or the element
+/// of a rest parameter it falls into.
+fn overload_param_at(params : Array[@ast.TsType], i : Int32) -> @ast.TsType {
+  let slot = if i < params.length() {
+    params[i]
+  } else if params.length() > 0 {
+    params[params.length() - 1]
+  } else {
+    return @ast.TsType::Any
+  }
+  match slot {
+    Rest(Array(elem)) => elem
+    Rest(_) => @ast.TsType::Any
+    t => t
+  }
 }
 
 ///|
@@ -3898,7 +4025,10 @@ fn Resolver::lookup_field(
     None
   }
   self.lookup_depth.val = self.lookup_depth.val + 1
-  let found = self.lookup_field_core(recv, field)
+  let found = match generic_func_prototype_member(recv, field) {
+    Some(t) => Some(t)
+    None => self.lookup_field_core(recv, field)
+  }
   self.lookup_depth.val = self.lookup_depth.val - 1
   match key {
     Some(k) => self.lookup_active.remove(k)
@@ -4818,7 +4948,11 @@ fn prune_nullish(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
       let nn : Array[@ast.TsType] = []
       for p in parts {
         match p {
-          Null | Undefined => ()
+          // `void` goes with them: `x?.m()` and `x!` both remove it in tsc,
+          // and univer's `Nullable<T> = T | null | undefined | void` left
+          // every `this.shape?.show()` reading "`show` does not exist on
+          // `Rect | void`".
+          Null | Undefined | Void => ()
           _ => nn.push(p)
         }
       }
@@ -5360,6 +5494,60 @@ fn weakset_prototype_member(t : @ast.TsType, field : String) -> @ast.TsType? {
     "add" => Some(@ast.TsType::Func([t], set_t))
     "has" => Some(@ast.TsType::Func([t], bool_))
     "delete" => Some(@ast.TsType::Func([t], bool_))
+    _ => None
+  }
+}
+
+///|
+/// `bind` / `call` / `apply` on a GENERIC callable, or on an overload set
+/// that has generic members, read before `unwrap` peels the binders.
+/// Peeled, `injector.get.bind(injector)` — how univer's tests take redi's
+/// `get` — was a plain function whose return was the bare `T`, and every
+/// `get(ICommandService).registerCommand(…)` then read `T` as whatever the
+/// program happens to declare under that name. `bind` with no partial
+/// arguments keeps the signature, binders included; `call` and `apply`
+/// solve nothing here, so their return binds each binder to `any`.
+fn generic_func_prototype_member(
+  recv : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  fn has_generic(t : @ast.TsType) -> Bool {
+    match t {
+      GenericFunc(_, _, _) => true
+      Union(parts) => parts.iter().any(fn(p) { p is GenericFunc(_, _, _) })
+      _ => false
+    }
+  }
+
+  if !has_generic(recv) {
+    return None
+  }
+  match field {
+    "bind" => Some(@ast.TsType::Func([@ast.TsType::Any], recv))
+    "call" | "apply" =>
+      match recv {
+        GenericFunc(names, _, Func(params, ret))
+        | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) => {
+          let erased = bind_unsolved_to_any(names, Map([]))
+          let ret = substitute_params(ret, erased)
+          if field == "call" {
+            let call_params : Array[@ast.TsType] = [@ast.TsType::Any]
+            for p in params {
+              call_params.push(substitute_params(p, erased))
+            }
+            Some(@ast.TsType::Func(call_params, ret))
+          } else {
+            Some(
+              @ast.TsType::Func(
+                [@ast.TsType::Any, @ast.TsType::Array(@ast.TsType::Any)],
+                ret,
+              ),
+            )
+          }
+        }
+        // An overload set has no single signature to call through.
+        _ => Some(@ast.TsType::Any)
+      }
     _ => None
   }
 }
@@ -6038,8 +6226,20 @@ fn Resolver::lookup_class_field(
   }
   if idx.inst_meth.get(class_key) is Some(meths) && meths.get(field) is Some(i) {
     let m = cls.methods[i]
+    let f = @ast.TsType::Func(method_callable_param_types(m), m.return_type)
+    // A GENERIC method keeps its binders when it is read as a value
+    // (`Injector['get']`, `injector.get.bind(injector)`), the way a generic
+    // function declaration's value does. The bare `Func` left `T` free, and
+    // a call through the value returned it unsolved: univer's test beds
+    // type `get` as `Injector['get']`, and every `get(ICommandService)`
+    // then read `T` as engine-formula's spreadsheet `class T`. A call on
+    // the member itself still solves through `method_type_params_of`.
     return Some(
-      @ast.TsType::Func(method_callable_param_types(m), m.return_type),
+      if m.type_params.is_empty() {
+        f
+      } else {
+        @ast.TsType::GenericFunc(m.type_params, m.type_param_bounds, f)
+      },
     )
   }
   for base in cls.base_names {
@@ -6142,6 +6342,57 @@ fn Resolver::method_type_params_of(
     None => ()
   }
   []
+}
+
+///|
+/// Every type-parameter name any declaration of `meth` binds, in first-seen
+/// order. `method_type_params_of` answers with the FIRST generic
+/// declaration, which is right for a single signature and wrong for an
+/// overload set: with `m<T>(x: T[], n: number): T` and `m<U>(x: U, s:
+/// string): U[]`, `c.m(5, "s")` selects the second, and solving against
+/// `[T]` left its `U` unsolved. The union solves the selected signature's
+/// own binders from its parameters; a name only another declaration binds
+/// does not occur in the selected one, or binds `any` where it does, which
+/// can only lose a finding.
+fn Resolver::method_overload_type_params(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> Array[String] {
+  // A copy: the first answer is the declaration's own list, and pushing
+  // into it would edit the AST.
+  let out = self.method_type_params_of(recv, meth).copy()
+  let name = match self.unwrap(recv) {
+    Named(n) => n
+    Applied(n, _) => n
+    _ => return out
+  }
+  let add = fn(names : Array[String]) {
+    for n in names {
+      if !out.contains(n) {
+        out.push(n)
+      }
+    }
+  }
+  match self.interfaces.get(name) {
+    Some(iface) =>
+      for entry in iface.method_type_params {
+        if entry.0 == meth {
+          add(entry.1)
+        }
+      }
+    None => ()
+  }
+  match self.classes.get(name) {
+    Some(cls) =>
+      for m in cls.methods {
+        if m.name == meth {
+          add(m.type_params)
+        }
+      }
+    None => ()
+  }
+  out
 }
 
 ///|
@@ -6655,30 +6906,130 @@ fn Resolver::resolve_method_overload(
   recv : @ast.TsType,
   meth : String,
   arg_types : Array[@ast.TsType],
-) -> @ast.TsType? {
+) -> (Array[@ast.TsType], @ast.TsType)? {
   let candidates = self.method_overload_signatures(recv, meth)
   // Only meaningful for an overload set: a single signature is already
   // handled by the first-match `lookup_method_sig` path.
   if candidates.length() <= 1 {
     return None
   }
+  // A member's own type parameters are judged as `any` here: they are
+  // solved from these arguments once the member is selected, so a raw
+  // `Named("V")` can only make a generic member unselectable. With
+  // `m<T>(x: number, f: () => T): T` and `m<V>(x: string, f: () => V):
+  // V[]`, `c.m("s", () => 5)` matched neither, fell back to the first
+  // declaration, and `const a: number[] = c.m("s", () => 5)` was reported
+  // as getting `number`. The binders are the union over the overload set,
+  // which is how they are recorded for an interface.
+  let erase : Map[String, @ast.TsType] = Map([])
+  for b in self.method_overload_type_params(recv, meth) {
+    erase[b] = @ast.TsType::Any
+  }
   for c in candidates {
     let (params, ret) = c
-    if params.length() != arg_types.length() {
+    // The argument count has to fit the member's arity, not equal its
+    // parameter count: redi's `get<T>(id, lookUp?)` is called as
+    // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
+    // matched its own signature.
+    if !overload_arity_accepts(params, arg_types.length()) {
       continue
     }
     let mut ok = true
     for i in 0..<arg_types.length() {
-      if !is_assignable_to(arg_types[i], params[i]) {
+      let expected = overload_param_at(params, i)
+      let expected = if erase.is_empty() {
+        expected
+      } else {
+        substitute_params(expected, erase)
+      }
+      if !is_assignable_to(arg_types[i], expected) {
         ok = false
         break
       }
     }
+    // Erasure alone cannot see arguments that contradict each other:
+    // `m<T>(xs: T[], y: T): number` accepts `([1], "s")` with `T` as
+    // `any`, and tsc goes on to `m(xs: number[], y: string): string`
+    // because `T` is `number` there. So a member that matched only with
+    // its binders erased is re-checked against the binders the arguments
+    // solve. They are solved from the WIDENED argument types, as a
+    // non-`const` type parameter infers (`("a", "b")` is `T = string`,
+    // not a clash between `"a"` and `"b"`), and one left unsolved stays
+    // `any`.
+    if ok &&
+      !erase.is_empty() &&
+      params
+      .iter()
+      .any(fn(p) { erase.keys().any(fn(b) { type_param_occurs(b, p) }) }) {
+      let binders = erase.keys().collect()
+      let solved : Map[String, @ast.TsType] = Map([])
+      for i in 0..<arg_types.length() {
+        infer_param_bindings(
+          binders,
+          overload_param_at(params, i),
+          widen_literal_deep(arg_types[i]),
+          solved,
+          false,
+        )
+      }
+      let inst : Map[String, @ast.TsType] = Map([])
+      for b in binders {
+        inst[b] = solved.get(b).unwrap_or(@ast.TsType::Any)
+      }
+      for i in 0..<arg_types.length() {
+        let expected = substitute_params(overload_param_at(params, i), inst)
+        if !is_assignable_to(arg_types[i], expected) {
+          ok = false
+          break
+        }
+      }
+    }
     if ok {
-      return Some(ret)
+      // The PARAMETERS come back with the return so the caller can solve
+      // the member's own type parameters from the arguments, as it does
+      // for a single signature: the return of `get<T>(…): T` is the bare
+      // `T` until it does.
+      return Some((params, ret))
     }
   }
   None
+}
+
+///|
+/// A method return with the method's own type parameters solved from the
+/// call's arguments, and any it cannot solve bound to `any` (see
+/// `bind_unsolved_to_any`). The overload path and the single-signature
+/// path both use it, so a generic method answers the same way whether or
+/// not it is overloaded.
+fn instantiate_method_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  ret : @ast.TsType,
+) -> @ast.TsType {
+  let method_tps = resolver.method_overload_type_params(recv, meth)
+  if method_tps.length() == 0 {
+    return ret
+  }
+  substitute_params(
+    ret,
+    bind_unsolved_to_any(
+      method_tps,
+      widen_fresh_literal_bindings(
+        env,
+        resolver,
+        solve_generic_bindings(env, resolver, method_tps, params, args, None),
+        method_tps,
+        None,
+        params,
+        args,
+        ret,
+      ),
+    ),
+  )
 }
 
 ///|
@@ -10678,7 +11029,25 @@ fn infer_expr_inner(
         resolver.interfaces.get("Array") is None {
         return @ast.TsType::Array(targs[0])
       }
-      infer_expr(env, resolver, inner)
+      let inner_ty = infer_expr(env, resolver, inner)
+      // `new C<A>()` is a `C<A>`. The explicit arguments were peeled off
+      // here and thrown away, so the instance read as a bare `C` and every
+      // member typed by a class parameter stayed the unbound `T`: rxjs's
+      // `new Subject<void>()` then made `subject.next()` "expected 1
+      // argument(s)", while the annotated `const s: Subject<void>` was
+      // right. Only an exact count is taken; a class whose arguments were
+      // defaulted or mis-counted keeps the bare name, as before.
+      // The inner `new` may already have instantiated the class from its
+      // constructor arguments; the written arguments win over that.
+      match (inner, inner_ty) {
+        (New(_, _) | NewExpr(_, _), Named(n) | Applied(n, _)) =>
+          match resolver.classes.get(n) {
+            Some(cls) if cls.type_params.length() == targs.length() &&
+              targs.length() > 0 => @ast.TsType::Applied(n, targs)
+            _ => inner_ty
+          }
+        _ => inner_ty
+      }
     }
     NumberLit(_) | IntLit(_) => @ast.TsType::Number
     BigIntLit(_) => @ast.TsType::BigInt
@@ -11096,13 +11465,15 @@ fn infer_expr_inner(
           for a in args {
             arg_types.push(infer_expr(env, resolver, a))
           }
-          match
-            resolver.resolve_method_overload(
-              prune_nullish(resolver, recv_ty),
-              meth,
-              arg_types,
-            ) {
-            Some(ret) => return substitute_this_type(ret, recv_ty)
+          let pruned = prune_nullish(resolver, recv_ty)
+          match resolver.resolve_method_overload(pruned, meth, arg_types) {
+            Some((params, ret)) =>
+              return substitute_this_type(
+                instantiate_method_return(
+                  env, resolver, pruned, meth, params, args, ret,
+                ),
+                recv_ty,
+              )
             None => ()
           }
         }
@@ -11125,10 +11496,57 @@ fn infer_expr_inner(
       }
     New(class_name, args) =>
       match resolver.lookup_constructor(class_name) {
-        Some(_) =>
+        Some(ctor_params) =>
           // Validate args at the call site via `check_arguments`; here we
           // just return the instance type.
-          @ast.TsType::Named(class_name)
+          //
+          // A GENERIC class written without type arguments is instantiated
+          // from the constructor's arguments, as tsc infers it, and a
+          // parameter the arguments do not pin is `any`. The bare name
+          // left every member typed by the class parameter as the unbound
+          // `T`, which then resolved to whatever the program declares
+          // under that name: univer's `new ObjectMatrix(cellValue)` met
+          // engine-formula's spreadsheet `class T`, and `value?.s` in the
+          // matrix callback read as "`s` does not exist on `T`".
+          match resolver.classes.get(class_name) {
+            Some(cls) if cls.type_params.length() > 0 => {
+              let names = cls.type_params
+              // The RICH signature, so a rest parameter solves from each
+              // variadic argument: `constructor(...values: T[])` with
+              // `new Box(["a"])` is `T = string[]`, where the bare
+              // `Array(T)` read as one fixed argument gave `T = string`.
+              let sig = match resolver.lookup_constructor_sig(class_name) {
+                Some((_, sig)) => Some(sig)
+                None => None
+              }
+              let bindings = bind_unsolved_to_any(
+                names,
+                widen_fresh_literal_bindings(
+                  env,
+                  resolver,
+                  solve_generic_bindings(
+                    env, resolver, names, ctor_params, args, sig,
+                  ),
+                  names,
+                  None,
+                  // Widened per ARGUMENT: a rest parameter's arguments each
+                  // land on its element type, so `constructor(...values:
+                  // T[])` with `new Box("a")` widens `T = "a"` to `string`
+                  // like `constructor(value: T)` does. Read as the bare
+                  // `T[]`, `T` sat in a nested position, which the widening
+                  // declines, and `box.value = "b"` was reported.
+                  rest_expanded_params(ctor_params, sig, args.length()),
+                  args,
+                  @ast.TsType::Named(class_name),
+                ),
+              )
+              @ast.TsType::Applied(
+                class_name,
+                names.map(fn(n) { bindings.get(n).unwrap_or(@ast.TsType::Any) }),
+              )
+            }
+            _ => @ast.TsType::Named(class_name)
+          }
         None => {
           // A lib `SharedArrayBuffer` instance keeps its Named type so the
           // fully-table-modeled member surface applies (`foge.length` —
@@ -11337,7 +11755,13 @@ fn infer_expr_inner(
         arg_types.push(infer_expr(env, resolver, a))
       }
       match resolver.resolve_method_overload(pruned_recv, meth, arg_types) {
-        Some(ret) => return substitute_this_type(ret, recv_ty)
+        Some((params, ret)) =>
+          return substitute_this_type(
+            instantiate_method_return(
+              env, resolver, pruned_recv, meth, params, args, ret,
+            ),
+            recv_ty,
+          )
         None => ()
       }
       // Nullable receiver: strip null/undefined members and retry so
@@ -11354,31 +11778,9 @@ fn infer_expr_inner(
           // cannot answer differently. Without it the return came back
           // as a bare `Named("T")`, which every downstream check reads
           // as unknowable.
-          let method_tps = resolver.method_type_params_of(pruned_recv, meth)
-          let instantiated = if method_tps.length() > 0 {
-            substitute_params(
-              ret,
-              widen_fresh_literal_bindings(
-                env,
-                resolver,
-                solve_generic_bindings(
-                  env,
-                  resolver,
-                  method_tps,
-                  params,
-                  args,
-                  None,
-                ),
-                method_tps,
-                None,
-                params,
-                args,
-                ret,
-              ),
-            )
-          } else {
-            ret
-          }
+          let instantiated = instantiate_method_return(
+            env, resolver, pruned_recv, meth, params, args, ret,
+          )
           // `this`-typed return: when an interface / class method is
           // declared as `m(): this` (or wrapped in `this & T` etc.),
           // substitute the receiver in for `this` so the chain
@@ -13391,6 +13793,59 @@ fn infer_call(
       }
     _ => ()
   }
+  // A generic callable VALUE is solved before `unwrap`, which peels the
+  // binders: past that line the arm below that was written for it could
+  // never match, and `const g = injector.get.bind(injector); g(ID)` came
+  // back with its `T` unsolved. A member type written as an indexed access
+  // (`get: Injector["get"]`, how univer's test beds declare it) is looked
+  // up first for the same reason, since `unwrap` would resolve it AND peel
+  // what it found.
+  let callee = match callee {
+    IndexedAccess(obj, Literal(member_name)) =>
+      match resolver.lookup_field(obj, member_name) {
+        Some(GenericFunc(_, _, _) as g) => g
+        _ => callee
+      }
+    _ => callee
+  }
+  match callee {
+    GenericFunc(names, _, Func(params, ret))
+    | GenericFunc(names, _, CallableMeta(Func(params, ret), _)) =>
+      if !(ret is TypePredicate(_, _)) && !(ret is AssertsPredicate(_, _)) {
+        let r = reduce_conditional(
+          substitute_params(
+            ret,
+            bind_unsolved_to_any(
+              names,
+              widen_fresh_literal_bindings(
+                env,
+                resolver,
+                solve_generic_bindings(env, resolver, names, params, args, None),
+                names,
+                None,
+                params,
+                args,
+                ret,
+              ),
+            ),
+          ),
+        )
+        // An indexed access the substitution left behind is one this
+        // checker cannot reduce, and judging it is how a binding to an
+        // INLINED bound becomes a finding: effect's
+        // `decodeEffect(schema)` inside `decodePromise<S extends
+        // ConstraintDecoder<unknown>>` solved `S` to that bound, returned
+        // `Effect<Bound["Type"], Issue, Bound["DecodingServices"]>`, and
+        // `asPromise`'s `Effect<T, Issue>` parameter then rejected the
+        // third argument on a line tsc accepts, where `S` stays generic.
+        return if type_contains_indexed_access(r) {
+          @ast.TsType::Any
+        } else {
+          r
+        }
+      }
+    _ => ()
+  }
   let callee = resolver.unwrap(callee)
   match callee {
     // `paramName is T` is a boolean at the value level — calls to a type
@@ -13414,15 +13869,18 @@ fn infer_call(
       reduce_conditional(
         substitute_params(
           ret,
-          widen_fresh_literal_bindings(
-            env,
-            resolver,
-            solve_generic_bindings(env, resolver, names, params, args, None),
+          bind_unsolved_to_any(
             names,
-            None,
-            params,
-            args,
-            ret,
+            widen_fresh_literal_bindings(
+              env,
+              resolver,
+              solve_generic_bindings(env, resolver, names, params, args, None),
+              names,
+              None,
+              params,
+              args,
+              ret,
+            ),
           ),
         ),
       )
@@ -13468,11 +13926,14 @@ fn infer_call(
               _ => reduce_conditional(ret)
             }
             rets.push(r)
-            // Best-effort overload match: same arity, every argument
-            // assignable to the corresponding parameter.
-            if params.length() == arg_types.length() {
+            // Best-effort overload match: the argument count fits the
+            // member's arity, and every argument is assignable to the
+            // parameter it lands on. "Fits" used to be "equals the
+            // parameter count", so a member with an optional or rest
+            // parameter could never match a call that omitted it.
+            if overload_arity_accepts(params, arg_types.length()) {
               let mut ok = true
-              for i in 0..<params.length() {
+              for i in 0..<arg_types.length() {
                 // Both sides unwrapped: `arg_types` already are, and a
                 // parameter typed with an object-type ALIAS
                 // (`type S = { k: string }`) stayed the bare name `S`, so
@@ -13483,7 +13944,11 @@ fn infer_call(
                 // `string | string | null` instead of its first
                 // overload's `string`. The interface spelling of the same
                 // parameter always matched.
-                if !overload_param_accepts(resolver, arg_types[i], params[i]) {
+                if !overload_param_accepts(
+                    resolver,
+                    arg_types[i],
+                    overload_param_at(params, i),
+                  ) {
                   ok = false
                   break
                 }
@@ -13516,12 +13981,21 @@ fn infer_call(
           args,
           gret,
         )
-        let r = reduce_conditional(substitute_params(gret, bindings))
+        let r = reduce_conditional(
+          substitute_params(gret, bind_unsolved_to_any(names, bindings)),
+        )
         let sps = substitute_params_array(gps, bindings)
-        if sps.length() == arg_types.length() {
+        // The same arity rule as a concrete member: redi's
+        // `useDependency<T>(id, lookUp?)` is called with ONE argument at
+        // every univer use site, and requiring two made every member fail,
+        // so the call came back as the union of all six returns.
+        if overload_arity_accepts(sps, arg_types.length()) {
           let mut ok = true
-          for i in 0..<sps.length() {
-            if !is_assignable_to(arg_types[i], resolver.unwrap(sps[i])) {
+          for i in 0..<arg_types.length() {
+            if !is_assignable_to(
+                arg_types[i],
+                resolver.unwrap(overload_param_at(sps, i)),
+              ) {
               ok = false
               break
             }
@@ -13534,6 +14008,12 @@ fn infer_call(
       }
       if rets.length() == 1 {
         rets[0]
+      } else if rets.iter().any(fn(t) { t is Any }) {
+        // A union with an `any` member IS `any` in TypeScript. Kept as a
+        // union it read as `any | any[] | null | …`, and a member access on
+        // it failed on the `any[]` and `null` arms — "property
+        // `currentLocale$` does not exist on `any | any[] | …`".
+        @ast.TsType::Any
       } else {
         @ast.TsType::Union(rets)
       }
@@ -21874,7 +22354,7 @@ fn check_arguments_with_sig(
       if fixed_rest_len >= 0 {
         (required_arity(ps) + fixed_rest_len, ps.length() - 1 + fixed_rest_len)
       } else {
-        let min_ = required_arity(ps)
+        let min_ = required_arity_at_call(ps, params)
         let max_ = if has_rest { -1 } else { ps.length() }
         (min_, max_)
       }
@@ -25146,12 +25626,18 @@ fn optional_chain_equality_narrowing(
 /// unwrapped first, or univer's `Nullable<T> = T | null | undefined |
 /// void` stayed one opaque variant and `if (s) use(s)` reported the whole
 /// alias. Only a union is taken, so any other type keeps its shape.
+///
+/// A union MEMBER that is such an alias is expanded too: an optional
+/// field typed `cl?: Nullable<IColorStyle>` is `Nullable<IColorStyle> |
+/// undefined`, whose outer `undefined` was all `if (cl?.rgb)` removed, so
+/// `cl.rgb` inside the guard still saw the alias's `null | undefined |
+/// void` and read as "object is possibly `undefined`".
 fn truthy_non_nullish(resolver : Resolver, cur : @ast.TsType) -> @ast.TsType {
   let ty = match resolver.unwrap(cur) {
     Union(_) as u => u
     _ => cur
   }
-  narrow_remove(non_nullable(ty), fn(v) { v is Void })
+  narrow_remove(non_nullable_resolved(resolver, ty), fn(v) { v is Void })
 }
 
 ///|
@@ -30003,22 +30489,23 @@ fn check_call_args_in_expr(
         GenericFunc(names, _, Func(params, _))
         | GenericFunc(names, _, CallableMeta(Func(params, _), _)) if !args
           .iter()
-          .any(fn(a) { a is Spread(_) }) =>
+          .any(fn(a) { a is Spread(_) }) => {
+          // A rest parameter's arguments are judged against its element,
+          // under the same binder rule: `<T>(x: T, ...rest: string[])`
+          // with `f(0, 1)` checks the `1` against `string`.
+          let has_rest = params.length() > 0 &&
+            params[params.length() - 1] is Rest(_)
           for i, a in args {
-            if i >= params.length() || params[i] is Rest(_) {
+            if i >= params.length() && !has_rest {
               break
             }
-            if is_checkable(params[i]) &&
-              !names.iter().any(fn(n) { type_param_occurs(n, params[i]) }) {
-              check_expr_against(
-                env,
-                a,
-                params[i],
-                ctx,
-                "call `\{name}` arg[\{i}]",
-              )
+            let p = overload_param_at(params, i)
+            if is_checkable(p) &&
+              !names.iter().any(fn(n) { type_param_occurs(n, p) }) {
+              check_expr_against(env, a, p, ctx, "call `\{name}` arg[\{i}]")
             }
           }
+        }
         other =>
           // A union callee whose members share one identical call signature
           // (`{ (a:number):X } | { (a:number):Y }`) is callable with those

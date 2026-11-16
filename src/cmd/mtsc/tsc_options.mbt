@@ -190,7 +190,6 @@ fn mtsc_option_accepted_no_effect(name : String) -> Bool {
     | "esmoduleinterop"
     | "allowjs"
     | "checkjs"
-    | "skiplibcheck"
     | "skipdefaultlibcheck"
     | "rootdir"
     | "rootdirs"
@@ -383,6 +382,10 @@ priv struct MtscOptions {
   // `-p` or a bare `mtsc` loads, and empty when files are named on the
   // command line, which is when `tsc` ignores tsconfig.json too.
   checker_options : Array[(String, String)]
+  // `--skipLibCheck`: report nothing inside a declaration file. `None`
+  // when neither the command line nor the project set it, so the command
+  // line can win over a config the way it does for every other option.
+  mut skip_lib_check : Bool?
 }
 
 ///|
@@ -427,6 +430,7 @@ fn mtsc_options_new() -> MtscOptions {
     list_files_only: false,
     ignored: [],
     checker_options: [],
+    skip_lib_check: None,
   }
 }
 
@@ -594,6 +598,18 @@ fn mtsc_parse_args(
       "nocheck" => {
         let (v, used) = mtsc_read_bool_value(argv, i + 1)
         opts.no_check = v
+        if used && inline_value is None {
+          consumed_next = true
+        }
+      }
+      "skiplibcheck" => {
+        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        opts.skip_lib_check = Some(
+          match inline_value {
+            Some(iv) => iv != "false"
+            None => v
+          },
+        )
         if used && inline_value is None {
           consumed_next = true
         }

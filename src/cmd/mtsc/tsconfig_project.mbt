@@ -384,6 +384,10 @@ async fn mtsc_apply_project_compiler_options(
     Some(v) => if !opts.no_check { opts.no_check = v }
     None => ()
   }
+  match @parser.tsconfig_compiler_option_bool_at(config_path, "skipLibCheck") {
+    Some(v) => if opts.skip_lib_check is None { opts.skip_lib_check = Some(v) }
+    None => ()
+  }
   // The options the CHECKER reads. They are passed on as written and the
   // `strict` family's defaults are decided where they are used
   // (`@mtsc_core.compiler_option_header`), so `-p` and the library

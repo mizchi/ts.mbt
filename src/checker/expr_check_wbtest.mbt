@@ -23337,3 +23337,256 @@ test "rename_type_refs renames an asserted target" {
     _ => fail("a bare `asserts x` has no target to rename")
   }
 }
+
+///|
+/// Issues in function bodies, parsed directly so a fixture that stopped
+/// parsing fails rather than passing as an empty module.
+fn body_issue_messages(src : String) -> Array[String] raise {
+  check_module_function_bodies(
+    @parser.parse_module_from_source_with_const_values(src, {}),
+  ).map(fn(i) { i.message })
+}
+
+///|
+/// A `declare class` member's `...rest` and a `p?: T | null` parameter were
+/// both read as required single arguments — redi's `new Injector()` and
+/// `createInstance(ctor, ...args)`, which every univer package calls.
+test "a declare class keeps its rest and nullable optional parameters" {
+  let prelude = "declare class Injector { constructor(deps?: number[], parent?: Injector | null); create(ctor: string, ...args: number[]): void; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const i = new Injector(); new Injector([1]); new Injector([1], null); i.create(\"a\", 1, 2, 3); i.create(\"a\"); }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude +
+      "function g() { const i = new Injector(); i.create(\"a\", \"x\"); }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// `new C<A>()` is a `C<A>`. The explicit arguments were dropped, so a
+/// member typed by the class parameter stayed the unbound `T`: rxjs's
+/// `new Subject<void>().next()` read as missing its one argument, and a
+/// wrong argument to `new Subject<number>().next(…)` went unreported.
+test "a new expression keeps its explicit type arguments" {
+  let prelude = "declare class S<T> { next(v: T): void; get(): T; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const s = new S<void>(); s.next(); const n = new S<number>(); n.next(1); const k: number = n.get(); }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g() { const n = new S<number>(); n.next(\"x\"); }",
+    ).length() >
+    0,
+  )
+  assert_true(
+    body_issue_messages(
+      prelude +
+      "function h() { const n = new S<number>(); const s: string = n.get(); }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// An overload member fits a call whose argument count lies in its arity
+/// RANGE. Requiring the exact parameter count made redi's
+/// `useDependency<T>(id, lookUp?)` fail for its one-argument call, and the
+/// fallback union of every return (`T | T[] | T | null | …`) had no
+/// `.x$` on its array arm.
+test "an overload member with an optional parameter matches a shorter call" {
+  let prelude = "declare function use<T>(id: T, lookUp?: number): T;\ndeclare function use<T>(id: T, q: \"many\", lookUp?: number): T[];\nclass L { x$ = 1 }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude + "function f() { const v: number = use(new L()).x$; return v; }",
+    ),
+    [],
+  )
+}
+
+///|
+/// A function TYPE's leading `this` parameter takes no argument. Kept
+/// positionally it was the callback's first parameter, so rxjs's
+/// `new Observable((subscriber) => …)` typed `subscriber` as the
+/// `Observable` itself and `subscriber.next(v)` read as a missing method.
+test "a function type's this parameter is not an argument position" {
+  let prelude = "interface Sub<T> { next(v: T): void }\ndeclare class Obs<T> { constructor(subscribe?: (this: Obs<T>, s: Sub<T>) => void); }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { return new Obs<number>((s) => { s.next(1); }); }",
+    ),
+    [],
+  )
+  @test.assert_eq(
+    body_issue_messages(
+      "declare function cb(f: (this: string, n: number) => void): void;\nfunction g() { cb((n) => { const k: number = n; }); }",
+    ),
+    [],
+  )
+}
+
+///|
+/// An unsolved type parameter must not leave a call as its bare name: the
+/// name is then resolved like any other type reference, and a program that
+/// declares a type of that spelling (univer's engine-formula has a
+/// spreadsheet `class T`) reads it as THAT type. Three routes leaked it:
+/// `new C(args)` of a generic class with no written arguments, a generic
+/// method read as a value (`Injector['get']`), and `.bind` on one.
+test "an unsolved type parameter does not leak into a call's result" {
+  let prelude = "class T { other = 1 }\nclass Matrix<V> { constructor(public data: V[]) {} forValue(cb: (v: V) => void): void {} first(): V { return this.data[0]; } }\nclass Inj { get<R>(id: new () => R): R { return new id(); } }\nclass Cmd { run(): void {} }\ninterface Bed { get: Inj[\"get\"] }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(b: Bed, i: Inj) { const m = new Matrix([{ s: 1 }]); m.forValue((value) => { const n: number = value.s; }); b.get(Cmd).run(); const g = i.get.bind(i); g(Cmd).run(); }",
+    ),
+    [],
+  )
+  // The instantiation is the constructor's: a wrong use still reports.
+  assert_true(
+    body_issue_messages(
+      prelude +
+      "function g() { const m = new Matrix([{ s: 1 }]); const s: string = m.first().s; }",
+    ).length() >
+    0,
+  )
+  // A written argument list still wins over the inferred one.
+  @test.assert_eq(
+    body_issue_messages(
+      "declare class S<X> { constructor(); next(v: X): void; }\nfunction h() { new S<void>().next(); }",
+    ),
+    [],
+  )
+}
+
+///|
+/// A truthy test removes the nullish members of an alias that is itself a
+/// MEMBER of the union: `cl?: Nullable<C>` is `Nullable<C> | undefined`,
+/// and `if (cl?.rgb)` used to remove only the outer `undefined`.
+test "a truthy optional chain narrows an alias member of the receiver's union" {
+  let prelude = "type Nullable<T> = T | null | undefined | void;\ninterface C { rgb?: string }\ninterface S { cl?: Nullable<C> }\ndeclare function norm(s: string): string;\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(s: S) { const { cl } = s; if (cl?.rgb) { norm(cl.rgb); } if (cl) { cl.rgb; } }",
+    ),
+    [],
+  )
+}
+
+///|
+/// A member type spelled as an indexed access keeps the binders of the
+/// generic method it names when it is called through a local binding, so
+/// an unsolved one binds `any` instead of leaking out as the bare `R`.
+/// (Not SOLVED here: a class used as a value is `any` in this checker, so
+/// `R` has nothing to bind from `Cmd`, and `const s: string = get(Cmd)` is
+/// a MISS.)
+test "a generic method reached through an indexed access type does not leak its binder" {
+  @test.assert_eq(
+    body_issue_messages(
+      "class T { other = 1 }\nclass Inj { get<R>(id: new () => R): R { return new id(); } }\nclass Cmd { run(): void {} }\ninterface Bed { get: Inj[\"get\"] }\ndeclare function bed(): Bed;\nfunction f() { const { get } = bed(); get(Cmd).run(); const b = bed(); const g = b.get; g(Cmd).run(); }",
+    ),
+    [],
+  )
+}
+
+///|
+/// A generic class's rest constructor parameter solves from EACH argument:
+/// `constructor(...values: T[])` with `new Box(["a"])` is `T = string[]`.
+/// Solving against the bare `Array(T)` read the rest as one fixed argument
+/// and gave `T = string`, so a legal `string[]` read was reported.
+test "a generic class instantiates through a rest constructor parameter" {
+  let prelude = "class Box<T> { value: T; constructor(...values: T[]) { this.value = values[0]; } }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const v: string = new Box(\"a\").value; const w: string[] = new Box([\"a\"]).value; }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g() { const bad: number = new Box(\"a\").value; }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// Overload selection judges a member's own type parameters as `any`, and
+/// the selected member's binders are solved: with `m<T>(x: number, f: ()
+/// => T): T` and `m<V>(x: string, f: () => V): V[]`, `c.m("s", () => 5)`
+/// is the SECOND, `number[]`. A raw `Named("V")` matched nothing, so the
+/// call fell back to the first declaration and a legal `number[]` read was
+/// reported as getting `number` — on a class and on an interface alike.
+test "an overloaded generic method selects and solves the matching member" {
+  let prelude = "type V = { v: 1 };\nclass C { m<T>(x: number, f: () => T): T; m<V>(x: string, f: () => V): V[]; m(x: any, f: any): any { return x } }\ninterface I { m<T>(x: number, f: () => T): T; m<V>(x: string, f: () => V): V[]; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(c: C, i: I) { const a: number[] = c.m(\"s\", () => 5); const b: number[] = i.m(\"s\", () => 5); const n: number = c.m(1, () => 5); }",
+    ),
+    [],
+  )
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function g(c: C, i: I) { const a: string[] = c.m(\"s\", () => 5); const b: string[] = i.m(\"s\", () => 5); }",
+    ).length(),
+    2,
+  )
+}
+
+///|
+/// Erasing a member's binders makes it accept arguments that contradict
+/// each other, so a member matched that way is re-checked against the
+/// binders the arguments solve: `m<T>(xs: T[], y: T)` with `([1], "s")`
+/// pins `T = number` and rejects `"s"`, and the call is the second
+/// member's, `string`. Literals solve widened, so `("a", "b")` is one
+/// `T = string` rather than a clash.
+test "an overload whose binders the arguments contradict is not selected" {
+  let prelude = "interface I { m<T>(xs: T[], y: T): number; m(xs: number[], y: string): string; }\nclass C { m<T>(xs: T[], y: T): number; m(xs: number[], y: string): string; m(a: any, b: any): any { return a } }\ninterface P { p<T>(x: T, y: T): T[]; p(x: boolean): boolean; }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f(i: I, c: C, q: P) { const r1: string = i.m([1], \"s\"); const r2: string = c.m([1], \"s\"); const r3: number = i.m([1], 2); const r4: string[] = q.p(\"a\", \"b\"); }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g(i: I) { const bad: number = i.m([1], \"s\"); }",
+    ).length() >
+    0,
+  )
+}
+
+///|
+/// A rest constructor parameter's arguments widen like a plain parameter's:
+/// `new Box("a")` is `Box<string>`, so a later `box.value = "b"` is legal.
+test "a rest constructor parameter widens a fresh literal" {
+  let prelude = "class Box<T> { value: T; constructor(...values: T[]) { this.value = values[0]; } }\n"
+  @test.assert_eq(
+    body_issue_messages(
+      prelude +
+      "function f() { const box = new Box(\"a\"); box.value = \"b\"; const n = new Box(1, 2); n.value = 3; }",
+    ),
+    [],
+  )
+  assert_true(
+    body_issue_messages(
+      prelude + "function g() { const box = new Box(\"a\"); box.value = 1; }",
+    ).length() >
+    0,
+  )
+}
