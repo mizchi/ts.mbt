@@ -46900,10 +46900,17 @@ fn check_module_function_bodies_layered(
               Some(set) => set.length() == 1 && set.contains(origin)
               None => false
             }
-            if local_name != bare &&
-              origin_is_sole_declarer &&
-              !checked_renamed_locals.contains(bare) {
-              renames[local_name] = bare
+            if local_name != bare && origin_is_sole_declarer {
+              // When the checked module renames into `bare`, the bare name
+              // is redirected to ITS import, and leaving `It` alone would
+              // read the shared table's `It` (the checked module's own,
+              // say). `bare@origin` is never registered on this path, so
+              // the reference is unresolved and abstains.
+              renames[local_name] = if checked_renamed_locals.contains(bare) {
+                bare + "@" + origin
+              } else {
+                bare
+              }
             }
             continue
           }

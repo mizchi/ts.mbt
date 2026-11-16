@@ -862,7 +862,9 @@ test "mtsc graph checker resolves a renamed import of a uniquely declared type" 
 /// The renamed-import mapping above must not land on a name the CHECKED
 /// module redirects: its `import { Other as Item }` (with `Other` declared
 /// twice) points `Item` at `Other@x1`, so mapping `b.ts`'s `It` to the bare
-/// `Item` read `make()` as `Other` and reported `.n` as missing.
+/// `Item` read `make()` as `Other` and reported `.n` as missing. Leaving
+/// `It` unmapped is not enough either: the root's own `interface It` would
+/// answer it.
 test "mtsc graph checker keeps a renamed import off a name the checked module redirects" {
   let module_ = fn(path : String, source : String) -> MtscModuleSource {
     { path, source, allowJsx: false, }
@@ -873,7 +875,7 @@ test "mtsc graph checker keeps a renamed import off a name the checked module re
   let issues = collect_module_graph_issues({
     modules: [
       module_(
-        "/src/root.ts", "import { make } from \"./b\";\nimport type { Other as Item } from \"./x1\";\nimport type { Other as O2 } from \"./x2\";\nexport const m: Item = { z: \"s\" };\nexport const o: O2 = { w: true };\nexport const k: number = make().n;",
+        "/src/root.ts", "import { make } from \"./b\";\nimport type { Other as Item } from \"./x1\";\nimport type { Other as O2 } from \"./x2\";\nexport interface It { b: number }\nexport const m: Item = { z: \"s\" };\nexport const o: O2 = { w: true };\nexport const i: It = { b: 1 };\nexport const k: number = make().n;",
       ),
       module_("/src/a.ts", "export interface Item { n: number }"),
       module_(

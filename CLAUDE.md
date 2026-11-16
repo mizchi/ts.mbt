@@ -4602,11 +4602,13 @@ product surfaces now.
     read the shared bare table. That table holds the checked module's own
     `It`, so `consume({ a: "x" })` was judged against the wrong type. The
     alias now maps to `Item` when the origin is the name's only declarer.
-    The mapping is skipped when the checked module has its own renamed
-    import spelled `Item` (`import { Other as Item }`).
-    `alias_namespace_import_types` redirects that name after ingestion, so
-    the mapping's first version read `make(): It` as `Other`, a false
-    positive the review caught. Skipping costs a MISS there. The
+    The checked module may have its own renamed import spelled `Item`
+    (`import { Other as Item }`). `alias_namespace_import_types` redirects
+    that name after ingestion, so the mapping's first version read
+    `make(): It` as `Other`, a false positive the review caught. In that
+    case `It` now maps to the never-registered `Item@origin` and abstains.
+    Merely skipping the mapping was not enough, since the shared table's
+    `It` could then be the checked module's own `interface It`. The
     checked-module side is not fixed: when another module declares `Item`,
     that renamed import still reads it as that module's declaration, which
     main does too. Adding local alias names to the rename map also exposed
