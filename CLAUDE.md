@@ -5739,6 +5739,56 @@ product surfaces now.
       walk in context was walked on its own, without the condition's
       narrowing that the eager walk applies. Each held value now carries the
       conditions it sits under.
+    - The later review rounds found method overload SELECTION thin, and each
+      finding was one argument or parameter shape read two ways at two
+      sites. A tuple-typed rest parameter is that many parameters; a tuple
+      spread is that many arguments, for selection and for the selected
+      member's binders (three call sites, one of them older than the PR);
+      an alias-typed argument is resolved both for the comparison and for
+      binding `T`. One of my own notes was wrong in a way worth keeping: a
+      middle tuple rest (`[string, ...number[], boolean]`) first kept only
+      the positions before it, documented as safe because it "can only keep
+      a member selectable". In overload selection a member kept selectable
+      is a member that can WIN, so `b.m("a")` took the tuple member without
+      its required trailing `boolean`. It is now expanded for the call's
+      argument count. tsc-extra's `methodOverloadSelectionByParameterShape`
+      holds every cell, and tsc and mtsc report the same 14 errors on it.
+  Batch GP takes univer's five sampled packages from 1,938 to 1,587 and
+  effect from 108 to 107, with no report at a new location anywhere; zod,
+  excalidraw, the `.d.ts` entries and the oracle are unchanged.
+  - **A defaulted parameter accepts `undefined`** from the caller, because
+    `undefined` is what triggers the default (univer's `parseBool(v,
+    options)` with `options?:`). `null` does not trigger it and is still
+    an error.
+  - **`a ?? b` and `a || b` remove `void`** from the left operand with
+    `null` and `undefined`, through an alias too: univer's `Nullable<T> = T
+    | null | undefined | void` made every `const a = get() ?? 0` read as
+    `number | void` wherever it was passed on.
+  - **That fix exposed the next gap rather than causing one.** `const { p }
+    = this.getValue() ?? {}` used to bind `any`, because the `void` member
+    defeated the destructuring. Once it bound a real type, `if
+    (Array.isArray(p.body?.textRuns)) { use(p.body) }` reported, because a
+    true `Array.isArray` of an optional chain did not narrow the chain's
+    receivers: the chain has no narrowing key of its own, so the call fell
+    to the generic method arm. Four reports in `Range.getFontStyle`, in all
+    five packages, and the reason the two fixes ship together.
+  - **A `string`-keyed index signature valued `any` accepts every object
+    type**, an interface included. Only the type-literal spelling `{ [k:
+    string]: any }` had been recognised. univer's `IAnyObject` is an
+    INTERFACE keyed by `number | string` whose value is a union holding
+    `any`. Probed: an `unknown` value is still TS2322 for an interface
+    source, and so is a `number` key alone.
+  - **An array literal against a union with exactly one tuple member** is
+    checked against that member alone, and the answer is kept only when it
+    finds nothing (`[a, b]` against `Interval | NumericTuple`, as
+    `@flatten-js/interval-tree` declares its keys). A literal holding a
+    function value opts out, since the speculative walk marks callback
+    bodies as checked.
+  - **`mtsc -p … --noEmit --pretty false` failed**, with "read error false":
+    `--pretty`, `--listFiles`, `--listFilesOnly`, `--showConfig` and
+    `--emitDeclarationOnly` never read tsc's optional `true` / `false`, so
+    the value became an input file. Found by benchmarking against tsrs,
+    whose harness passes exactly that command line.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
