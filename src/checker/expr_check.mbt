@@ -462,11 +462,16 @@ fn merge_ambient_constructor_overloads(
   next : Array[(String, @ast.TsType)],
   next_rest : Array[Bool],
 ) -> (Array[(String, @ast.TsType)], Array[Bool]) {
-  if next_rest.iter().any(fn(r) { r }) {
-    return (next, next_rest)
-  }
-  if prev_rest.iter().any(fn(r) { r }) {
-    return (prev, prev_rest)
+  // A rest overload accepts any count past its prefix, but only of its own
+  // element type: `constructor(...values: string[]); constructor(value:
+  // number)` accepts `new C(1)`, which keeping the rest signature alone
+  // rejects. No single list states both, so the merge abstains to an
+  // untyped rest unless the two are the same signature.
+  if next_rest.iter().any(fn(r) { r }) || prev_rest.iter().any(fn(r) { r }) {
+    if prev == next && prev_rest == next_rest {
+      return (prev, prev_rest)
+    }
+    return ([("args", @ast.TsType::Array(Any))], [true])
   }
   let (long, short) = if next.length() > prev.length() {
     (next, prev)
@@ -1000,6 +1005,11 @@ fn rename_class_refs(
     type_param_bounds: c.type_param_bounds.map(fn(b) { (b.0, go(b.1)) }),
     constructor_params: c.constructor_params.map(fn(ps) {
       ps.map(fn(p) { (p.0, go(p.1)) })
+    }),
+    // `Resolver::put_class` rebuilds `constructor_params` from these, so
+    // they are renamed with it or the rename is undone on registration.
+    ambient_constructor_overloads: c.ambient_constructor_overloads.map(fn(o) {
+      (o.0.map(fn(p) { (p.0, go(p.1)) }), o.1)
     }),
     properties: c.properties.map(fn(p) { { ..p, type_: go(p.type_), } }),
     methods,
@@ -4158,17 +4168,19 @@ fn unwrap_seen_add(
 
 ///|
 /// The element type of `xs.flat()` for an `xs` of element `elem`: one level
-/// of nesting removed, which is `flat`'s default depth. It returned the
-/// receiver's own type, so `getAreas().flat()[i]` on univer's
-/// `(BaseReferenceObject | ErrorValueObject)[][]` read as an array. A piece
-/// this table cannot see into — a name that may alias an array, or one
-/// still nested after the level is removed, which a `depth` argument would
-/// flatten further — is `any`, losing a finding rather than inventing one.
+/// of nesting removed, which is `flat`'s default depth (an explicit depth is
+/// answered at the call, in `infer_expr`). It returned the receiver's own
+/// type, so `getAreas().flat()[i]` on univer's `(BaseReferenceObject |
+/// ErrorValueObject)[][]` read as an array. A piece left nested after the
+/// level is removed stays as it is (`number[][][]` flattens to
+/// `number[][]`), and one this table cannot see into — a name that may
+/// alias an array — is `any`, losing a finding rather than inventing one.
 fn flat_one_level(elem : @ast.TsType) -> @ast.TsType {
   let out : Array[@ast.TsType] = []
   fn leaf(t : @ast.TsType, out : Array[@ast.TsType]) -> Unit {
     match t {
-      Array(_) | Tuple(_) | Applied(_, _) | Named(_) => out.push(Any)
+      Named(_) | Applied(_, _) if !(t is Applied("Array" | "ReadonlyArray", _)) =>
+        out.push(Any)
       _ => out.push(t)
     }
   }
@@ -4963,8 +4975,11 @@ fn Resolver::lookup_applied_class_member(
         bindings
       }
       let param_types : Array[@ast.TsType] = []
-      for mp in m.params {
-        param_types.push(substitute_params(mp.1, method_bindings))
+      // `method_callable_param_types` keeps a rest parameter `Rest(_)`, a
+      // defaulted one omittable, and drops a leading `this`; the raw
+      // `params` list kept none of that.
+      for pt in method_callable_param_types(m) {
+        param_types.push(substitute_params(pt, method_bindings))
       }
       return Some(
         @ast.TsType::Func(
@@ -5379,20 +5394,94 @@ fn Resolver::lookup_field_core(
         None
       }
     }
-    // Intersection: a value of `A & B` has all properties of both A and B.
-    // Return the type from the first member that declares the field; when
-    // the same name is declared on multiple members the types should be
-    // identical (or one is a sub-type), so first-match is correct in practice.
+    // Intersection: a value of `A & B` has all properties of both A and B,
+    // and a property several members declare has the INTERSECTION of their
+    // types. First-match was right while the declarations agreed and wrong
+    // where they do not: in `Record<string, number> & { label?: string }`
+    // the `Record` answers `number` for every name, and `label` is `number &
+    // (string | undefined)`, not `number`. Distinct answers are kept as an
+    // intersection, which the relations accept through any member.
+    //
+    // `T & unknown` is `T` and `T & any` is `any`, so those members fold
+    // away, and two answers that print the same are one type reached two
+    // ways (a module-keyed name and its bare spelling), not two types to
+    // intersect.
     Intersection(items) => {
+      let found : Array[@ast.TsType] = []
+      let mut saw_unknown = false
+      // A constituent that DECLARES the member outranks one that only
+      // answers through an index signature: in `Record<string, number> & {
+      // label?: string }`, `label` is `string | undefined` (probed). The
+      // index answers count only when no constituent declares the name.
+      let declaring = items.filter(fn(it) { !self.answers_by_index(it, field) })
+      let items = if declaring.length() > 0 &&
+        declaring.iter().any(fn(it) { self.lookup_field(it, field) is Some(_) }) {
+        declaring
+      } else {
+        items
+      }
       for it in items {
         match self.lookup_field(it, field) {
-          Some(t) => return Some(t)
+          Some(Any) => return Some(Any)
+          Some(Unknown) => saw_unknown = true
+          Some(t) =>
+            if !found
+              .iter()
+              .any(fn(f) { f == t || type_display(f) == type_display(t) }) {
+              found.push(t)
+            }
           None => ()
         }
       }
-      None
+      // When one answer is assignable to every other, the intersection IS
+      // that answer: `string & "line"` is `"line"`, which is how a
+      // discriminant reads through `Base & { type: "line" }`. Kept as an
+      // intersection, a `switch (element.type)` over such a union narrowed
+      // nothing.
+      match found.length() {
+        0 => if saw_unknown { Some(Unknown) } else { None }
+        1 => Some(found[0])
+        _ =>
+          match
+            found
+            .iter()
+            .find_first(fn(t) {
+              found.iter().all(fn(u) { u == t || is_assignable_to(t, u) })
+            }) {
+            Some(narrowest) => Some(narrowest)
+            None => Some(Intersection(found))
+          }
+      }
     }
     _ => None
+  }
+}
+
+///|
+/// True when `ty` can only answer for `field` through an index signature:
+/// an open `Record`, an object type that lists no such key, or an
+/// interface with an index signature and no member of that name. An
+/// interface's inherited members are not followed, so one that inherits
+/// the member reads as declaring it, which keeps the old answer.
+fn Resolver::answers_by_index(
+  self : Resolver,
+  ty : @ast.TsType,
+  field : String,
+) -> Bool {
+  match self.unwrap(ty) {
+    Applied("Record", [k, _]) => record_closed_key_names(k, self).is_empty()
+    Object(fields) =>
+      fields.iter().any(fn(f) { !(f.0 is Literal(_)) }) &&
+      !fields.iter().any(fn(f) { f.0 is Literal(k) && k == field })
+    Named(n) | Applied(n, _) =>
+      match self.interfaces.get(n) {
+        Some(iface) =>
+          iface.index_signatures.length() > 0 &&
+          iface.extends_names.length() == 0 &&
+          !iface.fields.iter().any(fn(f) { f.0 == field })
+        None => false
+      }
+    _ => false
   }
 }
 
@@ -12269,6 +12358,36 @@ fn infer_expr_inner(
       instance_ty
     }
     MethodCall(receiver, meth, args) => {
+      // `xs.flat(depth)`: the member table models the DEFAULT depth of one,
+      // because it cannot see the argument. `flat(1)` is that default,
+      // `flat(0)` is a copy of the receiver, and any other depth flattens
+      // further than the table does, so it is answered here.
+      match (meth, args) {
+        ("flat", [depth]) if !(depth is IntLit(1)) => {
+          let recv_ty = infer_expr(env, resolver, receiver)
+          match resolver.unwrap(recv_ty) {
+            Array(_) | Applied("Array" | "ReadonlyArray", _) | Tuple(_) =>
+              return if depth is IntLit(0) {
+                match resolver.unwrap(recv_ty) {
+                  Tuple(items) =>
+                    @ast.TsType::Array(
+                      if items.length() == 0 {
+                        Never
+                      } else {
+                        flatten_union_exact(items)
+                      },
+                    )
+                  Applied(_, [e]) => @ast.TsType::Array(e)
+                  other => other
+                }
+              } else {
+                @ast.TsType::Array(Any)
+              }
+            _ => ()
+          }
+        }
+        _ => ()
+      }
       // Static namespace dispatch: `Object.keys(...)`, `Math.max(...)`,
       // `Promise.resolve(...)` etc. — recognise the receiver by its bare
       // identifier rather than its inferred type so we don't depend on
@@ -16701,6 +16820,15 @@ fn check_expr_against(
   }
   if !is_checkable(expected) {
     return
+  }
+  // `any | undefined` is `any` — the spelling of an optional or defaulted
+  // `any` parameter — so it accepts every argument. Read as a union, it
+  // reached rules that ask "is the core the same type" through `equivalent`,
+  // which calls `any` equivalent to everything: `isEmptyObject(value?: any)`
+  // given a `Partial<T>` was "not assignable to `any | undefined`".
+  match expected {
+    Union(parts) if parts.contains(Any) => return
+    _ => ()
   }
   // For a literal expression use its precise literal type so a literal-union
   // target (`const x: 0 | 1 | 2 = 1`) sees `1` rather than the widened

@@ -334,8 +334,11 @@ test "an enum member and an array of a subtype assign to the wider type" {
 ///|
 /// `Record<K, V>` over a CLOSED key set has exactly those keys, so in
 /// `Record<UnitAction, boolean> & { ruleId?: string }` — univer's
-/// `ICellPermission` — `ruleId` is the string member, not `boolean`. `xs.flat()`
-/// removes one level of nesting, so its elements are not arrays.
+/// `ICellPermission` — `ruleId` is the string member, not `boolean`. A
+/// constituent that declares a member outranks one answering through an
+/// index signature, so beside an open `Record` an optional `label` is
+/// `string | undefined`, not the record's value type. `xs.flat()` removes
+/// one level of nesting, so its elements are not arrays.
 test "a closed Record names only its keys and flat removes a level" {
   let src =
     #|export enum UnitAction { View = "view", Edit = "edit" }
@@ -347,8 +350,15 @@ test "a closed Record names only its keys and flat removes a level" {
     #|  const n: number = rows.flat()[0];
     #|  const bad2: string = rows.flat()[0];
     #|}
+    #|declare const openRecord: Record<string, number> & { label?: string };
+    #|export function h(): void {
+    #|  const any_: number = openRecord.anything;
+    #|  const label: string | undefined = openRecord.label;
+    #|  const bad3: number = openRecord.label;
+    #|}
   assert_eq(issue_lines(src), [
     "function g > binding `bad` init: expected `string` but got `boolean`", "function g > binding `bad2` init: expected `string` but got `number`",
+    "function h > binding `bad3` init: type `string | undefined` is not assignable to type `number`",
   ])
 }
 
@@ -429,4 +439,91 @@ test "an imported arrow guard's defaulted parameter may be omitted" {
     ),
     ["top-level > call `isB` :: expected 0-2 argument(s), got 3"],
   )
+}
+
+///|
+/// A dependency declaration file that does not parse is untyped, not
+/// missing: its importers bind its names as `any`. The edge used to stay,
+/// pointing at a module the graph does not hold, and every importer read
+/// "resolved module … is absent". A checked file that does not parse is
+/// still a parse error.
+test "an import of an unparsable dependency declaration is untyped" {
+  let dep = "/node_modules/dep/index.d.ts"
+  let issues = collect_module_graph_issues(
+    {
+      modules: [
+        {
+          path: "/src/root.ts",
+          source: "import { x } from \"dep\";\nexport const n: number = x;",
+          allowJsx: false,
+        },
+        {
+          path: dep,
+          source: "export declare const x: number = ;;; }{",
+          allowJsx: false,
+        },
+      ],
+      edges: [
+        {
+          importerPath: "/src/root.ts",
+          moduleSpecifier: "dep",
+          targetPath: dep,
+        },
+      ],
+    },
+    context_only=Map([(dep, ())]),
+  )
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [])
+}
+
+///|
+/// A constructor overload's parameter types are written in the declaring
+/// module's scope like the rest of the class, so a name two modules declare
+/// is renamed in every overload: `Box`'s `Item` is module `a`'s, whatever
+/// the importer calls `Item`.
+test "a declare class's constructor overloads keep their module's names" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/a.ts", "export interface Item { a: string }\nexport declare class Box { constructor(i: Item); constructor(i: Item, n: number); }",
+        ),
+        ("/src/b.ts", "export interface Item { b: number }"),
+        (
+          "/src/root.ts", "import { Box } from \"./a\";\nimport type { Item } from \"./b\";\nexport const box = new Box({ a: \"x\" });\nexport const two = new Box({ a: \"x\" }, 1);\nexport const it: Item = { b: 1 };",
+        ),
+      ],
+      [
+        ("/src/root.ts", "./a", "/src/a.ts"),
+        ("/src/root.ts", "./b", "/src/b.ts"),
+      ],
+    ),
+    [],
+  )
+}
+
+///|
+/// `any | undefined` is `any` on either side of a relation: the spelling of
+/// a defaulted `any` parameter flows into a `string` as `any` does.
+test "an any union as a source is any" {
+  assert_true(@checker.is_assignable_to(Union([Any, Undefined]), String_))
+  assert_false(@checker.is_assignable_to(Union([Number, Undefined]), String_))
+}
+
+///|
+/// A defaulted `any` parameter takes any argument, a `Partial<T>` included:
+/// the parameter is `any | undefined`, and the Partial / Required lattice
+/// read its core through `equivalent`, which calls `any` equivalent to
+/// every type (univer's `Tools.isEmptyObject(value?: any)`).
+test "a defaulted any parameter accepts a Partial argument" {
+  let src =
+    #|interface D { id: string; n: number }
+    #|class Tools {
+    #|  static isEmptyObject(value: any = {}): boolean { return Object.keys(value).length === 0; }
+    #|}
+    #|export function f(d: Partial<D>): boolean { return Tools.isEmptyObject(d); }
+    #|export function g(d: D): boolean { return Tools.isEmptyObject(d, 1); }
+  assert_eq(issue_lines(src), [
+    "function g > call `isEmptyObject`: expected 0-1 argument(s), got 2",
+  ])
 }

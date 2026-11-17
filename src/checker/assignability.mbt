@@ -741,6 +741,7 @@ fn is_assignable_to_inner(
   }
   match source {
     Any => return true
+    Union(parts) if parts.contains(Any) => return true
     _ => ()
   }
   // `unknown` is the safe top type: every source flows into it, but it

@@ -2513,6 +2513,7 @@ pub fn collect_module_graph_issues(
   let parsed_modules : Array[ParsedMtscModule] = []
   let issues : Array[MtscGraphIssue] = []
   let option_header = compiler_option_header(compiler_options)
+  let unreadable : Map[String, Unit] = Map([])
   for source in graph.modules {
     match parse_graph_module(source, option_header~) {
       Ok(module_) => parsed_modules.push(module_)
@@ -2521,7 +2522,8 @@ pub fn collect_module_graph_issues(
       // is far likelier a gap here than a syntax error in a published
       // package, so it is left untyped instead of reported, as the CLI's
       // loader already does for the same file.
-      Err(_) if context_only.contains(source.path) => ()
+      Err(_) if context_only.contains(source.path) =>
+        unreadable[source.path] = ()
       Err(e) =>
         issues.push({
           modulePath: source.path,
@@ -2530,11 +2532,23 @@ pub fn collect_module_graph_issues(
         })
     }
   }
+  // An import of an unreadable dependency is untyped, not missing: its edge
+  // goes, and the import is marked skipped so a relative one is not
+  // reported as an unresolved local module either. Kept, the edge pointed
+  // at a module the graph does not hold, which is "is absent at".
+  let edges = graph.edges.filter(fn(e) { !unreadable.contains(e.targetPath) })
+  let skipped_imports : Map[String, Unit] = Map([])
+  for e in graph.edges {
+    if unreadable.contains(e.targetPath) {
+      skipped_imports[e.importerPath + "\u{0}" + e.moduleSpecifier] = ()
+    }
+  }
   collect_parsed_graph_issues(
     parsed_modules,
-    graph.edges,
+    edges,
     issues,
     context_only~,
+    skipped_imports~,
   )
   issues
 }
