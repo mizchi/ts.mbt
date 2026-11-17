@@ -13,11 +13,14 @@ declare function fNullable(a: number, b: Nullable<number>): void;
 declare function fTwoTrailing(a: number, b: Nullable<number>, c: void): void;
 declare function fUndefAlias(a: number, b: MaybeU<number>): void;
 declare function fMiddle(a: Nullable<number>, b: number): void;
+type V = void;
+declare function fScalarMember(a: number, b: number | V): void;
 class Matrix { slice(row: Nullable<number[]>, col: Nullable<number[]>) { return row ?? col; } }
 
 export function okAliasTrailing() { fNullable(1); }
 export function okTwoTrailing() { fTwoTrailing(1); }
 export function okMethod() { new Matrix().slice([1]); }
+export function okScalarVoidMember() { fScalarMember(1); }
 export function okArrow() { const f = (a: number, b: Nullable<number>) => a + (b ?? 0); return f(1); }
 
 export function badUndefinedAlias() { fUndefAlias(1); }

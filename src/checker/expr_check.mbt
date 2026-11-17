@@ -2894,9 +2894,12 @@ fn alias_accepts_void(resolver : Resolver, ty : @ast.TsType) -> Bool {
   match ty {
     Named(_) | Applied(_, _) | Union(_) => {
       let u = resolver.unwrap(ty)
+      // A member can be a scalar alias for `void` (`type V = void; number |
+      // V`), which `deep_union_members` keeps as written, so each member is
+      // resolved before the test.
       union_components(deep_union_members(resolver, u))
       .iter()
-      .any(fn(p) { p is Void })
+      .any(fn(p) { p is Void || resolver.unwrap(p) is Void })
     }
     _ => false
   }
@@ -3049,6 +3052,81 @@ fn overload_param_at(params : Array[@ast.TsType], i : Int32) -> @ast.TsType {
     Rest(_) => @ast.TsType::Any
     t => t
   }
+}
+
+///|
+/// A trailing rest parameter typed as a tuple is that many discrete
+/// parameters, so overload selection reads it as them. With
+/// `m(...xs: [string, number]): string; m(x: number): number`, `b.m(1)`
+/// takes the second member, while the slot kept as `Rest(Tuple(…))` fit one
+/// argument and read it as `any`, so the first member won. An optional slot
+/// (`[string, number?]`) is stored as `number | undefined`, which
+/// `required_arity_from_types` already reads as omittable. A rest element
+/// that ends the tuple is a trailing rest once expanded. One in the middle
+/// (`[string, ...number[], boolean]`) is expanded for the call's argument
+/// count `n_args`: the positions before it, as many copies of its element as
+/// the count leaves room for, then the positions after it. A call too short
+/// for the elements on both sides gets no copies, so the required trailing
+/// `boolean` still rejects `m("a")`; reading the suffix as part of a rest of
+/// `any` selected that member.
+fn expand_tuple_rest_params(
+  params : Array[@ast.TsType],
+  n_args : Int32,
+) -> Array[@ast.TsType] {
+  guard params.last() is Some(Rest(Tuple(elems))) else { return params }
+  let out : Array[@ast.TsType] = []
+  for i in 0..<(params.length() - 1) {
+    out.push(params[i])
+  }
+  let mut middle = -1
+  for i, e in elems {
+    if e is Rest(_) && i != elems.length() - 1 {
+      middle = i
+      break
+    }
+  }
+  if middle < 0 {
+    for e in elems {
+      out.push(e)
+    }
+    // `[string, ...[number, boolean]]` ends in another tuple rest.
+    return expand_tuple_rest_params(out, n_args)
+  }
+  let elem = match elems[middle] {
+    Rest(Array(e)) | Rest(Applied("Array" | "ReadonlyArray", [e])) => e
+    _ => @ast.TsType::Any
+  }
+  let fixed = out.length() + elems.length() - 1
+  for i in 0..<middle {
+    out.push(elems[i])
+  }
+  for _ in 0..<(n_args - fixed) {
+    out.push(elem)
+  }
+  for i in (middle + 1)..<elems.length() {
+    out.push(elems[i])
+  }
+  out
+}
+
+///|
+/// Whether overload selection takes an argument of type `arg` for a
+/// parameter of type `expected`. Both sides are resolved: an alias
+/// parameter (`type Flag = boolean`) against a `boolean` argument, and an
+/// argument typed by the alias (`flag: Flag`) against the resolved
+/// parameter, since `is_assignable_to` is resolver-free and reads
+/// `Named("Flag")` against `boolean` as a mismatch. The unresolved pair is
+/// asked first, which is the comparison this used to make.
+fn Resolver::overload_arg_fits(
+  self : Resolver,
+  arg : @ast.TsType,
+  expected : @ast.TsType,
+) -> Bool {
+  if is_assignable_to(arg, expected) {
+    return true
+  }
+  let e = self.unwrap(expected)
+  is_assignable_to(arg, e) || is_assignable_to(self.unwrap(arg), e)
 }
 
 ///|
@@ -6958,6 +7036,101 @@ fn Resolver::method_type_params_of(
 }
 
 ///|
+/// The one non-accessor `static` method `meth` that class `cn` declares, or
+/// `None` for none or an overload set. A class used as a value is `any`
+/// here, so a static call reads the declaration through this instead: the
+/// guard route (`Tools.isDefine(x)`) and the return-type route
+/// (`NumberValueObject.create(0)`) ask the same question.
+fn Resolver::single_static_method(
+  self : Resolver,
+  cn : String,
+  meth : String,
+) -> @ast.TsClassMethodDecl? {
+  guard self.classes.get(cn) is Some(cls) else { return None }
+  let mut found : @ast.TsClassMethodDecl? = None
+  let mut count = 0
+  for m in cls.methods {
+    if m.is_static && m.accessor == "" && m.name == meth {
+      count += 1
+      found = Some(m)
+    }
+  }
+  if count == 1 {
+    found
+  } else {
+    None
+  }
+}
+
+///|
+/// The class that declares the instance method `meth` for a receiver, with
+/// the substitution for that class's own type parameters. The walk follows
+/// `extends` to the first class that declares the method, carrying the type
+/// arguments down each edge (`class_base_type`), because a declaration there
+/// hides the base's. rxjs's `Subject<T> extends Observable<T>` declares no
+/// `pipe`, so a `Subject<number>` receiver reaches `Observable` with
+/// `T = number`. When the receiver's arguments do not line up with the
+/// class's parameters (a bare `Named` receiver), the map is empty and the
+/// signatures stay as written, which is what every caller saw before.
+fn Resolver::class_declaring_method(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> (String, Map[String, @ast.TsType])? {
+  let (n0, args0) : (String, Array[@ast.TsType]) = match self.unwrap(recv) {
+    Named(n) => (n, [])
+    Applied(n, a) => (n, a)
+    _ => return None
+  }
+  let mut n = n0
+  let mut args = args0
+  for _ in 0..<16 {
+    guard self.classes.get(n) is Some(cls) else { return None }
+    let subst : Map[String, @ast.TsType] = Map([])
+    if args.length() == cls.type_params.length() {
+      for i, tp in cls.type_params {
+        subst[tp] = args[i]
+      }
+    }
+    if cls.methods.iter().any(fn(m) { m.name == meth && !m.is_static }) {
+      return Some((n, subst))
+    }
+    // An own instance PROPERTY of that name hides the base's methods too
+    // (`m: any` over a base overload set), so the walk stops with no method.
+    // The accessor halves are recorded as methods and answered above.
+    if cls.properties.iter().any(fn(p) { p.name == meth && !p.is_static }) {
+      return None
+    }
+    let mut next : String? = None
+    for b in cls.base_names {
+      if b != "<expr-base>" && self.classes.contains(b) {
+        next = Some(b)
+        break
+      }
+    }
+    guard next is Some(b) else { return None }
+    let base_ty = self.class_base_type(n, b)
+    let base_ty = if subst.is_empty() {
+      base_ty
+    } else {
+      substitute_params(base_ty, subst)
+    }
+    match base_ty {
+      Applied(bn, ba) => {
+        n = bn
+        args = ba
+      }
+      Named(bn) => {
+        n = bn
+        args = []
+      }
+      _ => return None
+    }
+  }
+  None
+}
+
+///|
 /// Every type-parameter name any declaration of `meth` binds, in first-seen
 /// order. `method_type_params_of` answers with the FIRST generic
 /// declaration, which is right for a single signature and wrong for an
@@ -7004,6 +7177,20 @@ fn Resolver::method_overload_type_params(
         }
       }
     None => ()
+  }
+  // An inherited overload set's binders live on the base that declares it.
+  match self.class_declaring_method(recv, meth) {
+    Some((key, _)) if key != name =>
+      match self.classes.get(key) {
+        Some(cls) =>
+          for m in cls.methods {
+            if m.name == meth && !m.is_static {
+              add(m.type_params)
+            }
+          }
+        None => ()
+      }
+    _ => ()
   }
   out
 }
@@ -7411,8 +7598,15 @@ fn Resolver::method_overload_signatures(
       // silence the argument check. Repeated `fields` entries are how
       // the parser records an interface's overloads —
       // `interface_method_arity_reliable` says so at its own site.
-      match self.classes.get(n) {
-        Some(cls) => {
+      // The class is the one that DECLARES `meth`, which may be a base
+      // (`class_declaring_method`), and its type parameters are substituted
+      // from the receiver. Both were missing: a `Subject<number>` receiver
+      // found no `pipe` at all, and an `Observable<number>` one kept the raw
+      // `T`, so `pipe<A>(op: OperatorFunction<T, A>)` matched no argument
+      // and the call fell back to the first declaration, `pipe():
+      // Observable<T>`.
+      match self.class_declaring_method(recv, meth) {
+        Some((key, subst)) if self.classes.get(key) is Some(cls) => {
           // Overload *signatures* (no body) are the callable surface in TS;
           // the implementation signature (with a body) is not, so prefer the
           // former when both are present.
@@ -7428,14 +7622,37 @@ fn Resolver::method_overload_signatures(
           }
           let chosen = if sig_only.length() > 0 { sig_only } else { all }
           for m in chosen {
-            let ps : Array[@ast.TsType] = []
-            for p in m.params {
-              ps.push(p.1)
+            // A method's own type parameters shadow the class's, so they
+            // stay unsubstituted (`pick<T>(x: T)` on `Box<T>`), as
+            // `lookup_applied_class_member` already does.
+            let msubst : Map[String, @ast.TsType] = Map([])
+            for k, v in subst {
+              if !m.type_params.contains(k) {
+                msubst[k] = v
+              }
             }
-            candidates.push((ps, m.return_type))
+            // The callable parameter list, not `m.params`: it keeps a rest
+            // parameter as `Rest(…)` and drops a leading `this`, so
+            // `m(...xs: T[])` stays callable with one argument.
+            let ps : Array[@ast.TsType] = []
+            for pt in method_callable_param_types(m) {
+              ps.push(
+                if msubst.is_empty() {
+                  pt
+                } else {
+                  substitute_params(pt, msubst)
+                },
+              )
+            }
+            let ret = if msubst.is_empty() {
+              m.return_type
+            } else {
+              substitute_params(m.return_type, msubst)
+            }
+            candidates.push((ps, ret))
           }
         }
-        None => ()
+        _ => ()
       }
       if candidates.length() == 0 {
         match self.interfaces.get(n) {
@@ -7514,6 +7731,65 @@ fn method_declaration_count(
 }
 
 ///|
+/// The argument types overload selection compares, one per argument. A
+/// spread of a fixed-length tuple (`b.m(...xs)` with `xs: [string, number]`)
+/// is that many arguments, which is what a tuple-typed rest parameter
+/// expands to (`expand_tuple_rest_params`), so the two line up. Any other
+/// spread stays one entry, as before.
+fn overload_arg_types(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for a in args {
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(infer_expr(env, resolver, inner)) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for e in elems {
+              out.push(e)
+            }
+          _ => out.push(infer_expr(env, resolver, a))
+        }
+      _ => out.push(infer_expr(env, resolver, a))
+    }
+  }
+  out
+}
+
+///|
+/// The same expansion over the argument EXPRESSIONS, for solving the
+/// selected member's type parameters: `c.m(...xs)` with `xs: [string,
+/// number]` is read as `c.m(xs[0], xs[1])`, so `m<T>(value: T, count:
+/// number): T` binds `T` to `string` rather than to the whole tuple. Any
+/// other spread is kept whole, as the binding pass reads it.
+fn expand_tuple_spread_args(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsExpr] {
+  if !args.iter().any(fn(a) { a is Spread(_) }) {
+    return args
+  }
+  let out : Array[@ast.TsExpr] = []
+  for a in args {
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(infer_expr(env, resolver, inner)) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for i in 0..<elems.length() {
+              out.push(IndexAccess(inner, NumberLit(i.to_double())))
+            }
+          _ => out.push(a)
+        }
+      _ => out.push(a)
+    }
+  }
+  out
+}
+
+///|
 fn Resolver::resolve_method_overload(
   self : Resolver,
   recv : @ast.TsType,
@@ -7540,6 +7816,7 @@ fn Resolver::resolve_method_overload(
   }
   for c in candidates {
     let (params, ret) = c
+    let params = expand_tuple_rest_params(params, arg_types.length())
     // The argument count has to fit the member's arity, not equal its
     // parameter count: redi's `get<T>(id, lookUp?)` is called as
     // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
@@ -7555,7 +7832,7 @@ fn Resolver::resolve_method_overload(
       } else {
         substitute_params(expected, erase)
       }
-      if !is_assignable_to(arg_types[i], expected) {
+      if !self.overload_arg_fits(arg_types[i], expected) {
         ok = false
         break
       }
@@ -7577,10 +7854,13 @@ fn Resolver::resolve_method_overload(
       let binders = erase.keys().collect()
       let solved : Map[String, @ast.TsType] = Map([])
       for i in 0..<arg_types.length() {
+        // From the RESOLVED argument: `a: N` with `type N = number[]` gives
+        // `T` nothing to bind from as `Named("N")`, so `T` stayed `any` and
+        // `m<T>(a: T[], b: T[])` accepted a `number[]` and a `string[]`.
         infer_param_bindings(
           binders,
           overload_param_at(params, i),
-          widen_literal_deep(arg_types[i]),
+          widen_literal_deep(self.unwrap(arg_types[i])),
           solved,
           false,
         )
@@ -7591,7 +7871,7 @@ fn Resolver::resolve_method_overload(
       }
       for i in 0..<arg_types.length() {
         let expected = substitute_params(overload_param_at(params, i), inst)
-        if !is_assignable_to(arg_types[i], expected) {
+        if !self.overload_arg_fits(arg_types[i], expected) {
           ok = false
           break
         }
@@ -12364,16 +12644,19 @@ fn infer_expr_inner(
         // propagation, which sees this same node.
         PropAccess(recv, meth) | OptionalChain(PropAccess(recv, meth)) => {
           let recv_ty = infer_expr(env, resolver, recv)
-          let arg_types : Array[@ast.TsType] = []
-          for a in args {
-            arg_types.push(infer_expr(env, resolver, a))
-          }
+          let arg_types = overload_arg_types(env, resolver, args)
           let pruned = prune_nullish(resolver, recv_ty)
           match resolver.resolve_method_overload(pruned, meth, arg_types) {
             Some((params, ret)) =>
               return substitute_this_type(
                 instantiate_method_return(
-                  env, resolver, pruned, meth, params, args, ret,
+                  env,
+                  resolver,
+                  pruned,
+                  meth,
+                  params,
+                  expand_tuple_spread_args(env, resolver, args),
+                  ret,
                 ),
                 recv_ty,
               )
@@ -12683,15 +12966,18 @@ fn infer_expr_inner(
       // `lookup_method_sig` below only sees the first overload, so try the
       // full set first.
       let pruned_recv = prune_nullish(resolver, recv_ty)
-      let arg_types : Array[@ast.TsType] = []
-      for a in args {
-        arg_types.push(infer_expr(env, resolver, a))
-      }
+      let arg_types = overload_arg_types(env, resolver, args)
       match resolver.resolve_method_overload(pruned_recv, meth, arg_types) {
         Some((params, ret)) =>
           return substitute_this_type(
             instantiate_method_return(
-              env, resolver, pruned_recv, meth, params, args, ret,
+              env,
+              resolver,
+              pruned_recv,
+              meth,
+              params,
+              expand_tuple_spread_args(env, resolver, args),
+              ret,
             ),
             recv_ty,
           )
@@ -15795,14 +16081,17 @@ fn symbol_member_shape_blocks(
 /// the `any` walk reported `"r" in color` as `{ r: unknown }` beside the
 /// contextual walk's correct answer. tsc reports neither.
 ///
-/// So for the four shapes that hand a function value to a contextual type (an
-/// arrow, a function expression, and the object and array literals holding
-/// them) the walk runs AFTER the shape check. The contextual walk marks the
-/// body it walked (`walked_arrow_bodies` / `walked_func_bodies`) and the `any`
-/// walk then skips it, which is the order `check_arguments` already uses for a
-/// call argument. Every other expression keeps the walk first, because the
-/// walk narrows by assignment and clears the TS2454 set, and the shape check
-/// reads both.
+/// So a function value's `any` walk runs AFTER the shape check. The contextual
+/// walk marks the body it walked (`walked_arrow_bodies` / `walked_func_bodies`)
+/// and the `any` walk then skips it, which is the order `check_arguments`
+/// already uses for a call argument. For a bare arrow or function expression
+/// the whole walk moves. An object or array literal keeps its walk FIRST,
+/// because the walk narrows by assignment and the shape check reads that:
+/// `{ value: (x = "ok", x) }` against `{ value: string } | …` read `x` before
+/// the assignment and was reported (review of #299). Only the function values
+/// the literal holds are held back, through `deferred_arrow_bodies` /
+/// `deferred_func_bodies`, and walked after the shape check unless it already
+/// walked them in context.
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -15811,10 +16100,24 @@ fn check_expr_against(
   sub_path : String,
   arg_callee_non_generic~ : Bool = false,
 ) -> Unit {
-  let walk_after = expr
-    is (ArrowFunc(_, _, _, _) | FuncExpr(_) | ObjectLit(_) | ArrayLit(_))
+  let walk_after = expr is (ArrowFunc(_, _, _, _) | FuncExpr(_))
+  let held : Array[(@ast.TsExpr, Array[(@ast.TsExpr, Bool)])] = []
+  if expr is (ObjectLit(_) | ArrayLit(_) | Cond(_, _, _)) {
+    collect_literal_function_values(expr, [], held)
+  }
   if !walk_after {
+    let arrows_len = deferred_arrow_bodies.length()
+    let funcs_len = deferred_func_bodies.length()
+    for h in held {
+      match h.0 {
+        ArrowFunc(_, _, body, _) => deferred_arrow_bodies.push(body)
+        FuncExpr(f) => deferred_func_bodies.push(f.body)
+        _ => ()
+      }
+    }
     check_call_args_in_expr(env, expr, ctx)
+    deferred_arrow_bodies.truncate(arrows_len)
+    deferred_func_bodies.truncate(funcs_len)
   }
   check_expr_against_shape(
     env,
@@ -15826,6 +16129,22 @@ fn check_expr_against(
   )
   if walk_after {
     check_call_args_in_expr(env, expr, ctx)
+  }
+  for h in held {
+    let (value, conds) = h
+    if conds.is_empty() {
+      check_call_args_in_expr(env, value, ctx)
+    } else {
+      let snap = env.full_snapshot()
+      for cs in conds {
+        let eff = analyze_narrowing(env, ctx.resolver, cs.0)
+        for b in (if cs.1 { eff.then_binds } else { eff.else_binds }) {
+          env.narrow(b.0, b.1)
+        }
+      }
+      check_call_args_in_expr(env, value, ctx)
+      env.restore_from(snap)
+    }
   }
 }
 
@@ -22774,6 +23093,61 @@ fn arrow_body_walked(body : @ast.TsArrowBody) -> Bool {
 }
 
 ///|
+/// Function values inside an object or array literal whose `any` walk is
+/// held back until the literal's shape check has run (see
+/// `check_expr_against`). Pushed and truncated around one walk, so nesting
+/// is a stack.
+let deferred_arrow_bodies : Array[@ast.TsArrowBody] = []
+
+///|
+let deferred_func_bodies : Array[@ast.TsBlock] = []
+
+///|
+/// The function values an object or array literal holds, through nested
+/// literals: an entry's value, a computed entry's value, an array element.
+/// These are the values the literal's shape check hands a contextual type.
+///
+/// Each value comes with the conditions it sits under (`(condition, sense)`
+/// from the outside in), because the eager walk checks a conditional's arms
+/// under the condition's narrowing, and a deferred arm that the shape check
+/// did not walk in context must be walked the same way: effect's
+/// `emitter === undefined ? (a) => a : (a) => … emitter.begin …` read
+/// `emitter` as possibly undefined when the arm was walked on its own.
+fn collect_literal_function_values(
+  expr : @ast.TsExpr,
+  path : Array[(@ast.TsExpr, Bool)],
+  out : Array[(@ast.TsExpr, Array[(@ast.TsExpr, Bool)])],
+) -> Unit {
+  match expr {
+    ArrowFunc(_, _, _, _) | FuncExpr(_) => out.push((expr, path.copy()))
+    ObjectLit(entries) =>
+      for e in entries {
+        match e.1 {
+          ComputedProp(_, v) => collect_literal_function_values(v, path, out)
+          v => collect_literal_function_values(v, path, out)
+        }
+      }
+    ArrayLit(items) =>
+      for it in items {
+        collect_literal_function_values(it, path, out)
+      }
+    // The shape check judges each arm of a conditional entry against the
+    // entry's type, so a function value in either arm is checked in context
+    // too. The condition is not a value of the entry and stays on the eager
+    // walk.
+    Cond(c, then_, else_) => {
+      path.push((c, true))
+      collect_literal_function_values(then_, path, out)
+      let _ = path.pop()
+      path.push((c, false))
+      collect_literal_function_values(else_, path, out)
+      let _ = path.pop()
+    }
+    _ => ()
+  }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -27207,11 +27581,15 @@ fn narrow_predicate_path_arg(
   let narrowed = pair_pos[pair_pos.length() - 1].1
   // The narrowed value has to be PROVEN non-nullish: `any` and `unknown`
   // admit `undefined` without saying so, and a `void` part may be it.
-  if narrowed is Any ||
-    narrowed is Unknown ||
-    union_components(narrowed)
+  // Each part is resolved first, since an alias can name one of them (`type
+  // Top = unknown`).
+  let unproven = fn(t : @ast.TsType) {
+    t is (Void | Any | Unknown) || resolver.unwrap(t) is (Void | Any | Unknown)
+  }
+  if unproven(narrowed) ||
+    union_components(deep_union_members(resolver, resolver.unwrap(narrowed)))
     .iter()
-    .any(fn(t) { t is Void || t is Any || t is Unknown }) ||
+    .any(unproven) ||
     target_admits_nullish(resolver, narrowed, false, 0) ||
     target_admits_nullish(resolver, narrowed, true, 0) {
     return
@@ -27761,24 +28139,7 @@ fn apply_method_type_predicate_narrowing(
   // make the target loose.
   let static_guard = match receiver {
     Var(cn) if ns_predicate is None && env.lookup(cn) is None =>
-      match resolver.classes.get(cn) {
-        Some(cls) => {
-          let mut found : @ast.TsClassMethodDecl? = None
-          let mut count = 0
-          for m in cls.methods {
-            if m.is_static && m.accessor == "" && m.name == method_name {
-              count += 1
-              found = Some(m)
-            }
-          }
-          if count == 1 {
-            found
-          } else {
-            None
-          }
-        }
-        None => None
-      }
+      resolver.single_static_method(cn, method_name)
     _ => None
   }
   let recv_ty = infer_expr(env, resolver, receiver)
@@ -29887,6 +30248,35 @@ fn narrow_after_assignment(
     | ArrowFunc(_, _, _, _)
     | FuncExpr(_)
     | NativeClassExpr(_, _) => true
+    // A STATIC factory called through its class (`NumberValueObject.create(0)`)
+    // is never nullish when the method's declared return admits neither
+    // nullish value. A class used as a value is `any` here, so the call
+    // infers as `any` and narrowed nothing: univer's `if (v == null ||
+    // v.isNull()) { v = NumberValueObject.create(0) }` left `v` possibly
+    // undefined after the `if`. Only this NARROWING reads the declaration.
+    // Typing the call itself was tried, and it exposed four unrelated
+    // downstream gaps in univer and excalidraw (an object-literal union
+    // against an interface, a `declare class` implementing one, a generator
+    // object, `Array.prototype.at`), so the call stays `any` until those are
+    // fixed. Removing nullish members cannot add a mismatch.
+    MethodCall(Var(cn), meth, _) if env.lookup(cn) is None =>
+      match ctx.resolver.single_static_method(cn, meth) {
+        // Every member of the resolved return must be positively
+        // non-nullish: `string | void` is not, and `target_admits_nullish`
+        // does not see the `void`.
+        Some(m) =>
+          m.type_params.length() == 0 &&
+          is_checkable(m.return_type) &&
+          union_components(
+            deep_union_members(ctx.resolver, ctx.resolver.unwrap(m.return_type)),
+          )
+          .iter()
+          .all(fn(t) {
+            !(ctx.resolver.unwrap(t)
+            is (Void | Null | Undefined | Any | Unknown | Never))
+          })
+        None => false
+      }
     _ => false
   }
   // A declaration with a SINGLE non-nullish member narrows to exactly that
@@ -29897,9 +30287,19 @@ fn narrow_after_assignment(
   // shape instead made `b = { v: 1 }` on an `Entry | undefined` binding
   // read back as `{ v: number } | Entry` after an `if`, which the
   // resolver-free comparison then rejected against `Entry`.
+  // The declaration is resolved first: `let w = v` with `v:
+  // Nullable<BaseValue>` declares `w` as the alias, whose single non-nullish
+  // member is only visible once it is expanded, and `void` goes with `null`
+  // and `undefined`, as under `x!`.
   let declared_single = match env.lookup_declared(name) {
-    Some(d) if type_has_undefined(d) || type_has_null(d) =>
-      match non_nullable(d) {
+    Some(d) if type_has_undefined(d) ||
+      type_has_null(d) ||
+      target_admits_nullish(ctx.resolver, d, false, 0) ||
+      target_admits_nullish(ctx.resolver, d, true, 0) =>
+      match
+        narrow_remove(non_nullable_resolved(ctx.resolver, d), fn(t) {
+          ctx.resolver.unwrap(t) is (Void | Null | Undefined)
+        }) {
         Union(_) | Never => None
         one => Some(one)
       }
@@ -29940,7 +30340,13 @@ fn narrow_after_assignment(
     match env.lookup(name) {
       Some(cur) =>
         if type_has_undefined(cur) || type_has_null(cur) {
-          env.narrow(name, non_nullable(cur))
+          // The value is non-nullish of a type this cannot name. When the
+          // current type was ONLY nullish (`let b = null`, auto-typed, then
+          // `b = Factory.create()`), removing the nullish part leaves `never`,
+          // and every later read of `b` was reported on it. What is known is
+          // that it is not nullish, which `any` says.
+          let kept = non_nullable(cur)
+          env.narrow(name, if kept is Never { @ast.TsType::Any } else { kept })
         }
       None => ()
     }
@@ -35142,7 +35548,8 @@ fn check_call_args_in_expr(
     // `dedup_issues_since` pass inside the helpers drops the resulting
     // duplicate diagnostics.
     ArrowFunc(params, declared_ret, body, is_async) =>
-      if !arrow_body_walked(body) {
+      if !arrow_body_walked(body) &&
+        !deferred_arrow_bodies.iter().any(fn(b) { physical_equal(b, body) }) {
         check_arrow_with_context(
           env,
           params,
@@ -35156,7 +35563,8 @@ fn check_call_args_in_expr(
         )
       }
     FuncExpr(f) =>
-      if !walked_func_bodies.iter().any(fn(b) { physical_equal(b, f.body) }) {
+      if !walked_func_bodies.iter().any(fn(b) { physical_equal(b, f.body) }) &&
+        !deferred_func_bodies.iter().any(fn(b) { physical_equal(b, f.body) }) {
         check_funcexpr_with_context(
           env,
           f,

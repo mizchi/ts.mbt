@@ -5679,6 +5679,66 @@ product surfaces now.
     void`) is stripped by `x!`. An `unknown` or `any` guard result proves
     nothing about the `?.` receivers. A qualified name in an unreachable
     declaring module's scope (`Models.Payload`) moves with the bare names.
+  Batch GO takes univer's five sampled packages from 2,047 to 1,938 and
+  carries the three findings from the review of #299. Excalidraw (580),
+  effect (108), zod (8), the `.d.ts` entries and the oracle are unchanged,
+  and no target gains a report at a new location.
+  - **An overload set on a generic base class is inherited with its `T`.**
+    rxjs's `declare class Subject<T> extends Observable<T>` declares no
+    `pipe`, so `subject.pipe(take(1))` was judged against `pipe():
+    Observable<T>` (24 reports). Three facts were missing, and each one
+    is load-bearing on its own (mutation checked).
+    `method_overload_signatures` read only the receiver's own class. It
+    kept the class's raw `T`, so even an `Observable<number>` receiver
+    matched no generic member and fell back to the first declaration.
+    And a `declare class` never recorded its `extends B<…>` arguments.
+    `class_declaring_method` walks to the first class declaring the
+    method, carrying the substitution down each edge. A fourth change, a
+    class walk in `method_declaration_count`, measured as redundant once
+    the candidates were right, and was removed rather than kept as code
+    that does nothing.
+    - The dataset cell found a trap. With `T` used only inside methods,
+      tsc relates `Obs<string>` and `Obs<number>` structurally and accepts
+      the return-type mismatches mtsc reports, because mtsc compares type
+      arguments nominally. The cell's `Obs` carries a covariant `last: T`,
+      as rxjs's `Observable` does through `operator`, which tsc confirms
+      on the real package.
+  - **Assigning a static factory narrows a nullable binding.** univer's
+    `if (v == null || v.isNull()) { v = NumberValueObject.create(0) }` left
+    `v` possibly undefined, because a class used as a value is `any` here
+    and so was the call. Typing the call itself was tried first. It
+    exposed four unrelated downstream gaps (an object-literal union against
+    an interface, a `declare class` implementing one, a generator object,
+    `Array.prototype.at`), so only the assignment narrowing reads the
+    declared return now, which can only remove nullish members.
+    - Two pre-existing defects came with it. The single-member test read
+      an alias-typed declaration unexpanded. And a never-nullish value of
+      an unnamed type, assigned to a binding whose current type is only
+      `null`, narrowed it to `never`, which main also does through `new`
+      on an `any` constructor.
+  - **The #299 follow-ups.** A scalar `void` alias inside a union makes a
+    trailing parameter omissible. An alias for `unknown` proves nothing
+    about the `?.` receivers. And an object or array literal keeps its
+    nested-error walk BEFORE the shape check. #299 had moved that whole
+    walk after the shape check, which reported `{ value: (x = "ok", x) }`
+    because the shape check read `x` before the assignment. Only the
+    function values the literal holds are held back now, including those
+    in nested literals, and they are walked after the shape check unless
+    it walked them in context.
+  - **The review of #300 found five more, two of them regressions from the
+    batch itself.**
+    - An own instance property (`m: any`) hides an inherited overload set.
+    - A method's own `<T>` shadows the class's `T` in the substitution. My
+      first reply called this unobservable; `pick<T>(x: T): T` beside
+      `pick(x: string): number` on a `Box<number>` showed it selecting the
+      wrong overload.
+    - A `string | void` static return is not never-nullish.
+    - An alias union holding `unknown` proves nothing.
+    - A function value in a conditional entry is held back too. Its fix
+      first cost two effect reports: a held arm that the shape check did not
+      walk in context was walked on its own, without the condition's
+      narrowing that the eager walk applies. Each held value now carries the
+      conditions it sits under.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -838,3 +838,100 @@ test "a let initialized with null is auto-typed" {
     ],
   )
 }
+
+///|
+/// A method overload set declared on a generic base class is inherited
+/// whole, with the base's `T` from the receiver: rxjs's `Subject<T> extends
+/// Observable<T>` declares no `pipe` (24 univer reports of "expected 0
+/// argument(s)"). Three things were missing: the overload count walked
+/// interfaces only, the candidates kept the class's raw `T` (so even an
+/// `Observable<number>` receiver selected `pipe(): Observable<T>`), and a
+/// `declare class` did not record its `extends B<…>` arguments. An override
+/// with one signature hides the set.
+test "an inherited overload set on a generic base class" {
+  assert_eq(
+    issue_lines(
+      "interface Op<T, R> { (source: Obs<T>): Obs<R> }\ndeclare class Obs<T> { readonly last: T; pipe(): Obs<T>; pipe<A>(op1: Op<T, A>): Obs<A>; }\ndeclare class Sub<T> extends Obs<T> { next(v: T): void }\ndeclare class Narrow<T> extends Obs<T> { pipe(): Obs<T> }\ndeclare function take<T>(n: number): Op<T, T>;\ndeclare function toStr(): Op<number, string>;\nfunction okInherited(s: Sub<number>) { return s.pipe(take(1)); }\nfunction okReturn(s: Sub<number>): Obs<string> { return s.pipe(toStr()); }\nfunction okDirect(s: Obs<number>): Obs<string> { return s.pipe(toStr()); }\nfunction badOverride(s: Narrow<number>) { return s.pipe(take(1)); }\nfunction badReturn(s: Sub<number>): Obs<number> { return s.pipe(toStr()); }",
+    ),
+    [
+      "function badOverride > call `pipe`: expected 0 argument(s), got 1", "function badReturn > return: expected `Obs<number>` but got `Obs<string>`",
+    ],
+  )
+}
+
+///|
+/// The three findings from the review of #299. A scalar alias for `void`
+/// inside a union still makes a trailing parameter omissible. An assignment
+/// inside an object literal's entry is applied before the literal is
+/// judged, while a function value in it is still checked in context. And an
+/// alias for `unknown` proves nothing about the `?.` receivers.
+test "review of #299: void member alias, literal walk order, aliased unknown" {
+  assert_eq(
+    issue_lines(
+      "type V = void;\ndeclare function f(a: number, b: number | V): void;\nfunction okScalarVoid() { f(1); }\ndeclare function isObject(v: unknown): v is object;\ninterface R { r: number; g: number }\nfunction okAssignInLiteral() { let x: string | number = 0; const y: { value: string } | { other: number } = { value: (x = \"ok\", x) }; return y; }\nfunction okNested() { const o: { a: { f: (c: string | R) => number } } = { a: { f: (c) => { if (isObject(c)) { if (\"r\" in c) { return c.g; } } return 0; } } }; return o; }\ntype Top = unknown;\ndeclare function acceptsTop(x: unknown): x is Top;\ndeclare const lo: { p: unknown; q: number } | undefined;\nfunction badAliasedUnknown() { if (acceptsTop(lo?.p)) { const n = lo.q; } }",
+    ),
+    [
+      "function badAliasedUnknown > PropAccess `.q`: object is possibly `undefined`",
+    ],
+  )
+}
+
+///|
+/// Assigning a static factory called through its class narrows a nullable
+/// binding (univer's `v = NumberValueObject.create(0)` after `v == null`),
+/// also when the binding is declared through an alias (`let w = v` with
+/// `v: Nullable<…>`). The call itself is still `any`, so a mismatch through
+/// it is a MISS, and an assignment of a value typed `any` keeps the declared
+/// type, as tsc has it.
+test "a static factory assignment narrows a nullable binding" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\nclass BaseValue { isNull(): boolean { return false; } isBool(): boolean { return false; } }\nclass NumberValue extends BaseValue { static create(n: number): NumberValue { return new NumberValue(); } }\ndeclare const anything: any;\nfunction okNarrows(v: Nullable<BaseValue>) { let w = v; if (w == null || w.isNull()) { w = NumberValue.create(0); } return w.isBool(); }\nfunction badMismatch() { const s: string = NumberValue.create(3); return s; }\nfunction badAny(v: BaseValue | undefined) { v = anything; return v.isBool(); }\ndeclare const AnyCtor: any;\nfunction okAutoTypedAnyNew() { let b = null; b = new AnyCtor(); return b.width; }",
+    ),
+    ["function badAny > call `isBool`: object is possibly `undefined`"],
+  )
+}
+
+///|
+/// The findings from the review of #300. An own property hides an
+/// inherited overload set. A function value in a conditional entry, or a
+/// conditional initializer, is checked in context only. An alias union
+/// holding `unknown` proves nothing about the `?.` receivers. And a static
+/// returning `string | void` is not a never-nullish assignment.
+test "review of #300: property hides a base set, conditional entries, void static" {
+  assert_eq(
+    issue_lines(
+      "declare class Base { m(x: string): number; m(x: number): string; }\ndeclare class D extends Base { m: any; }\nfunction okHides(d: D) { const s: string = d.m(\"x\"); return s; }\ninterface R { r: number; g: number }\ndeclare const isObject: (v: unknown) => v is object;\ntype F = (c: string | R) => number;\nfunction okCond(flag: boolean) { const o: { f: F } = { f: flag ? (c) => { if (isObject(c)) { if (\"r\" in c) { return c.g; } } return 0; } : (c) => 0 }; return o; }\ntype Top = unknown;\ntype TU = Top | string;\ndeclare function acc(x: unknown): x is TU;\ndeclare const lo: { p: unknown; q: number } | undefined;\nfunction badAliasUnion() { if (acc(lo?.p)) { return lo.q; } return 0; }\ndeclare class MF { static make(): string | void; }\nfunction badVoidStatic(x: string | undefined) { x = MF.make(); return x.length; }\ndeclare class Shadow<T> { pick<T>(x: T): T; pick(x: string): number; }\nfunction okShadow(b: Shadow<number>) { const s: string = b.pick(\"a\"); return s; }\ninterface Em { begin: number; end(n: number): number }\ninterface Bx<A> { a: A }\nfunction okArmNarrowed() { const w = <A>(e: Em | undefined) => { const i: (x: Bx<A>) => Bx<A> = e === undefined ? (x) => x : (x) => { e.end(e.begin); return x; }; return i; }; return w; }\ntype Flag = boolean;\ndeclare class Fl<T> { m(x: T): string; m(x: boolean): number; }\ndeclare class FlSub extends Fl<Flag> {}\nfunction okAliasSel(d: FlSub) { const s: string = d.m(true); return s; }\ndeclare class Re<T> { m(...xs: T[]): string; m(x: number): number; }\ndeclare class ReSub extends Re<number> {}\nfunction okRestSel(d: ReSub) { const s: string = d.m(1); return s; }",
+    ),
+    [
+      "function badAliasUnion > PropAccess `.q`: object is possibly `undefined`",
+      "function badVoidStatic > PropAccess `.length`: object is possibly `undefined`",
+    ],
+  )
+}
+
+///|
+/// The second round of the review of #300. A tuple-typed rest parameter is
+/// that many discrete parameters in overload selection, optional slots
+/// included, so `b.m(1)` takes `m(x: number)` over
+/// `m(...xs: [string, number])`. And an argument typed by an alias
+/// (`flag: Flag`) fits a parameter of that alias, or of what it resolves to,
+/// so `f.m(flag)` takes `m(x: Flag)` over `m(x: any)`. The positions before
+/// a rest in the middle of the tuple are fixed, so they still reject. A
+/// tuple spread is that many arguments, and a generic member's binder is
+/// solved from the resolved argument, so aliased `number[]` and `string[]`
+/// do not both fit `T[]`. A middle rest is expanded for the argument count,
+/// so its required suffix rejects a call too short for it, and a tuple
+/// spread binds a generic member's `T` element by element.
+test "review of #300 round 3: tuple rest parameter, alias-typed argument" {
+  assert_eq(
+    issue_lines(
+      "declare class B { m(...xs: [string, number]): string; m(x: number): number; }\nfunction okTupleSecond(b: B) { const n: number = b.m(1); return n; }\nfunction okTupleFirst(b: B) { const s: string = b.m(\"a\", 2); return s; }\nfunction badTupleFirst(b: B) { const n: number = b.m(\"a\", 2); return n; }\ndeclare class O { m(...xs: [string, number?]): string; m(x: number): number; }\nfunction okOptionalSlot(o: O) { const s: string = o.m(\"a\"); return s; }\nfunction badOptionalSlot(o: O) { const n: number = o.m(\"a\"); return n; }\ntype Flag = boolean;\ndeclare class F { m(x: Flag): string; m(x: any): number; }\nfunction okAliasArg(f: F, flag: Flag) { const s: string = f.m(flag); return s; }\nfunction badAliasArg(f: F, flag: Flag) { const n: number = f.m(flag); return n; }\ntype Pair = { k: string };\ndeclare class P { m(x: Pair): string; m(x: any): number; }\nfunction okObjAliasArg(p: P, pair: Pair) { const s: string = p.m(pair); return s; }\ndeclare class M { m(...xs: [string, ...number[], boolean]): string; m(x: number): number; }\nfunction okMiddleRest(c: M) { const n: number = c.m(1); return n; }\ndeclare class Sp { m(...xs: [string, number]): string; m(...xs: any[]): number; }\ndeclare const pairArgs: [string, number];\nfunction okTupleSpread(t: Sp) { const s: string = t.m(...pairArgs); return s; }\ntype Nums = number[];\ntype Strs = string[];\ndeclare class G { m<T>(a: T[], b: T[]): string; m(a: number[], b: string[]): number; }\nfunction okAliasPair(g: G, a: Nums, b: Strs) { const n: number = g.m(a, b); return n; }\nfunction okAliasPairGeneric(g: G, a: Nums, b: Nums) { const s: string = g.m(a, b); return s; }\ndeclare class Sx { m(...xs: [string, ...number[], boolean]): string; m(x: string): number; }\nfunction okSuffixMissing(b: Sx) { const n: number = b.m(\"a\"); return n; }\nfunction okSuffixFilled(b: Sx) { const s: string = b.m(\"a\", 1, true); return s; }\ndeclare class Gs { m<T>(value: T, count: number): T; m(...values: any[]): string; }\nfunction okGenericSpread(c: Gs, xs: [string, number]): string { return c.m(...xs); }",
+    ),
+    [
+      "function badTupleFirst > binding `n` init: expected `number` but got `string`",
+      "function badOptionalSlot > binding `n` init: expected `number` but got `string`",
+      "function badAliasArg > binding `n` init: expected `number` but got `string`",
+    ],
+  )
+}
