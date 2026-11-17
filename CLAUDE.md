@@ -5756,6 +5756,18 @@ product surfaces now.
   Batch GP takes univer's five sampled packages from 1,938 to 1,587 and
   effect from 108 to 107, with no report at a new location anywhere; zod,
   excalidraw, the `.d.ts` entries and the oracle are unchanged.
+  - **An object member fits an interface member typed as a union.**
+    `struct_assignable_named_rec` recursed for a member whose target is a
+    class or interface and sent anything else to the resolver-free
+    relation, so `scope: { read, edit }` failed against `scope: IObjScope |
+    undefined` and passed against `scope: IObjScope` (univer's permission
+    payloads, 20 reports). A union on either side is now distributed member
+    by member through the same recursion; that can only accept more.
+  - **`Array.isArray` splits off a class or interface member** whose whole
+    heritage is known and never reaches `Array` / `ReadonlyArray`, so
+    `if (!Array.isArray(values)) return values` narrows `number[] |
+    ErrorValueObject` (24 reports). A lib type, an unresolved import or a
+    mixin base still abstains, since any of them might extend `Array`.
   - **A defaulted parameter accepts `undefined`** from the caller, because
     `undefined` is what triggers the default (univer's `parseBool(v,
     options)` with `options?:`). `null` does not trigger it and is still
