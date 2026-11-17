@@ -218,12 +218,12 @@ pub fn analyze_purity_with(
       | Const(
         @ast.TsBinding::Ident(name),
         _,
-        @ast.TsExpr::ArrowFunc(_, _, body, _)
+        @ast.TsExpr::ArrowFunc(_, _, body, _),
       )
       | Var(
         @ast.TsBinding::Ident(name),
         _,
-        @ast.TsExpr::ArrowFunc(_, _, body, _)
+        @ast.TsExpr::ArrowFunc(_, _, body, _),
       ) =>
         match body {
           ArrowBlock(b) => funcs[name] = b

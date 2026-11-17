@@ -1340,14 +1340,10 @@ async fn emit_mbt2ts_pkg_command_bins(
     if target != "" {
       args.push(target)
     }
-    let (exit_code, output) = @process.collect_output_merged(
-      "moon",
-      args,
-      cwd=".",
-    )
+    let (exit_code, output) = run_collect_merged("moon", args, cwd=".")
     if exit_code != 0 {
       println("Error: --pkg could not build command \{command.name}")
-      println(output.text())
+      println(output)
       return false
     }
     let built_js_path = main_join_path(
@@ -1595,14 +1591,14 @@ async fn emit_typescript_npm_package_from_project(
     )
     return false
   }
-  let (info_exit, info_output) = @process.collect_output_merged(
+  let (info_exit, info_output) = run_collect_merged(
     "moon",
     ["-C", module_root, "info"],
     cwd=".",
   )
   if info_exit != 0 {
     println("Error: moon info failed while preparing --pkg")
-    println(info_output.text())
+    println(info_output)
     return false
   }
   let mbti_path = main_join_path(source_root, "pkg.generated.mbti")

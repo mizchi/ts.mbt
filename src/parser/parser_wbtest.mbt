@@ -195,7 +195,7 @@ test "parser: parse for stmt" {
       Some(Let(@ast.TsBinding::Ident("i"), Any, IntLit(0))),
       Some(BinOp(BinLt, Var("i"), IntLit(10))),
       update,
-      body
+      body,
     ) => {
       match update {
         Some(Assign("i", BinOp(Add, Var("i"), IntLit(1))))
@@ -219,7 +219,7 @@ test "parser: parse for stmt with uninitialized let" {
       Some(Let(@ast.TsBinding::Ident("i"), Any, Var("__ts_no_init__"))),
       Some(BinOp(BinLt, Var("i"), IntLit(10))),
       _,
-      body
+      body,
     ) => assert_eq(body.stmts.length(), 1)
     _ => fail("unexpected result: \{stmt}")
   }
@@ -277,7 +277,7 @@ test "parser: parse for-of stmt" {
       @ast.TsBinding::Ident("x"),
       Any,
       Var("arr"),
-      body
+      body,
     ) => assert_eq(body.stmts.length(), 1)
     _ => fail("unexpected result: \{stmt}")
   }
@@ -293,7 +293,7 @@ test "parser: parse for-await-of stmt" {
       @ast.TsBinding::Ident("x"),
       Any,
       ArrayLit(_),
-      body
+      body,
     ) => assert_eq(body.stmts.length(), 1)
     _ => fail("unexpected result: \{stmt}")
   }
@@ -334,7 +334,7 @@ test "parser: parse for-in stmt" {
       @ast.TsBinding::Ident("k"),
       Any,
       Var("obj"),
-      body
+      body,
     ) => assert_eq(body.stmts.length(), 1)
     _ => fail("unexpected result: \{stmt}")
   }
@@ -350,7 +350,7 @@ test "parser: parse for-in let identifier" {
       @ast.TsBinding::Ident("let"),
       Any,
       Var("obj"),
-      body
+      body,
     ) => assert_eq(body.stmts.length(), 0)
     _ => fail("unexpected result: \{stmt}")
   }
@@ -400,7 +400,7 @@ test "parser: parse try/catch/finally stmt" {
       try_block,
       Some(@ast.TsBinding::Ident("e")),
       Some(catch_block),
-      Some(finally_block)
+      Some(finally_block),
     ) => {
       assert_eq(try_block.stmts.length(), 1)
       assert_eq(catch_block.stmts.length(), 1)
@@ -722,7 +722,7 @@ test "parser: parse mapped type with `as` key remap" {
       Union([Literal("a"), Literal("b")]),
       TemplateLiteralType(_, _),
       Number,
-      false
+      false,
     ) => ()
     other => fail("expected MappedTypeRemap, got \{other}")
   }
@@ -740,7 +740,7 @@ test "parser: parse mapped type with `as` filtering via never" {
       Union(_),
       Conditional(_, _, Never, Named("K")),
       Number,
-      false
+      false,
     ) => ()
     other =>
       fail("expected MappedTypeRemap with conditional remap, got \{other}")
@@ -4135,8 +4135,8 @@ test "parser: parse non-null assertion before property access" {
     Expr(
       AssignExpr(
         "link",
-        PropAccess(@ast.TsExpr::NonNull(Var("stack")), "value")
-      )
+        PropAccess(@ast.TsExpr::NonNull(Var("stack")), "value"),
+      ),
     ) => ()
     _ => fail("expected property access after non-null assertion")
   }
@@ -4152,8 +4152,8 @@ test "parser: parse non-null assertion after call before compound assign" {
       CompoundAssignExpr(
         PropAccess(@ast.TsExpr::NonNull(Call("getActiveSub", _)), "flags"),
         BitAndAssign,
-        _
-      )
+        _,
+      ),
     ) => ()
     _ => fail("expected compound assign on call()!.prop")
   }
@@ -4439,7 +4439,7 @@ test "parser: retain optional callable parameter syntax" {
           Literal("f"),
           CallableMeta(Func([Union([String_, Undefined])], Void), [true]),
         ),
-      ]
+      ],
     ) => ()
     _ => fail("expected object method optionality to remain in the AST")
   }
@@ -6155,7 +6155,7 @@ test "parser: parse asserted equality expression" {
     BinOp(
       BinEq,
       @ast.TsExpr::As(PropAccess(Var("this"), "_state"), _),
-      PropAccess(Var("AutorunState"), "stale")
+      PropAccess(Var("AutorunState"), "stale"),
     ) => ()
     expr => fail("expected asserted equality, got \{expr}")
   }
@@ -6189,7 +6189,7 @@ test "parser: parse function type with destructured parameter" {
   match module_.values[0].type_ {
     @ast.TsType::CallableMeta(
       @ast.TsType::Func(params, @ast.TsType::String_),
-      [false, true]
+      [false, true],
     ) => assert_eq(params.length(), 2)
     other => fail("expected optional function type metadata, got \{other}")
   }
@@ -8625,7 +8625,7 @@ test "parser: TS1002 in a declare module body is reported once in .ts and .tsx" 
 test "parser: destructuring detection through nested literals" {
   match parse_expr_from("[{ k: [[p, q] = pair] }]") {
     ArrayLit(
-      [ObjectLit([("k", ArrayLit([AssignPattern(binding, Var("pair"))]))])]
+      [ObjectLit([("k", ArrayLit([AssignPattern(binding, Var("pair"))]))])],
     ) =>
       match binding {
         @ast.TsBinding::Array(_) => ()

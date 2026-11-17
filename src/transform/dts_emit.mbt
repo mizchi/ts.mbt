@@ -578,7 +578,7 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
     GenericFunc(
       type_params,
       type_param_bounds,
-      CallableMeta(Func(params, ret), optional_params)
+      CallableMeta(Func(params, ret), optional_params),
     ) =>
       emit_callable_type(
         buf, type_params, type_param_bounds, params, optional_params, ret, false,
@@ -587,7 +587,7 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
     GenericFunc(
       type_params,
       type_param_bounds,
-      Constructor(params, ret, is_abstract)
+      Constructor(params, ret, is_abstract),
     ) =>
       emit_callable_type(
         buf,
@@ -602,7 +602,7 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
     GenericFunc(
       type_params,
       type_param_bounds,
-      CallableMeta(Constructor(params, ret, is_abstract), optional_params)
+      CallableMeta(Constructor(params, ret, is_abstract), optional_params),
     ) =>
       emit_callable_type(
         buf, type_params, type_param_bounds, params, optional_params, ret, true,

@@ -1407,7 +1407,7 @@ fn find_func_decl_from_stmts(
       | @ast.TsStmt::Const(
         @ast.TsBinding::Ident(local_name),
         declared_type,
-        expr
+        expr,
       )
       | @ast.TsStmt::Var(@ast.TsBinding::Ident(local_name), declared_type, expr) =>
         if local_name == name {

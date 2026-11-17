@@ -376,7 +376,7 @@ fn classify_iife_body_stmt(
     PropAssign(
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
       marker_key,
-      @ast.TsExpr::Var(accessor_tmp)
+      @ast.TsExpr::Var(accessor_tmp),
     ) if n == class_name &&
       (marker_key.has_prefix("@@get:") || marker_key.has_prefix("@@set:")) => {
       let (kind, prop_name) = if marker_key.has_prefix("@@get:") {
@@ -400,7 +400,7 @@ fn classify_iife_body_stmt(
     PropAssign(
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
       method_name,
-      @ast.TsExpr::FuncExpr(f)
+      @ast.TsExpr::FuncExpr(f),
     ) =>
       if n == class_name {
         Method(method_decl_from_func(method_name, f, false))
@@ -426,10 +426,10 @@ fn classify_iife_body_stmt(
     PropAssign(
       @ast.TsExpr::PropAccess(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-        _
+        _,
       ),
       _,
-      _
+      _,
     ) => if n == class_name { Skipped } else { Extra(stmt) }
     // `ClassName.METHOD.<meta> = …;` (chained static metadata).
     // When `n` is some other variable, the chained prop-assign is a
@@ -483,7 +483,7 @@ fn classify_iife_body_stmt(
       }
     // `Object.setPrototypeOf(ClassName.prototype, _Super.prototype)`
     Expr(
-      @ast.TsExpr::MethodCall(@ast.TsExpr::Var("Object"), "setPrototypeOf", _)
+      @ast.TsExpr::MethodCall(@ast.TsExpr::Var("Object"), "setPrototypeOf", _),
     ) =>
       match super_param {
         Some(_) => Skipped
@@ -504,7 +504,7 @@ fn classify_iife_body_stmt(
           @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_name), "prototype"),
           @ast.TsExpr::StringLit(prop_name),
           @ast.TsExpr::ObjectLit(descriptor),
-        ]
+        ],
       )
       | @ast.TsExpr::CallExpr(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Object"), "defineProperty"),
@@ -512,8 +512,8 @@ fn classify_iife_body_stmt(
           @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_name), "prototype"),
           @ast.TsExpr::StringLit(prop_name),
           @ast.TsExpr::ObjectLit(descriptor),
-        ]
-      )
+        ],
+      ),
     ) =>
       if recv_name == class_name {
         let accessors : Array[@ast.TsClassMethodDecl] = []
@@ -948,7 +948,7 @@ fn rewrite_super_expr(expr : @ast.TsExpr, sp : String) -> @ast.TsExpr {
     BinOp(
       @ast.TsBinOp::Or,
       @ast.TsExpr::BinOp(@ast.TsBinOp::And, _, inner_apply),
-      @ast.TsExpr::Var("this")
+      @ast.TsExpr::Var("this"),
     ) => {
       let rewritten = rewrite_super_expr(inner_apply, sp)
       match rewritten {
