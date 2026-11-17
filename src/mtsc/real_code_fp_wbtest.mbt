@@ -891,3 +891,19 @@ test "a static factory assignment narrows a nullable binding" {
     ["function badAny > call `isBool`: object is possibly `undefined`"],
   )
 }
+
+///|
+/// `Array.isArray(x)` splits a union whose non-array member is a class or
+/// interface that never extends `Array`. The split abstained on any named
+/// member, so univer's `number[] | ErrorValueObject` stayed whole after
+/// `if (!Array.isArray(values)) return values;` (24 reports).
+test "Array.isArray splits off a class member" {
+  assert_eq(
+    issue_lines(
+      "class ErrorValue { readonly code = 1; }\ndeclare function values(): number[] | ErrorValue;\ndeclare function useNumbers(xs: number[]): number;\nfunction okEarly() { const v = values(); if (!Array.isArray(v)) { return 0; } return useNumbers(v); }\nfunction okFalseSide() { const v = values(); if (!Array.isArray(v)) { return v.code; } return 0; }\nfunction badWrongSide() { const v = values(); if (Array.isArray(v)) { return v.code; } return 0; }",
+    ),
+    [
+      "function badWrongSide > PropAccess `.code`: property `code` does not exist on `number[]`",
+    ],
+  )
+}

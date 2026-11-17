@@ -256,6 +256,65 @@
       "claims": []
     },
     {
+      "case": "controlFlow/arrayIsArraySplitsClassMembers.ts",
+      "area": "controlFlow",
+      "name": "arrayIsArraySplitsClassMembers",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2339,
+        2345
+      ],
+      "baseline": "baselines/arrayIsArraySplitsClassMembers.errors.txt",
+      "claims": [
+        {
+          "name": "okEarlyReturn",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okThenBranch",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okFalseSideIsTheClass",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okInterfaceMember",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okArraySubclass",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 21
+        },
+        {
+          "name": "badNoGuard",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badWrongSide",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 24
+        }
+      ]
+    },
+    {
       "case": "controlFlow/assignmentInConditionAndNormalizedArrayLiterals.ts",
       "area": "controlFlow",
       "name": "assignmentInConditionAndNormalizedArrayLiterals",

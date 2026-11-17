@@ -1643,6 +1643,12 @@ fn array_is_array_split(
       | BooleanLiteral(_)
       | Func(_, _)
       | Object(_) => others.push(p)
+      // A class or interface whose whole heritage is known and never reaches
+      // `Array` cannot be an array. univer's helpers return
+      // `number[] | ErrorValueObject` and test `Array.isArray(values)`, and
+      // the class member made the split abstain.
+      Named(n) | Applied(n, _) | Struct(n, _) if named_never_array(resolver, n) =>
+        others.push(p)
       _ => return None
     }
   }
@@ -1650,6 +1656,49 @@ fn array_is_array_split(
     return None
   }
   Some((union_of(arrays), union_of(others)))
+}
+
+///|
+/// Whether a class or interface named `n` can never be an array: every
+/// `extends` edge, through both declaration kinds since they merge, is
+/// known, and none reaches `Array` or `ReadonlyArray`. A name this
+/// resolver does not declare (a lib type, an unresolved import) or a mixin
+/// base answers `false`, which keeps the caller's abstention.
+fn named_never_array(resolver : Resolver, n : String) -> Bool {
+  let seen : Map[String, Unit] = Map([])
+  let stack = [n]
+  while stack.pop() is Some(x) {
+    if seen.contains(x) {
+      continue
+    }
+    seen[x] = ()
+    if x == "Array" || x == "ReadonlyArray" {
+      return false
+    }
+    let cls = resolver.classes.get(x)
+    let iface = resolver.interfaces.get(x)
+    if cls is None && iface is None {
+      return false
+    }
+    match cls {
+      Some(c) =>
+        for b in c.base_names {
+          if b == "<expr-base>" {
+            return false
+          }
+          stack.push(b)
+        }
+      None => ()
+    }
+    match iface {
+      Some(i) =>
+        for b in i.extends_names {
+          stack.push(b)
+        }
+      None => ()
+    }
+  }
+  true
 }
 
 ///|
