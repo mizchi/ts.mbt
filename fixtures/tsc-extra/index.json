@@ -2093,128 +2093,176 @@
         {
           "name": "okTupleRestSelectsSecond",
           "kind": "ok",
-          "fromLine": 22,
-          "toLine": 22
+          "fromLine": 35,
+          "toLine": 35
         },
         {
           "name": "okTupleRestSelectsFirst",
           "kind": "ok",
-          "fromLine": 23,
-          "toLine": 23
-        },
-        {
-          "name": "okOptionalSlotOmitted",
-          "kind": "ok",
-          "fromLine": 24,
-          "toLine": 24
-        },
-        {
-          "name": "okOptionalSlotGiven",
-          "kind": "ok",
-          "fromLine": 25,
-          "toLine": 25
-        },
-        {
-          "name": "okArrayRestInTupleEmpty",
-          "kind": "ok",
-          "fromLine": 26,
-          "toLine": 26
-        },
-        {
-          "name": "okArrayRestInTupleMany",
-          "kind": "ok",
-          "fromLine": 27,
-          "toLine": 27
-        },
-        {
-          "name": "okArrayRestInTupleSecond",
-          "kind": "ok",
-          "fromLine": 28,
-          "toLine": 28
-        },
-        {
-          "name": "okNestedTupleRestFirst",
-          "kind": "ok",
-          "fromLine": 29,
-          "toLine": 29
-        },
-        {
-          "name": "okNestedTupleRestSecond",
-          "kind": "ok",
-          "fromLine": 30,
-          "toLine": 30
-        },
-        {
-          "name": "okMiddleRestPrefixRejects",
-          "kind": "ok",
-          "fromLine": 31,
-          "toLine": 31
-        },
-        {
-          "name": "okAliasArgument",
-          "kind": "ok",
-          "fromLine": 32,
-          "toLine": 32
-        },
-        {
-          "name": "okAliasArgumentResolvedParam",
-          "kind": "ok",
-          "fromLine": 33,
-          "toLine": 33
-        },
-        {
-          "name": "okObjectAliasArgument",
-          "kind": "ok",
-          "fromLine": 34,
-          "toLine": 35
-        },
-        {
-          "name": "badTupleRestSelectsFirst",
-          "kind": "bad",
           "fromLine": 36,
           "toLine": 36
         },
         {
-          "name": "badOptionalSlotOmitted",
-          "kind": "bad",
+          "name": "okOptionalSlotOmitted",
+          "kind": "ok",
           "fromLine": 37,
           "toLine": 37
         },
         {
-          "name": "badArrayRestInTupleSecond",
-          "kind": "bad",
+          "name": "okOptionalSlotGiven",
+          "kind": "ok",
           "fromLine": 38,
           "toLine": 38
         },
         {
-          "name": "badNestedTupleRestSecond",
-          "kind": "bad",
+          "name": "okArrayRestInTupleEmpty",
+          "kind": "ok",
           "fromLine": 39,
           "toLine": 39
         },
         {
-          "name": "badMiddleRestPrefixRejects",
-          "kind": "bad",
+          "name": "okArrayRestInTupleMany",
+          "kind": "ok",
           "fromLine": 40,
           "toLine": 40
         },
         {
-          "name": "badAliasArgument",
-          "kind": "bad",
+          "name": "okArrayRestInTupleSecond",
+          "kind": "ok",
           "fromLine": 41,
           "toLine": 41
         },
         {
-          "name": "badAliasArgumentResolvedParam",
-          "kind": "bad",
+          "name": "okNestedTupleRestFirst",
+          "kind": "ok",
           "fromLine": 42,
           "toLine": 42
         },
         {
+          "name": "okNestedTupleRestSecond",
+          "kind": "ok",
+          "fromLine": 43,
+          "toLine": 43
+        },
+        {
+          "name": "okMiddleRestPrefixRejects",
+          "kind": "ok",
+          "fromLine": 44,
+          "toLine": 44
+        },
+        {
+          "name": "okAliasArgument",
+          "kind": "ok",
+          "fromLine": 45,
+          "toLine": 45
+        },
+        {
+          "name": "okAliasArgumentResolvedParam",
+          "kind": "ok",
+          "fromLine": 46,
+          "toLine": 46
+        },
+        {
+          "name": "okObjectAliasArgument",
+          "kind": "ok",
+          "fromLine": 47,
+          "toLine": 47
+        },
+        {
+          "name": "okTupleSpreadSelectsFirst",
+          "kind": "ok",
+          "fromLine": 48,
+          "toLine": 48
+        },
+        {
+          "name": "okArgumentThenTupleSpread",
+          "kind": "ok",
+          "fromLine": 49,
+          "toLine": 49
+        },
+        {
+          "name": "okArraySpreadSelectsRest",
+          "kind": "ok",
+          "fromLine": 50,
+          "toLine": 50
+        },
+        {
+          "name": "okAliasPairRejectsGeneric",
+          "kind": "ok",
+          "fromLine": 51,
+          "toLine": 51
+        },
+        {
+          "name": "okAliasPairSelectsGeneric",
+          "kind": "ok",
+          "fromLine": 52,
+          "toLine": 53
+        },
+        {
+          "name": "badTupleRestSelectsFirst",
+          "kind": "bad",
+          "fromLine": 54,
+          "toLine": 54
+        },
+        {
+          "name": "badOptionalSlotOmitted",
+          "kind": "bad",
+          "fromLine": 55,
+          "toLine": 55
+        },
+        {
+          "name": "badArrayRestInTupleSecond",
+          "kind": "bad",
+          "fromLine": 56,
+          "toLine": 56
+        },
+        {
+          "name": "badNestedTupleRestSecond",
+          "kind": "bad",
+          "fromLine": 57,
+          "toLine": 57
+        },
+        {
+          "name": "badMiddleRestPrefixRejects",
+          "kind": "bad",
+          "fromLine": 58,
+          "toLine": 58
+        },
+        {
+          "name": "badAliasArgument",
+          "kind": "bad",
+          "fromLine": 59,
+          "toLine": 59
+        },
+        {
+          "name": "badAliasArgumentResolvedParam",
+          "kind": "bad",
+          "fromLine": 60,
+          "toLine": 60
+        },
+        {
           "name": "badObjectAliasArgument",
           "kind": "bad",
-          "fromLine": 43,
-          "toLine": 44
+          "fromLine": 61,
+          "toLine": 61
+        },
+        {
+          "name": "badTupleSpreadSelectsFirst",
+          "kind": "bad",
+          "fromLine": 62,
+          "toLine": 62
+        },
+        {
+          "name": "badAliasPairRejectsGeneric",
+          "kind": "bad",
+          "fromLine": 63,
+          "toLine": 63
+        },
+        {
+          "name": "badAliasPairSelectsGeneric",
+          "kind": "bad",
+          "fromLine": 64,
+          "toLine": 65
         }
       ]
     },

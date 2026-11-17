@@ -7706,6 +7706,34 @@ fn method_declaration_count(
 }
 
 ///|
+/// The argument types overload selection compares, one per argument. A
+/// spread of a fixed-length tuple (`b.m(...xs)` with `xs: [string, number]`)
+/// is that many arguments, which is what a tuple-typed rest parameter
+/// expands to (`expand_tuple_rest_params`), so the two line up. Any other
+/// spread stays one entry, as before.
+fn overload_arg_types(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for a in args {
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(infer_expr(env, resolver, inner)) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for e in elems {
+              out.push(e)
+            }
+          _ => out.push(infer_expr(env, resolver, a))
+        }
+      _ => out.push(infer_expr(env, resolver, a))
+    }
+  }
+  out
+}
+
+///|
 fn Resolver::resolve_method_overload(
   self : Resolver,
   recv : @ast.TsType,
@@ -7770,10 +7798,13 @@ fn Resolver::resolve_method_overload(
       let binders = erase.keys().collect()
       let solved : Map[String, @ast.TsType] = Map([])
       for i in 0..<arg_types.length() {
+        // From the RESOLVED argument: `a: N` with `type N = number[]` gives
+        // `T` nothing to bind from as `Named("N")`, so `T` stayed `any` and
+        // `m<T>(a: T[], b: T[])` accepted a `number[]` and a `string[]`.
         infer_param_bindings(
           binders,
           overload_param_at(params, i),
-          widen_literal_deep(arg_types[i]),
+          widen_literal_deep(self.unwrap(arg_types[i])),
           solved,
           false,
         )
@@ -12557,10 +12588,7 @@ fn infer_expr_inner(
         // propagation, which sees this same node.
         PropAccess(recv, meth) | OptionalChain(PropAccess(recv, meth)) => {
           let recv_ty = infer_expr(env, resolver, recv)
-          let arg_types : Array[@ast.TsType] = []
-          for a in args {
-            arg_types.push(infer_expr(env, resolver, a))
-          }
+          let arg_types = overload_arg_types(env, resolver, args)
           let pruned = prune_nullish(resolver, recv_ty)
           match resolver.resolve_method_overload(pruned, meth, arg_types) {
             Some((params, ret)) =>
@@ -12876,10 +12904,7 @@ fn infer_expr_inner(
       // `lookup_method_sig` below only sees the first overload, so try the
       // full set first.
       let pruned_recv = prune_nullish(resolver, recv_ty)
-      let arg_types : Array[@ast.TsType] = []
-      for a in args {
-        arg_types.push(infer_expr(env, resolver, a))
-      }
+      let arg_types = overload_arg_types(env, resolver, args)
       match resolver.resolve_method_overload(pruned_recv, meth, arg_types) {
         Some((params, ret)) =>
           return substitute_this_type(
