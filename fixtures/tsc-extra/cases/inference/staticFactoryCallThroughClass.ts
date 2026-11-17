@@ -15,6 +15,7 @@ class BaseValue { isNull(): boolean { return false; } isBool(): boolean { return
 class NumberValue extends BaseValue { static create(n: number): NumberValue { return new NumberValue(); } }
 declare const anything: any;
 declare const AnyCtor: any;
+declare class MaybeFactory { static make(): string | void; }
 
 export function okFactoryNarrowsAfterIf(v: Nullable<BaseValue>) { let w = v; if (w == null || w.isNull()) { w = NumberValue.create(0); } return w.isBool(); }
 export function okFactoryInCallback(xs: Nullable<BaseValue>[]) { xs.forEach((v) => { let w = v; if (w == null) { w = NumberValue.create(1); } w.isBool(); }); }
@@ -25,3 +26,4 @@ export function okFactoryInitializer() { const n: BaseValue = NumberValue.create
 export function badFactoryMismatch() { const s: string = NumberValue.create(3); return s; }
 export function badAnyAssignmentKeepsDeclared(v: BaseValue | undefined) { v = anything; return v.isBool(); }
 export function badReadBeforeFactory() { let b = null; const z = b.isBool(); b = NumberValue.create(5); return z; }
+export function badVoidReturningFactory(x: string | undefined) { x = MaybeFactory.make(); return x.length; }

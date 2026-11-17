@@ -1,15 +1,16 @@
-typeGuardOnPathAndStaticMethod.ts(27,83): error TS2322: Type 'undefined' is not assignable to type 'number'.
-typeGuardOnPathAndStaticMethod.ts(28,92): error TS2322: Type 'undefined' is not assignable to type 'number'.
-typeGuardOnPathAndStaticMethod.ts(28,96): error TS18048: 'props' is possibly 'undefined'.
-typeGuardOnPathAndStaticMethod.ts(29,85): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(29,83): error TS2322: Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(30,92): error TS2322: Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(30,96): error TS18048: 'props' is possibly 'undefined'.
+typeGuardOnPathAndStaticMethod.ts(31,85): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
   Type 'undefined' is not assignable to type 'number'.
-typeGuardOnPathAndStaticMethod.ts(30,46): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(32,46): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
   Type 'undefined' is not assignable to type 'number'.
-typeGuardOnPathAndStaticMethod.ts(31,79): error TS18048: 'loose' is possibly 'undefined'.
-typeGuardOnPathAndStaticMethod.ts(32,90): error TS18048: 'looseUnknown' is possibly 'undefined'.
+typeGuardOnPathAndStaticMethod.ts(33,79): error TS18048: 'loose' is possibly 'undefined'.
+typeGuardOnPathAndStaticMethod.ts(34,90): error TS18048: 'looseUnknown' is possibly 'undefined'.
+typeGuardOnPathAndStaticMethod.ts(35,94): error TS18048: 'looseUnknown' is possibly 'undefined'.
 
 
-==== typeGuardOnPathAndStaticMethod.ts (7 errors) ====
+==== typeGuardOnPathAndStaticMethod.ts (8 errors) ====
     // A type guard narrows its subject whatever spelling reaches it: a static
     // method called through its class, and a subject that is a property path
     // or an optional chain rather than a bare binding. A chain whose guarded
@@ -28,6 +29,8 @@ typeGuardOnPathAndStaticMethod.ts(32,90): error TS18048: 'looseUnknown' is possi
     declare const loose: { p?: any; q: number } | undefined;
     type Top = unknown;
     declare function acceptsTop(x: unknown): x is Top;
+    type TopOrString = Top | string;
+    declare function acceptsTopOrString(x: unknown): x is TopOrString;
     declare const looseUnknown: { p: unknown; q: number } | undefined;
     
     function okStaticOnVariable(x: number | undefined) { let t = 0; if (Tools.isDefine(x)) { t = x; } }
@@ -57,5 +60,8 @@ typeGuardOnPathAndStaticMethod.ts(32,90): error TS18048: 'looseUnknown' is possi
 !!! error TS18048: 'loose' is possibly 'undefined'.
     function badAliasedUnknownProvesNothing() { if (acceptsTop(looseUnknown?.p)) { const n = looseUnknown.q; } }
                                                                                              ~~~~~~~~~~~~
+!!! error TS18048: 'looseUnknown' is possibly 'undefined'.
+    function badAliasedUnionWithUnknown() { if (acceptsTopOrString(looseUnknown?.p)) { const n = looseUnknown.q; } }
+                                                                                                 ~~~~~~~~~~~~
 !!! error TS18048: 'looseUnknown' is possibly 'undefined'.
     

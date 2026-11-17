@@ -19,6 +19,8 @@ declare function accepts(x: unknown): x is unknown;
 declare const loose: { p?: any; q: number } | undefined;
 type Top = unknown;
 declare function acceptsTop(x: unknown): x is Top;
+type TopOrString = Top | string;
+declare function acceptsTopOrString(x: unknown): x is TopOrString;
 declare const looseUnknown: { p: unknown; q: number } | undefined;
 
 function okStaticOnVariable(x: number | undefined) { let t = 0; if (Tools.isDefine(x)) { t = x; } }
@@ -33,3 +35,4 @@ function badSiblingMember(props?: P) { let t = 0; if (Tools.isDefine(props?.top)
 function badUnguarded(props: P) { let t = 0; t = props.top; }
 function badUnknownTargetProvesNothing() { if (accepts(loose?.p)) { const n = loose.q; } }
 function badAliasedUnknownProvesNothing() { if (acceptsTop(looseUnknown?.p)) { const n = looseUnknown.q; } }
+function badAliasedUnionWithUnknown() { if (acceptsTopOrString(looseUnknown?.p)) { const n = looseUnknown.q; } }

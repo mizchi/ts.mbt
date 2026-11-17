@@ -1,18 +1,21 @@
-inheritedOverloadSetOnGenericBaseClass.ts(29,75): error TS2554: Expected 0 arguments, but got 1.
-inheritedOverloadSetOnGenericBaseClass.ts(30,71): error TS2322: Type 'Obs<string>' is not assignable to type 'Obs<number>'.
+inheritedOverloadSetOnGenericBaseClass.ts(36,75): error TS2554: Expected 0 arguments, but got 1.
+inheritedOverloadSetOnGenericBaseClass.ts(37,71): error TS2322: Type 'Obs<string>' is not assignable to type 'Obs<number>'.
   Type 'string' is not assignable to type 'number'.
-inheritedOverloadSetOnGenericBaseClass.ts(31,68): error TS2322: Type 'Obs<string>' is not assignable to type 'Obs<number>'.
+inheritedOverloadSetOnGenericBaseClass.ts(38,68): error TS2322: Type 'Obs<string>' is not assignable to type 'Obs<number>'.
   Type 'string' is not assignable to type 'number'.
-inheritedOverloadSetOnGenericBaseClass.ts(32,87): error TS2554: Expected 0-2 arguments, but got 3.
+inheritedOverloadSetOnGenericBaseClass.ts(39,87): error TS2554: Expected 0-2 arguments, but got 3.
+inheritedOverloadSetOnGenericBaseClass.ts(40,69): error TS2322: Type 'number' is not assignable to type 'string'.
+inheritedOverloadSetOnGenericBaseClass.ts(41,68): error TS2322: Type 'string' is not assignable to type 'number'.
 
 
-==== inheritedOverloadSetOnGenericBaseClass.ts (4 errors) ====
+==== inheritedOverloadSetOnGenericBaseClass.ts (6 errors) ====
     // A method overload set declared on a generic base class is inherited
     // whole: rxjs's `declare class Subject<T> extends Observable<T>` declares no
     // `pipe`, and `subject.pipe(take(1))` picks `pipe<A>(op1)` from `Observable`,
     // with `T` taken from `Subject<number>`. The return type follows the selected
     // overload, on the base and through the subclass alike. A subclass that
-    // declares the method once hides the base's whole set. (`last` makes `Obs`
+    // declares the method once hides the base's whole set, and so does an own
+    // property of that name. A method's own `<T>` shadows the class's `T`. (`last` makes `Obs`
     // covariant in `T`, as rxjs's `Observable` is through `operator`; without a
     // member that uses `T` outside a method, tsc relates `Obs<string>` and
     // `Obs<number>` structurally and accepts the return-type mismatches.)
@@ -26,6 +29,9 @@ inheritedOverloadSetOnGenericBaseClass.ts(32,87): error TS2554: Expected 0-2 arg
     }
     declare class Sub<T> extends Obs<T> { next(v: T): void }
     declare class Narrow<T> extends Obs<T> { pipe(): Obs<T> }
+    declare class HiddenByProperty<T> extends Obs<T> { pipe: any }
+    declare class Box<T> { pick<T>(x: T): T; pick(x: boolean): boolean; }
+    declare class Shadow<T> { pick<T>(x: T): T; pick(x: string): number; }
     declare function take<T>(n: number): Op<T, T>;
     declare function toStr(): Op<number, string>;
     
@@ -33,6 +39,9 @@ inheritedOverloadSetOnGenericBaseClass.ts(32,87): error TS2554: Expected 0-2 arg
     export function okInheritedTwo(s: Sub<number>) { return s.pipe(take(1), take(2)); }
     export class OkFieldReceiver { private readonly a = new Sub<number>(); m() { return this.a.pipe(take(1)); } }
     export function okInheritedReturnType(s: Sub<number>): Obs<string> { return s.pipe(toStr()); }
+    export function okPropertyHidesTheSet(s: HiddenByProperty<number>) { const x: string = s.pipe(take(1)); return x; }
+    export function okMethodBinderShadowsClass(b: Box<string>) { const n: number = b.pick(1); return n; }
+    export function okShadowSelectsGeneric(b: Shadow<number>) { const s: string = b.pick("a"); return s; }
     export function okDirectReturnType(s: Obs<number>): Obs<string> { return s.pipe(toStr()); }
     
     export function badOverrideHidesTheSet(s: Narrow<number>) { return s.pipe(take(1)); }
@@ -49,4 +58,10 @@ inheritedOverloadSetOnGenericBaseClass.ts(32,87): error TS2554: Expected 0-2 arg
     export function badTooManyOperators(s: Sub<number>) { return s.pipe(take(1), take(2), take(3)); }
                                                                                           ~~~~~~~
 !!! error TS2554: Expected 0-2 arguments, but got 3.
+    export function badMethodBinderShadowsClass(b: Box<string>) { const s: string = b.pick(1); return s; }
+                                                                        ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    export function badShadowSelectsGeneric(b: Shadow<number>) { const n: number = b.pick("a"); return n; }
+                                                                       ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
     

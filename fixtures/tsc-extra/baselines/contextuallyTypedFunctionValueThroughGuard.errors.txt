@@ -1,12 +1,14 @@
-contextuallyTypedFunctionValueThroughGuard.ts(32,128): error TS2339: Property 'h' does not exist on type 'IRgb'.
-contextuallyTypedFunctionValueThroughGuard.ts(33,118): error TS2339: Property 'r' does not exist on type 'Color'.
+contextuallyTypedFunctionValueThroughGuard.ts(39,128): error TS2339: Property 'h' does not exist on type 'IRgb'.
+contextuallyTypedFunctionValueThroughGuard.ts(40,118): error TS2339: Property 'r' does not exist on type 'Color'.
   Property 'r' does not exist on type 'IHsl'.
-contextuallyTypedFunctionValueThroughGuard.ts(34,129): error TS2339: Property 'g' does not exist on type 'IHsl'.
-contextuallyTypedFunctionValueThroughGuard.ts(35,119): error TS2339: Property 'l' does not exist on type 'IRgb'.
-contextuallyTypedFunctionValueThroughGuard.ts(36,119): error TS2339: Property 'g' does not exist on type 'string'.
+contextuallyTypedFunctionValueThroughGuard.ts(41,129): error TS2339: Property 'g' does not exist on type 'IHsl'.
+contextuallyTypedFunctionValueThroughGuard.ts(42,119): error TS2339: Property 'l' does not exist on type 'IRgb'.
+contextuallyTypedFunctionValueThroughGuard.ts(43,119): error TS2339: Property 'g' does not exist on type 'string'.
+contextuallyTypedFunctionValueThroughGuard.ts(44,162): error TS2339: Property 'h' does not exist on type 'IRgb'.
+contextuallyTypedFunctionValueThroughGuard.ts(45,195): error TS18048: 'e' is possibly 'undefined'.
 
 
-==== contextuallyTypedFunctionValueThroughGuard.ts (5 errors) ====
+==== contextuallyTypedFunctionValueThroughGuard.ts (7 errors) ====
     // A function value takes its parameter types from the type it is assigned
     // to, wherever that type comes from: a variable annotation, an object
     // literal's member, an array element, a `return` against the function's
@@ -20,7 +22,9 @@ contextuallyTypedFunctionValueThroughGuard.ts(36,119): error TS2339: Property 'g
     // is the position least likely to show it, because the contextual check
     // usually runs there first. And the order matters the other way for a
     // literal's plain entries: `{ value: (x = "ok", x) }` reads `x` after the
-    // assignment, so the literal is judged with `x` as `string`.
+    // assignment, so the literal is judged with `x` as `string`. A function value
+    // in an arm of a conditional is checked under the condition's narrowing:
+    // `e === undefined ? … : (a) => e.begin` reads `e` as defined.
     
     interface IRgb { r: number; g: number }
     interface IHsl { h: number; l: number }
@@ -36,6 +40,11 @@ contextuallyTypedFunctionValueThroughGuard.ts(36,119): error TS2339: Property 'g
     export function okFunctionExpression() { const f: ToNumber = function (color) { if (isObject(color)) { if ("r" in color) { return color.g; } } return 0; }; return f; }
     export function okNestedObjectMember() { const o: { a: { f: ToNumber } } = { a: { f: (color) => { if (isObject(color)) { if ("r" in color) { return color.g; } } return 0; } } }; return o; }
     export function okAssignmentInsideObjectLiteral() { let x: string | number = 0; const y: { value: string } | { other: number } = { value: (x = "ok", x) }; return y; }
+    export function okConditionalEntry(flag: boolean) { const o: { f: ToNumber } = { f: flag ? (color) => { if (isObject(color)) { if ("r" in color) { return color.g; } } return 0; } : (color) => 0 }; return o; }
+    export function okConditionalBare(flag: boolean) { const f: ToNumber = flag ? (color) => { if (isObject(color)) { if ("r" in color) { return color.g; } } return 0; } : (color) => 0; return f; }
+    interface Emitter { begin: number; end(n: number): number }
+    interface Box<A> { a: A }
+    export function okConditionalArmUnderCondition() { const w = <A>(e: Emitter | undefined) => { const instrument: (attempt: Box<A>) => Box<A> = e === undefined ? (attempt) => attempt : (attempt) => { e.end(e.begin); return attempt; }; return instrument; }; return w; }
     export function okCallArgument() { take((color) => { if (isObject(color)) { if ("r" in color) { return color.g; } } return 0; }); }
     
     export function badAnnotatedArrow() { const f: ToNumber = (color) => { if (isObject(color)) { if ("r" in color) { return color.h; } } return 0; }; return f; }
@@ -54,4 +63,10 @@ contextuallyTypedFunctionValueThroughGuard.ts(36,119): error TS2339: Property 'g
     export function badFunctionExpression() { const f: ToNumber = function (color) { if (!isObject(color)) { return color.g; } return 0; }; return f; }
                                                                                                                           ~
 !!! error TS2339: Property 'g' does not exist on type 'string'.
+    export function badConditionalEntry(flag: boolean) { const o: { f: ToNumber } = { f: flag ? (color) => { if (isObject(color)) { if ("r" in color) { return color.h; } } return 0; } : (color) => 0 }; return o; }
+                                                                                                                                                                     ~
+!!! error TS2339: Property 'h' does not exist on type 'IRgb'.
+    export function badConditionalArmWrongSide() { const w = <A>(e: Emitter | undefined) => { const instrument: (attempt: Box<A>) => Box<A> = e !== undefined ? (attempt) => attempt : (attempt) => { e.end(1); return attempt; }; return instrument; }; return w; }
+                                                                                                                                                                                                      ~
+!!! error TS18048: 'e' is possibly 'undefined'.
     

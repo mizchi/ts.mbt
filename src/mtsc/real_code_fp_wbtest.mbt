@@ -891,3 +891,21 @@ test "a static factory assignment narrows a nullable binding" {
     ["function badAny > call `isBool`: object is possibly `undefined`"],
   )
 }
+
+///|
+/// The findings from the review of #300. An own property hides an
+/// inherited overload set. A function value in a conditional entry, or a
+/// conditional initializer, is checked in context only. An alias union
+/// holding `unknown` proves nothing about the `?.` receivers. And a static
+/// returning `string | void` is not a never-nullish assignment.
+test "review of #300: property hides a base set, conditional entries, void static" {
+  assert_eq(
+    issue_lines(
+      "declare class Base { m(x: string): number; m(x: number): string; }\ndeclare class D extends Base { m: any; }\nfunction okHides(d: D) { const s: string = d.m(\"x\"); return s; }\ninterface R { r: number; g: number }\ndeclare const isObject: (v: unknown) => v is object;\ntype F = (c: string | R) => number;\nfunction okCond(flag: boolean) { const o: { f: F } = { f: flag ? (c) => { if (isObject(c)) { if (\"r\" in c) { return c.g; } } return 0; } : (c) => 0 }; return o; }\ntype Top = unknown;\ntype TU = Top | string;\ndeclare function acc(x: unknown): x is TU;\ndeclare const lo: { p: unknown; q: number } | undefined;\nfunction badAliasUnion() { if (acc(lo?.p)) { return lo.q; } return 0; }\ndeclare class MF { static make(): string | void; }\nfunction badVoidStatic(x: string | undefined) { x = MF.make(); return x.length; }\ndeclare class Shadow<T> { pick<T>(x: T): T; pick(x: string): number; }\nfunction okShadow(b: Shadow<number>) { const s: string = b.pick(\"a\"); return s; }\ninterface Em { begin: number; end(n: number): number }\ninterface Bx<A> { a: A }\nfunction okArmNarrowed() { const w = <A>(e: Em | undefined) => { const i: (x: Bx<A>) => Bx<A> = e === undefined ? (x) => x : (x) => { e.end(e.begin); return x; }; return i; }; return w; }",
+    ),
+    [
+      "function badAliasUnion > PropAccess `.q`: object is possibly `undefined`",
+      "function badVoidStatic > PropAccess `.length`: object is possibly `undefined`",
+    ],
+  )
+}
