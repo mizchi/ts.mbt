@@ -12944,7 +12944,15 @@ fn infer_expr_inner(
     // check happens elsewhere (`check_call_args_in_expr`).
     Satisfies(inner, _) => infer_expr(env, resolver, inner)
     // `x!` — strip null / undefined from the operand's type.
-    NonNull(inner) => non_nullable(infer_expr(env, resolver, inner))
+    // `x!` removes `null`, `undefined` and `void` (probed: `string | void`
+    // asserts to `string`), and it applies to what an alias stands for.
+    // univer's `Nullable<T> = T | null | undefined | void` is the return
+    // type of most of its lookups, and `m.getValue(r)!` kept all three.
+    NonNull(inner) =>
+      narrow_remove(
+        non_nullable_resolved(resolver, infer_expr(env, resolver, inner)),
+        fn(t) { t is Void },
+      )
     // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
     OptionalChain(inner) => {
       // `a?.b` — infer the chain result, then widen with `undefined`

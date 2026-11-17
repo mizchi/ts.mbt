@@ -614,3 +614,19 @@ test "a public getter beside a protected setter is readable" {
     ],
   )
 }
+
+///|
+/// `x!` removes `null`, `undefined` and `void`, and it applies to what an
+/// alias stands for. univer's lookups return `Nullable<T> = T | null |
+/// undefined | void`, and `m.getValue(r)!` kept all three, so every read
+/// of the asserted value was "possibly undefined". Without `!` it still is.
+test "a non-null assertion strips an aliased nullish union" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\ninterface V { b: number }\ndeclare class M<T> { getValue(r: number): Nullable<T>; }\ndeclare const m: M<V>;\ndeclare const v: string | void;\nfunction okVoid() { const s: string = v!; }\nfunction okMethod() { const c = m.getValue(1)!; const n: number = c.b; }\nfunction badNoAssertion() { const c = m.getValue(1); const n = c.b; }",
+    ),
+    [
+      "function badNoAssertion > PropAccess `.b`: object is possibly `undefined`",
+    ],
+  )
+}

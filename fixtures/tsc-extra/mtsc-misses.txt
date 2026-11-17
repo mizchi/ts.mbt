@@ -16,3 +16,4 @@ arrowConstGuardOptionalParameters:badTooManyArguments  a module-level arrow `con
 intersectionMemberFromEveryConstituent:badMemberOfOtherBranch  a member missing from every constituent of a narrowed intersection is not reported; member existence abstains on intersection receivers
 declareClassRestOverloadsAndMergedRestMethod:badNoOverloadBoolean  a rest overload beside another overload merges to `...args: any[]`, so no constructor call against that class is judged
 declareClassRestOverloadsAndMergedRestMethod:badNoOverloadTwoNumbers  same merge: `...args: any[]` accepts any argument count and type
+nonNullAssertionStripsAliasedVoid:badOptionalMemberUnguarded  a member read through an optional property (`c.a.x`) is not judged; the strictNullChecks member check reads only a bare variable receiver
