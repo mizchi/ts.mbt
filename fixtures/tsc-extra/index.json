@@ -2,6 +2,89 @@
   "typescript": "7.1.0-dev.20261114.1",
   "cases": [
     {
+      "case": "classes/accessorHalvesCarryTheirOwnVisibility.ts",
+      "area": "classes",
+      "name": "accessorHalvesCarryTheirOwnVisibility",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2341,
+        2445
+      ],
+      "baseline": "baselines/accessorHalvesCarryTheirOwnVisibility.errors.txt",
+      "claims": [
+        {
+          "name": "OkSubclassReadsAndWrites",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 25
+        },
+        {
+          "name": "okReadPublicGetter",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "okReadInExpression",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "okDestructurePublicGetter",
+          "kind": "ok",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "okStaticRead",
+          "kind": "ok",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "badWriteProtectedSetter",
+          "kind": "bad",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badWritePrivateSetter",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "badCompoundWrite",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "badReadPrivatePair",
+          "kind": "bad",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "badStaticWrite",
+          "kind": "bad",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badProtectedFieldCompound",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 36
+        }
+      ]
+    },
+    {
       "case": "classes/accessorOverPropertyThroughMixinBase.ts",
       "area": "classes",
       "name": "accessorOverPropertyThroughMixinBase",
@@ -600,6 +683,130 @@
           "kind": "bad",
           "fromLine": 13,
           "toLine": 14
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/typeGuardFalseBranchOfAnyAndUnknown.ts",
+      "area": "controlFlow",
+      "name": "typeGuardFalseBranchOfAnyAndUnknown",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2339,
+        18046
+      ],
+      "baseline": "baselines/typeGuardFalseBranchOfAnyAndUnknown.errors.txt",
+      "claims": [
+        {
+          "name": "okAnyElseIsAny",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okAnyPathElseIsAny",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okUnionElseIsTheRest",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badUnknownElseIsUnknown",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badUnionElseWrongMember",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 19
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/typeGuardOnPathAndStaticMethod.ts",
+      "area": "controlFlow",
+      "name": "typeGuardOnPathAndStaticMethod",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        18048
+      ],
+      "baseline": "baselines/typeGuardOnPathAndStaticMethod.errors.txt",
+      "claims": [
+        {
+          "name": "okStaticOnVariable",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okStaticConcrete",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okFunctionOnPath",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okStaticOnPath",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okStaticOnChain",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okFunctionOnChain",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badElseOfPath",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badElseOfChain",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badSiblingMember",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badUnguarded",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 25
         }
       ]
     },
@@ -2860,6 +3067,59 @@
       ]
     },
     {
+      "case": "types/nonNullAssertionStripsAliasedVoid.ts",
+      "area": "types",
+      "name": "nonNullAssertionStripsAliasedVoid",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18048,
+        18049
+      ],
+      "baseline": "baselines/nonNullAssertionStripsAliasedVoid.errors.txt",
+      "claims": [
+        {
+          "name": "okVoidStripped",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okFunctionResult",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okMethodResult",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okGuardedOptionalMember",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badNoAssertion",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badOptionalMemberUnguarded",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 20
+        }
+      ]
+    },
+    {
       "case": "types/objectSpreadOfUnenumerableSource.ts",
       "area": "types",
       "name": "objectSpreadOfUnenumerableSource",
@@ -2900,6 +3160,53 @@
         },
         {
           "name": "badSpreadKnownShapeIncomplete",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 13
+        }
+      ]
+    },
+    {
+      "case": "types/optionalAnyReadsAsAny.ts",
+      "area": "types",
+      "name": "optionalAnyReadsAsAny",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18046,
+        18048
+      ],
+      "baseline": "baselines/optionalAnyReadsAsAny.errors.txt",
+      "claims": [
+        {
+          "name": "okOptionalAnyProperty",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okOptionalAnyParameter",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okOptionalAnyMethodCall",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badOptionalNumberProperty",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badOptionalUnknownParameter",
           "kind": "bad",
           "fromLine": 12,
           "toLine": 13

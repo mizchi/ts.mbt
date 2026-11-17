@@ -8684,6 +8684,7 @@ fn check_member_accessibility(
   ctx : CheckCtx,
   recv : @ast.TsExpr,
   prop : String,
+  access : MemberAccess,
 ) -> Unit {
   match recv {
     Var("this") | Var("super") => return
@@ -8700,7 +8701,13 @@ fn check_member_accessibility(
         _ => return
       }
   }
-  check_class_member_accessibility(ctx, class_name, prop, "access `.\{prop}`")
+  check_class_member_accessibility(
+    ctx,
+    class_name,
+    prop,
+    "access `.\{prop}`",
+    access,
+  )
 }
 
 ///|
@@ -8766,6 +8773,7 @@ fn check_class_member_accessibility(
   class_name : String,
   prop : String,
   path : String,
+  access : MemberAccess,
 ) -> Unit {
   // An INTERFACE that extends a class inherits the class's members, and a
   // `private` / `protected` one stays private to the declaring CLASS:
@@ -8794,6 +8802,35 @@ fn check_class_member_accessibility(
   if !(is_private || is_protected) {
     return
   }
+  // An accessor pair carries one visibility per half, and the lists above
+  // hold the name whichever half was restricted. A read reaches the getter
+  // and a write the setter, so `get left()` beside `protected set
+  // left(v)` is readable anywhere while `b.left = 1` and `b.left += 1` are
+  // TS2445 (probed). univer's `BaseObject` writes every geometry member
+  // that way. tsc requires the getter to be at least as accessible as the
+  // setter (TS2808), so this can only ever widen a read.
+  let half = match access {
+    Read => accessor_half_visibility(decl, prop, false)
+    Write => accessor_half_visibility(decl, prop, true)
+    // `b.left += 1` reads and then writes. The read walk of the target has
+    // already applied the getter's visibility, so this pass reports only
+    // when the setter is stricter, which is the one case that read let
+    // through. Without it a plain `protected x` would be reported twice.
+    CompoundWrite => {
+      let set_half = accessor_half_visibility(decl, prop, true)
+      let get_half = accessor_half_visibility(decl, prop, false)
+      match (set_half, get_half) {
+        (Some(s), Some(g)) if s != g => set_half
+        _ => return
+      }
+    }
+  }
+  let is_private = match half {
+    Some("public") => return
+    Some("protected") => false
+    Some("private") => true
+    _ => is_private
+  }
   let enclosing = current_enclosing_class(ctx.path_prefix)
   if is_private {
     if enclosing != Some(class_name) {
@@ -8816,6 +8853,54 @@ fn check_class_member_accessibility(
       )
     }
   }
+}
+
+///|
+/// A union holding `any` is `any`. The parser spells an optional `any`
+/// (`zoom?: any`, a parameter `p?: any`) as `any | undefined` so the arity
+/// rule can read the slot as omittable, and a member read on that union
+/// reported the `undefined` half: `p.value` was "`value` does not exist on
+/// `any | undefined`" where tsc reads `p` as `any`.
+fn any_union_as_any(ty : @ast.TsType) -> @ast.TsType {
+  match ty {
+    Union(parts) if parts.contains(Any) => Any
+    _ => ty
+  }
+}
+
+///|
+/// How a member is reached, for the accessibility check: an accessor
+/// pair's two halves can carry different visibilities.
+priv enum MemberAccess {
+  Read
+  Write
+  CompoundWrite
+}
+
+///|
+/// The visibility the parser recorded for the getter (a read) or the
+/// setter (a write) named `prop`, from its `<accessor-vis:KIND:VIS:NAME>`
+/// sentinels. `None` when `prop` has no accessor of that kind: a field, a
+/// method, or the other half only.
+fn accessor_half_visibility(
+  decl : @ast.TsClassDecl,
+  prop : String,
+  is_write : Bool,
+) -> String? {
+  let prefix = if is_write {
+    "<accessor-vis:set:"
+  } else {
+    "<accessor-vis:get:"
+  }
+  let suffix = ":" + prop + ">"
+  for d in decl.duplicate_member_names {
+    if d.has_prefix(prefix) &&
+      d.has_suffix(suffix) &&
+      d.length() > prefix.length() + suffix.length() {
+      return Some(d[prefix.length():d.length() - suffix.length()].to_owned())
+    }
+  }
+  None
 }
 
 ///|
@@ -12872,7 +12957,15 @@ fn infer_expr_inner(
     // check happens elsewhere (`check_call_args_in_expr`).
     Satisfies(inner, _) => infer_expr(env, resolver, inner)
     // `x!` — strip null / undefined from the operand's type.
-    NonNull(inner) => non_nullable(infer_expr(env, resolver, inner))
+    // `x!` removes `null`, `undefined` and `void` (probed: `string | void`
+    // asserts to `string`), and it applies to what an alias stands for.
+    // univer's `Nullable<T> = T | null | undefined | void` is the return
+    // type of most of its lookups, and `m.getValue(r)!` kept all three.
+    NonNull(inner) =>
+      narrow_remove(
+        non_nullable_resolved(resolver, infer_expr(env, resolver, inner)),
+        fn(t) { t is Void },
+      )
     // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
     OptionalChain(inner) => {
       // `a?.b` — infer the chain result, then widen with `undefined`
@@ -25100,6 +25193,7 @@ fn bind_object_pattern(
           cn,
           prop.key,
           "destructure `\{prop.key}`",
+          Read,
         )
       _ => ()
     }
@@ -26848,7 +26942,83 @@ fn apply_type_predicate_narrowing(
           type_contains_unresolved_named(target, resolver),
       )
     }
-    _ => ()
+    arg =>
+      narrow_predicate_path_arg(
+        env,
+        resolver,
+        arg,
+        target,
+        pair_pos,
+        pair_neg,
+        predicate_is_generic || type_contains_unresolved_named(target, resolver),
+      )
+  }
+}
+
+///|
+/// A type guard whose subject argument is a property path or an optional
+/// chain rather than a bare binding: `isDefine(props.top)`,
+/// `Tools.isDefine(props?.top)`. The path narrows under the dotted key the
+/// truthiness and equality guards already bind. When the narrowed value
+/// cannot be nullish, the chain did not short-circuit, so every receiver a
+/// `?.` guarded is non-nullish too, as with `if (props?.top)`. A path this
+/// cannot name (a call, a computed index) narrows nothing, as before.
+fn narrow_predicate_path_arg(
+  env : ExprEnv,
+  resolver : Resolver,
+  arg : @ast.TsExpr,
+  target : @ast.TsType,
+  pair_pos : Array[(String, @ast.TsType)],
+  pair_neg : Array[(String, @ast.TsType)],
+  loose : Bool,
+) -> Unit {
+  let (plain, receivers) = optional_chain_guarded_receivers(arg)
+  let key = match plain {
+    PropAccess(_, _) | IndexAccess(_, _) =>
+      match narrowing_key_for_expr(plain) {
+        Some(k) => k
+        None => return
+      }
+    _ => return
+  }
+  let before = pair_pos.length()
+  narrow_by_predicate_target(
+    resolver,
+    narrowing_current_type(env, resolver, key),
+    target,
+    key,
+    pair_pos,
+    // A chain's negative branch says nothing about the path: the guard may
+    // have failed because a receiver was nullish.
+    if receivers.is_empty() {
+      pair_neg
+    } else {
+      []
+    },
+    loose_target=loose,
+  )
+  if receivers.is_empty() || pair_pos.length() == before {
+    return
+  }
+  let narrowed = pair_pos[pair_pos.length() - 1].1
+  if target_admits_nullish(resolver, narrowed, false, 0) ||
+    target_admits_nullish(resolver, narrowed, true, 0) {
+    return
+  }
+  for r in receivers {
+    match narrowing_key_for_expr(r) {
+      Some(rk) =>
+        pair_pos.push(
+          (
+            rk,
+            non_nullable_resolved(
+              resolver,
+              narrowing_current_type(env, resolver, rk),
+            ),
+          ),
+        )
+      None => ()
+    }
   }
 }
 
@@ -26900,7 +27070,7 @@ fn narrow_by_predicate_target(
   pair_neg : Array[(String, @ast.TsType)],
   loose_target~ : Bool = false,
 ) -> Unit {
-  let cur = predicate_narrowing_source(resolver, cur)
+  let cur = any_union_as_any(predicate_narrowing_source(resolver, cur))
   let target = predicate_canonical_target(resolver, target)
   let test_target = predicate_comparison_target(resolver, target)
   // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
@@ -26950,6 +27120,11 @@ fn narrow_by_predicate_target(
   // `if (isNone(a) || isNone(b)) return; a.value` saw `never`. An empty
   // result abstains instead.
   match (else_ty, cur) {
+    // `any` and `unknown` have no member to remove: the false branch of a
+    // guard keeps them as they are, as tsc does. Removing "every member
+    // that fits" emptied an `any` to `never`, so `isFiniteNumber(a) ? a :
+    // a.value` with `a: any` reported `value` on `never` (on main too).
+    (_, Any | Unknown) => ()
     (Never, Never) => pair_neg.push((arg_name, else_ty))
     (Never, _) if loose_target => ()
     _ => pair_neg.push((arg_name, else_ty))
@@ -27366,16 +27541,52 @@ fn apply_method_type_predicate_narrowing(
       resolver.globals.get("@ns:" + ns + "." + method_name)
     _ => None
   }
+  // A STATIC method guard called through its class (`Tools.isDefine(x)`,
+  // univer's helper for every optional read): a class used as a value is
+  // `any` here, so the instance-side lookup below finds nothing. The class's
+  // own declaration has the signature. Only a single non-accessor static of
+  // that name answers, so an overload set keeps the old route. Its own type
+  // parameters stay unresolved names, as a generic function guard's do, and
+  // make the target loose.
+  let static_guard = match receiver {
+    Var(cn) if ns_predicate is None && env.lookup(cn) is None =>
+      match resolver.classes.get(cn) {
+        Some(cls) => {
+          let mut found : @ast.TsClassMethodDecl? = None
+          let mut count = 0
+          for m in cls.methods {
+            if m.is_static && m.accessor == "" && m.name == method_name {
+              count += 1
+              found = Some(m)
+            }
+          }
+          if count == 1 {
+            found
+          } else {
+            None
+          }
+        }
+        None => None
+      }
+    _ => None
+  }
   let recv_ty = infer_expr(env, resolver, receiver)
   // The parameter types of the signature the predicate came from, to tell
   // its subject apart (`predicate_subject_index`); `None` keeps the first
   // argument, as an overloaded guard's idiom has it.
   let mut predicate_params : Array[@ast.TsType]? = None
+  let mut static_generic = false
   let ret = match
     (if ns_predicate is Some(_) {
       None
     } else {
-      resolver.lookup_method_sig(recv_ty, method_name)
+      match static_guard {
+        Some(m) => {
+          static_generic = m.type_params.length() > 0
+          Some((method_callable_param_types(m), m.return_type))
+        }
+        None => resolver.lookup_method_sig(recv_ty, method_name)
+      }
     }) {
     Some((ps, ret)) => {
       predicate_params = Some(ps)
@@ -27399,7 +27610,7 @@ fn apply_method_type_predicate_narrowing(
   // A target reached through the fallback below is a generic predicate's
   // with its type parameters read as `any`: fine for the positive branch,
   // too wide for the negative one (see `narrow_by_predicate_target`).
-  let mut loose = false
+  let mut loose = static_generic
   let (param_name, target) = match ret {
     TypePredicate(p, t) => (p, t)
     // An OVERLOADED predicate (`Predicate.hasProperty(cause, "errno")`):
@@ -27487,9 +27698,11 @@ fn apply_method_type_predicate_narrowing(
   }
   match args[idx] {
     Var(arg_name) => {
-      let cur = predicate_narrowing_source(
-        resolver,
-        env_lookup_full(env, resolver, arg_name),
+      let cur = any_union_as_any(
+        predicate_narrowing_source(
+          resolver,
+          env_lookup_full(env, resolver, arg_name),
+        ),
       )
       let then_ty = narrow_keep(cur, fn(v) {
         predicate_target_matches(v, target, test_target)
@@ -27502,11 +27715,15 @@ fn apply_method_type_predicate_narrowing(
       let else_ty = narrow_remove(cur, fn(v) {
         predicate_target_matches(v, target, test_target)
       })
-      if !(loose && else_ty is Never && !(cur is Never)) {
+      if !(loose && else_ty is Never && !(cur is Never)) &&
+        !(cur is Any || cur is Unknown) {
         pair_neg.push((arg_name, else_ty))
       }
     }
-    _ => ()
+    arg =>
+      narrow_predicate_path_arg(
+        env, resolver, arg, target, pair_pos, pair_neg, loose,
+      )
   }
 }
 
@@ -32096,7 +32313,7 @@ fn check_call_args_in_expr(
     }
     MethodCall(receiver, meth, args) => {
       check_private_name_access(ctx, meth)
-      check_member_accessibility(env, ctx, receiver, meth)
+      check_member_accessibility(env, ctx, receiver, meth, Read)
       check_super_abstract_access(ctx, receiver, meth)
       // TS2348: `Namespace.Klass()` — a class reached through its
       // namespace and called without `new` (forgottenNew). The receiver
@@ -32162,7 +32379,9 @@ fn check_call_args_in_expr(
         Some(params) =>
           check_arguments(env, params, args, ctx, "call `\{meth}`")
         None => {
-          let recv_ty = infer_expr(env, ctx.resolver, receiver)
+          let recv_ty = any_union_as_any(
+            infer_expr(env, ctx.resolver, receiver),
+          )
           // TS2684: a method declaring a `this` parameter, called on a
           // union receiver whose members are definitely disjoint.
           check_union_receiver_this_context(
@@ -33258,7 +33477,7 @@ fn check_call_args_in_expr(
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
       check_private_name_access(ctx, prop)
-      check_member_accessibility(env, ctx, recv, prop)
+      check_member_accessibility(env, ctx, recv, prop, Read)
       check_super_abstract_access(ctx, recv, prop)
       check_super_field_access(ctx, recv, prop)
       check_namespace_or_enum_member_access(env, ctx, recv, prop)
@@ -33380,7 +33599,7 @@ fn check_call_args_in_expr(
           }
         _ => ()
       }
-      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      let recv_ty = any_union_as_any(infer_expr(env, ctx.resolver, recv))
       // TS2339: a private name accessed on a `typeof C` value (`x: typeof
       // Derived; x.#prop`) — the static-side analogue of the `C.#x` check
       // above. Private statics are never inherited, so a private-brand name
@@ -33781,6 +34000,11 @@ fn check_call_args_in_expr(
       }
       check_call_args_in_expr(env, target, ctx)
       check_call_args_in_expr(env, v, ctx)
+      match target {
+        PropAccess(recv, prop) =>
+          check_member_accessibility(env, ctx, recv, prop, CompoundWrite)
+        _ => ()
+      }
       // TS2364: the left-hand side of an assignment must be a variable or a
       // property access. A literal LHS (`1 >>= 2`) is never assignable. Only
       // literals are flagged — every reference-shaped target (`Var`, member /
@@ -34108,7 +34332,7 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, v, ctx)
       check_write_through_empty_literal(env, ctx, recv, prop)
       check_private_name_access(ctx, prop)
-      check_member_accessibility(env, ctx, recv, prop)
+      check_member_accessibility(env, ctx, recv, prop, Write)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       if !prop.has_prefix("__private_brand__") &&
         !readonly_write_in_own_constructor(ctx, recv, recv_ty, prop) &&
@@ -45732,6 +45956,10 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
       } else if name.has_prefix("<private-decl:") {
         // Marker, not an error: a private member declaration keyed by its
         // class brand. Consumed by `private_brand_declared_on_receiver`.
+        ()
+      } else if name.has_prefix("<accessor-vis:") {
+        // Marker, not an error: an accessor half's own visibility.
+        // Consumed by `accessor_half_visibility`.
         ()
       } else if name.has_prefix("<unannotated-return:") {
         // Marker, not an error: a bodied instance method with no return

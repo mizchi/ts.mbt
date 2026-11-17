@@ -159,6 +159,7 @@ guide to whether the behaviour will change.
 
 | Area | Case | What it pins | tsc | Nearest upstream |
 | --- | --- | --- | --- | --- |
+| classes | `accessorHalvesCarryTheirOwnVisibility` | A public getter beside a `protected` / `private` setter is readable anywhere; a write and a `+=` use the setter's visibility | TS2341 TS2445 | — |
 | classes | `accessorOverPropertyThroughMixinBase` | TS2611 through `mixin(B)`. A member several bases declare is an accessor only when every declaration is one of the same kind. | TS2611 | `mixinAccessors3` |
 | classes | `classExtendsInterfaceMergedWithValue` | Extending a plain interface is TS2689. Extending an interface merged with a construct-signature `declare var` is not. | TS2689 | — |
 | classes | `noImplicitOverrideThroughMixinBase` | TS4113 for a member the mixin intersection lacks. Under `noImplicitOverride`, TS4114 for one it has. | TS4113 TS4114 | `override19` (TS4113 only) |
@@ -170,6 +171,8 @@ guide to whether the behaviour will change.
 | controlFlow | `loopBackEdgeWritesThatReachTheJoin` | Which writes reach the back edge: dependent, labelled, pattern, `for`-head, overwritten, `continue`, caught throw | TS2345 TS2367 | — |
 | controlFlow | `loopConditionsNestedBindersAndComputedKeyOrder` | A loop condition under the back edge, a caught vs uncaught `throw`, and left-to-right computed keys | TS2322 TS2345 TS2367 | — |
 | controlFlow | `truthyOptionalChainNarrowsGuardedMember` | `if (slice?.ranges)` narrows both `slice` and `slice.ranges`, and only inside the branch | TS18048 TS2322 | — |
+| controlFlow | `typeGuardFalseBranchOfAnyAndUnknown` | A guard's false branch keeps `any` as `any` and `unknown` as `unknown`, and removes exactly what the target covers from a union | TS18046 TS2339 | — |
+| controlFlow | `typeGuardOnPathAndStaticMethod` | A guard narrows through a static method called on its class, a property path and an optional chain (whose `?.` receivers become non-nullish) | TS18048 TS2322 | — |
 | declarations | `declareClassConstructorOverloadsAndInterfaceMerge` | A `declare class` accepts every constructor overload's arity, and a class merged with an interface keeps both members | TS2322 TS2554 | `classAndInterfaceMerge.d` |
 | declarations | `declareClassRestOverloadsAndMergedRestMethod` | A rest constructor overload beside a non-rest one; a rest method of a `declare class` merged with an interface | TS2345 | — |
 | declarations | `globalAugmentationNamespaceAcrossBodies` | A namespace member declared in one `declare global` block is visible bare in another block's body of the same namespace | TS2322 | — |
@@ -206,13 +209,16 @@ guide to whether the behaviour will change.
 | relations | `genericSignaturesDifferingOnlyInConstraints` | Generic signatures equal up to their constraints, a recursive constraint included | TS2322 | `assignmentCompatWithGenericCallSignatures4` |
 | relations | `numberToUnionHoldingNumericEnum` | `number` into `E \| undefined` for a numeric enum, and not for a string enum | TS2322 | `enumAssignability` |
 | relations | `privateMemberClassToNonNamingTargets` | A class with a `private` member into a union of bases, an object type, an interface; a target naming the member; a union source | TS2322 TS2739 TS2741 | — |
+| relations | `recursiveArrayAliasesRelateCoinductively` | `type A = A[]` and `type B = B[]` relate coinductively; `A[]` against `string[]` still fails where `A` meets `string` | TS2322 | — |
 | types | `arrayFlatExplicitDepth` | `flat()`, `flat(1)`, `flat(0)` and `flat(2)` on nested arrays | TS2322 | — |
 | types | `brandedTupleDestructuring` | Destructuring `[x: number, y: number] & { _brand }`, through a constrained type parameter and a `for…of` | TS2322 | — |
 | types | `closedRecordKeysInIntersectionAndArrayFlat` | `Record<Enum, V> & { k?: T }` reads `k` as `T`; an open `Record` answers any other name; `flat()` removes one level | TS2322 | — |
 | types | `computedDestructuringKeyWithoutIndexSignature` | TS2537 for a `string` / `number` computed destructuring key, beside the `const`, index-signature, array, `any` and computed-literal spellings | TS2537 | `objectRest` |
 | types | `intersectionMemberFromEveryConstituent` | A member several constituents declare is the narrowest of their types (`string & "line"`), which discriminates; a declared member outranks an index signature | TS2322 TS2339 | — |
 | types | `keyofTupleAndTemplateInferNumberIndex` | `keyof` a tuple, `infer N extends number` in a template (`"01"` is not canonical) | TS2322 TS2345 | `templateLiteralTypes4` |
+| types | `nonNullAssertionStripsAliasedVoid` | `x!` removes `null`, `undefined` and `void`, through an alias such as `Nullable<T> = T \| null \| undefined \| void` | TS18048 TS18049 | — |
 | types | `objectSpreadOfUnenumerableSource` | An object literal spreading `any` is not missing members; one spreading a known shape is | TS2739 TS2741 | — |
+| types | `optionalAnyReadsAsAny` | An optional `any` member or parameter reads as `any`; an optional `number` or `unknown` keeps its `undefined` | TS18046 TS18048 | — |
 | types | `templateInferPatternsInConditionals` | `infer` in a template with a fixed part or a bound, as a conditional's check type | TS2322 | `templateLiteralTypes4` |
 
 The `realWorld` cases are reduced from `zod@4` and `effect@4` sources that

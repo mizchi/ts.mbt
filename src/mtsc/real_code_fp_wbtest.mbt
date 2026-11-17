@@ -574,6 +574,14 @@ test "an import shadows a global of the same name" {
           "/src/imp.ts", "import { shadowed } from \"./other\";\nexport const s: string = shadowed;\nexport const bad: number = shadowed;",
         ),
         ("/src/plain.ts", "export const g: number = shadowed;"),
+        // The module's own declaration shadows the global the same way,
+        // in both spellings, and a function body is where it showed.
+        (
+          "/src/local.ts", "export declare const shadowed: string;\nexport function f(): string { return shadowed }",
+        ),
+        (
+          "/src/local2.ts", "export const shadowed = \"s\";\nexport function g(): string { return shadowed }",
+        ),
       ],
       [("/src/imp.ts", "./other", "/src/other.ts")],
     ),
@@ -592,5 +600,99 @@ test "a recursive array alias relates to its twin" {
       "type A = A[];\ntype B = B[];\ndeclare const a: A[];\nexport const ok: B[] = a;\nexport const bad: string[] = a;",
     ),
     ["top-level > binding `bad` init: expected `string[]` but got `A[]`"],
+  )
+}
+
+///|
+/// An accessor pair carries one visibility per half: a read reaches the
+/// getter and a write the setter. univer's `BaseObject` declares `get
+/// left()` beside `protected set left(v)`, and every outside read of
+/// `object.left` was reported. Writing it outside the class is still an
+/// error, and so is `+=`, which reads and then writes. A plain `protected`
+/// field under `+=` is reported once, not once per half.
+test "a public getter beside a protected setter is readable" {
+  assert_eq(
+    issue_lines(
+      "class B {\n  private _l = 0;\n  protected x = 0;\n  get left(): number { return this._l }\n  protected set left(v: number) { this._l = v }\n}\nclass D extends B { m() { this.left = 2; this.left += 1; return this.left; } }\ndeclare const b: B;\nfunction okRead() { const n: number = b.left; }\nfunction okDestructure() { const { left } = b; }\nfunction badWrite() { b.left = 1; }\nfunction badCompound() { b.left += 1; }\nfunction badField() { b.x += 1; }",
+    ),
+    [
+      "function badWrite > access `.left`: property `left` is protected and only accessible within class `B` and its subclasses",
+      "function badCompound > access `.left`: property `left` is protected and only accessible within class `B` and its subclasses",
+      "function badField > access `.x`: property `x` is protected and only accessible within class `B` and its subclasses",
+    ],
+  )
+}
+
+///|
+/// `x!` removes `null`, `undefined` and `void`, and it applies to what an
+/// alias stands for. univer's lookups return `Nullable<T> = T | null |
+/// undefined | void`, and `m.getValue(r)!` kept all three, so every read
+/// of the asserted value was "possibly undefined". Without `!` it still is.
+test "a non-null assertion strips an aliased nullish union" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\ninterface V { b: number }\ndeclare class M<T> { getValue(r: number): Nullable<T>; }\ndeclare const m: M<V>;\ndeclare const v: string | void;\nfunction okVoid() { const s: string = v!; }\nfunction okMethod() { const c = m.getValue(1)!; const n: number = c.b; }\nfunction badNoAssertion() { const c = m.getValue(1); const n = c.b; }",
+    ),
+    [
+      "function badNoAssertion > PropAccess `.b`: object is possibly `undefined`",
+    ],
+  )
+}
+
+///|
+/// A type guard narrows its subject through a static method called on its
+/// class and through a property path or an optional chain. univer guards
+/// every optional read with `Tools.isDefine(props?.top)`, and neither the
+/// static call nor the chain narrowed anything. A sibling member the guard
+/// did not test is still possibly undefined.
+test "a static guard narrows a path and an optional chain" {
+  assert_eq(
+    issue_lines(
+      "class Tools { static isDefine<T>(value?: T | void): value is T { return value !== undefined && value !== null } }\ninterface P { top?: number; other?: number }\nfunction okStatic(x: number | undefined) { let t = 0; if (Tools.isDefine(x)) { t = x; } }\nfunction okPath(props: P) { let t = 0; if (Tools.isDefine(props.top)) { t = props.top; } }\nfunction okChain(props?: P) { let t = 0; if (Tools.isDefine(props?.top)) { t = props.top; } }\nfunction badSibling(props?: P) { let t = 0; if (Tools.isDefine(props?.top)) { t = props.other; } }",
+    ),
+    [
+      "function badSibling > assign `t`: type `number | undefined` is not assignable to type `number`",
+    ],
+  )
+}
+
+///|
+/// The false branch of a guard keeps `any` as `any`: there is no member to
+/// remove. It used to remove "every member that fits", which emptied an
+/// `any` to `never`, so `isFiniteNumber(a) ? a : a.value` reported `value`
+/// on `never`. excalidraw's `restoreAppState` reaches the same shape
+/// through a path. An optional `any` (`any | undefined`) is `any` as well,
+/// as a receiver and as a guard's subject. An `unknown` stays `unknown`.
+test "a guard's false branch and a member read keep any as any" {
+  assert_eq(
+    issue_lines(
+      "declare const isFiniteNumber: (value: any) => value is number;\ndeclare const a: any;\ndeclare const u: unknown;\ninterface S { zoom?: any }\ndeclare const s: S;\nfunction okAny() { const v = isFiniteNumber(a) ? a : a.value; }\nfunction okPath() { const v = isFiniteNumber(s.zoom) ? s.zoom : s.zoom.value; }\nfunction okOptionalParam(p?: any) { return p.value; }\nfunction badUnknown() { const v = isFiniteNumber(u) ? u : u.value; }",
+    ),
+    [
+      "function badUnknown > PropAccess `.value`: property `value` does not exist on `unknown`",
+      "function badUnknown > PropAccess `.value`: property `value` does not exist on `unknown`",
+    ],
+  )
+}
+
+///|
+/// A `declare global` value's type is written in its declaring module's
+/// scope. Where that module is not reachable, `Payload` used to resolve
+/// against the checked module's own `Payload`, so `payload.a` and
+/// `take({ a: "x" })` were reported on legal lines. The reference abstains
+/// there now. Where the module is reachable, it resolves to the right
+/// declaration and the real mismatch is still reported.
+test "a declare global value's type stays in its declaring module's scope" {
+  let globals = (
+    "/src/globals.d.ts", "export {};\ninterface Payload { a: string }\ndeclare global { const payload: Payload; function take(p: Payload): void }",
+  )
+  let body = "interface Payload { b: number }\nexport const ok: string = payload.a;\nexport function g() { take({ a: \"x\" }); }\nexport const bad: number = payload.a;"
+  assert_eq(graph_messages([globals, ("/src/root.ts", body)], []), [])
+  assert_eq(
+    graph_messages(
+      [globals, ("/src/root.ts", "import type {} from \"./globals\";\n" + body)],
+      [("/src/root.ts", "./globals", "/src/globals.d.ts")],
+    ),
+    ["top-level > binding `bad` init :: expected `number` but got `string`"],
   )
 }

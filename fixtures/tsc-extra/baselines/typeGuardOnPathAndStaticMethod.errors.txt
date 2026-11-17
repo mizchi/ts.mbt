@@ -1,0 +1,47 @@
+typeGuardOnPathAndStaticMethod.ts(21,83): error TS2322: Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(22,92): error TS2322: Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(22,96): error TS18048: 'props' is possibly 'undefined'.
+typeGuardOnPathAndStaticMethod.ts(23,85): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(24,46): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+
+
+==== typeGuardOnPathAndStaticMethod.ts (5 errors) ====
+    // A type guard narrows its subject whatever spelling reaches it: a static
+    // method called through its class, and a subject that is a property path
+    // or an optional chain rather than a bare binding. A chain whose guarded
+    // value cannot be nullish did not short-circuit, so the receivers its `?.`
+    // guarded are non-nullish too. The negative branch of a chain says nothing,
+    // since the guard may have failed because a receiver was nullish.
+    
+    class Tools {
+      static isDefine<T>(value?: T | void): value is T { return value !== undefined && value !== null }
+      static isNum(value: unknown): value is number { return typeof value === "number" }
+    }
+    declare function isDefine<T>(value?: T | void): value is T;
+    interface P { top?: number; other?: number }
+    
+    function okStaticOnVariable(x: number | undefined) { let t = 0; if (Tools.isDefine(x)) { t = x; } }
+    function okStaticConcrete(x: unknown) { let t = 0; if (Tools.isNum(x)) { t = x; } }
+    function okFunctionOnPath(props: P) { let t = 0; if (isDefine(props.top)) { t = props.top; } }
+    function okStaticOnPath(props: P) { let t = 0; if (Tools.isDefine(props.top)) { t = props.top; } }
+    function okStaticOnChain(props?: P) { let t = 0; if (Tools.isDefine(props?.top)) { t = props.top; } }
+    function okFunctionOnChain(props?: P) { let t = 0; if (isDefine(props?.top)) { t = props.top; } }
+    function badElseOfPath(props: P) { let t = 0; if (isDefine(props.top)) { } else { t = props.top; } }
+                                                                                      ~
+!!! error TS2322: Type 'undefined' is not assignable to type 'number'.
+    function badElseOfChain(props?: P) { let t = 0; if (Tools.isDefine(props?.top)) { } else { t = props.top; } }
+                                                                                               ~
+!!! error TS2322: Type 'undefined' is not assignable to type 'number'.
+                                                                                                   ~~~~~
+!!! error TS18048: 'props' is possibly 'undefined'.
+    function badSiblingMember(props?: P) { let t = 0; if (Tools.isDefine(props?.top)) { t = props.other; } }
+                                                                                        ~
+!!! error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
+    function badUnguarded(props: P) { let t = 0; t = props.top; }
+                                                 ~
+!!! error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
+    

@@ -358,6 +358,13 @@ pub struct Parser {
   // false positive for the second. Drained per class into
   // `<unannotated-return:...>` sentinels.
   unannotated_return_members : Array[String]
+  // `KIND:VISIBILITY:NAME` for each named accessor of the class body being
+  // parsed, KIND `get` or `set`. `protected_members` / `private_members`
+  // hold a NAME whichever half carried the modifier, and a read reaches
+  // the getter while a write reaches the setter: `get left()` beside
+  // `protected set left(v)` is readable anywhere. Drained per class into
+  // `<accessor-vis:...>` sentinels.
+  accessor_member_visibility : Array[String]
   // TS7022, the INDIRECT form: bare `Var` names returned by an
   // un-annotated `next()` / `[Symbol.iterator]()` of the class body being
   // parsed. Accumulated here and drained per class into
@@ -569,6 +576,7 @@ pub fn Parser::new_with_strict_and_jsx(
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
+    accessor_member_visibility: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
     private_decl_counts: {},
@@ -949,6 +957,7 @@ pub fn Parser::from_source_with_jsx(
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
+    accessor_member_visibility: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
     private_decl_counts: {},
