@@ -787,3 +787,21 @@ test "a return type alias admitting undefined allows no value" {
     ],
   )
 }
+
+///|
+/// An optional chain ending in a call narrows its receivers as a property
+/// chain does: `x?.ok()` is `undefined` whenever `x` is nullish. Two arms
+/// missed it, one per AST shape: `x?.ok()` is a `CallExpr` the chain walk
+/// stopped at, and `x?.inner.has()` is a `MethodCall` the condition walk
+/// sent to type-predicate narrowing only (univer's AST helpers and value
+/// objects). The falsy branch and a `|| b` still prove nothing.
+test "an optional chain ending in a call narrows its receivers" {
+  assert_eq(
+    issue_lines(
+      "interface N { getParent(): N | undefined; ok(): boolean; v: number; inner: { has(): boolean } }\ntype Nullable<T> = T | null | undefined | void;\nfunction okIf(x: N | undefined) { if (x?.ok()) { return x.v; } return 0; }\nfunction okWhile(node: N) { let p: Nullable<N> = node; while (p?.getParent()) { p = p.getParent(); } return p; }\nfunction okNested(x: N | undefined) { if (x?.inner.has()) { return x.v; } return 0; }\nfunction badFalsy(x: N | undefined) { if (!x?.ok()) { return x.v; } return 0; }\nfunction badOr(x: N | undefined, b: boolean) { if (x?.ok() || b) { return x.v; } return 0; }",
+    ),
+    [
+      "function badFalsy > PropAccess `.v`: object is possibly `undefined`", "function badOr > PropAccess `.v`: object is possibly `undefined`",
+    ],
+  )
+}

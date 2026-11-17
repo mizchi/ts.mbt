@@ -704,6 +704,82 @@
       ]
     },
     {
+      "case": "controlFlow/optionalCallChainNarrowsReceiver.ts",
+      "area": "controlFlow",
+      "name": "optionalCallChainNarrowsReceiver",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18048
+      ],
+      "baseline": "baselines/optionalCallChainNarrowsReceiver.errors.txt",
+      "claims": [
+        {
+          "name": "okIf",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okWhile",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okAnd",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okOrOfChains",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okCompared",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okNested",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 18
+        },
+        {
+          "name": "badFalsyBranch",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badOrWithPlain",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badAfterWhile",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badComparedUndefined",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
+        }
+      ]
+    },
+    {
       "case": "controlFlow/truthyOptionalChainNarrowsGuardedMember.ts",
       "area": "controlFlow",
       "name": "truthyOptionalChainNarrowsGuardedMember",

@@ -171,6 +171,7 @@ guide to whether the behaviour will change.
 | controlFlow | `loopBackEdgeLiteralAssignmentWithEarlyExit` | A literal assigned at the end of a loop body reaches the next iteration, for every loop kind and every early exit | TS2367 | — |
 | controlFlow | `loopBackEdgeWritesThatReachTheJoin` | Which writes reach the back edge: dependent, labelled, pattern, `for`-head, overwritten, `continue`, caught throw | TS2345 TS2367 | — |
 | controlFlow | `loopConditionsNestedBindersAndComputedKeyOrder` | A loop condition under the back edge, a caught vs uncaught `throw`, and left-to-right computed keys | TS2322 TS2345 TS2367 | — |
+| controlFlow | `optionalCallChainNarrowsReceiver` | A chain ending in a call (`x?.ok()`, `x?.inner.has()`) narrows its receivers in an `if`, a `while`, `&&`, an `\|\|` of chains and a comparison; not on the falsy side | TS18048 | — |
 | controlFlow | `truthyOptionalChainNarrowsGuardedMember` | `if (slice?.ranges)` narrows both `slice` and `slice.ranges`, and only inside the branch | TS18048 TS2322 | — |
 | controlFlow | `typeGuardFalseBranchOfAnyAndUnknown` | A guard's false branch keeps `any` as `any` and `unknown` as `unknown`, and removes exactly what the target covers from a union | TS18046 TS2339 | — |
 | controlFlow | `typeGuardOnPathAndStaticMethod` | A guard narrows through a static method called on its class, a property path and an optional chain (whose `?.` receivers become non-nullish, unless the guard's target is `unknown` and proves nothing) | TS18048 TS2322 | — |

@@ -26588,6 +26588,28 @@ fn collect_narrowing(
       apply_method_type_predicate_narrowing(
         env, resolver, receiver, method_name, args, pair_pos, pair_neg,
       )
+      // A truthy `x?.inner.has()` did not short-circuit, so the receivers
+      // its `?.` guarded are non-nullish, as the catch-all below says for a
+      // property chain. This arm used to take the call and never reach that
+      // rule. Only "non-nullish" is pushed: the call being truthy says
+      // nothing about whether `x` is. A key the predicate already narrowed
+      // keeps that answer.
+      let (_, guarded) = optional_chain_guarded_receivers(cond)
+      for g in guarded {
+        match narrowing_key_for_expr(g) {
+          Some(key) if !pair_pos.iter().any(fn(b) { b.0 == key }) =>
+            pair_pos.push(
+              (
+                key,
+                non_nullable_resolved(
+                  resolver,
+                  narrowing_current_type(env, resolver, key),
+                ),
+              ),
+            )
+          _ => ()
+        }
+      }
     }
     // `if (x)` / `if (obj.prop)` / `if (obj.a.b)` — truthy narrowing
     // strips null / undefined under the synthesised key. Bare `Var(_)`
@@ -26845,6 +26867,15 @@ fn non_nullable_resolved(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
 /// yields `(p.a.b, [p])`. Anything that is not a property / index chain
 /// comes back unchanged with no receivers, so a caller narrows exactly
 /// what it narrowed before.
+///
+/// A CALL on top of a chain keeps the chain's receivers: `x?.ok()` is
+/// `CallExpr(OptionalChain(PropAccess(x, ok)), [])`, and it short-circuits
+/// to `undefined` whenever `x` is nullish, exactly as `x?.ok` does. So every
+/// caller's premise (the chain's value is known not to be `undefined`)
+/// still proves `x` non-nullish. Before this arm `if (x?.ok()) { x.v }` and
+/// `while (p?.getParent()) { p = p.getParent() }` reported `x` / `p` as
+/// possibly undefined (univer's AST and value-object code). A call has no
+/// narrowing key, so the rebuilt plain call narrows nothing itself.
 fn optional_chain_guarded_receivers(
   expr : @ast.TsExpr,
 ) -> (@ast.TsExpr, Array[@ast.TsExpr]) {
@@ -26866,6 +26897,27 @@ fn optional_chain_guarded_receivers(
     IndexAccess(inner, i) => {
       let (r, gs) = optional_chain_guarded_receivers(inner)
       (IndexAccess(r, i), gs)
+    }
+    CallExpr(inner, args) => {
+      let (r, gs) = optional_chain_guarded_receivers(inner)
+      if gs.length() == 0 {
+        (expr, [])
+      } else {
+        let plain : @ast.TsExpr = match r {
+          PropAccess(recv, m) => MethodCall(recv, m, args)
+          Var(n) => Call(n, args)
+          _ => CallExpr(r, args)
+        }
+        (plain, gs)
+      }
+    }
+    MethodCall(inner, m, args) => {
+      let (r, gs) = optional_chain_guarded_receivers(inner)
+      if gs.length() == 0 {
+        (expr, [])
+      } else {
+        (MethodCall(r, m, args), gs)
+      }
     }
     _ => (expr, [])
   }
