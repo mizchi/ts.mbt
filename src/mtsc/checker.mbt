@@ -1910,50 +1910,120 @@ fn graph_type_modules(
   // that two modules both declare (and decides which declaration's field
   // wins in a cross-module interface merge), so the last position is the
   // one that keeps every such winner what it was.
-  let order : Array[ParsedMtscModule] = []
-  let visited_paths : Map[String, Unit] = Map([])
-  let modules_by_path : Map[String, ParsedMtscModule] = Map([])
-  for m in modules {
-    if !modules_by_path.contains(m.source.path) {
-      modules_by_path[m.source.path] = m
-    }
+  // The walk runs on the program's integer ids: the index is built once per
+  // program, and the walk itself used to hash a path at every step. For
+  // every checked module that was rebuilding two path-keyed tables (13% of
+  // univer core's check) and then hashing ~1,000 paths per walk (7%).
+  let g = graph_reach_index(modules, edges)
+  let root = match g.ids.get(module_.source.path) {
+    Some(id) => id
+    None => return type_modules
   }
-  let edges_by_importer : Map[String, Array[String]] = Map([])
-  for edge in edges {
-    match edges_by_importer.get(edge.importerPath) {
-      Some(targets) => targets.push(edge.targetPath)
-      None => edges_by_importer[edge.importerPath] = [edge.targetPath]
-    }
-  }
-  let pending_paths : Array[String] = [module_.source.path]
+  let visited = FixedArray::make(g.paths.length(), false)
+  let order : Array[Int32] = []
+  let pending : Array[Int32] = [root]
   let mut cursor = 0
-  while cursor < pending_paths.length() {
-    let importer_path = pending_paths[cursor]
+  while cursor < pending.length() {
+    let importer = pending[cursor]
     cursor = cursor + 1
-    if visited_paths.contains(importer_path) {
+    if visited[importer] {
       continue
     }
-    visited_paths[importer_path] = ()
-    for target_path in edges_by_importer.get(importer_path).unwrap_or([]) {
-      let target = match modules_by_path.get(target_path) {
-        Some(target) => target
-        None => continue
-      }
+    visited[importer] = true
+    for target in g.targets[importer] {
       order.push(target)
-      pending_paths.push(target.source.path)
+      pending.push(target)
     }
   }
-  let last_index : Map[String, Int32] = Map([])
+  let last_index = FixedArray::make(g.paths.length(), -1)
   for i, t in order {
-    last_index[t.source.path] = i
+    last_index[t] = i
   }
   for i, t in order {
-    if last_index.get(t.source.path) == Some(i) {
-      type_modules.push(t.module_)
-      keys.push(t.source.path)
+    if last_index[t] == i {
+      match g.modules[t] {
+        Some(m) => {
+          type_modules.push(m.module_)
+          keys.push(m.source.path)
+        }
+        None => ()
+      }
     }
   }
   type_modules
+}
+
+///|
+/// The import graph on integer ids. Every path an edge or a module names
+/// gets an id; `targets` keeps each importer's edges in edge order, and
+/// only targets with a parsed module, which is what the path-based walk
+/// followed (`find_graph_module`'s first-match rule picks the module).
+priv struct GraphReachIndex {
+  ids : Map[String, Int32]
+  paths : Array[String]
+  modules : Array[ParsedMtscModule?]
+  targets : Array[Array[Int32]]
+}
+
+///|
+/// The last index built, reused while the same two arrays (by identity, at
+/// the same lengths) are asked about, as `graph_module_index` is.
+let graph_reach_index_cache : Array[
+  (
+    Array[ParsedMtscModule],
+    Int32,
+    Array[MtscModuleEdge],
+    Int32,
+    GraphReachIndex,
+  ),
+] = []
+
+///|
+fn graph_reach_index(
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> GraphReachIndex {
+  if graph_reach_index_cache.length() == 1 {
+    let (ms, ml, es, el, g) = graph_reach_index_cache[0]
+    if physical_equal(ms, modules) &&
+      ml == modules.length() &&
+      physical_equal(es, edges) &&
+      el == edges.length() {
+      return g
+    }
+  }
+  let g = { ids: Map([]), paths: [], modules: [], targets: [], }
+  let id_of = fn(path : String) -> Int32 {
+    match g.ids.get(path) {
+      Some(id) => id
+      None => {
+        let id = g.paths.length()
+        g.ids[path] = id
+        g.paths.push(path)
+        g.modules.push(None)
+        g.targets.push([])
+        id
+      }
+    }
+  }
+  for m in modules {
+    let id = id_of(m.source.path)
+    if g.modules[id] is None {
+      g.modules[id] = Some(m)
+    }
+  }
+  for edge in edges {
+    let from = id_of(edge.importerPath)
+    let to = id_of(edge.targetPath)
+    if g.modules[to] is Some(_) {
+      g.targets[from].push(to)
+    }
+  }
+  graph_reach_index_cache.clear()
+  graph_reach_index_cache.push(
+    (modules, modules.length(), edges, edges.length(), g),
+  )
+  g
 }
 
 ///|
@@ -2635,6 +2705,7 @@ fn collect_parsed_graph_issues(
   graph_declaration_namespace_alias_cache.clear()
   graph_module_index.clear()
   graph_edge_index.clear()
+  graph_reach_index_cache.clear()
   let (parsed_modules, edges, ambient_module_paths, untyped_imports) = graph_with_ambient_modules(
     parsed_modules, edges,
   )
