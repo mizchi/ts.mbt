@@ -5844,10 +5844,13 @@ product surfaces now.
     - Both now read an index that the env builds lazily from a log of
       written keys. A write is one push, and no key is classified until an
       assignment asks.
-    - `restore_from` writes keys back without going through `bind` or
-      `narrow`. That looks like a hole and is not one: every key in a
-      snapshot was written, and so logged, before the snapshot was taken.
-      So the index never drops a key.
+    - Neither index keeps keys from exited scopes. A reader drops a key
+      that has left `vars`, so N sibling scopes followed by N assignments
+      do not rescan every earlier scope's keys (found in review).
+      `restore_from` writes keys back without going through `bind` or
+      `narrow`, so a dropped key it restores is logged again. Until a
+      reader has dropped one, a block exit pays one length check for
+      this.
     - The axis is now 1.01: 35 ms at 4,000 statements, against 848 ms.
       Both index halves are mutation-checked. The scan was 0.04% of
       univer, so this fixes the axis, and the push costs real code nothing

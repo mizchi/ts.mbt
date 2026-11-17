@@ -8377,9 +8377,11 @@ priv struct ExprEnv {
   // `statements` axis of `verify-checker-scaling`.
   //
   // A write costs one push; no key is classified until a forget needs the
-  // index. Nothing is ever removed from the index: `restore_from` puts back
-  // keys without writing through `bind` / `narrow`, and every one of them
-  // was written (and so logged) before the snapshot was taken.
+  // index. A key that has left `vars` is dropped from an index when a reader
+  // meets it, so neither index grows with keys from scopes that have exited.
+  // That is only safe because of `pruned`: `restore_from` puts keys back
+  // without writing through `bind` / `narrow`, so a dropped key it restores
+  // is logged again there.
   //
   // The same log feeds `alias_cond_keys`, the `<alias-cond>` markers an
   // assignment has to cancel, which were found the same way.
@@ -8387,6 +8389,7 @@ priv struct ExprEnv {
   mut written_indexed : Int32
   paths_below : Map[String, Map[String, Unit]]
   alias_cond_keys : Map[String, Unit]
+  pruned : Map[String, Unit]
 }
 
 ///|
@@ -8398,6 +8401,7 @@ fn ExprEnv::new() -> ExprEnv {
     written_indexed: 0,
     paths_below: {},
     alias_cond_keys: {},
+    pruned: {},
   }
 }
 
@@ -8536,6 +8540,13 @@ fn ExprEnv::restore_from(
     let _ = self.declared.remove(n)
   }
   for entry in snap {
+    // A key an index dropped while it was out of `vars` is logged again, so
+    // the index finds it once it is back. Nothing to do until a reader has
+    // dropped one, which keeps the common block exit free of the lookup.
+    if self.pruned.length() > 0 && self.pruned.contains(entry.0) {
+      let _ = self.pruned.remove(entry.0)
+      self.written.push(entry.0)
+    }
     self.vars[entry.0] = entry.1
   }
 }
@@ -30716,6 +30727,33 @@ fn forget_paths_below(env : ExprEnv, name : String) -> Unit {
   guard env.paths_below.get(name) is Some(keys) else { return }
   for k, _ in keys {
     let _ = env.vars.remove(k)
+    env.pruned[k] = ()
+  }
+  // Every key filed here has just left `vars`, so the bucket starts empty;
+  // one that comes back is logged again and filed again.
+  keys.clear()
+}
+
+///|
+/// An assignment cancels every aliased condition that narrows `name`.
+fn cancel_aliases_of(env : ExprEnv, name : String) -> Unit {
+  env.index_written_keys()
+  let stale : Array[String] = []
+  let dead : Array[String] = []
+  for k, _ in env.alias_cond_keys {
+    match env.vars.get(k) {
+      Some(v) => if alias_cond_mentions(v, name) { stale.push(k) }
+      // A marker its scope's exit removed: drop it, so a later assignment
+      // does not look it up again.
+      None => dead.push(k)
+    }
+  }
+  for k in dead {
+    let _ = env.alias_cond_keys.remove(k)
+    env.pruned[k] = ()
+  }
+  for k in stale {
+    env.narrow(k, @ast.TsType::Tuple([]))
   }
 }
 
@@ -30742,16 +30780,7 @@ fn narrow_after_assignment(
   }
   // An assignment cancels every aliased condition that narrows this name:
   // tsc refuses to see through an alias to a reference that is assigned.
-  env.index_written_keys()
-  let stale : Array[String] = []
-  for k, _ in env.alias_cond_keys {
-    if env.vars.get(k) is Some(v) && alias_cond_mentions(v, name) {
-      stale.push(k)
-    }
-  }
-  for k in stale {
-    env.narrow(k, @ast.TsType::Tuple([]))
-  }
+  cancel_aliases_of(env, name)
   // A binding DECLARED `unknown` is not narrowed by assignment in tsc
   // (`e = 1; e.toFixed()` is TS18046), and neither is a catch binding.
   if env.lookup_declared(name) is Some(Unknown) {

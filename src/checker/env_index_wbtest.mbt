@@ -62,6 +62,13 @@ test "a key a snapshot restores is still found by the index" {
   forget_paths_below(env, "a.b")
   assert_false(env.vars.contains("a.b[0].c"))
   assert_true(env.vars.contains("a.b"))
+  // A bucket a forget emptied is refilled by the restore: `a.b` left `vars`
+  // in the first forget and came back through the snapshot.
+  env.restore_from(snap)
+  forget_paths_below(env, "a")
+  assert_false(env.vars.contains("a.b"))
+  assert_false(env.vars.contains("a[1]"))
+  env.restore_from(snap)
   // A key first written AFTER the index was built is indexed too.
   env.narrow("ab.d", @ast.TsType::String_)
   forget_paths_below(env, "ab")
@@ -104,4 +111,26 @@ test "an assignment still cancels aliases and forgets paths below it" {
   assert_true(eff_has(issues, "badSameTypeAssign"))
   assert_false(eff_has(issues, "okPath"))
   assert_true(eff_has(issues, "badPathForgotten"))
+}
+
+///|
+test "the indexes do not keep keys from exited scopes" {
+  // Markers and paths of a scope that has exited leave `vars`, and the
+  // index drops them the first time it meets them, so N sibling scopes
+  // followed by N assignments do not rescan every earlier scope's keys.
+  let env = ExprEnv::new()
+  env.bind("x", @ast.TsType::Number)
+  for i in 0..<50 {
+    let snap = env.full_snapshot()
+    env.narrow("<alias-cond>a\{i}", @ast.TsType::Tuple([]))
+    env.narrow("x.p\{i}", @ast.TsType::Number)
+    env.restore_from(snap)
+    cancel_aliases_of(env, "x")
+    forget_paths_below(env, "x")
+  }
+  assert_true(env.alias_cond_keys.length() <= 1)
+  match env.paths_below.get("x") {
+    Some(keys) => assert_true(keys.length() <= 1)
+    None => ()
+  }
 }
