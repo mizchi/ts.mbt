@@ -923,6 +923,14 @@ pub(all) struct TsClassDecl {
   // parameter's declared type (TS2322) the same way it does for free
   // functions and methods.
   constructor_param_defaults : Array[TsExpr?]
+  // Every public constructor SIGNATURE of an ambient `declare class`, in
+  // declaration order, each with its rest flags; empty for a runtime class,
+  // whose implementation is the signature. `constructor_params` keeps the
+  // LAST one, which is what the bridge generator reads; the checker merges
+  // them when it registers the class, so a `new` that matches any overload
+  // is accepted (@types/react's `constructor(props: P)` beside
+  // `constructor(props: P, context: any)`).
+  ambient_constructor_overloads : Array[(Array[(String, TsType)], Array[Bool])]
   // The constructor's statement body, when the source declared a
   // constructor with an implementation (`constructor(...) { ... }`).
   // `None` for classes with no constructor, an overload signature only,

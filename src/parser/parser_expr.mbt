@@ -79,7 +79,7 @@ fn Parser::consume_trailing_assertions_wrap(
         if self.check(Const) {
           let _ = self.advance()
           self.grammar_misuses.push("<const-assertion>")
-          if self.keep_const_assertion_nodes {
+          if self.checking_parse {
             wrapped = @ast.TsExpr::As(wrapped, Named("const"))
           }
         } else {

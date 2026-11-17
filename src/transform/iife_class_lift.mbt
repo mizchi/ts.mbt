@@ -234,6 +234,7 @@ fn try_lift_iife_value(
     constructor_params: None,
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    ambient_constructor_overloads: [],
     constructor_body: None,
     properties: [],
     methods: all_methods,

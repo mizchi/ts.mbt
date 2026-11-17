@@ -11995,6 +11995,7 @@ fn clone_exported_class(
     constructor_params,
     constructor_param_is_rest: exported.class_.constructor_param_is_rest,
     constructor_param_defaults: exported.class_.constructor_param_defaults,
+    ambient_constructor_overloads: exported.class_.ambient_constructor_overloads,
     constructor_body: exported.class_.constructor_body,
     properties,
     methods,
