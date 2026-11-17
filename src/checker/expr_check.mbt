@@ -7605,13 +7605,16 @@ fn Resolver::method_overload_signatures(
                 msubst[k] = v
               }
             }
+            // The callable parameter list, not `m.params`: it keeps a rest
+            // parameter as `Rest(…)` and drops a leading `this`, so
+            // `m(...xs: T[])` stays callable with one argument.
             let ps : Array[@ast.TsType] = []
-            for p in m.params {
+            for pt in method_callable_param_types(m) {
               ps.push(
                 if msubst.is_empty() {
-                  p.1
+                  pt
                 } else {
-                  substitute_params(p.1, msubst)
+                  substitute_params(pt, msubst)
                 },
               )
             }
@@ -7743,7 +7746,9 @@ fn Resolver::resolve_method_overload(
       } else {
         substitute_params(expected, erase)
       }
-      if !is_assignable_to(arg_types[i], expected) {
+      // An alias parameter (`type Flag = boolean`) is resolved first, as
+      // `overload_param_accepts` does for a free function.
+      if !is_assignable_to(arg_types[i], self.unwrap(expected)) {
         ok = false
         break
       }
@@ -7779,7 +7784,7 @@ fn Resolver::resolve_method_overload(
       }
       for i in 0..<arg_types.length() {
         let expected = substitute_params(overload_param_at(params, i), inst)
-        if !is_assignable_to(arg_types[i], expected) {
+        if !is_assignable_to(arg_types[i], self.unwrap(expected)) {
           ok = false
           break
         }
