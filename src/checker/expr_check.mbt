@@ -8856,6 +8856,19 @@ fn check_class_member_accessibility(
 }
 
 ///|
+/// A union holding `any` is `any`. The parser spells an optional `any`
+/// (`zoom?: any`, a parameter `p?: any`) as `any | undefined` so the arity
+/// rule can read the slot as omittable, and a member read on that union
+/// reported the `undefined` half: `p.value` was "`value` does not exist on
+/// `any | undefined`" where tsc reads `p` as `any`.
+fn any_union_as_any(ty : @ast.TsType) -> @ast.TsType {
+  match ty {
+    Union(parts) if parts.contains(Any) => Any
+    _ => ty
+  }
+}
+
+///|
 /// How a member is reached, for the accessibility check: an accessor
 /// pair's two halves can carry different visibilities.
 priv enum MemberAccess {
@@ -27057,7 +27070,7 @@ fn narrow_by_predicate_target(
   pair_neg : Array[(String, @ast.TsType)],
   loose_target~ : Bool = false,
 ) -> Unit {
-  let cur = predicate_narrowing_source(resolver, cur)
+  let cur = any_union_as_any(predicate_narrowing_source(resolver, cur))
   let target = predicate_canonical_target(resolver, target)
   let test_target = predicate_comparison_target(resolver, target)
   // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
@@ -27107,6 +27120,11 @@ fn narrow_by_predicate_target(
   // `if (isNone(a) || isNone(b)) return; a.value` saw `never`. An empty
   // result abstains instead.
   match (else_ty, cur) {
+    // `any` and `unknown` have no member to remove: the false branch of a
+    // guard keeps them as they are, as tsc does. Removing "every member
+    // that fits" emptied an `any` to `never`, so `isFiniteNumber(a) ? a :
+    // a.value` with `a: any` reported `value` on `never` (on main too).
+    (_, Any | Unknown) => ()
     (Never, Never) => pair_neg.push((arg_name, else_ty))
     (Never, _) if loose_target => ()
     _ => pair_neg.push((arg_name, else_ty))
@@ -27680,9 +27698,11 @@ fn apply_method_type_predicate_narrowing(
   }
   match args[idx] {
     Var(arg_name) => {
-      let cur = predicate_narrowing_source(
-        resolver,
-        env_lookup_full(env, resolver, arg_name),
+      let cur = any_union_as_any(
+        predicate_narrowing_source(
+          resolver,
+          env_lookup_full(env, resolver, arg_name),
+        ),
       )
       let then_ty = narrow_keep(cur, fn(v) {
         predicate_target_matches(v, target, test_target)
@@ -27695,7 +27715,8 @@ fn apply_method_type_predicate_narrowing(
       let else_ty = narrow_remove(cur, fn(v) {
         predicate_target_matches(v, target, test_target)
       })
-      if !(loose && else_ty is Never && !(cur is Never)) {
+      if !(loose && else_ty is Never && !(cur is Never)) &&
+        !(cur is Any || cur is Unknown) {
         pair_neg.push((arg_name, else_ty))
       }
     }
@@ -32358,7 +32379,9 @@ fn check_call_args_in_expr(
         Some(params) =>
           check_arguments(env, params, args, ctx, "call `\{meth}`")
         None => {
-          let recv_ty = infer_expr(env, ctx.resolver, receiver)
+          let recv_ty = any_union_as_any(
+            infer_expr(env, ctx.resolver, receiver),
+          )
           // TS2684: a method declaring a `this` parameter, called on a
           // union receiver whose members are definitely disjoint.
           check_union_receiver_this_context(
@@ -33576,7 +33599,7 @@ fn check_call_args_in_expr(
           }
         _ => ()
       }
-      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      let recv_ty = any_union_as_any(infer_expr(env, ctx.resolver, recv))
       // TS2339: a private name accessed on a `typeof C` value (`x: typeof
       // Derived; x.#prop`) — the static-side analogue of the `C.#x` check
       // above. Private statics are never inherited, so a private-brand name

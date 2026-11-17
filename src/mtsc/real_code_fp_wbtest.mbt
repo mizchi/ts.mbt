@@ -655,3 +655,22 @@ test "a static guard narrows a path and an optional chain" {
     ],
   )
 }
+
+///|
+/// The false branch of a guard keeps `any` as `any`: there is no member to
+/// remove. It used to remove "every member that fits", which emptied an
+/// `any` to `never`, so `isFiniteNumber(a) ? a : a.value` reported `value`
+/// on `never`. excalidraw's `restoreAppState` reaches the same shape
+/// through a path. An optional `any` (`any | undefined`) is `any` as well,
+/// as a receiver and as a guard's subject. An `unknown` stays `unknown`.
+test "a guard's false branch and a member read keep any as any" {
+  assert_eq(
+    issue_lines(
+      "declare const isFiniteNumber: (value: any) => value is number;\ndeclare const a: any;\ndeclare const u: unknown;\ninterface S { zoom?: any }\ndeclare const s: S;\nfunction okAny() { const v = isFiniteNumber(a) ? a : a.value; }\nfunction okPath() { const v = isFiniteNumber(s.zoom) ? s.zoom : s.zoom.value; }\nfunction okOptionalParam(p?: any) { return p.value; }\nfunction badUnknown() { const v = isFiniteNumber(u) ? u : u.value; }",
+    ),
+    [
+      "function badUnknown > PropAccess `.value`: property `value` does not exist on `unknown`",
+      "function badUnknown > PropAccess `.value`: property `value` does not exist on `unknown`",
+    ],
+  )
+}
