@@ -5739,6 +5739,63 @@ product surfaces now.
       walk in context was walked on its own, without the condition's
       narrowing that the eager walk applies. Each held value now carries the
       conditions it sits under.
+  Batch GQ is a performance batch, prompted by a comparison with tsrs (a
+  Rust port of TS 7) and ranked by the profile rather than by guessing.
+  Every gate is unchanged, measured rather than assumed: the oracle,
+  effect (108), zod (8), the four `.d.ts` entries, the eleven-package app,
+  and univer's five packages and excalidraw report exactly the lines main
+  reports. univer core under `-p … --noEmit` goes from 7.29 s to 4.74 s
+  (41.5G -> 26.2G instructions). On the same 1,331 files, tsrs takes
+  0.27 s and tsc 7.1 0.77 s.
+  - **The check rebuilt the program once per checked file.** In callgrind,
+    the function-body walk, which IS the type check, was 11.5% of the
+    run. `collect_parsed_graph_issues` builds a fresh resolver for each of
+    univer core's 464 checked modules and ingests every module that module
+    reaches, 340 on average (201,856 `ingest_type_module` calls). Three
+    things in that loop were redone per (checked, reachable) pair although
+    the answer depends on the reachable module alone:
+    - `graph_type_modules` rebuilt its path index and edge lists on every
+      call (12.7%). It now walks integer ids over an index built once per
+      graph. It still keeps each module at its LAST position in edge
+      order, and a whitebox test checks the order against a verbatim copy
+      of the old path walk. The test graph has a cycle, a diamond, a
+      missing target, a duplicate module and an edge appended after the
+      first call, and keeping the FIRST position fails the test.
+    - `qualify_cross_body_namespace_refs` renamed every reachable module's
+      interfaces and aliases again (16.6%). The rename is now memoized per
+      (module, rename map), with the map interned to an id. The first memo
+      hit only 33% of the time, and instrumenting it showed two reasons:
+      a merged interface was a fresh object on every ingest, and comparing
+      two rename maps by value cost nearly what it saved. Merges are now
+      memoized by input identity, and an unkeyed module's ingestion is
+      cached.
+    - A name's declarer set is now `(first key, whether there is a
+      second)`, and each module's top-level type names are computed once.
+  - **The scaling gate found a quadratic on main, and CI does not run that
+    gate.** `verify-checker-scaling` is not a CI step. Its `statements`
+    axis, N assignments in one body, read 1.82 on main. The binaries kept
+    from earlier batches show it linear (0.93) until 11-13.
+    - Every assignment scanned the whole env twice:
+      `forget_paths_below`, for the `x.p` and `x[i]` narrowings below the
+      target, built `name + "."` once per key; `narrow_after_assignment`
+      scanned for `<alias-cond>` markers.
+    - Both now read an index that the env builds lazily from a log of
+      written keys. A write is one push, and no key is classified until an
+      assignment asks.
+    - `restore_from` writes keys back without going through `bind` or
+      `narrow`. That looks like a hole and is not one: every key in a
+      snapshot was written, and so logged, before the snapshot was taken.
+      So the index never drops a key.
+    - The axis is now 1.01: 35 ms at 4,000 statements, against 848 ms.
+      Both index halves are mutation-checked. The scan was 0.04% of
+      univer, so this fixes the axis, and the push costs real code nothing
+      measurable.
+  - **What is left is the design, not a hot spot.** `String::hash` is
+    24.5% of the self cost, because path strings key the maps the per-file
+    rebuild reads. The parser costs about 26K instructions per source
+    line, and reference counting is about 12%. The check is also
+    single-threaded, where tsrs runs four checkers. Each of these needs a
+    design change, not another cache.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
