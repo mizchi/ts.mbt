@@ -1,0 +1,38 @@
+globalAugmentationNamespaceAcrossBodies.ts(25,47): error TS2322: Type 'string | undefined' is not assignable to type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+globalAugmentationNamespaceAcrossBodies.ts(26,39): error TS2322: Type 'string' is not assignable to type 'number'.
+
+
+==== globalAugmentationNamespaceAcrossBodies.ts (2 errors) ====
+    // A namespace is one scope across every body that declares it: a member
+    // declared in one `declare global` block's `namespace NodeJS` is visible,
+    // unqualified, inside another block's `namespace NodeJS` (how @types/node
+    // writes `interface ProcessEnv extends Dict<string>`). Values a module's
+    // `declare global` declares are globals.
+    
+    export {};
+    declare global {
+      namespace NodeJS {
+        interface Dict<T> { [key: string]: T | undefined }
+      }
+    }
+    declare global {
+      namespace NodeJS {
+        interface ProcessEnv extends Dict<string> { TZ?: string }
+        interface Proc { env: ProcessEnv }
+      }
+      var proc: NodeJS.Proc;
+      const APP_VERSION: string;
+    }
+    
+    function okDeclaredMember() { const tz: string | undefined = proc.env.TZ; }
+    function okIndexSignatureFromOtherBody() { const v: string | undefined = proc.env.OTHER; }
+    function okGlobalConst() { const v: string = APP_VERSION; }
+    function badIndexSignatureValueType() { const n: number = proc.env.OTHER; }
+                                                  ~
+!!! error TS2322: Type 'string | undefined' is not assignable to type 'number'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
+    function badGlobalConstType() { const n: number = APP_VERSION; }
+                                          ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    

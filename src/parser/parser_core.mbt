@@ -325,15 +325,25 @@ pub struct Parser {
   // nested declaration cannot share the module-wide bare-name keys — see
   // `Parser::at_module_scope` — so it is keyed by the method it lives in.
   mut raw_sig_scope : String
-  // Keep `x as const` in the AST as `As(x, Named("const"))` instead of
-  // erasing it. Set only by the parses that feed TYPE CHECKING and nothing
-  // else (`Parser::keep_const_assertions`): the transform passes read raw
+  // A parse whose module only the CHECKER reads, set by the parses that
+  // feed TYPE CHECKING and nothing else (`Parser::keep_const_assertions`).
+  // Two facts ride it, each one the checker needs and another consumer
+  // must not see:
+  //
+  //   - An interface or object-type METHOD's rest parameter is
+  //     `Rest(<declared array>)` in its callable type, as a function
+  //     TYPE's already is, so `debug(...args: any[])` takes any number of
+  //     arguments. The bridge renders a `Rest(T)` as `Array[T]`, which
+  //     would turn `...args: any[]` into `Array[Array[JSValue]]` in every
+  //     generated package, so its parse keeps the bare declared array.
+  //   - `x as const` stays in the AST as `As(x, Named("const"))` instead
+  //     of being erased. The transform passes read raw
   // expressions — a const-value table is matched on the literal itself —
   // so an emitting parse must not see the wrapper, while the checker needs
   // it to type `[9, a] as const` as a readonly tuple of literals rather
   // than `number[]`. `const` is a reserved word, so no source type can
   // spell `Named("const")`.
-  mut keep_const_assertion_nodes : Bool
+  mut checking_parse : Bool
   mut current_class_name : String
   // `NAME\u{0}LITERAL` for an unannotated READONLY instance field whose
   // initializer is a literal. Drained per class into a
@@ -555,7 +565,7 @@ pub fn Parser::new_with_strict_and_jsx(
     raw_generic_signatures: {},
     raw_sig_seen_names: {},
     raw_sig_scope: "",
-    keep_const_assertion_nodes: false,
+    checking_parse: false,
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
@@ -610,9 +620,9 @@ pub fn Parser::mark_declaration_file(self : Parser) -> Unit {
 
 ///|
 /// Keep `as const` assertions as `As(e, Named("const"))` — for a parse
-/// whose module only the CHECKER reads (see `keep_const_assertion_nodes`).
+/// whose module only the CHECKER reads (see `checking_parse`).
 pub fn Parser::keep_const_assertions(self : Parser) -> Unit {
-  self.keep_const_assertion_nodes = true
+  self.checking_parse = true
 }
 
 ///|
@@ -622,7 +632,7 @@ fn Parser::inherit_source_flags(self : Parser, child : Parser) -> Unit {
   if self.in_declaration_file {
     child.mark_declaration_file()
   }
-  child.keep_const_assertion_nodes = self.keep_const_assertion_nodes
+  child.checking_parse = self.checking_parse
 }
 
 ///|
@@ -935,7 +945,7 @@ pub fn Parser::from_source_with_jsx(
     raw_generic_signatures: {},
     raw_sig_seen_names: {},
     raw_sig_scope: "",
-    keep_const_assertion_nodes: false,
+    checking_parse: false,
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],

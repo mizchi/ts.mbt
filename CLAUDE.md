@@ -5363,6 +5363,196 @@ product surfaces now.
       namespace, inferred against `S | (() => S)`.
     - zod's `s.parse(x)` returns `core.output<this>`, a conditional over
       `this` read through generic internals.
+  Batch GL works through univer's false positives largest category first,
+  and adds **excalidraw** as the second application measured. Both are
+  accepted outright by tsc (excalidraw by TS 5.9 and by the TS7 nightly,
+  once its `baseUrl` is dropped for TS7). Every fix was probed against the
+  nightly before it was written, with a legal neighbour and an illegal
+  one, and each one's unit test fails with the fix removed (mutation
+  checked). The oracle, effect (114, none at a new location), zod (9) and
+  the four real `.d.ts` entries are unchanged. The generated bridge corpus
+  is byte-identical to main.
+  - **What it measures.** univer's five sampled packages go 4,800 -> 3,251
+    reports (core 347 -> 240, data-validation 1,487 -> 975, ui 1,097 ->
+    766). excalidraw goes 3,623 reports in 280 of its 684 files to 641 in
+    113. The new reports at a new location are 3 of 3,251 and 0 of 641,
+    each an inference gap one of the fixes exposed, not a new rule.
+  - **A module's `declare global` was invisible unless something imported
+    the module.** Only ambient SCRIPTS published globals, so
+    `types: ["vitest/globals"]` — a module of `declare global { const it }`
+    plus `export {}` — left `describe` / `it` / `expect` undeclared in every
+    test file. GI recorded this as a known gap. Publishing them needed two
+    exceptions. A name the default lib declares keeps the lib's type:
+    @types/node redeclares `navigator`, `crypto` and `performance` there
+    with conditional types this checker cannot evaluate, and publishing
+    them shadowed the DOM's, so every member read as missing. But the
+    generated lib registry also lists the names only @types/node declares
+    (`process`, `require`, `__dirname`), and skipping those left every
+    `process` read "cannot find name".
+  - **A namespace is one scope across every body that declares it.**
+    @types/node writes `global { namespace NodeJS { interface ProcessEnv
+    extends Dict<string> {} } }` inside `declare module "node:process"`,
+    for the `NodeJS.Dict` that `globals.d.ts` declares in another file.
+    `qualify_namespace_local_refs` qualifies only what its own body
+    declares, so `Dict` resolved to nothing and `process.env.X` "did not
+    exist". `qualify_cross_body_namespace_refs` runs once the whole program
+    is in the tables. It moves a bare reference to the nearest enclosing
+    namespace's member, and only when the bare name is in no table, so a
+    reference that resolved before resolves to the same declaration. The
+    single-file TS2304 heritage rule abstains inside `declare global` for
+    the same reason. Both were pre-existing on main.
+  - **Two parser gaps each failed a whole dependency file**, which left
+    every type in it untyped: a reserved word after a dot in a type
+    reference (postcss's `AtRule.default`; tsc parses the segment as an
+    IdentifierName), and `export type * as ns from "m"` (vitest's
+    `optional-types.d.ts`). A context-only dependency file that still does
+    not parse is now left untyped instead of reported, as the CLI loader
+    already did.
+  - **Two facts the bridge must not see ride the checking parse.**
+    - An interface or object-type method's rest parameter was ONE
+      parameter of the array type, so every logger interface
+      (`debug(...args: any[])`) reported its calls. It is
+      `Rest(<declared array>)` now, the form a function TYPE already uses.
+      The bridge renders `Rest(T)` as `Array[T]`, so the same marking in
+      its parse turned `...args: any[]` into `Array[Array[JSValue]]` in
+      every generated package. It is gated on `Parser::checking_parse`,
+      the flag `as const` already used (renamed from
+      `keep_const_assertion_nodes`, since it now carries two facts).
+    - A `declare class` keeps only its LAST constructor signature in
+      `constructor_params`, because that is what the bridge reads. The
+      first version merged the overloads in the parser and changed eight
+      lines of React's generated bridge. Every signature is now recorded in
+      `TsClassDecl.ambient_constructor_overloads`, and `Resolver::put_class`
+      merges them for the checker alone. So @types/react's `constructor(
+      props: P); constructor(props: P, context: any)` accepts `new C(p)`.
+  - **Class and interface merging.** `class Component<P, S>` beside
+    `interface Component<P, S> extends ComponentLifecycle<P, S>` is how
+    @types/react declares it. The interface arm of the member lookup
+    answered first and fell to the index signature, so `this.props` read as
+    missing in every component. Both arms now ask the class too.
+  - **Assignability, each one cell tsc decides the other way.**
+    - A class with a `private` member assigns to any target that does not
+      ask for that member: a union of its bases, an object type, an
+      interface, `Base | undefined`. `nominal_private_blocks` blocked every
+      such target. That was 66 reports of univer's `ArrayValueObject`
+      against `BaseValueObject | BaseReferenceObject` alone. Only a target
+      DECLARING the member collides with it. A union target is blocked when
+      every member is, and a union source when any member is.
+    - An enum MEMBER type is assignable to its enum (`type?:
+      CommandType.MUTATION` against `type?: CommandType`), and an array is
+      covariant in its element. univer hands `IMutationInfo[]` to
+      `sequenceExecute(tasks: ICommandInfo[])` dozens of times. A readonly
+      array still does not assign to a mutable one.
+    - A numeric enum accepts any `number`. A union target holding one
+      (`keepLines?: BooleanNumber`) read `number` as a mismatch, while the
+      bare enum target abstained at the unresolved-name bail.
+    - An unannotated function contextually typed by `() => void` may return
+      a value (`xs.forEach(x => { return false })`), because `() =>
+      boolean` is assignable to `() => void`. Only its own annotation can
+      make a returned value an error. The first version also judged every
+      annotated arrow against its own annotation, which tsc does too. That
+      exposed 92 new excalidraw reports, all from inference gaps in the
+      returned expression, so it was cut back to the `void` case.
+    - An object literal spreading a source this checker cannot enumerate
+      (`any`, a type parameter) is not missing members. A spread of `any`
+      makes the whole literal `any` in tsc.
+  - **Shapes that came back wrong.**
+    - One condition narrows both the receiver its `?.` guards and the member
+      it reads. Inside `if (slice?.ranges)`, the member's type was read off
+      the still-nullable receiver and came back `any`.
+    - `Record<K, V>` over a closed key set answered for EVERY name. So in
+      `Record<UnitAction, boolean> & { ruleId?: string }` (univer's
+      `ICellPermission`), `ruleId` read as `boolean`. That was pre-existing,
+      and was exposed once the narrowing above stopped returning `any`.
+    - `xs.flat()` returned the receiver's own type, so `rows.flat()[0]` was
+      still an array. One level is removed now, and any piece this table
+      cannot see into is `any`.
+    - Destructuring a branded tuple (`[x: number, y: number] & { _brand }`,
+      excalidraw's `GlobalPoint`) bound every element `undefined`.
+    - An imported value whose initializer spreads other values
+      (excalidraw's `MIME_TYPES = { ...STRING_MIME_TYPES, …,
+      ...IMAGE_MIME_TYPES } as const`) was read by its importers with each
+      spread as a member literally named `@@spread:N`. It is `any` to an
+      importer now. The parser's shape is left alone, because the bridge
+      reads it.
+    - An imported arrow-`const` type guard read every parameter as
+      required, so excalidraw's `isBindingElement = <T>(element?: T |
+      null, includeLocked = true): element is … =>` was "expected 2
+      argument(s), got 1" at every one-argument call. An optional or
+      defaulted slot is `any | undefined` now, the spelling the arity rule
+      reads as omittable. That spelling then exposed six reports, because
+      two relations read `any | undefined` as narrower than `any`. A union
+      holding `any` is `any`, so it now accepts `null` and everything else.
+  - **The oracle lost one TP, for the right reason, and the batch took its
+    real error instead.** `objectRest` had been flagged only by the private
+    rule above: `var i: I = removable` is legal. That is batch CS's lesson
+    again — a conformance file counts as a TP if anything fires. Its
+    baseline errors are TS2537. A computed destructuring key of type
+    `string` or `number` reads through an index signature, and
+    `var { [computed]: x } = { a: 1, b: "" }` with `let computed = "b"`
+    has none to read. The `const` spelling (a literal key) is legal, and so
+    are an index signature, an array, `any` and a `Record<string, …>`. A
+    union source and a type with heritage abstain.
+  - **`fixtures/tsc-extra` is now a dataset, not a contribution queue.**
+    Every cell this batch probed went in as a case: 16 new cases, 60 in all,
+    203 `ok…` / 119 `bad…` claims. `index.json` lists each case's options,
+    codes and claim spans for a runner that does not want to parse the
+    README, and is checked on every run so it cannot drift. With
+    `--upstream DIR` the harness now measures verbatim line overlap with any
+    single upstream case itself (max 0.33 over the coverage cases), where it
+    used to be a one-off claim. Writing the cases found one more defect,
+    which is the point of keeping them: an intersection member read the
+    FIRST constituent's type (`Record<string, number> & { label?: string }`
+    gave `label: number`). The first fix was wrong too, and the case is
+    what showed it: intersecting the answers gives `number & (string |
+    undefined)`, while tsc gives `string | undefined`, because a
+    constituent that DECLARES a member outranks one answering through an
+    index signature. A member declared by several constituents is the
+    narrowest of their types (`string & "line"` is `"line"`, which is how
+    `Base & { type: "line" }` discriminates).
+    They also measured a known gap rather than an argued one: a module-level
+    `let` or arrow `const` read inside a function body has no type there,
+    so a cell written that way is silent (`arrowConstGuardOptionalParameters`
+    declares it). Reviewing the batch added two more cases from what it
+    found: a rest constructor overload beside a non-rest one, and
+    `flat(depth)`.
+  - **The second review round found a hang this batch introduced**, and
+    the fix also closed an older false positive behind it. Array
+    covariance recursed on the element types with no bound, and `type A =
+    A[]` unwraps to an array of itself, so relating `A[]` to `B[]` never
+    returned. Bounding the walk was not enough. Answering `false` at the
+    bound kept main's report, `expected B[] but got A[]`, on a line tsc
+    accepts. tsc relates recursive types coinductively: a pair it is
+    already comparing is assumed related. So running out of depth answers
+    `true`. `A[]` against `string[]` still fails one level down, where `A`
+    meets `string`. The same round found that a `declare global` value
+    overrode an explicit import of the same name, because the ambient
+    entries are pushed after the import bindings and the later entry wins.
+    An imported name now keeps the import. One finding is declared rather
+    than fixed: a `declare global` value whose type is an IMPORT of the
+    declaring module (`import type { Payload }` beside `const APP_PAYLOAD:
+    Payload`) is unresolved in every other module, so `const bad: number =
+    APP_PAYLOAD.id` is a MISS. Resolving it means ingesting the declaring
+    module's import graph into every checked module, which is a cost and
+    scope change with its own measurement.
+    A union holding `any` (the parser's encoding of an optional `any`
+    slot) is now left undecided as a conditional's check type, in both
+    `reduce_conditional` and `extends_decision`. The relation accepts such
+    a union against every target, so reading it would pick the true branch
+    on no evidence, while tsc gives the union of both branches. Neither
+    guard moves an observable case today: `T | undefined extends string`
+    is decided `false` by the type parser for every `T`, since the
+    `undefined` member fails, and that is wrong only at `T = any`
+    (`G<any> = 1` is a false positive on main as well). Both guards are
+    pinned by white-box tests at the function level, where the hazard is
+    reachable.
+  - **What is left.** On excalidraw the largest families are a union of
+    object literals whose read needs normalization (`{ font: unknown } |
+    {}`), DOM member lookups on a narrowed `Element`, and an
+    overloaded-call arity (`expected 2 argument(s), got 1`, 42). On univer
+    they are a required property of a literal built in steps (269), the
+    `object is possibly undefined` family after a guard this checker does
+    not model (195), and array-of-union element relations.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

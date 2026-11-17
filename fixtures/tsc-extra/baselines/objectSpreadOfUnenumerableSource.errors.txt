@@ -1,0 +1,23 @@
+objectSpreadOfUnenumerableSource.ts(11,44): error TS2739: Type '{ s: number; e: number; }' is missing the following properties from type 'R': id, kind
+objectSpreadOfUnenumerableSource.ts(12,54): error TS2741: Property 'kind' is missing in type '{ s: number; e: number; id: string; }' but required in type 'R'.
+
+
+==== objectSpreadOfUnenumerableSource.ts (2 errors) ====
+    // An object literal spreading `any` (or a value this checker cannot see
+    // into) is `any`, so it is not missing any member of its target. A literal
+    // spreading a known shape still has to supply what that shape lacks.
+    
+    interface R { s: number; e: number; id: string; kind: number; extra?: boolean }
+    interface P { s: number }
+    
+    function okSpreadAny(a: any) { const x: R = { ...a, s: 0 }; }
+    function okSpreadAsAny(t: unknown) { const y: R = { ...(t as any), e: 1 }; }
+    function okSpreadKnownShapeComplete(p: P) { const z: R = { ...p, e: 1, id: "", kind: 0 }; }
+    function badMissingWithoutSpread() { const x: R = { s: 0, e: 1 }; }
+                                               ~
+!!! error TS2739: Type '{ s: number; e: number; }' is missing the following properties from type 'R': id, kind
+    function badSpreadKnownShapeIncomplete(p: P) { const y: R = { ...p, e: 1, id: "" }; }
+                                                         ~
+!!! error TS2741: Property 'kind' is missing in type '{ s: number; e: number; id: string; }' but required in type 'R'.
+!!! related TS2728 objectSpreadOfUnenumerableSource.ts:5:49: 'kind' is declared here.
+    

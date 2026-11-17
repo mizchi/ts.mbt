@@ -1,0 +1,28 @@
+truthyOptionalChainNarrowsGuardedMember.ts(12,83): error TS2322: Type 'R[]' is not assignable to type 'number'.
+truthyOptionalChainNarrowsGuardedMember.ts(13,81): error TS2322: Type 'R[] | undefined' is not assignable to type 'R[]'.
+  Type 'undefined' is not assignable to type 'R[]'.
+truthyOptionalChainNarrowsGuardedMember.ts(13,90): error TS18048: 'slice' is possibly 'undefined'.
+
+
+==== truthyOptionalChainNarrowsGuardedMember.ts (3 errors) ====
+    // One truthy optional chain narrows both the receiver its `?.` guards and
+    // the member it reads: inside `if (slice?.ranges)`, `slice` and
+    // `slice.ranges` are both non-nullish, so the member keeps its declared
+    // type. The narrowing ends with the branch.
+    
+    interface R { id: string }
+    interface Body { ranges?: R[] }
+    
+    function okMemberTyped(slice: Body | undefined) { if (slice?.ranges) { const r: R[] = slice.ranges; } }
+    function okLengthTest(slice: Body | undefined) { if (slice?.ranges?.length) { const r: R | undefined = slice.ranges[0]; } }
+    function okReceiverTyped(slice: Body | undefined) { if (slice?.ranges) { const b: Body = slice; } }
+    function badMemberWrongType(slice: Body | undefined) { if (slice?.ranges) { const n: number = slice.ranges; } }
+                                                                                      ~
+!!! error TS2322: Type 'R[]' is not assignable to type 'number'.
+    function badAfterBranch(slice: Body | undefined) { if (slice?.ranges) { } const r: R[] = slice.ranges; }
+                                                                                    ~
+!!! error TS2322: Type 'R[] | undefined' is not assignable to type 'R[]'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'R[]'.
+                                                                                             ~~~~~
+!!! error TS18048: 'slice' is possibly 'undefined'.
+    

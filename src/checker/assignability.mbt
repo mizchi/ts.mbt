@@ -730,13 +730,18 @@ fn is_assignable_to_inner(
     | (Named("BigInt"), BigInt) => return false
     _ => ()
   }
-  // `any` is the universal escape hatch — it flows in either direction.
+  // `any` is the universal escape hatch — it flows in either direction. A
+  // union holding it IS `any` (`any | undefined` is how an optional `any`
+  // parameter is spelled so the arity rule reads it as omittable), so it
+  // accepts every source too.
   match target {
     Any => return true
+    Union(parts) if parts.contains(Any) => return true
     _ => ()
   }
   match source {
     Any => return true
+    Union(parts) if parts.contains(Any) => return true
     _ => ()
   }
   // `unknown` is the safe top type: every source flows into it, but it
@@ -1634,6 +1639,12 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
         // TRUE branch on no evidence: with `C` undecided, `C extends
         // string ? number : boolean` became `number`. The outer
         // conditional is undecided too.
+        t
+      } else if check is Union(parts) && parts.contains(Any) {
+        // A union holding `any` IS `any`, and `any` as a check type gives
+        // the union of both branches, not the true one. The relation
+        // accepts such a union against every target, so reading it here
+        // would pick the true branch on no evidence; left undecided.
         t
       } else if is_assignable_to(check, extends) {
         true_branch

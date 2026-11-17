@@ -1,0 +1,26 @@
+arrayFlatExplicitDepth.ts(11,42): error TS2322: Type 'number[][]' is not assignable to type 'number[]'.
+  Type 'number[]' is not assignable to type 'number'.
+arrayFlatExplicitDepth.ts(12,42): error TS2322: Type 'number[][]' is not assignable to type 'number[]'.
+  Type 'number[]' is not assignable to type 'number'.
+
+
+==== arrayFlatExplicitDepth.ts (2 errors) ====
+    // `flat()` and `flat(1)` remove one level of nesting, `flat(0)` removes
+    // none, and a larger depth removes as many as the array has.
+    
+    declare const rows: number[][];
+    declare const deep: number[][][];
+    
+    function okDefaultDepth() { const r: number[] = rows.flat(); }
+    function okDepthOne() { const r: number[] = rows.flat(1); }
+    function okDepthZero() { const r: number[][] = rows.flat(0); }
+    function okDepthTwo() { const r: number[] = deep.flat(2); }
+    function badDepthZeroFlattened() { const r: number[] = rows.flat(0); }
+                                             ~
+!!! error TS2322: Type 'number[][]' is not assignable to type 'number[]'.
+!!! error TS2322:   Type 'number[]' is not assignable to type 'number'.
+    function badDefaultDepthOnDeep() { const r: number[] = deep.flat(); }
+                                             ~
+!!! error TS2322: Type 'number[][]' is not assignable to type 'number[]'.
+!!! error TS2322:   Type 'number[]' is not assignable to type 'number'.
+    

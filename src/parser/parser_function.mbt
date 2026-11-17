@@ -2854,7 +2854,12 @@ pub fn Parser::parse_interface(
           } else {
             @ast.TsType::Any
           }
-        _ => callable_func_type_from_params(method_params, return_type)
+        _ =>
+          callable_func_type_from_params(
+            method_params,
+            return_type,
+            mark_rest=self.checking_parse,
+          )
       }
       let accessor_pair_seen = accessor_kind is Some(_) &&
         fields.iter().any(fn(f) { f.0 == field_name })
@@ -4324,6 +4329,9 @@ fn Parser::parse_declare_class(
   // TS2386 support: `(first_optional, already_reported)` per member key.
   let declare_method_sig_optional : Map[String, (Bool, Bool)] = Map([])
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
+  let ambient_constructor_overloads : Array[
+    (Array[(String, @ast.TsType)], Array[Bool]),
+  ] = []
   let mut constructor_param_is_rest : Array[Bool] = []
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false
@@ -4563,8 +4571,13 @@ fn Parser::parse_declare_class(
                 !is_static &&
                 accessor_kind is None {
                 if is_public {
+                  // Every `constructor(…)` of a `declare class` is an
+                  // overload signature. The last one stays in
+                  // `constructor_params` for the bridge, and the checker
+                  // merges all of them (see `ambient_constructor_overloads`).
                   constructor_params = Some(params)
                   constructor_param_is_rest = params_rest
+                  ambient_constructor_overloads.push((params, params_rest))
                   saw_public_constructor = true
                 } else {
                   saw_nonpublic_constructor = true
@@ -4655,6 +4668,7 @@ fn Parser::parse_declare_class(
     // leave empty (rest detection just no-ops for these).
     constructor_param_is_rest,
     constructor_param_defaults: [],
+    ambient_constructor_overloads,
     constructor_body: None,
     properties,
     methods,

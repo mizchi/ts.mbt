@@ -243,7 +243,7 @@ pub struct Parser {
   raw_generic_signatures : Map[String, @ast.TsType]
   raw_sig_seen_names : Map[String, Unit]
   mut raw_sig_scope : String
-  mut keep_const_assertion_nodes : Bool
+  mut checking_parse : Bool
   mut current_class_name : String
   readonly_literal_members : Array[String]
   unannotated_return_members : Array[String]

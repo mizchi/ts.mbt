@@ -1,0 +1,20 @@
+// @strict: true
+// @target: esnext
+
+// A rest constructor overload accepts any count of its own element type
+// only: beside `constructor(value: number)`, `new R(1)` is the other
+// overload, not a string argument. A rest method of a `declare class` that
+// is merged with an interface keeps its rest shape through the class's
+// type arguments.
+
+declare class R { constructor(...values: string[]); constructor(value: number); }
+declare class C<T> { m(...values: T[]): void }
+interface C<T> {}
+declare const c: C<string>;
+
+function okNumberOverload() { new R(1); }
+function okRestOverload() { new R("a", "b"); new R(); }
+function okMergedRestMethod() { c.m(); c.m("x", "y"); }
+function badMergedRestElement() { c.m(1); }
+function badNoOverloadBoolean() { new R(true); }
+function badNoOverloadTwoNumbers() { new R(1, 2); }

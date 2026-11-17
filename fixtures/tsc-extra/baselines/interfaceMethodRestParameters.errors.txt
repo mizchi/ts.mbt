@@ -1,0 +1,34 @@
+interfaceMethodRestParameters.ts(19,42): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+interfaceMethodRestParameters.ts(20,48): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+interfaceMethodRestParameters.ts(21,50): error TS2345: Argument of type 'number' is not assignable to parameter of type 'number[]'.
+
+
+==== interfaceMethodRestParameters.ts (3 errors) ====
+    // An interface or object-type method's rest parameter takes any number of
+    // arguments of its element type, through an alias as well. Each argument is
+    // still checked, and a plain array parameter is still one argument.
+    
+    type ArgsType = any[];
+    interface ILog {
+      debug(...args: ArgsType): void;
+      info(...xs: number[]): void;
+      plain(xs: number[]): void;
+    }
+    declare const log: ILog;
+    declare const obj: { warn(...xs: string[]): void };
+    
+    function okAliasedAnyRest() { log.debug("a", 1, true); }
+    function okNoRestArguments() { log.debug(); log.info(); }
+    function okNumberRest() { log.info(1, 2, 3); }
+    function okObjectTypeRest() { obj.warn("a", "b"); }
+    function okPlainArray() { log.plain([1]); }
+    function badRestElementType() { log.info("no"); }
+                                             ~~~~
+!!! error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+    function badObjectTypeRestElement() { obj.warn(1); }
+                                                   ~
+!!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+    function badPlainArrayGivenElement() { log.plain(1); }
+                                                     ~
+!!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'number[]'.
+    

@@ -169,3 +169,12 @@ test "extends_decision: plain-return fn never extends a predicate-return fn" {
     None,
   )
 }
+
+///|
+/// `T | undefined extends string ? 1 : 2` at `T = any` is `1 | 2` in tsc:
+/// a union holding `any` is `any`, and `any` takes both branches. Read
+/// member by member, the `undefined` member alone answered `false`.
+test "extends_decision does not decide an any union" {
+  assert_eq(extends_decision(Union([Any, Undefined]), String_), None)
+  assert_eq(extends_decision(Union([String_, Undefined]), String_), Some(false))
+}

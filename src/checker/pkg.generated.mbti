@@ -89,6 +89,8 @@ pub fn is_simple_primitive_type(@ast.TsType) -> Bool
 
 pub fn is_string_literal_union(@ast.TsType) -> Bool
 
+pub fn lib_declares_global_value(String) -> Bool
+
 pub fn match_infer_pattern(@ast.TsType, @ast.TsType, Map[String, @ast.TsType]) -> Bool
 
 pub fn module_alias_resolver(@ast.TsModule, include_standard? : Bool) -> (String) -> AliasBinding?

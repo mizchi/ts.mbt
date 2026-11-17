@@ -338,8 +338,9 @@ verify-checker-soundness:
     moon build --target native --release
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 0
 
-# Test cases the upstream TypeScript suite does not contain, in its harness
-# format, kept so they can be contributed back (`fixtures/tsc-extra`).
+# A dataset of TypeScript checker behaviour the upstream suite does not test,
+# for projects reproducing the checker, in the upstream harness format and
+# indexed in `index.json` (`fixtures/tsc-extra`).
 #
 # Three questions, each meaningful only once the one before holds: does
 # TypeScript 7 still say what the committed `.errors.txt` baseline says (a
@@ -347,7 +348,8 @@ verify-checker-soundness:
 # `bad…` declaration's name agree with tsc's own spans; and does
 # `mtsc check --strict` agree — a report on an `ok…` declaration is a false
 # positive and fails, a silent `bad…` is a MISS that must be declared in
-# `fixtures/tsc-extra/mtsc-misses.txt`. `--update` rewrites the baselines.
+# `fixtures/tsc-extra/mtsc-misses.txt`. `--update` rewrites the baselines and
+# the index.
 verify-tsc-extra *ARGS:
     moon build --target native --release
     node scripts/verify_tsc_extra.mjs {{ ARGS }}

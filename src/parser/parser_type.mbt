@@ -24,6 +24,7 @@ fn callable_type_with_optionality(
 fn callable_func_type_from_params(
   params : Array[@ast.TsParam],
   return_type : @ast.TsType,
+  mark_rest~ : Bool,
 ) -> @ast.TsType {
   let types : Array[@ast.TsType] = []
   let optional : Array[Bool] = []
@@ -53,11 +54,21 @@ fn callable_func_type_from_params(
   while pi < params.length() {
     let param = params[pi]
     names.push(param.name)
-    // Declaration-style rest parameters already carry their array-shaped
-    // element type (`...checks: string[]` -> `Array[String]`). Keep the
-    // existing representation used by interface/object members; function
-    // *type* syntax builds `Rest` directly in `parse_paren_or_function_type`.
-    types.push(param.type_)
+    // A rest parameter is `Rest(<declared array type>)`, the form the
+    // function-TYPE parser builds in `parse_paren_or_function_type`. Pushed
+    // bare, the declared array was ONE parameter, so an interface method
+    // `debug(...args: any[])` called as `log.debug("a", 1)` was "expected
+    // 1 argument(s), got 2" plus "expected `any[]` but got `string`": every
+    // logger interface univer declares, on main as well. Only a checking
+    // parse marks it (`Parser::checking_parse` says why the bridge's
+    // parse must not).
+    types.push(
+      if param.is_rest && mark_rest {
+        Rest(param.type_)
+      } else {
+        param.type_
+      },
+    )
     optional.push(param.is_optional)
     pi += 1
   }
@@ -1148,7 +1159,9 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
           implicit_any_return_members.push(field_name)
         }
         let callable = callable_func_type_from_params(
-          method_params, return_type,
+          method_params,
+          return_type,
+          mark_rest=self.checking_parse,
         )
         // NAMED members only. A `<call>` / `<new>` sentinel's binders
         // have never been carried and nothing reads them yet, while the
@@ -1433,7 +1446,17 @@ fn Parser::parse_named_type_tail(
   first_name : String,
 ) -> @ast.TsType raise ParseError {
   let mut full_name = first_name
-  while self.check(Dot) && self.is_qualified_type_name_part(1) {
+  // The right side of a dot in a type reference is any IdentifierName,
+  // reserved words included: tsc parses it with `parseEntityName(
+  // allowReservedWords=true)`. postcss's `lib/node.d.ts` writes
+  // `AtRule.default` for a CommonJS default export, and stopping at the
+  // `default` keyword failed the whole file, which left every postcss type
+  // untyped.
+  while self.check(Dot) &&
+        (
+          self.is_qualified_type_name_part(1) ||
+          member_access_token_name(self.peek_at(1).kind) is Some(_)
+        ) {
     let _ = self.advance()
     // A primitive-type KEYWORD can never be a qualified type-name segment
     // (`var v: x.void` — parservoidInQualifiedName2, TS1003/TS2503).
@@ -1444,7 +1467,17 @@ fn Parser::parse_named_type_tail(
         )
       _ => ()
     }
-    let next_name = self.parse_binding_ident()
+    let next_name = if self.is_qualified_type_name_part(0) {
+      self.parse_binding_ident()
+    } else {
+      match member_access_token_name(self.peek().kind) {
+        Some(n) => {
+          let _ = self.advance()
+          n
+        }
+        None => self.parse_binding_ident()
+      }
+    }
     full_name = full_name + "." + next_name
   }
   // A type reference takes type arguments only when the `<` is on the

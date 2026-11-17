@@ -2444,7 +2444,7 @@ fn value_decl_static_key_from_expr_with_depth(
           )
         None => None
       }
-    // A checking parse keeps `as const` (`keep_const_assertion_nodes`), so
+    // A checking parse keeps `as const` (`checking_parse`), so
     // `const KEY = "id" as const` holds the wrapper; the key is the value
     // inside it, exactly as the erasing parse already sees it.
     @ast.TsExpr::As(inner, @ast.TsType::Named("const")) =>
@@ -3586,7 +3586,14 @@ fn Parser::parse_export_stmt(
     raise ParseError("Unsupported export statement")
   }
   if self.match_(Type) || self.match_ident("type") {
+    // `export type * as ns from "m"` (TypeScript 5.0) takes the same
+    // `as ns` the value form does: vitest's `optional-types.d.ts` writes
+    // `export type * as jsdomTypes from 'jsdom'`, and stopping at `as`
+    // failed the whole file.
     if self.match_(Star) {
+      if self.match_(As) || self.match_ident("as") {
+        let _ = self.parse_binding_ident()
+      }
       let _ = self.try_from_spec()
       self.consume_semicolon()
       return

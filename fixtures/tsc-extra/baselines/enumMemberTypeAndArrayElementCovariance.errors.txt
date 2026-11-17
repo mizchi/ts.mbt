@@ -1,0 +1,45 @@
+enumMemberTypeAndArrayElementCovariance.ts(20,39): error TS2322: Type 'X' is not assignable to type 'Y'.
+  Types of property 't' are incompatible.
+    Type 'CommandType.COMMAND' is not assignable to type 'CommandType.MUTATION'.
+enumMemberTypeAndArrayElementCovariance.ts(21,51): error TS2345: Argument of type 'Bad[]' is not assignable to parameter of type 'ICommandInfo<object>[]'.
+  Type 'Bad' is not assignable to type 'ICommandInfo<object>'.
+    Types of property 'id' are incompatible.
+      Type 'number' is not assignable to type 'string'.
+enumMemberTypeAndArrayElementCovariance.ts(22,69): error TS4104: The type 'readonly IMutationInfo<object>[]' is 'readonly' and cannot be assigned to the mutable type 'ICommandInfo<object>[]'.
+
+
+==== enumMemberTypeAndArrayElementCovariance.ts (3 errors) ====
+    // An enum member type (`CommandType.MUTATION`) is assignable to its enum, so
+    // an interface narrowing `type?: CommandType` to one member is assignable to
+    // the wider interface, and arrays are covariant in their element. A
+    // different member is not assignable, and a `readonly` array does not
+    // assign to a mutable one.
+    
+    enum CommandType { COMMAND = 0, OPERATION = 1, MUTATION = 2 }
+    interface ICommandInfo<T extends object = object> { id: string; type?: CommandType; params?: T }
+    interface IMutationInfo<T extends object = object> { id: string; type?: CommandType.MUTATION; params: T }
+    declare function run(tasks: ICommandInfo[]): void;
+    declare const ms: IMutationInfo[];
+    declare const m: IMutationInfo;
+    interface X { t: CommandType.COMMAND }
+    interface Y { t: CommandType.MUTATION }
+    interface Bad { id: number }
+    
+    function okMemberToEnumProperty() { const c: ICommandInfo = m; }
+    function okArrayOfNarrowerElements() { run(ms); }
+    function okReadonlyToReadonly(xs: readonly IMutationInfo[]) { const ys: readonly ICommandInfo[] = xs; }
+    function badOtherMember(x: X) { const y: Y = x; }
+                                          ~
+!!! error TS2322: Type 'X' is not assignable to type 'Y'.
+!!! error TS2322:   Types of property 't' are incompatible.
+!!! error TS2322:     Type 'CommandType.COMMAND' is not assignable to type 'CommandType.MUTATION'.
+    function badElementNotAssignable(bs: Bad[]) { run(bs); }
+                                                      ~~
+!!! error TS2345: Argument of type 'Bad[]' is not assignable to parameter of type 'ICommandInfo<object>[]'.
+!!! error TS2345:   Type 'Bad' is not assignable to type 'ICommandInfo<object>'.
+!!! error TS2345:     Types of property 'id' are incompatible.
+!!! error TS2345:       Type 'number' is not assignable to type 'string'.
+    function badReadonlyToMutable(xs: readonly IMutationInfo[]) { const ys: ICommandInfo[] = xs; }
+                                                                        ~~
+!!! error TS4104: The type 'readonly IMutationInfo<object>[]' is 'readonly' and cannot be assigned to the mutable type 'ICommandInfo<object>[]'.
+    

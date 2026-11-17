@@ -9,3 +9,10 @@
 # checker deliberately does not reproduce it.
 declareFieldReadInDerivedInitializer:*  mtsc folds `declare` into `!`, so a declare field is never "used before initialization"; tsc's TS2729 here is the questioned behaviour
 nullishCoalescingVoidLeftOperand:*      mtsc has no TS2871, and skips `void 0 ?? y` for TS2869 on purpose: tsc's TS2869 there is the questioned behaviour
+
+# Coverage cases.
+enumMemberTypeAndArrayElementCovariance:badReadonlyToMutable  TS4104 (a readonly array into a mutable one) is not modelled; the array relation abstains for that pair
+arrowConstGuardOptionalParameters:badTooManyArguments  a module-level arrow `const` read inside a function body has no inferred type there, so its call is not judged (the cross-module spelling is)
+intersectionMemberFromEveryConstituent:badMemberOfOtherBranch  a member missing from every constituent of a narrowed intersection is not reported; member existence abstains on intersection receivers
+declareClassRestOverloadsAndMergedRestMethod:badNoOverloadBoolean  a rest overload beside another overload merges to `...args: any[]`, so no constructor call against that class is judged
+declareClassRestOverloadsAndMergedRestMethod:badNoOverloadTwoNumbers  same merge: `...args: any[]` accepts any argument count and type

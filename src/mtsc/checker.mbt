@@ -321,7 +321,7 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
           }
         _ => ()
       }
-      return Some(value.type_)
+      return Some(spread_objects_as_any(value.type_))
     }
   }
   match arrow_const_predicate_type(module_, name) {
@@ -645,30 +645,38 @@ fn arrow_const_predicate_type(
   for stmt in module_.top_level_stmts {
     match stmt {
       Const(Ident(n), Any, ArrowFunc(params, TypePredicate(p, t), _, _)) if n ==
-        name => {
-        let ps : Array[@ast.TsType] = []
-        for _ in params {
-          ps.push(Any)
-        }
-        return Some(Func(ps, TypePredicate(p, t)))
-      }
+        name =>
+        return Some(Func(guard_param_slots(params), TypePredicate(p, t)))
       // `export const isUnion = makeGuard("Union")` — see
       // `@checker.factory_guard_predicate`.
       Const(Ident(n), Any, init) if n == name =>
         match @checker.factory_guard_predicate(module_, init) {
-          Some((params, p, t)) => {
-            let ps : Array[@ast.TsType] = []
-            for _ in params {
-              ps.push(Any)
-            }
-            return Some(Func(ps, TypePredicate(p, t)))
-          }
+          Some((params, p, t)) =>
+            return Some(Func(guard_param_slots(params), TypePredicate(p, t)))
           None => ()
         }
       _ => ()
     }
   }
   None
+}
+
+///|
+/// The parameter slots of a guard read as a value: each one `any`, and an
+/// optional or defaulted one `any | undefined`, the spelling the arity rule
+/// reads as omittable (a bare `any` reads as required). excalidraw's
+/// `isBindingElement = <T>(element?: T | null, includeLocked = true): element
+/// is … =>` was "expected 2 argument(s), got 1" at every one-argument call.
+fn guard_param_slots(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
+  params.map(fn(param) {
+    if param.is_rest {
+      @ast.TsType::Rest(Array(Any))
+    } else if param.is_optional || param.default is Some(_) {
+      @ast.TsType::Union([Any, Undefined])
+    } else {
+      @ast.TsType::Any
+    }
+  })
 }
 
 ///|
@@ -2158,7 +2166,7 @@ fn module_value_bindings(
 ) -> Array[(String, @ast.TsType)] {
   let out : Array[(String, @ast.TsType)] = []
   for value in module_.values {
-    out.push((value.name, value.type_))
+    out.push((value.name, spread_objects_as_any(value.type_)))
   }
   for func in module_.funcs {
     out.push((func.name, function_value_type(func)))
@@ -2170,6 +2178,31 @@ fn module_value_bindings(
     out.push((enum_.name, @ast.TsType::Named(enum_.name)))
   }
   out
+}
+
+///|
+/// `ty` with every object type that came from a SPREAD read as `any`. A
+/// value's recorded type is the parser's initializer shape, which writes
+/// each `...x` as a member literally named `@@spread:N`: excalidraw's
+/// `MIME_TYPES = { ...STRING_MIME_TYPES, "excalidraw.svg": …,
+/// ...IMAGE_MIME_TYPES } as const` was read by every importer as having
+/// neither `svg` nor `text`. The spread sources are other values the
+/// parser cannot see into, so the shape is unknowable here — the same
+/// answer the checker's own inference gives an unenumerable spread.
+fn spread_objects_as_any(ty : @ast.TsType) -> @ast.TsType {
+  match ty {
+    Object(fields) =>
+      if fields
+        .iter()
+        .any(fn(f) { f.0 is Literal(k) && k.has_prefix("@@spread:") }) {
+        Any
+      } else {
+        Object(fields.map(fn(f) { (f.0, spread_objects_as_any(f.1)) }))
+      }
+    Tuple(items) => Tuple(items.map(spread_objects_as_any))
+    Array(inner) => Array(spread_objects_as_any(inner))
+    _ => ty
+  }
 }
 
 ///|
@@ -2480,9 +2513,17 @@ pub fn collect_module_graph_issues(
   let parsed_modules : Array[ParsedMtscModule] = []
   let issues : Array[MtscGraphIssue] = []
   let option_header = compiler_option_header(compiler_options)
+  let unreadable : Map[String, Unit] = Map([])
   for source in graph.modules {
     match parse_graph_module(source, option_header~) {
       Ok(module_) => parsed_modules.push(module_)
+      // A context-only module is a dependency's declaration file, which
+      // the program reads and does not check. One this parser cannot read
+      // is far likelier a gap here than a syntax error in a published
+      // package, so it is left untyped instead of reported, as the CLI's
+      // loader already does for the same file.
+      Err(_) if context_only.contains(source.path) =>
+        unreadable[source.path] = ()
       Err(e) =>
         issues.push({
           modulePath: source.path,
@@ -2491,11 +2532,23 @@ pub fn collect_module_graph_issues(
         })
     }
   }
+  // An import of an unreadable dependency is untyped, not missing: its edge
+  // goes, and the import is marked skipped so a relative one is not
+  // reported as an unresolved local module either. Kept, the edge pointed
+  // at a module the graph does not hold, which is "is absent at".
+  let edges = graph.edges.filter(fn(e) { !unreadable.contains(e.targetPath) })
+  let skipped_imports : Map[String, Unit] = Map([])
+  for e in graph.edges {
+    if unreadable.contains(e.targetPath) {
+      skipped_imports[e.importerPath + "\u{0}" + e.moduleSpecifier] = ()
+    }
+  }
   collect_parsed_graph_issues(
     parsed_modules,
-    graph.edges,
+    edges,
     issues,
     context_only~,
+    skipped_imports~,
   )
   issues
 }
@@ -2578,6 +2631,34 @@ fn collect_parsed_graph_issues(
       ambient_globals.push(("@value-origin:" + entry.0, Named("<unkeyed>")))
     }
   }
+  // A MODULE's `declare global { … }` augments the global scope for the
+  // whole program, the way an ambient script's declarations do, whether or
+  // not anything imports the module. Only a module the checked file
+  // reached used to contribute it, so `types: ["vitest/globals"]`, whose
+  // `globals.d.ts` is `declare global { const it: … }` plus `export {}`,
+  // left `describe` / `it` / `expect` undeclared in every test file. The
+  // block's values are typed in the declaring module's scope, which is
+  // what `@value-origin:` names.
+  for module_ in parsed_modules {
+    if is_ambient_script_module(module_) {
+      continue
+    }
+    for ns in module_.module_.namespaces {
+      if ns.name != "<global>" {
+        continue
+      }
+      ambient_modules.push(ns.module_)
+      for entry in module_value_bindings(ns.module_) {
+        if @checker.lib_declares_global_value(entry.0) {
+          continue
+        }
+        ambient_globals.push(entry)
+        ambient_globals.push(
+          ("@value-origin:" + entry.0, Named(module_.source.path)),
+        )
+      }
+    }
+  }
   for module_ in parsed_modules {
     // Still parsed and still ingested by every module that reaches it —
     // only its OWN check is skipped. The ambient scan above runs over
@@ -2589,7 +2670,24 @@ fn collect_parsed_graph_issues(
     let (globals, import_diagnostics) = graph_import_globals(
       module_, parsed_modules, edges, skipped_imports, namespace_cache,
     )
+    // An import binds its name in the module's own scope, which a global
+    // never overrides: `import { shadowed } from "./other"` beside a
+    // `declare global { const shadowed: number }` elsewhere is the import.
+    // The ambient entries come last in `globals`, so pushing them for an
+    // imported name would let the global win.
+    let imported : Map[String, Unit] = Map([])
+    for name in module_.module_.imported_binding_names {
+      imported[name] = ()
+    }
     for entry in ambient_globals {
+      let name = if entry.0.has_prefix("@value-origin:") {
+        entry.0["@value-origin:".length():].to_owned()
+      } else {
+        entry.0
+      }
+      if imported.contains(name) {
+        continue
+      }
       globals.push(entry)
     }
     for diagnostic in import_diagnostics {
