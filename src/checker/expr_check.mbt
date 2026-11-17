@@ -2503,7 +2503,7 @@ fn Resolver::ingest_module(
       Const(
         Ident(name),
         Any,
-        ArrowFunc(params, TypePredicate(pname, target), _, _)
+        ArrowFunc(params, TypePredicate(pname, target), _, _),
       ) => {
         let mut idx = -1
         for i, p in params {

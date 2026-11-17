@@ -972,13 +972,13 @@ async test "emit_typescript_scaffold_from_mbti handles moon.mod source subdir" {
     ),
     create=0o644,
   )
-  let (info_exit, info_output) = @process.collect_output_merged(
+  let (info_exit, info_output) = run_collect_merged(
     "moon",
     ["-C", root, "info"],
     cwd=".",
   )
   if info_exit != 0 {
-    fail("moon info failed: \{info_output.text()}")
+    fail("moon info failed: \{info_output}")
   }
   let out = wbtest_join_path(root, "dist")
   assert_true(
@@ -1038,13 +1038,13 @@ async test "emit_typescript_scaffold_from_mbti handles DSL moon.mod source subdi
     ),
     create=0o644,
   )
-  let (info_exit, info_output) = @process.collect_output_merged(
+  let (info_exit, info_output) = run_collect_merged(
     "moon",
     ["-C", root, "info"],
     cwd=".",
   )
   if info_exit != 0 {
-    fail("moon info failed: \{info_output.text()}")
+    fail("moon info failed: \{info_output}")
   }
   let out = wbtest_join_path(root, "dist")
   assert_true(
@@ -1143,13 +1143,13 @@ async test "emit_typescript_npm_package_from_project creates a publishable npm d
   assert_true(@fs.exists(wbtest_join_path(npm_dir, "index.d.ts")))
   assert_true(@fs.exists(wbtest_join_path(npm_dir, "README.md")))
   assert_true(@fs.exists(wbtest_join_path(npm_dir, "LICENSE")))
-  let (pack_exit, pack_output) = @process.collect_output_merged(
+  let (pack_exit, pack_output) = run_collect_merged(
     "npm",
     ["pack", "--dry-run"],
     cwd=npm_dir,
   )
   if pack_exit != 0 {
-    fail("npm pack --dry-run failed: \{pack_output.text()}")
+    fail("npm pack --dry-run failed: \{pack_output}")
   }
 }
 

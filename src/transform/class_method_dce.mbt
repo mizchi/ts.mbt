@@ -697,17 +697,17 @@ fn collect_iife_class_names(block : @ast.TsBlock) -> Map[String, Bool] {
       Var(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args),
       )
       | Let(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args),
       )
       | Const(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args),
       ) => if args.length() == 0 { out[n] = true }
       _ => ()
     }
@@ -752,17 +752,17 @@ fn iife_prototype_method_names(
       Var(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
       )
       | Let(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
       )
       | Const(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
       ) =>
         if args.length() == 0 && iife_classes.contains(n) {
           for inner in f.body.stmts {
@@ -787,14 +787,14 @@ fn iife_prototype_member_name(stmt : @ast.TsStmt) -> String? {
     PropAssign(
       @ast.TsExpr::PropAccess(@ast.TsExpr::PropAccess(_, "prototype"), name),
       _,
-      _
+      _,
     ) => Some(name)
     Expr(
       @ast.TsExpr::PropAssignExpr(
         @ast.TsExpr::PropAccess(_, "prototype"),
         name,
-        _
-      )
+        _,
+      ),
     ) => Some(name)
     _ => None
   }
@@ -815,17 +815,17 @@ fn collect_static_accesses_block_skipping_iife(
       Var(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
       )
       | Let(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
       )
       | Const(
         @ast.TsBinding::Ident(n),
         _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
       ) =>
         if args.length() == 0 && iife_classes.contains(n) {
           // IIFE class body: skip prototype-assignment LHS reads.
@@ -854,7 +854,7 @@ fn collect_iife_body_accesses(
       PropAssign(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
         _,
-        v
+        v,
       ) =>
         if n == class_name {
           collect_static_accesses_expr(v, out)
@@ -865,10 +865,10 @@ fn collect_iife_body_accesses(
       PropAssign(
         @ast.TsExpr::PropAccess(
           @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-          _
+          _,
         ),
         _,
-        v
+        v,
       ) =>
         if n == class_name {
           collect_static_accesses_expr(v, out)
@@ -1757,7 +1757,7 @@ fn iife_method_assignment_is_dead(
     PropAssign(
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
       method_name,
-      _
+      _,
     ) =>
       if n == class_name &&
         method_name != "constructor" &&
@@ -1771,10 +1771,10 @@ fn iife_method_assignment_is_dead(
     PropAssign(
       @ast.TsExpr::PropAccess(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-        method_name
+        method_name,
       ),
       _,
-      _
+      _,
     ) =>
       if n == class_name &&
         method_name != "constructor" &&
@@ -1788,8 +1788,8 @@ fn iife_method_assignment_is_dead(
       @ast.TsExpr::PropAssignExpr(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
         method_name,
-        _
-      )
+        _,
+      ),
     ) =>
       if n == class_name &&
         method_name != "constructor" &&
@@ -1802,11 +1802,11 @@ fn iife_method_assignment_is_dead(
       @ast.TsExpr::PropAssignExpr(
         @ast.TsExpr::PropAccess(
           @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-          method_name
+          method_name,
         ),
         _,
-        _
-      )
+        _,
+      ),
     ) =>
       if n == class_name &&
         method_name != "constructor" &&

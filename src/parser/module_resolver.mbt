@@ -52,7 +52,7 @@ fn json_parse_string(src : String, start : Int32) -> (String, Int32) {
         'u' =>
           if i + 5 < src.length() {
             let hex = src[i + 2:i + 6].to_owned()
-            let code = @string.parse_int(hex, base=16) catch { _ => -1 }
+            let code = @string.parse_int(hex, radix=16) catch { _ => -1 }
             if code >= 0 && code <= 0x10FFFF {
               buf.write_char(code.unsafe_to_char())
             }

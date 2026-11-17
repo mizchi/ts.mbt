@@ -773,7 +773,7 @@ pub fn class_member_names(block : @ast.TsBlock) -> Map[String, Array[String]] {
                 @ast.TsStmt::PropAssign(@ast.TsExpr::Var("this"), n, _) =>
                   record(decl.name, n)
                 @ast.TsStmt::Expr(
-                  @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), n, _)
+                  @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), n, _),
                 ) => record(decl.name, n)
                 _ => ()
               }

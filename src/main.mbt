@@ -962,14 +962,14 @@ async fn build_moonbit_js_glue_package(
     remove_moonbit_js_glue_dir(context.glue_dir_path)
     return false
   }
-  let (exit_code, output) = @process.collect_output_merged(
+  let (exit_code, output) = run_collect_merged(
     "moon",
     ["build", "--target", "js", context.build_arg],
     cwd=context.module_root,
   )
   if exit_code != 0 {
     println("Build error: moon build --target js failed")
-    println(output.text())
+    println(output)
     remove_moonbit_js_glue_dir(context.glue_dir_path)
     return false
   }
