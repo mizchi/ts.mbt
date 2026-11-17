@@ -5553,6 +5553,60 @@ product surfaces now.
     they are a required property of a literal built in steps (269), the
     `object is possibly undefined` family after a guard this checker does
     not model (195), and array-of-union element relations.
+  Batch GM continues univer largest category first. It takes the five
+  sampled packages from 3,237 reports to 2,755, excalidraw from 616 to
+  602 and effect from 114 to 108, adds none at a new location on any of
+  them, and leaves the oracle unchanged. Every fix was probed against
+  the TS7 nightly with a legal neighbour and an illegal one, and each is a
+  tsc-extra case.
+  - **An accessor's two halves carry their own visibility.** univer's
+    `BaseObject` writes every geometry member as `get left()` beside
+    `protected set left(v)`, and each outside read of `object.left` was
+    TS2445 (171 reports). `protected_members` holds the name whichever half
+    was restricted, so the parser now records each half in an
+    `<accessor-vis:KIND:VIS:NAME>` sentinel. A read uses the getter's
+    visibility and a write the setter's. `b.left += 1` both reads and
+    writes, so a third access kind reports it only when the setter is the
+    stricter half, which is the one case the read walk lets through. That
+    keeps a plain `protected x` under `+=` reported once and not twice,
+    since `record` does not deduplicate. tsc requires a getter to be at
+    least as accessible as its setter (TS2808), so this only ever widens a
+    read.
+  - **`x!` removes `void` and sees through an alias.** univer's lookups
+    return `Nullable<T> = T | null | undefined | void`, and
+    `m.getValue(r)!` kept all three (189 reports). The arm called
+    `non_nullable`, which neither resolves an alias nor removes `void`.
+    tsc strips `void` under `!` (probed: `string | void` asserts to
+    `string`).
+  - **A type guard narrows through a static method, a path and a
+    chain.** `Tools.isDefine(props?.top)` narrowed nothing (92 reports),
+    for two independent reasons. A class used as a value is `any` here, so
+    the method-guard route found no signature for a static, and both guard
+    routes narrowed a bare variable argument only. The class's own
+    declaration answers now, for a single non-accessor static, with its
+    type parameters left as unresolved names, as a generic function
+    guard's are. A path argument narrows under the same dotted key the
+    truthiness guards bind. When the narrowed value cannot be nullish, the
+    receivers a `?.` guarded are non-nullish too. The negative branch of a
+    chain narrows nothing, because the guard may have failed on a nullish
+    receiver.
+  - **The path narrowing exposed a false positive that main has too.**
+    The false branch of a guard removed "every member that fits", which
+    empties `any` to `never`. So `isFiniteNumber(a) ? a : a.value` with
+    `a: any` reported `value` on `never`, and excalidraw's
+    `restoreAppState` reached the same shape through `appState.zoom`.
+    `any` and `unknown` now stay as they are in a false branch, as tsc
+    keeps them. The parser's optional `any` (`zoom?: any`, a parameter
+    `p?: any`) is `any | undefined`, and a member read on it reported the
+    `undefined` half (25 reports across univer and excalidraw). A union
+    holding `any` is `any` as a receiver and as a guard's subject, which
+    is the rule #296 already applied to assignability.
+  - **A module's own value declaration shadows a `declare global` value**,
+    as an import already did. This came from the review of #296.
+  - **What is left.** A member read through an optional property
+    (`c.a.x` with `a?:`) is still not judged, because the strictNullChecks
+    member check reads only a bare variable receiver. Two tsc-extra cells
+    declare it.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
