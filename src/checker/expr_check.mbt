@@ -2883,6 +2883,57 @@ fn required_arity(params : Array[@ast.TsParam]) -> Int32 {
 }
 
 ///|
+/// Whether `ty` accepts `void` once its aliases are expanded. tsc lets a
+/// trailing parameter that accepts `void` be omitted, and the arity helpers
+/// test for `Void` resolver-free, so univer's
+/// `slice(rowParam: Nullable<…>, columnParam: Nullable<…>)`, with
+/// `Nullable<T> = T | null | undefined | void`, read as requiring both
+/// arguments. Only `void` counts here: a `T | undefined` alias is still
+/// required, as tsc says (TS2554).
+fn alias_accepts_void(resolver : Resolver, ty : @ast.TsType) -> Bool {
+  match ty {
+    Named(_) | Applied(_, _) | Union(_) => {
+      let u = resolver.unwrap(ty)
+      union_components(deep_union_members(resolver, u))
+      .iter()
+      .any(fn(p) { p is Void })
+    }
+    _ => false
+  }
+}
+
+///|
+/// The parameter types with every void-accepting alias replaced by `Void`,
+/// for the arity count only.
+fn types_with_void_aliases(
+  resolver : Resolver,
+  params : Array[@ast.TsType],
+) -> Array[@ast.TsType] {
+  params.map(fn(t) {
+    if !(t is Rest(_)) && alias_accepts_void(resolver, t) {
+      @ast.TsType::Void
+    } else {
+      t
+    }
+  })
+}
+
+///|
+/// `types_with_void_aliases` for a rich signature.
+fn params_with_void_aliases(
+  resolver : Resolver,
+  params : Array[@ast.TsParam],
+) -> Array[@ast.TsParam] {
+  params.map(fn(p) {
+    if !p.is_rest && alias_accepts_void(resolver, p.type_) {
+      { ..p, type_: @ast.TsType::Void, }
+    } else {
+      p
+    }
+  })
+}
+
+///|
 /// `required_arity` for a call whose parameter TYPES have been instantiated
 /// (`params`, aligned with `sig`). A parameter whose declared type is a
 /// type parameter is omittable once that parameter is `void` at the call:
@@ -23212,7 +23263,7 @@ fn check_arguments_with_sig(
         param_count += 1
       }
     }
-    let min_args = required_arity(ps)
+    let min_args = required_arity(params_with_void_aliases(ctx.resolver, ps))
     let mut i = 0
     let mut stop = false
     for a in args {
@@ -23399,8 +23450,16 @@ fn check_arguments_with_sig(
       _ => effective_count += 1
     }
   }
-  // Arity check: prefer the rich sig if present.
-  let (min_arity, max_arity) = match sig {
+  // Arity check: prefer the rich sig if present. Arity reads each parameter
+  // type resolver-free, so it sees the void-accepting aliases expanded
+  // (`params_with_void_aliases`); the argument checks below keep the types
+  // as written, so their messages still name the alias.
+  let arity_params = types_with_void_aliases(ctx.resolver, params)
+  let arity_sig = match sig {
+    Some(ps) => Some(params_with_void_aliases(ctx.resolver, ps))
+    None => None
+  }
+  let (min_arity, max_arity) = match arity_sig {
     Some(ps) => {
       let mut has_rest = false
       for p in ps {
@@ -23445,7 +23504,7 @@ fn check_arguments_with_sig(
       if fixed_rest_len >= 0 {
         (required_arity(ps) + fixed_rest_len, ps.length() - 1 + fixed_rest_len)
       } else {
-        let min_ = required_arity_at_call(ps, params)
+        let min_ = required_arity_at_call(ps, arity_params)
         let max_ = if has_rest { -1 } else { ps.length() }
         (min_, max_)
       }
@@ -23467,7 +23526,7 @@ fn check_arguments_with_sig(
         }
       }
       let max_ = if has_rest_ty { -1 } else { params.length() }
-      (required_arity_from_types(params), max_)
+      (required_arity_from_types(arity_params), max_)
     }
   }
   if !has_spread || spread_exact {
@@ -29018,6 +29077,21 @@ fn check_ident_binding_decl(
   // when not, we leave declared as the inferred-from-init type
   // since that's what TS widens to anyway.
   env.declare_type(name, bound_type)
+  // tsc's AUTO-TYPED binding: under `noImplicitAny`, an unannotated `let` or
+  // `var` initialized with the `null` or `undefined` keyword is declared
+  // `any`, and its type evolves with each assignment. So `let e = null;
+  // e = v` is legal, while a read before any assignment still sees `null`.
+  // The declared slot was `null` here, so univer's `let errorValue = null`
+  // followed by `errorValue = value` in a callback was "expected `null`".
+  // Probed: without `noImplicitAny` the declared type really is `null`, and
+  // `void 0` is not auto-typed either. A `const` and an annotated `let e:
+  // null` keep their type.
+  if mutable_ &&
+    ctx.resolver.no_implicit_any &&
+    !is_checkable(declared) &&
+    (init is NullLit || init is Var("undefined")) {
+    env.declare_type(name, Any)
+  }
   // Declared-type narrowing on initialization: `let a: 0 | 1 = 0` makes `a`
   // `0` until something assigns it, exactly as `a = 0` would, while the
   // declared slot stays the union every later assignment is checked

@@ -805,3 +805,36 @@ test "an optional chain ending in a call narrows its receivers" {
     ],
   )
 }
+
+///|
+/// A trailing parameter accepting `void` may be omitted, through an alias
+/// too: univer's `slice(row: Nullable<…>, col: Nullable<…>)` called with one
+/// argument. A `T | undefined` alias is still required, as is a
+/// void-accepting parameter before a required one.
+test "a trailing parameter whose alias accepts void may be omitted" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\ntype MaybeU<T> = T | undefined;\ndeclare function fN(a: number, b: Nullable<number>): void;\ndeclare function fU(a: number, b: MaybeU<number>): void;\ndeclare function fM(a: Nullable<number>, b: number): void;\nfunction okOmitted() { fN(1); }\nfunction badUndefinedAlias() { fU(1); }\nfunction badMiddle() { fM(1); }",
+    ),
+    [
+      "function badUndefinedAlias > call `fU`: expected 2 argument(s), got 1", "function badMiddle > call `fM`: expected 2 argument(s), got 1",
+    ],
+  )
+}
+
+///|
+/// Under `noImplicitAny` an unannotated `let` / `var` initialized with
+/// `null` or `undefined` is declared `any` and evolves (univer's
+/// `let errorValue = null`). A read before any assignment still sees `null`,
+/// and `void 0`, a `const` and `let e: null` are not auto-typed.
+test "a let initialized with null is auto-typed" {
+  assert_eq(
+    issue_lines(
+      "interface V { a: number }\ndeclare const v: V;\nfunction okLet() { let e = null; e = v; return e; }\nfunction okInCallback(xs: V[]) { let e = undefined; xs.forEach((x) => { e = x; }); return e; }\nfunction badRead() { let e = null; return e.a; }\nfunction badVoidZero() { let e = void 0; e = v; return e; }\nfunction badAnnotated() { let e: null = null; e = v; return e; }",
+    ),
+    [
+      "function badRead > PropAccess `.a`: cannot access `.a` — receiver may be null or undefined",
+      "function badVoidZero > assign `e`: expected `undefined` but got `V`", "function badAnnotated > assign `e`: expected `null` but got `V`",
+    ],
+  )
+}

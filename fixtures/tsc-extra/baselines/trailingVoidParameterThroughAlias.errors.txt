@@ -1,0 +1,37 @@
+trailingVoidParameterThroughAlias.ts(20,39): error TS2554: Expected 2 arguments, but got 1.
+trailingVoidParameterThroughAlias.ts(21,43): error TS2554: Expected 2 arguments, but got 1.
+trailingVoidParameterThroughAlias.ts(22,48): error TS2554: Expected 1-2 arguments, but got 3.
+
+
+==== trailingVoidParameterThroughAlias.ts (3 errors) ====
+    // A trailing parameter whose type accepts `void` may be omitted at a call, and
+    // that holds through an alias: univer's `Nullable<T> = T | null | undefined |
+    // void`. Only `void` makes it omissible. A `T | undefined` alias is still a
+    // required argument, and so is a void-accepting parameter followed by a
+    // required one.
+    
+    type Nullable<T> = T | null | undefined | void;
+    type MaybeU<T> = T | undefined;
+    declare function fNullable(a: number, b: Nullable<number>): void;
+    declare function fTwoTrailing(a: number, b: Nullable<number>, c: void): void;
+    declare function fUndefAlias(a: number, b: MaybeU<number>): void;
+    declare function fMiddle(a: Nullable<number>, b: number): void;
+    class Matrix { slice(row: Nullable<number[]>, col: Nullable<number[]>) { return row ?? col; } }
+    
+    export function okAliasTrailing() { fNullable(1); }
+    export function okTwoTrailing() { fTwoTrailing(1); }
+    export function okMethod() { new Matrix().slice([1]); }
+    export function okArrow() { const f = (a: number, b: Nullable<number>) => a + (b ?? 0); return f(1); }
+    
+    export function badUndefinedAlias() { fUndefAlias(1); }
+                                          ~~~~~~~~~~~
+!!! error TS2554: Expected 2 arguments, but got 1.
+!!! related TS6210 trailingVoidParameterThroughAlias.ts:11:41: An argument for 'b' was not provided.
+    export function badVoidBeforeRequired() { fMiddle(1); }
+                                              ~~~~~~~
+!!! error TS2554: Expected 2 arguments, but got 1.
+!!! related TS6210 trailingVoidParameterThroughAlias.ts:12:47: An argument for 'b' was not provided.
+    export function badTooMany() { fNullable(1, 2, 3); }
+                                                   ~
+!!! error TS2554: Expected 1-2 arguments, but got 3.
+    

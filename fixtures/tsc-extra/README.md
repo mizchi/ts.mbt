@@ -182,6 +182,7 @@ guide to whether the behaviour will change.
 | declarations | `moduleLocalNonNullableShadowsLibUtility` | A module's own `type NonNullable<T> = T` is not the lib utility | TS2322 | — |
 | declarations | `namespaceLocalInterfaceShadowsLibPromise` | A namespace-local `interface Promise<T>` shadows the lib type | TS2345 | — |
 | inference | `arrowConstGuardOptionalParameters` | A generic arrow-`const` type guard with an optional and a defaulted parameter: arity, `null`, narrowing | TS2322 TS2554 | — |
+| inference | `autoTypedNullOrUndefinedInitializer` | Under `noImplicitAny`, `let e = null` / `var e = undefined` is declared `any` and evolves; a read before assignment is still `null`, and `void 0`, `const` and `let e: null` are not auto-typed | TS18047 TS2322 | — |
 | inference | `boundViolationsShadowingAndNumericTemplates` | Bound violations through array arguments, shadowing closure parameters, and `${bigint}` / `${number}` / `infer X extends number` on edge-case strings | TS2322 TS2353 | `templateLiteralTypes4` |
 | inference | `contextuallyTypedFunctionValueThroughGuard` | A guard narrows a function value's CONTEXTUAL parameter type (an annotation, an object member, an array element, a `return`, a function expression), not `any` | TS2339 | — |
 | inference | `contextuallyVoidCallbackReturns` | An unannotated callback typed `() => void` may return a value; its own `: void`, or `() => Promise<void>`, may not | TS2322 | — |
@@ -190,6 +191,7 @@ guide to whether the behaviour will change.
 | inference | `intraExpressionInferenceFromMethodReturn` | `setup()`'s return types a sibling method's parameter (reduced, with an illegal neighbour) | TS2339 | `intraExpressionInferences` |
 | inference | `optionalCallbackContextAndGenericInterfaceMethods` | An optional method-typed property as a contextual type, generic interface methods, an overload taking `Object` | TS2322 TS2339 TS2345 | — |
 | inference | `overloadSetAsCallbackAndMissingAwait` | An overload set as a callback, and `Promise<string>` where `string` is expected | TS2322 TS2345 | — |
+| inference | `trailingVoidParameterThroughAlias` | A trailing parameter accepting `void` may be omitted, through an alias such as `Nullable<T>`; a `T \| undefined` alias, and a void parameter before a required one, may not | TS2554 | — |
 | lib | `errorIsErrorAndAugmentedRawJSON` | ES2026 `Error.isError` narrows, and a `RawJSON` augmentation merges | TS2322 TS2339 | — |
 | parser | `contextualKeywordDeclareAsInterfaceName` | `interface declare<T>` | accepted | — |
 | parser | `emptyTypeArgumentListInInstantiationExpression` | `fx<>` is TS1099, `fx<string>` is legal | TS1099 | `instantiationExpressions` |

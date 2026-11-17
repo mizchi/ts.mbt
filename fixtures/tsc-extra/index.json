@@ -1343,6 +1343,77 @@
       ]
     },
     {
+      "case": "inference/autoTypedNullOrUndefinedInitializer.ts",
+      "area": "inference",
+      "name": "autoTypedNullOrUndefinedInitializer",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        18047
+      ],
+      "baseline": "baselines/autoTypedNullOrUndefinedInitializer.errors.txt",
+      "claims": [
+        {
+          "name": "okLetNull",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okVarUndefined",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okAssignedInCallback",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okReadAfterAssign",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 16
+        },
+        {
+          "name": "badReadBeforeAssign",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badVoidZero",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badConst",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badAnnotatedNull",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badPossiblyNullAfterBranch",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
+        }
+      ]
+    },
+    {
       "case": "inference/boundViolationsShadowingAndNumericTemplates.ts",
       "area": "inference",
       "name": "boundViolationsShadowingAndNumericTemplates",
@@ -1957,6 +2028,64 @@
         {
           "name": "okRegexArg",
           "kind": "ok",
+          "fromLine": 22,
+          "toLine": 23
+        }
+      ]
+    },
+    {
+      "case": "inference/trailingVoidParameterThroughAlias.ts",
+      "area": "inference",
+      "name": "trailingVoidParameterThroughAlias",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2554
+      ],
+      "baseline": "baselines/trailingVoidParameterThroughAlias.errors.txt",
+      "claims": [
+        {
+          "name": "okAliasTrailing",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okTwoTrailing",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okMethod",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okArrow",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 19
+        },
+        {
+          "name": "badUndefinedAlias",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badVoidBeforeRequired",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badTooMany",
+          "kind": "bad",
           "fromLine": 22,
           "toLine": 23
         }
