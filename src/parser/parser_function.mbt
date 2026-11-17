@@ -4087,6 +4087,7 @@ fn Parser::parse_declare_class_member_name(
 ///|
 fn Parser::parse_declare_class_base_names(
   self : Parser,
+  class_name : String,
 ) -> (Array[String], Array[String]) {
   let names : Array[String] = []
   let implements_names : Array[String] = []
@@ -4143,6 +4144,23 @@ fn Parser::parse_declare_class_base_names(
           implements_names.push(full_name)
         } else {
           names.push(full_name)
+          // `extends B<A1, A2>` records its type arguments, as the runtime
+          // class parsers do, so a member inherited from `B` is read with
+          // `B`'s parameters substituted. rxjs's `declare class Subject<T>
+          // extends Observable<T>` lost the `<T>` here, so `pipe` on a
+          // `Subject<number>` saw `Observable`'s raw `T`. Bound inlining is
+          // off for the same reason as there. A list that does not parse as
+          // simple types falls back to the angle-bracket skip below.
+          if self.check(Lt) {
+            let saved_inline = self.no_bound_inline
+            self.no_bound_inline = true
+            match self.try_parse_simple_type_args() {
+              Some(targs) =>
+                self.class_base_type_args.push((class_name, full_name, targs))
+              None => ()
+            }
+            self.no_bound_inline = saved_inline
+          }
         }
         expect_name = false
       }
@@ -4315,7 +4333,7 @@ fn Parser::parse_declare_class(
       type_param_bounds,
     )
   }
-  let (base_names, implements_names) = self.parse_declare_class_base_names()
+  let (base_names, implements_names) = self.parse_declare_class_base_names(name)
   let _ = self.expect(LBrace)
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []

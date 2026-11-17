@@ -838,3 +838,23 @@ test "a let initialized with null is auto-typed" {
     ],
   )
 }
+
+///|
+/// A method overload set declared on a generic base class is inherited
+/// whole, with the base's `T` from the receiver: rxjs's `Subject<T> extends
+/// Observable<T>` declares no `pipe` (24 univer reports of "expected 0
+/// argument(s)"). Three things were missing: the overload count walked
+/// interfaces only, the candidates kept the class's raw `T` (so even an
+/// `Observable<number>` receiver selected `pipe(): Observable<T>`), and a
+/// `declare class` did not record its `extends B<…>` arguments. An override
+/// with one signature hides the set.
+test "an inherited overload set on a generic base class" {
+  assert_eq(
+    issue_lines(
+      "interface Op<T, R> { (source: Obs<T>): Obs<R> }\ndeclare class Obs<T> { readonly last: T; pipe(): Obs<T>; pipe<A>(op1: Op<T, A>): Obs<A>; }\ndeclare class Sub<T> extends Obs<T> { next(v: T): void }\ndeclare class Narrow<T> extends Obs<T> { pipe(): Obs<T> }\ndeclare function take<T>(n: number): Op<T, T>;\ndeclare function toStr(): Op<number, string>;\nfunction okInherited(s: Sub<number>) { return s.pipe(take(1)); }\nfunction okReturn(s: Sub<number>): Obs<string> { return s.pipe(toStr()); }\nfunction okDirect(s: Obs<number>): Obs<string> { return s.pipe(toStr()); }\nfunction badOverride(s: Narrow<number>) { return s.pipe(take(1)); }\nfunction badReturn(s: Sub<number>): Obs<number> { return s.pipe(toStr()); }",
+    ),
+    [
+      "function badOverride > call `pipe`: expected 0 argument(s), got 1", "function badReturn > return: expected `Obs<number>` but got `Obs<string>`",
+    ],
+  )
+}

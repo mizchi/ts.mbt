@@ -6967,6 +6967,68 @@ fn Resolver::method_type_params_of(
 /// own binders from its parameters; a name only another declaration binds
 /// does not occur in the selected one, or binds `any` where it does, which
 /// can only lose a finding.
+/// The class that declares the instance method `meth` for a receiver, with
+/// the substitution for that class's own type parameters. The walk follows
+/// `extends` to the first class that declares the method, carrying the type
+/// arguments down each edge (`class_base_type`), because a declaration there
+/// hides the base's. rxjs's `Subject<T> extends Observable<T>` declares no
+/// `pipe`, so a `Subject<number>` receiver reaches `Observable` with
+/// `T = number`. When the receiver's arguments do not line up with the
+/// class's parameters (a bare `Named` receiver), the map is empty and the
+/// signatures stay as written, which is what every caller saw before.
+fn Resolver::class_declaring_method(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> (String, Map[String, @ast.TsType])? {
+  let (n0, args0) : (String, Array[@ast.TsType]) = match self.unwrap(recv) {
+    Named(n) => (n, [])
+    Applied(n, a) => (n, a)
+    _ => return None
+  }
+  let mut n = n0
+  let mut args = args0
+  for _ in 0..<16 {
+    guard self.classes.get(n) is Some(cls) else { return None }
+    let subst : Map[String, @ast.TsType] = Map([])
+    if args.length() == cls.type_params.length() {
+      for i, tp in cls.type_params {
+        subst[tp] = args[i]
+      }
+    }
+    if cls.methods.iter().any(fn(m) { m.name == meth && !m.is_static }) {
+      return Some((n, subst))
+    }
+    let mut next : String? = None
+    for b in cls.base_names {
+      if b != "<expr-base>" && self.classes.contains(b) {
+        next = Some(b)
+        break
+      }
+    }
+    guard next is Some(b) else { return None }
+    let base_ty = self.class_base_type(n, b)
+    let base_ty = if subst.is_empty() {
+      base_ty
+    } else {
+      substitute_params(base_ty, subst)
+    }
+    match base_ty {
+      Applied(bn, ba) => {
+        n = bn
+        args = ba
+      }
+      Named(bn) => {
+        n = bn
+        args = []
+      }
+      _ => return None
+    }
+  }
+  None
+}
+
+///|
 fn Resolver::method_overload_type_params(
   self : Resolver,
   recv : @ast.TsType,
@@ -7004,6 +7066,20 @@ fn Resolver::method_overload_type_params(
         }
       }
     None => ()
+  }
+  // An inherited overload set's binders live on the base that declares it.
+  match self.class_declaring_method(recv, meth) {
+    Some((key, _)) if key != name =>
+      match self.classes.get(key) {
+        Some(cls) =>
+          for m in cls.methods {
+            if m.name == meth && !m.is_static {
+              add(m.type_params)
+            }
+          }
+        None => ()
+      }
+    _ => ()
   }
   out
 }
@@ -7411,8 +7487,15 @@ fn Resolver::method_overload_signatures(
       // silence the argument check. Repeated `fields` entries are how
       // the parser records an interface's overloads —
       // `interface_method_arity_reliable` says so at its own site.
-      match self.classes.get(n) {
-        Some(cls) => {
+      // The class is the one that DECLARES `meth`, which may be a base
+      // (`class_declaring_method`), and its type parameters are substituted
+      // from the receiver. Both were missing: a `Subject<number>` receiver
+      // found no `pipe` at all, and an `Observable<number>` one kept the raw
+      // `T`, so `pipe<A>(op: OperatorFunction<T, A>)` matched no argument
+      // and the call fell back to the first declaration, `pipe():
+      // Observable<T>`.
+      match self.class_declaring_method(recv, meth) {
+        Some((key, subst)) if self.classes.get(key) is Some(cls) => {
           // Overload *signatures* (no body) are the callable surface in TS;
           // the implementation signature (with a body) is not, so prefer the
           // former when both are present.
@@ -7430,12 +7513,23 @@ fn Resolver::method_overload_signatures(
           for m in chosen {
             let ps : Array[@ast.TsType] = []
             for p in m.params {
-              ps.push(p.1)
+              ps.push(
+                if subst.is_empty() {
+                  p.1
+                } else {
+                  substitute_params(p.1, subst)
+                },
+              )
             }
-            candidates.push((ps, m.return_type))
+            let ret = if subst.is_empty() {
+              m.return_type
+            } else {
+              substitute_params(m.return_type, subst)
+            }
+            candidates.push((ps, ret))
           }
         }
-        None => ()
+        _ => ()
       }
       if candidates.length() == 0 {
         match self.interfaces.get(n) {

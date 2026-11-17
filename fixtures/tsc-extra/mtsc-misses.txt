@@ -18,3 +18,4 @@ declareClassRestOverloadsAndMergedRestMethod:badNoOverloadBoolean  a rest overlo
 declareClassRestOverloadsAndMergedRestMethod:badNoOverloadTwoNumbers  same merge: `...args: any[]` accepts any argument count and type
 nonNullAssertionStripsAliasedVoid:badOptionalMemberUnguarded  a member read through an optional property (`c.a.x`) is not judged; the strictNullChecks member check reads only a bare variable receiver
 optionalAnyReadsAsAny:badOptionalNumberProperty  a member read through an optional property (`s.n.toFixed()`) is not judged; the strictNullChecks member check reads only a bare variable receiver
+inheritedOverloadSetOnGenericBaseClass:badTooManyOperators  an overload set's arguments are not judged at a method call, because nothing there can tell which signature they were written for; the call abstains rather than judging overload #1

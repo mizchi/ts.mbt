@@ -127,6 +127,77 @@
       "claims": []
     },
     {
+      "case": "classes/inheritedOverloadSetOnGenericBaseClass.ts",
+      "area": "classes",
+      "name": "inheritedOverloadSetOnGenericBaseClass",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2554
+      ],
+      "baseline": "baselines/inheritedOverloadSetOnGenericBaseClass.errors.txt",
+      "claims": [
+        {
+          "name": "okInheritedOne",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okInheritedTwo",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "OkFieldReceiver",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okInheritedReturnType",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "okDirectReturnType",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 28
+        },
+        {
+          "name": "badOverrideHidesTheSet",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "badInheritedReturnType",
+          "kind": "bad",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badDirectReturnType",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "badTooManyOperators",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 33
+        }
+      ]
+    },
+    {
       "case": "classes/noImplicitOverrideThroughMixinBase.ts",
       "area": "classes",
       "name": "noImplicitOverrideThroughMixinBase",

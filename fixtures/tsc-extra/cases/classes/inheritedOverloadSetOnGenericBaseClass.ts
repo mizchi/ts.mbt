@@ -1,0 +1,35 @@
+// @strict: true
+// @target: esnext
+
+// A method overload set declared on a generic base class is inherited
+// whole: rxjs's `declare class Subject<T> extends Observable<T>` declares no
+// `pipe`, and `subject.pipe(take(1))` picks `pipe<A>(op1)` from `Observable`,
+// with `T` taken from `Subject<number>`. The return type follows the selected
+// overload, on the base and through the subclass alike. A subclass that
+// declares the method once hides the base's whole set. (`last` makes `Obs`
+// covariant in `T`, as rxjs's `Observable` is through `operator`; without a
+// member that uses `T` outside a method, tsc relates `Obs<string>` and
+// `Obs<number>` structurally and accepts the return-type mismatches.)
+
+interface Op<T, R> { (source: Obs<T>): Obs<R> }
+declare class Obs<T> {
+  readonly last: T;
+  pipe(): Obs<T>;
+  pipe<A>(op1: Op<T, A>): Obs<A>;
+  pipe<A, B>(op1: Op<T, A>, op2: Op<A, B>): Obs<B>;
+}
+declare class Sub<T> extends Obs<T> { next(v: T): void }
+declare class Narrow<T> extends Obs<T> { pipe(): Obs<T> }
+declare function take<T>(n: number): Op<T, T>;
+declare function toStr(): Op<number, string>;
+
+export function okInheritedOne(s: Sub<number>) { return s.pipe(take(1)); }
+export function okInheritedTwo(s: Sub<number>) { return s.pipe(take(1), take(2)); }
+export class OkFieldReceiver { private readonly a = new Sub<number>(); m() { return this.a.pipe(take(1)); } }
+export function okInheritedReturnType(s: Sub<number>): Obs<string> { return s.pipe(toStr()); }
+export function okDirectReturnType(s: Obs<number>): Obs<string> { return s.pipe(toStr()); }
+
+export function badOverrideHidesTheSet(s: Narrow<number>) { return s.pipe(take(1)); }
+export function badInheritedReturnType(s: Sub<number>): Obs<number> { return s.pipe(toStr()); }
+export function badDirectReturnType(s: Obs<number>): Obs<number> { return s.pipe(toStr()); }
+export function badTooManyOperators(s: Sub<number>) { return s.pipe(take(1), take(2), take(3)); }
