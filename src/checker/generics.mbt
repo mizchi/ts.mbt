@@ -406,3 +406,19 @@ fn scoped_without(
   }
   out
 }
+
+///|
+/// Whether the default lib declares a global value named `name` (the
+/// generated `lib_globals` registry). The graph checker asks it before
+/// publishing a module's `declare global { var name: … }`: @types/node
+/// declares `navigator`, `crypto` and `performance` there with conditional
+/// types this checker cannot evaluate, and publishing them shadowed the DOM
+/// lib's declarations, so every member read as missing. A global `var`
+/// redeclaration must have the lib's type anyway (TS2403), so keeping the
+/// lib's answer is the type tsc uses. The registry also lists the names
+/// only `@types/node` declares (`process`, `require`, `__dirname`, …),
+/// and for those the module's declaration IS the declaration: skipping
+/// them left every `process` read "cannot find name".
+pub fn lib_declares_global_value(name : String) -> Bool {
+  is_lib_global_value(name) && !is_node_only_global_value(name)
+}

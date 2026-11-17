@@ -448,6 +448,48 @@ fn ClassIndex::slot(
 }
 
 ///|
+/// One constructor signature accepting the arguments of two overloads of
+/// a `declare class` constructor: the longer list, with each shared
+/// position typed as the union of the two and each position only the
+/// longer one has made optional. A rest overload already accepts any count
+/// past its fixed prefix, so it is kept as written. The merge accepts some
+/// argument lists no single overload does (`(a: string)` plus
+/// `(a: number, b: string)` admits `("x", "y")`), which loses a finding
+/// and cannot report a call that matches an overload.
+fn merge_ambient_constructor_overloads(
+  prev : Array[(String, @ast.TsType)],
+  prev_rest : Array[Bool],
+  next : Array[(String, @ast.TsType)],
+  next_rest : Array[Bool],
+) -> (Array[(String, @ast.TsType)], Array[Bool]) {
+  if next_rest.iter().any(fn(r) { r }) {
+    return (next, next_rest)
+  }
+  if prev_rest.iter().any(fn(r) { r }) {
+    return (prev, prev_rest)
+  }
+  let (long, short) = if next.length() > prev.length() {
+    (next, prev)
+  } else {
+    (prev, next)
+  }
+  let out : Array[(String, @ast.TsType)] = []
+  for i, p in long {
+    if i < short.length() {
+      let other = short[i].1
+      out.push((p.0, if p.1 == other { p.1 } else { Union([p.1, other]) }))
+    } else {
+      let optional = match p.1 {
+        Union(parts) if parts.contains(@ast.TsType::Undefined) => p.1
+        t => @ast.TsType::Union([t, Undefined])
+      }
+      out.push((p.0, optional))
+    }
+  }
+  (out, [])
+}
+
+///|
 /// Record `cls` under `name`. The only writer of `classes`, so that the
 /// class index has exactly one place to be invalidated from — see
 /// `ClassIndex`.
@@ -456,6 +498,34 @@ fn Resolver::put_class(
   name : String,
   cls : @ast.TsClassDecl,
 ) -> Unit {
+  // A `declare class` keeps only its LAST constructor signature in
+  // `constructor_params`, which is what the bridge generator reads. The
+  // checker answers for all of them, so @types/react's `constructor(props:
+  // P); constructor(props: P, context: any);` accepts `new App(props)`
+  // instead of reporting "expected 2 argument(s), got 1".
+  let cls = if cls.ambient_constructor_overloads.length() > 1 {
+    let first = cls.ambient_constructor_overloads[0]
+    let mut params = first.0
+    let mut rest = first.1
+    for i in 1..<cls.ambient_constructor_overloads.length() {
+      let next = cls.ambient_constructor_overloads[i]
+      let (p, rf) = merge_ambient_constructor_overloads(
+        params,
+        rest,
+        next.0,
+        next.1,
+      )
+      params = p
+      rest = rf
+    }
+    {
+      ..cls,
+      constructor_params: Some(params),
+      constructor_param_is_rest: rest,
+    }
+  } else {
+    cls
+  }
   r.classes[name] = cls
   let idx = r.class_index
   if idx.built {
@@ -1026,6 +1096,124 @@ fn rename_interface_refs(
     index_signatures,
     type_param_bounds,
     method_type_param_bounds,
+  }
+}
+
+///|
+/// A namespace is one scope across every body that declares it, so a bare
+/// name in one body can mean a type ANOTHER body declares: @types/node's
+/// `declare module "node:process" { global { namespace NodeJS { interface
+/// ProcessEnv extends Dict<string> {} } } }` names the `NodeJS.Dict` that
+/// `globals.d.ts` declares, and reading `Dict` as unresolved left
+/// `process.env.X` "does not exist" in every program that reads one.
+/// `qualify_namespace_local_refs` qualifies only what its own body
+/// declares, so this runs once the whole program is in the tables: a bare
+/// reference inside a namespaced interface or alias moves to the nearest
+/// enclosing namespace's member of that name. Only a name that is NOT
+/// itself in a table moves, so a reference that resolved before still
+/// resolves to the same declaration.
+fn qualify_cross_body_namespace_refs(r : Resolver) -> Unit {
+  let members : Map[String, Map[String, Unit]] = Map([])
+  let note = fn(key : String) {
+    if key.contains("@") {
+      return
+    }
+    match key.rev_find(".") {
+      Some(dot) => {
+        let prefix = key[:dot + 1].to_owned()
+        let name = key[dot + 1:].to_owned()
+        match members.get(prefix) {
+          Some(m) => m[name] = ()
+          None => members[prefix] = Map([(name, ())])
+        }
+      }
+      None => ()
+    }
+  }
+  for k, _ in r.interfaces {
+    note(k)
+  }
+  for k, _ in r.type_aliases {
+    note(k)
+  }
+  for k, _ in r.enums {
+    note(k)
+  }
+  if members.length() == 0 {
+    return
+  }
+  let bare_known = fn(n : String) {
+    r.interfaces.contains(n) ||
+    r.type_aliases.contains(n) ||
+    r.enums.contains(n) ||
+    r.classes.contains(n)
+  }
+  let cache : Map[String, Map[String, String]] = Map([])
+  let renames_for = fn(key : String) -> Map[String, String] {
+    let prefix = match key.rev_find(".") {
+      Some(dot) => key[:dot + 1].to_owned()
+      None => return Map([])
+    }
+    match cache.get(prefix) {
+      Some(m) => return m
+      None => ()
+    }
+    let out : Map[String, String] = Map([])
+    // Innermost enclosing namespace first: `A.B.` before `A.`.
+    let mut p = prefix
+    while p != "" {
+      match members.get(p) {
+        Some(m) =>
+          for n, _ in m {
+            if !out.contains(n) && !bare_known(n) {
+              out[n] = p + n
+            }
+          }
+        None => ()
+      }
+      let inner = p[:p.length() - 1]
+      p = match inner.rev_find(".") {
+        Some(dot) => inner[:dot + 1].to_owned()
+        None => ""
+      }
+    }
+    cache[prefix] = out
+    out
+  }
+  let iface_updates : Array[(String, @ast.TsInterface)] = []
+  for k, i in r.interfaces {
+    if k.contains("@") || !k.contains(".") {
+      continue
+    }
+    let renames = renames_for(k)
+    if renames.length() > 0 {
+      iface_updates.push((k, rename_interface_refs(i, renames)))
+    }
+  }
+  for u in iface_updates {
+    r.interfaces[u.0] = u.1
+  }
+  let alias_updates : Array[(String, @ast.TsTypeAlias)] = []
+  for k, a in r.type_aliases {
+    if k.contains("@") || !k.contains(".") {
+      continue
+    }
+    let renames = renames_for(k)
+    if renames.length() == 0 {
+      continue
+    }
+    let own : Map[String, String] = Map([])
+    for n, v in renames {
+      if !a.type_params.contains(n) {
+        own[n] = v
+      }
+    }
+    if own.length() > 0 {
+      alias_updates.push((k, { ..a, type_: rename_type_refs(a.type_, own), }))
+    }
+  }
+  for u in alias_updates {
+    r.type_aliases[u.0] = u.1
   }
 }
 
@@ -3967,6 +4155,55 @@ fn unwrap_seen_add(
 /// instantiation; this function only returns the non-generic prototype
 /// shape for those entries so call-site checks still see a sensible
 /// formal-parameter type for the argument.
+
+///|
+/// The element type of `xs.flat()` for an `xs` of element `elem`: one level
+/// of nesting removed, which is `flat`'s default depth. It returned the
+/// receiver's own type, so `getAreas().flat()[i]` on univer's
+/// `(BaseReferenceObject | ErrorValueObject)[][]` read as an array. A piece
+/// this table cannot see into — a name that may alias an array, or one
+/// still nested after the level is removed, which a `depth` argument would
+/// flatten further — is `any`, losing a finding rather than inventing one.
+fn flat_one_level(elem : @ast.TsType) -> @ast.TsType {
+  let out : Array[@ast.TsType] = []
+  fn leaf(t : @ast.TsType, out : Array[@ast.TsType]) -> Unit {
+    match t {
+      Array(_) | Tuple(_) | Applied(_, _) | Named(_) => out.push(Any)
+      _ => out.push(t)
+    }
+  }
+  fn go(t : @ast.TsType, out : Array[@ast.TsType]) -> Unit {
+    match t {
+      Union(parts) =>
+        for p in parts {
+          go(p, out)
+        }
+      Array(inner) | Applied("Array" | "ReadonlyArray", [inner]) =>
+        leaf(inner, out)
+      Tuple(items) =>
+        for it in items {
+          match it {
+            Rest(Array(inner)) => leaf(inner, out)
+            Rest(_) => out.push(Any)
+            other => leaf(other, out)
+          }
+        }
+      Named(_) | Applied(_, _) => out.push(Any)
+      other => out.push(other)
+    }
+  }
+  go(elem, out)
+  if out.contains(Any) {
+    return Any
+  }
+  match out.length() {
+    0 => Never
+    1 => out[0]
+    _ => Union(out)
+  }
+}
+
+///|
 fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
   let arr_t = @ast.TsType::Array(elem)
   let nullable_elem = narrow_union(elem, @ast.TsType::Undefined)
@@ -4037,7 +4274,7 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
     "concat" =>
       Some(@ast.TsType::Func([rest(narrow_union(elem, arr_t))], arr_t))
     "slice" => Some(@ast.TsType::Func([opt_num, opt_num], arr_t))
-    "flat" => Some(@ast.TsType::Func([opt_num], arr_t))
+    "flat" => Some(@ast.TsType::Func([opt_num], Array(flat_one_level(elem))))
     "join" =>
       Some(@ast.TsType::Func([opt(@ast.TsType::String_)], @ast.TsType::String_))
     "toString" => Some(@ast.TsType::Func([], @ast.TsType::String_))
@@ -4675,6 +4912,78 @@ fn is_readonly_field(
 }
 
 ///|
+/// A member of the class `n` instantiated at `args`, instance side only
+/// (static members aren't reachable via `recv.field` on an instance).
+/// Shared by the `Applied` arm of `lookup_field_core` for a class, and for
+/// the CLASS half of a class merged with an interface of the same name.
+fn Resolver::lookup_applied_class_member(
+  self : Resolver,
+  n : String,
+  args : Array[@ast.TsType],
+  field : String,
+) -> @ast.TsType? {
+  guard self.classes.get(n) is Some(cls) else { return None }
+  // Same shape as the interface arm, walking class members
+  // (instance only — static members aren't reachable via
+  // `recv.field` on an instance).
+  let bindings : Map[String, @ast.TsType] = Map([])
+  let limit = if args.length() < cls.type_params.length() {
+    args.length()
+  } else {
+    cls.type_params.length()
+  }
+  let mut i = 0
+  while i < limit {
+    bindings[cls.type_params[i]] = args[i]
+    i = i + 1
+  }
+  for p in cls.properties {
+    if p.name == field && !p.is_static {
+      return Some(substitute_params(p.type_, bindings))
+    }
+  }
+  for m in cls.methods {
+    if m.name == field && !m.is_static {
+      // Method-level type parameters shadow the class's: a
+      // `foo3<T>(t: T, u: U)` declares a fresh `T` that is
+      // unrelated to the class's instantiated `T`. Drop any
+      // shadowed names from the substitution map so the method's
+      // own generics stay as bare `Named(...)` references (which
+      // the assignability check then leaves unconstrained)
+      // instead of being resolved to the class's type argument.
+      let method_bindings = if m.type_params.length() > 0 {
+        let scoped : Map[String, @ast.TsType] = Map([])
+        for kv in bindings {
+          if !m.type_params.contains(kv.0) {
+            scoped[kv.0] = kv.1
+          }
+        }
+        scoped
+      } else {
+        bindings
+      }
+      let param_types : Array[@ast.TsType] = []
+      for mp in m.params {
+        param_types.push(substitute_params(mp.1, method_bindings))
+      }
+      return Some(
+        @ast.TsType::Func(
+          param_types,
+          substitute_params(m.return_type, method_bindings),
+        ),
+      )
+    }
+  }
+  for base in cls.base_names {
+    match self.lookup_field(self.class_base_type(n, base), field) {
+      Some(t) => return Some(substitute_params(t, bindings))
+      None => ()
+    }
+  }
+  None
+}
+
+///|
 fn Resolver::lookup_field_core(
   self : Resolver,
   recv : @ast.TsType,
@@ -4790,6 +5099,14 @@ fn Resolver::lookup_field_core(
             }
             i = i + 1
           }
+          // The class half of a class + interface merge, as in the
+          // `Applied` arm below.
+          if self.classes.contains(n) {
+            match self.lookup_class_field(n, field) {
+              Some(t) => return Some(t)
+              None => ()
+            }
+          }
           // Index-signature fallback: when no named field / extends
           // chain entry matched, consult the interface's index
           // signatures so `d.foo` on `{ [k: string]: V }` resolves to
@@ -4835,7 +5152,19 @@ fn Resolver::lookup_field_core(
     // TypeScript utility types — handled at the lookup layer so we don't
     // need a structural rewrite of the whole type. The handler returns
     // the field's specialised type or `None` to keep falling through.
-    Applied("Record", [_, v]) => Some(v)
+    // A CLOSED key set names exactly its keys: `Record<UnitAction,
+    // boolean> & { ruleId?: string }` — univer's `ICellPermission` — read
+    // `ruleId` as `boolean`, because the intersection asks the `Record`
+    // first and the `Record` answered for every name. An open key type
+    // (`string`, a type parameter) still answers for any.
+    Applied("Record", [k, v]) => {
+      let closed = record_closed_key_names(k, self)
+      if closed.length() == 0 || closed.contains(field) {
+        Some(v)
+      } else {
+        None
+      }
+    }
     Applied("Partial", [t]) =>
       match self.lookup_field(t, field) {
         Some(inner) => Some(narrow_union(inner, @ast.TsType::Undefined))
@@ -4930,6 +5259,15 @@ fn Resolver::lookup_field_core(
             }
             j = j + 1
           }
+          // A class merged with this interface (`declare class C<P>` plus
+          // `interface C<P> extends L {}`, which is how @types/react
+          // declares `Component`) contributes its own members: the
+          // interface half answering alone hid every one of them, so a
+          // subclass of `React.Component` had no `props`.
+          match self.lookup_applied_class_member(n, args, field) {
+            Some(t) => return Some(t)
+            None => ()
+          }
           // Index-signature fallback with the outer-interface bindings
           // applied to the signature's value type.
           match index_signature_value(iface.index_signatures, field) {
@@ -4937,70 +5275,7 @@ fn Resolver::lookup_field_core(
             None => None
           }
         }
-        None =>
-          match self.classes.get(n) {
-            Some(cls) => {
-              // Same shape as the interface arm, walking class members
-              // (instance only — static members aren't reachable via
-              // `recv.field` on an instance).
-              let bindings : Map[String, @ast.TsType] = Map([])
-              let limit = if args.length() < cls.type_params.length() {
-                args.length()
-              } else {
-                cls.type_params.length()
-              }
-              let mut i = 0
-              while i < limit {
-                bindings[cls.type_params[i]] = args[i]
-                i = i + 1
-              }
-              for p in cls.properties {
-                if p.name == field && !p.is_static {
-                  return Some(substitute_params(p.type_, bindings))
-                }
-              }
-              for m in cls.methods {
-                if m.name == field && !m.is_static {
-                  // Method-level type parameters shadow the class's: a
-                  // `foo3<T>(t: T, u: U)` declares a fresh `T` that is
-                  // unrelated to the class's instantiated `T`. Drop any
-                  // shadowed names from the substitution map so the method's
-                  // own generics stay as bare `Named(...)` references (which
-                  // the assignability check then leaves unconstrained)
-                  // instead of being resolved to the class's type argument.
-                  let method_bindings = if m.type_params.length() > 0 {
-                    let scoped : Map[String, @ast.TsType] = Map([])
-                    for kv in bindings {
-                      if !m.type_params.contains(kv.0) {
-                        scoped[kv.0] = kv.1
-                      }
-                    }
-                    scoped
-                  } else {
-                    bindings
-                  }
-                  let param_types : Array[@ast.TsType] = []
-                  for mp in m.params {
-                    param_types.push(substitute_params(mp.1, method_bindings))
-                  }
-                  return Some(
-                    @ast.TsType::Func(
-                      param_types,
-                      substitute_params(m.return_type, method_bindings),
-                    ),
-                  )
-                }
-              }
-              for base in cls.base_names {
-                match self.lookup_field(self.class_base_type(n, base), field) {
-                  Some(t) => return Some(substitute_params(t, bindings))
-                  None => ()
-                }
-              }
-              None
-            }
-            None => None
-          }
+        None => self.lookup_applied_class_member(n, args, field)
       }
     Object(entries) => {
       // Named-property lookup first — `Literal("foo")` keyed entry.
@@ -8180,10 +8455,18 @@ fn class_has_private_member(resolver : Resolver, name : String) -> Bool {
 /// so assignability is blocked when:
 ///  - the *target* is a class with a private/protected member and the source
 ///    is neither that class nor a subclass of it (which inherits the member);
-///  - or the *source* is a class with a private/protected member and the
-///    target is neither that class nor a superclass of it -- a structural
-///    object / interface / unrelated class can never supply the private
-///    member.
+///  - or the *source* is a class with a private/protected member, the target
+///    is neither that class nor a superclass of it, and the target DECLARES a
+///    member of that name (`var a: { foo: string } = e` where
+///    `class E { private foo }`): only a target asking for the member can
+///    collide with it. A target that does not mention it is an ordinary
+///    structural question, so `const o: { b: number } = new Arr()` and the
+///    same class into an interface or into `Base | Ref` are legal (probed);
+///    reading every such target as blocked reported univer's
+///    `ArrayValueObject` against `BaseValueObject | BaseReferenceObject`
+///    66 times.
+///  - a UNION target is blocked only when every member is, and a UNION
+///    source when any member is.
 /// Returns true when the assignment must be flagged. Only fires when the
 /// relevant side resolves to a known class; everything else abstains. Callers
 /// reach this only after the nominal `is_assignable_to` already returned false
@@ -8193,6 +8476,28 @@ fn nominal_private_blocks(
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Bool {
+  // A UNION source is assignable when every member is, so it is blocked
+  // when ANY member is: `async ? new AsyncFn() : new Fn()` against a base
+  // class both extend is legal, and reading the union as "not a class"
+  // blocked it outright. A nullish member is left to the null checks.
+  match resolver.unwrap(source) {
+    Union(members) =>
+      return members
+        .iter()
+        .any(fn(m) {
+          !(resolver.unwrap(m) is (Null | Undefined)) &&
+          nominal_private_blocks(m, target, resolver)
+        })
+    _ => ()
+  }
+  match resolver.unwrap(target) {
+    Union(members) =>
+      return members.length() > 0 &&
+        members
+        .iter()
+        .all(fn(m) { nominal_private_blocks(source, m, resolver) })
+    _ => ()
+  }
   let s_class = match resolver.unwrap(source) {
     Named(n) => if resolver.classes.get(n) is Some(_) { Some(n) } else { None }
     _ => None
@@ -8214,12 +8519,62 @@ fn nominal_private_blocks(
   match s_class {
     Some(sn) =>
       if class_has_private_member(resolver, sn) {
-        match t_class {
-          Some(tn) => if !class_extends(resolver, sn, tn) { return true }
-          None => return true
+        let related = match t_class {
+          Some(tn) => class_extends(resolver, sn, tn)
+          None => false
+        }
+        if !related && target_declares_restricted_member(resolver, sn, target) {
+          return true
         }
       }
     None => ()
+  }
+  false
+}
+
+///|
+/// True when `target` declares a member with the name of a `private` /
+/// `protected` member of class `cls` or one of its bases. An interface with
+/// heritage abstains: it may inherit the member from `cls` itself
+/// (`interface I extends C {}`), where the declaration is the same one.
+fn target_declares_restricted_member(
+  resolver : Resolver,
+  cls : String,
+  target : @ast.TsType,
+) -> Bool {
+  let t = resolver.unwrap(target)
+  match t {
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) => if iface.extends_names.length() > 0 { return false }
+        None => if resolver.classes.get(n) is None { return false }
+      }
+    Object(_) | Struct(_, _) => ()
+    _ => return false
+  }
+  let mut current = cls
+  let mut depth = 0
+  while depth < 32 {
+    depth = depth + 1
+    match resolver.classes.get(current) {
+      Some(decl) => {
+        for name in decl.private_members {
+          if resolver.lookup_field(t, name) is Some(_) {
+            return true
+          }
+        }
+        for name in decl.protected_members {
+          if resolver.lookup_field(t, name) is Some(_) {
+            return true
+          }
+        }
+        if decl.base_names.length() == 0 {
+          return false
+        }
+        current = decl.base_names[0]
+      }
+      None => return false
+    }
   }
   false
 }
@@ -10484,6 +10839,59 @@ fn is_numeric_enum(decl : @ast.TsEnumDecl) -> Bool {
     }
   }
   decl.members.length() > 0
+}
+
+///|
+/// True when `name` is an enum with a member that is not a string, so a
+/// `number` is assignable to it (a string enum rejects one; an enum the
+/// table does not hold is not judged here).
+fn enum_may_hold_number(resolver : Resolver, name : String) -> Bool {
+  match resolver.enums.get(name) {
+    Some(decl) =>
+      decl.members.iter().any(fn(m) { !(m.value is Some(String(_))) })
+    None => false
+  }
+}
+
+///|
+/// `number`, a numeric literal, or a union of them.
+fn is_number_valued_type(ty : @ast.TsType) -> Bool {
+  match ty {
+    Number | Int | NumberLiteral(_) => true
+    Union(parts) =>
+      parts.length() > 0 && parts.iter().all(is_number_valued_type)
+    _ => false
+  }
+}
+
+///|
+/// `ty` with every enum MEMBER type (`CommandType.MUTATION`) read as its
+/// enum (`CommandType`), which it is assignable to. univer's
+/// `IMutationInfo` narrows `type?: CommandType` to `type?:
+/// CommandType.MUTATION`, and the resolver-free relation compares the two
+/// names nominally, so every mutation list handed to `sequenceExecute(tasks:
+/// ICommandInfo[])` read as a mismatch. A caller asks it only after the
+/// unwidened relation failed, so a member against the same member keeps its
+/// exact answer.
+fn enum_members_as_enums(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  match ty {
+    Named(n) =>
+      match n.rev_find(".") {
+        Some(dot) => {
+          let enum_name = n[:dot].to_owned()
+          let member_ = n[dot + 1:].to_owned()
+          match resolver.enums.get(enum_name) {
+            Some(decl) if decl.members.iter().any(fn(m) { m.name == member_ }) =>
+              Named(enum_name)
+            _ => ty
+          }
+        }
+        None => ty
+      }
+    Union(parts) =>
+      Union(parts.map(fn(p) { enum_members_as_enums(resolver, p) }))
+    _ => ty
+  }
 }
 
 ///|
@@ -15870,9 +16278,10 @@ fn check_expr_against(
   match ctx.resolver.object_call_signature(expected_shape) {
     Some(Func(formal_params, formal_ret)) =>
       match expr {
-        ArrowFunc(arrow_params, _declared_ret, body, is_async) => {
+        ArrowFunc(arrow_params, declared_ret, body, is_async) => {
           check_arrow_with_context(
-            env, arrow_params, body, is_async, formal_params, formal_ret, ctx, sub_path,
+            env, arrow_params, declared_ret, body, is_async, formal_params, formal_ret,
+            ctx, sub_path,
           )
           return
         }
@@ -15935,9 +16344,10 @@ fn check_expr_against(
             @ast.TsType::Union(rets)
           }
           match expr {
-            ArrowFunc(arrow_params, _dr, body, is_async) => {
+            ArrowFunc(arrow_params, declared_ret, body, is_async) => {
               check_arrow_with_context(
-                env, arrow_params, body, is_async, ps, ret_union, ctx, sub_path,
+                env, arrow_params, declared_ret, body, is_async, ps, ret_union, ctx,
+                sub_path,
               )
               return
             }
@@ -15955,11 +16365,12 @@ fn check_expr_against(
   }
   match (expr, expected_shape) {
     (
-      ArrowFunc(arrow_params, _declared_ret, body, is_async),
+      ArrowFunc(arrow_params, declared_ret, body, is_async),
       Func(formal_params, formal_ret),
     ) => {
       check_arrow_with_context(
-        env, arrow_params, body, is_async, formal_params, formal_ret, ctx, sub_path,
+        env, arrow_params, declared_ret, body, is_async, formal_params, formal_ret,
+        ctx, sub_path,
       )
       return
     }
@@ -17235,10 +17646,22 @@ fn check_expr_against(
     // AsyncGenerator<...>`) carries inference we don't track — the generator
     // `return`/`yield` contributes to a type argument, not the whole union.
     // Stay silent rather than compare the union nominally.
-    (_, Union(parts)) =>
+    (_, Union(parts)) => {
       if parts.iter().any(fn(p) { p is Applied(_, _) }) {
         return
       }
+      // A numeric enum accepts any `number` (`const e: E = n` is legal),
+      // and the resolver-free relation below never consults the enum
+      // table, so a union target holding one (`keepLines?: BooleanNumber`,
+      // which is `BooleanNumber | undefined`) read `number` as a mismatch
+      // while the bare enum target abstained at the unresolved-name bail.
+      if is_number_valued_type(inferred_u) &&
+        parts
+        .iter()
+        .any(fn(p) { p is Named(n) && enum_may_hold_number(ctx.resolver, n) }) {
+        return
+      }
+    }
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
@@ -17475,7 +17898,8 @@ fn struct_assignable_named_rec(
           is_named_decl(want, resolver) {
           struct_assignable_named_rec(have_u, want, resolver, visited)
         } else {
-          is_assignable_to(have_u, want)
+          is_assignable_to(have_u, want) ||
+          is_assignable_to(enum_members_as_enums(resolver, have_u), want)
         }
         if !ok {
           let _ = visited.pop()
@@ -18512,6 +18936,28 @@ fn structural_oneway_assignable(
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Bool {
+  // An array is covariant in its element, so the structural answer for the
+  // elements is the answer for the arrays: univer hands `IMutationInfo[]`
+  // to `sequenceExecute(tasks: ICommandInfo[])` dozens of times, and the
+  // element relation held while the array one fell to the nominal test. A
+  // `readonly` source does not assign to a mutable target.
+  let array_elem = fn(t : @ast.TsType) -> (@ast.TsType, Bool)? {
+    match t {
+      Array(e) | Applied("Array", [e]) => Some((e, false))
+      Applied("ReadonlyArray", [e]) => Some((e, true))
+      _ => None
+    }
+  }
+  match
+    (array_elem(resolver.unwrap(source)), array_elem(resolver.unwrap(target))) {
+    (Some((se, s_ro)), Some((te, t_ro))) =>
+      return (!s_ro || t_ro) &&
+        (
+          is_assignable_to(se, te) ||
+          structural_oneway_assignable(se, te, resolver)
+        )
+    _ => ()
+  }
   match resolver.unwrap(target) {
     Union(members) => {
       for m in members {
@@ -20303,6 +20749,13 @@ fn check_object_lit_against_target(
   // exempt.
   let declared = collect_declared_fields(target, resolver)
   let provided : Map[String, Bool] = Map([])
+  // A spread whose source this checker cannot enumerate can supply any
+  // member: `{ ...r, s: 0 }` with `r: any` is `any` in tsc, and a source
+  // typed by a type parameter or an unresolved name has members nobody
+  // listed. univer writes `[{ ...customRange, startIndex: 0 }]` with
+  // `customRange` read through a narrowing this checker loses, and every
+  // remaining member of `ICustomRange` read as missing.
+  let mut opaque_spread = false
   for entry in entries {
     if entry.0.has_prefix("@@spread:") {
       // A `{...spread}` entry contributes every field of the spread source,
@@ -20312,7 +20765,13 @@ fn check_object_lit_against_target(
       // spread copies the underlying PROPERTY (`{ ...op }` where `op` has
       // `get a()` provides `a` — objectSpread's getter case).
       let spread_ty = infer_expr(env, resolver, entry.1)
-      for sf in collect_declared_fields(spread_ty, resolver) {
+      let spread_fields = collect_declared_fields(spread_ty, resolver)
+      match resolver.unwrap(spread_ty) {
+        Any | Unknown => opaque_spread = true
+        Null | Undefined | Object(_) => ()
+        _ => if spread_fields.length() == 0 { opaque_spread = true }
+      }
+      for sf in spread_fields {
         let n = if sf.0.has_prefix("@@get:") || sf.0.has_prefix("@@set:") {
           sf.0[6:].to_owned()
         } else {
@@ -20336,6 +20795,9 @@ fn check_object_lit_against_target(
   let has_computed_entry = entries
     .iter()
     .any(fn(e) { e.0.has_prefix("@@computed:") })
+  if opaque_spread {
+    return
+  }
   for d in declared {
     let name = d.0
     let ty = d.1
@@ -21894,6 +22356,7 @@ fn arrow_body_walked(body : @ast.TsArrowBody) -> Bool {
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
+  declared_ret : @ast.TsType,
   body : @ast.TsArrowBody,
   is_async : Bool,
   formal_params : Array[@ast.TsType],
@@ -21952,7 +22415,12 @@ fn check_arrow_with_context(
   let inner_ctx : CheckCtx = {
     path_prefix: ctx.path_prefix,
     script_top_level: ctx.script_top_level,
-    return_type: unwrap_async_return(is_async, formal_ret),
+    return_type: contextual_body_return(
+      is_async,
+      declared_ret,
+      formal_ret,
+      prefer_declared=false,
+    ),
     yield_type: @ast.TsType::Any,
     yield_next_type: @ast.TsType::Any,
     widen_generator_return: false,
@@ -22060,6 +22528,43 @@ fn unassigned_without(
 }
 
 ///|
+/// The type a callable value's `return` statements are judged against
+/// when it is contextually typed by `formal`. A contextual `void` is the
+/// exception: an unannotated function contextually typed by `() => void`
+/// infers its own return type, and `() => boolean` is assignable to
+/// `() => void`, so `xs.forEach(x => { return false })` and
+/// `const k: () => void = () => { return true }` are legal (probed) —
+/// only the function's OWN annotation can make a returned value an error
+/// there. Only the literal `void` gets this; `() => Promise<void>` still
+/// demands that an async body return nothing, which tsc reports.
+///
+/// `prefer_declared` is the function-expression rule, which has always
+/// judged against its own annotation first. An arrow judges against the
+/// contextual type, as it did before: judging an annotated arrow against
+/// its own annotation everywhere is right and exposed 92 new reports on
+/// excalidraw alone, all from inference gaps in the RETURNED expression
+/// (a branded tuple, a literal union, a nested object literal) that the
+/// annotation had never been compared with.
+fn contextual_body_return(
+  is_async : Bool,
+  declared : @ast.TsType,
+  formal : @ast.TsType,
+  prefer_declared~ : Bool,
+) -> @ast.TsType {
+  if formal is Void {
+    if is_checkable(declared) {
+      unwrap_async_return(is_async, declared)
+    } else {
+      @ast.TsType::Any
+    }
+  } else if prefer_declared && is_checkable(declared) {
+    unwrap_async_return(is_async, declared)
+  } else {
+    unwrap_async_return(is_async, formal)
+  }
+}
+
+///|
 /// Same as `check_arrow_with_context` for `FuncExpr`. Function expressions
 /// already carry an explicit `return_type` slot; we only override unannotated
 /// (`Any`) params with the formal ones.
@@ -22119,11 +22624,12 @@ fn check_funcexpr_with_context(
   }
   // Prefer the function's own annotated return type when present; fall back
   // to the formal slot otherwise.
-  let body_return = if is_checkable(f.return_type) {
-    unwrap_async_return(f.is_async, f.return_type)
-  } else {
-    unwrap_async_return(f.is_async, formal_ret)
-  }
+  let body_return = contextual_body_return(
+    f.is_async,
+    f.return_type,
+    formal_ret,
+    prefer_declared=true,
+  )
   let inner_ctx : CheckCtx = {
     path_prefix: ctx.path_prefix,
     script_top_level: ctx.script_top_level,
@@ -24122,6 +24628,59 @@ fn join_conditional_assignments(
 }
 
 ///|
+/// The shape an array pattern destructures `source` as. An intersection
+/// with an array or tuple member (`RegExpExecArray`, modelled as
+/// `string[] & { index; input; groups }`; excalidraw's branded points,
+/// `[x: number, y: number] & { _brand: "…" }`) destructures as that member:
+/// the other members only add properties. `unwrap` does not expand an
+/// intersection, so without this every element bound `any` for the array
+/// case and `undefined` for the tuple one, and `x - cx` on a destructured
+/// point read as arithmetic on `undefined`.
+fn array_pattern_view(resolver : Resolver, source : @ast.TsType) -> @ast.TsType {
+  match resolver.unwrap(source) {
+    Intersection(parts) => {
+      for p in parts {
+        match resolver.unwrap(p) {
+          Array(_) | Tuple(_) | Applied("Array" | "ReadonlyArray", [_]) as v =>
+            return v
+          _ => ()
+        }
+      }
+      Intersection(parts)
+    }
+    other => other
+  }
+}
+
+///|
+/// Element `i` of a union destructured by an array pattern, when every
+/// member is a tuple or an array once viewed through `array_pattern_view`:
+/// the union of the members' elements, a short tuple contributing
+/// `undefined`. `None` for any other union.
+fn array_pattern_union_element(
+  resolver : Resolver,
+  parts : Array[@ast.TsType],
+  i : Int32,
+) -> @ast.TsType? {
+  let elems : Array[@ast.TsType] = []
+  for p in parts {
+    let t = match array_pattern_view(resolver, p) {
+      Tuple(items) => if i < items.length() { items[i] } else { Undefined }
+      Array(t) | Applied("Array" | "ReadonlyArray", [t]) => t
+      _ => return None
+    }
+    if !elems.contains(t) {
+      elems.push(t)
+    }
+  }
+  match elems.length() {
+    0 => None
+    1 => Some(elems[0])
+    _ => Some(Union(elems))
+  }
+}
+
+///|
 fn bind_array_pattern(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -24133,14 +24692,7 @@ fn bind_array_pattern(
   // `string[] & { index; input; groups }`) destructures as that array: the
   // other members only add properties. `unwrap` does not expand an
   // intersection, so without this every element bound `any`.
-  let unwrapped = match ctx.resolver.unwrap(source) {
-    Intersection(parts) =>
-      match parts.search_by(fn(p) { p is Array(_) }) {
-        Some(ai) => parts[ai]
-        None => Intersection(parts)
-      }
-    other => other
-  }
+  let unwrapped = array_pattern_view(ctx.resolver, source)
   let mut i = 0
   while i < ab.items.length() {
     match ab.items[i] {
@@ -24155,6 +24707,15 @@ fn bind_array_pattern(
             }
           Array(t) => t
           Applied("Array", [t]) | Applied("ReadonlyArray", [t]) => t
+          // A union whose every member destructures as a tuple or an array
+          // (`Q extends GlobalPoint | LocalPoint`, each a branded tuple)
+          // binds the union of the members' elements at this index. Any
+          // other union keeps the `undefined` below.
+          Union(parts) =>
+            match array_pattern_union_element(ctx.resolver, parts, i) {
+              Some(t) => t
+              None => @ast.TsType::Undefined
+            }
           // `any` destructures to `any`, and so does an iterable this
           // function has no arm for (a `Map` entry, a user iterable, a
           // type it could not expand): reading those as `undefined` made
@@ -26856,7 +27417,21 @@ fn narrowing_current_type(
       let prefix_ty = narrowing_current_type(env, resolver, prefix)
       match resolver.lookup_field(prefix_ty, leaf) {
         Some(t) => t
-        None => @ast.TsType::Any
+        // A key with a member below it was dereferenced, so its receiver is
+        // not nullish there: `if (slice?.ranges)` narrows `slice` and
+        // `slice.ranges` in one condition, the receiver's narrowing is not
+        // applied yet when the member's is computed, and reading `ranges`
+        // off `Body | undefined` came back `any` — every later
+        // `slice.ranges[0]` with it.
+        None =>
+          match
+            resolver.lookup_field(
+              non_nullable_resolved(resolver, prefix_ty),
+              leaf,
+            ) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
       }
     }
     None => env_lookup_full(env, resolver, key)
@@ -33881,11 +34456,12 @@ fn check_call_args_in_expr(
     // same body with the formal parameter types substituted in; the
     // `dedup_issues_since` pass inside the helpers drops the resulting
     // duplicate diagnostics.
-    ArrowFunc(params, _, body, is_async) =>
+    ArrowFunc(params, declared_ret, body, is_async) =>
       if !arrow_body_walked(body) {
         check_arrow_with_context(
           env,
           params,
+          declared_ret,
           body,
           is_async,
           [],
@@ -40997,6 +41573,14 @@ fn check_unresolved_signature_type_refs(
       }
     }
     for ns in m.namespaces {
+      // A `declare global { … }` body, and a namespace an ambient file also
+      // declares, merge with declarations this walk cannot see: @types/node
+      // writes `global { namespace NodeJS { interface ProcessEnv extends
+      // Dict<string> {} } }` for the `NodeJS.Dict` that `globals.d.ts`
+      // declares, and its bare `Dict` read as undeclared.
+      if ns.name == "<global>" || ambient_names.contains(ns.name) {
+        continue
+      }
       walk_module(ns.module_)
     }
   }
@@ -48151,6 +48735,7 @@ fn check_module_function_bodies_layered(
       )
     }
   }
+  qualify_cross_body_namespace_refs(resolver)
   // The aliases are the ROOT file's imports, and a namespace check gets
   // them too; a type the namespace (or one between it and the root)
   // declares shadows the import inside it.
