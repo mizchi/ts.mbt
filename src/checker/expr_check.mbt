@@ -755,6 +755,47 @@ fn merge_interface_group(decls : Array[@ast.TsInterface]) -> @ast.TsInterface {
 }
 
 ///|
+/// The merge of two halves of one interface, by the halves' identity. A
+/// graph check ingests the same modules in the same order for every
+/// checked module, so the same pair is merged again for every file, and
+/// each merge was a NEW object — which also defeated every identity-keyed
+/// memo downstream (`cross_body_renamed_interface`). `merge_interfaces` is
+/// a pure function of its two inputs. A few pairs per name are kept, since
+/// a name merged from several halves goes through one pair per step.
+let merged_interface_cache : Map[
+  String,
+  Array[(@ast.TsInterface, @ast.TsInterface, @ast.TsInterface)],
+] = Map([])
+
+///|
+fn merged_interface_memo(
+  name : String,
+  a : @ast.TsInterface,
+  b : @ast.TsInterface,
+) -> @ast.TsInterface {
+  let slot = match merged_interface_cache.get(name) {
+    Some(slot) => {
+      for e in slot {
+        if physical_equal(e.0, a) && physical_equal(e.1, b) {
+          return e.2
+        }
+      }
+      slot
+    }
+    None => {
+      let slot = []
+      merged_interface_cache[name] = slot
+      slot
+    }
+  }
+  let out = merge_interfaces(a, b)
+  if slot.length() < 8 {
+    slot.push((a, b, out))
+  }
+  out
+}
+
+///|
 fn merge_interfaces(
   a : @ast.TsInterface,
   b : @ast.TsInterface,
@@ -1158,11 +1199,11 @@ fn qualify_cross_body_namespace_refs(r : Resolver) -> Unit {
     r.enums.contains(n) ||
     r.classes.contains(n)
   }
-  let cache : Map[String, Map[String, String]] = Map([])
-  let renames_for = fn(key : String) -> Map[String, String] {
+  let cache : Map[String, (Map[String, String], Int32)] = Map([])
+  let renames_for = fn(key : String) -> (Map[String, String], Int32) {
     let prefix = match key.rev_find(".") {
       Some(dot) => key[:dot + 1].to_owned()
-      None => return Map([])
+      None => return (Map([]), -1)
     }
     match cache.get(prefix) {
       Some(m) => return m
@@ -1187,17 +1228,20 @@ fn qualify_cross_body_namespace_refs(r : Resolver) -> Unit {
         None => ""
       }
     }
-    cache[prefix] = out
-    out
+    let entry = (out, if out.length() == 0 { -1 } else { rename_map_id(out) })
+    cache[prefix] = entry
+    entry
   }
   let iface_updates : Array[(String, @ast.TsInterface)] = []
   for k, i in r.interfaces {
     if k.contains("@") || !k.contains(".") {
       continue
     }
-    let renames = renames_for(k)
+    let (renames, renames_id) = renames_for(k)
     if renames.length() > 0 {
-      iface_updates.push((k, rename_interface_refs(i, renames)))
+      iface_updates.push(
+        (k, cross_body_renamed_interface(k, i, renames, renames_id)),
+      )
     }
   }
   for u in iface_updates {
@@ -1208,7 +1252,7 @@ fn qualify_cross_body_namespace_refs(r : Resolver) -> Unit {
     if k.contains("@") || !k.contains(".") {
       continue
     }
-    let renames = renames_for(k)
+    let (renames, renames_id) = renames_for(k)
     if renames.length() == 0 {
       continue
     }
@@ -1219,11 +1263,92 @@ fn qualify_cross_body_namespace_refs(r : Resolver) -> Unit {
       }
     }
     if own.length() > 0 {
-      alias_updates.push((k, { ..a, type_: rename_type_refs(a.type_, own), }))
+      alias_updates.push((k, cross_body_renamed_alias(k, a, own, renames_id)))
     }
   }
   for u in alias_updates {
     r.type_aliases[u.0] = u.1
+  }
+}
+
+///|
+/// `qualify_cross_body_namespace_refs` runs once per CHECKED module, over
+/// the whole union of what that module reaches, so it rewrites the same
+/// namespaced interfaces again for every file: on univer's core package
+/// that was 55,144 rewrites for 464 files and 17% of the check. A rewrite
+/// depends only on its input and the rename map, so the last one per key
+/// is kept and reused when the input is the same object and the map is
+/// equal. Cleared with the type-module cache, once per program.
+let cross_body_interface_cache : Map[
+  String,
+  (@ast.TsInterface, Int32, @ast.TsInterface),
+] = Map([])
+
+///|
+let cross_body_alias_cache : Map[
+  String,
+  (@ast.TsTypeAlias, Int32, @ast.TsTypeAlias),
+] = Map([])
+
+///|
+/// Each distinct rename map, by content, gets one id per program, so the
+/// memo above compares two integers rather than two maps of a few hundred
+/// entries (that comparison alone cost 4% of the univer check).
+let rename_map_ids : Map[String, Int32] = Map([])
+
+///|
+fn rename_map_id(renames : Map[String, String]) -> Int32 {
+  let entries : Array[String] = []
+  for k, v in renames {
+    entries.push(k + "\u{1}" + v)
+  }
+  entries.sort()
+  let sig = entries.join("\u{2}")
+  match rename_map_ids.get(sig) {
+    Some(id) => id
+    None => {
+      let id = rename_map_ids.length()
+      rename_map_ids[sig] = id
+      id
+    }
+  }
+}
+
+///|
+fn cross_body_renamed_interface(
+  key : String,
+  i : @ast.TsInterface,
+  renames : Map[String, String],
+  renames_id : Int32,
+) -> @ast.TsInterface {
+  match cross_body_interface_cache.get(key) {
+    Some((input, id, out)) if id == renames_id && physical_equal(input, i) =>
+      out
+    _ => {
+      let out = rename_interface_refs(i, renames)
+      cross_body_interface_cache[key] = (i, renames_id, out)
+      out
+    }
+  }
+}
+
+///|
+/// `own` is `renames` minus the alias's own type parameters, so the pair
+/// (the same alias object, the same `renames` id) decides it.
+fn cross_body_renamed_alias(
+  key : String,
+  a : @ast.TsTypeAlias,
+  own : Map[String, String],
+  renames_id : Int32,
+) -> @ast.TsTypeAlias {
+  match cross_body_alias_cache.get(key) {
+    Some((input, id, out)) if id == renames_id && physical_equal(input, a) =>
+      out
+    _ => {
+      let out = { ..a, type_: rename_type_refs(a.type_, own), }
+      cross_body_alias_cache[key] = (a, renames_id, out)
+      out
+    }
   }
 }
 
@@ -1351,6 +1476,36 @@ fn rename_namespace_body_refs(
 }
 
 ///|
+/// The type-only ingestion of a module with no cache key, by the module's
+/// IDENTITY. A graph check ingests every ambient `.d.ts` (`@types/node`'s
+/// globals, every `declare global` block) for every checked module, and
+/// with no key each one was ingested from scratch every time: on univer's
+/// core package 45,021 ingestions for 464 files, 15% of the check with the
+/// namespace qualification it runs. Ingestion is a pure function of the
+/// module and its prefix, the same assumption `type_module_cache` makes,
+/// and an identity match cannot confuse two programs' modules. Only a
+/// caller that hands the SAME object each time asks for it, so the list
+/// stays the size of the ambient set; the bound keeps a caller that does
+/// not from turning the scan quadratic.
+let unkeyed_type_module_cache : Array[(@ast.TsModule, String, Resolver)] = []
+
+///|
+let unkeyed_type_module_cache_limit : Int32 = 1024
+
+///|
+fn unkeyed_type_module_lookup(
+  module_ : @ast.TsModule,
+  prefix : String,
+) -> Resolver? {
+  for entry in unkeyed_type_module_cache {
+    if physical_equal(entry.0, module_) && entry.1 == prefix {
+      return Some(entry.2)
+    }
+  }
+  None
+}
+
+///|
 /// Import only type declarations from another ES module. Value declarations
 /// intentionally stay out of `globals`: an embedding must still provide the
 /// concrete bindings it resolved for the current module's runtime imports.
@@ -1361,11 +1516,26 @@ fn Resolver::ingest_type_module(
   cache_key~ : String = "",
   skip~ : Map[String, Unit] = Map([]),
   renames~ : Map[String, String] = Map([]),
+  reuse_unkeyed~ : Bool = false,
 ) -> Unit {
   let types = if cache_key == "" {
-    let t = { ..Resolver::empty(), types_only: true, }
-    Resolver::ingest_module(t, module_, prefix)
-    t
+    match
+      (if reuse_unkeyed {
+        unkeyed_type_module_lookup(module_, prefix)
+      } else {
+        None
+      }) {
+      Some(t) => t
+      None => {
+        let t = { ..Resolver::empty(), types_only: true, }
+        Resolver::ingest_module(t, module_, prefix)
+        if reuse_unkeyed &&
+          unkeyed_type_module_cache.length() < unkeyed_type_module_cache_limit {
+          unkeyed_type_module_cache.push((module_, prefix, t))
+        }
+        t
+      }
+    }
   } else {
     match type_module_cache.get(cache_key) {
       Some(t) => t
@@ -1523,7 +1693,7 @@ fn Resolver::ingest_type_module(
     }
     match r.interfaces.get(name) {
       Some(existing) =>
-        r.interfaces[name] = merge_interfaces(existing, interface_)
+        r.interfaces[name] = merged_interface_memo(name, existing, interface_)
       None => r.interfaces[name] = interface_
     }
   }
@@ -1607,6 +1777,12 @@ let renamed_type_module_cache : Map[
 pub fn clear_type_module_cache() -> Unit {
   type_module_cache.clear()
   renamed_type_module_cache.clear()
+  cross_body_interface_cache.clear()
+  cross_body_alias_cache.clear()
+  rename_map_ids.clear()
+  unkeyed_type_module_cache.clear()
+  merged_interface_cache.clear()
+  module_type_names_cache.clear()
 }
 
 ///|
@@ -1924,18 +2100,50 @@ fn Resolver::alias_namespace_import_types(
 }
 
 ///|
-/// True when `module_` declares `name` at its TOP LEVEL as an interface,
-/// a type alias, an enum or a class — the kinds that get a per-module key.
-/// `module_declares_type_name` asks a different question (any depth, no
-/// enums) for the lib-spelling rules.
-fn module_declares_top_level_type(
-  module_ : @ast.TsModule,
-  name : String,
-) -> Bool {
-  module_.interfaces.iter().any(fn(d) { d.name == name }) ||
-  module_.type_aliases.iter().any(fn(d) { d.name == name }) ||
-  module_.enums.iter().any(fn(d) { d.name == name }) ||
-  module_.classes.iter().any(fn(d) { d.name == name })
+/// A module's own type names, for the per-checked-module collision pass:
+/// the top-level ones in declaration-kind order (interfaces, classes,
+/// aliases, enums, as `note_declared` adds them), then the namespace
+/// members under their qualified names, plus a set of the top-level ones.
+/// That pass runs for every checked module over every module it reaches,
+/// and recomputing these each time was 8% of the univer check. Keyed by the
+/// module's graph key and checked by identity; cleared once per program.
+let module_type_names_cache : Map[
+  String,
+  (@ast.TsModule, Array[String], Array[String], Map[String, Unit]),
+] = Map([])
+
+///|
+fn module_type_names(
+  m : @ast.TsModule,
+  key : String,
+) -> (Array[String], Array[String], Map[String, Unit]) {
+  match module_type_names_cache.get(key) {
+    Some((cached, top, qualified, set)) if physical_equal(cached, m) =>
+      return (top, qualified, set)
+    _ => ()
+  }
+  let top : Array[String] = []
+  for i in m.interfaces {
+    top.push(i.name)
+  }
+  for c in m.classes {
+    top.push(c.name)
+  }
+  for a in m.type_aliases {
+    top.push(a.name)
+  }
+  for e in m.enums {
+    top.push(e.name)
+  }
+  let set : Map[String, Unit] = Map([])
+  for n in top {
+    set[n] = ()
+  }
+  let qualified = namespace_qualified_type_names(m)
+  if key != "" {
+    module_type_names_cache[key] = (m, top, qualified, set)
+  }
+  (top, qualified, set)
 }
 
 ///|
@@ -8160,16 +8368,78 @@ priv struct ExprEnv {
   // narrowed to `string`, because the assignment target stays at the
   // declared union.
   declared : Map[String, @ast.TsType]
+  // Every key ever written to `vars`, in write order, and the index
+  // `forget_paths_below` builds from it on demand: for each key with a
+  // `.` or `[` in it, the key is filed under every prefix that ends right
+  // before one. That is exactly the set `k.has_prefix(name + ".") ||
+  // k.has_prefix(name + "[")` selects, so a lookup replaces a scan of the
+  // whole map — which made N assignments in one body O(N^2), the
+  // `statements` axis of `verify-checker-scaling`.
+  //
+  // A write costs one push; no key is classified until a forget needs the
+  // index. A key that has left `vars` is dropped from an index when a reader
+  // meets it, so neither index grows with keys from scopes that have exited.
+  // That is only safe because of `pruned`: `restore_from` puts keys back
+  // without writing through `bind` / `narrow`, so a dropped key it restores
+  // is logged again there.
+  //
+  // The same log feeds `alias_cond_keys`, the `<alias-cond>` markers an
+  // assignment has to cancel, which were found the same way.
+  written : Array[String]
+  mut written_indexed : Int32
+  paths_below : Map[String, Map[String, Unit]]
+  alias_cond_keys : Map[String, Unit]
+  pruned : Map[String, Unit]
 }
 
 ///|
 fn ExprEnv::new() -> ExprEnv {
-  { vars: {}, declared: {}, }
+  {
+    vars: {},
+    declared: {},
+    written: [],
+    written_indexed: 0,
+    paths_below: {},
+    alias_cond_keys: {},
+    pruned: {},
+  }
+}
+
+///|
+/// Files every key logged since the last call under the prefixes
+/// `forget_paths_below` can be asked for, and collects the `<alias-cond>`
+/// markers. Either index may hold a key `vars` no longer has, so a reader
+/// looks the key up again.
+fn ExprEnv::index_written_keys(self : ExprEnv) -> Unit {
+  let n = self.written.length()
+  for i in self.written_indexed..<n {
+    let k = self.written[i]
+    if k.has_prefix("<alias-cond>") {
+      self.alias_cond_keys[k] = ()
+    }
+    for j in 0..<k.length() {
+      let c = k[j].to_int()
+      // `.` and `[` (ASCII, so never half of a surrogate pair).
+      if c == 46 || c == 91 {
+        let prefix = k[0:j].to_owned()
+        match self.paths_below.get(prefix) {
+          Some(keys) => keys[k] = ()
+          None => {
+            let keys : Map[String, Unit] = Map([])
+            keys[k] = ()
+            self.paths_below[prefix] = keys
+          }
+        }
+      }
+    }
+  }
+  self.written_indexed = n
 }
 
 ///|
 fn ExprEnv::bind(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
   self.vars[name] = ty
+  self.written.push(name)
   // First write wins for `declared` -- subsequent narrowing rewrites
   // only `vars`. `declare_type` is the explicit alternative when the
   // caller wants to set / reset the declared slot deliberately.
@@ -8185,6 +8455,7 @@ fn ExprEnv::bind(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
 /// to avoid promoting a narrowed type into the assignment target.
 fn ExprEnv::narrow(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
   self.vars[name] = ty
+  self.written.push(name)
 }
 
 ///|
@@ -8269,6 +8540,13 @@ fn ExprEnv::restore_from(
     let _ = self.declared.remove(n)
   }
   for entry in snap {
+    // A key an index dropped while it was out of `vars` is logged again, so
+    // the index finds it once it is back. Nothing to do until a reader has
+    // dropped one, which keeps the common block exit free of the lookup.
+    if self.pruned.length() > 0 && self.pruned.contains(entry.0) {
+      let _ = self.pruned.remove(entry.0)
+      self.written.push(entry.0)
+    }
     self.vars[entry.0] = entry.1
   }
 }
@@ -30404,20 +30682,14 @@ fn narrow_after_prop_assignment(
 /// replaces what the other narrowed: after `o.p = ""; o["p"] = null`,
 /// `o.p` is `null` (tsc reports the read).
 fn forget_member_paths(env : ExprEnv, recv_key : String, prop : String) -> Unit {
-  let keys = [member_narrowing_key(recv_key, prop)]
-  let stale : Array[String] = []
-  for k, _ in env.vars {
-    if keys
-      .iter()
-      .any(fn(key) {
-        k == key || k.has_prefix(key + ".") || k.has_prefix(key + "[")
-      }) {
-      stale.push(k)
-    }
-  }
-  for k in stale {
-    let _ = env.vars.remove(k)
-  }
+  forget_path_and_below(env, member_narrowing_key(recv_key, prop))
+}
+
+///|
+/// Drops the narrowing of `key` itself and of every path below it.
+fn forget_path_and_below(env : ExprEnv, key : String) -> Unit {
+  let _ = env.vars.remove(key)
+  forget_paths_below(env, key)
 }
 
 ///|
@@ -30436,17 +30708,7 @@ fn narrow_after_index_assignment(
     StringLit(k) => narrow_after_prop_assignment(env, ctx, recv, k, value)
     _ =>
       match narrowing_key_for_expr(@ast.TsExpr::IndexAccess(recv, idx)) {
-        Some(key) => {
-          let stale : Array[String] = []
-          for k, _ in env.vars {
-            if k == key || k.has_prefix(key + ".") || k.has_prefix(key + "[") {
-              stale.push(k)
-            }
-          }
-          for k in stale {
-            let _ = env.vars.remove(k)
-          }
-        }
+        Some(key) => forget_path_and_below(env, key)
         None => ()
       }
   }
@@ -30461,14 +30723,37 @@ fn narrow_after_index_assignment(
 /// statement and the expression spelling). `narrow_after_prop_assignment`
 /// does the same for a written PATH; this is the binding itself.
 fn forget_paths_below(env : ExprEnv, name : String) -> Unit {
+  env.index_written_keys()
+  guard env.paths_below.get(name) is Some(keys) else { return }
+  for k, _ in keys {
+    let _ = env.vars.remove(k)
+    env.pruned[k] = ()
+  }
+  // Every key filed here has just left `vars`, so the bucket starts empty;
+  // one that comes back is logged again and filed again.
+  keys.clear()
+}
+
+///|
+/// An assignment cancels every aliased condition that narrows `name`.
+fn cancel_aliases_of(env : ExprEnv, name : String) -> Unit {
+  env.index_written_keys()
   let stale : Array[String] = []
-  for k, _ in env.vars {
-    if k.has_prefix(name + ".") || k.has_prefix(name + "[") {
-      stale.push(k)
+  let dead : Array[String] = []
+  for k, _ in env.alias_cond_keys {
+    match env.vars.get(k) {
+      Some(v) => if alias_cond_mentions(v, name) { stale.push(k) }
+      // A marker its scope's exit removed: drop it, so a later assignment
+      // does not look it up again.
+      None => dead.push(k)
     }
   }
+  for k in dead {
+    let _ = env.alias_cond_keys.remove(k)
+    env.pruned[k] = ()
+  }
   for k in stale {
-    let _ = env.vars.remove(k)
+    env.narrow(k, @ast.TsType::Tuple([]))
   }
 }
 
@@ -30495,15 +30780,7 @@ fn narrow_after_assignment(
   }
   // An assignment cancels every aliased condition that narrows this name:
   // tsc refuses to see through an alias to a reference that is assigned.
-  let stale : Array[String] = []
-  for k, v in env.vars {
-    if k.has_prefix("<alias-cond>") && alias_cond_mentions(v, name) {
-      stale.push(k)
-    }
-  }
-  for k in stale {
-    env.narrow(k, @ast.TsType::Tuple([]))
-  }
+  cancel_aliases_of(env, name)
   // A binding DECLARED `unknown` is not narrowed by assignment in tsc
   // (`e = 1; e.toFixed()` is TS18046), and neither is a catch binding.
   if env.lookup_declared(name) is Some(Unknown) {
@@ -49858,31 +50135,38 @@ fn check_module_function_bodies_layered(
   }
   // Which top-level type names more than one reachable module declares
   // (the checked module counting as one): those get a per-module key.
-  let declarers : Map[String, Map[String, Unit]] = Map([])
+  // Per name, the first module key that declares it and whether a SECOND,
+  // different key does too. The two questions asked of it below are "more
+  // than one declarer" and "exactly this one", so a set per name (one new
+  // map for every name of every reachable module, for every checked
+  // module) carried nothing those need.
+  let declarers : Map[String, (String, Bool)] = Map([])
   let note_declared = fn(m : @ast.TsModule, key : String) {
     let add = fn(n : String) {
       match declarers.get(n) {
-        Some(set) => set[key] = ()
-        None => declarers[n] = Map([(key, ())])
+        Some((first, false)) if first != key => declarers[n] = (first, true)
+        Some(_) => ()
+        None => declarers[n] = (key, false)
       }
     }
-    for i in m.interfaces {
-      add(i.name)
-    }
-    for c in m.classes {
-      add(c.name)
-    }
-    for a in m.type_aliases {
-      add(a.name)
-    }
-    for e in m.enums {
-      add(e.name)
+    // The checked module's own names are not cached: its key is a marker,
+    // not a graph path, and it is noted once.
+    let (top, qualified, _) = module_type_names(
+      m,
+      if key == "<checked>" {
+        ""
+      } else {
+        key
+      },
+    )
+    for n in top {
+      add(n)
     }
     // Namespace members are registered under their QUALIFIED name
     // (`State.Empty`), and two modules each declaring a `namespace State`
     // (effect's Scope.ts and internal/rcRef.ts) collide on exactly those
     // keys — so `state.exit` on Scope's `State.Closed` read rcRef's.
-    for q in namespace_qualified_type_names(m) {
+    for q in qualified {
       add(q)
     }
   }
@@ -49890,8 +50174,10 @@ fn check_module_function_bodies_layered(
     note_declared(own_root, "<checked>")
     for local_name, _ in checked_renamed_locals {
       match declarers.get(local_name) {
-        Some(set) => set["<checked>"] = ()
-        None => declarers[local_name] = Map([("<checked>", ())])
+        Some((first, false)) if first != "<checked>" =>
+          declarers[local_name] = (first, true)
+        Some(_) => ()
+        None => declarers[local_name] = ("<checked>", false)
       }
     }
   }
@@ -49951,10 +50237,7 @@ fn check_module_function_bodies_layered(
       // resolved to nothing and every `"_tag" in algorithm` narrowing
       // threw its members away.
       let add_if = fn(n : String) {
-        let multi = match declarers.get(n) {
-          Some(set) => set.length() > 1
-          None => false
-        }
+        let multi = declarers.get(n) is Some((_, true))
         if multi || is_lib_global_type(n) {
           renames[n] = n + "@" + cache_key
         }
@@ -49969,10 +50252,7 @@ fn check_module_function_bodies_layered(
         add_if(d.name)
       }
       for q in namespace_qualified_type_names(type_module) {
-        let multi = match declarers.get(q) {
-          Some(set) => set.length() > 1
-          None => false
-        }
+        let multi = declarers.get(q) is Some((_, true))
         if multi {
           renames[q] = q + "@" + cache_key
         }
@@ -49997,13 +50277,10 @@ fn check_module_function_bodies_layered(
         for import_alias in type_module_import_aliases[i] {
           let (local_name, bare, origin) = import_alias
           if renames.contains(local_name) ||
-            module_declares_top_level_type(type_module, local_name) {
+            module_type_names(type_module, cache_key).2.contains(local_name) {
             continue
           }
-          let multi = match declarers.get(bare) {
-            Some(set) => set.length() > 1
-            None => false
-          }
+          let multi = declarers.get(bare) is Some((_, true))
           // The same two reasons the declaration got a key above: another
           // module declares the name, or it shadows a LIB type (an
           // `interface Error` of the origin's own, which the bare table
@@ -50028,8 +50305,8 @@ fn check_module_function_bodies_layered(
             // renamed imports included, so a name it redirects is keyed
             // and never reaches this path.
             let origin_is_sole_declarer = match declarers.get(bare) {
-              Some(set) => set.length() == 1 && set.contains(origin)
-              None => false
+              Some((first, false)) => first == origin
+              _ => false
             }
             if local_name != bare && origin_is_sole_declarer {
               renames[local_name] = bare
@@ -50039,7 +50316,7 @@ fn check_module_function_bodies_layered(
           match type_modules_by_key.get(origin) {
             Some(origin_module) =>
               if !origin_module.classes.iter().any(fn(c) { c.name == bare }) &&
-                module_declares_top_level_type(origin_module, bare) {
+                module_type_names(origin_module, origin).2.contains(bare) {
                 renames[local_name] = bare + "@" + origin
               }
             None => ()
@@ -50060,18 +50337,21 @@ fn check_module_function_bodies_layered(
     // module's import: the legal `get().item.n` was reported. Its own
     // declarations of such a name move to `Item@<unkeyed>` instead, and
     // its references move with them.
-    let type_module = if cache_key == "" {
+    let moved = if cache_key == "" {
       move_unkeyed_reserved_type_names(type_module, unkeyed_renames)
     } else {
       type_module
     }
     Resolver::ingest_type_module(
       resolver,
-      type_module,
+      moved,
       "",
       cache_key~,
       skip=own_type_names,
       renames~,
+      // Unchanged by the move, it is the program's own ambient module and
+      // its ingestion can be shared with every other checked module.
+      reuse_unkeyed=cache_key == "" && physical_equal(moved, type_module),
     )
   }
   if unkeyed_renames.length() > 0 {
