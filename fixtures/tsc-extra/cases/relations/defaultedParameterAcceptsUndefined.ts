@@ -1,0 +1,21 @@
+// @strict: true
+// @target: esnext
+
+// A parameter with a default accepts `undefined` from the caller, because
+// `undefined` is what triggers the default. So `parseBool(v, options)` with
+// `options?: Opts` is legal against `options: Opts = {}`, for a function
+// declaration, a method and an arrow alike. `null` does not trigger a default
+// and is still an error, and so is `undefined` for a parameter with no
+// default.
+
+interface Opts { locale?: string }
+export function parseBool(value: string, options: Opts = {}) { return value + (options.locale ?? ""); }
+export function okDefaultedTakesUndefined(v: string, options?: Opts) { return parseBool(v, options); }
+export function okDefaultedTakesUnionUndefined(v: string, options: Opts | undefined) { return parseBool(v, options); }
+export function badDefaultedNull(v: string, options: Opts | null) { return parseBool(v, options); }
+class C { m(x: number = 1) { return x; } }
+export function okMethodDefaulted(c: C, n: number | undefined) { return c.m(n); }
+export const arrow = (x: number = 1) => x;
+export function okArrowDefaulted(n: number | undefined) { return arrow(n); }
+declare function noDefault(x: number): number;
+export function badNoDefault(n: number | undefined) { return noDefault(n); }

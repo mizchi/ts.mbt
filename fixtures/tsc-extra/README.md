@@ -213,6 +213,7 @@ guide to whether the behaviour will change.
 | realWorld | `effectPredicatesOpenRecordsAndNullableTuples` | predicates as `boolean` values, open records, nullable tuples, `typeof` on a chain and on a callable union | TS2322 TS2345 | — |
 | realWorld | `effectSwitchTypeofOptionalDiscriminantAndAliasedConditions` | `switch (typeof x)`, `e?._tag === …`, a guard to a subtype, an aliased `Array.isArray` | TS2322 TS2339 TS2741 | `narrowingByTypeofInSwitch` |
 | realWorld | `zodAndEffectNarrowingShapes` | zod / effect narrowing: non-nullish initializers, property paths, `??=`, getter keys, `never` methods, `asserts`, discriminant splits | TS18048 TS2322 TS2353 | — |
+| relations | `defaultedParameterAcceptsUndefined` | A defaulted parameter accepts `undefined` from the caller (a function, a method and an arrow), since `undefined` triggers the default; `null` does not, and a parameter with no default does not take `undefined` | TS2345 | — |
 | relations | `enumMemberTypeAndArrayElementCovariance` | `type?: E.Member` against `type?: E`, array element covariance, a `readonly` array into a mutable one | TS2322 TS2345 TS4104 | — |
 | relations | `genericSignaturesDifferingOnlyInConstraints` | Generic signatures equal up to their constraints, a recursive constraint included | TS2322 | `assignmentCompatWithGenericCallSignatures4` |
 | relations | `numberToUnionHoldingNumericEnum` | `number` into `E \| undefined` for a numeric enum, and not for a string enum | TS2322 | `enumAssignability` |

@@ -3164,6 +3164,58 @@
       ]
     },
     {
+      "case": "relations/defaultedParameterAcceptsUndefined.ts",
+      "area": "relations",
+      "name": "defaultedParameterAcceptsUndefined",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/defaultedParameterAcceptsUndefined.errors.txt",
+      "claims": [
+        {
+          "name": "okDefaultedTakesUndefined",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okDefaultedTakesUnionUndefined",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badDefaultedNull",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okMethodDefaulted",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okArrowDefaulted",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badNoDefault",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 19
+        }
+      ]
+    },
+    {
       "case": "relations/enumMemberTypeAndArrayElementCovariance.ts",
       "area": "relations",
       "name": "enumMemberTypeAndArrayElementCovariance",

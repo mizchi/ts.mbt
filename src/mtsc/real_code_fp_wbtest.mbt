@@ -941,3 +941,18 @@ test "review of #300: property hides a base set, conditional entries, void stati
     ],
   )
 }
+
+///|
+/// A defaulted parameter of a function declaration accepts `undefined`
+/// from the caller (univer's `parseBool(v, options)` with `options?:`).
+/// `null` does not trigger the default and is still reported.
+test "a defaulted parameter accepts undefined" {
+  assert_eq(
+    issue_lines(
+      "interface Opts { locale?: string }\nfunction parseBool(value: string, options: Opts = {}) { return value + (options.locale ?? \"\"); }\nfunction okUndefined(v: string, options?: Opts) { return parseBool(v, options); }\nfunction badNull(v: string, options: Opts | null) { return parseBool(v, options); }",
+    ),
+    [
+      "function badNull > call `parseBool` arg[1]: type `Opts | null` is not assignable to type `Opts | undefined`",
+    ],
+  )
+}

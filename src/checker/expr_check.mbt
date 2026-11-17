@@ -23991,10 +23991,22 @@ fn check_arguments_with_sig(
       }
     } else if i < params.length() {
       check_generator_arg_treturn(ctx, args[i], params[i], sub_path)
+      // A DEFAULTED parameter accepts `undefined` from the caller, which is
+      // what triggers the default: `parseBool(v, options)` with `options?:
+      // ParseOptions` against `options: ParseOptions = {}` is legal (univer,
+      // 20 reports). `callable_param_types` widens it for an arrow and a
+      // function expression; the rich signature of a declaration says it here.
+      let expected_i = match sig {
+        Some(ps) if i < ps.length() &&
+          ps[i].default is Some(_) &&
+          !type_accepts_undefined_param(params[i]) =>
+          @ast.TsType::Union([params[i], @ast.TsType::Undefined])
+        _ => params[i]
+      }
       check_expr_against(
         env,
         args[i],
-        params[i],
+        expected_i,
         ctx,
         sub_path,
         arg_callee_non_generic=callee_non_generic,
