@@ -696,3 +696,145 @@ test "a declare global value's type stays in its declaring module's scope" {
     ["top-level > binding `bad` init :: expected `number` but got `string`"],
   )
 }
+
+///|
+/// Three follow-ups from the review of #298. `++` and `--` write as well as
+/// read, so a protected setter still decides them. A nullish constituent
+/// can itself be an alias (`type Nothing = void`), and `x!` removes it.
+/// And an `unknown` or `any` guard result proves nothing about the `?.`
+/// receivers, so `o` stays possibly undefined.
+test "increment, an aliased void under !, and an unproven guard result" {
+  assert_eq(
+    issue_lines(
+      "class B { private _l = 0; get left(): number { return this._l } protected set left(v: number) { this._l = v } }\ndeclare const b: B;\ntype Nothing = void;\ntype Maybe = string | Nothing;\ndeclare function accepts(x: unknown): x is unknown;\ndeclare const o: { p?: any; q: number } | undefined;\nfunction badInc() { b.left++; }\nfunction okAlias(x: Maybe): string { return x!; }\nfunction badUnproven() { if (accepts(o?.p)) { const n = o.q; } }",
+    ),
+    [
+      "function badInc > access `.left`: property `left` is protected and only accessible within class `B` and its subclasses",
+      "function badUnproven > PropAccess `.q`: object is possibly `undefined`",
+    ],
+  )
+}
+
+///|
+/// A qualified name in an unreachable declaring module's scope
+/// (`Models.Payload`) moves with the bare ones, so it cannot resolve to the
+/// checked module's own `Models.Payload`.
+test "a declare global value's qualified type stays in its module's scope" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/globals.d.ts", "export {};\ndeclare namespace Models { interface Payload { a: string } }\ndeclare global { const payload: Models.Payload }",
+        ),
+        (
+          "/src/root.ts", "declare namespace Models { interface Payload { b: number } }\nexport const ok: string = payload.a;",
+        ),
+      ],
+      [],
+    ),
+    [],
+  )
+}
+
+///|
+/// Destructuring a reference reads each property through what control
+/// flow knows about it: after `if (!body.tables) body.tables = []`,
+/// `const { tables } = body` is the narrowed array (univer's text-model
+/// helpers, 96 reports in one file). A sibling property, an unguarded read
+/// and a read after the source was reassigned keep the optional type.
+test "destructuring reads a narrowed property" {
+  assert_eq(
+    issue_lines(
+      "interface B { tables?: number[]; other?: number[] }\nfunction okAssigned(body: B) { if (!body.tables) { body.tables = []; } const { tables } = body; tables.push(1); }\nfunction okRenamed(body: B) { if (body.tables) { const { tables: t } = body; t.push(1); } }\nfunction badSibling(body: B) { if (!body.tables) { body.tables = []; } const { other } = body; other.push(1); }\nfunction badReassigned(body: B, next: B) { if (body.tables) { body = next; const { tables } = body; tables.push(1); } }",
+    ),
+    [
+      "function badSibling > call `push`: object is possibly `undefined`", "function badReassigned > call `push`: object is possibly `undefined`",
+    ],
+  )
+}
+
+///|
+/// A function value takes its parameter types from where it is assigned,
+/// and a guard narrows those: after `isObject(color)` on `string | Color`
+/// the parameter is `Color` (univer's `toColor` in `color-kit.ts`). The
+/// body used to be walked with the parameters as `any` as well, where the
+/// guard narrows to `object`, so `"r" in color` read as `{ r: unknown }`.
+/// The `bad` lines keep a real error under each guard.
+test "a guard narrows a contextually typed parameter, not any" {
+  assert_eq(
+    issue_lines(
+      "interface IRgb { r: number; g: number }\ninterface IHsl { h: number; l: number }\ntype Color = IRgb | IHsl;\nconst isObject = (value: unknown): value is object => typeof value === \"object\" && value !== null;\ntype ToNumber = (color: string | Color) => number;\nconst okArrow: ToNumber = (color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; };\nconst okMember: { f: ToNumber } = { f: (color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; } };\nconst okElement: ToNumber[] = [(color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; }];\nfunction okReturned(): ToNumber { return (color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; }; }\nconst okFuncExpr: ToNumber = function (color) { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; };\nfunction badReturned(): ToNumber { return (color) => { if (isObject(color)) { if (\"r\" in color) { return color.l; } } return 0; }; }",
+    ),
+    [
+      "function badReturned > PropAccess `.l`: property `l` does not exist on `IRgb`",
+    ],
+  )
+}
+
+///|
+/// A bare `return;` and falling off the end are legal when the return type
+/// admits `undefined` or `void`, through an alias too. univer's lookups are
+/// typed `Nullable<T> = T | null | undefined | void` (100 reports). An alias
+/// admitting only `null` still requires a value.
+test "a return type alias admitting undefined allows no value" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\ntype OnlyNull<T> = T | null;\nfunction okBare(d: number | null): Nullable<string> { if (d == null) return; return \"x\"; }\nfunction okFallOff(d: number | null): Nullable<string> { if (d != null) return \"x\"; }\nfunction badBare(d: number | null): OnlyNull<string> { if (d == null) return; return \"x\"; }\nfunction badFallOff(d: number | null): OnlyNull<string> { if (d != null) return \"x\"; }",
+    ),
+    [
+      "function badBare > return: expected `OnlyNull<string>` but no value returned",
+      "function badFallOff: not all paths return a `OnlyNull<string>`",
+    ],
+  )
+}
+
+///|
+/// An optional chain ending in a call narrows its receivers as a property
+/// chain does: `x?.ok()` is `undefined` whenever `x` is nullish. Two arms
+/// missed it, one per AST shape: `x?.ok()` is a `CallExpr` the chain walk
+/// stopped at, and `x?.inner.has()` is a `MethodCall` the condition walk
+/// sent to type-predicate narrowing only (univer's AST helpers and value
+/// objects). The falsy branch and a `|| b` still prove nothing.
+test "an optional chain ending in a call narrows its receivers" {
+  assert_eq(
+    issue_lines(
+      "interface N { getParent(): N | undefined; ok(): boolean; v: number; inner: { has(): boolean } }\ntype Nullable<T> = T | null | undefined | void;\nfunction okIf(x: N | undefined) { if (x?.ok()) { return x.v; } return 0; }\nfunction okWhile(node: N) { let p: Nullable<N> = node; while (p?.getParent()) { p = p.getParent(); } return p; }\nfunction okNested(x: N | undefined) { if (x?.inner.has()) { return x.v; } return 0; }\nfunction badFalsy(x: N | undefined) { if (!x?.ok()) { return x.v; } return 0; }\nfunction badOr(x: N | undefined, b: boolean) { if (x?.ok() || b) { return x.v; } return 0; }",
+    ),
+    [
+      "function badFalsy > PropAccess `.v`: object is possibly `undefined`", "function badOr > PropAccess `.v`: object is possibly `undefined`",
+    ],
+  )
+}
+
+///|
+/// A trailing parameter accepting `void` may be omitted, through an alias
+/// too: univer's `slice(row: Nullable<…>, col: Nullable<…>)` called with one
+/// argument. A `T | undefined` alias is still required, as is a
+/// void-accepting parameter before a required one.
+test "a trailing parameter whose alias accepts void may be omitted" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\ntype MaybeU<T> = T | undefined;\ndeclare function fN(a: number, b: Nullable<number>): void;\ndeclare function fU(a: number, b: MaybeU<number>): void;\ndeclare function fM(a: Nullable<number>, b: number): void;\nfunction okOmitted() { fN(1); }\nfunction badUndefinedAlias() { fU(1); }\nfunction badMiddle() { fM(1); }",
+    ),
+    [
+      "function badUndefinedAlias > call `fU`: expected 2 argument(s), got 1", "function badMiddle > call `fM`: expected 2 argument(s), got 1",
+    ],
+  )
+}
+
+///|
+/// Under `noImplicitAny` an unannotated `let` / `var` initialized with
+/// `null` or `undefined` is declared `any` and evolves (univer's
+/// `let errorValue = null`). A read before any assignment still sees `null`,
+/// and `void 0`, a `const` and `let e: null` are not auto-typed.
+test "a let initialized with null is auto-typed" {
+  assert_eq(
+    issue_lines(
+      "interface V { a: number }\ndeclare const v: V;\nfunction okLet() { let e = null; e = v; return e; }\nfunction okInCallback(xs: V[]) { let e = undefined; xs.forEach((x) => { e = x; }); return e; }\nfunction badRead() { let e = null; return e.a; }\nfunction badVoidZero() { let e = void 0; e = v; return e; }\nfunction badAnnotated() { let e: null = null; e = v; return e; }",
+    ),
+    [
+      "function badRead > PropAccess `.a`: cannot access `.a` — receiver may be null or undefined",
+      "function badVoidZero > assign `e`: expected `undefined` but got `V`", "function badAnnotated > assign `e`: expected `null` but got `V`",
+    ],
+  )
+}

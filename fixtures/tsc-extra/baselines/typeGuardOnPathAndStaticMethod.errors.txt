@@ -1,18 +1,20 @@
-typeGuardOnPathAndStaticMethod.ts(21,83): error TS2322: Type 'undefined' is not assignable to type 'number'.
-typeGuardOnPathAndStaticMethod.ts(22,92): error TS2322: Type 'undefined' is not assignable to type 'number'.
-typeGuardOnPathAndStaticMethod.ts(22,96): error TS18048: 'props' is possibly 'undefined'.
-typeGuardOnPathAndStaticMethod.ts(23,85): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(24,83): error TS2322: Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(25,92): error TS2322: Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(25,96): error TS18048: 'props' is possibly 'undefined'.
+typeGuardOnPathAndStaticMethod.ts(26,85): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
   Type 'undefined' is not assignable to type 'number'.
-typeGuardOnPathAndStaticMethod.ts(24,46): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(27,46): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
   Type 'undefined' is not assignable to type 'number'.
+typeGuardOnPathAndStaticMethod.ts(28,79): error TS18048: 'loose' is possibly 'undefined'.
 
 
-==== typeGuardOnPathAndStaticMethod.ts (5 errors) ====
+==== typeGuardOnPathAndStaticMethod.ts (6 errors) ====
     // A type guard narrows its subject whatever spelling reaches it: a static
     // method called through its class, and a subject that is a property path
     // or an optional chain rather than a bare binding. A chain whose guarded
     // value cannot be nullish did not short-circuit, so the receivers its `?.`
-    // guarded are non-nullish too. The negative branch of a chain says nothing,
+    // guarded are non-nullish too, which an `unknown` or `any` result does not
+    // prove. The negative branch of a chain says nothing,
     // since the guard may have failed because a receiver was nullish.
     
     class Tools {
@@ -21,6 +23,8 @@ typeGuardOnPathAndStaticMethod.ts(24,46): error TS2322: Type 'number | undefined
     }
     declare function isDefine<T>(value?: T | void): value is T;
     interface P { top?: number; other?: number }
+    declare function accepts(x: unknown): x is unknown;
+    declare const loose: { p?: any; q: number } | undefined;
     
     function okStaticOnVariable(x: number | undefined) { let t = 0; if (Tools.isDefine(x)) { t = x; } }
     function okStaticConcrete(x: unknown) { let t = 0; if (Tools.isNum(x)) { t = x; } }
@@ -44,4 +48,7 @@ typeGuardOnPathAndStaticMethod.ts(24,46): error TS2322: Type 'number | undefined
                                                  ~
 !!! error TS2322: Type 'number | undefined' is not assignable to type 'number'.
 !!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
+    function badUnknownTargetProvesNothing() { if (accepts(loose?.p)) { const n = loose.q; } }
+                                                                                  ~~~~~
+!!! error TS18048: 'loose' is possibly 'undefined'.
     

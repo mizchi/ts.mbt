@@ -80,7 +80,19 @@
           "name": "badProtectedFieldCompound",
           "kind": "bad",
           "fromLine": 35,
+          "toLine": 35
+        },
+        {
+          "name": "badPostIncrement",
+          "kind": "bad",
+          "fromLine": 36,
           "toLine": 36
+        },
+        {
+          "name": "badPreDecrement",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 38
         }
       ]
     },
@@ -311,6 +323,58 @@
           "kind": "ok",
           "fromLine": 10,
           "toLine": 11
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/destructuringReadsNarrowedProperty.ts",
+      "area": "controlFlow",
+      "name": "destructuringReadsNarrowedProperty",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18048
+      ],
+      "baseline": "baselines/destructuringReadsNarrowedProperty.errors.txt",
+      "claims": [
+        {
+          "name": "okAssignedThenDestructured",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okGuardedThenDestructured",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okRenamedDestructure",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badSiblingProperty",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badUnnarrowed",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badAfterReassignment",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 15
         }
       ]
     },
@@ -640,6 +704,82 @@
       ]
     },
     {
+      "case": "controlFlow/optionalCallChainNarrowsReceiver.ts",
+      "area": "controlFlow",
+      "name": "optionalCallChainNarrowsReceiver",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18048
+      ],
+      "baseline": "baselines/optionalCallChainNarrowsReceiver.errors.txt",
+      "claims": [
+        {
+          "name": "okIf",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okWhile",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okAnd",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okOrOfChains",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okCompared",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okNested",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 18
+        },
+        {
+          "name": "badFalsyBranch",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badOrWithPlain",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badAfterWhile",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badComparedUndefined",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
+        }
+      ]
+    },
+    {
       "case": "controlFlow/truthyOptionalChainNarrowsGuardedMember.ts",
       "area": "controlFlow",
       "name": "truthyOptionalChainNarrowsGuardedMember",
@@ -751,62 +891,68 @@
         {
           "name": "okStaticOnVariable",
           "kind": "ok",
-          "fromLine": 15,
-          "toLine": 15
-        },
-        {
-          "name": "okStaticConcrete",
-          "kind": "ok",
-          "fromLine": 16,
-          "toLine": 16
-        },
-        {
-          "name": "okFunctionOnPath",
-          "kind": "ok",
-          "fromLine": 17,
-          "toLine": 17
-        },
-        {
-          "name": "okStaticOnPath",
-          "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "okStaticOnChain",
+          "name": "okStaticConcrete",
           "kind": "ok",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "okFunctionOnChain",
+          "name": "okFunctionOnPath",
           "kind": "ok",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "badElseOfPath",
-          "kind": "bad",
+          "name": "okStaticOnPath",
+          "kind": "ok",
           "fromLine": 21,
           "toLine": 21
         },
         {
-          "name": "badElseOfChain",
-          "kind": "bad",
+          "name": "okStaticOnChain",
+          "kind": "ok",
           "fromLine": 22,
           "toLine": 22
         },
         {
-          "name": "badSiblingMember",
-          "kind": "bad",
+          "name": "okFunctionOnChain",
+          "kind": "ok",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "badUnguarded",
+          "name": "badElseOfPath",
           "kind": "bad",
           "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badElseOfChain",
+          "kind": "bad",
+          "fromLine": 25,
           "toLine": 25
+        },
+        {
+          "name": "badSiblingMember",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badUnguarded",
+          "kind": "bad",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "badUnknownTargetProvesNothing",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 29
         }
       ]
     },
@@ -1197,6 +1343,77 @@
       ]
     },
     {
+      "case": "inference/autoTypedNullOrUndefinedInitializer.ts",
+      "area": "inference",
+      "name": "autoTypedNullOrUndefinedInitializer",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        18047
+      ],
+      "baseline": "baselines/autoTypedNullOrUndefinedInitializer.errors.txt",
+      "claims": [
+        {
+          "name": "okLetNull",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okVarUndefined",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okAssignedInCallback",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okReadAfterAssign",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 16
+        },
+        {
+          "name": "badReadBeforeAssign",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badVoidZero",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badConst",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badAnnotatedNull",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badPossiblyNullAfterBranch",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
+        }
+      ]
+    },
+    {
       "case": "inference/boundViolationsShadowingAndNumericTemplates.ts",
       "area": "inference",
       "name": "boundViolationsShadowingAndNumericTemplates",
@@ -1294,6 +1511,88 @@
           "kind": "bad",
           "fromLine": 29,
           "toLine": 30
+        }
+      ]
+    },
+    {
+      "case": "inference/contextuallyTypedFunctionValueThroughGuard.ts",
+      "area": "inference",
+      "name": "contextuallyTypedFunctionValueThroughGuard",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2339
+      ],
+      "baseline": "baselines/contextuallyTypedFunctionValueThroughGuard.errors.txt",
+      "claims": [
+        {
+          "name": "okAnnotatedArrow",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okObjectMember",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "okArrayElement",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okReturned",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "okFunctionExpression",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okCallArgument",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 27
+        },
+        {
+          "name": "badAnnotatedArrow",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "badObjectMember",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "badArrayElement",
+          "kind": "bad",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badReturned",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "badFunctionExpression",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 33
         }
       ]
     },
@@ -1729,6 +2028,64 @@
         {
           "name": "okRegexArg",
           "kind": "ok",
+          "fromLine": 22,
+          "toLine": 23
+        }
+      ]
+    },
+    {
+      "case": "inference/trailingVoidParameterThroughAlias.ts",
+      "area": "inference",
+      "name": "trailingVoidParameterThroughAlias",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2554
+      ],
+      "baseline": "baselines/trailingVoidParameterThroughAlias.errors.txt",
+      "claims": [
+        {
+          "name": "okAliasTrailing",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okTwoTrailing",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okMethod",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okArrow",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 19
+        },
+        {
+          "name": "badUndefinedAlias",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badVoidBeforeRequired",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badTooMany",
+          "kind": "bad",
           "fromLine": 22,
           "toLine": 23
         }
@@ -3084,38 +3441,44 @@
         {
           "name": "okVoidStripped",
           "kind": "ok",
-          "fromLine": 14,
-          "toLine": 14
-        },
-        {
-          "name": "okFunctionResult",
-          "kind": "ok",
-          "fromLine": 15,
-          "toLine": 15
-        },
-        {
-          "name": "okMethodResult",
-          "kind": "ok",
           "fromLine": 16,
           "toLine": 16
         },
         {
-          "name": "okGuardedOptionalMember",
+          "name": "okNestedVoidAlias",
           "kind": "ok",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "badNoAssertion",
-          "kind": "bad",
+          "name": "okFunctionResult",
+          "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
+          "name": "okMethodResult",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okGuardedOptionalMember",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badNoAssertion",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
           "name": "badOptionalMemberUnguarded",
           "kind": "bad",
-          "fromLine": 19,
-          "toLine": 20
+          "fromLine": 22,
+          "toLine": 23
         }
       ]
     },
@@ -3210,6 +3573,89 @@
           "kind": "bad",
           "fromLine": 12,
           "toLine": 13
+        }
+      ]
+    },
+    {
+      "case": "types/returnWithoutValueThroughAlias.ts",
+      "area": "types",
+      "name": "returnWithoutValueThroughAlias",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2366
+      ],
+      "baseline": "baselines/returnWithoutValueThroughAlias.errors.txt",
+      "claims": [
+        {
+          "name": "okBareReturnNullable",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okBareReturnUndefinedAlias",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okBareReturnInlineVoid",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okFallOffNullable",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okFallOffUndefinedAlias",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okAsyncBareReturn",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "OkMethod",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okArrow",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 19
+        },
+        {
+          "name": "badBareReturnNullOnly",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badBareReturnPlain",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badFallOffNullOnly",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
         }
       ]
     },

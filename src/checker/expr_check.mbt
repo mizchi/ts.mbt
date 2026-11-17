@@ -2883,6 +2883,57 @@ fn required_arity(params : Array[@ast.TsParam]) -> Int32 {
 }
 
 ///|
+/// Whether `ty` accepts `void` once its aliases are expanded. tsc lets a
+/// trailing parameter that accepts `void` be omitted, and the arity helpers
+/// test for `Void` resolver-free, so univer's
+/// `slice(rowParam: Nullable<…>, columnParam: Nullable<…>)`, with
+/// `Nullable<T> = T | null | undefined | void`, read as requiring both
+/// arguments. Only `void` counts here: a `T | undefined` alias is still
+/// required, as tsc says (TS2554).
+fn alias_accepts_void(resolver : Resolver, ty : @ast.TsType) -> Bool {
+  match ty {
+    Named(_) | Applied(_, _) | Union(_) => {
+      let u = resolver.unwrap(ty)
+      union_components(deep_union_members(resolver, u))
+      .iter()
+      .any(fn(p) { p is Void })
+    }
+    _ => false
+  }
+}
+
+///|
+/// The parameter types with every void-accepting alias replaced by `Void`,
+/// for the arity count only.
+fn types_with_void_aliases(
+  resolver : Resolver,
+  params : Array[@ast.TsType],
+) -> Array[@ast.TsType] {
+  params.map(fn(t) {
+    if !(t is Rest(_)) && alias_accepts_void(resolver, t) {
+      @ast.TsType::Void
+    } else {
+      t
+    }
+  })
+}
+
+///|
+/// `types_with_void_aliases` for a rich signature.
+fn params_with_void_aliases(
+  resolver : Resolver,
+  params : Array[@ast.TsParam],
+) -> Array[@ast.TsParam] {
+  params.map(fn(p) {
+    if !p.is_rest && alias_accepts_void(resolver, p.type_) {
+      { ..p, type_: @ast.TsType::Void, }
+    } else {
+      p
+    }
+  })
+}
+
+///|
 /// `required_arity` for a call whose parameter TYPES have been instantiated
 /// (`params`, aligned with `sig`). A parameter whose declared type is a
 /// type parameter is omittable once that parameter is `void` at the call:
@@ -10218,6 +10269,41 @@ fn type_has_undefined(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Whether a function whose return type is `ty` may end without a value:
+/// a bare `return;` or falling off the end. tsc allows both when the type
+/// admits `undefined` or `void`, and that includes an alias holding one.
+/// univer's `Nullable<T> = T | null | undefined | void` is the return type of
+/// most of its lookups, and `if (data == null) return;` in one of them was
+/// "no value returned" (100 reports), while the inline `string | void` was
+/// fine. The resolver-free `is_assignable_to` cannot expand the alias, so
+/// aliases and union members are expanded here. Running out of depth
+/// answers "admits", which can only lose a report.
+fn return_type_admits_no_value(
+  resolver : Resolver,
+  ty : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if is_assignable_to(@ast.TsType::Undefined, ty) ||
+    is_assignable_to(@ast.TsType::Void, ty) {
+    return true
+  }
+  if depth > 8 {
+    return true
+  }
+  match ty {
+    Union(_) =>
+      union_components(ty)
+      .iter()
+      .any(fn(p) { return_type_admits_no_value(resolver, p, depth + 1) })
+    Named(_) | Applied(_, _) => {
+      let u = resolver.unwrap(ty)
+      u != ty && return_type_admits_no_value(resolver, u, depth + 1)
+    }
+    _ => false
+  }
+}
+
+///|
 /// Whether the TARGET of an assignment admits `null` (`want_null`) or
 /// `undefined`, following an alias member of a union. `unwrap_containers`
 /// leaves a self-referential alias as its name, so `Json | undefined` with
@@ -12964,7 +13050,14 @@ fn infer_expr_inner(
     NonNull(inner) =>
       narrow_remove(
         non_nullable_resolved(resolver, infer_expr(env, resolver, inner)),
-        fn(t) { t is Void },
+        fn(t) {
+          // A constituent can itself be an alias for a nullish type:
+          // `type V = void; type Maybe = string | V` leaves `V` here.
+          match resolver.unwrap(t) {
+            Void | Null | Undefined => true
+            _ => false
+          }
+        },
       )
     // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
     OptionalChain(inner) => {
@@ -15692,6 +15785,24 @@ fn symbol_member_shape_blocks(
 /// this is the exact fact that lifts it. It defaults to `false` — "the
 /// caller cannot answer" — which keeps the suppression, so a call site that
 /// does not thread it loses a finding rather than inventing one.
+///
+/// Every expression is also walked by `check_call_args_in_expr`, for the
+/// errors nested inside it, even when `expected` is `Any`. That walk checks a
+/// function value's body with its unannotated parameters bound to `any`, and
+/// relies on the contextual walk reporting the same things so the repeats
+/// dedup away. A type guard breaks that: `isObject(color)` narrows `any` to
+/// `object` where the contextual walk narrows `string | Color` to `Color`, so
+/// the `any` walk reported `"r" in color` as `{ r: unknown }` beside the
+/// contextual walk's correct answer. tsc reports neither.
+///
+/// So for the four shapes that hand a function value to a contextual type (an
+/// arrow, a function expression, and the object and array literals holding
+/// them) the walk runs AFTER the shape check. The contextual walk marks the
+/// body it walked (`walked_arrow_bodies` / `walked_func_bodies`) and the `any`
+/// walk then skips it, which is the order `check_arguments` already uses for a
+/// call argument. Every other expression keeps the walk first, because the
+/// walk narrows by assignment and clears the TS2454 set, and the shape check
+/// reads both.
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -15700,10 +15811,33 @@ fn check_expr_against(
   sub_path : String,
   arg_callee_non_generic~ : Bool = false,
 ) -> Unit {
-  // Always walk for nested call-site argument errors, even when the outer
-  // expected type is `Any` (e.g. an unannotated return where we still want
-  // bad calls inside the returned expression to be flagged).
-  check_call_args_in_expr(env, expr, ctx)
+  let walk_after = expr
+    is (ArrowFunc(_, _, _, _) | FuncExpr(_) | ObjectLit(_) | ArrayLit(_))
+  if !walk_after {
+    check_call_args_in_expr(env, expr, ctx)
+  }
+  check_expr_against_shape(
+    env,
+    expr,
+    expected,
+    ctx,
+    sub_path,
+    arg_callee_non_generic~,
+  )
+  if walk_after {
+    check_call_args_in_expr(env, expr, ctx)
+  }
+}
+
+///|
+fn check_expr_against_shape(
+  env : ExprEnv,
+  expr : @ast.TsExpr,
+  expected : @ast.TsType,
+  ctx : CheckCtx,
+  sub_path : String,
+  arg_callee_non_generic~ : Bool,
+) -> Unit {
   // `new Promise((resolve) => …)` where a `Promise<X>` is expected: the
   // executor is contextually typed by `Promise<X>`'s constructor, so
   // `resolve` takes `X | PromiseLike<X>` (`resolve(null)` against
@@ -23129,7 +23263,7 @@ fn check_arguments_with_sig(
         param_count += 1
       }
     }
-    let min_args = required_arity(ps)
+    let min_args = required_arity(params_with_void_aliases(ctx.resolver, ps))
     let mut i = 0
     let mut stop = false
     for a in args {
@@ -23316,8 +23450,16 @@ fn check_arguments_with_sig(
       _ => effective_count += 1
     }
   }
-  // Arity check: prefer the rich sig if present.
-  let (min_arity, max_arity) = match sig {
+  // Arity check: prefer the rich sig if present. Arity reads each parameter
+  // type resolver-free, so it sees the void-accepting aliases expanded
+  // (`params_with_void_aliases`); the argument checks below keep the types
+  // as written, so their messages still name the alias.
+  let arity_params = types_with_void_aliases(ctx.resolver, params)
+  let arity_sig = match sig {
+    Some(ps) => Some(params_with_void_aliases(ctx.resolver, ps))
+    None => None
+  }
+  let (min_arity, max_arity) = match arity_sig {
     Some(ps) => {
       let mut has_rest = false
       for p in ps {
@@ -23362,7 +23504,7 @@ fn check_arguments_with_sig(
       if fixed_rest_len >= 0 {
         (required_arity(ps) + fixed_rest_len, ps.length() - 1 + fixed_rest_len)
       } else {
-        let min_ = required_arity_at_call(ps, params)
+        let min_ = required_arity_at_call(ps, arity_params)
         let max_ = if has_rest { -1 } else { ps.length() }
         (min_, max_)
       }
@@ -23384,7 +23526,7 @@ fn check_arguments_with_sig(
         }
       }
       let max_ = if has_rest_ty { -1 } else { params.length() }
-      (required_arity_from_types(params), max_)
+      (required_arity_from_types(arity_params), max_)
     }
   }
   if !has_spread || spread_exact {
@@ -25176,6 +25318,7 @@ fn bind_object_pattern(
   ctx : CheckCtx,
   ob : @ast.TsObjectBinding,
   source : @ast.TsType,
+  source_key? : String,
 ) -> Unit {
   for prop in ob.props {
     // TS2341 / TS2445: destructuring reaches a member exactly as a
@@ -25241,9 +25384,18 @@ fn bind_object_pattern(
       }
       _ => ()
     }
-    let field_ty = match computed_ty {
-      Some(t) => t
-      None =>
+    // Destructuring a narrowable reference reads each property through
+    // what is known about it: after `if (!body.tables) body.tables = []`,
+    // `const { tables } = body` is the narrowed `number[]` (probed), and
+    // univer's text-model helpers are written exactly that way.
+    let narrowed_field = match (source_key, prop.key_expr) {
+      (Some(k), None) => env.lookup(member_narrowing_key(k, prop.key))
+      _ => None
+    }
+    let field_ty = match (narrowed_field, computed_ty) {
+      (Some(t), _) => t
+      (None, Some(t)) => t
+      (None, None) =>
         match ctx.resolver.lookup_field(source, prop.key) {
           Some(t) => t
           None =>
@@ -26495,6 +26647,28 @@ fn collect_narrowing(
       apply_method_type_predicate_narrowing(
         env, resolver, receiver, method_name, args, pair_pos, pair_neg,
       )
+      // A truthy `x?.inner.has()` did not short-circuit, so the receivers
+      // its `?.` guarded are non-nullish, as the catch-all below says for a
+      // property chain. This arm used to take the call and never reach that
+      // rule. Only "non-nullish" is pushed: the call being truthy says
+      // nothing about whether `x` is. A key the predicate already narrowed
+      // keeps that answer.
+      let (_, guarded) = optional_chain_guarded_receivers(cond)
+      for g in guarded {
+        match narrowing_key_for_expr(g) {
+          Some(key) if !pair_pos.iter().any(fn(b) { b.0 == key }) =>
+            pair_pos.push(
+              (
+                key,
+                non_nullable_resolved(
+                  resolver,
+                  narrowing_current_type(env, resolver, key),
+                ),
+              ),
+            )
+          _ => ()
+        }
+      }
     }
     // `if (x)` / `if (obj.prop)` / `if (obj.a.b)` — truthy narrowing
     // strips null / undefined under the synthesised key. Bare `Var(_)`
@@ -26752,6 +26926,15 @@ fn non_nullable_resolved(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
 /// yields `(p.a.b, [p])`. Anything that is not a property / index chain
 /// comes back unchanged with no receivers, so a caller narrows exactly
 /// what it narrowed before.
+///
+/// A CALL on top of a chain keeps the chain's receivers: `x?.ok()` is
+/// `CallExpr(OptionalChain(PropAccess(x, ok)), [])`, and it short-circuits
+/// to `undefined` whenever `x` is nullish, exactly as `x?.ok` does. So every
+/// caller's premise (the chain's value is known not to be `undefined`)
+/// still proves `x` non-nullish. Before this arm `if (x?.ok()) { x.v }` and
+/// `while (p?.getParent()) { p = p.getParent() }` reported `x` / `p` as
+/// possibly undefined (univer's AST and value-object code). A call has no
+/// narrowing key, so the rebuilt plain call narrows nothing itself.
 fn optional_chain_guarded_receivers(
   expr : @ast.TsExpr,
 ) -> (@ast.TsExpr, Array[@ast.TsExpr]) {
@@ -26773,6 +26956,27 @@ fn optional_chain_guarded_receivers(
     IndexAccess(inner, i) => {
       let (r, gs) = optional_chain_guarded_receivers(inner)
       (IndexAccess(r, i), gs)
+    }
+    CallExpr(inner, args) => {
+      let (r, gs) = optional_chain_guarded_receivers(inner)
+      if gs.length() == 0 {
+        (expr, [])
+      } else {
+        let plain : @ast.TsExpr = match r {
+          PropAccess(recv, m) => MethodCall(recv, m, args)
+          Var(n) => Call(n, args)
+          _ => CallExpr(r, args)
+        }
+        (plain, gs)
+      }
+    }
+    MethodCall(inner, m, args) => {
+      let (r, gs) = optional_chain_guarded_receivers(inner)
+      if gs.length() == 0 {
+        (expr, [])
+      } else {
+        (MethodCall(r, m, args), gs)
+      }
     }
     _ => (expr, [])
   }
@@ -27001,7 +27205,14 @@ fn narrow_predicate_path_arg(
     return
   }
   let narrowed = pair_pos[pair_pos.length() - 1].1
-  if target_admits_nullish(resolver, narrowed, false, 0) ||
+  // The narrowed value has to be PROVEN non-nullish: `any` and `unknown`
+  // admit `undefined` without saying so, and a `void` part may be it.
+  if narrowed is Any ||
+    narrowed is Unknown ||
+    union_components(narrowed)
+    .iter()
+    .any(fn(t) { t is Void || t is Any || t is Unknown }) ||
+    target_admits_nullish(resolver, narrowed, false, 0) ||
     target_admits_nullish(resolver, narrowed, true, 0) {
     return
   }
@@ -28866,6 +29077,21 @@ fn check_ident_binding_decl(
   // when not, we leave declared as the inferred-from-init type
   // since that's what TS widens to anyway.
   env.declare_type(name, bound_type)
+  // tsc's AUTO-TYPED binding: under `noImplicitAny`, an unannotated `let` or
+  // `var` initialized with the `null` or `undefined` keyword is declared
+  // `any`, and its type evolves with each assignment. So `let e = null;
+  // e = v` is legal, while a read before any assignment still sees `null`.
+  // The declared slot was `null` here, so univer's `let errorValue = null`
+  // followed by `errorValue = value` in a callback was "expected `null`".
+  // Probed: without `noImplicitAny` the declared type really is `null`, and
+  // `void 0` is not auto-typed either. A `const` and an annotated `let e:
+  // null` keep their type.
+  if mutable_ &&
+    ctx.resolver.no_implicit_any &&
+    !is_checkable(declared) &&
+    (init is NullLit || init is Var("undefined")) {
+    env.declare_type(name, Any)
+  }
   // Declared-type narrowing on initialization: `let a: 0 | 1 = 0` makes `a`
   // `0` until something assigns it, exactly as `a = 0` would, while the
   // declared slot stays the union every later assignment is checked
@@ -29894,7 +30120,19 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           )
         }
       }
-      bind_object_pattern(env, ctx, ob, source_ty)
+      // An annotation retypes the source, so only an unannotated
+      // declaration reads the initializer's narrowed properties.
+      bind_object_pattern(
+        env,
+        ctx,
+        ob,
+        source_ty,
+        source_key?=if is_checkable(declared) {
+          None
+        } else {
+          narrowing_key_for_expr(init)
+        },
+      )
     }
     Var(@ast.TsBinding::Target(_), _, init)
     | Let(@ast.TsBinding::Target(_), _, init)
@@ -30146,8 +30384,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
         None =>
           if is_checkable(ctx.return_type) &&
-            !is_assignable_to(@ast.TsType::Undefined, ctx.return_type) &&
-            !is_assignable_to(@ast.TsType::Void, ctx.return_type) {
+            !return_type_admits_no_value(ctx.resolver, ctx.return_type, 0) {
             record(
               ctx,
               "return",
@@ -33241,6 +33478,15 @@ fn check_call_args_in_expr(
         // are not trustworthy here. Unions, generics, `any`, and unresolved
         // names all abstain.
         PreInc | PreDec | PostInc | PostDec => {
+          // `++` and `--` read and then write, like `+=`: the operand walk
+          // has applied the getter's visibility, and the setter's can only
+          // be stricter, so `b.left++` beside a `protected set left` is
+          // TS2445 (probed) through the same pass `+=` uses.
+          match inner {
+            PropAccess(recv, prop) =>
+              check_member_accessibility(env, ctx, recv, prop, CompoundWrite)
+            _ => ()
+          }
           // TS2540: enum members are read-only, so `E.B++` / `--E["B"]`
           // (receiver resolving to an enum object, not shadowed locally)
           // can never be an assignment target.
@@ -35553,8 +35799,7 @@ fn check_function_body_with(
   // signatures require an explicit `return`.
   if !func.is_generator &&
     is_checkable(body_return) &&
-    !is_assignable_to(@ast.TsType::Undefined, body_return) &&
-    !is_assignable_to(@ast.TsType::Void, body_return) &&
+    !return_type_admits_no_value(resolver, body_return, 0) &&
     !block_always_exits_with(func.body, env, resolver) &&
     !permissive {
     issues.push({

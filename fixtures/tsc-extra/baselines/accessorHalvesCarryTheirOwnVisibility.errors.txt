@@ -4,9 +4,11 @@ accessorHalvesCarryTheirOwnVisibility.ts(32,33): error TS2445: Property 'left' i
 accessorHalvesCarryTheirOwnVisibility.ts(33,45): error TS2341: Property 'secret' is private and only accessible within class 'B'.
 accessorHalvesCarryTheirOwnVisibility.ts(34,31): error TS2445: Property 'count' is protected and only accessible within class 'B' and its subclasses.
 accessorHalvesCarryTheirOwnVisibility.ts(35,42): error TS2445: Property 'x' is protected and only accessible within class 'B' and its subclasses.
+accessorHalvesCarryTheirOwnVisibility.ts(36,33): error TS2445: Property 'left' is protected and only accessible within class 'B' and its subclasses.
+accessorHalvesCarryTheirOwnVisibility.ts(37,34): error TS2445: Property 'left' is protected and only accessible within class 'B' and its subclasses.
 
 
-==== accessorHalvesCarryTheirOwnVisibility.ts (6 errors) ====
+==== accessorHalvesCarryTheirOwnVisibility.ts (8 errors) ====
     // An accessor pair carries one visibility per half. A read reaches the
     // getter and a write the setter, so a public getter beside a protected or
     // private setter is readable anywhere, while assigning to it outside the
@@ -54,4 +56,10 @@ accessorHalvesCarryTheirOwnVisibility.ts(35,42): error TS2445: Property 'x' is p
     function badProtectedFieldCompound() { b.x += 1; }
                                              ~
 !!! error TS2445: Property 'x' is protected and only accessible within class 'B' and its subclasses.
+    function badPostIncrement() { b.left++; }
+                                    ~~~~
+!!! error TS2445: Property 'left' is protected and only accessible within class 'B' and its subclasses.
+    function badPreDecrement() { --b.left; }
+                                     ~~~~
+!!! error TS2445: Property 'left' is protected and only accessible within class 'B' and its subclasses.
     

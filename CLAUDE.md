@@ -5620,6 +5620,65 @@ product surfaces now.
     (`c.a.x` with `a?:`) is still not judged, because the strictNullChecks
     member check reads only a bare variable receiver. Two tsc-extra cells
     declare it.
+  Batch GN continues univer largest category first and carries the four
+  follow-ups from the review of #298. It takes the five sampled packages
+  from 2,755 reports to 2,047, excalidraw from 602 to 580 and zod from 9
+  to 8, adds none at a new location on any target, and leaves effect, the
+  `.d.ts` entries and the oracle unchanged. Every fix was probed against
+  the TS7 nightly with a legal neighbour and an illegal one, and each is
+  a tsc-extra case.
+  - **A contextually typed function value is checked against its
+    context only.** `check_expr_against` walked every expression for
+    nested errors BEFORE the shape check, and that walk checks a function
+    value's body with its parameters as `any`, relying on the contextual
+    walk to report the same things so dedup drops them. A type guard
+    breaks that: `isObject(color)` narrows `any` to `object`, so `"r" in
+    color` read as `{ r: unknown }` beside the contextual walk's `IRgb`
+    (univer's `toColor`). It reached an annotated `const`, an
+    object-literal member, an array element, a `return` and a function
+    expression. For those four shapes the walk now runs after the shape
+    check, so the contextual walk marks the body first and the `any` walk
+    skips it, which is the order a call argument already had. Every other
+    expression keeps the walk first, because it narrows by assignment and
+    clears the TS2454 set, and the shape check reads both.
+  - **A return type alias admitting `undefined` allows no value.** A bare
+    `return;` and falling off the end both asked the resolver-free
+    `is_assignable_to`, which cannot expand `Nullable<T> = T | null |
+    undefined | void` (100 reports). The inline union was always fine.
+  - **An optional chain ending in a call narrows its receivers.** `x?.ok()`
+    is `CallExpr(OptionalChain(PropAccess(x, ok)))`, where the chain walk
+    stopped, and `x?.inner.has()` is a `MethodCall` the condition walk sent
+    to type-predicate narrowing only. One rule, two AST shapes, each
+    missing in a different function. Both narrow the guarded receivers to
+    non-nullish now: the call being truthy proves the chain did not
+    short-circuit, and nothing about the receiver's truthiness.
+  - **A trailing parameter whose alias accepts `void` may be omitted.**
+    The arity helpers test for `Void` resolver-free, so univer's
+    `slice(row: Nullable<…>, col: Nullable<…>)` with one argument was
+    "expected 2". The arity count sees such an alias as `Void`; the
+    argument checks keep the written type so messages still name it. Only
+    `void` counts: a `T | undefined` alias is TS2554 in tsc and stays
+    reported.
+  - **A `let` initialized with `null` is auto-typed.** Under
+    `noImplicitAny`, tsc declares an unannotated `let` / `var` initialized
+    with the `null` or `undefined` keyword as `any` and lets it evolve. The
+    declared slot was `null`, so `let errorValue = null` then
+    `errorValue = value` was "expected `null`". That predates the batch, and
+    the call-chain narrowing is what exposed it, by giving univer's
+    `value?.isError()` callbacks a narrowed `value` that the assignment
+    check no longer abstained on. It is the batch's only increase on any
+    target before the fix, which is why the rule went in beside it. Probed:
+    without `noImplicitAny` the declared type is `null`, and `void 0` is
+    not auto-typed.
+  - **Destructuring reads a narrowed property.** After `if (!body.tables)
+    body.tables = []`, `const { tables } = body` is the array (96 reports
+    in one univer file). The object-pattern binder now reads each
+    property's narrowing key.
+  - **The #298 follow-ups.** `++` / `--` write through the setter, so a
+    protected setter decides them. An aliased `void` (`type Nothing =
+    void`) is stripped by `x!`. An `unknown` or `any` guard result proves
+    nothing about the `?.` receivers. A qualified name in an unreachable
+    declaring module's scope (`Models.Payload`) moves with the bare names.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

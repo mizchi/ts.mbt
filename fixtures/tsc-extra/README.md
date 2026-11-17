@@ -159,20 +159,22 @@ guide to whether the behaviour will change.
 
 | Area | Case | What it pins | tsc | Nearest upstream |
 | --- | --- | --- | --- | --- |
-| classes | `accessorHalvesCarryTheirOwnVisibility` | A public getter beside a `protected` / `private` setter is readable anywhere; a write and a `+=` use the setter's visibility | TS2341 TS2445 | — |
+| classes | `accessorHalvesCarryTheirOwnVisibility` | A public getter beside a `protected` / `private` setter is readable anywhere; a write, a `+=` and a `++` / `--` use the setter's visibility | TS2341 TS2445 | — |
 | classes | `accessorOverPropertyThroughMixinBase` | TS2611 through `mixin(B)`. A member several bases declare is an accessor only when every declaration is one of the same kind. | TS2611 | `mixinAccessors3` |
 | classes | `classExtendsInterfaceMergedWithValue` | Extending a plain interface is TS2689. Extending an interface merged with a construct-signature `declare var` is not. | TS2689 | — |
 | classes | `noImplicitOverrideThroughMixinBase` | TS4113 for a member the mixin intersection lacks. Under `noImplicitOverride`, TS4114 for one it has. | TS4113 TS4114 | `override19` (TS4113 only) |
 | classes | `privateNameStaticClashAndReadonlyLiteralField` | `static #a` beside `#a`. An unannotated `readonly` field has a literal type: the constructor write is an error, a read into a `let` widens. | TS2322 TS2804 | — |
 | controlFlow | `assignmentInConditionAndNormalizedArrayLiterals` | `while ((m = re.exec(s)))`, boolean truthiness to `true` / `false`, and the normalized union of differently-keyed literals | TS18047 TS2322 TS2339 | `objectLiteralNormalization` |
 | controlFlow | `bindingPatternDefaultsWithConstTuplesAndComputedKeys` | An `as const` default, a computed key that assigns its variable, and their evaluation order | TS2322 | `controlFlowBindingPatternOrder` |
+| controlFlow | `destructuringReadsNarrowedProperty` | `const { tables } = body` reads `body.tables` as control flow narrowed it; a sibling property, an unguarded read and a reassigned source do not | TS18048 | — |
 | controlFlow | `forOfDestructuringAnyAndReadonlyMap` | `for (const [k, v] of …)` over `any` and over a `ReadonlyMap` | TS2322 | — |
 | controlFlow | `loopBackEdgeLiteralAssignmentWithEarlyExit` | A literal assigned at the end of a loop body reaches the next iteration, for every loop kind and every early exit | TS2367 | — |
 | controlFlow | `loopBackEdgeWritesThatReachTheJoin` | Which writes reach the back edge: dependent, labelled, pattern, `for`-head, overwritten, `continue`, caught throw | TS2345 TS2367 | — |
 | controlFlow | `loopConditionsNestedBindersAndComputedKeyOrder` | A loop condition under the back edge, a caught vs uncaught `throw`, and left-to-right computed keys | TS2322 TS2345 TS2367 | — |
+| controlFlow | `optionalCallChainNarrowsReceiver` | A chain ending in a call (`x?.ok()`, `x?.inner.has()`) narrows its receivers in an `if`, a `while`, `&&`, an `\|\|` of chains and a comparison; not on the falsy side | TS18048 | — |
 | controlFlow | `truthyOptionalChainNarrowsGuardedMember` | `if (slice?.ranges)` narrows both `slice` and `slice.ranges`, and only inside the branch | TS18048 TS2322 | — |
 | controlFlow | `typeGuardFalseBranchOfAnyAndUnknown` | A guard's false branch keeps `any` as `any` and `unknown` as `unknown`, and removes exactly what the target covers from a union | TS18046 TS2339 | — |
-| controlFlow | `typeGuardOnPathAndStaticMethod` | A guard narrows through a static method called on its class, a property path and an optional chain (whose `?.` receivers become non-nullish) | TS18048 TS2322 | — |
+| controlFlow | `typeGuardOnPathAndStaticMethod` | A guard narrows through a static method called on its class, a property path and an optional chain (whose `?.` receivers become non-nullish, unless the guard's target is `unknown` and proves nothing) | TS18048 TS2322 | — |
 | declarations | `declareClassConstructorOverloadsAndInterfaceMerge` | A `declare class` accepts every constructor overload's arity, and a class merged with an interface keeps both members | TS2322 TS2554 | `classAndInterfaceMerge.d` |
 | declarations | `declareClassRestOverloadsAndMergedRestMethod` | A rest constructor overload beside a non-rest one; a rest method of a `declare class` merged with an interface | TS2345 | — |
 | declarations | `globalAugmentationNamespaceAcrossBodies` | A namespace member declared in one `declare global` block is visible bare in another block's body of the same namespace | TS2322 | — |
@@ -180,13 +182,16 @@ guide to whether the behaviour will change.
 | declarations | `moduleLocalNonNullableShadowsLibUtility` | A module's own `type NonNullable<T> = T` is not the lib utility | TS2322 | — |
 | declarations | `namespaceLocalInterfaceShadowsLibPromise` | A namespace-local `interface Promise<T>` shadows the lib type | TS2345 | — |
 | inference | `arrowConstGuardOptionalParameters` | A generic arrow-`const` type guard with an optional and a defaulted parameter: arity, `null`, narrowing | TS2322 TS2554 | — |
+| inference | `autoTypedNullOrUndefinedInitializer` | Under `noImplicitAny`, `let e = null` / `var e = undefined` is declared `any` and evolves; a read before assignment is still `null`, and `void 0`, `const` and `let e: null` are not auto-typed | TS18047 TS2322 | — |
 | inference | `boundViolationsShadowingAndNumericTemplates` | Bound violations through array arguments, shadowing closure parameters, and `${bigint}` / `${number}` / `infer X extends number` on edge-case strings | TS2322 TS2353 | `templateLiteralTypes4` |
+| inference | `contextuallyTypedFunctionValueThroughGuard` | A guard narrows a function value's CONTEXTUAL parameter type (an annotation, an object member, an array element, a `return`, a function expression), not `any` | TS2339 | — |
 | inference | `contextuallyVoidCallbackReturns` | An unannotated callback typed `() => void` may return a value; its own `: void`, or `() => Promise<void>`, may not | TS2322 | — |
 | inference | `freshLiteralWideningAndNonNullableIntersections` | Fresh-literal widening at a generic call (`useState("")`), `NonNullable<T>` vs `T & {}`, intersections, nested `Extract` | TS2322 TS2345 TS2353 | — |
 | inference | `genericMethodReturningNestedGenericFunction` | A method's binding flows into the bound of the generic function it returns | TS2345 | `wrappedAndRecursiveConstraints4` |
 | inference | `intraExpressionInferenceFromMethodReturn` | `setup()`'s return types a sibling method's parameter (reduced, with an illegal neighbour) | TS2339 | `intraExpressionInferences` |
 | inference | `optionalCallbackContextAndGenericInterfaceMethods` | An optional method-typed property as a contextual type, generic interface methods, an overload taking `Object` | TS2322 TS2339 TS2345 | — |
 | inference | `overloadSetAsCallbackAndMissingAwait` | An overload set as a callback, and `Promise<string>` where `string` is expected | TS2322 TS2345 | — |
+| inference | `trailingVoidParameterThroughAlias` | A trailing parameter accepting `void` may be omitted, through an alias such as `Nullable<T>`; a `T \| undefined` alias, and a void parameter before a required one, may not | TS2554 | — |
 | lib | `errorIsErrorAndAugmentedRawJSON` | ES2026 `Error.isError` narrows, and a `RawJSON` augmentation merges | TS2322 TS2339 | — |
 | parser | `contextualKeywordDeclareAsInterfaceName` | `interface declare<T>` | accepted | — |
 | parser | `emptyTypeArgumentListInInstantiationExpression` | `fx<>` is TS1099, `fx<string>` is legal | TS1099 | `instantiationExpressions` |
@@ -216,9 +221,10 @@ guide to whether the behaviour will change.
 | types | `computedDestructuringKeyWithoutIndexSignature` | TS2537 for a `string` / `number` computed destructuring key, beside the `const`, index-signature, array, `any` and computed-literal spellings | TS2537 | `objectRest` |
 | types | `intersectionMemberFromEveryConstituent` | A member several constituents declare is the narrowest of their types (`string & "line"`), which discriminates; a declared member outranks an index signature | TS2322 TS2339 | — |
 | types | `keyofTupleAndTemplateInferNumberIndex` | `keyof` a tuple, `infer N extends number` in a template (`"01"` is not canonical) | TS2322 TS2345 | `templateLiteralTypes4` |
-| types | `nonNullAssertionStripsAliasedVoid` | `x!` removes `null`, `undefined` and `void`, through an alias such as `Nullable<T> = T \| null \| undefined \| void` | TS18048 TS18049 | — |
+| types | `nonNullAssertionStripsAliasedVoid` | `x!` removes `null`, `undefined` and `void`, through an alias such as `Nullable<T> = T \| null \| undefined \| void`, and when the `void` is itself an alias | TS18048 TS18049 | — |
 | types | `objectSpreadOfUnenumerableSource` | An object literal spreading `any` is not missing members; one spreading a known shape is | TS2739 TS2741 | — |
 | types | `optionalAnyReadsAsAny` | An optional `any` member or parameter reads as `any`; an optional `number` or `unknown` keeps its `undefined` | TS18046 TS18048 | — |
+| types | `returnWithoutValueThroughAlias` | A bare `return;` or falling off the end is legal when the return type admits `undefined` or `void`, through an alias such as `Nullable<T>`; a `null`-only alias still needs a value | TS2322 TS2366 | — |
 | types | `templateInferPatternsInConditionals` | `infer` in a template with a fixed part or a bound, as a conditional's check type | TS2322 | `templateLiteralTypes4` |
 
 The `realWorld` cases are reduced from `zod@4` and `effect@4` sources that
