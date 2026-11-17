@@ -5,15 +5,17 @@
 // many discrete parameters: `m(...xs: [string, number])` needs exactly two
 // arguments, so `b.m(1)` takes `m(x: number)`. An optional tuple slot may be
 // omitted, a rest element inside the tuple takes any count from its
-// position, a nested tuple rest is flattened, and the positions before a rest
-// in the middle of the tuple are fixed. An argument typed by an alias
+// position, a nested tuple rest is flattened, and the elements on both sides
+// of a rest in the middle of the tuple are required, so a call too short for
+// them takes another member. An argument typed by an alias
 // (`flag: Flag`, `type Flag = boolean`) fits a parameter of that alias and a
 // parameter of what it resolves to, so the first such member is selected
 // rather than a later `(x: any)`. A spread of a fixed-length tuple is that
 // many arguments, while an array spread fits only a rest parameter. A generic
 // member's type parameter is solved from the resolved argument, so
 // `m<T>(a: T[], b: T[])` rejects a `number[]` beside a `string[]` even when
-// both arrive through aliases.
+// both arrive through aliases, and a tuple spread binds `T` element by
+// element.
 
 declare class TupleRest { m(...xs: [string, number]): string; m(x: number): number; }
 declare class OptionalSlot { m(...xs: [string, number?]): string; m(x: number): number; }
@@ -34,6 +36,8 @@ declare class GenericFirst { m<T>(a: T[], b: T[]): string; m(a: number[], b: str
 declare const nums: Nums;
 declare const moreNums: Nums;
 declare const strs: Strs;
+declare class MiddleRestSuffix { m(...xs: [string, ...number[], boolean]): string; m(x: string): number; }
+declare class GenericFromSpread { m<T>(value: T, count: number): T; m(...values: any[]): string; }
 
 export function okTupleRestSelectsSecond(b: TupleRest) { const n: number = b.m(1); return n; }
 export function okTupleRestSelectsFirst(b: TupleRest) { const s: string = b.m("a", 2); return s; }
@@ -53,6 +57,10 @@ export function okArgumentThenTupleSpread(t: SpreadTarget) { const s: string = t
 export function okArraySpreadSelectsRest(t: SpreadTarget) { const n: number = t.m(...manyNumbers); return n; }
 export function okAliasPairRejectsGeneric(g: GenericFirst) { const n: number = g.m(nums, strs); return n; }
 export function okAliasPairSelectsGeneric(g: GenericFirst) { const s: string = g.m(nums, moreNums); return s; }
+export function okMiddleRestSuffixMissing(b: MiddleRestSuffix) { const n: number = b.m("a"); return n; }
+export function okMiddleRestSuffixGiven(b: MiddleRestSuffix) { const s: string = b.m("a", true); return s; }
+export function okMiddleRestFilled(b: MiddleRestSuffix) { const s: string = b.m("a", 1, 2, true); return s; }
+export function okGenericFromTupleSpread(c: GenericFromSpread, xs: [string, number]): string { return c.m(...xs); }
 
 export function badTupleRestSelectsFirst(b: TupleRest) { const n: number = b.m("a", 2); return n; }
 export function badOptionalSlotOmitted(o: OptionalSlot) { const n: number = o.m("a"); return n; }
@@ -65,3 +73,5 @@ export function badObjectAliasArgument(p: ObjectAliasParam, pair: Pair) { const 
 export function badTupleSpreadSelectsFirst(t: SpreadTarget) { const n: number = t.m(...pairArgs); return n; }
 export function badAliasPairRejectsGeneric(g: GenericFirst) { const s: string = g.m(nums, strs); return s; }
 export function badAliasPairSelectsGeneric(g: GenericFirst) { const n: number = g.m(nums, moreNums); return n; }
+export function badMiddleRestSuffixMissing(b: MiddleRestSuffix) { const s: string = b.m("a"); return s; }
+export function badGenericFromTupleSpread(c: GenericFromSpread, xs: [string, number]): number { return c.m(...xs); }

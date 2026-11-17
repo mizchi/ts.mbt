@@ -3063,25 +3063,50 @@ fn overload_param_at(params : Array[@ast.TsType], i : Int32) -> @ast.TsType {
 /// (`[string, number?]`) is stored as `number | undefined`, which
 /// `required_arity_from_types` already reads as omittable. A rest element
 /// that ends the tuple is a trailing rest once expanded. One in the middle
-/// (`[string, ...number[], boolean]`) keeps only the positions before it,
-/// which are fixed whatever the count, followed by a rest of `any`: the
-/// elements after it sit at a position the argument count decides, so they
-/// are not modelled, which can only keep a member selectable.
-fn expand_tuple_rest_params(params : Array[@ast.TsType]) -> Array[@ast.TsType] {
+/// (`[string, ...number[], boolean]`) is expanded for the call's argument
+/// count `n_args`: the positions before it, as many copies of its element as
+/// the count leaves room for, then the positions after it. A call too short
+/// for the elements on both sides gets no copies, so the required trailing
+/// `boolean` still rejects `m("a")`; reading the suffix as part of a rest of
+/// `any` selected that member.
+fn expand_tuple_rest_params(
+  params : Array[@ast.TsType],
+  n_args : Int32,
+) -> Array[@ast.TsType] {
   guard params.last() is Some(Rest(Tuple(elems))) else { return params }
   let out : Array[@ast.TsType] = []
   for i in 0..<(params.length() - 1) {
     out.push(params[i])
   }
+  let mut middle = -1
   for i, e in elems {
     if e is Rest(_) && i != elems.length() - 1 {
-      out.push(@ast.TsType::Rest(@ast.TsType::Array(@ast.TsType::Any)))
-      return out
+      middle = i
+      break
     }
-    out.push(e)
   }
-  // `[string, ...[number, boolean]]` ends in another tuple rest.
-  expand_tuple_rest_params(out)
+  if middle < 0 {
+    for e in elems {
+      out.push(e)
+    }
+    // `[string, ...[number, boolean]]` ends in another tuple rest.
+    return expand_tuple_rest_params(out, n_args)
+  }
+  let elem = match elems[middle] {
+    Rest(Array(e)) | Rest(Applied("Array" | "ReadonlyArray", [e])) => e
+    _ => @ast.TsType::Any
+  }
+  let fixed = out.length() + elems.length() - 1
+  for i in 0..<middle {
+    out.push(elems[i])
+  }
+  for _ in 0..<(n_args - fixed) {
+    out.push(elem)
+  }
+  for i in (middle + 1)..<elems.length() {
+    out.push(elems[i])
+  }
+  out
 }
 
 ///|
@@ -7734,6 +7759,37 @@ fn overload_arg_types(
 }
 
 ///|
+/// The same expansion over the argument EXPRESSIONS, for solving the
+/// selected member's type parameters: `c.m(...xs)` with `xs: [string,
+/// number]` is read as `c.m(xs[0], xs[1])`, so `m<T>(value: T, count:
+/// number): T` binds `T` to `string` rather than to the whole tuple. Any
+/// other spread is kept whole, as the binding pass reads it.
+fn expand_tuple_spread_args(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsExpr] {
+  if !args.iter().any(fn(a) { a is Spread(_) }) {
+    return args
+  }
+  let out : Array[@ast.TsExpr] = []
+  for a in args {
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(infer_expr(env, resolver, inner)) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for i in 0..<elems.length() {
+              out.push(IndexAccess(inner, NumberLit(i.to_double())))
+            }
+          _ => out.push(a)
+        }
+      _ => out.push(a)
+    }
+  }
+  out
+}
+
+///|
 fn Resolver::resolve_method_overload(
   self : Resolver,
   recv : @ast.TsType,
@@ -7760,7 +7816,7 @@ fn Resolver::resolve_method_overload(
   }
   for c in candidates {
     let (params, ret) = c
-    let params = expand_tuple_rest_params(params)
+    let params = expand_tuple_rest_params(params, arg_types.length())
     // The argument count has to fit the member's arity, not equal its
     // parameter count: redi's `get<T>(id, lookUp?)` is called as
     // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
@@ -12594,7 +12650,13 @@ fn infer_expr_inner(
             Some((params, ret)) =>
               return substitute_this_type(
                 instantiate_method_return(
-                  env, resolver, pruned, meth, params, args, ret,
+                  env,
+                  resolver,
+                  pruned,
+                  meth,
+                  params,
+                  expand_tuple_spread_args(env, resolver, args),
+                  ret,
                 ),
                 recv_ty,
               )
@@ -12909,7 +12971,13 @@ fn infer_expr_inner(
         Some((params, ret)) =>
           return substitute_this_type(
             instantiate_method_return(
-              env, resolver, pruned_recv, meth, params, args, ret,
+              env,
+              resolver,
+              pruned_recv,
+              meth,
+              params,
+              expand_tuple_spread_args(env, resolver, args),
+              ret,
             ),
             recv_ty,
           )
