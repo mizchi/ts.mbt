@@ -696,3 +696,42 @@ test "a declare global value's type stays in its declaring module's scope" {
     ["top-level > binding `bad` init :: expected `number` but got `string`"],
   )
 }
+
+///|
+/// Three follow-ups from the review of #298. `++` and `--` write as well as
+/// read, so a protected setter still decides them. A nullish constituent
+/// can itself be an alias (`type Nothing = void`), and `x!` removes it.
+/// And an `unknown` or `any` guard result proves nothing about the `?.`
+/// receivers, so `o` stays possibly undefined.
+test "increment, an aliased void under !, and an unproven guard result" {
+  assert_eq(
+    issue_lines(
+      "class B { private _l = 0; get left(): number { return this._l } protected set left(v: number) { this._l = v } }\ndeclare const b: B;\ntype Nothing = void;\ntype Maybe = string | Nothing;\ndeclare function accepts(x: unknown): x is unknown;\ndeclare const o: { p?: any; q: number } | undefined;\nfunction badInc() { b.left++; }\nfunction okAlias(x: Maybe): string { return x!; }\nfunction badUnproven() { if (accepts(o?.p)) { const n = o.q; } }",
+    ),
+    [
+      "function badInc > access `.left`: property `left` is protected and only accessible within class `B` and its subclasses",
+      "function badUnproven > PropAccess `.q`: object is possibly `undefined`",
+    ],
+  )
+}
+
+///|
+/// A qualified name in an unreachable declaring module's scope
+/// (`Models.Payload`) moves with the bare ones, so it cannot resolve to the
+/// checked module's own `Models.Payload`.
+test "a declare global value's qualified type stays in its module's scope" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/globals.d.ts", "export {};\ndeclare namespace Models { interface Payload { a: string } }\ndeclare global { const payload: Models.Payload }",
+        ),
+        (
+          "/src/root.ts", "declare namespace Models { interface Payload { b: number } }\nexport const ok: string = payload.a;",
+        ),
+      ],
+      [],
+    ),
+    [],
+  )
+}

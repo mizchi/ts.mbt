@@ -1845,7 +1845,9 @@ fn module_declares_top_level_type(
 /// `declare global` value typed by one of them cannot be read in a module
 /// that does not reach the declaring one, and that key is never registered
 /// there, so the reference stays unresolved.
-fn module_scope_type_renames(module_ : ParsedMtscModule) -> Map[String, String] {
+fn module_scope_type_renames(
+  module_ : ParsedMtscModule,
+) -> (Map[String, String], Map[String, Unit]) {
   let names : Map[String, Unit] = Map([])
   let m = module_.module_
   for iface in m.interfaces {
@@ -1860,19 +1862,29 @@ fn module_scope_type_renames(module_ : ParsedMtscModule) -> Map[String, String] 
   for e in m.enums {
     names[e.name] = ()
   }
+  // The roots a qualified reference in this scope can start from: its own
+  // namespaces and its namespace imports.
+  let roots : Map[String, Unit] = Map([])
   for ns in m.namespaces {
     if ns.name != "<global>" {
       names[ns.name] = ()
+      roots[ns.name] = ()
     }
   }
   for n in m.imported_binding_names {
     names[n] = ()
   }
+  for imp in module_.module_block.imports {
+    match imp.namespace_binding {
+      Some(ns) => roots[ns] = ()
+      None => ()
+    }
+  }
   let out : Map[String, String] = Map([])
   for n, _ in names {
     out[n] = n + "@" + module_.source.path
   }
-  out
+  (out, roots)
 }
 
 ///|
@@ -2656,7 +2668,10 @@ fn collect_parsed_graph_issues(
   let ambient_global_origin : Array[String] = []
   // Per declaring module, the type names its own scope declares or imports,
   // each mapped to a key no other module registers (see below).
-  let global_scope_renames : Map[String, Map[String, String]] = Map([])
+  let global_scope_renames : Map[
+    String,
+    (Map[String, String], Map[String, Unit]),
+  ] = Map([])
   let ambient_modules : Array[@ast.TsModule] = []
   let namespace_cache : Map[String, (@ast.TsType, Array[(String, String)])] = Map([],
   )
@@ -2764,10 +2779,22 @@ fn collect_parsed_graph_issues(
       }
       let origin = ambient_global_origin[i]
       match global_scope_renames.get(origin) {
-        Some(renames) if origin != "" &&
+        Some((renames, roots)) if origin != "" &&
           !reachable_origins.contains(origin) &&
-          !entry.0.has_prefix("@value-origin:") =>
-          globals.push((entry.0, @checker.rename_type_refs(entry.1, renames)))
+          !entry.0.has_prefix("@value-origin:") => {
+          // A dotted name rooted at one of that module's own namespaces or
+          // namespace imports (`Models.Payload`, `ns.X`) is in its scope
+          // too, and a bare-name rename cannot match it.
+          let all = renames.copy()
+          for n in @checker.collect_referenced_names(entry.1) {
+            match n.find(".") {
+              Some(i) if roots.contains(n[:i].to_owned()) =>
+                all[n] = n + "@" + origin
+              _ => ()
+            }
+          }
+          globals.push((entry.0, @checker.rename_type_refs(entry.1, all)))
+        }
         _ => globals.push(entry)
       }
     }

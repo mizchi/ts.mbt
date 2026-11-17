@@ -12964,7 +12964,14 @@ fn infer_expr_inner(
     NonNull(inner) =>
       narrow_remove(
         non_nullable_resolved(resolver, infer_expr(env, resolver, inner)),
-        fn(t) { t is Void },
+        fn(t) {
+          // A constituent can itself be an alias for a nullish type:
+          // `type V = void; type Maybe = string | V` leaves `V` here.
+          match resolver.unwrap(t) {
+            Void | Null | Undefined => true
+            _ => false
+          }
+        },
       )
     // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
     OptionalChain(inner) => {
@@ -27001,7 +27008,14 @@ fn narrow_predicate_path_arg(
     return
   }
   let narrowed = pair_pos[pair_pos.length() - 1].1
-  if target_admits_nullish(resolver, narrowed, false, 0) ||
+  // The narrowed value has to be PROVEN non-nullish: `any` and `unknown`
+  // admit `undefined` without saying so, and a `void` part may be it.
+  if narrowed is Any ||
+    narrowed is Unknown ||
+    union_components(narrowed)
+    .iter()
+    .any(fn(t) { t is Void || t is Any || t is Unknown }) ||
+    target_admits_nullish(resolver, narrowed, false, 0) ||
     target_admits_nullish(resolver, narrowed, true, 0) {
     return
   }
@@ -33241,6 +33255,15 @@ fn check_call_args_in_expr(
         // are not trustworthy here. Unions, generics, `any`, and unresolved
         // names all abstain.
         PreInc | PreDec | PostInc | PostDec => {
+          // `++` and `--` read and then write, like `+=`: the operand walk
+          // has applied the getter's visibility, and the setter's can only
+          // be stricter, so `b.left++` beside a `protected set left` is
+          // TS2445 (probed) through the same pass `+=` uses.
+          match inner {
+            PropAccess(recv, prop) =>
+              check_member_accessibility(env, ctx, recv, prop, CompoundWrite)
+            _ => ()
+          }
           // TS2540: enum members are read-only, so `E.B++` / `--E["B"]`
           // (receiver resolving to an enum object, not shadowed locally)
           // can never be an assignment target.

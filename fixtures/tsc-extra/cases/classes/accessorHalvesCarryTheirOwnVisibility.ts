@@ -36,3 +36,5 @@ function badCompoundWrite() { b.left += 1; }
 function badReadPrivatePair() { const n = b.secret; }
 function badStaticWrite() { B.count = 1; }
 function badProtectedFieldCompound() { b.x += 1; }
+function badPostIncrement() { b.left++; }
+function badPreDecrement() { --b.left; }

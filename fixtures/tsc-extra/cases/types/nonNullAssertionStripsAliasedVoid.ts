@@ -13,8 +13,11 @@ declare class M<T> { getValue(r: number): Nullable<T>; }
 declare const m: M<V>;
 declare function get(): Nullable<V>;
 declare const v: string | void;
+type Nothing = void;
+type Maybe = string | Nothing;
 
 function okVoidStripped() { const s: string = v!; }
+function okNestedVoidAlias(x: Maybe): string { return x!; }
 function okFunctionResult() { const n: number = get()!.b; }
 function okMethodResult() { const c = m.getValue(1)!; const n: number = c.b; }
 function okGuardedOptionalMember() { const c = m.getValue(1)!; if (c.a) { const x: number = c.a.x; } }
