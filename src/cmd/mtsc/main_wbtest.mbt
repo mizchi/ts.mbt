@@ -392,3 +392,25 @@ async test "mtsc: a --noEmit entry the graph check cannot take is still checked"
   @fs.write_file(root + "/c.ts", "export const c = 2;\n", create=0o644)
   assert_eq(mtsc_compile_all(opts, [root + "/a.ts", root + "/c.ts"]), 0)
 }
+
+///|
+/// A boolean option with no checker effect still consumes its optional
+/// `true` / `false`: `--pretty false` used to leave `false` as an input
+/// file, so the command line tsc and tsrs benchmarks use
+/// (`-p … --noEmit --incremental false --pretty false`) failed to read
+/// `false`. A false value turns the flag off rather than on.
+test "mtsc: a boolean option's explicit value is not an input file" {
+  let opts = mtsc_parse_args(
+    [
+      "mtsc", "-p", "tsconfig.json", "--noEmit", "--incremental", "false", "--pretty",
+      "false", "--listFiles", "false", "--emitDeclarationOnly", "false",
+    ],
+    1,
+  ).unwrap()
+  assert_eq(opts.inputs, [])
+  assert_eq(opts.list_files, false)
+  assert_eq(opts.dts_only, false)
+  let on = mtsc_parse_args(["mtsc", "--pretty", "--listFiles", "a.ts"], 1).unwrap()
+  assert_eq(on.inputs, ["a.ts"])
+  assert_eq(on.list_files, true)
+}

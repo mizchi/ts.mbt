@@ -545,15 +545,42 @@ fn mtsc_parse_args(
       "help" | "h" | "all" | "?" => opts.help = true
       "version" | "v" => opts.version = true
       "init" => opts.init = true
-      "showconfig" => opts.show_config = true
-      "listfiles" => opts.list_files = true
+      // Each of these booleans may carry tsc's optional `true` / `false`,
+      // and the value has to be consumed: `--pretty false` left `false` as
+      // an INPUT file, so `mtsc -p … --noEmit --pretty false` (the command
+      // tsc / tsrs benchmarks use) failed with "read error false".
+      "showconfig" => {
+        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        opts.show_config = v
+        if used && inline_value is None {
+          consumed_next = true
+        }
+      }
+      "listfiles" => {
+        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        opts.list_files = v
+        if used && inline_value is None {
+          consumed_next = true
+        }
+      }
       "listfilesonly" => {
-        opts.list_files = true
-        opts.list_files_only = true
+        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        if v {
+          opts.list_files = true
+          opts.list_files_only = true
+        }
+        if used && inline_value is None {
+          consumed_next = true
+        }
       }
       // `--pretty` controls colour, and mtsc emits none either way, so
       // there is nothing to honour and nothing lost.
-      "pretty" | "nocolors" | "nocolor" => ()
+      "pretty" | "nocolors" | "nocolor" => {
+        let (_, used) = mtsc_read_bool_value(argv, i + 1)
+        if used && inline_value is None {
+          consumed_next = true
+        }
+      }
       // ------------------------------------------------------------ paths
       "out" | "o" | "outfile" =>
         match need_value() {
@@ -589,9 +616,15 @@ fn mtsc_parse_args(
         }
       }
       "emitdeclarationonly" => {
-        opts.dts = true
-        opts.dts_only = true
-        opts.bundle = true
+        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        if v {
+          opts.dts = true
+          opts.dts_only = true
+          opts.bundle = true
+        }
+        if used && inline_value is None {
+          consumed_next = true
+        }
       }
       "dts" => {
         opts.dts = true
