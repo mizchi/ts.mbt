@@ -1,6 +1,6 @@
-trailingVoidParameterThroughAlias.ts(20,39): error TS2554: Expected 2 arguments, but got 1.
-trailingVoidParameterThroughAlias.ts(21,43): error TS2554: Expected 2 arguments, but got 1.
-trailingVoidParameterThroughAlias.ts(22,48): error TS2554: Expected 1-2 arguments, but got 3.
+trailingVoidParameterThroughAlias.ts(23,39): error TS2554: Expected 2 arguments, but got 1.
+trailingVoidParameterThroughAlias.ts(24,43): error TS2554: Expected 2 arguments, but got 1.
+trailingVoidParameterThroughAlias.ts(25,48): error TS2554: Expected 1-2 arguments, but got 3.
 
 
 ==== trailingVoidParameterThroughAlias.ts (3 errors) ====
@@ -16,11 +16,14 @@ trailingVoidParameterThroughAlias.ts(22,48): error TS2554: Expected 1-2 argument
     declare function fTwoTrailing(a: number, b: Nullable<number>, c: void): void;
     declare function fUndefAlias(a: number, b: MaybeU<number>): void;
     declare function fMiddle(a: Nullable<number>, b: number): void;
+    type V = void;
+    declare function fScalarMember(a: number, b: number | V): void;
     class Matrix { slice(row: Nullable<number[]>, col: Nullable<number[]>) { return row ?? col; } }
     
     export function okAliasTrailing() { fNullable(1); }
     export function okTwoTrailing() { fTwoTrailing(1); }
     export function okMethod() { new Matrix().slice([1]); }
+    export function okScalarVoidMember() { fScalarMember(1); }
     export function okArrow() { const f = (a: number, b: Nullable<number>) => a + (b ?? 0); return f(1); }
     
     export function badUndefinedAlias() { fUndefAlias(1); }

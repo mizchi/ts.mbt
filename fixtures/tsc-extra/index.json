@@ -962,68 +962,74 @@
         {
           "name": "okStaticOnVariable",
           "kind": "ok",
-          "fromLine": 18,
-          "toLine": 18
-        },
-        {
-          "name": "okStaticConcrete",
-          "kind": "ok",
-          "fromLine": 19,
-          "toLine": 19
-        },
-        {
-          "name": "okFunctionOnPath",
-          "kind": "ok",
-          "fromLine": 20,
-          "toLine": 20
-        },
-        {
-          "name": "okStaticOnPath",
-          "kind": "ok",
           "fromLine": 21,
           "toLine": 21
         },
         {
-          "name": "okStaticOnChain",
+          "name": "okStaticConcrete",
           "kind": "ok",
           "fromLine": 22,
           "toLine": 22
         },
         {
-          "name": "okFunctionOnChain",
+          "name": "okFunctionOnPath",
           "kind": "ok",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "badElseOfPath",
-          "kind": "bad",
+          "name": "okStaticOnPath",
+          "kind": "ok",
           "fromLine": 24,
           "toLine": 24
         },
         {
-          "name": "badElseOfChain",
-          "kind": "bad",
+          "name": "okStaticOnChain",
+          "kind": "ok",
           "fromLine": 25,
           "toLine": 25
         },
         {
-          "name": "badSiblingMember",
-          "kind": "bad",
+          "name": "okFunctionOnChain",
+          "kind": "ok",
           "fromLine": 26,
           "toLine": 26
         },
         {
-          "name": "badUnguarded",
+          "name": "badElseOfPath",
           "kind": "bad",
           "fromLine": 27,
           "toLine": 27
         },
         {
-          "name": "badUnknownTargetProvesNothing",
+          "name": "badElseOfChain",
           "kind": "bad",
           "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "badSiblingMember",
+          "kind": "bad",
+          "fromLine": 29,
           "toLine": 29
+        },
+        {
+          "name": "badUnguarded",
+          "kind": "bad",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badUnknownTargetProvesNothing",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "badAliasedUnknownProvesNothing",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 33
         }
       ]
     },
@@ -1602,68 +1608,80 @@
         {
           "name": "okAnnotatedArrow",
           "kind": "ok",
-          "fromLine": 21,
-          "toLine": 21
-        },
-        {
-          "name": "okObjectMember",
-          "kind": "ok",
-          "fromLine": 22,
-          "toLine": 22
-        },
-        {
-          "name": "okArrayElement",
-          "kind": "ok",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "okReturned",
+          "name": "okObjectMember",
           "kind": "ok",
           "fromLine": 24,
           "toLine": 24
         },
         {
-          "name": "okFunctionExpression",
+          "name": "okArrayElement",
           "kind": "ok",
           "fromLine": 25,
           "toLine": 25
         },
         {
-          "name": "okCallArgument",
+          "name": "okReturned",
           "kind": "ok",
           "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "okFunctionExpression",
+          "kind": "ok",
+          "fromLine": 27,
           "toLine": 27
         },
         {
-          "name": "badAnnotatedArrow",
-          "kind": "bad",
+          "name": "okNestedObjectMember",
+          "kind": "ok",
           "fromLine": 28,
           "toLine": 28
         },
         {
-          "name": "badObjectMember",
-          "kind": "bad",
+          "name": "okAssignmentInsideObjectLiteral",
+          "kind": "ok",
           "fromLine": 29,
           "toLine": 29
         },
         {
+          "name": "okCallArgument",
+          "kind": "ok",
+          "fromLine": 30,
+          "toLine": 31
+        },
+        {
+          "name": "badAnnotatedArrow",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "badObjectMember",
+          "kind": "bad",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
           "name": "badArrayElement",
           "kind": "bad",
-          "fromLine": 30,
-          "toLine": 30
+          "fromLine": 34,
+          "toLine": 34
         },
         {
           "name": "badReturned",
           "kind": "bad",
-          "fromLine": 31,
-          "toLine": 31
+          "fromLine": 35,
+          "toLine": 35
         },
         {
           "name": "badFunctionExpression",
           "kind": "bad",
-          "fromLine": 32,
-          "toLine": 33
+          "fromLine": 36,
+          "toLine": 37
         }
       ]
     },
@@ -2121,44 +2139,50 @@
         {
           "name": "okAliasTrailing",
           "kind": "ok",
-          "fromLine": 15,
-          "toLine": 15
-        },
-        {
-          "name": "okTwoTrailing",
-          "kind": "ok",
-          "fromLine": 16,
-          "toLine": 16
-        },
-        {
-          "name": "okMethod",
-          "kind": "ok",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "okArrow",
+          "name": "okTwoTrailing",
           "kind": "ok",
           "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okMethod",
+          "kind": "ok",
+          "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "badUndefinedAlias",
-          "kind": "bad",
+          "name": "okScalarVoidMember",
+          "kind": "ok",
           "fromLine": 20,
           "toLine": 20
         },
         {
+          "name": "okArrow",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 22
+        },
+        {
+          "name": "badUndefinedAlias",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
           "name": "badVoidBeforeRequired",
           "kind": "bad",
-          "fromLine": 21,
-          "toLine": 21
+          "fromLine": 24,
+          "toLine": 24
         },
         {
           "name": "badTooMany",
           "kind": "bad",
-          "fromLine": 22,
-          "toLine": 23
+          "fromLine": 25,
+          "toLine": 26
         }
       ]
     },

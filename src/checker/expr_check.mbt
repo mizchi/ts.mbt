@@ -2894,9 +2894,12 @@ fn alias_accepts_void(resolver : Resolver, ty : @ast.TsType) -> Bool {
   match ty {
     Named(_) | Applied(_, _) | Union(_) => {
       let u = resolver.unwrap(ty)
+      // A member can be a scalar alias for `void` (`type V = void; number |
+      // V`), which `deep_union_members` keeps as written, so each member is
+      // resolved before the test.
       union_components(deep_union_members(resolver, u))
       .iter()
-      .any(fn(p) { p is Void })
+      .any(fn(p) { p is Void || resolver.unwrap(p) is Void })
     }
     _ => false
   }
@@ -15889,14 +15892,17 @@ fn symbol_member_shape_blocks(
 /// the `any` walk reported `"r" in color` as `{ r: unknown }` beside the
 /// contextual walk's correct answer. tsc reports neither.
 ///
-/// So for the four shapes that hand a function value to a contextual type (an
-/// arrow, a function expression, and the object and array literals holding
-/// them) the walk runs AFTER the shape check. The contextual walk marks the
-/// body it walked (`walked_arrow_bodies` / `walked_func_bodies`) and the `any`
-/// walk then skips it, which is the order `check_arguments` already uses for a
-/// call argument. Every other expression keeps the walk first, because the
-/// walk narrows by assignment and clears the TS2454 set, and the shape check
-/// reads both.
+/// So a function value's `any` walk runs AFTER the shape check. The contextual
+/// walk marks the body it walked (`walked_arrow_bodies` / `walked_func_bodies`)
+/// and the `any` walk then skips it, which is the order `check_arguments`
+/// already uses for a call argument. For a bare arrow or function expression
+/// the whole walk moves. An object or array literal keeps its walk FIRST,
+/// because the walk narrows by assignment and the shape check reads that:
+/// `{ value: (x = "ok", x) }` against `{ value: string } | …` read `x` before
+/// the assignment and was reported (review of #299). Only the function values
+/// the literal holds are held back, through `deferred_arrow_bodies` /
+/// `deferred_func_bodies`, and walked after the shape check unless it already
+/// walked them in context.
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -15905,10 +15911,24 @@ fn check_expr_against(
   sub_path : String,
   arg_callee_non_generic~ : Bool = false,
 ) -> Unit {
-  let walk_after = expr
-    is (ArrowFunc(_, _, _, _) | FuncExpr(_) | ObjectLit(_) | ArrayLit(_))
+  let walk_after = expr is (ArrowFunc(_, _, _, _) | FuncExpr(_))
+  let held : Array[@ast.TsExpr] = []
+  if expr is (ObjectLit(_) | ArrayLit(_)) {
+    collect_literal_function_values(expr, held)
+  }
   if !walk_after {
+    let arrows_len = deferred_arrow_bodies.length()
+    let funcs_len = deferred_func_bodies.length()
+    for h in held {
+      match h {
+        ArrowFunc(_, _, body, _) => deferred_arrow_bodies.push(body)
+        FuncExpr(f) => deferred_func_bodies.push(f.body)
+        _ => ()
+      }
+    }
     check_call_args_in_expr(env, expr, ctx)
+    deferred_arrow_bodies.truncate(arrows_len)
+    deferred_func_bodies.truncate(funcs_len)
   }
   check_expr_against_shape(
     env,
@@ -15920,6 +15940,9 @@ fn check_expr_against(
   )
   if walk_after {
     check_call_args_in_expr(env, expr, ctx)
+  }
+  for h in held {
+    check_call_args_in_expr(env, h, ctx)
   }
 }
 
@@ -22868,6 +22891,41 @@ fn arrow_body_walked(body : @ast.TsArrowBody) -> Bool {
 }
 
 ///|
+/// Function values inside an object or array literal whose `any` walk is
+/// held back until the literal's shape check has run (see
+/// `check_expr_against`). Pushed and truncated around one walk, so nesting
+/// is a stack.
+let deferred_arrow_bodies : Array[@ast.TsArrowBody] = []
+
+///|
+let deferred_func_bodies : Array[@ast.TsBlock] = []
+
+///|
+/// The function values an object or array literal holds, through nested
+/// literals: an entry's value, a computed entry's value, an array element.
+/// These are the values the literal's shape check hands a contextual type.
+fn collect_literal_function_values(
+  expr : @ast.TsExpr,
+  out : Array[@ast.TsExpr],
+) -> Unit {
+  match expr {
+    ArrowFunc(_, _, _, _) | FuncExpr(_) => out.push(expr)
+    ObjectLit(entries) =>
+      for e in entries {
+        match e.1 {
+          ComputedProp(_, v) => collect_literal_function_values(v, out)
+          v => collect_literal_function_values(v, out)
+        }
+      }
+    ArrayLit(items) =>
+      for it in items {
+        collect_literal_function_values(it, out)
+      }
+    _ => ()
+  }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -27301,11 +27359,13 @@ fn narrow_predicate_path_arg(
   let narrowed = pair_pos[pair_pos.length() - 1].1
   // The narrowed value has to be PROVEN non-nullish: `any` and `unknown`
   // admit `undefined` without saying so, and a `void` part may be it.
-  if narrowed is Any ||
-    narrowed is Unknown ||
-    union_components(narrowed)
-    .iter()
-    .any(fn(t) { t is Void || t is Any || t is Unknown }) ||
+  // Each part is resolved first, since an alias can name one of them (`type
+  // Top = unknown`).
+  let unproven = fn(t : @ast.TsType) {
+    t is (Void | Any | Unknown) || resolver.unwrap(t) is (Void | Any | Unknown)
+  }
+  if unproven(narrowed) ||
+    union_components(narrowed).iter().any(unproven) ||
     target_admits_nullish(resolver, narrowed, false, 0) ||
     target_admits_nullish(resolver, narrowed, true, 0) {
     return
@@ -35236,7 +35296,8 @@ fn check_call_args_in_expr(
     // `dedup_issues_since` pass inside the helpers drops the resulting
     // duplicate diagnostics.
     ArrowFunc(params, declared_ret, body, is_async) =>
-      if !arrow_body_walked(body) {
+      if !arrow_body_walked(body) &&
+        !deferred_arrow_bodies.iter().any(fn(b) { physical_equal(b, body) }) {
         check_arrow_with_context(
           env,
           params,
@@ -35250,7 +35311,8 @@ fn check_call_args_in_expr(
         )
       }
     FuncExpr(f) =>
-      if !walked_func_bodies.iter().any(fn(b) { physical_equal(b, f.body) }) {
+      if !walked_func_bodies.iter().any(fn(b) { physical_equal(b, f.body) }) &&
+        !deferred_func_bodies.iter().any(fn(b) { physical_equal(b, f.body) }) {
         check_funcexpr_with_context(
           env,
           f,

@@ -858,3 +858,20 @@ test "an inherited overload set on a generic base class" {
     ],
   )
 }
+
+///|
+/// The three findings from the review of #299. A scalar alias for `void`
+/// inside a union still makes a trailing parameter omissible. An assignment
+/// inside an object literal's entry is applied before the literal is
+/// judged, while a function value in it is still checked in context. And an
+/// alias for `unknown` proves nothing about the `?.` receivers.
+test "review of #299: void member alias, literal walk order, aliased unknown" {
+  assert_eq(
+    issue_lines(
+      "type V = void;\ndeclare function f(a: number, b: number | V): void;\nfunction okScalarVoid() { f(1); }\ndeclare function isObject(v: unknown): v is object;\ninterface R { r: number; g: number }\nfunction okAssignInLiteral() { let x: string | number = 0; const y: { value: string } | { other: number } = { value: (x = \"ok\", x) }; return y; }\nfunction okNested() { const o: { a: { f: (c: string | R) => number } } = { a: { f: (c) => { if (isObject(c)) { if (\"r\" in c) { return c.g; } } return 0; } } }; return o; }\ntype Top = unknown;\ndeclare function acceptsTop(x: unknown): x is Top;\ndeclare const lo: { p: unknown; q: number } | undefined;\nfunction badAliasedUnknown() { if (acceptsTop(lo?.p)) { const n = lo.q; } }",
+    ),
+    [
+      "function badAliasedUnknown > PropAccess `.q`: object is possibly `undefined`",
+    ],
+  )
+}
