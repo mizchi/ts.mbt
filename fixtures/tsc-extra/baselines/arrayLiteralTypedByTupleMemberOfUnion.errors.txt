@@ -1,0 +1,36 @@
+arrayLiteralTypedByTupleMemberOfUnion.ts(17,82): error TS2322: Type 'number' is not assignable to type 'undefined'.
+arrayLiteralTypedByTupleMemberOfUnion.ts(18,51): error TS2322: Type 'string' is not assignable to type 'number'.
+arrayLiteralTypedByTupleMemberOfUnion.ts(19,56): error TS2322: Type '[number]' is not assignable to type 'Interval | NumericTuple'.
+  Type '[number]' is not assignable to type 'NumericTuple'.
+    Source has 1 element(s) but target requires 2.
+
+
+==== arrayLiteralTypedByTupleMemberOfUnion.ts (3 errors) ====
+    // An array literal against a union with one tuple member and a class member
+    // is typed by the tuple, as `@flatten-js/interval-tree` declares every key
+    // (`Interval | NumericTuple`): `[a, b]` fits. A literal of the wrong length
+    // or element type fits neither member and is still an error, at a method
+    // argument, a function argument and an annotated binding alike.
+    
+    type NumericTuple = [number, number];
+    declare class Interval { low: number; high: number; }
+    declare class Tree<T> { insert(key: Interval | NumericTuple, value?: T): void; }
+    declare function f(key: Interval | NumericTuple): void;
+    
+    export function okMethodArgument(t: Tree<string>, a: number, b: number) { t.insert([a, b]); }
+    export function okFunctionArgument(a: number) { f([a, a]); }
+    export function okInlineTupleMember(t: { m(k: Interval | [number, number]): void }, a: number) { t.m([a, a]); }
+    export function okAnnotatedBinding(a: number) { const k: Interval | NumericTuple = [a, 1]; return k; }
+    
+    export function badTooManyElements(t: Tree<string>, a: number) { t.insert([a, a, a]); }
+                                                                                     ~
+!!! error TS2322: Type 'number' is not assignable to type 'undefined'.
+    export function badElementType(a: number) { f([a, "x"]); }
+                                                      ~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export function badAnnotatedBinding(a: number) { const k: Interval | NumericTuple = [a]; return k; }
+                                                           ~
+!!! error TS2322: Type '[number]' is not assignable to type 'Interval | NumericTuple'.
+!!! error TS2322:   Type '[number]' is not assignable to type 'NumericTuple'.
+!!! error TS2322:     Source has 1 element(s) but target requires 2.
+    

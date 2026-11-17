@@ -1643,6 +1643,12 @@ fn array_is_array_split(
       | BooleanLiteral(_)
       | Func(_, _)
       | Object(_) => others.push(p)
+      // A class or interface whose whole heritage is known and never reaches
+      // `Array` cannot be an array. univer's helpers return
+      // `number[] | ErrorValueObject` and test `Array.isArray(values)`, and
+      // the class member made the split abstain.
+      Named(n) | Applied(n, _) | Struct(n, _) if named_never_array(resolver, n) =>
+        others.push(p)
       _ => return None
     }
   }
@@ -1650,6 +1656,49 @@ fn array_is_array_split(
     return None
   }
   Some((union_of(arrays), union_of(others)))
+}
+
+///|
+/// Whether a class or interface named `n` can never be an array: every
+/// `extends` edge, through both declaration kinds since they merge, is
+/// known, and none reaches `Array` or `ReadonlyArray`. A name this
+/// resolver does not declare (a lib type, an unresolved import) or a mixin
+/// base answers `false`, which keeps the caller's abstention.
+fn named_never_array(resolver : Resolver, n : String) -> Bool {
+  let seen : Map[String, Unit] = Map([])
+  let stack = [n]
+  while stack.pop() is Some(x) {
+    if seen.contains(x) {
+      continue
+    }
+    seen[x] = ()
+    if x == "Array" || x == "ReadonlyArray" {
+      return false
+    }
+    let cls = resolver.classes.get(x)
+    let iface = resolver.interfaces.get(x)
+    if cls is None && iface is None {
+      return false
+    }
+    match cls {
+      Some(c) =>
+        for b in c.base_names {
+          if b == "<expr-base>" {
+            return false
+          }
+          stack.push(b)
+        }
+      None => ()
+    }
+    match iface {
+      Some(i) =>
+        for b in i.extends_names {
+          stack.push(b)
+        }
+      None => ()
+    }
+  }
+  true
 }
 
 ///|
@@ -7907,6 +7956,16 @@ fn instantiate_method_return(
   if method_tps.length() == 0 {
     return ret
   }
+  // The callers expand a tuple SPREAD into its elements, so a tuple-REST
+  // formal (`first<T>(...args: [T, number])`) is expanded to match, or each
+  // element would be solved against the whole tuple and `T` would come back
+  // unsolved. An argument list that still holds a spread (one that is not a
+  // tuple) keeps the formal as declared.
+  let params = if args.iter().any(fn(a) { a is Spread(_) }) {
+    params
+  } else {
+    expand_tuple_rest_params(params, args.length())
+  }
   substitute_params(
     ret,
     bind_unsolved_to_any(
@@ -8753,6 +8812,88 @@ fn lacks_required_string_index_signature(
 }
 
 ///|
+/// A target whose index signatures all take a `string` key (alone, or in a
+/// union such as `number | string`) with a value that is `any` or a union
+/// holding it, and which declares no member of its own. tsc relates every
+/// object type to it, an interface or class value included, because such a
+/// signature asks nothing of the source's properties. univer's `IAnyObject`
+/// is `{ [key: number | string]: IAnyObject | IAnyObject[] | … | any }`, and
+/// `deepCompare(style, {})` was reported, as was an interface source
+/// against a plain `interface AnyIdx { [k: string]: any }`: only the
+/// type-literal `{ [k: string]: any }` had been recognised. An `unknown`
+/// value is not enough for an interface source (TS2322, probed), and
+/// neither is a `number` key alone.
+fn any_valued_string_index_target(
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> Bool {
+  let covers_string = fn(k : @ast.TsType) {
+    match k {
+      String_ => true
+      Union(ps) => ps.iter().any(fn(p) { p is String_ })
+      _ => false
+    }
+  }
+  let any_valued = fn(v : @ast.TsType) {
+    v is Any ||
+    (match resolver.unwrap(v) {
+      Any => true
+      Union(ps) => ps.iter().any(fn(p) { p is Any })
+      _ => false
+    })
+  }
+  match ty {
+    Object(entries) =>
+      entries.length() > 0 &&
+      entries.iter().all(fn(e) { covers_string(e.0) && any_valued(e.1) })
+    // A class of the same name merges its members into the interface, so
+    // the interface's own empty member list says nothing about the type.
+    Named(n) if resolver.classes.get(n) is None =>
+      match resolver.interfaces.get(n) {
+        Some(i) =>
+          i.fields.length() == 0 &&
+          i.extends_names.length() == 0 &&
+          i.index_signatures.length() > 0 &&
+          i.index_signatures
+          .iter()
+          .all(fn(sig) { covers_string(sig.0) && any_valued(sig.1) })
+        None => false
+      }
+    _ => false
+  }
+}
+
+///|
+/// Whether every value of `ty` is an object: an object type, an interface
+/// or a class instance, or a union of them. A primitive, an enum, `null`,
+/// `undefined`, `any` and anything this cannot classify answer `false`.
+fn non_primitive_object_source(
+  resolver : Resolver,
+  ty : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  match ty {
+    Object(_) | Struct(_, _) => true
+    Named(n) | Applied(n, _) =>
+      if resolver.type_aliases.contains(n) {
+        let u = resolver.unwrap(ty)
+        u != ty && non_primitive_object_source(resolver, u, depth + 1)
+      } else {
+        resolver.interfaces.contains(n) || resolver.classes.contains(n)
+      }
+    Union(ps) =>
+      ps.length() > 0 &&
+      ps
+      .iter()
+      .all(fn(p) { non_primitive_object_source(resolver, p, depth + 1) })
+    _ => false
+  }
+}
+
+///|
 /// A declared interface or class, none of whose declarations (or bases)
 /// carries a string index signature — the shapes that get no IMPLICIT one.
 fn is_declared_object_type_without_string_index(
@@ -8895,11 +9036,20 @@ fn class_has_private_member(resolver : Resolver, name : String) -> Bool {
 /// relevant side resolves to a known class; everything else abstains. Callers
 /// reach this only after the nominal `is_assignable_to` already returned false
 /// (so same-class and `any` / universal targets never get here).
+///
+/// The union arms recurse on members, and a member can unwrap to the very
+/// union it came from (`type Loop = Loop | number`, TS2456 in tsc), which
+/// overflowed the stack on main. They carry a depth, and running out of it
+/// answers "not blocked", which reports nothing.
 fn nominal_private_blocks(
   source : @ast.TsType,
   target : @ast.TsType,
   resolver : Resolver,
+  depth~ : Int32 = 0,
 ) -> Bool {
+  if depth > 32 {
+    return false
+  }
   // A UNION source is assignable when every member is, so it is blocked
   // when ANY member is: `async ? new AsyncFn() : new Fn()` against a base
   // class both extend is legal, and reading the union as "not a class"
@@ -8910,7 +9060,7 @@ fn nominal_private_blocks(
         .iter()
         .any(fn(m) {
           !(resolver.unwrap(m) is (Null | Undefined)) &&
-          nominal_private_blocks(m, target, resolver)
+          nominal_private_blocks(m, target, resolver, depth=depth + 1)
         })
     _ => ()
   }
@@ -8919,7 +9069,9 @@ fn nominal_private_blocks(
       return members.length() > 0 &&
         members
         .iter()
-        .all(fn(m) { nominal_private_blocks(source, m, resolver) })
+        .all(fn(m) {
+          nominal_private_blocks(source, m, resolver, depth=depth + 1)
+        })
     _ => ()
   }
   let s_class = match resolver.unwrap(source) {
@@ -12997,8 +13149,18 @@ fn infer_expr_inner(
           // cannot answer differently. Without it the return came back
           // as a bare `Named("T")`, which every downstream check reads
           // as unknowable.
+          // A tuple spread is expanded here as at the two overload sites
+          // above, so `c.m(...xs)` with `xs: [string, number]` against a
+          // lone `m<T>(value: T, count: number): T` binds `T` to `string`
+          // rather than to the whole tuple.
           let instantiated = instantiate_method_return(
-            env, resolver, pruned_recv, meth, params, args, ret,
+            env,
+            resolver,
+            pruned_recv,
+            meth,
+            params,
+            expand_tuple_spread_args(env, resolver, args),
+            ret,
           )
           // `this`-typed return: when an interface / class method is
           // declared as `m(): this` (or wrapped in `this & T` etc.),
@@ -15827,11 +15989,11 @@ fn infer_binop(
       if falsy_subset(resolver, l) is Never {
         non_nullable(l)
       } else {
-        narrow_union(non_nullable(l), r)
+        narrow_union(nullish_stripped(resolver, l), r)
       }
     // `a ?? b` — `b` is only evaluated when `a` is null/undefined, so the
     // result strips nullish from `a` and unions with `b`'s type.
-    Coalesce => narrow_union(non_nullable(l), r)
+    Coalesce => narrow_union(nullish_stripped(resolver, l), r)
   }
 }
 
@@ -17148,7 +17310,7 @@ fn check_expr_against_shape(
     // or tuple shape the literal is contextually typed by it — without this
     // the literal inferred as `(bigint | undefined)[]` and failed against
     // the tuple alias (effect's `coefficientRange`).
-    (ArrayLit(_), Union(parts)) => {
+    (ArrayLit(items), Union(parts)) => {
       let rest = parts.filter(fn(p) {
         !(ctx.resolver.unwrap(p) is (Undefined | Null))
       })
@@ -17161,6 +17323,30 @@ fn check_expr_against_shape(
             return
           }
           _ => ()
+        }
+      }
+      // `[row, row]` against `Interval | NumericTuple` (a class beside a
+      // tuple alias, as `@flatten-js/interval-tree` declares every key):
+      // tsc types the literal by the tuple member and accepts it, where
+      // the literal inferred as `number[]` here and failed against both.
+      // With exactly one tuple member, the literal is checked against it
+      // alone, and that answer is kept only when it finds nothing; a
+      // literal that fits one member fits the union. Otherwise the issues
+      // are dropped and the literal is judged against the whole union as
+      // before. A function value inside the literal opts out, because the
+      // first walk would mark its body as checked and the second could not
+      // report into it again.
+      let tuples = rest.filter(fn(p) { ctx.resolver.unwrap(p) is Tuple(_) })
+      if tuples.length() == 1 &&
+        rest.length() > 1 &&
+        !items.iter().any(fn(e) { e is (ArrowFunc(_, _, _, _) | FuncExpr(_)) }) {
+        let pre = ctx.issues.length()
+        check_expr_against(env, expr, tuples[0], ctx, sub_path)
+        if ctx.issues.length() == pre {
+          return
+        }
+        while ctx.issues.length() > pre {
+          ignore(ctx.issues.pop())
         }
       }
     }
@@ -17439,13 +17625,14 @@ fn check_expr_against_shape(
   // signature's value is `any`): `Foo` / `NM<Function>` into
   // `Record<string, string>` / `SM<T>` is TS2322 / TS2345, probed. A type
   // ALIAS of an object type does get one and is not judged here.
-  // ...and a `[k: string]: any` target accepts every interface or class
-  // value outright, which the structural comparison below reported.
-  if is_declared_object_type_without_string_index(inferred_u, ctx.resolver) &&
-    (match ctx.resolver.unwrap(expected_u) {
-      Object([(String_, Any)]) => true
-      _ => false
-    }) {
+  // ...and a `[k: string]: any` target accepts every object type value
+  // outright, an interface or class included, which the structural
+  // comparison below reported.
+  if non_primitive_object_source(ctx.resolver, inferred_u, 0) &&
+    any_valued_string_index_target(
+      ctx.resolver,
+      ctx.resolver.unwrap(expected_u),
+    ) {
     return
   }
   if lacks_required_string_index_signature(
@@ -18612,13 +18799,7 @@ fn struct_assignable_named_rec(
         // Recurse structurally when both field types are themselves
         // class / interface references (covers the recursive case); fall
         // back to the well-tested nominal / builtin relation otherwise.
-        let ok = if is_named_decl(have_u, resolver) &&
-          is_named_decl(want, resolver) {
-          struct_assignable_named_rec(have_u, want, resolver, visited)
-        } else {
-          is_assignable_to(have_u, want) ||
-          is_assignable_to(enum_members_as_enums(resolver, have_u), want)
-        }
+        let ok = struct_field_assignable(have_u, want, resolver, visited)
         if !ok {
           let _ = visited.pop()
           return false
@@ -18646,6 +18827,59 @@ fn struct_assignable_named_rec(
   }
   let _ = visited.pop()
   true
+}
+
+///|
+/// One member of `struct_assignable_named_rec`: two class / interface
+/// references recurse structurally, and anything else goes to the nominal
+/// relation. A UNION on either side is distributed first, each member
+/// through this same relation, because the nominal relation cannot resolve
+/// a named member: `scope: { read; edit }` against `scope: IObjScope |
+/// undefined` failed while the same member against `scope: IObjScope`
+/// passed (univer's permission payloads, 20 reports). The nominal relation
+/// is still asked first, so a union it already decided keeps that answer.
+///
+/// The union arms recurse on members that may unwrap to the same union —
+/// `type Loop = Loop | number`, which tsc rejects (TS2456) — so they carry
+/// a depth, and running out of it answers `true`: this function returning
+/// true suppresses a report, which is the direction to fail in.
+fn struct_field_assignable(
+  have : @ast.TsType,
+  want : @ast.TsType,
+  resolver : Resolver,
+  visited : Array[(String, String)],
+  depth~ : Int32 = 0,
+) -> Bool {
+  if depth > 32 {
+    return true
+  }
+  let h = resolver.unwrap(have)
+  let w = resolver.unwrap(want)
+  if is_named_decl(h, resolver) && is_named_decl(w, resolver) {
+    return struct_assignable_named_rec(h, w, resolver, visited)
+  }
+  if is_assignable_to(h, w) ||
+    is_assignable_to(enum_members_as_enums(resolver, h), w) {
+    return true
+  }
+  match h {
+    Union(hs) =>
+      return hs
+        .iter()
+        .all(fn(m) {
+          struct_field_assignable(m, w, resolver, visited, depth=depth + 1)
+        })
+    _ => ()
+  }
+  match w {
+    Union(ws) =>
+      ws
+      .iter()
+      .any(fn(m) {
+        struct_field_assignable(h, m, resolver, visited, depth=depth + 1)
+      })
+    _ => false
+  }
 }
 
 ///|
@@ -24052,10 +24286,35 @@ fn check_arguments_with_sig(
       }
     } else if i < params.length() {
       check_generator_arg_treturn(ctx, args[i], params[i], sub_path)
+      // A DEFAULTED parameter accepts `undefined` from the caller, which is
+      // what triggers the default: `parseBool(v, options)` with `options?:
+      // ParseOptions` against `options: ParseOptions = {}` is legal (univer,
+      // 20 reports). `callable_param_types` widens it for an arrow and a
+      // function expression; the rich signature of a declaration says it here.
+      // A fresh literal can never be `undefined`, and widening its target
+      // would hand an object literal a union the object checker declines,
+      // which left `take({ value: "bad" })` against `p: { value: number } =
+      // …` unchecked; it is checked against the declared type as before.
+      let fresh_literal = args[i]
+        is (ObjectLit(_)
+        | ArrayLit(_)
+        | ArrowFunc(_, _, _, _)
+        | FuncExpr(_)
+        | StringLit(_)
+        | NumberLit(_)
+        | TemplateLiteral(_, _))
+      let expected_i = match sig {
+        Some(ps) if !fresh_literal &&
+          i < ps.length() &&
+          ps[i].default is Some(_) &&
+          !type_accepts_undefined_param(params[i]) =>
+          @ast.TsType::Union([params[i], @ast.TsType::Undefined])
+        _ => params[i]
+      }
       check_expr_against(
         env,
         args[i],
-        params[i],
+        expected_i,
         ctx,
         sub_path,
         arg_callee_non_generic=callee_non_generic,
@@ -26974,14 +27233,36 @@ fn collect_narrowing(
         env, resolver, callee_name, args, pair_pos, pair_neg,
       )
     }
+    // `Array.isArray(p.body?.textRuns)` keys on the plain path, and a true
+    // answer means the chain did not short-circuit, since `undefined` is not
+    // an array, so every receiver its `?.` guarded is non-nullish (univer's
+    // `Range.getFontStyle` reads `p.body` next). A chain carries no
+    // narrowing key of its own, so the call used to reach the generic method
+    // arm below and narrow nothing.
     MethodCall(Var("Array"), "isArray", [arg]) if env.lookup("Array") is None &&
-      narrowing_key_for_expr(arg) is Some(_) => {
+      narrowing_key_for_expr(optional_chain_guarded_receivers(arg).0) is Some(_) => {
       let pair_pos = if then_sense { then_binds } else { else_binds }
       let pair_neg = if then_sense { else_binds } else { then_binds }
-      let x = narrowing_key_for_expr(arg).unwrap()
-      let cur = match arg {
+      let (plain, guarded) = optional_chain_guarded_receivers(arg)
+      let x = narrowing_key_for_expr(plain).unwrap()
+      for g in guarded {
+        match narrowing_key_for_expr(g) {
+          Some(key) if key != x =>
+            pair_pos.push(
+              (
+                key,
+                non_nullable_resolved(
+                  resolver,
+                  narrowing_current_type(env, resolver, key),
+                ),
+              ),
+            )
+          _ => ()
+        }
+      }
+      let cur = match plain {
         Var(n) => env_lookup_full(env, resolver, n)
-        _ => infer_expr(env, resolver, arg)
+        _ => infer_expr(env, resolver, plain)
       }
       // `unknown` narrows to `any[]` in the then-branch, as tsc gives it,
       // and keeps `unknown` in the else-branch; a property path
@@ -27272,6 +27553,20 @@ fn truthy_non_nullish(resolver : Resolver, cur : @ast.TsType) -> @ast.TsType {
     _ => cur
   }
   narrow_remove(non_nullable_resolved(resolver, ty), fn(v) { v is Void })
+}
+
+///|
+/// The left operand of `a ?? b` or `a || b` on the path where it is the
+/// result: `null`, `undefined` and `void` removed, with an alias expanded
+/// first. univer's `getValue(…) ?? 0` returns `Nullable<number>` (`number |
+/// null | undefined | void`), and a `const` bound to it read as `number |
+/// void` wherever it was passed on, because only `null` and `undefined`
+/// were removed and only from the outermost union. tsc removes `void` too,
+/// including a member that is itself an alias for it (`type V = void`).
+fn nullish_stripped(resolver : Resolver, l : @ast.TsType) -> @ast.TsType {
+  narrow_remove(non_nullable_resolved(resolver, l), fn(v) {
+    v is Void || resolver.unwrap(v) is Void
+  })
 }
 
 ///|
