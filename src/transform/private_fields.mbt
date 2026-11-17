@@ -269,7 +269,7 @@ fn class_private_this_assigns(
       let prop = match s {
         @ast.TsStmt::PropAssign(@ast.TsExpr::Var("this"), p, _) => p
         @ast.TsStmt::Expr(
-          @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), p, _)
+          @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), p, _),
         ) => p
         _ => ""
       }

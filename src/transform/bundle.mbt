@@ -1834,7 +1834,7 @@ fn detect_cjs_exports_var(block : @ast.TsBlock) -> String? {
           _,
           _,
           @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var(v)),
-          _
+          _,
         ) => return Some(v)
         _ => continue
       }
@@ -2621,7 +2621,7 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
     @ast.TsStmt::Let(
       b,
       t,
-      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
     ) =>
       Let(
         b,
@@ -2634,7 +2634,7 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
     @ast.TsStmt::Const(
       b,
       t,
-      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
     ) =>
       Const(
         b,
@@ -2647,7 +2647,7 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
     @ast.TsStmt::Var(
       b,
       t,
-      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args),
     ) =>
       Var(
         b,

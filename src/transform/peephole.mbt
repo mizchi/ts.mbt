@@ -250,7 +250,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           BinOp(
             op,
             @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)),
-            rhs
+            rhs,
           ),
         ) if tn == rn && ik == rk =>
           match (compound_for_binop(op), rhs) {
@@ -839,14 +839,14 @@ fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
       PropAssign(
         @ast.TsExpr::Var("this"),
         p,
-        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
       )
       | Expr(
         @ast.TsExpr::PropAssignExpr(
           @ast.TsExpr::Var("this"),
           p,
-          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
-        )
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+        ),
       ) => void_inits[p] = i
       _ => ()
     }
@@ -864,15 +864,15 @@ fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
         PropAssign(
           @ast.TsExpr::Var("this"),
           q,
-          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
         ) => q == p // another void-0: update the "latest init" index instead
         PropAssign(@ast.TsExpr::Var("this"), q, _) => q == p
         Expr(
           @ast.TsExpr::PropAssignExpr(
             @ast.TsExpr::Var("this"),
             q,
-            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
-          )
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+          ),
         ) => q == p
         Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), q, _)) =>
           q == p
@@ -1730,14 +1730,14 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
         PropAssign(
           @ast.TsExpr::Var("this"),
           _,
-          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
         ) => true
         Expr(
           @ast.TsExpr::PropAssignExpr(
             @ast.TsExpr::Var("this"),
             _,
-            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
-          )
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+          ),
         ) => true
         _ => false
       }
@@ -2584,7 +2584,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         let is_hasown_recv = match recv_p {
           PropAccess(
             PropAccess(@ast.TsExpr::Var("Object"), "prototype"),
-            "hasOwnProperty"
+            "hasOwnProperty",
           ) => true
           PropAccess(@ast.TsExpr::ObjectLit([]), "hasOwnProperty") => true
           _ => false
@@ -2866,7 +2866,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           BinOp(
             op,
             @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)),
-            rhs
+            rhs,
           ),
         ) if tn == rn && ik == rk =>
           match compound_for_binop(op) {

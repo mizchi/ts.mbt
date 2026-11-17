@@ -32,7 +32,7 @@ pub fn is_using_dispose_finally(fin : TsBlock) -> Bool {
 fn is_using_dispose_expr(e : TsExpr) -> Bool {
   match e {
     Await(
-      Cond(BinOp(AbstractNe, OptionalChain(m), NullLit), a, UnaryOp(Void, c))
+      Cond(BinOp(AbstractNe, OptionalChain(m), NullLit), a, UnaryOp(Void, c)),
     ) =>
       match using_dispose_member_holder(m, "asyncDispose") {
         Some(h) =>

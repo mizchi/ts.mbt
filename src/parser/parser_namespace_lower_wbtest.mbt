@@ -27,8 +27,8 @@ fn ns_assigned_members(block : @ast.TsBlock, name : String) -> Array[String] {
           @ast.TsExpr::MethodCall(
             @ast.TsExpr::Var("Object"),
             "defineProperty",
-            args
-          )
+            args,
+          ),
         ) =>
           if args.length() >= 2 {
             match (args[0], args[1]) {
@@ -115,8 +115,8 @@ test "namespace lowering: `export let` is published as a live getter" {
           @ast.TsExpr::MethodCall(
             @ast.TsExpr::Var("Object"),
             "defineProperty",
-            _
-          )
+            _,
+          ),
         ) => has_define_property = true
         _ => ()
       }

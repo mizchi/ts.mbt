@@ -824,7 +824,7 @@ fn build_runtime_class_decl(
         field_type,
         init,
         is_readonly,
-        has_definite_assertion
+        has_definite_assertion,
       ) =>
         if is_public_runtime_class_member_name(field_name) {
           // An unannotated field initialized by an arrow whose return type
@@ -975,7 +975,7 @@ fn build_runtime_class_decl(
         field_type,
         init,
         is_readonly_c,
-        has_definite_assertion_c
+        has_definite_assertion_c,
       ) => {
         computed_field_keys.push(key_expr)
         // Also surface the field's annotated/initialized shape under the

@@ -275,7 +275,7 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), prop) => Some((n, prop))
       @ast.TsExpr::IndexAccess(
         @ast.TsExpr::Var(n),
-        @ast.TsExpr::StringLit(prop)
+        @ast.TsExpr::StringLit(prop),
       ) => Some((n, prop))
       // A key we cannot name. The value escapes; the name cannot be
       // reserved, and `@@computed:` is how this file already says that.
@@ -358,7 +358,7 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
       @ast.TsExpr::MethodCall(
         @ast.TsExpr::Var("Object"),
         "defineProperty",
-        args
+        args,
       ) =>
         if args.length() >= 3 {
           match (args[0], args[1]) {

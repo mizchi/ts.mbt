@@ -7676,6 +7676,23 @@ typescript.mbt/
 # `scripts/patch_async_dep.sh` a silent no-op; it is gone, because
 # `moonbitlang/async@0.22.7` no longer carries the in-struct `fn new(..)`
 # it patched out.
+#
+# Re-verified clean on moon 0.1.20261117 / moonc v0.10.21. That release
+# turned CI red on main and on every open pull request the day it came
+# out. The compiler no longer lets a trait impl be called as a method
+# unless it is promoted with `extend`, and `mizchi/x@0.6.1`'s
+# `socket_native.mbt` calls `self.to_string()` on a type that only has
+# `impl Show`. Nothing here uses sockets: `mizchi/x/process` imports
+# `mizchi/x/socket`, so the import alone failed every native build.
+# `mizchi/x@0.7.0` is no way out, because it imports
+# `moonbitlang/core/async/pipe`, which today's core does not have. The root
+# package used one function from `mizchi/x/process`,
+# `collect_output_merged`, and on native that function only wrapped
+# `moonbitlang/async/process`. `src/process_run.mbt` now calls that
+# directly, with a `child_process.spawnSync` arm for `js`. The same release
+# deprecates `parse_int(..., base=)` in favour of `radix=`. Its formatter
+# also adds a trailing comma to a multi-line constructor pattern: 21 files,
+# no `#|` line touched, and a second pass changes nothing.
 moon check --deny-warn
 
 # Run tests. Takes about an hour, and most of that is NOT tests: the
