@@ -2123,6 +2123,72 @@
       ]
     },
     {
+      "case": "inference/staticFactoryCallThroughClass.ts",
+      "area": "inference",
+      "name": "staticFactoryCallThroughClass",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        18047,
+        18048
+      ],
+      "baseline": "baselines/staticFactoryCallThroughClass.errors.txt",
+      "claims": [
+        {
+          "name": "okFactoryNarrowsAfterIf",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okFactoryInCallback",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okAutoTypedThenFactory",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okAutoTypedThenAnyNew",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okFactoryInitializer",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 21
+        },
+        {
+          "name": "badFactoryMismatch",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badAnyAssignmentKeepsDeclared",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badReadBeforeFactory",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 25
+        }
+      ]
+    },
+    {
       "case": "inference/trailingVoidParameterThroughAlias.ts",
       "area": "inference",
       "name": "trailingVoidParameterThroughAlias",

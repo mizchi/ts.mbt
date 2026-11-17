@@ -875,3 +875,19 @@ test "review of #299: void member alias, literal walk order, aliased unknown" {
     ],
   )
 }
+
+///|
+/// Assigning a static factory called through its class narrows a nullable
+/// binding (univer's `v = NumberValueObject.create(0)` after `v == null`),
+/// also when the binding is declared through an alias (`let w = v` with
+/// `v: Nullable<…>`). The call itself is still `any`, so a mismatch through
+/// it is a MISS, and an assignment of a value typed `any` keeps the declared
+/// type, as tsc has it.
+test "a static factory assignment narrows a nullable binding" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\nclass BaseValue { isNull(): boolean { return false; } isBool(): boolean { return false; } }\nclass NumberValue extends BaseValue { static create(n: number): NumberValue { return new NumberValue(); } }\ndeclare const anything: any;\nfunction okNarrows(v: Nullable<BaseValue>) { let w = v; if (w == null || w.isNull()) { w = NumberValue.create(0); } return w.isBool(); }\nfunction badMismatch() { const s: string = NumberValue.create(3); return s; }\nfunction badAny(v: BaseValue | undefined) { v = anything; return v.isBool(); }\ndeclare const AnyCtor: any;\nfunction okAutoTypedAnyNew() { let b = null; b = new AnyCtor(); return b.width; }",
+    ),
+    ["function badAny > call `isBool`: object is possibly `undefined`"],
+  )
+}

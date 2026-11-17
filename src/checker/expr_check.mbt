@@ -6961,15 +6961,33 @@ fn Resolver::method_type_params_of(
 }
 
 ///|
-/// Every type-parameter name any declaration of `meth` binds, in first-seen
-/// order. `method_type_params_of` answers with the FIRST generic
-/// declaration, which is right for a single signature and wrong for an
-/// overload set: with `m<T>(x: T[], n: number): T` and `m<U>(x: U, s:
-/// string): U[]`, `c.m(5, "s")` selects the second, and solving against
-/// `[T]` left its `U` unsolved. The union solves the selected signature's
-/// own binders from its parameters; a name only another declaration binds
-/// does not occur in the selected one, or binds `any` where it does, which
-/// can only lose a finding.
+/// The one non-accessor `static` method `meth` that class `cn` declares, or
+/// `None` for none or an overload set. A class used as a value is `any`
+/// here, so a static call reads the declaration through this instead: the
+/// guard route (`Tools.isDefine(x)`) and the return-type route
+/// (`NumberValueObject.create(0)`) ask the same question.
+fn Resolver::single_static_method(
+  self : Resolver,
+  cn : String,
+  meth : String,
+) -> @ast.TsClassMethodDecl? {
+  guard self.classes.get(cn) is Some(cls) else { return None }
+  let mut found : @ast.TsClassMethodDecl? = None
+  let mut count = 0
+  for m in cls.methods {
+    if m.is_static && m.accessor == "" && m.name == meth {
+      count += 1
+      found = Some(m)
+    }
+  }
+  if count == 1 {
+    found
+  } else {
+    None
+  }
+}
+
+///|
 /// The class that declares the instance method `meth` for a receiver, with
 /// the substitution for that class's own type parameters. The walk follows
 /// `extends` to the first class that declares the method, carrying the type
@@ -7032,6 +7050,15 @@ fn Resolver::class_declaring_method(
 }
 
 ///|
+/// Every type-parameter name any declaration of `meth` binds, in first-seen
+/// order. `method_type_params_of` answers with the FIRST generic
+/// declaration, which is right for a single signature and wrong for an
+/// overload set: with `m<T>(x: T[], n: number): T` and `m<U>(x: U, s:
+/// string): U[]`, `c.m(5, "s")` selects the second, and solving against
+/// `[T]` left its `U` unsolved. The union solves the selected signature's
+/// own binders from its parameters; a name only another declaration binds
+/// does not occur in the selected one, or binds `any` where it does, which
+/// can only lose a finding.
 fn Resolver::method_overload_type_params(
   self : Resolver,
   recv : @ast.TsType,
@@ -27915,24 +27942,7 @@ fn apply_method_type_predicate_narrowing(
   // make the target loose.
   let static_guard = match receiver {
     Var(cn) if ns_predicate is None && env.lookup(cn) is None =>
-      match resolver.classes.get(cn) {
-        Some(cls) => {
-          let mut found : @ast.TsClassMethodDecl? = None
-          let mut count = 0
-          for m in cls.methods {
-            if m.is_static && m.accessor == "" && m.name == method_name {
-              count += 1
-              found = Some(m)
-            }
-          }
-          if count == 1 {
-            found
-          } else {
-            None
-          }
-        }
-        None => None
-      }
+      resolver.single_static_method(cn, method_name)
     _ => None
   }
   let recv_ty = infer_expr(env, resolver, receiver)
@@ -30041,6 +30051,27 @@ fn narrow_after_assignment(
     | ArrowFunc(_, _, _, _)
     | FuncExpr(_)
     | NativeClassExpr(_, _) => true
+    // A STATIC factory called through its class (`NumberValueObject.create(0)`)
+    // is never nullish when the method's declared return admits neither
+    // nullish value. A class used as a value is `any` here, so the call
+    // infers as `any` and narrowed nothing: univer's `if (v == null ||
+    // v.isNull()) { v = NumberValueObject.create(0) }` left `v` possibly
+    // undefined after the `if`. Only this NARROWING reads the declaration.
+    // Typing the call itself was tried, and it exposed four unrelated
+    // downstream gaps in univer and excalidraw (an object-literal union
+    // against an interface, a `declare class` implementing one, a generator
+    // object, `Array.prototype.at`), so the call stays `any` until those are
+    // fixed. Removing nullish members cannot add a mismatch.
+    MethodCall(Var(cn), meth, _) if env.lookup(cn) is None =>
+      match ctx.resolver.single_static_method(cn, meth) {
+        Some(m) =>
+          m.type_params.length() == 0 &&
+          is_checkable(m.return_type) &&
+          !(ctx.resolver.unwrap(m.return_type) is (Void | Any | Unknown)) &&
+          !target_admits_nullish(ctx.resolver, m.return_type, false, 0) &&
+          !target_admits_nullish(ctx.resolver, m.return_type, true, 0)
+        None => false
+      }
     _ => false
   }
   // A declaration with a SINGLE non-nullish member narrows to exactly that
@@ -30051,9 +30082,19 @@ fn narrow_after_assignment(
   // shape instead made `b = { v: 1 }` on an `Entry | undefined` binding
   // read back as `{ v: number } | Entry` after an `if`, which the
   // resolver-free comparison then rejected against `Entry`.
+  // The declaration is resolved first: `let w = v` with `v:
+  // Nullable<BaseValue>` declares `w` as the alias, whose single non-nullish
+  // member is only visible once it is expanded, and `void` goes with `null`
+  // and `undefined`, as under `x!`.
   let declared_single = match env.lookup_declared(name) {
-    Some(d) if type_has_undefined(d) || type_has_null(d) =>
-      match non_nullable(d) {
+    Some(d) if type_has_undefined(d) ||
+      type_has_null(d) ||
+      target_admits_nullish(ctx.resolver, d, false, 0) ||
+      target_admits_nullish(ctx.resolver, d, true, 0) =>
+      match
+        narrow_remove(non_nullable_resolved(ctx.resolver, d), fn(t) {
+          ctx.resolver.unwrap(t) is (Void | Null | Undefined)
+        }) {
         Union(_) | Never => None
         one => Some(one)
       }
@@ -30094,7 +30135,13 @@ fn narrow_after_assignment(
     match env.lookup(name) {
       Some(cur) =>
         if type_has_undefined(cur) || type_has_null(cur) {
-          env.narrow(name, non_nullable(cur))
+          // The value is non-nullish of a type this cannot name. When the
+          // current type was ONLY nullish (`let b = null`, auto-typed, then
+          // `b = Factory.create()`), removing the nullish part leaves `never`,
+          // and every later read of `b` was reported on it. What is known is
+          // that it is not nullish, which `any` says.
+          let kept = non_nullable(cur)
+          env.narrow(name, if kept is Never { @ast.TsType::Any } else { kept })
         }
       None => ()
     }

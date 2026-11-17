@@ -192,6 +192,7 @@ guide to whether the behaviour will change.
 | inference | `intraExpressionInferenceFromMethodReturn` | `setup()`'s return types a sibling method's parameter (reduced, with an illegal neighbour) | TS2339 | `intraExpressionInferences` |
 | inference | `optionalCallbackContextAndGenericInterfaceMethods` | An optional method-typed property as a contextual type, generic interface methods, an overload taking `Object` | TS2322 TS2339 TS2345 | — |
 | inference | `overloadSetAsCallbackAndMissingAwait` | An overload set as a callback, and `Promise<string>` where `string` is expected | TS2322 TS2345 | — |
+| inference | `staticFactoryCallThroughClass` | Assigning `Factory.create()` narrows a nullable binding, also one declared through `Nullable<T>`; an `any` assignment keeps the declared type; an auto-typed `let b = null` then a value of unnamed type is non-nullish | TS18047 TS18048 TS2322 | — |
 | inference | `trailingVoidParameterThroughAlias` | A trailing parameter accepting `void` may be omitted, through an alias such as `Nullable<T>` or a `void` alias inside a union; a `T \| undefined` alias, and a void parameter before a required one, may not | TS2554 | — |
 | lib | `errorIsErrorAndAugmentedRawJSON` | ES2026 `Error.isError` narrows, and a `RawJSON` augmentation merges | TS2322 TS2339 | — |
 | parser | `contextualKeywordDeclareAsInterfaceName` | `interface declare<T>` | accepted | — |
