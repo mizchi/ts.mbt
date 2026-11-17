@@ -956,3 +956,72 @@ test "a defaulted parameter accepts undefined" {
     ],
   )
 }
+
+///|
+/// `a ?? b` and `a || b` remove `void` from the left operand along with
+/// `null` and `undefined`, also when it arrives inside an alias: univer's
+/// `getValue(…) ?? 0` returns `Nullable<number>` (`number | null |
+/// undefined | void`), and a `const` bound to it read as `number | void`
+/// wherever it was passed on. The right operand's type still joins the
+/// result.
+test "?? and || remove void from an aliased left operand" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\ndeclare class Cache { getValue(r: number, c: number): Nullable<number>; }\nfunction okCoalesce(c: Cache) { const a = c.getValue(1, 2) ?? 0; return Math.max(1, a); }\nfunction okOr(c: Cache) { const a = c.getValue(1, 2) || 0; const n: number = a; return n; }\ndeclare const v: number | void;\nfunction okInline() { const a = v ?? 0; const n: number = a; return n; }\ntype V = void;\ndeclare const av: string | V;\nfunction okVoidAlias() { const s = av ?? \"x\"; const t: string = s; return t; }\nfunction badCoalesce(c: Cache) { const a = c.getValue(1, 2) ?? \"s\"; return Math.max(1, a); }",
+    ),
+    [
+      "function badCoalesce > call `max` arg[1]: expected `number` but got `number | \"s\" (string)`",
+    ],
+  )
+}
+
+///|
+/// A true `Array.isArray(p.body?.textRuns)` means the chain did not
+/// short-circuit, so `p.body` is non-nullish after it (univer's
+/// `Range.getFontStyle`). The false branch proves nothing about `p.body`.
+test "Array.isArray of an optional chain narrows its receivers" {
+  assert_eq(
+    issue_lines(
+      "interface Body { textRuns?: number[] }\ninterface Doc { body?: Body }\ndeclare function use(b: Body): void;\nfunction okChain(p: Doc) { if (Array.isArray(p.body?.textRuns)) { use(p.body); } }\nfunction okChainAnd(p: Doc | undefined) { if (p && Array.isArray(p.body?.textRuns) && p.body.textRuns.length > 0) { use(p.body); } }\nfunction badNegated(p: Doc) { if (!Array.isArray(p.body?.textRuns)) { use(p.body); } }",
+    ),
+    [
+      "function badNegated > call `use` arg[0]: type `Body | undefined` is not assignable to type `Body`",
+    ],
+  )
+}
+
+///|
+/// A `string`-keyed index signature whose value is `any` (alone or in a
+/// union) accepts every object type, an interface included, whatever the
+/// spelling of the target: univer's `IAnyObject` is an interface keyed by
+/// `number | string`. An `unknown` value, a `number` key and a primitive
+/// source are still errors.
+test "an any-valued string index signature accepts every object type" {
+  assert_eq(
+    issue_lines(
+      "interface S { a?: string; b?: number }\ninterface AnyIdx { [k: string]: any }\ninterface UnionKey { [k: number | string]: UnionKey | UnionKey[] | any }\ninterface UnknownIdx { [k: string]: unknown }\ninterface NumIdx { [k: number]: any }\ndeclare function take(o: UnionKey): void;\nfunction okIface(s: S) { const x: AnyIdx = s; return x; }\nfunction okUnionKey(s: S | undefined) { take(s || {}); }\nfunction badUnknown(s: S) { const x: UnknownIdx = s; return x; }\nfunction badNumberKey(s: S) { const x: NumIdx = s; return x; }\nfunction badPrimitive() { take(\"x\"); }",
+    ),
+    [
+      "function badUnknown > binding `x` init: index signature for type `string` is missing in type `S`",
+      "function badNumberKey > binding `x` init: expected `NumIdx` but got `S`",
+      "function badPrimitive > call `take` arg[0]: expected `UnionKey` but got `string`",
+    ],
+  )
+}
+
+///|
+/// An array literal against a union with exactly one tuple member is typed
+/// by that member: `[a, b]` fits `Interval | NumericTuple`, as
+/// `@flatten-js/interval-tree` declares its keys. A literal the tuple
+/// rejects is still reported against the whole union.
+test "an array literal is typed by the one tuple member of a union" {
+  assert_eq(
+    issue_lines(
+      "type NumericTuple = [number, number];\ndeclare class Interval { low: number; high: number; }\ndeclare class Tree<T> { insert(key: Interval | NumericTuple, value?: T): void; }\ndeclare function f(key: Interval | NumericTuple): void;\nfunction okMethod(t: Tree<string>, a: number, b: number) { t.insert([a, b]); }\nfunction okFn(a: number) { f([a, a]); }\nfunction okInline(t: { m(k: Interval | [number, number]): void }, a: number) { t.m([a, a]); }\nfunction badArity(t: Tree<string>, a: number) { t.insert([a, a, a]); }\nfunction badType(a: number) { f([a, \"x\"]); }",
+    ),
+    [
+      "function badArity > call `insert` arg[0]: expected `Interval | NumericTuple` but got `number[]`",
+      "function badType > call `f` arg[0]: expected `Interval | NumericTuple` but got `(number | \"x\" (string))[]`",
+    ],
+  )
+}
