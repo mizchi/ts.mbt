@@ -1051,3 +1051,17 @@ test "review of #300 round 3: tuple rest parameter, alias-typed argument" {
     ],
   )
 }
+
+///|
+/// A tuple spread into a lone generic method binds its `T` element by
+/// element, as it already does for an overload set: `c.m(...xs)` with
+/// `xs: [string, number]` against `m<T>(value: T, count: number): T` is a
+/// `string`, not the whole tuple. main had the same gap.
+test "a tuple spread binds a lone generic method element by element" {
+  assert_eq(
+    issue_lines(
+      "declare class C { m<T>(value: T, count: number): T; }\nfunction okSpread(c: C, xs: [string, number]): string { return c.m(...xs); }\nfunction badSpread(c: C, xs: [string, number]): number { return c.m(...xs); }",
+    ),
+    ["function badSpread > return: expected `number` but got `string`"],
+  )
+}

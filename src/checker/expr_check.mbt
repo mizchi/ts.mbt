@@ -13126,8 +13126,18 @@ fn infer_expr_inner(
           // cannot answer differently. Without it the return came back
           // as a bare `Named("T")`, which every downstream check reads
           // as unknowable.
+          // A tuple spread is expanded here as at the two overload sites
+          // above, so `c.m(...xs)` with `xs: [string, number]` against a
+          // lone `m<T>(value: T, count: number): T` binds `T` to `string`
+          // rather than to the whole tuple.
           let instantiated = instantiate_method_return(
-            env, resolver, pruned_recv, meth, params, args, ret,
+            env,
+            resolver,
+            pruned_recv,
+            meth,
+            params,
+            expand_tuple_spread_args(env, resolver, args),
+            ret,
           )
           // `this`-typed return: when an interface / class method is
           // declared as `m(): this` (or wrapped in `this & T` etc.),
