@@ -3324,6 +3324,58 @@
       ]
     },
     {
+      "case": "relations/unionMemberOfInterfaceTarget.ts",
+      "area": "relations",
+      "name": "unionMemberOfInterfaceTarget",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/unionMemberOfInterfaceTarget.errors.txt",
+      "claims": [
+        {
+          "name": "okGood",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okMaybe",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okNullTarget",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badWrongType",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badMissing",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badNullIntoUndefined",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
+        }
+      ]
+    },
+    {
       "case": "types/arrayFlatExplicitDepth.ts",
       "area": "types",
       "name": "arrayFlatExplicitDepth",

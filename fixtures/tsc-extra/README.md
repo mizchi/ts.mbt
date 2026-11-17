@@ -218,6 +218,7 @@ guide to whether the behaviour will change.
 | relations | `numberToUnionHoldingNumericEnum` | `number` into `E \| undefined` for a numeric enum, and not for a string enum | TS2322 | `enumAssignability` |
 | relations | `privateMemberClassToNonNamingTargets` | A class with a `private` member into a union of bases, an object type, an interface; a target naming the member; a union source | TS2322 TS2739 TS2741 | — |
 | relations | `recursiveArrayAliasesRelateCoinductively` | `type A = A[]` and `type B = B[]` relate coinductively; `A[]` against `string[]` still fails where `A` meets `string` | TS2322 | — |
+| relations | `unionMemberOfInterfaceTarget` | An object member fits an interface member typed `S \| undefined` (or `S \| null`) structurally, member by member; a wrong type, a missing member and `null` into `undefined` do not | TS2322 | — |
 | types | `arrayFlatExplicitDepth` | `flat()`, `flat(1)`, `flat(0)` and `flat(2)` on nested arrays | TS2322 | — |
 | types | `brandedTupleDestructuring` | Destructuring `[x: number, y: number] & { _brand }`, through a constrained type parameter and a `for…of` | TS2322 | — |
 | types | `closedRecordKeysInIntersectionAndArrayFlat` | `Record<Enum, V> & { k?: T }` reads `k` as `T`; an open `Record` answers any other name; `flat()` removes one level | TS2322 | — |

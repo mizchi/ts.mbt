@@ -907,3 +907,19 @@ test "Array.isArray splits off a class member" {
     ],
   )
 }
+
+///|
+/// An interface member typed `S | undefined` accepts an object member that
+/// fits `S` structurally. The member relation sent a union target to the
+/// resolver-free relation, which cannot resolve `S`, while a bare `S` target
+/// recursed (univer's `scope: IObjScope | undefined`, 20 reports).
+test "an object member fits an interface member typed as a union" {
+  assert_eq(
+    issue_lines(
+      "interface S { read: number; edit: number }\ninterface P { scope: S | undefined; name: string }\ndeclare const good: { name: string; scope: { read: number; edit: number } };\ndeclare const maybe: { name: string; scope: { read: number; edit: number } | undefined };\ndeclare const wrong: { name: string; scope: { read: string; edit: number } };\nconst okGood: P | undefined = good;\nconst okMaybe: P = maybe;\nconst badWrong: P = wrong;",
+    ),
+    [
+      "top-level > binding `badWrong` init: expected `P` but got `{ name: string; scope: { read: string; edit: number } }`",
+    ],
+  )
+}

@@ -18486,13 +18486,7 @@ fn struct_assignable_named_rec(
         // Recurse structurally when both field types are themselves
         // class / interface references (covers the recursive case); fall
         // back to the well-tested nominal / builtin relation otherwise.
-        let ok = if is_named_decl(have_u, resolver) &&
-          is_named_decl(want, resolver) {
-          struct_assignable_named_rec(have_u, want, resolver, visited)
-        } else {
-          is_assignable_to(have_u, want) ||
-          is_assignable_to(enum_members_as_enums(resolver, have_u), want)
-        }
+        let ok = struct_field_assignable(have_u, want, resolver, visited)
         if !ok {
           let _ = visited.pop()
           return false
@@ -18520,6 +18514,44 @@ fn struct_assignable_named_rec(
   }
   let _ = visited.pop()
   true
+}
+
+///|
+/// One member of `struct_assignable_named_rec`: two class / interface
+/// references recurse structurally, and anything else goes to the nominal
+/// relation. A UNION on either side is distributed first, each member
+/// through this same relation, because the nominal relation cannot resolve
+/// a named member: `scope: { read; edit }` against `scope: IObjScope |
+/// undefined` failed while the same member against `scope: IObjScope`
+/// passed (univer's permission payloads, 20 reports). The nominal relation
+/// is still asked first, so a union it already decided keeps that answer.
+fn struct_field_assignable(
+  have : @ast.TsType,
+  want : @ast.TsType,
+  resolver : Resolver,
+  visited : Array[(String, String)],
+) -> Bool {
+  let h = resolver.unwrap(have)
+  let w = resolver.unwrap(want)
+  if is_named_decl(h, resolver) && is_named_decl(w, resolver) {
+    return struct_assignable_named_rec(h, w, resolver, visited)
+  }
+  if is_assignable_to(h, w) ||
+    is_assignable_to(enum_members_as_enums(resolver, h), w) {
+    return true
+  }
+  match h {
+    Union(hs) =>
+      return hs
+        .iter()
+        .all(fn(m) { struct_field_assignable(m, w, resolver, visited) })
+    _ => ()
+  }
+  match w {
+    Union(ws) =>
+      ws.iter().any(fn(m) { struct_field_assignable(h, m, resolver, visited) })
+    _ => false
+  }
 }
 
 ///|
