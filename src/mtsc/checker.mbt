@@ -1840,6 +1840,42 @@ fn module_declares_top_level_type(
 }
 
 ///|
+/// The type names a module's own scope declares or imports, outside its
+/// `declare global` block, each mapped to `Name@<module path>`. A
+/// `declare global` value typed by one of them cannot be read in a module
+/// that does not reach the declaring one, and that key is never registered
+/// there, so the reference stays unresolved.
+fn module_scope_type_renames(module_ : ParsedMtscModule) -> Map[String, String] {
+  let names : Map[String, Unit] = Map([])
+  let m = module_.module_
+  for iface in m.interfaces {
+    names[iface.name] = ()
+  }
+  for ta in m.type_aliases {
+    names[ta.name] = ()
+  }
+  for c in m.classes {
+    names[c.name] = ()
+  }
+  for e in m.enums {
+    names[e.name] = ()
+  }
+  for ns in m.namespaces {
+    if ns.name != "<global>" {
+      names[ns.name] = ()
+    }
+  }
+  for n in m.imported_binding_names {
+    names[n] = ()
+  }
+  let out : Map[String, String] = Map([])
+  for n, _ in names {
+    out[n] = n + "@" + module_.source.path
+  }
+  out
+}
+
+///|
 /// Collect type declarations from the caller-resolved transitive dependency
 /// graph. Runtime names are deliberately not injected from these modules;
 /// `graph_import_globals` remains the only path for value bindings.
@@ -2615,6 +2651,12 @@ fn collect_parsed_graph_issues(
     all
   }
   let ambient_globals : Array[(String, @ast.TsType)] = []
+  // Aligned with `ambient_globals`: the module a `declare global` entry was
+  // written in, or "" for an ambient script's, whose scope is global.
+  let ambient_global_origin : Array[String] = []
+  // Per declaring module, the type names its own scope declares or imports,
+  // each mapped to a key no other module registers (see below).
+  let global_scope_renames : Map[String, Map[String, String]] = Map([])
   let ambient_modules : Array[@ast.TsModule] = []
   let namespace_cache : Map[String, (@ast.TsType, Array[(String, String)])] = Map([],
   )
@@ -2629,6 +2671,8 @@ fn collect_parsed_graph_issues(
       // the checker reads it through what that file's declarations moved
       // to (`<unkeyed>`, see `check_module_function_bodies_layered`).
       ambient_globals.push(("@value-origin:" + entry.0, Named("<unkeyed>")))
+      ambient_global_origin.push("")
+      ambient_global_origin.push("")
     }
   }
   // A MODULE's `declare global { … }` augments the global scope for the
@@ -2648,6 +2692,11 @@ fn collect_parsed_graph_issues(
         continue
       }
       ambient_modules.push(ns.module_)
+      if !global_scope_renames.contains(module_.source.path) {
+        global_scope_renames[module_.source.path] = module_scope_type_renames(
+          module_,
+        )
+      }
       for entry in module_value_bindings(ns.module_) {
         if @checker.lib_declares_global_value(entry.0) {
           continue
@@ -2656,6 +2705,8 @@ fn collect_parsed_graph_issues(
         ambient_globals.push(
           ("@value-origin:" + entry.0, Named(module_.source.path)),
         )
+        ambient_global_origin.push(module_.source.path)
+        ambient_global_origin.push(module_.source.path)
       }
     }
   }
@@ -2670,6 +2721,25 @@ fn collect_parsed_graph_issues(
     let (globals, import_diagnostics) = graph_import_globals(
       module_, parsed_modules, edges, skipped_imports, namespace_cache,
     )
+    let type_module_keys : Array[String] = []
+    let type_modules = graph_type_modules(
+      module_,
+      parsed_modules,
+      edges,
+      keys=type_module_keys,
+    )
+    // A `declare global` value's type is written in its declaring module's
+    // scope. Where that module is reachable, its types are ingested and the
+    // `@value-origin:` marker reads them there. Where it is not, a bare
+    // `Payload` would resolve against whatever THIS module calls `Payload`
+    // and report `payload.a` on a legal line, so the names that scope
+    // declares or imports move to keys nothing registers, which abstains,
+    // as an import-typed global already does.
+    let reachable_origins : Map[String, Unit] = Map([])
+    reachable_origins[module_.source.path] = ()
+    for k in type_module_keys {
+      reachable_origins[k] = ()
+    }
     // An import or a declaration binds its name in the module's own scope,
     // which a global never overrides: `import { shadowed } from "./other"`
     // or `export const shadowed = "s"` beside a `declare global { const
@@ -2683,7 +2753,7 @@ fn collect_parsed_graph_issues(
     for entry in module_value_bindings(module_.module_) {
       own_names[entry.0] = ()
     }
-    for entry in ambient_globals {
+    for i, entry in ambient_globals {
       let name = if entry.0.has_prefix("@value-origin:") {
         entry.0["@value-origin:".length():].to_owned()
       } else {
@@ -2692,7 +2762,14 @@ fn collect_parsed_graph_issues(
       if own_names.contains(name) {
         continue
       }
-      globals.push(entry)
+      let origin = ambient_global_origin[i]
+      match global_scope_renames.get(origin) {
+        Some(renames) if origin != "" &&
+          !reachable_origins.contains(origin) &&
+          !entry.0.has_prefix("@value-origin:") =>
+          globals.push((entry.0, @checker.rename_type_refs(entry.1, renames)))
+        _ => globals.push(entry)
+      }
     }
     for diagnostic in import_diagnostics {
       issues.push({
@@ -2701,13 +2778,6 @@ fn collect_parsed_graph_issues(
         message: diagnostic,
       })
     }
-    let type_module_keys : Array[String] = []
-    let type_modules = graph_type_modules(
-      module_,
-      parsed_modules,
-      edges,
-      keys=type_module_keys,
-    )
     for ambient in ambient_modules {
       type_modules.push(ambient)
     }

@@ -5603,6 +5603,19 @@ product surfaces now.
     is the rule #296 already applied to assignability.
   - **A module's own value declaration shadows a `declare global` value**,
     as an import already did. This came from the review of #296.
+  - **A `declare global` value's type stays in its declaring module's
+    scope.** `export {}; interface Payload { a: string } declare global {
+    const payload: Payload }` beside a module declaring its own
+    `interface Payload { b: number }` read `payload.a` against the wrong
+    `Payload`, because only the global block is ingested and an
+    unreachable declaring module has no keys. Where the declaring module
+    is not among the checked module's type modules, the names its own
+    scope declares or imports now become `Name@<path>` inside that value's
+    type. No module registers such a key, so the reference abstains, the
+    same MISS an import-typed global already takes. Where it is reachable,
+    the origin keying resolves it and the real mismatch is reported. Also
+    from the review of #296, as an outside-diff finding the first merge
+    missed.
   - **What is left.** A member read through an optional property
     (`c.a.x` with `a?:`) is still not judged, because the strictNullChecks
     member check reads only a bare variable receiver. Two tsc-extra cells

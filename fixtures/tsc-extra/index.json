@@ -687,6 +687,53 @@
       ]
     },
     {
+      "case": "controlFlow/typeGuardFalseBranchOfAnyAndUnknown.ts",
+      "area": "controlFlow",
+      "name": "typeGuardFalseBranchOfAnyAndUnknown",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2339,
+        18046
+      ],
+      "baseline": "baselines/typeGuardFalseBranchOfAnyAndUnknown.errors.txt",
+      "claims": [
+        {
+          "name": "okAnyElseIsAny",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okAnyPathElseIsAny",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okUnionElseIsTheRest",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badUnknownElseIsUnknown",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badUnionElseWrongMember",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 19
+        }
+      ]
+    },
+    {
       "case": "controlFlow/typeGuardOnPathAndStaticMethod.ts",
       "area": "controlFlow",
       "name": "typeGuardOnPathAndStaticMethod",
@@ -3113,6 +3160,53 @@
         },
         {
           "name": "badSpreadKnownShapeIncomplete",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 13
+        }
+      ]
+    },
+    {
+      "case": "types/optionalAnyReadsAsAny.ts",
+      "area": "types",
+      "name": "optionalAnyReadsAsAny",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18046,
+        18048
+      ],
+      "baseline": "baselines/optionalAnyReadsAsAny.errors.txt",
+      "claims": [
+        {
+          "name": "okOptionalAnyProperty",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okOptionalAnyParameter",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okOptionalAnyMethodCall",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badOptionalNumberProperty",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badOptionalUnknownParameter",
           "kind": "bad",
           "fromLine": 12,
           "toLine": 13

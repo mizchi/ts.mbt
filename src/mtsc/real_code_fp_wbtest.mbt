@@ -674,3 +674,28 @@ test "a guard's false branch and a member read keep any as any" {
     ],
   )
 }
+
+///|
+/// A `declare global` value's type is written in its declaring module's
+/// scope. Where that module is not reachable, `Payload` used to resolve
+/// against the checked module's own `Payload`, so `payload.a` and
+/// `take({ a: "x" })` were reported on legal lines. The reference abstains
+/// there now. Where the module is reachable, it resolves to the right
+/// declaration and the real mismatch is still reported.
+test "a declare global value's type stays in its declaring module's scope" {
+  let globals = (
+    "/src/globals.d.ts", "export {};\ninterface Payload { a: string }\ndeclare global { const payload: Payload; function take(p: Payload): void }",
+  )
+  let body = "interface Payload { b: number }\nexport const ok: string = payload.a;\nexport function g() { take({ a: \"x\" }); }\nexport const bad: number = payload.a;"
+  assert_eq(graph_messages([globals, ("/src/root.ts", body)], []), [])
+  assert_eq(
+    graph_messages(
+      [
+        globals,
+        ("/src/root.ts", "import type {} from \"./globals\";\n" + body),
+      ],
+      [("/src/root.ts", "./globals", "/src/globals.d.ts")],
+    ),
+    ["top-level > binding `bad` init :: expected `number` but got `string`"],
+  )
+}
