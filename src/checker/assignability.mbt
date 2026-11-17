@@ -730,9 +730,13 @@ fn is_assignable_to_inner(
     | (Named("BigInt"), BigInt) => return false
     _ => ()
   }
-  // `any` is the universal escape hatch — it flows in either direction.
+  // `any` is the universal escape hatch — it flows in either direction. A
+  // union holding it IS `any` (`any | undefined` is how an optional `any`
+  // parameter is spelled so the arity rule reads it as omittable), so it
+  // accepts every source too.
   match target {
     Any => return true
+    Union(parts) if parts.contains(Any) => return true
     _ => ()
   }
   match source {

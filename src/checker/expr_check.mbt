@@ -10895,6 +10895,43 @@ fn enum_members_as_enums(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// True when `source` is an object shape this checker can see whole and
+/// that declares no index signature: an object type literal, or an
+/// interface or class with no heritage. Anything else — a union, a type
+/// parameter, an array, `any`, a type with a base this walk does not
+/// follow — abstains, so a key it cannot judge is a MISS.
+fn source_declares_no_index_signature(
+  resolver : Resolver,
+  source : @ast.TsType,
+) -> Bool {
+  match resolver.unwrap(source) {
+    // An object literal's own computed key (`{ [K.a]: 1 }`, kept as
+    // `@@computed:N`) gives it an index signature in tsc when the key is a
+    // `string`, so a shape carrying one abstains — and so does any other
+    // internal `@@` spelling this walk does not decode.
+    Object(fields) =>
+      fields.length() > 0 &&
+      fields.iter().all(fn(f) { f.0 is Literal(k) && !k.has_prefix("@@") })
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) =>
+          iface.index_signatures.length() == 0 &&
+          iface.extends_names.length() == 0 &&
+          resolver.classes.get(n) is None
+        None =>
+          match resolver.classes.get(n) {
+            Some(cls) =>
+              cls.index_signatures.length() == 0 &&
+              cls.static_index_signatures.length() == 0 &&
+              cls.base_names.length() == 0
+            None => false
+          }
+      }
+    _ => false
+  }
+}
+
+///|
 /// True when `name` resolves to a purely numeric enum declaration.
 fn is_numeric_enum_name(resolver : Resolver, name : String) -> Bool {
   match resolver.enums.get(name) {
@@ -17197,6 +17234,9 @@ fn check_expr_against(
     let target_open = match expected_u {
       Any | Unknown | Void | Never => true
       Named(tn) => ctx.in_scope_type_params.contains(tn)
+      // `any | undefined` is `any`: the spelling of an optional `any`
+      // parameter, which accepts `null` like any other `any`.
+      Union(parts) => parts.contains(Any) || parts.contains(Unknown)
       _ => false
     }
     if !target_open && is_checkable(expected_u) {
@@ -24908,6 +24948,27 @@ fn bind_object_pattern(
           "destructure `\{prop.key}`",
         )
       _ => ()
+    }
+    // TS2537: a computed key of type `string` or `number` — not a literal,
+    // which names a member — reads through an index signature, and a
+    // source declaring none has nothing to read. `let computed = 'b'`
+    // widens to `string`, so `var { [computed]: x } = { a: 1, b: "" }` is
+    // the error while the `const` spelling is not (probed).
+    match prop.key_expr {
+      Some(k) =>
+        match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, k)) {
+          String_ | Number as kt =>
+            if source_declares_no_index_signature(ctx.resolver, source) {
+              let kname = if kt is String_ { "string" } else { "number" }
+              record(
+                ctx,
+                "destructure `[computed]`",
+                "type `\{type_display(source)}` has no matching index signature for type `\{kname}`",
+              )
+            }
+          _ => ()
+        }
+      None => ()
     }
     let computed_ty = match prop.key_expr {
       Some(k) => computed_key_tuple_element(env, ctx.resolver, source, k)

@@ -375,3 +375,58 @@ test "an imported value built from spreads is not missing their members" {
     ["top-level > binding `bad` init :: expected `string` but got `number`"],
   )
 }
+
+///|
+/// TS2537: a computed destructuring key of type `string` or `number` reads
+/// through an index signature, and a source declaring none has nothing to
+/// read. A literal key names a member, an index signature or an array
+/// answers, and `any` answers anything. `objectRest` had been flagged only
+/// by the private-member false positive this batch removed; this is its
+/// real error.
+test "a computed destructuring key needs an index signature" {
+  let src =
+    #|var o = { a: 1, b: 'no' };
+    #|let computed = 'b';
+    #|const lit = 'b';
+    #|var { [computed]: bad1 } = o;
+    #|var { [lit]: ok1 } = o;
+    #|declare const r: Record<string, number>;
+    #|var { [computed]: ok2 } = r;
+    #|declare const an: any;
+    #|var { [computed]: ok3 } = an;
+    #|declare const ix: { [k: string]: number; a: number };
+    #|var { [computed]: ok4 } = ix;
+    #|declare const n: number;
+    #|declare const arr: number[];
+    #|var { [n]: ok5 } = arr;
+    #|class C { a = 1 }
+    #|var { [n]: bad2 } = new C();
+    #|const K = { a: "a" };
+    #|const { [K.a]: ok6 } = (() => { return { [K.a]: 1 }; })();
+  assert_eq(issue_lines(src), [
+    "top-level > destructure `[computed]`: type `{ a: number; b: string }` has no matching index signature for type `string`",
+    "top-level > destructure `[computed]`: type `C` has no matching index signature for type `number`",
+  ])
+}
+
+///|
+/// An imported arrow-`const` type guard keeps its optional and defaulted
+/// parameters omittable: excalidraw's `isBindingElement = <T>(element?: T |
+/// null, includeLocked = true): element is … =>` read as "expected 2
+/// argument(s), got 1" at every one-argument call. Too many is still TS2554.
+test "an imported arrow guard's defaulted parameter may be omitted" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/t.ts", "interface El { locked: boolean }\nexport const isB = <T extends El>(element?: T | null, includeLocked = true): element is T => element != null && includeLocked;",
+        ),
+        (
+          "/src/u.ts", "import { isB } from \"./t\";\ndeclare const e: { locked: boolean };\nexport const one: boolean = isB(e);\ndeclare const m: { locked: boolean } | null;\nexport const nul: boolean = isB(m);\nexport const three: boolean = isB(e, false, 3);",
+        ),
+      ],
+      [("/src/u.ts", "./t", "/src/t.ts")],
+    ),
+    ["top-level > call `isB` :: expected 0-2 argument(s), got 3"],
+  )
+}

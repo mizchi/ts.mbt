@@ -5372,10 +5372,10 @@ product surfaces now.
   checked). The oracle, effect (114, none at a new location), zod (9) and
   the four real `.d.ts` entries are unchanged. The generated bridge corpus
   is byte-identical to main.
-  - **What it measures.** univer's five sampled packages go 4,800 -> 3,275
-    reports (core 347 -> 241, data-validation 1,487 -> 984, ui 1,097 ->
-    770). excalidraw goes 3,623 reports in 280 of its 684 files to 747 in
-    137. The new reports at a new location are 3 of 3,275 and 0 of 747,
+  - **What it measures.** univer's five sampled packages go 4,800 -> 3,251
+    reports (core 347 -> 240, data-validation 1,487 -> 975, ui 1,097 ->
+    766). excalidraw goes 3,623 reports in 280 of its 684 files to 641 in
+    113. The new reports at a new location are 3 of 3,251 and 0 of 641,
     each an inference gap one of the fixes exposed, not a new rule.
   - **A module's `declare global` was invisible unless something imported
     the module.** Only ambient SCRIPTS published globals, so
@@ -5475,6 +5475,24 @@ product surfaces now.
       spread as a member literally named `@@spread:N`. It is `any` to an
       importer now. The parser's shape is left alone, because the bridge
       reads it.
+    - An imported arrow-`const` type guard read every parameter as
+      required, so excalidraw's `isBindingElement = <T>(element?: T |
+      null, includeLocked = true): element is … =>` was "expected 2
+      argument(s), got 1" at every one-argument call. An optional or
+      defaulted slot is `any | undefined` now, the spelling the arity rule
+      reads as omittable. That spelling then exposed six reports, because
+      two relations read `any | undefined` as narrower than `any`. A union
+      holding `any` is `any`, so it now accepts `null` and everything else.
+  - **The oracle lost one TP, for the right reason, and the batch took its
+    real error instead.** `objectRest` had been flagged only by the private
+    rule above: `var i: I = removable` is legal. That is batch CS's lesson
+    again — a conformance file counts as a TP if anything fires. Its
+    baseline errors are TS2537. A computed destructuring key of type
+    `string` or `number` reads through an index signature, and
+    `var { [computed]: x } = { a: 1, b: "" }` with `let computed = "b"`
+    has none to read. The `const` spelling (a literal key) is legal, and so
+    are an index signature, an array, `any` and a `Record<string, …>`. A
+    union source and a type with heritage abstain.
   - **What is left.** On excalidraw the largest families are a union of
     object literals whose read needs normalization (`{ font: unknown } |
     {}`), DOM member lookups on a narrowed `Element`, and an

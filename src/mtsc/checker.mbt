@@ -645,30 +645,38 @@ fn arrow_const_predicate_type(
   for stmt in module_.top_level_stmts {
     match stmt {
       Const(Ident(n), Any, ArrowFunc(params, TypePredicate(p, t), _, _)) if n ==
-        name => {
-        let ps : Array[@ast.TsType] = []
-        for _ in params {
-          ps.push(Any)
-        }
-        return Some(Func(ps, TypePredicate(p, t)))
-      }
+        name =>
+        return Some(Func(guard_param_slots(params), TypePredicate(p, t)))
       // `export const isUnion = makeGuard("Union")` — see
       // `@checker.factory_guard_predicate`.
       Const(Ident(n), Any, init) if n == name =>
         match @checker.factory_guard_predicate(module_, init) {
-          Some((params, p, t)) => {
-            let ps : Array[@ast.TsType] = []
-            for _ in params {
-              ps.push(Any)
-            }
-            return Some(Func(ps, TypePredicate(p, t)))
-          }
+          Some((params, p, t)) =>
+            return Some(Func(guard_param_slots(params), TypePredicate(p, t)))
           None => ()
         }
       _ => ()
     }
   }
   None
+}
+
+///|
+/// The parameter slots of a guard read as a value: each one `any`, and an
+/// optional or defaulted one `any | undefined`, the spelling the arity rule
+/// reads as omittable (a bare `any` reads as required). excalidraw's
+/// `isBindingElement = <T>(element?: T | null, includeLocked = true): element
+/// is … =>` was "expected 2 argument(s), got 1" at every one-argument call.
+fn guard_param_slots(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
+  params.map(fn(param) {
+    if param.is_rest {
+      @ast.TsType::Rest(Array(Any))
+    } else if param.is_optional || param.default is Some(_) {
+      @ast.TsType::Union([Any, Undefined])
+    } else {
+      @ast.TsType::Any
+    }
+  })
 }
 
 ///|
