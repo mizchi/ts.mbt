@@ -3104,6 +3104,81 @@ fn overload_param_at(params : Array[@ast.TsType], i : Int32) -> @ast.TsType {
 }
 
 ///|
+/// A trailing rest parameter typed as a tuple is that many discrete
+/// parameters, so overload selection reads it as them. With
+/// `m(...xs: [string, number]): string; m(x: number): number`, `b.m(1)`
+/// takes the second member, while the slot kept as `Rest(Tuple(…))` fit one
+/// argument and read it as `any`, so the first member won. An optional slot
+/// (`[string, number?]`) is stored as `number | undefined`, which
+/// `required_arity_from_types` already reads as omittable. A rest element
+/// that ends the tuple is a trailing rest once expanded. One in the middle
+/// (`[string, ...number[], boolean]`) is expanded for the call's argument
+/// count `n_args`: the positions before it, as many copies of its element as
+/// the count leaves room for, then the positions after it. A call too short
+/// for the elements on both sides gets no copies, so the required trailing
+/// `boolean` still rejects `m("a")`; reading the suffix as part of a rest of
+/// `any` selected that member.
+fn expand_tuple_rest_params(
+  params : Array[@ast.TsType],
+  n_args : Int32,
+) -> Array[@ast.TsType] {
+  guard params.last() is Some(Rest(Tuple(elems))) else { return params }
+  let out : Array[@ast.TsType] = []
+  for i in 0..<(params.length() - 1) {
+    out.push(params[i])
+  }
+  let mut middle = -1
+  for i, e in elems {
+    if e is Rest(_) && i != elems.length() - 1 {
+      middle = i
+      break
+    }
+  }
+  if middle < 0 {
+    for e in elems {
+      out.push(e)
+    }
+    // `[string, ...[number, boolean]]` ends in another tuple rest.
+    return expand_tuple_rest_params(out, n_args)
+  }
+  let elem = match elems[middle] {
+    Rest(Array(e)) | Rest(Applied("Array" | "ReadonlyArray", [e])) => e
+    _ => @ast.TsType::Any
+  }
+  let fixed = out.length() + elems.length() - 1
+  for i in 0..<middle {
+    out.push(elems[i])
+  }
+  for _ in 0..<(n_args - fixed) {
+    out.push(elem)
+  }
+  for i in (middle + 1)..<elems.length() {
+    out.push(elems[i])
+  }
+  out
+}
+
+///|
+/// Whether overload selection takes an argument of type `arg` for a
+/// parameter of type `expected`. Both sides are resolved: an alias
+/// parameter (`type Flag = boolean`) against a `boolean` argument, and an
+/// argument typed by the alias (`flag: Flag`) against the resolved
+/// parameter, since `is_assignable_to` is resolver-free and reads
+/// `Named("Flag")` against `boolean` as a mismatch. The unresolved pair is
+/// asked first, which is the comparison this used to make.
+fn Resolver::overload_arg_fits(
+  self : Resolver,
+  arg : @ast.TsType,
+  expected : @ast.TsType,
+) -> Bool {
+  if is_assignable_to(arg, expected) {
+    return true
+  }
+  let e = self.unwrap(expected)
+  is_assignable_to(arg, e) || is_assignable_to(self.unwrap(arg), e)
+}
+
+///|
 /// Minimum argument count derivable from parameter *types* alone (no rich
 /// `TsParam` metadata). A trailing parameter whose type accepts `undefined`
 /// (the `x?: T` -> `T | undefined` widening) is optional and omittable.
@@ -7705,6 +7780,65 @@ fn method_declaration_count(
 }
 
 ///|
+/// The argument types overload selection compares, one per argument. A
+/// spread of a fixed-length tuple (`b.m(...xs)` with `xs: [string, number]`)
+/// is that many arguments, which is what a tuple-typed rest parameter
+/// expands to (`expand_tuple_rest_params`), so the two line up. Any other
+/// spread stays one entry, as before.
+fn overload_arg_types(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for a in args {
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(infer_expr(env, resolver, inner)) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for e in elems {
+              out.push(e)
+            }
+          _ => out.push(infer_expr(env, resolver, a))
+        }
+      _ => out.push(infer_expr(env, resolver, a))
+    }
+  }
+  out
+}
+
+///|
+/// The same expansion over the argument EXPRESSIONS, for solving the
+/// selected member's type parameters: `c.m(...xs)` with `xs: [string,
+/// number]` is read as `c.m(xs[0], xs[1])`, so `m<T>(value: T, count:
+/// number): T` binds `T` to `string` rather than to the whole tuple. Any
+/// other spread is kept whole, as the binding pass reads it.
+fn expand_tuple_spread_args(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsExpr] {
+  if !args.iter().any(fn(a) { a is Spread(_) }) {
+    return args
+  }
+  let out : Array[@ast.TsExpr] = []
+  for a in args {
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(infer_expr(env, resolver, inner)) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for i in 0..<elems.length() {
+              out.push(IndexAccess(inner, NumberLit(i.to_double())))
+            }
+          _ => out.push(a)
+        }
+      _ => out.push(a)
+    }
+  }
+  out
+}
+
+///|
 fn Resolver::resolve_method_overload(
   self : Resolver,
   recv : @ast.TsType,
@@ -7731,6 +7865,7 @@ fn Resolver::resolve_method_overload(
   }
   for c in candidates {
     let (params, ret) = c
+    let params = expand_tuple_rest_params(params, arg_types.length())
     // The argument count has to fit the member's arity, not equal its
     // parameter count: redi's `get<T>(id, lookUp?)` is called as
     // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
@@ -7746,9 +7881,7 @@ fn Resolver::resolve_method_overload(
       } else {
         substitute_params(expected, erase)
       }
-      // An alias parameter (`type Flag = boolean`) is resolved first, as
-      // `overload_param_accepts` does for a free function.
-      if !is_assignable_to(arg_types[i], self.unwrap(expected)) {
+      if !self.overload_arg_fits(arg_types[i], expected) {
         ok = false
         break
       }
@@ -7770,10 +7903,13 @@ fn Resolver::resolve_method_overload(
       let binders = erase.keys().collect()
       let solved : Map[String, @ast.TsType] = Map([])
       for i in 0..<arg_types.length() {
+        // From the RESOLVED argument: `a: N` with `type N = number[]` gives
+        // `T` nothing to bind from as `Named("N")`, so `T` stayed `any` and
+        // `m<T>(a: T[], b: T[])` accepted a `number[]` and a `string[]`.
         infer_param_bindings(
           binders,
           overload_param_at(params, i),
-          widen_literal_deep(arg_types[i]),
+          widen_literal_deep(self.unwrap(arg_types[i])),
           solved,
           false,
         )
@@ -7784,7 +7920,7 @@ fn Resolver::resolve_method_overload(
       }
       for i in 0..<arg_types.length() {
         let expected = substitute_params(overload_param_at(params, i), inst)
-        if !is_assignable_to(arg_types[i], self.unwrap(expected)) {
+        if !self.overload_arg_fits(arg_types[i], expected) {
           ok = false
           break
         }
@@ -12637,16 +12773,19 @@ fn infer_expr_inner(
         // propagation, which sees this same node.
         PropAccess(recv, meth) | OptionalChain(PropAccess(recv, meth)) => {
           let recv_ty = infer_expr(env, resolver, recv)
-          let arg_types : Array[@ast.TsType] = []
-          for a in args {
-            arg_types.push(infer_expr(env, resolver, a))
-          }
+          let arg_types = overload_arg_types(env, resolver, args)
           let pruned = prune_nullish(resolver, recv_ty)
           match resolver.resolve_method_overload(pruned, meth, arg_types) {
             Some((params, ret)) =>
               return substitute_this_type(
                 instantiate_method_return(
-                  env, resolver, pruned, meth, params, args, ret,
+                  env,
+                  resolver,
+                  pruned,
+                  meth,
+                  params,
+                  expand_tuple_spread_args(env, resolver, args),
+                  ret,
                 ),
                 recv_ty,
               )
@@ -12956,15 +13095,18 @@ fn infer_expr_inner(
       // `lookup_method_sig` below only sees the first overload, so try the
       // full set first.
       let pruned_recv = prune_nullish(resolver, recv_ty)
-      let arg_types : Array[@ast.TsType] = []
-      for a in args {
-        arg_types.push(infer_expr(env, resolver, a))
-      }
+      let arg_types = overload_arg_types(env, resolver, args)
       match resolver.resolve_method_overload(pruned_recv, meth, arg_types) {
         Some((params, ret)) =>
           return substitute_this_type(
             instantiate_method_return(
-              env, resolver, pruned_recv, meth, params, args, ret,
+              env,
+              resolver,
+              pruned_recv,
+              meth,
+              params,
+              expand_tuple_spread_args(env, resolver, args),
+              ret,
             ),
             recv_ty,
           )
