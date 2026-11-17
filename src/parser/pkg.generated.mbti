@@ -247,6 +247,7 @@ pub struct Parser {
   mut current_class_name : String
   readonly_literal_members : Array[String]
   unannotated_return_members : Array[String]
+  accessor_member_visibility : Array[String]
   protocol_return_names : Array[String]
   protocol_returns_by_class : Map[String, Array[String]]
   private_decl_counts : Map[String, Int32]

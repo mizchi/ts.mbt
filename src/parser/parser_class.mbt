@@ -3041,6 +3041,13 @@ fn Parser::parse_class_body(
       if is_abstract_member {
         abstract_members.push(method_name)
       }
+      match accessor_kind {
+        Some(kind) =>
+          self.accessor_member_visibility.push(
+            kind + ":" + visibility + ":" + method_name,
+          )
+        None => ()
+      }
     }
     // TS4112/4113/4114 support: which members carried an `override`
     // modifier (checked against the base chain, and -- under
@@ -3970,6 +3977,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let optional_names_start = self.optional_member_names.length()
   let readonly_literal_start = self.readonly_literal_members.length()
   let unann_return_start = self.unannotated_return_members.length()
+  let accessor_vis_start = self.accessor_member_visibility.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
@@ -4036,6 +4044,12 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   while self.unannotated_return_members.length() > unann_return_start {
     match self.unannotated_return_members.pop() {
       Some(n) => expr_class_sentinels.push("<unannotated-return:" + n + ">")
+      None => ()
+    }
+  }
+  while self.accessor_member_visibility.length() > accessor_vis_start {
+    match self.accessor_member_visibility.pop() {
+      Some(n) => expr_class_sentinels.push("<accessor-vis:" + n + ">")
       None => ()
     }
   }
@@ -4833,6 +4847,7 @@ fn Parser::parse_class_decl_with_abstract(
   let optional_names_start = self.optional_member_names.length()
   let readonly_literal_start = self.readonly_literal_members.length()
   let unann_return_start = self.unannotated_return_members.length()
+  let accessor_vis_start = self.accessor_member_visibility.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
   let (
@@ -4896,6 +4911,13 @@ fn Parser::parse_class_decl_with_abstract(
         runtime_decl.duplicate_member_names.push(
           "<unannotated-return:" + n + ">",
         )
+      None => ()
+    }
+  }
+  while self.accessor_member_visibility.length() > accessor_vis_start {
+    match self.accessor_member_visibility.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push("<accessor-vis:" + n + ">")
       None => ()
     }
   }

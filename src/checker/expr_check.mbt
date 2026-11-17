@@ -8684,6 +8684,7 @@ fn check_member_accessibility(
   ctx : CheckCtx,
   recv : @ast.TsExpr,
   prop : String,
+  access : MemberAccess,
 ) -> Unit {
   match recv {
     Var("this") | Var("super") => return
@@ -8700,7 +8701,13 @@ fn check_member_accessibility(
         _ => return
       }
   }
-  check_class_member_accessibility(ctx, class_name, prop, "access `.\{prop}`")
+  check_class_member_accessibility(
+    ctx,
+    class_name,
+    prop,
+    "access `.\{prop}`",
+    access,
+  )
 }
 
 ///|
@@ -8766,6 +8773,7 @@ fn check_class_member_accessibility(
   class_name : String,
   prop : String,
   path : String,
+  access : MemberAccess,
 ) -> Unit {
   // An INTERFACE that extends a class inherits the class's members, and a
   // `private` / `protected` one stays private to the declaring CLASS:
@@ -8794,6 +8802,35 @@ fn check_class_member_accessibility(
   if !(is_private || is_protected) {
     return
   }
+  // An accessor pair carries one visibility per half, and the lists above
+  // hold the name whichever half was restricted. A read reaches the getter
+  // and a write the setter, so `get left()` beside `protected set
+  // left(v)` is readable anywhere while `b.left = 1` and `b.left += 1` are
+  // TS2445 (probed). univer's `BaseObject` writes every geometry member
+  // that way. tsc requires the getter to be at least as accessible as the
+  // setter (TS2808), so this can only ever widen a read.
+  let half = match access {
+    Read => accessor_half_visibility(decl, prop, false)
+    Write => accessor_half_visibility(decl, prop, true)
+    // `b.left += 1` reads and then writes. The read walk of the target has
+    // already applied the getter's visibility, so this pass reports only
+    // when the setter is stricter, which is the one case that read let
+    // through. Without it a plain `protected x` would be reported twice.
+    CompoundWrite => {
+      let set_half = accessor_half_visibility(decl, prop, true)
+      let get_half = accessor_half_visibility(decl, prop, false)
+      match (set_half, get_half) {
+        (Some(s), Some(g)) if s != g => set_half
+        _ => return
+      }
+    }
+  }
+  let is_private = match half {
+    Some("public") => return
+    Some("protected") => false
+    Some("private") => true
+    _ => is_private
+  }
   let enclosing = current_enclosing_class(ctx.path_prefix)
   if is_private {
     if enclosing != Some(class_name) {
@@ -8816,6 +8853,41 @@ fn check_class_member_accessibility(
       )
     }
   }
+}
+
+///|
+/// How a member is reached, for the accessibility check: an accessor
+/// pair's two halves can carry different visibilities.
+priv enum MemberAccess {
+  Read
+  Write
+  CompoundWrite
+}
+
+///|
+/// The visibility the parser recorded for the getter (a read) or the
+/// setter (a write) named `prop`, from its `<accessor-vis:KIND:VIS:NAME>`
+/// sentinels. `None` when `prop` has no accessor of that kind: a field, a
+/// method, or the other half only.
+fn accessor_half_visibility(
+  decl : @ast.TsClassDecl,
+  prop : String,
+  is_write : Bool,
+) -> String? {
+  let prefix = if is_write {
+    "<accessor-vis:set:"
+  } else {
+    "<accessor-vis:get:"
+  }
+  let suffix = ":" + prop + ">"
+  for d in decl.duplicate_member_names {
+    if d.has_prefix(prefix) &&
+      d.has_suffix(suffix) &&
+      d.length() > prefix.length() + suffix.length() {
+      return Some(d[prefix.length():d.length() - suffix.length()].to_owned())
+    }
+  }
+  None
 }
 
 ///|
@@ -25100,6 +25172,7 @@ fn bind_object_pattern(
           cn,
           prop.key,
           "destructure `\{prop.key}`",
+          Read,
         )
       _ => ()
     }
@@ -32096,7 +32169,7 @@ fn check_call_args_in_expr(
     }
     MethodCall(receiver, meth, args) => {
       check_private_name_access(ctx, meth)
-      check_member_accessibility(env, ctx, receiver, meth)
+      check_member_accessibility(env, ctx, receiver, meth, Read)
       check_super_abstract_access(ctx, receiver, meth)
       // TS2348: `Namespace.Klass()` — a class reached through its
       // namespace and called without `new` (forgottenNew). The receiver
@@ -33258,7 +33331,7 @@ fn check_call_args_in_expr(
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
       check_private_name_access(ctx, prop)
-      check_member_accessibility(env, ctx, recv, prop)
+      check_member_accessibility(env, ctx, recv, prop, Read)
       check_super_abstract_access(ctx, recv, prop)
       check_super_field_access(ctx, recv, prop)
       check_namespace_or_enum_member_access(env, ctx, recv, prop)
@@ -33781,6 +33854,11 @@ fn check_call_args_in_expr(
       }
       check_call_args_in_expr(env, target, ctx)
       check_call_args_in_expr(env, v, ctx)
+      match target {
+        PropAccess(recv, prop) =>
+          check_member_accessibility(env, ctx, recv, prop, CompoundWrite)
+        _ => ()
+      }
       // TS2364: the left-hand side of an assignment must be a variable or a
       // property access. A literal LHS (`1 >>= 2`) is never assignable. Only
       // literals are flagged — every reference-shaped target (`Var`, member /
@@ -34108,7 +34186,7 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, v, ctx)
       check_write_through_empty_literal(env, ctx, recv, prop)
       check_private_name_access(ctx, prop)
-      check_member_accessibility(env, ctx, recv, prop)
+      check_member_accessibility(env, ctx, recv, prop, Write)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       if !prop.has_prefix("__private_brand__") &&
         !readonly_write_in_own_constructor(ctx, recv, recv_ty, prop) &&
@@ -45732,6 +45810,10 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
       } else if name.has_prefix("<private-decl:") {
         // Marker, not an error: a private member declaration keyed by its
         // class brand. Consumed by `private_brand_declared_on_receiver`.
+        ()
+      } else if name.has_prefix("<accessor-vis:") {
+        // Marker, not an error: an accessor half's own visibility.
+        // Consumed by `accessor_half_visibility`.
         ()
       } else if name.has_prefix("<unannotated-return:") {
         // Marker, not an error: a bodied instance method with no return

@@ -594,3 +594,23 @@ test "a recursive array alias relates to its twin" {
     ["top-level > binding `bad` init: expected `string[]` but got `A[]`"],
   )
 }
+
+///|
+/// An accessor pair carries one visibility per half: a read reaches the
+/// getter and a write the setter. univer's `BaseObject` declares `get
+/// left()` beside `protected set left(v)`, and every outside read of
+/// `object.left` was reported. Writing it outside the class is still an
+/// error, and so is `+=`, which reads and then writes. A plain `protected`
+/// field under `+=` is reported once, not once per half.
+test "a public getter beside a protected setter is readable" {
+  assert_eq(
+    issue_lines(
+      "class B {\n  private _l = 0;\n  protected x = 0;\n  get left(): number { return this._l }\n  protected set left(v: number) { this._l = v }\n}\nclass D extends B { m() { this.left = 2; this.left += 1; return this.left; } }\ndeclare const b: B;\nfunction okRead() { const n: number = b.left; }\nfunction okDestructure() { const { left } = b; }\nfunction badWrite() { b.left = 1; }\nfunction badCompound() { b.left += 1; }\nfunction badField() { b.x += 1; }",
+    ),
+    [
+      "function badWrite > access `.left`: property `left` is protected and only accessible within class `B` and its subclasses",
+      "function badCompound > access `.left`: property `left` is protected and only accessible within class `B` and its subclasses",
+      "function badField > access `.x`: property `x` is protected and only accessible within class `B` and its subclasses",
+    ],
+  )
+}
