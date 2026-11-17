@@ -920,7 +920,11 @@ test "an object member fits an interface member typed as a union" {
     ),
     [
       "top-level > binding `badWrong` init: expected `P` but got `{ name: string; scope: { read: string; edit: number } }`",
+    ],
+  )
+}
 
+///|
 /// The findings from the review of #300. An own property hides an
 /// inherited overload set. A function value in a conditional entry, or a
 /// conditional initializer, is checked in context only. An alias union
