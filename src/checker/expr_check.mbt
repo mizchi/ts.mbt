@@ -3055,6 +3055,56 @@ fn overload_param_at(params : Array[@ast.TsType], i : Int32) -> @ast.TsType {
 }
 
 ///|
+/// A trailing rest parameter typed as a tuple is that many discrete
+/// parameters, so overload selection reads it as them. With
+/// `m(...xs: [string, number]): string; m(x: number): number`, `b.m(1)`
+/// takes the second member, while the slot kept as `Rest(Tuple(…))` fit one
+/// argument and read it as `any`, so the first member won. An optional slot
+/// (`[string, number?]`) is stored as `number | undefined`, which
+/// `required_arity_from_types` already reads as omittable. A rest element
+/// that ends the tuple is a trailing rest once expanded. One in the middle
+/// (`[string, ...number[], boolean]`) keeps only the positions before it,
+/// which are fixed whatever the count, followed by a rest of `any`: the
+/// elements after it sit at a position the argument count decides, so they
+/// are not modelled, which can only keep a member selectable.
+fn expand_tuple_rest_params(params : Array[@ast.TsType]) -> Array[@ast.TsType] {
+  guard params.last() is Some(Rest(Tuple(elems))) else { return params }
+  let out : Array[@ast.TsType] = []
+  for i in 0..<(params.length() - 1) {
+    out.push(params[i])
+  }
+  for i, e in elems {
+    if e is Rest(_) && i != elems.length() - 1 {
+      out.push(@ast.TsType::Rest(@ast.TsType::Array(@ast.TsType::Any)))
+      return out
+    }
+    out.push(e)
+  }
+  // `[string, ...[number, boolean]]` ends in another tuple rest.
+  expand_tuple_rest_params(out)
+}
+
+///|
+/// Whether overload selection takes an argument of type `arg` for a
+/// parameter of type `expected`. Both sides are resolved: an alias
+/// parameter (`type Flag = boolean`) against a `boolean` argument, and an
+/// argument typed by the alias (`flag: Flag`) against the resolved
+/// parameter, since `is_assignable_to` is resolver-free and reads
+/// `Named("Flag")` against `boolean` as a mismatch. The unresolved pair is
+/// asked first, which is the comparison this used to make.
+fn Resolver::overload_arg_fits(
+  self : Resolver,
+  arg : @ast.TsType,
+  expected : @ast.TsType,
+) -> Bool {
+  if is_assignable_to(arg, expected) {
+    return true
+  }
+  let e = self.unwrap(expected)
+  is_assignable_to(arg, e) || is_assignable_to(self.unwrap(arg), e)
+}
+
+///|
 /// Minimum argument count derivable from parameter *types* alone (no rich
 /// `TsParam` metadata). A trailing parameter whose type accepts `undefined`
 /// (the `x?: T` -> `T | undefined` widening) is optional and omittable.
@@ -7682,6 +7732,7 @@ fn Resolver::resolve_method_overload(
   }
   for c in candidates {
     let (params, ret) = c
+    let params = expand_tuple_rest_params(params)
     // The argument count has to fit the member's arity, not equal its
     // parameter count: redi's `get<T>(id, lookUp?)` is called as
     // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
@@ -7697,9 +7748,7 @@ fn Resolver::resolve_method_overload(
       } else {
         substitute_params(expected, erase)
       }
-      // An alias parameter (`type Flag = boolean`) is resolved first, as
-      // `overload_param_accepts` does for a free function.
-      if !is_assignable_to(arg_types[i], self.unwrap(expected)) {
+      if !self.overload_arg_fits(arg_types[i], expected) {
         ok = false
         break
       }
@@ -7735,7 +7784,7 @@ fn Resolver::resolve_method_overload(
       }
       for i in 0..<arg_types.length() {
         let expected = substitute_params(overload_param_at(params, i), inst)
-        if !is_assignable_to(arg_types[i], self.unwrap(expected)) {
+        if !self.overload_arg_fits(arg_types[i], expected) {
           ok = false
           break
         }

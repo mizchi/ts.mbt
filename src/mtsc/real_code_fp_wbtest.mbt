@@ -909,3 +909,24 @@ test "review of #300: property hides a base set, conditional entries, void stati
     ],
   )
 }
+
+///|
+/// The second round of the review of #300. A tuple-typed rest parameter is
+/// that many discrete parameters in overload selection, optional slots
+/// included, so `b.m(1)` takes `m(x: number)` over
+/// `m(...xs: [string, number])`. And an argument typed by an alias
+/// (`flag: Flag`) fits a parameter of that alias, or of what it resolves to,
+/// so `f.m(flag)` takes `m(x: Flag)` over `m(x: any)`. The positions before
+/// a rest in the middle of the tuple are fixed, so they still reject.
+test "review of #300 round 3: tuple rest parameter, alias-typed argument" {
+  assert_eq(
+    issue_lines(
+      "declare class B { m(...xs: [string, number]): string; m(x: number): number; }\nfunction okTupleSecond(b: B) { const n: number = b.m(1); return n; }\nfunction okTupleFirst(b: B) { const s: string = b.m(\"a\", 2); return s; }\nfunction badTupleFirst(b: B) { const n: number = b.m(\"a\", 2); return n; }\ndeclare class O { m(...xs: [string, number?]): string; m(x: number): number; }\nfunction okOptionalSlot(o: O) { const s: string = o.m(\"a\"); return s; }\nfunction badOptionalSlot(o: O) { const n: number = o.m(\"a\"); return n; }\ntype Flag = boolean;\ndeclare class F { m(x: Flag): string; m(x: any): number; }\nfunction okAliasArg(f: F, flag: Flag) { const s: string = f.m(flag); return s; }\nfunction badAliasArg(f: F, flag: Flag) { const n: number = f.m(flag); return n; }\ntype Pair = { k: string };\ndeclare class P { m(x: Pair): string; m(x: any): number; }\nfunction okObjAliasArg(p: P, pair: Pair) { const s: string = p.m(pair); return s; }\ndeclare class M { m(...xs: [string, ...number[], boolean]): string; m(x: number): number; }\nfunction okMiddleRest(c: M) { const n: number = c.m(1); return n; }",
+    ),
+    [
+      "function badTupleFirst > binding `n` init: expected `number` but got `string`",
+      "function badOptionalSlot > binding `n` init: expected `number` but got `string`",
+      "function badAliasArg > binding `n` init: expected `number` but got `string`",
+    ],
+  )
+}

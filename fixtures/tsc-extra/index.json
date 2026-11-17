@@ -2077,6 +2077,148 @@
       ]
     },
     {
+      "case": "inference/methodOverloadSelectionByParameterShape.ts",
+      "area": "inference",
+      "name": "methodOverloadSelectionByParameterShape",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/methodOverloadSelectionByParameterShape.errors.txt",
+      "claims": [
+        {
+          "name": "okTupleRestSelectsSecond",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "okTupleRestSelectsFirst",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okOptionalSlotOmitted",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "okOptionalSlotGiven",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okArrayRestInTupleEmpty",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "okArrayRestInTupleMany",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "okArrayRestInTupleSecond",
+          "kind": "ok",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "okNestedTupleRestFirst",
+          "kind": "ok",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "okNestedTupleRestSecond",
+          "kind": "ok",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "okMiddleRestPrefixRejects",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "okAliasArgument",
+          "kind": "ok",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "okAliasArgumentResolvedParam",
+          "kind": "ok",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "okObjectAliasArgument",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 35
+        },
+        {
+          "name": "badTupleRestSelectsFirst",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "badOptionalSlotOmitted",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 37
+        },
+        {
+          "name": "badArrayRestInTupleSecond",
+          "kind": "bad",
+          "fromLine": 38,
+          "toLine": 38
+        },
+        {
+          "name": "badNestedTupleRestSecond",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "badMiddleRestPrefixRejects",
+          "kind": "bad",
+          "fromLine": 40,
+          "toLine": 40
+        },
+        {
+          "name": "badAliasArgument",
+          "kind": "bad",
+          "fromLine": 41,
+          "toLine": 41
+        },
+        {
+          "name": "badAliasArgumentResolvedParam",
+          "kind": "bad",
+          "fromLine": 42,
+          "toLine": 42
+        },
+        {
+          "name": "badObjectAliasArgument",
+          "kind": "bad",
+          "fromLine": 43,
+          "toLine": 44
+        }
+      ]
+    },
+    {
       "case": "inference/optionalCallbackContextAndGenericInterfaceMethods.ts",
       "area": "inference",
       "name": "optionalCallbackContextAndGenericInterfaceMethods",
