@@ -15,7 +15,7 @@
 // member's type parameter is solved from the resolved argument, so
 // `m<T>(a: T[], b: T[])` rejects a `number[]` beside a `string[]` even when
 // both arrive through aliases, and a tuple spread binds `T` element by
-// element.
+// element, for a lone generic method as for an overload set.
 
 declare class TupleRest { m(...xs: [string, number]): string; m(x: number): number; }
 declare class OptionalSlot { m(...xs: [string, number?]): string; m(x: number): number; }
@@ -38,6 +38,7 @@ declare const moreNums: Nums;
 declare const strs: Strs;
 declare class MiddleRestSuffix { m(...xs: [string, ...number[], boolean]): string; m(x: string): number; }
 declare class GenericFromSpread { m<T>(value: T, count: number): T; m(...values: any[]): string; }
+declare class LoneGeneric { m<T>(value: T, count: number): T; }
 
 export function okTupleRestSelectsSecond(b: TupleRest) { const n: number = b.m(1); return n; }
 export function okTupleRestSelectsFirst(b: TupleRest) { const s: string = b.m("a", 2); return s; }
@@ -61,6 +62,7 @@ export function okMiddleRestSuffixMissing(b: MiddleRestSuffix) { const n: number
 export function okMiddleRestSuffixGiven(b: MiddleRestSuffix) { const s: string = b.m("a", true); return s; }
 export function okMiddleRestFilled(b: MiddleRestSuffix) { const s: string = b.m("a", 1, 2, true); return s; }
 export function okGenericFromTupleSpread(c: GenericFromSpread, xs: [string, number]): string { return c.m(...xs); }
+export function okLoneGenericFromTupleSpread(c: LoneGeneric, xs: [string, number]): string { return c.m(...xs); }
 
 export function badTupleRestSelectsFirst(b: TupleRest) { const n: number = b.m("a", 2); return n; }
 export function badOptionalSlotOmitted(o: OptionalSlot) { const n: number = o.m("a"); return n; }
@@ -75,3 +77,11 @@ export function badAliasPairRejectsGeneric(g: GenericFirst) { const s: string = 
 export function badAliasPairSelectsGeneric(g: GenericFirst) { const n: number = g.m(nums, moreNums); return n; }
 export function badMiddleRestSuffixMissing(b: MiddleRestSuffix) { const s: string = b.m("a"); return s; }
 export function badGenericFromTupleSpread(c: GenericFromSpread, xs: [string, number]): number { return c.m(...xs); }
+export function badLoneGenericFromTupleSpread(c: LoneGeneric, xs: [string, number]): number { return c.m(...xs); }
+// A lone generic method whose rest parameter is a tuple: the formal is
+// expanded like the spread argument, positionally too.
+interface TupleRestGeneric { first<T>(...args: [T, number]): T }
+export function okTupleRestFromSpread(a: TupleRestGeneric, xs: [string, number]) { const s: string = a.first(...xs); return s; }
+export function okTupleRestPositional(a: TupleRestGeneric) { const s: string = a.first("a", 1); return s; }
+export function badTupleRestFromSpread(a: TupleRestGeneric, xs: [string, number]) { const n: number = a.first(...xs); return n; }
+export function badTupleRestPositional(a: TupleRestGeneric) { const n: number = a.first("a", 1); return n; }

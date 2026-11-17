@@ -1,0 +1,49 @@
+unionMemberOfInterfaceTarget.ts(19,14): error TS2322: Type '{ name: string; scope: { read: string; edit: number; }; }' is not assignable to type 'P'.
+  The types of 'scope.read' are incompatible between these types.
+    Type 'string' is not assignable to type 'number'.
+unionMemberOfInterfaceTarget.ts(20,14): error TS2322: Type '{ name: string; scope: { read: number; }; }' is not assignable to type 'P'.
+  Types of property 'scope' are incompatible.
+    Property 'edit' is missing in type '{ read: number; }' but required in type 'S'.
+unionMemberOfInterfaceTarget.ts(21,14): error TS2322: Type '{ name: string; scope: { read: number; edit: number; } | null; }' is not assignable to type 'P'.
+  Types of property 'scope' are incompatible.
+    Type '{ read: number; edit: number; } | null' is not assignable to type 'S | undefined'.
+      Type 'null' is not assignable to type 'S | undefined'.
+
+
+==== unionMemberOfInterfaceTarget.ts (3 errors) ====
+    // An object type whose member is an object, against an interface whose
+    // member is `S | undefined` (or `S | null`), relates member by member: the
+    // source member has to fit some part of the target's union, and each part of
+    // a union source member has to fit. univer's permission payloads write
+    // `scope: { read, edit }` into `scope: IObjScope | undefined`. A wrong member
+    // type, a missing member, and `null` into `undefined` are still errors.
+    
+    interface S { read: number; edit: number }
+    interface P { scope: S | undefined; name: string }
+    interface PN { scope: S | null; name: string }
+    declare const good: { name: string; scope: { read: number; edit: number } };
+    declare const wrongType: { name: string; scope: { read: string; edit: number } };
+    declare const missing: { name: string; scope: { read: number } };
+    declare const maybe: { name: string; scope: { read: number; edit: number } | undefined };
+    declare const maybeNull: { name: string; scope: { read: number; edit: number } | null };
+    export const okGood: P | undefined = good;
+    export const okMaybe: P = maybe;
+    export const okNullTarget: PN = maybeNull;
+    export const badWrongType: P | undefined = wrongType;
+                 ~~~~~~~~~~~~
+!!! error TS2322: Type '{ name: string; scope: { read: string; edit: number; }; }' is not assignable to type 'P'.
+!!! error TS2322:   The types of 'scope.read' are incompatible between these types.
+!!! error TS2322:     Type 'string' is not assignable to type 'number'.
+    export const badMissing: P = missing;
+                 ~~~~~~~~~~
+!!! error TS2322: Type '{ name: string; scope: { read: number; }; }' is not assignable to type 'P'.
+!!! error TS2322:   Types of property 'scope' are incompatible.
+!!! error TS2322:     Property 'edit' is missing in type '{ read: number; }' but required in type 'S'.
+!!! related TS2728 unionMemberOfInterfaceTarget.ts:8:29: 'edit' is declared here.
+    export const badNullIntoUndefined: P = maybeNull;
+                 ~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ name: string; scope: { read: number; edit: number; } | null; }' is not assignable to type 'P'.
+!!! error TS2322:   Types of property 'scope' are incompatible.
+!!! error TS2322:     Type '{ read: number; edit: number; } | null' is not assignable to type 'S | undefined'.
+!!! error TS2322:       Type 'null' is not assignable to type 'S | undefined'.
+    

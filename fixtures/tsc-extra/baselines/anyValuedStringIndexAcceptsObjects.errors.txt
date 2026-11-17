@@ -1,0 +1,65 @@
+anyValuedStringIndexAcceptsObjects.ts(27,14): error TS2322: Type 'S' is not assignable to type 'UnknownIdx'.
+  Index signature for type 'string' is missing in type 'S'.
+anyValuedStringIndexAcceptsObjects.ts(28,14): error TS2322: Type 'S' is not assignable to type 'NumberKeyAny'.
+  Index signature for type 'number' is missing in type 'S'.
+anyValuedStringIndexAcceptsObjects.ts(29,14): error TS2322: Type 'Req' is not assignable to type 'StringIdx'.
+  Index signature for type 'string' is missing in type 'Req'.
+anyValuedStringIndexAcceptsObjects.ts(30,14): error TS2322: Type 'string' is not assignable to type 'AnyIdx'.
+anyValuedStringIndexAcceptsObjects.ts(31,47): error TS2345: Argument of type 'number' is not assignable to parameter of type 'UnionValueAny'.
+anyValuedStringIndexAcceptsObjects.ts(36,14): error TS2741: Property 'required' is missing in type 'S' but required in type 'Merged'.
+
+
+==== anyValuedStringIndexAcceptsObjects.ts (6 errors) ====
+    // An interface value has no implicit index signature, but a target whose
+    // only index signature takes a `string` key with an `any` value accepts it
+    // anyway, because such a signature asks nothing of the source's properties.
+    // The key may be a union holding `string` (`number | string`) and the value
+    // a union holding `any`. An `unknown` value is not enough, and neither is a
+    // `number` key alone, and a primitive source is still an error.
+    
+    interface S { a?: string; b?: number }
+    interface Req { a: string }
+    interface AnyIdx { [k: string]: any }
+    interface UnionKeyAny { [k: number | string]: any }
+    interface UnionValueAny { [k: string]: UnionValueAny | UnionValueAny[] | any }
+    interface UnknownIdx { [k: string]: unknown }
+    interface NumberKeyAny { [k: number]: any }
+    interface StringIdx { [k: string]: string }
+    declare const s: S;
+    declare const req: Req;
+    declare function take(o: UnionValueAny): void;
+    
+    export const okInterfaceToAnyIndex: AnyIdx = s;
+    export const okRequiredMemberToAnyIndex: AnyIdx = req;
+    export const okInterfaceToUnionKey: UnionKeyAny = s;
+    export const okInterfaceToUnionValue: UnionValueAny = s;
+    export function okOrEmptyArgument(x: S | undefined) { take(x || {}); }
+    export const okLiteralToUnknownIndex: UnknownIdx = { a: 1 };
+    
+    export const badInterfaceToUnknownIndex: UnknownIdx = s;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'S' is not assignable to type 'UnknownIdx'.
+!!! error TS2322:   Index signature for type 'string' is missing in type 'S'.
+    export const badInterfaceToNumberKey: NumberKeyAny = s;
+                 ~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'S' is not assignable to type 'NumberKeyAny'.
+!!! error TS2322:   Index signature for type 'number' is missing in type 'S'.
+    export const badInterfaceToStringIndex: StringIdx = req;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'Req' is not assignable to type 'StringIdx'.
+!!! error TS2322:   Index signature for type 'string' is missing in type 'Req'.
+    export const badStringToAnyIndex: AnyIdx = "x";
+                 ~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'AnyIdx'.
+    export function badPrimitiveArgument() { take(1); }
+                                                  ~
+!!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'UnionValueAny'.
+    // A class of the same name merges its members into the interface, so the
+    // interface's own empty member list does not make the target unrestricted.
+    class Merged { required!: number }
+    interface Merged { [k: string]: any }
+    export const badClassHalfOfMergedTarget: Merged = s;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2741: Property 'required' is missing in type 'S' but required in type 'Merged'.
+!!! related TS2728 anyValuedStringIndexAcceptsObjects.ts:34:16: 'required' is declared here.
+    
