@@ -5493,6 +5493,29 @@ product surfaces now.
     has none to read. The `const` spelling (a literal key) is legal, and so
     are an index signature, an array, `any` and a `Record<string, …>`. A
     union source and a type with heritage abstain.
+  - **`fixtures/tsc-extra` is now a dataset, not a contribution queue.**
+    Every cell this batch probed went in as a case: 16 new cases, 60 in all,
+    203 `ok…` / 119 `bad…` claims. `index.json` lists each case's options,
+    codes and claim spans for a runner that does not want to parse the
+    README, and is checked on every run so it cannot drift. With
+    `--upstream DIR` the harness now measures verbatim line overlap with any
+    single upstream case itself (max 0.33 over the coverage cases), where it
+    used to be a one-off claim. Writing the cases found one more defect,
+    which is the point of keeping them: an intersection member read the
+    FIRST constituent's type (`Record<string, number> & { label?: string }`
+    gave `label: number`). The first fix was wrong too, and the case is
+    what showed it: intersecting the answers gives `number & (string |
+    undefined)`, while tsc gives `string | undefined`, because a
+    constituent that DECLARES a member outranks one answering through an
+    index signature. A member declared by several constituents is the
+    narrowest of their types (`string & "line"` is `"line"`, which is how
+    `Base & { type: "line" }` discriminates).
+    They also measured a known gap rather than an argued one: a module-level
+    `let` or arrow `const` read inside a function body has no type there,
+    so a cell written that way is silent (`arrowConstGuardOptionalParameters`
+    declares it). Reviewing the batch added two more cases from what it
+    found: a rest constructor overload beside a non-rest one, and
+    `flat(depth)`.
   - **What is left.** On excalidraw the largest families are a union of
     object literals whose read needs normalization (`{ font: unknown } |
     {}`), DOM member lookups on a narrowed `Element`, and an

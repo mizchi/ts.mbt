@@ -1,7 +1,9 @@
-// `fixtures/tsc-extra` — TypeScript test cases that the upstream suite
-// (microsoft/TypeScript `tsc/testdata/tests/cases/{compiler,conformance}`)
-// does not contain, written while probing tsc for this checker and kept in
-// the upstream harness format so they can be contributed back.
+// `fixtures/tsc-extra` — a dataset of TypeScript checker behaviour that the
+// upstream suite (microsoft/TypeScript `tsc/testdata/tests/cases/
+// {compiler,conformance}`) does not test, for any project reproducing the
+// checker. Written while probing tsc for this one, kept in the upstream
+// harness format so an existing conformance runner can read it, and indexed
+// in `index.json` (see `--update`).
 //
 // Three questions, in this order, because each one is only meaningful once
 // the one before it holds:
@@ -37,11 +39,15 @@
 //                                     [--permissive]
 //
 //   --update      rewrite baselines from the current compiler (and delete
-//                 the baseline of a case tsc now accepts)
+//                 the baseline of a case tsc now accepts), and rewrite
+//                 `index.json`; without it, a stale `index.json` fails
 //   --upstream    a checkout of the upstream `tsc/testdata/tests/cases`;
 //                 every case basename is checked against it as well as
 //                 against the vendored conformance name list, since a case
-//                 that collides with an upstream name cannot be contributed
+//                 that collides with an upstream name is ambiguous beside
+//                 it (upstream baselines are flat); with it, each case's
+//                 verbatim line overlap with any one upstream case is
+//                 measured too
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -60,6 +66,7 @@ const FIX = path.resolve(value("--root") ?? path.join(ROOT, "fixtures", "tsc-ext
 const CASES = path.join(FIX, "cases");
 const BASELINES = path.join(FIX, "baselines");
 const MISSES = path.join(FIX, "mtsc-misses.txt");
+const INDEX = path.join(FIX, "index.json");
 const update = flag("--update");
 const useMtsc = !flag("--no-mtsc");
 const only = value("--only");
@@ -326,6 +333,44 @@ function readMisses() {
 
 // ------------------------------------------------------------------- names
 
+// A line that says something: not blank, not a comment, not punctuation
+// alone. Only these count towards the overlap share.
+function significantLines(text) {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 8 && !l.startsWith("//") && /[A-Za-z0-9]/.test(l));
+}
+
+/**
+ * For each case, the largest share of its significant lines that appear
+ * verbatim in any ONE upstream case. A copy of an upstream test scores near
+ * 1; most cases here score 0. Only with `--upstream`, which names the
+ * checkout to compare against.
+ */
+let upstreamCount = 0;
+function upstreamOverlap(caseFiles) {
+  if (!upstreamDir) return null;
+  const owners = new Map();
+  walk(upstreamDir).forEach((f, id) => {
+    for (const l of new Set(significantLines(fs.readFileSync(f, "utf8")))) {
+      let o = owners.get(l);
+      if (!o) owners.set(l, (o = []));
+      o.push(id);
+    }
+  });
+  upstreamCount = owners.size === 0 ? 0 : walk(upstreamDir).length;
+  const out = new Map();
+  for (const f of caseFiles) {
+    const lines = [...new Set(significantLines(readCase(f).content))];
+    const per = new Map();
+    for (const l of lines) for (const id of owners.get(l) ?? []) per.set(id, (per.get(id) ?? 0) + 1);
+    const best = Math.max(0, ...per.values());
+    out.set(f, lines.length === 0 ? 0 : best / lines.length);
+  }
+  return out;
+}
+
 function upstreamNames() {
   const names = new Set();
   const vendored = path.join(ROOT, "scripts/ts7_baselines/tsgo_ran_set.txt");
@@ -352,6 +397,11 @@ if (useMtsc && !bin) {
 }
 const declaredMisses = readMisses();
 const observedMisses = new Set();
+// One entry per case, in path order: everything a consumer needs to run a
+// case and score an answer without parsing the README or the baselines.
+const index = [];
+const OVERLAP_LIMIT = 0.34;
+const overlap = upstreamOverlap(files);
 const counts = { cases: 0, accepted: 0, rejected: 0, ok: 0, bad: 0, fp: 0, miss: 0 };
 
 for (const file of files) {
@@ -394,6 +444,27 @@ for (const file of files) {
   // 2. self-consistency of ok…/bad… claims against tsc's spans
   const starts = lineStarts(content);
   const decls = claims(content);
+  index.push({
+    case: rel.split(path.sep).join("/"),
+    area: rel.split(path.sep)[0],
+    name: stem,
+    options: directives(fs.readFileSync(file, "utf8")),
+    accepted: diags.length === 0,
+    codes: [...new Set(diags.map((d) => d.code))].sort((a, b) => a - b),
+    baseline: diags.length === 0 ? null : `baselines/${stem}.errors.txt`,
+    // 1-based lines of the compiled content, which is what the baseline's
+    // positions count from (the option header and the blank lines after it
+    // are stripped).
+    claims: decls.map((c) => ({ name: c.name, kind: c.kind, fromLine: c.from + 1, toLine: c.to + 1 })),
+  });
+  // A `feedback/` case is written against the upstream test it questions,
+  // so sharing its lines is the point; it is reported, not failed.
+  if (overlap && index[index.length - 1].area !== "feedback") {
+    const share = overlap.get(file);
+    if (share >= OVERLAP_LIMIT) {
+      failures.push(`${rel}: ${Math.round(share * 100)}% of its lines appear verbatim in one upstream case`);
+    }
+  }
   const tscLines = diags.filter((d) => d.pos !== undefined).map((d) => lineOf(starts, d.pos));
   const inside = (c) => tscLines.filter((l) => l >= c.from && l <= c.to).length;
   for (const c of decls) {
@@ -484,6 +555,24 @@ for (const b of fs.existsSync(BASELINES) ? fs.readdirSync(BASELINES) : []) {
     if (update) fs.rmSync(path.join(BASELINES, b));
     else failures.push(`baselines/${b}: no case of that name`);
   }
+}
+
+if (!only) {
+  const text = `${JSON.stringify({ typescript: ts.version, cases: index }, null, 2)}\n`;
+  const have = fs.existsSync(INDEX) ? fs.readFileSync(INDEX, "utf8") : null;
+  if (update) {
+    if (text !== have) fs.writeFileSync(INDEX, text);
+  } else if (text !== have) {
+    failures.push("index.json: out of date with the cases or the compiler — re-run with --update");
+  }
+}
+if (overlap) {
+  const coverage = index.filter((e) => e.area !== "feedback").map((e) => overlap.get(path.join(CASES, e.case)));
+  notes.push(
+    `upstream overlap against ${upstreamCount} upstream file(s): max ${Math.max(0, ...coverage).toFixed(2)} ` +
+      `over the coverage cases; ${coverage.filter((x) => x === 0).length} of ${coverage.length} share no line ` +
+      "with any upstream case",
+  );
 }
 
 console.log(

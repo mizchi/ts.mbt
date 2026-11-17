@@ -1,0 +1,21 @@
+// @strict: true
+// @target: esnext
+
+// A computed destructuring key of type `string` or `number` reads through an
+// index signature, so a source with none is TS2537. A `let` initialized to a
+// string literal widens to `string`; a `const` keeps the literal and names a
+// member. An index signature, an array, `any` and an object literal with
+// its own computed key all answer.
+
+class C { a = 1 }
+interface I { a: number }
+
+function okLiteralKey() { const o = { a: 1, b: "no" }; const k = "b"; var { [k]: v } = o; }
+function okIndexSignature(r: Record<string, number>) { let k = "b"; var { [k]: v } = r; }
+function okAny(a: any) { let k = "b"; var { [k]: v } = a; }
+function okArrayNumberKey(arr: number[], n: number) { var { [n]: v } = arr; }
+function okLiteralWithComputedKey() { const K = { a: "a" }; const { [K.a]: v } = (() => ({ [K.a]: 1 }))(); }
+function badWidenedStringKey() { const o = { a: 1, b: "no" }; let k = "b"; var { [k]: v } = o; }
+function badNumberKey(n: number) { const o = { a: 1, b: "no" }; var { [n]: v } = o; }
+function badInterface(i: I, k: string) { var { [k]: v } = i; }
+function badClassInstance(k: string) { var { [k]: v } = new C(); }

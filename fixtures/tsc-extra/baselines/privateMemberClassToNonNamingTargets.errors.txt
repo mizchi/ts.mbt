@@ -1,0 +1,52 @@
+privateMemberClassToNonNamingTargets.ts(21,48): error TS2322: Type 'Arr' is not assignable to type '{ q: number; }'.
+  Property 'q' is private in type 'Arr' but not in type '{ q: number; }'.
+privateMemberClassToNonNamingTargets.ts(22,38): error TS2739: Type 'Arr' is missing the following properties from type 'Ref': z, c
+privateMemberClassToNonNamingTargets.ts(23,40): error TS2322: Type 'Arr' is not assignable to type 'Ref | { q: number; }'.
+  Type 'Arr' is missing the following properties from type 'Ref': z, c
+privateMemberClassToNonNamingTargets.ts(24,49): error TS2741: Property 'r' is missing in type 'Other' but required in type 'Base'.
+privateMemberClassToNonNamingTargets.ts(25,90): error TS2322: Type 'Arr | Other' is not assignable to type 'Base'.
+  Property 'r' is missing in type 'Other' but required in type 'Base'.
+
+
+==== privateMemberClassToNonNamingTargets.ts (5 errors) ====
+    // A class with a `private` member is assignable to any target that does not
+    // declare a member of that name: a union of its bases, an object type, an
+    // interface, `Base | undefined`. Only a target naming the private member, or
+    // one the class does not satisfy structurally, rejects it. A union source is
+    // rejected when any member is.
+    
+    class Root { r = 1 }
+    class Base extends Root { private p = 1; b = 2 }
+    class Arr extends Base { private q = 1; a = 3 }
+    class Ref extends Root { private z = 1; c = 4 }
+    class Other { private p = 1; b = 2 }
+    interface IB { b: number }
+    type V = Base | Ref;
+    
+    function okUnionOfBases() { const v: V = new Arr(); }
+    function okObjectType() { const o: { b: number } = new Arr(); }
+    function okInterface() { const i: IB = new Arr(); }
+    function okOptionalBase() { const b: Base | undefined = new Arr(); }
+    function okRoot() { const r: Root = new Arr(); }
+    function okUnionSource(c: boolean) { const x = c ? new Arr() : new Base(); const b: Base = x; }
+    function badTargetNamesPrivateMember() { const o: { q: number } = new Arr(); }
+                                                   ~
+!!! error TS2322: Type 'Arr' is not assignable to type '{ q: number; }'.
+!!! error TS2322:   Property 'q' is private in type 'Arr' but not in type '{ q: number; }'.
+    function badUnrelatedClass() { const r: Ref = new Arr(); }
+                                         ~
+!!! error TS2739: Type 'Arr' is missing the following properties from type 'Ref': z, c
+    function badUnionWithoutAFit() { const t: Ref | { q: number } = new Arr(); }
+                                           ~
+!!! error TS2322: Type 'Arr' is not assignable to type 'Ref | { q: number; }'.
+!!! error TS2322:   Type 'Arr' is missing the following properties from type 'Ref': z, c
+    function badSameShapeOtherDeclaration() { const b: Base = new Other(); }
+                                                    ~
+!!! error TS2741: Property 'r' is missing in type 'Other' but required in type 'Base'.
+!!! related TS2728 privateMemberClassToNonNamingTargets.ts:7:14: 'r' is declared here.
+    function badUnionSourceMember(c: boolean) { const x = c ? new Arr() : new Other(); const b: Base = x; }
+                                                                                             ~
+!!! error TS2322: Type 'Arr | Other' is not assignable to type 'Base'.
+!!! error TS2322:   Property 'r' is missing in type 'Other' but required in type 'Base'.
+!!! related TS2728 privateMemberClassToNonNamingTargets.ts:7:14: 'r' is declared here.
+    
