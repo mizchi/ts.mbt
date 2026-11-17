@@ -574,6 +574,14 @@ test "an import shadows a global of the same name" {
           "/src/imp.ts", "import { shadowed } from \"./other\";\nexport const s: string = shadowed;\nexport const bad: number = shadowed;",
         ),
         ("/src/plain.ts", "export const g: number = shadowed;"),
+        // The module's own declaration shadows the global the same way,
+        // in both spellings, and a function body is where it showed.
+        (
+          "/src/local.ts", "export declare const shadowed: string;\nexport function f(): string { return shadowed }",
+        ),
+        (
+          "/src/local2.ts", "export const shadowed = \"s\";\nexport function g(): string { return shadowed }",
+        ),
       ],
       [("/src/imp.ts", "./other", "/src/other.ts")],
     ),

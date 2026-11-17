@@ -2670,14 +2670,18 @@ fn collect_parsed_graph_issues(
     let (globals, import_diagnostics) = graph_import_globals(
       module_, parsed_modules, edges, skipped_imports, namespace_cache,
     )
-    // An import binds its name in the module's own scope, which a global
-    // never overrides: `import { shadowed } from "./other"` beside a
-    // `declare global { const shadowed: number }` elsewhere is the import.
-    // The ambient entries come last in `globals`, so pushing them for an
-    // imported name would let the global win.
-    let imported : Map[String, Unit] = Map([])
+    // An import or a declaration binds its name in the module's own scope,
+    // which a global never overrides: `import { shadowed } from "./other"`
+    // or `export const shadowed = "s"` beside a `declare global { const
+    // shadowed: number }` elsewhere is the module's own `shadowed`. The
+    // ambient entries come last in `globals`, so pushing them for such a
+    // name would let the global win inside every function body.
+    let own_names : Map[String, Unit] = Map([])
     for name in module_.module_.imported_binding_names {
-      imported[name] = ()
+      own_names[name] = ()
+    }
+    for entry in module_value_bindings(module_.module_) {
+      own_names[entry.0] = ()
     }
     for entry in ambient_globals {
       let name = if entry.0.has_prefix("@value-origin:") {
@@ -2685,7 +2689,7 @@ fn collect_parsed_graph_issues(
       } else {
         entry.0
       }
-      if imported.contains(name) {
+      if own_names.contains(name) {
         continue
       }
       globals.push(entry)
