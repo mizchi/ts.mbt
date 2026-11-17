@@ -752,3 +752,21 @@ test "destructuring reads a narrowed property" {
     ],
   )
 }
+
+///|
+/// A function value takes its parameter types from where it is assigned,
+/// and a guard narrows those: after `isObject(color)` on `string | Color`
+/// the parameter is `Color` (univer's `toColor` in `color-kit.ts`). The
+/// body used to be walked with the parameters as `any` as well, where the
+/// guard narrows to `object`, so `"r" in color` read as `{ r: unknown }`.
+/// The `bad` lines keep a real error under each guard.
+test "a guard narrows a contextually typed parameter, not any" {
+  assert_eq(
+    issue_lines(
+      "interface IRgb { r: number; g: number }\ninterface IHsl { h: number; l: number }\ntype Color = IRgb | IHsl;\nconst isObject = (value: unknown): value is object => typeof value === \"object\" && value !== null;\ntype ToNumber = (color: string | Color) => number;\nconst okArrow: ToNumber = (color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; };\nconst okMember: { f: ToNumber } = { f: (color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; } };\nconst okElement: ToNumber[] = [(color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; }];\nfunction okReturned(): ToNumber { return (color) => { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; }; }\nconst okFuncExpr: ToNumber = function (color) { if (isObject(color)) { if (\"r\" in color) { return color.g; } } return 0; };\nfunction badReturned(): ToNumber { return (color) => { if (isObject(color)) { if (\"r\" in color) { return color.l; } } return 0; }; }",
+    ),
+    [
+      "function badReturned > PropAccess `.l`: property `l` does not exist on `IRgb`",
+    ],
+  )
+}

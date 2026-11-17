@@ -15699,6 +15699,24 @@ fn symbol_member_shape_blocks(
 /// this is the exact fact that lifts it. It defaults to `false` — "the
 /// caller cannot answer" — which keeps the suppression, so a call site that
 /// does not thread it loses a finding rather than inventing one.
+///
+/// Every expression is also walked by `check_call_args_in_expr`, for the
+/// errors nested inside it, even when `expected` is `Any`. That walk checks a
+/// function value's body with its unannotated parameters bound to `any`, and
+/// relies on the contextual walk reporting the same things so the repeats
+/// dedup away. A type guard breaks that: `isObject(color)` narrows `any` to
+/// `object` where the contextual walk narrows `string | Color` to `Color`, so
+/// the `any` walk reported `"r" in color` as `{ r: unknown }` beside the
+/// contextual walk's correct answer. tsc reports neither.
+///
+/// So for the four shapes that hand a function value to a contextual type (an
+/// arrow, a function expression, and the object and array literals holding
+/// them) the walk runs AFTER the shape check. The contextual walk marks the
+/// body it walked (`walked_arrow_bodies` / `walked_func_bodies`) and the `any`
+/// walk then skips it, which is the order `check_arguments` already uses for a
+/// call argument. Every other expression keeps the walk first, because the
+/// walk narrows by assignment and clears the TS2454 set, and the shape check
+/// reads both.
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -15707,10 +15725,33 @@ fn check_expr_against(
   sub_path : String,
   arg_callee_non_generic~ : Bool = false,
 ) -> Unit {
-  // Always walk for nested call-site argument errors, even when the outer
-  // expected type is `Any` (e.g. an unannotated return where we still want
-  // bad calls inside the returned expression to be flagged).
-  check_call_args_in_expr(env, expr, ctx)
+  let walk_after = expr
+    is (ArrowFunc(_, _, _, _) | FuncExpr(_) | ObjectLit(_) | ArrayLit(_))
+  if !walk_after {
+    check_call_args_in_expr(env, expr, ctx)
+  }
+  check_expr_against_shape(
+    env,
+    expr,
+    expected,
+    ctx,
+    sub_path,
+    arg_callee_non_generic~,
+  )
+  if walk_after {
+    check_call_args_in_expr(env, expr, ctx)
+  }
+}
+
+///|
+fn check_expr_against_shape(
+  env : ExprEnv,
+  expr : @ast.TsExpr,
+  expected : @ast.TsType,
+  ctx : CheckCtx,
+  sub_path : String,
+  arg_callee_non_generic~ : Bool,
+) -> Unit {
   // `new Promise((resolve) => …)` where a `Promise<X>` is expected: the
   // executor is contextually typed by `Promise<X>`'s constructor, so
   // `resolve` takes `X | PromiseLike<X>` (`resolve(null)` against
