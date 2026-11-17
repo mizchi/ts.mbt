@@ -1640,6 +1640,12 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
         // string ? number : boolean` became `number`. The outer
         // conditional is undecided too.
         t
+      } else if check is Union(parts) && parts.contains(Any) {
+        // A union holding `any` IS `any`, and `any` as a check type gives
+        // the union of both branches, not the true one. The relation
+        // accepts such a union against every target, so reading it here
+        // would pick the true branch on no evidence; left undecided.
+        t
       } else if is_assignable_to(check, extends) {
         true_branch
       } else {

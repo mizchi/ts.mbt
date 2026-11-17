@@ -45,6 +45,11 @@ pub fn extends_decision(source : @ast.TsType, target : @ast.TsType) -> Bool? {
   }
   match source {
     Never => return Some(true)
+    // A union holding `any` IS `any`, and `any` as a check type takes both
+    // branches, so neither answer is right: `T | undefined extends string ?
+    // 1 : 2` at `T = any` is `1 | 2` (probed). Reading the members one by
+    // one answered `false` from the `undefined` member alone.
+    Union(items) if items.contains(Any) => return None
     Union(items) => {
       let mut saw_unknown = false
       for item in items {

@@ -757,3 +757,20 @@ test "an undecided conditional is found behind an indexed access and past the de
     Number,
   )
 }
+
+///|
+/// A union holding `any` is `any` to the relation, so `is_assignable_to`
+/// accepts it against every target. A check type like that takes BOTH
+/// branches in tsc, and reading the permissive relation here picked the
+/// true branch alone. `string | undefined` still decides.
+test "reduce_conditional leaves an any union check type undecided" {
+  let any_union : @ast.TsType = Union([Any, Undefined])
+  let cond : @ast.TsType = Conditional(any_union, String_, Number, Boolean)
+  assert_eq(reduce_conditional(cond), cond)
+  assert_eq(
+    reduce_conditional(
+      Conditional(Union([String_, Undefined]), String_, Number, Boolean),
+    ),
+    Boolean,
+  )
+}

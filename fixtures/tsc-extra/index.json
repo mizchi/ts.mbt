@@ -672,7 +672,8 @@
       },
       "accepted": false,
       "codes": [
-        2345
+        2345,
+        2769
       ],
       "baseline": "baselines/declareClassRestOverloadsAndMergedRestMethod.errors.txt",
       "claims": [
@@ -698,7 +699,19 @@
           "name": "badMergedRestElement",
           "kind": "bad",
           "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badNoOverloadBoolean",
+          "kind": "bad",
+          "fromLine": 16,
           "toLine": 16
+        },
+        {
+          "name": "badNoOverloadTwoNumbers",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 18
         }
       ]
     },
@@ -2414,8 +2427,7 @@
       "accepted": false,
       "codes": [
         2322,
-        2739,
-        2741
+        2739
       ],
       "baseline": "baselines/privateMemberClassToNonNamingTargets.errors.txt",
       "claims": [
@@ -2484,6 +2496,46 @@
           "kind": "bad",
           "fromLine": 25,
           "toLine": 26
+        }
+      ]
+    },
+    {
+      "case": "relations/recursiveArrayAliasesRelateCoinductively.ts",
+      "area": "relations",
+      "name": "recursiveArrayAliasesRelateCoinductively",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/recursiveArrayAliasesRelateCoinductively.errors.txt",
+      "claims": [
+        {
+          "name": "okTwinAlias",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okSameAlias",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badElementMeetsString",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badNestedElementMeetsNumber",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 15
         }
       ]
     },

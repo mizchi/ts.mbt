@@ -11,7 +11,7 @@ class Root { r = 1 }
 class Base extends Root { private p = 1; b = 2 }
 class Arr extends Base { private q = 1; a = 3 }
 class Ref extends Root { private z = 1; c = 4 }
-class Other { private p = 1; b = 2 }
+class Other extends Root { private p = 1; b = 2 }
 interface IB { b: number }
 type V = Base | Ref;
 

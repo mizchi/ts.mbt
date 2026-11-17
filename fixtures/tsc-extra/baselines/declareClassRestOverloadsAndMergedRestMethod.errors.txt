@@ -1,7 +1,11 @@
 declareClassRestOverloadsAndMergedRestMethod.ts(15,39): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+declareClassRestOverloadsAndMergedRestMethod.ts(16,41): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type 'boolean' is not assignable to parameter of type 'number'.
+declareClassRestOverloadsAndMergedRestMethod.ts(17,44): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
 
 
-==== declareClassRestOverloadsAndMergedRestMethod.ts (1 errors) ====
+==== declareClassRestOverloadsAndMergedRestMethod.ts (3 errors) ====
     // A rest constructor overload accepts any count of its own element type
     // only: beside `constructor(value: number)`, `new R(1)` is the other
     // overload, not a string argument. A rest method of a `declare class` that
@@ -18,5 +22,14 @@ declareClassRestOverloadsAndMergedRestMethod.ts(15,39): error TS2345: Argument o
     function okMergedRestMethod() { c.m(); c.m("x", "y"); }
     function badMergedRestElement() { c.m(1); }
                                           ~
+!!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+    function badNoOverloadBoolean() { new R(true); }
+                                            ~~~~
+!!! error TS2769: No overload matches this call.
+!!! error TS2769:   The last overload gave the following error.
+!!! error TS2769:     Argument of type 'boolean' is not assignable to parameter of type 'number'.
+!!! related TS2771 declareClassRestOverloadsAndMergedRestMethod.ts:7:53: The last overload is declared here.
+    function badNoOverloadTwoNumbers() { new R(1, 2); }
+                                               ~
 !!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
     

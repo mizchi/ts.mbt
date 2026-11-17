@@ -16,3 +16,5 @@ function okNumberOverload() { new R(1); }
 function okRestOverload() { new R("a", "b"); new R(); }
 function okMergedRestMethod() { c.m(); c.m("x", "y"); }
 function badMergedRestElement() { c.m(1); }
+function badNoOverloadBoolean() { new R(true); }
+function badNoOverloadTwoNumbers() { new R(1, 2); }

@@ -14,3 +14,5 @@ nullishCoalescingVoidLeftOperand:*      mtsc has no TS2871, and skips `void 0 ??
 enumMemberTypeAndArrayElementCovariance:badReadonlyToMutable  TS4104 (a readonly array into a mutable one) is not modelled; the array relation abstains for that pair
 arrowConstGuardOptionalParameters:badTooManyArguments  a module-level arrow `const` read inside a function body has no inferred type there, so its call is not judged (the cross-module spelling is)
 intersectionMemberFromEveryConstituent:badMemberOfOtherBranch  a member missing from every constituent of a narrowed intersection is not reported; member existence abstains on intersection receivers
+declareClassRestOverloadsAndMergedRestMethod:badNoOverloadBoolean  a rest overload beside another overload merges to `...args: any[]`, so no constructor call against that class is judged
+declareClassRestOverloadsAndMergedRestMethod:badNoOverloadTwoNumbers  same merge: `...args: any[]` accepts any argument count and type

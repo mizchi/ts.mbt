@@ -474,6 +474,34 @@ test "an import of an unparsable dependency declaration is untyped" {
     context_only=Map([(dep, ())]),
   )
   assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [])
+  // A relative import of one is skipped the same way, not reported as an
+  // unresolved local module.
+  let vendor = "/src/vendor.d.ts"
+  let relative = collect_module_graph_issues(
+    {
+      modules: [
+        {
+          path: "/src/root.ts",
+          source: "import { x } from \"./vendor\";\nexport const n: number = x;",
+          allowJsx: false,
+        },
+        {
+          path: vendor,
+          source: "export declare const x: number = ;;; }{",
+          allowJsx: false,
+        },
+      ],
+      edges: [
+        {
+          importerPath: "/src/root.ts",
+          moduleSpecifier: "./vendor",
+          targetPath: vendor,
+        },
+      ],
+    },
+    context_only=Map([(vendor, ())]),
+  )
+  assert_eq(relative.map(fn(i) { i.path + " :: " + i.message }), [])
 }
 
 ///|
@@ -526,4 +554,43 @@ test "a defaulted any parameter accepts a Partial argument" {
   assert_eq(issue_lines(src), [
     "function g > call `isEmptyObject`: expected 0-1 argument(s), got 2",
   ])
+}
+
+///|
+/// An import binds its name in the importing module's own scope, which a
+/// global never overrides: beside `declare global { const shadowed:
+/// number }` in another file, `import { shadowed } from "./other"` is the
+/// import's `string`. The ambient entry used to be pushed after the import
+/// and won.
+test "an import shadows a global of the same name" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/globals.d.ts", "export {};\ndeclare global { const shadowed: number }",
+        ),
+        ("/src/other.ts", "export const shadowed: string = \"s\";"),
+        (
+          "/src/imp.ts", "import { shadowed } from \"./other\";\nexport const s: string = shadowed;\nexport const bad: number = shadowed;",
+        ),
+        ("/src/plain.ts", "export const g: number = shadowed;"),
+      ],
+      [("/src/imp.ts", "./other", "/src/other.ts")],
+    ),
+    ["top-level > binding `bad` init :: expected `number` but got `string`"],
+  )
+}
+
+///|
+/// A recursive array alias unwraps to an array of itself, so relating its
+/// elements never bottomed out and the check hung. tsc assumes a pair it
+/// is already comparing is related, so `A[]` assigns to `B[]`, while `A[]`
+/// against `string[]` fails where `A` meets `string`.
+test "a recursive array alias relates to its twin" {
+  assert_eq(
+    issue_lines(
+      "type A = A[];\ntype B = B[];\ndeclare const a: A[];\nexport const ok: B[] = a;\nexport const bad: string[] = a;",
+    ),
+    ["top-level > binding `bad` init: expected `string[]` but got `A[]`"],
+  )
 }

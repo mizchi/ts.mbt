@@ -3,9 +3,11 @@ privateMemberClassToNonNamingTargets.ts(21,48): error TS2322: Type 'Arr' is not 
 privateMemberClassToNonNamingTargets.ts(22,38): error TS2739: Type 'Arr' is missing the following properties from type 'Ref': z, c
 privateMemberClassToNonNamingTargets.ts(23,40): error TS2322: Type 'Arr' is not assignable to type 'Ref | { q: number; }'.
   Type 'Arr' is missing the following properties from type 'Ref': z, c
-privateMemberClassToNonNamingTargets.ts(24,49): error TS2741: Property 'r' is missing in type 'Other' but required in type 'Base'.
+privateMemberClassToNonNamingTargets.ts(24,49): error TS2322: Type 'Other' is not assignable to type 'Base'.
+  Types have separate declarations of a private property 'p'.
 privateMemberClassToNonNamingTargets.ts(25,90): error TS2322: Type 'Arr | Other' is not assignable to type 'Base'.
-  Property 'r' is missing in type 'Other' but required in type 'Base'.
+  Type 'Other' is not assignable to type 'Base'.
+    Types have separate declarations of a private property 'p'.
 
 
 ==== privateMemberClassToNonNamingTargets.ts (5 errors) ====
@@ -19,7 +21,7 @@ privateMemberClassToNonNamingTargets.ts(25,90): error TS2322: Type 'Arr | Other'
     class Base extends Root { private p = 1; b = 2 }
     class Arr extends Base { private q = 1; a = 3 }
     class Ref extends Root { private z = 1; c = 4 }
-    class Other { private p = 1; b = 2 }
+    class Other extends Root { private p = 1; b = 2 }
     interface IB { b: number }
     type V = Base | Ref;
     
@@ -42,11 +44,11 @@ privateMemberClassToNonNamingTargets.ts(25,90): error TS2322: Type 'Arr | Other'
 !!! error TS2322:   Type 'Arr' is missing the following properties from type 'Ref': z, c
     function badSameShapeOtherDeclaration() { const b: Base = new Other(); }
                                                     ~
-!!! error TS2741: Property 'r' is missing in type 'Other' but required in type 'Base'.
-!!! related TS2728 privateMemberClassToNonNamingTargets.ts:7:14: 'r' is declared here.
+!!! error TS2322: Type 'Other' is not assignable to type 'Base'.
+!!! error TS2322:   Types have separate declarations of a private property 'p'.
     function badUnionSourceMember(c: boolean) { const x = c ? new Arr() : new Other(); const b: Base = x; }
                                                                                              ~
 !!! error TS2322: Type 'Arr | Other' is not assignable to type 'Base'.
-!!! error TS2322:   Property 'r' is missing in type 'Other' but required in type 'Base'.
-!!! related TS2728 privateMemberClassToNonNamingTargets.ts:7:14: 'r' is declared here.
+!!! error TS2322:   Type 'Other' is not assignable to type 'Base'.
+!!! error TS2322:     Types have separate declarations of a private property 'p'.
     

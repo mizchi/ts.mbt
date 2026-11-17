@@ -5413,15 +5413,19 @@ fn Resolver::lookup_field_core(
       // answers through an index signature: in `Record<string, number> & {
       // label?: string }`, `label` is `string | undefined` (probed). The
       // index answers count only when no constituent declares the name.
-      let declaring = items.filter(fn(it) { !self.answers_by_index(it, field) })
-      let items = if declaring.length() > 0 &&
-        declaring.iter().any(fn(it) { self.lookup_field(it, field) is Some(_) }) {
-        declaring
-      } else {
-        items
-      }
-      for it in items {
-        match self.lookup_field(it, field) {
+      //
+      // Each constituent is looked up once: the answers feed both the
+      // declaring-constituent test and the merge below.
+      let answers = items.map(fn(it) {
+        (self.answers_by_index(it, field), self.lookup_field(it, field))
+      })
+      let any_declares = answers.iter().any(fn(a) { !a.0 && a.1 is Some(_) })
+      for answer in answers {
+        let (by_index, looked_up) = answer
+        if any_declares && by_index {
+          continue
+        }
+        match looked_up {
           Some(Any) => return Some(Any)
           Some(Unknown) => saw_unknown = true
           Some(t) =>
@@ -19104,6 +19108,28 @@ fn structural_oneway_assignable(
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Bool {
+  structural_oneway_assignable_rec(source, target, resolver, 0)
+}
+
+///|
+/// `depth` bounds the element and union-member recursion: a recursive
+/// array alias (`type A = A[]`) unwraps to an array of itself, so the
+/// element walk never bottoms out, and it hung. Running out of depth
+/// answers `true`, which is how tsc relates recursive types: a pair
+/// already being compared further up is assumed related, so `type A =
+/// A[]; type B = B[]` makes `A[]` assignable to `B[]` (probed), while
+/// `A[]` against `string[]` still fails one level down, where `A` meets
+/// `string`. Only a pair that recurses this deep is affected, and the
+/// answer can only lose a finding.
+fn structural_oneway_assignable_rec(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+) -> Bool {
+  if depth > 16 {
+    return true
+  }
   // An array is covariant in its element, so the structural answer for the
   // elements is the answer for the arrays: univer hands `IMutationInfo[]`
   // to `sequenceExecute(tasks: ICommandInfo[])` dozens of times, and the
@@ -19122,14 +19148,14 @@ fn structural_oneway_assignable(
       return (!s_ro || t_ro) &&
         (
           is_assignable_to(se, te) ||
-          structural_oneway_assignable(se, te, resolver)
+          structural_oneway_assignable_rec(se, te, resolver, depth + 1)
         )
     _ => ()
   }
   match resolver.unwrap(target) {
     Union(members) => {
       for m in members {
-        if structural_oneway_assignable(source, m, resolver) {
+        if structural_oneway_assignable_rec(source, m, resolver, depth + 1) {
           return true
         }
       }

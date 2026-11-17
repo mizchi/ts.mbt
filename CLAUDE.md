@@ -5516,6 +5516,36 @@ product surfaces now.
     declares it). Reviewing the batch added two more cases from what it
     found: a rest constructor overload beside a non-rest one, and
     `flat(depth)`.
+  - **The second review round found a hang this batch introduced**, and
+    the fix also closed an older false positive behind it. Array
+    covariance recursed on the element types with no bound, and `type A =
+    A[]` unwraps to an array of itself, so relating `A[]` to `B[]` never
+    returned. Bounding the walk was not enough. Answering `false` at the
+    bound kept main's report, `expected B[] but got A[]`, on a line tsc
+    accepts. tsc relates recursive types coinductively: a pair it is
+    already comparing is assumed related. So running out of depth answers
+    `true`. `A[]` against `string[]` still fails one level down, where `A`
+    meets `string`. The same round found that a `declare global` value
+    overrode an explicit import of the same name, because the ambient
+    entries are pushed after the import bindings and the later entry wins.
+    An imported name now keeps the import. One finding is declared rather
+    than fixed: a `declare global` value whose type is an IMPORT of the
+    declaring module (`import type { Payload }` beside `const APP_PAYLOAD:
+    Payload`) is unresolved in every other module, so `const bad: number =
+    APP_PAYLOAD.id` is a MISS. Resolving it means ingesting the declaring
+    module's import graph into every checked module, which is a cost and
+    scope change with its own measurement.
+    A union holding `any` (the parser's encoding of an optional `any`
+    slot) is now left undecided as a conditional's check type, in both
+    `reduce_conditional` and `extends_decision`. The relation accepts such
+    a union against every target, so reading it would pick the true branch
+    on no evidence, while tsc gives the union of both branches. Neither
+    guard moves an observable case today: `T | undefined extends string`
+    is decided `false` by the type parser for every `T`, since the
+    `undefined` member fails, and that is wrong only at `T = any`
+    (`G<any> = 1` is a false positive on main as well). Both guards are
+    pinned by white-box tests at the function level, where the hazard is
+    reachable.
   - **What is left.** On excalidraw the largest families are a union of
     object literals whose read needs normalization (`{ font: unknown } |
     {}`), DOM member lookups on a narrowed `Element`, and an
