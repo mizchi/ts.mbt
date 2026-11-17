@@ -1097,3 +1097,24 @@ test "an `export import` alias is a binding name resolution can see" {
   // The neighbour that must still report: nothing declares `Q`.
   assert_true(undeclared("Q"))
 }
+
+///|
+test "a self-referential union alias does not overflow the relation" {
+  // `type Loop = Loop | number` is TS2456 in tsc. The private-member and
+  // structural relations recursed on a member that unwraps to the same
+  // union and overflowed the stack (a segfault on main); they now stop at a
+  // depth bound, which answers in the direction that reports nothing. The
+  // assertion is that this returns at all.
+  let issues = eff_issues(
+    (
+      #|type Loop = Loop | number;
+      #|interface T { a: Loop }
+      #|class C { a: Loop | string = 1 }
+      #|const x: T = new C();
+      #|class D { a: string = "" }
+      #|const y: T = new D();
+      #|function f() { const z: T = new C(); return z; }
+    ),
+  )
+  assert_false(eff_has(issues, "f"))
+}

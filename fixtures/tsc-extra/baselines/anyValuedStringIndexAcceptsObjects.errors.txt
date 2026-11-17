@@ -6,9 +6,10 @@ anyValuedStringIndexAcceptsObjects.ts(29,14): error TS2322: Type 'Req' is not as
   Index signature for type 'string' is missing in type 'Req'.
 anyValuedStringIndexAcceptsObjects.ts(30,14): error TS2322: Type 'string' is not assignable to type 'AnyIdx'.
 anyValuedStringIndexAcceptsObjects.ts(31,47): error TS2345: Argument of type 'number' is not assignable to parameter of type 'UnionValueAny'.
+anyValuedStringIndexAcceptsObjects.ts(36,14): error TS2741: Property 'required' is missing in type 'S' but required in type 'Merged'.
 
 
-==== anyValuedStringIndexAcceptsObjects.ts (5 errors) ====
+==== anyValuedStringIndexAcceptsObjects.ts (6 errors) ====
     // An interface value has no implicit index signature, but a target whose
     // only index signature takes a `string` key with an `any` value accepts it
     // anyway, because such a signature asks nothing of the source's properties.
@@ -53,4 +54,12 @@ anyValuedStringIndexAcceptsObjects.ts(31,47): error TS2345: Argument of type 'nu
     export function badPrimitiveArgument() { take(1); }
                                                   ~
 !!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'UnionValueAny'.
+    // A class of the same name merges its members into the interface, so the
+    // interface's own empty member list does not make the target unrestricted.
+    class Merged { required!: number }
+    interface Merged { [k: string]: any }
+    export const badClassHalfOfMergedTarget: Merged = s;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2741: Property 'required' is missing in type 'S' but required in type 'Merged'.
+!!! related TS2728 anyValuedStringIndexAcceptsObjects.ts:34:16: 'required' is declared here.
     

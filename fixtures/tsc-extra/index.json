@@ -2480,7 +2480,31 @@
           "name": "badLoneGenericFromTupleSpread",
           "kind": "bad",
           "fromLine": 77,
-          "toLine": 78
+          "toLine": 79
+        },
+        {
+          "name": "okTupleRestFromSpread",
+          "kind": "ok",
+          "fromLine": 81,
+          "toLine": 81
+        },
+        {
+          "name": "okTupleRestPositional",
+          "kind": "ok",
+          "fromLine": 82,
+          "toLine": 82
+        },
+        {
+          "name": "badTupleRestFromSpread",
+          "kind": "bad",
+          "fromLine": 83,
+          "toLine": 83
+        },
+        {
+          "name": "badTupleRestPositional",
+          "kind": "bad",
+          "fromLine": 84,
+          "toLine": 85
         }
       ]
     },
@@ -3523,7 +3547,8 @@
       "accepted": false,
       "codes": [
         2322,
-        2345
+        2345,
+        2741
       ],
       "baseline": "baselines/anyValuedStringIndexAcceptsObjects.errors.txt",
       "claims": [
@@ -3591,7 +3616,13 @@
           "name": "badPrimitiveArgument",
           "kind": "bad",
           "fromLine": 31,
-          "toLine": 32
+          "toLine": 33
+        },
+        {
+          "name": "badClassHalfOfMergedTarget",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 37
         }
       ]
     },
@@ -3663,6 +3694,7 @@
       },
       "accepted": false,
       "codes": [
+        2322,
         2345
       ],
       "baseline": "baselines/defaultedParameterAcceptsUndefined.errors.txt",
@@ -3701,7 +3733,25 @@
           "name": "badNoDefault",
           "kind": "bad",
           "fromLine": 18,
-          "toLine": 19
+          "toLine": 20
+        },
+        {
+          "name": "okUndefinedToDefaultedObject",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okObjectLiteralToDefaulted",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badObjectLiteralToDefaulted",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 26
         }
       ]
     },

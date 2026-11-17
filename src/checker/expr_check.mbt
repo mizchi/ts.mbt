@@ -7956,6 +7956,16 @@ fn instantiate_method_return(
   if method_tps.length() == 0 {
     return ret
   }
+  // The callers expand a tuple SPREAD into its elements, so a tuple-REST
+  // formal (`first<T>(...args: [T, number])`) is expanded to match, or each
+  // element would be solved against the whole tuple and `T` would come back
+  // unsolved. An argument list that still holds a spread (one that is not a
+  // tuple) keeps the formal as declared.
+  let params = if args.iter().any(fn(a) { a is Spread(_) }) {
+    params
+  } else {
+    expand_tuple_rest_params(params, args.length())
+  }
   substitute_params(
     ret,
     bind_unsolved_to_any(
@@ -8836,7 +8846,9 @@ fn any_valued_string_index_target(
     Object(entries) =>
       entries.length() > 0 &&
       entries.iter().all(fn(e) { covers_string(e.0) && any_valued(e.1) })
-    Named(n) =>
+    // A class of the same name merges its members into the interface, so
+    // the interface's own empty member list says nothing about the type.
+    Named(n) if resolver.classes.get(n) is None =>
       match resolver.interfaces.get(n) {
         Some(i) =>
           i.fields.length() == 0 &&
@@ -9024,11 +9036,20 @@ fn class_has_private_member(resolver : Resolver, name : String) -> Bool {
 /// relevant side resolves to a known class; everything else abstains. Callers
 /// reach this only after the nominal `is_assignable_to` already returned false
 /// (so same-class and `any` / universal targets never get here).
+///
+/// The union arms recurse on members, and a member can unwrap to the very
+/// union it came from (`type Loop = Loop | number`, TS2456 in tsc), which
+/// overflowed the stack on main. They carry a depth, and running out of it
+/// answers "not blocked", which reports nothing.
 fn nominal_private_blocks(
   source : @ast.TsType,
   target : @ast.TsType,
   resolver : Resolver,
+  depth~ : Int32 = 0,
 ) -> Bool {
+  if depth > 32 {
+    return false
+  }
   // A UNION source is assignable when every member is, so it is blocked
   // when ANY member is: `async ? new AsyncFn() : new Fn()` against a base
   // class both extend is legal, and reading the union as "not a class"
@@ -9039,7 +9060,7 @@ fn nominal_private_blocks(
         .iter()
         .any(fn(m) {
           !(resolver.unwrap(m) is (Null | Undefined)) &&
-          nominal_private_blocks(m, target, resolver)
+          nominal_private_blocks(m, target, resolver, depth=depth + 1)
         })
     _ => ()
   }
@@ -9048,7 +9069,9 @@ fn nominal_private_blocks(
       return members.length() > 0 &&
         members
         .iter()
-        .all(fn(m) { nominal_private_blocks(source, m, resolver) })
+        .all(fn(m) {
+          nominal_private_blocks(source, m, resolver, depth=depth + 1)
+        })
     _ => ()
   }
   let s_class = match resolver.unwrap(source) {
@@ -18815,12 +18838,21 @@ fn struct_assignable_named_rec(
 /// undefined` failed while the same member against `scope: IObjScope`
 /// passed (univer's permission payloads, 20 reports). The nominal relation
 /// is still asked first, so a union it already decided keeps that answer.
+///
+/// The union arms recurse on members that may unwrap to the same union —
+/// `type Loop = Loop | number`, which tsc rejects (TS2456) — so they carry
+/// a depth, and running out of it answers `true`: this function returning
+/// true suppresses a report, which is the direction to fail in.
 fn struct_field_assignable(
   have : @ast.TsType,
   want : @ast.TsType,
   resolver : Resolver,
   visited : Array[(String, String)],
+  depth~ : Int32 = 0,
 ) -> Bool {
+  if depth > 32 {
+    return true
+  }
   let h = resolver.unwrap(have)
   let w = resolver.unwrap(want)
   if is_named_decl(h, resolver) && is_named_decl(w, resolver) {
@@ -18834,12 +18866,18 @@ fn struct_field_assignable(
     Union(hs) =>
       return hs
         .iter()
-        .all(fn(m) { struct_field_assignable(m, w, resolver, visited) })
+        .all(fn(m) {
+          struct_field_assignable(m, w, resolver, visited, depth=depth + 1)
+        })
     _ => ()
   }
   match w {
     Union(ws) =>
-      ws.iter().any(fn(m) { struct_field_assignable(h, m, resolver, visited) })
+      ws
+      .iter()
+      .any(fn(m) {
+        struct_field_assignable(h, m, resolver, visited, depth=depth + 1)
+      })
     _ => false
   }
 }
@@ -24253,8 +24291,21 @@ fn check_arguments_with_sig(
       // ParseOptions` against `options: ParseOptions = {}` is legal (univer,
       // 20 reports). `callable_param_types` widens it for an arrow and a
       // function expression; the rich signature of a declaration says it here.
+      // A fresh literal can never be `undefined`, and widening its target
+      // would hand an object literal a union the object checker declines,
+      // which left `take({ value: "bad" })` against `p: { value: number } =
+      // …` unchecked; it is checked against the declared type as before.
+      let fresh_literal = args[i]
+        is (ObjectLit(_)
+        | ArrayLit(_)
+        | ArrowFunc(_, _, _, _)
+        | FuncExpr(_)
+        | StringLit(_)
+        | NumberLit(_)
+        | TemplateLiteral(_, _))
       let expected_i = match sig {
-        Some(ps) if i < ps.length() &&
+        Some(ps) if !fresh_literal &&
+          i < ps.length() &&
           ps[i].default is Some(_) &&
           !type_accepts_undefined_param(params[i]) =>
           @ast.TsType::Union([params[i], @ast.TsType::Undefined])

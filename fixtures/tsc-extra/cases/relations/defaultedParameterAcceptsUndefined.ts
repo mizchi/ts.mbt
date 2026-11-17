@@ -19,3 +19,10 @@ export const arrow = (x: number = 1) => x;
 export function okArrowDefaulted(n: number | undefined) { return arrow(n); }
 declare function noDefault(x: number): number;
 export function badNoDefault(n: number | undefined) { return noDefault(n); }
+// The `undefined` a default accepts is not a reason to stop checking a fresh
+// object literal against the declared type.
+interface Box { value: number }
+export function takeBox(p: Box = { value: 0 }) { return p.value; }
+export function okUndefinedToDefaultedObject() { takeBox(undefined); }
+export function okObjectLiteralToDefaulted() { takeBox({ value: 1 }); }
+export function badObjectLiteralToDefaulted() { takeBox({ value: "bad" }); }

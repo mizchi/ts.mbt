@@ -2,9 +2,10 @@ defaultedParameterAcceptsUndefined.ts(12,89): error TS2345: Argument of type 'Op
   Type 'null' is not assignable to type 'Opts | undefined'.
 defaultedParameterAcceptsUndefined.ts(18,72): error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.
   Type 'undefined' is not assignable to type 'number'.
+defaultedParameterAcceptsUndefined.ts(25,59): error TS2322: Type 'string' is not assignable to type 'number'.
 
 
-==== defaultedParameterAcceptsUndefined.ts (2 errors) ====
+==== defaultedParameterAcceptsUndefined.ts (3 errors) ====
     // A parameter with a default accepts `undefined` from the caller, because
     // `undefined` is what triggers the default. So `parseBool(v, options)` with
     // `options?: Opts` is legal against `options: Opts = {}`, for a function
@@ -29,4 +30,13 @@ defaultedParameterAcceptsUndefined.ts(18,72): error TS2345: Argument of type 'nu
                                                                            ~
 !!! error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.
 !!! error TS2345:   Type 'undefined' is not assignable to type 'number'.
+    // The `undefined` a default accepts is not a reason to stop checking a fresh
+    // object literal against the declared type.
+    interface Box { value: number }
+    export function takeBox(p: Box = { value: 0 }) { return p.value; }
+    export function okUndefinedToDefaultedObject() { takeBox(undefined); }
+    export function okObjectLiteralToDefaulted() { takeBox({ value: 1 }); }
+    export function badObjectLiteralToDefaulted() { takeBox({ value: "bad" }); }
+                                                              ~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
     

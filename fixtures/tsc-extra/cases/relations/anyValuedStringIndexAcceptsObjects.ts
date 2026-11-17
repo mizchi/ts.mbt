@@ -32,3 +32,8 @@ export const badInterfaceToNumberKey: NumberKeyAny = s;
 export const badInterfaceToStringIndex: StringIdx = req;
 export const badStringToAnyIndex: AnyIdx = "x";
 export function badPrimitiveArgument() { take(1); }
+// A class of the same name merges its members into the interface, so the
+// interface's own empty member list does not make the target unrestricted.
+class Merged { required!: number }
+interface Merged { [k: string]: any }
+export const badClassHalfOfMergedTarget: Merged = s;

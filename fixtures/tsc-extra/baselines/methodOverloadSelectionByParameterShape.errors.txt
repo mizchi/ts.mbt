@@ -12,9 +12,11 @@ methodOverloadSelectionByParameterShape.ts(74,69): error TS2322: Type 'string' i
 methodOverloadSelectionByParameterShape.ts(75,73): error TS2322: Type 'number' is not assignable to type 'string'.
 methodOverloadSelectionByParameterShape.ts(76,97): error TS2322: Type 'string' is not assignable to type 'number'.
 methodOverloadSelectionByParameterShape.ts(77,95): error TS2322: Type 'string' is not assignable to type 'number'.
+methodOverloadSelectionByParameterShape.ts(83,91): error TS2322: Type 'string' is not assignable to type 'number'.
+methodOverloadSelectionByParameterShape.ts(84,69): error TS2322: Type 'string' is not assignable to type 'number'.
 
 
-==== methodOverloadSelectionByParameterShape.ts (14 errors) ====
+==== methodOverloadSelectionByParameterShape.ts (16 errors) ====
     // Overload selection on a method reads a tuple-typed rest parameter as that
     // many discrete parameters: `m(...xs: [string, number])` needs exactly two
     // arguments, so `b.m(1)` takes `m(x: number)`. An optional tuple slot may be
@@ -119,5 +121,16 @@ methodOverloadSelectionByParameterShape.ts(77,95): error TS2322: Type 'string' i
 !!! error TS2322: Type 'string' is not assignable to type 'number'.
     export function badLoneGenericFromTupleSpread(c: LoneGeneric, xs: [string, number]): number { return c.m(...xs); }
                                                                                                   ~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    // A lone generic method whose rest parameter is a tuple: the formal is
+    // expanded like the spread argument, positionally too.
+    interface TupleRestGeneric { first<T>(...args: [T, number]): T }
+    export function okTupleRestFromSpread(a: TupleRestGeneric, xs: [string, number]) { const s: string = a.first(...xs); return s; }
+    export function okTupleRestPositional(a: TupleRestGeneric) { const s: string = a.first("a", 1); return s; }
+    export function badTupleRestFromSpread(a: TupleRestGeneric, xs: [string, number]) { const n: number = a.first(...xs); return n; }
+                                                                                              ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export function badTupleRestPositional(a: TupleRestGeneric) { const n: number = a.first("a", 1); return n; }
+                                                                        ~
 !!! error TS2322: Type 'string' is not assignable to type 'number'.
     

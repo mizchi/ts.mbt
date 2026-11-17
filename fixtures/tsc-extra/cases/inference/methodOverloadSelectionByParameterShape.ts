@@ -78,3 +78,10 @@ export function badAliasPairSelectsGeneric(g: GenericFirst) { const n: number = 
 export function badMiddleRestSuffixMissing(b: MiddleRestSuffix) { const s: string = b.m("a"); return s; }
 export function badGenericFromTupleSpread(c: GenericFromSpread, xs: [string, number]): number { return c.m(...xs); }
 export function badLoneGenericFromTupleSpread(c: LoneGeneric, xs: [string, number]): number { return c.m(...xs); }
+// A lone generic method whose rest parameter is a tuple: the formal is
+// expanded like the spread argument, positionally too.
+interface TupleRestGeneric { first<T>(...args: [T, number]): T }
+export function okTupleRestFromSpread(a: TupleRestGeneric, xs: [string, number]) { const s: string = a.first(...xs); return s; }
+export function okTupleRestPositional(a: TupleRestGeneric) { const s: string = a.first("a", 1); return s; }
+export function badTupleRestFromSpread(a: TupleRestGeneric, xs: [string, number]) { const n: number = a.first(...xs); return n; }
+export function badTupleRestPositional(a: TupleRestGeneric) { const n: number = a.first("a", 1); return n; }

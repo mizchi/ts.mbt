@@ -414,3 +414,30 @@ test "mtsc: a boolean option's explicit value is not an input file" {
   assert_eq(on.inputs, ["a.ts"])
   assert_eq(on.list_files, true)
 }
+
+///|
+test "mtsc: an inline boolean value leaves the next token alone" {
+  // `--flag=value` already supplied the value, so `false` after it is an
+  // input file, for the display options and for `--noEmit` alike.
+  let inline = mtsc_parse_args(
+    ["mtsc", "--listFiles=true", "false", "--noEmit=false", "true"],
+    1,
+  ).unwrap()
+  assert_eq(inline.inputs, ["false", "true"])
+  assert_eq(inline.list_files, true)
+  assert_eq(inline.no_emit, false)
+  // A later `false` turns the primary option off and leaves what an earlier
+  // occurrence implied.
+  let later = mtsc_parse_args(
+    [
+      "mtsc", "--listFilesOnly", "--listFilesOnly", "false", "--emitDeclarationOnly",
+      "--emitDeclarationOnly=false", "a.ts",
+    ],
+    1,
+  ).unwrap()
+  assert_eq(later.inputs, ["a.ts"])
+  assert_eq(later.list_files_only, false)
+  assert_eq(later.list_files, true)
+  assert_eq(later.dts_only, false)
+  assert_eq(later.dts, true)
+}

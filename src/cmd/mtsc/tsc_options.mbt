@@ -451,7 +451,18 @@ fn mtsc_options_new() -> MtscOptions {
 /// (`--strict false`), and the token is optional. So the value can only
 /// be consumed when it IS one of those two words — consuming
 /// unconditionally would eat the input file in `mtsc --noEmit a.ts`.
-fn mtsc_read_bool_value(argv : Array[String], next : Int32) -> (Bool, Bool) {
+fn mtsc_read_bool_value(
+  argv : Array[String],
+  next : Int32,
+  inline_value : String?,
+) -> (Bool, Bool) {
+  // `--flag=value` has already supplied the value, and the next token is
+  // then an ordinary argument: `--listFiles=true false` is `true` plus an
+  // input called `false`.
+  match inline_value {
+    Some(v) => return (v != "false", false)
+    None => ()
+  }
   if next < argv.length() {
     match argv[next] {
       "true" => return (true, true)
@@ -550,24 +561,26 @@ fn mtsc_parse_args(
       // an INPUT file, so `mtsc -p … --noEmit --pretty false` (the command
       // tsc / tsrs benchmarks use) failed with "read error false".
       "showconfig" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
         opts.show_config = v
         if used && inline_value is None {
           consumed_next = true
         }
       }
       "listfiles" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
         opts.list_files = v
         if used && inline_value is None {
           consumed_next = true
         }
       }
       "listfilesonly" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
+        // A later `--listFilesOnly false` turns it back off; the
+        // `--listFiles` it implied stays, as an explicit one would.
+        opts.list_files_only = v
         if v {
           opts.list_files = true
-          opts.list_files_only = true
         }
         if used && inline_value is None {
           consumed_next = true
@@ -576,7 +589,7 @@ fn mtsc_parse_args(
       // `--pretty` controls colour, and mtsc emits none either way, so
       // there is nothing to honour and nothing lost.
       "pretty" | "nocolors" | "nocolor" => {
-        let (_, used) = mtsc_read_bool_value(argv, i + 1)
+        let (_, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
         if used && inline_value is None {
           consumed_next = true
         }
@@ -599,14 +612,14 @@ fn mtsc_parse_args(
         }
       // ------------------------------------------------- emit selection
       "noemit" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
         opts.no_emit = v
         if used && inline_value is None {
           consumed_next = true
         }
       }
       "declaration" | "d" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
         opts.dts = v
         if v {
           opts.bundle = true
@@ -616,10 +629,10 @@ fn mtsc_parse_args(
         }
       }
       "emitdeclarationonly" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
+        opts.dts_only = v
         if v {
           opts.dts = true
-          opts.dts_only = true
           opts.bundle = true
         }
         if used && inline_value is None {
@@ -631,7 +644,7 @@ fn mtsc_parse_args(
         opts.bundle = true
       }
       "sourcemap" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
         opts.sourcemap = v
         if used && inline_value is None {
           consumed_next = true
@@ -639,20 +652,15 @@ fn mtsc_parse_args(
       }
       // ----------------------------------------------------- type-checking
       "nocheck" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
         opts.no_check = v
         if used && inline_value is None {
           consumed_next = true
         }
       }
       "skiplibcheck" => {
-        let (v, used) = mtsc_read_bool_value(argv, i + 1)
-        opts.skip_lib_check = Some(
-          match inline_value {
-            Some(iv) => iv != "false"
-            None => v
-          },
-        )
+        let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
+        opts.skip_lib_check = Some(v)
         if used && inline_value is None {
           consumed_next = true
         }
@@ -774,7 +782,7 @@ fn mtsc_parse_args(
           // A boolean in this tier may still carry `true` / `false`.
           let mut flag = true
           if inline_value is None && !mtsc_option_takes_value(name) {
-            let (v, used) = mtsc_read_bool_value(argv, i + 1)
+            let (v, used) = mtsc_read_bool_value(argv, i + 1, inline_value)
             flag = v
             if used {
               consumed_next = true
