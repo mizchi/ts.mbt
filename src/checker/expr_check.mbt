@@ -25183,6 +25183,7 @@ fn bind_object_pattern(
   ctx : CheckCtx,
   ob : @ast.TsObjectBinding,
   source : @ast.TsType,
+  source_key? : String,
 ) -> Unit {
   for prop in ob.props {
     // TS2341 / TS2445: destructuring reaches a member exactly as a
@@ -25248,9 +25249,18 @@ fn bind_object_pattern(
       }
       _ => ()
     }
-    let field_ty = match computed_ty {
-      Some(t) => t
-      None =>
+    // Destructuring a narrowable reference reads each property through
+    // what is known about it: after `if (!body.tables) body.tables = []`,
+    // `const { tables } = body` is the narrowed `number[]` (probed), and
+    // univer's text-model helpers are written exactly that way.
+    let narrowed_field = match (source_key, prop.key_expr) {
+      (Some(k), None) => env.lookup(member_narrowing_key(k, prop.key))
+      _ => None
+    }
+    let field_ty = match (narrowed_field, computed_ty) {
+      (Some(t), _) => t
+      (None, Some(t)) => t
+      (None, None) =>
         match ctx.resolver.lookup_field(source, prop.key) {
           Some(t) => t
           None =>
@@ -29908,7 +29918,19 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           )
         }
       }
-      bind_object_pattern(env, ctx, ob, source_ty)
+      // An annotation retypes the source, so only an unannotated
+      // declaration reads the initializer's narrowed properties.
+      bind_object_pattern(
+        env,
+        ctx,
+        ob,
+        source_ty,
+        source_key?=if is_checkable(declared) {
+          None
+        } else {
+          narrowing_key_for_expr(init)
+        },
+      )
     }
     Var(@ast.TsBinding::Target(_), _, init)
     | Let(@ast.TsBinding::Target(_), _, init)

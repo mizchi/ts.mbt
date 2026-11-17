@@ -735,3 +735,20 @@ test "a declare global value's qualified type stays in its module's scope" {
     [],
   )
 }
+
+///|
+/// Destructuring a reference reads each property through what control
+/// flow knows about it: after `if (!body.tables) body.tables = []`,
+/// `const { tables } = body` is the narrowed array (univer's text-model
+/// helpers, 96 reports in one file). A sibling property, an unguarded read
+/// and a read after the source was reassigned keep the optional type.
+test "destructuring reads a narrowed property" {
+  assert_eq(
+    issue_lines(
+      "interface B { tables?: number[]; other?: number[] }\nfunction okAssigned(body: B) { if (!body.tables) { body.tables = []; } const { tables } = body; tables.push(1); }\nfunction okRenamed(body: B) { if (body.tables) { const { tables: t } = body; t.push(1); } }\nfunction badSibling(body: B) { if (!body.tables) { body.tables = []; } const { other } = body; other.push(1); }\nfunction badReassigned(body: B, next: B) { if (body.tables) { body = next; const { tables } = body; tables.push(1); } }",
+    ),
+    [
+      "function badSibling > call `push`: object is possibly `undefined`", "function badReassigned > call `push`: object is possibly `undefined`",
+    ],
+  )
+}
