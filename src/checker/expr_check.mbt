@@ -10218,6 +10218,41 @@ fn type_has_undefined(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Whether a function whose return type is `ty` may end without a value:
+/// a bare `return;` or falling off the end. tsc allows both when the type
+/// admits `undefined` or `void`, and that includes an alias holding one.
+/// univer's `Nullable<T> = T | null | undefined | void` is the return type of
+/// most of its lookups, and `if (data == null) return;` in one of them was
+/// "no value returned" (100 reports), while the inline `string | void` was
+/// fine. The resolver-free `is_assignable_to` cannot expand the alias, so
+/// aliases and union members are expanded here. Running out of depth
+/// answers "admits", which can only lose a report.
+fn return_type_admits_no_value(
+  resolver : Resolver,
+  ty : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if is_assignable_to(@ast.TsType::Undefined, ty) ||
+    is_assignable_to(@ast.TsType::Void, ty) {
+    return true
+  }
+  if depth > 8 {
+    return true
+  }
+  match ty {
+    Union(_) =>
+      union_components(ty)
+      .iter()
+      .any(fn(p) { return_type_admits_no_value(resolver, p, depth + 1) })
+    Named(_) | Applied(_, _) => {
+      let u = resolver.unwrap(ty)
+      u != ty && return_type_admits_no_value(resolver, u, depth + 1)
+    }
+    _ => false
+  }
+}
+
+///|
 /// Whether the TARGET of an assignment admits `null` (`want_null`) or
 /// `undefined`, following an alias member of a union. `unwrap_containers`
 /// leaves a self-referential alias as its name, so `Json | undefined` with
@@ -30223,8 +30258,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
         None =>
           if is_checkable(ctx.return_type) &&
-            !is_assignable_to(@ast.TsType::Undefined, ctx.return_type) &&
-            !is_assignable_to(@ast.TsType::Void, ctx.return_type) {
+            !return_type_admits_no_value(ctx.resolver, ctx.return_type, 0) {
             record(
               ctx,
               "return",
@@ -35639,8 +35673,7 @@ fn check_function_body_with(
   // signatures require an explicit `return`.
   if !func.is_generator &&
     is_checkable(body_return) &&
-    !is_assignable_to(@ast.TsType::Undefined, body_return) &&
-    !is_assignable_to(@ast.TsType::Void, body_return) &&
+    !return_type_admits_no_value(resolver, body_return, 0) &&
     !block_always_exits_with(func.body, env, resolver) &&
     !permissive {
     issues.push({

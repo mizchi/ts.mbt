@@ -221,6 +221,7 @@ guide to whether the behaviour will change.
 | types | `nonNullAssertionStripsAliasedVoid` | `x!` removes `null`, `undefined` and `void`, through an alias such as `Nullable<T> = T \| null \| undefined \| void`, and when the `void` is itself an alias | TS18048 TS18049 | — |
 | types | `objectSpreadOfUnenumerableSource` | An object literal spreading `any` is not missing members; one spreading a known shape is | TS2739 TS2741 | — |
 | types | `optionalAnyReadsAsAny` | An optional `any` member or parameter reads as `any`; an optional `number` or `unknown` keeps its `undefined` | TS18046 TS18048 | — |
+| types | `returnWithoutValueThroughAlias` | A bare `return;` or falling off the end is legal when the return type admits `undefined` or `void`, through an alias such as `Nullable<T>`; a `null`-only alias still needs a value | TS2322 TS2366 | — |
 | types | `templateInferPatternsInConditionals` | `infer` in a template with a fixed part or a bound, as a conditional's check type | TS2322 | `templateLiteralTypes4` |
 
 The `realWorld` cases are reduced from `zod@4` and `effect@4` sources that

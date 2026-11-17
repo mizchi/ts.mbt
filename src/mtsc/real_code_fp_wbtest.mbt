@@ -770,3 +770,20 @@ test "a guard narrows a contextually typed parameter, not any" {
     ],
   )
 }
+
+///|
+/// A bare `return;` and falling off the end are legal when the return type
+/// admits `undefined` or `void`, through an alias too. univer's lookups are
+/// typed `Nullable<T> = T | null | undefined | void` (100 reports). An alias
+/// admitting only `null` still requires a value.
+test "a return type alias admitting undefined allows no value" {
+  assert_eq(
+    issue_lines(
+      "type Nullable<T> = T | null | undefined | void;\ntype OnlyNull<T> = T | null;\nfunction okBare(d: number | null): Nullable<string> { if (d == null) return; return \"x\"; }\nfunction okFallOff(d: number | null): Nullable<string> { if (d != null) return \"x\"; }\nfunction badBare(d: number | null): OnlyNull<string> { if (d == null) return; return \"x\"; }\nfunction badFallOff(d: number | null): OnlyNull<string> { if (d != null) return \"x\"; }",
+    ),
+    [
+      "function badBare > return: expected `OnlyNull<string>` but no value returned",
+      "function badFallOff: not all paths return a `OnlyNull<string>`",
+    ],
+  )
+}
