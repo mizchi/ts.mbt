@@ -690,10 +690,7 @@ test "a declare global value's type stays in its declaring module's scope" {
   assert_eq(graph_messages([globals, ("/src/root.ts", body)], []), [])
   assert_eq(
     graph_messages(
-      [
-        globals,
-        ("/src/root.ts", "import type {} from \"./globals\";\n" + body),
-      ],
+      [globals, ("/src/root.ts", "import type {} from \"./globals\";\n" + body)],
       [("/src/root.ts", "./globals", "/src/globals.d.ts")],
     ),
     ["top-level > binding `bad` init :: expected `number` but got `string`"],
