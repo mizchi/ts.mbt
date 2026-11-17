@@ -7069,6 +7069,12 @@ fn Resolver::class_declaring_method(
     if cls.methods.iter().any(fn(m) { m.name == meth && !m.is_static }) {
       return Some((n, subst))
     }
+    // An own instance PROPERTY of that name hides the base's methods too
+    // (`m: any` over a base overload set), so the walk stops with no method.
+    // The accessor halves are recorded as methods and answered above.
+    if cls.properties.iter().any(fn(p) { p.name == meth && !p.is_static }) {
+      return None
+    }
     let mut next : String? = None
     for b in cls.base_names {
       if b != "<expr-base>" && self.classes.contains(b) {
@@ -7590,20 +7596,29 @@ fn Resolver::method_overload_signatures(
           }
           let chosen = if sig_only.length() > 0 { sig_only } else { all }
           for m in chosen {
+            // A method's own type parameters shadow the class's, so they
+            // stay unsubstituted (`pick<T>(x: T)` on `Box<T>`), as
+            // `lookup_applied_class_member` already does.
+            let msubst : Map[String, @ast.TsType] = Map([])
+            for k, v in subst {
+              if !m.type_params.contains(k) {
+                msubst[k] = v
+              }
+            }
             let ps : Array[@ast.TsType] = []
             for p in m.params {
               ps.push(
-                if subst.is_empty() {
+                if msubst.is_empty() {
                   p.1
                 } else {
-                  substitute_params(p.1, subst)
+                  substitute_params(p.1, msubst)
                 },
               )
             }
-            let ret = if subst.is_empty() {
+            let ret = if msubst.is_empty() {
               m.return_type
             } else {
-              substitute_params(m.return_type, subst)
+              substitute_params(m.return_type, msubst)
             }
             candidates.push((ps, ret))
           }
@@ -15988,15 +16003,15 @@ fn check_expr_against(
   arg_callee_non_generic~ : Bool = false,
 ) -> Unit {
   let walk_after = expr is (ArrowFunc(_, _, _, _) | FuncExpr(_))
-  let held : Array[@ast.TsExpr] = []
-  if expr is (ObjectLit(_) | ArrayLit(_)) {
-    collect_literal_function_values(expr, held)
+  let held : Array[(@ast.TsExpr, Array[(@ast.TsExpr, Bool)])] = []
+  if expr is (ObjectLit(_) | ArrayLit(_) | Cond(_, _, _)) {
+    collect_literal_function_values(expr, [], held)
   }
   if !walk_after {
     let arrows_len = deferred_arrow_bodies.length()
     let funcs_len = deferred_func_bodies.length()
     for h in held {
-      match h {
+      match h.0 {
         ArrowFunc(_, _, body, _) => deferred_arrow_bodies.push(body)
         FuncExpr(f) => deferred_func_bodies.push(f.body)
         _ => ()
@@ -16018,7 +16033,20 @@ fn check_expr_against(
     check_call_args_in_expr(env, expr, ctx)
   }
   for h in held {
-    check_call_args_in_expr(env, h, ctx)
+    let (value, conds) = h
+    if conds.is_empty() {
+      check_call_args_in_expr(env, value, ctx)
+    } else {
+      let snap = env.full_snapshot()
+      for cs in conds {
+        let eff = analyze_narrowing(env, ctx.resolver, cs.0)
+        for b in (if cs.1 { eff.then_binds } else { eff.else_binds }) {
+          env.narrow(b.0, b.1)
+        }
+      }
+      check_call_args_in_expr(env, value, ctx)
+      env.restore_from(snap)
+    }
   }
 }
 
@@ -23012,23 +23040,43 @@ let deferred_func_bodies : Array[@ast.TsBlock] = []
 /// The function values an object or array literal holds, through nested
 /// literals: an entry's value, a computed entry's value, an array element.
 /// These are the values the literal's shape check hands a contextual type.
+///
+/// Each value comes with the conditions it sits under (`(condition, sense)`
+/// from the outside in), because the eager walk checks a conditional's arms
+/// under the condition's narrowing, and a deferred arm that the shape check
+/// did not walk in context must be walked the same way: effect's
+/// `emitter === undefined ? (a) => a : (a) => … emitter.begin …` read
+/// `emitter` as possibly undefined when the arm was walked on its own.
 fn collect_literal_function_values(
   expr : @ast.TsExpr,
-  out : Array[@ast.TsExpr],
+  path : Array[(@ast.TsExpr, Bool)],
+  out : Array[(@ast.TsExpr, Array[(@ast.TsExpr, Bool)])],
 ) -> Unit {
   match expr {
-    ArrowFunc(_, _, _, _) | FuncExpr(_) => out.push(expr)
+    ArrowFunc(_, _, _, _) | FuncExpr(_) => out.push((expr, path.copy()))
     ObjectLit(entries) =>
       for e in entries {
         match e.1 {
-          ComputedProp(_, v) => collect_literal_function_values(v, out)
-          v => collect_literal_function_values(v, out)
+          ComputedProp(_, v) => collect_literal_function_values(v, path, out)
+          v => collect_literal_function_values(v, path, out)
         }
       }
     ArrayLit(items) =>
       for it in items {
-        collect_literal_function_values(it, out)
+        collect_literal_function_values(it, path, out)
       }
+    // The shape check judges each arm of a conditional entry against the
+    // entry's type, so a function value in either arm is checked in context
+    // too. The condition is not a value of the entry and stays on the eager
+    // walk.
+    Cond(c, then_, else_) => {
+      path.push((c, true))
+      collect_literal_function_values(then_, path, out)
+      let _ = path.pop()
+      path.push((c, false))
+      collect_literal_function_values(else_, path, out)
+      let _ = path.pop()
+    }
     _ => ()
   }
 }
@@ -27473,7 +27521,9 @@ fn narrow_predicate_path_arg(
     t is (Void | Any | Unknown) || resolver.unwrap(t) is (Void | Any | Unknown)
   }
   if unproven(narrowed) ||
-    union_components(narrowed).iter().any(unproven) ||
+    union_components(deep_union_members(resolver, resolver.unwrap(narrowed)))
+    .iter()
+    .any(unproven) ||
     target_admits_nullish(resolver, narrowed, false, 0) ||
     target_admits_nullish(resolver, narrowed, true, 0) {
     return
@@ -30145,12 +30195,20 @@ fn narrow_after_assignment(
     // fixed. Removing nullish members cannot add a mismatch.
     MethodCall(Var(cn), meth, _) if env.lookup(cn) is None =>
       match ctx.resolver.single_static_method(cn, meth) {
+        // Every member of the resolved return must be positively
+        // non-nullish: `string | void` is not, and `target_admits_nullish`
+        // does not see the `void`.
         Some(m) =>
           m.type_params.length() == 0 &&
           is_checkable(m.return_type) &&
-          !(ctx.resolver.unwrap(m.return_type) is (Void | Any | Unknown)) &&
-          !target_admits_nullish(ctx.resolver, m.return_type, false, 0) &&
-          !target_admits_nullish(ctx.resolver, m.return_type, true, 0)
+          union_components(
+            deep_union_members(ctx.resolver, ctx.resolver.unwrap(m.return_type)),
+          )
+          .iter()
+          .all(fn(t) {
+            !(ctx.resolver.unwrap(t)
+            is (Void | Null | Undefined | Any | Unknown | Never))
+          })
         None => false
       }
     _ => false

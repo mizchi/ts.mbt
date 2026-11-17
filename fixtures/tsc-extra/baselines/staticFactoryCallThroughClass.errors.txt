@@ -1,9 +1,12 @@
-staticFactoryCallThroughClass.ts(22,46): error TS2322: Type 'NumberValue' is not assignable to type 'string'.
-staticFactoryCallThroughClass.ts(23,96): error TS18048: 'v' is possibly 'undefined'.
-staticFactoryCallThroughClass.ts(24,66): error TS18047: 'b' is possibly 'null'.
+staticFactoryCallThroughClass.ts(23,46): error TS2322: Type 'NumberValue' is not assignable to type 'string'.
+staticFactoryCallThroughClass.ts(24,96): error TS18048: 'v' is possibly 'undefined'.
+staticFactoryCallThroughClass.ts(25,66): error TS18047: 'b' is possibly 'null'.
+staticFactoryCallThroughClass.ts(26,66): error TS2322: Type 'void | string' is not assignable to type 'string | undefined'.
+  Type 'void' is not assignable to type 'string | undefined'.
+staticFactoryCallThroughClass.ts(26,98): error TS18048: 'x' is possibly 'undefined'.
 
 
-==== staticFactoryCallThroughClass.ts (3 errors) ====
+==== staticFactoryCallThroughClass.ts (5 errors) ====
     // A static method called through its class returns what it declares.
     // univer writes `if (v == null || v.isNull()) { v = NumberValueObject.create(0); }`,
     // and after that `if` the value is non-nullish on both paths, including when
@@ -18,6 +21,7 @@ staticFactoryCallThroughClass.ts(24,66): error TS18047: 'b' is possibly 'null'.
     class NumberValue extends BaseValue { static create(n: number): NumberValue { return new NumberValue(); } }
     declare const anything: any;
     declare const AnyCtor: any;
+    declare class MaybeFactory { static make(): string | void; }
     
     export function okFactoryNarrowsAfterIf(v: Nullable<BaseValue>) { let w = v; if (w == null || w.isNull()) { w = NumberValue.create(0); } return w.isBool(); }
     export function okFactoryInCallback(xs: Nullable<BaseValue>[]) { xs.forEach((v) => { let w = v; if (w == null) { w = NumberValue.create(1); } w.isBool(); }); }
@@ -34,4 +38,10 @@ staticFactoryCallThroughClass.ts(24,66): error TS18047: 'b' is possibly 'null'.
     export function badReadBeforeFactory() { let b = null; const z = b.isBool(); b = NumberValue.create(5); return z; }
                                                                      ~
 !!! error TS18047: 'b' is possibly 'null'.
+    export function badVoidReturningFactory(x: string | undefined) { x = MaybeFactory.make(); return x.length; }
+                                                                     ~
+!!! error TS2322: Type 'void | string' is not assignable to type 'string | undefined'.
+!!! error TS2322:   Type 'void' is not assignable to type 'string | undefined'.
+                                                                                                     ~
+!!! error TS18048: 'x' is possibly 'undefined'.
     

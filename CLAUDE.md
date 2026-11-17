@@ -5725,6 +5725,20 @@ product surfaces now.
     function values the literal holds are held back now, including those
     in nested literals, and they are walked after the shape check unless
     it walked them in context.
+  - **The review of #300 found five more, two of them regressions from the
+    batch itself.**
+    - An own instance property (`m: any`) hides an inherited overload set.
+    - A method's own `<T>` shadows the class's `T` in the substitution. My
+      first reply called this unobservable; `pick<T>(x: T): T` beside
+      `pick(x: string): number` on a `Box<number>` showed it selecting the
+      wrong overload.
+    - A `string | void` static return is not never-nullish.
+    - An alias union holding `unknown` proves nothing.
+    - A function value in a conditional entry is held back too. Its fix
+      first cost two effect reports: a held arm that the shape check did not
+      walk in context was walked on its own, without the condition's
+      narrowing that the eager walk applies. Each held value now carries the
+      conditions it sits under.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

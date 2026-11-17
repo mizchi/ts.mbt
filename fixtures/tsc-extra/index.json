@@ -144,56 +144,86 @@
         {
           "name": "okInheritedOne",
           "kind": "ok",
-          "fromLine": 23,
-          "toLine": 23
+          "fromLine": 27,
+          "toLine": 27
         },
         {
           "name": "okInheritedTwo",
           "kind": "ok",
-          "fromLine": 24,
-          "toLine": 24
+          "fromLine": 28,
+          "toLine": 28
         },
         {
           "name": "OkFieldReceiver",
           "kind": "ok",
-          "fromLine": 25,
-          "toLine": 25
-        },
-        {
-          "name": "okInheritedReturnType",
-          "kind": "ok",
-          "fromLine": 26,
-          "toLine": 26
-        },
-        {
-          "name": "okDirectReturnType",
-          "kind": "ok",
-          "fromLine": 27,
-          "toLine": 28
-        },
-        {
-          "name": "badOverrideHidesTheSet",
-          "kind": "bad",
           "fromLine": 29,
           "toLine": 29
         },
         {
-          "name": "badInheritedReturnType",
-          "kind": "bad",
+          "name": "okInheritedReturnType",
+          "kind": "ok",
           "fromLine": 30,
           "toLine": 30
         },
         {
-          "name": "badDirectReturnType",
-          "kind": "bad",
+          "name": "okPropertyHidesTheSet",
+          "kind": "ok",
           "fromLine": 31,
           "toLine": 31
         },
         {
+          "name": "okMethodBinderShadowsClass",
+          "kind": "ok",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "okShadowSelectsGeneric",
+          "kind": "ok",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "okDirectReturnType",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 35
+        },
+        {
+          "name": "badOverrideHidesTheSet",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "badInheritedReturnType",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 37
+        },
+        {
+          "name": "badDirectReturnType",
+          "kind": "bad",
+          "fromLine": 38,
+          "toLine": 38
+        },
+        {
           "name": "badTooManyOperators",
           "kind": "bad",
-          "fromLine": 32,
-          "toLine": 33
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "badMethodBinderShadowsClass",
+          "kind": "bad",
+          "fromLine": 40,
+          "toLine": 40
+        },
+        {
+          "name": "badShadowSelectsGeneric",
+          "kind": "bad",
+          "fromLine": 41,
+          "toLine": 42
         }
       ]
     },
@@ -1021,74 +1051,80 @@
         {
           "name": "okStaticOnVariable",
           "kind": "ok",
-          "fromLine": 21,
-          "toLine": 21
-        },
-        {
-          "name": "okStaticConcrete",
-          "kind": "ok",
-          "fromLine": 22,
-          "toLine": 22
-        },
-        {
-          "name": "okFunctionOnPath",
-          "kind": "ok",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "okStaticOnPath",
+          "name": "okStaticConcrete",
           "kind": "ok",
           "fromLine": 24,
           "toLine": 24
         },
         {
-          "name": "okStaticOnChain",
+          "name": "okFunctionOnPath",
           "kind": "ok",
           "fromLine": 25,
           "toLine": 25
         },
         {
-          "name": "okFunctionOnChain",
+          "name": "okStaticOnPath",
           "kind": "ok",
           "fromLine": 26,
           "toLine": 26
         },
         {
-          "name": "badElseOfPath",
-          "kind": "bad",
+          "name": "okStaticOnChain",
+          "kind": "ok",
           "fromLine": 27,
           "toLine": 27
         },
         {
-          "name": "badElseOfChain",
-          "kind": "bad",
+          "name": "okFunctionOnChain",
+          "kind": "ok",
           "fromLine": 28,
           "toLine": 28
         },
         {
-          "name": "badSiblingMember",
+          "name": "badElseOfPath",
           "kind": "bad",
           "fromLine": 29,
           "toLine": 29
         },
         {
-          "name": "badUnguarded",
+          "name": "badElseOfChain",
           "kind": "bad",
           "fromLine": 30,
           "toLine": 30
         },
         {
-          "name": "badUnknownTargetProvesNothing",
+          "name": "badSiblingMember",
           "kind": "bad",
           "fromLine": 31,
           "toLine": 31
         },
         {
-          "name": "badAliasedUnknownProvesNothing",
+          "name": "badUnguarded",
           "kind": "bad",
           "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "badUnknownTargetProvesNothing",
+          "kind": "bad",
+          "fromLine": 33,
           "toLine": 33
+        },
+        {
+          "name": "badAliasedUnknownProvesNothing",
+          "kind": "bad",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badAliasedUnionWithUnknown",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 36
         }
       ]
     },
@@ -1660,87 +1696,118 @@
       },
       "accepted": false,
       "codes": [
-        2339
+        2339,
+        18048
       ],
       "baseline": "baselines/contextuallyTypedFunctionValueThroughGuard.errors.txt",
       "claims": [
         {
           "name": "okAnnotatedArrow",
           "kind": "ok",
-          "fromLine": 23,
-          "toLine": 23
-        },
-        {
-          "name": "okObjectMember",
-          "kind": "ok",
-          "fromLine": 24,
-          "toLine": 24
-        },
-        {
-          "name": "okArrayElement",
-          "kind": "ok",
           "fromLine": 25,
           "toLine": 25
         },
         {
-          "name": "okReturned",
+          "name": "okObjectMember",
           "kind": "ok",
           "fromLine": 26,
           "toLine": 26
         },
         {
-          "name": "okFunctionExpression",
+          "name": "okArrayElement",
           "kind": "ok",
           "fromLine": 27,
           "toLine": 27
         },
         {
-          "name": "okNestedObjectMember",
+          "name": "okReturned",
           "kind": "ok",
           "fromLine": 28,
           "toLine": 28
         },
         {
-          "name": "okAssignmentInsideObjectLiteral",
+          "name": "okFunctionExpression",
           "kind": "ok",
           "fromLine": 29,
           "toLine": 29
         },
         {
-          "name": "okCallArgument",
+          "name": "okNestedObjectMember",
           "kind": "ok",
           "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "okAssignmentInsideObjectLiteral",
+          "kind": "ok",
+          "fromLine": 31,
           "toLine": 31
         },
         {
-          "name": "badAnnotatedArrow",
-          "kind": "bad",
+          "name": "okConditionalEntry",
+          "kind": "ok",
           "fromLine": 32,
           "toLine": 32
         },
         {
-          "name": "badObjectMember",
-          "kind": "bad",
+          "name": "okConditionalBare",
+          "kind": "ok",
           "fromLine": 33,
           "toLine": 33
         },
         {
+          "name": "okConditionalArmUnderCondition",
+          "kind": "ok",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "okCallArgument",
+          "kind": "ok",
+          "fromLine": 37,
+          "toLine": 38
+        },
+        {
+          "name": "badAnnotatedArrow",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "badObjectMember",
+          "kind": "bad",
+          "fromLine": 40,
+          "toLine": 40
+        },
+        {
           "name": "badArrayElement",
           "kind": "bad",
-          "fromLine": 34,
-          "toLine": 34
+          "fromLine": 41,
+          "toLine": 41
         },
         {
           "name": "badReturned",
           "kind": "bad",
-          "fromLine": 35,
-          "toLine": 35
+          "fromLine": 42,
+          "toLine": 42
         },
         {
           "name": "badFunctionExpression",
           "kind": "bad",
-          "fromLine": 36,
-          "toLine": 37
+          "fromLine": 43,
+          "toLine": 43
+        },
+        {
+          "name": "badConditionalEntry",
+          "kind": "bad",
+          "fromLine": 44,
+          "toLine": 44
+        },
+        {
+          "name": "badConditionalArmWrongSide",
+          "kind": "bad",
+          "fromLine": 45,
+          "toLine": 46
         }
       ]
     },
@@ -2200,50 +2267,56 @@
         {
           "name": "okFactoryNarrowsAfterIf",
           "kind": "ok",
-          "fromLine": 16,
-          "toLine": 16
-        },
-        {
-          "name": "okFactoryInCallback",
-          "kind": "ok",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "okAutoTypedThenFactory",
+          "name": "okFactoryInCallback",
           "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "okAutoTypedThenAnyNew",
+          "name": "okAutoTypedThenFactory",
           "kind": "ok",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "okFactoryInitializer",
+          "name": "okAutoTypedThenAnyNew",
           "kind": "ok",
           "fromLine": 20,
-          "toLine": 21
+          "toLine": 20
         },
         {
-          "name": "badFactoryMismatch",
-          "kind": "bad",
-          "fromLine": 22,
+          "name": "okFactoryInitializer",
+          "kind": "ok",
+          "fromLine": 21,
           "toLine": 22
         },
         {
-          "name": "badAnyAssignmentKeepsDeclared",
+          "name": "badFactoryMismatch",
           "kind": "bad",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "badReadBeforeFactory",
+          "name": "badAnyAssignmentKeepsDeclared",
           "kind": "bad",
           "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badReadBeforeFactory",
+          "kind": "bad",
+          "fromLine": 25,
           "toLine": 25
+        },
+        {
+          "name": "badVoidReturningFactory",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 27
         }
       ]
     },
