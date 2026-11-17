@@ -638,3 +638,20 @@ test "a non-null assertion strips an aliased nullish union" {
     ],
   )
 }
+
+///|
+/// A type guard narrows its subject through a static method called on its
+/// class and through a property path or an optional chain. univer guards
+/// every optional read with `Tools.isDefine(props?.top)`, and neither the
+/// static call nor the chain narrowed anything. A sibling member the guard
+/// did not test is still possibly undefined.
+test "a static guard narrows a path and an optional chain" {
+  assert_eq(
+    issue_lines(
+      "class Tools { static isDefine<T>(value?: T | void): value is T { return value !== undefined && value !== null } }\ninterface P { top?: number; other?: number }\nfunction okStatic(x: number | undefined) { let t = 0; if (Tools.isDefine(x)) { t = x; } }\nfunction okPath(props: P) { let t = 0; if (Tools.isDefine(props.top)) { t = props.top; } }\nfunction okChain(props?: P) { let t = 0; if (Tools.isDefine(props?.top)) { t = props.top; } }\nfunction badSibling(props?: P) { let t = 0; if (Tools.isDefine(props?.top)) { t = props.other; } }",
+    ),
+    [
+      "function badSibling > assign `t`: type `number | undefined` is not assignable to type `number`",
+    ],
+  )
+}

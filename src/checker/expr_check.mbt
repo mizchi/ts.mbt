@@ -26929,7 +26929,83 @@ fn apply_type_predicate_narrowing(
           type_contains_unresolved_named(target, resolver),
       )
     }
-    _ => ()
+    arg =>
+      narrow_predicate_path_arg(
+        env,
+        resolver,
+        arg,
+        target,
+        pair_pos,
+        pair_neg,
+        predicate_is_generic || type_contains_unresolved_named(target, resolver),
+      )
+  }
+}
+
+///|
+/// A type guard whose subject argument is a property path or an optional
+/// chain rather than a bare binding: `isDefine(props.top)`,
+/// `Tools.isDefine(props?.top)`. The path narrows under the dotted key the
+/// truthiness and equality guards already bind. When the narrowed value
+/// cannot be nullish, the chain did not short-circuit, so every receiver a
+/// `?.` guarded is non-nullish too, as with `if (props?.top)`. A path this
+/// cannot name (a call, a computed index) narrows nothing, as before.
+fn narrow_predicate_path_arg(
+  env : ExprEnv,
+  resolver : Resolver,
+  arg : @ast.TsExpr,
+  target : @ast.TsType,
+  pair_pos : Array[(String, @ast.TsType)],
+  pair_neg : Array[(String, @ast.TsType)],
+  loose : Bool,
+) -> Unit {
+  let (plain, receivers) = optional_chain_guarded_receivers(arg)
+  let key = match plain {
+    PropAccess(_, _) | IndexAccess(_, _) =>
+      match narrowing_key_for_expr(plain) {
+        Some(k) => k
+        None => return
+      }
+    _ => return
+  }
+  let before = pair_pos.length()
+  narrow_by_predicate_target(
+    resolver,
+    narrowing_current_type(env, resolver, key),
+    target,
+    key,
+    pair_pos,
+    // A chain's negative branch says nothing about the path: the guard may
+    // have failed because a receiver was nullish.
+    if receivers.is_empty() {
+      pair_neg
+    } else {
+      []
+    },
+    loose_target=loose,
+  )
+  if receivers.is_empty() || pair_pos.length() == before {
+    return
+  }
+  let narrowed = pair_pos[pair_pos.length() - 1].1
+  if target_admits_nullish(resolver, narrowed, false, 0) ||
+    target_admits_nullish(resolver, narrowed, true, 0) {
+    return
+  }
+  for r in receivers {
+    match narrowing_key_for_expr(r) {
+      Some(rk) =>
+        pair_pos.push(
+          (
+            rk,
+            non_nullable_resolved(
+              resolver,
+              narrowing_current_type(env, resolver, rk),
+            ),
+          ),
+        )
+      None => ()
+    }
   }
 }
 
@@ -27447,16 +27523,52 @@ fn apply_method_type_predicate_narrowing(
       resolver.globals.get("@ns:" + ns + "." + method_name)
     _ => None
   }
+  // A STATIC method guard called through its class (`Tools.isDefine(x)`,
+  // univer's helper for every optional read): a class used as a value is
+  // `any` here, so the instance-side lookup below finds nothing. The class's
+  // own declaration has the signature. Only a single non-accessor static of
+  // that name answers, so an overload set keeps the old route. Its own type
+  // parameters stay unresolved names, as a generic function guard's do, and
+  // make the target loose.
+  let static_guard = match receiver {
+    Var(cn) if ns_predicate is None && env.lookup(cn) is None =>
+      match resolver.classes.get(cn) {
+        Some(cls) => {
+          let mut found : @ast.TsClassMethodDecl? = None
+          let mut count = 0
+          for m in cls.methods {
+            if m.is_static && m.accessor == "" && m.name == method_name {
+              count += 1
+              found = Some(m)
+            }
+          }
+          if count == 1 {
+            found
+          } else {
+            None
+          }
+        }
+        None => None
+      }
+    _ => None
+  }
   let recv_ty = infer_expr(env, resolver, receiver)
   // The parameter types of the signature the predicate came from, to tell
   // its subject apart (`predicate_subject_index`); `None` keeps the first
   // argument, as an overloaded guard's idiom has it.
   let mut predicate_params : Array[@ast.TsType]? = None
+  let mut static_generic = false
   let ret = match
     (if ns_predicate is Some(_) {
       None
     } else {
-      resolver.lookup_method_sig(recv_ty, method_name)
+      match static_guard {
+        Some(m) => {
+          static_generic = m.type_params.length() > 0
+          Some((method_callable_param_types(m), m.return_type))
+        }
+        None => resolver.lookup_method_sig(recv_ty, method_name)
+      }
     }) {
     Some((ps, ret)) => {
       predicate_params = Some(ps)
@@ -27480,7 +27592,7 @@ fn apply_method_type_predicate_narrowing(
   // A target reached through the fallback below is a generic predicate's
   // with its type parameters read as `any`: fine for the positive branch,
   // too wide for the negative one (see `narrow_by_predicate_target`).
-  let mut loose = false
+  let mut loose = static_generic
   let (param_name, target) = match ret {
     TypePredicate(p, t) => (p, t)
     // An OVERLOADED predicate (`Predicate.hasProperty(cause, "errno")`):
@@ -27587,7 +27699,10 @@ fn apply_method_type_predicate_narrowing(
         pair_neg.push((arg_name, else_ty))
       }
     }
-    _ => ()
+    arg =>
+      narrow_predicate_path_arg(
+        env, resolver, arg, target, pair_pos, pair_neg, loose,
+      )
   }
 }
 
