@@ -366,6 +366,20 @@ verify-real-app *ARGS:
     moon build --target native --release
     node scripts/verify_real_app.mjs {{ ARGS }}
 
+# Mutation differential over `fixtures/real-app/ok`: every site of every
+# mutator in `scripts/mutation_differential.mjs`, one edit at a time, each
+# classified by what tsc says about it. Fails on an undeclared false
+# positive (a mutant tsc accepts and mtsc reports) and on a STALE entry in
+# `fixtures/real-app/mutation-fps.txt`; prints recall per mutator, which is
+# measured and not gated. About 20 minutes for the 455 mutants, so it is
+# not part of `ci`; `--count N --seed S` samples.
+#   just verify-mutations
+#   just verify-mutations --count 60 --seed 2
+#   just verify-mutations --project $UNIVER --tsconfig packages/core/tsconfig.json --count 40
+verify-mutations *ARGS:
+    moon build --target native --release
+    node scripts/mutation_differential.mjs --max-fp 0 {{ ARGS }}
+
 # Is any checker rule superlinear in the size of a module-wide list?
 #
 # `verify-checker-soundness` asks whether the answer is RIGHT, over 4,484

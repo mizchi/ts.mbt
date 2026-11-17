@@ -5861,6 +5861,72 @@ product surfaces now.
     line, and reference counting is about 12%. The check is also
     single-threaded, where tsrs runs four checkers. Each of these needs a
     design change, not another cache.
+  Batch GR adopts a testing method from tsrs: a mutation differential.
+  `scripts/mutation_differential.mjs` (`just verify-mutations`) makes one
+  small edit at a time in `fixtures/real-app/ok`, legal code against eleven
+  real packages, and asks tsc whether the edit is an error. Each mutant is
+  then one of four outcomes:
+  - CAUGHT: tsc reports something new in that file, and so does mtsc.
+  - MISS: tsc reports something new, and mtsc is silent.
+  - FP: tsc reports nothing new, and mtsc does.
+  - TN: neither reports anything new.
+
+  "New" is a multiset difference against the unmutated run, without line
+  numbers, so a field target that already carries reports still gives a
+  clean answer per edit.
+  - **Every other checker gate is a list somebody wrote.** A mutator is
+    applied at every site it matches, so it reaches the calls, member
+    accesses and object literals that real code writes, against real
+    package types.
+  - **The first run took 455 mutants** (12 mutators, 70 lines). Recall is
+    **30%** (77 of the 260 that tsc rejects), and there were **3 false
+    positives**, all on legal code and none reachable from the corpus or
+    from a hand-written case. Recall is measured, not gated. The worst
+    mutators are a member typo on a package type (30%), a `null` argument
+    (21%) and an extra or missing argument (28% / 33%), which ranks the
+    next work. After this batch's fixes the run has **1** false positive, the
+    declared one, and recall is unchanged, since the fixes remove false
+    positives and add no check.
+  - **Two of the three FPs, and a MISS, had one cause.** An optional
+    parameter's type is `T | undefined`, and the union took weaker paths
+    than `T`. A non-literal source whose members need structural
+    assignability was reported:
+    - `const opts = { locale }` passed to date-fns' `options?:
+      FormatOptions`;
+    - `0` passed to yjs' `attributes?: Object`.
+
+    And an object literal was not checked against it at all:
+    `take({ value: "bad" })` against `p?: { value: number }` was silent.
+    A non-nullish value meets `T | undefined` exactly when it meets `T`,
+    so the nullish members are dropped first, but only for a NON-literal
+    source with an object-shaped `T`. Both limits were measured, not
+    assumed:
+    - Doing it for an object literal too, which is what tsc does, switched
+      on excess-property and nested-member checks the union path skipped.
+      On univer that exposed four unrelated gaps at once (`IExecutionOptions`,
+      a nested `IRange`, `docsConfig.lists`, a member read in `tools.ts`):
+      36 new reports on legal code. So the literal MISS stays, declared in
+      tsc-extra with that reason.
+    - For an enum `T` the union path decides MORE: `s.mode = n` against
+      `mode?: Mode` (a string enum) is reported through the union and
+      abstained on against the bare `Mode`. The dataset gate caught that
+      the moment the first version shipped it.
+  - **The third FP was the missing `thisArg`.** Every array callback
+    method takes the lib's optional `thisArg?: any`, and the member table
+    spelled it for none of the ten, so `xs.filter(f, ctx)` was "expected 1
+    argument(s), got 2". This is batch FM's optional-parameter family,
+    in the one table FM did not reach.
+  - **One FP is declared, not fixed.** It is listed in
+    `fixtures/real-app/mutation-fps.txt`, with the same STALE rule as the
+    other declared lists. date-fns' `FormatOptions` extends
+    `LocalizedOptions<K>`, whose `locale?: Pick<Locale, K>` loses `K` to
+    its inlined bound. `Pick` is resolved by `lookup_field` rather than by
+    the structural relation, so a non-literal `{ locale: Locale }` is
+    proven assignable in neither direction. Making the instantiated
+    comparison resolver-aware was tried and measured to change nothing,
+    because `struct_assignable_named_rec` cannot see through `Pick`
+    either, so it was reverted. The MISS face of the same gap is declared
+    in tsc-extra.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

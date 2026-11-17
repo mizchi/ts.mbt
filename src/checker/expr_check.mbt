@@ -4676,13 +4676,21 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
     "join" =>
       Some(@ast.TsType::Func([opt(@ast.TsType::String_)], @ast.TsType::String_))
     "toString" => Some(@ast.TsType::Func([], @ast.TsType::String_))
-    // Search / predicate
+    // Search / predicate. Every callback method takes the lib's optional
+    // `thisArg?: any` after the callback, so `xs.filter(f, ctx)` is legal;
+    // the mutation differential found it missing from all ten of them.
     "indexOf" => Some(@ast.TsType::Func([elem, opt_num], @ast.TsType::Number))
     "lastIndexOf" =>
       Some(@ast.TsType::Func([elem, opt_num], @ast.TsType::Number))
     "includes" => Some(@ast.TsType::Func([elem, opt_num], @ast.TsType::Boolean))
-    "every" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
-    "some" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
+    "every" =>
+      Some(
+        @ast.TsType::Func([cb_bool, optional_any_param()], @ast.TsType::Boolean),
+      )
+    "some" =>
+      Some(
+        @ast.TsType::Func([cb_bool, optional_any_param()], @ast.TsType::Boolean),
+      )
     // Iteration protocol views: `values()` yields the elements (for-of12
     // needs the element type to flow), `keys()` the indices, `entries()`
     // index/element pairs.
@@ -4706,14 +4714,27 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
           ]),
         ),
       )
-    "find" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
-    "findIndex" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
-    "findLast" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
-    "findLastIndex" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
+    "find" =>
+      Some(@ast.TsType::Func([cb_bool, optional_any_param()], nullable_elem))
+    "findIndex" =>
+      Some(
+        @ast.TsType::Func([cb_bool, optional_any_param()], @ast.TsType::Number),
+      )
+    "findLast" =>
+      Some(@ast.TsType::Func([cb_bool, optional_any_param()], nullable_elem))
+    "findLastIndex" =>
+      Some(
+        @ast.TsType::Func([cb_bool, optional_any_param()], @ast.TsType::Number),
+      )
     // Iteration with element-type-preserving result
-    "filter" => Some(@ast.TsType::Func([cb_bool], arr_t))
+    "filter" => Some(@ast.TsType::Func([cb_bool, optional_any_param()], arr_t))
     "forEach" =>
-      Some(@ast.TsType::Func([cb(@ast.TsType::Void)], @ast.TsType::Void))
+      Some(
+        @ast.TsType::Func(
+          [cb(@ast.TsType::Void), optional_any_param()],
+          @ast.TsType::Void,
+        ),
+      )
     // Generic methods — the formal `U` shape is exposed here for the
     // call-site contextual typing path to thread through, but the call
     // site's `MethodCall` handler in `infer_expr` substitutes the real
@@ -4723,14 +4744,14 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
     "map" =>
       Some(
         @ast.TsType::Func(
-          [cb(@ast.TsType::Any)],
+          [cb(@ast.TsType::Any), optional_any_param()],
           @ast.TsType::Array(@ast.TsType::Any),
         ),
       )
     "flatMap" =>
       Some(
         @ast.TsType::Func(
-          [cb(@ast.TsType::Any)],
+          [cb(@ast.TsType::Any), optional_any_param()],
           @ast.TsType::Array(@ast.TsType::Any),
         ),
       )
@@ -16661,6 +16682,69 @@ fn check_expr_against_shape(
         arg_callee_non_generic~,
       )
       return
+    }
+    _ => ()
+  }
+  // An optional parameter or member is `T | undefined`, and a value that
+  // cannot be nullish meets that target exactly when it meets `T`: it has no
+  // use for the nullish members. The union took a weaker path than `T`, and
+  // the mutation differential found it on real package types: a non-literal
+  // source whose members need structural assignability was reported, as in
+  // `const opts = { locale }` passed to date-fns'
+  // `format(d, f, options?: FormatOptions)` and `0` passed to yjs'
+  // `attributes?: Object`, both legal.
+  //
+  // Only for an OBJECT-shaped `T`. For an enum or a primitive the union path
+  // is the one that decides more, not less: `s.mode = n` with `mode?: Mode`
+  // (a string enum) is reported against `Mode | undefined` and abstained on
+  // against the bare `Mode`.
+  match expected {
+    Union(_) => {
+      let parts = union_components(expected)
+      let kept = parts.filter(fn(p) { !(p is (Undefined | Null | Void)) })
+      let object_shaped = kept.length() == 1 &&
+        (match ctx.resolver.unwrap(kept[0]) {
+          Object(_) | Struct(_, _) => true
+          Named("Object") => true
+          Named(n) | Applied(n, _) =>
+            ctx.resolver.interfaces.contains(n) ||
+            ctx.resolver.classes.contains(n)
+          _ => false
+        })
+      if object_shaped {
+        // A LITERAL object, array or function keeps the union path. Checking
+        // one against `T` is right and is what tsc does, but it switches on
+        // excess-property and nested-member checks the union path skipped,
+        // and on univer those exposed four unrelated gaps at once
+        // (`IExecutionOptions`, a nested `IRange`, `docsConfig.lists`, a
+        // member read in `tools.ts`): 36 new reports, all on legal code. So
+        // `take({ value: "bad" })` against `p?: Box` is still a MISS, and the
+        // relation for a non-literal value is what this fixes.
+        let literal = expr
+          is (ObjectLit(_)
+          | ArrayLit(_)
+          | ArrowFunc(_, _, _, _)
+          | FuncExpr(_)
+          | Cond(_, _, _))
+        let non_nullish = !literal &&
+          (
+            expr is (StringLit(_) | NumberLit(_) | TemplateLiteral(_, _)) ||
+            definitely_non_nullish(
+              ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr)),
+            )
+          )
+        if non_nullish {
+          check_expr_against_shape(
+            env,
+            expr,
+            union_of(kept),
+            ctx,
+            sub_path,
+            arg_callee_non_generic~,
+          )
+          return
+        }
+      }
     }
     _ => ()
   }
