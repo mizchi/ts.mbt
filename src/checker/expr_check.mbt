@@ -22023,9 +22023,13 @@ fn binding_init_type(
 /// Where an object literal's member got its type, in source order: from a
 /// member WRITTEN in the literal or a spread of a literal written in place
 /// (fresh, so it widens), or from a spread of a declared value (its
-/// declared type, which does not).
+/// declared type, which does not). `FreshPart(t)` is a member a fresh
+/// one and a declared one both contributed to: only the union members that
+/// came from the fresh one (`t`) widen, so a union spread that replaces
+/// the member in SOME alternatives keeps the declared type in those.
 priv enum ObjectMemberOrigin {
   Fresh(@ast.TsExpr?)
+  FreshPart(@ast.TsType)
   Declared
 }
 
@@ -22101,6 +22105,7 @@ fn spread_member_origins(
           (Some(Declared), Some(Declared)) => true
           (Some(Fresh(None)), Some(Fresh(None))) => true
           (Some(Fresh(Some(x))), Some(Fresh(Some(y)))) => physical_equal(x, y)
+          (Some(FreshPart(x)), Some(FreshPart(y))) => x == y
           _ => false
         }
         if same {
@@ -22110,6 +22115,10 @@ fn spread_member_origins(
           }
         } else if a0 is Some(Fresh(_)) || b0 is Some(Fresh(_)) {
           out[k] = Fresh(None)
+        } else if a0 is Some(FreshPart(t)) {
+          out[k] = FreshPart(t)
+        } else if b0 is Some(FreshPart(t)) {
+          out[k] = FreshPart(t)
         } else {
           out[k] = Declared
         }
@@ -22126,12 +22135,14 @@ fn spread_member_origins(
       // survives into the union and still widens.
       fn mark_declared(k : String, optional : Bool) {
         match out.get(k) {
-          // The member is now the union of the fresh one and this one, so
-          // the whole union widens, not the written expression alone:
-          // `{ h: c ? "a" : "b", ...d }` with `d.h?: number` is
-          // `string | number` (probed), and re-widening only the
-          // conditional's branches dropped the `number`.
-          Some(Fresh(_)) if optional => out[k] = Fresh(None)
+          // The member is now the union of the fresh one and this one, and
+          // only the fresh one's part widens: `{ h: c ? "a" : "b", ...d }`
+          // with `d.h?: number` is `string | number` (probed; re-widening
+          // only the conditional's branches dropped the `number`), and
+          // `{ h: 0, ...u }` over `{ h: "a"; kind: "a" } | { kind: "b" }`
+          // keeps the first alternative's `"a"`.
+          Some(Fresh(Some(v))) if optional => out[k] = FreshPart(infer(v))
+          Some(Fresh(None) | FreshPart(_)) if optional => ()
           _ => out[k] = Declared
         }
       }
@@ -22202,6 +22213,28 @@ fn widen_object_literal_type(
                 Some(Fresh(Some(v))) =>
                   (f.0, widen_object_literal_type(f.1, v, resolver, infer))
                 Some(Fresh(None)) => (f.0, widen_literal_deep(f.1))
+                Some(FreshPart(t)) => {
+                  let fresh = union_components(t)
+                  let parts : Array[@ast.TsType] = []
+                  for p in union_components(f.1) {
+                    let w = if fresh.iter().any(fn(x) { equivalent(x, p) }) {
+                      widen_literal_deep(p)
+                    } else {
+                      p
+                    }
+                    if !parts.iter().any(fn(e) { equivalent(e, w) }) {
+                      parts.push(w)
+                    }
+                  }
+                  (
+                    f.0,
+                    if parts.length() == 1 {
+                      parts[0]
+                    } else {
+                      @ast.TsType::Union(parts)
+                    },
+                  )
+                }
                 Some(Declared) => f
                 None if has_spread => f
                 None => (f.0, widen_literal_deep(f.1))
@@ -37820,7 +37853,35 @@ fn check_call_args_in_expr_at(
                   }
                   _ => ()
                 }
-              None => ()
+              // A union spread overwrites the member when EVERY member of
+              // the union requires it, which is tsc's union property being
+              // required (`{ h: "seed", ...u }` over `{ h: "a" } | { h: "b"
+              // }`). A nullish member or one this cannot enumerate abstains.
+              None =>
+                match spread_ty {
+                  Union(parts) if parts.length() > 0 &&
+                    parts
+                    .iter()
+                    .all(fn(p) {
+                      match
+                        cast_shape_fields(
+                          ctx.resolver,
+                          ctx.resolver.unwrap(p),
+                          0,
+                        ) {
+                        Some(fs) => fs.get(ent.0) is Some(true)
+                        None => false
+                      }
+                    }) => {
+                    record_unfiltered(
+                      ctx,
+                      "object literal `\{ent.0}`",
+                      "`\{ent.0}` is specified more than once, so this usage will be overwritten by the spread",
+                    )
+                    reported = true
+                  }
+                  _ => ()
+                }
             }
           }
         }
