@@ -6545,6 +6545,84 @@ product surfaces now.
     check still catches 8 of 11 with no false positive, and the mutation
     differential is unchanged at 105 caught / 155 missed (40%), with no
     undeclared false positive.
+  [#308](https://github.com/mizchi/ts.mbt/pull/308)'s review found five
+  places where GW's member-origin walk decided from less than it needed.
+  Each was a report on code tsc accepts, and the corpus could see none of
+  them:
+  - An optional declared spread after a written member made that member
+    the union of both, and only the written expression was re-widened, so
+    `{ h: c ? "a" : "b", ...d }` with `d.h?: number` read `string`.
+  - An asserted member inside a conditional spread was merged as fresh.
+  - A conditional branch that omits a member replaced the earlier fresh
+    origin with the other branch's declared one. Each branch now starts
+    from the origins so far.
+  - A member every union variant requires was treated as optional.
+  - A union of shapes under a written key (`{ nested: { ...u } }`) was
+    widened deep instead of per alternative.
+
+  A second round found that the origin map is shared across a literal's
+  alternatives, so `{ h: 0, ...u }` over `{ h: "a"; kind: "a" } |
+  { kind: "b" }` widened the declared `"a"` along with the fresh `0`. A
+  member both a fresh value and an optional declared one contribute to is
+  now `FreshPart`, and only its union members that came from the fresh
+  value widen. It also found TS2783 abstaining on every union spread. A
+  union whose every member requires the member overwrites it, which is
+  tsc's union property being required.
+
+  Batch GX is the next univer categories:
+  - **A union member's bases are walked per member.**
+    `collect_declared_fields` shares one visited set so a shared base is
+    collected once per walk. The members of a union are separate walks,
+    and the second member skipped every base the first had reached. So
+    `IRange | IRange`, a member read off a union of two params interfaces
+    (not deduplicated), kept only `IRange`'s own members, and
+    `{ ...range }` lost the inherited `startRow` (22 reports, on main
+    too).
+  - **A source union loses the members the target spells too** before
+    inference, as tsc's `inferFromMatchingTypes` does. `T[] | undefined`
+    against `Blk[] | undefined` tried `T[]` against the whole union and
+    bound nothing. The callback parameter of `collect<T extends
+    { startIndex: number }>(…, getId: (item: T) => string)` then read as
+    the bound, and `item.blockId` "did not exist".
+  - **`a ??= b` and `a ||= b` are the left part joined with `b`.** Their
+    value was the right-hand side, so `const s = this._data.style ??= {}`
+    was `{}`. tsc gives `NonNullable<A> | B`, subtype-reduced, so a fresh
+    literal contextually typed by `A` drops out. An assignment target
+    reads at its declared type, so a binding still narrowed to `undefined`
+    uses its declaration. The probe also found a false positive on main:
+    `anyv ??= "s"` with `anyv: any` read as `string`, where tsc says
+    `any`.
+  - **An optional call's arguments see its receivers non-nullish.**
+    `icon?.move({ left: icon.width })` is legal, because the arguments run
+    only when the call does. The call is checked in its plain form with
+    those receivers narrowed, which is how the `!` spelling is checked.
+    Checking it through the optional arm judged an overloaded method by
+    its first declaration (`h$?.pipe(op)` against rxjs's `pipe()`), and
+    the field data caught that first version: two new univer sites. A
+    UNION receiver stays on the optional arm, because the plain method arm
+    has no every-member arity rule. `u.m("a")` over `A | B` is a MISS
+    there, and the optional spelling now also catches `u?.m("a")` over
+    `A | B | undefined`.
+
+  One duplication is recorded rather than fixed: a method call's
+  arguments are walked by `check_arguments`, by the nested object-literal
+  check and by the walk itself. So one bad member access inside an
+  argument reports three times, on main too. `other!.m({ left: icon.width
+  })` does it.
+  - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
+    FP 0), and tsc-extra stays at FP 0. effect goes from 96 to 92 and zod
+    stays at 7. univer goes, against batch GW:
+    - core 62→55
+    - docs-hyper-link 46→39
+    - data-validation 284→258
+    - sheets-numfmt 287→261
+    - ui 257→239
+
+    excalidraw stays at 329. None of them reports at a site main does not.
+    The real-app check still catches 8 of 11 with no false positive, and
+    the mutation differential is unchanged at 105 caught / 155 missed
+    (40%), with no undeclared false positive. Every scaling axis is within
+    budget.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
