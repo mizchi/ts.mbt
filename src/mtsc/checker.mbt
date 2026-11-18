@@ -427,9 +427,19 @@ fn local_function_value_type(
           // The raw copy keeps the TYPES and not the optionality, which
           // `function_value_type` reads off the declaration: without it
           // `joinValues(array, separator = " | ")` demanded two arguments.
+          // A REST parameter is wrapped the way `function_value_type`
+          // wraps one, which is how a `Func` says "any number from here":
+          // left bare, `polygon<P>(...points: P[])` read as one parameter
+          // and every call with more was "expected 1 argument(s)" once the
+          // count of an imported generic was judged.
           let params = raw_params.mapi(fn(i, t) {
             let p = func.params[i]
-            if !p.is_rest && (p.is_optional || p.default is Some(_)) {
+            if p.is_rest {
+              match t {
+                Rest(_) => t
+                _ => @ast.TsType::Rest(t)
+              }
+            } else if p.is_optional || p.default is Some(_) {
               match t {
                 Union(parts) if parts.contains(Undefined) => t
                 _ => @ast.TsType::Union([t, Undefined])
@@ -1107,6 +1117,7 @@ fn graph_namespace_object(
   )
   let fields : Array[(@ast.TsType, @ast.TsType)] = []
   let origins : Array[(String, String)] = []
+  let typed : Map[String, Unit] = Map([])
   for name in names {
     match exported_value_site(target, name, modules, edges, []) {
       Some((declarer, declared_name, type_)) => {
@@ -1125,14 +1136,206 @@ fn graph_namespace_object(
           fields.push((Literal(name), sig))
         }
         origins.push((name, declarer.source.path))
+        typed[name] = ()
       }
       None => ()
     }
   }
-  fields.push((String_, Any))
+  // When every name the namespace can hold is known, a member this could
+  // not type is still a member: it is listed as `any`, and the
+  // `[k: string]: any` signature goes, so a typo'd member is TS2339 the way
+  // tsc reports it (`z.objectt`, `Effect.succed`, `Y.encodeStateAsUpdat`).
+  // While any name could come from somewhere this does not see, the
+  // signature stays and an unlisted member reads as unknown.
+  if graph_namespace_names_closed(target, modules, edges, Map([])) {
+    for name in names {
+      if !typed.contains(name) {
+        fields.push((Literal(name), Any))
+      }
+    }
+  } else {
+    fields.push((String_, Any))
+  }
   let value = (@ast.TsType::Object(fields), origins)
   cache[target.source.path] = value
   value
+}
+
+///|
+/// Whether `graph_value_export_names` lists every value name `module_`'s
+/// namespace object holds. Only a declaration file's export list is read
+/// that way: a `.ts` source can export through shapes the list does not
+/// enumerate. It is open when the module assigns its whole value
+/// (`export =`), and when an `export *` reaches a module the graph does
+/// not hold, since that module's names are unknown. A named re-export of
+/// an unloaded module only loses a TYPE, so it does not open the list.
+///
+/// A module augmentation can add a value export (`declare module "pk" {
+/// export const added: string }` makes `P.added` legal), so EVERY module
+/// along the `export *` closure must be one no augmentation can name:
+/// `declare module "./base" { export const added: string }` adds `added`
+/// to a barrel that does `export * from "./base"`, and checking the
+/// barrel alone reported that legal member as missing.
+fn graph_namespace_names_closed(
+  module_ : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  seen : Map[String, Unit],
+) -> Bool {
+  if seen.contains(module_.source.path) {
+    return true
+  }
+  seen[module_.source.path] = ()
+  if !mtsc_is_declaration_file(module_.source.path) ||
+    module_.module_block.has_export_equals ||
+    graph_module_may_be_augmented(module_, modules, edges) {
+    return false
+  }
+  for reexport_ in module_.module_block.reexports {
+    if reexport_.type_only {
+      continue
+    }
+    match reexport_.kind {
+      @ast.TsReExportKind::All =>
+        match
+          graph_target_module(module_, reexport_.module_spec, modules, edges) {
+          Some(target) =>
+            if !graph_namespace_names_closed(target, modules, edges, seen) {
+              return false
+            }
+          None => return false
+        }
+      _ => ()
+    }
+  }
+  true
+}
+
+///|
+/// Whether some `declare module "spec" { … }` in the program could add
+/// names to `target`. An augmentation can add a VALUE export (`declare
+/// module "pk" { export const added: string }` makes `P.added` legal), so
+/// such a module's namespace object stays open.
+///
+/// The question is whether `spec` can name `target`, and every way it can
+/// is taken as a yes: an edge for that spelling from the declaring module
+/// that leads to `target`; a relative spelling whose path is `target`'s; a
+/// spelling some importer uses to reach `target`; and a bare spelling of
+/// `target`'s package (`effect/Effect` augments a file reached as
+/// `./Effect.js`). What it must not do is count every ambient module:
+/// `@types/node` declares `declare module "assert"` and fifty siblings,
+/// and project mode loads it whenever it is installed.
+fn graph_module_may_be_augmented(
+  target : ParsedMtscModule,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+) -> Bool {
+  let target_specs : Map[String, Unit] = Map([])
+  for e in edges {
+    if e.targetPath == target.source.path {
+      target_specs[e.moduleSpecifier] = ()
+    }
+  }
+  let target_stem = module_path_stem(target.source.path)
+  for m in modules {
+    for aug in m.module_.module_augmentations {
+      let spec = aug.0
+      match find_graph_target(edges, m.source.path, spec) {
+        Some(path) => if path == target.source.path { return true }
+        None =>
+          if spec.has_prefix(".") {
+            let dir = match m.source.path.rev_find("/") {
+              Some(i) => m.source.path[:i].to_owned()
+              None => "."
+            }
+            let joined = module_path_stem(
+              normalize_module_path(dir + "/" + spec),
+            )
+            if stems_may_match(joined, target_stem) {
+              return true
+            }
+          } else if target_specs.contains(spec) ||
+            spec_names_package_of(spec, target.source.path) {
+            return true
+          }
+      }
+    }
+  }
+  false
+}
+
+///|
+/// `path` without a module extension and without a trailing `/index`, so
+/// `./x.js`, `./x`, `x.d.ts` and `x/index.d.ts` compare equal.
+fn module_path_stem(path : String) -> String {
+  let mut p = path
+  for
+    ext in [
+      ".d.ts", ".d.cts", ".d.mts", ".tsx", ".ts", ".cts", ".mts", ".jsx", ".js",
+      ".cjs", ".mjs",
+    ] {
+    if p.has_suffix(ext) {
+      p = p[:p.length() - ext.length()].to_owned()
+      break
+    }
+  }
+  if p.has_suffix("/index") {
+    p = p[:p.length() - "/index".length()].to_owned()
+  }
+  p
+}
+
+///|
+/// `.` and `..` segments resolved, so `a/b/../c` is `a/c`.
+fn normalize_module_path(path : String) -> String {
+  let out : Array[String] = []
+  let absolute = path.has_prefix("/")
+  for seg in path.split("/") {
+    let seg = seg.to_owned()
+    if seg == "" || seg == "." {
+      continue
+    }
+    if seg == ".." && out.length() > 0 && out[out.length() - 1] != ".." {
+      let _ = out.pop()
+    } else {
+      out.push(seg)
+    }
+  }
+  (if absolute { "/" } else { "" }) + out.join("/")
+}
+
+///|
+/// Two stems name one file when they are equal, or when one is a suffix of
+/// the other at a `/` boundary: a module path can be held absolute in one
+/// place and relative to the project in another.
+fn stems_may_match(a : String, b : String) -> Bool {
+  a == b || a.has_suffix("/" + b) || b.has_suffix("/" + a)
+}
+
+///|
+/// Whether bare `spec` names the package `path` lies in: `effect/Effect`
+/// and `effect` both name `…/node_modules/effect/…`, and `react` names
+/// `…/node_modules/@types/react/…` too.
+fn spec_names_package_of(spec : String, path : String) -> Bool {
+  let segs : Array[String] = spec
+    .split("/")
+    .map(fn(s) { s.to_owned() })
+    .collect()
+  if segs.length() == 0 || segs[0] == "" {
+    return false
+  }
+  let pkg = if segs[0].has_prefix("@") && segs.length() > 1 {
+    segs[0] + "/" + segs[1]
+  } else {
+    segs[0]
+  }
+  let types_pkg = if pkg.has_prefix("@") {
+    "@types/" + pkg[1:].to_owned().replace(old="/", new="__")
+  } else {
+    "@types/" + pkg
+  }
+  path.contains("node_modules/" + pkg + "/") ||
+  path.contains("node_modules/" + types_pkg + "/")
 }
 
 ///|

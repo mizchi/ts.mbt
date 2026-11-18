@@ -5951,6 +5951,92 @@ product surfaces now.
     because `struct_assignable_named_rec` cannot see through `Pick`
     either, so it was reverted. The MISS face of the same gap is declared
     in tsc-extra.
+  Batch GS ranks work by the mutation differential's MISS list, not its
+  total, and the three causes it took were each a fact one site had and
+  another lacked. Recall on `fixtures/real-app/ok` goes from **77 to
+  92** of the 260 edits tsc rejects (30% to 35%, and member typos from
+  30% to 52%), at no false positive on legal code. Every other gate is
+  unchanged: the oracle, tsc-extra (now 85 cases), effect 102, zod 8, the
+  `.d.ts` entries 0, univer's five packages, and excalidraw one report
+  lower.
+  - **An imported generic function's argument COUNT was checked by
+    nothing.** Its value arrives as a binder over the raw signature, and
+    the `GenericFunc` arm of `check_call_args_in_expr` judged only the
+    TYPES of binder-free positions. So every date-fns call took any number
+    of arguments (`addDays(d)`, `parseISO()`), while the same call to a
+    local generic declaration reported. The count needs no binder solved,
+    since a binder occurs only in parameter types. A generic callable VALUE
+    (`declare const f: <T>(x: T, n: number) => T`) reaches the same arm
+    and had the same hole, in a single file, so it is in tsc-extra. One
+    cell stays a MISS: an imported `u: number | undefined` cannot be told
+    from `u?: number`, so `und(1)` is silent where tsc reports TS2554.
+
+    Its first version put 37 false positives on excalidraw, every one the
+    same shape: `polygon(a, b, c, d)` and testing-library's
+    `queryByTestId(container, id)` were "expected 1 argument(s)". The rule
+    was right and its input was not. An imported generic DECLARATION's
+    value is built from the un-inlined raw signature, and that branch of
+    `local_value_type` did not wrap a rest parameter in `Rest(…)`, where
+    the non-generic branch beside it always has. Wrapping it removed the
+    37 and one more that predates this batch (`getAllByTestId` through a
+    `Func` arm). Two consumers of one value type, one of them told the
+    parameter was variadic.
+  - **A class extending a RENAMED import resolved no base.** A bundled
+    `.d.ts` writes `import { Base as B$1 }` and `class D extends B$1`, and
+    `rename_class_refs` rewrote a class's member types but kept its
+    heritage names, so the base was looked up as `B$1` and every member
+    lookup on a `D` abstained. A base is renamed now when the import alias
+    maps to a bare name, which is the name class lookups use. A keyed
+    `X@path` target is left alone, because classes are not keyed. hono is
+    the case this does NOT fix: hono-base declares `class Hono` and
+    exports it as `HonoBase`, so hono.d.ts's `class Hono extends Hono$1`
+    is two classes with one bare name.
+  - **A namespace object always carried `[k: string]: any`.** So `z.objectt`,
+    `Effect.succed` and `Y.encodeStateAsUpdat` were all silent; a typo'd
+    member of a package namespace is the commonest mistake those APIs see.
+    The signature now goes when the export list is provably complete,
+    and a member this cannot type (a class value, an enum, a nested
+    namespace) is listed as `any` rather than left out. Completeness has
+    three conditions:
+    - every module in the `export *` closure is a declaration file, since
+      a `.ts` source can export through shapes the list does not
+      enumerate;
+    - no module there assigns its whole value (`export =`), and no
+      `export *` reaches a module the graph does not hold;
+    - no `declare module "spec"` in the program can name the module,
+      because an augmentation CAN add a value export (probed: `declare
+      module "pk" { export const added: string }` makes `P.added` legal).
+
+    The first version of the third condition opened EVERY namespace, since
+    project mode loads `@types/node` whenever it is installed and that
+    declares `declare module "assert"` and fifty siblings. The question
+    is whether the spec can name the target: an edge to it, a relative
+    path that resolves to it, a spelling an importer uses for it, or a
+    bare spelling of its package. A long object type in a message is now
+    elided after 24 members, as tsc's "... N more ..." is, because
+    effect's `Effect` namespace has hundreds.
+  - **What is left.** Of the 168 remaining, the largest cause is one
+    inference rule, and it is the next batch. A source that matches no
+    other member of a union target is not inferred to the union's bare
+    binder, so `one<S>(x: S | (() => S)): S` called as `one("")` gives
+    `S = any`, and so does `S | undefined` (probed; tsc gives `string`
+    for both). That is preact's and React's `useState("")`, the
+    commonest hook there is. The rest have no cheap single cause:
+    - express's `export =` value is merged with a namespace whose
+      interfaces extend `core.Request` through a namespace import;
+    - drizzle's API is consts typed by callable interfaces;
+    - the hono collision above.
+    A `.d.ts` that is both a `-p` entry and reached through a barrel also
+    loses its values in the combined multi-entry check, while the
+    per-entry check sees them. That is rare and is recorded here rather
+    than fixed.
+  - **A gate that skips exits 0.** `verify-checker-soundness` in a
+    worktree without the `typescript7` submodule checked out prints
+    "conformance corpus … not populated — skipping" and succeeds, so a gate
+    log reads green with the oracle never run. The first gate run of this
+    batch was exactly that, caught only by reading the oracle's lines
+    rather than its exit code; CI checks the submodule out, so it cannot
+    happen there.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

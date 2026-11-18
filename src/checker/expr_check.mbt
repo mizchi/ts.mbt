@@ -1041,8 +1041,25 @@ fn rename_class_refs(
       return_type: rename_type_refs(m.return_type, own),
     }
   })
+  // A base reached through a RENAMED import is the exception: hono's
+  // `import { HonoBase as Hono$1 }` beside `class Hono extends Hono$1`
+  // names a class no table holds under `Hono$1`, so the base was
+  // unresolvable and every member lookup on a `Hono` abstained —
+  // `new Hono().nope` and `app.getMut(…)` were both silent. The import
+  // alias maps to the bare original when its module is the name's only
+  // declarer, which is the name a class lookup uses, so that rename is
+  // taken. A KEYED target (`X@path`) is left alone: classes are not keyed,
+  // and it would resolve to nothing, which is what the written name does
+  // already.
+  let base_names = c.base_names.map(fn(n) {
+    match r.get(n) {
+      Some(to) if !to.contains("@") => to
+      _ => n
+    }
+  })
   {
     ..c,
+    base_names,
     type_param_bounds: c.type_param_bounds.map(fn(b) { (b.0, go(b.1)) }),
     constructor_params: c.constructor_params.map(fn(ps) {
       ps.map(fn(p) { (p.0, go(p.1)) })
@@ -25918,8 +25935,16 @@ fn type_display(ty : @ast.TsType) -> String {
       if fields.length() == 0 {
         "{}"
       } else {
+        // A namespace object holds one field per export, which is hundreds
+        // for effect's `Effect`; tsc elides the middle of a long type the
+        // same way ("... 812 more ..."), so a message stays readable.
+        let shown_limit = 24
         let parts : Array[String] = []
-        for f in fields {
+        for i, f in fields {
+          if i >= shown_limit {
+            parts.push("... \{fields.length() - shown_limit} more ...")
+            break
+          }
           let key = match f.0 {
             Literal(k) => k
             _ => type_display(f.0)
@@ -33419,6 +33444,66 @@ fn check_call_args_in_expr(
           // with `f(0, 1)` checks the `1` against `string`.
           let has_rest = params.length() > 0 &&
             params[params.length() - 1] is Rest(_)
+          // The COUNT is judged too. It needs no binder solved: a binder
+          // occurs only in parameter TYPES, and how many arguments a
+          // signature takes is fixed by its parameter list. An IMPORTED
+          // generic function arrives here (`@import-generic:`), which is
+          // every date-fns function, so `addDays(d)` was silent while the
+          // same call to a local generic declaration reported.
+          //
+          // The minimum reads optionality off the types, the way a `Func`
+          // spells it: `x?: T` is `T | undefined`, and a parameter whose
+          // type accepts `undefined` or is `void` may be omitted. A
+          // parameter typed by a bare binder is required, and tsc agrees:
+          // `f<T>(x: T)` called as `f()` is TS2554, and so is `f<void>()`
+          // (probed), since the count is the declared signature's and an
+          // explicit `void` argument does not make it optional.
+          // A parameter that accepts `void` may be omitted too, as a union
+          // member and through an alias (`v: number | void`, `type V =
+          // void`): tsc's minimum count skips a trailing one, and counting
+          // it made `f(1)` against `f<T>(x: T, v: number | void)` "expected
+          // 2" on code tsc accepts.
+          let optional_params = match callee_ty {
+            GenericFunc(_, _, CallableMeta(Func(_, _), flags)) => flags
+            _ => []
+          }
+          let resolver = ctx.resolver
+          fn omittable(i : Int32, p : @ast.TsType) -> Bool {
+            if p is Rest(_) ||
+              (i < optional_params.length() && optional_params[i]) {
+              return true
+            }
+            let members = match p {
+              Union(ms) => ms
+              other => [other]
+            }
+            members
+            .iter()
+            .any(fn(m) { m is Void || resolver.unwrap(m) is Void }) ||
+            (optional_params.length() == 0 && type_accepts_undefined_param(p))
+          }
+
+          let mut min_arity = 0
+          for i, p in params {
+            if !omittable(i, p) {
+              min_arity = i + 1
+            }
+          }
+          let n = args.length()
+          if n < min_arity || (!has_rest && n > params.length()) {
+            let expect_str = if has_rest {
+              "at least \{min_arity}"
+            } else if min_arity == params.length() {
+              "\{min_arity}"
+            } else {
+              "\{min_arity}-\{params.length()}"
+            }
+            record(
+              ctx,
+              "call `\{name}`",
+              "expected \{expect_str} argument(s), got \{n}",
+            )
+          }
           for i, a in args {
             if i >= params.length() && !has_rest {
               break
