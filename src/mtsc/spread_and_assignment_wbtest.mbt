@@ -600,3 +600,23 @@ test "a spread of an open shape stays open" {
     "function badClosed > return.asc: property `asc` is required by `LP`",
   ])
 }
+
+///|
+/// univer's canvas code: a lib type ALIAS over string literals
+/// (`CanvasLineCap`) is only a name here, so a literal assigned to it is
+/// not judged, while a curated lib type keeps its primitive check.
+test "a lib literal alias abstains and a curated lib type does not" {
+  let src =
+    #|declare function k(x: CanvasLineCap): void;
+    #|export class Q { set cap(v: CanvasLineCap) {} get cap() { return "butt" as CanvasLineCap; } }
+    #|export function okAlias(q: Q) {
+    #|  k("butt");
+    #|  let y: CanvasLineCap = "round";
+    #|  q.cap = "butt";
+    #|  return y;
+    #|}
+    #|export function badDate() { const d: Date = 5; return d; }
+  assert_eq(issue_lines(src), [
+    "function badDate > binding `d` init: expected `Date` but got `number`",
+  ])
+}

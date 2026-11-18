@@ -20201,7 +20201,7 @@ fn check_expr_against_shape(
         // widenings (`number`→`Number`, `string`→`String`) and `Object` /
         // `Function` are guarded as universal targets below, so letting these
         // through stays false-positive-free while catching e.g. `foo<Date>(1)`.
-        !(is_well_known_type_name(n) &&
+        !(is_curated_well_known_type_name(n) &&
         is_concrete_primitive_or_literal(inferred_u)) {
         return
       }
