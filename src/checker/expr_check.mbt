@@ -8189,10 +8189,26 @@ fn raw_class_method_call_params(
       // `registerPlugin<T extends PluginCtor<Plugin>>(plugin: T, config?:
       // ConstructorParameters<T>[0])`, "expected 2 argument(s)".
       let inst = substitute_params(rp, bindings)
-      if type_accepts_undefined(params[i]) && !type_accepts_undefined(inst) {
-        out.push(@ast.TsType::Union([inst, Undefined]))
-      } else {
-        out.push(inst)
+      match params[i] {
+        // The header spells a rest parameter by its declared type alone
+        // (`...args: Events[K]` is `Events[K]`), and the arity and argument
+        // checks read a rest parameter as `Rest(_)`. Instantiated bare, it
+        // became one required parameter: excalidraw's `emit<K extends
+        // keyof Events>(name: K, ...args: Events[K])` judged `42` against
+        // the whole tuple `TE["init"]`, and `emit("done")` was "expected 2
+        // argument(s)". It is re-wrapped once the element list is known,
+        // and keeps the inlined form while it is not.
+        Rest(_) =>
+          match resolver.unwrap(inst) {
+            Array(_) | Tuple(_) as list => out.push(@ast.TsType::Rest(list))
+            _ => out.push(params[i])
+          }
+        _ =>
+          if type_accepts_undefined(params[i]) && !type_accepts_undefined(inst) {
+            out.push(@ast.TsType::Union([inst, Undefined]))
+          } else {
+            out.push(inst)
+          }
       }
     } else {
       out.push(params[i])
@@ -16655,6 +16671,22 @@ fn instantiate_raw_generic_return(
   if !solved {
     return None
   }
+  // With strictNullChecks off a `null` / `undefined` in the binding is the
+  // widening kind, which tsc turns into `any` once the call's type is
+  // widened: `foo<T extends [any]>([undefined])` declares `[any]`, not
+  // `[undefined]` (wideningTuples1). The inlined return is what that
+  // case had before, so it keeps it.
+  if resolver.globals.contains("@no-strict-null-checks") &&
+    mentioned
+    .iter()
+    .any(fn(tp) {
+      match bindings.get(tp) {
+        Some(b) => type_contains_nullish_part(b, 0)
+        None => false
+      }
+    }) {
+    return None
+  }
   let bindings = widen_fresh_literal_bindings(
     env,
     resolver,
@@ -16666,6 +16698,31 @@ fn instantiate_raw_generic_return(
     raw_ret,
   )
   Some(substitute_params(raw_ret, bindings))
+}
+
+///|
+/// True when `null` or `undefined` occurs anywhere in `t`. Depth-bounded,
+/// and running out of depth answers `true`, which is the abstaining answer
+/// for the one caller.
+fn type_contains_nullish_part(t : @ast.TsType, depth : Int32) -> Bool {
+  if depth > 16 {
+    return true
+  }
+  let d = depth + 1
+  match t {
+    Null | Undefined => true
+    Array(inner) | Rest(inner) => type_contains_nullish_part(inner, d)
+    Union(parts) | Intersection(parts) | Tuple(parts) | Applied(_, parts) =>
+      parts.iter().any(fn(p) { type_contains_nullish_part(p, d) })
+    Func(params, ret) =>
+      params.iter().any(fn(p) { type_contains_nullish_part(p, d) }) ||
+      type_contains_nullish_part(ret, d)
+    Object(entries) =>
+      entries.iter().any(fn(e) { type_contains_nullish_part(e.1, d) })
+    Struct(_, fields) =>
+      fields.iter().any(fn(f) { type_contains_nullish_part(f.1, d) })
+    _ => false
+  }
 }
 
 ///|
@@ -54090,6 +54147,12 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  // Read by inference, which has no `CheckCtx`: with strictNullChecks off,
+  // tsc widens a `null` / `undefined` that came from a literal to `any`
+  // wherever the type is widened (wideningTuples1).
+  if !strict_null_checks {
+    resolver.globals["@no-strict-null-checks"] = Any
+  }
   // `@value-origin:NAME` says which module an imported value's type is
   // written in (see `graph_import_globals`).
   let value_origins : Map[String, String] = Map([])

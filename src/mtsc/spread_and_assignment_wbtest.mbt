@@ -863,3 +863,40 @@ test "a bounded class method's raw header reaches another module" {
     ),
   )
 }
+
+///|
+/// Three shapes the raw headers mis-instantiated, each one found by a gate
+/// rather than a probe. With strictNullChecks off a bounded generic's
+/// binding of `[undefined]` is the widening kind tsc turns into `[any]`
+/// (wideningTuples1). One generic at two argument counts leaves trailing
+/// arguments to their defaults, which the AST does not keep, so the common
+/// prefix decides (effect's `asSync(decodeUnknownEffect(…))`). And a rest
+/// parameter in a class method's header is spelled by its declared type,
+/// so the instantiation is re-wrapped as a rest (excalidraw's `emit`).
+test "a raw header keeps rest parameters, defaulted arguments and nullish widening" {
+  let loose =
+    #|// @strict: false
+    #|declare function foo<T extends [any]>(x: T): T;
+    #|var y = foo([undefined]);
+    #|y = [""];
+  assert_eq(issue_lines(loose), [])
+  let src =
+    #|interface Effect<A, E = never, R = never> { a: A; e: E; r: R }
+    #|declare function asSync<T, E>(p: (i: E) => Effect<T, string>): (i: E) => T;
+    #|declare const p2: (i: unknown) => Effect<unknown, string, never>;
+    #|export const okDefaulted = asSync(p2);
+    #|declare const p4: (i: unknown) => Effect<unknown, number, never>;
+    #|export const badPrefix = asSync(p4);
+    #|type Map1 = Record<string, unknown[]>;
+    #|class Bus<Events extends Map1> { emit<K extends keyof Events>(name: K, ...args: Events[K]) {} }
+    #|type TE = { init: [number]; up: [string]; none: [] };
+    #|const bus = new Bus<TE>();
+    #|bus.emit("init", 42);
+    #|bus.emit("up", "s");
+    #|bus.emit("none");
+    #|bus.emit("init", "bad");
+  assert_eq(issue_lines(src), [
+    "top-level > call `asSync` arg[0]: expected `(unknown) => Effect<any, string>` but got `(unknown) => Effect<unknown, number, never>`",
+    "top-level > call `emit` rest arg[0]: expected `number` but got `string`",
+  ])
+}

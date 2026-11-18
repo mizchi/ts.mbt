@@ -1203,10 +1203,25 @@ fn is_assignable_to_inner(
     (Named(a), Applied(b, args)) | (Applied(b, args), Named(a)) =>
       a == b && args.length() > 0 && args.iter().all(fn(x) { x is Any })
     (Applied(a, args_a), Applied(b, args_b)) => {
-      if a != b || args_a.length() != args_b.length() {
+      if a != b {
         return false
       }
-      for i in 0..<args_a.length() {
+      // One generic at two argument counts is a reference that leaves
+      // trailing arguments to their DEFAULTS (`Effect<A, E>` against
+      // `Effect<A, E, never>`, with `interface Effect<A, E = never, R =
+      // never>`). The defaults are not in the AST, so the positions only
+      // one side spells are undecided rather than unrelated, and the
+      // common prefix decides. effect's `asSync(decodeUnknownEffect(…))`
+      // was reported on that difference alone.
+      let n = if args_a.length() < args_b.length() {
+        args_a.length()
+      } else {
+        args_b.length()
+      }
+      if n == 0 && args_a.length() != args_b.length() {
+        return false
+      }
+      for i in 0..<n {
         if !is_assignable_to_inner(args_a[i], args_b[i], bivariant_params) {
           return false
         }
