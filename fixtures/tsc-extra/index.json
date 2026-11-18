@@ -1615,6 +1615,70 @@
       "claims": []
     },
     {
+      "case": "inference/arrayMethodNamedCallbackAndPredicateFit.ts",
+      "area": "inference",
+      "name": "arrayMethodNamedCallbackAndPredicateFit",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/arrayMethodNamedCallbackAndPredicateFit.errors.txt",
+      "claims": [
+        {
+          "name": "okMapNamedCallback",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okMapNamedCallbackThisArg",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okFlatMapNamedCallback",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badMapNamedCallback",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badFlatMapNamedCallback",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 14
+        },
+        {
+          "name": "okFilterFittingPredicate",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okFilterUnrelatedPredicate",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badFilterUnrelatedPredicate",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 19
+        }
+      ]
+    },
+    {
       "case": "inference/arrowConstGuardOptionalParameters.ts",
       "area": "inference",
       "name": "arrowConstGuardOptionalParameters",
@@ -3898,6 +3962,150 @@
           "kind": "bad",
           "fromLine": 14,
           "toLine": 15
+        }
+      ]
+    },
+    {
+      "case": "relations/optionalParameterTargetIsItsType.ts",
+      "area": "relations",
+      "name": "optionalParameterTargetIsItsType",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2345,
+        2554
+      ],
+      "baseline": "baselines/optionalParameterTargetIsItsType.errors.txt",
+      "claims": [
+        {
+          "name": "okLiteralToOptional",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okUndefinedToOptional",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badLiteralToOptional",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badLiteralToUnion",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badLiteralToNullable",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 16
+        },
+        {
+          "name": "okOptionsViaConst",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badOptionsViaConst",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
+        },
+        {
+          "name": "okNumberToOptionalObject",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "okStringToOptionalObject",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 28
+        },
+        {
+          "name": "okFilterThisArg",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "okMapThisArg",
+          "kind": "ok",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "okSomeThisArg",
+          "kind": "ok",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "okEveryThisArg",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "okFindThisArg",
+          "kind": "ok",
+          "fromLine": 35,
+          "toLine": 35
+        },
+        {
+          "name": "okFindIndexThisArg",
+          "kind": "ok",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "okForEachThisArg",
+          "kind": "ok",
+          "fromLine": 37,
+          "toLine": 37
+        },
+        {
+          "name": "okFlatMapThisArg",
+          "kind": "ok",
+          "fromLine": 38,
+          "toLine": 38
+        },
+        {
+          "name": "badFilterTooMany",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 41
+        },
+        {
+          "name": "badMapResultWithThisArg",
+          "kind": "bad",
+          "fromLine": 43,
+          "toLine": 43
+        },
+        {
+          "name": "badFlatMapResultWithThisArg",
+          "kind": "bad",
+          "fromLine": 44,
+          "toLine": 44
+        },
+        {
+          "name": "badFilterPredicateWithThisArg",
+          "kind": "bad",
+          "fromLine": 45,
+          "toLine": 46
         }
       ]
     },

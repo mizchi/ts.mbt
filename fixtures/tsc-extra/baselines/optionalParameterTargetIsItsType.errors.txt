@@ -1,0 +1,83 @@
+optionalParameterTargetIsItsType.ts(13,57): error TS2322: Type 'string' is not assignable to type 'number'.
+optionalParameterTargetIsItsType.ts(14,51): error TS2322: Type 'string' is not assignable to type 'number'.
+optionalParameterTargetIsItsType.ts(15,57): error TS2322: Type 'string' is not assignable to type 'number'.
+optionalParameterTargetIsItsType.ts(21,97): error TS2345: Argument of type '{ locale: number; }' is not assignable to parameter of type 'Options'.
+  Types of property 'locale' are incompatible.
+    Type 'number' is not assignable to type 'Pick<Locale, "localize">'.
+optionalParameterTargetIsItsType.ts(39,81): error TS2554: Expected 1-2 arguments, but got 3.
+optionalParameterTargetIsItsType.ts(43,14): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+  Type 'number' is not assignable to type 'string'.
+optionalParameterTargetIsItsType.ts(44,14): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+  Type 'number' is not assignable to type 'string'.
+optionalParameterTargetIsItsType.ts(45,14): error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+  Type 'string' is not assignable to type 'number'.
+
+
+==== optionalParameterTargetIsItsType.ts (8 errors) ====
+    // An optional parameter's type is `T | undefined`, and a value that cannot be
+    // nullish meets that target exactly when it meets `T`: an object literal is
+    // checked against `T` itself, mismatched members included, and a non-literal
+    // source is related to `T` the same way it would be against a required
+    // parameter.
+    
+    interface Box { value: number }
+    declare function takeOptional(p?: Box): void;
+    declare function takeUnion(p: Box | undefined): void;
+    declare function takeNullable(p: Box | null): void;
+    export function okLiteralToOptional() { takeOptional({ value: 1 }); }
+    export function okUndefinedToOptional() { takeOptional(undefined); }
+    export function badLiteralToOptional() { takeOptional({ value: "bad" }); }
+                                                            ~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export function badLiteralToUnion() { takeUnion({ value: "bad" }); }
+                                                      ~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export function badLiteralToNullable() { takeNullable({ value: "bad" }); }
+                                                            ~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    
+    interface Locale { code: string; localize: { month: (n: number) => string } }
+    interface Options { locale?: Pick<Locale, "localize"> }
+    declare function format(d: Date, f: string, o?: Options): string;
+    export function okOptionsViaConst(d: Date, locale: Locale) { const opts = { locale }; return format(d, "x", opts); }
+    export function badOptionsViaConst(d: Date) { const opts = { locale: 1 }; return format(d, "x", opts); }
+                                                                                                    ~~~~
+!!! error TS2345: Argument of type '{ locale: number; }' is not assignable to parameter of type 'Options'.
+!!! error TS2345:   Types of property 'locale' are incompatible.
+!!! error TS2345:     Type 'number' is not assignable to type 'Pick<Locale, "localize">'.
+    
+    declare function insert(index: number, text: string, attributes?: Object): void;
+    export function okNumberToOptionalObject() { insert(0, "a", 0); }
+    export function okStringToOptionalObject() { insert(0, "a", "s"); }
+    
+    // Every array callback method takes the lib's optional `thisArg` after the
+    // callback.
+    declare const xs: string[];
+    const ctx = { n: 1 };
+    export const okFilterThisArg = xs.filter((x) => x.length > 0, ctx);
+    export const okMapThisArg = xs.map((x) => x.length, ctx);
+    export const okSomeThisArg = xs.some((x) => x === "a", ctx);
+    export const okEveryThisArg = xs.every((x) => x !== "", ctx);
+    export const okFindThisArg = xs.find((x) => x === "a", ctx);
+    export const okFindIndexThisArg = xs.findIndex((x) => x === "a", ctx);
+    export function okForEachThisArg() { xs.forEach((x) => x, ctx); }
+    export const okFlatMapThisArg = xs.flatMap((x) => [x], ctx);
+    export function badFilterTooMany() { return xs.filter((x) => x.length > 0, ctx, 1); }
+                                                                                    ~
+!!! error TS2554: Expected 1-2 arguments, but got 3.
+    // The `thisArg` does not change what the callback returns, so the result is
+    // inferred as without it.
+    declare const mixed: (string | number)[];
+    export const badMapResultWithThisArg: string[] = xs.map((x) => x.length, ctx);
+                 ~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    export const badFlatMapResultWithThisArg: string[] = xs.flatMap((x) => [x.length], ctx);
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    export const badFilterPredicateWithThisArg: number[] = mixed.filter((y): y is string => typeof y === "string", ctx);
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+!!! error TS2322:   Type 'string' is not assignable to type 'number'.
+    

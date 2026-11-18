@@ -20,3 +20,7 @@ nonNullAssertionStripsAliasedVoid:badOptionalMemberUnguarded  a member read thro
 optionalAnyReadsAsAny:badOptionalNumberProperty  a member read through an optional property (`s.n.toFixed()`) is not judged; the strictNullChecks member check reads only a bare variable receiver
 inheritedOverloadSetOnGenericBaseClass:badTooManyOperators  an overload set's arguments are not judged at a method call, because nothing there can tell which signature they were written for; the call abstains rather than judging overload #1
 staticFactoryCallThroughClass:badFactoryMismatch  a static call through its class is `any`; only assignment narrowing reads the declared return, because typing the call exposed four unrelated downstream gaps in univer and excalidraw
+optionalParameterTargetIsItsType:badOptionsViaConst  a non-literal object against a member typed `Pick<…>` is not judged: `Pick` is resolved by `lookup_field`, not by the structural relation, which then abstains (the false-positive face of the same gap is declared in `fixtures/real-app/mutation-fps.txt`)
+optionalParameterTargetIsItsType:badLiteralToOptional  an object LITERAL against `T | undefined` keeps the union path, which does not check its members; checking it against `T` exposed excess-property and nested-member gaps on univer (36 reports on legal code), so it waits for those
+optionalParameterTargetIsItsType:badLiteralToUnion  same union path as `badLiteralToOptional`
+optionalParameterTargetIsItsType:badLiteralToNullable  same union path as `badLiteralToOptional`, with `null` as the nullish member

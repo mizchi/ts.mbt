@@ -1,0 +1,7 @@
+# False positives `scripts/mutation_differential.mjs` finds on
+# `fixtures/real-app/ok` and that are not fixed yet: a mutant tsc accepts and
+# mtsc reports. One per line, `FILE:LINE:COL MUTATOR  reason` (the column of the edit). An entry that runs
+# and no longer reproduces fails the harness as STALE, so this file only ever
+# lists what is still wrong.
+
+src/datefns.ts:3:102 satisfies-unknown  `({ locale } satisfies unknown)` passed to `format(…, options?: FormatOptions)`: `FormatOptions extends LocalizedOptions<…>`, whose `locale?: Pick<Locale, K>` loses `K` to its inlined bound, and `Pick` is resolved by `lookup_field` rather than by the structural relation, so a non-literal `{ locale: Locale }` is proven assignable in neither direction. The literal argument is accepted.
