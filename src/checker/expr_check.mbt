@@ -21411,20 +21411,37 @@ fn assignable_through_class_chain(
         let b = tp[i]
         if !(is_assignable_to_bivariant(a, b) ||
           is_assignable_to_bivariant(b, a) ||
-          assignable_through_class_chain(b, a, resolver) ||
-          assignable_through_class_chain(a, b, resolver)) {
+          chain_relates_names(b, a, resolver) ||
+          chain_relates_names(a, b, resolver)) {
           return false
         }
       }
       tr is (Void | Any) ||
       sr is Any ||
       is_assignable_to(sr, tr) ||
-      assignable_through_class_chain(sr, tr, resolver)
+      chain_relates_names(sr, tr, resolver)
     }
     // Same-shape primitive / `null` / `undefined` matches so a union
     // walk like `Foo | null → Object | null` succeeds (the class chain
     // handles Foo→Object; this branch handles Null→Null).
     _ => is_assignable_to(src, tgt)
+  }
+}
+
+///|
+/// `assignable_through_class_chain` for the function-type arm, minus the
+/// one case the chain walk cannot judge: two instantiations of the SAME
+/// generic (`Effect<unknown, number>` against `Effect<any, string>`),
+/// which it relates by name alone. Those are the resolver-free relation's
+/// to decide, argument by argument.
+fn chain_relates_names(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match (resolver.unwrap(source), resolver.unwrap(target)) {
+    (Applied(a, _), Applied(b, _)) if a == b => false
+    _ => assignable_through_class_chain(source, target, resolver)
   }
 }
 
