@@ -33458,10 +33458,36 @@ fn check_call_args_in_expr(
           // `f<T>(x: T)` called as `f()` is TS2554, and so is `f<void>()`
           // (probed), since the count is the declared signature's and an
           // explicit `void` argument does not make it optional.
-          let min_arity = match callee_ty {
-            GenericFunc(_, _, CallableMeta(Func(ps, _), optional_params)) =>
-              required_arity_from_callable_source(ps, optional_params)
-            _ => required_arity_from_types(params)
+          // A parameter that accepts `void` may be omitted too, as a union
+          // member and through an alias (`v: number | void`, `type V =
+          // void`): tsc's minimum count skips a trailing one, and counting
+          // it made `f(1)` against `f<T>(x: T, v: number | void)` "expected
+          // 2" on code tsc accepts.
+          let optional_params = match callee_ty {
+            GenericFunc(_, _, CallableMeta(Func(_, _), flags)) => flags
+            _ => []
+          }
+          let resolver = ctx.resolver
+          fn omittable(i : Int32, p : @ast.TsType) -> Bool {
+            if p is Rest(_) ||
+              (i < optional_params.length() && optional_params[i]) {
+              return true
+            }
+            let members = match p {
+              Union(ms) => ms
+              other => [other]
+            }
+            members
+            .iter()
+            .any(fn(m) { m is Void || resolver.unwrap(m) is Void }) ||
+            (optional_params.length() == 0 && type_accepts_undefined_param(p))
+          }
+
+          let mut min_arity = 0
+          for i, p in params {
+            if !omittable(i, p) {
+              min_arity = i + 1
+            }
           }
           let n = args.length()
           if n < min_arity || (!has_rest && n > params.length()) {

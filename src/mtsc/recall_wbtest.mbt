@@ -24,13 +24,13 @@ test "an imported generic function's argument count is checked" {
     graph_messages(
       [
         (
-          "/src/g.d.ts", "export declare function two<T>(x: T, n: number): T;\nexport declare function opt<T>(x: T, n?: number): T;\nexport declare function rest<T>(x: T, ...more: number[]): T;\nexport declare function tup<T extends unknown[]>(...args: T): T;\nexport declare function vparam<T>(x: T, v: void): T;\nexport declare function und<T>(x: T, u: number | undefined): T;\nexport declare function bare<T>(x: T): T;",
+          "/src/g.d.ts", "type V = void;\nexport declare function vu<T>(x: T, v: number | void): T;\nexport declare function va<T>(x: T, v: number | V): T;\nexport declare const vm: <T>(x: T, v: number | void, w?: string) => T;\nexport declare function two<T>(x: T, n: number): T;\nexport declare function opt<T>(x: T, n?: number): T;\nexport declare function rest<T>(x: T, ...more: number[]): T;\nexport declare function tup<T extends unknown[]>(...args: T): T;\nexport declare function vparam<T>(x: T, v: void): T;\nexport declare function und<T>(x: T, u: number | undefined): T;\nexport declare function bare<T>(x: T): T;",
         ),
         (
           "/src/poly.ts", "export function poly<P extends number>(...points: P[]) { return points; }\nexport function pq<T extends string = string>(...args: Parameters<(a: number, b?: string) => T>): T { return \"\" as T; }",
         ),
         (
-          "/src/main.ts", "import { two, opt, rest, tup, vparam, und, bare } from \"./g\";\nimport { poly, pq } from \"./poly\";\nexport const ok9 = poly(1, 2, 3, 4);\nexport const ok10 = poly();\nexport const ok11 = pq(1, \"s\");\nexport const bad1 = two(1);\nexport const bad2 = two(1, 2, 3);\nexport const bad3 = opt(1, 2, 3);\nexport const bad4 = rest();\nexport const bad5 = und(1);\nexport const bad6 = bare();\nexport const ok1 = two(1, 2);\nexport const ok2 = opt(1);\nexport const ok3 = rest(1);\nexport const ok4 = rest(1, 2, 3, 4);\nexport const ok5 = tup();\nexport const ok6 = tup(1, \"a\");\nexport const ok7 = vparam(1);\nexport const ok8 = und(1, undefined);",
+          "/src/main.ts", "import { two, opt, rest, tup, vparam, und, bare, vu, va, vm } from \"./g\";\nexport const ok12 = vu(1);\nexport const ok13 = va(1);\nexport const ok14 = vm(1);\nexport const bad7 = vm();\nimport { poly, pq } from \"./poly\";\nexport const ok9 = poly(1, 2, 3, 4);\nexport const ok10 = poly();\nexport const ok11 = pq(1, \"s\");\nexport const bad1 = two(1);\nexport const bad2 = two(1, 2, 3);\nexport const bad3 = opt(1, 2, 3);\nexport const bad4 = rest();\nexport const bad5 = und(1);\nexport const bad6 = bare();\nexport const ok1 = two(1, 2);\nexport const ok2 = opt(1);\nexport const ok3 = rest(1);\nexport const ok4 = rest(1, 2, 3, 4);\nexport const ok5 = tup();\nexport const ok6 = tup(1, \"a\");\nexport const ok7 = vparam(1);\nexport const ok8 = und(1, undefined);",
         ),
       ],
       [
@@ -39,9 +39,9 @@ test "an imported generic function's argument count is checked" {
       ],
     ),
     [
-      "top-level > call `two` :: expected 2 argument(s), got 1", "top-level > call `two` :: expected 2 argument(s), got 3",
-      "top-level > call `opt` :: expected 1-2 argument(s), got 3", "top-level > call `rest` :: expected at least 1 argument(s), got 0",
-      "top-level > call `bare` :: expected 1 argument(s), got 0",
+      "top-level > call `vm` :: expected 1-3 argument(s), got 0", "top-level > call `two` :: expected 2 argument(s), got 1",
+      "top-level > call `two` :: expected 2 argument(s), got 3", "top-level > call `opt` :: expected 1-2 argument(s), got 3",
+      "top-level > call `rest` :: expected at least 1 argument(s), got 0", "top-level > call `bare` :: expected 1 argument(s), got 0",
     ],
   )
 }
@@ -163,6 +163,25 @@ test "a namespace object stays open while a name could come from elsewhere" {
       ],
     ),
   ]
+  // An augmentation of a module the barrel reaches through `export *`.
+  open_cases.push(
+    (
+      [
+        ("/src/base.d.ts", "export declare const k: string;"),
+        ("/src/barrel.d.ts", "export * from \"./base\";"),
+        (
+          "/src/aug.ts", "export {};\ndeclare module \"./base\" { export const added: string; }",
+        ),
+        (
+          "/src/main.ts", "import * as B from \"./barrel\";\nexport const x: string = B.added;",
+        ),
+      ],
+      [
+        ("/src/barrel.d.ts", "./base", "/src/base.d.ts"),
+        ("/src/main.ts", "./barrel", "/src/barrel.d.ts"),
+      ],
+    ),
+  )
   for c in open_cases {
     assert_eq(graph_messages(c.0, c.1), [])
   }

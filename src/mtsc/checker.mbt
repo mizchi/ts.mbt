@@ -1147,8 +1147,7 @@ fn graph_namespace_object(
   // tsc reports it (`z.objectt`, `Effect.succed`, `Y.encodeStateAsUpdat`).
   // While any name could come from somewhere this does not see, the
   // signature stays and an unlisted member reads as unknown.
-  if graph_namespace_names_closed(target, modules, edges, Map([])) &&
-    !graph_module_may_be_augmented(target, modules, edges) {
+  if graph_namespace_names_closed(target, modules, edges, Map([])) {
     for name in names {
       if !typed.contains(name) {
         fields.push((Literal(name), Any))
@@ -1172,8 +1171,11 @@ fn graph_namespace_object(
 /// an unloaded module only loses a TYPE, so it does not open the list.
 ///
 /// A module augmentation can add a value export (`declare module "pk" {
-/// export const added: string }` makes `P.added` legal), so the caller
-/// also requires that no module of the program augments one.
+/// export const added: string }` makes `P.added` legal), so EVERY module
+/// along the `export *` closure must be one no augmentation can name:
+/// `declare module "./base" { export const added: string }` adds `added`
+/// to a barrel that does `export * from "./base"`, and checking the
+/// barrel alone reported that legal member as missing.
 fn graph_namespace_names_closed(
   module_ : ParsedMtscModule,
   modules : Array[ParsedMtscModule],
@@ -1185,7 +1187,8 @@ fn graph_namespace_names_closed(
   }
   seen[module_.source.path] = ()
   if !mtsc_is_declaration_file(module_.source.path) ||
-    module_.module_block.has_export_equals {
+    module_.module_block.has_export_equals ||
+    graph_module_may_be_augmented(module_, modules, edges) {
     return false
   }
   for reexport_ in module_.module_block.reexports {
