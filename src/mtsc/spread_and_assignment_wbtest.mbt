@@ -744,6 +744,26 @@ test "a bounded generic returns its binding, not its bound" {
 }
 
 ///|
+/// #309's review, probed: `||=` keeps only the left operand's truthy part,
+/// and two branches that each contribute a fresh value widen both.
+test "||= keeps the truthy part and conditional fresh parts merge" {
+  let src =
+    #|declare const c: boolean;
+    #|declare const d: { h?: boolean };
+    #|export function f(x: false | { p: number }) { return (x ||= { p: 1 }).p; }
+    #|export function g(x: false | { n: number }): { n: number } { return x ||= { n: 1 }; }
+    #|export function g2(x: "" | { n: number }): { n: number } { return x ||= { n: 1 }; }
+    #|export function g3(x: boolean | { n: number }) { const r: true | { n: number } = (x ||= { n: 1 }); return r; }
+    #|export function h() { let out = { ...(c ? { h: "x", ...d } : { h: 0, ...d }) }; out.h = 42; out.h = "s"; return out; }
+    #|export function bad(x: false | { n: number }): { m: number } { return x ||= { n: 1 }; }
+    #|export function badShape() { const out = { ...(c ? { h: "x", ...d } : { h: "y", ...d }) }; const t: number = out; return t; }
+  assert_eq(issue_lines(src), [
+    "function bad > return: property `m` is missing in `{ n: number }` but required in `{ m: number }`",
+    "function badShape > binding `t` init: expected `number` but got `{ h: string | boolean }`",
+  ])
+}
+
+///|
 /// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
 /// enumerate leaves the result open, and spreading that result again keeps
 /// it open, as a fresh literal and as a bound one.

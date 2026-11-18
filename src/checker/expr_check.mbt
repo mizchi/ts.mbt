@@ -14220,6 +14220,16 @@ fn infer_expr_inner(
                 is_checkable(d) {
                 left = prune_nullish(resolver, d)
               }
+              // `||=` keeps only the left's TRUTHY part, which is more than
+              // its non-nullish part: `x ||= { n: 1 }` over `false | { n:
+              // number }` is `{ n: number }` (probed; #309's review), where
+              // keeping the `false` failed a return check tsc accepts.
+              if op is OrAssign {
+                left = match without_falsy_literals(left) {
+                  Some(t) => t
+                  None => @ast.TsType::Undefined
+                }
+              }
               if left is (Null | Undefined | Void | Any) {
                 rhs
               } else if value is (ObjectLit(_) | ArrayLit(_)) ||
@@ -22258,6 +22268,10 @@ fn spread_member_origins(
           }
         } else if a0 is Some(Fresh(_)) || b0 is Some(Fresh(_)) {
           out[k] = Fresh(None)
+        } else if a0 is Some(FreshPart(t1)) && b0 is Some(FreshPart(t2)) {
+          // Each branch's fresh value widens in its own alternative, so the
+          // merged fresh part is both (#309's review).
+          out[k] = FreshPart(flatten_union_exact([t1, t2]))
         } else if a0 is Some(FreshPart(t)) {
           out[k] = FreshPart(t)
         } else if b0 is Some(FreshPart(t)) {
@@ -30910,6 +30924,30 @@ fn optional_chain_equality_narrowing(
       }
       None => ()
     }
+  }
+}
+
+///|
+/// `t` without the members that are always falsy (`false`, `""`, `0`,
+/// `0n`), with `boolean` read as `true`; `None` when nothing is left. The
+/// literal falsiness `falsy_subset` leaves alone, for a position whose
+/// result is the operand only when it was truthy.
+fn without_falsy_literals(t : @ast.TsType) -> @ast.TsType? {
+  let out : Array[@ast.TsType] = []
+  for p in union_components(t) {
+    match p {
+      BooleanLiteral(false) => ()
+      Literal("") => ()
+      NumberLiteral("0") | NumberLiteral("-0") => ()
+      BigIntLiteral("0") | BigIntLiteral("0n") => ()
+      Boolean => out.push(BooleanLiteral(true))
+      other => out.push(other)
+    }
+  }
+  match out.length() {
+    0 => None
+    1 => Some(out[0])
+    _ => Some(Union(out))
   }
 }
 
