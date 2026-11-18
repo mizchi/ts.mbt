@@ -6212,8 +6212,9 @@ product surfaces now.
   - nullish constituents are set aside during the reduction and added
     back;
   - two equal candidates are that candidate;
-  - an explicit JSX attribute overrides a spread field of the same name,
-    in inference and in the check.
+  - an explicit JSX attribute overrides an EARLIER spread field of the
+    same name, in inference and in the check. A later spread overriding
+    the attribute is not modelled yet.
 
   Every mechanism is mutation-proven in `callable_shapes_wbtest.mbt` and
   `recall_wbtest.mbt`.
@@ -6245,6 +6246,138 @@ product surfaces now.
     positive. The mutation differential goes from 92 to 105 caught
     (recall 35% → 40%), with no undeclared false positive.
     `member-typo` alone goes from 31 to 36.
+
+  Batch GV takes excalidraw's largest category and the shapes behind it.
+  Every fix below was reproduced in a minimal file and checked against the
+  nightly first; tsc accepts each `ok` shape:
+  - **A spread of a union distributes.** `{ ...u }` with `u: A | B` is
+    `{ ...A } | { ...B }` in tsc, and mtsc read it as the members the two
+    share. excalidraw's `restoreElement` writes `element = { ...element }`
+    over a 14-member element union and then switches on `element.type`, so
+    every case arm's own member read "does not exist" (about 100 reports).
+    A later key replaces an earlier one. An OPTIONAL member from a spread
+    does not override: `{ ...defaults, ...partial }` keeps each default
+    where `partial` may lack the member, as tsc's `getSpreadType` does.
+  - **`Exclude` / `Extract` over interfaces.** `extends_decision` is
+    resolver-free and could not decide `A extends C` for two named
+    interfaces, so `Exclude<Element, SelectionElement>` stayed an undecided
+    conditional. Two object shapes are now decided by one rule: a member
+    on both sides whose types are made of literals and are disjoint means
+    `false`. `true` is decided only against an object-type literal whose
+    every member the source definitely satisfies.
+  - **A generic alias used without type arguments** came back with its
+    parameter names unbound. effect's bare `MulticastInterface<A extends
+    IpAddress = IpAddress>` then read `A` as `net/Dns.ts`'s `interface A`,
+    and the new decision answered over the DNS record. A parameter whose
+    name the program declares as a type now reads as `any`. Replacing
+    every parameter was measured and cut back, because zod's bare
+    `SyncParseReturnType` exposed the object-literal discriminant split.
+  - **TS2454 in a closure.** A read of an outer `let x: T;` from inside a
+    closure is "used before being assigned" only when `x` is never
+    DEFINITELY assigned anywhere (tsc's `isOuterVariable &&
+    !isNeverInitialized`). That is `beforeEach(() => { api = … })` with
+    `it(() => api.go())`, the commonest shape in excalidraw's tests. A
+    definite assignment is `=`, a logical assignment, a destructuring
+    assignment or a loop head. `+=` and `++` read first and do not count,
+    probed. The parser records each as `<assigned:NAME>`.
+  - **A `private static` member** made the INSTANCE type nominal, so
+    `{ ...editor, … }` was not a `LinearElementEditor` (on main too). Only
+    an instance-side `private` / `protected` member does that.
+  - **A destructuring callback parameter** was bound to the whole element
+    type during return inference: `points.map(([x]) => x)` was an array of
+    points (on main too). The check path had bound the pattern since batch
+    EJ; the inference path is now the same walk.
+  - **`?.` over a union of declared shapes** added `undefined`, and every
+    receiver lost the member's own `null` (on main too). `one?.frameId`
+    with `frameId: string | null` is `string | null`, and `maybe?.frameId`
+    is `string | null | undefined`.
+  - **The other side of `x?.tag === K`** was left unnarrowed, so univer's
+    `menuItem?.type === MenuItemType.BUTTON ? undefined : menuItem` kept
+    the button variant (on main too). A non-nullish VALUE on the other
+    side rules the short-circuit out as surely as a literal does, which
+    needed one more fact: an enum type is in `resolver.enums`, and
+    `type_contains_unresolved_named` does not read that table, so
+    `currentBullet?.listType === listType` with `listType` an enum left
+    `currentBullet` possibly `undefined`.
+
+  Fixing the spread and the `Exclude` decision made more of excalidraw
+  and univer judgeable, and the shapes behind them came next. Each is on
+  main too unless it says otherwise:
+  - **`Exclude` over a nested union.** `ExcalidrawElement` lists
+    `ExcalidrawGenericElement`, itself an alias to a union holding the
+    selection element an `Exclude` removes, so distributing one level
+    checked that alias whole. A union of unions is that union now. And
+    the object decision runs on the shapes as WRITTEN, before
+    `simplify_type`, whose intersection collapse reduces `Base & { type:
+    "rectangle" }` to `Base` and made `RectEl extends SelEl` true.
+  - **`?.` receivers.** An intersection, `Readonly<…>` and its siblings, a
+    mapped type, and a union member that is itself a union alias are all
+    non-nullish receivers.
+  - **A written type argument over a bound-inlined return.**
+    `pointFrom<GlobalPoint>(x, y)` returned the bound `GlobalPoint |
+    LocalPoint`, because the parser inlines `P` to its bound. A return
+    that IS a parameter's union bound reads as the written argument. An
+    imported overload set, whose bounds are not on record, abstains.
+  - **A generic static method's binders.** univer's `static deepClone<T>`
+    met engine-formula's `class T`, and every `Tools.deepClone(x)`
+    reported. An unsolved binder reads as `any`.
+  - **TS2678 under `@ts-ignore`.** excalidraw keeps a `case "draw":` the
+    element union no longer has, under the comment. With no line to
+    honour the comment at, the rule abstains in a file that carries one.
+  - **A flat `??`.** `o?.a ?? o?.b` nested `number | (number |
+    undefined)`, and a `!= null` guard, which removes members one level
+    deep, left the inner `undefined`.
+  - **A compound write is judged on the narrowed target.** `x -= d` reads
+    `x` first, so univer's `if (p != null) { p -= delta }` is legal. `+=`
+    over a declared type that admits a string keeps the declared type,
+    and a logical assignment is not arithmetic.
+  - **A class base an augmentation names.** univer's facade mixins write
+    `class FUniverUIMixin extends FUniver` beside `declare module
+    "@univerjs/core/facade" { interface FUniver extends IFUniverUIMixin
+    {} }`, and the base read as that interface alone, without the class's
+    own `_injector`. The augmentation walk now follows class bases too.
+  - **A union of lib arrays and the union arity rule.** This one is new
+    in this batch: once `?.` stopped adding `undefined` to a callee, the
+    rule reached `paragraphs?.find(cb)` over `IParagraph[] | never[]`.
+    A lib member table writes `thisArg?` as a bare `T | undefined`, which
+    the rule cannot tell from a written `x: T | undefined` (that one stays
+    required, unionTypeReduction2). The plain `.find` spelling goes
+    through the method path and abstains on a union receiver, so the
+    chained spelling abstains too. A union of DECLARED methods keeps the
+    rule: `u?.m("a")` over `A | B` is TS2554, probed.
+  - **A switch that names every enum member ends every path.** univer's
+    `getReverseDirection` covers all four `Direction` members and was
+    "not all paths return" (on main too). An enum member read infers as
+    its base `number` / `string`, so coverage is decided by NAME. A
+    scrutinee typed through a namespace import (`E.Dir`) is still
+    reported, because a qualified enum that no other module declares is
+    not in the qualified-name table.
+
+  Two of #306's review items were reports on legal code, confirmed against
+  the nightly, and are fixed here:
+  - a `switch` label that falls into `default` keeps its variant there;
+  - a callable object's overloads are tried in declaration order, generic
+    members included.
+  The other items are MISSes and stay filed.
+
+  One change was reverted with its measurement. Deduplicating a union
+  member read (`"z" | "z"` → `"z"`) is cosmetic, and it gave effect two
+  new reports: `Pipeable`'s overload set had arrived as a union of two
+  identical sets, which abstained, and deduplicated it reached the
+  overload resolution that cannot judge a leading `this` parameter.
+  - **What it measures.** The oracle is unchanged: TP 2726 / MISS 0 /
+    FP 0, and tsc-extra stays at FP 0. effect goes from 102 to 96 and zod
+    stays at 7. univer goes:
+    - core 102→74
+    - docs-hyper-link 83→58
+    - data-validation 405→332
+    - sheets-numfmt 488→335
+    - ui 393→307
+
+    excalidraw goes from 529 to 345. None of them reports at a site main
+    does not. The real-app check still catches 8 of 11 with no false
+    positive. The mutation differential is unchanged at 105 caught / 155
+    missed (40%), with no undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
