@@ -4023,7 +4023,25 @@
           "name": "badFilterTooMany",
           "kind": "bad",
           "fromLine": 39,
-          "toLine": 40
+          "toLine": 41
+        },
+        {
+          "name": "badMapResultWithThisArg",
+          "kind": "bad",
+          "fromLine": 43,
+          "toLine": 43
+        },
+        {
+          "name": "badFlatMapResultWithThisArg",
+          "kind": "bad",
+          "fromLine": 44,
+          "toLine": 44
+        },
+        {
+          "name": "badFilterPredicateWithThisArg",
+          "kind": "bad",
+          "fromLine": 45,
+          "toLine": 46
         }
       ]
     },

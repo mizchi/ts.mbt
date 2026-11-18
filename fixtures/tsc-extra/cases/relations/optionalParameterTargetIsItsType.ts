@@ -40,3 +40,9 @@ export const okFindIndexThisArg = xs.findIndex((x) => x === "a", ctx);
 export function okForEachThisArg() { xs.forEach((x) => x, ctx); }
 export const okFlatMapThisArg = xs.flatMap((x) => [x], ctx);
 export function badFilterTooMany() { return xs.filter((x) => x.length > 0, ctx, 1); }
+// The `thisArg` does not change what the callback returns, so the result is
+// inferred as without it.
+declare const mixed: (string | number)[];
+export const badMapResultWithThisArg: string[] = xs.map((x) => x.length, ctx);
+export const badFlatMapResultWithThisArg: string[] = xs.flatMap((x) => [x.length], ctx);
+export const badFilterPredicateWithThisArg: number[] = mixed.filter((y): y is string => typeof y === "string", ctx);

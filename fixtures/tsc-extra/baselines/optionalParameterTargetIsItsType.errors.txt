@@ -5,9 +5,15 @@ optionalParameterTargetIsItsType.ts(21,97): error TS2345: Argument of type '{ lo
   Types of property 'locale' are incompatible.
     Type 'number' is not assignable to type 'Pick<Locale, "localize">'.
 optionalParameterTargetIsItsType.ts(39,81): error TS2554: Expected 1-2 arguments, but got 3.
+optionalParameterTargetIsItsType.ts(43,14): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+  Type 'number' is not assignable to type 'string'.
+optionalParameterTargetIsItsType.ts(44,14): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+  Type 'number' is not assignable to type 'string'.
+optionalParameterTargetIsItsType.ts(45,14): error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+  Type 'string' is not assignable to type 'number'.
 
 
-==== optionalParameterTargetIsItsType.ts (5 errors) ====
+==== optionalParameterTargetIsItsType.ts (8 errors) ====
     // An optional parameter's type is `T | undefined`, and a value that cannot be
     // nullish meets that target exactly when it meets `T`: an object literal is
     // checked against `T` itself, mismatched members included, and a non-literal
@@ -59,4 +65,19 @@ optionalParameterTargetIsItsType.ts(39,81): error TS2554: Expected 1-2 arguments
     export function badFilterTooMany() { return xs.filter((x) => x.length > 0, ctx, 1); }
                                                                                     ~
 !!! error TS2554: Expected 1-2 arguments, but got 3.
+    // The `thisArg` does not change what the callback returns, so the result is
+    // inferred as without it.
+    declare const mixed: (string | number)[];
+    export const badMapResultWithThisArg: string[] = xs.map((x) => x.length, ctx);
+                 ~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    export const badFlatMapResultWithThisArg: string[] = xs.flatMap((x) => [x.length], ctx);
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    export const badFilterPredicateWithThisArg: number[] = mixed.filter((y): y is string => typeof y === "string", ctx);
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+!!! error TS2322:   Type 'string' is not assignable to type 'number'.
     

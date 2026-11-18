@@ -5916,6 +5916,17 @@ product surfaces now.
     spelled it for none of the ten, so `xs.filter(f, ctx)` was "expected 1
     argument(s), got 2". This is batch FM's optional-parameter family,
     in the one table FM did not reach.
+  - **A harness that edits tracked files has to survive being killed.**
+    A container restart killed a gate run mid-edit and left
+    `fixtures/real-app/ok/src/yjs.ts` mutated, because a SIGKILL runs no
+    exit handler. Each edit is now written to a journal before it is
+    applied, and the next run restores the file first. This was checked by
+    killing a run with `kill -9` while an edit was in flight. Review of the
+    PR added two more guards. Restoring writes back only the file this run
+    mutated, and only while it still holds the mutation. And an mtsc exit
+    that is nonzero with no parsed diagnostic is a CRASH, not a clean run,
+    because a run that loaded nothing would otherwise score every mutant
+    as MISS or TN.
   - **One FP is declared, not fixed.** It is listed in
     `fixtures/real-app/mutation-fps.txt`, with the same STALE rule as the
     other declared lists. date-fns' `FormatOptions` extends

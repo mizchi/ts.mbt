@@ -40,7 +40,7 @@
 //     --max-fp N       exit 1 when more than N UNDECLARED mutants are false
 //                      positives (see --declared)
 //     --declared F     false positives already known, one per line as
-//                      `FILE:LINE MUTATOR  reason`; default
+//                      `FILE:LINE:COL MUTATOR  reason`; default
 //                      `fixtures/real-app/mutation-fps.txt` for the default
 //                      project. A declared entry that ran and was NOT a
 //                      false positive fails as STALE, which is what keeps
@@ -61,17 +61,32 @@ const ts = require(path.join(ROOT, "node_modules", "typescript-6"));
 
 const argv = process.argv.slice(2);
 const flag = (f) => argv.includes(f);
+const die = (msg) => {
+  console.error(`mutation_differential: ${msg}`);
+  process.exit(2);
+};
+/** An option's operand; a missing one, or another option in its place, is an error. */
 const value = (f) => {
   const i = argv.indexOf(f);
-  return i >= 0 ? argv[i + 1] : undefined;
+  if (i < 0) return undefined;
+  const v = argv[i + 1];
+  if (v === undefined || v.startsWith("--")) die(`${f} needs a value`);
+  return v;
+};
+/** An integer operand no smaller than `min`, or `undefined` when the option is absent. */
+const intValue = (f, min) => {
+  const v = value(f);
+  if (v === undefined) return undefined;
+  if (!/^-?\d+$/.test(v) || Number(v) < min) die(`${f} needs an integer >= ${min}, got \`${v}\``);
+  return Number(v);
 };
 const PROJECT = path.resolve(value("--project") ?? path.join(ROOT, "fixtures", "real-app", "ok"));
 const TSCONFIG = value("--tsconfig") ?? "tsconfig.json";
 const FILES = value("--files");
 const ONLY = value("--mutators")?.split(",");
-const COUNT = value("--count") ? Number(value("--count")) : undefined;
-const SEED = Number(value("--seed") ?? 1);
-const MAX_FP = value("--max-fp") !== undefined ? Number(value("--max-fp")) : undefined;
+const COUNT = intValue("--count", 1);
+const SEED = intValue("--seed", Number.MIN_SAFE_INTEGER) ?? 1;
+const MAX_FP = intValue("--max-fp", 0);
 const DECLARED_PATH = value("--declared") ??
   (value("--project") ? undefined : path.join(ROOT, "fixtures", "real-app", "mutation-fps.txt"));
 const JSON_OUT = value("--json");
@@ -103,12 +118,43 @@ function spawn(cmd, args) {
 
 const rel = (f) => path.relative(PROJECT, path.resolve(PROJECT, f)).replaceAll("\\", "/");
 
+// Only the file this run has mutated is ever restored, and only when it
+// still holds the mutation: an edit somebody made to it meanwhile is left
+// alone and reported rather than overwritten.
+//
+// A SIGKILL runs no handler, and a container restart is one, so the edit in
+// flight is also written to a journal before it is applied. A run that
+// finds a journal puts that file back first, under the same rule.
+const JOURNAL = path.join(PROJECT, ".mutation-differential.journal.json");
+let active = null;
+const putBack = ({ p, original, mutated }) => {
+  const now = fs.readFileSync(p, "utf8");
+  if (now === mutated) fs.writeFileSync(p, original);
+  else if (now !== original) console.error(`mutation_differential: ${rel(p)} changed during the run; left as it is`);
+};
+const restore = () => {
+  if (!active) return;
+  const a = active;
+  active = null;
+  putBack(a);
+  fs.rmSync(JOURNAL, { force: true });
+};
+if (fs.existsSync(JOURNAL)) {
+  const left = JSON.parse(fs.readFileSync(JOURNAL, "utf8"));
+  console.error(`mutation_differential: an earlier run was killed mid-edit; restoring ${rel(left.p)}`);
+  putBack(left);
+  fs.rmSync(JOURNAL, { force: true });
+}
+
 /** tsc's diagnostics per file, as `TSn message` with the location dropped. */
 function runTsc() {
   const out = new Map();
   const args = ["-p", TSCONFIG, "--noEmit", "--pretty", "false"];
   const text = TSC_IS_SCRIPT ? spawn(process.execPath, [TSC, ...args]) : spawn(TSC, args);
   for (const line of text.split("\n")) {
+    // A diagnostic with no location is about the configuration, and a run
+    // that could not read its configuration checked nothing.
+    if (/^error TS\d+:/.test(line.trim())) die(`tsc rejected the project: ${line.trim()}`);
     const m = /^(.+?)\(\d+,\d+\): error (TS\d+): (.*)$/.exec(line.trim());
     if (!m) continue;
     const f = rel(m[1]);
@@ -138,6 +184,13 @@ function runMtsc() {
     const f = rel(m[1]);
     if (!out.has(f)) out.set(f, []);
     out.get(f).push(m[2].trim());
+  }
+  // A failing exit with no diagnostic means nothing was checked (a missing
+  // tsconfig, a graph that did not load), and reading that as "no report"
+  // would score every mutant as MISS or TN.
+  if (!crashed && r.status !== 0 && out.size === 0) {
+    const first = `${r.stdout}\n${r.stderr}`.split("\n").find((l) => l.trim()) ?? "";
+    crashed = `exit ${r.status} with no diagnostic: ${first.trim()}`;
   }
   return { byFile: out, crashed };
 }
@@ -309,9 +362,9 @@ function enumerateMutants(files) {
           const key = `${start}:${end}:${repl}`;
           if (seen.has(key)) return;
           seen.add(key);
-          const line = sf.getLineAndCharacterOfPosition(start).line + 1;
-          mutants.push({ file, mutator: m.name, expects: m.expects, start, end, repl, line,
-            before: text.slice(start, end), text });
+          const lc = sf.getLineAndCharacterOfPosition(start);
+          mutants.push({ file, mutator: m.name, expects: m.expects, start, end, repl,
+            line: lc.line + 1, col: lc.character + 1, before: text.slice(start, end), text });
         });
         ts.forEachChild(n, visit);
       };
@@ -333,7 +386,7 @@ function rng(seed) {
   };
 }
 
-/** `FILE:LINE MUTATOR  reason` entries; `#` starts a comment. */
+/** `FILE:LINE:COL MUTATOR  reason` entries; `#` starts a comment. */
 function readDeclared() {
   const out = new Map();
   if (!DECLARED_PATH || !fs.existsSync(DECLARED_PATH)) return out;
@@ -342,7 +395,7 @@ function readDeclared() {
     if (!line) continue;
     const [where, mutator, ...reason] = line.split(/\s+/);
     if (!mutator || reason.length === 0) {
-      throw new Error(`${DECLARED_PATH}: \`${line}\` needs FILE:LINE MUTATOR and a reason`);
+      throw new Error(`${DECLARED_PATH}: \`${line}\` needs FILE:LINE:COL MUTATOR and a reason`);
     }
     out.set(`${where} ${mutator}`, reason.join(" "));
   }
@@ -374,13 +427,6 @@ if (flag("--list")) {
   process.exit(0);
 }
 
-const originals = new Map(files.map((f) => [f, fs.readFileSync(path.join(PROJECT, f), "utf8")]));
-const restore = () => {
-  for (const [f, text] of originals) {
-    const p = path.join(PROJECT, f);
-    if (fs.readFileSync(p, "utf8") !== text) fs.writeFileSync(p, text);
-  }
-};
 process.on("exit", restore);
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { restore(); process.exit(130); });
 
@@ -399,14 +445,18 @@ const bump = (m, k) => {
 try {
   for (const [i, m] of mutants.entries()) {
     const p = path.join(PROJECT, m.file);
-    fs.writeFileSync(p, m.text.slice(0, m.start) + m.repl + m.text.slice(m.end));
+    if (fs.readFileSync(p, "utf8") !== m.text) die(`${m.file} changed since the mutants were listed; stopping`);
+    const mutated = m.text.slice(0, m.start) + m.repl + m.text.slice(m.end);
+    active = { p, original: m.text, mutated };
+    fs.writeFileSync(JOURNAL, JSON.stringify(active));
+    fs.writeFileSync(p, mutated);
     let tscNew;
     let mtsc;
     try {
       tscNew = added(baseTsc.get(m.file), runTsc().get(m.file));
       mtsc = runMtsc();
     } finally {
-      fs.writeFileSync(p, m.text);
+      restore();
     }
     const mtscNew = added(baseMtsc.byFile.get(m.file), mtsc.byFile.get(m.file));
     const outcome = mtsc.crashed
@@ -415,12 +465,12 @@ try {
         ? mtscNew.length > 0 ? "CAUGHT" : "MISS"
         : mtscNew.length > 0 ? "FP" : "TN";
     bump(m.mutator, outcome);
-    const rec = { file: m.file, line: m.line, mutator: m.mutator, expects: m.expects,
+    const rec = { file: m.file, line: m.line, col: m.col, mutator: m.mutator, expects: m.expects,
       before: m.before, after: m.repl, outcome, tsc: tscNew, mtsc: mtscNew };
     results.push(rec);
     if (VERBOSE || outcome === "MISS" || outcome === "FP" || outcome === "CRASH") {
       const edit = `${JSON.stringify(m.before)} -> ${JSON.stringify(m.repl)}`;
-      console.log(`[${i + 1}/${mutants.length}] ${outcome.padEnd(6)} ${m.mutator} ${m.file}:${m.line} ${edit}`);
+      console.log(`[${i + 1}/${mutants.length}] ${outcome.padEnd(6)} ${m.mutator} ${m.file}:${m.line}:${m.col} ${edit}`);
       for (const d of tscNew) console.log(`    tsc : ${d}`);
       for (const d of mtscNew) console.log(`    mtsc: ${d}`);
     }
@@ -441,9 +491,10 @@ const den = sum.CAUGHT + sum.MISS;
 console.log(`${"total".padEnd(22)} ${String(sum.CAUGHT).padStart(6)} ${String(sum.MISS).padStart(5)} ${String(sum.FP).padStart(4)} ${String(sum.TN).padStart(4)}  ${den ? `${((100 * sum.CAUGHT) / den).toFixed(0)}%` : "-"}${sum.CRASH ? `  (${sum.CRASH} crash)` : ""}`);
 if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(results, null, 1));
 const declared = readDeclared();
-const ran = new Set(results.map((r) => `${r.file}:${r.line} ${r.mutator}`));
-const fpKeys = new Set(results.filter((r) => r.outcome === "FP").map((r) => `${r.file}:${r.line} ${r.mutator}`));
-const undeclared = results.filter((r) => r.outcome === "FP" && !declared.has(`${r.file}:${r.line} ${r.mutator}`));
+const siteKey = (r) => `${r.file}:${r.line}:${r.col} ${r.mutator}`;
+const ran = new Set(results.map(siteKey));
+const fpKeys = new Set(results.filter((r) => r.outcome === "FP").map(siteKey));
+const undeclared = results.filter((r) => r.outcome === "FP" && !declared.has(siteKey(r)));
 const stale = [...declared.keys()].filter((k) => ran.has(k) && !fpKeys.has(k));
 if (declared.size > 0) {
   const reproduced = [...declared.keys()].filter((k) => fpKeys.has(k)).length;

@@ -13327,10 +13327,11 @@ fn infer_expr_inner(
       // Special-case generic `Array.prototype.{map, flatMap, reduce}` so
       // the callback's body / initial-value type flows into the result
       // type instead of the synthetic `Any` slot returned by
-      // `array_prototype_member`.
+      // `array_prototype_member`. The lib's optional `thisArg` after the
+      // callback does not change what the callback returns.
       let elem_opt = array_element_type(resolver, recv_ty)
       match (elem_opt, meth, args) {
-        (Some(elem), "map", [cb]) => {
+        (Some(elem), "map", [cb] | [cb, _]) => {
           let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
             elem,
             @ast.TsType::Number,
@@ -13338,7 +13339,7 @@ fn infer_expr_inner(
           ])
           return @ast.TsType::Array(cb_ret)
         }
-        (Some(elem), "flatMap", [cb]) => {
+        (Some(elem), "flatMap", [cb] | [cb, _]) => {
           let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
             elem,
             @ast.TsType::Number,
@@ -13378,7 +13379,7 @@ fn infer_expr_inner(
         // `arr.filter((x): x is Foo => …)` — when the callback is
         // declared as a type predicate, narrow the result array's
         // element to the predicate's asserted type.
-        (Some(elem), "filter", [cb]) =>
+        (Some(elem), "filter", [cb] | [cb, _]) =>
           match arrow_type_predicate_target(cb) {
             Some(target) => return @ast.TsType::Array(target)
             None =>
