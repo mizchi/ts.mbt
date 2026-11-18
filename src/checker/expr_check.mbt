@@ -18405,6 +18405,26 @@ fn is_bigint_operand(
 }
 
 ///|
+/// True when every member of `t` is a string, a string literal or a
+/// template literal type, which is what makes `+` a concatenation.
+fn string_like_operand(
+  resolver : Resolver,
+  t : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  match resolver.unwrap(t) {
+    String_ | Literal(_) | TemplateLiteralType(_, _) => true
+    Union(parts) =>
+      parts.length() > 0 &&
+      parts.iter().all(fn(p) { string_like_operand(resolver, p, depth + 1) })
+    _ => false
+  }
+}
+
+///|
 fn infer_binop(
   op : @ast.TsBinOp,
   l : @ast.TsType,
@@ -18422,6 +18442,12 @@ fn infer_binop(
         // String concat — either side is a string-shaped type.
         (String_, _) | (_, String_) | (Literal(_), _) | (_, Literal(_)) =>
           @ast.TsType::String_
+        // A union of strings is a string operand too: `(data.path || "") +
+        // token` with `token` narrowed to `"M" | "D"` is a string, where
+        // both operands being unions fell through to `number` (univer's
+        // `nextToken`).
+        _ if string_like_operand(resolver, l, 0) ||
+          string_like_operand(resolver, r, 0) => @ast.TsType::String_
         // `bigint + bigint` stays bigint (mixing with number is a type error,
         // surfaced separately by the operand check).
         (BigInt, BigInt)
@@ -25450,7 +25476,15 @@ fn accessor_member_value_type(
           None => false
         }
         if unannotated {
-          from_getter = method_sole_return_type(m, resolver)
+          // With strictNullChecks off an inferred `null` / `undefined`
+          // return widens to `any`, so `get y() { return null }` beside
+          // `set y(x) {}` takes `c.y = 1` (classPropertyIsPublicByDefault).
+          from_getter = match method_sole_return_type(m, resolver) {
+            Some(Null | Undefined) if resolver.globals.contains(
+                "@no-strict-null-checks",
+              ) => Some(@ast.TsType::Any)
+            other => other
+          }
         }
       }
     }
@@ -33178,8 +33212,26 @@ fn analyze_equality(
         // "possibly undefined". It is left as it was: `never` would be
         // exact, but this site cannot see `strictNullChecks`, and with it
         // off every type admits `undefined`.
+        // The equal side keeps the nullish members the type HAS: `x ==
+        // null` over `null | P[][]` is `null`, not `null | undefined`
+        // (tsc filters the declared members; univer's
+        // `_handleCustomResult`). A type with no nullish member to keep,
+        // and every type with strictNullChecks off, keeps the pair.
         if !type_definitely_non_nullish(resolver, cur) {
-          true_side.push((key, @ast.TsType::Union([Null, Undefined])))
+          let flat = flatten_union_parts(cur)
+          let has_nullish_member = cur is Union(_) &&
+            union_components(flat).iter().any(is_nullish)
+          true_side.push(
+            (
+              key,
+              if has_nullish_member &&
+                !resolver.globals.contains("@no-strict-null-checks") {
+                narrow_keep(flat, is_nullish)
+              } else {
+                @ast.TsType::Union([Null, Undefined])
+              },
+            ),
+          )
         }
         false_side.push((key, narrow_remove(cur, is_nullish)))
       } else {

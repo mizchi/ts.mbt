@@ -481,3 +481,73 @@ test "an object type meets an index-signature interface" {
     "top-level > binding `badMember` init: expected `Idx` but got `{ a: string }`",
   ])
 }
+
+///|
+/// With strictNullChecks off an unannotated getter returning `null` or
+/// `undefined` is `any`, so its unannotated setter takes anything
+/// (classPropertyIsPublicByDefault). With it on, the getter's `null`
+/// stands.
+test "a nullish getter widens to any without strictNullChecks" {
+  let loose =
+    #|// @strict: false
+    #|class C {
+    #|  get y() { return null; }
+    #|  set y(x) { }
+    #|  get u() { return undefined; }
+    #|  set u(x) { }
+    #|  get n() { return 1; }
+    #|  set n(x) { }
+    #|}
+    #|declare var c: C;
+    #|c.y = 1;
+    #|c.u = "s";
+    #|c.n = "bad";
+  assert_eq(issue_lines(loose), [
+    "top-level > assign `.n`: expected `number` but got `string`",
+  ])
+  let strict =
+    #|class C {
+    #|  get y() { return null; }
+    #|  set y(x) { }
+    #|}
+    #|declare var c: C;
+    #|c.y = 1;
+  assert_eq(issue_lines(strict), [
+    "top-level > assign `.y`: expected `null` but got `number`",
+  ])
+}
+
+///|
+/// `+` concatenates when either operand is made of strings, a union of
+/// string literals included (univer's `nextToken`, where `token` is
+/// narrowed to `"M" | "D"` and `path` is `data.path || ""`).
+test "a union of strings is a string operand of plus" {
+  let src =
+    #|interface St { path: string }
+    #|declare function next(d: St): void;
+    #|export function f(data: St, token: string) {
+    #|  const path = data.path || "";
+    #|  if (token === "M" || token === "D") { next({ path: path + token }); }
+    #|}
+    #|export function bad(k: "a" | "b", n: number) { const m: number = k + n; return m; }
+  assert_eq(issue_lines(src), [
+    "function bad > binding `m` init: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// The equal side of `x == null` keeps the nullish members `x` has: over
+/// `null | P[][]` it is `null`, and over `string | null | undefined` both
+/// (univer's `_handleCustomResult`).
+test "loose null equality keeps the declared nullish members" {
+  let src =
+    #|type P = string | boolean | number | null;
+    #|type R = P | P[][];
+    #|declare function create(v: string | number | boolean | null): void;
+    #|export function f(x: R) { if (typeof x !== "object" || x == null) { create(x); } }
+    #|export function a(x: string | null) { if (x == null) { const n: null = x; } }
+    #|export function c(x: string | null | undefined) { if (x == null) { const n: null = x; } }
+  assert_eq(issue_lines(src), [
+    "function c > binding `n` init: expected `null` but got `null | undefined`",
+  ])
+}
