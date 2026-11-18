@@ -303,3 +303,99 @@ test "a naked union member's candidate is reduced with the call's others" {
     "function badUnwrap > binding `s` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// A value whose type is an object type or an interface with call
+/// signatures is called through them: one signature is checked as a
+/// function-typed value is, several as an overload set, and the result is
+/// the signature's return. Every such call came back `any` before.
+test "a callable object type is called through its call signatures" {
+  let src =
+    #|interface Express { listen(port: number): void }
+    #|declare const q: { (): Express; json: () => number };
+    #|declare const r: { (): Express; (x: string): number };
+    #|interface CallI { (n: number): string; extra: boolean }
+    #|declare const ci: CallI;
+    #|export function okCalls() {
+    #|  q().listen(1);
+    #|  const n: number = r("s");
+    #|  const s: string = ci(1);
+    #|  return [n, s, q.json(), ci.extra];
+    #|}
+    #|export function badArity() { return q(1); }
+    #|export function badReturn() { q().listen("x"); }
+    #|export function badOverload() { return r(1, 2); }
+    #|export function badArg() { return ci("x"); }
+  assert_eq(issue_lines(src), [
+    "function badArity > call `q`: expected 0 argument(s), got 1", "function badReturn > call `listen` arg[0]: expected `number` but got `string`",
+    "function badOverload > call `r`: no overload matches this call", "function badArg > call `ci` arg[0]: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// The shape `@types/express` has: a function merged with a namespace,
+/// assigned with `export =`, whose namespace interfaces extend a
+/// namespace-imported module's and carry type parameters with defaults.
+/// The call, the namespace's types imported by name, a renamed import of
+/// the base, and member existence on the callable app all check, and a
+/// generic interface named without arguments reads its parameters as
+/// `any` instead of the raw binder (`res.json(1)` is legal).
+test "an export-assigned function merged with a namespace of types" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/core.d.ts", "export interface Request<P = string> { params: P; path: string }\nexport interface Response<B = any> { json(body?: B): this }\nexport interface Express { (req: any, res: any): void; listen(port: number): void }",
+        ),
+        (
+          "/src/e.d.ts", "import * as core from \"./core\";\ndeclare function e(): core.Express;\ndeclare namespace e {\n  var json: () => (req: any, res: any) => void;\n  interface Request<P = string> extends core.Request<P> {}\n  interface Response<B = any> extends core.Response<B> {}\n}\nexport = e;",
+        ),
+        (
+          "/src/main.ts", "import express from \"./e\";\nimport type { Request, Response } from \"./e\";\nimport type { Response as CoreRes } from \"./core\";\nconst app = express();\napp.listen(3000);\ndeclare const req: Request;\ndeclare const res: Response;\ndeclare const cres: CoreRes;\nres.json(1);\ncres.json(1);\nexport const okPath: string = req.path;\nexport const okBind = app.bind;\nexport const bad1 = express(1);\nexport const bad2 = app.lisen;\nexport const bad3 = req.nope;\nexport const bad4 = res.nope;\nexport const bad5: number = req.path;\nexport const bad6 = express.nope;",
+        ),
+      ],
+      [
+        ("/src/e.d.ts", "./core", "/src/core.d.ts"),
+        ("/src/main.ts", "./e", "/src/e.d.ts"),
+        ("/src/main.ts", "./core", "/src/core.d.ts"),
+      ],
+    ),
+    [
+      "top-level > call `express` :: expected 0 argument(s), got 1", "top-level > PropAccess `.lisen` :: property `lisen` does not exist on `Express`",
+      "top-level > PropAccess `.nope` :: property `nope` does not exist on `Request`",
+      "top-level > PropAccess `.nope` :: property `nope` does not exist on `Response`",
+      "top-level > binding `bad5` init :: expected `number` but got `string`", "top-level > PropAccess `.nope` :: property `nope` does not exist on `{ <call>: () => Express; json: () => (any, any) => void }`",
+    ],
+  )
+}
+
+///|
+/// A computed member key naming a value declared `unique symbol` is a
+/// symbol key, which no `.name` access can reach, so it no longer makes
+/// the member list undecidable — dotted (`[NS.s]`) or not. A key naming a
+/// string `const` or an enum member still might name the accessed
+/// member, and still abstains.
+test "a symbol-keyed member does not block member existence" {
+  let src =
+    #|declare const k: unique symbol;
+    #|declare namespace NS { const s: unique symbol; const lit: "lit"; }
+    #|interface I1 { [k](): void; y: number }
+    #|interface I2 { [NS.s]?(): void; y: number }
+    #|const kk = "hello";
+    #|interface I3 { [kk]: number; y: number }
+    #|enum K { A = "a" }
+    #|interface I4 { [K.A]: number; y: number }
+    #|interface I5 { [NS.lit]: number; y: number }
+    #|declare const i1: I1;
+    #|declare const i2: I2;
+    #|declare const i3: I3;
+    #|declare const i4: I4;
+    #|declare const i5: I5;
+    #|export function okKeys() { return [i3.hello, i4.a, i5.lit, i1.y, i2.y]; }
+    #|export function badSymbolKeyed1() { return i1.nope; }
+    #|export function badSymbolKeyed2() { return i2.nope; }
+  assert_eq(issue_lines(src), [
+    "function badSymbolKeyed1 > PropAccess `.nope`: property `nope` does not exist on `I1`",
+    "function badSymbolKeyed2 > PropAccess `.nope`: property `nope` does not exist on `I2`",
+  ])
+}

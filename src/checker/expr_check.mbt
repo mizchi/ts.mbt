@@ -1526,6 +1526,75 @@ fn unkeyed_type_module_lookup(
 /// Import only type declarations from another ES module. Value declarations
 /// intentionally stay out of `globals`: an embedding must still provide the
 /// concrete bindings it resolved for the current module's runtime imports.
+
+///|
+/// Every value `module_` declares as a `unique symbol`, at its own name and
+/// under each enclosing namespace (`EventEmitter.captureRejectionSymbol`),
+/// recorded as `@unique-symbol:NAME` markers. A type-only ingestion drops
+/// a module's values, and these are what a computed member key names:
+/// `[EventEmitter.captureRejectionSymbol]?(…)` is a SYMBOL-keyed member,
+/// which no `.name` access can reach (see `member_recv_unmodeled`).
+fn Resolver::record_unique_symbol_names(
+  r : Resolver,
+  module_ : @ast.TsModule,
+  prefix : String,
+) -> Unit {
+  for v in module_.values {
+    if v.type_ is UniqueSymbol(_) {
+      r.globals["@unique-symbol:" + prefix + v.name] = Any
+    }
+  }
+  for ns in module_.namespaces {
+    Resolver::record_unique_symbol_names(r, ns.module_, prefix + ns.name + ".")
+  }
+  Resolver::record_augmented_interface_names(r, module_)
+}
+
+///|
+/// The interfaces a module AUGMENTATION declares (`declare module
+/// "@vitest/expect" { interface ExpectStatic { poll: … } }`), recorded as
+/// `@augmented-iface:NAME`. An augmentation's members are not merged into
+/// the interface it augments, so the interface's member list is not the
+/// whole of it and member existence on it abstains (see
+/// `member_recv_unmodeled`). Keyed by bare name: an augmentation names the
+/// interface the way its own module does.
+fn Resolver::record_augmented_interface_names(
+  r : Resolver,
+  module_ : @ast.TsModule,
+) -> Unit {
+  fn walk(r : Resolver, m : @ast.TsModule) -> Unit {
+    for i in m.interfaces {
+      r.globals["@augmented-iface:" + i.name] = Any
+    }
+    for ns in m.namespaces {
+      walk(r, ns.module_)
+    }
+  }
+
+  // Only a file that is itself a MODULE augments: there `declare module
+  // "x" { … }` adds to `"x"`. In a script (every `@types/node` file is one)
+  // the same spelling DECLARES `"x"`, and its interfaces are that module's
+  // whole member lists — recording them made `IncomingMessage`, and with
+  // it every express `Request`, abstain.
+  let is_module = !module_.import_module_specs.is_empty() ||
+    !module_.imported_binding_names.is_empty() ||
+    module_.grammar_misuses
+    .iter()
+    .any(fn(gm) {
+      gm == "<module-syntax>" ||
+      gm.has_prefix("<export-value>") ||
+      gm.has_prefix("<export-default>") ||
+      gm.has_prefix("<export-eq>")
+    })
+  if !is_module {
+    return
+  }
+  for aug in module_.module_augmentations {
+    walk(r, aug.1)
+  }
+}
+
+///|
 fn Resolver::ingest_type_module(
   r : Resolver,
   module_ : @ast.TsModule,
@@ -1535,6 +1604,7 @@ fn Resolver::ingest_type_module(
   renames~ : Map[String, String] = Map([]),
   reuse_unkeyed~ : Bool = false,
 ) -> Unit {
+  Resolver::record_unique_symbol_names(r, module_, prefix)
   let types = if cache_key == "" {
     match
       (if reuse_unkeyed {
@@ -2521,6 +2591,7 @@ fn Resolver::ingest_module(
   module_ : @ast.TsModule,
   prefix : String,
 ) -> Unit {
+  Resolver::record_augmented_interface_names(r, module_)
   // TS declaration merging: `interface Foo { a }` + `interface Foo { b }`
   // produces a single `Foo` whose members are the union of both bodies.
   // Field-key collisions take the later declaration.
@@ -2554,9 +2625,34 @@ fn Resolver::ingest_module(
       None => r.interfaces[key] = merged
     }
   }
+  // Inside a namespace, a class's `extends B` names the namespace's own
+  // `B` when the body declares one, as TypeScript scopes it: @types/react's
+  // `class PureComponent extends Component` inside `namespace React` is
+  // `React.Component`. Read bare, the base was whatever the table holds
+  // under `Component`, and with `@firebase/component`'s `class Component`
+  // in the same program, `this.state` on every `PureComponent` subclass
+  // was "does not exist". The class is ingested under `prefix + name`, so
+  // its base is too.
+  let namespace_types : Map[String, Unit] = Map([])
+  if prefix != "" {
+    for c in module_.classes {
+      namespace_types[c.name] = ()
+    }
+    for i in module_.interfaces {
+      namespace_types[i.name] = ()
+    }
+  }
+  fn requalify_base(b : String) -> String {
+    if namespace_types.contains(b) {
+      prefix + b
+    } else {
+      b
+    }
+  }
+
   for e in module_.class_base_type_args {
     let (cls_name, base, args) = e
-    let key = class_base_key(prefix + cls_name, base)
+    let key = class_base_key(prefix + cls_name, requalify_base(base))
     match r.class_base_args.get(key) {
       None => r.class_base_args[key] = Some(args)
       Some(Some(prev)) if prev != args => r.class_base_args[key] = None
@@ -2576,6 +2672,11 @@ fn Resolver::ingest_module(
     // resolve its base chain, which loses a finding rather than inventing
     // one.
     if !c.is_local {
+      let c = if namespace_types.is_empty() {
+        c
+      } else {
+        { ..c, base_names: c.base_names.map(requalify_base), }
+      }
       Resolver::put_class(r, prefix + c.name, c)
     }
   }
@@ -3476,6 +3577,34 @@ fn function_value_required_arity(expr : @ast.TsExpr) -> Int32? {
 }
 
 ///|
+/// Whether an interface's call signatures may carry type parameters this
+/// cannot see. A generic call signature (`interface ExpectStatic { <T>(
+/// actual: T): Assertion<T> }`) records its binders in
+/// `method_type_params` under `<call>` only in a CHECKING parse, since the
+/// bridge reads that list, and its parameters then name a bare `T`; one
+/// without any record cannot be told from a non-generic one, so only an
+/// interface that records NONE of them is called through. An object type
+/// literal's generic call signature is a `GenericFunc` in a checking
+/// parse, which the callers handle as one.
+fn call_signatures_binders_unknown(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let name = match resolver.unwrap(t) {
+    Named(n) | Applied(n, _) | Struct(n, _) => n
+    _ => return false
+  }
+  fn generic(iface : @ast.TsInterface) -> Bool {
+    iface.method_type_params.iter().any(fn(e) { e.0 == "<call>" })
+  }
+
+  match resolver.interfaces.get(name) {
+    Some(iface) => generic(iface)
+    None => false
+  }
+}
+
+///|
 /// Collect every call signature (`<call>`) declared on `t` -- one entry per
 /// overload -- from both structural object types and interface declarations,
 /// plus a bare `Func` type (a single call signature).
@@ -3491,6 +3620,14 @@ fn collect_call_signatures(
         match f.0 {
           Literal(k) => if k == "<call>" { out.push(f.1) }
           _ => ()
+        }
+      }
+    // An interface the resolver expanded (a generic one at its arguments,
+    // `IRouterMatcher<this>`) holds its call signatures the same way.
+    Struct(_, fields) =>
+      for f in fields {
+        if f.0 == "<call>" {
+          out.push(f.1)
         }
       }
     Named(n) =>
@@ -4882,6 +5019,53 @@ fn Resolver::lookup_field(
     None
   }
   self.lookup_depth.val = self.lookup_depth.val + 1
+  // A GENERIC interface named with no type arguments (`declare const r:
+  // Response` of `interface Response<ResBody = any>`) is read with each
+  // parameter as `any`. Defaults are not recorded, and `any` is what a
+  // default can only narrow from, so this can lose a finding but not make
+  // one. Left bare, a member's type kept the raw binder, and once the
+  // interface came from ANOTHER module the binder was a name the checked
+  // file never declares: `r.json(1)` against `json(body?: ResBody)` was
+  // "expected `ResBody | undefined`", a false positive on every express
+  // `Response` and on any imported generic interface with a default.
+  // A renamed import of one (`import type { Response as R }`) is a hop or
+  // two away from the interface's own name (`qualified_names`, which also
+  // holds `ns.X`, or an alias), so those hops are followed first.
+  let recv = match recv {
+    Named(start) => {
+      let mut n = start
+      let mut hops = 0
+      while hops < 4 {
+        match self.qualified_names.get(n) {
+          Some(next) if next != n => {
+            n = next
+            hops = hops + 1
+            continue
+          }
+          _ => ()
+        }
+        match self.type_aliases.get(n) {
+          Some(decl) if decl.type_params.is_empty() &&
+            decl.type_ is Named(next) &&
+            next != n => {
+            n = next
+            hops = hops + 1
+          }
+          _ => break
+        }
+      }
+      if is_builtin_generic_table_name(n) || self.classes.contains(n) {
+        recv
+      } else {
+        match self.interfaces.get(n) {
+          Some(iface) if iface.type_params.length() > 0 =>
+            @ast.TsType::Applied(n, iface.type_params.map(fn(_) { Any }))
+          _ => recv
+        }
+      }
+    }
+    _ => recv
+  }
   let found = match generic_func_prototype_member(recv, field) {
     Some(t) => Some(t)
     None => self.lookup_field_core(recv, field)
@@ -14185,6 +14369,12 @@ fn infer_naked_union_member(
   let thenable_member = others
     .iter()
     .any(fn(o) { o is Applied("Promise" | "PromiseLike", _) })
+  // A source carrying a construct signature is what a `Constructor` member
+  // matches (`make<T>(x: T | (new () => T))` over a class value), which
+  // the structural pass does not decide either.
+  let constructor_member = others
+    .iter()
+    .any(fn(o) { o is Constructor(_, _, _) })
   let source_parts = match actual {
     Union(ms) => ms
     other => [other]
@@ -14236,9 +14426,17 @@ fn infer_naked_union_member(
       | Tuple(_) => true
       Object(fields) =>
         !thenable_member &&
-        !fields.iter().any(fn(f) { f.0 is Literal("<call>") })
+        !fields
+        .iter()
+        .any(fn(f) {
+          f.0 is Literal("<call>") ||
+          (constructor_member && f.0 is Literal("<new>"))
+        })
       Struct(_, fields) =>
-        !thenable_member && !fields.iter().any(fn(f) { f.0 == "<call>" })
+        !thenable_member &&
+        !fields
+        .iter()
+        .any(fn(f) { f.0 == "<call>" || (constructor_member && f.0 == "<new>") })
       Undefined | Null | Void => true
       _ => false
     }
@@ -14279,6 +14477,22 @@ priv struct NakedFallbacks {
 ///|
 fn NakedFallbacks::new() -> NakedFallbacks {
   { candidates: Map([]), structural_any: Map([]), }
+}
+
+///|
+/// Whether an explicit JSX attribute named `name` follows the spread at
+/// `idx`, overriding the spread's field of that name.
+fn jsx_attr_overridden_after(
+  attrs : Array[(String, @ast.TsExpr?)],
+  idx : Int32,
+  name : String,
+) -> Bool {
+  for j in (idx + 1)..<attrs.length() {
+    if attrs[j].0 == name {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -14324,19 +14538,54 @@ fn flush_naked_union_fallbacks(
         seq.push(entry.0)
       }
     }
-    let mut acc = seq[0]
-    let mut decided = true
-    for i in 1..<seq.length() {
-      match reduce_inference_candidates(acc, seq[i]) {
-        Some(r) => acc = r
-        None => {
-          decided = false
-          break
+    // `null` / `undefined` / `void` constituents take no part in the
+    // reduction and are added back after it: under strictNullChecks
+    // `both(s, undefined)` against `T | null` twice is `string | undefined`.
+    let parts : Array[@ast.TsType] = []
+    let nullish : Array[@ast.TsType] = []
+    for t in seq {
+      let members = match t {
+        Union(ms) => ms
+        other => [other]
+      }
+      let rest = members.filter(fn(m) { !(m is (Undefined | Null | Void)) })
+      for m in members {
+        if m is (Undefined | Null | Void) && !nullish.contains(m) {
+          nullish.push(m)
         }
+      }
+      match rest.length() {
+        0 => ()
+        1 => parts.push(rest[0])
+        _ => parts.push(Union(rest))
+      }
+    }
+    let mut decided = true
+    let mut acc : @ast.TsType? = None
+    for t in parts {
+      match acc {
+        None => acc = Some(t)
+        Some(a) =>
+          match reduce_inference_candidates(a, t) {
+            Some(r) => acc = Some(r)
+            None => {
+              decided = false
+              break
+            }
+          }
       }
     }
     bindings[k] = if decided {
-      acc
+      let mut out = acc
+      for n in nullish {
+        out = Some(
+          match out {
+            Some(o) => narrow_union(o, n)
+            None => n
+          },
+        )
+      }
+      out.unwrap_or(@ast.TsType::Any)
     } else {
       structural.unwrap_or(@ast.TsType::Any)
     }
@@ -14350,6 +14599,11 @@ fn reduce_inference_candidates(
   s : @ast.TsType,
   t : @ast.TsType,
 ) -> @ast.TsType? {
+  // Two equal candidates are that candidate (`both(xs, xs)` with `xs:
+  // string[]`), whatever it is.
+  if s == t {
+    return Some(s)
+  }
   match (primitive_candidate_family(s), primitive_candidate_family(t)) {
     (Some((sb, s_lit)), Some((tb, t_lit))) =>
       if sb == tb && s_lit && t_lit {
@@ -15991,6 +16245,25 @@ fn infer_call(
     _ => ()
   }
   let callee = resolver.unwrap(callee)
+  // An OBJECT type or an interface with call signatures (`{ (): Express;
+  // json: … }`, `interface CallI { (n: number): string }`) is called
+  // through them. This had no arm, so every such call came back `any`:
+  // express's `e` (a function merged with a namespace, held as `<call>`
+  // plus members), a callable interface typing a `const`, and a value
+  // typed `{ (n: number): string }` all lost their return. One signature
+  // is that `Func`; several are the overload set the `Union` arm below
+  // already resolves.
+  match callee {
+    Object(_) | Struct(_, _) | Named(_) | Applied(_, _) if !call_signatures_binders_unknown(
+        callee, resolver,
+      ) =>
+      match collect_call_signatures(callee, resolver) {
+        [] => ()
+        [one] => return infer_call(env, resolver, one, args)
+        many => return infer_call(env, resolver, Union(many), args)
+      }
+    _ => ()
+  }
   match callee {
     // `paramName is T` is a boolean at the value level — calls to a type
     // predicate function return `Boolean`. The predicate effect is applied
@@ -20161,14 +20434,152 @@ fn tuples_differ_only_in_named(
 /// `typeof X` value queries (enum objects, namespaces, mixin factory
 /// results), and class instances with an unresolvable base chain.
 fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  member_recv_unmodeled_with(ty, resolver, true)
+}
+
+///|
+/// Whether the receiver's interface, or one it extends, is augmented by a
+/// `declare module "…" { interface … }` somewhere in the program
+/// (`Resolver::record_augmented_interface_names`). A keyed name
+/// (`ExpectStatic@/path`) and a qualified one are read by their last
+/// segment, which is how the augmentation spells it.
+fn interface_chain_augmented(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  let start = match resolver.unwrap(ty) {
+    Named(n) | Applied(n, _) | Struct(n, _) => n
+    _ =>
+      match ty {
+        Named(n) | Applied(n, _) => n
+        _ => return false
+      }
+  }
+  fn bare(n : String) -> String {
+    let n = match n.find("@") {
+      Some(i) if i > 0 => n[:i].to_owned()
+      _ => n
+    }
+    match n.rev_find(".") {
+      Some(i) => n[i + 1:].to_owned()
+      None => n
+    }
+  }
+
+  let seen : Map[String, Unit] = Map([])
+  let todo = [start]
+  while todo.pop() is Some(n) {
+    if seen.contains(n) || seen.length() > 64 {
+      continue
+    }
+    seen[n] = ()
+    if resolver.globals.contains("@augmented-iface:" + bare(n)) {
+      return true
+    }
+    match resolver.interfaces.get(n) {
+      Some(iface) =>
+        for e in iface.extends_names {
+          todo.push(e)
+        }
+      None => ()
+    }
+  }
+  false
+}
+
+///|
+/// `member_recv_unmodeled` for a lookup of the member `name`. A CALLABLE
+/// shape abstains because it inherits the whole `Function` member set
+/// (`call`, `apply`, `bind`, …), which this checker does not list for an
+/// object type; that is a reason to abstain on those names and no other.
+/// An express app is callable (`Application` declares `(req, res): any`)
+/// and so is a function merged with a namespace, and abstaining on every
+/// name made `app.lisen(3000)` silent.
+fn member_recv_unmodeled_for(
+  ty : @ast.TsType,
+  resolver : Resolver,
+  name : String,
+) -> Bool {
+  // A function VALUE keeps abstaining on every name: an expando
+  // assignment (`function d() {}` then `d.q = 1`) adds members, and the
+  // parser lowers a class declared in a function, or a class expression,
+  // to one. And a file that augments `Function` or `Object` adds members
+  // every callable shape inherits.
+  let shape = resolver.unwrap(ty)
+    is (Object(_) | Struct(_, _) | Named(_) | Applied(_, _))
+  member_recv_unmodeled_with(
+    ty,
+    resolver,
+    !shape ||
+    is_function_or_object_proto_member(name) ||
+    resolver.interfaces.contains("Function") ||
+    resolver.interfaces.contains("Object"),
+  )
+}
+
+///|
+/// The members every function value has through `Function.prototype` and
+/// `Object.prototype`.
+fn is_function_or_object_proto_member(name : String) -> Bool {
+  match name {
+    "apply"
+    | "call"
+    | "bind"
+    | "toString"
+    | "length"
+    | "name"
+    | "arguments"
+    | "caller"
+    | "prototype"
+    | "constructor"
+    | "hasOwnProperty"
+    | "isPrototypeOf"
+    | "propertyIsEnumerable"
+    | "toLocaleString"
+    | "valueOf"
+    | "__proto__"
+    | "__defineGetter__"
+    | "__defineSetter__"
+    | "__lookupGetter__"
+    | "__lookupSetter__" => true
+    _ => false
+  }
+}
+
+///|
+fn member_recv_unmodeled_with(
+  ty : @ast.TsType,
+  resolver : Resolver,
+  callable_abstains : Bool,
+) -> Bool {
   // The `object` keyword is NOT unmodeled: its full member surface is exactly
   // `Object.prototype` (folded into `lookup_field`), so member-existence
   // checks against it are sound (`(a: object).nonExist()` is a real TS2339).
   if type_is_unmodeled_shape(ty, resolver) {
     return true
   }
-  if shape_is_callable(ty, resolver) {
+  if callable_abstains && shape_is_callable(ty, resolver) {
     return true
+  }
+  if interface_chain_augmented(ty, resolver) {
+    return true
+  }
+  // An alias another module declares over a bare LIB global (`type
+  // NativeKeyboardEvent = KeyboardEvent` at the top of `@types/react`,
+  // meaning the DOM's) reads its body through the checked module's import
+  // redirects, which are global: `import type { KeyboardEvent } from
+  // "react"` sends every bare `KeyboardEvent` to `React.KeyboardEvent`. The
+  // body cannot be told from the importer's own spelling there, so member
+  // existence abstains (`e.nativeEvent.isComposing` was reported).
+  match ty {
+    Named(n) =>
+      match resolver.type_aliases.get(n) {
+        Some(a) if a.type_params.is_empty() =>
+          match a.type_ {
+            Named(m) | Applied(m, _) if is_lib_global_type(m) &&
+              resolver.qualified_names.contains(m) => return true
+            _ => ()
+          }
+        _ => ()
+      }
+    _ => ()
   }
   // A member whose NAME could not be decided statically. `interface I {
   // [kk]: number }` over `const kk = "hello"` declares a member tsc calls
@@ -20184,9 +20595,31 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
   // undecidable spellings abstain. That costs a MISS on a genuinely
   // absent property of an interface carrying a computed key, which is the
   // affordable direction.
+  //
+  // A `@@unique:NAME` key whose NAME is a value declared `unique symbol`
+  // (in this module, or in any module the graph ingested) is a SYMBOL key,
+  // which no `.name` access can reach, so it does not make the member list
+  // undecidable. That is how `@types/node` keys `NodeJS.EventEmitter`
+  // (`[EventEmitter.captureRejectionSymbol]`) and its streams
+  // (`[toAsyncStreamable]`), and every type extending one — express's
+  // `req` and `res`, `http.Server`, every node stream — had abstained on
+  // member existence. The match is by spelling, as the late-bound lookup's
+  // is; a string `const` that shares a unique symbol's spelling would be
+  // read as a symbol, which can only miss a member it names.
   for f in collect_declared_fields(ty, resolver) {
-    if f.0 == "<computed>" || f.0.has_prefix("@@unique:") {
+    if f.0 == "<computed>" {
       return true
+    }
+    if f.0.has_prefix("@@unique:") {
+      let key = f.0["@@unique:".length():].to_owned()
+      let is_symbol = resolver.globals.contains("@unique-symbol:" + key) ||
+        (match resolver.globals.get(key) {
+          Some(UniqueSymbol(_)) | Some(Symbol) => true
+          _ => false
+        })
+      if !is_symbol {
+        return true
+      }
     }
   }
   // A file AUGMENTING a lib interface this checker has no member table for
@@ -20196,10 +20629,19 @@ fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
   // the augmentation, not the merged interface. The lib types whose members
   // ARE modelled keep their checks (`interface Error { code }` merges with
   // the Error table).
+  // A name that is an IMPORT of a module's own interface is not that: an
+  // `import type { Request } from "express"` names express's `e.Request`
+  // (through `qualified_names`), which merges with nothing global, so it
+  // keeps its member checks. Abstaining there made every typo'd member
+  // of an express `Request` or `Response` silent.
   match ty {
     Named(n) | Applied(n, _) if resolver.interfaces.contains(n) &&
       is_lib_global_type(n) &&
-      !lib_interface_members_modeled(n) => return true
+      !lib_interface_members_modeled(n) &&
+      (match resolver.qualified_names.get(n) {
+        Some(other) => other == n
+        None => true
+      }) => return true
     _ => ()
   }
   match resolver.unwrap(ty) {
@@ -20720,6 +21162,22 @@ fn structural_oneway_assignable_rec(
           is_assignable_to(se, te) ||
           structural_oneway_assignable_rec(se, te, resolver, depth + 1)
         )
+    _ => ()
+  }
+  // A union SOURCE assigns when every member does. `const t: PO = y` with
+  // `y: { errors: "first" } | PO`, or `Q | PO` where `Q` is a structural
+  // subtype of `PO`, was reported, because the nominal test fails on the
+  // union as a whole and the target descent below asks about one source;
+  // effect's `make(input, parseOptions)` hands over exactly that, a spread
+  // object beside the `ParseOptions` it defaults to.
+  match resolver.unwrap(source) {
+    Union(members) if members.length() > 1 =>
+      return members
+        .iter()
+        .all(fn(m) {
+          is_assignable_to(m, target) ||
+          structural_oneway_assignable_rec(m, target, resolver, depth + 1)
+        })
     _ => ()
   }
   match resolver.unwrap(target) {
@@ -21901,15 +22359,20 @@ fn check_jsx_attrs(
       bindings[tp] = @ast.TsType::Any
     }
     let deferred = NakedFallbacks::new()
-    for entry in attrs {
+    for idx, entry in attrs {
       let name = entry.0
       match entry.1 {
         Some(value) =>
           if name == "" {
-            // Spread: unify each overlapping field with the props.
+            // Spread: unify each overlapping field with the props. A field
+            // a LATER explicit attribute supplies is overridden by it, so
+            // only the attribute's value takes part.
             let spread_ty = infer_expr(env, ctx.resolver, value)
             let spread_fields = collect_declared_fields(spread_ty, ctx.resolver)
             for sf in spread_fields {
+              if jsx_attr_overridden_after(attrs, idx, sf.0) {
+                continue
+              }
               match ctx.resolver.lookup_field(raw_props_ty, sf.0) {
                 Some(formal) =>
                   infer_param_bindings(
@@ -21959,7 +22422,7 @@ fn check_jsx_attrs(
   // before they reach the component, so they aren't validated against
   // the declared props.
   let spread_provided : Map[String, Bool] = Map([])
-  for entry in attrs {
+  for idx, entry in attrs {
     let name = entry.0
     if name == "key" || name == "ref" {
       continue
@@ -21968,11 +22431,16 @@ fn check_jsx_attrs(
       Some(value) =>
         if name == "" {
           // Spread attribute: validate each overlapping field type and
-          // record the names it contributes.
+          // record the names it contributes. A field a later explicit
+          // attribute overrides is not the value the prop receives
+          // (`<C {...{ value: 1 }} value="ok" />` passes `"ok"`).
           let spread_ty = infer_expr(env, ctx.resolver, value)
           let spread_fields = collect_declared_fields(spread_ty, ctx.resolver)
           for sf in spread_fields {
             spread_provided[sf.0] = true
+            if jsx_attr_overridden_after(attrs, idx, sf.0) {
+              continue
+            }
             match ctx.resolver.lookup_field(props, sf.0) {
               Some(declared) =>
                 if is_checkable(declared) &&
@@ -23936,7 +24404,15 @@ fn infer_block_return(
     let _ = env.declared.remove(name)
   }
   if first {
-    @ast.TsType::Undefined
+    // No `return` at the top level is `undefined` only when there is none
+    // at all. A body that returns from inside a `switch` or an `if` (every
+    // arm of `xs.map(([t]) => { switch (t) { case 0: { return a } default:
+    // { return b } } })`) is not read here, and calling it `undefined`
+    // made each element of the result "possibly undefined".
+    match stmts_return_count(top) {
+      Some(0) => @ast.TsType::Undefined
+      _ => @ast.TsType::Any
+    }
   } else {
     acc
   }
@@ -26569,8 +27045,26 @@ fn array_pattern_union_element(
   parts : Array[@ast.TsType],
   i : Int32,
 ) -> @ast.TsType? {
-  let elems : Array[@ast.TsType] = []
+  // A union of unions is that union: a nested conditional (`a ? (b ? p :
+  // q) : [0, 0]`, excalidraw's `getArrowheadPoints`) infers as one, and
+  // the inner union is not itself a tuple or an array, so every element
+  // bound `undefined`.
+  let flat : Array[@ast.TsType] = []
+  fn flatten(t : @ast.TsType, depth : Int32) -> Unit {
+    match resolver.unwrap(t) {
+      Union(inner) if depth < 8 =>
+        for m in inner {
+          flatten(m, depth + 1)
+        }
+      _ => flat.push(t)
+    }
+  }
+
   for p in parts {
+    flatten(p, 0)
+  }
+  let elems : Array[@ast.TsType] = []
+  for p in flat {
     let t = match array_pattern_view(resolver, p) {
       Tuple(items) => if i < items.length() { items[i] } else { Undefined }
       Array(t) | Applied("Array" | "ReadonlyArray", [t]) => t
@@ -27321,10 +27815,31 @@ fn apply_switch_disc_default_narrowing(
     env_lookup_full(env, resolver, obj_name)
   }
   let mut next : @ast.TsType = cur
+  // Only a UNION is narrowed by its discriminant: `data: EncodedData` with
+  // `encoding: "bstring"` stays `EncodedData` in the `default` of `switch
+  // (data.encoding) { case "bstring": … }` (excalidraw's `decode` reads
+  // `data.encoding` there), so the last variant is removed only once a
+  // split has happened.
+  let mut split = false
   for m in matchers {
     match narrow_by_discriminant(resolver, next, prop, m, false) {
-      Some(remainder) => next = remainder
-      None => ()
+      Some(remainder) => {
+        next = remainder
+        split = true
+      }
+      // `narrow_by_discriminant` splits a union only, so the LAST variant
+      // the labels cover stayed: `switch (a.kind) { case "abc": …; case
+      // "def": … default: }` left `a` as `{ kind: "def" }` there, where tsc
+      // has `never` (and reports `a.kind`, exhaustiveSwitchStatements1).
+      // One variant whose literal discriminant a label matches is removed.
+      None =>
+        if split && !(resolver.unwrap(next) is (Union(_) | Never)) {
+          match resolver.lookup_field(next, prop) {
+            Some(ft) if is_literal_discriminant_type(ft) && m(ft) =>
+              next = Never
+            _ => ()
+          }
+        }
     }
   }
   env.bind(obj_name, next)
@@ -27772,6 +28287,63 @@ fn analyze_narrowing(
 }
 
 ///|
+/// `Array.isArray(arg)` as a condition: the array members of `arg`'s type in
+/// the true branch and the rest in the false one, with every receiver an
+/// optional chain in `arg` guarded made non-nullish where it is true.
+fn narrow_by_array_is_array(
+  env : ExprEnv,
+  resolver : Resolver,
+  arg : @ast.TsExpr,
+  then_binds : Array[(String, @ast.TsType)],
+  else_binds : Array[(String, @ast.TsType)],
+  then_sense : Bool,
+) -> Unit {
+  let pair_pos = if then_sense { then_binds } else { else_binds }
+  let pair_neg = if then_sense { else_binds } else { then_binds }
+  let (plain, guarded) = optional_chain_guarded_receivers(arg)
+  let x = narrowing_key_for_expr(plain).unwrap()
+  for g in guarded {
+    match narrowing_key_for_expr(g) {
+      Some(key) if key != x =>
+        pair_pos.push(
+          (
+            key,
+            non_nullable_resolved(
+              resolver,
+              narrowing_current_type(env, resolver, key),
+            ),
+          ),
+        )
+      _ => ()
+    }
+  }
+  let cur = match plain {
+    Var(n) => env_lookup_full(env, resolver, n)
+    _ => infer_expr(env, resolver, plain)
+  }
+  // `unknown` narrows to `any[]` in the then-branch, as tsc gives it,
+  // and keeps `unknown` in the else-branch; a property path
+  // (`Array.isArray(source.allOf)`) narrows through the same dotted key
+  // the truthiness and equality guards bind. effect's `unknown`-typed
+  // JSON walkers read `.length` straight after both shapes.
+  match resolver.unwrap(cur) {
+    // `object` narrows the same way: effect's `Equal.compareStructure`
+    // takes `self: object` and reads `self.length` after
+    // `Array.isArray(self)`.
+    Unknown | NonPrimitiveObject | Object([]) =>
+      pair_pos.push((x, @ast.TsType::Array(@ast.TsType::Any)))
+    _ =>
+      match array_is_array_split(resolver, cur) {
+        Some((arrays, others)) => {
+          pair_pos.push((x, arrays))
+          pair_neg.push((x, others))
+        }
+        None => ()
+      }
+  }
+}
+
+///|
 /// Walk `cond` looking for narrowing-shaped sub-expressions, appending the
 /// effect into `then_binds` / `else_binds`. `then_sense` flips when we
 /// descend through a logical `!` so the same primitive can be matched in
@@ -28052,6 +28624,18 @@ fn collect_narrowing(
                       out.push((Literal(key), Unknown))
                       pair_pos.push((name, Object(out)))
                     }
+                    // An interface or class instance that lacks the key is
+                    // `T & Record<"key", unknown>` in tsc, so `"members" in
+                    // schema && schema.members` is legal on a `schema:
+                    // Constraint` (effect's `toTaggedUnion`). The
+                    // intersection keeps `T`'s own members.
+                    Named(_) | Applied(_, _) | Struct(_, _) =>
+                      pair_pos.push(
+                        (
+                          name,
+                          Intersection([cur, Object([(Literal(key), Unknown)])]),
+                        ),
+                      )
                     _ => ()
                   }
                 _ => pair_pos.push((name, then_ty))
@@ -28085,51 +28669,22 @@ fn collect_narrowing(
     // narrowing key of its own, so the call used to reach the generic method
     // arm below and narrow nothing.
     MethodCall(Var("Array"), "isArray", [arg]) if env.lookup("Array") is None &&
-      narrowing_key_for_expr(optional_chain_guarded_receivers(arg).0) is Some(_) => {
-      let pair_pos = if then_sense { then_binds } else { else_binds }
-      let pair_neg = if then_sense { else_binds } else { then_binds }
-      let (plain, guarded) = optional_chain_guarded_receivers(arg)
-      let x = narrowing_key_for_expr(plain).unwrap()
-      for g in guarded {
-        match narrowing_key_for_expr(g) {
-          Some(key) if key != x =>
-            pair_pos.push(
-              (
-                key,
-                non_nullable_resolved(
-                  resolver,
-                  narrowing_current_type(env, resolver, key),
-                ),
-              ),
-            )
-          _ => ()
-        }
-      }
-      let cur = match plain {
-        Var(n) => env_lookup_full(env, resolver, n)
-        _ => infer_expr(env, resolver, plain)
-      }
-      // `unknown` narrows to `any[]` in the then-branch, as tsc gives it,
-      // and keeps `unknown` in the else-branch; a property path
-      // (`Array.isArray(source.allOf)`) narrows through the same dotted key
-      // the truthiness and equality guards bind. effect's `unknown`-typed
-      // JSON walkers read `.length` straight after both shapes.
-      match resolver.unwrap(cur) {
-        // `object` narrows the same way: effect's `Equal.compareStructure`
-        // takes `self: object` and reads `self.length` after
-        // `Array.isArray(self)`.
-        Unknown | NonPrimitiveObject | Object([]) =>
-          pair_pos.push((x, @ast.TsType::Array(@ast.TsType::Any)))
-        _ =>
-          match array_is_array_split(resolver, cur) {
-            Some((arrays, others)) => {
-              pair_pos.push((x, arrays))
-              pair_neg.push((x, others))
-            }
-            None => ()
-          }
-      }
-    }
+      narrowing_key_for_expr(optional_chain_guarded_receivers(arg).0) is Some(_) =>
+      narrow_by_array_is_array(
+        env, resolver, arg, then_binds, else_binds, then_sense,
+      )
+    // `globalThis.Array.isArray(x)` is the same guard, spelled to reach the
+    // global past a local `Array` (effect imports its own `Array` module
+    // and writes `"members" in schema && globalThis.Array.isArray(
+    // schema.members)` in `toTaggedUnion`).
+    MethodCall(PropAccess(Var("globalThis"), "Array"), "isArray", [arg]) if env.lookup(
+        "globalThis",
+      )
+      is None &&
+      narrowing_key_for_expr(optional_chain_guarded_receivers(arg).0) is Some(_) =>
+      narrow_by_array_is_array(
+        env, resolver, arg, then_binds, else_binds, then_sense,
+      )
     // ES2026 lib static type guards: `Error.isError(v): v is Error` and
     // `JSON.isRawJSON(v): v is RawJSON`. Only the positive branch narrows
     // — the negative one keeps what it had, which can only lose a finding.
@@ -29241,6 +29796,16 @@ fn apply_assertion_predicate_effect(
         None => non_nullable(cur)
       }
       env.bind(arg_name, narrowed)
+    }
+    // `asserts cond` over a CONDITION (`invariant(p != null, "…")`, how
+    // excalidraw and every `assert(…)` helper is called): after the call
+    // the condition held, so its true branch's narrowing persists. Only the
+    // untyped form; `asserts x is T` names a binding.
+    cond if target_opt is None => {
+      let eff = analyze_narrowing(env, resolver, cond)
+      for b in eff.then_binds {
+        env.narrow(b.0, b.1)
+      }
     }
     _ => ()
   }
@@ -31818,7 +32383,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             !is_in_scope_type_param(ctx, recv_ty) &&
             !prop.has_prefix("__private_brand__") &&
             !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
-            !member_recv_unmodeled(recv_ty, ctx.resolver) {
+            !member_recv_unmodeled_for(recv_ty, ctx.resolver, prop) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -33931,6 +34496,39 @@ fn check_call_args_in_expr(
             }
           }
         }
+        // An object type or an interface with call signatures is called
+        // through them, the arm `infer_call` has for the same shape. One
+        // signature is checked as a function-typed value is (the arity
+        // read off the parameter types); several are an overload set,
+        // judged only by `check_overload_set_no_match`, which reports
+        // when NO member accepts.
+        Object(_) | Struct(_, _) | Named(_) | Applied(_, _) if collect_call_signatures(
+            callee_ty,
+            ctx.resolver,
+          ).length() >
+          0 &&
+          !call_signatures_binders_unknown(callee_ty, ctx.resolver) => {
+          // TS2684: a plain call supplies `this: void`, which the arm
+          // below this one checks for every other callee.
+          check_plain_call_this_context(ctx, callee_ty, "call `\{name}`")
+          match collect_call_signatures(callee_ty, ctx.resolver) {
+            [Func(params, _)] | [CallableMeta(Func(params, _), _)] =>
+              check_arguments(env, params, args, ctx, "call `\{name}`")
+            [_] => ()
+            many =>
+              if many
+                .iter()
+                .all(fn(s) { s is (Func(_, _) | CallableMeta(_, _)) }) {
+                check_overload_set_no_match(
+                  env,
+                  ctx,
+                  Union(many),
+                  args,
+                  "call `\{name}`",
+                )
+              }
+          }
+        }
         other =>
           // A union callee whose members share one identical call signature
           // (`{ (a:number):X } | { (a:number):Y }`) is callable with those
@@ -34383,7 +34981,7 @@ fn check_call_args_in_expr(
                       // of, qualified-namespace member), the resulting
                       // diagnostic is uninformative -- stay silent.
                       !type_contains_unresolved_named(pruned, ctx.resolver) &&
-                      !member_recv_unmodeled(pruned, ctx.resolver) {
+                      !member_recv_unmodeled_for(pruned, ctx.resolver, meth) {
                       record(
                         ctx,
                         "call `\{meth}`",
@@ -35445,7 +36043,7 @@ fn check_call_args_in_expr(
                   let recv_ty = infer_expr(env, ctx.resolver, recv)
                   if is_checkable(recv_ty) &&
                     !is_in_scope_type_param(ctx, recv_ty) &&
-                    !member_recv_unmodeled(recv_ty, ctx.resolver) &&
+                    !member_recv_unmodeled_for(recv_ty, ctx.resolver, prop) &&
                     !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
                     record(
                       ctx,
@@ -35621,7 +36219,7 @@ fn check_call_args_in_expr(
         // Mapped / conditional / generic-alias shapes (`Proxify<Shape>`,
         // `Boxified<Foo>`, …) resolve to forms we can't enumerate; TS
         // accepts member access on them, so stay silent.
-        !member_recv_unmodeled(recv_ty, ctx.resolver) {
+        !member_recv_unmodeled_for(recv_ty, ctx.resolver, prop) {
         record(
           ctx,
           "PropAccess `.\{member_display_name(prop)}`",
@@ -36222,7 +36820,7 @@ fn check_call_args_in_expr(
             !is_in_scope_type_param(ctx, recv_ty) &&
             !prop.has_prefix("__private_brand__") &&
             !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
-            !member_recv_unmodeled(recv_ty, ctx.resolver) {
+            !member_recv_unmodeled_for(recv_ty, ctx.resolver, prop) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -36657,7 +37255,7 @@ fn check_call_args_in_expr(
           )
           if is_checkable(recv_ty) &&
             !is_in_scope_type_param(ctx, recv_ty) &&
-            !member_recv_unmodeled(recv_ty, ctx.resolver) &&
+            !member_recv_unmodeled_for(recv_ty, ctx.resolver, prop) &&
             // The plain `.prop` check's gate for a shape holding a name the
             // resolver cannot expand — missing here, so `a?.toCodec` on a
             // namespace-qualified interface reported where `a.toCodec`
