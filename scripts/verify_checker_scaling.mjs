@@ -79,8 +79,9 @@ const AXIS_RUNGS = {
   // by time. 8x between the endpoints still separates linear from
   // quadratic, and an exponential axis dies at the first rung or two.
   "nested-literals": [50, 100, 200, 400],
-  // A depth too: one call nested in another's argument.
+  // Depths too: one call nested in another's argument.
   "nested-overload-calls": [50, 100, 200, 400],
+  "nested-generic-overload-calls": [50, 100, 200, 400],
 };
 
 // Per-axis exponent budget. Every axis is held to `--max-exponent` (1.5)
@@ -295,8 +296,10 @@ const AXES = {
   // member, so every level falls back from the callable-object overload
   // loop to the union one. That fallback used to infer the call's
   // arguments a second time, and the argument is the next call, so the
-  // work doubled per level: 2.7 s at 18 levels. Each argument is inferred
-  // once now and the axis is linear.
+  // work doubled per level: 2.7 s at 18 levels. The fallback reuses the
+  // inferred argument types now; the axis as a whole is still superlinear
+  // (see its `AXIS_BUDGET` entry), which is the check re-inferring each
+  // level's arguments, not the overload loop.
   "nested-overload-calls": (n) => {
     let call = `"x"`;
     for (let i = 0; i < n; i++) call = `f(${call})`;
@@ -305,6 +308,18 @@ const AXES = {
       "  (x: number, y: number): string;\n" +
       "  (x: boolean, y: boolean): string;\n" +
       "};\n" +
+      `export const r = ${call};\n`
+    );
+  },
+  // The same nesting where a GENERIC member matches first: binding its
+  // type parameter inferred the argument again, the doubling above through
+  // a different door (0.62 s at 16 levels). The binding pass reads the
+  // types the overload loop already inferred.
+  "nested-generic-overload-calls": (n) => {
+    let call = "1";
+    for (let i = 0; i < n; i++) call = `f(${call})`;
+    return (
+      "declare const f: { <T>(x: T): T; (x: number): number };\n" +
       `export const r = ${call};\n`
     );
   },

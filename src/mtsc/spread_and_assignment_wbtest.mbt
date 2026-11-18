@@ -493,3 +493,48 @@ test "tuple spreads, void, recorded optionals, agreeing returns, tuple aliases" 
     "top-level > binding `badRest2` init: expected `number` but got `string`",
   ])
 }
+
+///|
+/// #307's fifth review round, against the TS7 nightly. A generic member
+/// binds from a fixed tuple spread's elements and is judged on the literal
+/// argument types, as a concrete member is. Two members whose returns agree
+/// only by spelling a binder (`T`) do not agree. A method set holding a
+/// member the loop cannot take (a generic one) is left to the
+/// first-declaration lookup instead of being resolved among the rest, and
+/// the "no overload matches" proof reads a `void` alias as omittable.
+test "generic tuple spreads and literals, binder returns, incomplete method sets" {
+  let src =
+    #|declare const sn: [string, number];
+    #|declare const fc: { <T>(x: T, n: number): T; (x: string, n: number): boolean };
+    #|export const okC: string = fc(...sn);
+    #|export const badC: boolean = fc(...sn);
+    #|declare const fd: { <T>(tag: 1, value: T): T; (tag: number, value: string): boolean };
+    #|declare const s: string;
+    #|export const okD: string = fd(1, s);
+    #|export const badD: boolean = fd(1, s);
+    #|export const okD2: boolean = fd(2, s);
+    #|export const badD2: string = fd(2, s);
+    #|declare const oe: { m<T>(x: T): number; m(x: string, flag?: boolean): boolean; m(x: number): string };
+    #|export const okE: number = oe.m(s);
+    #|export const badE: string = oe.m(s);
+    #|type V = void;
+    #|declare const ff: { (x: 1, y: string | V): string; (x: boolean): number };
+    #|export const okF: string = ff(1);
+    #|export const badF: number = ff(1);
+    #|declare class CA { m<T>(x: T[], y: string | undefined): T; m<T>(x: T): T }
+    #|declare const ca: CA;
+    #|declare const nums: number[];
+    #|export const okA: number[] = ca.m(nums);
+    #|declare const f2: { (x: 1, ...rest: [string]): string; (x: number, value: [string]): number };
+    #|declare const xs: [string];
+    #|export const badNoSpread: string = f2(1, xs);
+    #|type Tail = [string];
+    #|declare const ta: { (x: 1, ...rest: Tail): string; (x: number): number };
+    #|export const badTail2: number = ta(1, "ok");
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badC` init: expected `boolean` but got `string`", "top-level > binding `badD` init: expected `boolean` but got `string`",
+    "top-level > binding `badD2` init: expected `string` but got `boolean`", "top-level > binding `badE` init: expected `string` but got `number`",
+    "top-level > binding `badF` init: expected `number` but got `string`", "top-level > binding `badNoSpread` init: expected `string` but got `number`",
+    "top-level > binding `badTail2` init: expected `number` but got `string`",
+  ])
+}

@@ -6400,6 +6400,30 @@ product surfaces now.
     too (1.56; checking a call re-infers everything below it), so it
     carries a budget with that reason. What it exists to catch is the
     exponential version, which never finishes its first rung.
+  - **The fifth round found the same doubling through a second door**, and
+    four more places where the selection rule was read wrong.
+    - A matching GENERIC member bound its type parameter by inferring the
+      argument again: 0.62 s at 16 levels on `{ <T>(x: T): T; … }`.
+      `solve_generic_bindings` now reads the types the overload loop already
+      inferred (`pre`), the nesting is flat, and
+      `nested-generic-overload-calls` is its axis (linear, 0.64).
+    - A generic member is solved from a fixed tuple spread's ELEMENTS, and
+      its fit is judged on the literal argument types, as a concrete
+      member's is.
+    - Two members whose returns agree only by spelling a binder do not
+      agree. `m<T>(x: T[], …): T` beside `m<T>(x: T): T` read `ca.m(nums)`
+      as `number`, on main too.
+    - A method set holding a member the loop cannot take (a generic one) is
+      INCOMPLETE. Resolving among the rest picked `boolean` for `oe.m(s)`
+      where the generic first member says `number`, so such a set is left to
+      the first-declaration lookup.
+    - TS2769's arity proof missed a `void` alias.
+
+    What stays is that a union of callable VALUES and an overload set are
+    the same `Union` here, so first-match selection drops the other
+    members' returns. `((s, n) => number) | ((s, n) => boolean)` called with
+    a tuple spread is `number`, a MISS. main reports that call only because
+    it matched nothing.
   - **Object conditionals, two more cells.** An interface's own member
     overrides the inherited one (`A extends { kind: "a" }` was false), and
     a member that may be optional proves nothing in either direction,
