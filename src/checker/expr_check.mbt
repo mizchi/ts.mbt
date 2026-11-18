@@ -14880,6 +14880,26 @@ fn infer_param_bindings(
         fallback?,
       )
     (Union(f_parts), _) => {
+      // A source union first loses the members the target spells too, as
+      // tsc's `inferFromMatchingTypes` does: `T[] | undefined` against
+      // `Blk[] | undefined` infers from `Blk[]` alone. Matching `T[]`
+      // against the whole union bound nothing, and univer's
+      // `collect<T extends { startIndex: number }>(prev: T[] | undefined,
+      // …, getId: (item: T) => string)` then typed `item` as the bound, so
+      // `item.blockId` "did not exist" (on main too).
+      let actual = match actual {
+        Union(a_parts) => {
+          let rest = a_parts.filter(fn(a) { !f_parts.contains(a) })
+          if rest.length() == a_parts.length() || rest.length() == 0 {
+            actual
+          } else if rest.length() == 1 {
+            rest[0]
+          } else {
+            @ast.TsType::Union(rest)
+          }
+        }
+        _ => actual
+      }
       // Best-effort: try the first part that isn't a bare type parameter
       // (matching a concrete shape generally yields more information). If
       // none matches concretely, fall back to the first part.
