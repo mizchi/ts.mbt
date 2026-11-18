@@ -21945,26 +21945,8 @@ fn binding_init_type(
 ) -> @ast.TsType {
   match inferred {
     Object(_) => widen_object_literal_type(inferred, init, resolver, infer)
-    // A spread of a union distributes, so the literal infers as a union of
-    // shapes, and each alternative widens by the same member origins:
-    // `{ ...(c ? { h: "a" } : { h: "b" }) }` and `{ ...u, k: "x" }` widen
-    // their fresh members as the single-shape case does (probed). Main left
-    // every alternative narrow.
-    Union(parts) if init is ObjectLit(_) &&
-      parts.iter().all(fn(p) { p is Object(_) }) => {
-      let out : Array[@ast.TsType] = []
-      for part in parts {
-        let w = widen_object_literal_type(part, init, resolver, infer)
-        if !out.iter().any(fn(e) { equivalent(e, w) }) {
-          out.push(w)
-        }
-      }
-      if out.length() == 1 {
-        out[0]
-      } else {
-        Union(out)
-      }
-    }
+    Union(_) if init is ObjectLit(_) =>
+      widen_object_literal_type(inferred, init, resolver, infer)
     Struct(_, _) | Array(_) | Tuple(_) => widen_literal_deep(inferred)
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       if mutable_ && fresh {
@@ -22007,6 +21989,11 @@ fn object_literal_member_origins(
   for e in entries {
     if e.0.has_prefix("@@spread:") {
       spread_member_origins(e.1, resolver, infer, out, depth + 1)
+    } else if e.1 is As(_, _) {
+      // An asserted member is not fresh (`{ h: "a" as "a" }` keeps `"a"`),
+      // and saying so here rather than at the widening keeps it narrow
+      // through a conditional spread too.
+      out[e.0] = Declared
     } else {
       out[e.0] = Fresh(Some(e.1))
     }
@@ -22025,23 +22012,46 @@ fn spread_member_origins(
     ObjectLit(inner) =>
       object_literal_member_origins(inner, resolver, infer, out, depth)
     // A conditional spreads one branch or the other, so a member either
-    // branch makes fresh is widened in the union (`c ? rq : { h: "x" }` is
-    // legal to write `"y"` through, probed).
+    // branch leaves fresh is widened in the union (`c ? rq : { h: "x" }` is
+    // legal to write `"y"` through, probed). Each branch starts from the
+    // origins so far, so a branch that omits a member (`{ h: "seed",
+    // ...(c ? d : {}) }`) or holds it only optionally keeps the earlier
+    // fresh one, which tsc widens.
     Cond(_, a, b) => {
-      let merged : Map[String, ObjectMemberOrigin] = Map([])
+      let results : Array[Map[String, ObjectMemberOrigin]] = []
       for branch in [a, b] {
-        let one : Map[String, ObjectMemberOrigin] = Map([])
+        let one = out.copy()
         spread_member_origins(branch, resolver, infer, one, depth + 1)
-        for k, o in one {
-          match (merged.get(k), o) {
-            (Some(Fresh(_)), _) => ()
-            (_, Fresh(_)) => merged[k] = Fresh(None)
-            _ => merged[k] = Declared
-          }
+        results.push(one)
+      }
+      let keys : Map[String, Unit] = Map([])
+      for r in results {
+        for k, _ in r {
+          keys[k] = ()
         }
       }
-      for k, o in merged {
-        out[k] = o
+      for k, _ in keys {
+        let a0 = results[0].get(k)
+        let b0 = results[1].get(k)
+        // Both branches left it as it was (the origin carried in, the same
+        // object in both copies), or agree on a kind.
+        let same = match (a0, b0) {
+          (None, None) => true
+          (Some(Declared), Some(Declared)) => true
+          (Some(Fresh(None)), Some(Fresh(None))) => true
+          (Some(Fresh(Some(x))), Some(Fresh(Some(y)))) => physical_equal(x, y)
+          _ => false
+        }
+        if same {
+          match a0 {
+            Some(o) => out[k] = o
+            None => ()
+          }
+        } else if a0 is Some(Fresh(_)) || b0 is Some(Fresh(_)) {
+          out[k] = Fresh(None)
+        } else {
+          out[k] = Declared
+        }
       }
     }
     _ => {
@@ -22054,8 +22064,14 @@ fn spread_member_origins(
       // An optional member may be absent, so a fresh member before it
       // survives into the union and still widens.
       fn mark_declared(k : String, optional : Bool) {
-        if !optional || !(out.get(k) is Some(Fresh(_))) {
-          out[k] = Declared
+        match out.get(k) {
+          // The member is now the union of the fresh one and this one, so
+          // the whole union widens, not the written expression alone:
+          // `{ h: c ? "a" : "b", ...d }` with `d.h?: number` is
+          // `string | number` (probed), and re-widening only the
+          // conditional's branches dropped the `number`.
+          Some(Fresh(_)) if optional => out[k] = Fresh(None)
+          _ => out[k] = Declared
         }
       }
 
@@ -22068,12 +22084,22 @@ fn spread_member_origins(
         }
       } else if object_spread_variants(spread_ty, resolver) is Some(vs) &&
         vs.length() >= 2 {
-        // Each variant answers for its own alternative, so a member one
-        // variant declares is optional as far as the others go.
+        // Each variant answers for its own alternative, so a member is
+        // required only when EVERY variant requires it (`u: { h: "a" } |
+        // { h: "b" }` replaces `h` in both, so `{ h: "seed", ...u }` keeps
+        // `"a" | "b"`, probed); one some variant lacks is optional.
+        let required : Map[String, Int32] = Map([])
+        let seen : Map[String, Unit] = Map([])
         for v in vs {
           for f in v {
-            mark_declared(f.0, true)
+            seen[f.0] = ()
+            if !type_accepts_undefined(f.1) {
+              required[f.0] = required.get(f.0).unwrap_or(0) + 1
+            }
           }
+        }
+        for k, _ in seen {
+          mark_declared(k, required.get(k).unwrap_or(0) < vs.length())
         }
       } else if spread_shape_is_known(spread_ty, resolver) {
         for f in collect_declared_fields(spread_ty, resolver) {
@@ -22123,6 +22149,26 @@ fn widen_object_literal_type(
           }
         }),
       )
+    }
+    // A spread of a union distributes, so the literal infers as a union of
+    // shapes, and each alternative widens by the same member origins:
+    // `{ ...(c ? { h: "a" } : { h: "b" }) }` and `{ ...u, k: "x" }` widen
+    // their fresh members as the single-shape case does (probed). Main left
+    // every alternative narrow at the binding, and widened every one of
+    // them under a written key (`{ nested: { ...u } }`).
+    (Union(parts), ObjectLit(_)) if parts.iter().all(fn(p) { p is Object(_) }) => {
+      let out : Array[@ast.TsType] = []
+      for part in parts {
+        let w = widen_object_literal_type(part, init, resolver, infer)
+        if !out.iter().any(fn(e) { equivalent(e, w) }) {
+          out.push(w)
+        }
+      }
+      if out.length() == 1 {
+        out[0]
+      } else {
+        Union(out)
+      }
     }
     // An asserted type is not a fresh literal, so it does not widen:
     // `{ v: "q" as const }` and `{ k: "q" as "q" }` keep `"q"` (probed).

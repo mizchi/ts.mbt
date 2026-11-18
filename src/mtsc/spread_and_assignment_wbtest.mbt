@@ -615,6 +615,29 @@ test "a spread member widens by where it came from, in order" {
 }
 
 ///|
+/// #308's review, each cell probed against the nightly: an optional spread
+/// after a written member widens the whole union, an asserted branch member
+/// stays narrow through a conditional spread, a branch that omits a member
+/// keeps the earlier fresh one, a member every union variant requires is
+/// declared, and a union spread under a written key widens per alternative.
+test "spread origins compose through conditionals, variants and nesting" {
+  let src =
+    #|declare const c: boolean;
+    #|declare const d: { h?: number };
+    #|declare const da: { h: "a" };
+    #|declare const u: { h: "a" } | { h: "b" };
+    #|export function m1() { let r = { h: c ? "a" : "b", ...d }; r.h = 1; r.h = "z"; return r; }
+    #|export function m1bad() { let r = { h: c ? "a" : "b", ...d }; const s: string = r.h; return s; }
+    #|export function n1() { const s = { ...(c ? { h: "a" as "a" } : { h: "b" as "b" }) }; const t: { h: "a" | "b" } = s; return t; }
+    #|export function n2() { let r = { h: "seed", ...(c ? da : {}) }; r.h = "x"; return r; }
+    #|export function n3() { const r = { h: "seed", ...u }; const t: { h: "a" | "b" } = r; return t; }
+    #|export function n4() { const r = { nested: { ...u } }; const t: "a" | "b" = r.nested.h; return t; }
+  assert_eq(issue_lines(src), [
+    "function m1bad > binding `s` init: expected `string` but got `string | number`",
+  ])
+}
+
+///|
 /// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
 /// enumerate leaves the result open, and spreading that result again keeps
 /// it open, as a fresh literal and as a bound one.
