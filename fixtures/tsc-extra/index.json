@@ -1087,6 +1087,83 @@
       ]
     },
     {
+      "case": "controlFlow/realCodeNarrowingShapes.ts",
+      "area": "controlFlow",
+      "name": "realCodeNarrowingShapes",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2339
+      ],
+      "baseline": "baselines/realCodeNarrowingShapes.errors.txt",
+      "claims": [
+        {
+          "name": "okInOnInterface",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 14
+        },
+        {
+          "name": "badInOnInterfaceStillChecksTheRest",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 21
+        },
+        {
+          "name": "okUnionSourceEachMemberAssigns",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "badUnionSourceOneMemberDoesNot",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 27
+        },
+        {
+          "name": "okAssertOverCondition",
+          "kind": "ok",
+          "fromLine": 29,
+          "toLine": 33
+        },
+        {
+          "name": "badAssertOverWeakCondition",
+          "kind": "bad",
+          "fromLine": 34,
+          "toLine": 39
+        },
+        {
+          "name": "okNestedConditionalDestructures",
+          "kind": "ok",
+          "fromLine": 41,
+          "toLine": 45
+        },
+        {
+          "name": "okExhaustiveDefaultIsNever",
+          "kind": "ok",
+          "fromLine": 47,
+          "toLine": 53
+        },
+        {
+          "name": "badExhaustiveDefaultMember",
+          "kind": "bad",
+          "fromLine": 54,
+          "toLine": 60
+        },
+        {
+          "name": "okNonUnionIsNotNarrowed",
+          "kind": "ok",
+          "fromLine": 62,
+          "toLine": 68
+        }
+      ]
+    },
+    {
       "case": "controlFlow/truthyOptionalChainNarrowsGuardedMember.ts",
       "area": "controlFlow",
       "name": "truthyOptionalChainNarrowsGuardedMember",

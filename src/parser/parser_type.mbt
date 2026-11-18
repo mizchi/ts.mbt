@@ -932,8 +932,12 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
       }
       let field_name : String = match self.peek().kind {
         LParen => "<call>"
+        // A checking parse keeps a generic call signature's binders as a
+        // `GenericFunc` (below); the bridge's parse skips them as before.
         Lt => {
-          self.skip_type_params()
+          if !self.checking_parse {
+            self.skip_type_params()
+          }
           "<call>"
         }
         // `new` followed by a member-key token is a PROPERTY named
@@ -1163,15 +1167,17 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
           return_type,
           mark_rest=self.checking_parse,
         )
-        // NAMED members only. A `<call>` / `<new>` sentinel's binders
-        // have never been carried and nothing reads them yet, while the
-        // wrapper is visible to every consumer that matches the member's
-        // shape — wrapping them cost a true positive outright
+        // NAMED members, and in a checking parse a `<call>` too. A `<new>`
+        // sentinel's binders are not carried: the wrapper is visible to
+        // every consumer that matches the member's shape, and wrapping
+        // them cost a true positive outright
         // (`genericCallWithOverloadedConstructorTypedArguments2`, whose
-        // members are all `new <T>(…)`), which is the same reason
-        // CLAUDE.md records for not walking those binders elsewhere.
+        // members are all `new <T>(…)`). A `<call>` is wrapped because a
+        // call through it is now checked, and its bare `T` would be judged
+        // as a type; the bridge's parse is not a checking one, so what it
+        // reads is unchanged.
         let field_type = if m_tp_names.length() > 0 &&
-          field_name != "<call>" &&
+          (field_name != "<call>" || self.checking_parse) &&
           field_name != "<new>" {
           @ast.TsType::GenericFunc(m_tp_names, m_tp_bounds, callable)
         } else {

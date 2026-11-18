@@ -1347,6 +1347,11 @@ fn spec_names_package_of(spec : String, path : String) -> Bool {
 /// => R; (self, that): R }` — are each spread into one field per
 /// signature. Kept whole, `Equal.equals(a, b)` was judged against the
 /// first signature alone: "expected 1 argument(s), got 2".
+///
+/// A checking parse holds a generic call signature as a `GenericFunc`, and
+/// the method call path selects among overload fields only when each is a
+/// plain signature, so a spread signature is the `Func` inside: the shape
+/// these fields have always had.
 fn namespace_member_signatures(
   declarer : ParsedMtscModule,
   declared_name : String,
@@ -1356,7 +1361,12 @@ fn namespace_member_signatures(
     Union(parts) if declares_overload_set(declarer, declared_name) => parts
     Object(entries) if entries.length() > 1 &&
       entries.iter().all(fn(e) { e.0 is Literal("<call>") }) =>
-      entries.map(fn(e) { e.1 })
+      entries.map(fn(e) {
+        match e.1 {
+          GenericFunc(_, _, inner) => inner
+          other => other
+        }
+      })
     _ => [type_]
   }
 }
@@ -1651,6 +1661,35 @@ fn graph_exposed_type_names(
   }
   for e in m.enums {
     out.push((prefix + e.name, e.name, module_.source.path))
+  }
+  // An `export =` module exposes its assigned value's namespace types at
+  // the top: `import * as express from "express"` reads `express.Request`
+  // as that namespace's `Request`.
+  match export_equals_namespaces(module_) {
+    Some((assigned, bodies)) =>
+      for body in bodies {
+        for i in body.interfaces {
+          out.push(
+            (prefix + i.name, assigned + "." + i.name, module_.source.path),
+          )
+        }
+        for a in body.type_aliases {
+          out.push(
+            (prefix + a.name, assigned + "." + a.name, module_.source.path),
+          )
+        }
+        for c in body.classes {
+          out.push(
+            (prefix + c.name, assigned + "." + c.name, module_.source.path),
+          )
+        }
+        for e in body.enums {
+          out.push(
+            (prefix + e.name, assigned + "." + e.name, module_.source.path),
+          )
+        }
+      }
+    None => ()
   }
   for re in module_.module_block.reexports {
     let target = match
@@ -2011,6 +2050,16 @@ fn graph_exported_type(
       _ => ()
     }
   }
+  // `export = e` exports the types of the namespace merged with `e`.
+  match export_equals_namespaces(module_) {
+    Some((assigned, bodies)) =>
+      for body in bodies {
+        if module_declares_top_level_type(body, name) {
+          return Some((assigned + "." + name, path))
+        }
+      }
+    None => ()
+  }
   let mut found : (String, String)? = None
   for re in module_.module_block.reexports {
     match re.kind {
@@ -2027,6 +2076,39 @@ fn graph_exported_type(
     }
   }
   found
+}
+
+///|
+/// The namespace bodies merged with the value an `export =` module assigns
+/// (`declare function e(); declare namespace e { interface Request … };
+/// export = e`, which is express), with that value's name. Their types are
+/// the module's type exports: `import type { Request } from "express"`
+/// names `e.Request`, and the resolver ingested it under that qualified
+/// key.
+fn export_equals_namespaces(
+  module_ : ParsedMtscModule,
+) -> (String, Array[@ast.TsModule])? {
+  if !module_.module_block.has_export_equals {
+    return None
+  }
+  let assigned = match
+    module_.module_block.exports
+    .iter()
+    .find_first(fn(e) { e.export_name == "default" }) {
+    Some(e) => e.local_name
+    None => return None
+  }
+  let bodies : Array[@ast.TsModule] = []
+  for ns in module_.module_.namespaces {
+    if ns.name == assigned {
+      bodies.push(ns.module_)
+    }
+  }
+  if bodies.is_empty() {
+    None
+  } else {
+    Some((assigned, bodies))
+  }
 }
 
 ///|

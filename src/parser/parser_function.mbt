@@ -2427,9 +2427,14 @@ pub fn Parser::parse_interface(
     let field_name : String = match self.peek().kind {
       // Call signature: (...): T
       LParen => "<call>"
-      // Generic call signature: <T>(...): U
+      // Generic call signature: <T>(...): U. A checking parse keeps the
+      // binders, read below into `method_type_params` under `<call>`; the
+      // bridge renders call signatures and reads that list, so its parse
+      // skips them as it always has.
       Lt => {
-        self.skip_type_params()
+        if !self.checking_parse {
+          self.skip_type_params()
+        }
         "<call>"
       }
       // Constructor signature: new(...): T
@@ -2515,16 +2520,47 @@ pub fn Parser::parse_interface(
         // spelling twenty lines above has had a stable `@@name` for a
         // long time. One question, two answers. The shape is exactly
         // `[ Ident ]`, so a dotted or expression key still goes opaque.
-        let late_bound_key : String? = if symbol_name is None {
+        //
+        // A DOTTED entity name (`[EventEmitter.captureRejectionSymbol]`,
+        // how `@types/node` keys `NodeJS.EventEmitter`) is one too: its
+        // name, like `[k]`'s, is what the checker looks up to decide
+        // whether the key is a symbol (see `member_recv_unmodeled`). Left
+        // `<computed>`, it made every type extending a node EventEmitter
+        // or stream abstain on member existence — express's `req` and
+        // `res` among them.
+        let late_bound_key : (String, Int32)? = if symbol_name is None {
           match self.peek().kind {
-            Ident(key) if self.peek_at(1).kind == RBracket => Some(key)
+            Ident(first) => {
+              let mut key = first
+              let mut at = 1
+              let mut ok = true
+              while self.peek_at(at).kind == Dot {
+                match self.peek_at(at + 1).kind {
+                  Ident(next) => {
+                    key = key + "." + next
+                    at = at + 2
+                  }
+                  _ => {
+                    ok = false
+                    break
+                  }
+                }
+              }
+              if ok && self.peek_at(at).kind == RBracket {
+                Some((key, at))
+              } else {
+                None
+              }
+            }
             _ => None
           }
         } else {
           None
         }
-        if late_bound_key is Some(key) {
-          let _ = self.advance()
+        if late_bound_key is Some((key, tokens)) {
+          for _ in 0..<tokens {
+            let _ = self.advance()
+          }
           let _ = self.expect(RBracket)
           symbol_name = Some("@@unique:" + key)
         }

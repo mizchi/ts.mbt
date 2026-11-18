@@ -6130,6 +6130,121 @@ product surfaces now.
     `number`. An object source now abstains whenever a `Promise` or
     `PromiseLike` member is present. Each is mutation-proven and in the
     tsc-extra case.
+  Batch GU is express, the one real-app package whose planted errors
+  mtsc could not see. Six things express code writes were silent, and
+  tsc reports every one:
+  - `express()` with an argument;
+  - a typo on `app`;
+  - a typo on the express namespace;
+  - a typo on `req`;
+  - a typo on `res`;
+  - `req.path` read as a number.
+
+  None of them needed a new rule. Each was a fact that was missing or
+  thrown away.
+  - **A callable object type was not called through its call
+    signatures.** This covers `{ (): Express; json: … }`, a callable
+    interface, and a function merged with a namespace. `infer_call` had
+    no arm for them, so the result was `any`, and the argument check had
+    none either. One signature is now checked like a function value; two
+    or more are an overload set.
+  - **A symbol-keyed member blocked member existence.** `@types/node`
+    keys `NodeJS.EventEmitter` with `[EventEmitter.captureRejectionSymbol]`.
+    So every type that extends it abstained: express's `req` and `res`,
+    `http.Server`, every stream. A value declared `unique symbol` is now
+    recorded as `@unique-symbol:NAME` when its module is ingested, so its
+    key reads as a symbol. The dotted late-bound key `[A.b]` had not
+    parsed at all.
+  - **A callable shape abstained on every member name.** It now abstains
+    only on the names `Function.prototype` and `Object.prototype` supply.
+  - **An `export =` module's namespace types were not its type exports.**
+    `import type { Request } from "express"` names the `e.Request` of
+    `declare namespace e`.
+  - **A generic interface named without type arguments** was read with
+    its raw binders. It now reads them as `any`, so `res.json(1)` is legal.
+
+  **Widening the checks exposed nine false positives that the abstentions
+  had been hiding. Several are on main too.** Each was found on effect,
+  univer or excalidraw, reproduced in a minimal file, and fixed at the
+  cause:
+  - **Call-signature binders.** A generic call signature lost its binders
+    in the parser (vitest's `ExpectStatic`, 223 reports). A checking
+    parse now keeps them: in `method_type_params` under `<call>` for an
+    interface, and as a `GenericFunc` in an object type literal. The
+    bridge's parse is unchanged, so the generated output is too. An
+    interface with such a signature is not called through, because a
+    real `class T` in the program (univer's engine-formula) would capture
+    the bare `T`.
+  - **Function values.** A bare `Func` value keeps abstaining on member
+    existence. An expando assignment adds members, and the parser lowers a
+    nested class or a class expression to a function. A file that augments
+    `Function` or `Object` keeps the abstention too.
+  - **`"k" in x` on an interface.** It narrowed nothing, so `"members" in
+    schema && schema.members` was reported (on main too). It is now `T &
+    Record<"k", unknown>`, as in tsc.
+  - **A union source.** `{ errors: "first" } | PO` into `PO` was reported
+    whenever a member was an object (on main too). A union source now
+    assigns when each member does.
+  - **A callback returning only from inside a `switch`.** It read as
+    returning `undefined` (on main too), because only top-level `return`s
+    are read. A body with nested returns is `any` now.
+  - **A module augmentation.** vitest adds `expect.poll` through `declare
+    module "@vitest/expect"`, which is not merged. An interface that an
+    augmentation names, or one that extends it, abstains on member
+    existence. Only a file that is itself a module augments. In a script,
+    every `@types/node` file included, the same spelling declares the
+    module, and reading it as an augmentation lost every express catch.
+  - **An alias over a lib global.** `type NativeKeyboardEvent =
+    KeyboardEvent` in `@types/react` means the DOM's type. But `import type
+    { KeyboardEvent } from "react"` redirects every bare `KeyboardEvent`
+    (on main too, through a named import). Member existence through such
+    an alias abstains.
+  - **A namespace's own class.** `class PureComponent extends Component`
+    inside `namespace React` is `React.Component`. Read bare, it was
+    `@firebase/component`'s `class Component`, and `this.state` on every
+    subclass was reported. A base declared in the same namespace body is
+    now re-qualified when ingested.
+  - **The namespace member split.** It now unwraps a `GenericFunc`, so
+    effect's `dual` APIs keep their overload shape.
+
+  #305's third review round left four Minors, carried here:
+  - a construct-signature source against a `Constructor` member abstains;
+  - nullish constituents are set aside during the reduction and added
+    back;
+  - two equal candidates are that candidate;
+  - an explicit JSX attribute overrides a spread field of the same name,
+    in inference and in the check.
+
+  Every mechanism is mutation-proven in `callable_shapes_wbtest.mbt` and
+  `recall_wbtest.mbt`.
+  Three more were exposed once those were gone, all on main:
+  - an assertion over a CONDITION (`invariant(p != null, "…")`) narrowed
+    only a bare-variable argument, so excalidraw's `p` stayed possibly
+    `undefined`;
+  - a nested conditional's union of unions destructured as `undefined`;
+  - the `default` of a switch covering every variant kept the last
+    variant where tsc has `never`. This one is for a split UNION only: a
+    non-union receiver is not narrowed by its discriminant at all (the
+    first version reported excalidraw's `decode`). `globalThis.Array.isArray`
+    now narrows as `Array.isArray` does.
+
+  `exhaustiveSwitchStatements1` had been a TP only through the
+  `areaWrapped` false positive, which the switch-body fix removes. It is a
+  TP again through its own TS2339 (`kind` on `never` in an exhaustive
+  `default`).
+  - **What it measures.** The oracle is unchanged: TP 2726 / MISS 0 /
+    FP 0. effect stays at 102 and zod goes from 8 to 7. univer goes:
+    - core 106→102
+    - docs-hyper-link 87→83
+    - data-validation 442→405
+    - sheets-numfmt 521→488
+    - ui 416→393
+
+    excalidraw goes from 579 to 529. None of them reports at a site main
+    does not. The real-app check still catches 8 of 11 with no false
+    positive. The mutation differential goes from 92 to 105 caught
+    (recall 35% → 40%), with no undeclared false positive.
+    `member-typo` alone goes from 31 to 36.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
