@@ -261,3 +261,39 @@ test "a class whose base a module augmentation names abstains on members" {
     [],
   )
 }
+
+///|
+/// univer's `rich-text-builder.ts` and `text-x-utils.ts`. An enum-typed
+/// value is a definite value for a `?.` equality, and a union of lib
+/// arrays is not judged by the union-callee arity rule, whose `?`
+/// information the lib member tables do not carry. A union of DECLARED
+/// methods keeps that rule (TS2554 in tsc).
+test "an enum operand narrows a chain and a lib array union keeps its arity" {
+  let src =
+    #|enum PLT { A = "a", B = "b" }
+    #|interface IBullet { listType: PLT | string; listId: string }
+    #|interface IP { startIndex: number }
+    #|interface A { m(x: string): void }
+    #|interface B { m(x: string, y: string): void }
+    #|export function okEnum(b: IBullet | undefined, o: { type?: PLT }) {
+    #|  const listType = o.type ?? PLT.A;
+    #|  return b?.listType === listType ? b.listId : "x";
+    #|}
+    #|export function badMaybeEnum(b: IBullet | undefined, t: PLT | undefined) {
+    #|  return b?.listType === t ? b.listId : "x";
+    #|}
+    #|export function okLibUnion(xs: IP[] | number[], body: { ps?: IP[] }) {
+    #|  const { ps = [] } = body;
+    #|  return [xs?.find((p) => true), ps?.find((p) => p.startIndex > 0)];
+    #|}
+    #|export function badDeclaredUnion(u: A | B) {
+    #|  u?.m("a");
+    #|}
+  // The ternary's branch is checked twice, so its report appears twice; that
+  // predates this test and is the same on main.
+  assert_eq(issue_lines(src), [
+    "function badMaybeEnum > PropAccess `.listId`: object is possibly `undefined`",
+    "function badMaybeEnum > PropAccess `.listId`: object is possibly `undefined`",
+    "function badDeclaredUnion > call: expected at least 2 argument(s), got 1",
+  ])
+}

@@ -22264,6 +22264,41 @@ fn callable_source_params(
 }
 
 ///|
+/// Whether `callee` reads a member off a receiver that is a union with a
+/// BUILT-IN member: an array, a tuple, a primitive, or a type this checker
+/// takes from a lib member table. Those tables write `x?: T` as a bare
+/// `Func` parameter typed `T | undefined`, and the union arity rule must not
+/// read that as optional, because a bare `Func` is also how a written
+/// `x: T | undefined` arrives, which stays required (unionTypeReduction2).
+/// So a union of lib methods read `find`'s `thisArg?` as required:
+/// univer's `paragraphs?.find(cb)` over `IParagraph[] | never[]` was
+/// "expected at least 2 argument(s)". The plain `xs.find(cb)` spelling goes
+/// through the method-call path, which abstains on a union receiver, so
+/// this abstains too and the two spellings agree. A union of declared
+/// shapes keeps the rule: `u?.m("a")` over `A | B` is TS2554 (probed).
+fn union_receiver_has_builtin_member(
+  resolver : Resolver,
+  callee : @ast.TsExpr,
+  env : ExprEnv,
+) -> Bool {
+  let recv = match callee {
+    OptionalChain(PropAccess(r, _)) | PropAccess(r, _) => r
+    _ => return false
+  }
+  let t = prune_nullish(resolver, infer_expr(env, resolver, recv))
+  for part in union_components(flatten_union_parts(resolver.unwrap(t))) {
+    match resolver.unwrap(part) {
+      Array(_) | Tuple(_) | String_ | Number | Boolean | BigInt | Literal(_) =>
+        return true
+      Applied(n, _) | Named(n) if !is_named_decl(Named(n), resolver) =>
+        return true
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
 /// Common call-signature parameters of a union callee: when every member of
 /// the union exposes exactly one call signature and all of them have
 /// *identical* parameter types, the union is callable with those parameters
@@ -28792,14 +28827,38 @@ fn narrow_declared_nullish_by_init(
 /// An alias can hide a nullish member a level down, so the parts are
 /// unwrapped recursively, to a bounded depth.
 fn type_definitely_non_nullish(resolver : Resolver, t : @ast.TsType) -> Bool {
+  // An enum type, or one of its members (`E` / `E.M`), is a union of number
+  // and string literals. It is in `resolver.enums`, which
+  // `type_contains_unresolved_named` does not read, so it would otherwise
+  // abstain: univer's `currentBullet?.listType === listType` with
+  // `listType: PresetListType` left `currentBullet` possibly `undefined`.
+  fn is_enum_name(n : String) -> Bool {
+    let head = match n.find(".") {
+      Some(i) => n[:i].to_owned()
+      None => n
+    }
+    resolver.enums.contains(head)
+  }
+
   fn go(t : @ast.TsType, depth : Int32) -> Bool {
+    if t is Named(n) && is_enum_name(n) {
+      return true
+    }
     if depth == 0 ||
       !is_checkable(t) ||
       type_contains_unresolved_named(t, resolver) {
+      if t is Union(parts) {
+        // `E | number`: the unresolved-name gate above reads the enum
+        // member as unknowable; judge each part instead.
+        if depth > 0 && parts.iter().all(p => go(p, depth - 1)) {
+          return true
+        }
+      }
       return false
     }
     for part in union_components(resolver.unwrap(t)) {
       match resolver.unwrap(part) {
+        Named(n) if is_enum_name(n) => ()
         Undefined | Null | Void | Any | Unknown | Never => return false
         Union(_) as u => if !go(u, depth - 1) { return false }
         p => if !is_checkable(p) { return false }
@@ -35562,7 +35621,9 @@ fn check_call_args_in_expr(
           // arity. Run this before the common-signature route: two callables
           // can have identical widened parameter types while differing in
           // whether that parameter was written with `?`.
-          check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          if !union_receiver_has_builtin_member(ctx.resolver, callee, env) {
+            check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          }
           check_plain_call_this_context(ctx, raw_callee_ty, "call")
           check_overload_set_no_match(env, ctx, raw_callee_ty, args, "call")
           match union_common_call_params(callee_ty, ctx.resolver) {
