@@ -6117,6 +6117,19 @@ product surfaces now.
     over `number[]` is a MISS: tsc infers `T = number[]`, and this
     abstains. `choose(() => "a", ["b"])` still reports `arg[1][0]`, which
     main does too.
+  - **A second review round found three more, all real.** The first
+    fallback candidate was kept and later ones dropped, so `both("a",
+    "b")` against `T | undefined` twice was `"a"`. Every candidate is
+    collected now, and the whole sequence is reduced in argument order,
+    structural candidate included. A structural `any` candidate (`choose(
+    "a", xs)` with `xs: any[]`) read as "unbound", because both are `Any`
+    in the binding map, so `"a"` replaced it. The direct-hit arm records
+    it now, and `any` wins the reduction, as it is the supertype of every
+    candidate. And an object argument against `T | PromiseLike<T>` became
+    `T`, where tsc matches a thenable against `PromiseLike` and infers
+    `number`. An object source now abstains whenever a `Promise` or
+    `PromiseLike` member is present. Each is mutation-proven and in the
+    tsc-extra case.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

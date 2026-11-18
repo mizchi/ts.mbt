@@ -286,8 +286,20 @@ test "a naked union member's candidate is reduced with the call's others" {
     #|}
     #|export function badChoose(ns: number[]) { return choose("a", ns); }
     #|export function badHook() { const [p] = hookP("light"); const n: number = p; return n; }
+    #|declare function both<T>(a: T | undefined, b: T | undefined): T;
+    #|declare function unwrap<T>(x: T | PromiseLike<T>): T;
+    #|export function okRound2(anys: any[], p: { then(f?: (v: number) => any): any }) {
+    #|  const u: "a" | "b" = both("a", "b");
+    #|  const isB = both("a", "b") === "b";
+    #|  const n: number = choose("a", anys);
+    #|  const t: number = unwrap(p);
+    #|  return [u, isB, n, t];
+    #|}
+    #|export function badBoth() { return both("a", 1); }
+    #|export function badUnwrap() { const s: string = unwrap(5); return s; }
   assert_eq(issue_lines(src), [
     "function badPick > binding `n` init: expected `number` but got `string`", "function badChoose > call `choose` arg[1]: expected `\"a\" (string)[]` but got `number[]`",
-    "function badHook > binding `n` init: expected `number` but got `string`",
+    "function badHook > binding `n` init: expected `number` but got `string`", "function badBoth > call `both` arg[1]: expected `\"a\" (string) | undefined` but got `number`",
+    "function badUnwrap > binding `s` init: expected `string` but got `number`",
   ])
 }

@@ -2835,7 +2835,37 @@
           "name": "badHookWidenedState",
           "kind": "bad",
           "fromLine": 45,
-          "toLine": 50
+          "toLine": 53
+        },
+        {
+          "name": "okBothLiteralsUnion",
+          "kind": "ok",
+          "fromLine": 56,
+          "toLine": 59
+        },
+        {
+          "name": "badBothUnrelatedKeepsTheLeftmost",
+          "kind": "bad",
+          "fromLine": 60,
+          "toLine": 62
+        },
+        {
+          "name": "okAnyCandidateWins",
+          "kind": "ok",
+          "fromLine": 63,
+          "toLine": 66
+        },
+        {
+          "name": "okThenableIsNotTheNakedMember",
+          "kind": "ok",
+          "fromLine": 67,
+          "toLine": 70
+        },
+        {
+          "name": "badUnwrapPrimitive",
+          "kind": "bad",
+          "fromLine": 71,
+          "toLine": 75
         }
       ]
     },

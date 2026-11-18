@@ -50,3 +50,28 @@ export function badHookWidenedState() {
   const n: number = p;
   return n;
 }
+
+// Every such candidate takes part, an `any` candidate is the supertype of
+// the rest, and an object argument can be a thenable that a `PromiseLike`
+// member matches structurally, so it is not the naked member's.
+declare function both<T>(a: T | undefined, b: T | undefined): T;
+declare function unwrap<T>(x: T | PromiseLike<T>): T;
+export function okBothLiteralsUnion() {
+  const u: "a" | "b" = both("a", "b");
+  return both("a", "b") === "b" ? u : u;
+}
+export function badBothUnrelatedKeepsTheLeftmost() {
+  return both("a", 1);
+}
+export function okAnyCandidateWins(anys: any[]) {
+  const n: number = choose("a", anys);
+  return n;
+}
+export function okThenableIsNotTheNakedMember(p: { then(f?: (v: number) => any): any }) {
+  const n: number = unwrap(p);
+  return n;
+}
+export function badUnwrapPrimitive() {
+  const s: string = unwrap(5);
+  return s;
+}

@@ -8148,7 +8148,7 @@ fn Resolver::resolve_method_overload(
       .any(fn(p) { erase.keys().any(fn(b) { type_param_occurs(b, p) }) }) {
       let binders = erase.keys().collect()
       let solved : Map[String, @ast.TsType] = Map([])
-      let deferred : Map[String, (@ast.TsType, Bool)] = Map([])
+      let deferred = NakedFallbacks::new()
       for i in 0..<arg_types.length() {
         // From the RESOLVED argument: `a: N` with `type N = number[]` gives
         // `T` nothing to bind from as `Named("N")`, so `T` stayed `any` and
@@ -13923,14 +13923,23 @@ fn infer_param_bindings(
   actual : @ast.TsType,
   bindings : Map[String, @ast.TsType],
   soft : Bool,
-  fallback? : Map[String, (@ast.TsType, Bool)],
+  fallback? : NakedFallbacks,
 ) -> Unit {
   // Direct hit: formal is exactly a type parameter we're solving for.
   match formal {
     Named(name) =>
       if type_params.contains(name) {
         match bindings.get(name) {
-          Some(Any) | None => bindings[name] = actual
+          Some(Any) | None => {
+            bindings[name] = actual
+            // An `any` candidate is a candidate (`choose("a", xs)` with
+            // `xs: any[]` is `T = any`), which the binding map cannot
+            // tell from "unbound": both are `Any`.
+            match (actual, fallback) {
+              (Any, Some(fb)) => fb.structural_any[name] = ()
+              _ => ()
+            }
+          }
           Some(existing) =>
             // `soft` widens; hard inferences keep the first concrete
             // binding so the per-arg assignability check catches a real
@@ -14137,7 +14146,7 @@ fn infer_naked_union_member(
   actual : @ast.TsType,
   bindings : Map[String, @ast.TsType],
   soft : Bool,
-  fallback? : Map[String, (@ast.TsType, Bool)],
+  fallback? : NakedFallbacks,
 ) -> Unit {
   let naked : Array[String] = []
   let others : Array[@ast.TsType] = []
@@ -14163,13 +14172,19 @@ fn infer_naked_union_member(
   // been seen (`flush_naked_union_fallbacks`), recording whether a
   // structural candidate came first. Without one, a parameter that is
   // already bound keeps its binding.
-  match fallback {
-    Some(deferred) => if deferred.contains(naked[0]) { return }
-    None => if bound_before { return }
+  if fallback is None && bound_before {
+    return
   }
   if !others.iter().all(naked_union_other_member) {
     return
   }
+  // An object type can be a thenable a `Promise` / `PromiseLike` member
+  // accepts structurally (`unwrap<T>(x: T | PromiseLike<T>)` over `{
+  // then(f?: (v: number) => any): any }` is `T = number` in tsc), which
+  // this does not decide, so it abstains rather than take the object.
+  let thenable_member = others
+    .iter()
+    .any(fn(o) { o is Applied("Promise" | "PromiseLike", _) })
   let source_parts = match actual {
     Union(ms) => ms
     other => [other]
@@ -14219,8 +14234,11 @@ fn infer_naked_union_member(
       | TemplateLiteralType(_, _)
       | Array(_)
       | Tuple(_) => true
-      Object(fields) => !fields.iter().any(fn(f) { f.0 is Literal("<call>") })
-      Struct(_, fields) => !fields.iter().any(fn(f) { f.0 == "<call>" })
+      Object(fields) =>
+        !thenable_member &&
+        !fields.iter().any(fn(f) { f.0 is Literal("<call>") })
+      Struct(_, fields) =>
+        !thenable_member && !fields.iter().any(fn(f) { f.0 == "<call>" })
       Undefined | Null | Void => true
       _ => false
     }
@@ -14238,54 +14256,111 @@ fn infer_naked_union_member(
     @ast.TsType::Union(kept)
   }
   match fallback {
-    Some(deferred) => deferred[naked[0]] = (source, bound_before)
+    Some(fb) =>
+      match fb.candidates.get(naked[0]) {
+        Some(list) => list.push((source, bound_before))
+        None => fb.candidates[naked[0]] = [(source, bound_before)]
+      }
     None =>
       infer_param_bindings(type_params, Named(naked[0]), source, bindings, soft)
   }
 }
 
 ///|
-/// Apply the candidates `infer_naked_union_member` deferred. One left alone
-/// binds its parameter; one beside a structural candidate is reduced the
-/// way tsc's `getCommonSupertype` reduces candidates of one priority, in
-/// argument order: literals of one primitive are UNIONED (`choose("a",
-/// bs)` with `bs: "b"[]` is `"a" | "b"`), and otherwise the leftmost
-/// candidate stays unless it is a subtype of the next (`choose("a", ss)`
-/// with `ss: string[]` is `string`; `choose(s, as_)` with `s: string` and
-/// `as_: "a"[]` is `string` too, and `choose("a", ns)` with `ns: number[]`
-/// is `"a"`, so `ns` is the argument tsc reports). Only primitives and
-/// their literals are decided; anything else keeps the structural
-/// candidate, which is what the call inferred before the fallback existed.
+/// The candidates `infer_naked_union_member` defers for one call: each
+/// type parameter's, in argument order, with whether a structural
+/// candidate was already bound when it was made, and the parameters a
+/// structural `any` candidate reached.
+priv struct NakedFallbacks {
+  candidates : Map[String, Array[(@ast.TsType, Bool)]]
+  structural_any : Map[String, Unit]
+}
+
+///|
+fn NakedFallbacks::new() -> NakedFallbacks {
+  { candidates: Map([]), structural_any: Map([]), }
+}
+
+///|
+/// Apply the candidates `infer_naked_union_member` deferred, reduced with
+/// the structural candidate the way tsc's `getCommonSupertype` reduces
+/// candidates of one priority, in argument order: literals of one
+/// primitive are UNIONED (`both("a", "b")` against `T | undefined` twice
+/// is `"a" | "b"`, and so is `choose("a", bs)` with `bs: "b"[]`), and
+/// otherwise the leftmost candidate stays unless it is a subtype of the
+/// next (`choose("a", ss)` with `ss: string[]` is `string`; `choose(s,
+/// as_)` with `s: string` and `as_: "a"[]` is `string` too, and
+/// `choose("a", ns)` with `ns: number[]` is `"a"`, so `ns` is the argument
+/// tsc reports). An `any` candidate is the supertype of every other.
+///
+/// Only primitives and their literals are decided. A pair this cannot
+/// decide keeps the structural candidate, which is what the call inferred
+/// before the fallback existed, and with none leaves the parameter `any`.
 fn flush_naked_union_fallbacks(
   bindings : Map[String, @ast.TsType],
-  deferred : Map[String, (@ast.TsType, Bool)],
+  deferred : NakedFallbacks,
 ) -> Unit {
-  for k, entry in deferred {
-    let (f, structural_first) = entry
-    match bindings.get(k) {
-      None | Some(Any) => bindings[k] = f
-      Some(h) =>
-        match (primitive_candidate_family(f), primitive_candidate_family(h)) {
-          (Some((fb, f_lit)), Some((hb, h_lit))) =>
-            if fb == hb && f_lit && h_lit {
-              bindings[k] = if structural_first {
-                narrow_union(h, f)
-              } else {
-                narrow_union(f, h)
-              }
-            } else if structural_first {
-              // `[h, f]`: `h` stays unless it is a subtype of `f`, which
-              // for these is `f` being `h`'s primitive.
-              if fb == hb && !f_lit {
-                bindings[k] = f
-              }
-            } else if !(fb == hb && !h_lit) {
-              // `[f, h]`: `f` stays unless it is a subtype of `h`.
-              bindings[k] = f
-            }
-          _ => ()
-        }
+  for k, list in deferred.candidates {
+    if deferred.structural_any.contains(k) {
+      bindings[k] = Any
+      continue
     }
+    let structural = match bindings.get(k) {
+      None | Some(Any) => None
+      Some(h) => Some(h)
+    }
+    let seq : Array[@ast.TsType] = []
+    for entry in list {
+      if !entry.1 {
+        seq.push(entry.0)
+      }
+    }
+    match structural {
+      Some(h) => seq.push(h)
+      None => ()
+    }
+    for entry in list {
+      if entry.1 {
+        seq.push(entry.0)
+      }
+    }
+    let mut acc = seq[0]
+    let mut decided = true
+    for i in 1..<seq.length() {
+      match reduce_inference_candidates(acc, seq[i]) {
+        Some(r) => acc = r
+        None => {
+          decided = false
+          break
+        }
+      }
+    }
+    bindings[k] = if decided {
+      acc
+    } else {
+      structural.unwrap_or(@ast.TsType::Any)
+    }
+  }
+}
+
+///|
+/// One step of `getCommonSupertype` over two candidates, leftmost first,
+/// for primitives and their literals; `None` for any other pair.
+fn reduce_inference_candidates(
+  s : @ast.TsType,
+  t : @ast.TsType,
+) -> @ast.TsType? {
+  match (primitive_candidate_family(s), primitive_candidate_family(t)) {
+    (Some((sb, s_lit)), Some((tb, t_lit))) =>
+      if sb == tb && s_lit && t_lit {
+        Some(narrow_union(s, t))
+      } else if sb == tb && !t_lit {
+        // `s` is a subtype of `t`, its primitive.
+        Some(t)
+      } else {
+        Some(s)
+      }
+    _ => None
   }
 }
 
@@ -14372,7 +14447,7 @@ fn infer_object_field_bindings(
   actual_fields : Array[(String, @ast.TsType)],
   bindings : Map[String, @ast.TsType],
   soft : Bool,
-  fallback? : Map[String, (@ast.TsType, Bool)],
+  fallback? : NakedFallbacks,
 ) -> Unit {
   for ff in formal_fields {
     for af in actual_fields {
@@ -14585,7 +14660,7 @@ fn solve_generic_bindings(
   for tp in type_params {
     bindings[tp] = @ast.TsType::Any
   }
-  let deferred : Map[String, (@ast.TsType, Bool)] = Map([])
+  let deferred = NakedFallbacks::new()
   // A type parameter that appears *only* as a bare top-level parameter
   // (`f<T>(x: T, y: T)`) — never nested inside an array / generic /
   // structural shape — is inferred from every such argument as a union,
@@ -21825,7 +21900,7 @@ fn check_jsx_attrs(
     for tp in type_params {
       bindings[tp] = @ast.TsType::Any
     }
-    let deferred : Map[String, (@ast.TsType, Bool)] = Map([])
+    let deferred = NakedFallbacks::new()
     for entry in attrs {
       let name = entry.0
       match entry.1 {
