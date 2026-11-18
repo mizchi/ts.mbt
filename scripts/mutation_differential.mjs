@@ -377,7 +377,10 @@ function projectFiles() {
       if (e.name === "node_modules" || e.name.startsWith(".")) continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
-      else if (/\.(ts|tsx|mts|cts)$/.test(e.name) && !/\.d\.[mc]?ts$/.test(e.name)) out.push(rel(p));
+      // Only a regular file is edited. Renaming a temporary file over a
+      // symlink would replace the link with a copy of its target, so a
+      // linked source is skipped rather than mutated.
+      else if (e.isFile() && /\.(ts|tsx|mts|cts)$/.test(e.name) && !/\.d\.[mc]?ts$/.test(e.name)) out.push(rel(p));
     }
   };
   const src = path.join(PROJECT, "src");
