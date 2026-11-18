@@ -551,3 +551,25 @@ test "loose null equality keeps the declared nullish members" {
     "function c > binding `n` init: expected `null` but got `null | undefined`",
   ])
 }
+
+///|
+/// A declared ALIAS to a union loses its nullish members to a non-nullish
+/// initializer, as a written union does: `const raw: Op = []` with `type Op
+/// = null | OpList` (ot-json1's `JSONOp`, univer's `addDrawing`). A later
+/// `null` assignment and a nullable initializer still report.
+test "an alias to a nullable union is narrowed by its initializer" {
+  let src =
+    #|type L = (number | L)[];
+    #|type Op = null | L;
+    #|export function okConst() { const raw: Op = []; raw.push(1); return raw; }
+    #|export function okLet() { let raw: Op = []; raw.push(1); return raw; }
+    #|export function badReassigned(c: boolean) { let raw: Op = []; if (c) { raw = null; } raw.push(1); }
+    #|declare const v: Op;
+    #|export function badNullableInit() { const raw: Op = v; raw.push(1); }
+    #|type MaybeStr = string | undefined;
+    #|export function okStr() { const s: MaybeStr = "x"; return s.length; }
+  assert_eq(issue_lines(src), [
+    "function badReassigned > call `push`: object is possibly `null`",
+    "function badNullableInit > call `push`: object is possibly `null`",
+  ])
+}

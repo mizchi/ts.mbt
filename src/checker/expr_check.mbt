@@ -30481,8 +30481,18 @@ fn narrow_declared_nullish_by_init(
   if init is Var("__ts_no_init__") {
     return
   }
-  let members = union_components(declared)
-  let kept = members.filter(fn(m) { !(m is (Undefined | Null | Void)) })
+  // A declared ALIAS to a union is one member until it is unwrapped:
+  // `type Op = null | OpList` (ot-json1's `JSONOp`) with `const raw: Op =
+  // []` kept the `null`, and every `raw.push(…)` was "possibly `null`"
+  // (univer's `addDrawing`).
+  let members = match ctx.resolver.unwrap(declared) {
+    Union(_) as u =>
+      union_components(expand_union_alias_members(ctx.resolver, u))
+    _ => union_components(declared)
+  }
+  let kept = members.filter(fn(m) {
+    !(ctx.resolver.unwrap(m) is (Undefined | Null | Void))
+  })
   if kept.length() == members.length() || kept.length() == 0 {
     return
   }
@@ -34156,7 +34166,9 @@ fn check_ident_binding_decl(
         env.narrow(name, l)
       _ => narrow_declared_nullish_by_init(env, ctx, name, declared, init)
     }
-  } else if declared is Union(_) {
+  } else if declared is Union(_) || ctx.resolver.unwrap(declared) is Union(_) {
+    // An ALIAS to a union takes the nullish half too: `const raw: Op = []`
+    // with `type Op = null | OpList` (see `narrow_declared_nullish_by_init`).
     narrow_declared_nullish_by_init(env, ctx, name, declared, init)
   }
   if !mutable_ && block_scoped {
