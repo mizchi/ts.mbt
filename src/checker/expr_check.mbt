@@ -10233,8 +10233,13 @@ fn nominal_private_blocks(
   match s_class {
     Some(sn) =>
       if class_has_private_member(resolver, sn) {
+        // A subclass that adds no member IS its base, whose private
+        // members it inherits from the same declaration (univer's
+        // `UniverRenderingContext extends UniverRenderingContext2D {}`).
         let related = match t_class {
-          Some(tn) => class_extends(resolver, sn, tn)
+          Some(tn) =>
+            class_extends(resolver, sn, tn) ||
+            class_extends_without_members(resolver, tn, sn, 0)
           None => false
         }
         if !related && target_declares_restricted_member(resolver, sn, target) {
@@ -20536,7 +20541,12 @@ fn check_expr_against_shape(
   // excluded, as is a target that itself carries the same nullish member.
   if ctx.strict_null_checks &&
     type_has_non_nullish(inferred_u) &&
-    (type_has_undefined(inferred_u) || type_has_null(inferred_u)) {
+    (type_has_undefined(inferred_u) || type_has_null(inferred_u)) &&
+    // A SOURCE union holding `any` is `any` too: an optional `any`
+    // parameter (`value?: any`) is spelled `any | undefined`, and univer's
+    // `Number.parseFloat(value)` read it as leaking `undefined`. The target
+    // side already reads that spelling as open, just below.
+    !(inferred_u is Union(src_parts) && src_parts.contains(Any)) {
     let target_open = match expected_u {
       Any | Unknown | Void | Never => true
       Named(tn) => ctx.in_scope_type_params.contains(tn)
@@ -20771,7 +20781,11 @@ fn check_expr_against_shape(
     !func_type_mentions_type_param(expected_u, ctx) &&
     !type_contains_unresolved_named(expected_u, ctx.resolver) &&
     !type_contains_unresolved_named(inferred_u, ctx.resolver) {
-    if !is_assignable_to_bivariant(inferred_u, expected_u) {
+    // The resolver-free relation is nominal for interfaces, so a handler
+    // taking a BASE interface read as unrelated to a slot typed by a
+    // derived one; the chain-aware walk settles that.
+    if !is_assignable_to_bivariant(inferred_u, expected_u) &&
+      !assignable_through_class_chain(inferred_u, expected_u, ctx.resolver) {
       record(
         ctx,
         sub_path,
@@ -21371,11 +21385,69 @@ fn assignable_through_class_chain(
     (Named(s_name), Applied(t_name, _))
     | (Applied(s_name, _), Applied(t_name, _)) =>
       class_or_interface_inherits(s_name, t_name, resolver, [])
+    // Two function types, with each parameter and the return compared
+    // through the class and interface chains the resolver-free relation
+    // cannot see. `this._onClick = h` with `h: (e: IMouseEvent) => void`
+    // over a method taking `IPointerEvent extends IMouseEvent` is legal
+    // (univer's `InputManager.dispose`), and `B0 ≤ A0` is a nominal
+    // mismatch to `is_assignable_to`. Parameters are compared both ways, a
+    // method's being bivariant; a rest parameter on either side keeps the
+    // resolver-free answer.
+    (Func(sp, sr), Func(tp, tr)) => {
+      if sp.length() > tp.length() ||
+        sp.iter().any(fn(p) { p is Rest(_) }) ||
+        tp.iter().any(fn(p) { p is Rest(_) }) {
+        return is_assignable_to(src, tgt)
+      }
+      for i, a in sp {
+        let b = tp[i]
+        if !(is_assignable_to_bivariant(a, b) ||
+          is_assignable_to_bivariant(b, a) ||
+          assignable_through_class_chain(b, a, resolver) ||
+          assignable_through_class_chain(a, b, resolver)) {
+          return false
+        }
+      }
+      tr is (Void | Any) ||
+      sr is Any ||
+      is_assignable_to(sr, tr) ||
+      assignable_through_class_chain(sr, tr, resolver)
+    }
     // Same-shape primitive / `null` / `undefined` matches so a union
     // walk like `Foo | null → Object | null` succeeds (the class chain
     // handles Foo→Object; this branch handles Null→Null).
     _ => is_assignable_to(src, tgt)
   }
+}
+
+///|
+/// True when the class `derived` reaches `base` through a chain of classes
+/// that declare no instance member of their own. Classes are structural, so
+/// such a class IS its base's instance type and a base instance is
+/// assignable to it: univer's `class UniverRenderingContext extends
+/// UniverRenderingContext2D { }` takes every `UniverRenderingContext2D`.
+/// A generic class, a class with an index signature, and one that adds a
+/// field, a method or an accessor are not walked.
+fn class_extends_without_members(
+  resolver : Resolver,
+  derived : String,
+  base : String,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  guard resolver.classes.get(derived) is Some(cls) else { return false }
+  if !cls.type_params.is_empty() ||
+    cls.base_names.length() != 1 ||
+    !cls.index_signatures.is_empty() ||
+    cls.properties.iter().any(fn(p) { !p.is_static }) ||
+    cls.methods.iter().any(fn(m) { !m.is_static && m.name != "constructor" }) {
+    return false
+  }
+  let parent = cls.base_names[0]
+  parent == base ||
+  class_extends_without_members(resolver, parent, base, depth + 1)
 }
 
 ///|
@@ -25214,6 +25286,27 @@ fn accessor_member_value_type(
 }
 
 ///|
+/// The type a WRITE to `recv.name` must supply. For a class accessor that is
+/// the setter's parameter type, which since TS 4.3 may be wider than the
+/// getter's (`get width(): number` beside `set width(v: number | string)`,
+/// univer's `BaseObject`); `lookup_field` answers with the getter's, which
+/// is the read side. Any other member is what `lookup_field` says.
+fn property_write_type(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  name : String,
+) -> @ast.TsType? {
+  match resolver.lookup_field(recv, name) {
+    Some(read) =>
+      match accessor_member_value_type(resolver, recv, name) {
+        Some(write) => Some(write)
+        None => Some(read)
+      }
+    None => None
+  }
+}
+
+///|
 /// Does the resolvable class behind `recv` declare `name` as an instance
 /// method more than once — i.e. is it an overload set, whose type is an
 /// intersection of signatures rather than the one `lookup_field` returns?
@@ -26887,7 +26980,12 @@ fn check_arrow_with_context(
       reliable_func_param_operand(p.type_, ctx) &&
       reliable_func_param_operand(formal_params[i], ctx) &&
       !(is_assignable_to_bivariant(p.type_, formal_params[i]) ||
-      is_assignable_to_bivariant(formal_params[i], p.type_)) {
+      is_assignable_to_bivariant(formal_params[i], p.type_)) &&
+      // The resolver-free relation is nominal for interfaces, so an
+      // annotated `(e: A0) => {}` against `(e: B0) => void` with `B0
+      // extends A0` read as unrelated. It is the legal direction.
+      !assignable_through_class_chain(formal_params[i], p.type_, ctx.resolver) &&
+      !assignable_through_class_chain(p.type_, formal_params[i], ctx.resolver) {
       record(
         ctx,
         "\{sub_path} param `\{p.name}`",
@@ -34885,7 +34983,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           "cannot assign to `\{prop}` because it is read-only",
         )
       }
-      match ctx.resolver.lookup_field(recv_ty, prop) {
+      match property_write_type(ctx.resolver, recv_ty, prop) {
         Some(target_ty) => {
           // When the field carries no annotation (`x = 1`) its declared type is
           // `Any`; recover the widened primitive from the initializer so a
@@ -39491,7 +39589,7 @@ fn check_call_args_in_expr_at(
           "cannot assign to `\{prop}` because it is read-only",
         )
       }
-      match ctx.resolver.lookup_field(recv_ty, prop) {
+      match property_write_type(ctx.resolver, recv_ty, prop) {
         Some(target_ty) => {
           let target_ty = if is_checkable(target_ty) {
             target_ty

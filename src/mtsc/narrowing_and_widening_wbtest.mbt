@@ -236,3 +236,86 @@ test "a nested union alias is split by instanceof" {
     "function badOr > call `push` arg[0]: expected `number` but got `string | number`",
   ])
 }
+
+///|
+/// `any | undefined` is `any`, as a source as well as a target: an optional
+/// `any` parameter is spelled that way, and univer's
+/// `Tools.isStringNumber(value?: any)` passes it to `Number.parseFloat`.
+test "an optional any parameter does not leak undefined" {
+  let src =
+    #|export class T1 {
+    #|  static okStatic(value?: any): boolean { return !isNaN(Number.parseFloat(value)) && isFinite(value); }
+    #|}
+    #|export function okBinding(v?: any) { const s: string = v; return s; }
+    #|export function badNumber(v?: number) { const s: string = v; return s; }
+  assert_eq(issue_lines(src), [
+    "function badNumber > binding `s` init: type `number | undefined` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// A write to an accessor is checked against the SETTER's parameter type,
+/// which since TS 4.3 may be wider than the getter's (univer's
+/// `BaseObject.resize`).
+test "an accessor write takes the setter's type" {
+  let src =
+    #|export class B1 {
+    #|  private _width: number = 0;
+    #|  get width(): number { return this._width; }
+    #|  protected set width(num: number | string) { this._width = typeof num === "string" ? 1 : num; }
+    #|  okResize(width?: number | string) { if (width !== undefined) { this.width = width; } return this; }
+    #|}
+    #|export class B2 {
+    #|  private _w: number = 0;
+    #|  get w(): number { return this._w; }
+    #|  set w(num: number | string) { this._w = 1; }
+    #|}
+    #|export function okWrite(b: B2, v: number | string) { b.w = v; }
+    #|export function badWrite(b: B2) { b.w = true; }
+    #|export function badRead(b: B2) { const s: string = b.w; return s; }
+  assert_eq(issue_lines(src), [
+    "function badWrite > assign `.w`: expected `number | string` but got `boolean`",
+    "function badRead > binding `s` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// Classes are structural, so a subclass that declares nothing of its own
+/// takes an instance of its base (univer's `UniverRenderingContext extends
+/// UniverRenderingContext2D { }`), while one that adds a member does not.
+test "a base instance is assignable to a memberless subclass" {
+  let src =
+    #|export class Ctx2D { private _sys = 1; fill(): void {} }
+    #|export class Ctx extends Ctx2D { }
+    #|export class CtxPlus extends Ctx2D { extra = 1; }
+    #|declare function draw(c: Ctx): void;
+    #|declare function drawPlus(c: CtxPlus): void;
+    #|export function okEmptySubclass(c: Ctx2D) { draw(c); }
+    #|export function badAddedMember(c: Ctx2D) { drawPlus(c); }
+  assert_eq(issue_lines(src), [
+    "function badAddedMember > call `drawPlus` arg[0]: expected `CtxPlus` but got `Ctx2D`",
+  ])
+}
+
+///|
+/// A function's parameters are compared through the interface chain: a
+/// handler taking the BASE event fits a slot typed by the derived one
+/// (univer's `InputManager.dispose`), while an unrelated parameter type and
+/// a mismatched return still report.
+test "function parameters are compared through the interface chain" {
+  let src =
+    #|interface A0 { a: number }
+    #|interface B0 extends A0 { b: number }
+    #|interface C0 { c: number }
+    #|export class IM3 {
+    #|  okDispose() { this._h = null as unknown as (e: A0) => void; }
+    #|  _h(e: B0) { e.b; }
+    #|}
+    #|export function okArrow() { let f: (e: B0) => void = (e: A0) => {}; return f; }
+    #|export function badArrow() { let f: (e: B0) => void = (e: C0) => {}; return f; }
+    #|export function badReturn(g: (e: A0) => string) { let f: (e: B0) => number = g; return f; }
+  assert_eq(issue_lines(src), [
+    "function badArrow > binding `f` init param `e`: expected `B0` but got `C0`",
+    "function badReturn > binding `f` init: expected `(B0) => number` but got `(A0) => string`",
+  ])
+}
