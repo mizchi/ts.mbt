@@ -35999,6 +35999,63 @@ fn check_call_args_in_expr(
   expr : @ast.TsExpr,
   ctx : CheckCtx,
 ) -> Unit {
+  // A call that short-circuits through a `?.` evaluates its arguments only
+  // when every receiver the `?.` guarded is non-nullish, so they are
+  // non-nullish inside the arguments: `icon?.move({ left: icon.width })`
+  // is legal, while `other?.move({ left: icon.width })` still reports
+  // `icon` (probed). univer's transformer writes this for every optional
+  // control. The receivers come from `optional_chain_guarded_receivers`,
+  // the walk the truthy-chain narrowing already uses, and so does the
+  // PLAIN form of the call it returns, which is what gets checked: with
+  // the receivers non-nullish the call is the plain spelling's, and
+  // checking it through the optional arm instead judged an overloaded
+  // method by its first declaration (`h$?.pipe(op)` against rxjs's
+  // `pipe(): Observable<T>`, where `h$!.pipe(op)` is silent). A guarded
+  // receiver with no narrowing key (`f()?.m(…)`) keeps the optional walk.
+  match expr {
+    CallExpr(_, _) | MethodCall(_, _, _) => {
+      let (plain, guarded) = optional_chain_guarded_receivers(expr)
+      let narrowed : Array[(String, @ast.TsType)] = []
+      let mut all_keyed = guarded.length() > 0
+      for g in guarded {
+        match narrowing_key_for_expr(g) {
+          Some(key) => {
+            let t = non_nullable_resolved(
+              ctx.resolver,
+              narrowing_current_type(env, ctx.resolver, key),
+            )
+            if t is Never {
+              all_keyed = false
+            } else {
+              narrowed.push((key, t))
+            }
+          }
+          None => all_keyed = false
+        }
+      }
+      if all_keyed {
+        let snap = env.full_snapshot()
+        for b in narrowed {
+          env.narrow(b.0, b.1)
+        }
+        check_call_args_in_expr_at(env, plain, ctx)
+        env.restore_from(snap)
+        return
+      }
+    }
+    _ => ()
+  }
+  check_call_args_in_expr_at(env, expr, ctx)
+}
+
+///|
+/// The body of `check_call_args_in_expr`, after the optional-call
+/// receivers are narrowed.
+fn check_call_args_in_expr_at(
+  env : ExprEnv,
+  expr : @ast.TsExpr,
+  ctx : CheckCtx,
+) -> Unit {
   match expr {
     // A call carrying explicit type arguments: first validate the type-argument
     // list against the callee, then descend into the underlying call so its
