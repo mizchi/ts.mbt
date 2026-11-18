@@ -14416,6 +14416,16 @@ fn infer_expr_inner(
               }
             }
           } else if spread_shape_is_known(spread_ty, resolver) {
+            // A shape that is itself OPEN (an index entry, which is how an
+            // unenumerable spread above leaves its result) stays open when
+            // it is spread again: univer's `const line = { ...withoutParent(
+            // source), … }` then `{ ...line, bullet }` lost every member the
+            // generic `Omit<T, "parent">` contributed and reported each one
+            // as required (on main too). The index is copied as `any`.
+            if resolver.unwrap(spread_ty) is Object(sfs) &&
+              sfs.iter().any(fn(f) { !(f.0 is Literal(_)) }) {
+              opaque_spread = true
+            }
             for f in collect_declared_fields(spread_ty, resolver) {
               // A `#private` member is NOT copied by a spread — it is not
               // an own enumerable property — so the result does not have
@@ -24059,7 +24069,15 @@ fn check_object_lit_against_target(
       let spread_fields = collect_declared_fields(spread_ty, resolver)
       match resolver.unwrap(spread_ty) {
         Any | Unknown => opaque_spread = true
-        Null | Undefined | Object(_) => ()
+        // An OPEN shape (an index entry, which is how an unenumerable
+        // spread leaves its inferred result) can supply any member:
+        // univer's `{ ...line, bullet }` with `line = { ...withoutParent(
+        // source), … }` reported every member `Omit<T, "parent">` gave it.
+        Object(fs) =>
+          if fs.iter().any(fn(f) { !(f.0 is Literal(_)) }) {
+            opaque_spread = true
+          }
+        Null | Undefined => ()
         _ => if spread_fields.length() == 0 { opaque_spread = true }
       }
       for sf in spread_fields {

@@ -573,3 +573,30 @@ test "a bound spread keeps declared literals and typeof reads a local" {
     "function badTypeof > binding `s` init: type `Array<I>` is not assignable to type `string`",
   ])
 }
+
+///|
+/// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
+/// enumerate leaves the result open, and spreading that result again keeps
+/// it open, as a fresh literal and as a bound one.
+test "a spread of an open shape stays open" {
+  let src =
+    #|interface L { asc: number; parent?: object; divides: number[]; bullet?: { a: number } }
+    #|interface LP extends Omit<L, "divides" | "parent"> { divides: string[] }
+    #|declare function withoutParent<T extends { parent?: unknown }>(value: T): Omit<T, "parent">;
+    #|export function okFresh(source: L): LP {
+    #|  const line = { ...withoutParent(source), divides: source.divides.map(String) };
+    #|  return source.bullet == null ? line : { ...line, bullet: { a: 1 } };
+    #|}
+    #|export function okBound(source: L): LP {
+    #|  const line = { ...withoutParent(source), divides: source.divides.map(String) };
+    #|  const again = { ...line };
+    #|  return again;
+    #|}
+    #|export function badClosed(source: L): LP {
+    #|  const line = { divides: source.divides.map(String) };
+    #|  return { ...line, bullet: { a: 1 } };
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badClosed > return.asc: property `asc` is required by `LP`",
+  ])
+}
