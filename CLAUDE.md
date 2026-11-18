@@ -6375,6 +6375,31 @@ product surfaces now.
     the parentheses, so it is promoted here. That is a false positive on a
     spelling nobody writes, filed with its blocker (an AST change the
     bridge reads).
+  - **The fourth round found the rest of that judgement**, and each cell
+    was probed. A fixed-tuple SPREAD argument counts as its elements
+    (`f(1, ...xs)` read `xs` as one argument against an expanded tuple
+    rest; a false positive on main too). A parameter whose type accepts
+    `void` is omittable, as tsc's minimum argument count says
+    (`y: string | void`); `y: string | undefined` is not. An interface
+    method with a `?` was left out of the method loop's candidates
+    entirely (on main too). Members that agree on the return keep it:
+    `m(x: string, y?: string): number` beside `m(x: string): number` is
+    `number` whichever one tsc picks. A generic member's arity reads its
+    recorded `?`s, and a rest parameter typed with a tuple ALIAS is
+    expanded. The "no overload matches" proof (TS2769) read a literal
+    argument widened, so `lit(1)` against `(x: 1): string; (x: string):
+    number` was reported on main: the fact the three selection loops
+    already had, missing from a fourth reader.
+  - **The callable-object loop's fallback to the union loop inferred every
+    argument a second time**, and the argument of a nested call is the
+    next call, so `f(f(f(…)))` over unmatched overloads was exponential in
+    depth: 2.66 s at 18 levels, 0.006 s once each argument is inferred
+    once. This batch introduced it, and the review found it.
+    `verify-checker-scaling` could not have: it had no nested-call axis.
+    `nested-overload-calls` is that axis now. It is superlinear on main
+    too (1.56; checking a call re-infers everything below it), so it
+    carries a budget with that reason. What it exists to catch is the
+    exponential version, which never finishes its first rung.
   - **Object conditionals, two more cells.** An interface's own member
     overrides the inherited one (`A extends { kind: "a" }` was false), and
     a member that may be optional proves nothing in either direction,

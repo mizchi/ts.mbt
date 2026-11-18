@@ -79,6 +79,8 @@ const AXIS_RUNGS = {
   // by time. 8x between the endpoints still separates linear from
   // quadratic, and an exponential axis dies at the first rung or two.
   "nested-literals": [50, 100, 200, 400],
+  // A depth too: one call nested in another's argument.
+  "nested-overload-calls": [50, 100, 200, 400],
 };
 
 // Per-axis exponent budget. Every axis is held to `--max-exponent` (1.5)
@@ -105,6 +107,15 @@ const AXIS_BUDGET = {
   // `RootNameBackstops`) — worth -22% at n=1000 and nothing measurable
   // on any real file.
   namespaces: 2.15,
+  // SUPERLINEAR in nesting depth on main too (1.56 there, 1.67 here),
+  // because checking a call infers its argument and then checks that
+  // argument, which infers ITS argument again, so each level re-infers
+  // everything below it. 400 nested calls take 0.1 s, and real code nests
+  // an overloaded call a handful of levels deep. What this axis exists to
+  // catch is the EXPONENTIAL version, which never finishes the first rung:
+  // the overload fallback that inferred each argument twice took 2.7 s at
+  // 18 levels.
+  "nested-overload-calls": 1.85,
 };
 
 // One generator per axis. Each emits N declarations of ONE kind, so a
@@ -279,6 +290,23 @@ const AXES = {
       lit = `{ k: ${i}, v: [${inner}] }`;
     }
     return `export const fixture = ${lit};\n`;
+  },
+  // Calls to an overloaded callable nested N deep, each one matching no
+  // member, so every level falls back from the callable-object overload
+  // loop to the union one. That fallback used to infer the call's
+  // arguments a second time, and the argument is the next call, so the
+  // work doubled per level: 2.7 s at 18 levels. Each argument is inferred
+  // once now and the axis is linear.
+  "nested-overload-calls": (n) => {
+    let call = `"x"`;
+    for (let i = 0; i < n; i++) call = `f(${call})`;
+    return (
+      "declare const f: {\n" +
+      "  (x: number, y: number): string;\n" +
+      "  (x: boolean, y: boolean): string;\n" +
+      "};\n" +
+      `export const r = ${call};\n`
+    );
   },
   // THE CONTROL. Byte count grows with the rung and the declaration
   // count does not (12 interfaces throughout), so this axis stays flat

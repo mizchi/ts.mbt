@@ -439,3 +439,57 @@ test "tuple-rest and omittable-parameter overload arity, qualified enum shadows"
     "top-level > binding `badUnion` init: expected `string` but got `number`", "top-level > binding `badOwn` init: expected `R4` but got `2`",
   ])
 }
+
+///|
+/// #307's fourth review round, all against the TS7 nightly. A spread of a
+/// fixed tuple is its elements for selection; a parameter whose type
+/// accepts `void` is omittable; an interface method with a `?` is a
+/// candidate with its recorded flags; members that agree on the return keep
+/// it; a generic member's arity uses its recorded `?`s; a rest parameter's
+/// tuple ALIAS is expanded; and the "no overload matches" proof reads a
+/// literal argument as its literal type (`lit(1)` against `(x: 1)` was
+/// TS2769 on main). The supplied-argument cases of `g` and `f` pin the
+/// members' own arity.
+test "tuple spreads, void, recorded optionals, agreeing returns, tuple aliases" {
+  let src =
+    #|declare const f2: { (x: 1, ...rest: [string]): string; (x: number, value: [string]): number };
+    #|declare const xs: [string];
+    #|export const okSpread: string = f2(1, ...xs);
+    #|export const badSpread: number = f2(1, ...xs);
+    #|export const okNoSpread: number = f2(1, xs);
+    #|declare const v: { (x: 1, y: string | void | undefined): string; (x: number): number };
+    #|export const okVoid: string = v(1);
+    #|export const badVoid: number = v(1);
+    #|interface M3 { m(x: 1, y?: string): string; m(x: number): number; m(x: boolean): boolean }
+    #|declare const m3: M3;
+    #|export const okM3: string = m3.m(1);
+    #|export const badM3: number = m3.m(1);
+    #|declare class C2 { m(x: string, y?: string): number; m(x: string): number }
+    #|declare const c2: C2;
+    #|export const badSame: string = c2.m("a");
+    #|declare const gg: { <T>(x: T, y: string | undefined, z?: boolean): string; (x: number): number };
+    #|export const okGen: number = gg(1);
+    #|export const badGen: string = gg(1);
+    #|export const okGen2: string = gg(1, undefined);
+    #|export const badGen2: number = gg(1, undefined);
+    #|type Tail = [string];
+    #|declare const ta: { (x: 1, ...rest: Tail): string; (x: number): number };
+    #|export const okTail: number = ta(1);
+    #|export const okTail2: string = ta(1, "ok");
+    #|export const badTail: string = ta(1);
+    #|declare const lit: { (x: 1): string; (x: string): number };
+    #|export const okLit: string = lit(1);
+    #|declare const g: { (x: 1, y: string | undefined): string; (x: number): number };
+    #|export const okReq2: string = g(1, undefined);
+    #|export const badReq2: number = g(1, undefined);
+    #|declare const f: { (x: 1, ...rest: [string]): string; (x: number): number };
+    #|export const okRest2: string = f(1, "ok");
+    #|export const badRest2: number = f(1, "ok");
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badSpread` init: expected `number` but got `string`", "top-level > binding `badVoid` init: expected `number` but got `string`",
+    "top-level > binding `badM3` init: expected `number` but got `string`", "top-level > binding `badSame` init: expected `string` but got `number`",
+    "top-level > binding `badGen` init: expected `string` but got `number`", "top-level > binding `badGen2` init: expected `number` but got `string`",
+    "top-level > binding `badTail` init: expected `string` but got `number`", "top-level > binding `badReq2` init: expected `number` but got `string`",
+    "top-level > binding `badRest2` init: expected `number` but got `string`",
+  ])
+}

@@ -3386,15 +3386,6 @@ fn bind_unsolved_to_any(
 }
 
 ///|
-/// Whether `n` arguments fit a callable's parameter list: at least the
-/// required count (a trailing optional, `void` or rest parameter may be
-/// omitted) and at most the parameter count, unless a rest takes the rest.
-fn overload_arity_accepts(params : Array[@ast.TsType], n : Int32) -> Bool {
-  let has_rest = params.iter().any(fn(p) { p is Rest(_) })
-  n >= required_arity_from_types(params) && (has_rest || n <= params.length())
-}
-
-///|
 /// Whether a concrete overload member takes a call, three ways.
 /// `Maybe` is a member that takes it only if a parameter it omits is
 /// optional, when the member cannot say: a bare `Func` spells `y?: T` and
@@ -3411,11 +3402,110 @@ priv enum OverloadFit {
 }
 
 ///|
+/// One overload loop's running answer. `offer` returns the call's type once
+/// it is decided. A `Maybe` member is held; a later member that also takes
+/// the call decides it as `any`, unless the two agree on the return (`m(x:
+/// string, y?: string): number` beside `m(x: string): number` is `number`
+/// whichever one tsc picks). An agreeing `Maybe` keeps scanning, since a
+/// later member can still disagree.
+priv struct OverloadPick {
+  mut tentative : @ast.TsType?
+}
+
+///|
+fn OverloadPick::offer(
+  self : OverloadPick,
+  fit : OverloadFit,
+  r : @ast.TsType,
+) -> @ast.TsType? {
+  match fit {
+    NoFit => None
+    Fits =>
+      match self.tentative {
+        None => Some(r)
+        Some(t) => Some(if t == r { t } else { @ast.TsType::Any })
+      }
+    Maybe =>
+      match self.tentative {
+        None => {
+          self.tentative = Some(r)
+          None
+        }
+        Some(t) => if t == r { None } else { Some(@ast.TsType::Any) }
+      }
+  }
+}
+
+///|
+/// The arguments' types for overload selection, each argument inferred
+/// once: the widened types (for a generic member, whose binders are solved
+/// from them) and the selection types, where a literal keeps its literal
+/// type (`overload_selection_arg_type`). A spread of a fixed tuple counts
+/// as its elements in both, as the method loop's `overload_arg_types`
+/// reads it: `f(1, ...xs)` with `xs: [string]` is two arguments.
+fn overload_call_arg_types(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> (Array[@ast.TsType], Array[@ast.TsType]) {
+  let arg_types : Array[@ast.TsType] = []
+  let sel_types : Array[@ast.TsType] = []
+  for a in args {
+    let t = resolver.unwrap(infer_expr(env, resolver, a))
+    match (a, t) {
+      (Spread(_), Tuple(elems)) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+        for e in elems {
+          arg_types.push(e)
+          sel_types.push(e)
+        }
+      _ => {
+        arg_types.push(t)
+        sel_types.push(overload_selection_arg_type(a, t))
+      }
+    }
+  }
+  (arg_types, sel_types)
+}
+
+///|
+/// A rest parameter typed with a tuple ALIAS (`...rest: Tail`, `type Tail =
+/// [string]`) resolved to the tuple, so `expand_tuple_rest_params` sees it:
+/// left as `Rest(Named("Tail"))` it read as an unbounded rest.
+fn resolve_rest_tuple_alias(
+  resolver : Resolver,
+  params : Array[@ast.TsType],
+) -> Array[@ast.TsType] {
+  match params.last() {
+    Some(Rest(Named(_) | Applied(_, _) as t)) =>
+      match resolver.unwrap(t) {
+        Tuple(_) as tup => {
+          let out = params.copy()
+          out[out.length() - 1] = @ast.TsType::Rest(tup)
+          out
+        }
+        _ => params
+      }
+    _ => params
+  }
+}
+
+///|
+/// How many parameters a signature WRITES before a tuple rest's elements:
+/// the positions its recorded `?`s speak for.
+fn written_param_count(params : Array[@ast.TsType]) -> Int32 {
+  if params.last() is Some(Rest(Tuple(_))) {
+    params.length() - 1
+  } else {
+    params.length()
+  }
+}
+
+///|
 /// The arity half of `OverloadFit`. `params` has its tuple rest expanded
 /// (`(x: 1, ...rest: [string])` requires two arguments); `flags` are the
-/// member's recorded `?`s, exact for the first `exact` positions. A `void`
-/// parameter is omittable whatever its spelling.
+/// member's recorded `?`s, exact for the first `exact` positions.
 fn overload_arity_fit(
+  resolver : Resolver,
   params : Array[@ast.TsType],
   flags : Array[Bool]?,
   exact : Int32,
@@ -3428,7 +3518,10 @@ fn overload_arity_fit(
   let mut strict = 0
   let mut lenient = 0
   for i, p in params {
-    if p is Rest(_) || p is Void {
+    // A parameter whose type accepts `void` is omittable whatever its
+    // spelling (`y: string | void`), as tsc's minimum argument count says;
+    // `y: string | undefined` is not.
+    if p is Rest(_) || p is Void || alias_accepts_void(resolver, p) {
       continue
     }
     match flags {
@@ -8177,16 +8270,16 @@ fn Resolver::method_overload_signatures(
   self : Resolver,
   recv : @ast.TsType,
   meth : String,
-) -> Array[(Array[@ast.TsType], @ast.TsType, Bool)] {
+) -> Array[(Array[@ast.TsType], @ast.TsType, Array[Bool]?)] {
   // Collect the candidate signatures of `meth` as `(params, return,
-  // exact)` triples, in declaration order. A class method may be
+  // optional)` triples, in declaration order. A class method may be
   // overloaded across several declarations; an object / interface type
-  // expresses overloads as repeated fields of the same name. `exact` says
-  // the member has no optional parameter: a parsed member signature with a
-  // `?` is a `CallableMeta`, which the type-shaped arms below do not take,
-  // so a bare `Func` there has none, while a class method records no `?`
-  // at all (see `OverloadFit`).
-  let candidates : Array[(Array[@ast.TsType], @ast.TsType, Bool)] = []
+  // expresses overloads as repeated fields of the same name. `optional` is
+  // the member's recorded `?`s when it has them: a parsed member signature
+  // with a `?` is a `CallableMeta`, so a bare `Func` among the type-shaped
+  // arms below has none (`Some([])`), while a class method records no `?`
+  // at all (`None`, see `OverloadFit`).
+  let candidates : Array[(Array[@ast.TsType], @ast.TsType, Array[Bool]?)] = []
   match self.unwrap(recv) {
     Named(n) | Applied(n, _) => {
       // An INTERFACE is how a `.d.ts` declares an overload set, and this
@@ -8260,7 +8353,7 @@ fn Resolver::method_overload_signatures(
             } else {
               substitute_params(m.return_type, msubst)
             }
-            candidates.push((ps, ret, false))
+            candidates.push((ps, ret, None))
           }
         }
         _ => ()
@@ -8277,7 +8370,11 @@ fn Resolver::method_overload_signatures(
               match f.1 {
                 Func(ps, ret) =>
                   if f.0 == meth {
-                    candidates.push((ps, ret, true))
+                    candidates.push((ps, ret, Some([])))
+                  }
+                CallableMeta(Func(ps, ret), flags) =>
+                  if f.0 == meth {
+                    candidates.push((ps, ret, Some(flags)))
                   }
                 _ => ()
               }
@@ -8290,14 +8387,23 @@ fn Resolver::method_overload_signatures(
       for f in fields {
         match (f.0, f.1) {
           (Literal(k), Func(ps, ret)) if k == meth =>
-            candidates.push((ps, ret, true))
+            candidates.push((ps, ret, Some([])))
+          (Literal(k), CallableMeta(Func(ps, ret), flags)) if k == meth =>
+            candidates.push((ps, ret, Some(flags)))
           _ => ()
         }
       }
     Struct(_, fields) =>
       for f in fields {
         match f.1 {
-          Func(ps, ret) => if f.0 == meth { candidates.push((ps, ret, true)) }
+          Func(ps, ret) =>
+            if f.0 == meth {
+              candidates.push((ps, ret, Some([])))
+            }
+          CallableMeta(Func(ps, ret), flags) =>
+            if f.0 == meth {
+              candidates.push((ps, ret, Some(flags)))
+            }
           _ => ()
         }
       }
@@ -8442,34 +8548,34 @@ fn Resolver::resolve_method_overload(
   }
   // Literal-typed members first, as tsc's `reorderCandidates` does (see
   // `specialized_overloads_first`).
-  let candidates = candidates.filter(fn(c) {
-      c.0.iter().any(fn(p) { overload_param_is_literal(p, false) })
-    }) +
-    candidates.filter(fn(c) {
-      !c.0.iter().any(fn(p) { overload_param_is_literal(p, false) })
-    })
+  fn specialized(c : (Array[@ast.TsType], @ast.TsType, Array[Bool]?)) -> Bool {
+    let flags = c.2.unwrap_or([])
+    for i, p in c.0 {
+      if overload_param_is_literal(p, i < flags.length() && flags[i]) {
+        return true
+      }
+    }
+    false
+  }
+
+  let candidates = candidates.filter(specialized) +
+    candidates.filter(fn(c) { !specialized(c) })
   // A member that takes the call only if a parameter it omits is optional
   // answers unless a later member takes it too (see `OverloadFit`).
   let mut tentative : (Array[@ast.TsType], @ast.TsType)? = None
   for c in candidates {
-    let (params, ret, exact) = c
-    let written = if params.last() is Some(Rest(Tuple(_))) {
-      params.length() - 1
-    } else {
-      params.length()
-    }
+    let (params, ret, flags) = c
+    let params = resolve_rest_tuple_alias(self, params)
+    let written = written_param_count(params)
     let params = expand_tuple_rest_params(params, arg_types.length())
     // The argument count has to fit the member's arity, not equal its
     // parameter count: redi's `get<T>(id, lookUp?)` is called as
     // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
     // matched its own signature.
     let fit = overload_arity_fit(
+      self,
       params,
-      if exact {
-        Some([])
-      } else {
-        None
-      },
+      flags,
       written,
       arg_types.length(),
     )
@@ -8533,8 +8639,18 @@ fn Resolver::resolve_method_overload(
       }
     }
     if ok {
-      if tentative is Some((tparams, _)) {
-        return Some((tparams, @ast.TsType::Any))
+      // As `OverloadPick`: a later member agreeing on the return keeps it.
+      match tentative {
+        Some((tparams, tret)) =>
+          if tret == ret {
+            if fit is Maybe {
+              continue
+            }
+            return Some((tparams, tret))
+          } else {
+            return Some((tparams, @ast.TsType::Any))
+          }
+        None => ()
       }
       if fit is Maybe {
         tentative = Some((params, ret))
@@ -16710,27 +16826,40 @@ fn infer_call(
           // first and is `number` in tsc. The `Union` arm below defers
           // generic members, which is right for the union of callables it
           // was written for and reported `const n: number = f(s)` here.
-          let arg_types : Array[@ast.TsType] = []
-          let sel_types : Array[@ast.TsType] = []
-          for a in args {
-            let t = resolver.unwrap(infer_expr(env, resolver, a))
-            arg_types.push(t)
-            sel_types.push(overload_selection_arg_type(a, t))
-          }
-          // A member that takes the call only if a parameter is omittable
-          // (`OverloadFit::Maybe`) answers the call unless a later member
-          // takes it too, when which one tsc picks depends on a fact this
-          // member does not carry, and the call is `any`.
-          let mut tentative : @ast.TsType? = None
+          let (arg_types, sel_types) = overload_call_arg_types(
+            env, resolver, args,
+          )
+          let pick = OverloadPick::{ tentative: None, }
           for sig in specialized_overloads_first(many, resolver) {
             match sig {
-              GenericFunc(names, _, Func(gps, gret))
-              | GenericFunc(names, _, CallableMeta(Func(gps, gret), _)) => {
-                let (r, ok) = overload_generic_attempt(
-                  env, resolver, names, gps, gret, args, arg_types,
+              GenericFunc(names, _, Func(gps, gret)) => {
+                let (r, fit) = overload_generic_attempt(
+                  env,
+                  resolver,
+                  names,
+                  gps,
+                  gret,
+                  None,
+                  args,
+                  arg_types,
                 )
-                if ok {
-                  return if tentative is Some(_) { @ast.TsType::Any } else { r }
+                if pick.offer(fit, r) is Some(answer) {
+                  return answer
+                }
+              }
+              GenericFunc(names, _, CallableMeta(Func(gps, gret), flags)) => {
+                let (r, fit) = overload_generic_attempt(
+                  env,
+                  resolver,
+                  names,
+                  gps,
+                  gret,
+                  Some(flags),
+                  args,
+                  arg_types,
+                )
+                if pick.offer(fit, r) is Some(answer) {
+                  return answer
                 }
               }
               _ =>
@@ -16741,31 +16870,23 @@ fn infer_call(
                       AssertsPredicate(_, _) => @ast.TsType::Void
                       _ => reduce_conditional(ret)
                     }
-                    match
-                      overload_concrete_fit(resolver, sig, params, sel_types) {
-                      Fits =>
-                        return if tentative is Some(_) {
-                          @ast.TsType::Any
-                        } else {
-                          r
-                        }
-                      Maybe =>
-                        if tentative is Some(_) {
-                          return @ast.TsType::Any
-                        } else {
-                          tentative = Some(r)
-                        }
-                      NoFit => ()
+                    let fit = overload_concrete_fit(
+                      resolver, sig, params, sel_types,
+                    )
+                    if pick.offer(fit, r) is Some(answer) {
+                      return answer
                     }
                   }
                   _ => ()
                 }
             }
           }
-          if tentative is Some(r) {
+          if pick.tentative is Some(r) {
             return r
           }
-          return infer_call(env, resolver, Union(many), args)
+          return infer_overload_union_call(
+            env, resolver, many, args, arg_types, sel_types,
+          )
         }
       }
     _ => ()
@@ -16813,100 +16934,10 @@ fn infer_call(
     // type when no signature matches precisely (so an overloaded call site
     // doesn't widen to an imprecise union for the common matching case).
     Union(parts) => {
-      let arg_types : Array[@ast.TsType] = []
-      let sel_types : Array[@ast.TsType] = []
-      for a in args {
-        let t = resolver.unwrap(infer_expr(env, resolver, a))
-        arg_types.push(t)
-        sel_types.push(overload_selection_arg_type(a, t))
-      }
-      let rets : Array[@ast.TsType] = []
-      // See the callable-object arm: a `Maybe` member answers unless a
-      // later member also takes the call.
-      let mut tentative : @ast.TsType? = None
-      // GENERIC members are set aside and instantiated only after every
-      // concrete one has failed to match — TypeScript's own overload
-      // order, and the same discipline `func_overload_type_params` uses,
-      // so a call a concrete member accepts keeps the answer it had.
-      let generics : Array[(Array[String], Array[@ast.TsType], @ast.TsType)] = []
-      for part in specialized_overloads_first(parts, resolver) {
-        // `unwrap` PEELS a `GenericFunc`: it says so at the site, because
-        // the wrapper erases to its underlying callable for every
-        // value-shape decision. That erasure also throws away the binders
-        // this call has to SOLVE, so the member must be read before it —
-        // `declare const c: { m<T>(o: { x: T }): T } | undefined;
-        // c?.m({ x: 12 })` reached the arm below as `Func([{x: T}], T)`
-        // and came back with `T` unsolved, where the same member reached
-        // directly (`d.m({ x: 12 })`) is solved by the `GenericFunc` arm
-        // above. One question, two answers.
-        match part {
-          GenericFunc(names, _, Func(gps, gret))
-          | GenericFunc(names, _, CallableMeta(Func(gps, gret), _)) => {
-            generics.push((names, gps, gret))
-            continue
-          }
-          _ => ()
-        }
-        match resolver.unwrap(part) {
-          Func(params, ret) => {
-            let r = match ret {
-              TypePredicate(_, _) => @ast.TsType::Boolean
-              AssertsPredicate(_, _) => @ast.TsType::Void
-              _ => reduce_conditional(ret)
-            }
-            rets.push(r)
-            // Best-effort overload match: the argument count fits the
-            // member's arity, and every argument is assignable to the
-            // parameter it lands on. "Fits" used to be "equals the
-            // parameter count", so a member with an optional or rest
-            // parameter could never match a call that omitted it.
-            match overload_concrete_fit(resolver, part, params, sel_types) {
-              Fits =>
-                return if tentative is Some(_) { @ast.TsType::Any } else { r }
-              Maybe =>
-                if tentative is Some(_) {
-                  return @ast.TsType::Any
-                } else {
-                  tentative = Some(r)
-                }
-              NoFit => ()
-            }
-          }
-          // A NULLISH member is not a callable the union offers, it is
-          // the reason the call needs a `?.` — so it contributes no
-          // return type and must not collapse the answer to `Any`.
-          // Invoking a possibly-nullish value without `?.` is TS2722,
-          // a diagnostic of its own; an OPTIONAL call adds the
-          // `| undefined` back at the chain node. Either way the
-          // callable half's return is the more precise answer.
-          Undefined | Null => ()
-          _ => return @ast.TsType::Any
-        }
-      }
-      for g in generics {
-        let (names, gps, gret) = g
-        let (r, ok) = overload_generic_attempt(
-          env, resolver, names, gps, gret, args, arg_types,
-        )
-        if ok {
-          return if tentative is Some(_) { @ast.TsType::Any } else { r }
-        }
-        rets.push(r)
-      }
-      if tentative is Some(r) {
-        return r
-      }
-      if rets.length() == 1 {
-        rets[0]
-      } else if rets.iter().any(fn(t) { t is Any }) {
-        // A union with an `any` member IS `any` in TypeScript. Kept as a
-        // union it read as `any | any[] | null | …`, and a member access on
-        // it failed on the `any[]` and `null` arms — "property
-        // `currentLocale$` does not exist on `any | any[] | …`".
-        @ast.TsType::Any
-      } else {
-        @ast.TsType::Union(rets)
-      }
+      let (arg_types, sel_types) = overload_call_arg_types(env, resolver, args)
+      infer_overload_union_call(
+        env, resolver, parts, args, arg_types, sel_types,
+      )
     }
     // Intersection: find the first callable member and use its return type.
     Intersection(parts) => {
@@ -16921,6 +16952,107 @@ fn infer_call(
       @ast.TsType::Any
     }
     _ => @ast.TsType::Any
+  }
+}
+
+///|
+/// A union of callable types (an overload set): the return of the member
+/// whose arity and parameter types accept the call, or the union of every
+/// member's return when none does (so an overloaded call site does not
+/// widen to an imprecise union for the common matching case). The argument
+/// types come in already inferred (`overload_call_arg_types`), so the
+/// callable-object path can fall back here without inferring them again:
+/// re-inferring at each level made `f(f(f(x)))` exponential in its depth.
+fn infer_overload_union_call(
+  env : ExprEnv,
+  resolver : Resolver,
+  parts : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  arg_types : Array[@ast.TsType],
+  sel_types : Array[@ast.TsType],
+) -> @ast.TsType {
+  let rets : Array[@ast.TsType] = []
+  let pick = OverloadPick::{ tentative: None, }
+  // GENERIC members are set aside and instantiated only after every
+  // concrete one has failed to match — TypeScript's own overload
+  // order, and the same discipline `func_overload_type_params` uses,
+  // so a call a concrete member accepts keeps the answer it had.
+  let generics : Array[
+    (Array[String], Array[@ast.TsType], @ast.TsType, Array[Bool]?),
+  ] = []
+  for part in specialized_overloads_first(parts, resolver) {
+    // `unwrap` PEELS a `GenericFunc`: it says so at the site, because
+    // the wrapper erases to its underlying callable for every
+    // value-shape decision. That erasure also throws away the binders
+    // this call has to SOLVE, so the member must be read before it —
+    // `declare const c: { m<T>(o: { x: T }): T } | undefined;
+    // c?.m({ x: 12 })` reached the arm below as `Func([{x: T}], T)`
+    // and came back with `T` unsolved, where the same member reached
+    // directly (`d.m({ x: 12 })`) is solved by the `GenericFunc` arm
+    // above. One question, two answers.
+    match part {
+      GenericFunc(names, _, Func(gps, gret)) => {
+        generics.push((names, gps, gret, None))
+        continue
+      }
+      GenericFunc(names, _, CallableMeta(Func(gps, gret), flags)) => {
+        generics.push((names, gps, gret, Some(flags)))
+        continue
+      }
+      _ => ()
+    }
+    match resolver.unwrap(part) {
+      Func(params, ret) => {
+        let r = match ret {
+          TypePredicate(_, _) => @ast.TsType::Boolean
+          AssertsPredicate(_, _) => @ast.TsType::Void
+          _ => reduce_conditional(ret)
+        }
+        rets.push(r)
+        // Best-effort overload match: the argument count fits the
+        // member's arity, and every argument is assignable to the
+        // parameter it lands on. "Fits" used to be "equals the
+        // parameter count", so a member with an optional or rest
+        // parameter could never match a call that omitted it.
+        let fit = overload_concrete_fit(resolver, part, params, sel_types)
+        if pick.offer(fit, r) is Some(answer) {
+          return answer
+        }
+      }
+      // A NULLISH member is not a callable the union offers, it is
+      // the reason the call needs a `?.` — so it contributes no
+      // return type and must not collapse the answer to `Any`.
+      // Invoking a possibly-nullish value without `?.` is TS2722,
+      // a diagnostic of its own; an OPTIONAL call adds the
+      // `| undefined` back at the chain node. Either way the
+      // callable half's return is the more precise answer.
+      Undefined | Null => ()
+      _ => return @ast.TsType::Any
+    }
+  }
+  for g in generics {
+    let (names, gps, gret, flags) = g
+    let (r, fit) = overload_generic_attempt(
+      env, resolver, names, gps, gret, flags, args, arg_types,
+    )
+    if pick.offer(fit, r) is Some(answer) {
+      return answer
+    }
+    rets.push(r)
+  }
+  if pick.tentative is Some(r) {
+    return r
+  }
+  if rets.length() == 1 {
+    rets[0]
+  } else if rets.iter().any(fn(t) { t is Any }) {
+    // A union with an `any` member IS `any` in TypeScript. Kept as a
+    // union it read as `any | any[] | null | …`, and a member access on
+    // it failed on the `any[]` and `null` arms — "property
+    // `currentLocale$` does not exist on `any | any[] | …`".
+    @ast.TsType::Any
+  } else {
+    @ast.TsType::Union(rets)
   }
 }
 
@@ -17029,15 +17161,12 @@ fn overload_concrete_fit(
     _ => None
   }
   let n = arg_types.length()
-  let expanded = expand_tuple_rest_params(params, n)
+  let params = resolve_rest_tuple_alias(resolver, params)
   // The flags speak for the parameters as written; a tuple rest's elements
   // come after them.
-  let exact = if params.last() is Some(Rest(Tuple(_))) {
-    params.length() - 1
-  } else {
-    params.length()
-  }
-  let fit = overload_arity_fit(expanded, flags, exact, n)
+  let exact = written_param_count(params)
+  let expanded = expand_tuple_rest_params(params, n)
+  let fit = overload_arity_fit(resolver, expanded, flags, exact, n)
   if fit is NoFit {
     return NoFit
   }
@@ -17065,9 +17194,10 @@ fn overload_generic_attempt(
   names : Array[String],
   gps : Array[@ast.TsType],
   gret : @ast.TsType,
+  flags : Array[Bool]?,
   args : Array[@ast.TsExpr],
   arg_types : Array[@ast.TsType],
-) -> (@ast.TsType, Bool) {
+) -> (@ast.TsType, OverloadFit) {
   let bindings = widen_fresh_literal_bindings(
     env,
     resolver,
@@ -17081,19 +17211,29 @@ fn overload_generic_attempt(
   let r = reduce_conditional(
     substitute_params(gret, bind_unsolved_to_any(names, bindings)),
   )
-  let sps = substitute_params_array(gps, bindings)
-  if !overload_arity_accepts(sps, arg_types.length()) {
-    return (r, false)
+  // The arity rule is a concrete member's (`overload_arity_fit`), with the
+  // member's recorded `?`s: `<T>(x: T, y: string | undefined)` does not
+  // take `f(1)`.
+  let n = arg_types.length()
+  let sps = resolve_rest_tuple_alias(
+    resolver,
+    substitute_params_array(gps, bindings),
+  )
+  let written = written_param_count(sps)
+  let sps = expand_tuple_rest_params(sps, n)
+  let fit = overload_arity_fit(resolver, sps, flags, written, n)
+  if fit is NoFit {
+    return (r, NoFit)
   }
-  for i in 0..<arg_types.length() {
+  for i in 0..<n {
     if !is_assignable_to(
         arg_types[i],
         resolver.unwrap(overload_param_at(sps, i)),
       ) {
-      return (r, false)
+      return (r, NoFit)
     }
   }
-  (r, true)
+  (r, fit)
 }
 
 ///|
@@ -22056,9 +22196,18 @@ fn check_overload_set_no_match(
     }
   }
   let n = args.length()
+  // A literal argument keeps its literal type: widened, `1` against
+  // `f(x: 1)` read as a `number` the member cannot take, so `f(1, "ok")`
+  // over `(x: 1, ...rest: Tail)` and `(x: number)` was "no overload
+  // matches" on a call tsc accepts.
   let arg_tys : Array[@ast.TsType] = []
   for a in args {
-    arg_tys.push(ctx.resolver.unwrap(infer_expr(env, ctx.resolver, a)))
+    arg_tys.push(
+      overload_selection_arg_type(
+        a,
+        ctx.resolver.unwrap(infer_expr(env, ctx.resolver, a)),
+      ),
+    )
   }
   for sig in sigs {
     let (ps, optional_params) = sig
