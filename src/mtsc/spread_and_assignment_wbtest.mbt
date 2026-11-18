@@ -220,3 +220,44 @@ test "TS2678 abstains in a file carrying a suppression comment" {
     "function f > switch case: case value `\"c\" (string)` can never match scrutinee `\"a\" (string) | \"b\" (string)`",
   ])
 }
+
+///|
+/// univer's own shapes: `a?.x ?? a?.y` narrowed by `!= null`, a compound
+/// assignment judged on the narrowed target, and a class whose base an
+/// augmentation in the same file names (graph mode, below).
+test "a flat ?? and a compound write on the narrowed target" {
+  let src =
+    #|declare const o: { a?: number; b?: number } | undefined;
+    #|declare const d: number;
+    #|export function okGuarded() {
+    #|  let p = o?.a ?? o?.b;
+    #|  if (p != null) { const q: number = p; p -= d; return q; }
+    #|  return 0;
+    #|}
+    #|export function badUnguarded(x?: number) {
+    #|  let r: number | undefined = x;
+    #|  r -= d;
+    #|  return r;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badUnguarded > compound-assign `r`: compound arithmetic op requires a number target, got `number | undefined`",
+  ])
+}
+
+///|
+test "a class whose base a module augmentation names abstains on members" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/p/facade/index.ts", "export class FUniver {\n  constructor(protected readonly _injector: { get(): number }) {}\n  static extend(_m: unknown): void {}\n}\n",
+        ),
+        (
+          "/p/ui.ts", "import { FUniver } from \"./facade\";\nexport interface IFUniverUIMixin { copy(): number }\nexport class FUniverUIMixin extends FUniver implements IFUniverUIMixin {\n  copy(): number { return this._injector.get(); }\n}\nFUniver.extend(FUniverUIMixin);\ndeclare module \"./facade\" {\n  interface FUniver extends IFUniverUIMixin { }\n}\n",
+        ),
+      ],
+      [("/p/ui.ts", "./facade", "/p/facade/index.ts")],
+    ),
+    [],
+  )
+}

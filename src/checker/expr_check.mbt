@@ -17364,8 +17364,19 @@ fn infer_binop(
         narrow_union(nullish_stripped(resolver, l), r)
       }
     // `a ?? b` — `b` is only evaluated when `a` is null/undefined, so the
-    // result strips nullish from `a` and unions with `b`'s type.
-    Coalesce => narrow_union(nullish_stripped(resolver, l), r)
+    // result strips nullish from `a` and unions with `b`'s type. The union
+    // is FLAT: `o?.a ?? o?.b` nested `number | (number | undefined)`, and a
+    // `!= null` guard, which removes members one level deep, left the
+    // inner `undefined` behind (univer's `priorityPageAnchor -= delta`
+    // under `if (priorityPageAnchor != null)`, on main too).
+    Coalesce => {
+      let a = nullish_stripped(resolver, l)
+      if equivalent(a, r) {
+        a
+      } else {
+        flatten_union_exact([a, r])
+      }
+    }
   }
 }
 
@@ -20849,6 +20860,18 @@ fn interface_chain_augmented(ty : @ast.TsType, resolver : Resolver) -> Bool {
       Some(iface) =>
         for e in iface.extends_names {
           todo.push(e)
+        }
+      None => ()
+    }
+    // A CLASS whose base an augmentation names: univer's facade mixins
+    // write `class FUniverUIMixin extends FUniver` beside `declare module
+    // '@univerjs/core/facade' { interface FUniver extends IFUniverUIMixin
+    // {} }`, and the base then read as that interface alone, without the
+    // class's own `_injector` (on main too).
+    match resolver.classes.get(n) {
+      Some(cls) =>
+        for b in cls.base_names {
+          todo.push(b)
         }
       None => ()
     }
@@ -33149,7 +33172,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // the equivalent simple assignment's required type. Targets the
       // declared type (see `Assign` above) so a compound assignment
       // after narrowing still accepts the full declared union.
-      match env.lookup_declared(name) {
+      match compound_assign_target_type(env, name, op) {
         Some(target_ty) =>
           check_compound_assign(env, target_ty, op, e, ctx, name)
         None => ()
@@ -37332,7 +37355,7 @@ fn check_call_args_in_expr(
       }
       match target {
         Var(name) =>
-          match env.lookup_declared(name) {
+          match compound_assign_target_type(env, name, op) {
             Some(target_ty) =>
               check_compound_assign(env, target_ty, op, v, ctx, name)
             None => ()
@@ -58600,4 +58623,37 @@ fn check_dup_param_names(
       seen.push(name)
     }
   }
+}
+
+///|
+/// The type a compound assignment's TARGET is judged as. `x -= d` READS
+/// `x` first, so the narrowed type is the one it must be numeric in:
+/// univer writes `if (p != null) { p -= delta }` over a `number |
+/// undefined`, and reading the declared type reported the guarded write
+/// (on main too). `+=` keeps the declared type when that admits a string,
+/// since then the write may concatenate whatever the narrowing says, and a
+/// logical assignment is not arithmetic at all.
+fn compound_assign_target_type(
+  env : ExprEnv,
+  name : String,
+  op : @ast.TsCompoundOp,
+) -> @ast.TsType? {
+  let declared = env.lookup_declared(name)
+  match (op, declared) {
+    (AddAssign, Some(d)) if type_has_string_member(d) => declared
+    (AndAssign | OrAssign | CoalesceAssign, _) => declared
+    _ =>
+      match env.lookup(name) {
+        Some(t) => Some(t)
+        None => declared
+      }
+  }
+}
+
+///|
+fn type_has_string_member(t : @ast.TsType) -> Bool {
+  is_assignable_to(t, @ast.TsType::String_) ||
+  union_components(flatten_union_parts(t))
+  .iter()
+  .any(fn(m) { m is (String_ | Literal(_) | TemplateLiteralType(_, _)) })
 }
