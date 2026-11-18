@@ -8173,15 +8173,38 @@ fn raw_class_method_call_params(
         }
       })
     if mentioned.iter().any(fn(tp) { unknown_tps.contains(tp) }) {
-      // A bare `any` reads as REQUIRED to the arity check, so an optional
-      // parameter keeps its `| undefined` spelled out.
-      out.push(
-        if type_accepts_undefined(params[i]) {
-          @ast.TsType::Union([Any, Undefined])
-        } else {
-          @ast.TsType::Any
-        },
-      )
+      match params[i] {
+        // A rest parameter keeps its element list with the unknown binder
+        // read as `any`: `...values: [number, T]` checks its first
+        // argument against `number` whatever `T` is.
+        Rest(_) => {
+          let any_for_unknown : Map[String, @ast.TsType] = Map([])
+          for tp in mentioned {
+            any_for_unknown[tp] = if unknown_tps.contains(tp) {
+              @ast.TsType::Any
+            } else {
+              match bindings.get(tp) {
+                Some(b) => b
+                None => @ast.TsType::Any
+              }
+            }
+          }
+          match resolver.unwrap(substitute_params(rp, any_for_unknown)) {
+            Array(_) | Tuple(_) as list => out.push(@ast.TsType::Rest(list))
+            _ => out.push(params[i])
+          }
+        }
+        // A bare `any` reads as REQUIRED to the arity check, so an
+        // optional parameter keeps its `| undefined` spelled out.
+        _ =>
+          out.push(
+            if type_accepts_undefined(params[i]) {
+              @ast.TsType::Union([Any, Undefined])
+            } else {
+              @ast.TsType::Any
+            },
+          )
+      }
     } else if mentioned.length() > 0 && solved {
       // The header keeps parameter TYPES only, so an optional parameter's
       // `?` is in the inlined parameter (as `| undefined`) and not here.
@@ -13538,20 +13561,24 @@ fn infer_expr_inner(
         // argument said. A return that IS a parameter's union bound is read
         // as that parameter, and the written argument answers for it.
         (Call(name, _), _) if env.lookup(name) is None =>
-          match
-            explicit_arg_for_inlined_bound(resolver, name, targs, inner_ty) {
+          match raw_return_for_written_args(resolver, name, targs) {
             Some(t) => t
-            // An OVERLOAD SET with written type arguments whose bounds are
-            // not on record (an imported function: excalidraw's
-            // `pointFrom<GlobalPoint>(x, y)` from `@excalidraw/math`): the
-            // answer would be some overload's inlined bound, which the
-            // written argument narrows, so the call abstains.
             None =>
-              match resolver.globals.get(name) {
-                Some(t) if targs.length() > 0 &&
-                  resolver.unwrap(t) is Union(ms) &&
-                  ms.length() > 1 => @ast.TsType::Any
-                _ => inner_ty
+              match
+                explicit_arg_for_inlined_bound(resolver, name, targs, inner_ty) {
+                Some(t) => t
+                // An OVERLOAD SET with written type arguments whose bounds are
+                // not on record (an imported function: excalidraw's
+                // `pointFrom<GlobalPoint>(x, y)` from `@excalidraw/math`): the
+                // answer would be some overload's inlined bound, which the
+                // written argument narrows, so the call abstains.
+                None =>
+                  match resolver.globals.get(name) {
+                    Some(t) if targs.length() > 0 &&
+                      resolver.unwrap(t) is Union(ms) &&
+                      ms.length() > 1 => @ast.TsType::Any
+                    _ => inner_ty
+                  }
               }
           }
         _ => inner_ty
@@ -14427,7 +14454,7 @@ fn infer_expr_inner(
               // number }` is `{ n: number }` (probed; #309's review), where
               // keeping the `false` failed a return check tsc accepts.
               if op is OrAssign {
-                left = match without_falsy_literals(left) {
+                left = match without_falsy_literals(resolver, left) {
                   Some(t) => t
                   None => @ast.TsType::Undefined
                 }
@@ -16621,6 +16648,43 @@ fn raw_signature_known_bounds(
       }
   }
   known_bounds
+}
+
+///|
+/// The return of a call to a bounded generic FUNCTION with written type
+/// arguments: the un-inlined return with the written arguments substituted.
+/// `id<"a" | "b">("a")` with `id<T extends string>(x: T): T` is
+/// `"a" | "b"` whatever the argument is, and solving `T` from the argument
+/// instead made it `"a"`, so a `let` holding it rejected `"b"` (probed;
+/// #310's review). Only a single signature with exactly as many type
+/// parameters as written arguments, each argument checkable and resolved;
+/// `None` otherwise, which leaves the call's inferred type as it was.
+fn raw_return_for_written_args(
+  resolver : Resolver,
+  name : String,
+  targs : Array[@ast.TsType],
+) -> @ast.TsType? {
+  guard targs.length() > 0 else { return None }
+  guard resolver.globals.get("@raw-sig:" + name) is Some(Func(_, raw_ret)) else {
+    return None
+  }
+  guard resolver.globals.get(name) is Some(callee) &&
+    resolver.unwrap(callee) is Func(_, _) else {
+    return None
+  }
+  guard resolver.func_type_params.get(name) is Some(tps) &&
+    tps.length() == targs.length() else {
+    return None
+  }
+  let bindings : Map[String, @ast.TsType] = Map([])
+  for i, tp in tps {
+    let t = targs[i]
+    if !is_checkable(t) || type_contains_unresolved_named(t, resolver) {
+      return None
+    }
+    bindings[tp] = t
+  }
+  Some(substitute_params(raw_ret, bindings))
 }
 
 ///|
@@ -31402,16 +31466,18 @@ fn optional_chain_equality_narrowing(
 /// `0n`), with `boolean` read as `true`; `None` when nothing is left. The
 /// literal falsiness `falsy_subset` leaves alone, for a position whose
 /// result is the operand only when it was truthy.
-fn without_falsy_literals(t : @ast.TsType) -> @ast.TsType? {
+fn without_falsy_literals(resolver : Resolver, t : @ast.TsType) -> @ast.TsType? {
   let out : Array[@ast.TsType] = []
-  for p in union_components(t) {
-    match p {
+  // A member is matched by what it RESOLVES to, so `type Off = false` is
+  // dropped like a written `false`; the kept member keeps its spelling.
+  for p in union_components(expand_union_alias_members(resolver, t)) {
+    match resolver.unwrap(p) {
       BooleanLiteral(false) => ()
       Literal("") => ()
       NumberLiteral("0") | NumberLiteral("-0") => ()
       BigIntLiteral("0") | BigIntLiteral("0n") => ()
       Boolean => out.push(BooleanLiteral(true))
-      other => out.push(other)
+      _ => out.push(p)
     }
   }
   match out.length() {

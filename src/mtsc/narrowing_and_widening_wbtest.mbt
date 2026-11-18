@@ -360,3 +360,58 @@ test "an enum member widens to its enum in a let" {
     "function badConst > strict equality: comparing `\"A\" (string)` and `\"B\" (string)` with === will always be false",
   ])
 }
+
+///|
+/// A rest parameter whose type mentions an unsolved binder keeps its
+/// element list, with the binder read as `any` (#310's review):
+/// `...values: [number, T]` still checks its first argument against
+/// `number` when `tag` is `any`.
+test "a rest tuple keeps its known elements beside an unsolved binder" {
+  let src =
+    #|export class C { m<T extends string>(tag: T, ...values: [number, T]) {} }
+    #|declare const tag: any;
+    #|declare const c: C;
+    #|c.m(tag, 42, "ok");
+    #|c.m(tag, "wrong", "x");
+  assert_eq(issue_lines(src), [
+    "top-level > call `m` rest arg[0]: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// Written type arguments decide a bounded generic's return, not the
+/// argument (#310's review): `id<"a" | "b">("a")` is `"a" | "b"`, so a
+/// `let` holding it takes `"b"`. With `id<"a">` it does not.
+test "written type arguments decide a bounded generic's return" {
+  let src =
+    #|function id<T extends string>(x: T): T { return x; }
+    #|const r = id<"a" | "b">("a");
+    #|export const okR: "a" | "b" = r;
+    #|let s = r;
+    #|s = "b";
+    #|const r2 = id<"a">("a");
+    #|let s2 = r2;
+    #|s2 = "b";
+    #|declare function pair<T extends string, U extends number>(x: T, y: U): [T, U];
+    #|export const okP: ["a" | "b", 1 | 2] = pair<"a" | "b", 1 | 2>("a", 1);
+  assert_eq(issue_lines(src), [
+    "top-level > assign `s2`: expected `\"a\" (string)` but got `\"b\" (string)`",
+  ])
+}
+
+///|
+/// `||=` drops a falsy member by what it resolves to, so `type Off =
+/// false` goes like a written `false` (#310's review).
+test "or-assignment drops an aliased falsy member" {
+  let src =
+    #|type Off = false;
+    #|declare let x: Off | { n: number };
+    #|const y = (x ||= { n: 1 });
+    #|export const okY: { n: number } = y;
+    #|declare let z: Off | { n: number };
+    #|const w = (z ||= { n: 1 });
+    #|export const badW: string = w;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badW` init: expected `string` but got `{ n: number }`",
+  ])
+}
