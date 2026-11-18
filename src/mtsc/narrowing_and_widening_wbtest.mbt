@@ -433,3 +433,22 @@ test "a string compared equal to a literal is the literal" {
     "function badArray > binding `s` init: expected `string[]` but got `string`",
   ])
 }
+
+///|
+/// `typeof x === "object"` splits a union into its object members (`null`
+/// included) and the rest, on both sides (univer's
+/// `RichTextBuilder.insertParagraph`, `start?: number | ParagraphStyleBuilder`).
+test "typeof object splits a union into objects and the rest" {
+  let src =
+    #|class PSB { ff = "a"; }
+    #|interface Opt { a: number }
+    #|export function okElse(start?: number | PSB) { let i: number; if (typeof start === "object") { i = 0; } else { i = start!; } return i; }
+    #|export function okThen(start?: number | PSB) { if (typeof start === "object") { const p: PSB = start; return p.ff; } return ""; }
+    #|export function okIface(x: string | Opt) { if (typeof x === "object") { return x.a; } const s: string = x; return s; }
+    #|export function okNull(x: string | null) { if (typeof x === "object") { const n: null = x; return n; } const s: string = x; return s; }
+    #|export function okArr(x: string | number[]) { if (typeof x !== "object") { const s: string = x; return s; } return x.length; }
+    #|export function badThen(start?: number | PSB) { if (typeof start === "object") { const n: number = start; return n; } return 0; }
+  assert_eq(issue_lines(src), [
+    "function badThen > binding `n` init: expected `number` but got `PSB`",
+  ])
+}

@@ -32956,6 +32956,13 @@ fn analyze_equality(
             )
             is Some(t) {
             t
+          } else if ts == "object" &&
+            typeof_object_split(
+              resolver,
+              narrowing_current_type(env, resolver, name),
+            )
+            is Some((objects, _)) {
+            objects
           } else {
             narrowed
           }
@@ -32981,6 +32988,9 @@ fn analyze_equality(
                 _ => false
               }
             })
+          } else if ts == "object" &&
+            typeof_object_split(resolver, cur0) is Some((_, rest)) {
+            rest
           } else {
             // `typeof x === "undefined"` is also true of `void`, whose only
             // value is `undefined`, so the else side drops it too (probed).
@@ -33733,6 +33743,76 @@ fn aliased_condition_binds(
     }
   }
   Some(out)
+}
+
+///|
+/// `typeof x === "object"` over a union whose every member is decidable:
+/// `(objects, rest)`, where the objects are the classes, non-callable
+/// interfaces, object types, arrays and tuples, plus `null` (`typeof null
+/// === "object"`), and the rest is the primitives and the functions. The
+/// test used to replace the equal side with `object` and remove only an
+/// exact `object` from the other, so `typeof start === "object"` over
+/// `number | ParagraphStyleBuilder` left the class in the else branch
+/// (univer's `RichTextBuilder.insertParagraph`). `None` when a member is
+/// one this cannot classify (`any`, a type parameter, an unresolved name),
+/// or when the test separates nothing.
+fn typeof_object_split(
+  resolver : Resolver,
+  cur : @ast.TsType,
+) -> (@ast.TsType, @ast.TsType)? {
+  let parts = union_components(expand_union_alias_members(resolver, cur))
+  if parts.length() < 2 {
+    return None
+  }
+  let objects : Array[@ast.TsType] = []
+  let rest : Array[@ast.TsType] = []
+  for p in parts {
+    let is_object = match resolver.unwrap(p) {
+      Null
+      | NonPrimitiveObject
+      | Object(_)
+      | Array(_)
+      | Tuple(_)
+      | Struct(_, _)
+      | Applied("Array" | "ReadonlyArray" | "Map" | "Set" | "Promise", _) =>
+        true
+      String_
+      | Number
+      | Int
+      | Boolean
+      | BigInt
+      | Symbol
+      | UniqueSymbol(_)
+      | Literal(_)
+      | NumberLiteral(_)
+      | BooleanLiteral(_)
+      | BigIntLiteral(_)
+      | Undefined
+      | Void
+      | Func(_, _)
+      | GenericFunc(_, _, _)
+      | CallableMeta(_, _) => false
+      Named(n) =>
+        if resolver.classes.contains(n) {
+          true
+        } else if resolver.interfaces.contains(n) &&
+          !shape_is_callable(p, resolver) {
+          true
+        } else {
+          return None
+        }
+      _ => return None
+    }
+    if is_object {
+      objects.push(p)
+    } else {
+      rest.push(p)
+    }
+  }
+  if objects.length() == 0 || rest.length() == 0 {
+    return None
+  }
+  Some((union_of(objects), union_of(rest)))
 }
 
 ///|
