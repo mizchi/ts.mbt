@@ -2049,10 +2049,31 @@ fn distribute_conditional_alias(
     Some(a) => a
     None => return None
   }
-  let members = match r.unwrap(arg) {
+  let top = match r.unwrap(arg) {
     Union(items) => items
     _ => return None
   }
+  // A union of unions is that union. excalidraw's `ExcalidrawElement`
+  // lists `ExcalidrawGenericElement`, itself an alias to a union that
+  // holds the very `ExcalidrawSelectionElement` an `Exclude` removes, so
+  // distributing one level checked that alias whole, could not decide it,
+  // and left every `Exclude<ExcalidrawElement, …>` unresolved.
+  let members : Array[@ast.TsType] = []
+  fn flatten(
+    r : Resolver,
+    items : Array[@ast.TsType],
+    depth : Int32,
+    out : Array[@ast.TsType],
+  ) -> Unit {
+    for m in items {
+      match r.unwrap(m) {
+        Union(inner) if depth < 4 => flatten(r, inner, depth + 1, out)
+        _ => if !out.contains(m) { out.push(m) }
+      }
+    }
+  }
+
+  flatten(r, top, 0, members)
   let out : Array[@ast.TsType] = []
   for m in members {
     let b : Map[String, @ast.TsType] = Map([])
@@ -4650,7 +4671,23 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           t_branch,
           f_branch,
         )
-        let simplified = simplify_type(probe)
+        // Two object shapes are decided on the shapes as WRITTEN, before
+        // `simplify_type` sees them: its intersection collapse reduces
+        // `Base & { type: "rectangle" }` to the one named part `Base`, so
+        // two discriminated members of `Base` both became `Base` and
+        // `RectEl extends SelEl` came out TRUE (on main too) — which made
+        // `Exclude<ExcalidrawElement, ExcalidrawSelectionElement>` drop
+        // every member that shares the base.
+        let early = if has_infer {
+          None
+        } else {
+          self.object_extends_decision(resolved_check, self.unwrap(ext))
+        }
+        let simplified = match early {
+          Some(true) => t_branch
+          Some(false) => f_branch
+          None => simplify_type(probe)
+        }
         match simplified {
           Conditional(_, _, _, _) =>
             // `simplify_type` decides through the three-valued
@@ -12969,6 +13006,28 @@ fn infer_expr_inner(
               targs.length() > 0 => @ast.TsType::Applied(n, targs)
             _ => inner_ty
           }
+        // `pointFrom<GlobalPoint>(x, y)` where the declaration returns its
+        // bounded `P`: the parser inlined `P` to its bound, so the call came
+        // back as the bound `GlobalPoint | LocalPoint` whatever the written
+        // argument said. A return that IS a parameter's union bound is read
+        // as that parameter, and the written argument answers for it.
+        (Call(name, _), _) if env.lookup(name) is None =>
+          match
+            explicit_arg_for_inlined_bound(resolver, name, targs, inner_ty) {
+            Some(t) => t
+            // An OVERLOAD SET with written type arguments whose bounds are
+            // not on record (an imported function: excalidraw's
+            // `pointFrom<GlobalPoint>(x, y)` from `@excalidraw/math`): the
+            // answer would be some overload's inlined bound, which the
+            // written argument narrows, so the call abstains.
+            None =>
+              match resolver.globals.get(name) {
+                Some(t) if targs.length() > 0 &&
+                  resolver.unwrap(t) is Union(ms) &&
+                  ms.length() > 1 => @ast.TsType::Any
+                _ => inner_ty
+              }
+          }
         _ => inner_ty
       }
     }
@@ -14204,9 +14263,35 @@ fn infer_expr_inner(
           // `string | undefined` while the same function over
           // `{ name: string }` did not. tsc accepts both (probed); a
           // unit test had asserted the report.
-          let part = fn(t : @ast.TsType) {
+          fn part(t : @ast.TsType, resolver : Resolver, depth : Int32) -> Bool {
             definitely_non_nullish(t) ||
-            (t is (Named(_) | Applied(_, _)) && is_named_decl(t, resolver))
+            (t is (Named(_) | Applied(_, _)) && is_named_decl(t, resolver)) ||
+            // An intersection is non-nullish when any part is: excalidraw's
+            // elements are `_ExcalidrawElementBase & { type: … }`.
+            (
+              depth < 4 &&
+              t is Intersection(ps) &&
+              ps
+              .iter()
+              .any(fn(q) { part(resolver.unwrap(q), resolver, depth + 1) })
+            ) ||
+            // `Readonly<{ … }>` and its siblings map an object to an object.
+            (
+              depth < 4 &&
+              t is Applied("Readonly" | "Partial" | "Required", [inner]) &&
+              part(resolver.unwrap(inner), resolver, depth + 1)
+            ) ||
+            t is MappedType(_, _, _, _) ||
+            // A union member that is itself a union alias
+            // (`ExcalidrawGenericElement` inside `ExcalidrawElement`).
+            (
+              depth < 4 &&
+              t is Union(ps) &&
+              ps.length() > 0 &&
+              ps
+              .iter()
+              .all(fn(q) { part(resolver.unwrap(q), resolver, depth + 1) })
+            )
           }
           // A UNION of declared shapes is as non-nullish as each of them:
           // `one?.frameId` over excalidraw's element union came back
@@ -14214,8 +14299,8 @@ fn infer_expr_inner(
           match rt {
             Union(items) =>
               items.length() > 0 &&
-              items.iter().all(fn(i) { part(resolver.unwrap(i)) })
-            _ => part(rt)
+              items.iter().all(fn(i) { part(resolver.unwrap(i), resolver, 0) })
+            _ => part(rt, resolver, 0)
           }
         }
         // A shape this cannot read keeps the old, wider answer.
@@ -14224,8 +14309,13 @@ fn infer_expr_inner(
       if receiver_non_nullish {
         // The member's OWN nullish part is its type, not a short-circuit:
         // `a?.frameId` with `frameId: string | null` is `string | null`.
-        // Pruning it answered `string`.
-        inner_ty
+        // Pruning it answered `string`. With nothing nullish to keep, the
+        // pruned form stays, since `prune_nullish` also normalizes.
+        if type_has_null(inner_ty) || type_has_undefined(inner_ty) {
+          inner_ty
+        } else {
+          base
+        }
       } else {
         // Likewise when the receiver CAN be nullish: the short-circuit adds
         // `undefined`, and the member keeps its own `null` (`maybe?.frameId`
@@ -14238,7 +14328,9 @@ fn infer_expr_inner(
             parts.push(t)
           }
         }
-        if parts.is_empty() || base is Any {
+        if parts.is_empty() ||
+          base is Any ||
+          !(type_has_null(inner_ty) || type_has_undefined(inner_ty)) {
           narrow_union(base, @ast.TsType::Undefined)
         } else {
           if !parts.contains(Undefined) {
@@ -15673,6 +15765,59 @@ fn expand_alias_head(
       }
     _ => p
   }
+}
+
+///|
+/// The written type argument whose parameter's UNION bound is exactly
+/// `ret` — the shape a bound-inlined bare `P` return takes — or `None`.
+/// Only a union bound counts: a primitive bound equal to the return is as
+/// likely a declared `string` return as an inlined `P extends string`.
+fn explicit_arg_for_inlined_bound(
+  resolver : Resolver,
+  name : String,
+  targs : Array[@ast.TsType],
+  ret : @ast.TsType,
+) -> @ast.TsType? {
+  let names = match resolver.func_type_params.get(name) {
+    Some(ns) if ns.length() > 0 => ns
+    _ =>
+      match resolver.func_overload_type_params.get(name) {
+        Some(ns) => ns
+        None => return None
+      }
+  }
+  if names.length() != targs.length() {
+    return None
+  }
+  guard resolver.func_type_param_bounds.get(name) is Some(bounds) else {
+    return None
+  }
+  fn members(t : @ast.TsType) -> Array[@ast.TsType] {
+    let out : Array[@ast.TsType] = []
+    for m in union_components(flatten_union_parts(t)) {
+      if !out.contains(m) {
+        out.push(m)
+      }
+    }
+    out
+  }
+
+  let got = members(ret)
+  if got.length() < 2 {
+    return None
+  }
+  for b in bounds {
+    let want = members(b.1)
+    if want.length() == got.length() &&
+      want.iter().all(fn(w) { got.contains(w) }) {
+      for i, n in names {
+        if n == b.0 {
+          return Some(targs[i])
+        }
+      }
+    }
+  }
+  None
 }
 
 ///|
@@ -22233,7 +22378,20 @@ fn class_static_method_param_types(
       return None
     }
   }
-  Some(method_callable_param_types(m))
+  let params = method_callable_param_types(m)
+  // A GENERIC static method's own binders are not solved here, and left
+  // bare they were looked up as whatever type of that name the program
+  // has: univer's `static deepClone<T>(value: T)` met engine-formula's
+  // `class T`, and every `Tools.deepClone(x)` reported (on main too). An
+  // unsolved binder accepts anything.
+  if m.type_params.length() == 0 {
+    return Some(params)
+  }
+  let b : Map[String, @ast.TsType] = Map([])
+  for tp in m.type_params {
+    b[tp] = Any
+  }
+  Some(substitute_params_array(params, b))
 }
 
 ///|
@@ -29517,6 +29675,14 @@ fn optional_chain_equality_narrowing(
   let is_definite_value = match other {
     StringLit(_) | NumberLit(_) | IntLit(_) | BoolLit(_) => true
     TemplateLiteral(_, []) => true
+    // A value whose TYPE cannot be nullish rules the short-circuit out as
+    // surely as a literal does: univer's `currentBullet?.listType ===
+    // listType ? currentBullet.listId : …` with `listType` an enum.
+    Var(_) | PropAccess(_, _) =>
+      type_definitely_non_nullish(
+        resolver,
+        resolver.unwrap(infer_expr(env, resolver, other)),
+      )
     _ => false
   }
   let side = if is_definite_value || (is_null && !loose) {
@@ -33718,8 +33884,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let scrutinee_ty = ctx.resolver.unwrap(
         infer_expr(env, ctx.resolver, scrutinee),
       )
+      // A legacy label kept under `// @ts-ignore` (excalidraw's `case
+      // "draw":` for a type the element union no longer has) is one tsc
+      // reports and the comment silences. With no line to honour the
+      // comment at, TS2678 abstains in a file that carries one.
+      let case_suppressed = ctx.resolver.globals.contains(
+        "@ts-suppression-present",
+      )
       for case_ in cases {
         match case_.test_expr {
+          Some(e) if case_suppressed => check_call_args_in_expr(env, e, ctx)
           Some(e) => {
             check_call_args_in_expr(env, e, ctx)
             // TS2678 for the two spellings the type-driven test below
@@ -34488,7 +34662,15 @@ fn check_explicit_type_args(
         }
       }
     }
+    // `signatures` holds ONE declaration per name, so for an overload set
+    // it answers with whichever was ingested last, and `pointFrom<P>(1, 2)`
+    // was judged against the `(coords: [number, number])` overload.
+    let overloaded = match ctx.resolver.globals.get(name) {
+      Some(t) => ctx.resolver.unwrap(t) is Union(_)
+      None => false
+    }
     match inner {
+      Call(_, call_args) if overloaded => ignore(call_args)
       Call(_, call_args) =>
         match ctx.resolver.signatures.get(name) {
           Some(sig) =>
@@ -52250,6 +52432,16 @@ fn check_module_function_bodies_layered(
   }
   if unkeyed_renames.length() > 0 {
     renames_by_key["<unkeyed>"] = unkeyed_renames
+  }
+  // A file carrying a `@ts-ignore` / `@ts-expect-error` comment: the
+  // checks below have no line to honour one at, so the ones that are
+  // whole-file sensitive abstain (see `<ts-suppression-present>`). A
+  // namespace body is parsed on its own and the comment sits in the file.
+  if module_.grammar_misuses.contains("<ts-suppression-present>") ||
+    outer_modules
+    .iter()
+    .any(fn(o) { o.grammar_misuses.contains("<ts-suppression-present>") }) {
+    resolver.globals["@ts-suppression-present"] = Any
   }
   if outer_modules.length() == 0 {
     Resolver::ingest_module(resolver, module_, "")

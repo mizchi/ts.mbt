@@ -138,3 +138,85 @@ test "patterns, optional chains and overloads the field data exposed" {
     "top-level > binding `badOrder` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// excalidraw's element union, reduced: an `Exclude` over a union that
+/// lists a union alias, members sharing an intersected base (which
+/// `simplify_type` collapses to the base alone), a receiver union of
+/// intersections under `?.`, a chain compared with a non-literal value,
+/// a static generic method beside a program `class T`, explicit type
+/// arguments on an overload set, and a `@ts-ignore`d legacy case label.
+test "excalidraw's element union and the shapes around it" {
+  let src =
+    #|type Base = Readonly<{ id: string; x: number; frameId: string | null }>;
+    #|type SelEl = Base & { type: "selection" };
+    #|type RectEl = Base & { type: "rectangle" };
+    #|type Generic = SelEl | RectEl;
+    #|type TextEl = Base & Readonly<{ type: "text"; fontSize: number }>;
+    #|type El = Generic | TextEl;
+    #|export function okRestore(element: Exclude<El, SelEl>): number {
+    #|  element = { ...element };
+    #|  switch (element.type) {
+    #|    case "text": return element.fontSize;
+    #|    case "rectangle": return element.x;
+    #|  }
+    #|}
+    #|type T1 = RectEl extends SelEl ? "yes" : "no";
+    #|declare const t1: T1;
+    #|export const okNo: "no" = t1;
+    #|declare const els: readonly El[];
+    #|declare const i: number;
+    #|export const okFrame: string | null = els[i]?.frameId;
+    #|interface IBullet { listType: string; listId: string }
+    #|declare const b: IBullet | undefined;
+    #|declare const lt: string;
+    #|export const okChainVar = b?.listType === lt ? b.listId : "x";
+    #|export class T { t = 1 }
+    #|class Tools { static deepClone<T = unknown>(value: T): T { return value } }
+    #|export const okClone = Tools.deepClone(b);
+    #|type GP = [number, number] & { _brand: "g" };
+    #|type LP = [number, number] & { _brand: "l" };
+    #|export function pointFrom<P extends GP | LP>(x: number, y: number): P;
+    #|export function pointFrom<P extends GP | LP>(c: { x: number; y: number }): P;
+    #|export function pointFrom<P extends GP | LP>(a: number | { x: number; y: number }, y?: number): P {
+    #|  return (typeof a === "object" ? [a.x, a.y] : [a, y]) as P;
+    #|}
+    #|export const okPoints: GP[] = ([[1, 2]] as [number, number][]).map(([x, y]) => pointFrom<GP>(x, y));
+    #|declare function df<P extends GP | LP>(x: number, y: number): P;
+    #|declare function df<P extends GP | LP>(c: [number, number]): P;
+    #|export const okDeclared = df<GP>(1, 2);
+    #|export const badRect: number = t1;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badRect` init: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// A `@ts-ignore`d label is one tsc reports and the comment silences, so
+/// TS2678 abstains in a file carrying the comment; the same label in a
+/// file without one is reported.
+test "TS2678 abstains in a file carrying a suppression comment" {
+  let ignored =
+    #|type K = "a" | "b";
+    #|export function f(k: K) {
+    #|  switch (k) {
+    #|    case "a": return 1;
+    #|    // @ts-ignore legacy value
+    #|    case "c": return 2;
+    #|  }
+    #|  return 0;
+    #|}
+  let plain =
+    #|type K = "a" | "b";
+    #|export function f(k: K) {
+    #|  switch (k) {
+    #|    case "a": return 1;
+    #|    case "c": return 2;
+    #|  }
+    #|  return 0;
+    #|}
+  assert_eq(issue_lines(ignored), [])
+  assert_eq(issue_lines(plain), [
+    "function f > switch case: case value `\"c\" (string)` can never match scrutinee `\"a\" (string) | \"b\" (string)`",
+  ])
+}
