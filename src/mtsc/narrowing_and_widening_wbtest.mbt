@@ -413,7 +413,10 @@ test "or-assignment drops an aliased falsy member" {
     #|export const badW: string = w;
   assert_eq(issue_lines(src), [
     "top-level > binding `badW` init: expected `string` but got `{ n: number }`",
+  ])
+}
 
+///|
 /// A `string` compared EQUAL to a literal is that literal, and a member
 /// that cannot equal a string is gone (tsc's `replacePrimitivesWithLiterals`):
 /// univer's `getSeparator` returns `token.value === '-' || token.value ===
