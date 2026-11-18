@@ -569,6 +569,70 @@
       ]
     },
     {
+      "case": "controlFlow/destructuredDiscriminantBoundaries.ts",
+      "area": "controlFlow",
+      "name": "destructuredDiscriminantBoundaries",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2339
+      ],
+      "baseline": "baselines/destructuredDiscriminantBoundaries.errors.txt",
+      "claims": [
+        {
+          "name": "okChain",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 19
+        },
+        {
+          "name": "okTruthy",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 23
+        },
+        {
+          "name": "okPropertyPath",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 27
+        },
+        {
+          "name": "okDirectTruthy",
+          "kind": "ok",
+          "fromLine": 28,
+          "toLine": 30
+        },
+        {
+          "name": "okOptionalFalse",
+          "kind": "ok",
+          "fromLine": 33,
+          "toLine": 35
+        },
+        {
+          "name": "badLet",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 39
+        },
+        {
+          "name": "badDefault",
+          "kind": "bad",
+          "fromLine": 40,
+          "toLine": 43
+        },
+        {
+          "name": "badGroup",
+          "kind": "bad",
+          "fromLine": 44,
+          "toLine": 48
+        }
+      ]
+    },
+    {
       "case": "controlFlow/destructuringReadsNarrowedProperty.ts",
       "area": "controlFlow",
       "name": "destructuringReadsNarrowedProperty",
