@@ -394,3 +394,48 @@ test "literal arguments, explicit undefined unions, optional sources, shadowing 
     "top-level > binding `badNum` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// #307's third review round. An overload member's tuple rest is expanded
+/// before its arity is judged, so `(x: 1, ...rest: [string])` needs two
+/// arguments. A member that takes a call only if a parameter it omits is
+/// optional, when the member cannot say (a bare `Func` spells `y?: T` and
+/// `y: T | undefined` alike), answers unless a later member takes the call
+/// too; then the call is `any`. A recorded `?` (`CallableMeta`) and an
+/// interface member with none are exact. A qualified enum label is shadowed
+/// through its root.
+test "tuple-rest and omittable-parameter overload arity, qualified enum shadows" {
+  let src =
+    #|declare const f: { (x: 1, ...rest: [string]): string; (x: number): number };
+    #|export const okRest: number = f(1);
+    #|export const badRest: string = f(1);
+    #|declare const g: { (x: 1, y: string | undefined): string; (x: number): number };
+    #|export const okReq: number = g(1);
+    #|declare const h: { (x: 1, y?: string): string; (x: number): number };
+    #|export const badOpt: number = h(1);
+    #|interface I { m(x: 1, y: string | undefined): string; m(x: number): number }
+    #|declare const i: I;
+    #|export const okM: number = i.m(1);
+    #|export const badM: string = i.m(1);
+    #|declare function df(x: 1, y: string | undefined): string;
+    #|declare function df(x: number): number;
+    #|export const okD: number = df(1);
+    #|export namespace N { export enum E { A, B } }
+    #|export function badShadowQ(N: { E: { A: number; B: number } }, d: N.E): number {
+    #|  switch (d) { case N.E.A: return 1; case N.E.B: return 2; }
+    #|}
+    #|export function okQ(d: N.E): number {
+    #|  switch (d) { case N.E.A: return 1; case N.E.B: return 2; }
+    #|}
+    #|declare const hu: { (x: string): number; (x: "a" | undefined): string };
+    #|export const badUnion: string = hu("a");
+    #|interface Base { kind: "a" | "b"; n: number }
+    #|interface A extends Base { kind: "a" }
+    #|type R4 = A extends { kind: "a" } ? 1 : 2;
+    #|export const badOwn: R4 = 2;
+  assert_eq(issue_lines(src), [
+    "function badShadowQ: not all paths return a `number`", "top-level > binding `badRest` init: expected `string` but got `number`",
+    "top-level > binding `badOpt` init: expected `number` but got `string`", "top-level > binding `badM` init: expected `string` but got `number`",
+    "top-level > binding `badUnion` init: expected `string` but got `number`", "top-level > binding `badOwn` init: expected `R4` but got `2`",
+  ])
+}

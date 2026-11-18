@@ -6357,6 +6357,24 @@ product surfaces now.
     picked the implementation's `T[] | null`). A written `x: "a" |
     undefined` is not promoted; only a parameter `CallableMeta` records as
     optional is.
+  - **A literal argument then reached members it could take only by
+    OMITTING a parameter**, and that had been judged from the parameter's
+    TYPE. `(x: 1, ...rest: [string])` counted the tuple rest as omittable
+    and `(x: 1, y: string | undefined)` counted `y` as optional, so `f(1)`
+    picked `string` where tsc goes on to the next member's `number`
+    (probed on all three loops). The tuple rest is expanded first, as the
+    method loop already did. Optionality is three-valued now
+    (`OverloadFit`). A member whose `?`s are on record is exact: a
+    `CallableMeta`, or an interface member, which the method loop takes
+    only when it has no `?`. A member that takes the call only if an
+    omitted parameter is optional, and cannot say, answers unless a later
+    member takes the call too; then the call is `any`. A `declare
+    function` overload set records no `?`, so `dg(x: 1, y?: string)`
+    beside `dg(x: number)` is a MISS again, as on main. And `x: (1)` is
+    not a literal type NODE, so tsc does not promote it; the parser strips
+    the parentheses, so it is promoted here. That is a false positive on a
+    spelling nobody writes, filed with its blocker (an AST change the
+    bridge reads).
   - **Object conditionals, two more cells.** An interface's own member
     overrides the inherited one (`A extends { kind: "a" }` was false), and
     a member that may be optional proves nothing in either direction,
@@ -6369,7 +6387,8 @@ product surfaces now.
     reported, because a qualified enum that no other module declares is
     not in the qualified-name table. A local binding of the enum's name
     (`const E = { A: 0, B: 0 }`, a parameter `E: Labels`) shadows it, and
-    its labels do not count.
+    its labels do not count. A qualified label is shadowed through its
+    ROOT: a parameter `N` makes `N.E.A` its own member read.
 
   Two of #306's review items were reports on legal code, confirmed against
   the nightly, and are fixed here:
