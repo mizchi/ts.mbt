@@ -30610,6 +30610,16 @@ fn collect_narrowing(
     }
     None => ()
   }
+  // A destructured discriminant narrows the object it came from, as the
+  // property it was read from would; the binding itself still narrows
+  // below.
+  match destructured_discriminant_rewrite(env, resolver, cond) {
+    Some(rewritten) =>
+      collect_narrowing(
+        env, resolver, rewritten, then_binds, else_binds, then_sense,
+      )
+    None => ()
+  }
   match cond {
     BinOp(And, l, r) =>
       if then_sense {
@@ -31029,8 +31039,80 @@ fn collect_narrowing(
         Some(key) => push(key)
         None => ()
       }
+      // A truthiness test of a DISCRIMINANT narrows the object it is read
+      // from: `if (r.ok)` keeps the members whose `ok` can be truthy and
+      // the else side the ones whose `ok` can be falsy, as tsc's
+      // `narrowTypeByTruthiness` does through `narrowTypeByDiscriminant`.
+      // Only for a plain chain, so a `?.`-guarded receiver keeps the
+      // non-nullish narrowing pushed above.
+      match plain {
+        PropAccess(recv_e, field) if guarded.length() == 0 =>
+          match narrowing_key_for_expr(recv_e) {
+            Some(rk) => {
+              let cur = narrowing_current_type(env, resolver, rk)
+              let pos = if then_sense { then_binds } else { else_binds }
+              let neg = if then_sense { else_binds } else { then_binds }
+              match narrow_by_truthy_discriminant(resolver, cur, field, true) {
+                Some(t) => pos.push((rk, t))
+                None => ()
+              }
+              match narrow_by_truthy_discriminant(resolver, cur, field, false) {
+                Some(t) => neg.push((rk, t))
+                None => ()
+              }
+            }
+            None => ()
+          }
+        _ => ()
+      }
     }
   }
+}
+
+///|
+/// The members of a union receiver whose `field` can be truthy (`truthy`)
+/// or falsy (`!truthy`). Every member has to declare the field with a type
+/// made only of literals, `null`, `undefined` and `void`, the shapes whose
+/// truthiness is known; anything else answers `None`, as does a test that
+/// keeps every member. An optional `done?: false` is `false | undefined`,
+/// both falsy.
+fn narrow_by_truthy_discriminant(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  field : String,
+  truthy : Bool,
+) -> @ast.TsType? {
+  let variants = union_components(
+    deep_union_members(resolver, resolver.unwrap(recv)),
+  )
+  if variants.length() < 2 {
+    return None
+  }
+  let kept : Array[@ast.TsType] = []
+  for v in variants {
+    guard resolver.lookup_field(v, field) is Some(ft) else { return None }
+    let parts = union_components(resolver.unwrap(ft))
+    let mut survives = false
+    for p in parts {
+      let falsy = match p {
+        BooleanLiteral(b) => !b
+        Literal(s) => s == ""
+        NumberLiteral(n) => n == "0" || n == "-0"
+        Null | Undefined | Void => true
+        _ => return None
+      }
+      if falsy != truthy {
+        survives = true
+      }
+    }
+    if survives {
+      kept.push(v)
+    }
+  }
+  if kept.length() == variants.length() {
+    return None
+  }
+  Some(union_of(kept))
 }
 
 ///|
@@ -31178,6 +31260,43 @@ fn without_falsy_literals(t : @ast.TsType) -> @ast.TsType? {
     0 => None
     1 => Some(out[0])
     _ => Some(Union(out))
+  }
+}
+
+///|
+/// `t` with every union MEMBER that is an alias to a union replaced by that
+/// union's members. `cond ? nullableField : null` is `Nullable<X> | null`,
+/// and `x ??= f()` with `f(): Nullable<X>` joins `X | Nullable<X>`: the
+/// alias stayed one opaque member, so `!= null` removed the outer `null`
+/// and kept the alias's `null | undefined | void` (univer's
+/// `DocumentSkeleton`). The nullish test expands them, which serves both.
+/// A type with no such member is returned unchanged.
+fn expand_union_alias_members(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType {
+  guard t is Union(_) else { return t }
+  let out : Array[@ast.TsType] = []
+  let mut expanded = false
+  for p in union_components(t) {
+    match p {
+      Named(_) | Applied(_, _) =>
+        match resolver.unwrap(p) {
+          Union(_) as u => {
+            expanded = true
+            for q in union_components(u) {
+              out.push(q)
+            }
+          }
+          _ => out.push(p)
+        }
+      _ => out.push(p)
+    }
+  }
+  if expanded {
+    flatten_union_exact(out)
+  } else {
+    t
   }
 }
 
@@ -32701,10 +32820,13 @@ fn analyze_equality(
       // null` removed nothing and every later `use(s)` reported the whole
       // alias. Only a union is taken, as the `typeof` arm below does.
       let cur0 = narrowing_current_type(env, resolver, key)
-      let cur = match resolver.unwrap(cur0) {
-        Union(_) as u => u
-        _ => cur0
-      }
+      let cur = expand_union_alias_members(
+        resolver,
+        match resolver.unwrap(cur0) {
+          Union(_) as u => u
+          _ => cur0
+        },
+      )
       // Loose `== null` / `== undefined` matches *both* `null` and
       // `undefined` (in JS `null == undefined`), so the equal side is the
       // nullish pair and the not-equal side strips both. Strict `===` keeps
@@ -33110,6 +33232,109 @@ fn record_aliased_condition(
     "<alias-cond>" + name,
     @ast.TsType::Tuple([enc(eff.then_binds), enc(eff.else_binds)]),
   )
+}
+
+///|
+/// TS 4.4 destructured discriminants: `const { type } = item` and then
+/// `if (type === "a")` narrows `item` as `if (item.type === "a")` would,
+/// univer's `DropdownMenu` `renderMenuItem` and every reducer written as
+/// `const { kind } = action; switch (kind)`. Each destructured name is
+/// recorded under `<destr-disc>NAME` as `Tuple([Literal(source key),
+/// Literal(property), type_at_destructuring])`. Only a `const` with no
+/// default and no computed key participates: a `let` binding and a
+/// defaulted one do not narrow the source in tsc (probed), because the
+/// binding no longer has to equal the property. The source is a binding
+/// or a plain property path (`props.item`, `this.item`), both of which
+/// tsc narrows.
+fn record_destructured_discriminants(
+  env : ExprEnv,
+  resolver : Resolver,
+  ob : @ast.TsObjectBinding,
+  init : @ast.TsExpr,
+) -> Unit {
+  guard narrowing_key_for_expr(init) is Some(src) else { return }
+  if src.contains("[") {
+    return
+  }
+  let before = narrowing_current_type(env, resolver, src)
+  if destructured_discriminant_parts(resolver, before).length() < 2 {
+    return
+  }
+  for prop in ob.props {
+    match (prop.binding, prop.key_expr, prop.default) {
+      (Ident(n), None, None) =>
+        env.bind(
+          "<destr-disc>" + n,
+          @ast.TsType::Tuple([Literal(src), Literal(prop.key), before]),
+        )
+      _ => ()
+    }
+  }
+}
+
+///|
+fn destructured_discriminant_parts(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> Array[@ast.TsType] {
+  union_components(resolver.unwrap(t))
+}
+
+///|
+/// The source a destructured discriminant still stands for: `None` once the
+/// source holds a member it did not hold at the destructuring, which only
+/// an assignment can do (tsc does not narrow through an assigned
+/// parameter). Narrowing the source in between only removes members, so an
+/// `else if (type === "b")` after `if (type === "a")` still narrows.
+fn destructured_discriminant_source(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+) -> @ast.TsExpr? {
+  guard env.lookup("<destr-disc>" + name)
+    is Some(Tuple([Literal(src), Literal(key), before])) else {
+    return None
+  }
+  let cur = narrowing_current_type(env, resolver, src)
+  if cur != before {
+    let had = destructured_discriminant_parts(resolver, before)
+    for c in destructured_discriminant_parts(resolver, cur) {
+      if !had.contains(c) {
+        return None
+      }
+    }
+  }
+  let segs = src.split(".").map(fn(s) { s.to_owned() }).collect()
+  let mut e = @ast.TsExpr::Var(segs[0])
+  for i in 1..<segs.length() {
+    e = PropAccess(e, segs[i])
+  }
+  Some(PropAccess(e, key))
+}
+
+///|
+/// `cond` with a destructured discriminant replaced by the property it was
+/// read from, for the comparison and truthiness shapes tsc narrows a
+/// discriminant by. `None` when `cond` has no such operand.
+fn destructured_discriminant_rewrite(
+  env : ExprEnv,
+  resolver : Resolver,
+  cond : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match cond {
+    BinOp(BinEq | BinNe | AbstractEq | AbstractNe as op, Var(n), r) =>
+      match destructured_discriminant_source(env, resolver, n) {
+        Some(e) => Some(BinOp(op, e, r))
+        None => None
+      }
+    BinOp(BinEq | BinNe | AbstractEq | AbstractNe as op, l, Var(n)) =>
+      match destructured_discriminant_source(env, resolver, n) {
+        Some(e) => Some(BinOp(op, l, e))
+        None => None
+      }
+    Var(n) => destructured_discriminant_source(env, resolver, n)
+    _ => None
+  }
 }
 
 ///|
@@ -34511,6 +34736,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           narrowing_key_for_expr(init)
         },
       )
+      if stmt is Const(_, _, _) && !is_checkable(declared) {
+        record_destructured_discriminants(env, ctx.resolver, ob, init)
+      }
     }
     Var(@ast.TsBinding::Target(_), _, init)
     | Let(@ast.TsBinding::Target(_), _, init)
@@ -35327,6 +35555,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             Some(key) => Some((key, prop))
             None => None
           }
+        // `const { kind } = action; switch (kind)` narrows `action` too.
+        Var(n) =>
+          match destructured_discriminant_source(env, ctx.resolver, n) {
+            Some(PropAccess(parent, prop)) =>
+              match narrowing_key_for_expr(parent) {
+                Some(key) => Some((key, prop))
+                None => None
+              }
+            _ => None
+          }
         _ => None
       }
       let typeof_scrutinee_key = match scrutinee {
@@ -35422,10 +35660,23 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             break
           }
         }
-        let narrow_target = match (scrutinee_name, scrutinee_disc) {
-          (Some(name), _) => Some(name)
-          (_, Some((obj_name, _))) => Some(obj_name)
-          _ => typeof_scrutinee_key
+        // Every binding a label narrows: the scrutinee, and the object a
+        // discriminant scrutinee was read from (both, for a destructured
+        // discriminant).
+        let narrow_targets : Array[String] = []
+        match scrutinee_name {
+          Some(name) => narrow_targets.push(name)
+          None => ()
+        }
+        match scrutinee_disc {
+          Some((obj_name, _)) => narrow_targets.push(obj_name)
+          None => ()
+        }
+        if narrow_targets.length() == 0 {
+          match typeof_scrutinee_key {
+            Some(k) => narrow_targets.push(k)
+            None => ()
+          }
         }
         let apply_label = fn(t : @ast.TsExpr) {
           // `switch (typeof x) { case "bigint": … }` narrows `x` exactly as
@@ -35455,24 +35706,25 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           if group.length() == 1 {
             apply_label(group[0])
           } else {
-            match narrow_target {
-              Some(target) => {
-                let parts : Array[@ast.TsType] = []
-                let mut all = true
-                for t in group {
-                  env.restore_from(pre)
-                  apply_label(t)
-                  match env.lookup(target) {
-                    Some(ty) => parts.push(ty)
-                    None => all = false
-                  }
-                }
-                env.restore_from(pre)
-                if all && parts.length() > 0 {
-                  env.narrow(target, flatten_union_exact(parts))
+            let parts : Array[Array[@ast.TsType]] = narrow_targets.map(fn(_) {
+              []
+            })
+            let all : Array[Bool] = narrow_targets.map(fn(_) { true })
+            for t in group {
+              env.restore_from(pre)
+              apply_label(t)
+              for i, target in narrow_targets {
+                match env.lookup(target) {
+                  Some(ty) => parts[i].push(ty)
+                  None => all[i] = false
                 }
               }
-              None => ()
+            }
+            env.restore_from(pre)
+            for i, target in narrow_targets {
+              if all[i] && parts[i].length() > 0 {
+                env.narrow(target, flatten_union_exact(parts[i]))
+              }
             }
           }
         }
@@ -37205,6 +37457,15 @@ fn check_call_args_in_expr_at(
           let recv_ty = any_union_as_any(
             infer_expr(env, ctx.resolver, receiver),
           )
+          // An array literal RECEIVER has no contextual type, so its
+          // literal elements widen: `["__proto__", "prototype"].includes(key)`
+          // takes a `string` (univer's `validatePropertyPaths`), while the
+          // same array `as const` keeps `"__proto__" | "prototype"`.
+          let recv_ty = if receiver is ArrayLit(_) {
+            widen_literal_deep(recv_ty)
+          } else {
+            recv_ty
+          }
           // TS2684: a method declaring a `this` parameter, called on a
           // union receiver whose members are definitely disjoint.
           check_union_receiver_this_context(
