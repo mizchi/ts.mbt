@@ -8299,7 +8299,18 @@ fn overload_arg_types(
             }
           _ => out.push(infer_expr(env, resolver, a))
         }
-      _ => out.push(infer_expr(env, resolver, a))
+      // A literal argument keeps its literal type for SELECTION, as
+      // `overload_selection_arg_type` does on the call paths: univer's
+      // `_getUndoStack(id, true)` against `(id): T[] | null` and `(id,
+      // createAsNeeded: true): T[]` widened `true` to `boolean`, matched
+      // neither, and fell back to the implementation's `T[] | null`.
+      _ =>
+        out.push(
+          match precise_literal_type(a) {
+            Some(t) => t
+            None => infer_expr(env, resolver, a)
+          },
+        )
     }
   }
   out
@@ -8364,9 +8375,11 @@ fn Resolver::resolve_method_overload(
   // Literal-typed members first, as tsc's `reorderCandidates` does (see
   // `specialized_overloads_first`).
   let candidates = candidates.filter(fn(c) {
-      c.0.iter().any(overload_param_is_literal)
+      c.0.iter().any(fn(p) { overload_param_is_literal(p, false) })
     }) +
-    candidates.filter(fn(c) { !c.0.iter().any(overload_param_is_literal) })
+    candidates.filter(fn(c) {
+      !c.0.iter().any(fn(p) { overload_param_is_literal(p, false) })
+    })
   for c in candidates {
     let (params, ret) = c
     let params = expand_tuple_rest_params(params, arg_types.length())
@@ -14084,12 +14097,16 @@ fn infer_expr_inner(
             // does not reach a key that is listed, so such a key reads as
             // `any` too.
             opaque_spread = true
+            let written : Map[String, Unit] = Map([])
             for v in vs {
               for f in v {
-                for alt in alts {
-                  if alt.iter().any(fn(e) { e.0 == @ast.TsType::Literal(f.0) }) {
-                    object_lit_set_field(alt, f.0, @ast.TsType::Any)
-                  }
+                written[f.0] = ()
+              }
+            }
+            for alt in alts {
+              for i, e in alt {
+                if e.0 is Literal(k) && written.contains(k) {
+                  alt[i] = (e.0, @ast.TsType::Any)
                 }
               }
             }
@@ -16601,8 +16618,10 @@ fn infer_call(
           // generic members, which is right for the union of callables it
           // was written for and reported `const n: number = f(s)` here.
           let arg_types : Array[@ast.TsType] = []
+          let sel_types : Array[@ast.TsType] = []
           for a in args {
             arg_types.push(resolver.unwrap(infer_expr(env, resolver, a)))
+            sel_types.push(overload_selection_arg_type(env, resolver, a))
           }
           for sig in specialized_overloads_first(many, resolver) {
             match sig {
@@ -16618,7 +16637,7 @@ fn infer_call(
               _ =>
                 match resolver.unwrap(sig) {
                   Func(params, ret) =>
-                    if overload_concrete_accepts(resolver, params, arg_types) {
+                    if overload_concrete_accepts(resolver, params, sel_types) {
                       return match ret {
                         TypePredicate(_, _) => @ast.TsType::Boolean
                         AssertsPredicate(_, _) => @ast.TsType::Void
@@ -16678,8 +16697,10 @@ fn infer_call(
     // doesn't widen to an imprecise union for the common matching case).
     Union(parts) => {
       let arg_types : Array[@ast.TsType] = []
+      let sel_types : Array[@ast.TsType] = []
       for a in args {
         arg_types.push(resolver.unwrap(infer_expr(env, resolver, a)))
+        sel_types.push(overload_selection_arg_type(env, resolver, a))
       }
       let rets : Array[@ast.TsType] = []
       // GENERIC members are set aside and instantiated only after every
@@ -16718,7 +16739,7 @@ fn infer_call(
             // parameter it lands on. "Fits" used to be "equals the
             // parameter count", so a member with an optional or rest
             // parameter could never match a call that omitted it.
-            if overload_concrete_accepts(resolver, params, arg_types) {
+            if overload_concrete_accepts(resolver, params, sel_types) {
               return r
             }
           }
@@ -16777,15 +16798,34 @@ fn infer_call(
 /// the front of its group, keeping declaration order otherwise), so
 /// `{ (x: string): number; (x: "a"): string }` called with `"a"` is
 /// `string` (probed). Trying the list in declaration order picked the
-/// broad member. Only a parameter whose whole type is a literal counts, as
-/// the type NODE does in tsc; `x?: "a"` arrives as `"a" | undefined`.
-fn overload_param_is_literal(t : @ast.TsType) -> Bool {
+/// broad member. Only a parameter whose type NODE is a literal counts, as
+/// in tsc. `x?: "a"` arrives as `"a" | undefined`, which a written
+/// `x: "a" | undefined` is too, so that shape counts only where the
+/// signature records the parameter as optional (`CallableMeta`).
+fn overload_param_is_literal(t : @ast.TsType, optional : Bool) -> Bool {
   match t {
     Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
-    Union([l, Undefined]) | Union([Undefined, l]) =>
+    Union([l, Undefined]) | Union([Undefined, l]) if optional =>
       l
       is (Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_))
     _ => false
+  }
+}
+
+///|
+/// The type of an argument for overload SELECTION: a literal keeps its
+/// literal type, which is what a literal-typed overload exists for
+/// (`{ (x: number): string; (x: 1): number }` with `f(1)` is `number`).
+/// Inference widens a number or boolean literal, and the literal is still
+/// assignable to its base, so a broad member still matches.
+fn overload_selection_arg_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  a : @ast.TsExpr,
+) -> @ast.TsType {
+  match precise_literal_type(a) {
+    Some(t) => t
+    None => resolver.unwrap(infer_expr(env, resolver, a))
   }
 }
 
@@ -16794,16 +16834,18 @@ fn specialized_overloads_first(
   sigs : Array[@ast.TsType],
   resolver : Resolver,
 ) -> Array[@ast.TsType] {
-  fn params_of(sig : @ast.TsType, resolver : Resolver) -> Array[@ast.TsType] {
+  fn params_of(
+    sig : @ast.TsType,
+    resolver : Resolver,
+  ) -> (Array[@ast.TsType], Array[Bool]) {
     match sig {
-      GenericFunc(_, _, Func(ps, _))
-      | GenericFunc(_, _, CallableMeta(Func(ps, _), _))
-      | CallableMeta(Func(ps, _), _)
-      | Func(ps, _) => ps
+      GenericFunc(_, _, CallableMeta(Func(ps, _), flags))
+      | CallableMeta(Func(ps, _), flags) => (ps, flags)
+      GenericFunc(_, _, Func(ps, _)) | Func(ps, _) => (ps, [])
       _ =>
         match resolver.unwrap(sig) {
-          Func(ps, _) => ps
-          _ => []
+          Func(ps, _) => (ps, [])
+          _ => ([], [])
         }
     }
   }
@@ -16811,7 +16853,14 @@ fn specialized_overloads_first(
   let first : Array[@ast.TsType] = []
   let rest : Array[@ast.TsType] = []
   for sig in sigs {
-    if params_of(sig, resolver).iter().any(overload_param_is_literal) {
+    let (ps, flags) = params_of(sig, resolver)
+    let mut specialized = false
+    for i, p in ps {
+      if overload_param_is_literal(p, i < flags.length() && flags[i]) {
+        specialized = true
+      }
+    }
+    if specialized {
       first.push(sig)
     } else {
       rest.push(sig)
@@ -23850,7 +23899,13 @@ fn Resolver::object_extends_decision(
         for sf in source_fields {
           if sf.0 == name {
             found = true
-            if !(extends_decision(self.unwrap(sf.1), tty) is Some(true)) {
+            // A source member whose type admits `undefined` may be the
+            // OPTIONAL spelling, and an absent member does not satisfy a
+            // required one (`{ b?: string } extends { b: string |
+            // undefined }` is false in tsc), so its presence proves
+            // nothing.
+            if type_has_undefined(self.unwrap(sf.1)) ||
+              !(extends_decision(self.unwrap(sf.1), tty) is Some(true)) {
               return None
             }
           }
@@ -38730,10 +38785,12 @@ fn switch_covers_union(
           Some(PropAccess(obj, m)) =>
             match narrowing_key_for_expr(obj) {
               // A local value that SHADOWS the enum (`const E = { A: 0,
-              // B: 0 }` beside `enum E`) is not the enum, and its members
-              // can coincide, so its labels prove nothing.
+              // B: 0 }` beside `enum E`, or a parameter `E: Labels`) is not
+              // the enum, and its members can coincide, so its labels
+              // prove nothing. Whatever its type: the enum itself is not
+              // bound as a value here.
               Some(k) if (k == base || k == written || k == enum_name) &&
-                !(env.lookup(k) is Some(Object(_))) => named[m] = ()
+                env.lookup(k) is None => named[m] = ()
               _ => ()
             }
           _ => ()

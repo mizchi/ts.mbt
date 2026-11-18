@@ -334,9 +334,11 @@ test "literal overloads first, effective members, absent members, shadowed enums
     #|declare function g(x: string): number;
     #|declare function g(x: "a"): string;
     #|export const okDecl: string = g("a");
+    #|export const badDecl: number = g("a");
     #|interface I { m(x: string): number; m(x: "a"): string }
     #|declare const i: I;
     #|export const okMethod: string = i.m("a");
+    #|export const badMethod: number = i.m("a");
     #|interface Base { kind: "a" | "b"; n: number }
     #|interface A extends Base { kind: "a" }
     #|type R4 = A extends { kind: "a" } ? 1 : 2;
@@ -350,5 +352,45 @@ test "literal overloads first, effective members, absent members, shadowed enums
     #|}
   assert_eq(issue_lines(src), [
     "function badShadow: not all paths return a `number`", "top-level > binding `badLit` init: expected `number` but got `string`",
+    "top-level > binding `badDecl` init: expected `number` but got `string`", "top-level > binding `badMethod` init: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// #307's second review round: a literal ARGUMENT selects a literal-typed
+/// overload on every call path (a number literal is widened by inference),
+/// an explicit `x: "a" | undefined` is not a literal-typed parameter, a
+/// source member that may be optional does not prove presence, and any
+/// local binding of an enum's name shadows it.
+test "literal arguments, explicit undefined unions, optional sources, shadowing params" {
+  let src =
+    #|declare const f: { (x: number): string; (x: 1): number };
+    #|export const okNum: number = f(1);
+    #|export const badNum: string = f(1);
+    #|declare const h: { (x: string): number; (x: "a" | undefined): string };
+    #|export const okUnion: number = h("a");
+    #|type R3 = { a: true; b?: string } extends { b: string | undefined } ? 1 : 2;
+    #|export const okR3: R3 = 2;
+    #|interface Item { a: number }
+    #|export class S {
+    #|  private _m = new Map<string, Item[]>();
+    #|  protected get(id: string): Item[] | null;
+    #|  protected get(id: string, create: true): Item[];
+    #|  protected get(id: string, create = false): Item[] | null {
+    #|    let s = this._m.get(id);
+    #|    if (!s && create) { s = []; this._m.set(id, s); }
+    #|    return s || null;
+    #|  }
+    #|  ok(): Item[] { return this.get("x", true); }
+    #|  bad(): Item[] { return this.get("x"); }
+    #|}
+    #|export enum E { A, B }
+    #|interface Labels { A: E; B: E }
+    #|export function badParam(x: E, E: Labels): number {
+    #|  switch (x) { case E.A: return 1; case E.B: return 2; }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badParam: not all paths return a `number`", "function S.bad > return: type `Item[] | null` is not assignable to type `Item[]`",
+    "top-level > binding `badNum` init: expected `string` but got `number`",
   ])
 }
