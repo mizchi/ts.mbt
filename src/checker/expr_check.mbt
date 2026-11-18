@@ -1803,6 +1803,18 @@ fn Resolver::ingest_type_module(
       continue
     }
     Resolver::put_class(r, name, class_)
+    // A class method's un-inlined header (`@raw-sig:<method>C#m`) travels
+    // with the class, so a call from ANOTHER module solves the method's
+    // bounded type parameters as a same-module call does: univer's
+    // controllers call `this._sheetInterceptorService.intercept(…)`, which
+    // `SheetInterceptorService` declares, and read the bound instead.
+    for m in class_.methods {
+      let key = "@raw-sig:" + prefix + "<method>" + name + "#" + m.name
+      match types.globals.get(key) {
+        Some(sig) if !r.globals.contains(key) => r.globals[key] = sig
+        _ => ()
+      }
+    }
   }
   for name, alias_ in types.type_aliases {
     let alias_ = match renamed {
@@ -7999,6 +8011,10 @@ fn instantiate_method_call_params(
   let bounded = interface_method_params_with_bounds(
     resolver, recv, meth, params,
   )
+  match raw_class_method_call_params(env, resolver, recv, meth, params, args) {
+    Some(out) => return out
+    None => ()
+  }
   let method_tps = resolver.method_type_params_of(recv, meth)
   // A function TYPE with a leading `this` parameter keeps it as a
   // positional one (see `<fn-type-this-param>`), so a `(this: This, arg:
@@ -8026,6 +8042,179 @@ fn instantiate_method_call_params(
     }
   }
   out
+}
+
+///|
+/// The parameters a call to a CLASS method with a bounded type parameter
+/// is checked against, from its un-inlined header (`<method>C#meth`). The
+/// parser inlines the bound into every parameter, so univer's
+/// `intercept<T extends IInterceptor<any, any>>(name: T, interceptor: T)`
+/// judged the second argument's object literal against `IInterceptor`, and
+/// the `effect` member `T = ICellInterceptor` declares read as an excess
+/// property (on main too). Solved from the raw parameters, a parameter is
+/// instantiated only when every type parameter it mentions is solved to a
+/// checkable binding that satisfies its bound, as the function path holds
+/// it (`instantiate_raw_generic_params`); otherwise it keeps the inlined
+/// form. A class type parameter in a raw parameter takes the receiver's
+/// type argument, and a receiver that supplies none abstains.
+fn raw_class_method_call_params(
+  env : ExprEnv,
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsType]? {
+  let (cls, cls_args) = match recv {
+    Named(n) => (n, [])
+    Applied(n, a) => (n, a)
+    _ => return None
+  }
+  guard resolver.classes.get(cls) is Some(decl) else { return None }
+  let (prefix, base) = match cls.rev_find(".") {
+    Some(i) => (cls[:i + 1].to_owned(), cls[i + 1:].to_owned())
+    None => ("", cls)
+  }
+  guard resolver.globals.get(
+      "@raw-sig:" + prefix + "<method>" + base + "#" + meth,
+    )
+    is Some(GenericFunc(names, bounds, Func(raw, _))) else {
+    return None
+  }
+  if raw.length() != params.length() ||
+    resolver.globals.contains("@fn-type-this-param") {
+    return None
+  }
+  let class_bindings : Map[String, @ast.TsType] = Map([])
+  if decl.type_params.length() > 0 {
+    if cls_args.length() != decl.type_params.length() {
+      if raw.iter().any(fn(p) { type_references_any(p, decl.type_params) }) {
+        return None
+      }
+    } else {
+      for i, tp in decl.type_params {
+        if !names.contains(tp) {
+          class_bindings[tp] = cls_args[i]
+        }
+      }
+    }
+  }
+  let raw = raw.map(fn(p) {
+    expand_alias_head(resolver, substitute_params(p, class_bindings), 0)
+  })
+  // A literal argument at a bare type-parameter position is checked
+  // AGAINST the binding rather than being a candidate for it: tsc picks
+  // the common supertype of the candidates, which is the declared
+  // argument's type whenever the literal fits it, so `intercept(PLAIN,
+  // { effect: 2, … })` reports `effect` against `IInterceptor` (TS2353)
+  // while `intercept(CELL, …)` accepts it. Solving from the literal too
+  // made every literal its own binding and accepted both.
+  let solve_from = raw.mapi(fn(i, p) {
+    match (p, args.get(i)) {
+      (Named(n), Some(ObjectLit(_) | ArrayLit(_))) if names.contains(n) =>
+        @ast.TsType::Any
+      _ => p
+    }
+  })
+  // Each argument is inferred once, here, and the binding pass reads it.
+  let arg_types = args.map(fn(a) { infer_expr(env, resolver, a) })
+  let bindings = solve_generic_bindings(
+    env,
+    resolver,
+    names,
+    solve_from,
+    args,
+    None,
+    pre=arg_types,
+  )
+  // A type parameter whose bare-position argument is itself `any` (a
+  // module-level `const` read inside a function body is one, here) is a
+  // binding this cannot know, and judging the other arguments against its
+  // BOUND is the one wrong answer: they are compared with whatever the
+  // argument really is. Those parameters abstain. A parameter with no
+  // candidate at all is different, and keeps the bound tsc falls back to.
+  let unknown_tps : Map[String, Unit] = Map([])
+  for i, p in solve_from {
+    match p {
+      Named(n) if names.contains(n) && i < arg_types.length() =>
+        if arg_types[i] is Any {
+          unknown_tps[n] = ()
+        }
+      _ => ()
+    }
+  }
+  let known : Map[String, @ast.TsType?] = Map([])
+  for tp in names {
+    known[tp] = match bounds.search_by(fn(b) { b.0 == tp }) {
+      Some(bi) => Some(bounds[bi].1)
+      None => None
+    }
+  }
+  let out : Array[@ast.TsType] = []
+  for i, rp in raw {
+    let mentioned = names.filter(fn(tp) { type_param_occurs(tp, rp) })
+    let solved = mentioned
+      .iter()
+      .all(fn(tp) {
+        match bindings.get(tp) {
+          Some(b) =>
+            is_checkable(b) &&
+            !(b is (Any | Unknown | Never)) &&
+            !type_has_member_marker_key(b) &&
+            !type_contains_unresolved_named(b, resolver) &&
+            binding_satisfies_declared_bound(
+              resolver,
+              names,
+              bindings,
+              known.get(tp),
+              b,
+            )
+          None => false
+        }
+      })
+    if mentioned.iter().any(fn(tp) { unknown_tps.contains(tp) }) {
+      // A bare `any` reads as REQUIRED to the arity check, so an optional
+      // parameter keeps its `| undefined` spelled out.
+      out.push(
+        if type_accepts_undefined(params[i]) {
+          @ast.TsType::Union([Any, Undefined])
+        } else {
+          @ast.TsType::Any
+        },
+      )
+    } else if mentioned.length() > 0 && solved {
+      // The header keeps parameter TYPES only, so an optional parameter's
+      // `?` is in the inlined parameter (as `| undefined`) and not here.
+      // Dropping it made univer's `registerPlugin(Plugin)`, against
+      // `registerPlugin<T extends PluginCtor<Plugin>>(plugin: T, config?:
+      // ConstructorParameters<T>[0])`, "expected 2 argument(s)".
+      let inst = substitute_params(rp, bindings)
+      match params[i] {
+        // The header spells a rest parameter by its declared type alone
+        // (`...args: Events[K]` is `Events[K]`), and the arity and argument
+        // checks read a rest parameter as `Rest(_)`. Instantiated bare, it
+        // became one required parameter: excalidraw's `emit<K extends
+        // keyof Events>(name: K, ...args: Events[K])` judged `42` against
+        // the whole tuple `TE["init"]`, and `emit("done")` was "expected 2
+        // argument(s)". It is re-wrapped once the element list is known,
+        // and keeps the inlined form while it is not.
+        Rest(_) =>
+          match resolver.unwrap(inst) {
+            Array(_) | Tuple(_) as list => out.push(@ast.TsType::Rest(list))
+            _ => out.push(params[i])
+          }
+        _ =>
+          if type_accepts_undefined(params[i]) && !type_accepts_undefined(inst) {
+            out.push(@ast.TsType::Union([inst, Undefined]))
+          } else {
+            out.push(inst)
+          }
+      }
+    } else {
+      out.push(params[i])
+    }
+  }
+  Some(out)
 }
 
 ///|
@@ -13627,6 +13816,29 @@ fn infer_expr_inner(
       if type_params.length() > 0 {
         match callee_ty {
           Func(params, ret) => {
+            // Inferred once and read by both solves, so a raw header that
+            // abstains does not make every nested call infer its
+            // arguments twice (which doubles per level of nesting).
+            let pre : Array[@ast.TsType]? = if env.lookup(name) is None &&
+              resolver.globals.contains("@raw-sig:" + name) {
+              Some(args.map(fn(a) { infer_expr(env, resolver, a) }))
+            } else {
+              None
+            }
+            match
+              instantiate_raw_generic_return(
+                env,
+                resolver,
+                name,
+                type_params,
+                params,
+                args,
+                resolver.signatures.get(name),
+                pre,
+              ) {
+              Some(t) => return t
+              None => ()
+            }
             let bindings = solve_generic_bindings(
               env,
               resolver,
@@ -13634,6 +13846,7 @@ fn infer_expr_inner(
               params,
               args,
               resolver.signatures.get(name),
+              pre?,
             )
             // The parser inlines a function's bounded type parameter, so
             // a return of `T` with `T extends unknown[]` arrives as the
@@ -14206,6 +14419,16 @@ fn infer_expr_inner(
                 env.lookup_declared(n) is Some(d) &&
                 is_checkable(d) {
                 left = prune_nullish(resolver, d)
+              }
+              // `||=` keeps only the left's TRUTHY part, which is more than
+              // its non-nullish part: `x ||= { n: 1 }` over `false | { n:
+              // number }` is `{ n: number }` (probed; #309's review), where
+              // keeping the `false` failed a return check tsc accepts.
+              if op is OrAssign {
+                left = match without_falsy_literals(left) {
+                  Some(t) => t
+                  None => @ast.TsType::Undefined
+                }
               }
               if left is (Null | Undefined | Void | Any) {
                 rhs
@@ -14798,6 +15021,40 @@ fn infer_param_bindings(
         type_params,
         f_elem,
         a_elem,
+        bindings,
+        soft,
+        fallback?,
+      )
+    // A `ReadonlyArray<T>` parameter takes a mutable array, and a mutable
+    // `T[]` takes a `ReadonlyArray` only in a mismatch the assignment check
+    // reports, so either direction is an element-wise inference (tsc's
+    // `ReadonlyArray<T>` is a supertype of `T[]`). Only `readonly T[]`, which
+    // the parser spells as an array, was matched before.
+    (Applied("ReadonlyArray", f_args), Array(a_elem)) if f_args.length() == 1 =>
+      infer_param_bindings(
+        type_params,
+        f_args[0],
+        a_elem,
+        bindings,
+        soft,
+        fallback?,
+      )
+    (Applied("ReadonlyArray", f_args), Applied("Array", a_args)) if f_args.length() ==
+      1 &&
+      a_args.length() == 1 =>
+      infer_param_bindings(
+        type_params,
+        f_args[0],
+        a_args[0],
+        bindings,
+        soft,
+        fallback?,
+      )
+    (Array(f_elem), Applied("ReadonlyArray", a_args)) if a_args.length() == 1 =>
+      infer_param_bindings(
+        type_params,
+        f_elem,
+        a_args[0],
         bindings,
         soft,
         fallback?,
@@ -16293,20 +16550,9 @@ fn instantiate_raw_generic_params(
   // inlined parameter holds the bound exactly where the raw one holds the
   // name (`align_inlined_bounds`). A parameter neither source can speak for
   // has an UNKNOWN bound and keeps the inlined form.
-  let known_bounds : Map[String, @ast.TsType?] = Map([])
-  match resolver.func_type_param_bounds.get(name) {
-    Some(bs) =>
-      for tp in type_params {
-        known_bounds[tp] = match bs.search_by(fn(b) { b.0 == tp }) {
-          Some(bi) => Some(bs[bi].1)
-          None => None
-        }
-      }
-    None =>
-      for i, rp in raw {
-        align_inlined_bounds(rp, params[i], type_params, known_bounds, 0)
-      }
-  }
+  let known_bounds = raw_signature_known_bounds(
+    resolver, name, type_params, raw, params,
+  )
   let out : Array[@ast.TsType] = []
   for i, p in raw {
     let mentioned = type_params.filter(fn(tp) { type_param_occurs(tp, p) })
@@ -16340,6 +16586,191 @@ fn instantiate_raw_generic_params(
     }
   }
   Some(out)
+}
+
+///|
+/// Each type parameter's bound, for a call through a raw signature: a
+/// function DECLARATION records its bounds in `func_type_param_bounds`,
+/// and a `declare function` (ingested as a `TsImport`, which carries none)
+/// has them read back off the raw and inlined parameters, which differ
+/// exactly where a bound stands (`align_inlined_bounds`). `None` for a
+/// parameter neither source can speak for.
+fn raw_signature_known_bounds(
+  resolver : Resolver,
+  name : String,
+  type_params : Array[String],
+  raw : Array[@ast.TsType],
+  params : Array[@ast.TsType],
+) -> Map[String, @ast.TsType?] {
+  let known_bounds : Map[String, @ast.TsType?] = Map([])
+  match resolver.func_type_param_bounds.get(name) {
+    Some(bs) =>
+      for tp in type_params {
+        known_bounds[tp] = match bs.search_by(fn(b) { b.0 == tp }) {
+          Some(bi) => Some(bs[bi].1)
+          None => None
+        }
+      }
+    None =>
+      for i, rp in raw {
+        if i < params.length() {
+          align_inlined_bounds(rp, params[i], type_params, known_bounds, 0)
+        }
+      }
+  }
+  known_bounds
+}
+
+///|
+/// The return of a call to a BOUNDED generic function, instantiated from
+/// its un-inlined signature. The parser inlines a bounded type parameter
+/// to its bound in the return as in the parameters, so `findBy<T extends
+/// IS>(items: readonly T[], i: number): T | undefined` returned
+/// `IS | undefined` whatever it was called with, and univer's
+/// `findByStartIndex(body.tables ?? [], i)?.tableId` "did not exist on
+/// `IS`" (probed). Solved from the raw parameters, the binding is `Tbl`.
+/// Only when every type parameter the return mentions is solved to
+/// something checkable that provably satisfies its bound — the same
+/// condition the raw parameters are held to — and `None` otherwise, which
+/// leaves the inlined return the call always had.
+fn instantiate_raw_generic_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  type_params : Array[String],
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  sig : Array[@ast.TsParam]?,
+  pre : Array[@ast.TsType]?,
+) -> @ast.TsType? {
+  guard env.lookup(name) is None else { return None }
+  guard resolver.globals.get("@raw-sig:" + name) is Some(Func(raw, raw_ret)) else {
+    return None
+  }
+  if raw.length() != params.length() {
+    return None
+  }
+  let mentioned = type_params.filter(fn(tp) { type_param_occurs(tp, raw_ret) })
+  if mentioned.length() == 0 {
+    return None
+  }
+  let expanded = raw.map(fn(p) { expand_alias_head(resolver, p, 0) })
+  let bindings = solve_generic_bindings(
+    env,
+    resolver,
+    type_params,
+    expanded,
+    args,
+    sig,
+    pre?,
+  )
+  let known_bounds = raw_signature_known_bounds(
+    resolver, name, type_params, raw, params,
+  )
+  let solved = mentioned
+    .iter()
+    .all(fn(tp) {
+      match bindings.get(tp) {
+        Some(b) =>
+          is_checkable(b) &&
+          !(b is (Any | Unknown | Never)) &&
+          !type_has_member_marker_key(b) &&
+          !type_contains_unresolved_named(b, resolver) &&
+          binding_satisfies_declared_bound(
+            resolver,
+            type_params,
+            bindings,
+            known_bounds.get(tp),
+            b,
+          )
+        None => false
+      }
+    })
+  if !solved {
+    return None
+  }
+  // With strictNullChecks off a `null` / `undefined` in the binding is the
+  // widening kind, which tsc turns into `any` once the call's type is
+  // widened: `foo<T extends [any]>([undefined])` declares `[any]`, not
+  // `[undefined]` (wideningTuples1). The inlined return is what that
+  // case had before, so it keeps it.
+  if resolver.globals.contains("@no-strict-null-checks") &&
+    mentioned
+    .iter()
+    .any(fn(tp) {
+      match bindings.get(tp) {
+        Some(b) => type_contains_nullish_part(b, 0)
+        None => false
+      }
+    }) {
+    return None
+  }
+  // `widen_fresh_literal_bindings` widens in place, so the solved
+  // bindings are kept aside for the bound check below.
+  let solved_bindings = bindings.copy()
+  let widened = widen_fresh_literal_bindings(
+    env,
+    resolver,
+    bindings,
+    type_params,
+    resolver.func_const_type_params.get(name),
+    expanded,
+    args,
+    raw_ret,
+  )
+  // Widening a fresh literal may not leave the bound: `box<T extends "a" |
+  // "b">(x: T): T[]` makes `box("a")` an `"a"[]`, where widening `"a"` to
+  // `string` gave `string[]`, which the bound rules out. A bound may name
+  // another binder (`pair<U extends T, T extends "a" | "b">`), so restoring
+  // one binding can put another outside its bound, and the check repeats
+  // until nothing changes. Each restore sets a binding back to its solved
+  // value once, so this ends.
+  let mut changed = true
+  while changed {
+    changed = false
+    for tp in mentioned {
+      match (solved_bindings.get(tp), widened.get(tp)) {
+        (Some(b), Some(w)) if b != w &&
+          !binding_satisfies_declared_bound(
+            resolver,
+            type_params,
+            widened,
+            known_bounds.get(tp),
+            w,
+          ) => {
+          widened[tp] = b
+          changed = true
+        }
+        _ => ()
+      }
+    }
+  }
+  Some(substitute_params(raw_ret, widened))
+}
+
+///|
+/// True when `null` or `undefined` occurs anywhere in `t`. Depth-bounded,
+/// and running out of depth answers `true`, which is the abstaining answer
+/// for the one caller.
+fn type_contains_nullish_part(t : @ast.TsType, depth : Int32) -> Bool {
+  if depth > 16 {
+    return true
+  }
+  let d = depth + 1
+  match t {
+    Null | Undefined => true
+    Array(inner) | Rest(inner) => type_contains_nullish_part(inner, d)
+    Union(parts) | Intersection(parts) | Tuple(parts) | Applied(_, parts) =>
+      parts.iter().any(fn(p) { type_contains_nullish_part(p, d) })
+    Func(params, ret) =>
+      params.iter().any(fn(p) { type_contains_nullish_part(p, d) }) ||
+      type_contains_nullish_part(ret, d)
+    Object(entries) =>
+      entries.iter().any(fn(e) { type_contains_nullish_part(e.1, d) })
+    Struct(_, fields) =>
+      fields.iter().any(fn(f) { type_contains_nullish_part(f.1, d) })
+    _ => false
+  }
 }
 
 ///|
@@ -22115,6 +22546,10 @@ fn spread_member_origins(
           }
         } else if a0 is Some(Fresh(_)) || b0 is Some(Fresh(_)) {
           out[k] = Fresh(None)
+        } else if a0 is Some(FreshPart(t1)) && b0 is Some(FreshPart(t2)) {
+          // Each branch's fresh value widens in its own alternative, so the
+          // merged fresh part is both (#309's review).
+          out[k] = FreshPart(flatten_union_exact([t1, t2]))
         } else if a0 is Some(FreshPart(t)) {
           out[k] = FreshPart(t)
         } else if b0 is Some(FreshPart(t)) {
@@ -30767,6 +31202,30 @@ fn optional_chain_equality_narrowing(
       }
       None => ()
     }
+  }
+}
+
+///|
+/// `t` without the members that are always falsy (`false`, `""`, `0`,
+/// `0n`), with `boolean` read as `true`; `None` when nothing is left. The
+/// literal falsiness `falsy_subset` leaves alone, for a position whose
+/// result is the operand only when it was truthy.
+fn without_falsy_literals(t : @ast.TsType) -> @ast.TsType? {
+  let out : Array[@ast.TsType] = []
+  for p in union_components(t) {
+    match p {
+      BooleanLiteral(false) => ()
+      Literal("") => ()
+      NumberLiteral("0") | NumberLiteral("-0") => ()
+      BigIntLiteral("0") | BigIntLiteral("0n") => ()
+      Boolean => out.push(BooleanLiteral(true))
+      other => out.push(other)
+    }
+  }
+  match out.length() {
+    0 => None
+    1 => Some(out[0])
+    _ => Some(Union(out))
   }
 }
 
@@ -53736,6 +54195,12 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  // Read by inference, which has no `CheckCtx`: with strictNullChecks off,
+  // tsc widens a `null` / `undefined` that came from a literal to `any`
+  // wherever the type is widened (wideningTuples1).
+  if !strict_null_checks {
+    resolver.globals["@no-strict-null-checks"] = Any
+  }
   // `@value-origin:NAME` says which module an imported value's type is
   // written in (see `graph_import_globals`).
   let value_origins : Map[String, String] = Map([])

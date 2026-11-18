@@ -715,6 +715,86 @@ test "a union spread widens per alternative and overwrites when every member req
 }
 
 ///|
+/// univer's `findByStartIndex`: a bounded generic's return is instantiated
+/// from its un-inlined signature, so `T | undefined` is the argument's
+/// element type rather than the bound, a `ReadonlyArray<T>` parameter
+/// binds from a mutable array, and a literal bound against a primitive
+/// constraint stays a literal (probed).
+test "a bounded generic returns its binding, not its bound" {
+  let src =
+    #|interface IS { startIndex: number }
+    #|interface Tbl { startIndex: number; tableId: string }
+    #|interface Body { tables?: Tbl[] }
+    #|function findBy<T extends IS>(items: readonly T[], i: number): T | undefined { return items.find((x) => x.startIndex === i); }
+    #|function findRo<T extends IS>(items: ReadonlyArray<T>): T | undefined { return items[0]; }
+    #|function g<T extends string>(x: T): T | undefined { return x; }
+    #|function k<T extends { kind: string }>(x: T): T[] { return [x]; }
+    #|export function okRawReturn(b: Body | undefined, xs: Tbl[]) {
+    #|  const t = findBy(b?.tables ?? [], 1);
+    #|  const r = findRo(xs);
+    #|  return [t?.tableId, r?.tableId];
+    #|}
+    #|export function okBoundedObject(o: { kind: string; n: number }) { const v = k(o); const w: number = v[0].n; return w; }
+    #|export function badRawReturn(b: Body | undefined) { return findBy(b?.tables ?? [], 1)?.nope; }
+    #|export function badLiteralKept() { let r = g("a"); r = "b"; return r; }
+  assert_eq(issue_lines(src), [
+    "function badRawReturn > PropAccess `?.nope`: property `nope` does not exist on `Tbl`",
+    "function badLiteralKept > assign `r`: expected `\"a\" (string) | undefined` but got `string`",
+  ])
+}
+
+///|
+/// #309's review, probed: `||=` keeps only the left operand's truthy part,
+/// and two branches that each contribute a fresh value widen both.
+test "||= keeps the truthy part and conditional fresh parts merge" {
+  let src =
+    #|declare const c: boolean;
+    #|declare const d: { h?: boolean };
+    #|export function f(x: false | { p: number }) { return (x ||= { p: 1 }).p; }
+    #|export function g(x: false | { n: number }): { n: number } { return x ||= { n: 1 }; }
+    #|export function g2(x: "" | { n: number }): { n: number } { return x ||= { n: 1 }; }
+    #|export function g3(x: boolean | { n: number }) { const r: true | { n: number } = (x ||= { n: 1 }); return r; }
+    #|export function h() { let out = { ...(c ? { h: "x", ...d } : { h: 0, ...d }) }; out.h = 42; out.h = "s"; return out; }
+    #|export function bad(x: false | { n: number }): { m: number } { return x ||= { n: 1 }; }
+    #|export function badShape() { const out = { ...(c ? { h: "x", ...d } : { h: "y", ...d }) }; const t: number = out; return t; }
+  assert_eq(issue_lines(src), [
+    "function bad > return: property `m` is missing in `{ n: number }` but required in `{ m: number }`",
+    "function badShape > binding `t` init: expected `number` but got `{ h: string | boolean }`",
+  ])
+}
+
+///|
+/// univer's `intercept<T extends IInterceptor>(name: T, interceptor: T)`: a
+/// class method's arguments are checked against its un-inlined header, with
+/// `T` solved from the declared argument and not from the literal, an
+/// optional parameter kept optional, and an `any`-typed argument making the
+/// parameters that mention its type parameter abstain (probed).
+test "a bounded class method is checked against its raw header" {
+  let src =
+    #|interface IInterceptor<M, C> { id?: string; priority?: number; handler: (v: M, c: C) => M }
+    #|interface ICellInterceptor<M, C> extends IInterceptor<M, C> { effect?: number }
+    #|declare const CELL: ICellInterceptor<string, number>;
+    #|declare const PLAIN: IInterceptor<string, number>;
+    #|declare class Plugin { constructor(config?: { a: number }) }
+    #|type PluginCtor<T extends Plugin> = new (...args: any[]) => T;
+    #|class MyPlugin extends Plugin {}
+    #|const ANY_CELL = CELL as ICellInterceptor<string, number>;
+    #|export class Svc {
+    #|  intercept<T extends IInterceptor<any, any>>(name: T, interceptor: T): void {}
+    #|  registerPlugin<T extends PluginCtor<Plugin>>(plugin: T, config?: ConstructorParameters<T>[0]): void {}
+    #|}
+    #|export function ok(s: Svc) {
+    #|  s.intercept(CELL, { priority: 1, effect: 2, handler: (v) => v });
+    #|  s.intercept(ANY_CELL, { priority: 1, effect: 2, handler: (v) => v });
+    #|  s.registerPlugin(MyPlugin);
+    #|}
+    #|export function bad(s: Svc) { s.intercept(PLAIN, { priority: 1, effect: 2, handler: (v) => v }); }
+  assert_eq(issue_lines(src), [
+    "function bad > call `intercept` arg[1].effect: property `effect` does not exist on target type",
+  ])
+}
+
+///|
 /// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
 /// enumerate leaves the result open, and spreading that result again keeps
 /// it open, as a fresh literal and as a bound one.
@@ -758,5 +838,87 @@ test "a lib literal alias abstains and a curated lib type does not" {
     #|export function badDate() { const d: Date = 5; return d; }
   assert_eq(issue_lines(src), [
     "function badDate > binding `d` init: expected `Date` but got `number`",
+  ])
+}
+
+///|
+/// The raw header of a class method travels with the class into another
+/// module, so univer's controllers calling `this._svc.intercept(…)` on a
+/// service declared elsewhere solve `T` as a same-module call does.
+test "a bounded class method's raw header reaches another module" {
+  let svc = "export interface IInterceptor<M, C> { priority?: number; handler: (v: M, c: C) => M }\nexport interface ICellInterceptor<M, C> extends IInterceptor<M, C> { effect?: number }\nexport declare const CELL: ICellInterceptor<string, number>;\nexport declare const PLAIN: IInterceptor<string, number>;\nexport class Svc {\n  intercept<T extends IInterceptor<any, any>>(name: T, interceptor: T): void {}\n}\n"
+  let ok = MtscMemoryHost::over({
+    "entry.ts": "import { Svc, CELL } from \"./svc\";\nexport function f(s: Svc) { s.intercept(CELL, { priority: 1, effect: 2, handler: (v) => v }); }\n",
+    "svc.ts": svc,
+  })
+  assert_eq(wbtest_messages(get_program_diagnostics(ok)), [])
+  let bad = MtscMemoryHost::over({
+    "entry.ts": "import { Svc, PLAIN } from \"./svc\";\nexport function f(s: Svc) { s.intercept(PLAIN, { priority: 1, effect: 2, handler: (v) => v }); }\n",
+    "svc.ts": svc,
+  })
+  assert_true(
+    wbtest_any_contains(
+      get_program_diagnostics(bad),
+      "property `effect` does not exist",
+    ),
+  )
+}
+
+///|
+/// Three shapes the raw headers mis-instantiated, each one found by a gate
+/// rather than a probe. With strictNullChecks off a bounded generic's
+/// binding of `[undefined]` is the widening kind tsc turns into `[any]`
+/// (wideningTuples1). One generic at two argument counts leaves trailing
+/// arguments to their defaults, which the AST does not keep, so the common
+/// prefix decides (effect's `asSync(decodeUnknownEffect(…))`). And a rest
+/// parameter in a class method's header is spelled by its declared type,
+/// so the instantiation is re-wrapped as a rest (excalidraw's `emit`).
+test "a raw header keeps rest parameters, defaulted arguments and nullish widening" {
+  let loose =
+    #|// @strict: false
+    #|declare function foo<T extends [any]>(x: T): T;
+    #|var y = foo([undefined]);
+    #|y = [""];
+  assert_eq(issue_lines(loose), [])
+  let src =
+    #|interface Effect<A, E = never, R = never> { a: A; e: E; r: R }
+    #|declare function asSync<T, E>(p: (i: E) => Effect<T, string>): (i: E) => T;
+    #|declare const p2: (i: unknown) => Effect<unknown, string, never>;
+    #|export const okDefaulted = asSync(p2);
+    #|declare const p4: (i: unknown) => Effect<unknown, number, never>;
+    #|export const badPrefix = asSync(p4);
+    #|type Map1 = Record<string, unknown[]>;
+    #|class Bus<Events extends Map1> { emit<K extends keyof Events>(name: K, ...args: Events[K]) {} }
+    #|type TE = { init: [number]; up: [string]; none: [] };
+    #|const bus = new Bus<TE>();
+    #|bus.emit("init", 42);
+    #|bus.emit("up", "s");
+    #|bus.emit("none");
+    #|bus.emit("init", "bad");
+  assert_eq(issue_lines(src), [
+    "top-level > call `asSync` arg[0]: expected `(unknown) => Effect<any, string>` but got `(unknown) => Effect<unknown, number, never>`",
+    "top-level > call `emit` rest arg[0]: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// From #310's review: widening a fresh literal binding may not leave the
+/// type parameter's bound (`box<T extends "a" | "b">(x: T): T[]` makes
+/// `box("a")` an `"a"[]`, not `string[]`), and a conditional whose check
+/// and extends types spell one generic at two argument counts is left
+/// undecided rather than decided by the shared prefix.
+test "a raw return keeps a binding inside its bound" {
+  let src =
+    #|function box<T extends "a" | "b">(x: T): T[] { return [x]; }
+    #|export const okBox: ("a" | "b")[] = box("a");
+    #|export const badBox: "z"[] = box("a");
+    #|interface Box<A, B = string> { value: B; a: A }
+    #|type IsBox<T> = T extends Box<number, number> ? string : boolean;
+    #|declare const r: IsBox<Box<number>>;
+    #|export const okR: boolean = r;
+    #|function pair<U extends T, T extends "a" | "b">(u: U, t: T): [U[], T[]] { return [[u], [t]]; }
+    #|export const okPair: [("a" | "b")[], ("a" | "b")[]] = pair("a", "a");
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badBox` init: expected `\"z\" (string)[]` but got `string[]`",
   ])
 }

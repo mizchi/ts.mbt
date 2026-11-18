@@ -1203,10 +1203,25 @@ fn is_assignable_to_inner(
     (Named(a), Applied(b, args)) | (Applied(b, args), Named(a)) =>
       a == b && args.length() > 0 && args.iter().all(fn(x) { x is Any })
     (Applied(a, args_a), Applied(b, args_b)) => {
-      if a != b || args_a.length() != args_b.length() {
+      if a != b {
         return false
       }
-      for i in 0..<args_a.length() {
+      // One generic at two argument counts is a reference that leaves
+      // trailing arguments to their DEFAULTS (`Effect<A, E>` against
+      // `Effect<A, E, never>`, with `interface Effect<A, E = never, R =
+      // never>`). The defaults are not in the AST, so the positions only
+      // one side spells are undecided rather than unrelated, and the
+      // common prefix decides. effect's `asSync(decodeUnknownEffect(…))`
+      // was reported on that difference alone.
+      let n = if args_a.length() < args_b.length() {
+        args_a.length()
+      } else {
+        args_b.length()
+      }
+      if n == 0 && args_a.length() != args_b.length() {
+        return false
+      }
+      for i in 0..<n {
         if !is_assignable_to_inner(args_a[i], args_b[i], bivariant_params) {
           return false
         }
@@ -1646,6 +1661,13 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
         // accepts such a union against every target, so reading it here
         // would pick the true branch on no evidence; left undecided.
         t
+      } else if applied_arity_mismatch(check, extends) {
+        // One generic at two argument counts leaves the shorter side's
+        // trailing arguments to defaults the AST does not keep, and the
+        // relation compares only the shared prefix there. That is an
+        // abstention, not proof: `Box<number> extends Box<number, number>`
+        // with `B = string` is false in tsc. Left undecided.
+        t
       } else if is_assignable_to(check, extends) {
         true_branch
       } else {
@@ -1653,6 +1675,60 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
       }
     _ => t
   }
+}
+
+///|
+/// True when some generic name occurs in `a` and `b` (or twice in one of
+/// them) with different argument counts. Every shape the relation compares
+/// is walked, so a mismatch behind a `Struct` field, a constructor type or
+/// an indexed access is found too. Running out of depth answers `true`,
+/// which leaves the conditional undecided rather than proven.
+fn applied_arity_mismatch(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  let seen : Map[String, Int32] = Map([])
+  fn walk(t : @ast.TsType, seen : Map[String, Int32], depth : Int32) -> Bool {
+    if depth > 16 {
+      return true
+    }
+    let d = depth + 1
+    match t {
+      Applied(n, args) => {
+        match seen.get(n) {
+          Some(k) => if k != args.length() { return true }
+          None => seen[n] = args.length()
+        }
+        args.iter().any(fn(x) { walk(x, seen, d) })
+      }
+      Array(inner) | Rest(inner) | Keyof(inner) | CallableMeta(inner, _) =>
+        walk(inner, seen, d)
+      Tuple(items)
+      | Union(items)
+      | Intersection(items)
+      | TemplateLiteralType(_, items) =>
+        items.iter().any(fn(x) { walk(x, seen, d) })
+      Object(fields) =>
+        fields.iter().any(fn(f) { walk(f.0, seen, d) || walk(f.1, seen, d) })
+      Struct(_, fields) => fields.iter().any(fn(f) { walk(f.1, seen, d) })
+      Func(ps, r) | Constructor(ps, r, _) =>
+        ps.iter().any(fn(x) { walk(x, seen, d) }) || walk(r, seen, d)
+      GenericFunc(_, bounds, inner) =>
+        bounds.iter().any(fn(bd) { walk(bd.1, seen, d) }) ||
+        walk(inner, seen, d)
+      IndexedAccess(o, k) => walk(o, seen, d) || walk(k, seen, d)
+      Conditional(c, e, x, y) =>
+        walk(c, seen, d) ||
+        walk(e, seen, d) ||
+        walk(x, seen, d) ||
+        walk(y, seen, d)
+      MappedType(_, src, v, _) => walk(src, seen, d) || walk(v, seen, d)
+      MappedTypeRemap(_, src, r, v, _) =>
+        walk(src, seen, d) || walk(r, seen, d) || walk(v, seen, d)
+      TypePredicate(_, inner) | AssertsPredicate(_, Some(inner)) =>
+        walk(inner, seen, d)
+      _ => false
+    }
+  }
+
+  walk(a, seen, 0) || walk(b, seen, 0)
 }
 
 ///|

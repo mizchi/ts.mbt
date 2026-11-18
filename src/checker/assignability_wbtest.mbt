@@ -774,3 +774,67 @@ test "reduce_conditional leaves an any union check type undecided" {
     Boolean,
   )
 }
+
+///|
+/// One generic at two argument counts leaves trailing arguments to defaults
+/// the AST does not keep. The relation accepts the shared prefix (an
+/// abstention), so a conditional must not read that as proof:
+/// `Box<number> extends Box<number, number>` is false in tsc when `B =
+/// string`. Equal counts still decide.
+test "reduce_conditional: a defaulted argument count leaves it undecided" {
+  let short = @ast.TsType::Applied("Box", [Number])
+  let long = @ast.TsType::Applied("Box", [Number, Number])
+  let c = @ast.TsType::Conditional(short, long, String_, Boolean)
+  assert_true(reduce_conditional(c) is Conditional(_, _, _, _))
+  assert_true(is_assignable_to(short, long))
+  let same = @ast.TsType::Conditional(long, long, String_, Boolean)
+  assert_eq(reduce_conditional(same), String_)
+  let other = @ast.TsType::Applied("Box", [String_, Number])
+  assert_eq(
+    reduce_conditional(@ast.TsType::Conditional(long, other, String_, Boolean)),
+    Boolean,
+  )
+}
+
+///|
+/// The same abstention behind every shape the relation compares (#310's
+/// review): a `Struct` field, a constructor type, an indexed access and a
+/// nesting deeper than the walk's bound. Equal counts behind the same
+/// shapes still decide.
+test "reduce_conditional: a defaulted argument count behind a nested shape" {
+  let short = @ast.TsType::Applied("Box", [Number])
+  let long = @ast.TsType::Applied("Box", [Number, Number])
+  fn undecided(a : @ast.TsType, b : @ast.TsType) -> Bool {
+    reduce_conditional(@ast.TsType::Conditional(a, b, String_, Boolean))
+    is Conditional(_, _, _, _)
+  }
+
+  let st = fn(x : @ast.TsType) { @ast.TsType::Struct("S", [("x", x)]) }
+  assert_true(undecided(st(short), st(long)))
+  let ctor = fn(x : @ast.TsType) { @ast.TsType::Constructor([], x, false) }
+  assert_true(undecided(ctor(short), ctor(long)))
+  let ia = @ast.TsType::IndexedAccess(
+    Object([(Literal("x"), short)]),
+    Literal("x"),
+  )
+  assert_true(undecided(ia, long))
+  let mut deep_short = short
+  let mut deep_long = long
+  for _ in 0..<17 {
+    deep_short = Array(deep_short)
+    deep_long = Array(deep_long)
+  }
+  assert_true(undecided(deep_short, deep_long))
+  assert_eq(
+    reduce_conditional(
+      @ast.TsType::Conditional(st(long), st(long), String_, Boolean),
+    ),
+    String_,
+  )
+  assert_eq(
+    reduce_conditional(
+      @ast.TsType::Conditional(ctor(long), ctor(long), String_, Boolean),
+    ),
+    String_,
+  )
+}
