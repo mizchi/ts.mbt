@@ -319,3 +319,36 @@ test "a switch naming every enum member ends every path" {
     "function badMissing: not all paths return a `D`",
   ])
 }
+
+///|
+/// #307's review, each cell probed against the nightly: an overload with a
+/// literal-typed parameter is tried first, an interface's own member
+/// overrides the inherited one in an object conditional, a member the
+/// source lacks decides nothing, and a local shadowing an enum does not
+/// cover its members.
+test "literal overloads first, effective members, absent members, shadowed enums" {
+  let src =
+    #|declare const f: { (x: string): number; (x: "a"): string };
+    #|export const okLit: string = f("a");
+    #|export const badLit: number = f("a");
+    #|declare function g(x: string): number;
+    #|declare function g(x: "a"): string;
+    #|export const okDecl: string = g("a");
+    #|interface I { m(x: string): number; m(x: "a"): string }
+    #|declare const i: I;
+    #|export const okMethod: string = i.m("a");
+    #|interface Base { kind: "a" | "b"; n: number }
+    #|interface A extends Base { kind: "a" }
+    #|type R4 = A extends { kind: "a" } ? 1 : 2;
+    #|export const okOwn: R4 = 1;
+    #|type R5 = { a: true } extends { a: true; b: string | undefined } ? 1 : 2;
+    #|export const okAbsent: R5 = 2;
+    #|export enum E { A, B }
+    #|export function badShadow(x: E): number {
+    #|  const E = { A: 0 as const, B: 0 as const };
+    #|  switch (x) { case E.A: return 1; case E.B: return 2; }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badShadow: not all paths return a `number`", "top-level > binding `badLit` init: expected `number` but got `string`",
+  ])
+}

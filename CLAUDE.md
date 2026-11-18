@@ -6255,9 +6255,12 @@ product surfaces now.
     share. excalidraw's `restoreElement` writes `element = { ...element }`
     over a 14-member element union and then switches on `element.type`, so
     every case arm's own member read "does not exist" (about 100 reports).
-    A later key replaces an earlier one. An OPTIONAL member from a spread
-    does not override: `{ ...defaults, ...partial }` keeps each default
-    where `partial` may lack the member, as tsc's `getSpreadType` does.
+    A later key replaces an earlier one. A later OPTIONAL member only
+    may: `{ ...defaults, ...partial }` reads as the union of the default's
+    type and the member's type without `undefined`, as tsc's
+    `getSpreadType` does. A required member whose type includes
+    `undefined` is read the same way, because `x?: T` and `x: T |
+    undefined` are one node here; tsc would keep that member's own type.
   - **`Exclude` / `Extract` over interfaces.** `extends_decision` is
     resolver-free and could not decide `A extends C` for two named
     interfaces, so `Exclude<Element, SelectionElement>` stayed an undecided

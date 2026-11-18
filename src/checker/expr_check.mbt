@@ -8361,6 +8361,12 @@ fn Resolver::resolve_method_overload(
   for b in self.method_overload_type_params(recv, meth) {
     erase[b] = @ast.TsType::Any
   }
+  // Literal-typed members first, as tsc's `reorderCandidates` does (see
+  // `specialized_overloads_first`).
+  let candidates = candidates.filter(fn(c) {
+      c.0.iter().any(overload_param_is_literal)
+    }) +
+    candidates.filter(fn(c) { !c.0.iter().any(overload_param_is_literal) })
   for c in candidates {
     let (params, ret) = c
     let params = expand_tuple_rest_params(params, arg_types.length())
@@ -14072,8 +14078,21 @@ fn infer_expr_inner(
           } else if variants is Some(vs) && vs.length() >= 2 {
             // Too many combinations to spell out: open, as an
             // unenumerable spread is, rather than the members every
-            // variant shares.
+            // variant shares. A key some variant WRITES is no longer the
+            // earlier entry's type either (`{ tag: 0, ...u }` where every
+            // variant of `u` declares `tag: string`), and the open index
+            // does not reach a key that is listed, so such a key reads as
+            // `any` too.
             opaque_spread = true
+            for v in vs {
+              for f in v {
+                for alt in alts {
+                  if alt.iter().any(fn(e) { e.0 == @ast.TsType::Literal(f.0) }) {
+                    object_lit_set_field(alt, f.0, @ast.TsType::Any)
+                  }
+                }
+              }
+            }
           } else if spread_shape_is_known(spread_ty, resolver) {
             for f in collect_declared_fields(spread_ty, resolver) {
               // A `#private` member is NOT copied by a spread — it is not
@@ -16585,7 +16604,7 @@ fn infer_call(
           for a in args {
             arg_types.push(resolver.unwrap(infer_expr(env, resolver, a)))
           }
-          for sig in many {
+          for sig in specialized_overloads_first(many, resolver) {
             match sig {
               GenericFunc(names, _, Func(gps, gret))
               | GenericFunc(names, _, CallableMeta(Func(gps, gret), _)) => {
@@ -16668,7 +16687,7 @@ fn infer_call(
       // order, and the same discipline `func_overload_type_params` uses,
       // so a call a concrete member accepts keeps the answer it had.
       let generics : Array[(Array[String], Array[@ast.TsType], @ast.TsType)] = []
-      for part in parts {
+      for part in specialized_overloads_first(parts, resolver) {
         // `unwrap` PEELS a `GenericFunc`: it says so at the site, because
         // the wrapper erases to its underlying callable for every
         // value-shape decision. That erasure also throws away the binders
@@ -16749,6 +16768,59 @@ fn infer_call(
       @ast.TsType::Any
     }
     _ => @ast.TsType::Any
+  }
+}
+
+///|
+/// TypeScript tries an overload with a LITERAL-typed parameter before the
+/// others (`reorderCandidates` moves a signature carrying literal types to
+/// the front of its group, keeping declaration order otherwise), so
+/// `{ (x: string): number; (x: "a"): string }` called with `"a"` is
+/// `string` (probed). Trying the list in declaration order picked the
+/// broad member. Only a parameter whose whole type is a literal counts, as
+/// the type NODE does in tsc; `x?: "a"` arrives as `"a" | undefined`.
+fn overload_param_is_literal(t : @ast.TsType) -> Bool {
+  match t {
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    Union([l, Undefined]) | Union([Undefined, l]) =>
+      l
+      is (Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_))
+    _ => false
+  }
+}
+
+///|
+fn specialized_overloads_first(
+  sigs : Array[@ast.TsType],
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  fn params_of(sig : @ast.TsType, resolver : Resolver) -> Array[@ast.TsType] {
+    match sig {
+      GenericFunc(_, _, Func(ps, _))
+      | GenericFunc(_, _, CallableMeta(Func(ps, _), _))
+      | CallableMeta(Func(ps, _), _)
+      | Func(ps, _) => ps
+      _ =>
+        match resolver.unwrap(sig) {
+          Func(ps, _) => ps
+          _ => []
+        }
+    }
+  }
+
+  let first : Array[@ast.TsType] = []
+  let rest : Array[@ast.TsType] = []
+  for sig in sigs {
+    if params_of(sig, resolver).iter().any(overload_param_is_literal) {
+      first.push(sig)
+    } else {
+      rest.push(sig)
+    }
+  }
+  if first.is_empty() || rest.is_empty() {
+    sigs
+  } else {
+    first + rest
   }
 }
 
@@ -23721,8 +23793,26 @@ fn Resolver::object_extends_decision(
       _ => false
     }
   }
-  let source_fields = collect_declared_fields(source, self)
-  for tf in collect_declared_fields(target, self) {
+  // The FIRST declaration of a name is the effective member: an interface
+  // lists its own members before the ones it inherits, and an own
+  // `kind: "a"` overrides the base's `kind: "a" | "b"`. Comparing the
+  // inherited one too decided `A extends { kind: "a" }` as false.
+  fn effective(
+    fields : Array[(String, @ast.TsType)],
+  ) -> Array[(String, @ast.TsType)] {
+    let seen : Map[String, Unit] = Map([])
+    let out : Array[(String, @ast.TsType)] = []
+    for f in fields {
+      if !seen.contains(f.0) {
+        seen[f.0] = ()
+        out.push(f)
+      }
+    }
+    out
+  }
+
+  let source_fields = effective(collect_declared_fields(source, self))
+  for tf in effective(collect_declared_fields(target, self)) {
     if tf.0.has_prefix("@@") || tf.0.has_prefix("<") {
       continue
     }
@@ -23765,7 +23855,11 @@ fn Resolver::object_extends_decision(
             }
           }
         }
-        if !found && !type_has_undefined(tty) {
+        // A member the source lacks proves nothing: `b?: string` and a
+        // required `b: string | undefined` are the same node here, and
+        // only the first is satisfied by its absence (`{ a: true }
+        // extends { a: true; b: string | undefined }` is false in tsc).
+        if !found {
           return None
         }
       }
@@ -38635,8 +38729,11 @@ fn switch_covers_union(
         match c.test_expr {
           Some(PropAccess(obj, m)) =>
             match narrowing_key_for_expr(obj) {
-              Some(k) if k == base || k == written || k == enum_name =>
-                named[m] = ()
+              // A local value that SHADOWS the enum (`const E = { A: 0,
+              // B: 0 }` beside `enum E`) is not the enum, and its members
+              // can coincide, so its labels prove nothing.
+              Some(k) if (k == base || k == written || k == enum_name) &&
+                !(env.lookup(k) is Some(Object(_))) => named[m] = ()
               _ => ()
             }
           _ => ()
