@@ -2680,6 +2680,101 @@
       ]
     },
     {
+      "case": "inference/nakedTypeParameterInUnionTarget.ts",
+      "area": "inference",
+      "name": "nakedTypeParameterInUnionTarget",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2339
+      ],
+      "baseline": "baselines/nakedTypeParameterInUnionTarget.errors.txt",
+      "claims": [
+        {
+          "name": "okOneFromValue",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badOneFromValue",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okOneFromThunk",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badOneFromThunk",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okOptFromValue",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badOptFromValue",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okManyFromElement",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okManyFromArray",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badManyFromArray",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okOneFromObject",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badOneFromObject",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 24
+        },
+        {
+          "name": "okHookWidens",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 30
+        },
+        {
+          "name": "badHookState",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 35
+        }
+      ]
+    },
+    {
       "case": "inference/optionalCallbackContextAndGenericInterfaceMethods.ts",
       "area": "inference",
       "name": "optionalCallbackContextAndGenericInterfaceMethods",

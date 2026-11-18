@@ -14038,7 +14038,7 @@ fn infer_param_bindings(
       infer_object_field_bindings(
         type_params, f_fields, a_fields, bindings, soft,
       )
-    (Union(f_parts), _) =>
+    (Union(f_parts), _) => {
       // Best-effort: try the first part that isn't a bare type parameter
       // (matching a concrete shape generally yields more information). If
       // none matches concretely, fall back to the first part.
@@ -14047,12 +14047,128 @@ fn infer_param_bindings(
           Named(n) if type_params.contains(n) => continue
           _ => {
             infer_param_bindings(type_params, part, actual, bindings, soft)
-            return
+            break
           }
         }
       }
+      infer_naked_union_member(type_params, f_parts, actual, bindings, soft)
+    }
     _ => ()
   }
+}
+
+///|
+/// tsc's inference to a union target with ONE naked type parameter
+/// (`inferToMultipleTypes`): the source members that match a non-naked
+/// member are taken out, and what is left is a candidate for the naked
+/// one. So `useState<S>(init: S | (() => S))` called as `useState("")`
+/// gives `S = ""`, and `f<S>(x: S | undefined)` called as `f(1)` gives
+/// `S = 1`; the structural pass above tries only the non-naked member,
+/// found nothing to match, and left `S` as `any`, so every use of the
+/// hook's state was unchecked.
+///
+/// This is narrower than tsc and only ever binds what the call PROVES:
+/// - the parameter must still be unbound, so a structural match (`() =>
+///   ""` against `() => S`) wins, as tsc's higher-priority inference does;
+/// - every non-naked member must be one a primitive, an array or a plain
+///   object literal cannot match: `null` / `undefined` / `void` (taken out
+///   of the source when the source has them), a function type, an array,
+///   a tuple or a `Promise`. A `Named` member might be an alias to a
+///   primitive, a primitive member is a closer match in tsc and leaves the
+///   naked one nothing, and an object type might accept the source
+///   structurally, so any of those abstains;
+/// - every remaining source member must be a primitive, a literal, an
+///   array, a tuple or an object type with no call signature, the shapes
+///   a function type cannot accept. A class or an interface instance
+///   arrives as a name this cannot see into and abstains.
+fn infer_naked_union_member(
+  type_params : Array[String],
+  f_parts : Array[@ast.TsType],
+  actual : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+  soft : Bool,
+) -> Unit {
+  let naked : Array[String] = []
+  let others : Array[@ast.TsType] = []
+  for part in f_parts {
+    match part {
+      Named(n) if type_params.contains(n) =>
+        if !naked.contains(n) {
+          naked.push(n)
+        }
+      _ => others.push(part)
+    }
+  }
+  if naked.length() != 1 || others.length() == 0 {
+    return
+  }
+  match bindings.get(naked[0]) {
+    None | Some(Any) => ()
+    Some(_) => return
+  }
+  fn other_cannot_match(t : @ast.TsType) -> Bool {
+    match t {
+      Undefined | Null | Void => true
+      Func(_, _)
+      | GenericFunc(_, _, _)
+      | CallableMeta(_, _)
+      | Constructor(_, _, _)
+      | Array(_)
+      | Tuple(_) => true
+      Applied(n, _) =>
+        n == "Array" ||
+        n == "ReadonlyArray" ||
+        n == "Promise" ||
+        n == "PromiseLike"
+      _ => false
+    }
+  }
+
+  if !others.iter().all(other_cannot_match) {
+    return
+  }
+  let source_parts = match actual {
+    Union(ms) => ms
+    other => [other]
+  }
+  let kept : Array[@ast.TsType] = []
+  for m in source_parts {
+    let nullish = m is (Undefined | Null | Void)
+    if nullish && others.contains(m) {
+      continue
+    }
+    let ok = match m {
+      String_
+      | Number
+      | Int
+      | Boolean
+      | BigInt
+      | Literal(_)
+      | NumberLiteral(_)
+      | BooleanLiteral(_)
+      | BigIntLiteral(_)
+      | TemplateLiteralType(_, _)
+      | Array(_)
+      | Tuple(_) => true
+      Object(fields) => !fields.iter().any(fn(f) { f.0 is Literal("<call>") })
+      Struct(_, fields) => !fields.iter().any(fn(f) { f.0 == "<call>" })
+      Undefined | Null | Void => true
+      _ => false
+    }
+    if !ok {
+      return
+    }
+    kept.push(m)
+  }
+  if kept.length() == 0 {
+    return
+  }
+  let source = if kept.length() == 1 {
+    kept[0]
+  } else {
+    @ast.TsType::Union(kept)
+  }
+  infer_param_bindings(type_params, Named(naked[0]), source, bindings, soft)
 }
 
 ///|
@@ -14483,6 +14599,12 @@ fn widen_fresh_literal_bindings(
       if !type_param_occurs(tp, p) {
         continue
       }
+      // A union's other members may also be ones a literal cannot match
+      // (a function type, an array): `useState<S>(init: S | (() => S))`.
+      // Every argument here is a fresh literal, checked below, so its
+      // candidate came through the naked member and is as fresh as the
+      // bare `x: T` case — `useState("light")` is `string`, and leaving it
+      // `"light"` made every later `mode === "dark"` look impossible.
       let top = match p {
         Named(n) => n == tp
         Union(ms) =>
@@ -14490,7 +14612,17 @@ fn widen_fresh_literal_bindings(
           ms
           .iter()
           .all(fn(m) {
-            (m is Named(n) && n == tp) || m is Undefined || m is Null
+            (m is Named(n) && n == tp) ||
+            m
+            is (Undefined
+            | Null
+            | Void
+            | Func(_, _)
+            | GenericFunc(_, _, _)
+            | CallableMeta(_, _)
+            | Constructor(_, _, _)
+            | Array(_)
+            | Tuple(_))
           })
         _ => false
       }
@@ -33477,9 +33609,19 @@ fn check_call_args_in_expr(
               Union(ms) => ms
               other => [other]
             }
+            // A member that is one of the callee's OWN binders is not an
+            // alias, whatever a module-level `type T = void` says: `<T>(x:
+            // T)` called as `f()` is TS2554 beside it too, so only the
+            // other names are resolved.
             members
             .iter()
-            .any(fn(m) { m is Void || resolver.unwrap(m) is Void }) ||
+            .any(fn(m) {
+              m is Void ||
+              (
+                !(m is Named(n) && names.contains(n)) &&
+                resolver.unwrap(m) is Void
+              )
+            }) ||
             (optional_params.length() == 0 && type_accepts_undefined_param(p))
           }
 

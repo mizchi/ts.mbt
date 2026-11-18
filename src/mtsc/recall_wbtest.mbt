@@ -24,13 +24,13 @@ test "an imported generic function's argument count is checked" {
     graph_messages(
       [
         (
-          "/src/g.d.ts", "type V = void;\nexport declare function vu<T>(x: T, v: number | void): T;\nexport declare function va<T>(x: T, v: number | V): T;\nexport declare const vm: <T>(x: T, v: number | void, w?: string) => T;\nexport declare function two<T>(x: T, n: number): T;\nexport declare function opt<T>(x: T, n?: number): T;\nexport declare function rest<T>(x: T, ...more: number[]): T;\nexport declare function tup<T extends unknown[]>(...args: T): T;\nexport declare function vparam<T>(x: T, v: void): T;\nexport declare function und<T>(x: T, u: number | undefined): T;\nexport declare function bare<T>(x: T): T;",
+          "/src/g.d.ts", "type V = void;\ntype T = void;\nexport declare function shadow<T>(x: T): T;\nexport declare function vu<T>(x: T, v: number | void): T;\nexport declare function va<T>(x: T, v: number | V): T;\nexport declare const vm: <T>(x: T, v: number | void, w?: string) => T;\nexport declare function two<T>(x: T, n: number): T;\nexport declare function opt<T>(x: T, n?: number): T;\nexport declare function rest<T>(x: T, ...more: number[]): T;\nexport declare function tup<T extends unknown[]>(...args: T): T;\nexport declare function vparam<T>(x: T, v: void): T;\nexport declare function und<T>(x: T, u: number | undefined): T;\nexport declare function bare<T>(x: T): T;",
         ),
         (
           "/src/poly.ts", "export function poly<P extends number>(...points: P[]) { return points; }\nexport function pq<T extends string = string>(...args: Parameters<(a: number, b?: string) => T>): T { return \"\" as T; }",
         ),
         (
-          "/src/main.ts", "import { two, opt, rest, tup, vparam, und, bare, vu, va, vm } from \"./g\";\nexport const ok12 = vu(1);\nexport const ok13 = va(1);\nexport const ok14 = vm(1);\nexport const bad7 = vm();\nimport { poly, pq } from \"./poly\";\nexport const ok9 = poly(1, 2, 3, 4);\nexport const ok10 = poly();\nexport const ok11 = pq(1, \"s\");\nexport const bad1 = two(1);\nexport const bad2 = two(1, 2, 3);\nexport const bad3 = opt(1, 2, 3);\nexport const bad4 = rest();\nexport const bad5 = und(1);\nexport const bad6 = bare();\nexport const ok1 = two(1, 2);\nexport const ok2 = opt(1);\nexport const ok3 = rest(1);\nexport const ok4 = rest(1, 2, 3, 4);\nexport const ok5 = tup();\nexport const ok6 = tup(1, \"a\");\nexport const ok7 = vparam(1);\nexport const ok8 = und(1, undefined);",
+          "/src/main.ts", "import { two, opt, rest, tup, vparam, und, bare, vu, va, vm, shadow } from \"./g\";\nexport const ok12 = vu(1);\nexport const ok13 = va(1);\nexport const ok14 = vm(1);\nexport const bad7 = vm();\nexport const bad8 = shadow();\nimport { poly, pq } from \"./poly\";\nexport const ok9 = poly(1, 2, 3, 4);\nexport const ok10 = poly();\nexport const ok11 = pq(1, \"s\");\nexport const bad1 = two(1);\nexport const bad2 = two(1, 2, 3);\nexport const bad3 = opt(1, 2, 3);\nexport const bad4 = rest();\nexport const bad5 = und(1);\nexport const bad6 = bare();\nexport const ok1 = two(1, 2);\nexport const ok2 = opt(1);\nexport const ok3 = rest(1);\nexport const ok4 = rest(1, 2, 3, 4);\nexport const ok5 = tup();\nexport const ok6 = tup(1, \"a\");\nexport const ok7 = vparam(1);\nexport const ok8 = und(1, undefined);",
         ),
       ],
       [
@@ -39,9 +39,10 @@ test "an imported generic function's argument count is checked" {
       ],
     ),
     [
-      "top-level > call `vm` :: expected 1-3 argument(s), got 0", "top-level > call `two` :: expected 2 argument(s), got 1",
-      "top-level > call `two` :: expected 2 argument(s), got 3", "top-level > call `opt` :: expected 1-2 argument(s), got 3",
-      "top-level > call `rest` :: expected at least 1 argument(s), got 0", "top-level > call `bare` :: expected 1 argument(s), got 0",
+      "top-level > call `vm` :: expected 1-3 argument(s), got 0", "top-level > call `shadow` :: expected 1 argument(s), got 0",
+      "top-level > call `two` :: expected 2 argument(s), got 1", "top-level > call `two` :: expected 2 argument(s), got 3",
+      "top-level > call `opt` :: expected 1-2 argument(s), got 3", "top-level > call `rest` :: expected at least 1 argument(s), got 0",
+      "top-level > call `bare` :: expected 1 argument(s), got 0",
     ],
   )
 }
@@ -202,4 +203,47 @@ test "a namespace object stays open while a name could come from elsewhere" {
       "top-level > PropAccess `.nope` :: property `nope` does not exist on `{ k: string }`",
     ],
   )
+}
+
+///|
+/// Inference to a union target with ONE naked type parameter takes the
+/// argument as that parameter's candidate once the members another
+/// member matches are taken out, as tsc's `inferToMultipleTypes` does:
+/// `S | (() => S)` (`useState`), `S | undefined` and `S | S[]` all infer
+/// `S` from a plain argument. Before, the structural pass tried only the
+/// non-naked member and left `S` as `any`, so a hook's state was
+/// unchecked. A fresh literal argument widens, since `S` is not at the top
+/// level of a tuple return: `hook("light")` is `string`, and leaving it
+/// `"light"` would make `mode === "dark"` look impossible.
+test "a naked type parameter in a union target infers from the argument" {
+  let src =
+    #|declare function one<S>(x: S | (() => S)): S;
+    #|declare function opt<S>(x: S | undefined): S;
+    #|declare function many<S>(x: S | S[]): S;
+    #|declare function hook<S>(init: S | (() => S)): [S, (next: S) => void];
+    #|export function okValues() {
+    #|  const a: string = one("");
+    #|  const b: string = one(() => "");
+    #|  const c: string = opt("");
+    #|  const d: string = many("");
+    #|  const e: string = many([""]);
+    #|  const f: { a: number } = one({ a: 1 });
+    #|  const g: number[] = one([1]);
+    #|  return [a, b, c, d, e, f, g];
+    #|}
+    #|export function okHookWidens() {
+    #|  const [mode, setMode] = hook("light");
+    #|  if (mode === "dark") { setMode("light"); }
+    #|  setMode("dark");
+    #|  return mode;
+    #|}
+    #|export function badOne() { const n: number = one(""); return n; }
+    #|export function badOpt() { const n: number = opt(""); return n; }
+    #|export function badObject() { const n: number = one({ a: 1 }); return n; }
+    #|export function badState() { const [q] = hook(""); return q.nope; }
+  assert_eq(issue_lines(src), [
+    "function badOne > binding `n` init: expected `number` but got `string`", "function badOpt > binding `n` init: expected `number` but got `string`",
+    "function badObject > binding `n` init: expected `number` but got `{ a: number }`",
+    "function badState > PropAccess `.nope`: property `nope` does not exist on `string`",
+  ])
 }

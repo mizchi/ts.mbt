@@ -6037,6 +6037,49 @@ product surfaces now.
     batch was exactly that, caught only by reading the oracle's lines
     rather than its exit code; CI checks the submodule out, so it cannot
     happen there.
+
+  Batch GT is the inference rule batch GS named as its largest remaining
+  cause. A union target with ONE naked type parameter (`S | (() => S)`,
+  `S | undefined`, `S | S[]`) inferred nothing from a plain argument: the
+  structural pass in `infer_param_bindings` tried only the first
+  non-naked member, found no match, and left `S` as `any`. So
+  `useState("")` (preact's and React's signature) gave `[any, …]`, and
+  `q.nope` on its state was silent, as was `const n: number = opt("")`
+  against `opt<S>(x: S | undefined): S`. tsc's `inferToMultipleTypes`
+  takes out the source members another member matches, and what is left
+  is a lower-priority candidate for the naked parameter.
+  - **The candidate is taken only where the call proves it.** The
+    parameter must still be unbound after the structural pass, so `one(()
+    => "")` against `S | (() => S)` keeps the higher-priority match. Every
+    non-naked member must be one a primitive, an array or a plain object
+    literal cannot match: `null` / `undefined` / `void` (taken out of the
+    source when it has them), a function type, an array, a tuple or a
+    `Promise`. And every remaining source member must be a primitive, a
+    literal, an array, a tuple or an object type with no call signature.
+    Probed against tsc, it reports more than this does: `f<S>(x: S |
+    string)` called as `f("x")` gives `S = string` in tsc, and so do
+    `S | { a: number }` and a class instance against `S | (() => S)`.
+    Those are MISSes here, because a `Named` member could be an alias to a
+    primitive and an object member could accept the source structurally.
+  - **The first version made every hook's state a literal.**
+    `useState("light")` came out `"light"`, so `mode === "dark"` would
+    have read as a comparison with no overlap. tsc widens a fresh literal
+    candidate when `S` is not at the top level of the return, and
+    `[S, Dispatch<…>]` is not. `widen_fresh_literal_bindings` already did
+    that for `x: T` and `x: T | undefined` only. It now also accepts a
+    union whose other members a literal cannot match, since the argument is
+    still required to be a literal written at the call site, so its
+    candidate came through the naked member.
+  - **What it measures.** effect, zod, univer and excalidraw report
+    nothing at a new location. The real-app hooks catch `q.nope` and a
+    `number` read as a `string`. React's `useState` is still missed for a
+    different reason: it is an overloaded member of an `export =`
+    namespace, which binds as `any`. So is a setter call (`setQ(1)`),
+    since `Dispatch<StateUpdater<S>>` is not resolved at the call.
+  - **Carried from #304.** The generic arity check resolved a callee's own
+    binder through the module's aliases, so `type T = void` beside `<T>(x:
+    T)` made `f()` look legal. The binder is now skipped. That costs only
+    a finding, and it has its regression cell.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
