@@ -6405,8 +6405,13 @@ product surfaces now.
     - A matching GENERIC member bound its type parameter by inferring the
       argument again: 0.62 s at 16 levels on `{ <T>(x: T): T; … }`.
       `solve_generic_bindings` now reads the types the overload loop already
-      inferred (`pre`), the nesting is flat, and
-      `nested-generic-overload-calls` is its axis (linear, 0.64).
+      inferred (`pre`), and `nested-generic-overload-calls` is its axis. The
+      first version still inferred again whenever a call had a SPREAD
+      argument, because it fell back to `expand_tuple_spread_args`. That was
+      3.3 s at 18 levels of `f(…, ...empty)`, and the review found it. The
+      expansion now takes its element types from the inferred tuple
+      (`expand_tuple_spread_args_typed`), and the axis alternates plain and
+      spread levels, so either door dies at its first rung.
     - A generic member is solved from a fixed tuple spread's ELEMENTS, and
       its fit is judged on the literal argument types, as a concrete
       member's is.

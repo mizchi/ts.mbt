@@ -3469,6 +3469,41 @@ fn overload_call_arg_types(
 }
 
 ///|
+/// `expand_tuple_spread_args` over types already inferred: each argument
+/// with its type from `raw` (one per argument as written), a spread of a
+/// fixed tuple replaced by one `xs[i]` per element with that element's type.
+fn expand_tuple_spread_args_typed(
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+  raw : Array[@ast.TsType],
+) -> (Array[@ast.TsExpr], Array[@ast.TsType]) {
+  let out_args : Array[@ast.TsExpr] = []
+  let out_types : Array[@ast.TsType] = []
+  for i, a in args {
+    let t = if i < raw.length() { raw[i] } else { @ast.TsType::Any }
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(t) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for j, e in elems {
+              out_args.push(IndexAccess(inner, NumberLit(j.to_double())))
+              out_types.push(e)
+            }
+          _ => {
+            out_args.push(a)
+            out_types.push(t)
+          }
+        }
+      _ => {
+        out_args.push(a)
+        out_types.push(t)
+      }
+    }
+  }
+  (out_args, out_types)
+}
+
+///|
 /// A rest parameter typed with a tuple ALIAS (`...rest: Tail`, `type Tail =
 /// [string]`) resolved to the tuple, so `expand_tuple_rest_params` sees it:
 /// left as `Rest(Named("Tail"))` it read as an unbounded rest.
@@ -17227,21 +17262,26 @@ fn overload_generic_attempt(
   sel_types : Array[@ast.TsType],
 ) -> (@ast.TsType, OverloadFit) {
   // The binders are solved from the arguments as written, reusing the types
-  // the caller inferred. A spread of a fixed tuple is read as its elements
-  // (`expand_tuple_spread_args`, as the method loop reads it), so `T` binds
-  // from `xs[0]` rather than from the whole tuple; such a call is rare
-  // enough to infer again.
-  let has_spread = args.iter().any(fn(a) { a is Spread(_) })
-  let bind_args = if has_spread {
-    expand_tuple_spread_args(env, resolver, args)
-  } else {
-    args
-  }
-  let pre = if has_spread { None } else { Some(raw_types) }
+  // the caller inferred. A spread of a fixed tuple is read as its elements,
+  // as the method loop's `expand_tuple_spread_args` reads it, so `T` binds
+  // from `xs[0]` rather than from the whole tuple; the expansion takes the
+  // element types from the inferred tuple too, so a spread does not send a
+  // nested call through inference a second time.
+  let (bind_args, bind_types) = expand_tuple_spread_args_typed(
+    resolver, args, raw_types,
+  )
   let bindings = widen_fresh_literal_bindings(
     env,
     resolver,
-    solve_generic_bindings(env, resolver, names, gps, bind_args, None, pre?),
+    solve_generic_bindings(
+      env,
+      resolver,
+      names,
+      gps,
+      bind_args,
+      None,
+      pre=bind_types,
+    ),
     names,
     None,
     gps,

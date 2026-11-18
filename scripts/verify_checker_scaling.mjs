@@ -314,12 +314,18 @@ const AXES = {
   // The same nesting where a GENERIC member matches first: binding its
   // type parameter inferred the argument again, the doubling above through
   // a different door (0.62 s at 16 levels). The binding pass reads the
-  // types the overload loop already inferred.
+  // types the overload loop already inferred. Every other level carries an
+  // empty tuple SPREAD, because the first fix still inferred again whenever
+  // a call had one: a spread is expanded before binding, and the expansion
+  // has to take its types from the inferred ones too.
   "nested-generic-overload-calls": (n) => {
     let call = "1";
-    for (let i = 0; i < n; i++) call = `f(${call})`;
+    for (let i = 0; i < n; i++) {
+      call = i % 2 === 1 ? `f(${call}, ...empty)` : `f(${call})`;
+    }
     return (
       "declare const f: { <T>(x: T): T; (x: number): number };\n" +
+      "declare const empty: [];\n" +
       `export const r = ${call};\n`
     );
   },
