@@ -23038,6 +23038,41 @@ fn structural_oneway_assignable_rec(
         })
     _ => ()
   }
+  // An object type has an implicit index signature, so it is assignable to
+  // an interface that declares nothing but string index signatures when
+  // every member fits the index value: `const e = {}` into univer's
+  // `interface IDateTrie { [token: string]: IDateTrie | number | undefined
+  // }`, and `{ a: 1 }` into `{ [k: string]: number }`. An interface's own
+  // type has no such signature, and a computed or accessor key decides
+  // nothing here.
+  match (resolver.unwrap(source), resolver.unwrap(target)) {
+    (Object(fields), Named(n)) =>
+      match resolver.interfaces.get(n) {
+        Some(i) if i.fields.is_empty() &&
+          i.extends_names.is_empty() &&
+          i.type_params.is_empty() &&
+          !i.index_signatures.is_empty() &&
+          i.index_signatures.iter().all(fn(sig) { sig.0 is String_ }) &&
+          fields.iter().all(fn(f) { f.0 is Literal(k) && !k.has_prefix("@@") }) =>
+          return fields
+            .iter()
+            .all(fn(f) {
+              i.index_signatures
+              .iter()
+              .all(fn(sig) {
+                is_assignable_to(f.1, sig.1) ||
+                structural_oneway_assignable_rec(
+                  f.1,
+                  sig.1,
+                  resolver,
+                  depth + 1,
+                )
+              })
+            })
+        _ => ()
+      }
+    _ => ()
+  }
   match resolver.unwrap(target) {
     Union(members) => {
       for m in members {

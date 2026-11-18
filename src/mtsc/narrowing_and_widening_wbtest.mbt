@@ -452,3 +452,29 @@ test "typeof object splits a union into objects and the rest" {
     "function badThen > binding `n` init: expected `number` but got `PSB`",
   ])
 }
+
+///|
+/// An object type has an implicit index signature, so it is assignable to
+/// an interface of string index signatures when every member fits (univer's
+/// `IDateTrie`, filled with `branch = {}`); a member that does not fit
+/// still reports.
+test "an object type meets an index-signature interface" {
+  let src =
+    #|interface IDateTrie { [token: string]: IDateTrie | number | undefined; }
+    #|interface Idx { [k: string]: number }
+    #|const e = {};
+    #|export const okEmpty: IDateTrie = e;
+    #|const f = { a: 1 };
+    #|export const okMember: Idx = f;
+    #|export const okUnion: IDateTrie | number = e;
+    #|export function okPack(node: IDateTrie, char: string) {
+    #|  let branch = node[char];
+    #|  if (typeof branch !== "object") { branch = {}; node[char] = branch; }
+    #|  return branch;
+    #|}
+    #|const g = { a: "s" };
+    #|export const badMember: Idx = g;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badMember` init: expected `Idx` but got `{ a: string }`",
+  ])
+}
