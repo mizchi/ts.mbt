@@ -297,3 +297,25 @@ test "an enum operand narrows a chain and a lib array union keeps its arity" {
     "function badDeclaredUnion > call: expected at least 2 argument(s), got 1",
   ])
 }
+
+///|
+/// univer's `getReverseDirection`: a `switch` naming every member of an
+/// enum, numeric or string, needs no ending return. tsc reports TS2366 when
+/// one member is missing.
+test "a switch naming every enum member ends every path" {
+  let src =
+    #|export enum D { UP, DOWN }
+    #|export enum S { A = "a", B = "b" }
+    #|export function okNumeric(d: D): D {
+    #|  switch (d) { case D.UP: return D.DOWN; case D.DOWN: return D.UP; }
+    #|}
+    #|export function okString(s: S): number {
+    #|  switch (s) { case S.A: return 1; case S.B: return 2; }
+    #|}
+    #|export function badMissing(d: D): D {
+    #|  switch (d) { case D.UP: return D.DOWN; }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badMissing: not all paths return a `D`",
+  ])
+}

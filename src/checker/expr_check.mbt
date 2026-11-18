@@ -38609,8 +38609,43 @@ fn switch_covers_union(
   env : ExprEnv,
   resolver : Resolver,
 ) -> Bool {
-  let members : Array[@ast.TsType] = match
-    resolver.unwrap(infer_expr(env, resolver, scrutinee)) {
+  let scrutinee_ty = resolver.unwrap(infer_expr(env, resolver, scrutinee))
+  // An ENUM scrutinee is covered when every member is named by a label.
+  // Its member reads infer as the base `number` / `string`, so coverage is
+  // decided by NAME: `case Direction.LEFT:` names the member `LEFT` of the
+  // scrutinee's enum. univer's `getReverseDirection` switches over all four
+  // `Direction` members and was "not all paths return" (on main too); tsc
+  // accepts it, and the same switch missing one member is TS2366.
+  if scrutinee_ty is Named(written) {
+    // `ns.E` through `import * as ns` reaches the enum through the
+    // qualified-name table, as `unwrap` reads it.
+    let enum_name = match resolver.qualified_names.get(written) {
+      Some(key) => key
+      None => written
+    }
+    if resolver.enums.get(enum_name) is Some(decl) && decl.members.length() > 0 {
+      // A label names the enum by its source spelling: the bare name, or
+      // the written qualified one (`E.Dir.UP` for a scrutinee `E.Dir`).
+      let base = match enum_name.find("@") {
+        Some(i) => enum_name[:i].to_owned()
+        None => enum_name
+      }
+      let named : Map[String, Unit] = Map([])
+      for c in cases {
+        match c.test_expr {
+          Some(PropAccess(obj, m)) =>
+            match narrowing_key_for_expr(obj) {
+              Some(k) if k == base || k == written || k == enum_name =>
+                named[m] = ()
+              _ => ()
+            }
+          _ => ()
+        }
+      }
+      return decl.members.iter().all(fn(m) { named.contains(m.name) })
+    }
+  }
+  let members : Array[@ast.TsType] = match scrutinee_ty {
     Union(parts) => parts
     other =>
       match other {
