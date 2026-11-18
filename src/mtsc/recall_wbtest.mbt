@@ -247,3 +247,47 @@ test "a naked type parameter in a union target infers from the argument" {
     "function badState > PropAccess `.nope`: property `nope` does not exist on `string`",
   ])
 }
+
+///|
+/// The fallback candidate is one candidate among the call's, not a binding
+/// that pins the parameter before the other arguments are seen. Each cell
+/// was probed against tsc: the `ok…` functions are accepted, the `bad…`
+/// ones report where tsc does.
+test "a naked union member's candidate is reduced with the call's others" {
+  let src =
+    #|declare function pick<T>(x: T | number[]): T;
+    #|declare function choose<T>(value: T | (() => T), values: T[]): T;
+    #|declare function hookP<S>(init: S | Promise<S>): [S];
+    #|declare function hookA<S>(init: S | Array<S>): [S];
+    #|declare function hookL<S>(init: S | PromiseLike<S>): [S];
+    #|declare function hookR<S>(init: S | ReadonlyArray<S>): [S];
+    #|export function okPick(input: string | number[]) {
+    #|  const r: string = pick(input);
+    #|  return r;
+    #|}
+    #|export function okChoose(s: string, ss: string[], as_: "a"[], bs: "b"[]) {
+    #|  const a: string = choose("a", ss);
+    #|  let b = choose("a", ss);
+    #|  b = "b";
+    #|  const c: string = choose(s, as_);
+    #|  const d: "a" | "b" = choose("a", bs);
+    #|  return [a, b, c, d];
+    #|}
+    #|export function okHooks() {
+    #|  const [p] = hookP("light");
+    #|  const [a] = hookA("light");
+    #|  const [l] = hookL("light");
+    #|  const [r] = hookR("light");
+    #|  return [p === "dark", a === "dark", l === "dark", r === "dark"];
+    #|}
+    #|export function badPick(input: string | number[]) {
+    #|  const n: number = pick(input);
+    #|  return n;
+    #|}
+    #|export function badChoose(ns: number[]) { return choose("a", ns); }
+    #|export function badHook() { const [p] = hookP("light"); const n: number = p; return n; }
+  assert_eq(issue_lines(src), [
+    "function badPick > binding `n` init: expected `number` but got `string`", "function badChoose > call `choose` arg[1]: expected `\"a\" (string)[]` but got `number[]`",
+    "function badHook > binding `n` init: expected `number` but got `string`",
+  ])
+}

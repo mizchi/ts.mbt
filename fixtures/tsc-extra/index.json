@@ -2775,6 +2775,71 @@
       ]
     },
     {
+      "case": "inference/nakedUnionCandidateReduction.ts",
+      "area": "inference",
+      "name": "nakedUnionCandidateReduction",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2345
+      ],
+      "baseline": "baselines/nakedUnionCandidateReduction.errors.txt",
+      "claims": [
+        {
+          "name": "okPickRemovesTheMatchedArray",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 18
+        },
+        {
+          "name": "badPickRemovesTheMatchedArray",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 22
+        },
+        {
+          "name": "okChooseLiteralThenItsPrimitive",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 27
+        },
+        {
+          "name": "okChoosePrimitiveThenItsLiteral",
+          "kind": "ok",
+          "fromLine": 28,
+          "toLine": 31
+        },
+        {
+          "name": "okChooseTwoLiteralsUnion",
+          "kind": "ok",
+          "fromLine": 32,
+          "toLine": 35
+        },
+        {
+          "name": "badChooseUnrelatedKeepsTheLeftmost",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 38
+        },
+        {
+          "name": "okHooksWidenThroughApplied",
+          "kind": "ok",
+          "fromLine": 39,
+          "toLine": 44
+        },
+        {
+          "name": "badHookWidenedState",
+          "kind": "bad",
+          "fromLine": 45,
+          "toLine": 50
+        }
+      ]
+    },
+    {
       "case": "inference/optionalCallbackContextAndGenericInterfaceMethods.ts",
       "area": "inference",
       "name": "optionalCallbackContextAndGenericInterfaceMethods",

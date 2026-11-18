@@ -8148,6 +8148,7 @@ fn Resolver::resolve_method_overload(
       .any(fn(p) { erase.keys().any(fn(b) { type_param_occurs(b, p) }) }) {
       let binders = erase.keys().collect()
       let solved : Map[String, @ast.TsType] = Map([])
+      let deferred : Map[String, (@ast.TsType, Bool)] = Map([])
       for i in 0..<arg_types.length() {
         // From the RESOLVED argument: `a: N` with `type N = number[]` gives
         // `T` nothing to bind from as `Named("N")`, so `T` stayed `any` and
@@ -8158,8 +8159,10 @@ fn Resolver::resolve_method_overload(
           widen_literal_deep(self.unwrap(arg_types[i])),
           solved,
           false,
+          fallback=deferred,
         )
       }
+      flush_naked_union_fallbacks(solved, deferred)
       let inst : Map[String, @ast.TsType] = Map([])
       for b in binders {
         inst[b] = solved.get(b).unwrap_or(@ast.TsType::Any)
@@ -13920,6 +13923,7 @@ fn infer_param_bindings(
   actual : @ast.TsType,
   bindings : Map[String, @ast.TsType],
   soft : Bool,
+  fallback? : Map[String, (@ast.TsType, Bool)],
 ) -> Unit {
   // Direct hit: formal is exactly a type parameter we're solving for.
   match formal {
@@ -13944,11 +13948,32 @@ fn infer_param_bindings(
   // Structural matching — peel matching outer shapes.
   match (formal, actual) {
     (Array(f_elem), Array(a_elem)) =>
-      infer_param_bindings(type_params, f_elem, a_elem, bindings, soft)
+      infer_param_bindings(
+        type_params,
+        f_elem,
+        a_elem,
+        bindings,
+        soft,
+        fallback?,
+      )
     (Array(f_elem), Applied("Array", a_args)) if a_args.length() == 1 =>
-      infer_param_bindings(type_params, f_elem, a_args[0], bindings, soft)
+      infer_param_bindings(
+        type_params,
+        f_elem,
+        a_args[0],
+        bindings,
+        soft,
+        fallback?,
+      )
     (Applied("Array", f_args), Array(a_elem)) if f_args.length() == 1 =>
-      infer_param_bindings(type_params, f_args[0], a_elem, bindings, soft)
+      infer_param_bindings(
+        type_params,
+        f_args[0],
+        a_elem,
+        bindings,
+        soft,
+        fallback?,
+      )
     (Applied(f_name, f_args), Applied(a_name, a_args)) =>
       if f_name == a_name && f_args.length() == a_args.length() {
         let mut i = 0
@@ -13959,6 +13984,7 @@ fn infer_param_bindings(
             a_args[i],
             bindings,
             soft,
+            fallback?,
           )
           i = i + 1
         }
@@ -13977,6 +14003,7 @@ fn infer_param_bindings(
           a_items[i],
           bindings,
           soft,
+          fallback?,
         )
         i = i + 1
       }
@@ -14000,10 +14027,11 @@ fn infer_param_bindings(
           a_params[i],
           bindings,
           soft,
+          fallback?,
         )
         i = i + 1
       }
-      infer_param_bindings(type_params, f_ret, a_ret, bindings, true)
+      infer_param_bindings(type_params, f_ret, a_ret, bindings, true, fallback?)
     }
     // Object / interface-shaped parameters: match fields by name and infer
     // recursively. `foo<T>(x: { bar: T; baz: T })` called with `{ bar: 1,
@@ -14017,6 +14045,7 @@ fn infer_param_bindings(
         object_fields_by_name(a_fields),
         bindings,
         soft,
+        fallback?,
       )
     (Struct(_, f_fields), Object(a_fields)) =>
       infer_object_field_bindings(
@@ -14025,6 +14054,7 @@ fn infer_param_bindings(
         object_fields_by_name(a_fields),
         bindings,
         soft,
+        fallback?,
       )
     (Object(f_fields), Struct(_, a_fields)) =>
       infer_object_field_bindings(
@@ -14033,10 +14063,16 @@ fn infer_param_bindings(
         a_fields,
         bindings,
         soft,
+        fallback?,
       )
     (Struct(_, f_fields), Struct(_, a_fields)) =>
       infer_object_field_bindings(
-        type_params, f_fields, a_fields, bindings, soft,
+        type_params,
+        f_fields,
+        a_fields,
+        bindings,
+        soft,
+        fallback?,
       )
     (Union(f_parts), _) => {
       // Best-effort: try the first part that isn't a bare type parameter
@@ -14046,12 +14082,26 @@ fn infer_param_bindings(
         match part {
           Named(n) if type_params.contains(n) => continue
           _ => {
-            infer_param_bindings(type_params, part, actual, bindings, soft)
+            infer_param_bindings(
+              type_params,
+              part,
+              actual,
+              bindings,
+              soft,
+              fallback?,
+            )
             break
           }
         }
       }
-      infer_naked_union_member(type_params, f_parts, actual, bindings, soft)
+      infer_naked_union_member(
+        type_params,
+        f_parts,
+        actual,
+        bindings,
+        soft,
+        fallback?,
+      )
     }
     _ => ()
   }
@@ -14087,6 +14137,7 @@ fn infer_naked_union_member(
   actual : @ast.TsType,
   bindings : Map[String, @ast.TsType],
   soft : Bool,
+  fallback? : Map[String, (@ast.TsType, Bool)],
 ) -> Unit {
   let naked : Array[String] = []
   let others : Array[@ast.TsType] = []
@@ -14102,29 +14153,21 @@ fn infer_naked_union_member(
   if naked.length() != 1 || others.length() == 0 {
     return
   }
-  match bindings.get(naked[0]) {
-    None | Some(Any) => ()
-    Some(_) => return
+  let bound_before = match bindings.get(naked[0]) {
+    None | Some(Any) => false
+    Some(_) => true
   }
-  fn other_cannot_match(t : @ast.TsType) -> Bool {
-    match t {
-      Undefined | Null | Void => true
-      Func(_, _)
-      | GenericFunc(_, _, _)
-      | CallableMeta(_, _)
-      | Constructor(_, _, _)
-      | Array(_)
-      | Tuple(_) => true
-      Applied(n, _) =>
-        n == "Array" ||
-        n == "ReadonlyArray" ||
-        n == "Promise" ||
-        n == "PromiseLike"
-      _ => false
-    }
+  // This candidate is reduced with the call's OTHER candidates for the
+  // parameter, which a first-wins binding cannot do in argument order: a
+  // driver that collects `fallback` decides it once every argument has
+  // been seen (`flush_naked_union_fallbacks`), recording whether a
+  // structural candidate came first. Without one, a parameter that is
+  // already bound keeps its binding.
+  match fallback {
+    Some(deferred) => if deferred.contains(naked[0]) { return }
+    None => if bound_before { return }
   }
-
-  if !others.iter().all(other_cannot_match) {
+  if !others.iter().all(naked_union_other_member) {
     return
   }
   let source_parts = match actual {
@@ -14136,6 +14179,32 @@ fn infer_naked_union_member(
     let nullish = m is (Undefined | Null | Void)
     if nullish && others.contains(m) {
       continue
+    }
+    // tsc first takes out the source members a non-naked member matches
+    // identically or CLOSELY (an instantiation of the same object type),
+    // so `pick<T>(x: T | number[])` over `string | number[]` is `T =
+    // string`: an array source and an `Array` member are both `Array`,
+    // whatever the element types. A `ReadonlyArray` or tuple member is a
+    // different type that may still accept the array, and a tuple source
+    // matches by identity only, which this does not decide, so either
+    // abstains rather than keep a member tsc may have taken out.
+    let array_source = m is (Array(_) | Applied("Array", _))
+    if array_source || m is Tuple(_) {
+      let closely = others
+        .iter()
+        .any(fn(o) { o is (Array(_) | Applied("Array", _)) })
+      let maybe = others
+        .iter()
+        .any(fn(o) { o is (Tuple(_) | Applied("ReadonlyArray", _)) })
+      if m is Tuple(_) && (closely || maybe) {
+        return
+      }
+      if maybe {
+        return
+      }
+      if closely {
+        continue
+      }
     }
     let ok = match m {
       String_
@@ -14168,7 +14237,113 @@ fn infer_naked_union_member(
   } else {
     @ast.TsType::Union(kept)
   }
-  infer_param_bindings(type_params, Named(naked[0]), source, bindings, soft)
+  match fallback {
+    Some(deferred) => deferred[naked[0]] = (source, bound_before)
+    None =>
+      infer_param_bindings(type_params, Named(naked[0]), source, bindings, soft)
+  }
+}
+
+///|
+/// Apply the candidates `infer_naked_union_member` deferred. One left alone
+/// binds its parameter; one beside a structural candidate is reduced the
+/// way tsc's `getCommonSupertype` reduces candidates of one priority, in
+/// argument order: literals of one primitive are UNIONED (`choose("a",
+/// bs)` with `bs: "b"[]` is `"a" | "b"`), and otherwise the leftmost
+/// candidate stays unless it is a subtype of the next (`choose("a", ss)`
+/// with `ss: string[]` is `string`; `choose(s, as_)` with `s: string` and
+/// `as_: "a"[]` is `string` too, and `choose("a", ns)` with `ns: number[]`
+/// is `"a"`, so `ns` is the argument tsc reports). Only primitives and
+/// their literals are decided; anything else keeps the structural
+/// candidate, which is what the call inferred before the fallback existed.
+fn flush_naked_union_fallbacks(
+  bindings : Map[String, @ast.TsType],
+  deferred : Map[String, (@ast.TsType, Bool)],
+) -> Unit {
+  for k, entry in deferred {
+    let (f, structural_first) = entry
+    match bindings.get(k) {
+      None | Some(Any) => bindings[k] = f
+      Some(h) =>
+        match (primitive_candidate_family(f), primitive_candidate_family(h)) {
+          (Some((fb, f_lit)), Some((hb, h_lit))) =>
+            if fb == hb && f_lit && h_lit {
+              bindings[k] = if structural_first {
+                narrow_union(h, f)
+              } else {
+                narrow_union(f, h)
+              }
+            } else if structural_first {
+              // `[h, f]`: `h` stays unless it is a subtype of `f`, which
+              // for these is `f` being `h`'s primitive.
+              if fb == hb && !f_lit {
+                bindings[k] = f
+              }
+            } else if !(fb == hb && !h_lit) {
+              // `[f, h]`: `f` stays unless it is a subtype of `h`.
+              bindings[k] = f
+            }
+          _ => ()
+        }
+    }
+  }
+}
+
+///|
+/// The primitive a candidate is (`string`, `number`, `boolean`, `bigint`)
+/// and whether it is a LITERAL of it. A union counts when every member is
+/// a literal of one primitive; anything else is `None`.
+fn primitive_candidate_family(t : @ast.TsType) -> (String, Bool)? {
+  match t {
+    String_ => Some(("string", false))
+    Number | Int => Some(("number", false))
+    Boolean => Some(("boolean", false))
+    BigInt => Some(("bigint", false))
+    Literal(_) => Some(("string", true))
+    NumberLiteral(_) => Some(("number", true))
+    BooleanLiteral(_) => Some(("boolean", true))
+    BigIntLiteral(_) => Some(("bigint", true))
+    Union(ms) if ms.length() > 0 => {
+      let mut base = ""
+      for m in ms {
+        match primitive_candidate_family(m) {
+          Some((b, true)) =>
+            if base == "" {
+              base = b
+            } else if base != b {
+              return None
+            }
+          _ => return None
+        }
+      }
+      Some((base, true))
+    }
+    _ => None
+  }
+}
+
+///|
+/// A non-naked member of a union parameter that a primitive, an array or
+/// a plain object literal argument cannot match, which is what lets
+/// `infer_naked_union_member` hand the argument to the naked member — and
+/// what lets `widen_fresh_literal_bindings` read that member as the top
+/// level, so the two agree on which unions count.
+fn naked_union_other_member(t : @ast.TsType) -> Bool {
+  match t {
+    Undefined | Null | Void => true
+    Func(_, _)
+    | GenericFunc(_, _, _)
+    | CallableMeta(_, _)
+    | Constructor(_, _, _)
+    | Array(_)
+    | Tuple(_) => true
+    Applied(n, _) =>
+      n == "Array" ||
+      n == "ReadonlyArray" ||
+      n == "Promise" ||
+      n == "PromiseLike"
+    _ => false
+  }
 }
 
 ///|
@@ -14197,11 +14372,12 @@ fn infer_object_field_bindings(
   actual_fields : Array[(String, @ast.TsType)],
   bindings : Map[String, @ast.TsType],
   soft : Bool,
+  fallback? : Map[String, (@ast.TsType, Bool)],
 ) -> Unit {
   for ff in formal_fields {
     for af in actual_fields {
       if af.0 == ff.0 {
-        infer_param_bindings(type_params, ff.1, af.1, bindings, soft)
+        infer_param_bindings(type_params, ff.1, af.1, bindings, soft, fallback?)
       }
     }
   }
@@ -14409,6 +14585,7 @@ fn solve_generic_bindings(
   for tp in type_params {
     bindings[tp] = @ast.TsType::Any
   }
+  let deferred : Map[String, (@ast.TsType, Bool)] = Map([])
   // A type parameter that appears *only* as a bare top-level parameter
   // (`f<T>(x: T, y: T)`) — never nested inside an array / generic /
   // structural shape — is inferred from every such argument as a union,
@@ -14466,17 +14643,37 @@ fn solve_generic_bindings(
             // (iteratorSpreadInCall7), unlike plain rest arguments.
             match iterator_class_element_type(resolver, actual) {
               Some(el) =>
-                infer_param_bindings(type_params, elem, el, bindings, false)
+                infer_param_bindings(
+                  type_params,
+                  elem,
+                  el,
+                  bindings,
+                  false,
+                  fallback=deferred,
+                )
               None =>
                 // Array-typed spreads (`...[...it]`, `...arr`) infer
                 // `number[] -> T[]` — a NESTED position, so they pin
                 // first-wins too (iteratorSpreadInCall9); only direct rest
                 // arguments union across positions.
                 infer_param_bindings(
-                  type_params, rest_arr, actual, bindings, false,
+                  type_params,
+                  rest_arr,
+                  actual,
+                  bindings,
+                  false,
+                  fallback=deferred,
                 )
             }
-          _ => infer_param_bindings(type_params, elem, actual, bindings, true)
+          _ =>
+            infer_param_bindings(
+              type_params,
+              elem,
+              actual,
+              bindings,
+              true,
+              fallback=deferred,
+            )
         }
         i = i + 1
       }
@@ -14495,10 +14692,18 @@ fn solve_generic_bindings(
         Named(n) => widen_safe.contains(n)
         _ => false
       }
-      infer_param_bindings(type_params, params[i], actual, bindings, soft)
+      infer_param_bindings(
+        type_params,
+        params[i],
+        actual,
+        bindings,
+        soft,
+        fallback=deferred,
+      )
     }
     i = i + 1
   }
+  flush_naked_union_fallbacks(bindings, deferred)
   bindings
 }
 
@@ -14612,17 +14817,7 @@ fn widen_fresh_literal_bindings(
           ms
           .iter()
           .all(fn(m) {
-            (m is Named(n) && n == tp) ||
-            m
-            is (Undefined
-            | Null
-            | Void
-            | Func(_, _)
-            | GenericFunc(_, _, _)
-            | CallableMeta(_, _)
-            | Constructor(_, _, _)
-            | Array(_)
-            | Tuple(_))
+            (m is Named(n) && n == tp) || naked_union_other_member(m)
           })
         _ => false
       }
@@ -21630,6 +21825,7 @@ fn check_jsx_attrs(
     for tp in type_params {
       bindings[tp] = @ast.TsType::Any
     }
+    let deferred : Map[String, (@ast.TsType, Bool)] = Map([])
     for entry in attrs {
       let name = entry.0
       match entry.1 {
@@ -21647,6 +21843,7 @@ fn check_jsx_attrs(
                     maybe_widen(sf.1),
                     bindings,
                     false,
+                    fallback=deferred,
                   )
                 None => ()
               }
@@ -21667,6 +21864,7 @@ fn check_jsx_attrs(
                   maybe_widen(actual),
                   bindings,
                   false,
+                  fallback=deferred,
                 )
               }
               None => ()
@@ -21675,6 +21873,7 @@ fn check_jsx_attrs(
         None => ()
       }
     }
+    flush_naked_union_fallbacks(bindings, deferred)
     substitute_params(raw_props_ty, bindings)
   } else {
     raw_props_ty

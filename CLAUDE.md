@@ -6080,6 +6080,43 @@ product surfaces now.
     binder through the module's aliases, so `type T = void` beside `<T>(x:
     T)` made `f()` look legal. The binder is now skipped. That costs only
     a finding, and it has its regression cell.
+  - **Review found three false positives, and fixing them correctly
+    took tsc's candidate reduction rather than a priority.** All three
+    were new in this batch, and all three are now absent:
+    - `pick<T>(x: T | number[])` over `string | number[]` kept the array
+      in the candidate, so `const r: string = pick(input)` was reported.
+      tsc first takes out a source member that another member matches
+      identically or closely, which is any array against `Array`. A
+      `ReadonlyArray` or tuple member may still accept the array, so
+      either one abstains.
+    - `choose<T>(v: T | (() => T), vs: T[])` called as `choose("a", ss)`
+      bound `"a"` before `ss: string[]` was seen. The obvious fix was to
+      defer the candidate and let structure win. That introduced a false
+      positive the first version did not have: `choose(s, as_)` with
+      `as_: "a"[]` is `string` in tsc, because candidates of one priority
+      are reduced in argument order by `getCommonSupertype`. So the
+      candidate is deferred to the end of the call (`fallback`, threaded
+      through `infer_param_bindings`) and then reduced:
+      - literals of one primitive are unioned (`choose("a", bs)` is
+        `"a" | "b"`);
+      - otherwise the leftmost candidate stays unless it is a subtype of
+        the next;
+      - only primitives and their literals are decided, and anything else
+        keeps the structural candidate, which is what main inferred.
+
+      `choose("a", ns)` with `ns: number[]` now reports at `ns`, where tsc
+      does. Before, it reported at `"a"`.
+    - `hook<S>(init: S | Promise<S>)` kept `"light"`. The widening's union
+      test and the fallback's member test were two copies of one list,
+      and only one had `Applied` `Array` / `ReadonlyArray` / `Promise` /
+      `PromiseLike`. They are one predicate now,
+      `naked_union_other_member`.
+
+    Each mechanism is mutation-proven, and the cells are a tsc-extra case,
+    `nakedUnionCandidateReduction`. `pickR<T>(x: T | readonly number[])`
+    over `number[]` is a MISS: tsc infers `T = number[]`, and this
+    abstains. `choose(() => "a", ["b"])` still reports `arg[1][0]`, which
+    main does too.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
