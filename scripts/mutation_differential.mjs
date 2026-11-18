@@ -34,7 +34,7 @@
 //                      project's `src/` holds)
 //     --mutators A,B   only these mutators
 //     --count N        sample N mutants (seeded) instead of all of them
-//     --seed N         sampling seed (default 1)
+//     --seed N         sampling seed, any safe integer (default 1)
 //     --mtsc PATH      mtsc binary (default the release build)
 //     --tsc PATH       tsc entry (default node_modules/typescript/bin/tsc)
 //     --max-fp N       exit 1 when more than N UNDECLARED mutants are false
@@ -73,12 +73,19 @@ const value = (f) => {
   if (v === undefined || v.startsWith("--")) die(`${f} needs a value`);
   return v;
 };
-/** An integer operand no smaller than `min`, or `undefined` when the option is absent. */
+/**
+ * An integer operand no smaller than `min`, or `undefined` when the option is
+ * absent. It must be a safe integer (|n| <= 2^53 - 1): a longer run of digits
+ * converts to `Infinity`, which would switch the `--max-fp` budget off.
+ */
 const intValue = (f, min) => {
   const v = value(f);
   if (v === undefined) return undefined;
-  if (!/^-?\d+$/.test(v) || Number(v) < min) die(`${f} needs an integer >= ${min}, got \`${v}\``);
-  return Number(v);
+  const n = Number(v);
+  if (!/^-?\d+$/.test(v) || !Number.isSafeInteger(n) || n < min) {
+    die(`${f} needs a safe integer >= ${min}, got \`${v}\``);
+  }
+  return n;
 };
 const PROJECT = path.resolve(value("--project") ?? path.join(ROOT, "fixtures", "real-app", "ok"));
 const TSCONFIG = value("--tsconfig") ?? "tsconfig.json";
@@ -125,24 +132,54 @@ const rel = (f) => path.relative(PROJECT, path.resolve(PROJECT, f)).replaceAll("
 // A SIGKILL runs no handler, and a container restart is one, so the edit in
 // flight is also written to a journal before it is applied. A run that
 // finds a journal puts that file back first, under the same rule.
+//
+// A source file is replaced whole (a complete temporary file renamed over
+// it, with its mode kept), so a kill cannot leave it truncated; and the
+// journal is removed only once the file provably holds the original again,
+// so a file that matches neither saved version keeps its journal.
 const JOURNAL = path.join(PROJECT, ".mutation-differential.journal.json");
 let active = null;
+const writeWhole = (p, text) => {
+  const tmp = `${p}.mutation-tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.chmodSync(tmp, fs.statSync(p).mode);
+  fs.renameSync(tmp, p);
+};
+/** Puts the original back; true when the file holds the original afterwards. */
 const putBack = ({ p, original, mutated }) => {
   const now = fs.readFileSync(p, "utf8");
-  if (now === mutated) fs.writeFileSync(p, original);
-  else if (now !== original) console.error(`mutation_differential: ${rel(p)} changed during the run; left as it is`);
+  if (now === mutated) writeWhole(p, original);
+  else if (now !== original) {
+    console.error(`mutation_differential: ${rel(p)} matches neither the original nor the mutation; left as it is, with ${rel(JOURNAL)}`);
+    return false;
+  }
+  return true;
 };
 const restore = () => {
   if (!active) return;
   const a = active;
   active = null;
-  putBack(a);
-  fs.rmSync(JOURNAL, { force: true });
+  if (putBack(a)) fs.rmSync(JOURNAL, { force: true });
+  // A file somebody changed mid-run is left as it is, and the run stops:
+  // every later mutant of it would be measured against the wrong text.
+  else process.exit(2);
+};
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
 };
 if (fs.existsSync(JOURNAL)) {
   const left = JSON.parse(fs.readFileSync(JOURNAL, "utf8"));
+  // A journal whose run is still going is that run's edit in flight.
+  if (left.pid !== process.pid && alive(left.pid)) {
+    die(`another run (pid ${left.pid}) has an edit in flight in ${rel(left.p)}; not touching it`);
+  }
   console.error(`mutation_differential: an earlier run was killed mid-edit; restoring ${rel(left.p)}`);
-  putBack(left);
+  if (!putBack(left)) process.exit(2);
   fs.rmSync(JOURNAL, { force: true });
 }
 
@@ -447,9 +484,9 @@ try {
     const p = path.join(PROJECT, m.file);
     if (fs.readFileSync(p, "utf8") !== m.text) die(`${m.file} changed since the mutants were listed; stopping`);
     const mutated = m.text.slice(0, m.start) + m.repl + m.text.slice(m.end);
-    active = { p, original: m.text, mutated };
+    active = { p, original: m.text, mutated, pid: process.pid };
     fs.writeFileSync(JOURNAL, JSON.stringify(active));
-    fs.writeFileSync(p, mutated);
+    writeWhole(p, mutated);
     let tscNew;
     let mtsc;
     try {

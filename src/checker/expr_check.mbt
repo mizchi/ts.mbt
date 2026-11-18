@@ -13332,7 +13332,7 @@ fn infer_expr_inner(
       let elem_opt = array_element_type(resolver, recv_ty)
       match (elem_opt, meth, args) {
         (Some(elem), "map", [cb] | [cb, _]) => {
-          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
+          let cb_ret = array_callback_return(env, resolver, cb, [
             elem,
             @ast.TsType::Number,
             @ast.TsType::Array(elem),
@@ -13340,7 +13340,7 @@ fn infer_expr_inner(
           return @ast.TsType::Array(cb_ret)
         }
         (Some(elem), "flatMap", [cb] | [cb, _]) => {
-          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
+          let cb_ret = array_callback_return(env, resolver, cb, [
             elem,
             @ast.TsType::Number,
             @ast.TsType::Array(elem),
@@ -13381,6 +13381,14 @@ fn infer_expr_inner(
         // element to the predicate's asserted type.
         (Some(elem), "filter", [cb] | [cb, _]) =>
           match arrow_type_predicate_target(cb) {
+            // tsc takes the predicate overload only when the target extends
+            // the element type, so `numbers.filter((x: unknown): x is string
+            // => …)` is still `number[]`. Refused only when the two are
+            // concrete primitives that definitely do not relate; for object
+            // types the relation can fail to prove a real subtype, and not
+            // narrowing would then report the narrowed use.
+            Some(target) if predicate_target_definitely_unrelated(target, elem) =>
+              ()
             Some(target) => return @ast.TsType::Array(target)
             None =>
               match inferred_filter_predicate(env, resolver, cb, elem) {
@@ -23101,6 +23109,49 @@ fn array_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? {
     }
     _ => None
   }
+}
+
+///|
+/// What an array method's callback returns. A literal callback's body is
+/// inferred with the element parameters; any other callback contributes its
+/// declared return type. Returning the callback's own type there made
+/// `numbers.map(cb)` with `cb: (n: number) => string` an array of
+/// functions, so `const s: string[] = numbers.map(cb)` was reported. A
+/// generic callable or anything unresolved is `any`, which reports nothing.
+fn array_callback_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  cb : @ast.TsExpr,
+  params : Array[@ast.TsType],
+) -> @ast.TsType {
+  match cb {
+    ArrowFunc(_, _, _, _) | FuncExpr(_) =>
+      infer_arrow_body_with_params(env, resolver, cb, params)
+    _ => {
+      let t = infer_expr(env, resolver, cb)
+      if t is GenericFunc(_, _, _) {
+        return @ast.TsType::Any
+      }
+      match resolver.unwrap(t) {
+        Func(_, ret) => ret
+        _ => @ast.TsType::Any
+      }
+    }
+  }
+}
+
+///|
+/// A predicate target that cannot narrow `elem`: both sides are concrete
+/// primitives or literals (or a union of them) and the target is not
+/// assignable to the element type.
+fn predicate_target_definitely_unrelated(
+  target : @ast.TsType,
+  elem : @ast.TsType,
+) -> Bool {
+  let concrete = fn(t : @ast.TsType) {
+    union_components(t).iter().all(is_concrete_primitive_or_literal)
+  }
+  concrete(target) && concrete(elem) && !is_assignable_to(target, elem)
 }
 
 ///|

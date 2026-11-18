@@ -5927,6 +5927,19 @@ product surfaces now.
     that is nonzero with no parsed diagnostic is a CRASH, not a clean run,
     because a run that loaded nothing would otherwise score every mutant
     as MISS or TN.
+  - **Review of the `thisArg` fix found two older FPs in the same arms.**
+    Both are on main and both are on legal code:
+    - A callback passed BY NAME (`numbers.map(toLabel)`) made the result an
+      array of FUNCTIONS, because the arm used the callback's own type
+      where it wanted the callback's return.
+    - A type-predicate `filter` narrowed to the predicate's target even
+      when that target does not fit the element type. tsc then takes the
+      plain overload, so `numbers.filter((x: unknown): x is string => …)`
+      is `number[]`.
+
+    The second is refused only for concrete primitives. For object types
+    the relation can fail to prove a real subtype, and not narrowing would
+    then report the narrowed use.
   - **One FP is declared, not fixed.** It is listed in
     `fixtures/real-app/mutation-fps.txt`, with the same STALE rule as the
     other declared lists. date-fns' `FormatOptions` extends

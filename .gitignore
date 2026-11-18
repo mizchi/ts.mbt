@@ -60,3 +60,4 @@ examples/**/__tsmbt_glue__*/
 # Built JavaScript checker, copied next to the facade by `just build-js`.
 js/mtsc.js
 .mutation-differential.journal.json
+*.mutation-tmp

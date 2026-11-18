@@ -1615,6 +1615,70 @@
       "claims": []
     },
     {
+      "case": "inference/arrayMethodNamedCallbackAndPredicateFit.ts",
+      "area": "inference",
+      "name": "arrayMethodNamedCallbackAndPredicateFit",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/arrayMethodNamedCallbackAndPredicateFit.errors.txt",
+      "claims": [
+        {
+          "name": "okMapNamedCallback",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okMapNamedCallbackThisArg",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okFlatMapNamedCallback",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badMapNamedCallback",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badFlatMapNamedCallback",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 14
+        },
+        {
+          "name": "okFilterFittingPredicate",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okFilterUnrelatedPredicate",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badFilterUnrelatedPredicate",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 19
+        }
+      ]
+    },
+    {
       "case": "inference/arrowConstGuardOptionalParameters.ts",
       "area": "inference",
       "name": "arrowConstGuardOptionalParameters",
