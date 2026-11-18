@@ -900,3 +900,25 @@ test "a raw header keeps rest parameters, defaulted arguments and nullish wideni
     "top-level > call `emit` rest arg[0]: expected `number` but got `string`",
   ])
 }
+
+///|
+/// From #310's review: widening a fresh literal binding may not leave the
+/// type parameter's bound (`box<T extends "a" | "b">(x: T): T[]` makes
+/// `box("a")` an `"a"[]`, not `string[]`), and a conditional whose check
+/// and extends types spell one generic at two argument counts is left
+/// undecided rather than decided by the shared prefix.
+test "a raw return keeps a binding inside its bound" {
+  let src =
+    #|function box<T extends "a" | "b">(x: T): T[] { return [x]; }
+    #|export const okBox: ("a" | "b")[] = box("a");
+    #|export const badBox: "z"[] = box("a");
+    #|interface Box<A, B = string> { value: B; a: A }
+    #|type IsBox<T> = T extends Box<number, number> ? string : boolean;
+    #|declare const r: IsBox<Box<number>>;
+    #|export const okR: boolean = r;
+    #|function pair<U extends T, T extends "a" | "b">(u: U, t: T): [U[], T[]] { return [[u], [t]]; }
+    #|export const okPair: [("a" | "b")[], ("a" | "b")[]] = pair("a", "a");
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badBox` init: expected `\"z\" (string)[]` but got `string[]`",
+  ])
+}

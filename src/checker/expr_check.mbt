@@ -13856,6 +13856,15 @@ fn infer_expr_inner(
       if type_params.length() > 0 {
         match callee_ty {
           Func(params, ret) => {
+            // Inferred once and read by both solves, so a raw header that
+            // abstains does not make every nested call infer its
+            // arguments twice (which doubles per level of nesting).
+            let pre : Array[@ast.TsType]? = if env.lookup(name) is None &&
+              resolver.globals.contains("@raw-sig:" + name) {
+              Some(args.map(fn(a) { infer_expr(env, resolver, a) }))
+            } else {
+              None
+            }
             match
               instantiate_raw_generic_return(
                 env,
@@ -13865,6 +13874,7 @@ fn infer_expr_inner(
                 params,
                 args,
                 resolver.signatures.get(name),
+                pre,
               ) {
               Some(t) => return t
               None => ()
@@ -13876,6 +13886,7 @@ fn infer_expr_inner(
               params,
               args,
               resolver.signatures.get(name),
+              pre?,
             )
             // The parser inlines a function's bounded type parameter, so
             // a return of `T` with `T extends unknown[]` arrives as the
@@ -16707,6 +16718,7 @@ fn instantiate_raw_generic_return(
   params : Array[@ast.TsType],
   args : Array[@ast.TsExpr],
   sig : Array[@ast.TsParam]?,
+  pre : Array[@ast.TsType]?,
 ) -> @ast.TsType? {
   guard env.lookup(name) is None else { return None }
   guard resolver.globals.get("@raw-sig:" + name) is Some(Func(raw, raw_ret)) else {
@@ -16721,7 +16733,13 @@ fn instantiate_raw_generic_return(
   }
   let expanded = raw.map(fn(p) { expand_alias_head(resolver, p, 0) })
   let bindings = solve_generic_bindings(
-    env, resolver, type_params, expanded, args, sig,
+    env,
+    resolver,
+    type_params,
+    expanded,
+    args,
+    sig,
+    pre?,
   )
   let known_bounds = raw_signature_known_bounds(
     resolver, name, type_params, raw, params,
@@ -16764,7 +16782,10 @@ fn instantiate_raw_generic_return(
     }) {
     return None
   }
-  let bindings = widen_fresh_literal_bindings(
+  // `widen_fresh_literal_bindings` widens in place, so the solved
+  // bindings are kept aside for the bound check below.
+  let solved_bindings = bindings.copy()
+  let widened = widen_fresh_literal_bindings(
     env,
     resolver,
     bindings,
@@ -16774,7 +16795,34 @@ fn instantiate_raw_generic_return(
     args,
     raw_ret,
   )
-  Some(substitute_params(raw_ret, bindings))
+  // Widening a fresh literal may not leave the bound: `box<T extends "a" |
+  // "b">(x: T): T[]` makes `box("a")` an `"a"[]`, where widening `"a"` to
+  // `string` gave `string[]`, which the bound rules out. A bound may name
+  // another binder (`pair<U extends T, T extends "a" | "b">`), so restoring
+  // one binding can put another outside its bound, and the check repeats
+  // until nothing changes. Each restore sets a binding back to its solved
+  // value once, so this ends.
+  let mut changed = true
+  while changed {
+    changed = false
+    for tp in mentioned {
+      match (solved_bindings.get(tp), widened.get(tp)) {
+        (Some(b), Some(w)) if b != w &&
+          !binding_satisfies_declared_bound(
+            resolver,
+            type_params,
+            widened,
+            known_bounds.get(tp),
+            w,
+          ) => {
+          widened[tp] = b
+          changed = true
+        }
+        _ => ()
+      }
+    }
+  }
+  Some(substitute_params(raw_ret, widened))
 }
 
 ///|

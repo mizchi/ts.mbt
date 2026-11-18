@@ -6623,6 +6623,84 @@ product surfaces now.
     the mutation differential is unchanged at 105 caught / 155 missed
     (40%), with no undeclared false positive. Every scaling axis is within
     budget.
+
+  Batch GY is the bound-inlining family on the call side, and two Minor
+  findings from [#309](https://github.com/mizchi/ts.mbt/pull/309)'s review.
+  The parser inlines a bounded type parameter into every position it
+  appears in, and the raw signature side channel (batch FW) already
+  instantiated a function's PARAMETERS from it. The return type and a
+  class method's parameters still read the bound:
+  - **A bounded generic's return is its binding.** `findBy<T extends
+    IS>(items: readonly T[], i): T | undefined` returned `IS | undefined`
+    whatever it was called with. univer's `findByStartIndex(body.tables
+    ?? [], i)?.tableId` then "did not exist on `IS`". The return is now
+    solved from the raw signature under the conditions the parameters are
+    held to: every binding is checkable and satisfies its bound.
+    Otherwise it keeps the inlined return. A literal bound against a
+    primitive constraint stays a literal (`g<T extends string>(x: T): T |
+    undefined` makes `g("a")` an `"a" | undefined`), probed. A
+    `ReadonlyArray<T>` parameter now binds from a mutable array; only the
+    `readonly T[]` spelling had.
+  - **A bounded class method's arguments are checked against its raw
+    header** (`<method>C#m`, which batch FX records). univer's
+    `intercept<T extends IInterceptor<any, any>>(name: T, interceptor: T)`
+    judged the second argument's object literal against `IInterceptor`.
+    The `effect` member that `T = ICellInterceptor` declares then read as
+    an excess property. Three cells decided the shape, each probed:
+    - A literal argument at a bare type-parameter position is checked
+      AGAINST the binding and is not a candidate for it. tsc picks the
+      common supertype, which is the declared argument's type whenever
+      the literal fits. Solving from the literal too accepted
+      `intercept(PLAIN, { effect })`, which is TS2353.
+    - An `any`-typed argument makes the parameters that mention its type
+      parameter abstain. A module-level `const` read inside a function is
+      one, and judging the others against the bound is the one wrong
+      answer.
+    - An optional parameter stays optional. The header keeps only types,
+      and a bare `any` reads as required to the arity check, so
+      `registerPlugin(Plugin)` was "expected 2 argument(s)". The field
+      data caught that first version.
+
+    The header now travels with the class into another module, because
+    `ingest_type_module` copied classes and not their `@raw-sig:`
+    entries. Same-module calls were fixed and univer's cross-module calls
+    were not, until a two-file repro showed why.
+  - **From #309's review:** `||=` keeps only the left operand's truthy
+    part, not just its non-nullish part, so `x ||= { n: 1 }` over `false |
+    { n: number }` is `{ n: number }`. A conditional spread whose
+    branches each contribute a different fresh value merges both fresh
+    parts. Before, it kept the first, and the second stayed narrow.
+
+  The gates on those three commits found one conformance false positive
+  and seven field sites, each a fact the raw-header path had dropped:
+  - With strictNullChecks off, a binding holding `null` / `undefined` is
+    the widening kind, which tsc turns into `any`.
+    `foo<T extends [any]>([undefined])` declares `[any]`
+    (`wideningTuples1`), so such a binding keeps the inlined return.
+  - One generic at two argument counts (`Effect<A, E>` against `Effect<A,
+    E, never>`) leaves trailing arguments to their defaults. The AST does
+    not keep defaults, so the positions only one side spells are now
+    undecided, and the common prefix decides. effect's
+    `asSync(decodeUnknownEffect(…))` was reported on that difference
+    alone, on main too. The bounded return made it reachable at three new
+    sites.
+  - A method header spells a rest parameter by its declared type, so
+    `...args: Events[K]` instantiated as one required parameter
+    (excalidraw's `AppEventBus.emit`, four sites). It is re-wrapped as a
+    rest once the element list is known.
+  - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
+    FP 0), and tsc-extra stays at FP 0. effect goes from 92 to 82 and zod
+    stays at 7. univer goes, against batch GX:
+    - core 55→51
+    - docs-hyper-link 39→35
+    - data-validation 258→245
+    - sheets-numfmt 261→247
+    - ui 239→231
+
+    excalidraw goes from 329 to 328. None of them reports at a site main
+    does not. The real-app check still catches 8 of 11 with no false
+    positive, and the mutation differential is unchanged at 105 caught /
+    155 missed (40%), with no undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
