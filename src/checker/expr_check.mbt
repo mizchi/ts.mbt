@@ -3150,6 +3150,52 @@ fn Resolver::ingest_module(
 }
 
 ///|
+/// `typeof x` for a binding in scope is that binding's type AT THIS POINT,
+/// narrowing included: tsc reports `const a: typeof x = 1` inside
+/// `if (typeof x === "string")` (probed). `unwrap` resolves a query against
+/// `globals` only, so a parameter's or a local's stayed an opaque
+/// `TypeOf`, and univer's `get(key) as unknown as Array<typeof name>` was
+/// filtered with a callback judged against `typeof name` itself. A class,
+/// an enum or a namespace keeps its query (its value type is not what a
+/// binding holds), and so does a binding whose type is `any` / `unknown`
+/// or itself mentions a query.
+fn resolve_local_type_queries(
+  env : ExprEnv,
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType {
+  fn go(t : @ast.TsType, depth : Int32) -> @ast.TsType {
+    if depth > 8 {
+      return t
+    }
+    match t {
+      TypeOf(n) if !n.contains(".") &&
+        n != "this" &&
+        !resolver.classes.contains(n) &&
+        !resolver.enums.contains(n) =>
+        match env.lookup(n) {
+          Some(b) if is_checkable(b) &&
+            !(b is (Any | Unknown)) &&
+            !type_contains_typeof(b) => b
+          _ => t
+        }
+      Array(inner) => Array(go(inner, depth + 1))
+      Applied(name, args) => Applied(name, args.map(fn(a) { go(a, depth + 1) }))
+      Union(parts) => Union(parts.map(fn(a) { go(a, depth + 1) }))
+      Intersection(parts) => Intersection(parts.map(fn(a) { go(a, depth + 1) }))
+      Tuple(parts) => Tuple(parts.map(fn(a) { go(a, depth + 1) }))
+      _ => t
+    }
+  }
+
+  if type_contains_typeof(ty) {
+    go(ty, 0)
+  } else {
+    ty
+  }
+}
+
+///|
 /// True when `ty` contains a `TypeOf(_)` reference anywhere in its
 /// structure. Used by the top-level globals ingestion to skip
 /// `typeof`-referencing declarations -- registering them risks
@@ -14488,7 +14534,7 @@ fn infer_expr_inner(
     // any nested call sites are validated.
     As(inner, ty) => {
       let _ = infer_expr(env, resolver, inner)
-      ty
+      resolve_local_type_queries(env, resolver, ty)
     }
     // `x satisfies T` — structural check; result type is `typeof x`. The
     // check happens elsewhere (`check_call_args_in_expr`).
@@ -21883,10 +21929,12 @@ fn binding_init_type(
   mutable_ : Bool,
   fresh : Bool,
   inferred : @ast.TsType,
+  init : @ast.TsExpr,
+  infer : (@ast.TsExpr) -> @ast.TsType,
 ) -> @ast.TsType {
   match inferred {
-    Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
-      widen_literal_deep(inferred)
+    Object(_) => widen_object_literal_type(inferred, init, infer)
+    Struct(_, _) | Array(_) | Tuple(_) => widen_literal_deep(inferred)
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       if mutable_ && fresh {
         widen_literal(inferred)
@@ -21894,6 +21942,65 @@ fn binding_init_type(
         inferred
       }
     _ => inferred
+  }
+}
+
+///|
+/// Widen an object literal's inferred type the way tsc widens a fresh one:
+/// a member WRITTEN in the literal widens (`{ h: "a" }` is `{ h: string }`),
+/// while a member a SPREAD contributes keeps the type it was declared with,
+/// because that type is not a fresh literal. Widening the whole shape made
+/// univer's `const r = { ...style }` read `fontHint?: "default" | "eastAsia"`
+/// as `string`, and `r` was then not assignable to `style`'s own interface
+/// (on main too). A key written anywhere in the literal counts as written,
+/// and a literal with no spread widens every member, as before;
+/// a nested object literal under a written key is widened by the same rule.
+fn widen_object_literal_type(
+  ty : @ast.TsType,
+  init : @ast.TsExpr,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+) -> @ast.TsType {
+  match (ty, init) {
+    (Object(fields), ObjectLit(entries)) => {
+      let has_spread = entries.iter().any(fn(e) { e.0.has_prefix("@@spread:") })
+      let written : Map[String, @ast.TsExpr] = Map([])
+      for e in entries {
+        if !e.0.has_prefix("@@spread:") {
+          written[e.0] = e.1
+        }
+      }
+      Object(
+        fields.map(fn(f) {
+          match f.0 {
+            Literal(k) =>
+              match written.get(k) {
+                Some(v) => (f.0, widen_object_literal_type(f.1, v, infer))
+                None if has_spread => f
+                None => (f.0, widen_literal_deep(f.1))
+              }
+            _ => (f.0, widen_literal_deep(f.1))
+          }
+        }),
+      )
+    }
+    // `c ? { ...a } : { ...b }` under a written key: each branch is its own
+    // literal, widened by its own rule, so a spread member inside either
+    // keeps its declared type (univer's `coverTextRuns`).
+    (_, Cond(_, a, b)) => {
+      let parts : Array[@ast.TsType] = []
+      for branch in [a, b] {
+        let w = widen_object_literal_type(infer(branch), branch, infer)
+        if !parts.iter().any(fn(e) { equivalent(e, w) }) {
+          parts.push(w)
+        }
+      }
+      if parts.length() == 1 {
+        parts[0]
+      } else {
+        Union(parts)
+      }
+    }
+    _ => widen_literal_deep(ty)
   }
 }
 
@@ -25516,6 +25623,8 @@ fn infer_body_return_type(
               !(stmt is Const(_, _, _)),
               is_fresh_literal_expr(init),
               infer_expr(env, resolver, init),
+              init,
+              fn(e) { infer_expr(env, resolver, e) },
             )
           }
           if is_checkable(ty) {
@@ -25699,6 +25808,8 @@ fn infer_block_return(
               !(stmt is Const(_, _, _)),
               is_fresh_literal_expr(init),
               infer_expr(env, resolver, init),
+              init,
+              fn(e) { infer_expr(env, resolver, e) },
             )
           }
           if is_checkable(ty) {
@@ -32537,7 +32648,7 @@ fn check_ident_binding_decl(
     _ => ()
   }
   let bound_type = if is_checkable(declared) {
-    declared
+    resolve_local_type_queries(env, ctx.resolver, declared)
   } else if declared is Any &&
     ctx.resolver.globals.contains("@written-any:" + name) {
     @ast.TsType::Any
@@ -32553,6 +32664,8 @@ fn check_ident_binding_decl(
       mutable_,
       is_fresh_literal_in_env(env, init),
       infer_expr(env, ctx.resolver, init),
+      init,
+      fn(e) { infer_expr(env, ctx.resolver, e) },
     )
   }
   env.bind(name, bound_type)

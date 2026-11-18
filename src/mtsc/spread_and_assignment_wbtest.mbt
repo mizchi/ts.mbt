@@ -538,3 +538,38 @@ test "generic tuple spreads and literals, binder returns, incomplete method sets
     "top-level > binding `badTail2` init: expected `number` but got `string`",
   ])
 }
+
+///|
+/// univer's `coverTextRuns`: a member a spread contributes keeps its
+/// declared literal type when the literal is bound, while a member written
+/// in the literal widens. `typeof x` for a local is the local's type there.
+test "a bound spread keeps declared literals and typeof reads a local" {
+  let src =
+    #|interface T { h?: "a" | "b"; p?: { r: "m" | "i" } }
+    #|interface I { a: number }
+    #|export function okSpread(o: T | undefined, q: T, c: boolean) {
+    #|  const r = { ...o };
+    #|  const t1: T = r;
+    #|  const r2 = { ...q, k: 1 };
+    #|  const t2: T = r2;
+    #|  const r3 = { p: c ? { ...q.p! } : { ...q.p! } };
+    #|  const t3: T = r3;
+    #|}
+    #|export function badFresh() {
+    #|  const lit = { h: "a" };
+    #|  const t: T = lit;
+    #|}
+    #|export function okTypeof(name: I, k: unknown, keep: (i: I) => boolean) {
+    #|  let xs = k as Array<typeof name>;
+    #|  xs = xs.filter(keep);
+    #|  return xs;
+    #|}
+    #|export function badTypeof(name: I, k: unknown) {
+    #|  const xs = k as Array<typeof name>;
+    #|  const s: string = xs;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badFresh > binding `t` init: expected `T` but got `{ h: string }`",
+    "function badTypeof > binding `s` init: type `Array<I>` is not assignable to type `string`",
+  ])
+}
