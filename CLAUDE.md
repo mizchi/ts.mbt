@@ -6037,6 +6037,99 @@ product surfaces now.
     batch was exactly that, caught only by reading the oracle's lines
     rather than its exit code; CI checks the submodule out, so it cannot
     happen there.
+
+  Batch GT is the inference rule batch GS named as its largest remaining
+  cause. A union target with ONE naked type parameter (`S | (() => S)`,
+  `S | undefined`, `S | S[]`) inferred nothing from a plain argument: the
+  structural pass in `infer_param_bindings` tried only the first
+  non-naked member, found no match, and left `S` as `any`. So
+  `useState("")` (preact's and React's signature) gave `[any, …]`, and
+  `q.nope` on its state was silent, as was `const n: number = opt("")`
+  against `opt<S>(x: S | undefined): S`. tsc's `inferToMultipleTypes`
+  takes out the source members another member matches, and what is left
+  is a lower-priority candidate for the naked parameter.
+  - **The candidate is taken only where the call proves it.** The
+    parameter must still be unbound after the structural pass, so `one(()
+    => "")` against `S | (() => S)` keeps the higher-priority match. Every
+    non-naked member must be one a primitive, an array or a plain object
+    literal cannot match: `null` / `undefined` / `void` (taken out of the
+    source when it has them), a function type, an array, a tuple or a
+    `Promise`. And every remaining source member must be a primitive, a
+    literal, an array, a tuple or an object type with no call signature.
+    Probed against tsc, it reports more than this does: `f<S>(x: S |
+    string)` called as `f("x")` gives `S = string` in tsc, and so do
+    `S | { a: number }` and a class instance against `S | (() => S)`.
+    Those are MISSes here, because a `Named` member could be an alias to a
+    primitive and an object member could accept the source structurally.
+  - **The first version made every hook's state a literal.**
+    `useState("light")` came out `"light"`, so `mode === "dark"` would
+    have read as a comparison with no overlap. tsc widens a fresh literal
+    candidate when `S` is not at the top level of the return, and
+    `[S, Dispatch<…>]` is not. `widen_fresh_literal_bindings` already did
+    that for `x: T` and `x: T | undefined` only. It now also accepts a
+    union whose other members a literal cannot match, since the argument is
+    still required to be a literal written at the call site, so its
+    candidate came through the naked member.
+  - **What it measures.** effect, zod, univer and excalidraw report
+    nothing at a new location. The real-app hooks catch `q.nope` and a
+    `number` read as a `string`. React's `useState` is still missed for a
+    different reason: it is an overloaded member of an `export =`
+    namespace, which binds as `any`. So is a setter call (`setQ(1)`),
+    since `Dispatch<StateUpdater<S>>` is not resolved at the call.
+  - **Carried from #304.** The generic arity check resolved a callee's own
+    binder through the module's aliases, so `type T = void` beside `<T>(x:
+    T)` made `f()` look legal. The binder is now skipped. That costs only
+    a finding, and it has its regression cell.
+  - **Review found three false positives, and fixing them correctly
+    took tsc's candidate reduction rather than a priority.** All three
+    were new in this batch, and all three are now absent:
+    - `pick<T>(x: T | number[])` over `string | number[]` kept the array
+      in the candidate, so `const r: string = pick(input)` was reported.
+      tsc first takes out a source member that another member matches
+      identically or closely, which is any array against `Array`. A
+      `ReadonlyArray` or tuple member may still accept the array, so
+      either one abstains.
+    - `choose<T>(v: T | (() => T), vs: T[])` called as `choose("a", ss)`
+      bound `"a"` before `ss: string[]` was seen. The obvious fix was to
+      defer the candidate and let structure win. That introduced a false
+      positive the first version did not have: `choose(s, as_)` with
+      `as_: "a"[]` is `string` in tsc, because candidates of one priority
+      are reduced in argument order by `getCommonSupertype`. So the
+      candidate is deferred to the end of the call (`fallback`, threaded
+      through `infer_param_bindings`) and then reduced:
+      - literals of one primitive are unioned (`choose("a", bs)` is
+        `"a" | "b"`);
+      - otherwise the leftmost candidate stays unless it is a subtype of
+        the next;
+      - only primitives and their literals are decided, and anything else
+        keeps the structural candidate, which is what main inferred.
+
+      `choose("a", ns)` with `ns: number[]` now reports at `ns`, where tsc
+      does. Before, it reported at `"a"`.
+    - `hook<S>(init: S | Promise<S>)` kept `"light"`. The widening's union
+      test and the fallback's member test were two copies of one list,
+      and only one had `Applied` `Array` / `ReadonlyArray` / `Promise` /
+      `PromiseLike`. They are one predicate now,
+      `naked_union_other_member`.
+
+    Each mechanism is mutation-proven, and the cells are a tsc-extra case,
+    `nakedUnionCandidateReduction`. `pickR<T>(x: T | readonly number[])`
+    over `number[]` is a MISS: tsc infers `T = number[]`, and this
+    abstains. `choose(() => "a", ["b"])` still reports `arg[1][0]`, which
+    main does too.
+  - **A second review round found three more, all real.** The first
+    fallback candidate was kept and later ones dropped, so `both("a",
+    "b")` against `T | undefined` twice was `"a"`. Every candidate is
+    collected now, and the whole sequence is reduced in argument order,
+    structural candidate included. A structural `any` candidate (`choose(
+    "a", xs)` with `xs: any[]`) read as "unbound", because both are `Any`
+    in the binding map, so `"a"` replaced it. The direct-hit arm records
+    it now, and `any` wins the reduction, as it is the supertype of every
+    candidate. And an object argument against `T | PromiseLike<T>` became
+    `T`, where tsc matches a thenable against `PromiseLike` and infers
+    `number`. An object source now abstains whenever a `Promise` or
+    `PromiseLike` member is present. Each is mutation-proven and in the
+    tsc-extra case.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
