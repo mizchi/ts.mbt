@@ -22036,6 +22036,12 @@ fn member_recv_unmodeled_with(
   }
   match resolver.unwrap(ty) {
     Intersection(_) | TypeOf(_) => true
+    // A receiver that REDUCES to `any` has every member, whatever it is
+    // spelled as: `ReturnType<C["m"]>[number]` over an unannotated method
+    // (`() => any` here) and `(typeof anyValue)[number]` were both reported
+    // on every member read, because the spelled type is not `Any` and the
+    // reduced one is not an unmodeled shape (univer's `DocumentSkeleton`).
+    Any => true
     Named(n) | Applied(n, _) =>
       resolver.classes.get(n) is Some(_) &&
       class_chain_has_unresolved_base(n, resolver)
@@ -24521,6 +24527,13 @@ fn check_object_lit_against_target(
   // The `object` keyword accepts ANY object shape: no key is excess and no
   // key is required. Suppress the whole excess/missing check.
   if resolver.unwrap(target) is NonPrimitiveObject {
+    return
+  }
+  // Nor does the EMPTY object type: tsc's excess-property check skips an
+  // empty target (`let o = {}; o = { a: 1 }` and `let o: {} = { a: 1 }` are
+  // both legal, probed), since `{}` is what any non-nullish value is
+  // assignable to. univer's `handleBorder` fills `let obj = {}` that way.
+  if resolver.unwrap(target) is Object([]) {
     return
   }
   // Mapped / conditional / `keyof` / generic-alias targets (`Boxified<any>`,
@@ -30775,7 +30788,15 @@ fn collect_narrowing(
           }
           match (lhs_key, class_name_opt) {
             (Some(key), Some(class_name)) => {
-              let cur = narrowing_current_type(env, resolver, key)
+              // A union member that is an alias to a union is expanded, or
+              // the else side kept it whole: univer's `OrInput = string |
+              // Or | CharsetInput` kept `CharsetInput`, class members and
+              // all, after `instanceof Or`, so a later `instanceof Charset`
+              // had nothing to remove.
+              let cur = expand_union_alias_members(
+                resolver,
+                narrowing_current_type(env, resolver, key),
+              )
               let class_ty = @ast.TsType::Named(class_name)
               // `v instanceof C` keeps every union member whose class
               // chain reaches `C` — so `instanceof Object` keeps `Date`
@@ -31275,28 +31296,23 @@ fn expand_union_alias_members(
   resolver : Resolver,
   t : @ast.TsType,
 ) -> @ast.TsType {
-  guard t is Union(_) else { return t }
-  let out : Array[@ast.TsType] = []
-  let mut expanded = false
-  for p in union_components(t) {
-    match p {
-      Named(_) | Applied(_, _) =>
-        match resolver.unwrap(p) {
-          Union(_) as u => {
-            expanded = true
-            for q in union_components(u) {
-              out.push(q)
-            }
-          }
-          _ => out.push(p)
+  match resolver.unwrap(t) {
+    Union(_) as u => {
+      let d = deep_union_members(resolver, u)
+      if d == u && !(t is Union(_)) {
+        return t
+      }
+      // The same member can arrive from two aliases (`string` in both
+      // `OrInput` and `CharsetRawInput`); keep one.
+      let out : Array[@ast.TsType] = []
+      for p in union_components(d) {
+        if !out.contains(p) {
+          out.push(p)
         }
-      _ => out.push(p)
+      }
+      union_of(out)
     }
-  }
-  if expanded {
-    flatten_union_exact(out)
-  } else {
-    t
+    _ => t
   }
 }
 
@@ -34426,6 +34442,17 @@ fn narrow_after_assignment(
     // function types left `x` holding `y`'s signature, so a following
     // `y = x` compared `y` with itself.
     Some(GenericFunc(_, _, _) as d) => {
+      env.narrow(name, d)
+      return
+    }
+    // And for the empty object type and a tuple, the two non-union
+    // declarations an array or object literal is commonly assigned over:
+    // `let obj = {}; obj = { t: … }` leaves `obj` as `{}`, so `return obj`
+    // against an all-optional interface is legal and `obj.t` is TS2339
+    // (univer's `handleBorder`), and `let r: [number, number]; r = [a, 1]`
+    // keeps the tuple an array literal would otherwise widen to `number[]`
+    // (univer's `dec2frac`).
+    Some(Object([]) | Tuple(_) as d) => {
       env.narrow(name, d)
       return
     }

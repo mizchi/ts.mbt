@@ -136,3 +136,103 @@ test "an array literal receiver widens its literal elements" {
     "top-level > call `includes` arg[0]: expected `string` but got `number`",
   ])
 }
+
+///|
+/// `any[K]` is `any` for every key. A non-literal key left it unreduced,
+/// and the unreduced shape read as a receiver with no members (univer's
+/// `ReturnType<DocumentViewModel["getChildren"]>[number]`, where the
+/// unannotated method reads as `() => any` here).
+test "an indexed access into any is any" {
+  let src =
+    #|class VM { private _c: { endIndex: number }[] = []; getChildren() { return this._c; } }
+    #|declare const q: any;
+    #|export function okUnannotated(s: ReturnType<VM["getChildren"]>[number]) { return s.endIndex; }
+    #|export function okAnyIndex(s: (typeof q)[number]) { return s.foo; }
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// The empty object type takes no excess-property check, and a binding
+/// declared `{}` is not narrowed by an assignment, because tsc narrows by
+/// assignment only a UNION declaration (univer's `handleBorder`, which
+/// fills `let obj = {}` in an `if` chain and returns it as an all-optional
+/// interface). A non-empty target still checks its excess keys.
+test "an empty object type takes no excess check and no assignment narrowing" {
+  let src =
+    #|interface BD { t?: { s: number } | null; r?: { s: number } | null }
+    #|export function okAssign(arr: string[]): BD {
+    #|  let obj = {};
+    #|  if (arr.length === 1) { obj = { t: arr[0], r: arr[0] }; }
+    #|  return obj;
+    #|}
+    #|export function okDeclared() {
+    #|  let o: {} = { a: 1 };
+    #|  o = { b: 2 };
+    #|  return o;
+    #|}
+    #|export function badRead(arr: string[]) {
+    #|  let obj = {};
+    #|  obj = { t: arr[0] };
+    #|  return obj.t;
+    #|}
+    #|export function badExcess() {
+    #|  let o: { a?: number } = {};
+    #|  o = { a: 1, zz: 2 };
+    #|  return o;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badRead > PropAccess `.t`: property `t` does not exist on `{}`", "function badExcess > assign `o`.zz: property `zz` does not exist on target type",
+  ])
+}
+
+///|
+/// A binding declared as a tuple keeps the tuple through an assignment of
+/// an array literal (univer's `dec2frac`).
+test "a tuple declaration is not narrowed by an array literal assignment" {
+  let src =
+    #|export function okTuple(n: number, s: number): [number, number] {
+    #|  let r: [number, number];
+    #|  if (n % 1 === 0) { r = [n * s, 1]; } else { r = [s, 1e19]; }
+    #|  return r;
+    #|}
+    #|export function badTuple(n: number): [string, number] {
+    #|  let r: [number, number];
+    #|  r = [n, 1];
+    #|  return r;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badTuple > return: expected `[string, number]` but got `[number, number]`",
+  ])
+}
+
+///|
+/// A union member that is an alias to a union is expanded before an
+/// `instanceof` test removes members (univer's `OrInput = string | Or |
+/// CharsetInput`), and a member two aliases share is kept once.
+test "a nested union alias is split by instanceof" {
+  let src =
+    #|type Unit = [number, number];
+    #|type RawInput = string | number | Unit;
+    #|class Charset { x = 1 }
+    #|type CharsetInput = Charset | RawInput;
+    #|class Or { s = 1 }
+    #|type OrInput = string | Or | CharsetInput;
+    #|export function okOr(inputs: OrInput[]) {
+    #|  const strings: string[] = [];
+    #|  for (const input of inputs) {
+    #|    if (input instanceof Or) { }
+    #|    else if (input instanceof Charset || typeof input === "number" || Array.isArray(input)) { }
+    #|    else { strings.push(input); }
+    #|  }
+    #|}
+    #|export function badOr(inputs: OrInput[]) {
+    #|  const nums: number[] = [];
+    #|  for (const input of inputs) {
+    #|    if (input instanceof Or || input instanceof Charset) { }
+    #|    else if (!Array.isArray(input)) { nums.push(input); }
+    #|  }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badOr > call `push` arg[0]: expected `number` but got `string | number`",
+  ])
+}
