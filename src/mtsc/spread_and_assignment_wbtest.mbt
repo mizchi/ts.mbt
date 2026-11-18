@@ -575,6 +575,46 @@ test "a bound spread keeps declared literals and typeof reads a local" {
 }
 
 ///|
+/// Which spread a member came from decides whether it widens, in source
+/// order, each cell probed: a spread of a literal written in place is fresh
+/// and widens (a conditional of literals too, and a fresh branch beside a
+/// declared one), a later REQUIRED declared member keeps its declared type,
+/// and a later OPTIONAL one leaves the earlier fresh member widened. An
+/// asserted member (`as const`, `as "q"`) is not fresh and stays narrow.
+test "a spread member widens by where it came from, in order" {
+  let src =
+    #|interface St { h?: "a" | "b"; n: number }
+    #|interface Req { h: "a" | "b" }
+    #|export function okFreshSpread() { let s = { ...{ h: "x" } }; s.h = "y"; return s; }
+    #|export function okCondSpread(c: boolean) { let s = { ...(c ? { h: "a" } : { h: "b" }) }; s.h = "z"; return s; }
+    #|export function okMixedCond(c: boolean, rq: Req) { let s = { ...(c ? rq : { h: "x" }) }; s.h = "y"; return s; }
+    #|export function okOptionalAfter(st: St) { let s = { ...{ h: "x" }, ...st }; s.h = "y"; return s; }
+    #|export function okFreshAfter(rq: Req) { let s = { ...rq, ...{ h: "x" } }; s.h = "y"; return s; }
+    #|export function okDeclared(rq: Req) { const s = { ...rq }; const r: Req = s; return r; }
+    #|export function badRequiredAfter(rq: Req) { let s = { ...{ h: "x" }, ...rq }; s.h = "y"; return s; }
+    #|export function badWrittenThenRequired(rq: Req) { let s = { h: "x", ...rq }; s.h = "y"; return s; }
+    #|export function badAsserted(rq: Req) {
+    #|  let o = { ...rq, v: "q" as const, k: "q" as "q" };
+    #|  o.v = "r";
+    #|  o.k = "r";
+    #|  return o;
+    #|}
+    #|export function badAssertedUnion(u: Req | St) {
+    #|  let o = { ...u, h: "z" as const };
+    #|  o.h = "y";
+    #|  return o;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badRequiredAfter > assign `.h`: expected `\"a\" (string) | \"b\" (string)` but got `\"y\" (string)`",
+    "function badWrittenThenRequired > object literal `h`: `h` is specified more than once, so this usage will be overwritten by the spread",
+    "function badWrittenThenRequired > assign `.h`: expected `\"a\" (string) | \"b\" (string)` but got `\"y\" (string)`",
+    "function badAsserted > assign `.v`: expected `\"q\" (string)` but got `\"r\" (string)`",
+    "function badAsserted > assign `.k`: expected `\"q\" (string)` but got `\"r\" (string)`",
+    "function badAssertedUnion > assign `.h`: expected `\"z\" (string) | \"z\" (string)` but got `\"y\" (string)`",
+  ])
+}
+
+///|
 /// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
 /// enumerate leaves the result open, and spreading that result again keeps
 /// it open, as a fresh literal and as a bound one.
