@@ -2592,6 +2592,7 @@ fn Resolver::ingest_module(
   prefix : String,
 ) -> Unit {
   Resolver::record_augmented_interface_names(r, module_)
+  Resolver::record_assigned_names(r, module_)
   // TS declaration merging: `interface Foo { a }` + `interface Foo { b }`
   // produces a single `Foo` whose members are the union of both bodies.
   // Field-key collisions take the later declaration.
@@ -4280,7 +4281,24 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           match self.type_aliases.get(n) {
             Some(aliased) => {
               seen = unwrap_seen_add(seen, n)
-              cur = aliased.type_
+              // A generic alias named WITHOUT type arguments: tsc reads
+              // each parameter as its DEFAULT, which the AST does not
+              // record, so each reads as `any`. Handing the body back with
+              // the parameter names unbound let a later lookup read one as
+              // whatever same-named declaration the program has: effect's
+              // `MulticastInterface<A extends IpAddress = IpAddress>` used
+              // bare met `net/Dns.ts`'s `interface A`, and the conditional
+              // `A extends Ipv4Address ? … : number` was decided over the
+              // DNS record.
+              cur = if aliased.type_params.length() == 0 {
+                aliased.type_
+              } else {
+                let b : Map[String, @ast.TsType] = Map([])
+                for tp in aliased.type_params {
+                  b[tp] = Any
+                }
+                substitute_params(aliased.type_, b)
+              }
             }
             None =>
               // A pure array-alias interface (`interface I extends Array<T>
@@ -4651,10 +4669,7 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               }
             } else {
               match
-                self.object_extends_decision(
-                  resolved_check,
-                  self.unwrap(ext),
-                ) {
+                self.object_extends_decision(resolved_check, self.unwrap(ext)) {
                 Some(true) => cur = t_branch
                 Some(false) => cur = f_branch
                 None => keep_going = false
@@ -5990,7 +6005,10 @@ fn Resolver::lookup_field_core(
       let mut any_missing = false
       for it in items {
         match self.lookup_field(it, field) {
-          Some(t) => parts.push(t)
+          // An EXACT duplicate adds nothing: a spread of a union gives
+          // every alternative the written `type: "z"`, and the read came
+          // back `"z" | "z"`.
+          Some(t) => if !parts.contains(t) { parts.push(t) }
           None => any_missing = true
         }
       }
@@ -9478,7 +9496,7 @@ fn generic_class_instance_definite_mismatch(
     Applied(tn, _) | Named(tn) =>
       match resolver.classes.get(tn) {
         Some(tc) =>
-          (tc.private_members.length() > 0 || tc.protected_members.length() > 0) &&
+          class_decl_has_instance_restricted_member(tc) &&
           !class_extends(resolver, sn, tn) &&
           resolver.interfaces.get(tn) is None
         None => false
@@ -9520,10 +9538,64 @@ fn class_extends(resolver : Resolver, sub : String, base : String) -> Bool {
 /// subclass, which inherits it) can satisfy the type.
 fn class_has_private_member(resolver : Resolver, name : String) -> Bool {
   match resolver.classes.get(name) {
-    Some(decl) =>
-      decl.private_members.length() > 0 || decl.protected_members.length() > 0
+    Some(decl) => class_decl_has_instance_restricted_member(decl)
     None => false
   }
+}
+
+///|
+/// Does the INSTANCE side of `decl` carry a `private` / `protected` member?
+/// Only those make the instance type nominal. The visibility lists hold
+/// static members too, and a `private static helper()` is a member of the
+/// constructor, not of an instance: tsc accepts `const k: K = { a: 2 }`
+/// for `class K { a = 1; private static helper() {} }` (probed).
+/// excalidraw's `LinearElementEditor` is every editor update in the app
+/// spelled as `{ ...editor, … }`, and it has three `private static`s.
+///
+/// A name counts as static only when every declaration of it found is
+/// static; one this cannot find (a parameter property is recorded only
+/// in the lists) stays instance-side, so the answer can only lose a
+/// report.
+fn class_decl_has_instance_restricted_member(decl : @ast.TsClassDecl) -> Bool {
+  fn static_only(decl : @ast.TsClassDecl, n : String) -> Bool {
+    let mut saw_static = false
+    for m in decl.methods {
+      if m.name == n {
+        if m.is_static {
+          saw_static = true
+        } else {
+          return false
+        }
+      }
+    }
+    for p in decl.properties {
+      if p.name == n {
+        if p.is_static {
+          saw_static = true
+        } else {
+          return false
+        }
+      }
+    }
+    for f in decl.static_field_inits {
+      if f.0 == n {
+        saw_static = true
+      }
+    }
+    saw_static
+  }
+
+  for n in decl.private_members {
+    if !static_only(decl, n) {
+      return true
+    }
+  }
+  for n in decl.protected_members {
+    if !static_only(decl, n) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -13911,7 +13983,7 @@ fn infer_expr_inner(
                 @ast.TsType::Union([f.1, Undefined])
               }
               for alt in alts {
-                object_lit_set_field(alt, f.0, ft)
+                object_lit_spread_field(alt, f.0, ft)
               }
             }
           } else if variants is Some(vs) &&
@@ -13927,7 +13999,7 @@ fn infer_expr_inner(
               for v in vs {
                 let copy = alt.copy()
                 for f in v {
-                  object_lit_set_field(copy, f.0, f.1)
+                  object_lit_spread_field(copy, f.0, f.1)
                 }
                 next.push(copy)
               }
@@ -13950,7 +14022,7 @@ fn infer_expr_inner(
                 continue
               }
               for alt in alts {
-                object_lit_set_field(alt, f.0, f.1)
+                object_lit_spread_field(alt, f.0, f.1)
               }
             }
           } else {
@@ -23168,6 +23240,49 @@ fn object_lit_set_field(
 }
 
 ///|
+/// A member a SPREAD copies. An OPTIONAL member does not override what is
+/// already there: `{ ...defaults, ...partial }` with `partial: Partial<O>`
+/// keeps each default where `partial` may lack the member, so tsc's
+/// `getSpreadType` gives the union of the earlier type and the later one
+/// without `undefined`. The `?` is not in the type (the parser wraps
+/// `a?: T` into `T | undefined`), so a member whose type admits
+/// `undefined` is read as optional — for a REQUIRED `a: T | undefined`
+/// that drops the `undefined`, a narrower type rather than a report on
+/// legal code. excalidraw's bucket fill merges its options exactly so.
+fn object_lit_spread_field(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+  key : String,
+  ty : @ast.TsType,
+) -> Unit {
+  let k = @ast.TsType::Literal(key)
+  let optional = match ty {
+    Undefined => true
+    Union(items) => items.contains(Undefined)
+    _ => false
+  }
+  if optional && !key.has_prefix("@@") {
+    for i, f in fields {
+      if f.0 == k {
+        let parts : Array[@ast.TsType] = []
+        for t in union_components(f.1) {
+          if !parts.contains(t) {
+            parts.push(t)
+          }
+        }
+        for t in union_components(ty) {
+          if !(t is Undefined) && !parts.contains(t) {
+            parts.push(t)
+          }
+        }
+        fields[i] = (k, union_of(parts))
+        return
+      }
+    }
+  }
+  object_lit_set_field(fields, key, ty)
+}
+
+///|
 /// The member lists a spread of `ty` can copy, one per union member, when
 /// `ty` is a union whose every non-nullish member is an enumerable shape.
 /// A nullish member copies nothing and contributes an empty list. `None`
@@ -23178,7 +23293,7 @@ fn object_spread_variants(
   resolver : Resolver,
 ) -> Array[Array[(String, @ast.TsType)]]? {
   let members : Array[@ast.TsType] = []
-  fn go(t : @ast.TsType, depth : Int, out : Array[@ast.TsType]) -> Bool {
+  fn go(t : @ast.TsType, depth : Int32, out : Array[@ast.TsType]) -> Bool {
     if depth > 4 {
       return false
     }
@@ -23283,16 +23398,15 @@ fn Resolver::object_extends_decision(
         items
         .iter()
         .all(fn(i) {
-          i is (Literal(_)
+          i
+          is (Literal(_)
           | NumberLiteral(_)
           | BooleanLiteral(_)
           | BigIntLiteral(_)
           | Undefined
           | Null)
         }) &&
-        items
-        .iter()
-        .any(fn(i) { !(i is (Undefined | Null)) })
+        items.iter().any(fn(i) { !(i is (Undefined | Null)) })
       _ => false
     }
   }
@@ -25039,7 +25153,11 @@ fn check_arrow_with_context(
     in_scope_type_params: ctx.in_scope_type_params,
     type_param_bounds: ctx.type_param_bounds,
     permissive: ctx.permissive,
-    unassigned: unassigned_without(ctx.unassigned, param_names),
+    unassigned: unassigned_for_closure(
+      ctx.unassigned,
+      param_names,
+      ctx.resolver,
+    ),
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
@@ -25117,6 +25235,54 @@ fn dedup_issues_since(issues : Array[ExprIssue], pre_len : Int32) -> Unit {
   for k in kept {
     issues.push(k)
   }
+}
+
+///|
+/// Record every name the parser saw WRITTEN (`<assigned:NAME>`) as
+/// `@assigned:NAME`, for the closure half of TS2454 — see
+/// `unassigned_for_closure`. Namespace bodies are their own `TsModule`
+/// and are walked too, since a `let` the file declares may be assigned in
+/// one.
+fn Resolver::record_assigned_names(
+  r : Resolver,
+  module_ : @ast.TsModule,
+) -> Unit {
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<assigned:") && gm.has_suffix(">") {
+      r.globals["@assigned:" +
+      gm["<assigned:".length():gm.length() - 1].to_owned()] = Any
+    }
+  }
+  for ns in module_.namespaces {
+    Resolver::record_assigned_names(r, ns.module_)
+  }
+}
+
+///|
+/// The TS2454 tracking map a CLOSURE body starts with. Its parameters
+/// shadow outer bindings (`unassigned_without`), and an outer variable
+/// that is assigned ANYWHERE is assumed initialized: the closure can run
+/// after any of those writes, which is tsc's `isOuterVariable &&
+/// !isNeverInitialized`. Probed: `let api: Api; before(() => { api = mk()
+/// }); it(() => { api.go() })` is accepted, and the same `it` beside no
+/// assignment at all is TS2454. Every test file that sets a fixture in
+/// `beforeEach` and reads it in `it` is the first shape.
+fn unassigned_for_closure(
+  src : Map[String, Bool],
+  names : Array[String],
+  resolver : Resolver,
+) -> Map[String, Bool] {
+  let m = unassigned_without(src, names)
+  let drop : Array[String] = []
+  for k, _ in m {
+    if resolver.globals.contains("@assigned:" + k) {
+      drop.push(k)
+    }
+  }
+  for k in drop {
+    let _ = m.remove(k)
+  }
+  m
 }
 
 ///|
@@ -25253,7 +25419,11 @@ fn check_funcexpr_with_context(
     type_param_bounds: ctx.type_param_bounds,
     permissive: ctx.permissive,
     // Parameters shadow outer bindings — drop them from the TS2454 set.
-    unassigned: unassigned_without(ctx.unassigned, param_names),
+    unassigned: unassigned_for_closure(
+      ctx.unassigned,
+      param_names,
+      ctx.resolver,
+    ),
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
