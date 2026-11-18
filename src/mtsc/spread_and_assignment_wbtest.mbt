@@ -715,6 +715,35 @@ test "a union spread widens per alternative and overwrites when every member req
 }
 
 ///|
+/// univer's `findByStartIndex`: a bounded generic's return is instantiated
+/// from its un-inlined signature, so `T | undefined` is the argument's
+/// element type rather than the bound, a `ReadonlyArray<T>` parameter
+/// binds from a mutable array, and a literal bound against a primitive
+/// constraint stays a literal (probed).
+test "a bounded generic returns its binding, not its bound" {
+  let src =
+    #|interface IS { startIndex: number }
+    #|interface Tbl { startIndex: number; tableId: string }
+    #|interface Body { tables?: Tbl[] }
+    #|function findBy<T extends IS>(items: readonly T[], i: number): T | undefined { return items.find((x) => x.startIndex === i); }
+    #|function findRo<T extends IS>(items: ReadonlyArray<T>): T | undefined { return items[0]; }
+    #|function g<T extends string>(x: T): T | undefined { return x; }
+    #|function k<T extends { kind: string }>(x: T): T[] { return [x]; }
+    #|export function okRawReturn(b: Body | undefined, xs: Tbl[]) {
+    #|  const t = findBy(b?.tables ?? [], 1);
+    #|  const r = findRo(xs);
+    #|  return [t?.tableId, r?.tableId];
+    #|}
+    #|export function okBoundedObject(o: { kind: string; n: number }) { const v = k(o); const w: number = v[0].n; return w; }
+    #|export function badRawReturn(b: Body | undefined) { return findBy(b?.tables ?? [], 1)?.nope; }
+    #|export function badLiteralKept() { let r = g("a"); r = "b"; return r; }
+  assert_eq(issue_lines(src), [
+    "function badRawReturn > PropAccess `?.nope`: property `nope` does not exist on `Tbl`",
+    "function badLiteralKept > assign `r`: expected `\"a\" (string) | undefined` but got `string`",
+  ])
+}
+
+///|
 /// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
 /// enumerate leaves the result open, and spreading that result again keeps
 /// it open, as a fresh literal and as a bound one.

@@ -13627,6 +13627,19 @@ fn infer_expr_inner(
       if type_params.length() > 0 {
         match callee_ty {
           Func(params, ret) => {
+            match
+              instantiate_raw_generic_return(
+                env,
+                resolver,
+                name,
+                type_params,
+                params,
+                args,
+                resolver.signatures.get(name),
+              ) {
+              Some(t) => return t
+              None => ()
+            }
             let bindings = solve_generic_bindings(
               env,
               resolver,
@@ -14798,6 +14811,40 @@ fn infer_param_bindings(
         type_params,
         f_elem,
         a_elem,
+        bindings,
+        soft,
+        fallback?,
+      )
+    // A `ReadonlyArray<T>` parameter takes a mutable array, and a mutable
+    // `T[]` takes a `ReadonlyArray` only in a mismatch the assignment check
+    // reports, so either direction is an element-wise inference (tsc's
+    // `ReadonlyArray<T>` is a supertype of `T[]`). Only `readonly T[]`, which
+    // the parser spells as an array, was matched before.
+    (Applied("ReadonlyArray", f_args), Array(a_elem)) if f_args.length() == 1 =>
+      infer_param_bindings(
+        type_params,
+        f_args[0],
+        a_elem,
+        bindings,
+        soft,
+        fallback?,
+      )
+    (Applied("ReadonlyArray", f_args), Applied("Array", a_args)) if f_args.length() ==
+      1 &&
+      a_args.length() == 1 =>
+      infer_param_bindings(
+        type_params,
+        f_args[0],
+        a_args[0],
+        bindings,
+        soft,
+        fallback?,
+      )
+    (Array(f_elem), Applied("ReadonlyArray", a_args)) if a_args.length() == 1 =>
+      infer_param_bindings(
+        type_params,
+        f_elem,
+        a_args[0],
         bindings,
         soft,
         fallback?,
@@ -16293,20 +16340,9 @@ fn instantiate_raw_generic_params(
   // inlined parameter holds the bound exactly where the raw one holds the
   // name (`align_inlined_bounds`). A parameter neither source can speak for
   // has an UNKNOWN bound and keeps the inlined form.
-  let known_bounds : Map[String, @ast.TsType?] = Map([])
-  match resolver.func_type_param_bounds.get(name) {
-    Some(bs) =>
-      for tp in type_params {
-        known_bounds[tp] = match bs.search_by(fn(b) { b.0 == tp }) {
-          Some(bi) => Some(bs[bi].1)
-          None => None
-        }
-      }
-    None =>
-      for i, rp in raw {
-        align_inlined_bounds(rp, params[i], type_params, known_bounds, 0)
-      }
-  }
+  let known_bounds = raw_signature_known_bounds(
+    resolver, name, type_params, raw, params,
+  )
   let out : Array[@ast.TsType] = []
   for i, p in raw {
     let mentioned = type_params.filter(fn(tp) { type_param_occurs(tp, p) })
@@ -16340,6 +16376,113 @@ fn instantiate_raw_generic_params(
     }
   }
   Some(out)
+}
+
+///|
+/// Each type parameter's bound, for a call through a raw signature: a
+/// function DECLARATION records its bounds in `func_type_param_bounds`,
+/// and a `declare function` (ingested as a `TsImport`, which carries none)
+/// has them read back off the raw and inlined parameters, which differ
+/// exactly where a bound stands (`align_inlined_bounds`). `None` for a
+/// parameter neither source can speak for.
+fn raw_signature_known_bounds(
+  resolver : Resolver,
+  name : String,
+  type_params : Array[String],
+  raw : Array[@ast.TsType],
+  params : Array[@ast.TsType],
+) -> Map[String, @ast.TsType?] {
+  let known_bounds : Map[String, @ast.TsType?] = Map([])
+  match resolver.func_type_param_bounds.get(name) {
+    Some(bs) =>
+      for tp in type_params {
+        known_bounds[tp] = match bs.search_by(fn(b) { b.0 == tp }) {
+          Some(bi) => Some(bs[bi].1)
+          None => None
+        }
+      }
+    None =>
+      for i, rp in raw {
+        if i < params.length() {
+          align_inlined_bounds(rp, params[i], type_params, known_bounds, 0)
+        }
+      }
+  }
+  known_bounds
+}
+
+///|
+/// The return of a call to a BOUNDED generic function, instantiated from
+/// its un-inlined signature. The parser inlines a bounded type parameter
+/// to its bound in the return as in the parameters, so `findBy<T extends
+/// IS>(items: readonly T[], i: number): T | undefined` returned
+/// `IS | undefined` whatever it was called with, and univer's
+/// `findByStartIndex(body.tables ?? [], i)?.tableId` "did not exist on
+/// `IS`" (probed). Solved from the raw parameters, the binding is `Tbl`.
+/// Only when every type parameter the return mentions is solved to
+/// something checkable that provably satisfies its bound — the same
+/// condition the raw parameters are held to — and `None` otherwise, which
+/// leaves the inlined return the call always had.
+fn instantiate_raw_generic_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  type_params : Array[String],
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  sig : Array[@ast.TsParam]?,
+) -> @ast.TsType? {
+  guard env.lookup(name) is None else { return None }
+  guard resolver.globals.get("@raw-sig:" + name) is Some(Func(raw, raw_ret)) else {
+    return None
+  }
+  if raw.length() != params.length() {
+    return None
+  }
+  let mentioned = type_params.filter(fn(tp) { type_param_occurs(tp, raw_ret) })
+  if mentioned.length() == 0 {
+    return None
+  }
+  let expanded = raw.map(fn(p) { expand_alias_head(resolver, p, 0) })
+  let bindings = solve_generic_bindings(
+    env, resolver, type_params, expanded, args, sig,
+  )
+  let known_bounds = raw_signature_known_bounds(
+    resolver, name, type_params, raw, params,
+  )
+  let solved = mentioned
+    .iter()
+    .all(fn(tp) {
+      match bindings.get(tp) {
+        Some(b) =>
+          is_checkable(b) &&
+          !(b is (Any | Unknown | Never)) &&
+          !type_has_member_marker_key(b) &&
+          !type_contains_unresolved_named(b, resolver) &&
+          binding_satisfies_declared_bound(
+            resolver,
+            type_params,
+            bindings,
+            known_bounds.get(tp),
+            b,
+          )
+        None => false
+      }
+    })
+  if !solved {
+    return None
+  }
+  let bindings = widen_fresh_literal_bindings(
+    env,
+    resolver,
+    bindings,
+    type_params,
+    resolver.func_const_type_params.get(name),
+    expanded,
+    args,
+    raw_ret,
+  )
+  Some(substitute_params(raw_ret, bindings))
 }
 
 ///|
