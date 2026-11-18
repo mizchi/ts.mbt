@@ -6348,13 +6348,28 @@ product surfaces now.
     through the method path and abstains on a union receiver, so the
     chained spelling abstains too. A union of DECLARED methods keeps the
     rule: `u?.m("a")` over `A | B` is TS2554, probed.
+  - **Overload order and literal arguments.** tsc tries a signature with
+    a literal-typed parameter first (`reorderCandidates`), so `{ (x:
+    string): number; (x: "a"): string }` with `f("a")` is `string`. That
+    needed two facts at all three overload loops: the reorder itself, and
+    a literal argument keeping its literal type for SELECTION, since
+    inference widens `1` and `true` (univer's `_getUndoStack(id, true)`
+    picked the implementation's `T[] | null`). A written `x: "a" |
+    undefined` is not promoted; only a parameter `CallableMeta` records as
+    optional is.
+  - **Object conditionals, two more cells.** An interface's own member
+    overrides the inherited one (`A extends { kind: "a" }` was false), and
+    a member that may be optional proves nothing in either direction,
+    since `b?: T` and `b: T | undefined` are one node.
   - **A switch that names every enum member ends every path.** univer's
     `getReverseDirection` covers all four `Direction` members and was
     "not all paths return" (on main too). An enum member read infers as
     its base `number` / `string`, so coverage is decided by NAME. A
     scrutinee typed through a namespace import (`E.Dir`) is still
     reported, because a qualified enum that no other module declares is
-    not in the qualified-name table.
+    not in the qualified-name table. A local binding of the enum's name
+    (`const E = { A: 0, B: 0 }`, a parameter `E: Labels`) shadows it, and
+    its labels do not count.
 
   Two of #306's review items were reports on legal code, confirmed against
   the nightly, and are fixed here:
@@ -6371,11 +6386,11 @@ product surfaces now.
   - **What it measures.** The oracle is unchanged: TP 2726 / MISS 0 /
     FP 0, and tsc-extra stays at FP 0. effect goes from 102 to 96 and zod
     stays at 7. univer goes:
-    - core 102→74
-    - docs-hyper-link 83→58
-    - data-validation 405→332
-    - sheets-numfmt 488→335
-    - ui 393→307
+    - core 102→69
+    - docs-hyper-link 83→53
+    - data-validation 405→327
+    - sheets-numfmt 488→330
+    - ui 393→302
 
     excalidraw goes from 529 to 345. None of them reports at a site main
     does not. The real-app check still catches 8 of 11 with no false
