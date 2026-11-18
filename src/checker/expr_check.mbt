@@ -33210,6 +33210,16 @@ fn analyze_equality(
   match lit_match {
     Some((name, lit)) => {
       let cur = narrowing_current_type(env, resolver, name)
+      // A `string` member compared EQUAL to a literal is that literal
+      // (tsc's `replacePrimitivesWithLiterals`), and a member that cannot
+      // equal a string (`undefined`, an array, a number) is gone. So
+      // `v === "-" || v === "/" ? v : null` over `v: string | string[] |
+      // undefined` returns `"-" | "/" | null` (univer's `getSeparator`).
+      // Only the equal side changes; the other keeps `string`.
+      match string_equal_to_literal(resolver, cur, lit) {
+        Some(t) => true_side.push((name, t))
+        None => ()
+      }
       match cur {
         Union(_) => {
           let kept = narrow_keep(cur, fn(v) {
@@ -33237,6 +33247,54 @@ fn analyze_equality(
     }
     None => ()
   }
+}
+
+///|
+/// The equal side of `x === "lit"` where `x`'s type holds `string`: each
+/// `string` member becomes the literal, the same literal stays, and members
+/// that cannot equal a string are dropped. `None` when no `string` member
+/// is there (the literal-union arm below decides those) or when a member
+/// is one this cannot classify, which keeps the type as it was.
+fn string_equal_to_literal(
+  resolver : Resolver,
+  cur : @ast.TsType,
+  lit : String,
+) -> @ast.TsType? {
+  let parts = union_components(expand_union_alias_members(resolver, cur))
+  let out : Array[@ast.TsType] = []
+  let mut saw_string = false
+  for p in parts {
+    match resolver.unwrap(p) {
+      String_ => {
+        saw_string = true
+        if !out.contains(Literal(lit)) {
+          out.push(Literal(lit))
+        }
+      }
+      Literal(s) =>
+        if s == lit && !out.contains(Literal(lit)) {
+          out.push(Literal(lit))
+        }
+      Null
+      | Undefined
+      | Void
+      | Number
+      | Int
+      | NumberLiteral(_)
+      | Boolean
+      | BooleanLiteral(_)
+      | BigInt
+      | BigIntLiteral(_)
+      | Symbol
+      | Array(_)
+      | Tuple(_) => ()
+      _ => return None
+    }
+  }
+  if !saw_string || out.length() == 0 {
+    return None
+  }
+  Some(union_of(out))
 }
 
 // ---------------------------------------------------------------------------

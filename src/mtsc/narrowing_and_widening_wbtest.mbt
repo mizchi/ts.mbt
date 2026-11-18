@@ -413,5 +413,23 @@ test "or-assignment drops an aliased falsy member" {
     #|export const badW: string = w;
   assert_eq(issue_lines(src), [
     "top-level > binding `badW` init: expected `string` but got `{ n: number }`",
+
+/// A `string` compared EQUAL to a literal is that literal, and a member
+/// that cannot equal a string is gone (tsc's `replacePrimitivesWithLiterals`):
+/// univer's `getSeparator` returns `token.value === '-' || token.value ===
+/// '/' ? token.value : null` as `'-' | '/' | null`. The other side keeps
+/// `string`.
+test "a string compared equal to a literal is the literal" {
+  let src =
+    #|export function okPath(t: { value?: string | string[] }): "-" | "/" | null {
+    #|  return t.value === "-" || t.value === "/" ? t.value : null;
+    #|}
+    #|export function okVar(v: string | undefined): "-" | null { if (v === "-") { return v; } return null; }
+    #|export function okElse(v: string) { if (v !== "-") { const x: string = v; return x; } const y: "-" = v; return y; }
+    #|export function badElse(v: string) { if (v !== "-") { const x: "-" = v; return x; } return null; }
+    #|export function badArray(v: string | string[]) { if (v === "-") { const s: string[] = v; return s; } return null; }
+  assert_eq(issue_lines(src), [
+    "function badElse > binding `x` init: expected `\"-\" (string)` but got `string`",
+    "function badArray > binding `s` init: expected `string[]` but got `string`",
   ])
 }
