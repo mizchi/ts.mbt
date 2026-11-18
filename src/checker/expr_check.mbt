@@ -14182,6 +14182,47 @@ fn infer_expr_inner(
             @ast.TsType::Union(members)
           }
         }
+        // `a ??= b` is `NonNullable<A> | B` and `a ||= b` is A's truthy part
+        // `| B`, both subtype-reduced, so a fresh literal `b` contextually
+        // typed by `A` drops out: univer's `const s = this._data.style ??=
+        // {}` is the declared `IDocumentStyle`, and reading `.renderConfig`
+        // off it is legal (probed). Answering `b`'s own `{}` reported every
+        // member (on main too). A mismatched `b` is reported by the
+        // assignment check itself, so the left part answers for a literal;
+        // any other `b` joins it unless it is assignable to it.
+        OrAssign | CoalesceAssign => {
+          let lhs = infer_expr(env, resolver, target)
+          match lhs {
+            Any => @ast.TsType::Any
+            _ if !is_checkable(lhs) || lhs is Unknown => rhs
+            _ => {
+              let mut left = prune_nullish(resolver, lhs)
+              // A binding declared `T | undefined` and never assigned reads
+              // as `undefined` here, while tsc types an assignment target at
+              // its DECLARED type (`let s: DS | undefined; const t = s ??=
+              // {}` is a `DS`, probed).
+              if left is (Null | Undefined | Void) &&
+                target is Var(n) &&
+                env.lookup_declared(n) is Some(d) &&
+                is_checkable(d) {
+                left = prune_nullish(resolver, d)
+              }
+              if left is (Null | Undefined | Void | Any) {
+                rhs
+              } else if value is (ObjectLit(_) | ArrayLit(_)) ||
+                is_assignable_to(rhs, left) {
+                left
+              } else {
+                let members = simplify_union([left, rhs])
+                if members.length() == 1 {
+                  members[0]
+                } else {
+                  @ast.TsType::Union(members)
+                }
+              }
+            }
+          }
+        }
         _ => rhs
       }
     }
