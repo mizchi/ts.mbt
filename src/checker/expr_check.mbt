@@ -14182,6 +14182,47 @@ fn infer_expr_inner(
             @ast.TsType::Union(members)
           }
         }
+        // `a ??= b` is `NonNullable<A> | B` and `a ||= b` is A's truthy part
+        // `| B`, both subtype-reduced, so a fresh literal `b` contextually
+        // typed by `A` drops out: univer's `const s = this._data.style ??=
+        // {}` is the declared `IDocumentStyle`, and reading `.renderConfig`
+        // off it is legal (probed). Answering `b`'s own `{}` reported every
+        // member (on main too). A mismatched `b` is reported by the
+        // assignment check itself, so the left part answers for a literal;
+        // any other `b` joins it unless it is assignable to it.
+        OrAssign | CoalesceAssign => {
+          let lhs = infer_expr(env, resolver, target)
+          match lhs {
+            Any => @ast.TsType::Any
+            _ if !is_checkable(lhs) || lhs is Unknown => rhs
+            _ => {
+              let mut left = prune_nullish(resolver, lhs)
+              // A binding declared `T | undefined` and never assigned reads
+              // as `undefined` here, while tsc types an assignment target at
+              // its DECLARED type (`let s: DS | undefined; const t = s ??=
+              // {}` is a `DS`, probed).
+              if left is (Null | Undefined | Void) &&
+                target is Var(n) &&
+                env.lookup_declared(n) is Some(d) &&
+                is_checkable(d) {
+                left = prune_nullish(resolver, d)
+              }
+              if left is (Null | Undefined | Void | Any) {
+                rhs
+              } else if value is (ObjectLit(_) | ArrayLit(_)) ||
+                is_assignable_to(rhs, left) {
+                left
+              } else {
+                let members = simplify_union([left, rhs])
+                if members.length() == 1 {
+                  members[0]
+                } else {
+                  @ast.TsType::Union(members)
+                }
+              }
+            }
+          }
+        }
         _ => rhs
       }
     }
@@ -14880,6 +14921,26 @@ fn infer_param_bindings(
         fallback?,
       )
     (Union(f_parts), _) => {
+      // A source union first loses the members the target spells too, as
+      // tsc's `inferFromMatchingTypes` does: `T[] | undefined` against
+      // `Blk[] | undefined` infers from `Blk[]` alone. Matching `T[]`
+      // against the whole union bound nothing, and univer's
+      // `collect<T extends { startIndex: number }>(prev: T[] | undefined,
+      // …, getId: (item: T) => string)` then typed `item` as the bound, so
+      // `item.blockId` "did not exist" (on main too).
+      let actual = match actual {
+        Union(a_parts) => {
+          let rest = a_parts.filter(fn(a) { !f_parts.contains(a) })
+          if rest.length() == a_parts.length() || rest.length() == 0 {
+            actual
+          } else if rest.length() == 1 {
+            rest[0]
+          } else {
+            @ast.TsType::Union(rest)
+          }
+        }
+        _ => actual
+      }
       // Best-effort: try the first part that isn't a bare type parameter
       // (matching a concrete shape generally yields more information). If
       // none matches concretely, fall back to the first part.
@@ -21962,9 +22023,13 @@ fn binding_init_type(
 /// Where an object literal's member got its type, in source order: from a
 /// member WRITTEN in the literal or a spread of a literal written in place
 /// (fresh, so it widens), or from a spread of a declared value (its
-/// declared type, which does not).
+/// declared type, which does not). `FreshPart(t)` is a member a fresh
+/// one and a declared one both contributed to: only the union members that
+/// came from the fresh one (`t`) widen, so a union spread that replaces
+/// the member in SOME alternatives keeps the declared type in those.
 priv enum ObjectMemberOrigin {
   Fresh(@ast.TsExpr?)
+  FreshPart(@ast.TsType)
   Declared
 }
 
@@ -22040,6 +22105,7 @@ fn spread_member_origins(
           (Some(Declared), Some(Declared)) => true
           (Some(Fresh(None)), Some(Fresh(None))) => true
           (Some(Fresh(Some(x))), Some(Fresh(Some(y)))) => physical_equal(x, y)
+          (Some(FreshPart(x)), Some(FreshPart(y))) => x == y
           _ => false
         }
         if same {
@@ -22049,6 +22115,10 @@ fn spread_member_origins(
           }
         } else if a0 is Some(Fresh(_)) || b0 is Some(Fresh(_)) {
           out[k] = Fresh(None)
+        } else if a0 is Some(FreshPart(t)) {
+          out[k] = FreshPart(t)
+        } else if b0 is Some(FreshPart(t)) {
+          out[k] = FreshPart(t)
         } else {
           out[k] = Declared
         }
@@ -22065,12 +22135,14 @@ fn spread_member_origins(
       // survives into the union and still widens.
       fn mark_declared(k : String, optional : Bool) {
         match out.get(k) {
-          // The member is now the union of the fresh one and this one, so
-          // the whole union widens, not the written expression alone:
-          // `{ h: c ? "a" : "b", ...d }` with `d.h?: number` is
-          // `string | number` (probed), and re-widening only the
-          // conditional's branches dropped the `number`.
-          Some(Fresh(_)) if optional => out[k] = Fresh(None)
+          // The member is now the union of the fresh one and this one, and
+          // only the fresh one's part widens: `{ h: c ? "a" : "b", ...d }`
+          // with `d.h?: number` is `string | number` (probed; re-widening
+          // only the conditional's branches dropped the `number`), and
+          // `{ h: 0, ...u }` over `{ h: "a"; kind: "a" } | { kind: "b" }`
+          // keeps the first alternative's `"a"`.
+          Some(Fresh(Some(v))) if optional => out[k] = FreshPart(infer(v))
+          Some(Fresh(None) | FreshPart(_)) if optional => ()
           _ => out[k] = Declared
         }
       }
@@ -22141,6 +22213,28 @@ fn widen_object_literal_type(
                 Some(Fresh(Some(v))) =>
                   (f.0, widen_object_literal_type(f.1, v, resolver, infer))
                 Some(Fresh(None)) => (f.0, widen_literal_deep(f.1))
+                Some(FreshPart(t)) => {
+                  let fresh = union_components(t)
+                  let parts : Array[@ast.TsType] = []
+                  for p in union_components(f.1) {
+                    let w = if fresh.iter().any(fn(x) { equivalent(x, p) }) {
+                      widen_literal_deep(p)
+                    } else {
+                      p
+                    }
+                    if !parts.iter().any(fn(e) { equivalent(e, w) }) {
+                      parts.push(w)
+                    }
+                  }
+                  (
+                    f.0,
+                    if parts.length() == 1 {
+                      parts[0]
+                    } else {
+                      @ast.TsType::Union(parts)
+                    },
+                  )
+                }
                 Some(Declared) => f
                 None if has_spread => f
                 None => (f.0, widen_literal_deep(f.1))
@@ -25249,7 +25343,14 @@ fn collect_declared_fields_unwrapped_at(
           out.push(f)
         }
       }
-    // Union: only fields present on every member are accessible.
+    // Union: only fields present on every member are accessible. Each
+    // member walks with its OWN copy of the visited set: the set exists so
+    // a shared base is collected once per walk, and the members are
+    // separate walks. Sharing it made the second member skip every base
+    // the first had reached, so `IRange | IRange` (a member read off a
+    // union of two params interfaces, which is not deduplicated) kept only
+    // `IRange`'s own members and `{ ...range }` lost the inherited
+    // `startRow` (univer's permission checks, on main too).
     Union(parts) =>
       if parts.length() == 0 {
         ()
@@ -25258,7 +25359,7 @@ fn collect_declared_fields_unwrapped_at(
           parts[0],
           resolver,
           depth + 1,
-          visited,
+          visited.copy(),
         )
         let common : Map[String, @ast.TsType] = Map([])
         for f in first_fields {
@@ -25270,7 +25371,7 @@ fn collect_declared_fields_unwrapped_at(
             parts[i],
             resolver,
             depth + 1,
-            visited,
+            visited.copy(),
           )
           let member_map : Map[String, @ast.TsType] = Map([])
           for f in member_fields {
@@ -35931,6 +36032,84 @@ fn check_call_args_in_expr(
   expr : @ast.TsExpr,
   ctx : CheckCtx,
 ) -> Unit {
+  // A call that short-circuits through a `?.` evaluates its arguments only
+  // when every receiver the `?.` guarded is non-nullish, so they are
+  // non-nullish inside the arguments: `icon?.move({ left: icon.width })`
+  // is legal, while `other?.move({ left: icon.width })` still reports
+  // `icon` (probed). univer's transformer writes this for every optional
+  // control. The receivers come from `optional_chain_guarded_receivers`,
+  // the walk the truthy-chain narrowing already uses, and so does the
+  // PLAIN form of the call it returns, which is what gets checked: with
+  // the receivers non-nullish the call is the plain spelling's, and
+  // checking it through the optional arm instead judged an overloaded
+  // method by its first declaration (`h$?.pipe(op)` against rxjs's
+  // `pipe(): Observable<T>`, where `h$!.pipe(op)` is silent). A guarded
+  // receiver with no narrowing key (`f()?.m(…)`) keeps the optional walk.
+  match expr {
+    CallExpr(_, _) | MethodCall(_, _, _) => {
+      let (plain, guarded) = optional_chain_guarded_receivers(expr)
+      let narrowed : Array[(String, @ast.TsType)] = []
+      let mut all_keyed = guarded.length() > 0
+      for g in guarded {
+        match narrowing_key_for_expr(g) {
+          Some(key) => {
+            let t = non_nullable_resolved(
+              ctx.resolver,
+              narrowing_current_type(env, ctx.resolver, key),
+            )
+            if t is Never {
+              all_keyed = false
+            } else {
+              narrowed.push((key, t))
+            }
+          }
+          None => all_keyed = false
+        }
+      }
+      if all_keyed {
+        let snap = env.full_snapshot()
+        for b in narrowed {
+          env.narrow(b.0, b.1)
+        }
+        // A UNION receiver stays on the optional walk: its every-member
+        // arity rule (`u?.m("a")` over `A | B` is TS2554) lives on the
+        // call arm and the plain method arm has none, which is a MISS on
+        // `u.m("a")` too. One receiver type takes the plain form.
+        let use_plain = match plain {
+          MethodCall(r, _, _) =>
+            !(prune_nullish(
+              ctx.resolver,
+              ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r)),
+            )
+            is Union(_))
+          _ => true
+        }
+        check_call_args_in_expr_at(
+          env,
+          if use_plain {
+            plain
+          } else {
+            expr
+          },
+          ctx,
+        )
+        env.restore_from(snap)
+        return
+      }
+    }
+    _ => ()
+  }
+  check_call_args_in_expr_at(env, expr, ctx)
+}
+
+///|
+/// The body of `check_call_args_in_expr`, after the optional-call
+/// receivers are narrowed.
+fn check_call_args_in_expr_at(
+  env : ExprEnv,
+  expr : @ast.TsExpr,
+  ctx : CheckCtx,
+) -> Unit {
   match expr {
     // A call carrying explicit type arguments: first validate the type-argument
     // list against the callee, then descend into the underlying call so its
@@ -37674,7 +37853,35 @@ fn check_call_args_in_expr(
                   }
                   _ => ()
                 }
-              None => ()
+              // A union spread overwrites the member when EVERY member of
+              // the union requires it, which is tsc's union property being
+              // required (`{ h: "seed", ...u }` over `{ h: "a" } | { h: "b"
+              // }`). A nullish member or one this cannot enumerate abstains.
+              None =>
+                match spread_ty {
+                  Union(parts) if parts.length() > 0 &&
+                    parts
+                    .iter()
+                    .all(fn(p) {
+                      match
+                        cast_shape_fields(
+                          ctx.resolver,
+                          ctx.resolver.unwrap(p),
+                          0,
+                        ) {
+                        Some(fs) => fs.get(ent.0) is Some(true)
+                        None => false
+                      }
+                    }) => {
+                    record_unfiltered(
+                      ctx,
+                      "object literal `\{ent.0}`",
+                      "`\{ent.0}` is specified more than once, so this usage will be overwritten by the spread",
+                    )
+                    reported = true
+                  }
+                  _ => ()
+                }
             }
           }
         }

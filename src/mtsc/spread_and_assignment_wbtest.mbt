@@ -634,6 +634,83 @@ test "spread origins compose through conditionals, variants and nesting" {
     #|export function n4() { const r = { nested: { ...u } }; const t: "a" | "b" = r.nested.h; return t; }
   assert_eq(issue_lines(src), [
     "function m1bad > binding `s` init: expected `string` but got `string | number`",
+    "function n3 > object literal `h`: `h` is specified more than once, so this usage will be overwritten by the spread",
+  ])
+}
+
+///|
+/// Four univer shapes, each probed against the nightly: a union member's
+/// inherited members survive a spread, a type parameter binds from a union
+/// source once the shared `undefined` is out, `a ??= {}` is `a`'s declared
+/// type, and an optional call's arguments see its receivers non-nullish
+/// (an overloaded method judged as the plain spelling judges it).
+test "union bases, union binding, logical assignment, optional-call arguments" {
+  let src =
+    #|interface Loc { unitId?: string }
+    #|interface RowR extends Loc { startRow: number; endRow: number }
+    #|interface IRange extends RowR { rangeType?: number }
+    #|interface P1 { range: IRange; direction: 1 | 2 }
+    #|interface P2 { range: IRange; direction: 3 | 4 }
+    #|export function okUnionBases(params: P1 | P2) {
+    #|  const { range } = params;
+    #|  const r = { ...range };
+    #|  r.startRow = 1;
+    #|  return r;
+    #|}
+    #|interface Blk { startIndex: number; blockId: string }
+    #|function collect<T extends { startIndex: number }>(prev: T[] | undefined, getId: (item: T) => string): string[] {
+    #|  return (prev ?? []).map(getId);
+    #|}
+    #|export function okUnionBinding(a: Blk[] | undefined) { return collect(a, (item) => item.blockId); }
+    #|export function badUnionBinding(a: Blk[] | undefined) { return collect(a, (item) => item.nope); }
+    #|interface DS { title?: string }
+    #|interface Data { ds?: DS }
+    #|export function okCoalesce(d: Data) {
+    #|  const s = d.ds ??= {};
+    #|  s.title = "x";
+    #|  let local: DS | undefined;
+    #|  const l = local ||= { title: "y" };
+    #|  return [s, l];
+    #|}
+    #|export function badCoalesce(d: Data) { const s = d.ds ??= {}; const n: number = s; return n; }
+    #|interface R { width: number; m(o: { left: number }): void; n?: R }
+    #|export function okOptionalCall(icon?: R) {
+    #|  icon?.m({ left: icon.width / 2 });
+    #|  icon?.n?.m({ left: icon.n.width });
+    #|}
+    #|export function badOptionalCall(icon?: R, other?: R) { other?.k({ left: icon?.width ?? 0 }); }
+    #|interface Op<T, A> { (src: Obs<T>): Obs<A> }
+    #|declare class Obs<T> {
+    #|  pipe(): Obs<T>;
+    #|  pipe<A>(op1: Op<T, A>): Obs<A>;
+    #|}
+    #|declare function thr<T>(n: number): Op<T, T>;
+    #|export function okOptionalOverload(h?: Obs<number>) { return h?.pipe(thr(0)); }
+  assert_eq(issue_lines(src), [
+    "function badUnionBinding > PropAccess `.nope`: property `nope` does not exist on `Blk`",
+    "function badCoalesce > binding `n` init: expected `number` but got `DS`", "function badOptionalCall > call `k`: method `k` does not exist on `R`",
+  ])
+}
+
+///|
+/// #308's second review round, probed: a union spread that replaces a
+/// fresh member in SOME alternatives keeps the declared type in those and
+/// widens only the fresh part, and a union whose every member requires the
+/// member overwrites the written one (TS2783).
+test "a union spread widens per alternative and overwrites when every member requires" {
+  let src =
+    #|declare const c: boolean;
+    #|declare const u: { h: "a"; kind: "a" } | { kind: "b" };
+    #|declare const u2: { h: "a" } | { h: "b" };
+    #|declare const d1: { h?: 1 };
+    #|export function p1() { const r = { h: 0, ...u }; const t: "a" | number = r.h; return t; }
+    #|export function p2() { const r = { h: "x", ...d1 }; const t: string | 1 = r.h; return t; }
+    #|export function p3() { const r = { h: "seed", ...u2 }; return r; }
+    #|export function p4() { let r = { h: 0, ...u }; r.h = 5; return r; }
+    #|export function p5bad() { const r = { h: 0, ...u }; const t: "a" = r.h; return t; }
+  assert_eq(issue_lines(src), [
+    "function p3 > object literal `h`: `h` is specified more than once, so this usage will be overwritten by the spread",
+    "function p5bad > binding `t` init: expected `\"a\" (string)` but got `\"a\" (string) | number`",
   ])
 }
 
