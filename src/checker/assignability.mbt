@@ -1679,12 +1679,15 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
 
 ///|
 /// True when some generic name occurs in `a` and `b` (or twice in one of
-/// them) with different argument counts.
+/// them) with different argument counts. Every shape the relation compares
+/// is walked, so a mismatch behind a `Struct` field, a constructor type or
+/// an indexed access is found too. Running out of depth answers `true`,
+/// which leaves the conditional undecided rather than proven.
 fn applied_arity_mismatch(a : @ast.TsType, b : @ast.TsType) -> Bool {
   let seen : Map[String, Int32] = Map([])
   fn walk(t : @ast.TsType, seen : Map[String, Int32], depth : Int32) -> Bool {
     if depth > 16 {
-      return false
+      return true
     }
     let d = depth + 1
     match t {
@@ -1695,12 +1698,32 @@ fn applied_arity_mismatch(a : @ast.TsType, b : @ast.TsType) -> Bool {
         }
         args.iter().any(fn(x) { walk(x, seen, d) })
       }
-      Array(inner) | Rest(inner) => walk(inner, seen, d)
-      Tuple(items) | Union(items) | Intersection(items) =>
+      Array(inner) | Rest(inner) | Keyof(inner) | CallableMeta(inner, _) =>
+        walk(inner, seen, d)
+      Tuple(items)
+      | Union(items)
+      | Intersection(items)
+      | TemplateLiteralType(_, items) =>
         items.iter().any(fn(x) { walk(x, seen, d) })
-      Object(fields) => fields.iter().any(fn(f) { walk(f.1, seen, d) })
-      Func(ps, r) =>
+      Object(fields) =>
+        fields.iter().any(fn(f) { walk(f.0, seen, d) || walk(f.1, seen, d) })
+      Struct(_, fields) => fields.iter().any(fn(f) { walk(f.1, seen, d) })
+      Func(ps, r) | Constructor(ps, r, _) =>
         ps.iter().any(fn(x) { walk(x, seen, d) }) || walk(r, seen, d)
+      GenericFunc(_, bounds, inner) =>
+        bounds.iter().any(fn(bd) { walk(bd.1, seen, d) }) ||
+        walk(inner, seen, d)
+      IndexedAccess(o, k) => walk(o, seen, d) || walk(k, seen, d)
+      Conditional(c, e, x, y) =>
+        walk(c, seen, d) ||
+        walk(e, seen, d) ||
+        walk(x, seen, d) ||
+        walk(y, seen, d)
+      MappedType(_, src, v, _) => walk(src, seen, d) || walk(v, seen, d)
+      MappedTypeRemap(_, src, r, v, _) =>
+        walk(src, seen, d) || walk(r, seen, d) || walk(v, seen, d)
+      TypePredicate(_, inner) | AssertsPredicate(_, Some(inner)) =>
+        walk(inner, seen, d)
       _ => false
     }
   }

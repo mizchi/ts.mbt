@@ -795,3 +795,46 @@ test "reduce_conditional: a defaulted argument count leaves it undecided" {
     Boolean,
   )
 }
+
+///|
+/// The same abstention behind every shape the relation compares (#310's
+/// review): a `Struct` field, a constructor type, an indexed access and a
+/// nesting deeper than the walk's bound. Equal counts behind the same
+/// shapes still decide.
+test "reduce_conditional: a defaulted argument count behind a nested shape" {
+  let short = @ast.TsType::Applied("Box", [Number])
+  let long = @ast.TsType::Applied("Box", [Number, Number])
+  fn undecided(a : @ast.TsType, b : @ast.TsType) -> Bool {
+    reduce_conditional(@ast.TsType::Conditional(a, b, String_, Boolean))
+    is Conditional(_, _, _, _)
+  }
+
+  let st = fn(x : @ast.TsType) { @ast.TsType::Struct("S", [("x", x)]) }
+  assert_true(undecided(st(short), st(long)))
+  let ctor = fn(x : @ast.TsType) { @ast.TsType::Constructor([], x, false) }
+  assert_true(undecided(ctor(short), ctor(long)))
+  let ia = @ast.TsType::IndexedAccess(
+    Object([(Literal("x"), short)]),
+    Literal("x"),
+  )
+  assert_true(undecided(ia, long))
+  let mut deep_short = short
+  let mut deep_long = long
+  for _ in 0..<17 {
+    deep_short = Array(deep_short)
+    deep_long = Array(deep_long)
+  }
+  assert_true(undecided(deep_short, deep_long))
+  assert_eq(
+    reduce_conditional(
+      @ast.TsType::Conditional(st(long), st(long), String_, Boolean),
+    ),
+    String_,
+  )
+  assert_eq(
+    reduce_conditional(
+      @ast.TsType::Conditional(ctor(long), ctor(long), String_, Boolean),
+    ),
+    String_,
+  )
+}

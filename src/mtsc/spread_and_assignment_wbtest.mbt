@@ -916,6 +916,8 @@ test "a raw return keeps a binding inside its bound" {
     #|type IsBox<T> = T extends Box<number, number> ? string : boolean;
     #|declare const r: IsBox<Box<number>>;
     #|export const okR: boolean = r;
+    #|function pair<U extends T, T extends "a" | "b">(u: U, t: T): [U[], T[]] { return [[u], [t]]; }
+    #|export const okPair: [("a" | "b")[], ("a" | "b")[]] = pair("a", "a");
   assert_eq(issue_lines(src), [
     "top-level > binding `badBox` init: expected `\"z\" (string)[]` but got `string[]`",
   ])

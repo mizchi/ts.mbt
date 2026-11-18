@@ -16720,18 +16720,29 @@ fn instantiate_raw_generic_return(
   )
   // Widening a fresh literal may not leave the bound: `box<T extends "a" |
   // "b">(x: T): T[]` makes `box("a")` an `"a"[]`, where widening `"a"` to
-  // `string` gave `string[]`, which the bound rules out.
-  for tp in mentioned {
-    match (solved_bindings.get(tp), widened.get(tp)) {
-      (Some(b), Some(w)) if b != w &&
-        !binding_satisfies_declared_bound(
-          resolver,
-          type_params,
-          widened,
-          known_bounds.get(tp),
-          w,
-        ) => widened[tp] = b
-      _ => ()
+  // `string` gave `string[]`, which the bound rules out. A bound may name
+  // another binder (`pair<U extends T, T extends "a" | "b">`), so restoring
+  // one binding can put another outside its bound, and the check repeats
+  // until nothing changes. Each restore sets a binding back to its solved
+  // value once, so this ends.
+  let mut changed = true
+  while changed {
+    changed = false
+    for tp in mentioned {
+      match (solved_bindings.get(tp), widened.get(tp)) {
+        (Some(b), Some(w)) if b != w &&
+          !binding_satisfies_declared_bound(
+            resolver,
+            type_params,
+            widened,
+            known_bounds.get(tp),
+            w,
+          ) => {
+          widened[tp] = b
+          changed = true
+        }
+        _ => ()
+      }
     }
   }
   Some(substitute_params(raw_ret, widened))
