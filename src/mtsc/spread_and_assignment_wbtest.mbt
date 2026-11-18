@@ -49,7 +49,7 @@ test "a spread of a union distributes and Exclude decides by a discriminant" {
     #|declare const ex: Exclude<E, C>;
     #|export const badExclude: number = ex.type;
   assert_eq(issue_lines(src), [
-    "top-level > binding `badOverride` init: expected `\"a\" (string)` but got `string`",
+    "top-level > binding `badOverride` init: expected `\"a\" (string)` but got `\"z\" (string) | \"z\" (string)`",
     "top-level > binding `badExtract` init: expected `string` but got `number`",
     "top-level > binding `badIsB` init: expected `1` but got `number`", "top-level > binding `badExclude` init: expected `number` but got `\"a\" (string) | \"b\" (string)`",
   ])
@@ -78,5 +78,63 @@ test "an outer variable assigned anywhere is initialized inside a closure" {
   assert_eq(issue_lines(src), [
     "function badNever > use `n`: variable `n` is used before being assigned", "function badCompound > use `a`: variable `a` is used before being assigned",
     "function badDirect > use `h`: variable `h` is used before being assigned",
+  ])
+}
+
+///|
+/// The shapes reaching real code exposed once the spreads above resolved,
+/// and the two #306 review items that were reports on legal code: a
+/// destructuring callback parameter's RETURN inference, `?.` over a union
+/// of declared shapes and over a nullable receiver, the other side of a
+/// `x?.tag === K` comparison, an instance type with only `private static`
+/// members, a `switch` label falling into `default`, and a callable
+/// object's overloads tried in declaration order.
+test "patterns, optional chains and overloads the field data exposed" {
+  let src =
+    #|type LocalPoint = [number, number] & { _brand: "local" };
+    #|declare const points: readonly LocalPoint[];
+    #|export const okXs: number[] = points.map(([x]) => x);
+    #|export const badXs: string[] = points.map(([x]) => x);
+    #|export const okObj: number[] = [{ a: 1 }].map(({ a }) => a);
+    #|interface A { type: "a"; frameId: string | null }
+    #|interface B { type: "b"; frameId: string | null }
+    #|declare const one: A | B;
+    #|export const okChain: string | null = one?.frameId;
+    #|export const badChain: string = one?.frameId;
+    #|declare const maybe: A | undefined;
+    #|export const okMaybe: string | null | undefined = maybe?.frameId;
+    #|export const okCmp = maybe?.frameId === null;
+    #|export const badMaybe: string | null = maybe?.frameId;
+    #|enum K { A, B }
+    #|interface Ba { type: K.A }
+    #|interface Se { type: K.B; selections?: number[] }
+    #|declare const item: Ba | Se | undefined;
+    #|export function chainElse() {
+    #|  const sel = item?.type === K.A ? undefined : item;
+    #|  return [sel && sel.selections, sel && sel.nope];
+    #|}
+    #|export class Ks { public readonly a: number = 1; private static helper(): number { return 1 } static use() { return Ks.helper() } }
+    #|export const okStatic: Ks = { a: 2 };
+    #|export class Kp { public readonly a: number = 1; private secret = 2 }
+    #|export const badPrivate: Kp = { a: 2, secret: 3 };
+    #|type Kind = { kind: "a"; a: number } | { kind: "b"; b: string };
+    #|export function okFall(x: Kind) {
+    #|  switch (x.kind) { case "a": break; case "b": default: return x.kind; }
+    #|  return "";
+    #|}
+    #|export function badExhausted(x: Kind) {
+    #|  switch (x.kind) { case "a": return 1; case "b": return 2; default: return x.kind; }
+    #|}
+    #|declare const f: { <T>(x: T): number; (x: string): string };
+    #|declare const s: string;
+    #|export const okOrder: number = f(s);
+    #|export const badOrder: string = f(s);
+  assert_eq(issue_lines(src), [
+    "function chainElse > PropAccess `.nope`: property `nope` does not exist on `Se`",
+    "function badExhausted > PropAccess `.kind`: property `kind` does not exist on `never`",
+    "top-level > binding `badXs` init: expected `string[]` but got `number[]`", "top-level > binding `badChain` init: type `string | null` is not assignable to type `string`",
+    "top-level > binding `badMaybe` init: type `string | null | undefined` is not assignable to type `string | null`",
+    "top-level > binding `badPrivate` init: expected `Kp` but got `{ a: number; secret: number }`",
+    "top-level > binding `badOrder` init: expected `string` but got `number`",
   ])
 }
