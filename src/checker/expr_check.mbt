@@ -1803,6 +1803,18 @@ fn Resolver::ingest_type_module(
       continue
     }
     Resolver::put_class(r, name, class_)
+    // A class method's un-inlined header (`@raw-sig:<method>C#m`) travels
+    // with the class, so a call from ANOTHER module solves the method's
+    // bounded type parameters as a same-module call does: univer's
+    // controllers call `this._sheetInterceptorService.intercept(…)`, which
+    // `SheetInterceptorService` declares, and read the bound instead.
+    for m in class_.methods {
+      let key = "@raw-sig:" + prefix + "<method>" + name + "#" + m.name
+      match types.globals.get(key) {
+        Some(sig) if !r.globals.contains(key) => r.globals[key] = sig
+        _ => ()
+      }
+    }
   }
   for name, alias_ in types.type_aliases {
     let alias_ = match renamed {
@@ -7999,6 +8011,10 @@ fn instantiate_method_call_params(
   let bounded = interface_method_params_with_bounds(
     resolver, recv, meth, params,
   )
+  match raw_class_method_call_params(env, resolver, recv, meth, params, args) {
+    Some(out) => return out
+    None => ()
+  }
   let method_tps = resolver.method_type_params_of(recv, meth)
   // A function TYPE with a leading `this` parameter keeps it as a
   // positional one (see `<fn-type-this-param>`), so a `(this: This, arg:
@@ -8026,6 +8042,163 @@ fn instantiate_method_call_params(
     }
   }
   out
+}
+
+///|
+/// The parameters a call to a CLASS method with a bounded type parameter
+/// is checked against, from its un-inlined header (`<method>C#meth`). The
+/// parser inlines the bound into every parameter, so univer's
+/// `intercept<T extends IInterceptor<any, any>>(name: T, interceptor: T)`
+/// judged the second argument's object literal against `IInterceptor`, and
+/// the `effect` member `T = ICellInterceptor` declares read as an excess
+/// property (on main too). Solved from the raw parameters, a parameter is
+/// instantiated only when every type parameter it mentions is solved to a
+/// checkable binding that satisfies its bound, as the function path holds
+/// it (`instantiate_raw_generic_params`); otherwise it keeps the inlined
+/// form. A class type parameter in a raw parameter takes the receiver's
+/// type argument, and a receiver that supplies none abstains.
+fn raw_class_method_call_params(
+  env : ExprEnv,
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+) -> Array[@ast.TsType]? {
+  let (cls, cls_args) = match recv {
+    Named(n) => (n, [])
+    Applied(n, a) => (n, a)
+    _ => return None
+  }
+  guard resolver.classes.get(cls) is Some(decl) else { return None }
+  let (prefix, base) = match cls.rev_find(".") {
+    Some(i) => (cls[:i + 1].to_owned(), cls[i + 1:].to_owned())
+    None => ("", cls)
+  }
+  guard resolver.globals.get(
+      "@raw-sig:" + prefix + "<method>" + base + "#" + meth,
+    )
+    is Some(GenericFunc(names, bounds, Func(raw, _))) else {
+    return None
+  }
+  if raw.length() != params.length() ||
+    resolver.globals.contains("@fn-type-this-param") {
+    return None
+  }
+  let class_bindings : Map[String, @ast.TsType] = Map([])
+  if decl.type_params.length() > 0 {
+    if cls_args.length() != decl.type_params.length() {
+      if raw.iter().any(fn(p) { type_references_any(p, decl.type_params) }) {
+        return None
+      }
+    } else {
+      for i, tp in decl.type_params {
+        if !names.contains(tp) {
+          class_bindings[tp] = cls_args[i]
+        }
+      }
+    }
+  }
+  let raw = raw.map(fn(p) {
+    expand_alias_head(resolver, substitute_params(p, class_bindings), 0)
+  })
+  // A literal argument at a bare type-parameter position is checked
+  // AGAINST the binding rather than being a candidate for it: tsc picks
+  // the common supertype of the candidates, which is the declared
+  // argument's type whenever the literal fits it, so `intercept(PLAIN,
+  // { effect: 2, … })` reports `effect` against `IInterceptor` (TS2353)
+  // while `intercept(CELL, …)` accepts it. Solving from the literal too
+  // made every literal its own binding and accepted both.
+  let solve_from = raw.mapi(fn(i, p) {
+    match (p, args.get(i)) {
+      (Named(n), Some(ObjectLit(_) | ArrayLit(_))) if names.contains(n) =>
+        @ast.TsType::Any
+      _ => p
+    }
+  })
+  // Each argument is inferred once, here, and the binding pass reads it.
+  let arg_types = args.map(fn(a) { infer_expr(env, resolver, a) })
+  let bindings = solve_generic_bindings(
+    env,
+    resolver,
+    names,
+    solve_from,
+    args,
+    None,
+    pre=arg_types,
+  )
+  // A type parameter whose bare-position argument is itself `any` (a
+  // module-level `const` read inside a function body is one, here) is a
+  // binding this cannot know, and judging the other arguments against its
+  // BOUND is the one wrong answer: they are compared with whatever the
+  // argument really is. Those parameters abstain. A parameter with no
+  // candidate at all is different, and keeps the bound tsc falls back to.
+  let unknown_tps : Map[String, Unit] = Map([])
+  for i, p in solve_from {
+    match p {
+      Named(n) if names.contains(n) && i < arg_types.length() =>
+        if arg_types[i] is Any {
+          unknown_tps[n] = ()
+        }
+      _ => ()
+    }
+  }
+  let known : Map[String, @ast.TsType?] = Map([])
+  for tp in names {
+    known[tp] = match bounds.search_by(fn(b) { b.0 == tp }) {
+      Some(bi) => Some(bounds[bi].1)
+      None => None
+    }
+  }
+  let out : Array[@ast.TsType] = []
+  for i, rp in raw {
+    let mentioned = names.filter(fn(tp) { type_param_occurs(tp, rp) })
+    let solved = mentioned
+      .iter()
+      .all(fn(tp) {
+        match bindings.get(tp) {
+          Some(b) =>
+            is_checkable(b) &&
+            !(b is (Any | Unknown | Never)) &&
+            !type_has_member_marker_key(b) &&
+            !type_contains_unresolved_named(b, resolver) &&
+            binding_satisfies_declared_bound(
+              resolver,
+              names,
+              bindings,
+              known.get(tp),
+              b,
+            )
+          None => false
+        }
+      })
+    if mentioned.iter().any(fn(tp) { unknown_tps.contains(tp) }) {
+      // A bare `any` reads as REQUIRED to the arity check, so an optional
+      // parameter keeps its `| undefined` spelled out.
+      out.push(
+        if type_accepts_undefined(params[i]) {
+          @ast.TsType::Union([Any, Undefined])
+        } else {
+          @ast.TsType::Any
+        },
+      )
+    } else if mentioned.length() > 0 && solved {
+      // The header keeps parameter TYPES only, so an optional parameter's
+      // `?` is in the inlined parameter (as `| undefined`) and not here.
+      // Dropping it made univer's `registerPlugin(Plugin)`, against
+      // `registerPlugin<T extends PluginCtor<Plugin>>(plugin: T, config?:
+      // ConstructorParameters<T>[0])`, "expected 2 argument(s)".
+      let inst = substitute_params(rp, bindings)
+      if type_accepts_undefined(params[i]) && !type_accepts_undefined(inst) {
+        out.push(@ast.TsType::Union([inst, Undefined]))
+      } else {
+        out.push(inst)
+      }
+    } else {
+      out.push(params[i])
+    }
+  }
+  Some(out)
 }
 
 ///|

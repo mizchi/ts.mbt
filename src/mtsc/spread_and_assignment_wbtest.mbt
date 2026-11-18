@@ -764,6 +764,37 @@ test "||= keeps the truthy part and conditional fresh parts merge" {
 }
 
 ///|
+/// univer's `intercept<T extends IInterceptor>(name: T, interceptor: T)`: a
+/// class method's arguments are checked against its un-inlined header, with
+/// `T` solved from the declared argument and not from the literal, an
+/// optional parameter kept optional, and an `any`-typed argument making the
+/// parameters that mention its type parameter abstain (probed).
+test "a bounded class method is checked against its raw header" {
+  let src =
+    #|interface IInterceptor<M, C> { id?: string; priority?: number; handler: (v: M, c: C) => M }
+    #|interface ICellInterceptor<M, C> extends IInterceptor<M, C> { effect?: number }
+    #|declare const CELL: ICellInterceptor<string, number>;
+    #|declare const PLAIN: IInterceptor<string, number>;
+    #|declare class Plugin { constructor(config?: { a: number }) }
+    #|type PluginCtor<T extends Plugin> = new (...args: any[]) => T;
+    #|class MyPlugin extends Plugin {}
+    #|const ANY_CELL = CELL as ICellInterceptor<string, number>;
+    #|export class Svc {
+    #|  intercept<T extends IInterceptor<any, any>>(name: T, interceptor: T): void {}
+    #|  registerPlugin<T extends PluginCtor<Plugin>>(plugin: T, config?: ConstructorParameters<T>[0]): void {}
+    #|}
+    #|export function ok(s: Svc) {
+    #|  s.intercept(CELL, { priority: 1, effect: 2, handler: (v) => v });
+    #|  s.intercept(ANY_CELL, { priority: 1, effect: 2, handler: (v) => v });
+    #|  s.registerPlugin(MyPlugin);
+    #|}
+    #|export function bad(s: Svc) { s.intercept(PLAIN, { priority: 1, effect: 2, handler: (v) => v }); }
+  assert_eq(issue_lines(src), [
+    "function bad > call `intercept` arg[1].effect: property `effect` does not exist on target type",
+  ])
+}
+
+///|
 /// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
 /// enumerate leaves the result open, and spreading that result again keeps
 /// it open, as a fresh literal and as a bound one.
@@ -808,4 +839,27 @@ test "a lib literal alias abstains and a curated lib type does not" {
   assert_eq(issue_lines(src), [
     "function badDate > binding `d` init: expected `Date` but got `number`",
   ])
+}
+
+///|
+/// The raw header of a class method travels with the class into another
+/// module, so univer's controllers calling `this._svc.intercept(…)` on a
+/// service declared elsewhere solve `T` as a same-module call does.
+test "a bounded class method's raw header reaches another module" {
+  let svc = "export interface IInterceptor<M, C> { priority?: number; handler: (v: M, c: C) => M }\nexport interface ICellInterceptor<M, C> extends IInterceptor<M, C> { effect?: number }\nexport declare const CELL: ICellInterceptor<string, number>;\nexport declare const PLAIN: IInterceptor<string, number>;\nexport class Svc {\n  intercept<T extends IInterceptor<any, any>>(name: T, interceptor: T): void {}\n}\n"
+  let ok = MtscMemoryHost::over({
+    "entry.ts": "import { Svc, CELL } from \"./svc\";\nexport function f(s: Svc) { s.intercept(CELL, { priority: 1, effect: 2, handler: (v) => v }); }\n",
+    "svc.ts": svc,
+  })
+  assert_eq(wbtest_messages(get_program_diagnostics(ok)), [])
+  let bad = MtscMemoryHost::over({
+    "entry.ts": "import { Svc, PLAIN } from \"./svc\";\nexport function f(s: Svc) { s.intercept(PLAIN, { priority: 1, effect: 2, handler: (v) => v }); }\n",
+    "svc.ts": svc,
+  })
+  assert_true(
+    wbtest_any_contains(
+      get_program_diagnostics(bad),
+      "property `effect` does not exist",
+    ),
+  )
 }
