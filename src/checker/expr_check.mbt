@@ -3150,6 +3150,52 @@ fn Resolver::ingest_module(
 }
 
 ///|
+/// `typeof x` for a binding in scope is that binding's type AT THIS POINT,
+/// narrowing included: tsc reports `const a: typeof x = 1` inside
+/// `if (typeof x === "string")` (probed). `unwrap` resolves a query against
+/// `globals` only, so a parameter's or a local's stayed an opaque
+/// `TypeOf`, and univer's `get(key) as unknown as Array<typeof name>` was
+/// filtered with a callback judged against `typeof name` itself. A class,
+/// an enum or a namespace keeps its query (its value type is not what a
+/// binding holds), and so does a binding whose type is `any` / `unknown`
+/// or itself mentions a query.
+fn resolve_local_type_queries(
+  env : ExprEnv,
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType {
+  fn go(t : @ast.TsType, depth : Int32) -> @ast.TsType {
+    if depth > 8 {
+      return t
+    }
+    match t {
+      TypeOf(n) if !n.contains(".") &&
+        n != "this" &&
+        !resolver.classes.contains(n) &&
+        !resolver.enums.contains(n) =>
+        match env.lookup(n) {
+          Some(b) if is_checkable(b) &&
+            !(b is (Any | Unknown)) &&
+            !type_contains_typeof(b) => b
+          _ => t
+        }
+      Array(inner) => Array(go(inner, depth + 1))
+      Applied(name, args) => Applied(name, args.map(fn(a) { go(a, depth + 1) }))
+      Union(parts) => Union(parts.map(fn(a) { go(a, depth + 1) }))
+      Intersection(parts) => Intersection(parts.map(fn(a) { go(a, depth + 1) }))
+      Tuple(parts) => Tuple(parts.map(fn(a) { go(a, depth + 1) }))
+      _ => t
+    }
+  }
+
+  if type_contains_typeof(ty) {
+    go(ty, 0)
+  } else {
+    ty
+  }
+}
+
+///|
 /// True when `ty` contains a `TypeOf(_)` reference anywhere in its
 /// structure. Used by the top-level globals ingestion to skip
 /// `typeof`-referencing declarations -- registering them risks
@@ -14370,6 +14416,16 @@ fn infer_expr_inner(
               }
             }
           } else if spread_shape_is_known(spread_ty, resolver) {
+            // A shape that is itself OPEN (the `[string]: any` entry an
+            // unenumerable spread below leaves in its result) stays open when
+            // it is spread again: univer's `const line = { ...withoutParent(
+            // source), … }` then `{ ...line, bullet }` lost every member the
+            // generic `Omit<T, "parent">` contributed and reported each one
+            // as required (on main too). The index is copied as `any`.
+            if resolver.unwrap(spread_ty) is Object(sfs) &&
+              sfs.iter().any(fn(f) { f is (String_, Any) }) {
+              opaque_spread = true
+            }
             for f in collect_declared_fields(spread_ty, resolver) {
               // A `#private` member is NOT copied by a spread — it is not
               // an own enumerable property — so the result does not have
@@ -14488,7 +14544,7 @@ fn infer_expr_inner(
     // any nested call sites are validated.
     As(inner, ty) => {
       let _ = infer_expr(env, resolver, inner)
-      ty
+      resolve_local_type_queries(env, resolver, ty)
     }
     // `x satisfies T` — structural check; result type is `typeof x`. The
     // check happens elsewhere (`check_call_args_in_expr`).
@@ -20145,7 +20201,7 @@ fn check_expr_against_shape(
         // widenings (`number`→`Number`, `string`→`String`) and `Object` /
         // `Function` are guarded as universal targets below, so letting these
         // through stays false-positive-free while catching e.g. `foo<Date>(1)`.
-        !(is_well_known_type_name(n) &&
+        !(is_curated_well_known_type_name(n) &&
         is_concrete_primitive_or_literal(inferred_u)) {
         return
       }
@@ -21883,10 +21939,15 @@ fn binding_init_type(
   mutable_ : Bool,
   fresh : Bool,
   inferred : @ast.TsType,
+  init : @ast.TsExpr,
+  resolver : Resolver,
+  infer : (@ast.TsExpr) -> @ast.TsType,
 ) -> @ast.TsType {
   match inferred {
-    Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
-      widen_literal_deep(inferred)
+    Object(_) => widen_object_literal_type(inferred, init, resolver, infer)
+    Union(_) if init is ObjectLit(_) =>
+      widen_object_literal_type(inferred, init, resolver, infer)
+    Struct(_, _) | Array(_) | Tuple(_) => widen_literal_deep(inferred)
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       if mutable_ && fresh {
         widen_literal(inferred)
@@ -21894,6 +21955,251 @@ fn binding_init_type(
         inferred
       }
     _ => inferred
+  }
+}
+
+///|
+/// Where an object literal's member got its type, in source order: from a
+/// member WRITTEN in the literal or a spread of a literal written in place
+/// (fresh, so it widens), or from a spread of a declared value (its
+/// declared type, which does not).
+priv enum ObjectMemberOrigin {
+  Fresh(@ast.TsExpr?)
+  Declared
+}
+
+///|
+/// Record each member's origin, later entries overriding earlier ones as
+/// the spread semantics do. tsc, probed: `{ ...{ h: "x" } }` and
+/// `{ ...(c ? { h: "a" } : { h: "b" }) }` widen `h`, `{ h: "x", ...rq }`
+/// with a REQUIRED `rq.h: "a" | "b"` keeps `rq`'s type, and an OPTIONAL
+/// declared member after a fresh one widens the union. A spread this
+/// cannot enumerate changes nothing, which leaves an earlier fresh member
+/// widened as main did.
+fn object_literal_member_origins(
+  entries : Array[(String, @ast.TsExpr)],
+  resolver : Resolver,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  out : Map[String, ObjectMemberOrigin],
+  depth : Int32,
+) -> Unit {
+  if depth > 8 {
+    return
+  }
+  for e in entries {
+    if e.0.has_prefix("@@spread:") {
+      spread_member_origins(e.1, resolver, infer, out, depth + 1)
+    } else if e.1 is As(_, _) {
+      // An asserted member is not fresh (`{ h: "a" as "a" }` keeps `"a"`),
+      // and saying so here rather than at the widening keeps it narrow
+      // through a conditional spread too.
+      out[e.0] = Declared
+    } else {
+      out[e.0] = Fresh(Some(e.1))
+    }
+  }
+}
+
+///|
+fn spread_member_origins(
+  expr : @ast.TsExpr,
+  resolver : Resolver,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  out : Map[String, ObjectMemberOrigin],
+  depth : Int32,
+) -> Unit {
+  match expr {
+    ObjectLit(inner) =>
+      object_literal_member_origins(inner, resolver, infer, out, depth)
+    // A conditional spreads one branch or the other, so a member either
+    // branch leaves fresh is widened in the union (`c ? rq : { h: "x" }` is
+    // legal to write `"y"` through, probed). Each branch starts from the
+    // origins so far, so a branch that omits a member (`{ h: "seed",
+    // ...(c ? d : {}) }`) or holds it only optionally keeps the earlier
+    // fresh one, which tsc widens.
+    Cond(_, a, b) => {
+      let results : Array[Map[String, ObjectMemberOrigin]] = []
+      for branch in [a, b] {
+        let one = out.copy()
+        spread_member_origins(branch, resolver, infer, one, depth + 1)
+        results.push(one)
+      }
+      let keys : Map[String, Unit] = Map([])
+      for r in results {
+        for k, _ in r {
+          keys[k] = ()
+        }
+      }
+      for k, _ in keys {
+        let a0 = results[0].get(k)
+        let b0 = results[1].get(k)
+        // Both branches left it as it was (the origin carried in, the same
+        // object in both copies), or agree on a kind.
+        let same = match (a0, b0) {
+          (None, None) => true
+          (Some(Declared), Some(Declared)) => true
+          (Some(Fresh(None)), Some(Fresh(None))) => true
+          (Some(Fresh(Some(x))), Some(Fresh(Some(y)))) => physical_equal(x, y)
+          _ => false
+        }
+        if same {
+          match a0 {
+            Some(o) => out[k] = o
+            None => ()
+          }
+        } else if a0 is Some(Fresh(_)) || b0 is Some(Fresh(_)) {
+          out[k] = Fresh(None)
+        } else {
+          out[k] = Declared
+        }
+      }
+    }
+    _ => {
+      // The same enumeration the spread inference uses
+      // (`collect_declared_fields`), so an interface-typed spread is seen
+      // here exactly when its members are copied there.
+      let spread_ty = infer(expr)
+      let parts = union_components(spread_ty)
+      let rest = parts.filter(fn(p) { !(p is (Undefined | Null)) })
+      // An optional member may be absent, so a fresh member before it
+      // survives into the union and still widens.
+      fn mark_declared(k : String, optional : Bool) {
+        match out.get(k) {
+          // The member is now the union of the fresh one and this one, so
+          // the whole union widens, not the written expression alone:
+          // `{ h: c ? "a" : "b", ...d }` with `d.h?: number` is
+          // `string | number` (probed), and re-widening only the
+          // conditional's branches dropped the `number`.
+          Some(Fresh(_)) if optional => out[k] = Fresh(None)
+          _ => out[k] = Declared
+        }
+      }
+
+      if rest.length() < parts.length() &&
+        rest.length() == 1 &&
+        spread_shape_is_known(rest[0], resolver) {
+        // `T | undefined` copies `T`'s members as OPTIONAL.
+        for f in collect_declared_fields(rest[0], resolver) {
+          mark_declared(f.0, true)
+        }
+      } else if object_spread_variants(spread_ty, resolver) is Some(vs) &&
+        vs.length() >= 2 {
+        // Each variant answers for its own alternative, so a member is
+        // required only when EVERY variant requires it (`u: { h: "a" } |
+        // { h: "b" }` replaces `h` in both, so `{ h: "seed", ...u }` keeps
+        // `"a" | "b"`, probed); one some variant lacks is optional.
+        let required : Map[String, Int32] = Map([])
+        let seen : Map[String, Unit] = Map([])
+        for v in vs {
+          for f in v {
+            seen[f.0] = ()
+            if !type_accepts_undefined(f.1) {
+              required[f.0] = required.get(f.0).unwrap_or(0) + 1
+            }
+          }
+        }
+        for k, _ in seen {
+          mark_declared(k, required.get(k).unwrap_or(0) < vs.length())
+        }
+      } else if spread_shape_is_known(spread_ty, resolver) {
+        for f in collect_declared_fields(spread_ty, resolver) {
+          mark_declared(f.0, type_accepts_undefined(f.1))
+        }
+      }
+    }
+  }
+}
+
+///|
+/// Widen an object literal's inferred type the way tsc widens a fresh one:
+/// a member WRITTEN in the literal, or contributed by a spread of a literal
+/// written in place, widens (`{ h: "a" }` is `{ h: string }`), while a
+/// member a spread of a DECLARED value contributes keeps the type it was
+/// declared with, because that type is not a fresh literal. Widening the
+/// whole shape made univer's `const r = { ...style }` read
+/// `fontHint?: "default" | "eastAsia"` as `string`, and `r` was then not
+/// assignable to `style`'s own interface (on main too). Which one a member
+/// is follows source order (`object_literal_member_origins`); a literal
+/// with no spread widens every member, as before, and a nested object
+/// literal under a written key is widened by the same rule.
+fn widen_object_literal_type(
+  ty : @ast.TsType,
+  init : @ast.TsExpr,
+  resolver : Resolver,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+) -> @ast.TsType {
+  match (ty, init) {
+    (Object(fields), ObjectLit(entries)) => {
+      let has_spread = entries.iter().any(fn(e) { e.0.has_prefix("@@spread:") })
+      let origins : Map[String, ObjectMemberOrigin] = Map([])
+      object_literal_member_origins(entries, resolver, infer, origins, 0)
+      Object(
+        fields.map(fn(f) {
+          match f.0 {
+            Literal(k) =>
+              match origins.get(k) {
+                Some(Fresh(Some(v))) =>
+                  (f.0, widen_object_literal_type(f.1, v, resolver, infer))
+                Some(Fresh(None)) => (f.0, widen_literal_deep(f.1))
+                Some(Declared) => f
+                None if has_spread => f
+                None => (f.0, widen_literal_deep(f.1))
+              }
+            _ => (f.0, widen_literal_deep(f.1))
+          }
+        }),
+      )
+    }
+    // A spread of a union distributes, so the literal infers as a union of
+    // shapes, and each alternative widens by the same member origins:
+    // `{ ...(c ? { h: "a" } : { h: "b" }) }` and `{ ...u, k: "x" }` widen
+    // their fresh members as the single-shape case does (probed). Main left
+    // every alternative narrow at the binding, and widened every one of
+    // them under a written key (`{ nested: { ...u } }`).
+    (Union(parts), ObjectLit(_)) if parts.iter().all(fn(p) { p is Object(_) }) => {
+      let out : Array[@ast.TsType] = []
+      for part in parts {
+        let w = widen_object_literal_type(part, init, resolver, infer)
+        if !out.iter().any(fn(e) { equivalent(e, w) }) {
+          out.push(w)
+        }
+      }
+      if out.length() == 1 {
+        out[0]
+      } else {
+        Union(out)
+      }
+    }
+    // An asserted type is not a fresh literal, so it does not widen:
+    // `{ v: "q" as const }` and `{ k: "q" as "q" }` keep `"q"` (probed).
+    // The single-shape path widened these too, which only the
+    // literal-to-base abstention hid; once a union of shapes printed the
+    // member as `string | string`, `{ ...u, type: "z" as const }` read as
+    // `string`.
+    (_, As(_, _)) => ty
+    // `c ? { ...a } : { ...b }` under a written key: each branch is its own
+    // literal, widened by its own rule, so a spread member inside either
+    // keeps its declared type (univer's `coverTextRuns`).
+    (_, Cond(_, a, b)) => {
+      let parts : Array[@ast.TsType] = []
+      for branch in [a, b] {
+        let w = widen_object_literal_type(
+          infer(branch),
+          branch,
+          resolver,
+          infer,
+        )
+        if !parts.iter().any(fn(e) { equivalent(e, w) }) {
+          parts.push(w)
+        }
+      }
+      if parts.length() == 1 {
+        parts[0]
+      } else {
+        Union(parts)
+      }
+    }
+    _ => widen_literal_deep(ty)
   }
 }
 
@@ -23952,7 +24258,17 @@ fn check_object_lit_against_target(
       let spread_fields = collect_declared_fields(spread_ty, resolver)
       match resolver.unwrap(spread_ty) {
         Any | Unknown => opaque_spread = true
-        Null | Undefined | Object(_) => ()
+        // An OPEN shape (the `[string]: any` entry an unenumerable spread
+        // leaves in its inferred result) can supply any member. A DECLARED
+        // index signature is not that: tsc does not let it supply a named
+        // member (objectSpreadIndexSignature).
+        // univer's `{ ...line, bullet }` with `line = { ...withoutParent(
+        // source), … }` reported every member `Omit<T, "parent">` gave it.
+        Object(fs) =>
+          if fs.iter().any(fn(f) { f is (String_, Any) }) {
+            opaque_spread = true
+          }
+        Null | Undefined => ()
         _ => if spread_fields.length() == 0 { opaque_spread = true }
       }
       for sf in spread_fields {
@@ -25516,6 +25832,9 @@ fn infer_body_return_type(
               !(stmt is Const(_, _, _)),
               is_fresh_literal_expr(init),
               infer_expr(env, resolver, init),
+              init,
+              resolver,
+              fn(e) { infer_expr(env, resolver, e) },
             )
           }
           if is_checkable(ty) {
@@ -25699,6 +26018,9 @@ fn infer_block_return(
               !(stmt is Const(_, _, _)),
               is_fresh_literal_expr(init),
               infer_expr(env, resolver, init),
+              init,
+              resolver,
+              fn(e) { infer_expr(env, resolver, e) },
             )
           }
           if is_checkable(ty) {
@@ -32537,7 +32859,7 @@ fn check_ident_binding_decl(
     _ => ()
   }
   let bound_type = if is_checkable(declared) {
-    declared
+    resolve_local_type_queries(env, ctx.resolver, declared)
   } else if declared is Any &&
     ctx.resolver.globals.contains("@written-any:" + name) {
     @ast.TsType::Any
@@ -32553,6 +32875,9 @@ fn check_ident_binding_decl(
       mutable_,
       is_fresh_literal_in_env(env, init),
       infer_expr(env, ctx.resolver, init),
+      init,
+      ctx.resolver,
+      fn(e) { infer_expr(env, ctx.resolver, e) },
     )
   }
   env.bind(name, bound_type)

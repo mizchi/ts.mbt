@@ -388,6 +388,17 @@ fn module_declared_name_set(module_ : @ast.TsModule) -> Map[String, Unit] {
 
 ///|
 fn is_well_known_type_name(name : String) -> Bool {
+  is_curated_well_known_type_name(name) || is_lib_global_type(name)
+}
+
+///|
+/// The standard-library names whose SHAPE is known well enough to decide
+/// that a primitive or literal is not one (`number` is never a `Date`).
+/// The generated lib registry is a list of NAMES, and it also holds type
+/// aliases over primitives (`CanvasLineCap = "butt" | "round" |
+/// "square"`, `PropertyKey`), so letting a registry name decide that
+/// reported `ctx.lineCap = "butt"` everywhere univer draws (on main too).
+fn is_curated_well_known_type_name(name : String) -> Bool {
   match name {
     // Standard library / lib.dom.d.ts staples.
     "Array"
@@ -437,10 +448,9 @@ fn is_well_known_type_name(name : String) -> Bool {
     | "IterableIterator" => true
     // Everything else the TypeScript standard libraries declare
     // ambiently (PropertyKey, TemplateStringsArray, ThisType,
-    // HTMLElement, ...) — the generated registry unions every lib
-    // target, and a larger allowlist only ever suppresses a
-    // diagnostic, never creates one.
-    _ => is_lib_global_type(name)
+    // HTMLElement, ...) is added by `is_well_known_type_name`, whose one
+    // caller here uses the name to SUPPRESS a diagnostic.
+    _ => false
   }
 }
 

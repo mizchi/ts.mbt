@@ -538,3 +538,148 @@ test "generic tuple spreads and literals, binder returns, incomplete method sets
     "top-level > binding `badTail2` init: expected `number` but got `string`",
   ])
 }
+
+///|
+/// univer's `coverTextRuns`: a member a spread contributes keeps its
+/// declared literal type when the literal is bound, while a member written
+/// in the literal widens. `typeof x` for a local is the local's type there.
+test "a bound spread keeps declared literals and typeof reads a local" {
+  let src =
+    #|interface T { h?: "a" | "b"; p?: { r: "m" | "i" } }
+    #|interface I { a: number }
+    #|export function okSpread(o: T | undefined, q: T, c: boolean) {
+    #|  const r = { ...o };
+    #|  const t1: T = r;
+    #|  const r2 = { ...q, k: 1 };
+    #|  const t2: T = r2;
+    #|  const r3 = { p: c ? { ...q.p! } : { ...q.p! } };
+    #|  const t3: T = r3;
+    #|}
+    #|export function badFresh() {
+    #|  const lit = { h: "a" };
+    #|  const t: T = lit;
+    #|}
+    #|export function okTypeof(name: I, k: unknown, keep: (i: I) => boolean) {
+    #|  let xs = k as Array<typeof name>;
+    #|  xs = xs.filter(keep);
+    #|  return xs;
+    #|}
+    #|export function badTypeof(name: I, k: unknown) {
+    #|  const xs = k as Array<typeof name>;
+    #|  const s: string = xs;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badFresh > binding `t` init: expected `T` but got `{ h: string }`",
+    "function badTypeof > binding `s` init: type `Array<I>` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// Which spread a member came from decides whether it widens, in source
+/// order, each cell probed: a spread of a literal written in place is fresh
+/// and widens (a conditional of literals too, and a fresh branch beside a
+/// declared one), a later REQUIRED declared member keeps its declared type,
+/// and a later OPTIONAL one leaves the earlier fresh member widened. An
+/// asserted member (`as const`, `as "q"`) is not fresh and stays narrow.
+test "a spread member widens by where it came from, in order" {
+  let src =
+    #|interface St { h?: "a" | "b"; n: number }
+    #|interface Req { h: "a" | "b" }
+    #|export function okFreshSpread() { let s = { ...{ h: "x" } }; s.h = "y"; return s; }
+    #|export function okCondSpread(c: boolean) { let s = { ...(c ? { h: "a" } : { h: "b" }) }; s.h = "z"; return s; }
+    #|export function okMixedCond(c: boolean, rq: Req) { let s = { ...(c ? rq : { h: "x" }) }; s.h = "y"; return s; }
+    #|export function okOptionalAfter(st: St) { let s = { ...{ h: "x" }, ...st }; s.h = "y"; return s; }
+    #|export function okFreshAfter(rq: Req) { let s = { ...rq, ...{ h: "x" } }; s.h = "y"; return s; }
+    #|export function okDeclared(rq: Req) { const s = { ...rq }; const r: Req = s; return r; }
+    #|export function badRequiredAfter(rq: Req) { let s = { ...{ h: "x" }, ...rq }; s.h = "y"; return s; }
+    #|export function badWrittenThenRequired(rq: Req) { let s = { h: "x", ...rq }; s.h = "y"; return s; }
+    #|export function badAsserted(rq: Req) {
+    #|  let o = { ...rq, v: "q" as const, k: "q" as "q" };
+    #|  o.v = "r";
+    #|  o.k = "r";
+    #|  return o;
+    #|}
+    #|export function badAssertedUnion(u: Req | St) {
+    #|  let o = { ...u, h: "z" as const };
+    #|  o.h = "y";
+    #|  return o;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badRequiredAfter > assign `.h`: expected `\"a\" (string) | \"b\" (string)` but got `\"y\" (string)`",
+    "function badWrittenThenRequired > object literal `h`: `h` is specified more than once, so this usage will be overwritten by the spread",
+    "function badWrittenThenRequired > assign `.h`: expected `\"a\" (string) | \"b\" (string)` but got `\"y\" (string)`",
+    "function badAsserted > assign `.v`: expected `\"q\" (string)` but got `\"r\" (string)`",
+    "function badAsserted > assign `.k`: expected `\"q\" (string)` but got `\"r\" (string)`",
+    "function badAssertedUnion > assign `.h`: expected `\"z\" (string) | \"z\" (string)` but got `\"y\" (string)`",
+  ])
+}
+
+///|
+/// #308's review, each cell probed against the nightly: an optional spread
+/// after a written member widens the whole union, an asserted branch member
+/// stays narrow through a conditional spread, a branch that omits a member
+/// keeps the earlier fresh one, a member every union variant requires is
+/// declared, and a union spread under a written key widens per alternative.
+test "spread origins compose through conditionals, variants and nesting" {
+  let src =
+    #|declare const c: boolean;
+    #|declare const d: { h?: number };
+    #|declare const da: { h: "a" };
+    #|declare const u: { h: "a" } | { h: "b" };
+    #|export function m1() { let r = { h: c ? "a" : "b", ...d }; r.h = 1; r.h = "z"; return r; }
+    #|export function m1bad() { let r = { h: c ? "a" : "b", ...d }; const s: string = r.h; return s; }
+    #|export function n1() { const s = { ...(c ? { h: "a" as "a" } : { h: "b" as "b" }) }; const t: { h: "a" | "b" } = s; return t; }
+    #|export function n2() { let r = { h: "seed", ...(c ? da : {}) }; r.h = "x"; return r; }
+    #|export function n3() { const r = { h: "seed", ...u }; const t: { h: "a" | "b" } = r; return t; }
+    #|export function n4() { const r = { nested: { ...u } }; const t: "a" | "b" = r.nested.h; return t; }
+  assert_eq(issue_lines(src), [
+    "function m1bad > binding `s` init: expected `string` but got `string | number`",
+  ])
+}
+
+///|
+/// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
+/// enumerate leaves the result open, and spreading that result again keeps
+/// it open, as a fresh literal and as a bound one.
+test "a spread of an open shape stays open" {
+  let src =
+    #|interface L { asc: number; parent?: object; divides: number[]; bullet?: { a: number } }
+    #|interface LP extends Omit<L, "divides" | "parent"> { divides: string[] }
+    #|declare function withoutParent<T extends { parent?: unknown }>(value: T): Omit<T, "parent">;
+    #|export function okFresh(source: L): LP {
+    #|  const line = { ...withoutParent(source), divides: source.divides.map(String) };
+    #|  return source.bullet == null ? line : { ...line, bullet: { a: 1 } };
+    #|}
+    #|export function okBound(source: L): LP {
+    #|  const line = { ...withoutParent(source), divides: source.divides.map(String) };
+    #|  const again = { ...line };
+    #|  return again;
+    #|}
+    #|export function badClosed(source: L): LP {
+    #|  const line = { divides: source.divides.map(String) };
+    #|  return { ...line, bullet: { a: 1 } };
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badClosed > return.asc: property `asc` is required by `LP`",
+  ])
+}
+
+///|
+/// univer's canvas code: a lib type ALIAS over string literals
+/// (`CanvasLineCap`) is only a name here, so a literal assigned to it is
+/// not judged, while a curated lib type keeps its primitive check.
+test "a lib literal alias abstains and a curated lib type does not" {
+  let src =
+    #|declare function k(x: CanvasLineCap): void;
+    #|export class Q { set cap(v: CanvasLineCap) {} get cap() { return "butt" as CanvasLineCap; } }
+    #|export function okAlias(q: Q) {
+    #|  k("butt");
+    #|  let y: CanvasLineCap = "round";
+    #|  q.cap = "butt";
+    #|  return y;
+    #|}
+    #|export function badDate() { const d: Date = 5; return d; }
+  assert_eq(issue_lines(src), [
+    "function badDate > binding `d` init: expected `Date` but got `number`",
+  ])
+}
