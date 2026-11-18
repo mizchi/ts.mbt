@@ -4650,7 +4650,15 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                 _ => cur = reduced
               }
             } else {
-              keep_going = false
+              match
+                self.object_extends_decision(
+                  resolved_check,
+                  self.unwrap(ext),
+                ) {
+                Some(true) => cur = t_branch
+                Some(false) => cur = f_branch
+                None => keep_going = false
+              }
             }
           _ => cur = simplified
         }
@@ -13861,7 +13869,15 @@ fn infer_expr_inner(
       }
     }
     ObjectLit(entries) => {
-      let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      // One field list per ALTERNATIVE. A spread of a union distributes:
+      // `{ ...u }` with `u: A | B` is `{ ...A } | { ...B }` in tsc
+      // (`getSpreadType` maps over a union), and reading it as the union's
+      // COMMON members made every member only some variants have read as
+      // missing. excalidraw's `restoreElement` writes
+      // `element = { ...element }` over a 14-member element union and then
+      // switches on `element.type`; every case arm's own member read
+      // "does not exist".
+      let mut alts : Array[Array[(@ast.TsType, @ast.TsType)]] = [[]]
       // Set when a spread operand's shape can't be enumerated. The result
       // then has to stay OPEN: closing it over just the keys we could see
       // turns every read of a spread-in member into a false
@@ -13881,6 +13897,7 @@ fn infer_expr_inner(
           let parts = union_components(spread_ty)
           let nullish = parts.filter(fn(p) { p is (Undefined | Null) })
           let rest = parts.filter(fn(p) { !(p is (Undefined | Null)) })
+          let variants = object_spread_variants(spread_ty, resolver)
           if nullish.length() > 0 &&
             rest.length() == 1 &&
             spread_shape_is_known(rest[0], resolver) {
@@ -13893,8 +13910,34 @@ fn infer_expr_inner(
               } else {
                 @ast.TsType::Union([f.1, Undefined])
               }
-              fields.push((@ast.TsType::Literal(f.0), ft))
+              for alt in alts {
+                object_lit_set_field(alt, f.0, ft)
+              }
             }
+          } else if variants is Some(vs) &&
+            vs.length() >= 2 &&
+            alts.length() * vs.length() <= 32 {
+            // A union of enumerable shapes: one alternative per (current
+            // alternative, member) pair. A nullish member contributes an
+            // alternative that adds nothing (spreading `undefined` copies
+            // no member), which `object_spread_variants` encodes as an
+            // empty field list.
+            let next : Array[Array[(@ast.TsType, @ast.TsType)]] = []
+            for alt in alts {
+              for v in vs {
+                let copy = alt.copy()
+                for f in v {
+                  object_lit_set_field(copy, f.0, f.1)
+                }
+                next.push(copy)
+              }
+            }
+            alts = next
+          } else if variants is Some(vs) && vs.length() >= 2 {
+            // Too many combinations to spell out: open, as an
+            // unenumerable spread is, rather than the members every
+            // variant shares.
+            opaque_spread = true
           } else if spread_shape_is_known(spread_ty, resolver) {
             for f in collect_declared_fields(spread_ty, resolver) {
               // A `#private` member is NOT copied by a spread — it is not
@@ -13906,23 +13949,40 @@ fn infer_expr_inner(
               if f.0.has_prefix("__private_brand__") {
                 continue
               }
-              fields.push((@ast.TsType::Literal(f.0), f.1))
+              for alt in alts {
+                object_lit_set_field(alt, f.0, f.1)
+              }
             }
           } else {
             opaque_spread = true
           }
         } else {
           let val_ty = infer_expr(env, resolver, entry.1)
-          fields.push((@ast.TsType::Literal(entry.0), val_ty))
+          for alt in alts {
+            object_lit_set_field(alt, entry.0, val_ty)
+          }
         }
       }
       if opaque_spread {
         // An `[k: string]: any` entry. `lookup_field_core` matches the
         // literal keys first, so the fields we DID resolve keep their
         // precise types and only the unknown remainder goes permissive.
-        fields.push((@ast.TsType::String_, @ast.TsType::Any))
+        for alt in alts {
+          alt.push((@ast.TsType::String_, @ast.TsType::Any))
+        }
       }
-      @ast.TsType::Object(fields)
+      if alts.length() == 1 {
+        @ast.TsType::Object(alts[0])
+      } else {
+        let out : Array[@ast.TsType] = []
+        for alt in alts {
+          let o = @ast.TsType::Object(alt)
+          if !out.contains(o) {
+            out.push(o)
+          }
+        }
+        union_of(out)
+      }
     }
     ComputedProp(_, _) => @ast.TsType::Any
     ArrowFunc(params, declared_ret, body, is_async) => {
@@ -23079,6 +23139,214 @@ fn check_object_lit_against_target(
       "\{sub_path}.\{name}",
       "property `\{name}` is required by `\{type_display(target)}`",
     )
+  }
+}
+
+///|
+/// Set a literal-keyed member of an object literal being built: a later
+/// entry REPLACES an earlier one of the same name, which is what an object
+/// literal means (`{ ...a, type: "x" }` has the written `type`, and reading
+/// it as `a`'s was the first-match lookup answering for the overwritten
+/// member). Anything that is not a plain key is appended as before.
+fn object_lit_set_field(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+  key : String,
+  ty : @ast.TsType,
+) -> Unit {
+  let k = @ast.TsType::Literal(key)
+  if key.has_prefix("@@") {
+    fields.push((k, ty))
+    return
+  }
+  for i, f in fields {
+    if f.0 == k {
+      fields[i] = (k, ty)
+      return
+    }
+  }
+  fields.push((k, ty))
+}
+
+///|
+/// The member lists a spread of `ty` can copy, one per union member, when
+/// `ty` is a union whose every non-nullish member is an enumerable shape.
+/// A nullish member copies nothing and contributes an empty list. `None`
+/// for anything that is not such a union, which leaves the caller's
+/// single-shape handling in charge.
+fn object_spread_variants(
+  ty : @ast.TsType,
+  resolver : Resolver,
+) -> Array[Array[(String, @ast.TsType)]]? {
+  let members : Array[@ast.TsType] = []
+  fn go(t : @ast.TsType, depth : Int, out : Array[@ast.TsType]) -> Bool {
+    if depth > 4 {
+      return false
+    }
+    match t {
+      Union(items) => {
+        for i in items {
+          if !go(i, depth + 1, out) {
+            return false
+          }
+        }
+        true
+      }
+      _ =>
+        match resolver.unwrap(t) {
+          Union(items) => {
+            for i in items {
+              if !go(i, depth + 1, out) {
+                return false
+              }
+            }
+            true
+          }
+          u => {
+            if !out.contains(u) {
+              out.push(u)
+            }
+            true
+          }
+        }
+    }
+  }
+  if !go(ty, 0, members) {
+    return None
+  }
+  let non_nullish = members.filter(fn(m) { !(m is (Undefined | Null)) })
+  if non_nullish.length() < 2 {
+    return None
+  }
+  let out : Array[Array[(String, @ast.TsType)]] = []
+  let mut saw_nullish = false
+  for m in members {
+    match m {
+      Undefined | Null => saw_nullish = true
+      _ => {
+        if !spread_shape_is_known(m, resolver) {
+          return None
+        }
+        out.push(
+          collect_declared_fields(m, resolver).filter(fn(f) {
+            !f.0.has_prefix("__private_brand__")
+          }),
+        )
+      }
+    }
+  }
+  if saw_nullish {
+    out.push([])
+  }
+  Some(out)
+}
+
+///|
+/// `S extends T` for two OBJECT shapes, decided only where a member settles
+/// it. `extends_decision` is resolver-free and answers `None` for any pair
+/// of named object types, so `Exclude<Element, SelectionElement>` over a
+/// discriminated union of interfaces stayed an undecided conditional —
+/// and every read through it abstained or, worse, met a `{}` (excalidraw's
+/// `restoreElement` takes exactly that parameter type).
+///
+/// The one rule is a member present on BOTH sides whose types are made of
+/// literals (or nullish members) and are disjoint: `{ type: "rect" }` can
+/// never extend `{ type: "selection" }`, whether the target's member is
+/// optional or not, since a source that HAS the member must give it a type
+/// the target accepts. Every other pair is `None`, so a conditional this
+/// cannot decide stays exactly as undecided as before. Equal shapes are
+/// already `true` in `extends_decision`.
+fn Resolver::object_extends_decision(
+  self : Resolver,
+  source : @ast.TsType,
+  target : @ast.TsType,
+) -> Bool? {
+  fn objectish(t : @ast.TsType) -> Bool {
+    match t {
+      Object(_) | Struct(_, _) | Intersection(_) | Named(_) | Applied(_, _) =>
+        true
+      _ => false
+    }
+  }
+  if !objectish(source) || !objectish(target) {
+    return None
+  }
+  if !spread_shape_is_known(source, self) ||
+    !spread_shape_is_known(target, self) {
+    return None
+  }
+  fn literal_only(t : @ast.TsType) -> Bool {
+    match t {
+      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) =>
+        true
+      Union(items) =>
+        items.length() > 0 &&
+        items
+        .iter()
+        .all(fn(i) {
+          i is (Literal(_)
+          | NumberLiteral(_)
+          | BooleanLiteral(_)
+          | BigIntLiteral(_)
+          | Undefined
+          | Null)
+        }) &&
+        items
+        .iter()
+        .any(fn(i) { !(i is (Undefined | Null)) })
+      _ => false
+    }
+  }
+  let source_fields = collect_declared_fields(source, self)
+  for tf in collect_declared_fields(target, self) {
+    if tf.0.has_prefix("@@") || tf.0.has_prefix("<") {
+      continue
+    }
+    let tty = self.unwrap(tf.1)
+    if !literal_only(tty) {
+      continue
+    }
+    for sf in source_fields {
+      if sf.0 != tf.0 {
+        continue
+      }
+      let sty = self.unwrap(sf.1)
+      if literal_only(sty) && extends_decision(sty, tty) is Some(false) {
+        return Some(false)
+      }
+    }
+  }
+  // `true` only against an object-type LITERAL, whose members are the
+  // whole of what it requires: every member the target lists is present
+  // on the source with a type that definitely extends it, or is optional
+  // and absent. An interface or class target is left alone, since its
+  // members can arrive through heritage, merging or a nominal private.
+  match target {
+    Object(tfields) => {
+      if tfields.length() == 0 {
+        return None
+      }
+      for tf in tfields {
+        let name = match tf.0 {
+          Literal(n) if !n.has_prefix("@@") && !n.has_prefix("<") => n
+          _ => return None
+        }
+        let tty = self.unwrap(tf.1)
+        let mut found = false
+        for sf in source_fields {
+          if sf.0 == name {
+            found = true
+            if !(extends_decision(self.unwrap(sf.1), tty) is Some(true)) {
+              return None
+            }
+          }
+        }
+        if !found && !type_has_undefined(tty) {
+          return None
+        }
+      }
+      Some(true)
+    }
+    _ => None
   }
 }
 
