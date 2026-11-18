@@ -638,6 +638,60 @@ test "spread origins compose through conditionals, variants and nesting" {
 }
 
 ///|
+/// Four univer shapes, each probed against the nightly: a union member's
+/// inherited members survive a spread, a type parameter binds from a union
+/// source once the shared `undefined` is out, `a ??= {}` is `a`'s declared
+/// type, and an optional call's arguments see its receivers non-nullish
+/// (an overloaded method judged as the plain spelling judges it).
+test "union bases, union binding, logical assignment, optional-call arguments" {
+  let src =
+    #|interface Loc { unitId?: string }
+    #|interface RowR extends Loc { startRow: number; endRow: number }
+    #|interface IRange extends RowR { rangeType?: number }
+    #|interface P1 { range: IRange; direction: 1 | 2 }
+    #|interface P2 { range: IRange; direction: 3 | 4 }
+    #|export function okUnionBases(params: P1 | P2) {
+    #|  const { range } = params;
+    #|  const r = { ...range };
+    #|  r.startRow = 1;
+    #|  return r;
+    #|}
+    #|interface Blk { startIndex: number; blockId: string }
+    #|function collect<T extends { startIndex: number }>(prev: T[] | undefined, getId: (item: T) => string): string[] {
+    #|  return (prev ?? []).map(getId);
+    #|}
+    #|export function okUnionBinding(a: Blk[] | undefined) { return collect(a, (item) => item.blockId); }
+    #|export function badUnionBinding(a: Blk[] | undefined) { return collect(a, (item) => item.nope); }
+    #|interface DS { title?: string }
+    #|interface Data { ds?: DS }
+    #|export function okCoalesce(d: Data) {
+    #|  const s = d.ds ??= {};
+    #|  s.title = "x";
+    #|  let local: DS | undefined;
+    #|  const l = local ||= { title: "y" };
+    #|  return [s, l];
+    #|}
+    #|export function badCoalesce(d: Data) { const s = d.ds ??= {}; const n: number = s; return n; }
+    #|interface R { width: number; m(o: { left: number }): void; n?: R }
+    #|export function okOptionalCall(icon?: R) {
+    #|  icon?.m({ left: icon.width / 2 });
+    #|  icon?.n?.m({ left: icon.n.width });
+    #|}
+    #|export function badOptionalCall(icon?: R, other?: R) { other?.k({ left: icon?.width ?? 0 }); }
+    #|interface Op<T, A> { (src: Obs<T>): Obs<A> }
+    #|declare class Obs<T> {
+    #|  pipe(): Obs<T>;
+    #|  pipe<A>(op1: Op<T, A>): Obs<A>;
+    #|}
+    #|declare function thr<T>(n: number): Op<T, T>;
+    #|export function okOptionalOverload(h?: Obs<number>) { return h?.pipe(thr(0)); }
+  assert_eq(issue_lines(src), [
+    "function badUnionBinding > PropAccess `.nope`: property `nope` does not exist on `Blk`",
+    "function badCoalesce > binding `n` init: expected `number` but got `DS`", "function badOptionalCall > call `k`: method `k` does not exist on `R`",
+  ])
+}
+
+///|
 /// univer's `serializeDocumentSkeletonLine`: a spread this checker cannot
 /// enumerate leaves the result open, and spreading that result again keeps
 /// it open, as a fresh literal and as a bound one.

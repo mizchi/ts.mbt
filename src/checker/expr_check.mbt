@@ -36038,7 +36038,28 @@ fn check_call_args_in_expr(
         for b in narrowed {
           env.narrow(b.0, b.1)
         }
-        check_call_args_in_expr_at(env, plain, ctx)
+        // A UNION receiver stays on the optional walk: its every-member
+        // arity rule (`u?.m("a")` over `A | B` is TS2554) lives on the
+        // call arm and the plain method arm has none, which is a MISS on
+        // `u.m("a")` too. One receiver type takes the plain form.
+        let use_plain = match plain {
+          MethodCall(r, _, _) =>
+            !(prune_nullish(
+              ctx.resolver,
+              ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r)),
+            )
+            is Union(_))
+          _ => true
+        }
+        check_call_args_in_expr_at(
+          env,
+          if use_plain {
+            plain
+          } else {
+            expr
+          },
+          ctx,
+        )
         env.restore_from(snap)
         return
       }
