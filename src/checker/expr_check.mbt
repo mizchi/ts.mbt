@@ -2049,10 +2049,31 @@ fn distribute_conditional_alias(
     Some(a) => a
     None => return None
   }
-  let members = match r.unwrap(arg) {
+  let top = match r.unwrap(arg) {
     Union(items) => items
     _ => return None
   }
+  // A union of unions is that union. excalidraw's `ExcalidrawElement`
+  // lists `ExcalidrawGenericElement`, itself an alias to a union that
+  // holds the very `ExcalidrawSelectionElement` an `Exclude` removes, so
+  // distributing one level checked that alias whole, could not decide it,
+  // and left every `Exclude<ExcalidrawElement, …>` unresolved.
+  let members : Array[@ast.TsType] = []
+  fn flatten(
+    r : Resolver,
+    items : Array[@ast.TsType],
+    depth : Int32,
+    out : Array[@ast.TsType],
+  ) -> Unit {
+    for m in items {
+      match r.unwrap(m) {
+        Union(inner) if depth < 4 => flatten(r, inner, depth + 1, out)
+        _ => if !out.contains(m) { out.push(m) }
+      }
+    }
+  }
+
+  flatten(r, top, 0, members)
   let out : Array[@ast.TsType] = []
   for m in members {
     let b : Map[String, @ast.TsType] = Map([])
@@ -2592,6 +2613,7 @@ fn Resolver::ingest_module(
   prefix : String,
 ) -> Unit {
   Resolver::record_augmented_interface_names(r, module_)
+  Resolver::record_assigned_names(r, module_)
   // TS declaration merging: `interface Foo { a }` + `interface Foo { b }`
   // produces a single `Foo` whose members are the union of both bodies.
   // Field-key collisions take the later declaration.
@@ -3364,12 +3386,201 @@ fn bind_unsolved_to_any(
 }
 
 ///|
-/// Whether `n` arguments fit a callable's parameter list: at least the
-/// required count (a trailing optional, `void` or rest parameter may be
-/// omitted) and at most the parameter count, unless a rest takes the rest.
-fn overload_arity_accepts(params : Array[@ast.TsType], n : Int32) -> Bool {
+/// Whether a concrete overload member takes a call, three ways.
+/// `Maybe` is a member that takes it only if a parameter it omits is
+/// optional, when the member cannot say: a bare `Func` spells `y?: T` and
+/// a required `y: T | undefined` alike (a parsed signature with a `?` is
+/// wrapped in `CallableMeta`, but the lib tables and other synthesized
+/// signatures spell an optional parameter as `T | undefined` too).
+/// `{ (x: 1, y: string | undefined): string; (x: number): number }` called
+/// as `f(1)` is `number` in tsc, and counting `y` as omittable read it as
+/// `string` (probed).
+priv enum OverloadFit {
+  Fits
+  Maybe
+  NoFit
+}
+
+///|
+/// One overload loop's running answer. `offer` returns the call's type once
+/// it is decided. A `Maybe` member is held; a later member that also takes
+/// the call decides it as `any`, unless the two agree on the return (`m(x:
+/// string, y?: string): number` beside `m(x: string): number` is `number`
+/// whichever one tsc picks). An agreeing `Maybe` keeps scanning, since a
+/// later member can still disagree.
+priv struct OverloadPick {
+  mut tentative : @ast.TsType?
+}
+
+///|
+fn OverloadPick::offer(
+  self : OverloadPick,
+  fit : OverloadFit,
+  r : @ast.TsType,
+) -> @ast.TsType? {
+  match fit {
+    NoFit => None
+    Fits =>
+      match self.tentative {
+        None => Some(r)
+        Some(t) => Some(if t == r { t } else { @ast.TsType::Any })
+      }
+    Maybe =>
+      match self.tentative {
+        None => {
+          self.tentative = Some(r)
+          None
+        }
+        Some(t) => if t == r { None } else { Some(@ast.TsType::Any) }
+      }
+  }
+}
+
+///|
+/// The arguments' types for overload selection, each argument inferred
+/// once. The first list is the SELECTION types, where a literal keeps its
+/// literal type (`overload_selection_arg_type`) and a spread of a fixed
+/// tuple counts as its elements, as the method loop's `overload_arg_types`
+/// reads it (`f(1, ...xs)` with `xs: [string]` is two arguments). The
+/// second is each argument's type as inferred, one per argument as written,
+/// which is what a generic member's binding pass reads
+/// (`solve_generic_bindings`'s `pre`): inferring an argument again there
+/// made `f(f(f(1)))` over `{ <T>(x: T): T; … }` exponential in its depth.
+fn overload_call_arg_types(
+  env : ExprEnv,
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+) -> (Array[@ast.TsType], Array[@ast.TsType]) {
+  let sel_types : Array[@ast.TsType] = []
+  let raw : Array[@ast.TsType] = []
+  for a in args {
+    let inferred = infer_expr(env, resolver, a)
+    raw.push(inferred)
+    let t = resolver.unwrap(inferred)
+    match (a, t) {
+      (Spread(_), Tuple(elems)) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+        for e in elems {
+          sel_types.push(e)
+        }
+      _ => sel_types.push(overload_selection_arg_type(a, t))
+    }
+  }
+  (sel_types, raw)
+}
+
+///|
+/// `expand_tuple_spread_args` over types already inferred: each argument
+/// with its type from `raw` (one per argument as written), a spread of a
+/// fixed tuple replaced by one `xs[i]` per element with that element's type.
+fn expand_tuple_spread_args_typed(
+  resolver : Resolver,
+  args : Array[@ast.TsExpr],
+  raw : Array[@ast.TsType],
+) -> (Array[@ast.TsExpr], Array[@ast.TsType]) {
+  let out_args : Array[@ast.TsExpr] = []
+  let out_types : Array[@ast.TsType] = []
+  for i, a in args {
+    let t = if i < raw.length() { raw[i] } else { @ast.TsType::Any }
+    match a {
+      Spread(inner) =>
+        match resolver.unwrap(t) {
+          Tuple(elems) if !elems.iter().any(fn(e) { e is Rest(_) }) =>
+            for j, e in elems {
+              out_args.push(IndexAccess(inner, NumberLit(j.to_double())))
+              out_types.push(e)
+            }
+          _ => {
+            out_args.push(a)
+            out_types.push(t)
+          }
+        }
+      _ => {
+        out_args.push(a)
+        out_types.push(t)
+      }
+    }
+  }
+  (out_args, out_types)
+}
+
+///|
+/// A rest parameter typed with a tuple ALIAS (`...rest: Tail`, `type Tail =
+/// [string]`) resolved to the tuple, so `expand_tuple_rest_params` sees it:
+/// left as `Rest(Named("Tail"))` it read as an unbounded rest.
+fn resolve_rest_tuple_alias(
+  resolver : Resolver,
+  params : Array[@ast.TsType],
+) -> Array[@ast.TsType] {
+  match params.last() {
+    Some(Rest(Named(_) | Applied(_, _) as t)) =>
+      match resolver.unwrap(t) {
+        Tuple(_) as tup => {
+          let out = params.copy()
+          out[out.length() - 1] = @ast.TsType::Rest(tup)
+          out
+        }
+        _ => params
+      }
+    _ => params
+  }
+}
+
+///|
+/// How many parameters a signature WRITES before a tuple rest's elements:
+/// the positions its recorded `?`s speak for.
+fn written_param_count(params : Array[@ast.TsType]) -> Int32 {
+  if params.last() is Some(Rest(Tuple(_))) {
+    params.length() - 1
+  } else {
+    params.length()
+  }
+}
+
+///|
+/// The arity half of `OverloadFit`. `params` has its tuple rest expanded
+/// (`(x: 1, ...rest: [string])` requires two arguments); `flags` are the
+/// member's recorded `?`s, exact for the first `exact` positions.
+fn overload_arity_fit(
+  resolver : Resolver,
+  params : Array[@ast.TsType],
+  flags : Array[Bool]?,
+  exact : Int32,
+  n : Int32,
+) -> OverloadFit {
   let has_rest = params.iter().any(fn(p) { p is Rest(_) })
-  n >= required_arity_from_types(params) && (has_rest || n <= params.length())
+  if !has_rest && n > params.length() {
+    return NoFit
+  }
+  let mut strict = 0
+  let mut lenient = 0
+  for i, p in params {
+    // A parameter whose type accepts `void` is omittable whatever its
+    // spelling (`y: string | void`), as tsc's minimum argument count says;
+    // `y: string | undefined` is not.
+    if p is Rest(_) || p is Void || alias_accepts_void(resolver, p) {
+      continue
+    }
+    match flags {
+      Some(f) if i < exact =>
+        if !(i < f.length() && f[i]) {
+          strict = i + 1
+          lenient = i + 1
+        }
+      _ => {
+        strict = i + 1
+        if !type_accepts_undefined_param(p) {
+          lenient = i + 1
+        }
+      }
+    }
+  }
+  if n < lenient {
+    NoFit
+  } else if n < strict {
+    Maybe
+  } else {
+    Fits
+  }
 }
 
 ///|
@@ -4280,7 +4491,32 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           match self.type_aliases.get(n) {
             Some(aliased) => {
               seen = unwrap_seen_add(seen, n)
-              cur = aliased.type_
+              // A generic alias named WITHOUT type arguments hands back its
+              // body with the parameters unbound: tsc reads each as its
+              // DEFAULT, which the AST does not record. An unbound name
+              // only misleads where it RESOLVES — effect's
+              // `MulticastInterface<A extends IpAddress = IpAddress>` used
+              // bare met `net/Dns.ts`'s `interface A`, and the conditional
+              // `A extends Ipv4Address ? … : number` was decided over the
+              // DNS record — so such a parameter reads as `any`. One that
+              // names nothing stays as it was: replacing every parameter
+              // turned zod's bare `SyncParseReturnType` into
+              // `OK<any> | DIRTY<any> | INVALID` and exposed the
+              // discriminant split on object literals to it.
+              let b : Map[String, @ast.TsType] = Map([])
+              for tp in aliased.type_params {
+                if self.interfaces.contains(tp) ||
+                  self.classes.contains(tp) ||
+                  self.type_aliases.contains(tp) ||
+                  self.enums.contains(tp) {
+                  b[tp] = Any
+                }
+              }
+              cur = if b.is_empty() {
+                aliased.type_
+              } else {
+                substitute_params(aliased.type_, b)
+              }
             }
             None =>
               // A pure array-alias interface (`interface I extends Array<T>
@@ -4624,7 +4860,23 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           t_branch,
           f_branch,
         )
-        let simplified = simplify_type(probe)
+        // Two object shapes are decided on the shapes as WRITTEN, before
+        // `simplify_type` sees them: its intersection collapse reduces
+        // `Base & { type: "rectangle" }` to the one named part `Base`, so
+        // two discriminated members of `Base` both became `Base` and
+        // `RectEl extends SelEl` came out TRUE (on main too) — which made
+        // `Exclude<ExcalidrawElement, ExcalidrawSelectionElement>` drop
+        // every member that shares the base.
+        let early = if has_infer {
+          None
+        } else {
+          self.object_extends_decision(resolved_check, self.unwrap(ext))
+        }
+        let simplified = match early {
+          Some(true) => t_branch
+          Some(false) => f_branch
+          None => simplify_type(probe)
+        }
         match simplified {
           Conditional(_, _, _, _) =>
             // `simplify_type` decides through the three-valued
@@ -4650,7 +4902,12 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                 _ => cur = reduced
               }
             } else {
-              keep_going = false
+              match
+                self.object_extends_decision(resolved_check, self.unwrap(ext)) {
+                Some(true) => cur = t_branch
+                Some(false) => cur = f_branch
+                None => keep_going = false
+              }
             }
           _ => cur = simplified
         }
@@ -8049,12 +8306,17 @@ fn Resolver::method_overload_signatures(
   self : Resolver,
   recv : @ast.TsType,
   meth : String,
-) -> Array[(Array[@ast.TsType], @ast.TsType)] {
-  // Collect the candidate signatures of `meth` as `(params, return)` pairs,
-  // in declaration order. A class method may be overloaded across several
-  // declarations; an object / interface type expresses overloads as repeated
-  // fields of the same name.
-  let candidates : Array[(Array[@ast.TsType], @ast.TsType)] = []
+) -> Array[(Array[@ast.TsType], @ast.TsType, Array[Bool]?)] {
+  // Collect the candidate signatures of `meth` as `(params, return,
+  // optional)` triples, in declaration order. A class method may be
+  // overloaded across several declarations; an object / interface type
+  // expresses overloads as repeated fields of the same name. `optional` is
+  // the member's recorded `?`s when it has them: a parsed member signature
+  // with a `?` is a `CallableMeta`, so a bare `Func` among the type-shaped
+  // arms below has none (`Some([])`), while a class method records no `?`
+  // at all (`None`, see `OverloadFit`).
+  let candidates : Array[(Array[@ast.TsType], @ast.TsType, Array[Bool]?)] = []
+  let mut incomplete = false
   match self.unwrap(recv) {
     Named(n) | Applied(n, _) => {
       // An INTERFACE is how a `.d.ts` declares an overload set, and this
@@ -8128,7 +8390,7 @@ fn Resolver::method_overload_signatures(
             } else {
               substitute_params(m.return_type, msubst)
             }
-            candidates.push((ps, ret))
+            candidates.push((ps, ret, None))
           }
         }
         _ => ()
@@ -8143,8 +8405,15 @@ fn Resolver::method_overload_signatures(
               // and keeps the single-signature path, losing a finding
               // rather than picking an arm for a caller.
               match f.1 {
-                Func(ps, ret) => if f.0 == meth { candidates.push((ps, ret)) }
-                _ => ()
+                Func(ps, ret) =>
+                  if f.0 == meth {
+                    candidates.push((ps, ret, Some([])))
+                  }
+                CallableMeta(Func(ps, ret), flags) =>
+                  if f.0 == meth {
+                    candidates.push((ps, ret, Some(flags)))
+                  }
+                _ => if f.0 == meth { incomplete = true }
               }
             }
           None => ()
@@ -8154,18 +8423,37 @@ fn Resolver::method_overload_signatures(
     Object(fields) =>
       for f in fields {
         match (f.0, f.1) {
-          (Literal(k), Func(ps, ret)) if k == meth => candidates.push((ps, ret))
+          (Literal(k), Func(ps, ret)) if k == meth =>
+            candidates.push((ps, ret, Some([])))
+          (Literal(k), CallableMeta(Func(ps, ret), flags)) if k == meth =>
+            candidates.push((ps, ret, Some(flags)))
+          (Literal(k), _) if k == meth => incomplete = true
           _ => ()
         }
       }
     Struct(_, fields) =>
       for f in fields {
         match f.1 {
-          Func(ps, ret) => if f.0 == meth { candidates.push((ps, ret)) }
-          _ => ()
+          Func(ps, ret) =>
+            if f.0 == meth {
+              candidates.push((ps, ret, Some([])))
+            }
+          CallableMeta(Func(ps, ret), flags) =>
+            if f.0 == meth {
+              candidates.push((ps, ret, Some(flags)))
+            }
+          _ => if f.0 == meth { incomplete = true }
         }
       }
     _ => ()
+  }
+  // A member of the set this cannot take (a generic one, an optional one)
+  // makes the set INCOMPLETE, and selecting among the rest picks a member
+  // tsc would not: `m<T>(x: T): number` beside `m(x: string, flag?:
+  // boolean): boolean` resolves `m(s)` to the generic one. Such a set is
+  // left to the first-declaration lookup.
+  if incomplete {
+    return []
   }
   candidates
 }
@@ -8231,7 +8519,18 @@ fn overload_arg_types(
             }
           _ => out.push(infer_expr(env, resolver, a))
         }
-      _ => out.push(infer_expr(env, resolver, a))
+      // A literal argument keeps its literal type for SELECTION, as
+      // `overload_selection_arg_type` does on the call paths: univer's
+      // `_getUndoStack(id, true)` against `(id): T[] | null` and `(id,
+      // createAsNeeded: true): T[]` widened `true` to `boolean`, matched
+      // neither, and fell back to the implementation's `T[] | null`.
+      _ =>
+        out.push(
+          match precise_literal_type(a) {
+            Some(t) => t
+            None => infer_expr(env, resolver, a)
+          },
+        )
     }
   }
   out
@@ -8293,14 +8592,40 @@ fn Resolver::resolve_method_overload(
   for b in self.method_overload_type_params(recv, meth) {
     erase[b] = @ast.TsType::Any
   }
+  // Literal-typed members first, as tsc's `reorderCandidates` does (see
+  // `specialized_overloads_first`).
+  fn specialized(c : (Array[@ast.TsType], @ast.TsType, Array[Bool]?)) -> Bool {
+    let flags = c.2.unwrap_or([])
+    for i, p in c.0 {
+      if overload_param_is_literal(p, i < flags.length() && flags[i]) {
+        return true
+      }
+    }
+    false
+  }
+
+  let candidates = candidates.filter(specialized) +
+    candidates.filter(fn(c) { !specialized(c) })
+  // A member that takes the call only if a parameter it omits is optional
+  // answers unless a later member takes it too (see `OverloadFit`).
+  let mut tentative : (Array[@ast.TsType], @ast.TsType)? = None
   for c in candidates {
-    let (params, ret) = c
+    let (params, ret, flags) = c
+    let params = resolve_rest_tuple_alias(self, params)
+    let written = written_param_count(params)
     let params = expand_tuple_rest_params(params, arg_types.length())
     // The argument count has to fit the member's arity, not equal its
     // parameter count: redi's `get<T>(id, lookUp?)` is called as
     // `get(ID, LookUp.SELF)` and as `get(ID)`, and the second never
     // matched its own signature.
-    if !overload_arity_accepts(params, arg_types.length()) {
+    let fit = overload_arity_fit(
+      self,
+      params,
+      flags,
+      written,
+      arg_types.length(),
+    )
+    if fit is NoFit {
       continue
     }
     let mut ok = true
@@ -8360,6 +8685,27 @@ fn Resolver::resolve_method_overload(
       }
     }
     if ok {
+      // As `OverloadPick`: a later member agreeing on the return keeps it.
+      // A return that mentions one of the members' own binders agrees
+      // only by spelling: `m<T>(x: T[], …): T` and `m<T>(x: T): T` both
+      // return `T` and instantiate it differently.
+      match tentative {
+        Some((tparams, tret)) =>
+          if tret == ret &&
+            !erase.keys().any(fn(b) { type_param_occurs(b, tret) }) {
+            if fit is Maybe {
+              continue
+            }
+            return Some((tparams, tret))
+          } else {
+            return Some((tparams, @ast.TsType::Any))
+          }
+        None => ()
+      }
+      if fit is Maybe {
+        tentative = Some((params, ret))
+        continue
+      }
       // The PARAMETERS come back with the return so the caller can solve
       // the member's own type parameters from the arguments, as it does
       // for a single signature: the return of `get<T>(…): T` is the bare
@@ -8367,7 +8713,7 @@ fn Resolver::resolve_method_overload(
       return Some((params, ret))
     }
   }
-  None
+  tentative
 }
 
 ///|
@@ -9470,7 +9816,7 @@ fn generic_class_instance_definite_mismatch(
     Applied(tn, _) | Named(tn) =>
       match resolver.classes.get(tn) {
         Some(tc) =>
-          (tc.private_members.length() > 0 || tc.protected_members.length() > 0) &&
+          class_decl_has_instance_restricted_member(tc) &&
           !class_extends(resolver, sn, tn) &&
           resolver.interfaces.get(tn) is None
         None => false
@@ -9512,10 +9858,64 @@ fn class_extends(resolver : Resolver, sub : String, base : String) -> Bool {
 /// subclass, which inherits it) can satisfy the type.
 fn class_has_private_member(resolver : Resolver, name : String) -> Bool {
   match resolver.classes.get(name) {
-    Some(decl) =>
-      decl.private_members.length() > 0 || decl.protected_members.length() > 0
+    Some(decl) => class_decl_has_instance_restricted_member(decl)
     None => false
   }
+}
+
+///|
+/// Does the INSTANCE side of `decl` carry a `private` / `protected` member?
+/// Only those make the instance type nominal. The visibility lists hold
+/// static members too, and a `private static helper()` is a member of the
+/// constructor, not of an instance: tsc accepts `const k: K = { a: 2 }`
+/// for `class K { a = 1; private static helper() {} }` (probed).
+/// excalidraw's `LinearElementEditor` is every editor update in the app
+/// spelled as `{ ...editor, … }`, and it has three `private static`s.
+///
+/// A name counts as static only when every declaration of it found is
+/// static; one this cannot find (a parameter property is recorded only
+/// in the lists) stays instance-side, so the answer can only lose a
+/// report.
+fn class_decl_has_instance_restricted_member(decl : @ast.TsClassDecl) -> Bool {
+  fn static_only(decl : @ast.TsClassDecl, n : String) -> Bool {
+    let mut saw_static = false
+    for m in decl.methods {
+      if m.name == n {
+        if m.is_static {
+          saw_static = true
+        } else {
+          return false
+        }
+      }
+    }
+    for p in decl.properties {
+      if p.name == n {
+        if p.is_static {
+          saw_static = true
+        } else {
+          return false
+        }
+      }
+    }
+    for f in decl.static_field_inits {
+      if f.0 == n {
+        saw_static = true
+      }
+    }
+    saw_static
+  }
+
+  for n in decl.private_members {
+    if !static_only(decl, n) {
+      return true
+    }
+  }
+  for n in decl.protected_members {
+    if !static_only(decl, n) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -12884,6 +13284,28 @@ fn infer_expr_inner(
               targs.length() > 0 => @ast.TsType::Applied(n, targs)
             _ => inner_ty
           }
+        // `pointFrom<GlobalPoint>(x, y)` where the declaration returns its
+        // bounded `P`: the parser inlined `P` to its bound, so the call came
+        // back as the bound `GlobalPoint | LocalPoint` whatever the written
+        // argument said. A return that IS a parameter's union bound is read
+        // as that parameter, and the written argument answers for it.
+        (Call(name, _), _) if env.lookup(name) is None =>
+          match
+            explicit_arg_for_inlined_bound(resolver, name, targs, inner_ty) {
+            Some(t) => t
+            // An OVERLOAD SET with written type arguments whose bounds are
+            // not on record (an imported function: excalidraw's
+            // `pointFrom<GlobalPoint>(x, y)` from `@excalidraw/math`): the
+            // answer would be some overload's inlined bound, which the
+            // written argument narrows, so the call abstains.
+            None =>
+              match resolver.globals.get(name) {
+                Some(t) if targs.length() > 0 &&
+                  resolver.unwrap(t) is Union(ms) &&
+                  ms.length() > 1 => @ast.TsType::Any
+                _ => inner_ty
+              }
+          }
         _ => inner_ty
       }
     }
@@ -13861,7 +14283,15 @@ fn infer_expr_inner(
       }
     }
     ObjectLit(entries) => {
-      let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      // One field list per ALTERNATIVE. A spread of a union distributes:
+      // `{ ...u }` with `u: A | B` is `{ ...A } | { ...B }` in tsc
+      // (`getSpreadType` maps over a union), and reading it as the union's
+      // COMMON members made every member only some variants have read as
+      // missing. excalidraw's `restoreElement` writes
+      // `element = { ...element }` over a 14-member element union and then
+      // switches on `element.type`; every case arm's own member read
+      // "does not exist".
+      let mut alts : Array[Array[(@ast.TsType, @ast.TsType)]] = [[]]
       // Set when a spread operand's shape can't be enumerated. The result
       // then has to stay OPEN: closing it over just the keys we could see
       // turns every read of a spread-in member into a false
@@ -13881,6 +14311,7 @@ fn infer_expr_inner(
           let parts = union_components(spread_ty)
           let nullish = parts.filter(fn(p) { p is (Undefined | Null) })
           let rest = parts.filter(fn(p) { !(p is (Undefined | Null)) })
+          let variants = object_spread_variants(spread_ty, resolver)
           if nullish.length() > 0 &&
             rest.length() == 1 &&
             spread_shape_is_known(rest[0], resolver) {
@@ -13893,7 +14324,50 @@ fn infer_expr_inner(
               } else {
                 @ast.TsType::Union([f.1, Undefined])
               }
-              fields.push((@ast.TsType::Literal(f.0), ft))
+              for alt in alts {
+                object_lit_spread_field(alt, f.0, ft)
+              }
+            }
+          } else if variants is Some(vs) &&
+            vs.length() >= 2 &&
+            alts.length() * vs.length() <= 32 {
+            // A union of enumerable shapes: one alternative per (current
+            // alternative, member) pair. A nullish member contributes an
+            // alternative that adds nothing (spreading `undefined` copies
+            // no member), which `object_spread_variants` encodes as an
+            // empty field list.
+            let next : Array[Array[(@ast.TsType, @ast.TsType)]] = []
+            for alt in alts {
+              for v in vs {
+                let copy = alt.copy()
+                for f in v {
+                  object_lit_spread_field(copy, f.0, f.1)
+                }
+                next.push(copy)
+              }
+            }
+            alts = next
+          } else if variants is Some(vs) && vs.length() >= 2 {
+            // Too many combinations to spell out: open, as an
+            // unenumerable spread is, rather than the members every
+            // variant shares. A key some variant WRITES is no longer the
+            // earlier entry's type either (`{ tag: 0, ...u }` where every
+            // variant of `u` declares `tag: string`), and the open index
+            // does not reach a key that is listed, so such a key reads as
+            // `any` too.
+            opaque_spread = true
+            let written : Map[String, Unit] = Map([])
+            for v in vs {
+              for f in v {
+                written[f.0] = ()
+              }
+            }
+            for alt in alts {
+              for i, e in alt {
+                if e.0 is Literal(k) && written.contains(k) {
+                  alt[i] = (e.0, @ast.TsType::Any)
+                }
+              }
             }
           } else if spread_shape_is_known(spread_ty, resolver) {
             for f in collect_declared_fields(spread_ty, resolver) {
@@ -13906,23 +14380,40 @@ fn infer_expr_inner(
               if f.0.has_prefix("__private_brand__") {
                 continue
               }
-              fields.push((@ast.TsType::Literal(f.0), f.1))
+              for alt in alts {
+                object_lit_spread_field(alt, f.0, f.1)
+              }
             }
           } else {
             opaque_spread = true
           }
         } else {
           let val_ty = infer_expr(env, resolver, entry.1)
-          fields.push((@ast.TsType::Literal(entry.0), val_ty))
+          for alt in alts {
+            object_lit_set_field(alt, entry.0, val_ty)
+          }
         }
       }
       if opaque_spread {
         // An `[k: string]: any` entry. `lookup_field_core` matches the
         // literal keys first, so the fields we DID resolve keep their
         // precise types and only the unknown remainder goes permissive.
-        fields.push((@ast.TsType::String_, @ast.TsType::Any))
+        for alt in alts {
+          alt.push((@ast.TsType::String_, @ast.TsType::Any))
+        }
       }
-      @ast.TsType::Object(fields)
+      if alts.length() == 1 {
+        @ast.TsType::Object(alts[0])
+      } else {
+        let out : Array[@ast.TsType] = []
+        for alt in alts {
+          let o = @ast.TsType::Object(alt)
+          if !out.contains(o) {
+            out.push(o)
+          }
+        }
+        union_of(out)
+      }
     }
     ComputedProp(_, _) => @ast.TsType::Any
     ArrowFunc(params, declared_ret, body, is_async) => {
@@ -14067,16 +14558,81 @@ fn infer_expr_inner(
           // `string | undefined` while the same function over
           // `{ name: string }` did not. tsc accepts both (probed); a
           // unit test had asserted the report.
-          definitely_non_nullish(rt) ||
-          (rt is (Named(_) | Applied(_, _)) && is_named_decl(rt, resolver))
+          fn part(t : @ast.TsType, resolver : Resolver, depth : Int32) -> Bool {
+            definitely_non_nullish(t) ||
+            (t is (Named(_) | Applied(_, _)) && is_named_decl(t, resolver)) ||
+            // An intersection is non-nullish when any part is: excalidraw's
+            // elements are `_ExcalidrawElementBase & { type: … }`.
+            (
+              depth < 4 &&
+              t is Intersection(ps) &&
+              ps
+              .iter()
+              .any(fn(q) { part(resolver.unwrap(q), resolver, depth + 1) })
+            ) ||
+            // `Readonly<{ … }>` and its siblings map an object to an object.
+            (
+              depth < 4 &&
+              t is Applied("Readonly" | "Partial" | "Required", [inner]) &&
+              part(resolver.unwrap(inner), resolver, depth + 1)
+            ) ||
+            t is MappedType(_, _, _, _) ||
+            // A union member that is itself a union alias
+            // (`ExcalidrawGenericElement` inside `ExcalidrawElement`).
+            (
+              depth < 4 &&
+              t is Union(ps) &&
+              ps.length() > 0 &&
+              ps
+              .iter()
+              .all(fn(q) { part(resolver.unwrap(q), resolver, depth + 1) })
+            )
+          }
+          // A UNION of declared shapes is as non-nullish as each of them:
+          // `one?.frameId` over excalidraw's element union came back
+          // `string | undefined` where tsc has `string | null`.
+          match rt {
+            Union(items) =>
+              items.length() > 0 &&
+              items.iter().all(fn(i) { part(resolver.unwrap(i), resolver, 0) })
+            _ => part(rt, resolver, 0)
+          }
         }
         // A shape this cannot read keeps the old, wider answer.
         None => false
       }
       if receiver_non_nullish {
-        base
+        // The member's OWN nullish part is its type, not a short-circuit:
+        // `a?.frameId` with `frameId: string | null` is `string | null`.
+        // Pruning it answered `string`. With nothing nullish to keep, the
+        // pruned form stays, since `prune_nullish` also normalizes.
+        if type_has_null(inner_ty) || type_has_undefined(inner_ty) {
+          inner_ty
+        } else {
+          base
+        }
       } else {
-        narrow_union(base, @ast.TsType::Undefined)
+        // Likewise when the receiver CAN be nullish: the short-circuit adds
+        // `undefined`, and the member keeps its own `null` (`maybe?.frameId`
+        // is `string | null | undefined`). Only a nullish part the chain
+        // itself contributes is dropped, and the null it added back cannot
+        // come from the receiver: the member read already looked through it.
+        let parts : Array[@ast.TsType] = []
+        for t in union_components(flatten_union_parts(inner_ty)) {
+          if !parts.contains(t) {
+            parts.push(t)
+          }
+        }
+        if parts.is_empty() ||
+          base is Any ||
+          !(type_has_null(inner_ty) || type_has_undefined(inner_ty)) {
+          narrow_union(base, @ast.TsType::Undefined)
+        } else {
+          if !parts.contains(Undefined) {
+            parts.push(Undefined)
+          }
+          union_of(parts)
+        }
       }
     }
     // JSX element / fragment. The value itself is opaque at the type
@@ -14904,7 +15460,17 @@ fn solve_generic_bindings(
   params : Array[@ast.TsType],
   args : Array[@ast.TsExpr],
   sig : Array[@ast.TsParam]?,
+  pre? : Array[@ast.TsType],
 ) -> Map[String, @ast.TsType] {
+  // `pre` holds each argument's type as the caller already inferred it
+  // (`infer_expr` on that argument), so the binding pass does not infer a
+  // nested call a second time.
+  let arg_type = fn(i : Int32) -> @ast.TsType {
+    match pre {
+      Some(p) if i < p.length() => p[i]
+      _ => infer_expr(env, resolver, args[i])
+    }
+  }
   // `NoInfer<T>` positions are inference barriers (the intrinsic's whole
   // purpose): erase them to `Any` for candidate collection, so `T` pins
   // from the other positions and the NoInfer argument is CHECKED against
@@ -14960,7 +15526,7 @@ fn solve_generic_bindings(
       }
       let elem = rest_param_element(params[i])
       while i < args.length() {
-        let actual = infer_expr(env, resolver, args[i])
+        let actual = arg_type(i)
         match args[i] {
           Spread(_) =>
             // A spread of a hand-rolled iterator class contributes its
@@ -15013,7 +15579,7 @@ fn solve_generic_bindings(
         env,
         resolver,
         args[i],
-        infer_expr(env, resolver, args[i]),
+        arg_type(i),
       )
       // Widen (union across positions) only for a bare type parameter that
       // is never nested elsewhere; otherwise keep first-wins.
@@ -15504,6 +16070,59 @@ fn expand_alias_head(
       }
     _ => p
   }
+}
+
+///|
+/// The written type argument whose parameter's UNION bound is exactly
+/// `ret` — the shape a bound-inlined bare `P` return takes — or `None`.
+/// Only a union bound counts: a primitive bound equal to the return is as
+/// likely a declared `string` return as an inlined `P extends string`.
+fn explicit_arg_for_inlined_bound(
+  resolver : Resolver,
+  name : String,
+  targs : Array[@ast.TsType],
+  ret : @ast.TsType,
+) -> @ast.TsType? {
+  let names = match resolver.func_type_params.get(name) {
+    Some(ns) if ns.length() > 0 => ns
+    _ =>
+      match resolver.func_overload_type_params.get(name) {
+        Some(ns) => ns
+        None => return None
+      }
+  }
+  if names.length() != targs.length() {
+    return None
+  }
+  guard resolver.func_type_param_bounds.get(name) is Some(bounds) else {
+    return None
+  }
+  fn members(t : @ast.TsType) -> Array[@ast.TsType] {
+    let out : Array[@ast.TsType] = []
+    for m in union_components(flatten_union_parts(t)) {
+      if !out.contains(m) {
+        out.push(m)
+      }
+    }
+    out
+  }
+
+  let got = members(ret)
+  if got.length() < 2 {
+    return None
+  }
+  for b in bounds {
+    let want = members(b.1)
+    if want.length() == got.length() &&
+      want.iter().all(fn(w) { got.contains(w) }) {
+      for i, n in names {
+        if n == b.0 {
+          return Some(targs[i])
+        }
+      }
+    }
+  }
+  None
 }
 
 ///|
@@ -16260,7 +16879,77 @@ fn infer_call(
       match collect_call_signatures(callee, resolver) {
         [] => ()
         [one] => return infer_call(env, resolver, one, args)
-        many => return infer_call(env, resolver, Union(many), args)
+        many => {
+          // A callable OBJECT's signatures are an overload list, tried in
+          // DECLARATION order, generic members included — `{ <T>(x: T):
+          // number; (x: string): string }` called with a `string` picks the
+          // first and is `number` in tsc. The `Union` arm below defers
+          // generic members, which is right for the union of callables it
+          // was written for and reported `const n: number = f(s)` here.
+          let (sel_types, raw_types) = overload_call_arg_types(
+            env, resolver, args,
+          )
+          let pick = OverloadPick::{ tentative: None, }
+          for sig in specialized_overloads_first(many, resolver) {
+            match sig {
+              GenericFunc(names, _, Func(gps, gret)) => {
+                let (r, fit) = overload_generic_attempt(
+                  env,
+                  resolver,
+                  names,
+                  gps,
+                  gret,
+                  None,
+                  args,
+                  raw_types,
+                  sel_types,
+                )
+                if pick.offer(fit, r) is Some(answer) {
+                  return answer
+                }
+              }
+              GenericFunc(names, _, CallableMeta(Func(gps, gret), flags)) => {
+                let (r, fit) = overload_generic_attempt(
+                  env,
+                  resolver,
+                  names,
+                  gps,
+                  gret,
+                  Some(flags),
+                  args,
+                  raw_types,
+                  sel_types,
+                )
+                if pick.offer(fit, r) is Some(answer) {
+                  return answer
+                }
+              }
+              _ =>
+                match resolver.unwrap(sig) {
+                  Func(params, ret) => {
+                    let r = match ret {
+                      TypePredicate(_, _) => @ast.TsType::Boolean
+                      AssertsPredicate(_, _) => @ast.TsType::Void
+                      _ => reduce_conditional(ret)
+                    }
+                    let fit = overload_concrete_fit(
+                      resolver, sig, params, sel_types,
+                    )
+                    if pick.offer(fit, r) is Some(answer) {
+                      return answer
+                    }
+                  }
+                  _ => ()
+                }
+            }
+          }
+          if pick.tentative is Some(r) {
+            return r
+          }
+          return infer_overload_union_call(
+            env, resolver, many, args, sel_types, raw_types,
+          )
+        }
       }
     _ => ()
   }
@@ -16307,133 +16996,10 @@ fn infer_call(
     // type when no signature matches precisely (so an overloaded call site
     // doesn't widen to an imprecise union for the common matching case).
     Union(parts) => {
-      let arg_types : Array[@ast.TsType] = []
-      for a in args {
-        arg_types.push(resolver.unwrap(infer_expr(env, resolver, a)))
-      }
-      let rets : Array[@ast.TsType] = []
-      // GENERIC members are set aside and instantiated only after every
-      // concrete one has failed to match — TypeScript's own overload
-      // order, and the same discipline `func_overload_type_params` uses,
-      // so a call a concrete member accepts keeps the answer it had.
-      let generics : Array[(Array[String], Array[@ast.TsType], @ast.TsType)] = []
-      for part in parts {
-        // `unwrap` PEELS a `GenericFunc`: it says so at the site, because
-        // the wrapper erases to its underlying callable for every
-        // value-shape decision. That erasure also throws away the binders
-        // this call has to SOLVE, so the member must be read before it —
-        // `declare const c: { m<T>(o: { x: T }): T } | undefined;
-        // c?.m({ x: 12 })` reached the arm below as `Func([{x: T}], T)`
-        // and came back with `T` unsolved, where the same member reached
-        // directly (`d.m({ x: 12 })`) is solved by the `GenericFunc` arm
-        // above. One question, two answers.
-        match part {
-          GenericFunc(names, _, Func(gps, gret))
-          | GenericFunc(names, _, CallableMeta(Func(gps, gret), _)) => {
-            generics.push((names, gps, gret))
-            continue
-          }
-          _ => ()
-        }
-        match resolver.unwrap(part) {
-          Func(params, ret) => {
-            let r = match ret {
-              TypePredicate(_, _) => @ast.TsType::Boolean
-              AssertsPredicate(_, _) => @ast.TsType::Void
-              _ => reduce_conditional(ret)
-            }
-            rets.push(r)
-            // Best-effort overload match: the argument count fits the
-            // member's arity, and every argument is assignable to the
-            // parameter it lands on. "Fits" used to be "equals the
-            // parameter count", so a member with an optional or rest
-            // parameter could never match a call that omitted it.
-            if overload_arity_accepts(params, arg_types.length()) {
-              let mut ok = true
-              for i in 0..<arg_types.length() {
-                // Both sides unwrapped: `arg_types` already are, and a
-                // parameter typed with an object-type ALIAS
-                // (`type S = { k: string }`) stayed the bare name `S`, so
-                // the resolver-free comparison saw `{ k: string }` against
-                // `Named("S")`, no member matched, and the call fell back
-                // to the UNION of every overload's return — zod's
-                // `generateCheck(doc, ctx, schema, accessor)` came back
-                // `string | string | null` instead of its first
-                // overload's `string`. The interface spelling of the same
-                // parameter always matched.
-                if !overload_param_accepts(
-                    resolver,
-                    arg_types[i],
-                    overload_param_at(params, i),
-                  ) {
-                  ok = false
-                  break
-                }
-              }
-              if ok {
-                return r
-              }
-            }
-          }
-          // A NULLISH member is not a callable the union offers, it is
-          // the reason the call needs a `?.` — so it contributes no
-          // return type and must not collapse the answer to `Any`.
-          // Invoking a possibly-nullish value without `?.` is TS2722,
-          // a diagnostic of its own; an OPTIONAL call adds the
-          // `| undefined` back at the chain node. Either way the
-          // callable half's return is the more precise answer.
-          Undefined | Null => ()
-          _ => return @ast.TsType::Any
-        }
-      }
-      for g in generics {
-        let (names, gps, gret) = g
-        let bindings = widen_fresh_literal_bindings(
-          env,
-          resolver,
-          solve_generic_bindings(env, resolver, names, gps, args, None),
-          names,
-          None,
-          gps,
-          args,
-          gret,
-        )
-        let r = reduce_conditional(
-          substitute_params(gret, bind_unsolved_to_any(names, bindings)),
-        )
-        let sps = substitute_params_array(gps, bindings)
-        // The same arity rule as a concrete member: redi's
-        // `useDependency<T>(id, lookUp?)` is called with ONE argument at
-        // every univer use site, and requiring two made every member fail,
-        // so the call came back as the union of all six returns.
-        if overload_arity_accepts(sps, arg_types.length()) {
-          let mut ok = true
-          for i in 0..<arg_types.length() {
-            if !is_assignable_to(
-                arg_types[i],
-                resolver.unwrap(overload_param_at(sps, i)),
-              ) {
-              ok = false
-              break
-            }
-          }
-          if ok {
-            return r
-          }
-        }
-        rets.push(r)
-      }
-      if rets.length() == 1 {
-        rets[0]
-      } else if rets.iter().any(fn(t) { t is Any }) {
-        // A union with an `any` member IS `any` in TypeScript. Kept as a
-        // union it read as `any | any[] | null | …`, and a member access on
-        // it failed on the `any[]` and `null` arms — "property
-        // `currentLocale$` does not exist on `any | any[] | …`".
-        @ast.TsType::Any
-      } else {
-        @ast.TsType::Union(rets)
-      }
+      let (sel_types, raw_types) = overload_call_arg_types(env, resolver, args)
+      infer_overload_union_call(
+        env, resolver, parts, args, sel_types, raw_types,
+      )
     }
     // Intersection: find the first callable member and use its return type.
     Intersection(parts) => {
@@ -16449,6 +17015,307 @@ fn infer_call(
     }
     _ => @ast.TsType::Any
   }
+}
+
+///|
+/// A union of callable types (an overload set): the return of the member
+/// whose arity and parameter types accept the call, or the union of every
+/// member's return when none does (so an overloaded call site does not
+/// widen to an imprecise union for the common matching case). The argument
+/// types come in already inferred (`overload_call_arg_types`), so the
+/// callable-object path can fall back here without inferring them again:
+/// re-inferring at each level made `f(f(f(x)))` exponential in its depth.
+fn infer_overload_union_call(
+  env : ExprEnv,
+  resolver : Resolver,
+  parts : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  sel_types : Array[@ast.TsType],
+  raw_types : Array[@ast.TsType],
+) -> @ast.TsType {
+  let rets : Array[@ast.TsType] = []
+  let pick = OverloadPick::{ tentative: None, }
+  // GENERIC members are set aside and instantiated only after every
+  // concrete one has failed to match — TypeScript's own overload
+  // order, and the same discipline `func_overload_type_params` uses,
+  // so a call a concrete member accepts keeps the answer it had.
+  let generics : Array[
+    (Array[String], Array[@ast.TsType], @ast.TsType, Array[Bool]?),
+  ] = []
+  for part in specialized_overloads_first(parts, resolver) {
+    // `unwrap` PEELS a `GenericFunc`: it says so at the site, because
+    // the wrapper erases to its underlying callable for every
+    // value-shape decision. That erasure also throws away the binders
+    // this call has to SOLVE, so the member must be read before it —
+    // `declare const c: { m<T>(o: { x: T }): T } | undefined;
+    // c?.m({ x: 12 })` reached the arm below as `Func([{x: T}], T)`
+    // and came back with `T` unsolved, where the same member reached
+    // directly (`d.m({ x: 12 })`) is solved by the `GenericFunc` arm
+    // above. One question, two answers.
+    match part {
+      GenericFunc(names, _, Func(gps, gret)) => {
+        generics.push((names, gps, gret, None))
+        continue
+      }
+      GenericFunc(names, _, CallableMeta(Func(gps, gret), flags)) => {
+        generics.push((names, gps, gret, Some(flags)))
+        continue
+      }
+      _ => ()
+    }
+    match resolver.unwrap(part) {
+      Func(params, ret) => {
+        let r = match ret {
+          TypePredicate(_, _) => @ast.TsType::Boolean
+          AssertsPredicate(_, _) => @ast.TsType::Void
+          _ => reduce_conditional(ret)
+        }
+        rets.push(r)
+        // Best-effort overload match: the argument count fits the
+        // member's arity, and every argument is assignable to the
+        // parameter it lands on. "Fits" used to be "equals the
+        // parameter count", so a member with an optional or rest
+        // parameter could never match a call that omitted it.
+        let fit = overload_concrete_fit(resolver, part, params, sel_types)
+        if pick.offer(fit, r) is Some(answer) {
+          return answer
+        }
+      }
+      // A NULLISH member is not a callable the union offers, it is
+      // the reason the call needs a `?.` — so it contributes no
+      // return type and must not collapse the answer to `Any`.
+      // Invoking a possibly-nullish value without `?.` is TS2722,
+      // a diagnostic of its own; an OPTIONAL call adds the
+      // `| undefined` back at the chain node. Either way the
+      // callable half's return is the more precise answer.
+      Undefined | Null => ()
+      _ => return @ast.TsType::Any
+    }
+  }
+  for g in generics {
+    let (names, gps, gret, flags) = g
+    let (r, fit) = overload_generic_attempt(
+      env, resolver, names, gps, gret, flags, args, raw_types, sel_types,
+    )
+    if pick.offer(fit, r) is Some(answer) {
+      return answer
+    }
+    rets.push(r)
+  }
+  if pick.tentative is Some(r) {
+    return r
+  }
+  if rets.length() == 1 {
+    rets[0]
+  } else if rets.iter().any(fn(t) { t is Any }) {
+    // A union with an `any` member IS `any` in TypeScript. Kept as a
+    // union it read as `any | any[] | null | …`, and a member access on
+    // it failed on the `any[]` and `null` arms — "property
+    // `currentLocale$` does not exist on `any | any[] | …`".
+    @ast.TsType::Any
+  } else {
+    @ast.TsType::Union(rets)
+  }
+}
+
+///|
+/// TypeScript tries an overload with a LITERAL-typed parameter before the
+/// others (`reorderCandidates` moves a signature carrying literal types to
+/// the front of its group, keeping declaration order otherwise), so
+/// `{ (x: string): number; (x: "a"): string }` called with `"a"` is
+/// `string` (probed). Trying the list in declaration order picked the
+/// broad member. Only a parameter whose type NODE is a literal counts, as
+/// in tsc. `x?: "a"` arrives as `"a" | undefined`, which a written
+/// `x: "a" | undefined` is too, so that shape counts only where the
+/// signature records the parameter as optional (`CallableMeta`).
+fn overload_param_is_literal(t : @ast.TsType, optional : Bool) -> Bool {
+  match t {
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    Union([l, Undefined]) | Union([Undefined, l]) if optional =>
+      l
+      is (Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_))
+    _ => false
+  }
+}
+
+///|
+/// The type of an argument for overload SELECTION: a literal keeps its
+/// literal type, which is what a literal-typed overload exists for
+/// (`{ (x: number): string; (x: 1): number }` with `f(1)` is `number`).
+/// Inference widens a number or boolean literal, and the literal is still
+/// assignable to its base, so a broad member still matches.
+///
+/// `inferred` is the argument's type the caller already computed: inferring
+/// it again here doubled the work at every level of `f(f(f(x)))`.
+fn overload_selection_arg_type(
+  a : @ast.TsExpr,
+  inferred : @ast.TsType,
+) -> @ast.TsType {
+  match precise_literal_type(a) {
+    Some(t) => t
+    None => inferred
+  }
+}
+
+///|
+fn specialized_overloads_first(
+  sigs : Array[@ast.TsType],
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  fn params_of(
+    sig : @ast.TsType,
+    resolver : Resolver,
+  ) -> (Array[@ast.TsType], Array[Bool]) {
+    match sig {
+      GenericFunc(_, _, CallableMeta(Func(ps, _), flags))
+      | CallableMeta(Func(ps, _), flags) => (ps, flags)
+      GenericFunc(_, _, Func(ps, _)) | Func(ps, _) => (ps, [])
+      _ =>
+        match resolver.unwrap(sig) {
+          Func(ps, _) => (ps, [])
+          _ => ([], [])
+        }
+    }
+  }
+
+  let first : Array[@ast.TsType] = []
+  let rest : Array[@ast.TsType] = []
+  for sig in sigs {
+    let (ps, flags) = params_of(sig, resolver)
+    let mut specialized = false
+    for i, p in ps {
+      if overload_param_is_literal(p, i < flags.length() && flags[i]) {
+        specialized = true
+      }
+    }
+    if specialized {
+      first.push(sig)
+    } else {
+      rest.push(sig)
+    }
+  }
+  if first.is_empty() || rest.is_empty() {
+    sigs
+  } else {
+    first + rest
+  }
+}
+
+///|
+/// Does a CONCRETE overload member accept these (unwrapped) argument types?
+/// Its arity range has to hold the call, and every argument has to be
+/// assignable to the parameter it lands on. Both sides are unwrapped: a
+/// parameter typed with an object-type ALIAS (`type S = { k: string }`)
+/// stayed the bare name `S`, the resolver-free comparison saw `{ k: string }`
+/// against `Named("S")`, and zod's `generateCheck(doc, ctx, schema,
+/// accessor)` fell back to the union of every overload's return.
+///
+/// `sig` is the member before `unwrap`, which is where its recorded `?`s
+/// are (`CallableMeta`). The arity part is `overload_arity_fit`.
+fn overload_concrete_fit(
+  resolver : Resolver,
+  sig : @ast.TsType,
+  params : Array[@ast.TsType],
+  arg_types : Array[@ast.TsType],
+) -> OverloadFit {
+  let flags = match sig {
+    CallableMeta(_, f) | GenericFunc(_, _, CallableMeta(_, f)) => Some(f)
+    _ => None
+  }
+  let n = arg_types.length()
+  let params = resolve_rest_tuple_alias(resolver, params)
+  // The flags speak for the parameters as written; a tuple rest's elements
+  // come after them.
+  let exact = written_param_count(params)
+  let expanded = expand_tuple_rest_params(params, n)
+  let fit = overload_arity_fit(resolver, expanded, flags, exact, n)
+  if fit is NoFit {
+    return NoFit
+  }
+  for i in 0..<n {
+    if !overload_param_accepts(
+        resolver,
+        arg_types[i],
+        overload_param_at(expanded, i),
+      ) {
+      return NoFit
+    }
+  }
+  fit
+}
+
+///|
+/// Instantiate a GENERIC overload member from the call's arguments: its
+/// return with the solved binders (unsolved ones `any`), and whether the
+/// instantiated parameters accept the arguments. The arity rule is a
+/// concrete member's: redi's `useDependency<T>(id, lookUp?)` is called with
+/// ONE argument at every univer use site.
+fn overload_generic_attempt(
+  env : ExprEnv,
+  resolver : Resolver,
+  names : Array[String],
+  gps : Array[@ast.TsType],
+  gret : @ast.TsType,
+  flags : Array[Bool]?,
+  args : Array[@ast.TsExpr],
+  raw_types : Array[@ast.TsType],
+  sel_types : Array[@ast.TsType],
+) -> (@ast.TsType, OverloadFit) {
+  // The binders are solved from the arguments as written, reusing the types
+  // the caller inferred. A spread of a fixed tuple is read as its elements,
+  // as the method loop's `expand_tuple_spread_args` reads it, so `T` binds
+  // from `xs[0]` rather than from the whole tuple; the expansion takes the
+  // element types from the inferred tuple too, so a spread does not send a
+  // nested call through inference a second time.
+  let (bind_args, bind_types) = expand_tuple_spread_args_typed(
+    resolver, args, raw_types,
+  )
+  let bindings = widen_fresh_literal_bindings(
+    env,
+    resolver,
+    solve_generic_bindings(
+      env,
+      resolver,
+      names,
+      gps,
+      bind_args,
+      None,
+      pre=bind_types,
+    ),
+    names,
+    None,
+    gps,
+    bind_args,
+    gret,
+  )
+  let r = reduce_conditional(
+    substitute_params(gret, bind_unsolved_to_any(names, bindings)),
+  )
+  // The arity rule is a concrete member's (`overload_arity_fit`), with the
+  // member's recorded `?`s: `<T>(x: T, y: string | undefined)` does not
+  // take `f(1)`. The fit reads the SELECTION types, so a literal argument
+  // keeps its literal type as it does for a concrete member: `{ <T>(tag:
+  // 1, value: T): T; … }` takes `f(1, s)`.
+  let n = sel_types.length()
+  let sps = resolve_rest_tuple_alias(
+    resolver,
+    substitute_params_array(gps, bindings),
+  )
+  let written = written_param_count(sps)
+  let sps = expand_tuple_rest_params(sps, n)
+  let fit = overload_arity_fit(resolver, sps, flags, written, n)
+  if fit is NoFit {
+    return (r, NoFit)
+  }
+  for i in 0..<n {
+    if !is_assignable_to(
+        sel_types[i],
+        resolver.unwrap(overload_param_at(sps, i)),
+      ) {
+      return (r, NoFit)
+    }
+  }
+  (r, fit)
 }
 
 ///|
@@ -16992,8 +17859,19 @@ fn infer_binop(
         narrow_union(nullish_stripped(resolver, l), r)
       }
     // `a ?? b` — `b` is only evaluated when `a` is null/undefined, so the
-    // result strips nullish from `a` and unions with `b`'s type.
-    Coalesce => narrow_union(nullish_stripped(resolver, l), r)
+    // result strips nullish from `a` and unions with `b`'s type. The union
+    // is FLAT: `o?.a ?? o?.b` nested `number | (number | undefined)`, and a
+    // `!= null` guard, which removes members one level deep, left the
+    // inner `undefined` behind (univer's `priorityPageAnchor -= delta`
+    // under `if (priorityPageAnchor != null)`, on main too).
+    Coalesce => {
+      let a = nullish_stripped(resolver, l)
+      if equivalent(a, r) {
+        a
+      } else {
+        flatten_union_exact([a, r])
+      }
+    }
   }
 }
 
@@ -20480,6 +21358,18 @@ fn interface_chain_augmented(ty : @ast.TsType, resolver : Resolver) -> Bool {
         }
       None => ()
     }
+    // A CLASS whose base an augmentation names: univer's facade mixins
+    // write `class FUniverUIMixin extends FUniver` beside `declare module
+    // '@univerjs/core/facade' { interface FUniver extends IFUniverUIMixin
+    // {} }`, and the base then read as that interface alone, without the
+    // class's own `_injector` (on main too).
+    match resolver.classes.get(n) {
+      Some(cls) =>
+        for b in cls.base_names {
+          todo.push(b)
+        }
+      None => ()
+    }
   }
   false
 }
@@ -21388,9 +22278,18 @@ fn check_overload_set_no_match(
     }
   }
   let n = args.length()
+  // A literal argument keeps its literal type: widened, `1` against
+  // `f(x: 1)` read as a `number` the member cannot take, so `f(1, "ok")`
+  // over `(x: 1, ...rest: Tail)` and `(x: number)` was "no overload
+  // matches" on a call tsc accepts.
   let arg_tys : Array[@ast.TsType] = []
   for a in args {
-    arg_tys.push(ctx.resolver.unwrap(infer_expr(env, ctx.resolver, a)))
+    arg_tys.push(
+      overload_selection_arg_type(
+        a,
+        ctx.resolver.unwrap(infer_expr(env, ctx.resolver, a)),
+      ),
+    )
   }
   for sig in sigs {
     let (ps, optional_params) = sig
@@ -21421,6 +22320,7 @@ fn check_overload_set_no_match(
       if !(ps[i] is Rest(_)) &&
         !declared_optional &&
         !(ps[i] is Void) &&
+        !alias_accepts_void(ctx.resolver, ps[i]) &&
         !type_accepts_undefined(ctx.resolver.unwrap(ps[i])) {
         min_arity = i + 1
       }
@@ -21869,6 +22769,41 @@ fn callable_source_params(
 }
 
 ///|
+/// Whether `callee` reads a member off a receiver that is a union with a
+/// BUILT-IN member: an array, a tuple, a primitive, or a type this checker
+/// takes from a lib member table. Those tables write `x?: T` as a bare
+/// `Func` parameter typed `T | undefined`, and the union arity rule must not
+/// read that as optional, because a bare `Func` is also how a written
+/// `x: T | undefined` arrives, which stays required (unionTypeReduction2).
+/// So a union of lib methods read `find`'s `thisArg?` as required:
+/// univer's `paragraphs?.find(cb)` over `IParagraph[] | never[]` was
+/// "expected at least 2 argument(s)". The plain `xs.find(cb)` spelling goes
+/// through the method-call path, which abstains on a union receiver, so
+/// this abstains too and the two spellings agree. A union of declared
+/// shapes keeps the rule: `u?.m("a")` over `A | B` is TS2554 (probed).
+fn union_receiver_has_builtin_member(
+  resolver : Resolver,
+  callee : @ast.TsExpr,
+  env : ExprEnv,
+) -> Bool {
+  let recv = match callee {
+    OptionalChain(PropAccess(r, _)) | PropAccess(r, _) => r
+    _ => return false
+  }
+  let t = prune_nullish(resolver, infer_expr(env, resolver, recv))
+  for part in union_components(flatten_union_parts(resolver.unwrap(t))) {
+    match resolver.unwrap(part) {
+      Array(_) | Tuple(_) | String_ | Number | Boolean | BigInt | Literal(_) =>
+        return true
+      Applied(n, _) | Named(n) if !is_named_decl(Named(n), resolver) =>
+        return true
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
 /// Common call-signature parameters of a union callee: when every member of
 /// the union exposes exactly one call signature and all of them have
 /// *identical* parameter types, the union is callable with those parameters
@@ -22006,7 +22941,20 @@ fn class_static_method_param_types(
       return None
     }
   }
-  Some(method_callable_param_types(m))
+  let params = method_callable_param_types(m)
+  // A GENERIC static method's own binders are not solved here, and left
+  // bare they were looked up as whatever type of that name the program
+  // has: univer's `static deepClone<T>(value: T)` met engine-formula's
+  // `class T`, and every `Tools.deepClone(x)` reported (on main too). An
+  // unsolved binder accepts anything.
+  if m.type_params.length() == 0 {
+    return Some(params)
+  }
+  let b : Map[String, @ast.TsType] = Map([])
+  for tp in m.type_params {
+    b[tp] = Any
+  }
+  Some(substitute_params_array(params, b))
 }
 
 ///|
@@ -23083,6 +24031,284 @@ fn check_object_lit_against_target(
 }
 
 ///|
+/// Set a literal-keyed member of an object literal being built: a later
+/// entry REPLACES an earlier one of the same name, which is what an object
+/// literal means (`{ ...a, type: "x" }` has the written `type`, and reading
+/// it as `a`'s was the first-match lookup answering for the overwritten
+/// member). Anything that is not a plain key is appended as before.
+fn object_lit_set_field(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+  key : String,
+  ty : @ast.TsType,
+) -> Unit {
+  let k = @ast.TsType::Literal(key)
+  if key.has_prefix("@@") {
+    fields.push((k, ty))
+    return
+  }
+  for i, f in fields {
+    if f.0 == k {
+      fields[i] = (k, ty)
+      return
+    }
+  }
+  fields.push((k, ty))
+}
+
+///|
+/// A member a SPREAD copies. An OPTIONAL member does not override what is
+/// already there: `{ ...defaults, ...partial }` with `partial: Partial<O>`
+/// keeps each default where `partial` may lack the member, so tsc's
+/// `getSpreadType` gives the union of the earlier type and the later one
+/// without `undefined`. The `?` is not in the type (the parser wraps
+/// `a?: T` into `T | undefined`), so a member whose type admits
+/// `undefined` is read as optional — for a REQUIRED `a: T | undefined`
+/// that drops the `undefined`, a narrower type rather than a report on
+/// legal code. excalidraw's bucket fill merges its options exactly so.
+fn object_lit_spread_field(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+  key : String,
+  ty : @ast.TsType,
+) -> Unit {
+  let k = @ast.TsType::Literal(key)
+  let optional = match ty {
+    Undefined => true
+    Union(items) => items.contains(Undefined)
+    _ => false
+  }
+  if optional && !key.has_prefix("@@") {
+    for i, f in fields {
+      if f.0 == k {
+        let parts : Array[@ast.TsType] = []
+        for t in union_components(f.1) {
+          if !parts.contains(t) {
+            parts.push(t)
+          }
+        }
+        for t in union_components(ty) {
+          if !(t is Undefined) && !parts.contains(t) {
+            parts.push(t)
+          }
+        }
+        fields[i] = (k, union_of(parts))
+        return
+      }
+    }
+  }
+  object_lit_set_field(fields, key, ty)
+}
+
+///|
+/// The member lists a spread of `ty` can copy, one per union member, when
+/// `ty` is a union whose every non-nullish member is an enumerable shape.
+/// A nullish member copies nothing and contributes an empty list. `None`
+/// for anything that is not such a union, which leaves the caller's
+/// single-shape handling in charge.
+fn object_spread_variants(
+  ty : @ast.TsType,
+  resolver : Resolver,
+) -> Array[Array[(String, @ast.TsType)]]? {
+  let members : Array[@ast.TsType] = []
+  fn go(t : @ast.TsType, depth : Int32, out : Array[@ast.TsType]) -> Bool {
+    if depth > 4 {
+      return false
+    }
+    match t {
+      Union(items) => {
+        for i in items {
+          if !go(i, depth + 1, out) {
+            return false
+          }
+        }
+        true
+      }
+      _ =>
+        match resolver.unwrap(t) {
+          Union(items) => {
+            for i in items {
+              if !go(i, depth + 1, out) {
+                return false
+              }
+            }
+            true
+          }
+          u => {
+            if !out.contains(u) {
+              out.push(u)
+            }
+            true
+          }
+        }
+    }
+  }
+  if !go(ty, 0, members) {
+    return None
+  }
+  let non_nullish = members.filter(fn(m) { !(m is (Undefined | Null)) })
+  if non_nullish.length() < 2 {
+    return None
+  }
+  let out : Array[Array[(String, @ast.TsType)]] = []
+  let mut saw_nullish = false
+  for m in members {
+    match m {
+      Undefined | Null => saw_nullish = true
+      _ => {
+        if !spread_shape_is_known(m, resolver) {
+          return None
+        }
+        out.push(
+          collect_declared_fields(m, resolver).filter(fn(f) {
+            !f.0.has_prefix("__private_brand__")
+          }),
+        )
+      }
+    }
+  }
+  if saw_nullish {
+    out.push([])
+  }
+  Some(out)
+}
+
+///|
+/// `S extends T` for two OBJECT shapes, decided only where a member settles
+/// it. `extends_decision` is resolver-free and answers `None` for any pair
+/// of named object types, so `Exclude<Element, SelectionElement>` over a
+/// discriminated union of interfaces stayed an undecided conditional —
+/// and every read through it abstained or, worse, met a `{}` (excalidraw's
+/// `restoreElement` takes exactly that parameter type).
+///
+/// The one rule is a member present on BOTH sides whose types are made of
+/// literals (or nullish members) and are disjoint: `{ type: "rect" }` can
+/// never extend `{ type: "selection" }`, whether the target's member is
+/// optional or not, since a source that HAS the member must give it a type
+/// the target accepts. Every other pair is `None`, so a conditional this
+/// cannot decide stays exactly as undecided as before. Equal shapes are
+/// already `true` in `extends_decision`.
+fn Resolver::object_extends_decision(
+  self : Resolver,
+  source : @ast.TsType,
+  target : @ast.TsType,
+) -> Bool? {
+  fn objectish(t : @ast.TsType) -> Bool {
+    match t {
+      Object(_) | Struct(_, _) | Intersection(_) | Named(_) | Applied(_, _) =>
+        true
+      _ => false
+    }
+  }
+  if !objectish(source) || !objectish(target) {
+    return None
+  }
+  if !spread_shape_is_known(source, self) ||
+    !spread_shape_is_known(target, self) {
+    return None
+  }
+  fn literal_only(t : @ast.TsType) -> Bool {
+    match t {
+      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) =>
+        true
+      Union(items) =>
+        items.length() > 0 &&
+        items
+        .iter()
+        .all(fn(i) {
+          i
+          is (Literal(_)
+          | NumberLiteral(_)
+          | BooleanLiteral(_)
+          | BigIntLiteral(_)
+          | Undefined
+          | Null)
+        }) &&
+        items.iter().any(fn(i) { !(i is (Undefined | Null)) })
+      _ => false
+    }
+  }
+  // The FIRST declaration of a name is the effective member: an interface
+  // lists its own members before the ones it inherits, and an own
+  // `kind: "a"` overrides the base's `kind: "a" | "b"`. Comparing the
+  // inherited one too decided `A extends { kind: "a" }` as false.
+  fn effective(
+    fields : Array[(String, @ast.TsType)],
+  ) -> Array[(String, @ast.TsType)] {
+    let seen : Map[String, Unit] = Map([])
+    let out : Array[(String, @ast.TsType)] = []
+    for f in fields {
+      if !seen.contains(f.0) {
+        seen[f.0] = ()
+        out.push(f)
+      }
+    }
+    out
+  }
+
+  let source_fields = effective(collect_declared_fields(source, self))
+  for tf in effective(collect_declared_fields(target, self)) {
+    if tf.0.has_prefix("@@") || tf.0.has_prefix("<") {
+      continue
+    }
+    let tty = self.unwrap(tf.1)
+    if !literal_only(tty) {
+      continue
+    }
+    for sf in source_fields {
+      if sf.0 != tf.0 {
+        continue
+      }
+      let sty = self.unwrap(sf.1)
+      if literal_only(sty) && extends_decision(sty, tty) is Some(false) {
+        return Some(false)
+      }
+    }
+  }
+  // `true` only against an object-type LITERAL, whose members are the
+  // whole of what it requires: every member the target lists is present
+  // on the source with a type that definitely extends it, or is optional
+  // and absent. An interface or class target is left alone, since its
+  // members can arrive through heritage, merging or a nominal private.
+  match target {
+    Object(tfields) => {
+      if tfields.length() == 0 {
+        return None
+      }
+      for tf in tfields {
+        let name = match tf.0 {
+          Literal(n) if !n.has_prefix("@@") && !n.has_prefix("<") => n
+          _ => return None
+        }
+        let tty = self.unwrap(tf.1)
+        let mut found = false
+        for sf in source_fields {
+          if sf.0 == name {
+            found = true
+            // A source member whose type admits `undefined` may be the
+            // OPTIONAL spelling, and an absent member does not satisfy a
+            // required one (`{ b?: string } extends { b: string |
+            // undefined }` is false in tsc), so its presence proves
+            // nothing.
+            if type_has_undefined(self.unwrap(sf.1)) ||
+              !(extends_decision(self.unwrap(sf.1), tty) is Some(true)) {
+              return None
+            }
+          }
+        }
+        // A member the source lacks proves nothing: `b?: string` and a
+        // required `b: string | undefined` are the same node here, and
+        // only the first is satisfied by its absence (`{ a: true }
+        // extends { a: true; b: string | undefined }` is false in tsc).
+        if !found {
+          return None
+        }
+      }
+      Some(true)
+    }
+    _ => None
+  }
+}
+
+///|
 /// Can `collect_declared_fields` enumerate this type's members
 /// exhaustively? Only a concrete object shape can — and the answer has to
 /// be conservative, because the caller uses it to decide whether an object
@@ -24032,6 +25258,104 @@ fn array_callback_return(
 }
 
 ///|
+/// Bind a callback parameter for RETURN inference. A destructuring
+/// parameter's `name` is only the first name in its pattern, so binding it
+/// to the whole parameter type made `points.map(([x]) => x)` an array of
+/// POINTS: `x` read as the tuple it is taken from. The check path binds
+/// the pattern (`bind_callable_param`); this is the same walk without a
+/// `CheckCtx`, and a name it cannot type reads as `any`.
+fn bind_param_for_inference(
+  env : ExprEnv,
+  resolver : Resolver,
+  p : @ast.TsParam,
+  ty : @ast.TsType,
+) -> Unit {
+  match p.binding {
+    Some(b) if b is (Object(_) | Array(_)) =>
+      bind_pattern_for_inference(env, resolver, b, ty, 0)
+    _ => env.bind(p.name, ty)
+  }
+}
+
+///|
+fn bind_pattern_for_inference(
+  env : ExprEnv,
+  resolver : Resolver,
+  b : @ast.TsBinding,
+  ty : @ast.TsType,
+  depth : Int32,
+) -> Unit {
+  if depth > 8 {
+    let names : Array[String] = []
+    collect_binding_names(b, names)
+    for n in names {
+      env.bind(n, Any)
+    }
+    return
+  }
+  match b {
+    Ident(n) => env.bind(n, ty)
+    Array(ab) => {
+      let view = array_pattern_view(resolver, ty)
+      for i, item in ab.items {
+        match item {
+          Some(elem) => {
+            let et = match view {
+              Tuple(items) =>
+                if i < items.length() {
+                  items[i]
+                } else {
+                  @ast.TsType::Undefined
+                }
+              Array(t) | Applied("Array" | "ReadonlyArray", [t]) => t
+              Union(parts) =>
+                match array_pattern_union_element(resolver, parts, i) {
+                  Some(t) => t
+                  None => @ast.TsType::Any
+                }
+              _ => @ast.TsType::Any
+            }
+            // A default supplies the element where it is `undefined`; what
+            // it adds is not modelled here, so the binding reads `any`.
+            let et = if elem.default is Some(_) { @ast.TsType::Any } else { et }
+            bind_pattern_for_inference(
+              env,
+              resolver,
+              elem.binding,
+              et,
+              depth + 1,
+            )
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => bind_pattern_for_inference(env, resolver, r, Any, depth + 1)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        let pt = if prop.default is Some(_) || prop.key_expr is Some(_) {
+          @ast.TsType::Any
+        } else {
+          match resolver.lookup_field(ty, prop.key) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
+        }
+        bind_pattern_for_inference(env, resolver, prop.binding, pt, depth + 1)
+      }
+      match ob.rest {
+        Some(n) => env.bind(n, Any)
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
 /// A predicate target that cannot narrow `elem`: both sides are concrete
 /// primitives or literals (or a union of them) and the target is not
 /// assignable to the element type.
@@ -24071,7 +25395,7 @@ fn infer_arrow_body_with_params(
         } else {
           p.type_
         }
-        env.bind(p.name, ty)
+        bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
       // Prefer the explicit return-type annotation; fall back to body
@@ -24099,7 +25423,7 @@ fn infer_arrow_body_with_params(
         } else {
           p.type_
         }
-        env.bind(p.name, ty)
+        bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
       if is_checkable(f.return_type) {
@@ -24771,7 +26095,11 @@ fn check_arrow_with_context(
     in_scope_type_params: ctx.in_scope_type_params,
     type_param_bounds: ctx.type_param_bounds,
     permissive: ctx.permissive,
-    unassigned: unassigned_without(ctx.unassigned, param_names),
+    unassigned: unassigned_for_closure(
+      ctx.unassigned,
+      param_names,
+      ctx.resolver,
+    ),
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
@@ -24849,6 +26177,54 @@ fn dedup_issues_since(issues : Array[ExprIssue], pre_len : Int32) -> Unit {
   for k in kept {
     issues.push(k)
   }
+}
+
+///|
+/// Record every name the parser saw WRITTEN (`<assigned:NAME>`) as
+/// `@assigned:NAME`, for the closure half of TS2454 — see
+/// `unassigned_for_closure`. Namespace bodies are their own `TsModule`
+/// and are walked too, since a `let` the file declares may be assigned in
+/// one.
+fn Resolver::record_assigned_names(
+  r : Resolver,
+  module_ : @ast.TsModule,
+) -> Unit {
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<assigned:") && gm.has_suffix(">") {
+      r.globals["@assigned:" +
+      gm["<assigned:".length():gm.length() - 1].to_owned()] = Any
+    }
+  }
+  for ns in module_.namespaces {
+    Resolver::record_assigned_names(r, ns.module_)
+  }
+}
+
+///|
+/// The TS2454 tracking map a CLOSURE body starts with. Its parameters
+/// shadow outer bindings (`unassigned_without`), and an outer variable
+/// that is assigned ANYWHERE is assumed initialized: the closure can run
+/// after any of those writes, which is tsc's `isOuterVariable &&
+/// !isNeverInitialized`. Probed: `let api: Api; before(() => { api = mk()
+/// }); it(() => { api.go() })` is accepted, and the same `it` beside no
+/// assignment at all is TS2454. Every test file that sets a fixture in
+/// `beforeEach` and reads it in `it` is the first shape.
+fn unassigned_for_closure(
+  src : Map[String, Bool],
+  names : Array[String],
+  resolver : Resolver,
+) -> Map[String, Bool] {
+  let m = unassigned_without(src, names)
+  let drop : Array[String] = []
+  for k, _ in m {
+    if resolver.globals.contains("@assigned:" + k) {
+      drop.push(k)
+    }
+  }
+  for k in drop {
+    let _ = m.remove(k)
+  }
+  m
 }
 
 ///|
@@ -24985,7 +26361,11 @@ fn check_funcexpr_with_context(
     type_param_bounds: ctx.type_param_bounds,
     permissive: ctx.permissive,
     // Parameters shadow outer bindings — drop them from the TS2454 set.
-    unassigned: unassigned_without(ctx.unassigned, param_names),
+    unassigned: unassigned_for_closure(
+      ctx.unassigned,
+      param_names,
+      ctx.resolver,
+    ),
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
@@ -27980,14 +29360,38 @@ fn narrow_declared_nullish_by_init(
 /// An alias can hide a nullish member a level down, so the parts are
 /// unwrapped recursively, to a bounded depth.
 fn type_definitely_non_nullish(resolver : Resolver, t : @ast.TsType) -> Bool {
+  // An enum type, or one of its members (`E` / `E.M`), is a union of number
+  // and string literals. It is in `resolver.enums`, which
+  // `type_contains_unresolved_named` does not read, so it would otherwise
+  // abstain: univer's `currentBullet?.listType === listType` with
+  // `listType: PresetListType` left `currentBullet` possibly `undefined`.
+  fn is_enum_name(n : String) -> Bool {
+    let head = match n.find(".") {
+      Some(i) => n[:i].to_owned()
+      None => n
+    }
+    resolver.enums.contains(head)
+  }
+
   fn go(t : @ast.TsType, depth : Int32) -> Bool {
+    if t is Named(n) && is_enum_name(n) {
+      return true
+    }
     if depth == 0 ||
       !is_checkable(t) ||
       type_contains_unresolved_named(t, resolver) {
+      if t is Union(parts) {
+        // `E | number`: the unresolved-name gate above reads the enum
+        // member as unknowable; judge each part instead.
+        if depth > 0 && parts.iter().all(p => go(p, depth - 1)) {
+          return true
+        }
+      }
       return false
     }
     for part in union_components(resolver.unwrap(t)) {
       match resolver.unwrap(part) {
+        Named(n) if is_enum_name(n) => ()
         Undefined | Null | Void | Any | Unknown | Never => return false
         Union(_) as u => if !go(u, depth - 1) { return false }
         p => if !is_checkable(p) { return false }
@@ -28886,6 +30290,14 @@ fn optional_chain_equality_narrowing(
   let is_definite_value = match other {
     StringLit(_) | NumberLit(_) | IntLit(_) | BoolLit(_) => true
     TemplateLiteral(_, []) => true
+    // A value whose TYPE cannot be nullish rules the short-circuit out as
+    // surely as a literal does: univer's `currentBullet?.listType ===
+    // listType ? currentBullet.listId : …` with `listType` an enum.
+    Var(_) | PropAccess(_, _) =>
+      type_definitely_non_nullish(
+        resolver,
+        resolver.unwrap(infer_expr(env, resolver, other)),
+      )
     _ => false
   }
   let side = if is_definite_value || (is_null && !loose) {
@@ -30571,11 +31983,30 @@ fn analyze_equality(
       match narrow_by_discriminant(resolver, cur, prop, matcher, true) {
         Some(then_ty) => {
           true_side.push((parent_key, then_ty))
-          if !from_chain {
-            match narrow_by_discriminant(resolver, cur, prop, matcher, false) {
-              Some(else_ty) => false_side.push((parent_key, else_ty))
-              None => ()
-            }
+          match narrow_by_discriminant(resolver, cur, prop, matcher, false) {
+            Some(else_ty) =>
+              if from_chain {
+                // `x?.kind === "a" ? … : x` — the other side is every
+                // variant whose tag is not `"a"`, AND the nullish receiver
+                // the chain short-circuited on. Leaving it unnarrowed kept
+                // the `"a"` variant, so univer's `menuItem?.type ===
+                // MenuItemType.BUTTON ? undefined : menuItem` read
+                // `.selections` on the button item too.
+                let orig = narrowing_current_type(env, resolver, parent_key)
+                let parts = union_components(else_ty).copy()
+                for
+                  t in union_components(
+                    flatten_union_parts(resolver.unwrap(orig)),
+                  ) {
+                  if t is (Null | Undefined) && !parts.contains(t) {
+                    parts.push(t)
+                  }
+                }
+                false_side.push((parent_key, union_of(parts)))
+              } else {
+                false_side.push((parent_key, else_ty))
+              }
+            None => ()
           }
         }
         None => ()
@@ -32333,7 +33764,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // the equivalent simple assignment's required type. Targets the
       // declared type (see `Assign` above) so a compound assignment
       // after narrowing still accepts the full declared union.
-      match env.lookup_declared(name) {
+      match compound_assign_target_type(env, name, op) {
         Some(target_ty) =>
           check_compound_assign(env, target_ty, op, e, ctx, name)
         None => ()
@@ -33068,8 +34499,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let scrutinee_ty = ctx.resolver.unwrap(
         infer_expr(env, ctx.resolver, scrutinee),
       )
+      // A legacy label kept under `// @ts-ignore` (excalidraw's `case
+      // "draw":` for a type the element union no longer has) is one tsc
+      // reports and the comment silences. With no line to honour the
+      // comment at, TS2678 abstains in a file that carries one.
+      let case_suppressed = ctx.resolver.globals.contains(
+        "@ts-suppression-present",
+      )
       for case_ in cases {
         match case_.test_expr {
+          Some(e) if case_suppressed => check_call_args_in_expr(env, e, ctx)
           Some(e) => {
             check_call_args_in_expr(env, e, ctx)
             // TS2678 for the two spellings the type-driven test below
@@ -33229,9 +34668,18 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             }
           }
         }
+        // Every listed label is removed in `default:` only when no label can
+        // FALL INTO it: `case "b": default: return x.kind` reaches the
+        // default body with `x` still the `"b"` variant, and removing it
+        // read `x` as `never`. The rule `switch (typeof x)` uses above.
+        let nothing_falls_in = case_index == 0 ||
+          (
+            cases[case_index - 1].body.stmts.length() > 0 &&
+            block_always_exits(cases[case_index - 1].body)
+          )
         // `default:` body — narrow against all literal cases.
         match (scrutinee_name, case_.test_expr) {
-          (Some(name), None) =>
+          (Some(name), None) if nothing_falls_in =>
             apply_switch_default_narrowing(env, ctx.resolver, name, cases)
           _ => ()
         }
@@ -33240,7 +34688,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         // every union member whose discriminant matches one of the
         // listed cases so the default body sees the exhaustive remainder.
         match (scrutinee_disc, case_.test_expr) {
-          (Some((obj_name, prop)), None) =>
+          (Some((obj_name, prop)), None) if nothing_falls_in =>
             apply_switch_disc_default_narrowing(
               env,
               ctx.resolver,
@@ -33829,7 +35277,15 @@ fn check_explicit_type_args(
         }
       }
     }
+    // `signatures` holds ONE declaration per name, so for an overload set
+    // it answers with whichever was ingested last, and `pointFrom<P>(1, 2)`
+    // was judged against the `(coords: [number, number])` overload.
+    let overloaded = match ctx.resolver.globals.get(name) {
+      Some(t) => ctx.resolver.unwrap(t) is Union(_)
+      None => false
+    }
     match inner {
+      Call(_, call_args) if overloaded => ignore(call_args)
       Call(_, call_args) =>
         match ctx.resolver.signatures.get(name) {
           Some(sig) =>
@@ -34698,7 +36154,9 @@ fn check_call_args_in_expr(
           // arity. Run this before the common-signature route: two callables
           // can have identical widened parameter types while differing in
           // whether that parameter was written with `?`.
-          check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          if !union_receiver_has_builtin_member(ctx.resolver, callee, env) {
+            check_union_callee_arity(ctx, raw_callee_ty, args, "call")
+          }
           check_plain_call_this_context(ctx, raw_callee_ty, "call")
           check_overload_set_no_match(env, ctx, raw_callee_ty, args, "call")
           match union_common_call_params(callee_ty, ctx.resolver) {
@@ -36491,7 +37949,7 @@ fn check_call_args_in_expr(
       }
       match target {
         Var(name) =>
-          match env.lookup_declared(name) {
+          match compound_assign_target_type(env, name, op) {
             Some(target_ty) =>
               check_compound_assign(env, target_ty, op, v, ctx, name)
             None => ()
@@ -37684,8 +39142,57 @@ fn switch_covers_union(
   env : ExprEnv,
   resolver : Resolver,
 ) -> Bool {
-  let members : Array[@ast.TsType] = match
-    resolver.unwrap(infer_expr(env, resolver, scrutinee)) {
+  let scrutinee_ty = resolver.unwrap(infer_expr(env, resolver, scrutinee))
+  // An ENUM scrutinee is covered when every member is named by a label.
+  // Its member reads infer as the base `number` / `string`, so coverage is
+  // decided by NAME: `case Direction.LEFT:` names the member `LEFT` of the
+  // scrutinee's enum. univer's `getReverseDirection` switches over all four
+  // `Direction` members and was "not all paths return" (on main too); tsc
+  // accepts it, and the same switch missing one member is TS2366.
+  if scrutinee_ty is Named(written) {
+    // `ns.E` through `import * as ns` reaches the enum through the
+    // qualified-name table, as `unwrap` reads it.
+    let enum_name = match resolver.qualified_names.get(written) {
+      Some(key) => key
+      None => written
+    }
+    if resolver.enums.get(enum_name) is Some(decl) && decl.members.length() > 0 {
+      // A label names the enum by its source spelling: the bare name, or
+      // the written qualified one (`E.Dir.UP` for a scrutinee `E.Dir`).
+      let base = match enum_name.find("@") {
+        Some(i) => enum_name[:i].to_owned()
+        None => enum_name
+      }
+      let named : Map[String, Unit] = Map([])
+      for c in cases {
+        match c.test_expr {
+          Some(PropAccess(obj, m)) =>
+            match narrowing_key_for_expr(obj) {
+              // A local value that SHADOWS the enum (`const E = { A: 0,
+              // B: 0 }` beside `enum E`, or a parameter `E: Labels`) is not
+              // the enum, and its members can coincide, so its labels
+              // prove nothing. Whatever its type: the enum itself is not
+              // bound as a value here.
+              // A qualified label is shadowed through its ROOT: a
+              // parameter `N` makes `N.E.A` its own member read.
+              Some(k) if (k == base || k == written || k == enum_name) &&
+                env.lookup(k) is None &&
+                env.lookup(
+                  match k.find(".") {
+                    Some(i) => k[:i].to_owned()
+                    None => k
+                  },
+                )
+                is None => named[m] = ()
+              _ => ()
+            }
+          _ => ()
+        }
+      }
+      return decl.members.iter().all(fn(m) { named.contains(m.name) })
+    }
+  }
+  let members : Array[@ast.TsType] = match scrutinee_ty {
     Union(parts) => parts
     other =>
       match other {
@@ -51592,6 +53099,16 @@ fn check_module_function_bodies_layered(
   if unkeyed_renames.length() > 0 {
     renames_by_key["<unkeyed>"] = unkeyed_renames
   }
+  // A file carrying a `@ts-ignore` / `@ts-expect-error` comment: the
+  // checks below have no line to honour one at, so the ones that are
+  // whole-file sensitive abstain (see `<ts-suppression-present>`). A
+  // namespace body is parsed on its own and the comment sits in the file.
+  if module_.grammar_misuses.contains("<ts-suppression-present>") ||
+    outer_modules
+    .iter()
+    .any(fn(o) { o.grammar_misuses.contains("<ts-suppression-present>") }) {
+    resolver.globals["@ts-suppression-present"] = Any
+  }
   if outer_modules.length() == 0 {
     Resolver::ingest_module(resolver, module_, "")
     collect_module_value_names(module_, resolver.declared_value_names)
@@ -57749,4 +59266,37 @@ fn check_dup_param_names(
       seen.push(name)
     }
   }
+}
+
+///|
+/// The type a compound assignment's TARGET is judged as. `x -= d` READS
+/// `x` first, so the narrowed type is the one it must be numeric in:
+/// univer writes `if (p != null) { p -= delta }` over a `number |
+/// undefined`, and reading the declared type reported the guarded write
+/// (on main too). `+=` keeps the declared type when that admits a string,
+/// since then the write may concatenate whatever the narrowing says, and a
+/// logical assignment is not arithmetic at all.
+fn compound_assign_target_type(
+  env : ExprEnv,
+  name : String,
+  op : @ast.TsCompoundOp,
+) -> @ast.TsType? {
+  let declared = env.lookup_declared(name)
+  match (op, declared) {
+    (AddAssign, Some(d)) if type_has_string_member(d) => declared
+    (AndAssign | OrAssign | CoalesceAssign, _) => declared
+    _ =>
+      match env.lookup(name) {
+        Some(t) => Some(t)
+        None => declared
+      }
+  }
+}
+
+///|
+fn type_has_string_member(t : @ast.TsType) -> Bool {
+  is_assignable_to(t, @ast.TsType::String_) ||
+  union_components(flatten_union_parts(t))
+  .iter()
+  .any(fn(m) { m is (String_ | Literal(_) | TemplateLiteralType(_, _)) })
 }

@@ -6212,8 +6212,9 @@ product surfaces now.
   - nullish constituents are set aside during the reduction and added
     back;
   - two equal candidates are that candidate;
-  - an explicit JSX attribute overrides a spread field of the same name,
-    in inference and in the check.
+  - an explicit JSX attribute overrides an EARLIER spread field of the
+    same name, in inference and in the check. A later spread overriding
+    the attribute is not modelled yet.
 
   Every mechanism is mutation-proven in `callable_shapes_wbtest.mbt` and
   `recall_wbtest.mbt`.
@@ -6245,6 +6246,229 @@ product surfaces now.
     positive. The mutation differential goes from 92 to 105 caught
     (recall 35% → 40%), with no undeclared false positive.
     `member-typo` alone goes from 31 to 36.
+
+  Batch GV takes excalidraw's largest category and the shapes behind it.
+  Every fix below was reproduced in a minimal file and checked against the
+  nightly first; tsc accepts each `ok` shape:
+  - **A spread of a union distributes.** `{ ...u }` with `u: A | B` is
+    `{ ...A } | { ...B }` in tsc, and mtsc read it as the members the two
+    share. excalidraw's `restoreElement` writes `element = { ...element }`
+    over a 14-member element union and then switches on `element.type`, so
+    every case arm's own member read "does not exist" (about 100 reports).
+    A later key replaces an earlier one. A later OPTIONAL member only
+    may: `{ ...defaults, ...partial }` reads as the union of the default's
+    type and the member's type without `undefined`, as tsc's
+    `getSpreadType` does. A required member whose type includes
+    `undefined` is read the same way, because `x?: T` and `x: T |
+    undefined` are one node here; tsc would keep that member's own type.
+  - **`Exclude` / `Extract` over interfaces.** `extends_decision` is
+    resolver-free and could not decide `A extends C` for two named
+    interfaces, so `Exclude<Element, SelectionElement>` stayed an undecided
+    conditional. Two object shapes are now decided by one rule: a member
+    on both sides whose types are made of literals and are disjoint means
+    `false`. `true` is decided only against an object-type literal whose
+    every member the source definitely satisfies.
+  - **A generic alias used without type arguments** came back with its
+    parameter names unbound. effect's bare `MulticastInterface<A extends
+    IpAddress = IpAddress>` then read `A` as `net/Dns.ts`'s `interface A`,
+    and the new decision answered over the DNS record. A parameter whose
+    name the program declares as a type now reads as `any`. Replacing
+    every parameter was measured and cut back, because zod's bare
+    `SyncParseReturnType` exposed the object-literal discriminant split.
+  - **TS2454 in a closure.** A read of an outer `let x: T;` from inside a
+    closure is "used before being assigned" only when `x` is never
+    DEFINITELY assigned anywhere (tsc's `isOuterVariable &&
+    !isNeverInitialized`). That is `beforeEach(() => { api = … })` with
+    `it(() => api.go())`, the commonest shape in excalidraw's tests. A
+    definite assignment is `=`, a logical assignment, a destructuring
+    assignment or a loop head. `+=` and `++` read first and do not count,
+    probed. The parser records each as `<assigned:NAME>`.
+  - **A `private static` member** made the INSTANCE type nominal, so
+    `{ ...editor, … }` was not a `LinearElementEditor` (on main too). Only
+    an instance-side `private` / `protected` member does that.
+  - **A destructuring callback parameter** was bound to the whole element
+    type during return inference: `points.map(([x]) => x)` was an array of
+    points (on main too). The check path had bound the pattern since batch
+    EJ; the inference path is now the same walk.
+  - **`?.` over a union of declared shapes** added `undefined`, and every
+    receiver lost the member's own `null` (on main too). `one?.frameId`
+    with `frameId: string | null` is `string | null`, and `maybe?.frameId`
+    is `string | null | undefined`.
+  - **The other side of `x?.tag === K`** was left unnarrowed, so univer's
+    `menuItem?.type === MenuItemType.BUTTON ? undefined : menuItem` kept
+    the button variant (on main too). A non-nullish VALUE on the other
+    side rules the short-circuit out as surely as a literal does, which
+    needed one more fact: an enum type is in `resolver.enums`, and
+    `type_contains_unresolved_named` does not read that table, so
+    `currentBullet?.listType === listType` with `listType` an enum left
+    `currentBullet` possibly `undefined`.
+
+  Fixing the spread and the `Exclude` decision made more of excalidraw
+  and univer judgeable, and the shapes behind them came next. Each is on
+  main too unless it says otherwise:
+  - **`Exclude` over a nested union.** `ExcalidrawElement` lists
+    `ExcalidrawGenericElement`, itself an alias to a union holding the
+    selection element an `Exclude` removes, so distributing one level
+    checked that alias whole. A union of unions is that union now. And
+    the object decision runs on the shapes as WRITTEN, before
+    `simplify_type`, whose intersection collapse reduces `Base & { type:
+    "rectangle" }` to `Base` and made `RectEl extends SelEl` true.
+  - **`?.` receivers.** An intersection, `Readonly<…>` and its siblings, a
+    mapped type, and a union member that is itself a union alias are all
+    non-nullish receivers.
+  - **A written type argument over a bound-inlined return.**
+    `pointFrom<GlobalPoint>(x, y)` returned the bound `GlobalPoint |
+    LocalPoint`, because the parser inlines `P` to its bound. A return
+    that IS a parameter's union bound reads as the written argument. An
+    imported overload set, whose bounds are not on record, abstains.
+  - **A generic static method's binders.** univer's `static deepClone<T>`
+    met engine-formula's `class T`, and every `Tools.deepClone(x)`
+    reported. An unsolved binder reads as `any`.
+  - **TS2678 under `@ts-ignore`.** excalidraw keeps a `case "draw":` the
+    element union no longer has, under the comment. With no line to
+    honour the comment at, the rule abstains in a file that carries one.
+  - **A flat `??`.** `o?.a ?? o?.b` nested `number | (number |
+    undefined)`, and a `!= null` guard, which removes members one level
+    deep, left the inner `undefined`.
+  - **A compound write is judged on the narrowed target.** `x -= d` reads
+    `x` first, so univer's `if (p != null) { p -= delta }` is legal. `+=`
+    over a declared type that admits a string keeps the declared type,
+    and a logical assignment is not arithmetic.
+  - **A class base an augmentation names.** univer's facade mixins write
+    `class FUniverUIMixin extends FUniver` beside `declare module
+    "@univerjs/core/facade" { interface FUniver extends IFUniverUIMixin
+    {} }`, and the base read as that interface alone, without the class's
+    own `_injector`. The augmentation walk now follows class bases too.
+  - **A union of lib arrays and the union arity rule.** This one is new
+    in this batch: once `?.` stopped adding `undefined` to a callee, the
+    rule reached `paragraphs?.find(cb)` over `IParagraph[] | never[]`.
+    A lib member table writes `thisArg?` as a bare `T | undefined`, which
+    the rule cannot tell from a written `x: T | undefined` (that one stays
+    required, unionTypeReduction2). The plain `.find` spelling goes
+    through the method path and abstains on a union receiver, so the
+    chained spelling abstains too. A union of DECLARED methods keeps the
+    rule: `u?.m("a")` over `A | B` is TS2554, probed.
+  - **Overload order and literal arguments.** tsc tries a signature with
+    a literal-typed parameter first (`reorderCandidates`), so `{ (x:
+    string): number; (x: "a"): string }` with `f("a")` is `string`. That
+    needed two facts at all three overload loops: the reorder itself, and
+    a literal argument keeping its literal type for SELECTION, since
+    inference widens `1` and `true` (univer's `_getUndoStack(id, true)`
+    picked the implementation's `T[] | null`). A written `x: "a" |
+    undefined` is not promoted; only a parameter `CallableMeta` records as
+    optional is.
+  - **A literal argument then reached members it could take only by
+    OMITTING a parameter**, and that had been judged from the parameter's
+    TYPE. `(x: 1, ...rest: [string])` counted the tuple rest as omittable
+    and `(x: 1, y: string | undefined)` counted `y` as optional, so `f(1)`
+    picked `string` where tsc goes on to the next member's `number`
+    (probed on all three loops). The tuple rest is expanded first, as the
+    method loop already did. Optionality is three-valued now
+    (`OverloadFit`). A member whose `?`s are on record is exact: a
+    `CallableMeta`, or an interface member, which the method loop takes
+    only when it has no `?`. A member that takes the call only if an
+    omitted parameter is optional, and cannot say, answers unless a later
+    member takes the call too; then the call is `any`. A `declare
+    function` overload set records no `?`, so `dg(x: 1, y?: string)`
+    beside `dg(x: number)` is a MISS again, as on main. And `x: (1)` is
+    not a literal type NODE, so tsc does not promote it; the parser strips
+    the parentheses, so it is promoted here. That is a false positive on a
+    spelling nobody writes, filed with its blocker (an AST change the
+    bridge reads).
+  - **The fourth round found the rest of that judgement**, and each cell
+    was probed. A fixed-tuple SPREAD argument counts as its elements
+    (`f(1, ...xs)` read `xs` as one argument against an expanded tuple
+    rest; a false positive on main too). A parameter whose type accepts
+    `void` is omittable, as tsc's minimum argument count says
+    (`y: string | void`); `y: string | undefined` is not. An interface
+    method with a `?` was left out of the method loop's candidates
+    entirely (on main too). Members that agree on the return keep it:
+    `m(x: string, y?: string): number` beside `m(x: string): number` is
+    `number` whichever one tsc picks. A generic member's arity reads its
+    recorded `?`s, and a rest parameter typed with a tuple ALIAS is
+    expanded. The "no overload matches" proof (TS2769) read a literal
+    argument widened, so `lit(1)` against `(x: 1): string; (x: string):
+    number` was reported on main: the fact the three selection loops
+    already had, missing from a fourth reader.
+  - **The callable-object loop's fallback to the union loop inferred every
+    argument a second time**, and the argument of a nested call is the
+    next call, so `f(f(f(…)))` over unmatched overloads was exponential in
+    depth: 2.66 s at 18 levels, 0.006 s once each argument is inferred
+    once. This batch introduced it, and the review found it.
+    `verify-checker-scaling` could not have: it had no nested-call axis.
+    `nested-overload-calls` is that axis now. It is superlinear on main
+    too (1.56; checking a call re-infers everything below it), so it
+    carries a budget with that reason. What it exists to catch is the
+    exponential version, which never finishes its first rung.
+  - **The fifth round found the same doubling through a second door**, and
+    four more places where the selection rule was read wrong.
+    - A matching GENERIC member bound its type parameter by inferring the
+      argument again: 0.62 s at 16 levels on `{ <T>(x: T): T; … }`.
+      `solve_generic_bindings` now reads the types the overload loop already
+      inferred (`pre`), and `nested-generic-overload-calls` is its axis. The
+      first version still inferred again whenever a call had a SPREAD
+      argument, because it fell back to `expand_tuple_spread_args`. That was
+      3.3 s at 18 levels of `f(…, ...empty)`, and the review found it. The
+      expansion now takes its element types from the inferred tuple
+      (`expand_tuple_spread_args_typed`), and the axis alternates plain and
+      spread levels, so either door dies at its first rung.
+    - A generic member is solved from a fixed tuple spread's ELEMENTS, and
+      its fit is judged on the literal argument types, as a concrete
+      member's is.
+    - Two members whose returns agree only by spelling a binder do not
+      agree. `m<T>(x: T[], …): T` beside `m<T>(x: T): T` read `ca.m(nums)`
+      as `number`, on main too.
+    - A method set holding a member the loop cannot take (a generic one) is
+      INCOMPLETE. Resolving among the rest picked `boolean` for `oe.m(s)`
+      where the generic first member says `number`, so such a set is left to
+      the first-declaration lookup.
+    - TS2769's arity proof missed a `void` alias.
+
+    What stays is that a union of callable VALUES and an overload set are
+    the same `Union` here, so first-match selection drops the other
+    members' returns. `((s, n) => number) | ((s, n) => boolean)` called with
+    a tuple spread is `number`, a MISS. main reports that call only because
+    it matched nothing.
+  - **Object conditionals, two more cells.** An interface's own member
+    overrides the inherited one (`A extends { kind: "a" }` was false), and
+    a member that may be optional proves nothing in either direction,
+    since `b?: T` and `b: T | undefined` are one node.
+  - **A switch that names every enum member ends every path.** univer's
+    `getReverseDirection` covers all four `Direction` members and was
+    "not all paths return" (on main too). An enum member read infers as
+    its base `number` / `string`, so coverage is decided by NAME. A
+    scrutinee typed through a namespace import (`E.Dir`) is still
+    reported, because a qualified enum that no other module declares is
+    not in the qualified-name table. A local binding of the enum's name
+    (`const E = { A: 0, B: 0 }`, a parameter `E: Labels`) shadows it, and
+    its labels do not count. A qualified label is shadowed through its
+    ROOT: a parameter `N` makes `N.E.A` its own member read.
+
+  Two of #306's review items were reports on legal code, confirmed against
+  the nightly, and are fixed here:
+  - a `switch` label that falls into `default` keeps its variant there;
+  - a callable object's overloads are tried in declaration order, generic
+    members included.
+  The other items are MISSes and stay filed.
+
+  One change was reverted with its measurement. Deduplicating a union
+  member read (`"z" | "z"` → `"z"`) is cosmetic, and it gave effect two
+  new reports: `Pipeable`'s overload set had arrived as a union of two
+  identical sets, which abstained, and deduplicated it reached the
+  overload resolution that cannot judge a leading `this` parameter.
+  - **What it measures.** The oracle is unchanged: TP 2726 / MISS 0 /
+    FP 0, and tsc-extra stays at FP 0. effect goes from 102 to 96 and zod
+    stays at 7. univer goes:
+    - core 102→69
+    - docs-hyper-link 83→53
+    - data-validation 405→327
+    - sheets-numfmt 488→330
+    - ui 393→302
+
+    excalidraw goes from 529 to 345. None of them reports at a site main
+    does not. The real-app check still catches 8 of 11 with no false
+    positive. The mutation differential is unchanged at 105 caught / 155
+    missed (40%), with no undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

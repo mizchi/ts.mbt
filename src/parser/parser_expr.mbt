@@ -412,6 +412,58 @@ fn Parser::record_assign_target_strict_misuse(
 }
 
 ///|
+/// `<assigned:NAME>`: NAME is DEFINITELY written somewhere in this file —
+/// by `=`, a logical assignment (`??=`, `||=`, `&&=`), a destructuring
+/// assignment or an assignment-form `for…of` / `for…in` head. An
+/// arithmetic compound operator and `++` / `--` read the binding first and
+/// do not count, which is tsc's `isSymbolAssignedDefinitely` (probed). The
+/// checker reads it for TS2454: a read of
+/// an outer `let x: T;` from inside a closure is "used before being
+/// assigned" only when `x` is NEVER assigned (tsc's `isOuterVariable &&
+/// !isNeverInitialized`), because the closure may run after any of those
+/// writes. Recorded per occurrence and keyed by name, so a speculative
+/// parse that is rolled back takes its markers with it, and a name some
+/// OTHER binding of the same spelling writes only ever silences a report.
+fn Parser::record_assigned_name(self : Parser, name : String) -> Unit {
+  self.grammar_misuses.push("<assigned:" + name + ">")
+}
+
+///|
+/// The names a destructuring-assignment or assignment-form loop head
+/// writes, recorded as `record_assigned_name` does.
+fn Parser::record_assigned_binding(
+  self : Parser,
+  binding : @ast.TsBinding,
+) -> Unit {
+  match binding {
+    Ident(name) => self.record_assigned_name(name)
+    Array(arr) => {
+      for item in arr.items {
+        match item {
+          Some(elem) => self.record_assigned_binding(elem.binding)
+          None => ()
+        }
+      }
+      match arr.rest {
+        Some(rest) => self.record_assigned_binding(rest)
+        None => ()
+      }
+    }
+    Object(obj) => {
+      for prop in obj.props {
+        self.record_assigned_binding(prop.binding)
+      }
+      match obj.rest {
+        Some(name) => self.record_assigned_name(name)
+        None => ()
+      }
+    }
+    Target(Var(name)) => self.record_assigned_name(name)
+    Target(_) => ()
+  }
+}
+
+///|
 /// TS2357 / TS1109: the operand of an assignment or an update operator has
 /// to be something a value can be WRITTEN to — a variable, a property
 /// access, or an element access. `++await 42`, `++this` and the `++ ++ y`
@@ -467,6 +519,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
   if (self.check(LBracket) || self.check(LBrace)) &&
     self.is_destructuring_assignment_start() {
     let pattern = self.parse_assignment_binding_pattern()
+    self.record_assigned_binding(pattern)
     let _ = self.expect(Eq)
     let right = self.parse_assignment()
     return AssignPattern(pattern, right)
@@ -494,6 +547,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         // Recorded -- not raised -- so the file still parses and the
         // checker reports the diagnostic.
         self.record_assign_target_strict_misuse(left)
+        self.record_assigned_name(name)
         let _ = self.advance()
         let right = self.parse_assignment()
         AssignExpr(name, right)
@@ -547,6 +601,15 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
     _ => None
   }
   if compound is Some(op) {
+    // A LOGICAL assignment counts as a definite write for TS2454 and an
+    // arithmetic one does not: `+=` reads the binding first, so tsc's
+    // `isSymbolAssignedDefinitely` ignores it (probed — `a += 1` in one
+    // closure leaves `a.toFixed()` in another TS2454, `q ??= 1` does not).
+    match (op, left) {
+      (AndAssign | OrAssign | CoalesceAssign, Var(name)) =>
+        self.record_assigned_name(name)
+      _ => ()
+    }
     let _ = self.advance()
     let right = self.parse_assignment()
     // The old per-operator bodies rebuilt a `Var` / `PropAccess` /

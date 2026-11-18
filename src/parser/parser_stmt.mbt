@@ -1566,6 +1566,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       let lhs_parenthesized = self.check(LParen)
       let binding = self.parse_assignment_binding_pattern()
       if self.check(Of) || self.check(In) {
+        self.record_assigned_binding(binding)
         let is_in = self.check(In)
         if is_await && is_in {
           raise ParseError("for-await-of requires 'of'")
