@@ -6463,12 +6463,88 @@ product surfaces now.
     - docs-hyper-link 83→53
     - data-validation 405→327
     - sheets-numfmt 488→330
-    - ui 393→302
+    - ui 393→301
 
     excalidraw goes from 529 to 345. None of them reports at a site main
     does not. The real-app check still catches 8 of 11 with no false
     positive. The mutation differential is unchanged at 105 caught / 155
     missed (40%), with no undeclared false positive.
+  Batch GW takes the univer categories batch GV left filed. Every cell was
+  probed against the nightly first:
+  - **A spread member widens by where it came from.** tsc widens only a
+    FRESH literal, so `const r = { ...style }` keeps `fontHint?: "default"
+    | "eastAsia"` and `r` is assignable back to `style`'s interface. mtsc
+    widened every member of an object literal, so `r` was not (9 univer
+    reports, on main too). The first version kept every member a spread
+    contributed, which was wrong the other way: `let s = { ...{ h: "x" }
+    }; s.h = "y"` is legal, because a literal spread in place is fresh
+    too. So each member records its origin in source order. A member
+    written in the literal, or contributed by a spread of a literal, is
+    fresh and widens. A member a declared value's spread contributes keeps
+    its declared type. A later REQUIRED declared member overrides an
+    earlier fresh one (`{ h: "x", ...rq }` then `s.h = "y"` is TS2322). A
+    later OPTIONAL one leaves the fresh member widened, since it may be
+    absent. A conditional spread makes a member fresh when either branch
+    does. The declared members are read through `collect_declared_fields`,
+    the enumeration the spread inference itself uses. The first draft read
+    `resolver.unwrap`, which leaves an interface as a name, so `...rq`
+    changed nothing.
+  - **A union of shapes widens per alternative.** A spread of a union
+    distributes (batch GV), so `{ ...(c ? { h: "a" } : { h: "b" }) }`
+    infers as a union. `binding_init_type` widened only an `Object`, which
+    left every alternative narrow, and `s.h = "z"` was reported (on main
+    too).
+  - **An asserted member is not fresh.** `{ v: "q" as const }` and
+    `{ k: "q" as "q" }` keep `"q"`. The single-shape path had widened them
+    too. Only the literal-to-base abstention hid it, because a widened
+    `string` against a `"q"` target is suppressed. A union of shapes
+    printed the member as `string | string`, which is not the base, and
+    `{ ...u, type: "z" as const }` read as `string`. Probing it turned up
+    five MISSes on main: `o.v = "r"` over `v: "q" as const` is TS2322, and
+    the widened type accepted it.
+  - **A spread of an open shape stays open.** A spread the checker cannot
+    enumerate leaves a `[string]: any` entry in the inferred result, and
+    spreading that result again closed it. univer's `{ ...line, bullet }`,
+    where `line = { ...withoutParent(source), … }`, then reported every
+    member the generic `Omit<T, "parent">` contributed as required (on
+    main too). Only that `[string]: any` entry opens the result. A
+    DECLARED index signature does not, and the oracle caught the first
+    version that also let one through: tsc does not let `[n: string]:
+    number` supply a named member (`objectSpreadIndexSignature`). A
+    declared `[k: string]: any` is the same node as the marker, so it is a
+    MISS here: `const x: { a: number } = { ...anyIdx }` is TS2741 in tsc
+    and silent.
+  - **`typeof x` for a binding in scope** is that binding's type at that
+    point, narrowing included (probed). `unwrap` resolves a query against
+    `globals` only, so univer's `get(key) as unknown as Array<typeof
+    name>`, with `name` a parameter, stayed an opaque query, and a filter
+    callback was judged against the query itself. A class, an enum and a
+    namespace keep their query, because the value type is not what a
+    binding holds.
+  - **A primitive is judged only against a curated lib type.** The
+    unresolved-name bail let any name in the generated lib registry
+    decide that a primitive is not that type. The registry is a list of
+    NAMES, and it also holds aliases over primitives, so
+    `ctx.lineCap = "butt"` was "expected `CanvasLineCap` but got `string`"
+    at every univer draw call (on main too). Only the curated staples
+    (`Date`, `RegExp`, …) decide now. The registry still suppresses
+    wherever it did.
+  - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
+    FP 0), and tsc-extra stays at FP 0. effect stays at 96 and zod at 7.
+    univer goes, against batch GV:
+    - core 69→62
+    - docs-hyper-link 53→46
+    - data-validation 327→284
+    - sheets-numfmt 330→287
+    - ui 301→257
+
+    excalidraw goes from 345 to 329. None of them reports at a site main
+    does not. Two univer core lines change their message without moving:
+    `const style = { … } as const` now keeps `ff: "Inter"`, as tsc does, so
+    the report main already made there prints the literal. The real-app
+    check still catches 8 of 11 with no false positive, and the mutation
+    differential is unchanged at 105 caught / 155 missed (40%), with no
+    undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
