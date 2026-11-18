@@ -25249,7 +25249,14 @@ fn collect_declared_fields_unwrapped_at(
           out.push(f)
         }
       }
-    // Union: only fields present on every member are accessible.
+    // Union: only fields present on every member are accessible. Each
+    // member walks with its OWN copy of the visited set: the set exists so
+    // a shared base is collected once per walk, and the members are
+    // separate walks. Sharing it made the second member skip every base
+    // the first had reached, so `IRange | IRange` (a member read off a
+    // union of two params interfaces, which is not deduplicated) kept only
+    // `IRange`'s own members and `{ ...range }` lost the inherited
+    // `startRow` (univer's permission checks, on main too).
     Union(parts) =>
       if parts.length() == 0 {
         ()
@@ -25258,7 +25265,7 @@ fn collect_declared_fields_unwrapped_at(
           parts[0],
           resolver,
           depth + 1,
-          visited,
+          visited.copy(),
         )
         let common : Map[String, @ast.TsType] = Map([])
         for f in first_fields {
@@ -25270,7 +25277,7 @@ fn collect_declared_fields_unwrapped_at(
             parts[i],
             resolver,
             depth + 1,
-            visited,
+            visited.copy(),
           )
           let member_map : Map[String, @ast.TsType] = Map([])
           for f in member_fields {
