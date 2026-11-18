@@ -319,3 +319,44 @@ test "function parameters are compared through the interface chain" {
     "function badReturn > binding `f` init: expected `(B0) => number` but got `(A0) => string`",
   ])
 }
+
+///|
+/// A template literal type is a set of strings, so it is comparable to
+/// `string` and to a string literal (univer's `r.name === hook.pluginName`
+/// with a `${Biz}_${string}_PLUGIN` name), and not to a number.
+test "a template literal type is comparable to a string" {
+  let src =
+    #|type Biz = "A" | "B";
+    #|type RName = `${Biz}_${string}_PLUGIN`;
+    #|declare const n: string;
+    #|declare const r: RName;
+    #|export const okString = n === r;
+    #|export const okLiteral = [{ name: "x" }].find((x) => x.name === r);
+    #|declare const num: number;
+    #|export const badNumber = num === r;
+  assert_eq(issue_lines(src), [
+    "top-level > strict equality: comparing `number` and `type` with === will always be false",
+  ])
+}
+
+///|
+/// An enum member widens to its enum in a mutable binding (univer's
+/// `let prevCharType = LinkCharType.Other`, reassigned in a loop), and stays
+/// the member in a `const`.
+test "an enum member widens to its enum in a let" {
+  let src =
+    #|enum K { A = "A", B = "B" }
+    #|declare function of(c: string): K;
+    #|export function okLoop(s: string) {
+    #|  let prev = K.A;
+    #|  for (let i = 0; i < s.length; i++) {
+    #|    const t = of(s[i]);
+    #|    if (i > 0 && prev !== K.B && t !== prev) { prev = t; }
+    #|  }
+    #|}
+    #|export function okWiden() { let p = K.A; p = K.B; return p; }
+    #|export function badConst() { const p = K.A; return p === K.B; }
+  assert_eq(issue_lines(src), [
+    "function badConst > strict equality: comparing `\"A\" (string)` and `\"B\" (string)` with === will always be false",
+  ])
+}

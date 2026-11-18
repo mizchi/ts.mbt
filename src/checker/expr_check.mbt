@@ -12909,6 +12909,14 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
     | (_, Conditional(_, _, _, _))
     | (MappedType(_, _, _, _), _)
     | (_, MappedType(_, _, _, _)) => true
+    // A template literal type is a set of strings, so it overlaps `string`,
+    // a string literal (which it may or may not match; `true` is the
+    // cautious answer) and another template. univer's `r.name ===
+    // hook.pluginName` with `pluginName: \`${Biz}_${string}_PLUGIN\`` read as
+    // always false. A non-string side still reports.
+    (TemplateLiteralType(_, _), String_ | Literal(_) | TemplateLiteralType(_, _)
+    )
+    | (String_ | Literal(_), TemplateLiteralType(_, _)) => true
     // Same primitive families overlap with each other and their literals.
     (Number, Number)
     | (Number, NumberLiteral(_))
@@ -22470,6 +22478,20 @@ fn binding_init_type(
     Union(_) if init is ObjectLit(_) =>
       widen_object_literal_type(inferred, init, resolver, infer)
     Struct(_, _) | Array(_) | Tuple(_) => widen_literal_deep(inferred)
+    // An enum member's literal type widens to its ENUM in a mutable
+    // binding: `let prev = LinkCharType.Other` is a `LinkCharType`, so a
+    // later `prev = other` and `prev !== LinkCharType.Open` are legal
+    // (univer's `linebreakLink`). The member reads as its folded value
+    // here, which is what made both report.
+    Literal(_) | NumberLiteral(_) if mutable_ &&
+      (match init {
+        PropAccess(Var(e), _) => resolver.enums.contains(e)
+        _ => false
+      }) =>
+      match init {
+        PropAccess(Var(e), _) => Named(e)
+        _ => inferred
+      }
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       if mutable_ && fresh {
         widen_literal(inferred)
