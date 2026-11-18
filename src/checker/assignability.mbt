@@ -1661,6 +1661,13 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
         // accepts such a union against every target, so reading it here
         // would pick the true branch on no evidence; left undecided.
         t
+      } else if applied_arity_mismatch(check, extends) {
+        // One generic at two argument counts leaves the shorter side's
+        // trailing arguments to defaults the AST does not keep, and the
+        // relation compares only the shared prefix there. That is an
+        // abstention, not proof: `Box<number> extends Box<number, number>`
+        // with `B = string` is false in tsc. Left undecided.
+        t
       } else if is_assignable_to(check, extends) {
         true_branch
       } else {
@@ -1668,6 +1675,37 @@ fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
       }
     _ => t
   }
+}
+
+///|
+/// True when some generic name occurs in `a` and `b` (or twice in one of
+/// them) with different argument counts.
+fn applied_arity_mismatch(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  let seen : Map[String, Int32] = Map([])
+  fn walk(t : @ast.TsType, seen : Map[String, Int32], depth : Int32) -> Bool {
+    if depth > 16 {
+      return false
+    }
+    let d = depth + 1
+    match t {
+      Applied(n, args) => {
+        match seen.get(n) {
+          Some(k) => if k != args.length() { return true }
+          None => seen[n] = args.length()
+        }
+        args.iter().any(fn(x) { walk(x, seen, d) })
+      }
+      Array(inner) | Rest(inner) => walk(inner, seen, d)
+      Tuple(items) | Union(items) | Intersection(items) =>
+        items.iter().any(fn(x) { walk(x, seen, d) })
+      Object(fields) => fields.iter().any(fn(f) { walk(f.1, seen, d) })
+      Func(ps, r) =>
+        ps.iter().any(fn(x) { walk(x, seen, d) }) || walk(r, seen, d)
+      _ => false
+    }
+  }
+
+  walk(a, seen, 0) || walk(b, seen, 0)
 }
 
 ///|

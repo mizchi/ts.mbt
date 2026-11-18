@@ -774,3 +774,24 @@ test "reduce_conditional leaves an any union check type undecided" {
     Boolean,
   )
 }
+
+///|
+/// One generic at two argument counts leaves trailing arguments to defaults
+/// the AST does not keep. The relation accepts the shared prefix (an
+/// abstention), so a conditional must not read that as proof:
+/// `Box<number> extends Box<number, number>` is false in tsc when `B =
+/// string`. Equal counts still decide.
+test "reduce_conditional: a defaulted argument count leaves it undecided" {
+  let short = @ast.TsType::Applied("Box", [Number])
+  let long = @ast.TsType::Applied("Box", [Number, Number])
+  let c = @ast.TsType::Conditional(short, long, String_, Boolean)
+  assert_true(reduce_conditional(c) is Conditional(_, _, _, _))
+  assert_true(is_assignable_to(short, long))
+  let same = @ast.TsType::Conditional(long, long, String_, Boolean)
+  assert_eq(reduce_conditional(same), String_)
+  let other = @ast.TsType::Applied("Box", [String_, Number])
+  assert_eq(
+    reduce_conditional(@ast.TsType::Conditional(long, other, String_, Boolean)),
+    Boolean,
+  )
+}
