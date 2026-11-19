@@ -903,3 +903,24 @@ test "finally writes, nested-block bindings and static factory parameters" {
     "function C1 > PropAccess `.length`: object is possibly `null`",
   ])
 }
+
+///|
+/// A join with an `any` side is `any`, as a union with `any` is in tsc.
+/// The try/catch join kept `any | { appState }`, so excalidraw's
+/// `initializeScene` reported `initialData?.elements`; main reported the
+/// same sites as "does not exist on `null`", and the `if` form too.
+/// Probed against the nightly: the `string` neighbours are TS2339.
+test "a join with an any side is any" {
+  let src =
+    #|declare const anyv: any;
+    #|declare const c: boolean;
+    #|declare function g(): any;
+    #|export async function okTry() { let d = null; try { d = (await g()) || null; } catch (e: any) { d = { appState: { m: e.message } }; } return d?.elements; }
+    #|export function okIf() { let d = null; if (c) { d = anyv; } else { d = { a: 1 }; } return d?.b; }
+    #|export function badIf() { let d = null; if (c) { d = "s"; } else { d = { a: 1 }; } return d.b; }
+    #|export function badTry() { let d = null; try { d = "s"; } catch { d = { a: 1 }; } return d.b; }
+  assert_eq(issue_lines(src), [
+    "function badIf > PropAccess `.b`: property `b` does not exist on `\"s\" (string) | { a: number }`",
+    "function badTry > PropAccess `.b`: property `b` does not exist on `\"s\" (string) | { a: number }`",
+  ])
+}

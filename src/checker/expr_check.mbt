@@ -34348,6 +34348,12 @@ fn join_branch_types_resolved(
   // The pieces an `unknown` is narrowed into (`{}`, `null`, `undefined`)
   // join back to `unknown` once all three are present again.
   let all_parts = [..ca, ..cb]
+  // A union with `any` is `any` in tsc. `let d = null; try { d = (await
+  // g()) || null } catch { d = { … } }` left `any | { appState }`, and every
+  // `d?.elements` after it was reported (excalidraw's `initializeScene`).
+  if all_parts.iter().any(fn(x) { x is Any }) {
+    return @ast.TsType::Any
+  }
   if all_parts.contains(@ast.TsType::Object([])) &&
     all_parts.contains(@ast.TsType::Null) &&
     all_parts.contains(@ast.TsType::Undefined) &&
