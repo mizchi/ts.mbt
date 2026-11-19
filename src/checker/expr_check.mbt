@@ -9248,6 +9248,29 @@ priv struct ExprEnv {
   paths_below : Map[String, Map[String, Unit]]
   alias_cond_keys : Map[String, Unit]
   pruned : Map[String, Unit]
+  // Every `declared` slot an explicit `declare_type` OVERWROTE, with the
+  // value it held, in write order. A snapshot records the log's length and
+  // `restore_from` undoes back to it, so a block-local `let x = 5` that
+  // shadows an outer `let x: string | null` gives the outer one its
+  // declaration back when the block ends. The snapshot used to cover `vars`
+  // only, which put a name introduced INSIDE a scope right but left a
+  // shadowed one holding the inner declaration: `{ let x = 5 } x = "a"` was
+  // "expected `number` but got `string`", and so was a `for (let x = 0; …)`
+  // head and an `if` branch's own `let x` (probed; tsc accepts all three).
+  declared_undo : Array[(String, @ast.TsType)]
+}
+
+///|
+/// A scope's entry state: the `vars` bindings, and how far
+/// `ExprEnv::declared_undo` had grown. Iterates as the bindings.
+priv struct EnvSnapshot {
+  entries : Array[(String, @ast.TsType)]
+  undo_len : Int32
+}
+
+///|
+fn EnvSnapshot::iter(self : EnvSnapshot) -> Iter[(String, @ast.TsType)] {
+  self.entries.iter()
 }
 
 ///|
@@ -9260,6 +9283,7 @@ fn ExprEnv::new() -> ExprEnv {
     paths_below: {},
     alias_cond_keys: {},
     pruned: {},
+    declared_undo: [],
   }
 }
 
@@ -9328,6 +9352,10 @@ fn ExprEnv::declare_type(
   name : String,
   ty : @ast.TsType,
 ) -> Unit {
+  match self.declared.get(name) {
+    Some(old) if old != ty => self.declared_undo.push((name, old))
+    _ => ()
+  }
   self.declared[name] = ty
 }
 
@@ -9371,19 +9399,24 @@ fn ExprEnv::lookup_declared(self : ExprEnv, name : String) -> @ast.TsType? {
 /// for both lexical scope and narrowing. The snapshot covers `vars`
 /// only; the matching `declared` entries are walked in step on
 /// restore so a nested `let x: T;` doesn't leak its declared slot.
-fn ExprEnv::full_snapshot(self : ExprEnv) -> Array[(String, @ast.TsType)] {
+fn ExprEnv::full_snapshot(self : ExprEnv) -> EnvSnapshot {
   let entries : Array[(String, @ast.TsType)] = []
   for entry in self.vars {
     entries.push((entry.0, entry.1))
   }
-  entries
+  { entries, undo_len: self.declared_undo.length(), }
 }
 
 ///|
-fn ExprEnv::restore_from(
-  self : ExprEnv,
-  snap : Array[(String, @ast.TsType)],
-) -> Unit {
+fn ExprEnv::restore_from(self : ExprEnv, snap : EnvSnapshot) -> Unit {
+  // Undo the declared slots this scope overwrote, newest first, before the
+  // removals below drop the slots of names the scope introduced.
+  while self.declared_undo.length() > snap.undo_len {
+    match self.declared_undo.pop() {
+      Some((n, old)) => self.declared[n] = old
+      None => break
+    }
+  }
   let kept : Map[String, @ast.TsType] = Map([])
   for entry in snap {
     kept[entry.0] = entry.1
@@ -33732,6 +33765,7 @@ fn record_aliased_condition(
     BinOp(BinEq | BinNe | AbstractEq | AbstractNe | Instanceof | In, _, _) =>
       true
     UnaryOp(Not, _) => true
+    BinOp(And | Or, _, _) => true
     _ => false
   }
   if !shaped {
@@ -34151,6 +34185,74 @@ fn check_block_narrowing_exit(
   }
   env.restore_from(pre)
   exit
+}
+
+///|
+/// After a block that ran straight through (a bare `{ … }`, a `try` that
+/// completed), each OUTER binding takes its type at the block's exit. Only
+/// a plain name that held a binding before the block participates: a name
+/// the block declares (`shadow`) is its own binding, which the exit map
+/// cannot tell from the outer one, and a marker (`<…>`) belongs to its
+/// writer. A property path the block FORGOT — its receiver was rebound or
+/// the path written — is dropped, as the `if` join drops one, so a stale
+/// `o.p` narrowing does not outlive `o = other`.
+fn apply_sequential_exit(
+  env : ExprEnv,
+  pre_map : Map[String, @ast.TsType],
+  exit : Map[String, @ast.TsType],
+  shadow : Map[String, Unit],
+) -> Unit {
+  let gone : Array[String] = []
+  for k, v in pre_map {
+    if k.has_prefix("<") {
+      continue
+    }
+    let is_path = k.contains(".") || k.contains("[")
+    let root = if is_path {
+      let mut end = k.length()
+      for i in 0..<k.length() {
+        let c = k[i].to_int()
+        if c == 46 || c == 91 {
+          end = i
+          break
+        }
+      }
+      k[:end].to_owned()
+    } else {
+      k
+    }
+    if shadow.contains(root) {
+      continue
+    }
+    match exit.get(k) {
+      Some(t) => if t != v { env.narrow(k, t) }
+      None => if is_path { gone.push(k) }
+    }
+  }
+  for k in gone {
+    let _ = env.vars.remove(k)
+  }
+}
+
+///|
+/// The names a block's own statements declare (`let` / `const` / `var`,
+/// a class), including a parser-merged declarator group. Nested blocks are
+/// included too, which only ever excludes more names.
+fn block_declared_names(b : @ast.TsBlock, out : Map[String, Unit]) -> Unit {
+  for st in b.stmts {
+    match st {
+      Var(bind, _, _) | Let(bind, _, _) | Const(bind, _, _) => {
+        let names : Array[String] = []
+        collect_binding_names(bind, names)
+        for n in names {
+          out[n] = ()
+        }
+      }
+      NativeClassStmt(decl, _) => out[decl.name] = ()
+      Block(inner) => block_declared_names(inner, out)
+      _ => ()
+    }
+  }
 }
 
 ///|
@@ -35155,6 +35257,19 @@ fn narrow_after_assignment(
   }
   if is_checkable(new_ty) {
     env.narrow(name, new_ty)
+    return
+  }
+  // A binding whose DECLARED slot is `any` — an auto-typed `let data =
+  // null` under noImplicitAny, or a written `: any` — holds whatever it is
+  // assigned, and a value this cannot type is `any` there: excalidraw's
+  // `let data = null; try { data = JSON.parse(event.data) } catch {}`
+  // stayed `null`, so the `if (!data) return` after it left `never` and
+  // every `data.info` was reported. tsc accepts all of it. A DECLARED type
+  // keeps today's answer: there an uninferable value is as likely to be our
+  // inference failing as a real `any`, and tsc's narrowing to the
+  // declaration would report reads this cannot prove nullable.
+  if new_ty is Any && env.lookup_declared(name) is Some(Any) {
+    env.narrow(name, @ast.TsType::Any)
     return
   }
   if never_nullish {
@@ -36417,9 +36532,36 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     With(_, body) => check_block(env, body, ctx)
     Try(try_block, catch_binding, catch_block, finally_block) => {
-      check_block(env, try_block, ctx)
+      // The state after the statement is the try block's exit joined with
+      // the catch block's (see `apply_sequential_exit`): an assignment in
+      // either one reaches the code below. Both used to be checked inside a
+      // snapshot that put every outer binding back, so `let data = null;
+      // try { data = JSON.parse(s) } catch {}` left `data` as `null` and a
+      // following `if (!data) return` made it `never` — excalidraw's
+      // `onWindowMessage`. The catch block is entered from the PRE-try
+      // state, which loses a value the try block assigned before it threw;
+      // that only narrows, and it is how the catch was checked before.
+      let try_pre = env.full_snapshot()
+      let try_exit = check_block_narrowing_exit(env, try_block, ctx, [])
+      let try_exits = block_always_exits(try_block)
+      let shadow : Map[String, Unit] = Map([])
+      block_declared_names(try_block, shadow)
+      let mut catch_exit : Map[String, @ast.TsType]? = None
+      let mut catch_exits = false
       match catch_block {
         Some(cb) => {
+          block_declared_names(cb, shadow)
+          match catch_binding {
+            Some(b) => {
+              let names : Array[String] = []
+              collect_binding_names(b, names)
+              for n in names {
+                shadow[n] = ()
+              }
+            }
+            None => ()
+          }
+          catch_exits = block_always_exits(cb)
           let pre = env.full_snapshot()
           // TS 4.0+ defaults catch bindings to `unknown`. We don't model
           // `unknown` separately (it folds into `Any` here), but binding to
@@ -36444,10 +36586,43 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             }
             _ => ()
           }
-          check_block(env, cb, ctx)
+          catch_exit = Some(check_block_narrowing_exit(env, cb, ctx, []))
           env.restore_from(pre)
         }
         None => ()
+      }
+      let pre_map : Map[String, @ast.TsType] = Map([])
+      for e in try_pre {
+        pre_map[e.0] = e.1
+      }
+      match catch_exit {
+        None =>
+          if !try_exits {
+            apply_sequential_exit(env, pre_map, try_exit, shadow)
+          }
+        Some(ce) =>
+          if try_exits && !catch_exits {
+            apply_sequential_exit(env, pre_map, ce, shadow)
+          } else if catch_exits && !try_exits {
+            apply_sequential_exit(env, pre_map, try_exit, shadow)
+          } else if !try_exits && !catch_exits {
+            let joined : Map[String, @ast.TsType] = Map([])
+            for k, v in pre_map {
+              let a = try_exit.get(k)
+              let b = ce.get(k)
+              match (a, b) {
+                (Some(a), Some(b)) =>
+                  joined[k] = if a == b {
+                    a
+                  } else {
+                    join_branch_types_resolved(ctx.resolver, a, b)
+                  }
+                // A path either side forgot is forgotten after the join.
+                _ => if !(k.contains(".") || k.contains("[")) { joined[k] = v }
+              }
+            }
+            apply_sequential_exit(env, pre_map, joined, shadow)
+          }
       }
       match finally_block {
         Some(fb) => check_block(env, fb, ctx)
@@ -36473,7 +36648,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           check_stmt(env, st, ctx)
         }
       } else {
-        check_block(env, b, ctx)
+        // A block runs straight through, so what it assigns to an OUTER
+        // binding is that binding's state after it (`{ x = 1 }`); its own
+        // declarations go out of scope (see `apply_sequential_exit`).
+        let pre = env.full_snapshot()
+        let exit = check_block_narrowing_exit(env, b, ctx, [])
+        if !block_always_exits(b) {
+          let pre_map : Map[String, @ast.TsType] = Map([])
+          for e in pre {
+            pre_map[e.0] = e.1
+          }
+          let shadow : Map[String, Unit] = Map([])
+          block_declared_names(b, shadow)
+          apply_sequential_exit(env, pre_map, exit, shadow)
+        }
       }
     }
     Label(_, inner) => check_stmt(env, inner, ctx)

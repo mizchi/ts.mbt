@@ -688,3 +688,88 @@ test "an any-typed parameter shadowing an enum is any" {
     "function real > binding `s` init: expected `number` but got `string`", "top-level > binding `merged` init: expected `number` but got `string`",
   ])
 }
+
+///|
+/// A block-local declaration that shadows an outer binding gives the
+/// outer one its declaration back when the block ends: `{ let x = 5 }`
+/// then `x = "a"` on a `let x: string | null` is legal (probed), and so
+/// are the `if`-branch and `for`-head spellings. Inside the block the
+/// inner declaration still decides.
+test "a shadowing block declaration gives the outer binding its declaration back" {
+  let src =
+    #|declare const c: boolean;
+    #|export function s2() { let x: string | null = null; if (c) { let x = 5; x = 6; } else { x = "a"; } return x; }
+    #|export function s3() { let x: string | null = null; { let x = 5; x = 6; } x = "a"; return x; }
+    #|export function s4() { let x: string | null = null; if (c) { let x = 5; } x = "a"; return x; }
+    #|export function s5() { let x: string | null = null; for (let x = 0; x < 3; x++) { } x = "a"; return x; }
+    #|export function inner() { let x: string | null = null; { let x = 5; x = "a"; } return x; }
+  assert_eq(issue_lines(src), [
+    "function inner > assign `x`: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// TS 4.4 aliased conditions through `&&` / `||`: `const ok = hit && n < 3`
+/// narrows `hit` wherever `ok` is known truthy, `if (ok)` and the exit of
+/// `if (!ok) return` alike, and `const bad = !hit || …` the same way round.
+/// The falsy side of an `&&` (and the truthy side of an `||`) proves
+/// nothing, and an assignment between the alias and its use cancels it.
+test "an and-or initializer is an aliased condition" {
+  let src =
+    #|interface El { id: string }
+    #|declare function get(): El | null;
+    #|declare const n: number;
+    #|export function a1(): string { const hit = get(); const ok = hit && n < 3; if (!ok) { return ""; } return hit.id; }
+    #|export function a4(): string { const hit = get(); const ok = hit && n < 3; if (ok) { return hit.id; } return ""; }
+    #|export function b2(): string { const hit = get(); const bad = !hit || n > 3; if (bad) { return ""; } return hit.id; }
+    #|export function c1(): string { const hit = get(); const ok = hit && n < 3; if (!ok) { return hit.id; } return ""; }
+    #|export function c2(): string { const hit = get(); const ok = n < 3 || hit; if (!ok) { return ""; } return hit.id; }
+    #|export function c3(): string { let hit = get(); const ok = hit && n < 3; hit = get(); if (!ok) { return ""; } return hit.id; }
+  assert_eq(issue_lines(src), [
+    "function c1 > PropAccess `.id`: object is possibly `null`", "function c2 > PropAccess `.id`: object is possibly `null`",
+    "function c3 > PropAccess `.id`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A binding DECLARED `any` (here the auto-typed `let data = null`) takes
+/// a value this cannot type as `any`, which is what tsc gives it: after
+/// `data = JSON.parse(raw)` the `if (!data) return` guard leaves `any`, not
+/// `never`. A written union keeps its declaration, so the read is still
+/// judged there (`x` is possibly `undefined` in tsc too).
+test "an any-declared binding takes an uninferable value as any" {
+  let src =
+    #|declare const raw: string;
+    #|declare const c: boolean;
+    #|export function u1() { let data = null; data = JSON.parse(raw); if (!data) { return; } return data.info; }
+    #|export function u2() { let data = null; if (c) { data = JSON.parse(raw); } if (!data) { return; } return data.info; }
+    #|export function v1() { let x: string | undefined = undefined; x = JSON.parse(raw); return x.length; }
+  assert_eq(issue_lines(src), [
+    "function v1 > PropAccess `.length`: object is possibly `undefined`",
+  ])
+}
+
+///|
+/// What a bare block or a `try` assigns to an outer binding reaches the
+/// code after it. After `try`/`catch` the binding is the join of the two
+/// exits, so a catch that leaves it `null` keeps the report, a catch that
+/// returns does not, and a `try` that always returns leaves the catch's
+/// state. A declaration inside the block is its own binding.
+test "an assignment in a block or a try reaches the code after it" {
+  let src =
+    #|declare const raw: string;
+    #|declare function risky(): void;
+    #|export function w1() { let x = null; { x = JSON.parse(raw); } if (!x) { return; } return x.info; }
+    #|export function w2() { let x = null; try { x = JSON.parse(raw); } catch {} if (!x) { return; } return x.info; }
+    #|export function n1() { let x: { info: number } | null = null; try { x = { info: 1 }; } catch {} return x.info; }
+    #|export function n2() { let x: { info: number } | null = null; try { x = { info: 1 }; } catch { return 0; } return x.info; }
+    #|export function n4() { let x: string | null = null; { x = "a"; } return x.length; }
+    #|export function n5() { let x: string | null = null; { let x = "a"; x.length; } return x.length; }
+    #|export function n6() { let x: string | null = null; try { risky(); } catch { x = "a"; } return x.length; }
+    #|export function n7() { let x: string | null = null; try { return 0; } catch { x = "a"; } return x.length; }
+    #|export function n8() { let x: string | null = null; try { x = "a"; } finally { risky(); } return x.length; }
+  assert_eq(issue_lines(src), [
+    "function n1 > PropAccess `.info`: object is possibly `null`", "function n5 > PropAccess `.length`: object is possibly `null`",
+    "function n6 > PropAccess `.length`: object is possibly `null`",
+  ])
+}

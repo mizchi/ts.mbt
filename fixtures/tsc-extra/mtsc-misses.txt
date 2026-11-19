@@ -25,3 +25,4 @@ optionalParameterTargetIsItsType:badOptionsViaConst  a non-literal object agains
 optionalParameterTargetIsItsType:badLiteralToOptional  an object LITERAL against `T | undefined` keeps the union path, which does not check its members; checking it against `T` exposed excess-property and nested-member gaps on univer (36 reports on legal code), so it waits for those
 optionalParameterTargetIsItsType:badLiteralToUnion  same union path as `badLiteralToOptional`
 optionalParameterTargetIsItsType:badLiteralToNullable  same union path as `badLiteralToOptional`, with `null` as the nullish member
+optionalCallChainNarrowsReceiver:badAfterWhile  after a `while` loop a binding returns to its ENTRY type, so `p = p.getParent()` in the body never reaches `p.v` below it; the read was reported only while `let p: Nullable<N> = node` was not narrowed by its initializer
