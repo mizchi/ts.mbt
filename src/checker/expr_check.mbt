@@ -24340,7 +24340,16 @@ fn method_sole_return_type(
   }
   guard b.stmts.length() == 1 else { return None }
   guard b.stmts[0] is Return(Some(e)) else { return None }
-  let t = widen_literal(infer_expr(ExprEnv::new(), resolver, e))
+  // The method's own parameters are in scope for its body: an empty env
+  // read `static create(value: string | null) { return value }` through a
+  // module-level `value: string`, so the factory looked never-nullish
+  // (#312's review). A parameter's written type is its type, and an
+  // unannotated one is `any`.
+  let env = ExprEnv::new()
+  for p in m.params {
+    env.bind(p.0, p.1)
+  }
+  let t = widen_literal(infer_expr(env, resolver, e))
   if t is Any || t is Unknown {
     None
   } else {
@@ -28537,7 +28546,98 @@ fn collect_try_writes(stmts : Array[@ast.TsStmt]) -> BackedgeWrites {
   // The trailing `Empty` keeps the top-level list from reading as one that
   // ends in an exit, which the walker would skip whole.
   backedge_walk_list([..stmts, @ast.TsStmt::Empty], w, true, true, [])
-  w
+  // A write to a name some NESTED scope declares may target that scope's
+  // own binding, and the walk records writes by name: `{ let x = "a"; x =
+  // null }` inside the try block would otherwise widen the outer `x` for
+  // the catch block (#312's review). Such a name is dropped whatever it
+  // targets, which loses a write to the outer binding of the same spelling
+  // and only narrows.
+  let nested : Map[String, Unit] = Map([])
+  for st in stmts {
+    nested_scope_declared_names(st, nested)
+  }
+  if nested.is_empty() {
+    return w
+  }
+  let other : Map[String, Unit] = Map([])
+  for k, _ in w.other {
+    if !nested.contains(k) {
+      other[k] = ()
+    }
+  }
+  { assigns: w.assigns.filter(fn(a) { !nested.contains(a.0) }), other, }
+}
+
+///|
+/// The names declared in a scope NESTED inside `st` (a block, a branch, a
+/// loop body or head, a nested `try`'s blocks and catch binding, a `switch`
+/// case). A declaration at `st`'s own level is not collected.
+fn nested_scope_declared_names(
+  st : @ast.TsStmt,
+  out : Map[String, Unit],
+) -> Unit {
+  let block = fn(b : @ast.TsBlock) {
+    let names : Map[String, Unit] = Map([])
+    block_declared_names(b, names)
+    for k, _ in names {
+      out[k] = ()
+    }
+    for inner in b.stmts {
+      nested_scope_declared_names(inner, out)
+    }
+  }
+  let binding = fn(b : @ast.TsBinding) {
+    let names : Array[String] = []
+    collect_binding_names(b, names)
+    for n in names {
+      out[n] = ()
+    }
+  }
+  match st {
+    Block(b) if b.stmt_positions != [@ast.DECL_GROUP_POSITION] => block(b)
+    If(_, t, e) => {
+      block(t)
+      match e {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    While(_, b) | DoWhile(_, b) | With(_, b) => block(b)
+    For(init, _, _, b) => {
+      match init {
+        Some(Var(bd, _, _) | Let(bd, _, _) | Const(bd, _, _)) => binding(bd)
+        _ => ()
+      }
+      block(b)
+    }
+    ForOf(_, bd, _, _, b)
+    | ForAwaitOf(_, bd, _, _, b)
+    | ForIn(_, bd, _, _, b) => {
+      binding(bd)
+      block(b)
+    }
+    Try(t, cb, c, f) => {
+      block(t)
+      match cb {
+        Some(bd) => binding(bd)
+        None => ()
+      }
+      match c {
+        Some(b) => block(b)
+        None => ()
+      }
+      match f {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    Switch(_, cases) =>
+      for c in cases {
+        block(c.body)
+      }
+    Label(_, inner) => nested_scope_declared_names(inner, out)
+    _ => ()
+  }
 }
 
 ///|
@@ -36803,6 +36903,23 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       match finally_block {
         Some(fb) => {
           let pre = env.full_snapshot()
+          let post : Map[String, @ast.TsType] = Map([])
+          for e in pre {
+            post[e.0] = e.1
+          }
+          // What the finally block writes reaches the code after the
+          // statement too, since it runs after a normal try exit (#312's
+          // review): `try { x = null } finally { x = "ok" } x.length` is
+          // legal. Each is computed from the post-try state, not from the
+          // widened entry the block is checked in.
+          let fin_shadow : Map[String, Unit] = Map([])
+          block_declared_names(fb, fin_shadow)
+          let fin_joins = backedge_bindings_for_writes(
+            env,
+            ctx,
+            collect_try_writes(fb.stmts),
+            fn(n) { !fin_shadow.contains(n) },
+          )
           for j in finally_entry {
             let t = match env.lookup(j.0) {
               Some(cur) if cur != j.1 =>
@@ -36815,13 +36932,39 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             }
             env.narrow(j.0, t)
           }
-          check_block(env, fb, ctx)
+          let fin_exit = check_block_narrowing_exit(env, fb, ctx, [])
           env.restore_from(pre)
+          if !block_always_exits(fb) {
+            // A name the block writes at its own top level holds the exit
+            // value whatever the entry was; any other write may or may not
+            // have happened, so it joins the post-try value.
+            let definite : Map[String, Unit] = Map([])
+            for st in fb.stmts {
+              match st {
+                Assign(n, _) | Expr(AssignExpr(n, _)) => definite[n] = ()
+                _ => ()
+              }
+            }
+            for j in fin_joins {
+              if !definite.contains(j.0) {
+                env.narrow(j.0, flatten_union_parts(j.1))
+              }
+            }
+            for n, _ in definite {
+              if !fin_shadow.contains(n) && post.contains(n) {
+                match fin_exit.get(n) {
+                  Some(t) => env.narrow(n, t)
+                  None => ()
+                }
+              }
+            }
+          }
         }
         None => ()
       }
     }
     Block(b) => {
+
       // A parser-merged declarator group (`var a: string, b: number;`
       // becomes `Block[Var, Var]`) must leak its bindings into the
       // enclosing scope -- snapshot/restore would erase them for every

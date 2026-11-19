@@ -1423,11 +1423,19 @@ fn line_comment_check_pragma(src : String, start : Int32, end : Int32) -> Bool? 
 
 ///|
 fn is_pragma_space(c : Int32) -> Bool {
+  // JavaScript's `\s` short of the line terminators, which end the comment:
+  // `// @ts-nocheck\u{2003}reason` opts out (probed), so every Unicode space
+  // separator counts, not only the ASCII ones (#312's review).
   c == ' '.to_int() ||
   c == '\t'.to_int() ||
   c == 0x0B ||
   c == 0x0C ||
   c == 0xA0 ||
+  c == 0x1680 ||
+  (c >= 0x2000 && c <= 0x200A) ||
+  c == 0x202F ||
+  c == 0x205F ||
+  c == 0x3000 ||
   c == 0xFEFF
 }
 

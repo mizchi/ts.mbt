@@ -6947,6 +6947,23 @@ product surfaces now.
       It has a channel of its own now.
     - An always-falsy left operand of `&&` is the result beside an `any`
       right operand.
+
+    The second round found two false positives that the first round's
+    fixes had introduced, and two smaller gaps.
+    - The try writes are collected by NAME, so a nested block's own `{
+      let x; x = null }` widened the outer `x` for `catch` and `finally`.
+      A name some nested scope declares is now dropped from the
+      collection. That loses a write to the outer binding of the same
+      spelling, and only narrows.
+    - The `finally` block was checked inside a snapshot that dropped its
+      writes, so `try { x = null } finally { x = "ok" } x.length` was
+      reported. A name the block writes at its own top level takes the
+      block's exit value. Any other write joins the post-try value, and a
+      `finally`-local binding is excluded.
+    - A static factory's body was inferred in an empty env, so `return
+      value` read a module-level `value`. Its parameters are bound now.
+    - The pragma's separators are JavaScript's `\s`, including U+2003 and
+      U+3000, as tsc reads them (probed).
   - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
     FP 0). tsc-extra stays at FP 0, now with 95 cases and one more
     declared MISS. effect goes from 78 to 75 and zod stays at 7. Against batch

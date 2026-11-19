@@ -878,3 +878,28 @@ test "an always-falsy left operand of and is the result" {
     "function n2 > binding `s` init: expected `string` but got `undefined`",
   ])
 }
+
+///|
+/// Round two of #312's review, each cell probed against the nightly: a
+/// write to a nested block's OWN binding does not widen the outer one for
+/// `catch` / `finally`; what `finally` writes reaches the code after the
+/// statement, and a `finally`-local binding does not; and a static
+/// factory's return is read with its parameters in scope.
+test "finally writes, nested-block bindings and static factory parameters" {
+  let src =
+    #|declare function risky(): void;
+    #|export function A3() { let x: string | null = "s"; try { { let x: string | null = "a"; x = null; } risky(); } catch { return x.length; } return 0; }
+    #|export function A4() { let x: string | null = "s"; try { { let x: string | null = "a"; x = null; } risky(); } finally { x.length; } return 0; }
+    #|export function A5() { let x: string | null = "s"; try { { x = null; } risky(); } catch { return x.length; } return 0; }
+    #|export function B1() { let x: string | null = "ok"; try { x = null; } finally { x = "ok"; } return x.length; }
+    #|export function B2() { let x: string | null = "ok"; try { x = "a"; } finally { x = null; } return x.length; }
+    #|export function B3() { let x: string | null = "ok"; try { x = null; } finally { let x = 1; x = 2; } return x.length; }
+    #|class Factory { static create(value: string | null) { return value; } }
+    #|declare const value: string;
+    #|export function C1() { let result: string | null = null; result = Factory.create(null); return result.length; }
+  assert_eq(issue_lines(src), [
+    "function A5 > PropAccess `.length`: object is possibly `null`", "function B2 > PropAccess `.length`: cannot access `.length` — receiver may be null or undefined",
+    "function B3 > PropAccess `.length`: cannot access `.length` — receiver may be null or undefined",
+    "function C1 > PropAccess `.length`: object is possibly `null`",
+  ])
+}

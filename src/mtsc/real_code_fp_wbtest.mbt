@@ -1081,7 +1081,8 @@ test "a leading ts-nocheck pragma opts the file out" {
       "// @ts-nocheck generated\nconst a: number = \"s\";", "//@ts-nocheck\nconst a: number = \"s\";",
       "// @ts-check\n// @ts-nocheck\nconst a: number = \"s\";", "\n\n  // @ts-nocheck\nconst a: number = \"s\";",
       "// @ts-nocheck\nlet x = 1; let x = 2;", "// @ts-nocheck\nfunction f(a?, b) {}",
-      "// @ts-nocheck\nnamespace N { export const a: number = \"s\"; }",
+      "// @ts-nocheck\nnamespace N { export const a: number = \"s\"; }", "// @ts-nocheck\u{2003}reason\nconst a: number = \"s\";",
+      "// @ts-nocheck\u{3000}\nconst a: number = \"s\";",
     ] {
     assert_eq(issue_lines(src), [], msg=src)
   }
