@@ -551,3 +551,55 @@ test "loose null equality keeps the declared nullish members" {
     "function c > binding `n` init: expected `null` but got `null | undefined`",
   ])
 }
+
+///|
+/// A destructured discriminant belongs to its binding: an inner `const
+/// kind` or a parameter named `kind` is a different binding and does not
+/// narrow the source (#311's review). The direct use still does.
+test "a shadowing binding does not reuse a destructured discriminant" {
+  let src =
+    #|type U = { kind: "a"; a: number } | { kind: "b"; b: string };
+    #|export function shadowed(x: U) { const { kind } = x; { const kind = "b" as "a" | "b"; if (kind === "a") { const n: { kind: "a"; a: number } = x; return n; } } return 0; }
+    #|export function direct(x: U) { const { kind } = x; if (kind === "a") { const n: { kind: "a"; a: number } = x; return n; } return 0; }
+    #|export function param(x: U) { const { kind } = x; return (kind: "a" | "b") => { if (kind === "a") { const n: { kind: "a"; a: number } = x; return n; } return 0; }; }
+  assert_eq(issue_lines(src), [
+    "function shadowed > binding `n` init: expected `{ kind: \"a\" (string); a: number }` but got `{ kind: \"a\" (string); a: number } | { kind: \"b\" (string); b: string }`",
+    "function param > binding `n` init: expected `{ kind: \"a\" (string); a: number }` but got `{ kind: \"a\" (string); a: number } | { kind: \"b\" (string); b: string }`",
+  ])
+}
+
+///|
+/// Two instantiations of one generic stay apart inside a union return of
+/// a function type (#311's review): `() => Box<number> | undefined` is not
+/// a `() => Box<string> | undefined`.
+test "a function return union keeps generic arguments apart" {
+  let src =
+    #|interface Box<T> { value: T }
+    #|declare let f1: () => Box<number> | undefined;
+    #|declare let f2: () => Box<string> | undefined;
+    #|f2 = f1;
+    #|declare let g1: () => Box<number>;
+    #|declare let g2: () => Box<string>;
+    #|g2 = g1;
+    #|declare let h1: () => Box<string> | undefined;
+    #|f2 = h1;
+  assert_eq(issue_lines(src), [
+    "top-level > assign `f2`: expected `() => Box<string> | undefined` but got `() => Box<number> | undefined`",
+    "top-level > assign `g2`: expected `() => Box<string>` but got `() => Box<number>`",
+  ])
+}
+
+///|
+/// A parameter named like an enum is that parameter: `E.A` reads its own
+/// member and is not widened to the enum (#311's review).
+test "a parameter shadowing an enum is read through its own type" {
+  let src =
+    #|enum E { A = "global" }
+    #|export function local(E: { A: "local" }) { let value = E.A; value = "other"; return value; }
+    #|export function wide(E: { A: string }) { let value = E.A; value = "other"; return value; }
+    #|export function read(E: { A: string }) { const n: number = E.A; return n; }
+  assert_eq(issue_lines(src), [
+    "function local > assign `value`: expected `\"local\" (string)` but got `\"other\" (string)`",
+    "function read > binding `n` init: expected `number` but got `string`",
+  ])
+}

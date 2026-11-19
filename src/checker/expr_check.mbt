@@ -9317,8 +9317,12 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 /// exit.
 fn ExprEnv::forget_freshness(self : ExprEnv, name : String) -> Unit {
   let _ = self.vars.remove("<fresh>" + name)
-  // The same holds for the `<exact>` marker of `bind_object_pattern`.
+  // The same holds for the `<exact>` marker of `bind_object_pattern`, and
+  // for a destructured discriminant's `<destr-disc>` marker: an inner
+  // `const kind = …` is not the `kind` destructured from `x`, so it must
+  // not narrow `x` (#311's review).
   let _ = self.vars.remove("<exact>" + name)
+  let _ = self.vars.remove("<destr-disc>" + name)
 }
 
 ///|
@@ -14540,9 +14544,14 @@ fn infer_expr_inner(
       // globals (because `namespace Name` registered the member as
       // `Name.member`, or `class Name` has a static method), prefer
       // that lookup. The instance-side `lookup_field` would otherwise
-      // miss static members entirely.
+      // miss static members entirely. A LOCAL binding of the same name (a
+      // parameter `E: { A: string }` beside `enum E`) is what the name
+      // means here, so its own type answers instead (#311's review).
       match receiver {
-        Var(class_name) =>
+        Var(class_name) if !(match env.lookup(class_name) {
+            Some(t) => is_checkable(t) && !(t is Any)
+            None => false
+          }) =>
           match resolver.globals.get(class_name + "." + name) {
             Some(t) => return t
             None =>
@@ -21572,12 +21581,29 @@ fn assignable_through_class_chain(
 /// generic (`Effect<unknown, number>` against `Effect<any, string>`),
 /// which it relates by name alone. Those are the resolver-free relation's
 /// to decide, argument by argument.
+/// A union on either side is taken apart here rather than by the chain
+/// walk, so the same-generic case is refused at every member and not only
+/// at the top: `() => Box<number> | undefined` against `() => Box<string>
+/// | undefined` reached `Box<number>` against `Box<string>` inside the
+/// walk's own union arms, which relate them by name (#311's review).
 fn chain_relates_names(
   source : @ast.TsType,
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Bool {
   match (resolver.unwrap(source), resolver.unwrap(target)) {
+    (Union(ms), _) =>
+      ms
+      .iter()
+      .all(fn(m) {
+        is_assignable_to(m, target) || chain_relates_names(m, target, resolver)
+      })
+    (s, Union(ms)) =>
+      ms
+      .iter()
+      .any(fn(m) {
+        is_assignable_to(s, m) || chain_relates_names(s, m, resolver)
+      })
     (Applied(a, _), Applied(b, _)) if a == b => false
     _ => assignable_through_class_chain(source, target, resolver)
   }
@@ -22638,9 +22664,14 @@ fn binding_init_type(
     // later `prev = other` and `prev !== LinkCharType.Open` are legal
     // (univer's `linebreakLink`). The member reads as its folded value
     // here, which is what made both report.
+    // The receiver must BE the enum: a parameter or local named like one
+    // (`function f(E: { A: "local" })`) keeps its own member's type
+    // (#311's review). The enum's own value infers as `any`, which a
+    // shadowing binding does not.
     Literal(_) | NumberLiteral(_) if mutable_ &&
       (match init {
-        PropAccess(Var(e), _) => resolver.enums.contains(e)
+        PropAccess(Var(e), _) =>
+          resolver.enums.contains(e) && infer(Var(e)) is Any
         _ => false
       }) =>
       match init {
@@ -34117,6 +34148,7 @@ fn check_ident_binding_decl(
   // is what keeps a SHADOWING binding this site never sees (a parameter,
   // a destructured name) from inheriting an outer `const`'s freshness.
   if !mutable_ && !is_checkable(declared) && is_fresh_literal_in_env(env, init) {
+    let _ = env.vars.remove("<destr-disc>" + name)
     env.bind("<fresh>" + name, bound_type)
   } else {
     env.forget_freshness(name)
