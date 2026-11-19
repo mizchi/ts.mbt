@@ -1,0 +1,34 @@
+inOperatorFalseSideKeepsIndexSignatures.ts(12,80): error TS2339: Property 'x' does not exist on type '{ y: string; }'.
+inOperatorFalseSideKeepsIndexSignatures.ts(14,131): error TS2349: This expression is not callable.
+  Not all constituents of type 'number | ((searchElement: string, fromIndex?: number | undefined) => boolean)' are callable.
+    Type 'number' has no call signatures.
+inOperatorFalseSideKeepsIndexSignatures.ts(17,139): error TS2339: Property 'foo' does not exist on type 'never'.
+
+
+==== inOperatorFalseSideKeepsIndexSignatures.ts (3 errors) ====
+    // `"k" in x` narrows a union on both sides. The false side removes only a
+    // member that DECLARES `k`: one that answers for it through an index
+    // signature may still lack it at runtime, so it stays in the else branch.
+    // A member that declares `k` beside an index signature is removed. The
+    // true side keeps the index-signature member too, so a read there is the
+    // union of both members.
+    
+    type A = { x: number } | { y: string };
+    interface Dict { [k: string]: string }
+    
+    export function okRemovesDeclarer(v: A) { if (!("x" in v)) { return v.y; } return 0; }
+    export function badElseOfDeclarer(v: A) { if ("x" in v) { return 0; } return v.x; }
+                                                                                   ~
+!!! error TS2339: Property 'x' does not exist on type '{ y: string; }'.
+    export function okRecordKept(c: readonly string[] | Record<string, number>, v: string) { return "includes" in c ? 1 : c.hasOwnProperty(v); }
+    export function badRecordKeptOnTrueSideToo(c: readonly string[] | Record<string, number>, v: string) { return "includes" in c ? c.includes(v) : 1; }
+                                                                                                                                      ~~~~~~~~
+!!! error TS2349: This expression is not callable.
+!!! error TS2349:   Not all constituents of type 'number | ((searchElement: string, fromIndex?: number | undefined) => boolean)' are callable.
+!!! error TS2349:     Type 'number' has no call signatures.
+    export function okGenericRecordKept<T extends string>(c: readonly T[] | Record<T, any>, v: string) { return "includes" in c ? c.includes(v as T) : c.hasOwnProperty(v); }
+    export function okInterfaceIndexKept(c: string[] | Dict) { return "map" in c ? 1 : c.anything.length; }
+    export function badDeclaredBesideIndex(c: readonly string[] | { [k: string]: number; includes: number }) { return "includes" in c ? 1 : c.foo; }
+                                                                                                                                              ~~~
+!!! error TS2339: Property 'foo' does not exist on type 'never'.
+    

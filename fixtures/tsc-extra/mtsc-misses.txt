@@ -13,6 +13,8 @@ nullishCoalescingVoidLeftOperand:*      mtsc has no TS2871, and skips `void 0 ??
 # Coverage cases.
 enumMemberTypeAndArrayElementCovariance:badReadonlyToMutable  TS4104 (a readonly array into a mutable one) is not modelled; the array relation abstains for that pair
 arrowConstGuardOptionalParameters:badTooManyArguments  a module-level arrow `const` read inside a function body has no inferred type there, so its call is not judged (the cross-module spelling is)
+arrowRestParameterArityAndContext:badRestElement  same cause as `arrowConstGuardOptionalParameters`: a module-level arrow `const` read inside a function body has no inferred type there, so its call is not judged (the same call at top level is)
+arrowRestParameterArityAndContext:badMissingHead  same cause as `badRestElement`
 intersectionMemberFromEveryConstituent:badMemberOfOtherBranch  a member missing from every constituent of a narrowed intersection is not reported; member existence abstains on intersection receivers
 realCodeNarrowingShapes:badInOnInterfaceStillChecksTheRest  `"k" in x` on an interface narrows to an intersection, and member existence abstains on intersection receivers
 declareClassRestOverloadsAndMergedRestMethod:badNoOverloadBoolean  a rest overload beside another overload merges to `...args: any[]`, so no constructor call against that class is judged
@@ -26,3 +28,4 @@ optionalParameterTargetIsItsType:badLiteralToOptional  an object LITERAL against
 optionalParameterTargetIsItsType:badLiteralToUnion  same union path as `badLiteralToOptional`
 optionalParameterTargetIsItsType:badLiteralToNullable  same union path as `badLiteralToOptional`, with `null` as the nullish member
 optionalCallChainNarrowsReceiver:badAfterWhile  after a `while` loop a binding returns to its ENTRY type, so `p = p.getParent()` in the body never reaches `p.v` below it; the read was reported only while `let p: Nullable<N> = node` was not narrowed by its initializer
+inOperatorFalseSideKeepsIndexSignatures:badRecordKeptOnTrueSideToo  the true side of `in` keeps the index-signature member as tsc does, and calling the resulting `number | ((…) => boolean)` member is not reported: TS2349 for a union with a non-callable member is not modelled

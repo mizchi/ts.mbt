@@ -1,0 +1,28 @@
+bigintZeroReportedAlwaysTruthy.ts(8,26): error TS2872: This kind of expression is always truthy.
+bigintZeroReportedAlwaysTruthy.ts(9,25): error TS2872: This kind of expression is always truthy.
+bigintZeroReportedAlwaysTruthy.ts(10,24): error TS2873: This kind of expression is always falsy.
+bigintZeroReportedAlwaysTruthy.ts(12,22): error TS2872: This kind of expression is always truthy.
+
+
+==== bigintZeroReportedAlwaysTruthy.ts (4 errors) ====
+    // `0n` is falsy (`Boolean(0n) === false`), so `0n && x` always yields `0n`
+    // and `0n || x` always yields `x`. TypeScript reports both as TS2872 "This
+    // kind of expression is always truthy", the opposite claim. Every other
+    // falsy literal gets TS2873 "always falsy", and a zero NUMBER is exempt.
+    // Expected: TS2873 (or no diagnostic) on the `0n` lines.
+    declare const x: string;
+    
+    const viaZeroBigintAnd = 0n && x;
+                             ~~
+!!! error TS2872: This kind of expression is always truthy.
+    const viaZeroBigintOr = 0n || x;
+                            ~~
+!!! error TS2872: This kind of expression is always truthy.
+    const viaEmptyString = "" || x;
+                           ~~
+!!! error TS2873: This kind of expression is always falsy.
+    const viaZeroNumber = 0 && x;
+    const viaOneBigint = 1n && x;
+                         ~~
+!!! error TS2872: This kind of expression is always truthy.
+    

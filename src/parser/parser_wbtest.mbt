@@ -8727,3 +8727,23 @@ test "parser: a split << that closes no type argument list is a shift again" {
     }),
   )
 }
+
+///|
+/// A single-line space after a comment is skipped by the comment loop, which
+/// is the only loop that runs there. It had no arm for NBSP, VT or FF, so an
+/// NBSP reached `scan_ident` and lexed as an EMPTY identifier (`const d =
+/// /**/<NBSP>1` emitted `const d = ;`), and VT / FF were invalid characters
+/// (#314's review). A line separator after a comment is a line terminator.
+test "lexer: spaces after a comment are whitespace" {
+  for
+    src in [
+      "const d = /**/\u{A0}1;", "const d = /**/\u{0B}1;", "const d = /**/\u{0C}1;",
+      "const d = /**/\u{2003}1;",
+    ] {
+    let tokens = Lexer::new(src).tokenize()
+    assert_eq(tokens[3].kind, Int(1), msg=src)
+    assert_eq(tokens[4].kind, Semicolon, msg=src)
+  }
+  let line = Lexer::new("let h = 5 // c\n\u{A0}h").tokenize()
+  assert_eq(line[4].kind, Ident("h"))
+}

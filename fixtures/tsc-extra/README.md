@@ -12,7 +12,7 @@ The cases are not meant to be submitted upstream. They are kept in the
 upstream harness format only because that is the format an existing
 conformance runner already reads.
 
-The five cases under `feedback/` are a different kind. Each one pins a
+The six cases under `feedback/` are a different kind. Each one pins a
 TypeScript 7 behaviour that looks inconsistent, with the spelling it
 compares against in the same file. A reimplementation that wants tsc's
 answers has to reproduce these too. Every other case is coverage: tsc's
@@ -140,6 +140,8 @@ generates `.types` / `.symbols` / `.js` and this harness does not.
 Each was verified on TypeScript 7.1.0-beta and again on the nightly
 `7.1.0-dev.20261114.1` (`main` at `6bdcb54d`), where all five reproduce
 unchanged — so none was fixed between the beta and current `main`.
+`bigintZeroReportedAlwaysTruthy` was added later and was verified on the
+nightly only.
 
 The baseline is tsc's answer, inconsistent or not, so a checker matching
 these baselines matches tsc. The upstream trackers (microsoft/TypeScript,
@@ -154,6 +156,7 @@ guide to whether the behaviour will change.
 | `feedback/expandoElementAccessAssignmentInBranch` | An expando property assigned only in one branch is TS2565 when the write is `fn.q = 1`. When the write is `fn["q"] = 1`, the same later read is **accepted**. Both READ spellings are checked. | `typeFromPropertyAssignment36` (dotted writes only) | No report. microsoft/typescript-go#4134 restored the dotted-write case in tsgo. The element-access write behaves the same from 4.9.5 through 7.1. [Draft](issue-drafts/expandoElementAccessAssignmentInBranch.md) |
 | `feedback/superCallInObjectLiteralComputedKey` | `super()` in an object literal's computed key is accepted directly in a constructor and **TS2466** inside an arrow, where a bare `super()` gets **TS2337**. The arrow is what differs, so one of the two codes is the wrong one. | `computedPropertyNames28` / `30` | No report. Unchanged from 4.2.3 through 7.1. The lowest impact of the three, since only the diagnostic differs. [Draft](issue-drafts/superCallInObjectLiteralComputedKey.md) |
 | `feedback/templateLiteralNumberWhitespace` | `" "`, `"\n"`, `" "`, `" 1"` and `"1 "` all satisfy `` `${number}` `` (`+" "` is `0`). Upstream pins `"0x1"`, `"1e21"`, … and rejects `""`. No test says whether whitespace is meant to pass. | `templateLiteralTypesPatterns` | **Covered by #46109** (open, Needs Investigation, assigned). @ahejlsberg wrote there that whitespace-only strings are accepted because JavaScript's conversion allows them, and that "it makes more sense to not permit any whitespace". |
+| `feedback/bigintZeroReportedAlwaysTruthy` | `0n && x` and `0n \|\| x` are **TS2872** "This kind of expression is always truthy". `0n` is falsy, so `0n && x` always yields `0n`. | `"" \|\| x` is TS2873 "always falsy", and `0 && x` is exempt | **Open as [microsoft/TypeScript#60320](https://github.com/microsoft/TypeScript/issues/60320)** ("bug: error message says 0n is truthy"). |
 
 ## Coverage cases
 
@@ -176,6 +179,8 @@ guide to whether the behaviour will change.
 | controlFlow | `destructuringReadsNarrowedProperty` | `const { tables } = body` reads `body.tables` as control flow narrowed it; a sibling property, an unguarded read and a reassigned source do not | TS18048 | — |
 | controlFlow | `destructuredDiscriminantBoundaries` | A `const` destructured discriminant narrows its source through an `else if` chain, a truthiness test and a property path. A `let` or defaulted binding does not, and a `switch` group keeps the union of its labels. A boolean discriminant's truthiness narrows, `done?: false` included. | TS2339 | `controlFlowAliasing` (plain, renamed, `switch`) |
 | controlFlow | `forOfDestructuringAnyAndReadonlyMap` | `for (const [k, v] of …)` over `any` and over a `ReadonlyMap` | TS2322 | — |
+| controlFlow | `inOperatorFalseSideKeepsIndexSignatures` | The false side of `"k" in x` removes only a member that declares `k`; a member that answers through an index signature (`Record<T, any>`, an interface indexer) stays, on the true side too; one that declares `k` beside an indexer is removed | TS2339 TS2349 | — |
+| controlFlow | `literalLogicalOperandTruthiness` | A literal left operand of `&&` / `\|\|` has a condition's exemptions: `0`, `1`, `true`, `false` (by value, so `1.0` and `0x0`), a negative number and a template with a substitution are accepted; an empty template is falsy; a ternary is decided when both branches agree | TS2872 TS2873 | `conditionalOperatorConditionIsNumberType` (conditions only) |
 | controlFlow | `logicalOperatorsNarrowBothSidesInBothSenses` | `!(x === null \|\| y === null)` narrows both operands where it is true; after `if (!a?.x && !a?.y) return`, `a` is defined; `x === false` on a union with `boolean` leaves `true` | TS18047 TS18048 TS2322 | — |
 | controlFlow | `loopBackEdgeLiteralAssignmentWithEarlyExit` | A literal assigned at the end of a loop body reaches the next iteration, for every loop kind and every early exit | TS2367 | — |
 | controlFlow | `loopBackEdgeWritesThatReachTheJoin` | Which writes reach the back edge: dependent, labelled, pattern, `for`-head, overwritten, `continue`, caught throw | TS2345 TS2367 | — |
@@ -187,11 +192,13 @@ guide to whether the behaviour will change.
 | controlFlow | `typeGuardFalseBranchOfAnyAndUnknown` | A guard's false branch keeps `any` as `any` and `unknown` as `unknown`, and removes exactly what the target covers from a union | TS18046 TS2339 | — |
 | controlFlow | `typeGuardOnPathAndStaticMethod` | A guard narrows through a static method called on its class, a property path and an optional chain (whose `?.` receivers become non-nullish, unless the guard's target is `unknown`, or an alias for it, and proves nothing) | TS18048 TS2322 | — |
 | controlFlow | `realCodeNarrowingShapes` | Shapes real code writes that a checker must accept: `"k" in x` on an interface (`T & Record<"k", unknown>`), a union source whose members each assign, an `asserts cond` call over a condition, a union of unions destructured by a nested conditional, and an exhaustive switch's `default` as `never` beside a non-union receiver that is not narrowed | TS2339 TS2322 | — |
+| declarations | `constructorPatternParametersBindEveryName` | A constructor's object or array pattern parameter binds every name it declares, each with its member's type, defaulted or not | TS2322 | — |
 | declarations | `declareClassConstructorOverloadsAndInterfaceMerge` | A `declare class` accepts every constructor overload's arity, and a class merged with an interface keeps both members | TS2322 TS2554 | `classAndInterfaceMerge.d` |
 | declarations | `declareClassRestOverloadsAndMergedRestMethod` | A rest constructor overload beside a non-rest one; a rest method of a `declare class` merged with an interface | TS2345 | — |
 | declarations | `globalAugmentationNamespaceAcrossBodies` | A namespace member declared in one `declare global` block is visible bare in another block's body of the same namespace | TS2322 | — |
 | declarations | `interfaceMethodRestParameters` | An interface or object-type method's rest parameter, through an alias too, beside a plain array parameter | TS2345 | — |
 | declarations | `moduleLocalNonNullableShadowsLibUtility` | A module's own `type NonNullable<T> = T` is not the lib utility | TS2322 | — |
+| declarations | `multiDeclaratorBindingsReachLaterStatements` | Every declarator of `const a = 1, b = "x"` (and of a `let` list, with a pattern or uninitialized) binds in the enclosing scope, for a later statement and a closure; a real block's own declaration does not | TS2322 | — |
 | declarations | `namespaceLocalInterfaceShadowsLibPromise` | A namespace-local `interface Promise<T>` shadows the lib type | TS2345 | — |
 | declarations | `objectRestOverUnionKeepsEachMember` | An object rest over a union is a union of the members' rests, keeping each discriminant and narrowing by it | TS2322 | — |
 | directives | `tsNocheckAfterBlockComment` | `@ts-nocheck` after a block comment, in any case, with a `: reason` tail, opts the file out | accepted | `tsNoCheckForTypescriptComments2` (no block comment) |
@@ -199,9 +206,11 @@ guide to whether the behaviour will change.
 | directives | `tsNocheckInJsDocBlock` | `/** @ts-nocheck */` does not opt out: the pragma is single-line | TS2322 | — |
 | directives | `tsNocheckThenTsCheck` | With `@ts-nocheck` and `@ts-check` both leading, the last one wins | TS2322 | — |
 | inference | `arrowConstGuardOptionalParameters` | A generic arrow-`const` type guard with an optional and a defaulted parameter: arity, `null`, narrowing | TS2322 TS2554 | — |
+| inference | `arrowRestParameterArityAndContext` | An arrow's or a function expression's rest parameter takes any count, through the value and an object member; against a contextual list its element is compared with each formal, and two rest lists compare their arrays | TS2322 TS2345 TS2555 | — |
 | inference | `autoTypedNullOrUndefinedInitializer` | Under `noImplicitAny`, `let e = null` / `var e = undefined` is declared `any` and evolves; a read before assignment is still `null`, and `void 0`, `const` and `let e: null` are not auto-typed | TS18047 TS2322 | — |
 | inference | `awaitDistributesOverUnion` | `await` on `T \| Promise<T>` awaits each member, so destructuring the result reads `T`'s members | TS2322 | — |
 | inference | `boundViolationsShadowingAndNumericTemplates` | Bound violations through array arguments, shadowing closure parameters, and `${bigint}` / `${number}` / `infer X extends number` on edge-case strings | TS2322 TS2353 | `templateLiteralTypes4` |
+| inference | `contextualRestParametersAndVariadicPatterns` | An unannotated callback parameter reads the contextual rest position: a rest parameter collects the formals from its position on (the rest array, or a tuple of fixed formals), a plain one on the contextual rest takes its element; a variadic tuple pattern binds its rest positions to the rest's element | TS2322 | — |
 | inference | `contextuallyTypedFunctionValueThroughGuard` | A guard narrows a function value's CONTEXTUAL parameter type (an annotation, an object member at any depth, an array element, a `return`, a function expression), not `any`; an assignment in a literal's entry is applied before the literal is judged | TS2339 | — |
 | inference | `contextuallyVoidCallbackReturns` | An unannotated callback typed `() => void` may return a value; its own `: void`, or `() => Promise<void>`, may not | TS2322 | — |
 | inference | `freshLiteralWideningAndNonNullableIntersections` | Fresh-literal widening at a generic call (`useState("")`), `NonNullable<T>` vs `T & {}`, intersections, nested `Extract` | TS2322 TS2345 TS2353 | — |
@@ -216,6 +225,7 @@ guide to whether the behaviour will change.
 | inference | `overloadSetAsCallbackAndMissingAwait` | An overload set as a callback, and `Promise<string>` where `string` is expected | TS2322 TS2345 | — |
 | inference | `staticFactoryCallThroughClass` | Assigning `Factory.create()` narrows a nullable binding, also one declared through `Nullable<T>`; an `any` assignment keeps the declared type; an auto-typed `let b = null` then a value of unnamed type is non-nullish | TS18047 TS18048 TS2322 | — |
 | inference | `trailingVoidParameterThroughAlias` | A trailing parameter accepting `void` may be omitted, through an alias such as `Nullable<T>` or a `void` alias inside a union; a `T \| undefined` alias, and a void parameter before a required one, may not | TS2554 | — |
+| inference | `variadicTuplePatternRemainder` | The rest element of an array pattern over a variadic tuple: at or before the tuple's rest it keeps the tail as written, past it an array of every element type from the rest on (a fixed tail joins the union), for an annotation and a contextual rest tuple alike | TS2322 | `variadicTuples1` |
 | lib | `errorIsErrorAndAugmentedRawJSON` | ES2026 `Error.isError` narrows, and a `RawJSON` augmentation merges | TS2322 TS2339 | — |
 | parser | `contextualKeywordDeclareAsInterfaceName` | `interface declare<T>` | accepted | — |
 | parser | `emptyTypeArgumentListInInstantiationExpression` | `fx<>` is TS1099, `fx<string>` is legal | TS1099 | `instantiationExpressions` |

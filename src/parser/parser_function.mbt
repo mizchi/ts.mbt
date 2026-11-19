@@ -4722,6 +4722,7 @@ fn Parser::parse_declare_class(
     // leave empty (rest detection just no-ops for these).
     constructor_param_is_rest,
     constructor_param_defaults: [],
+    constructor_param_bindings: [],
     ambient_constructor_overloads,
     constructor_body: None,
     properties,

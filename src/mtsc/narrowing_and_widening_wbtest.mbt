@@ -1012,7 +1012,7 @@ test "an opaque lib member of a union abstains through an alias and a pattern" {
     #|interface RPE { clientX: number; button: number }
     #|export function f(event: RPE | MouseEvent) { let { clientX: lastX } = event; return lastX - 1; }
     #|interface A { a: number; t: "a" }
-    #|interface B { b: string; t: "b" }
+    #|interface B { b: string; t: "b"; a?: number }
     #|export function g(v: A | B) { const { a } = v; const n: number = a; return n; }
   assert_eq(issue_lines(src), [
     "function g > binding `n` init: type `number | undefined` is not assignable to type `number`",
@@ -1036,6 +1036,9 @@ test "an object literal against an interface intersection is checked by field" {
     #|export function a() { n1({ type: E.B, event: "x", extra: 1 }); }
     #|export function b() { n1({ event: "x" }); }
     #|export function d() { nj({ name: "n", event: "x" }); }
+    #|class C { m(): void {} x = 1 }
+    #|declare function nc(v: C & { tag: number }): void;
+    #|export function okClassMethod() { nc({ m() {}, x: 1, tag: 1 }); }
   assert_eq(issue_lines(src), [
     "function a > call `n1` arg[0].extra: property `extra` does not exist on target type",
     "function b > call `n1` arg[0].type: property `type` is required by `{ type: E; event: string }`",
@@ -1081,5 +1084,154 @@ test "an if whose branches all exit is an exit" {
     #|export function w2(c: boolean, d: boolean) { let x: string | null = "ok"; while (c) { const n = x.length; x = null; if (d) { break; } } return 0; }
   assert_eq(issue_lines(src), [
     "function g > PropAccess `.length`: object is possibly `null`", "function w2 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// Every declarator of `const a = 1, b = "x"` binds in the enclosing scope.
+/// The parser lowers the list to a block marked `DECL_GROUP_POSITION`, and
+/// the checker read only an all-`var` block as a group, so every later read
+/// of a `let` or `const` declarator was unchecked (probed: all four `bad`
+/// lines are TS2322). A real block's own declarations still go out of scope.
+test "a multi-declarator let or const binds every name in its scope" {
+  let src =
+    #|export {};
+    #|const a = 1, b = "x";
+    #|const badA: string = a;
+    #|export function g() { const h = 1, i = "x"; const badH: string = h; const okI: string = i; let j = 1, k = 2; { let j = "s"; const okJ: string = j; } const okJ2: number = j; return [badH, okI, k, okJ2]; }
+    #|export function g2(o: { x: number }) { const { x } = o, y = 2; const badX: string = x; const okY: number = y; return [badX, okY]; }
+    #|export function g3() { const t1 = 1, t2 = "t"; return () => { const badT: string = t1; return [badT, t2]; }; }
+  assert_eq(issue_lines(src), [
+    "function g > binding `badH` init: expected `string` but got `number`", "function g2 > binding `badX` init: expected `string` but got `number`",
+    "function g3 > binding `badT` init: expected `string` but got `number`", "top-level > binding `badA` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// A constructor's pattern parameter binds every name it declares, as a
+/// method's does. The class kept one `(name, type)` pair per parameter, the
+/// pattern's first name, so `a` was bound to the whole parameter type and
+/// `b` was "cannot find name" (excalidraw's `FileManager` and
+/// `RequestError`, probed: tsc reports only `bad`).
+test "a constructor's pattern parameter binds every name" {
+  let src =
+    #|export class A {
+    #|  x: number; y: string; z: string[];
+    #|  constructor({ a, b }: { a: number; b: string }, [c, ...d]: string[]) { this.x = a; this.y = b; this.z = d; const s: string = c; }
+    #|}
+    #|export class B {
+    #|  constructor({ a, b }: { a: number; b: string } = { a: 1, b: "" }) { const bad: string = a; const ok: string = b; }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function B.constructor > binding `bad` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// The false side of `"k" in x` removes only a member that DECLARES `k`
+/// (tsc's `isTypePresencePossible`, probed). A member that answers for the
+/// key through an index signature may still lack it, so it stays, where it
+/// was removed and `c.hasOwnProperty(v)` read off `never` (excalidraw's
+/// `isMemberOf`). A member that declares the key beside an index signature
+/// is still removed.
+test "the false side of in keeps a member that only has an index signature" {
+  let src =
+    #|type A = { x: number } | { y: string };
+    #|export function okRemovesDeclarer(v: A) { if (!("x" in v)) { return v.y; } return 0; }
+    #|export function badElseOfDeclarer(v: A) { if ("x" in v) { return 0; } return v.x; }
+    #|export function okIndexKept(c: readonly string[] | Record<string, number>, v: string) { return "includes" in c ? 1 : c.hasOwnProperty(v); }
+    #|export function badDeclaredWithIndex(c: readonly string[] | { [k: string]: number; includes: number }) { return "includes" in c ? 1 : c.foo; }
+    #|interface Dict { [k: string]: string }
+    #|export function okInterfaceIndexKept(c: string[] | Dict) { return "map" in c ? 1 : c.anything.length; }
+  assert_eq(issue_lines(src), [
+    "function badElseOfDeclarer > PropAccess `.x`: property `x` does not exist on `{ y: string }`",
+    "function badDeclaredWithIndex > PropAccess `.foo`: property `foo` does not exist on `never`",
+    "function badDeclaredWithIndex > PropAccess `.foo`: property `foo` does not exist on `never`",
+  ])
+}
+
+///|
+/// An arrow's or a function expression's rest parameter is `Rest(_)` in its
+/// type, as a method's is, so a call through the VALUE takes any count:
+/// `const concat = (...b: B[]) => …` took exactly one argument on the graph
+/// path (excalidraw's `concatBuffers(a, b)`). A rest parameter against a
+/// contextual list compares its element with each formal, and two rest
+/// lists compare their arrays (probed: tsc reports only the `bad` lines).
+test "an arrow's rest parameter takes any count and compares its element" {
+  let src =
+    #|const c1 = (...xs: number[]) => xs.length;
+    #|export const bad1 = c1("a");
+    #|export const ok1 = c1();
+    #|const c3 = function (...xs: string[]) { return xs.join(); };
+    #|export const ok3 = c3("a", "b");
+    #|const take: (f: (...a: number[]) => number) => number = (f) => f(1, 2);
+    #|export const ok4 = take(c1);
+    #|export const bad4 = take((...xs: string[]) => 1);
+    #|type Fn = (a: number, b: number) => number;
+    #|export const ok6: Fn = (...a: number[]) => a[0];
+    #|export const bad6: Fn = (...a: string[]) => 1;
+  assert_eq(issue_lines(src), [
+    "top-level > call `c1` arg[0]: expected `number` but got `string`", "top-level > call `take` arg[0] param `xs`: expected `number` but got `string`",
+    "top-level > binding `bad6` init param `a`: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// An unannotated callback parameter takes its type from the contextual
+/// list with the rest position read: a rest parameter collects the formals
+/// from its position on, and a plain one on the contextual rest takes its
+/// element. A variadic tuple pattern binds its rest positions to the rest's
+/// element. Each had bound the raw `Rest(_)` marker (#314's review, probed:
+/// tsc reports exactly the four `bad` lines; main reported the four `ok`
+/// ones too).
+test "a contextual rest parameter and a variadic tuple pattern bind element types" {
+  let src =
+    #|declare function takeRest(cb: (...xs: number[]) => void): void;
+    #|declare function takePair(cb: (x: string, y: number) => void): void;
+    #|export function okRestFromRest() { takeRest((...a) => { const v: number[] = a; return v; }); }
+    #|export function badRestFromRest() { takeRest((...a) => { const v: string[] = a; return v; }); }
+    #|export function okPlainFromRest() { takeRest((a, b) => { const n: number = a + b; return n; }); }
+    #|export function badPlainFromRest() { takeRest((a) => { const s: string = a; return s; }); }
+    #|export function okRestFromPair() { takePair((...a) => { const v: [string, number] = a; return v; }); }
+    #|export function badRestFromPair() { takePair((...a) => { const v: [number, number] = a; return v; }); }
+    #|export function okTupleRest([a, b]: [number, ...string[]]) { const s: string = b; return [a, s]; }
+    #|export function badTupleRest([a, b]: [number, ...string[]]) { const n: number = b; return [a, n]; }
+    #|export function okTupleRestTail([a, b, c]: [number, ...string[]]) { const s: string = c; return [a, b, s]; }
+    #|declare function f5<T extends any[], U>(f: (...args: T) => U): (...args: T) => U;
+    #|export const okAnnotatedOnGenericRest = f5((x: number, y) => 42);
+    #|export function okAnnotatedOnRest() { takeRest((a: number, b: number) => {}); }
+    #|export function badAnnotatedOnRest() { takeRest((a: string) => {}); }
+  assert_eq(issue_lines(src), [
+    "function badRestFromRest > binding `v` init: expected `string[]` but got `number[]`",
+    "function badPlainFromRest > binding `s` init: expected `string` but got `number`",
+    "function badRestFromPair > binding `v` init: expected `[number, number]` but got `[string, number]`",
+    "function badTupleRest > binding `n` init: expected `number` but got `string`",
+    "function badAnnotatedOnRest > call `takeRest` arg[0] param `a`: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// The rest element of an array pattern over a variadic tuple takes tsc's
+/// slice: the tail as written from at or before the tuple's rest, an array
+/// of the element types from the rest on past it. Slicing the stored items
+/// past the rest left `[]`, so `[h, f, ...t]` then `const [n] = t` read `n`
+/// as `undefined` (#314's review, probed on the nightly).
+test "a variadic tuple pattern's rest element keeps the tuple's slice" {
+  let src =
+    #|export function okTwoHead([h, f, ...t]: [number, ...string[]]) { const x: string[] = t; const [n] = t; const v: string = n; return [h, f, x, v]; }
+    #|export function badTwoHead([h, f, ...t]: [number, ...string[]]) { const x: number[] = t; return [h, f, x]; }
+    #|export function badElementOfRemainder([h, f, ...t]: [number, ...string[]]) { const [n] = t; const v: number = n; return [h, f, v]; }
+    #|export function okOneHead([h, ...t]: [number, ...string[]]) { const x: string[] = t; return [h, x]; }
+    #|export function okWhole([...t]: [number, ...string[]]) { const x: [number, ...string[]] = t; return x; }
+    #|export function okPastTail([a, b, c, ...t]: [number, ...string[], boolean]) { const x: (string | boolean)[] = t; return [a, b, c, x]; }
+    #|export function badPastTail([a, b, c, ...t]: [number, ...string[], boolean]) { const x: string[] = t; return [a, b, c, x]; }
+    #|export function okBeforeTail([a, ...t]: [number, ...string[], boolean]) { const x: [...string[], boolean] = t; return [a, x]; }
+    #|export function okCallback() { const cb: (...xs: [number, ...string[]]) => void = (...[head, first, ...tail]) => { const [next] = tail; const v: string = next; void [head, first, v]; }; return cb; }
+    #|export function badCallback() { const cb: (...xs: [number, ...string[]]) => void = (...[head, first, ...tail]) => { const x: number[] = tail; void [head, first, x]; }; return cb; }
+  assert_eq(issue_lines(src), [
+    "function badTwoHead > binding `x` init: expected `number[]` but got `string[]`",
+    "function badElementOfRemainder > binding `v` init: expected `number` but got `string`",
+    "function badPastTail > binding `x` init: expected `string[]` but got `(string | boolean)[]`",
+    "function badCallback > binding `x` init: expected `number[]` but got `string[]`",
   ])
 }

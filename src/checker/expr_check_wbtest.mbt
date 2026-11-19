@@ -10852,8 +10852,21 @@ test "expr_check: always-truthy left operand of && (TS2872)" {
   assert_true(issues("let z = [] && 1;") > 0)
   // Literal scalars that are statically truthy.
   assert_true(issues("let z = 10 && 1;") > 0)
+  assert_true(issues("let z = 0.5 && 1;") > 0)
+  assert_true(issues("let z = 1n && 1;") > 0)
   assert_true(issues("let z = \"x\" && 1;") > 0)
-  assert_true(issues("let z = true && 1;") > 0)
+  assert_true(issues("let z = (a ? {} : []) && 1;") > 0)
+  // `0`, `1`, `true` and `false` are exempt, by numeric value, as they are
+  // in a condition. This test used to assert `true && 1`, which tsc
+  // accepts (probed).
+  @test.assert_eq(issues("let z = true && 1;"), 0)
+  @test.assert_eq(issues("let z = 1 && 2;"), 0)
+  @test.assert_eq(issues("let z = 1.0 && 2;"), 0)
+  @test.assert_eq(issues("let z = 0x1 && 2;"), 0)
+  // `0n` is falsy and tsc reports it as always truthy (#60320): a MISS here.
+  @test.assert_eq(issues("let z = 0n && 1;"), 0)
+  // A ternary with one exempt branch can be either.
+  @test.assert_eq(issues("let a: any; let z = (a ? 0 : 2) && 1;"), 0)
   // Falsy scalars are NOT always-truthy: silent under this check.
   @test.assert_eq(issues("let z = 0 && 1;"), 0)
   @test.assert_eq(issues("let z = \"\" && 1;"), 0)
@@ -10882,9 +10895,17 @@ test "expr_check: always-falsy left operand of || (TS2873)" {
   // Literal always-falsy left operands of `||`.
   assert_true(issues("let z = null || 1;") > 0)
   assert_true(issues("let z = void 0 || 1;") > 0)
-  assert_true(issues("let z = 0 || 1;") > 0)
   assert_true(issues("let z = \"\" || 1;") > 0)
-  assert_true(issues("let z = false || 1;") > 0)
+  assert_true(issues("let z = `` || 1;") > 0)
+  assert_true(issues("let a: any; let z = (a ? null : \"\") || 1;") > 0)
+  // `0` and `false` are exempt, as in a condition. This test used to
+  // assert both, and tsc accepts both (probed).
+  @test.assert_eq(issues("let z = 0 || 1;"), 0)
+  @test.assert_eq(issues("let z = false || 1;"), 0)
+  @test.assert_eq(issues("let z = 0.0 || 1;"), 0)
+  @test.assert_eq(issues("let z = 0n || 1;"), 0)
+  // A template with a substitution can be either.
+  @test.assert_eq(issues("let a: any; let z = `${a}` || 1;"), 0)
   // A bare identifier (incl. `undefined`, which is shadowable) is NOT matched.
   @test.assert_eq(issues("let a: any; let z = a || 1;"), 0)
   @test.assert_eq(issues("let z = undefined || 1;"), 0)

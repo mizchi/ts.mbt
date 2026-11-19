@@ -1,0 +1,22 @@
+// @strict: true
+// @target: esnext
+
+// Every declarator of `const a = 1, b = "x"` is a binding of the enclosing
+// scope, whatever the declaration kind, so a later statement reads each
+// one's type. A checker that lowers the list to a group of declarations has
+// to keep the group's bindings in scope; a real block holding the same
+// declarations does not.
+
+declare const xs: string[];
+declare const o: { x: number; y: string };
+
+export function badConstGroupRead() { const h = 1, i = "x"; const s: string = h; return [s, i]; }
+export function okConstGroupRead() { const h = 1, i = "x"; const s: string = i; return [s, h]; }
+export function badLetGroupRead() { let h = 1, i = "x"; i = "y"; const s: string = h; return [s, i]; }
+export function okLetGroupAssigned() { let h = 1, i = "x"; h = 2; i = "y"; const n: number = h; return [n, i]; }
+export function badPatternInGroup() { const { x } = o, y = 2; const s: string = x; return [s, y]; }
+export function okPatternInGroup() { const { x } = o, y = 2; const n: number = y; return [n, x]; }
+export function okShadowInBlock() { let j = 1, k = 2; { let j = "s"; const s: string = j; } const n: number = j; return [n, k]; }
+export function okForHeadGroup() { for (let n = 0, m = xs.length; n < m; n++) { const k: number = m; } }
+export function badClosureReadsGroup() { const t1 = 1, t2 = "t"; return () => { const s: string = t1; return [s, t2]; }; }
+export function okUninitializedGroup() { let p, q; p = 1; q = "s"; const n: number = p; return [n, q]; }

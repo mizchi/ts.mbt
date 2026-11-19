@@ -3305,14 +3305,18 @@ fn method_callable_param_types(
 ///|
 /// Same for a callable built from rich `TsParam` metadata (an arrow or a
 /// function expression). `param_is_optional` already folds in the
-/// default, the `?` marker and the rest flag; a rest parameter keeps its
-/// own type since arity handles `Rest(_)` directly.
+/// default, the `?` marker and the rest flag. A rest parameter is
+/// `Rest(_)`, which is what the arity and argument checks read, as
+/// `method_callable_param_types` does for a method. It was left as its
+/// bare array type, so `const concat = (...bufs: B[]) => …` took exactly
+/// one argument wherever its type came from the value (the graph path:
+/// excalidraw's `concatBuffers(a, b)` and `Regex.and(a, b)`).
 fn callable_param_types(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
   let out : Array[@ast.TsType] = []
   for p in params {
-    if !p.is_rest &&
-      param_is_optional(p) &&
-      !type_accepts_undefined_param(p.type_) {
+    if p.is_rest {
+      out.push(@ast.TsType::Rest(p.type_))
+    } else if param_is_optional(p) && !type_accepts_undefined_param(p.type_) {
       out.push(@ast.TsType::Union([p.type_, @ast.TsType::Undefined]))
     } else {
       out.push(p.type_)
@@ -10837,12 +10841,6 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 /// Like `record`, but bypasses the permissive-mode suppression filter. Used
 /// for diagnostics the caller has already established are reliable in
 /// permissive mode (e.g. constructor / direct-function-call arity).
-/// True when `expr` is a literal form that always evaluates to a truthy
-/// value: a function / arrow / class expression, an object literal, or an
-/// array literal. Used to flag `<always-truthy> && rhs` (TS2872, "This kind
-/// of expression is always truthy"). Only syntactic literal forms qualify --
-/// a bare identifier or call result is never matched, so no inference is
-/// needed and the check is false-positive-free.
 
 ///|
 /// True when `expr` is a syntactic literal whose value can never be
@@ -10861,7 +10859,7 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 ///  - `null` is nullish, and tsc gives it a different code (TS2871,
 ///    "This expression is always nullish");
 ///  - `undefined` parses as a bare identifier that can be shadowed, the
-///    same reason `is_syntactically_always_falsy` leaves it out;
+///    same reason `condition_literal_truthiness` leaves it out;
 ///  - `void <expr>` is `undefined`, so its right operand is ALWAYS
 ///    reached — tsc reports TS2869 there anyway, and following it would
 ///    mean encoding a compiler quirk as a rule. Left as a MISS.
@@ -10883,61 +10881,48 @@ fn is_syntactically_never_nullish(expr : @ast.TsExpr) -> Bool {
 }
 
 ///|
-fn is_syntactically_always_truthy(expr : @ast.TsExpr) -> Bool {
+/// TS2872 / TS2873: `Some(true)` when `expr` is a literal that is always
+/// truthy wherever it is tested, `Some(false)` when it is always falsy, and
+/// `None` otherwise. This is tsc's `getSyntacticTruthySemantics`, and one
+/// rule serves every position it tests: a `&&` / `||` left operand, a
+/// ternary condition and a `!` operand. Probed cell by cell:
+///  - `0`, `1`, `true` and `false` are exempt everywhere, so `while (1)`,
+///    `0 && x` and `false || x` are accepted. The `&&` / `||` check used
+///    to treat them as literals and report all four, while the condition
+///    check exempted them. The exemption is by numeric value, so `1.0`,
+///    `0x0` and `1e0` are exempt too.
+///  - A negative number is a prefix expression, and tsc reads it as
+///    "sometimes", so only a value above 1 is truthy here.
+///  - An empty template literal is falsy, like `""`. A template with a
+///    substitution can be either.
+///  - A ternary is always truthy or always falsy when both branches are.
+///  - `0n` is falsy, and tsc reports it as always TRUTHY
+///    (microsoft/TypeScript#60320, open). Encoding that would put a false
+///    sentence on legal-looking code, so `0n` abstains and is a MISS. A
+///    non-zero bigint is truthy, as tsc says.
+///  - `undefined` parses as a bare identifier that can be shadowed, so it
+///    abstains here, where tsc reports it when it resolves to the global.
+fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
   match expr {
     ArrowFunc(_, _, _, _)
     | FuncExpr(_)
     | NativeClassExpr(_, _)
     | ObjectLit(_)
-    | ArrayLit(_) => true
-    // Literal scalars whose value is statically truthy: a non-empty string, a
-    // non-zero number / bigint, or `true`. Mirrors the always-falsy set, so a
-    // bare identifier or call result is still never matched.
-    BoolLit(b) => b
-    StringLit(s) => s != ""
-    IntLit(n) => n != 0
-    NumberLit(n) => n != 0.0
-    BigIntLit(s) => s != "0" && s != "0n"
-    _ => false
-  }
-}
-
-///|
-/// True when `expr` is a literal form that always evaluates to a falsy value:
-/// `null`, `false`, `0`, `0n`, `""`, or `void <expr>` (always `undefined`).
-/// Used to flag `<always-falsy> || rhs` (TS2873, "This kind of expression is
-/// always falsy"). `undefined` is intentionally excluded -- it parses as a
-/// bare identifier that can be shadowed -- so the check stays sound.
-fn is_syntactically_always_falsy(expr : @ast.TsExpr) -> Bool {
-  match expr {
-    NullLit | BoolLit(false) | StringLit("") | IntLit(0) => true
-    NumberLit(n) => n == 0.0
-    BigIntLit(s) => s == "0" || s == "0n"
-    UnaryOp(Void, _) => true
-    _ => false
-  }
-}
-
-///|
-/// TS2872 / TS2873 for *condition* positions (`cond ? a : b`, `!cond`).
-/// Same literal classification as the `&&` / `||` operand check, except
-/// that tsc exempts `0`, `1`, `true`, and `false` here -- `while (1)`,
-/// `if (0)`, and `1 ? a : b` are idiomatic debug / generated-code shapes
-/// (conditionalOperatorConditionIsNumberType flags `10000 ?` but not
-/// `1 ?` / `0 ?`). Returns `Some(truthy)` when the condition is a
-/// non-exempt literal, `None` otherwise.
-fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
-  match expr {
-    IntLit(0) | IntLit(1) | BoolLit(_) => None
-    NumberLit(n) if n == 0.0 || n == 1.0 => None
-    _ =>
-      if is_syntactically_always_truthy(expr) {
-        Some(true)
-      } else if is_syntactically_always_falsy(expr) {
-        Some(false)
-      } else {
-        None
+    | ArrayLit(_)
+    | JsxElement(_, _, _) => Some(true)
+    BoolLit(_) => None
+    IntLit(n) => if n > 1 { Some(true) } else { None }
+    NumberLit(n) => if n > 0.0 && n != 1.0 { Some(true) } else { None }
+    BigIntLit(s) => if s == "0" || s == "0n" { None } else { Some(true) }
+    StringLit(s) => Some(s != "")
+    TemplateLiteral(quasis, []) => Some(quasis.iter().any(fn(q) { q != "" }))
+    NullLit | UnaryOp(Void, _) => Some(false)
+    Cond(_, a, b) =>
+      match (condition_literal_truthiness(a), condition_literal_truthiness(b)) {
+        (Some(x), Some(y)) if x == y => Some(x)
+        _ => None
       }
+    _ => None
   }
 }
 
@@ -21769,13 +21754,32 @@ fn assignable_through_class_chain(
     // method's being bivariant; a rest parameter on either side keeps the
     // resolver-free answer.
     (Func(sp, sr), Func(tp, tr)) => {
-      if sp.length() > tp.length() ||
-        sp.iter().any(fn(p) { p is Rest(_) }) ||
-        tp.iter().any(fn(p) { p is Rest(_) }) {
+      // Two lists with a rest parameter at the same position compare the
+      // rest arrays like any other pair: `(...xs: number[]) => any` passed
+      // for `(...a: number[]) => number` fell to the resolver-free relation,
+      // which reported it. Any other mix of rest and fixed positions still
+      // falls back.
+      let same_rest_shape = sp.length() == tp.length() &&
+        (0)
+        .until(sp.length())
+        .all(fn(i) { (sp[i] is Rest(_)) == (tp[i] is Rest(_)) })
+      if !same_rest_shape &&
+        (
+          sp.length() > tp.length() ||
+          sp.iter().any(fn(p) { p is Rest(_) }) ||
+          tp.iter().any(fn(p) { p is Rest(_) })
+        ) {
         return is_assignable_to(src, tgt)
       }
-      for i, a in sp {
-        let b = tp[i]
+      for i, a0 in sp {
+        let a = match a0 {
+          Rest(x) => x
+          _ => a0
+        }
+        let b = match tp[i] {
+          Rest(x) => x
+          other => other
+        }
         if !(is_assignable_to_bivariant(a, b) ||
           is_assignable_to_bivariant(b, a) ||
           chain_relates_names(b, a, resolver) ||
@@ -26778,13 +26782,7 @@ fn infer_arrow_body_with_params(
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
-        let ty = if is_checkable(p.type_) {
-          p.type_
-        } else if i < formal_param_types.length() {
-          formal_param_types[i]
-        } else {
-          p.type_
-        }
+        let ty = contextual_param_type(p, i, formal_param_types)
         bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
@@ -26806,13 +26804,7 @@ fn infer_arrow_body_with_params(
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
-        let ty = if is_checkable(p.type_) {
-          p.type_
-        } else if i < formal_param_types.length() {
-          formal_param_types[i]
-        } else {
-          p.type_
-        }
+        let ty = contextual_param_type(p, i, formal_param_types)
         bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
@@ -27415,6 +27407,68 @@ fn collect_literal_function_values(
 }
 
 ///|
+/// The type an arrow's or a function expression's parameter `p` at position
+/// `i` takes from a contextual parameter list `formals`. An annotation wins.
+/// A REST parameter collects every formal from its position on: the rest
+/// array itself when the formal there is the contextual rest, or a tuple of
+/// the fixed formals, and `any` for a mix. A plain parameter that lands on
+/// the contextual rest takes its element type. Binding the formal unchanged
+/// put the `Rest(_)` marker itself on the parameter, so `(...a) => { const
+/// v: string[] = a }` against `(...a: string[]) => void` was reported
+/// (#314's review, probed: tsc accepts it).
+fn contextual_param_type(
+  p : @ast.TsParam,
+  i : Int32,
+  formals : Array[@ast.TsType],
+) -> @ast.TsType {
+  if is_checkable(p.type_) || i >= formals.length() {
+    return p.type_
+  }
+  if p.is_rest {
+    match formals[i] {
+      Rest(inner) if i == formals.length() - 1 => inner
+      _ =>
+        if formals[i:].iter().any(fn(t) { t is Rest(_) }) {
+          @ast.TsType::Any
+        } else {
+          @ast.TsType::Tuple(formals[i:].to_owned())
+        }
+    }
+  } else {
+    match formals[i] {
+      Rest(inner) =>
+        match rest_param_element_type(inner) {
+          Some(e) => e
+          None => @ast.TsType::Any
+        }
+      t => t
+    }
+  }
+}
+
+///|
+/// The contextual formal a PLAIN parameter at position `i` is compared
+/// with: the formal itself, or the element of a contextual rest. `any`,
+/// which every check skips, when the rest's element cannot be named.
+fn contextual_formal_at(formals : Array[@ast.TsType], i : Int32) -> @ast.TsType {
+  match formals[i] {
+    Rest(inner) => rest_param_element_type(inner).unwrap_or(@ast.TsType::Any)
+    t => t
+  }
+}
+
+///|
+/// The element type of a rest parameter's written array type (`T[]`,
+/// `Array<T>`, `ReadonlyArray<T>`). `None` for a tuple or anything else,
+/// whose positions are not one element type.
+fn rest_param_element_type(t : @ast.TsType) -> @ast.TsType? {
+  match t {
+    Array(e) | Applied("Array" | "ReadonlyArray", [e]) => Some(e)
+    _ => None
+  }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -27440,13 +27494,7 @@ fn check_arrow_with_context(
     let p = arrow_params[i]
     // Honor an explicit annotation on the arrow's param; otherwise fall
     // back to the formal parameter type.
-    let ty = if is_checkable(p.type_) {
-      p.type_
-    } else if i < formal_params.length() {
-      formal_params[i]
-    } else {
-      p.type_
-    }
+    let ty = contextual_param_type(p, i, formal_params)
     // When the arrow param carries an *explicit* annotation, it must be
     // compatible with the contextual (formal) parameter type. Parameters are
     // compared bivariantly (matching `strictFunctionTypes: false`, the corpus
@@ -27454,22 +27502,79 @@ fn check_arrow_with_context(
     // `(x: number) => …` is expected) is a real TS2345 / TS2322. Skipped when
     // either side is non-checkable (`any`) or mentions an in-scope type
     // parameter (instantiation could reconcile them).
-    if is_checkable(p.type_) &&
+    // A REST parameter stands for every formal from its position on, so
+    // its ELEMENT type is what each of them is compared with: `(...a:
+    // number[]) => a[0]` fits `(a: number, b: number) => number`, and
+    // `(...a: string[])` does not (probed). Comparing the array type with
+    // the first formal reported the legal one as "expected `number` but got
+    // `number[]`". An element type this cannot name abstains.
+    if p.is_rest {
+      if is_checkable(p.type_) {
+        match rest_param_element_type(p.type_) {
+          Some(elem) if reliable_func_param_operand(elem, ctx) => {
+            let mut j = i
+            while j < formal_params.length() {
+              let formal = match formal_params[j] {
+                Rest(inner) =>
+                  match rest_param_element_type(inner) {
+                    Some(e) => e
+                    None => @ast.TsType::Any
+                  }
+                other => other
+              }
+              if is_checkable(formal) &&
+                reliable_func_param_operand(formal, ctx) &&
+                !(is_assignable_to_bivariant(elem, formal) ||
+                is_assignable_to_bivariant(formal, elem)) &&
+                !assignable_through_class_chain(formal, elem, ctx.resolver) &&
+                !assignable_through_class_chain(elem, formal, ctx.resolver) {
+                record(
+                  ctx,
+                  "\{sub_path} param `\{p.name}`",
+                  "expected `\{type_display(formal)}` but got `\{type_display(elem)}`",
+                )
+                break
+              }
+              j = j + 1
+            }
+          }
+          _ => ()
+        }
+      }
+    } else if is_checkable(p.type_) &&
       i < formal_params.length() &&
-      is_checkable(formal_params[i]) &&
+      // A plain parameter on the contextual REST is compared with the
+      // rest's element, and abstains when that is a type parameter
+      // (`(x: number, y) => 42` against `(...args: T) => U`, which the
+      // array-typed comparison reported).
+      is_checkable(contextual_formal_at(formal_params, i)) &&
       reliable_func_param_operand(p.type_, ctx) &&
-      reliable_func_param_operand(formal_params[i], ctx) &&
-      !(is_assignable_to_bivariant(p.type_, formal_params[i]) ||
-      is_assignable_to_bivariant(formal_params[i], p.type_)) &&
+      reliable_func_param_operand(contextual_formal_at(formal_params, i), ctx) &&
+      !(is_assignable_to_bivariant(
+        p.type_,
+        contextual_formal_at(formal_params, i),
+      ) ||
+      is_assignable_to_bivariant(
+        contextual_formal_at(formal_params, i),
+        p.type_,
+      )) &&
       // The resolver-free relation is nominal for interfaces, so an
       // annotated `(e: A0) => {}` against `(e: B0) => void` with `B0
       // extends A0` read as unrelated. It is the legal direction.
-      !assignable_through_class_chain(formal_params[i], p.type_, ctx.resolver) &&
-      !assignable_through_class_chain(p.type_, formal_params[i], ctx.resolver) {
+      !assignable_through_class_chain(
+        contextual_formal_at(formal_params, i),
+        p.type_,
+        ctx.resolver,
+      ) &&
+      !assignable_through_class_chain(
+        p.type_,
+        contextual_formal_at(formal_params, i),
+        ctx.resolver,
+      ) {
       record(
         ctx,
         "\{sub_path} param `\{p.name}`",
-        "expected `\{type_display(formal_params[i])}` but got `\{type_display(p.type_)}`",
+        "expected `\{type_display(contextual_formal_at(formal_params, i))}` but got `\{type_display(p.type_)}`",
       )
     }
     bind_callable_param(env, ctx, p, ty, param_names)
@@ -27731,13 +27836,7 @@ fn check_funcexpr_with_context(
   let mut i = 0
   while i < f.params.length() {
     let p = f.params[i]
-    let ty = if is_checkable(p.type_) {
-      p.type_
-    } else if i < formal_params.length() {
-      formal_params[i]
-    } else {
-      p.type_
-    }
+    let ty = contextual_param_type(p, i, formal_params)
     bind_callable_param(env, ctx, p, ty, param_names)
     i = i + 1
   }
@@ -30037,6 +30136,17 @@ fn bind_array_pattern(
     match ab.items[i] {
       Some(elem) => {
         let elem_ty = match unwrapped {
+          // A variadic tuple's positions from its rest element on hold the
+          // rest's ELEMENT type (with any fixed tail beside it): `[a, b]:
+          // [number, ...string[]]` binds `b` as `string`. Binding the raw
+          // `Rest(_)` marker made `const s: string = b` a report (#314's
+          // review, probed: tsc accepts it).
+          Tuple(items) if variadic_tuple_rest_index(items) is Some(r) =>
+            if i < r {
+              items[i]
+            } else {
+              variadic_tuple_element_from(items, r)
+            }
           Tuple(items) =>
             if i < items.length() {
               items[i]
@@ -30089,6 +30199,21 @@ fn bind_array_pattern(
   match ab.rest {
     Some(rest_binding) => {
       let rest_ty = match unwrapped {
+        // A variadic tuple's remainder follows tsc's `sliceTupleType`: from
+        // a position at or before the rest element it is the tuple's tail
+        // as written (`[h, ...t]: [number, ...string[]]` binds `t` as
+        // `[...string[]]`), and from past it an array of every element
+        // type from the rest on (`[h, f, ...t]` binds `string[]`). Slicing
+        // the stored items past the rest left `[]`, so a later `const [n]
+        // = t` read `n` as `undefined` (#314's review, probed).
+        Tuple(items) if variadic_tuple_rest_index(items) is Some(r) => {
+          let n = ab.items.length()
+          if n <= r {
+            @ast.TsType::Tuple(items[n:].to_owned())
+          } else {
+            @ast.TsType::Array(variadic_tuple_element_from(items, r))
+          }
+        }
         Tuple(items) => {
           // Rest captures the remaining tuple elements as a tuple.
           let remaining : Array[@ast.TsType] = []
@@ -30107,6 +30232,40 @@ fn bind_array_pattern(
     }
     None => ()
   }
+}
+
+///|
+/// The position of a tuple's variadic `Rest(_)` element, if it has one.
+fn variadic_tuple_rest_index(items : Array[@ast.TsType]) -> Int32? {
+  for r, t in items {
+    if t is Rest(_) {
+      return Some(r)
+    }
+  }
+  None
+}
+
+///|
+/// The type a position at or past a variadic tuple's rest element `r`
+/// holds: the union of the rest's element type and every fixed element
+/// after it (tsc's `getElementTypeOfSliceOfTupleType`). `any` stands for a
+/// rest whose element cannot be named.
+fn variadic_tuple_element_from(
+  items : Array[@ast.TsType],
+  r : Int32,
+) -> @ast.TsType {
+  let parts : Array[@ast.TsType] = []
+  let rest_elem = match items[r] {
+    Rest(inner) => rest_param_element_type(inner).unwrap_or(@ast.TsType::Any)
+    _ => @ast.TsType::Any
+  }
+  parts.push(rest_elem)
+  for j in (r + 1)..<items.length() {
+    if !parts.contains(items[j]) {
+      parts.push(items[j])
+    }
+  }
+  union_of(parts)
 }
 
 ///|
@@ -31701,8 +31860,23 @@ fn collect_narrowing(
                   }
                 _ => pair_pos.push((name, then_ty))
               }
+              // The false side removes only a member that DECLARES the
+              // key, which is tsc's `isTypePresencePossible`. A member that
+              // answers for the key through an index signature may still
+              // lack it at runtime, so `"includes" in c` on `readonly T[] |
+              // Record<T, any>` leaves the record in the else branch, where
+              // it was `never` and every `c.hasOwnProperty(v)` reported
+              // (excalidraw's `isMemberOf`, probed). A member that answers
+              // for a key nothing could declare answers through an index
+              // signature, and is removed only when it also lists the key.
               let else_ty = narrow_remove(cur, fn(v) {
-                resolver.lookup_field(v, key) is Some(_)
+                resolver.lookup_field(v, key) is Some(_) &&
+                (
+                  resolver.lookup_field(v, "\u{0}in-probe") is None ||
+                  collect_declared_fields(v, resolver)
+                  .iter()
+                  .any(fn(f) { f.0 == key })
+                )
               })
               pair_neg.push((name, else_ty))
             }
@@ -37205,16 +37379,17 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // A parser-merged declarator group (`var a: string, b: number;`
       // becomes `Block[Var, Var]`) must leak its bindings into the
       // enclosing scope -- snapshot/restore would erase them for every
-      // later statement. Only `var` groups leak (they hoist out of real
-      // blocks in JS anyway); `let`/`const` stay block-scoped so a later
-      // same-named outer declaration isn't shadowed by a stale type.
-      let mut all_decls = b.stmts.length() > 0
-      for st in b.stmts {
-        match st {
-          Var(_, _, _) => ()
-          _ => all_decls = false
-        }
-      }
+      // later statement. The parser marks a group with
+      // `DECL_GROUP_POSITION`, so `const a = 1, b = "x"` leaks whatever
+      // its kind. It used to be told apart by its contents, which cannot
+      // separate it from `{ let a = 1; let b = 2 }`, so only `var` groups
+      // leaked, and every later read of `a` was unchecked. A real block
+      // holding only `var`s still leaks, since a `var` hoists out of it.
+      let all_decls = b.stmts.length() > 0 &&
+        (
+          b.stmt_positions == [@ast.DECL_GROUP_POSITION] ||
+          b.stmts.iter().all(fn(st) { st is Var(_, _, _) })
+        )
       if all_decls {
         for st in b.stmts {
           check_stmt(env, st, ctx)
@@ -39290,15 +39465,17 @@ fn check_call_args_in_expr_at(
       // TS2872 / TS2873: the left operand of a `&&` / `||` whose value is a
       // statically truthy / falsy literal makes the short-circuit redundant.
       // TS reports on the operand's truthiness regardless of which logical
-      // operator it gates (`{} && x`, `{} || x` -> always truthy; `0 && x`,
-      // `null || x` -> always falsy). Only syntactic literal forms are matched,
-      // so the check needs no inference and never false-positives.
+      // operator it gates (`{} && x`, `{} || x` -> always truthy; `"" && x`,
+      // `null || x` -> always falsy), with the exemptions a condition has
+      // (`0 && x` and `false || x` are accepted). Only syntactic literal
+      // forms are matched, so the check needs no inference.
       if op is (And | Or) {
-        if is_syntactically_always_truthy(l) {
+        let literal = condition_literal_truthiness(l)
+        if literal == Some(true) {
           record_unfiltered(
             ctx, "logical operand", "this kind of expression is always truthy",
           )
-        } else if is_syntactically_always_falsy(l) {
+        } else if literal == Some(false) {
           record_unfiltered(
             ctx, "logical operand", "this kind of expression is always falsy",
           )
@@ -41134,13 +41311,7 @@ fn check_call_args_in_expr_at(
           let mut i = 0
           while i < aps.length() {
             let p = aps[i]
-            let ty = if is_checkable(p.type_) {
-              p.type_
-            } else if i < fps.length() {
-              fps[i]
-            } else {
-              p.type_
-            }
+            let ty = contextual_param_type(p, i, fps)
             bind_callable_param(inner_env, ctx, p, ty, names)
             ptys.push(ty)
             i = i + 1
@@ -56064,9 +56235,18 @@ fn check_module_function_bodies_layered(
       }
       let is_rest = i < cls.constructor_param_is_rest.length() &&
         cls.constructor_param_is_rest[i]
+      // A pattern parameter binds every name it declares, as a method's
+      // does (`bind_callable_param`). With only the pair's name, `a` of
+      // `constructor({ a, b }: T)` was bound to the whole `T` and `b` was
+      // "cannot find name" (excalidraw's `FileManager`, `RequestError`).
+      let binding = if i < cls.constructor_param_bindings.length() {
+        cls.constructor_param_bindings[i]
+      } else {
+        None
+      }
       params.push({
         name: p.0,
-        binding: None,
+        binding,
         is_rest,
         is_optional: false,
         type_: p.1,
@@ -59112,8 +59292,11 @@ fn merge_enumerable_object_intersection(
       // its inherited fields. It had made the merge give up, so `I & {
       // event }` fell to the whole-object relation, which reads an enum
       // member field as `number`, and `{ type: E.B, event }` was reported
-      // (univer's `Transformer`, nine times).
-      Struct(_, _) | Named(_) if resolver.enumerable_object_shape(p, 0) =>
+      // (univer's `Transformer`, nine times). A CLASS is left out: its
+      // declared fields are its properties without its methods, so `C & {
+      // tag }` read `{ m() {}, tag: 1 }`'s `m` as excess (#313's review).
+      Struct(n, _) | Named(n) if !resolver.classes.contains(n) &&
+        resolver.enumerable_object_shape(p, 0) =>
         collect_declared_fields(p, resolver).map(fn(f) {
           (@ast.TsType::Literal(f.0), f.1)
         })

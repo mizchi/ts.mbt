@@ -923,6 +923,12 @@ pub(all) struct TsClassDecl {
   // parameter's declared type (TS2322) the same way it does for free
   // functions and methods.
   constructor_param_defaults : Array[TsExpr?]
+  // Positionally aligned with `constructor_params`: the parameter's binding
+  // pattern when it is one (`constructor({ a, b }: T)`), else `None`. The
+  // `(String, TsType)` pairs keep one name per parameter, which is the
+  // pattern's FIRST name, so the checker bound that name to the whole
+  // parameter type and left the others unbound. Empty means "no patterns".
+  constructor_param_bindings : Array[TsBinding?]
   // Every public constructor SIGNATURE of an ambient `declare class`, in
   // declaration order, each with its rest flags; empty for a runtime class,
   // whose implementation is the signature. `constructor_params` keeps the
