@@ -1012,7 +1012,7 @@ test "an opaque lib member of a union abstains through an alias and a pattern" {
     #|interface RPE { clientX: number; button: number }
     #|export function f(event: RPE | MouseEvent) { let { clientX: lastX } = event; return lastX - 1; }
     #|interface A { a: number; t: "a" }
-    #|interface B { b: string; t: "b" }
+    #|interface B { b: string; t: "b"; a?: number }
     #|export function g(v: A | B) { const { a } = v; const n: number = a; return n; }
   assert_eq(issue_lines(src), [
     "function g > binding `n` init: type `number | undefined` is not assignable to type `number`",
@@ -1036,6 +1036,9 @@ test "an object literal against an interface intersection is checked by field" {
     #|export function a() { n1({ type: E.B, event: "x", extra: 1 }); }
     #|export function b() { n1({ event: "x" }); }
     #|export function d() { nj({ name: "n", event: "x" }); }
+    #|class C { m(): void {} x = 1 }
+    #|declare function nc(v: C & { tag: number }): void;
+    #|export function okClassMethod() { nc({ m() {}, x: 1, tag: 1 }); }
   assert_eq(issue_lines(src), [
     "function a > call `n1` arg[0].extra: property `extra` does not exist on target type",
     "function b > call `n1` arg[0].type: property `type` is required by `{ type: E; event: string }`",

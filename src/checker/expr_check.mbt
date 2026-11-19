@@ -59120,8 +59120,11 @@ fn merge_enumerable_object_intersection(
       // its inherited fields. It had made the merge give up, so `I & {
       // event }` fell to the whole-object relation, which reads an enum
       // member field as `number`, and `{ type: E.B, event }` was reported
-      // (univer's `Transformer`, nine times).
-      Struct(_, _) | Named(_) if resolver.enumerable_object_shape(p, 0) =>
+      // (univer's `Transformer`, nine times). A CLASS is left out: its
+      // declared fields are its properties without its methods, so `C & {
+      // tag }` read `{ m() {}, tag: 1 }`'s `m` as excess (#313's review).
+      Struct(n, _) | Named(n) if !resolver.classes.contains(n) &&
+        resolver.enumerable_object_shape(p, 0) =>
         collect_declared_fields(p, resolver).map(fn(f) {
           (@ast.TsType::Literal(f.0), f.1)
         })
