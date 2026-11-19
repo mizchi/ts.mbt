@@ -7166,9 +7166,18 @@ product surfaces now.
     real error is a generic rest tuple, `(function(a, ...x){})(1, 2,
     ...t)` with `t: T extends any[]`, which is not modelled. So the
     in-scope MISS budget goes from 0 to 1, with that reason at the gate.
-    A third finding did not reproduce: an NBSP after a comment. The source
-    is indexed by UTF-16 code unit, so NBSP is the single unit `0xA0`, and
-    `skip_whitespace` takes it before `scan_ident` can.
+    The review also caught a regression this batch had made, and my first
+    reply to it was wrong. Making NBSP end an identifier meant an NBSP
+    after a COMMENT reached `scan_ident`, because the comment loop of
+    `skip_whitespace` is the only loop that runs there, and it had no arm
+    for NBSP. So `const d = /**/<NBSP>1` lexed an EMPTY identifier and
+    emitted `const d = ;`. I had answered "does not reproduce" from the
+    checker's diagnostics, and a clean diagnostic list says nothing about
+    the token stream, which the reviewer pointed out. The loop now takes
+    the single-line spaces the fast loop takes, which fixes VT and FF after
+    a comment too (on main those were "invalid character"). A lexer test
+    asserts the tokens, and each spelling's emit prints what the source
+    prints under Node.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
