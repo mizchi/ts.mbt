@@ -1,0 +1,22 @@
+objectRestOverUnionKeepsEachMember.ts(9,74): error TS2322: Type '"a" | "b"' is not assignable to type '"z"'.
+  Type '"a"' is not assignable to type '"z"'.
+objectRestOverUnionKeepsEachMember.ts(10,95): error TS2322: Type 'number' is not assignable to type 'string'.
+
+
+==== objectRestOverUnionKeepsEachMember.ts (2 errors) ====
+    // An object rest over a union is a union of the members' rests, so it keeps
+    // each member's discriminant and narrows by it.
+    
+    type Base = { size?: string; hidden?: boolean };
+    type P = (Base & { type: "button"; onClick?(): void }) | (Base & { type: "toggle"; checked: boolean });
+    type Q = { type: "a"; x: number; k: string } | { type: "b"; y: string; k: string };
+    
+    export function okRestNarrowsByDiscriminant({ size = "m", ...props }: P) { if (props.type === "button") return props.onClick; return props.checked; }
+    export function badRestKeepsBothDiscriminants({ k, ...rest }: Q) { const z: "z" = rest.type; return z; }
+                                                                             ~
+!!! error TS2322: Type '"a" | "b"' is not assignable to type '"z"'.
+!!! error TS2322:   Type '"a"' is not assignable to type '"z"'.
+    export function badRestNarrowedMemberType({ k, ...rest }: Q) { if (rest.type === "a") { const s: string = rest.x; return s; } return ""; }
+                                                                                                  ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    
