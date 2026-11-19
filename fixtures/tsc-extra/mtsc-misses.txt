@@ -26,3 +26,4 @@ optionalParameterTargetIsItsType:badLiteralToOptional  an object LITERAL against
 optionalParameterTargetIsItsType:badLiteralToUnion  same union path as `badLiteralToOptional`
 optionalParameterTargetIsItsType:badLiteralToNullable  same union path as `badLiteralToOptional`, with `null` as the nullish member
 optionalCallChainNarrowsReceiver:badAfterWhile  after a `while` loop a binding returns to its ENTRY type, so `p = p.getParent()` in the body never reaches `p.v` below it; the read was reported only while `let p: Nullable<N> = node` was not narrowed by its initializer
+inOperatorFalseSideKeepsIndexSignatures:badRecordKeptOnTrueSideToo  the true side of `in` keeps the index-signature member as tsc does, and calling the resulting `number | ((…) => boolean)` member is not reported: TS2349 for a union with a non-callable member is not modelled
