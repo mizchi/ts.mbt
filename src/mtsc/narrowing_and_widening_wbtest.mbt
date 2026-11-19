@@ -1123,3 +1123,26 @@ test "a constructor's pattern parameter binds every name" {
     "function B.constructor > binding `bad` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// The false side of `"k" in x` removes only a member that DECLARES `k`
+/// (tsc's `isTypePresencePossible`, probed). A member that answers for the
+/// key through an index signature may still lack it, so it stays, where it
+/// was removed and `c.hasOwnProperty(v)` read off `never` (excalidraw's
+/// `isMemberOf`). A member that declares the key beside an index signature
+/// is still removed.
+test "the false side of in keeps a member that only has an index signature" {
+  let src =
+    #|type A = { x: number } | { y: string };
+    #|export function okRemovesDeclarer(v: A) { if (!("x" in v)) { return v.y; } return 0; }
+    #|export function badElseOfDeclarer(v: A) { if ("x" in v) { return 0; } return v.x; }
+    #|export function okIndexKept(c: readonly string[] | Record<string, number>, v: string) { return "includes" in c ? 1 : c.hasOwnProperty(v); }
+    #|export function badDeclaredWithIndex(c: readonly string[] | { [k: string]: number; includes: number }) { return "includes" in c ? 1 : c.foo; }
+    #|interface Dict { [k: string]: string }
+    #|export function okInterfaceIndexKept(c: string[] | Dict) { return "map" in c ? 1 : c.anything.length; }
+  assert_eq(issue_lines(src), [
+    "function badElseOfDeclarer > PropAccess `.x`: property `x` does not exist on `{ y: string }`",
+    "function badDeclaredWithIndex > PropAccess `.foo`: property `foo` does not exist on `never`",
+    "function badDeclaredWithIndex > PropAccess `.foo`: property `foo` does not exist on `never`",
+  ])
+}

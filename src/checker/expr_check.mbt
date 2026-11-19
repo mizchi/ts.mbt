@@ -31682,8 +31682,23 @@ fn collect_narrowing(
                   }
                 _ => pair_pos.push((name, then_ty))
               }
+              // The false side removes only a member that DECLARES the
+              // key, which is tsc's `isTypePresencePossible`. A member that
+              // answers for the key through an index signature may still
+              // lack it at runtime, so `"includes" in c` on `readonly T[] |
+              // Record<T, any>` leaves the record in the else branch, where
+              // it was `never` and every `c.hasOwnProperty(v)` reported
+              // (excalidraw's `isMemberOf`, probed). A member that answers
+              // for a key nothing could declare answers through an index
+              // signature, and is removed only when it also lists the key.
               let else_ty = narrow_remove(cur, fn(v) {
-                resolver.lookup_field(v, key) is Some(_)
+                resolver.lookup_field(v, key) is Some(_) &&
+                (
+                  resolver.lookup_field(v, "\u{0}in-probe") is None ||
+                  collect_declared_fields(v, resolver)
+                  .iter()
+                  .any(fn(f) { f.0 == key })
+                )
               })
               pair_neg.push((name, else_ty))
             }
