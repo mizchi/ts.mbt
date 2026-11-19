@@ -253,6 +253,22 @@ pub struct Lexer {
 pub extend Lexer with @debug.Debug::{to_repr}
 
 ///|
+/// The non-ASCII single-line spaces tsc's scanner skips
+/// (`isWhiteSpaceSingleLine`) beyond NBSP, VT and FF: NEL, OGHAM SPACE
+/// MARK, U+2000..U+200B, NNBSP, MMSP, IDEOGRAPHIC SPACE and the BOM. They
+/// had been identifier characters here, so `\u{2003}const a = 1` scanned
+/// as one identifier and the declaration vanished (probed: tsc accepts it).
+fn is_unicode_single_line_space(b : Int32) -> Bool {
+  b == 0x85 ||
+  b == 0x1680 ||
+  (b >= 0x2000 && b <= 0x200B) ||
+  b == 0x202F ||
+  b == 0x205F ||
+  b == 0x3000 ||
+  b == 0xFEFF
+}
+
+///|
 /// Latin-1 Supplement code points that are symbols or punctuation rather
 /// than identifier characters. See the TS1127 site in `next_token`.
 fn is_latin1_non_identifier_char(c : Char) -> Bool {
@@ -388,7 +404,7 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
       self.pos += 1
       continue
     }
-    if b == 0x0B || b == 0x0C || b == 0xA0 {
+    if b == 0x0B || b == 0x0C || b == 0xA0 || is_unicode_single_line_space(b) {
       self.pos += 1
       continue
     }
@@ -443,6 +459,9 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
         self.newline_before_next = true
       }
       Some(' ') | Some('\t') => {
+        let _ = self.advance()
+      }
+      Some(c) if is_unicode_single_line_space(c.to_int()) => {
         let _ = self.advance()
       }
       Some('\n') | Some('\r') => {
@@ -895,8 +914,9 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
       // Non-ASCII identifier characters (CJK, accented letters, …). TS uses
       // the Unicode ID_Continue set; we over-approximate with "any code unit
       // >= 0x80" so a unicode-named identifier scans as a single token
-      // instead of fragmenting into per-character tokens.
-      b >= 0x80 {
+      // instead of fragmenting into per-character tokens. A Unicode SPACE
+      // ends it, as it does in tsc (`a\u{2003}b` is two tokens).
+      (b >= 0x80 && !is_unicode_single_line_space(b)) {
       self.pos += 1
     } else {
       break
