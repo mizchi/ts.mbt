@@ -30286,13 +30286,26 @@ fn bind_object_pattern(
               Union(parts) => {
                 let member_types : Array[@ast.TsType] = []
                 let mut all_found = true
+                // A member this cannot enumerate (a DOM interface the lib
+                // tables do not carry) may well declare the field, so the
+                // field is `any` rather than `T | undefined`: `{ clientX } =
+                // event` with `event: React.PointerEvent | MouseEvent` was
+                // `number | undefined` (excalidraw's `AppPan.start`).
+                let mut opaque_member = false
                 for part in parts {
                   match ctx.resolver.lookup_field(part, prop.key) {
                     Some(t) => member_types.push(t)
-                    None => all_found = false
+                    None =>
+                      if ctx.resolver.enumerable_object_shape(part, 0) {
+                        all_found = false
+                      } else {
+                        opaque_member = true
+                      }
                   }
                 }
-                if member_types.length() == 0 {
+                if opaque_member {
+                  @ast.TsType::Any
+                } else if member_types.length() == 0 {
                   @ast.TsType::Any
                 } else if member_types.length() == 1 {
                   if all_found {
@@ -40215,6 +40228,14 @@ fn check_call_args_in_expr_at(
         // comes from a generic / `this`-type / flow-narrowing gap we
         // don't model.
         !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+        // The same for an ALIAS to such a union, which the test above does
+        // not expand: `type MC = OffscreenCanvas | HTMLCanvasElement` made
+        // `c.width` "does not exist on `MC`" where the written union is
+        // silent (excalidraw's `MinimapRenderer`).
+        !(match ctx.resolver.unwrap(recv_ty) {
+          Union(_) as u => type_contains_unresolved_named(u, ctx.resolver)
+          _ => false
+        }) &&
         // A brand-mangled private reference from a lexically nested class
         // carries the inner class's brand; when the receiver class declares
         // the same base name the access is (or may be) legal — stay silent.

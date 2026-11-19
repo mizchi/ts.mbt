@@ -998,3 +998,23 @@ test "an object rest over a union keeps each member" {
     "function t2 > binding `s` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// A DOM interface the lib tables do not carry may declare any member, so
+/// a union holding one abstains on member existence whether it is written
+/// out or reached through an alias, and a field destructured from it is
+/// `any` rather than `T | undefined` (probed: the nightly accepts both).
+test "an opaque lib member of a union abstains through an alias and a pattern" {
+  let src =
+    #|type MC = OffscreenCanvas | HTMLCanvasElement;
+    #|export function h(c: MC) { return c.width; }
+    #|export function k(c: HTMLCanvasElement | OffscreenCanvas) { return c.width; }
+    #|interface RPE { clientX: number; button: number }
+    #|export function f(event: RPE | MouseEvent) { let { clientX: lastX } = event; return lastX - 1; }
+    #|interface A { a: number; t: "a" }
+    #|interface B { b: string; t: "b" }
+    #|export function g(v: A | B) { const { a } = v; const n: number = a; return n; }
+  assert_eq(issue_lines(src), [
+    "function g > binding `n` init: type `number | undefined` is not assignable to type `number`",
+  ])
+}
