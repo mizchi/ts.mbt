@@ -1195,6 +1195,40 @@ test "a keyof key over a concrete object is not a generic indexed access" {
 }
 
 ///|
+/// An unannotated callback parameter takes its type from the contextual
+/// list with the rest position read: a rest parameter collects the formals
+/// from its position on, and a plain one on the contextual rest takes its
+/// element. A variadic tuple pattern binds its rest positions to the rest's
+/// element. Each had bound the raw `Rest(_)` marker (#314's review, probed:
+/// tsc reports exactly the four `bad` lines; main reported the four `ok`
+/// ones too).
+test "a contextual rest parameter and a variadic tuple pattern bind element types" {
+  let src =
+    #|declare function takeRest(cb: (...xs: number[]) => void): void;
+    #|declare function takePair(cb: (x: string, y: number) => void): void;
+    #|export function okRestFromRest() { takeRest((...a) => { const v: number[] = a; return v; }); }
+    #|export function badRestFromRest() { takeRest((...a) => { const v: string[] = a; return v; }); }
+    #|export function okPlainFromRest() { takeRest((a, b) => { const n: number = a + b; return n; }); }
+    #|export function badPlainFromRest() { takeRest((a) => { const s: string = a; return s; }); }
+    #|export function okRestFromPair() { takePair((...a) => { const v: [string, number] = a; return v; }); }
+    #|export function badRestFromPair() { takePair((...a) => { const v: [number, number] = a; return v; }); }
+    #|export function okTupleRest([a, b]: [number, ...string[]]) { const s: string = b; return [a, s]; }
+    #|export function badTupleRest([a, b]: [number, ...string[]]) { const n: number = b; return [a, n]; }
+    #|export function okTupleRestTail([a, b, c]: [number, ...string[]]) { const s: string = c; return [a, b, s]; }
+    #|declare function f5<T extends any[], U>(f: (...args: T) => U): (...args: T) => U;
+    #|export const okAnnotatedOnGenericRest = f5((x: number, y) => 42);
+    #|export function okAnnotatedOnRest() { takeRest((a: number, b: number) => {}); }
+    #|export function badAnnotatedOnRest() { takeRest((a: string) => {}); }
+  assert_eq(issue_lines(src), [
+    "function badRestFromRest > binding `v` init: expected `string[]` but got `number[]`",
+    "function badPlainFromRest > binding `s` init: expected `string` but got `number`",
+    "function badRestFromPair > binding `v` init: expected `[number, number]` but got `[string, number]`",
+    "function badTupleRest > binding `n` init: expected `number` but got `string`",
+    "function badAnnotatedOnRest > call `takeRest` arg[0] param `a`: expected `number` but got `string`",
+  ])
+}
+
+///|
 /// An unannotated static factory narrows an assignment by its whole body,
 /// not only by a single `return new N(v)`: `const instance = new N(v); …;
 /// return instance` is an `N` (univer's `NumberValueObject.create`, behind
@@ -1212,5 +1246,31 @@ test "a static factory that returns a local narrows an assignment" {
     #|export function k(x: Nullable<Base>) { let o = x; if (o == null) { o = M.mk2(0); } return o.isBoolean(); }
   assert_eq(issue_lines(src), [
     "function h > call `isBoolean`: object is possibly `undefined`", "function k > call `isBoolean`: object is possibly `undefined`",
+  ])
+}
+
+///|
+/// The rest element of an array pattern over a variadic tuple takes tsc's
+/// slice: the tail as written from at or before the tuple's rest, an array
+/// of the element types from the rest on past it. Slicing the stored items
+/// past the rest left `[]`, so `[h, f, ...t]` then `const [n] = t` read `n`
+/// as `undefined` (#314's review, probed on the nightly).
+test "a variadic tuple pattern's rest element keeps the tuple's slice" {
+  let src =
+    #|export function okTwoHead([h, f, ...t]: [number, ...string[]]) { const x: string[] = t; const [n] = t; const v: string = n; return [h, f, x, v]; }
+    #|export function badTwoHead([h, f, ...t]: [number, ...string[]]) { const x: number[] = t; return [h, f, x]; }
+    #|export function badElementOfRemainder([h, f, ...t]: [number, ...string[]]) { const [n] = t; const v: number = n; return [h, f, v]; }
+    #|export function okOneHead([h, ...t]: [number, ...string[]]) { const x: string[] = t; return [h, x]; }
+    #|export function okWhole([...t]: [number, ...string[]]) { const x: [number, ...string[]] = t; return x; }
+    #|export function okPastTail([a, b, c, ...t]: [number, ...string[], boolean]) { const x: (string | boolean)[] = t; return [a, b, c, x]; }
+    #|export function badPastTail([a, b, c, ...t]: [number, ...string[], boolean]) { const x: string[] = t; return [a, b, c, x]; }
+    #|export function okBeforeTail([a, ...t]: [number, ...string[], boolean]) { const x: [...string[], boolean] = t; return [a, x]; }
+    #|export function okCallback() { const cb: (...xs: [number, ...string[]]) => void = (...[head, first, ...tail]) => { const [next] = tail; const v: string = next; void [head, first, v]; }; return cb; }
+    #|export function badCallback() { const cb: (...xs: [number, ...string[]]) => void = (...[head, first, ...tail]) => { const x: number[] = tail; void [head, first, x]; }; return cb; }
+  assert_eq(issue_lines(src), [
+    "function badTwoHead > binding `x` init: expected `number[]` but got `string[]`",
+    "function badElementOfRemainder > binding `v` init: expected `number` but got `string`",
+    "function badPastTail > binding `x` init: expected `string[]` but got `(string | boolean)[]`",
+    "function badCallback > binding `x` init: expected `number[]` but got `string[]`",
   ])
 }

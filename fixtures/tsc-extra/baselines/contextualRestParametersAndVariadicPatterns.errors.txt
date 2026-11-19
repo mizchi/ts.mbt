@@ -1,0 +1,51 @@
+contextualRestParametersAndVariadicPatterns.ts(11,64): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+  Type 'number' is not assignable to type 'string'.
+contextualRestParametersAndVariadicPatterns.ts(13,62): error TS2322: Type 'number' is not assignable to type 'string'.
+contextualRestParametersAndVariadicPatterns.ts(15,64): error TS2322: Type '[x: string, y: number]' is not assignable to type '[number, number]'.
+  Type at position 0 in source is not compatible with type at position 0 in target.
+    Type 'string' is not assignable to type 'number'.
+contextualRestParametersAndVariadicPatterns.ts(17,69): error TS2322: Type 'string' is not assignable to type 'number'.
+contextualRestParametersAndVariadicPatterns.ts(22,49): error TS2345: Argument of type '(a: string) => void' is not assignable to parameter of type '(...xs: number[]) => void'.
+  Types of parameters 'a' and 'xs' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+
+
+==== contextualRestParametersAndVariadicPatterns.ts (5 errors) ====
+    // An unannotated callback parameter takes its type from the contextual
+    // list, with the rest position read: a rest parameter collects the formals
+    // from its position on (the rest array, or a tuple of fixed formals), and a
+    // plain parameter on the contextual rest takes its element. A variadic
+    // tuple pattern binds every position from its rest on to the rest's element.
+    
+    declare function takeRest(cb: (...xs: number[]) => void): void;
+    declare function takePair(cb: (x: string, y: number) => void): void;
+    
+    export function okRestFromRest() { takeRest((...a) => { const v: number[] = a; return v; }); }
+    export function badRestFromRest() { takeRest((...a) => { const v: string[] = a; return v; }); }
+                                                                   ~
+!!! error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    export function okPlainFromRest() { takeRest((a, b) => { const n: number = a + b; return n; }); }
+    export function badPlainFromRest() { takeRest((a) => { const s: string = a; return s; }); }
+                                                                 ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    export function okRestFromPair() { takePair((...a) => { const v: [string, number] = a; return v; }); }
+    export function badRestFromPair() { takePair((...a) => { const v: [number, number] = a; return v; }); }
+                                                                   ~
+!!! error TS2322: Type '[x: string, y: number]' is not assignable to type '[number, number]'.
+!!! error TS2322:   Type at position 0 in source is not compatible with type at position 0 in target.
+!!! error TS2322:     Type 'string' is not assignable to type 'number'.
+    export function okTupleRest([a, b]: [number, ...string[]]) { const s: string = b; return [a, s]; }
+    export function badTupleRest([a, b]: [number, ...string[]]) { const n: number = b; return [a, n]; }
+                                                                        ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export function okTupleRestTail([a, b, c]: [number, ...string[]]) { const s: string = c; return [a, b, s]; }
+    declare function f5<T extends any[], U>(f: (...args: T) => U): (...args: T) => U;
+    export const okAnnotatedOnGenericRest = f5((x: number, y) => 42);
+    export function okAnnotatedOnRest() { takeRest((a: number, b: number) => {}); }
+    export function badAnnotatedOnRest() { takeRest((a: string) => {}); }
+                                                    ~~~~~~~~~~~~~~~~~
+!!! error TS2345: Argument of type '(a: string) => void' is not assignable to parameter of type '(...xs: number[]) => void'.
+!!! error TS2345:   Types of parameters 'a' and 'xs' are incompatible.
+!!! error TS2345:     Type 'number' is not assignable to type 'string'.
+    

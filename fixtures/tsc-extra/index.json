@@ -2974,6 +2974,95 @@
       ]
     },
     {
+      "case": "inference/contextualRestParametersAndVariadicPatterns.ts",
+      "area": "inference",
+      "name": "contextualRestParametersAndVariadicPatterns",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2345
+      ],
+      "baseline": "baselines/contextualRestParametersAndVariadicPatterns.errors.txt",
+      "claims": [
+        {
+          "name": "okRestFromRest",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badRestFromRest",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okPlainFromRest",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badPlainFromRest",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okRestFromPair",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badRestFromPair",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okTupleRest",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badTupleRest",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okTupleRestTail",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okAnnotatedOnGenericRest",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okAnnotatedOnRest",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badAnnotatedOnRest",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
+        }
+      ]
+    },
+    {
       "case": "inference/contextuallyTypedFunctionValueThroughGuard.ts",
       "area": "inference",
       "name": "contextuallyTypedFunctionValueThroughGuard",
@@ -4231,6 +4320,88 @@
       ]
     },
     {
+      "case": "inference/variadicTuplePatternRemainder.ts",
+      "area": "inference",
+      "name": "variadicTuplePatternRemainder",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/variadicTuplePatternRemainder.errors.txt",
+      "claims": [
+        {
+          "name": "okTwoHead",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "badTwoHead",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badElementOfRemainder",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okOneHead",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okWhole",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okPastTail",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badPastTail",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okBeforeTail",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okCallback",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badCallback",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okCallbackParams",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 20
+        }
+      ]
+    },
+    {
       "case": "lib/errorIsErrorAndAugmentedRawJSON.ts",
       "area": "lib",
       "name": "errorIsErrorAndAugmentedRawJSON",
@@ -4381,32 +4552,50 @@
         {
           "name": "okIdeographicSpaceAfterKeyword",
           "kind": "ok",
-          "fromLine": 7,
-          "toLine": 7
-        },
-        {
-          "name": "okNoBreakSpaceBeforeColon",
-          "kind": "ok",
           "fromLine": 8,
           "toLine": 8
         },
         {
-          "name": "okNoBreakSpaceEndsTheName",
+          "name": "okNoBreakSpaceBeforeColon",
           "kind": "ok",
           "fromLine": 9,
           "toLine": 9
         },
         {
-          "name": "badEmSpaceDoesNotHideMismatch",
-          "kind": "bad",
+          "name": "okNoBreakSpaceEndsTheName",
+          "kind": "ok",
           "fromLine": 10,
           "toLine": 10
         },
         {
+          "name": "badEmSpaceDoesNotHideMismatch",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
           "name": "okCaf",
           "kind": "ok",
-          "fromLine": 11,
+          "fromLine": 12,
           "toLine": 12
+        },
+        {
+          "name": "okNoBreakSpaceAfterBlockComment",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okVerticalTabAfterBlockComment",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okFormFeedAfterLineComment",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 17
         }
       ]
     },

@@ -19495,7 +19495,9 @@ fn check_expr_against_shape(
       // probed). That shape stays unjudged here.
       (
         key_t is Keyof(inner) &&
-        ctx.in_scope_type_params.iter().any(fn(tp) { type_param_occurs(tp, inner) })
+        ctx.in_scope_type_params
+        .iter()
+        .any(fn(tp) { type_param_occurs(tp, inner) })
       ) ||
       (key_t is Named(key) && ctx.in_scope_type_params.contains(key)) => {
       record_unfiltered(
@@ -26816,13 +26818,7 @@ fn infer_arrow_body_with_params(
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
-        let ty = if is_checkable(p.type_) {
-          p.type_
-        } else if i < formal_param_types.length() {
-          formal_param_types[i]
-        } else {
-          p.type_
-        }
+        let ty = contextual_param_type(p, i, formal_param_types)
         bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
@@ -26844,13 +26840,7 @@ fn infer_arrow_body_with_params(
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
-        let ty = if is_checkable(p.type_) {
-          p.type_
-        } else if i < formal_param_types.length() {
-          formal_param_types[i]
-        } else {
-          p.type_
-        }
+        let ty = contextual_param_type(p, i, formal_param_types)
         bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
@@ -27453,6 +27443,57 @@ fn collect_literal_function_values(
 }
 
 ///|
+/// The type an arrow's or a function expression's parameter `p` at position
+/// `i` takes from a contextual parameter list `formals`. An annotation wins.
+/// A REST parameter collects every formal from its position on: the rest
+/// array itself when the formal there is the contextual rest, or a tuple of
+/// the fixed formals, and `any` for a mix. A plain parameter that lands on
+/// the contextual rest takes its element type. Binding the formal unchanged
+/// put the `Rest(_)` marker itself on the parameter, so `(...a) => { const
+/// v: string[] = a }` against `(...a: string[]) => void` was reported
+/// (#314's review, probed: tsc accepts it).
+fn contextual_param_type(
+  p : @ast.TsParam,
+  i : Int32,
+  formals : Array[@ast.TsType],
+) -> @ast.TsType {
+  if is_checkable(p.type_) || i >= formals.length() {
+    return p.type_
+  }
+  if p.is_rest {
+    match formals[i] {
+      Rest(inner) if i == formals.length() - 1 => inner
+      _ =>
+        if formals[i:].iter().any(fn(t) { t is Rest(_) }) {
+          @ast.TsType::Any
+        } else {
+          @ast.TsType::Tuple(formals[i:].to_owned())
+        }
+    }
+  } else {
+    match formals[i] {
+      Rest(inner) =>
+        match rest_param_element_type(inner) {
+          Some(e) => e
+          None => @ast.TsType::Any
+        }
+      t => t
+    }
+  }
+}
+
+///|
+/// The contextual formal a PLAIN parameter at position `i` is compared
+/// with: the formal itself, or the element of a contextual rest. `any`,
+/// which every check skips, when the rest's element cannot be named.
+fn contextual_formal_at(formals : Array[@ast.TsType], i : Int32) -> @ast.TsType {
+  match formals[i] {
+    Rest(inner) => rest_param_element_type(inner).unwrap_or(@ast.TsType::Any)
+    t => t
+  }
+}
+
+///|
 /// The element type of a rest parameter's written array type (`T[]`,
 /// `Array<T>`, `ReadonlyArray<T>`). `None` for a tuple or anything else,
 /// whose positions are not one element type.
@@ -27489,13 +27530,7 @@ fn check_arrow_with_context(
     let p = arrow_params[i]
     // Honor an explicit annotation on the arrow's param; otherwise fall
     // back to the formal parameter type.
-    let ty = if is_checkable(p.type_) {
-      p.type_
-    } else if i < formal_params.length() {
-      formal_params[i]
-    } else {
-      p.type_
-    }
+    let ty = contextual_param_type(p, i, formal_params)
     // When the arrow param carries an *explicit* annotation, it must be
     // compatible with the contextual (formal) parameter type. Parameters are
     // compared bivariantly (matching `strictFunctionTypes: false`, the corpus
@@ -27544,20 +27579,38 @@ fn check_arrow_with_context(
       }
     } else if is_checkable(p.type_) &&
       i < formal_params.length() &&
-      is_checkable(formal_params[i]) &&
+      // A plain parameter on the contextual REST is compared with the
+      // rest's element, and abstains when that is a type parameter
+      // (`(x: number, y) => 42` against `(...args: T) => U`, which the
+      // array-typed comparison reported).
+      is_checkable(contextual_formal_at(formal_params, i)) &&
       reliable_func_param_operand(p.type_, ctx) &&
-      reliable_func_param_operand(formal_params[i], ctx) &&
-      !(is_assignable_to_bivariant(p.type_, formal_params[i]) ||
-      is_assignable_to_bivariant(formal_params[i], p.type_)) &&
+      reliable_func_param_operand(contextual_formal_at(formal_params, i), ctx) &&
+      !(is_assignable_to_bivariant(
+        p.type_,
+        contextual_formal_at(formal_params, i),
+      ) ||
+      is_assignable_to_bivariant(
+        contextual_formal_at(formal_params, i),
+        p.type_,
+      )) &&
       // The resolver-free relation is nominal for interfaces, so an
       // annotated `(e: A0) => {}` against `(e: B0) => void` with `B0
       // extends A0` read as unrelated. It is the legal direction.
-      !assignable_through_class_chain(formal_params[i], p.type_, ctx.resolver) &&
-      !assignable_through_class_chain(p.type_, formal_params[i], ctx.resolver) {
+      !assignable_through_class_chain(
+        contextual_formal_at(formal_params, i),
+        p.type_,
+        ctx.resolver,
+      ) &&
+      !assignable_through_class_chain(
+        p.type_,
+        contextual_formal_at(formal_params, i),
+        ctx.resolver,
+      ) {
       record(
         ctx,
         "\{sub_path} param `\{p.name}`",
-        "expected `\{type_display(formal_params[i])}` but got `\{type_display(p.type_)}`",
+        "expected `\{type_display(contextual_formal_at(formal_params, i))}` but got `\{type_display(p.type_)}`",
       )
     }
     bind_callable_param(env, ctx, p, ty, param_names)
@@ -27819,13 +27872,7 @@ fn check_funcexpr_with_context(
   let mut i = 0
   while i < f.params.length() {
     let p = f.params[i]
-    let ty = if is_checkable(p.type_) {
-      p.type_
-    } else if i < formal_params.length() {
-      formal_params[i]
-    } else {
-      p.type_
-    }
+    let ty = contextual_param_type(p, i, formal_params)
     bind_callable_param(env, ctx, p, ty, param_names)
     i = i + 1
   }
@@ -30125,6 +30172,17 @@ fn bind_array_pattern(
     match ab.items[i] {
       Some(elem) => {
         let elem_ty = match unwrapped {
+          // A variadic tuple's positions from its rest element on hold the
+          // rest's ELEMENT type (with any fixed tail beside it): `[a, b]:
+          // [number, ...string[]]` binds `b` as `string`. Binding the raw
+          // `Rest(_)` marker made `const s: string = b` a report (#314's
+          // review, probed: tsc accepts it).
+          Tuple(items) if variadic_tuple_rest_index(items) is Some(r) =>
+            if i < r {
+              items[i]
+            } else {
+              variadic_tuple_element_from(items, r)
+            }
           Tuple(items) =>
             if i < items.length() {
               items[i]
@@ -30177,6 +30235,21 @@ fn bind_array_pattern(
   match ab.rest {
     Some(rest_binding) => {
       let rest_ty = match unwrapped {
+        // A variadic tuple's remainder follows tsc's `sliceTupleType`: from
+        // a position at or before the rest element it is the tuple's tail
+        // as written (`[h, ...t]: [number, ...string[]]` binds `t` as
+        // `[...string[]]`), and from past it an array of every element
+        // type from the rest on (`[h, f, ...t]` binds `string[]`). Slicing
+        // the stored items past the rest left `[]`, so a later `const [n]
+        // = t` read `n` as `undefined` (#314's review, probed).
+        Tuple(items) if variadic_tuple_rest_index(items) is Some(r) => {
+          let n = ab.items.length()
+          if n <= r {
+            @ast.TsType::Tuple(items[n:].to_owned())
+          } else {
+            @ast.TsType::Array(variadic_tuple_element_from(items, r))
+          }
+        }
         Tuple(items) => {
           // Rest captures the remaining tuple elements as a tuple.
           let remaining : Array[@ast.TsType] = []
@@ -30195,6 +30268,40 @@ fn bind_array_pattern(
     }
     None => ()
   }
+}
+
+///|
+/// The position of a tuple's variadic `Rest(_)` element, if it has one.
+fn variadic_tuple_rest_index(items : Array[@ast.TsType]) -> Int32? {
+  for r, t in items {
+    if t is Rest(_) {
+      return Some(r)
+    }
+  }
+  None
+}
+
+///|
+/// The type a position at or past a variadic tuple's rest element `r`
+/// holds: the union of the rest's element type and every fixed element
+/// after it (tsc's `getElementTypeOfSliceOfTupleType`). `any` stands for a
+/// rest whose element cannot be named.
+fn variadic_tuple_element_from(
+  items : Array[@ast.TsType],
+  r : Int32,
+) -> @ast.TsType {
+  let parts : Array[@ast.TsType] = []
+  let rest_elem = match items[r] {
+    Rest(inner) => rest_param_element_type(inner).unwrap_or(@ast.TsType::Any)
+    _ => @ast.TsType::Any
+  }
+  parts.push(rest_elem)
+  for j in (r + 1)..<items.length() {
+    if !parts.contains(items[j]) {
+      parts.push(items[j])
+    }
+  }
+  union_of(parts)
 }
 
 ///|
@@ -35738,7 +35845,8 @@ fn narrow_after_assignment(
             // the end is reachable (univer's `NumberValueObject.create`).
             match method_sole_return_type(m, ctx.resolver) {
               Some(t) => t
-              None => static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+              None =>
+                static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
             }
           } else {
             m.return_type
@@ -41247,13 +41355,7 @@ fn check_call_args_in_expr_at(
           let mut i = 0
           while i < aps.length() {
             let p = aps[i]
-            let ty = if is_checkable(p.type_) {
-              p.type_
-            } else if i < fps.length() {
-              fps[i]
-            } else {
-              p.type_
-            }
+            let ty = contextual_param_type(p, i, fps)
             bind_callable_param(inner_env, ctx, p, ty, names)
             ptys.push(ty)
             i = i + 1
