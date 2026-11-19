@@ -334,9 +334,15 @@ checker-miss-buckets *ARGS:
 # tuples. Two TPs that had been flagged for a WRONG reason (a tuple was
 # never assignable to an array) are flagged for their real ones now:
 # TS1354 (`readonly` on non-array syntax) and TS2344 (`Parameters<Function>`).
+# 0 -> 1 in batch HC: `restTuplesFromContextualTypes` was a TP for a WRONG
+# reason. Every report on it came from a callback parameter bound to the
+# `Rest(_)` marker itself, on lines tsc accepts. Its one real error is a
+# generic rest tuple: `(function(a, ...x){})(1, 2, ...t)` with `t: T extends
+# any[]`, whose parameters `[b: T[0], ...x: T[number][]]` `T` cannot satisfy.
+# That is a MISS until variadic tuple types are related generically.
 verify-checker-soundness:
     moon build --target native --release
-    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 0
+    bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0 --max-miss 1
 
 # A dataset of TypeScript checker behaviour the upstream suite does not test,
 # for projects reproducing the checker, in the upstream harness format and

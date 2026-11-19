@@ -2983,7 +2983,8 @@
       },
       "accepted": false,
       "codes": [
-        2322
+        2322,
+        2345
       ],
       "baseline": "baselines/contextualRestParametersAndVariadicPatterns.errors.txt",
       "claims": [
@@ -3039,7 +3040,25 @@
           "name": "okTupleRestTail",
           "kind": "ok",
           "fromLine": 18,
-          "toLine": 19
+          "toLine": 18
+        },
+        {
+          "name": "okAnnotatedOnGenericRest",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okAnnotatedOnRest",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badAnnotatedOnRest",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
         }
       ]
     },

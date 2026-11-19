@@ -5,9 +5,12 @@ contextualRestParametersAndVariadicPatterns.ts(15,64): error TS2322: Type '[x: s
   Type at position 0 in source is not compatible with type at position 0 in target.
     Type 'string' is not assignable to type 'number'.
 contextualRestParametersAndVariadicPatterns.ts(17,69): error TS2322: Type 'string' is not assignable to type 'number'.
+contextualRestParametersAndVariadicPatterns.ts(22,49): error TS2345: Argument of type '(a: string) => void' is not assignable to parameter of type '(...xs: number[]) => void'.
+  Types of parameters 'a' and 'xs' are incompatible.
+    Type 'number' is not assignable to type 'string'.
 
 
-==== contextualRestParametersAndVariadicPatterns.ts (4 errors) ====
+==== contextualRestParametersAndVariadicPatterns.ts (5 errors) ====
     // An unannotated callback parameter takes its type from the contextual
     // list, with the rest position read: a rest parameter collects the formals
     // from its position on (the rest array, or a tuple of fixed formals), and a
@@ -37,4 +40,12 @@ contextualRestParametersAndVariadicPatterns.ts(17,69): error TS2322: Type 'strin
                                                                         ~
 !!! error TS2322: Type 'string' is not assignable to type 'number'.
     export function okTupleRestTail([a, b, c]: [number, ...string[]]) { const s: string = c; return [a, b, s]; }
+    declare function f5<T extends any[], U>(f: (...args: T) => U): (...args: T) => U;
+    export const okAnnotatedOnGenericRest = f5((x: number, y) => 42);
+    export function okAnnotatedOnRest() { takeRest((a: number, b: number) => {}); }
+    export function badAnnotatedOnRest() { takeRest((a: string) => {}); }
+                                                    ~~~~~~~~~~~~~~~~~
+!!! error TS2345: Argument of type '(a: string) => void' is not assignable to parameter of type '(...xs: number[]) => void'.
+!!! error TS2345:   Types of parameters 'a' and 'xs' are incompatible.
+!!! error TS2345:     Type 'number' is not assignable to type 'string'.
     

@@ -27447,6 +27447,17 @@ fn contextual_param_type(
 }
 
 ///|
+/// The contextual formal a PLAIN parameter at position `i` is compared
+/// with: the formal itself, or the element of a contextual rest. `any`,
+/// which every check skips, when the rest's element cannot be named.
+fn contextual_formal_at(formals : Array[@ast.TsType], i : Int32) -> @ast.TsType {
+  match formals[i] {
+    Rest(inner) => rest_param_element_type(inner).unwrap_or(@ast.TsType::Any)
+    t => t
+  }
+}
+
+///|
 /// The element type of a rest parameter's written array type (`T[]`,
 /// `Array<T>`, `ReadonlyArray<T>`). `None` for a tuple or anything else,
 /// whose positions are not one element type.
@@ -27532,20 +27543,24 @@ fn check_arrow_with_context(
       }
     } else if is_checkable(p.type_) &&
       i < formal_params.length() &&
-      is_checkable(formal_params[i]) &&
+      // A plain parameter on the contextual REST is compared with the
+      // rest's element, and abstains when that is a type parameter
+      // (`(x: number, y) => 42` against `(...args: T) => U`, which the
+      // array-typed comparison reported).
+      is_checkable(contextual_formal_at(formal_params, i)) &&
       reliable_func_param_operand(p.type_, ctx) &&
-      reliable_func_param_operand(formal_params[i], ctx) &&
-      !(is_assignable_to_bivariant(p.type_, formal_params[i]) ||
-      is_assignable_to_bivariant(formal_params[i], p.type_)) &&
+      reliable_func_param_operand(contextual_formal_at(formal_params, i), ctx) &&
+      !(is_assignable_to_bivariant(p.type_, contextual_formal_at(formal_params, i)) ||
+      is_assignable_to_bivariant(contextual_formal_at(formal_params, i), p.type_)) &&
       // The resolver-free relation is nominal for interfaces, so an
       // annotated `(e: A0) => {}` against `(e: B0) => void` with `B0
       // extends A0` read as unrelated. It is the legal direction.
-      !assignable_through_class_chain(formal_params[i], p.type_, ctx.resolver) &&
-      !assignable_through_class_chain(p.type_, formal_params[i], ctx.resolver) {
+      !assignable_through_class_chain(contextual_formal_at(formal_params, i), p.type_, ctx.resolver) &&
+      !assignable_through_class_chain(p.type_, contextual_formal_at(formal_params, i), ctx.resolver) {
       record(
         ctx,
         "\{sub_path} param `\{p.name}`",
-        "expected `\{type_display(formal_params[i])}` but got `\{type_display(p.type_)}`",
+        "expected `\{type_display(contextual_formal_at(formal_params, i))}` but got `\{type_display(p.type_)}`",
       )
     }
     bind_callable_param(env, ctx, p, ty, param_names)

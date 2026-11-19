@@ -19,3 +19,7 @@ export function badRestFromPair() { takePair((...a) => { const v: [number, numbe
 export function okTupleRest([a, b]: [number, ...string[]]) { const s: string = b; return [a, s]; }
 export function badTupleRest([a, b]: [number, ...string[]]) { const n: number = b; return [a, n]; }
 export function okTupleRestTail([a, b, c]: [number, ...string[]]) { const s: string = c; return [a, b, s]; }
+declare function f5<T extends any[], U>(f: (...args: T) => U): (...args: T) => U;
+export const okAnnotatedOnGenericRest = f5((x: number, y) => 42);
+export function okAnnotatedOnRest() { takeRest((a: number, b: number) => {}); }
+export function badAnnotatedOnRest() { takeRest((a: string) => {}); }

@@ -1197,10 +1197,15 @@ test "a contextual rest parameter and a variadic tuple pattern bind element type
     #|export function okTupleRest([a, b]: [number, ...string[]]) { const s: string = b; return [a, s]; }
     #|export function badTupleRest([a, b]: [number, ...string[]]) { const n: number = b; return [a, n]; }
     #|export function okTupleRestTail([a, b, c]: [number, ...string[]]) { const s: string = c; return [a, b, s]; }
+    #|declare function f5<T extends any[], U>(f: (...args: T) => U): (...args: T) => U;
+    #|export const okAnnotatedOnGenericRest = f5((x: number, y) => 42);
+    #|export function okAnnotatedOnRest() { takeRest((a: number, b: number) => {}); }
+    #|export function badAnnotatedOnRest() { takeRest((a: string) => {}); }
   assert_eq(issue_lines(src), [
     "function badRestFromRest > binding `v` init: expected `string[]` but got `number[]`",
     "function badPlainFromRest > binding `s` init: expected `string` but got `number`",
     "function badRestFromPair > binding `v` init: expected `[number, number]` but got `[string, number]`",
     "function badTupleRest > binding `n` init: expected `number` but got `string`",
+    "function badAnnotatedOnRest > call `takeRest` arg[0] param `a`: expected `number` but got `string`",
   ])
 }
