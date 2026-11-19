@@ -1175,3 +1175,21 @@ test "an arrow's rest parameter takes any count and compares its element" {
     "top-level > binding `bad6` init param `a`: expected `number` but got `string`",
   ])
 }
+
+///|
+/// The "generic indexed access" rule (a primitive into `T[P]` over a type
+/// parameter) took any `keyof` key as generic, so `typeof KEYS[keyof
+/// typeof KEYS]` over an `as const` object, which is a concrete union of
+/// its values, rejected `has(KEYS.A)` (excalidraw's `EditorLocalStorage`,
+/// probed: tsc accepts it). A `keyof` over an in-scope type parameter is
+/// still the generic access.
+test "a keyof key over a concrete object is not a generic indexed access" {
+  let src =
+    #|const LOCAL = { A: "a-key", B: "b-key" } as const;
+    #|class S { static has(key: typeof LOCAL[keyof typeof LOCAL]) { return !!key; } }
+    #|export const ok = S.has(LOCAL.B);
+    #|export function g<T>(o: T, s: string) { const y: T[keyof T] = s; return [o, y]; }
+  assert_eq(issue_lines(src), [
+    "function g > binding `y` init: `string` is not assignable to the generic indexed access `T[keyof T]`",
+  ])
+}

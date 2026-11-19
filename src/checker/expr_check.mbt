@@ -19488,8 +19488,15 @@ fn check_expr_against_shape(
       ) ||
       // Parameter registration substitutes in-scope type params with their
       // bounds, leaving shapes like `IndexedAccess(Any, Keyof(Named("T")))`
-      // — the `keyof` key marks it as the same opaque generic access.
-      key_t is Keyof(_) ||
+      // — the `keyof` key marks it as the same opaque generic access. Only
+      // when the `keyof` names one of them: `typeof KEYS[keyof typeof KEYS]`
+      // over an `as const` object is a concrete union of its values, and
+      // `has(KEYS.A)` against it is legal (excalidraw's `EditorLocalStorage`,
+      // probed). That shape stays unjudged here.
+      (
+        key_t is Keyof(inner) &&
+        ctx.in_scope_type_params.iter().any(fn(tp) { type_param_occurs(tp, inner) })
+      ) ||
       (key_t is Named(key) && ctx.in_scope_type_params.contains(key)) => {
       record_unfiltered(
         ctx,
