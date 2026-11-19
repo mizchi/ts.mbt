@@ -1067,3 +1067,19 @@ test "a nested declaration shields only its own statement's writes" {
     "function e3 > PropAccess `.length`: object is possibly `null`", "function f2 > PropAccess `.length`: object is possibly `null`",
   ])
 }
+
+///|
+/// A compound statement every way through which exits is an exit, so a
+/// write before it reaches neither the code after a `finally` nor a loop's
+/// back edge (#312's review, probed): an `if` / `else` that throws on both
+/// sides, and a `break` / `return` pair in a loop body.
+test "an if whose branches all exit is an exit" {
+  let src =
+    #|export function f(flag: boolean, other: boolean) { let x: string | null = "ok"; try {} finally { if (flag) { x = null; if (other) throw 0; else throw 1; } } return x.length; }
+    #|export function g(flag: boolean, other: boolean) { let x: string | null = "ok"; try {} finally { if (flag) { x = null; if (other) throw 0; } } return x.length; }
+    #|export function w(c: boolean, d: boolean) { let x: string | null = "ok"; while (c) { const n = x.length; x = null; if (d) { break; } else { return n; } } return 0; }
+    #|export function w2(c: boolean, d: boolean) { let x: string | null = "ok"; while (c) { const n = x.length; x = null; if (d) { break; } } return 0; }
+  assert_eq(issue_lines(src), [
+    "function g > PropAccess `.length`: object is possibly `null`", "function w2 > PropAccess `.length`: object is possibly `null`",
+  ])
+}

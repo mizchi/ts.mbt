@@ -28947,6 +28947,15 @@ fn backedge_list_exits(
     Some(Break(Some(l))) => !inner_labels.contains(l)
     Some(Throw(_)) => !throw_caught
     Some(Break(None)) => !in_breakable
+    // A compound statement exits when every way through it does: an `if`
+    // whose two branches both exit, and a bare block that ends in an exit.
+    // `finally { if (flag) { x = null; if (o) throw 0; else throw 1 } }`
+    // joined `x = null` into the code after the statement (#312's review).
+    Some(If(_, t, Some(e))) =>
+      backedge_list_exits(t.stmts, in_breakable, throw_caught, inner_labels) &&
+      backedge_list_exits(e.stmts, in_breakable, throw_caught, inner_labels)
+    Some(Block(b)) =>
+      backedge_list_exits(b.stmts, in_breakable, throw_caught, inner_labels)
     _ => false
   }
   exits && !stmts.any(stmt_may_continue)
