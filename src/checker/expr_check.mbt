@@ -37205,16 +37205,17 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // A parser-merged declarator group (`var a: string, b: number;`
       // becomes `Block[Var, Var]`) must leak its bindings into the
       // enclosing scope -- snapshot/restore would erase them for every
-      // later statement. Only `var` groups leak (they hoist out of real
-      // blocks in JS anyway); `let`/`const` stay block-scoped so a later
-      // same-named outer declaration isn't shadowed by a stale type.
-      let mut all_decls = b.stmts.length() > 0
-      for st in b.stmts {
-        match st {
-          Var(_, _, _) => ()
-          _ => all_decls = false
-        }
-      }
+      // later statement. The parser marks a group with
+      // `DECL_GROUP_POSITION`, so `const a = 1, b = "x"` leaks whatever
+      // its kind. It used to be told apart by its contents, which cannot
+      // separate it from `{ let a = 1; let b = 2 }`, so only `var` groups
+      // leaked, and every later read of `a` was unchecked. A real block
+      // holding only `var`s still leaks, since a `var` hoists out of it.
+      let all_decls = b.stmts.length() > 0 &&
+        (
+          b.stmt_positions == [@ast.DECL_GROUP_POSITION] ||
+          b.stmts.iter().all(fn(st) { st is Var(_, _, _) })
+        )
       if all_decls {
         for st in b.stmts {
           check_stmt(env, st, ctx)

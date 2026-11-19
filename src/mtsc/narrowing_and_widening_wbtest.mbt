@@ -1083,3 +1083,23 @@ test "an if whose branches all exit is an exit" {
     "function g > PropAccess `.length`: object is possibly `null`", "function w2 > PropAccess `.length`: object is possibly `null`",
   ])
 }
+
+///|
+/// Every declarator of `const a = 1, b = "x"` binds in the enclosing scope.
+/// The parser lowers the list to a block marked `DECL_GROUP_POSITION`, and
+/// the checker read only an all-`var` block as a group, so every later read
+/// of a `let` or `const` declarator was unchecked (probed: all four `bad`
+/// lines are TS2322). A real block's own declarations still go out of scope.
+test "a multi-declarator let or const binds every name in its scope" {
+  let src =
+    #|export {};
+    #|const a = 1, b = "x";
+    #|const badA: string = a;
+    #|export function g() { const h = 1, i = "x"; const badH: string = h; const okI: string = i; let j = 1, k = 2; { let j = "s"; const okJ: string = j; } const okJ2: number = j; return [badH, okI, k, okJ2]; }
+    #|export function g2(o: { x: number }) { const { x } = o, y = 2; const badX: string = x; const okY: number = y; return [badX, okY]; }
+    #|export function g3() { const t1 = 1, t2 = "t"; return () => { const badT: string = t1; return [badT, t2]; }; }
+  assert_eq(issue_lines(src), [
+    "function g > binding `badH` init: expected `string` but got `number`", "function g2 > binding `badX` init: expected `string` but got `number`",
+    "function g3 > binding `badT` init: expected `string` but got `number`", "top-level > binding `badA` init: expected `string` but got `number`",
+  ])
+}
