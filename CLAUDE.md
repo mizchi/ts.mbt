@@ -7125,13 +7125,15 @@ product surfaces now.
       batch HB.
     - NBSP ends an identifier. This predates batch HB.
     - One test's input was invalid TypeScript and is fixed.
-  - **Six tsc-extra cases**, 109 in all.
+  - **Seven tsc-extra cases**, 110 in all.
   - **What it measures.**
-    - The oracle is unchanged (TP 2726 / MISS 0 / FP 0).
-    - tsc-extra stays at FP 0, with 109 cases and 20 declared MISSes.
-    - effect goes from 72 to 65. The seven reports removed are the
-      rest-parameter arity reports (`raceAll`, `zipLatestAll`, `color`,
-      `logEffect`).
+    - The oracle reads TP 2725 / MISS 1 / FP 0. The one MISS is the
+      wrong-reason TP described below.
+    - tsc-extra stays at FP 0, with 110 cases and 20 declared MISSes.
+    - effect goes from 72 to 62. All ten reports removed are
+      rest-parameter reports. Seven are arity reports (`raceAll`,
+      `zipLatestAll`, `color`, `logEffect`), and three are a `.length`
+      read off the `Rest(_)` marker.
     - zod stays at 7, and univer is unchanged.
     - excalidraw goes from 110 to 85.
 
@@ -7139,6 +7141,34 @@ product surfaces now.
     still catches 8 of 11 with no false positive. The mutation
     differential is unchanged at 105 caught / 155 missed (40%), with no
     undeclared false positive.
+
+    The review of [#314](https://github.com/mizchi/ts.mbt/pull/314) found
+    the `Rest(_)` marker in more places. Each was checked against the
+    nightly, and main had all of them.
+    - An unannotated callback parameter took the contextual formal at its
+      position unchanged. A rest parameter against `(...xs: number[]) =>
+      void` was therefore bound to the marker itself, and so was a plain
+      parameter that landed on the contextual rest.
+      `contextual_param_type` reads the rest position at all five sites
+      that bind a callback's parameters. A rest parameter collects the
+      formals from its position on, and a plain one takes the rest's
+      element.
+    - An ANNOTATED plain parameter on the contextual rest was compared with
+      the marker. It is compared with the rest's element now, and abstains
+      when that is a type parameter.
+    - A variadic tuple pattern (`[a, b]: [number, ...string[]]`) bound `b`
+      to the marker. It now binds the rest's element, joined with any
+      fixed tail.
+
+    Fixing these cost one corpus file, `restTuplesFromContextualTypes`,
+    which had been a TP for a WRONG reason. Every report on it came from a
+    callback parameter bound to the marker, on lines tsc accepts. Its one
+    real error is a generic rest tuple, `(function(a, ...x){})(1, 2,
+    ...t)` with `t: T extends any[]`, which is not modelled. So the
+    in-scope MISS budget goes from 0 to 1, with that reason at the gate.
+    A third finding did not reproduce: an NBSP after a comment. The source
+    is indexed by UTF-16 code unit, so NBSP is the single unit `0xA0`, and
+    `skip_whitespace` takes it before `scan_ident` can.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -27550,13 +27550,27 @@ fn check_arrow_with_context(
       is_checkable(contextual_formal_at(formal_params, i)) &&
       reliable_func_param_operand(p.type_, ctx) &&
       reliable_func_param_operand(contextual_formal_at(formal_params, i), ctx) &&
-      !(is_assignable_to_bivariant(p.type_, contextual_formal_at(formal_params, i)) ||
-      is_assignable_to_bivariant(contextual_formal_at(formal_params, i), p.type_)) &&
+      !(is_assignable_to_bivariant(
+        p.type_,
+        contextual_formal_at(formal_params, i),
+      ) ||
+      is_assignable_to_bivariant(
+        contextual_formal_at(formal_params, i),
+        p.type_,
+      )) &&
       // The resolver-free relation is nominal for interfaces, so an
       // annotated `(e: A0) => {}` against `(e: B0) => void` with `B0
       // extends A0` read as unrelated. It is the legal direction.
-      !assignable_through_class_chain(contextual_formal_at(formal_params, i), p.type_, ctx.resolver) &&
-      !assignable_through_class_chain(p.type_, contextual_formal_at(formal_params, i), ctx.resolver) {
+      !assignable_through_class_chain(
+        contextual_formal_at(formal_params, i),
+        p.type_,
+        ctx.resolver,
+      ) &&
+      !assignable_through_class_chain(
+        p.type_,
+        contextual_formal_at(formal_params, i),
+        ctx.resolver,
+      ) {
       record(
         ctx,
         "\{sub_path} param `\{p.name}`",
