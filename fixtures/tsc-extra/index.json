@@ -691,6 +691,83 @@
       ]
     },
     {
+      "case": "controlFlow/branchAssignmentsSurviveAnExitingSibling.ts",
+      "area": "controlFlow",
+      "name": "branchAssignmentsSurviveAnExitingSibling",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2345
+      ],
+      "baseline": "baselines/branchAssignmentsSurviveAnExitingSibling.errors.txt",
+      "claims": [
+        {
+          "name": "okThenAssigns",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okElseAssigns",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okElseIfChain",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okThrowingSibling",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badAssignsNull",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badNestedMaybe",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badShadowInBranch",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 16
+        },
+        {
+          "name": "okTupleAliasBothBranches",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okTupleAliasAfterExit",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badTupleAliasWrongLength",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 20
+        }
+      ]
+    },
+    {
       "case": "controlFlow/catchBindingSpelledAsPropertyName.ts",
       "area": "controlFlow",
       "name": "catchBindingSpelledAsPropertyName",
@@ -914,6 +991,58 @@
           "kind": "bad",
           "fromLine": 14,
           "toLine": 15
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/enumMemberValuesTakeTheirEnum.ts",
+      "area": "controlFlow",
+      "name": "enumMemberValuesTakeTheirEnum",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/enumMemberValuesTakeTheirEnum.errors.txt",
+      "claims": [
+        {
+          "name": "OkFields",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 18
+        },
+        {
+          "name": "okLetReassigned",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okAssignedOnce",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okAssignedInBranches",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okReduceKeepsTheEnum",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 25
+        },
+        {
+          "name": "badMaybeAssigned",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 27
         }
       ]
     },
@@ -1489,6 +1618,83 @@
           "kind": "bad",
           "fromLine": 26,
           "toLine": 27
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/memberPathAssignmentNarrowsThroughAliasAndMethodReturn.ts",
+      "area": "controlFlow",
+      "name": "memberPathAssignmentNarrowsThroughAliasAndMethodReturn",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345,
+        2532
+      ],
+      "baseline": "baselines/memberPathAssignmentNarrowsThroughAliasAndMethodReturn.errors.txt",
+      "claims": [
+        {
+          "name": "OkPath",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 22
+        },
+        {
+          "name": "OkBinding",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 26
+        },
+        {
+          "name": "OkLiteralOnAlias",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 30
+        },
+        {
+          "name": "OkStaticPath",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 34
+        },
+        {
+          "name": "BadStaticPathMaybe",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 38
+        },
+        {
+          "name": "BadPathMaybe",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 43
+        },
+        {
+          "name": "BadAnyReturn",
+          "kind": "bad",
+          "fromLine": 44,
+          "toLine": 48
+        },
+        {
+          "name": "BadEmptyBody",
+          "kind": "bad",
+          "fromLine": 49,
+          "toLine": 53
+        },
+        {
+          "name": "BadUnassigned",
+          "kind": "bad",
+          "fromLine": 54,
+          "toLine": 57
+        },
+        {
+          "name": "OkGeneric",
+          "kind": "ok",
+          "fromLine": 58,
+          "toLine": 63
         }
       ]
     },
@@ -3063,6 +3269,70 @@
       ]
     },
     {
+      "case": "inference/contextualRestThroughTypeofAndAlias.ts",
+      "area": "inference",
+      "name": "contextualRestThroughTypeofAndAlias",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/contextualRestThroughTypeofAndAlias.errors.txt",
+      "claims": [
+        {
+          "name": "okAlias",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badAlias",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okTypeofFunction",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badTypeofFunction",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okTypeofLocalArrow",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 18
+        },
+        {
+          "name": "badTypeofLocalArrow",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 23
+        },
+        {
+          "name": "okTypeofTopArrow",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badTypeofTopArrow",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 26
+        }
+      ]
+    },
+    {
       "case": "inference/contextuallyTypedFunctionValueThroughGuard.ts",
       "area": "inference",
       "name": "contextuallyTypedFunctionValueThroughGuard",
@@ -4402,6 +4672,59 @@
       ]
     },
     {
+      "case": "lib/aliasOfLibInterfaceKeepsMembers.ts",
+      "area": "lib",
+      "name": "aliasOfLibInterfaceKeepsMembers",
+      "options": {
+        "strict": "true",
+        "target": "esnext",
+        "lib": "esnext,dom"
+      },
+      "accepted": false,
+      "codes": [
+        2339
+      ],
+      "baseline": "baselines/aliasOfLibInterfaceKeepsMembers.errors.txt",
+      "claims": [
+        {
+          "name": "okDirect",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okAlias",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okThroughNamespace",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okNamespaceOwnMember",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badAliasMissingMember",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badNamespaceMissingMember",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 20
+        }
+      ]
+    },
+    {
       "case": "lib/errorIsErrorAndAugmentedRawJSON.ts",
       "area": "lib",
       "name": "errorIsErrorAndAugmentedRawJSON",
@@ -5478,6 +5801,112 @@
           "kind": "bad",
           "fromLine": 22,
           "toLine": 23
+        }
+      ]
+    },
+    {
+      "case": "relations/enumMembersAgainstEnumTargets.ts",
+      "area": "relations",
+      "name": "enumMembersAgainstEnumTargets",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/enumMembersAgainstEnumTargets.errors.txt",
+      "claims": [
+        {
+          "name": "okLiteralMember",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okPropertyWrite",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okCallArgument",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okReturnedMember",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okMemberUnion",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okShadowedName",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badOtherEnum",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badMemberOutsideUnion",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badPlainLiteral",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 25
+        },
+        {
+          "name": "okNumberIntoNumericEnum",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "okNumberIntoRequiredEnum",
+          "kind": "ok",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "okEnumMemberValue",
+          "kind": "ok",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "badStringIntoNumericEnum",
+          "kind": "bad",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badBooleanIntoNumericEnum",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "badNumberIntoStringEnum",
+          "kind": "bad",
+          "fromLine": 38,
+          "toLine": 39
         }
       ]
     },
