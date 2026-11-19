@@ -924,3 +924,22 @@ test "a join with an any side is any" {
     "function badTry > PropAccess `.b`: property `b` does not exist on `\"s\" (string) | { a: number }`",
   ])
 }
+
+///|
+/// Round three of #312's review, each cell probed against the nightly. A
+/// nested scope's declaration only shields the writes made inside the
+/// statement that holds it: `{ let x = 0 } x = null` still writes the outer
+/// `x` before the throw. An assignment-form or `var` loop head writes the
+/// outer binding; only a `let` / `const` head declares one of its own.
+test "a nested declaration shields only its own statement's writes" {
+  let src =
+    #|export function e1() { let x: string | null = "ok"; try { { let x = 0; x = 1; } x = null; throw 0; } catch { x.length; } }
+    #|export function e2() { let x: string | null = "ok"; try { for (x of [null]) { throw 0; } } catch { x.length; } }
+    #|export function e3() { let x: string | null = "ok"; try { for (const y of [1]) { x = null; } throw 0; } catch { x.length; } }
+    #|export function ok1() { let x: string | null = "ok"; try { { let x: string | null = "a"; x = null; } throw 0; } catch { x.length; } }
+    #|export function ok2() { let x: string | null = "ok"; try { for (let x of [null]) { throw 0; } } catch { x.length; } }
+  assert_eq(issue_lines(src), [
+    "function e1 > PropAccess `.length`: object is possibly `null`", "function e2 > PropAccess `.length`: object is possibly `null`",
+    "function e3 > PropAccess `.length`: object is possibly `null`",
+  ])
+}

@@ -28543,29 +28543,36 @@ fn loop_backedge_bindings_where(
 /// skipped, which only narrows.
 fn collect_try_writes(stmts : Array[@ast.TsStmt]) -> BackedgeWrites {
   let w : BackedgeWrites = { assigns: [], other: Map([]), }
-  // The trailing `Empty` keeps the top-level list from reading as one that
-  // ends in an exit, which the walker would skip whole.
-  backedge_walk_list([..stmts, @ast.TsStmt::Empty], w, true, true, [])
   // A write to a name some NESTED scope declares may target that scope's
   // own binding, and the walk records writes by name: `{ let x = "a"; x =
   // null }` inside the try block would otherwise widen the outer `x` for
-  // the catch block (#312's review). Such a name is dropped whatever it
-  // targets, which loses a write to the outer binding of the same spelling
-  // and only narrows.
-  let nested : Map[String, Unit] = Map([])
+  // the catch block (#312's review). So each top-level statement is walked
+  // on its own, and a write it makes to a name declared in a scope nested
+  // INSIDE it is dropped. `{ let x = 0 } x = null` keeps the second write,
+  // which is a separate statement. A write to the outer binding inside the
+  // same compound statement is still dropped, and that only narrows.
+  //
+  // Walking one statement at a time is the walk the whole list gets: inside
+  // a `try` with a `catch` (`throw_caught`) no write is dropped as
+  // overwritten, and the trailing `Empty` keeps the list from reading as
+  // one that ends in an exit, which the walker would skip whole.
   for st in stmts {
+    let one : BackedgeWrites = { assigns: [], other: Map([]), }
+    backedge_walk_list([st, @ast.TsStmt::Empty], one, true, true, [])
+    let nested : Map[String, Unit] = Map([])
     nested_scope_declared_names(st, nested)
-  }
-  if nested.is_empty() {
-    return w
-  }
-  let other : Map[String, Unit] = Map([])
-  for k, _ in w.other {
-    if !nested.contains(k) {
-      other[k] = ()
+    for a in one.assigns {
+      if !nested.contains(a.0) {
+        w.assigns.push(a)
+      }
+    }
+    for k, _ in one.other {
+      if !nested.contains(k) {
+        w.other[k] = ()
+      }
     }
   }
-  { assigns: w.assigns.filter(fn(a) { !nested.contains(a.0) }), other, }
+  w
 }
 
 ///|
@@ -28610,10 +28617,15 @@ fn nested_scope_declared_names(
       }
       block(b)
     }
-    ForOf(_, bd, _, _, b)
-    | ForAwaitOf(_, bd, _, _, b)
-    | ForIn(_, bd, _, _, b) => {
-      binding(bd)
+    // Only a `let` / `const` head declares a binding of the loop's own.
+    // An assignment head (`for (x of …)`) writes the outer `x`, and a `var`
+    // head is the function's binding (#312's review).
+    ForOf(kind, bd, _, _, b)
+    | ForAwaitOf(kind, bd, _, _, b)
+    | ForIn(kind, bd, _, _, b) => {
+      if kind is (Let | Const) {
+        binding(bd)
+      }
       block(b)
     }
     Try(t, cb, c, f) => {
