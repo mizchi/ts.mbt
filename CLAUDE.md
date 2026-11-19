@@ -6964,6 +6964,13 @@ product surfaces now.
       value` read a module-level `value`. Its parameters are bound now.
     - The pragma's separators are JavaScript's `\s`, including U+2003 and
       U+3000, as tsc reads them (probed).
+
+    One more came from the field data rather than the review. A flow
+    join kept `any` as a union member. After `let d = null; try { d =
+    (await g()) || null } catch { d = { … } }`, excalidraw's
+    `d?.elements` was reported three times, and main reported the same
+    three sites as "does not exist on `null`". A union with `any` is
+    `any`, as in tsc, and the `if` join gets the same rule.
   - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
     FP 0). tsc-extra stays at FP 0, now with 95 cases and one more
     declared MISS. effect goes from 78 to 75 and zod stays at 7. Against batch
@@ -6974,7 +6981,7 @@ product surfaces now.
     - sheets-numfmt 199→153
     - ui 159→113
 
-    excalidraw goes from 296 to 197. None of them reports at a site
+    excalidraw goes from 296 to 194. None of them reports at a site
     main does not. The real-app check still catches 8 of 11 with no
     false positive. The mutation differential is unchanged at 105
     caught / 155 missed (40%), with no undeclared false positive.
