@@ -773,3 +773,26 @@ test "an assignment in a block or a try reaches the code after it" {
     "function n6 > PropAccess `.length`: object is possibly `null`",
   ])
 }
+
+///|
+/// The falsy part of a `boolean` left operand of `&&` is `false`, so
+/// `flag && obj` is `false | Obj` and `if (p)` on it leaves `Obj`
+/// (excalidraw's `insertAtParentCenter && this.snap(…)`). An `any` right
+/// operand makes the whole expression `any`. `boolean[]`'s `x => !!x`
+/// still infers no `x is true`, as in tsc.
+test "a boolean and an object joined by and narrow to the object" {
+  let src =
+    #|declare const flag: boolean;
+    #|declare const av: any;
+    #|interface P { ex: number }
+    #|declare function snap(x: number): P | undefined;
+    #|declare const bools: boolean[];
+    #|export function run(x: number) { const p = flag && snap(x); if (p) { return p.ex; } return 0; }
+    #|export function anyRight() { const p = flag && av; const n: string = p; return n; }
+    #|export function falsePart(x: number) { const p = flag && snap(x); const q: P = p; return q; }
+    #|export const kept: true[] = bools.filter((x) => !!x);
+  assert_eq(issue_lines(src), [
+    "function falsePart > binding `q` init: type `false | P | undefined` is not assignable to type `P`",
+    "top-level > binding `kept` init: expected `true[]` but got `boolean[]`",
+  ])
+}
