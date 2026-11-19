@@ -24417,6 +24417,33 @@ fn method_sole_return_type(
 }
 
 ///|
+/// The return type of an unannotated method's whole body, read as
+/// `infer_body_return_type` reads a function declaration's: every `return`
+/// short of a nested function, the body's top-level locals bound, and
+/// `undefined` when the end is reachable. `None` for an async or generator
+/// method and for a body that cannot be decided. Used only where a static
+/// factory's result narrows an assignment, which can remove nullish members
+/// and nothing else, and only for a method the parser's
+/// `<unannotated-return:NAME>` sentinel names.
+fn static_factory_body_return_type(
+  m : @ast.TsClassMethodDecl,
+  resolver : Resolver,
+) -> @ast.TsType? {
+  if m.is_async || m.is_generator {
+    return None
+  }
+  guard m.body is Some(b) else { return None }
+  let env = ExprEnv::new()
+  for p in m.params {
+    env.bind(p.0, p.1)
+  }
+  match infer_body_return_type(env, resolver, b) {
+    Some(t) if !(t is Any || t is Unknown) => Some(t)
+    _ => None
+  }
+}
+
+///|
 /// TS2416 for a class METHOD against the interface member it implements.
 ///
 /// `member_override_incompatible` cannot answer this: its arms are scalars
@@ -35705,7 +35732,14 @@ fn narrow_after_assignment(
           } else if ctx.resolver.unannotated_static_return_members.get(cn)
             is Some(names) &&
             names.contains(meth) {
-            method_sole_return_type(m, ctx.resolver).unwrap_or(Any)
+            // A factory that builds its instance in a local first (`const
+            // instance = new N(v); …; return instance`) is read the way a
+            // function declaration's body is, with `undefined` added when
+            // the end is reachable (univer's `NumberValueObject.create`).
+            match method_sole_return_type(m, ctx.resolver) {
+              Some(t) => t
+              None => static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+            }
           } else {
             m.return_type
           }

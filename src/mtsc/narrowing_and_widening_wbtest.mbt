@@ -1193,3 +1193,24 @@ test "a keyof key over a concrete object is not a generic indexed access" {
     "function g > binding `y` init: `string` is not assignable to the generic indexed access `T[keyof T]`",
   ])
 }
+
+///|
+/// An unannotated static factory narrows an assignment by its whole body,
+/// not only by a single `return new N(v)`: `const instance = new N(v); …;
+/// return instance` is an `N` (univer's `NumberValueObject.create`, behind
+/// `if (v == null || v.isNull()) { v = NumberValueObject.create(0) }`). A
+/// factory that may return `undefined`, or fall off its end, still leaves
+/// the binding possibly `undefined` (probed: tsc reports exactly `h` and `k`).
+test "a static factory that returns a local narrows an assignment" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|class Base { isNull() { return false; } isBoolean() { return false; } }
+    #|class N extends Base { static create(v: number, p: string = "") { const i = new N(v); if (p) { i.p = p; } return i; } p = ""; constructor(public v: number) { super(); } }
+    #|class M extends Base { static mk(v: number) { const i = v > 0 ? new M() : undefined; return i; } static mk2(v: number) { if (v > 0) { return new M(); } } }
+    #|export function f(x: Nullable<Base>) { let o = x; if (o == null || o.isNull()) { o = N.create(0); } return o.isBoolean(); }
+    #|export function h(x: Nullable<Base>) { let o = x; if (o == null) { o = M.mk(0); } return o.isBoolean(); }
+    #|export function k(x: Nullable<Base>) { let o = x; if (o == null) { o = M.mk2(0); } return o.isBoolean(); }
+  assert_eq(issue_lines(src), [
+    "function h > call `isBoolean`: object is possibly `undefined`", "function k > call `isBoolean`: object is possibly `undefined`",
+  ])
+}
