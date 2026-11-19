@@ -7178,6 +7178,15 @@ product surfaces now.
     a comment too (on main those were "invalid character"). A lexer test
     asserts the tokens, and each spelling's emit prints what the source
     prints under Node.
+    The second round found the `Rest(_)` family once more, in an array
+    pattern's REST element: `[h, f, ...t]: [number, ...string[]]` sliced
+    the stored tuple items past the rest marker and bound `t` as `[]`, so
+    a later `const [n] = t` read `n` as `undefined`. main had it for an
+    annotated pattern, and this batch's contextual rest tuple carried it
+    into callbacks. The remainder now follows tsc's `sliceTupleType`. From
+    at or before the tuple's rest it is the tail as written. From past it,
+    it is an array of every element type from the rest on. The element
+    position and the remainder share one helper for that union.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
