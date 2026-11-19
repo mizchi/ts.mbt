@@ -168,7 +168,9 @@ guide to whether the behaviour will change.
 | controlFlow | `arrayIsArraySplitsClassMembers` | `Array.isArray` splits `number[] \| ErrorValue` when the other member is a class or interface that does not extend `Array`; an `Array` subclass stays on the array side | TS2339 TS2345 | — |
 | controlFlow | `arrayIsArrayThroughOptionalChain` | A true `Array.isArray(p.body?.textRuns)` proves `p.body` non-nullish, also after an `&&` guard on `p`; the false branch proves nothing | TS2345 | — |
 | controlFlow | `assignmentInConditionAndNormalizedArrayLiterals` | `while ((m = re.exec(s)))`, boolean truthiness to `true` / `false`, and the normalized union of differently-keyed literals | TS18047 TS2322 TS2339 | `objectLiteralNormalization` |
+| controlFlow | `assignmentsReachPastBlockAndTry` | What a bare block or a `try` assigns to an outer binding reaches the code after it; after `try`/`catch` the binding is the union of both exits, and an exiting side drops out; an auto-typed `let x = null` assigned `any` is `any` | TS18047 | — |
 | controlFlow | `bindingPatternDefaultsWithConstTuplesAndComputedKeys` | An `as const` default, a computed key that assigns its variable, and their evaluation order | TS2322 | `controlFlowBindingPatternOrder` |
+| controlFlow | `blockShadowKeepsOuterDeclaration` | A block-scoped declaration that shadows an outer binding (an `if` branch, a bare block, a `for` head) leaves the outer binding's declaration in force after the block; inside, the inner one decides | TS2322 | — |
 | controlFlow | `destructuringReadsNarrowedProperty` | `const { tables } = body` reads `body.tables` as control flow narrowed it; a sibling property, an unguarded read and a reassigned source do not | TS18048 | — |
 | controlFlow | `destructuredDiscriminantBoundaries` | A `const` destructured discriminant narrows its source through an `else if` chain, a truthiness test and a property path. A `let` or defaulted binding does not, and a `switch` group keeps the union of its labels. A boolean discriminant's truthiness narrows, `done?: false` included. | TS2339 | `controlFlowAliasing` (plain, renamed, `switch`) |
 | controlFlow | `forOfDestructuringAnyAndReadonlyMap` | `for (const [k, v] of …)` over `any` and over a `ReadonlyMap` | TS2322 | — |
@@ -187,6 +189,10 @@ guide to whether the behaviour will change.
 | declarations | `interfaceMethodRestParameters` | An interface or object-type method's rest parameter, through an alias too, beside a plain array parameter | TS2345 | — |
 | declarations | `moduleLocalNonNullableShadowsLibUtility` | A module's own `type NonNullable<T> = T` is not the lib utility | TS2322 | — |
 | declarations | `namespaceLocalInterfaceShadowsLibPromise` | A namespace-local `interface Promise<T>` shadows the lib type | TS2345 | — |
+| directives | `tsNocheckAfterBlockComment` | `@ts-nocheck` after a block comment, in any case, with a `: reason` tail, opts the file out | accepted | `tsNoCheckForTypescriptComments2` (no block comment) |
+| directives | `tsNocheckAfterStatement` | A `// @ts-nocheck` after the first statement is an ordinary comment | TS2322 | — |
+| directives | `tsNocheckInJsDocBlock` | `/** @ts-nocheck */` does not opt out: the pragma is single-line | TS2322 | — |
+| directives | `tsNocheckThenTsCheck` | With `@ts-nocheck` and `@ts-check` both leading, the last one wins | TS2322 | — |
 | inference | `arrowConstGuardOptionalParameters` | A generic arrow-`const` type guard with an optional and a defaulted parameter: arity, `null`, narrowing | TS2322 TS2554 | — |
 | inference | `autoTypedNullOrUndefinedInitializer` | Under `noImplicitAny`, `let e = null` / `var e = undefined` is declared `any` and evolves; a read before assignment is still `null`, and `void 0`, `const` and `let e: null` are not auto-typed | TS18047 TS2322 | — |
 | inference | `boundViolationsShadowingAndNumericTemplates` | Bound violations through array arguments, shadowing closure parameters, and `${bigint}` / `${number}` / `infer X extends number` on edge-case strings | TS2322 TS2353 | `templateLiteralTypes4` |

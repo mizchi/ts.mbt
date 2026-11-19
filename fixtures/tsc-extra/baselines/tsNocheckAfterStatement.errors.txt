@@ -1,0 +1,13 @@
+tsNocheckAfterStatement.ts(6,14): error TS2322: Type 'string' is not assignable to type 'number'.
+
+
+==== tsNocheckAfterStatement.ts (1 errors) ====
+    export const okFirstStatement = 1;
+    // @ts-nocheck
+    
+    // A pragma after the first statement is an ordinary comment.
+    
+    export const badAfterStatement: number = "s";
+                 ~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    
