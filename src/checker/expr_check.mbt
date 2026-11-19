@@ -35030,17 +35030,31 @@ fn narrow_after_assignment(
         // Every member of the resolved return must be positively
         // non-nullish: `string | void` is not, and `target_admits_nullish`
         // does not see the `void`.
-        Some(m) =>
+        // An unannotated static reads its return from the body, as a
+        // getter does: `static create(v) { return new N(v) }` is an `N`.
+        // The parser marks it `static:NAME` only when no annotation was
+        // written, so an explicit `: any` stays `any`.
+        Some(m) => {
+          let ret = if is_checkable(m.return_type) {
+            m.return_type
+          } else if ctx.resolver.unannotated_return_members.get(cn)
+            is Some(names) &&
+            names.contains("static:" + meth) {
+            method_sole_return_type(m, ctx.resolver).unwrap_or(Any)
+          } else {
+            m.return_type
+          }
           m.type_params.length() == 0 &&
-          is_checkable(m.return_type) &&
+          is_checkable(ret) &&
           union_components(
-            deep_union_members(ctx.resolver, ctx.resolver.unwrap(m.return_type)),
+            deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
           )
           .iter()
           .all(fn(t) {
             !(ctx.resolver.unwrap(t)
             is (Void | Null | Undefined | Any | Unknown | Never))
           })
+        }
         None => false
       }
     _ => false

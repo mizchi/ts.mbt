@@ -594,7 +594,29 @@ test "promise callbacks are optional" {
     #|export const badUnion = p.then(() => "a", () => 1).then((x) => { const n: number = x; return n; });
   assert_eq(issue_lines(src), [
     "top-level > call `then` arg[0] param `v`: expected `number` but got `string`",
-    "top-level > call `then`: expected 0-2 argument(s), got 3",
-    "top-level > binding `n` init: expected `number` but got `\"a\" (string) | number`",
+    "top-level > call `then`: expected 0-2 argument(s), got 3", "top-level > binding `n` init: expected `number` but got `\"a\" (string) | number`",
+  ])
+}
+
+///|
+/// An unannotated STATIC factory reads its return from the body when an
+/// assignment narrows by it: univer's `v = NumberValueObject.create(0)`
+/// inside `if (v == null)` left `v` possibly undefined after the `if`. An
+/// explicit `: any` and a nullable body still report.
+test "an unannotated static factory narrows an assignment" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|class B { isBoolean() { return false; } }
+    #|class N extends B {
+    #|  static create(v: number) { return new N(); }
+    #|  static loose(v: number): any { return new N(); }
+    #|  static maybe(v: number) { return v > 0 ? new N() : undefined; }
+    #|}
+    #|export function ok(valueObject: Nullable<B>) { let v = valueObject; if (v == null) { v = N.create(0); } return v.isBoolean(); }
+    #|export function badAny(valueObject: Nullable<B>) { let v = valueObject; if (v == null) { v = N.loose(0); } return v.isBoolean(); }
+    #|export function badMaybe(valueObject: Nullable<B>) { let v = valueObject; if (v == null) { v = N.maybe(0); } return v.isBoolean(); }
+  assert_eq(issue_lines(src), [
+    "function badAny > call `isBoolean`: object is possibly `undefined`",
+    "function badMaybe > call `isBoolean`: object is possibly `undefined`",
   ])
 }
