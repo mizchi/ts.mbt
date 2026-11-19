@@ -4307,16 +4307,22 @@
           "toLine": 8
         },
         {
-          "name": "badEmSpaceDoesNotHideMismatch",
-          "kind": "bad",
+          "name": "okNoBreakSpaceEndsTheName",
+          "kind": "ok",
           "fromLine": 9,
           "toLine": 9
         },
         {
+          "name": "badEmSpaceDoesNotHideMismatch",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
           "name": "okCaf",
           "kind": "ok",
-          "fromLine": 10,
-          "toLine": 11
+          "fromLine": 11,
+          "toLine": 12
         }
       ]
     },

@@ -9,5 +9,6 @@
  export const okEmSpaceBeforeDeclaration = 1;
 export const　okIdeographicSpaceAfterKeyword = 2;
 export const okNoBreakSpaceBeforeColon : number = 3;
+export const okNoBreakSpaceEndsTheName: number = okNoBreakSpaceBeforeColon;
 export function badEmSpaceDoesNotHideMismatch() { const a: number = "s"; return a; }
 export const okCafé = 4;

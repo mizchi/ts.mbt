@@ -1128,6 +1128,8 @@ test "a unicode space is whitespace in trivia and in code" {
   for
     src in [
       "\u{2003}const a = 1;\nexport { a };", "const café = 1;\nconst 変数 = café + 1;\nexport { 変数 };",
+      // NBSP ends a name too (#313's review): this declared `a\u{A0}`.
+       "const a\u{A0}: number = 3;\nexport { a };",
     ] {
     assert_eq(issue_lines(src), [], msg=src)
   }
