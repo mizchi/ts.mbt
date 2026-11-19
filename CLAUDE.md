@@ -7002,6 +7002,80 @@ product surfaces now.
     main does not. The real-app check still catches 8 of 11 with no
     false positive. The mutation differential is unchanged at 105
     caught / 155 missed (40%), with no undeclared false positive.
+
+  Batch HB continues with excalidraw and univer, and takes the three
+  Minors carried from [#312](https://github.com/mizchi/ts.mbt/pull/312)'s
+  last review. Each cell was probed against the nightly, and each
+  mechanism was shown necessary by reverting it.
+  - **Two narrowing gaps in `&&` and `||`, one of them a false positive
+    on main.** Under a `!`, the `||` arm pushed each operand's TRUE
+    narrowing into the then branch, so `if (!(x === null || y === null))
+    x.length` read `x` as `null`. The `&&` arm had no else side at all and
+    did nothing under a `!`, so `if (!lock?.scroll && !lock?.zoom) return`
+    left `lock` possibly `undefined` below it. Both operators now compute
+    one true side and one false side, and the sense decides which branch
+    gets which. One side composes the operands' narrowings, and the other
+    narrows only a binding both paths narrow, to the union of the two.
+  - **`x === false` on a union with `boolean` leaves `true`.** Strict
+    equality only, and only a union, which is the shape that had nothing
+    to remove.
+  - **A `const` arrow guard narrows like a declared one.** Its parameter
+    may be typed by an indexed access (`AppProps["ui"]`), which reached
+    the guard raw. Its argument may be a property path, which the `const`
+    route had not handled.
+  - **`await` on a union awaits each member,** so destructuring the
+    result of a `T | Promise<T>` call no longer reads `string |
+    undefined` off the promise member.
+  - **An object rest over a union is a union of the members' rests,** so
+    `{ size, ...props }: Button | Toggle` keeps each discriminant.
+  - **Three `any` collapses.** These are grouped `switch` labels on an `any`
+    scrutinee, a join with an `any` side, and an auto-typed binding that takes
+    a back-edge value this cannot type.
+  - **Lib instances and opaque lib members.** `new RegExp`, `new Date` and a
+    regex literal keep their lib instance type. A union holding a DOM
+    interface the lib tables do not carry abstains on member existence
+    through an alias as well as written out, and a field destructured from
+    it is `any`.
+  - **An interface in an intersection target joins the merge.** An object
+    literal against `I & { event }` is checked field by field, inherited
+    members included. The whole-object relation it fell to read an enum
+    member as `number`.
+  - **The lexer treats Unicode spaces as whitespace.** These are U+0085,
+    U+1680, U+2000–U+200B, U+202F, U+205F, U+3000 and U+FEFF. They had
+    been identifier characters, so `\u{2003}const a = 1` made the
+    declaration vanish, on main too.
+  - **TS18046's scan skips a property name.** `console.error("…", error)`
+    had read as a call of the catch variable `error`.
+  - **#312's carried Minors.** An `if` whose branches all exit is an exit,
+    so `finally { if (f) { x = null; if (o) throw 0; else throw 1 } }`
+    leaves `x` alone after the statement. The Unicode trivia cells assert
+    the exact line.
+  - **Eight tsc-extra cases**, 103 in all.
+  - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
+    FP 0). tsc-extra stays at FP 0 with 103 cases and 17 declared
+    MISSes. effect goes from 75 to 72 and zod stays at 7. Against batch
+    HA, univer goes:
+    - core 30→28
+    - docs-hyper-link 14→12
+    - data-validation 151→136
+    - sheets-numfmt 153→142
+    - ui 113→102
+
+    excalidraw goes from 194 to 110. None of them reports at a site
+    main does not. Two sites changed, and both are older than this batch:
+    - effect's `compileJsonSchema` now reads `JsonSchema | true` where
+      main read `JsonSchema | boolean`. Both come from one gap: an object
+      literal widens a member holding an ANNOTATED binding, so `{ type }`
+      with `const type: J | false` reads `J | boolean`, where tsc keeps
+      `J | false`. The new `=== false` narrowing then leaves `true`.
+    - univer's `isScientificNotationNumericCell` reports one more
+      `cell.v` read in the same `&&` chain. The guard compares against an
+      imported enum member, which the graph path types as `any`. tsc
+      reports all three reads for that spelling.
+
+    The real-app check still catches 8 of 11 with no false positive.
+    The mutation differential is unchanged at 105 caught / 155 missed
+    (40%), with no undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

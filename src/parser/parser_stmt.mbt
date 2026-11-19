@@ -1168,6 +1168,12 @@ fn Parser::record_unknown_catch_use(
     if prev is Typeof {
       return
     }
+    // A property NAME after `.` (or `?.`, which lexes as `?` then `.`) is
+    // not the binding: `console.error("…", error)` was reported as a call
+    // of the catch variable `error` (excalidraw, twelve times).
+    if prev is Dot {
+      continue
+    }
     match next {
       Instanceof | As | Eq | Bang => return
       Ident("as") => return

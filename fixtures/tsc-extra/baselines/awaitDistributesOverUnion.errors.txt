@@ -1,0 +1,23 @@
+awaitDistributesOverUnion.ts(10,90): error TS2322: Type 'string' is not assignable to type 'number'.
+awaitDistributesOverUnion.ts(11,80): error TS2322: Type 'string | number' is not assignable to type 'string'.
+  Type 'number' is not assignable to type 'string'.
+
+
+==== awaitDistributesOverUnion.ts (2 errors) ====
+    // `await` on a union awaits each member, so destructuring the result of a
+    // `T | Promise<T>` call reads `T`'s members, not `string | undefined` off the
+    // promise member.
+    
+    type MaybePromise<T> = T | Promise<T>;
+    declare function gen(): MaybePromise<{ html: string }>;
+    declare const mixed: { html: string } | Promise<{ html: number }>;
+    
+    export async function okDestructureAwaitedUnion() { const { html } = await gen(); return html.trim(); }
+    export async function badDestructureAwaitedUnion() { const { html } = await gen(); const n: number = html; return n; }
+                                                                                             ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export async function badAwaitedMembersDiffer() { const r = await mixed; const s: string = r.html; return s; }
+                                                                                   ~
+!!! error TS2322: Type 'string | number' is not assignable to type 'string'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    

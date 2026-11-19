@@ -691,6 +691,117 @@
       ]
     },
     {
+      "case": "controlFlow/catchBindingSpelledAsPropertyName.ts",
+      "area": "controlFlow",
+      "name": "catchBindingSpelledAsPropertyName",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18046
+      ],
+      "baseline": "baselines/catchBindingSpelledAsPropertyName.errors.txt",
+      "claims": [
+        {
+          "name": "okPassedToConsoleError",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okPassedThroughOptionalCall",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "badMemberOfUnknown",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badCallOfUnknown",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/constGuardsLibInstancesAndAnyJoins.ts",
+      "area": "controlFlow",
+      "name": "constGuardsLibInstancesAndAnyJoins",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2339
+      ],
+      "baseline": "baselines/constGuardsLibInstancesAndAnyJoins.errors.txt",
+      "claims": [
+        {
+          "name": "okConstGuardOnIndexedAccessParam",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okConstGuardOnPath",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badConstGuardElse",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okRegexExecLoop",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badDateGetTime",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okGroupedLabelsOnAny",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okJoinWithAnySide",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badJoinOfTypedSides",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okDomUnionAlias",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 25
+        }
+      ]
+    },
+    {
       "case": "controlFlow/destructuredDiscriminantBoundaries.ts",
       "area": "controlFlow",
       "name": "destructuredDiscriminantBoundaries",
@@ -837,6 +948,60 @@
           "kind": "bad",
           "fromLine": 6,
           "toLine": 7
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/logicalOperatorsNarrowBothSidesInBothSenses.ts",
+      "area": "controlFlow",
+      "name": "logicalOperatorsNarrowBothSidesInBothSenses",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        18047,
+        18048
+      ],
+      "baseline": "baselines/logicalOperatorsNarrowBothSidesInBothSenses.errors.txt",
+      "claims": [
+        {
+          "name": "okNegatedOrNarrowsBoth",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "badNegatedOrElseSide",
+          "kind": "bad",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okAndOfNegatedChainsEarlyReturn",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badOrOfNegatedChainsEarlyReturn",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okFalseThenTrueLeavesNumber",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badFalseLeavesTrue",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 14
         }
       ]
     },
@@ -1397,6 +1562,88 @@
       ]
     },
     {
+      "case": "controlFlow/tryStatementEntryAndExitStates.ts",
+      "area": "controlFlow",
+      "name": "tryStatementEntryAndExitStates",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18047
+      ],
+      "baseline": "baselines/tryStatementEntryAndExitStates.errors.txt",
+      "claims": [
+        {
+          "name": "badCatchSeesWriteBeforeThrow",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badFinallySeesWriteBeforeReturn",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okFinallyWriteReachesContinuation",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badFinallyNullWriteReachesContinuation",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okFinallyWriteBeforeThrow",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okFinallyWriteBeforeExitingIfElse",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badFinallyWriteBeforeConditionalThrow",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okNestedDeclarationShieldsItsWrite",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badNestedDeclarationThenOuterWrite",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badAssignmentLoopHeadWritesOuter",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "okLetLoopHeadIsItsOwn",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 24
+        }
+      ]
+    },
+    {
       "case": "controlFlow/typeGuardFalseBranchOfAnyAndUnknown.ts",
       "area": "controlFlow",
       "name": "typeGuardFalseBranchOfAnyAndUnknown",
@@ -1804,6 +2051,40 @@
       "claims": []
     },
     {
+      "case": "declarations/objectRestOverUnionKeepsEachMember.ts",
+      "area": "declarations",
+      "name": "objectRestOverUnionKeepsEachMember",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/objectRestOverUnionKeepsEachMember.errors.txt",
+      "claims": [
+        {
+          "name": "okRestNarrowsByDiscriminant",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "badRestKeepsBothDiscriminants",
+          "kind": "bad",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "badRestNarrowedMemberType",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 11
+        }
+      ]
+    },
+    {
       "case": "directives/tsNocheckAfterBlockComment.ts",
       "area": "directives",
       "name": "tsNocheckAfterBlockComment",
@@ -2136,6 +2417,40 @@
           "kind": "bad",
           "fromLine": 21,
           "toLine": 22
+        }
+      ]
+    },
+    {
+      "case": "inference/awaitDistributesOverUnion.ts",
+      "area": "inference",
+      "name": "awaitDistributesOverUnion",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/awaitDistributesOverUnion.errors.txt",
+      "claims": [
+        {
+          "name": "okDestructureAwaitedUnion",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "badDestructureAwaitedUnion",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badAwaitedMembersDiffer",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
         }
       ]
     },
@@ -3632,6 +3947,46 @@
       "claims": []
     },
     {
+      "case": "parser/unicodeSpacesSeparateTokens.ts",
+      "area": "parser",
+      "name": "unicodeSpacesSeparateTokens",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/unicodeSpacesSeparateTokens.errors.txt",
+      "claims": [
+        {
+          "name": "okIdeographicSpaceAfterKeyword",
+          "kind": "ok",
+          "fromLine": 7,
+          "toLine": 7
+        },
+        {
+          "name": "okNoBreakSpaceBeforeColon",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "badEmSpaceDoesNotHideMismatch",
+          "kind": "bad",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okCaf",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 11
+        }
+      ]
+    },
+    {
       "case": "realWorld/effectArrowConstTypeGuards.ts",
       "area": "realWorld",
       "name": "effectArrowConstTypeGuards",
@@ -4602,6 +4957,53 @@
           "kind": "bad",
           "fromLine": 14,
           "toLine": 15
+        }
+      ]
+    },
+    {
+      "case": "relations/objectLiteralAgainstInterfaceIntersection.ts",
+      "area": "relations",
+      "name": "objectLiteralAgainstInterfaceIntersection",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345,
+        2353
+      ],
+      "baseline": "baselines/objectLiteralAgainstInterfaceIntersection.errors.txt",
+      "claims": [
+        {
+          "name": "okEnumMemberField",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okInheritedMembers",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badExcessProperty",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badMissingMember",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badMissingInheritedMember",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 17
         }
       ]
     },

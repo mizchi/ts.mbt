@@ -926,6 +926,124 @@ test "a join with an any side is any" {
 }
 
 ///|
+/// Batch HB, each cell probed against the nightly. A `switch` over an
+/// `any` scrutinee with grouped labels narrows to `any`, not `any | any`. A
+/// `RegExp` or `Date` instance keeps its lib type, so `regex.exec(t)` is
+/// `RegExpExecArray | null` and an assignment loop narrows it. An auto-typed
+/// binding takes a back-edge value this cannot type as `any`. `await` on `T
+/// | Promise<T>` awaits each member.
+test "grouped any labels, lib instances, auto-typed back edges and awaited unions" {
+  let src =
+    #|declare const els: any[];
+    #|export function sw() { for (const element of els) { switch (element.type) { case "rectangle": case "ellipse": return element?.label?.text; } } return 0; }
+    #|export function re(t: string) { const regex = /a/g; let match = null; while ((match = regex.exec(t)) !== null) { return match.index; } return -1; }
+    #|export function dateBad() { const d = new Date(); const n: string = d.getTime(); return n; }
+    #|export function reBad(t: string) { const r = new RegExp("a"); const n: number = r.test(t); return n; }
+    #|declare const gs: { content: string }[];
+    #|export function inLoop() { let prev = null; for (const g of gs) { if (prev && prev.content === "x") return 1; const cur = g; prev = cur; } return 0; }
+    #|type MaybePromise<T> = T | Promise<T>;
+    #|declare function gen(): MaybePromise<{ html: string }>;
+    #|export async function aw() { const { html } = await gen(); return html.trim(); }
+    #|export async function awBad() { const { html } = await gen(); const n: number = html; return n; }
+  assert_eq(issue_lines(src), [
+    "function dateBad > binding `n` init: expected `string` but got `number`", "function reBad > binding `n` init: expected `number` but got `boolean`",
+    "function awBad > binding `n` init: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// A `const` arrow guard narrows a parameter typed by an indexed access and
+/// a property path, as a declared guard does. `x === false` on a union with
+/// a `boolean` leaves `true`. And `&&` / `||` narrow on both sides in both
+/// senses: the else branch of `!a?.x && !a?.y` has `a` defined, and the then
+/// branch of `!(x === null || y === null)` has both non-null, where it had
+/// read `x` as `null`.
+test "const guards on indexed types and paths, boolean literals, logical sides" {
+  let src =
+    #|type UIConfig = { enabled: { zoom?: boolean } } | { disabled: { minimap?: boolean } };
+    #|type AppProps = { ui?: boolean | UIConfig };
+    #|const isUIConfig = (ui: AppProps["ui"]): ui is UIConfig => typeof ui === "object" && ui !== null;
+    #|export function g1(props: AppProps) { if (isUIConfig(props.ui)) { return "enabled" in props.ui ? props.ui.enabled.zoom : props.ui.disabled.minimap; } return undefined; }
+    #|export function g2(ui: AppProps["ui"]) { if (isUIConfig(ui)) { const x: UIConfig = ui; return x; } return null; }
+    #|export function g3(props: AppProps) { if (!isUIConfig(props.ui)) { const c: UIConfig = props.ui; return c; } return null; }
+    #|export function b1(o: boolean | number | undefined): number { if (o === false) return 0; if (o === true || o == null) return 1; return Math.max(o, 0); }
+    #|export function b2(o: boolean | number): number { if (o === false) return 0; return o; }
+    #|type Lock = { scroll?: boolean; zoom?: boolean; overscroll?: number };
+    #|export function l1(lock?: Lock) { if (!lock?.scroll && !lock?.zoom) return 0; return lock.overscroll; }
+    #|export function l2(lock?: Lock) { if (!lock?.scroll || !lock?.zoom) return lock.overscroll; return 0; }
+    #|export function n1(x: string | null, y: string | null) { if (!(x === null || y === null)) { return x.length + y.length; } return 0; }
+    #|export function n2(x: string | null, y: string | null) { if (!(x === null || y === null)) { return 0; } return x.length; }
+  assert_eq(issue_lines(src), [
+    "function g3 > binding `c` init: type `boolean | undefined` is not assignable to type `{ enabled: { zoom: boolean | undefined } } | { disabled: { minimap: boolean | undefined } }`",
+    "function b2 > return: expected `number` but got `true | number`", "function l2 > PropAccess `.overscroll`: object is possibly `undefined`",
+    "function n2 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// An object rest over a union is a union of the members' rests, as tsc
+/// distributes it, so the rest keeps each member's discriminant and narrows
+/// by it (probed). It had been the fields common to every member, with the
+/// first member's discriminant.
+test "an object rest over a union keeps each member" {
+  let src =
+    #|type Base = { size?: string; hidden?: boolean };
+    #|type P = (Base & { type: "button"; onClick?(): void }) | (Base & { type: "toggle"; checked: boolean });
+    #|export function f({ size = "m", ...props }: P) { if (props.type === "button") return props.onClick; return props.checked; }
+    #|type Q = { type: "a"; x: number; k: string } | { type: "b"; y: string; k: string };
+    #|export function t1({ k, ...rest }: Q) { const z: "z" = rest.type; return z; }
+    #|export function t2({ k, ...rest }: Q) { if (rest.type === "a") { const s: string = rest.x; return s; } return ""; }
+  assert_eq(issue_lines(src), [
+    "function t1 > binding `z` init: expected `\"z\" (string)` but got `\"a\" (string) | \"b\" (string)`",
+    "function t2 > binding `s` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// A DOM interface the lib tables do not carry may declare any member, so
+/// a union holding one abstains on member existence whether it is written
+/// out or reached through an alias, and a field destructured from it is
+/// `any` rather than `T | undefined` (probed: the nightly accepts both).
+test "an opaque lib member of a union abstains through an alias and a pattern" {
+  let src =
+    #|type MC = OffscreenCanvas | HTMLCanvasElement;
+    #|export function h(c: MC) { return c.width; }
+    #|export function k(c: HTMLCanvasElement | OffscreenCanvas) { return c.width; }
+    #|interface RPE { clientX: number; button: number }
+    #|export function f(event: RPE | MouseEvent) { let { clientX: lastX } = event; return lastX - 1; }
+    #|interface A { a: number; t: "a" }
+    #|interface B { b: string; t: "b" }
+    #|export function g(v: A | B) { const { a } = v; const n: number = a; return n; }
+  assert_eq(issue_lines(src), [
+    "function g > binding `n` init: type `number | undefined` is not assignable to type `number`",
+  ])
+}
+
+///|
+/// An object literal against an interface intersected with an object type
+/// is checked field by field, the interface's inherited members included,
+/// as the plain interface target is. It had fallen to the whole-object
+/// relation, which reads an enum member as `number` (probed).
+test "an object literal against an interface intersection is checked by field" {
+  let src =
+    #|enum E { A, B }
+    #|interface I1 { type: E }
+    #|interface J extends I1 { name: string }
+    #|declare function n1(v: I1 & { event: string }): void;
+    #|declare function nj(v: J & { event: string }): void;
+    #|export function ok1() { n1({ type: E.B, event: "x" }); }
+    #|export function ok2() { nj({ type: E.A, name: "n", event: "x" }); }
+    #|export function a() { n1({ type: E.B, event: "x", extra: 1 }); }
+    #|export function b() { n1({ event: "x" }); }
+    #|export function d() { nj({ name: "n", event: "x" }); }
+  assert_eq(issue_lines(src), [
+    "function a > call `n1` arg[0].extra: property `extra` does not exist on target type",
+    "function b > call `n1` arg[0].type: property `type` is required by `{ type: E; event: string }`",
+    "function d > call `nj` arg[0].type: property `type` is required by `{ name: string; type: E; event: string }`",
+  ])
+}
+
+///|
 /// Round three of #312's review, each cell probed against the nightly. A
 /// nested scope's declaration only shields the writes made inside the
 /// statement that holds it: `{ let x = 0 } x = null` still writes the outer
@@ -947,5 +1065,21 @@ test "a nested declaration shields only its own statement's writes" {
   assert_eq(issue_lines(src), [
     "function e1 > PropAccess `.length`: object is possibly `null`", "function e2 > PropAccess `.length`: object is possibly `null`",
     "function e3 > PropAccess `.length`: object is possibly `null`", "function f2 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A compound statement every way through which exits is an exit, so a
+/// write before it reaches neither the code after a `finally` nor a loop's
+/// back edge (#312's review, probed): an `if` / `else` that throws on both
+/// sides, and a `break` / `return` pair in a loop body.
+test "an if whose branches all exit is an exit" {
+  let src =
+    #|export function f(flag: boolean, other: boolean) { let x: string | null = "ok"; try {} finally { if (flag) { x = null; if (other) throw 0; else throw 1; } } return x.length; }
+    #|export function g(flag: boolean, other: boolean) { let x: string | null = "ok"; try {} finally { if (flag) { x = null; if (other) throw 0; } } return x.length; }
+    #|export function w(c: boolean, d: boolean) { let x: string | null = "ok"; while (c) { const n = x.length; x = null; if (d) { break; } else { return n; } } return 0; }
+    #|export function w2(c: boolean, d: boolean) { let x: string | null = "ok"; while (c) { const n = x.length; x = null; if (d) { break; } } return 0; }
+  assert_eq(issue_lines(src), [
+    "function g > PropAccess `.length`: object is possibly `null`", "function w2 > PropAccess `.length`: object is possibly `null`",
   ])
 }

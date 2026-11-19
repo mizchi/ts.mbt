@@ -1100,11 +1100,53 @@ test "a ts-nocheck that is not the file's pragma checks the file" {
       "const z = 1;\n// @ts-nocheck\nconst a: number = \"s\";", "/** @ts-nocheck */\nconst a: number = \"s\";",
       "// @ts-nocheckx\nconst a: number = \"s\";", "// foo @ts-nocheck\nconst a: number = \"s\";",
       "// @ts-nocheck\n// @ts-check\nconst a: number = \"s\";", "namespace N {\n// @ts-nocheck\nexport const a: number = \"s\"; }",
-      // A Unicode space before the later `@ts-check` is trivia, as tsc's
-      // scanner skips it (probed, #312's review).
-       "// @ts-nocheck reason\n\u{2003}// @ts-check\nconst a: number = \"s\";", "// @ts-nocheck\n\u{3000}// @ts-check\nconst a: number = \"s\";",
-      "// @ts-nocheck\n\u{200B}// @ts-check\nconst a: number = \"s\";", "// @ts-nocheck\n\u{85}// @ts-check\nconst a: number = \"s\";",
     ] {
     assert_true(issue_lines(src).length() > 0, msg=src)
   }
+}
+
+///|
+/// A Unicode space is whitespace, as tsc's scanner reads it
+/// (`isWhiteSpaceSingleLine`, probed). Between leading comments it is
+/// trivia, so a later `@ts-check` is still read (#312's review), and each
+/// cell reports exactly the type mismatch it carries. In code it separates
+/// tokens: `\u{2003}const a = 1` had scanned as one identifier, so the
+/// declaration vanished and `export { a }` was "only local declarations".
+test "a unicode space is whitespace in trivia and in code" {
+  for
+    src in [
+      "// @ts-nocheck reason\n\u{2003}// @ts-check\nconst a: number = \"s\";", "// @ts-nocheck\n\u{3000}// @ts-check\nconst a: number = \"s\";",
+      "// @ts-nocheck\n\u{200B}// @ts-check\nconst a: number = \"s\";", "// @ts-nocheck\n\u{85}// @ts-check\nconst a: number = \"s\";",
+      "\u{2003}const a: number = \"s\";", "const\u{3000}a: number = \"s\";", "const a\u{FEFF}: number = \"s\";",
+    ] {
+    assert_eq(
+      issue_lines(src),
+      ["top-level > binding `a` init: expected `number` but got `string`"],
+      msg=src,
+    )
+  }
+  for
+    src in [
+      "\u{2003}const a = 1;\nexport { a };", "const café = 1;\nconst 変数 = café + 1;\nexport { 変数 };",
+    ] {
+    assert_eq(issue_lines(src), [], msg=src)
+  }
+}
+
+///|
+/// TS18046's token scan ignores a property NAME spelled like the catch
+/// binding: `console.error("…", error)` passes `error` and does not call
+/// it, while `error.message` and `error()` are uses (probed).
+test "a catch binding spelled as a property name is not a use" {
+  let src =
+    #|export function okLogged() { try { JSON.parse("x"); } catch (error) { console.error("x", error); } }
+    #|export function okOptionalLogged(log?: { error(m: string, e: unknown): void }) { try { JSON.parse("x"); } catch (error) { log?.error("x", error); } }
+  assert_eq(issue_lines(src), [])
+  let bad =
+    #|export function badMember() { try { JSON.parse("x"); } catch (error) { return error.message; } }
+  assert_true(
+    issue_lines(bad).contains(
+      "grammar: `error` is of type `unknown` — narrow it before use",
+    ),
+  )
 }
