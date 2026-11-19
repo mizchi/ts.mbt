@@ -7549,6 +7549,44 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
 }
 
 ///|
+/// `await` on a union awaits each member, as tsc's `Awaited` distributes:
+/// `await (x as MaybePromise<{ html: string }>)` is `{ html: string }`. It
+/// had been the union unchanged, so destructuring `{ html }` read `html`
+/// off the `Promise` member as well and got `string | undefined`
+/// (excalidraw's `onMagicFrameGenerate`). A union with no promise member
+/// is returned as it was.
+fn awaited_union_members(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  let resolved = match ty {
+    Union(_) => ty
+    Named(_) | Applied(_, _) => resolver.unwrap(ty)
+    _ => return ty
+  }
+  guard resolved is Union(members) else { return ty }
+  let promised = fn(m : @ast.TsType) -> @ast.TsType? {
+    match m {
+      Applied("Promise", [t]) | Applied("PromiseLike", [t]) => Some(t)
+      _ => None
+    }
+  }
+  if !members.iter().any(fn(m) { promised(m) is Some(_) }) {
+    return ty
+  }
+  let out : Array[@ast.TsType] = []
+  for m in members {
+    let a = match promised(m) {
+      Some(t) => t
+      None => m
+    }
+    for part in union_components(a) {
+      if !out.contains(part) {
+        out.push(part)
+      }
+    }
+  }
+  union_of(out)
+}
+
+///|
 /// Generic-shaped static methods that need callback / argument-driven
 /// inference for their result type. Returns the specialised result type
 /// when the static call matches a recognised pattern; otherwise `None`,
@@ -14188,6 +14226,16 @@ fn infer_expr_inner(
             resolver.interfaces.get(class_name) is None {
             return @ast.TsType::Named("SharedArrayBuffer")
           }
+          // So do `RegExp` and `Date`, the non-generic lib constructors with
+          // a curated member table, and a regex literal, which the parser
+          // writes as `new RegExp(…)`. They were `any`, so `regex.exec(t)`
+          // was too, and `while ((m = regex.exec(t)) !== null) m.index` read
+          // `m` through its `null` initializer (excalidraw's `SearchMenu`).
+          if (class_name == "RegExp" || class_name == "Date") &&
+            resolver.classes.get(class_name) is None &&
+            resolver.interfaces.get(class_name) is None {
+            return @ast.TsType::Named(class_name)
+          }
           // Lib `Map` with a uniform entry array infers `Map<K, V>` from
           // the literal-widened first pair, so downstream iteration /
           // spread checks see `[K, V]` elements
@@ -14608,7 +14656,7 @@ fn infer_expr_inner(
     Await(inner) =>
       match infer_expr(env, resolver, inner) {
         Applied("Promise", args) if args.length() == 1 => args[0]
-        other => other
+        other => awaited_union_members(resolver, other)
       }
     // `yield expr` — type is whatever the generator's `.next()` sends back
     // (TNext), which we don't track. Walk the operand for side-effect checks;
@@ -28785,6 +28833,16 @@ fn backedge_join_pass(
       }
     }
     if rhs_ty is Any || !is_checkable(rhs_ty) {
+      // A binding DECLARED `any` (an auto-typed `let prev = null`) takes
+      // an assigned value this cannot type as `any`, as an assignment
+      // outside a loop does. The RHS is inferred in the ENTRY env, so a
+      // body-local is never typed here: `prev = cur` with `const cur =
+      // gs[i]` in the body left `prev` as its `null` initializer at the
+      // loop head, and `prev && prev.content` read `never` (univer's
+      // `addCJKLatinSpacing`, on main too).
+      if decl is Any {
+        merged[name] = @ast.TsType::Any
+      }
       continue
     }
     // Cap at the declared type: an escaping assignment is its own error.
@@ -31228,6 +31286,75 @@ fn narrow_by_array_is_array(
 }
 
 ///|
+/// The narrowing that holds where `l && r` (`is_and`) or `l || r` is true,
+/// and where it is false. For `&&` the true side is `l` true and then `r`
+/// true, composed: `r` is analysed with `l`'s true narrowing applied and
+/// pushed after it, so the later push wins per key (the `typeof x !== "a"
+/// && typeof x !== "b"` residue). The false side is `l` false, or `l` true
+/// and `r` false, so a binding narrowed on BOTH paths is narrowed to the
+/// union of the two and one narrowed on only one path is left alone. `||`
+/// is the mirror image.
+fn logical_narrowing_sides(
+  env : ExprEnv,
+  resolver : Resolver,
+  is_and : Bool,
+  l : @ast.TsExpr,
+  r : @ast.TsExpr,
+) -> (Array[(String, @ast.TsType)], Array[(String, @ast.TsType)]) {
+  let lo = analyze_narrowing(env, resolver, l)
+  // `r` runs only where `l` is true for `&&`, and false for `||`.
+  let l_on = if is_and { lo.then_binds } else { lo.else_binds }
+  let l_off = if is_and { lo.else_binds } else { lo.then_binds }
+  let snap = env.full_snapshot()
+  for b in l_on {
+    env.bind(b.0, b.1)
+  }
+  let ro = analyze_narrowing(env, resolver, r)
+  env.restore_from(snap)
+  let r_on = if is_and { ro.then_binds } else { ro.else_binds }
+  let r_off = if is_and { ro.else_binds } else { ro.then_binds }
+  let composed : Array[(String, @ast.TsType)] = []
+  for b in l_on {
+    composed.push(b)
+  }
+  for b in r_on {
+    composed.push(b)
+  }
+  let first : Map[String, @ast.TsType] = Map([])
+  for b in l_off {
+    first[b.0] = b.1
+  }
+  let second : Map[String, @ast.TsType] = Map([])
+  for b in r_off {
+    second[b.0] = b.1
+  }
+  let joined : Array[(String, @ast.TsType)] = []
+  for k, t1 in first {
+    match second.get(k) {
+      Some(t2) =>
+        joined.push(
+          (
+            k,
+            if t1 is Any || t2 is Any {
+              @ast.TsType::Any
+            } else if t1 == t2 {
+              t1
+            } else {
+              flatten_union_exact([t1, t2])
+            },
+          ),
+        )
+      None => ()
+    }
+  }
+  if is_and {
+    (composed, joined)
+  } else {
+    (joined, composed)
+  }
+}
+
+///|
 /// Walk `cond` looking for narrowing-shaped sub-expressions, appending the
 /// effect into `then_binds` / `else_binds`. `then_sense` flips when we
 /// descend through a logical `!` so the same primitive can be matched in
@@ -31291,86 +31418,37 @@ fn collect_narrowing(
     None => ()
   }
   match cond {
-    BinOp(And, l, r) =>
-      if then_sense {
-        // `if (l && r) { /* l true AND r true */ }`. Both hold in the
-        // then-branch, composed: narrow by l-true *then* r-true so the
-        // second condition sees the first's narrowing (mirrors the `||`
-        // else-branch). This is the `typeof x !== "a" && typeof x !== "b"`
-        // residue -- the then-branch removes both "a" and "b" from x. The
-        // else-branch of `&&` is a union (`!l | (l & !r)`) we can't narrow
-        // cleanly, so leave else_binds untouched.
-        let lo = analyze_narrowing(env, resolver, l)
-        for b in lo.then_binds {
-          then_binds.push(b)
-        }
-        let snap = env.full_snapshot()
-        for b in lo.then_binds {
-          env.bind(b.0, b.1)
-        }
-        let ro = analyze_narrowing(env, resolver, r)
-        env.restore_from(snap)
-        for b in ro.then_binds {
-          then_binds.push(b)
-        }
-      }
-    BinOp(Or, l, r) =>
-      if !then_sense {
-        // Under a negation: `!(l || r)` is `!l && !r`, so both hold.
-        collect_narrowing(env, resolver, l, then_binds, else_binds, true)
-        collect_narrowing(env, resolver, r, then_binds, else_binds, true)
+    // `l && r` and `l || r`: one side of each is a composition of the two
+    // operands' narrowings and the other is a disjunction, where only a
+    // binding BOTH paths narrow is narrowed, to the union of the two (see
+    // `logical_narrowing_sides`). Which side is which depends on the sense
+    // the expression is read in: under a `!`, its true side narrows the
+    // else branch. The negated `||` used to push each operand's TRUE
+    // narrowing into the then branch, so `if (!(x === null || y === null))
+    // x.length` read `x` as `null` (on main too), and a negated `&&` and
+    // the else branch of `&&` narrowed nothing: `if (!lock?.scroll &&
+    // !lock?.zoom) return` left `lock` possibly `undefined` after it
+    // (excalidraw's `getConstrainedTargetViewport`).
+    BinOp(And | Or as op, l, r) => {
+      let (true_side, false_side) = logical_narrowing_sides(
+        env,
+        resolver,
+        op is And,
+        l,
+        r,
+      )
+      let (to_then, to_else) = if then_sense {
+        (true_side, false_side)
       } else {
-        // `if (l || r) { } else { /* l false AND r false */ }`. The
-        // else-branch narrows by l-false *then* r-false (composed), which
-        // is the common `typeof x === "a" || typeof x === "b"` discriminant
-        // residue: in the else, x has both "a" and "b" types removed.
-        // Apply l's false narrowing to a scratch env so r's narrowing sees
-        // the already-reduced type, then collect both into else_binds
-        // (later push wins per key, which yields the composed result).
-        let lo = analyze_narrowing(env, resolver, l)
-        for b in lo.else_binds {
-          else_binds.push(b)
-        }
-        let snap = env.full_snapshot()
-        for b in lo.else_binds {
-          env.bind(b.0, b.1)
-        }
-        let ro = analyze_narrowing(env, resolver, r)
-        env.restore_from(snap)
-        for b in ro.else_binds {
-          else_binds.push(b)
-        }
-        // The then-branch is `l` true, or `l` false and `r` true, so a
-        // binding BOTH sides narrow is narrowed to the union of the two:
-        // `options?.fromFile !== undefined || options?.toFile !==
-        // undefined` rules `options` being `undefined` out on either path,
-        // and effect reads `options.fromFile` right after it. A binding
-        // only one side narrows is left alone.
-        let lt : Map[String, @ast.TsType] = Map([])
-        for b in lo.then_binds {
-          lt[b.0] = b.1
-        }
-        let rt : Map[String, @ast.TsType] = Map([])
-        for b in ro.then_binds {
-          rt[b.0] = b.1
-        }
-        for k, t1 in lt {
-          match rt.get(k) {
-            Some(t2) =>
-              then_binds.push(
-                (
-                  k,
-                  if t1 is Any || t2 is Any {
-                    @ast.TsType::Any
-                  } else {
-                    flatten_union_exact([t1, t2])
-                  },
-                ),
-              )
-            None => ()
-          }
-        }
+        (false_side, true_side)
       }
+      for b in to_then {
+        then_binds.push(b)
+      }
+      for b in to_else {
+        else_binds.push(b)
+      }
+    }
     BinOp(Coalesce, l, r) =>
       // `x ?? y`: when truthy, x is non-nullish; when falsy, narrowing from r.
       if then_sense {
@@ -32197,7 +32275,15 @@ fn apply_type_predicate_narrowing(
                 loose_target=true,
               )
             }
-            _ => ()
+            // A property path narrows under its dotted key, as a declared
+            // guard's does: `isUIConfig(props.ui)` with a `const` arrow
+            // guard left `props.ui` as the whole union, so `"enabled" in
+            // props.ui ? props.ui.enabled : …` was reported (excalidraw).
+            Some(arg) =>
+              narrow_predicate_path_arg(
+                env, resolver, arg, target, pair_pos, pair_neg, true,
+              )
+            None => ()
           }
         None => ()
       }
@@ -32538,12 +32624,18 @@ fn predicate_callable_params(ty : @ast.TsType?) -> Array[@ast.TsType]? {
 /// resolver-free relation cannot see is `string`, so `!isS(value)` kept it
 /// and `const n: number = value` was reported. Interfaces and classes stay
 /// named, which is the shape the keep / remove tests were written against.
+///
+/// An indexed access is resolved the same way. A parameter declared
+/// `AppProps["ui"]` reached the guard as the raw `IndexedAccess`, which no
+/// member test can see into, so `isUIConfig(ui)` with `isUIConfig = (ui:
+/// AppProps["ui"]): ui is UIConfig => …` narrowed nothing (excalidraw's
+/// `isUIControlEnabled`).
 fn predicate_narrowing_source(
   resolver : Resolver,
   cur : @ast.TsType,
 ) -> @ast.TsType {
   match cur {
-    Named(_) | Applied(_, _) =>
+    Named(_) | Applied(_, _) | IndexedAccess(_, _) =>
       match resolver.unwrap(cur) {
         Union(parts) => {
           let members : Array[@ast.TsType] = []
@@ -33585,6 +33677,54 @@ fn analyze_equality(
             }),
           ),
         )
+      }
+    }
+    None => ()
+  }
+  // `x === false` / `x === true` on a union holding a `boolean`: the
+  // not-equal side keeps the OTHER literal, as tsc splits `boolean` into
+  // `true | false`. `if (o === false) return 0; if (o === true || o ==
+  // null) return 1; Math.max(o, 0)` over `boolean | number | undefined`
+  // was "expected `number` but got `boolean | number`" (excalidraw's
+  // `resolveOverscroll`). Strict equality only, and only a union, which is
+  // the shape that had nothing to remove.
+  let bool_match = match (left, right) {
+    (e, BoolLit(b)) | (BoolLit(b), e) if !loose =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, b))
+        None => None
+      }
+    _ => None
+  }
+  match bool_match {
+    Some((key, b)) => {
+      let cur0 = narrowing_current_type(env, resolver, key)
+      let cur = expand_union_alias_members(
+        resolver,
+        match resolver.unwrap(cur0) {
+          Union(_) as u => u
+          _ => cur0
+        },
+      )
+      match flatten_union_parts(cur) {
+        Union(parts) if parts
+          .iter()
+          .any(fn(p) { p is (Boolean | BooleanLiteral(_)) }) => {
+          let rest : Array[@ast.TsType] = []
+          for p in parts {
+            let kept = match p {
+              Boolean => Some(@ast.TsType::BooleanLiteral(!b))
+              BooleanLiteral(v) if v == b => None
+              _ => Some(p)
+            }
+            match kept {
+              Some(t) => if !rest.contains(t) { rest.push(t) }
+              None => ()
+            }
+          }
+          false_side.push((key, union_of(rest)))
+        }
+        _ => ()
       }
     }
     None => ()
@@ -36687,7 +36827,17 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             env.restore_from(pre)
             for i, target in narrow_targets {
               if all[i] && parts[i].length() > 0 {
-                env.narrow(target, flatten_union_exact(parts[i]))
+                // Each label narrows an `any` scrutinee to `any`, and a
+                // union with `any` is `any`: `case "rectangle": case
+                // "ellipse":` on an element this cannot type read as
+                // `any | any`, and every `element?.label` in the body was
+                // "does not exist" (excalidraw's `convertToExcalidrawElements`).
+                let joined = if parts[i].iter().any(fn(p) { p is Any }) {
+                  @ast.TsType::Any
+                } else {
+                  flatten_union_exact(parts[i])
+                }
+                env.narrow(target, joined)
               }
             }
           }

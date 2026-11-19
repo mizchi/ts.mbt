@@ -924,3 +924,58 @@ test "a join with an any side is any" {
     "function badTry > PropAccess `.b`: property `b` does not exist on `\"s\" (string) | { a: number }`",
   ])
 }
+
+///|
+/// Batch HB, each cell probed against the nightly. A `switch` over an
+/// `any` scrutinee with grouped labels narrows to `any`, not `any | any`. A
+/// `RegExp` or `Date` instance keeps its lib type, so `regex.exec(t)` is
+/// `RegExpExecArray | null` and an assignment loop narrows it. An auto-typed
+/// binding takes a back-edge value this cannot type as `any`. `await` on `T
+/// | Promise<T>` awaits each member.
+test "grouped any labels, lib instances, auto-typed back edges and awaited unions" {
+  let src =
+    #|declare const els: any[];
+    #|export function sw() { for (const element of els) { switch (element.type) { case "rectangle": case "ellipse": return element?.label?.text; } } return 0; }
+    #|export function re(t: string) { const regex = /a/g; let match = null; while ((match = regex.exec(t)) !== null) { return match.index; } return -1; }
+    #|export function dateBad() { const d = new Date(); const n: string = d.getTime(); return n; }
+    #|export function reBad(t: string) { const r = new RegExp("a"); const n: number = r.test(t); return n; }
+    #|declare const gs: { content: string }[];
+    #|export function inLoop() { let prev = null; for (const g of gs) { if (prev && prev.content === "x") return 1; const cur = g; prev = cur; } return 0; }
+    #|type MaybePromise<T> = T | Promise<T>;
+    #|declare function gen(): MaybePromise<{ html: string }>;
+    #|export async function aw() { const { html } = await gen(); return html.trim(); }
+    #|export async function awBad() { const { html } = await gen(); const n: number = html; return n; }
+  assert_eq(issue_lines(src), [
+    "function dateBad > binding `n` init: expected `string` but got `number`", "function reBad > binding `n` init: expected `number` but got `boolean`",
+    "function awBad > binding `n` init: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// A `const` arrow guard narrows a parameter typed by an indexed access and
+/// a property path, as a declared guard does. `x === false` on a union with
+/// a `boolean` leaves `true`. And `&&` / `||` narrow on both sides in both
+/// senses: the else branch of `!a?.x && !a?.y` has `a` defined, and the then
+/// branch of `!(x === null || y === null)` has both non-null, where it had
+/// read `x` as `null`.
+test "const guards on indexed types and paths, boolean literals, logical sides" {
+  let src =
+    #|type UIConfig = { enabled: { zoom?: boolean } } | { disabled: { minimap?: boolean } };
+    #|type AppProps = { ui?: boolean | UIConfig };
+    #|const isUIConfig = (ui: AppProps["ui"]): ui is UIConfig => typeof ui === "object" && ui !== null;
+    #|export function g1(props: AppProps) { if (isUIConfig(props.ui)) { return "enabled" in props.ui ? props.ui.enabled.zoom : props.ui.disabled.minimap; } return undefined; }
+    #|export function g2(ui: AppProps["ui"]) { if (isUIConfig(ui)) { const x: UIConfig = ui; return x; } return null; }
+    #|export function g3(props: AppProps) { if (!isUIConfig(props.ui)) { const c: UIConfig = props.ui; return c; } return null; }
+    #|export function b1(o: boolean | number | undefined): number { if (o === false) return 0; if (o === true || o == null) return 1; return Math.max(o, 0); }
+    #|export function b2(o: boolean | number): number { if (o === false) return 0; return o; }
+    #|type Lock = { scroll?: boolean; zoom?: boolean; overscroll?: number };
+    #|export function l1(lock?: Lock) { if (!lock?.scroll && !lock?.zoom) return 0; return lock.overscroll; }
+    #|export function l2(lock?: Lock) { if (!lock?.scroll || !lock?.zoom) return lock.overscroll; return 0; }
+    #|export function n1(x: string | null, y: string | null) { if (!(x === null || y === null)) { return x.length + y.length; } return 0; }
+    #|export function n2(x: string | null, y: string | null) { if (!(x === null || y === null)) { return 0; } return x.length; }
+  assert_eq(issue_lines(src), [
+    "function g3 > binding `c` init: type `boolean | undefined` is not assignable to type `{ enabled: { zoom: boolean | undefined } } | { disabled: { minimap: boolean | undefined } }`",
+    "function b2 > return: expected `number` but got `true | number`", "function l2 > PropAccess `.overscroll`: object is possibly `undefined`",
+    "function n2 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
