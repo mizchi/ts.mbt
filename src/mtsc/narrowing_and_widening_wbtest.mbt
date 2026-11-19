@@ -1018,3 +1018,27 @@ test "an opaque lib member of a union abstains through an alias and a pattern" {
     "function g > binding `n` init: type `number | undefined` is not assignable to type `number`",
   ])
 }
+
+///|
+/// An object literal against an interface intersected with an object type
+/// is checked field by field, the interface's inherited members included,
+/// as the plain interface target is. It had fallen to the whole-object
+/// relation, which reads an enum member as `number` (probed).
+test "an object literal against an interface intersection is checked by field" {
+  let src =
+    #|enum E { A, B }
+    #|interface I1 { type: E }
+    #|interface J extends I1 { name: string }
+    #|declare function n1(v: I1 & { event: string }): void;
+    #|declare function nj(v: J & { event: string }): void;
+    #|export function ok1() { n1({ type: E.B, event: "x" }); }
+    #|export function ok2() { nj({ type: E.A, name: "n", event: "x" }); }
+    #|export function a() { n1({ type: E.B, event: "x", extra: 1 }); }
+    #|export function b() { n1({ event: "x" }); }
+    #|export function d() { nj({ name: "n", event: "x" }); }
+  assert_eq(issue_lines(src), [
+    "function a > call `n1` arg[0].extra: property `extra` does not exist on target type",
+    "function b > call `n1` arg[0].type: property `type` is required by `{ type: E; event: string }`",
+    "function d > call `nj` arg[0].type: property `type` is required by `{ name: string; type: E; event: string }`",
+  ])
+}

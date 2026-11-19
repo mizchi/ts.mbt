@@ -59078,6 +59078,15 @@ fn merge_enumerable_object_intersection(
           Some(fs) => fs
           None => return None
         }
+      // An interface whose whole member set is known joins the merge with
+      // its inherited fields. It had made the merge give up, so `I & {
+      // event }` fell to the whole-object relation, which reads an enum
+      // member field as `number`, and `{ type: E.B, event }` was reported
+      // (univer's `Transformer`, nine times).
+      Struct(_, _) | Named(_) if resolver.enumerable_object_shape(p, 0) =>
+        collect_declared_fields(p, resolver).map(fn(f) {
+          (@ast.TsType::Literal(f.0), f.1)
+        })
       _ => return None
     }
     for f in fields {
