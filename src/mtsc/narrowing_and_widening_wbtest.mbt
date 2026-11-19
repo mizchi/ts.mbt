@@ -1209,3 +1209,29 @@ test "a contextual rest parameter and a variadic tuple pattern bind element type
     "function badAnnotatedOnRest > call `takeRest` arg[0] param `a`: expected `number` but got `string`",
   ])
 }
+
+///|
+/// The rest element of an array pattern over a variadic tuple takes tsc's
+/// slice: the tail as written from at or before the tuple's rest, an array
+/// of the element types from the rest on past it. Slicing the stored items
+/// past the rest left `[]`, so `[h, f, ...t]` then `const [n] = t` read `n`
+/// as `undefined` (#314's review, probed on the nightly).
+test "a variadic tuple pattern's rest element keeps the tuple's slice" {
+  let src =
+    #|export function okTwoHead([h, f, ...t]: [number, ...string[]]) { const x: string[] = t; const [n] = t; const v: string = n; return [h, f, x, v]; }
+    #|export function badTwoHead([h, f, ...t]: [number, ...string[]]) { const x: number[] = t; return [h, f, x]; }
+    #|export function badElementOfRemainder([h, f, ...t]: [number, ...string[]]) { const [n] = t; const v: number = n; return [h, f, v]; }
+    #|export function okOneHead([h, ...t]: [number, ...string[]]) { const x: string[] = t; return [h, x]; }
+    #|export function okWhole([...t]: [number, ...string[]]) { const x: [number, ...string[]] = t; return x; }
+    #|export function okPastTail([a, b, c, ...t]: [number, ...string[], boolean]) { const x: (string | boolean)[] = t; return [a, b, c, x]; }
+    #|export function badPastTail([a, b, c, ...t]: [number, ...string[], boolean]) { const x: string[] = t; return [a, b, c, x]; }
+    #|export function okBeforeTail([a, ...t]: [number, ...string[], boolean]) { const x: [...string[], boolean] = t; return [a, x]; }
+    #|export function okCallback() { const cb: (...xs: [number, ...string[]]) => void = (...[head, first, ...tail]) => { const [next] = tail; const v: string = next; void [head, first, v]; }; return cb; }
+    #|export function badCallback() { const cb: (...xs: [number, ...string[]]) => void = (...[head, first, ...tail]) => { const x: number[] = tail; void [head, first, x]; }; return cb; }
+  assert_eq(issue_lines(src), [
+    "function badTwoHead > binding `x` init: expected `number[]` but got `string[]`",
+    "function badElementOfRemainder > binding `v` init: expected `number` but got `string`",
+    "function badPastTail > binding `x` init: expected `string[]` but got `(string | boolean)[]`",
+    "function badCallback > binding `x` init: expected `number[]` but got `string[]`",
+  ])
+}

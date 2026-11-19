@@ -225,6 +225,7 @@ guide to whether the behaviour will change.
 | inference | `overloadSetAsCallbackAndMissingAwait` | An overload set as a callback, and `Promise<string>` where `string` is expected | TS2322 TS2345 | — |
 | inference | `staticFactoryCallThroughClass` | Assigning `Factory.create()` narrows a nullable binding, also one declared through `Nullable<T>`; an `any` assignment keeps the declared type; an auto-typed `let b = null` then a value of unnamed type is non-nullish | TS18047 TS18048 TS2322 | — |
 | inference | `trailingVoidParameterThroughAlias` | A trailing parameter accepting `void` may be omitted, through an alias such as `Nullable<T>` or a `void` alias inside a union; a `T \| undefined` alias, and a void parameter before a required one, may not | TS2554 | — |
+| inference | `variadicTuplePatternRemainder` | The rest element of an array pattern over a variadic tuple: at or before the tuple's rest it keeps the tail as written, past it an array of every element type from the rest on (a fixed tail joins the union), for an annotation and a contextual rest tuple alike | TS2322 | `variadicTuples1` |
 | lib | `errorIsErrorAndAugmentedRawJSON` | ES2026 `Error.isError` narrows, and a `RawJSON` augmentation merges | TS2322 TS2339 | — |
 | parser | `contextualKeywordDeclareAsInterfaceName` | `interface declare<T>` | accepted | — |
 | parser | `emptyTypeArgumentListInInstantiationExpression` | `fx<>` is TS1099, `fx<string>` is legal | TS1099 | `instantiationExpressions` |

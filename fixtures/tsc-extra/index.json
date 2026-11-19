@@ -4320,6 +4320,88 @@
       ]
     },
     {
+      "case": "inference/variadicTuplePatternRemainder.ts",
+      "area": "inference",
+      "name": "variadicTuplePatternRemainder",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/variadicTuplePatternRemainder.errors.txt",
+      "claims": [
+        {
+          "name": "okTwoHead",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "badTwoHead",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badElementOfRemainder",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okOneHead",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okWhole",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okPastTail",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badPastTail",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okBeforeTail",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okCallback",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badCallback",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okCallbackParams",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 20
+        }
+      ]
+    },
+    {
       "case": "lib/errorIsErrorAndAugmentedRawJSON.ts",
       "area": "lib",
       "name": "errorIsErrorAndAugmentedRawJSON",

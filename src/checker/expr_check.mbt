@@ -30141,32 +30141,12 @@ fn bind_array_pattern(
           // [number, ...string[]]` binds `b` as `string`. Binding the raw
           // `Rest(_)` marker made `const s: string = b` a report (#314's
           // review, probed: tsc accepts it).
-          Tuple(items) if items.iter().any(fn(t) { t is Rest(_) }) => {
-            let mut r = 0
-            while !(items[r] is Rest(_)) {
-              r = r + 1
-            }
+          Tuple(items) if variadic_tuple_rest_index(items) is Some(r) =>
             if i < r {
               items[i]
             } else {
-              let parts : Array[@ast.TsType] = []
-              let rest_elem = match items[r] {
-                Rest(inner) =>
-                  match rest_param_element_type(inner) {
-                    Some(e) => e
-                    None => @ast.TsType::Any
-                  }
-                _ => @ast.TsType::Any
-              }
-              parts.push(rest_elem)
-              for j in (r + 1)..<items.length() {
-                if !parts.contains(items[j]) {
-                  parts.push(items[j])
-                }
-              }
-              union_of(parts)
+              variadic_tuple_element_from(items, r)
             }
-          }
           Tuple(items) =>
             if i < items.length() {
               items[i]
@@ -30219,6 +30199,21 @@ fn bind_array_pattern(
   match ab.rest {
     Some(rest_binding) => {
       let rest_ty = match unwrapped {
+        // A variadic tuple's remainder follows tsc's `sliceTupleType`: from
+        // a position at or before the rest element it is the tuple's tail
+        // as written (`[h, ...t]: [number, ...string[]]` binds `t` as
+        // `[...string[]]`), and from past it an array of every element
+        // type from the rest on (`[h, f, ...t]` binds `string[]`). Slicing
+        // the stored items past the rest left `[]`, so a later `const [n]
+        // = t` read `n` as `undefined` (#314's review, probed).
+        Tuple(items) if variadic_tuple_rest_index(items) is Some(r) => {
+          let n = ab.items.length()
+          if n <= r {
+            @ast.TsType::Tuple(items[n:].to_owned())
+          } else {
+            @ast.TsType::Array(variadic_tuple_element_from(items, r))
+          }
+        }
         Tuple(items) => {
           // Rest captures the remaining tuple elements as a tuple.
           let remaining : Array[@ast.TsType] = []
@@ -30237,6 +30232,40 @@ fn bind_array_pattern(
     }
     None => ()
   }
+}
+
+///|
+/// The position of a tuple's variadic `Rest(_)` element, if it has one.
+fn variadic_tuple_rest_index(items : Array[@ast.TsType]) -> Int32? {
+  for r, t in items {
+    if t is Rest(_) {
+      return Some(r)
+    }
+  }
+  None
+}
+
+///|
+/// The type a position at or past a variadic tuple's rest element `r`
+/// holds: the union of the rest's element type and every fixed element
+/// after it (tsc's `getElementTypeOfSliceOfTupleType`). `any` stands for a
+/// rest whose element cannot be named.
+fn variadic_tuple_element_from(
+  items : Array[@ast.TsType],
+  r : Int32,
+) -> @ast.TsType {
+  let parts : Array[@ast.TsType] = []
+  let rest_elem = match items[r] {
+    Rest(inner) => rest_param_element_type(inner).unwrap_or(@ast.TsType::Any)
+    _ => @ast.TsType::Any
+  }
+  parts.push(rest_elem)
+  for j in (r + 1)..<items.length() {
+    if !parts.contains(items[j]) {
+      parts.push(items[j])
+    }
+  }
+  union_of(parts)
 }
 
 ///|
