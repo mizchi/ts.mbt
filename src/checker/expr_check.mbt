@@ -3305,14 +3305,18 @@ fn method_callable_param_types(
 ///|
 /// Same for a callable built from rich `TsParam` metadata (an arrow or a
 /// function expression). `param_is_optional` already folds in the
-/// default, the `?` marker and the rest flag; a rest parameter keeps its
-/// own type since arity handles `Rest(_)` directly.
+/// default, the `?` marker and the rest flag. A rest parameter is
+/// `Rest(_)`, which is what the arity and argument checks read, as
+/// `method_callable_param_types` does for a method. It was left as its
+/// bare array type, so `const concat = (...bufs: B[]) => …` took exactly
+/// one argument wherever its type came from the value (the graph path:
+/// excalidraw's `concatBuffers(a, b)` and `Regex.and(a, b)`).
 fn callable_param_types(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
   let out : Array[@ast.TsType] = []
   for p in params {
-    if !p.is_rest &&
-      param_is_optional(p) &&
-      !type_accepts_undefined_param(p.type_) {
+    if p.is_rest {
+      out.push(@ast.TsType::Rest(p.type_))
+    } else if param_is_optional(p) && !type_accepts_undefined_param(p.type_) {
       out.push(@ast.TsType::Union([p.type_, @ast.TsType::Undefined]))
     } else {
       out.push(p.type_)
@@ -21750,13 +21754,32 @@ fn assignable_through_class_chain(
     // method's being bivariant; a rest parameter on either side keeps the
     // resolver-free answer.
     (Func(sp, sr), Func(tp, tr)) => {
-      if sp.length() > tp.length() ||
-        sp.iter().any(fn(p) { p is Rest(_) }) ||
-        tp.iter().any(fn(p) { p is Rest(_) }) {
+      // Two lists with a rest parameter at the same position compare the
+      // rest arrays like any other pair: `(...xs: number[]) => any` passed
+      // for `(...a: number[]) => number` fell to the resolver-free relation,
+      // which reported it. Any other mix of rest and fixed positions still
+      // falls back.
+      let same_rest_shape = sp.length() == tp.length() &&
+        (0)
+        .until(sp.length())
+        .all(fn(i) { (sp[i] is Rest(_)) == (tp[i] is Rest(_)) })
+      if !same_rest_shape &&
+        (
+          sp.length() > tp.length() ||
+          sp.iter().any(fn(p) { p is Rest(_) }) ||
+          tp.iter().any(fn(p) { p is Rest(_) })
+        ) {
         return is_assignable_to(src, tgt)
       }
-      for i, a in sp {
-        let b = tp[i]
+      for i, a0 in sp {
+        let a = match a0 {
+          Rest(x) => x
+          _ => a0
+        }
+        let b = match tp[i] {
+          Rest(x) => x
+          other => other
+        }
         if !(is_assignable_to_bivariant(a, b) ||
           is_assignable_to_bivariant(b, a) ||
           chain_relates_names(b, a, resolver) ||
@@ -27396,6 +27419,17 @@ fn collect_literal_function_values(
 }
 
 ///|
+/// The element type of a rest parameter's written array type (`T[]`,
+/// `Array<T>`, `ReadonlyArray<T>`). `None` for a tuple or anything else,
+/// whose positions are not one element type.
+fn rest_param_element_type(t : @ast.TsType) -> @ast.TsType? {
+  match t {
+    Array(e) | Applied("Array" | "ReadonlyArray", [e]) => Some(e)
+    _ => None
+  }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -27435,7 +27469,46 @@ fn check_arrow_with_context(
     // `(x: number) => …` is expected) is a real TS2345 / TS2322. Skipped when
     // either side is non-checkable (`any`) or mentions an in-scope type
     // parameter (instantiation could reconcile them).
-    if is_checkable(p.type_) &&
+    // A REST parameter stands for every formal from its position on, so
+    // its ELEMENT type is what each of them is compared with: `(...a:
+    // number[]) => a[0]` fits `(a: number, b: number) => number`, and
+    // `(...a: string[])` does not (probed). Comparing the array type with
+    // the first formal reported the legal one as "expected `number` but got
+    // `number[]`". An element type this cannot name abstains.
+    if p.is_rest {
+      if is_checkable(p.type_) {
+        match rest_param_element_type(p.type_) {
+          Some(elem) if reliable_func_param_operand(elem, ctx) => {
+            let mut j = i
+            while j < formal_params.length() {
+              let formal = match formal_params[j] {
+                Rest(inner) =>
+                  match rest_param_element_type(inner) {
+                    Some(e) => e
+                    None => @ast.TsType::Any
+                  }
+                other => other
+              }
+              if is_checkable(formal) &&
+                reliable_func_param_operand(formal, ctx) &&
+                !(is_assignable_to_bivariant(elem, formal) ||
+                is_assignable_to_bivariant(formal, elem)) &&
+                !assignable_through_class_chain(formal, elem, ctx.resolver) &&
+                !assignable_through_class_chain(elem, formal, ctx.resolver) {
+                record(
+                  ctx,
+                  "\{sub_path} param `\{p.name}`",
+                  "expected `\{type_display(formal)}` but got `\{type_display(elem)}`",
+                )
+                break
+              }
+              j = j + 1
+            }
+          }
+          _ => ()
+        }
+      }
+    } else if is_checkable(p.type_) &&
       i < formal_params.length() &&
       is_checkable(formal_params[i]) &&
       reliable_func_param_operand(p.type_, ctx) &&

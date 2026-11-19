@@ -1149,3 +1149,29 @@ test "the false side of in keeps a member that only has an index signature" {
     "function badDeclaredWithIndex > PropAccess `.foo`: property `foo` does not exist on `never`",
   ])
 }
+
+///|
+/// An arrow's or a function expression's rest parameter is `Rest(_)` in its
+/// type, as a method's is, so a call through the VALUE takes any count:
+/// `const concat = (...b: B[]) => …` took exactly one argument on the graph
+/// path (excalidraw's `concatBuffers(a, b)`). A rest parameter against a
+/// contextual list compares its element with each formal, and two rest
+/// lists compare their arrays (probed: tsc reports only the `bad` lines).
+test "an arrow's rest parameter takes any count and compares its element" {
+  let src =
+    #|const c1 = (...xs: number[]) => xs.length;
+    #|export const bad1 = c1("a");
+    #|export const ok1 = c1();
+    #|const c3 = function (...xs: string[]) { return xs.join(); };
+    #|export const ok3 = c3("a", "b");
+    #|const take: (f: (...a: number[]) => number) => number = (f) => f(1, 2);
+    #|export const ok4 = take(c1);
+    #|export const bad4 = take((...xs: string[]) => 1);
+    #|type Fn = (a: number, b: number) => number;
+    #|export const ok6: Fn = (...a: number[]) => a[0];
+    #|export const bad6: Fn = (...a: string[]) => 1;
+  assert_eq(issue_lines(src), [
+    "top-level > call `c1` arg[0]: expected `number` but got `string`", "top-level > call `take` arg[0] param `xs`: expected `number` but got `string`",
+    "top-level > binding `bad6` init param `a`: expected `number` but got `string`",
+  ])
+}

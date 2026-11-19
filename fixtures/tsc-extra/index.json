@@ -2684,6 +2684,90 @@
       ]
     },
     {
+      "case": "inference/arrowRestParameterArityAndContext.ts",
+      "area": "inference",
+      "name": "arrowRestParameterArityAndContext",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2345,
+        2555
+      ],
+      "baseline": "baselines/arrowRestParameterArityAndContext.errors.txt",
+      "claims": [
+        {
+          "name": "okTwoBuffers",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okNoBuffers",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okTwoStrings",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okRestThroughObject",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okHeadAndRest",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okRestForRest",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okRestForFixed",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badRestElement",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badMissingHead",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badRestForRest",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badRestForFixed",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 24
+        }
+      ]
+    },
+    {
       "case": "inference/autoTypedNullOrUndefinedInitializer.ts",
       "area": "inference",
       "name": "autoTypedNullOrUndefinedInitializer",

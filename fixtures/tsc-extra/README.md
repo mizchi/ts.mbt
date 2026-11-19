@@ -206,6 +206,7 @@ guide to whether the behaviour will change.
 | directives | `tsNocheckInJsDocBlock` | `/** @ts-nocheck */` does not opt out: the pragma is single-line | TS2322 | — |
 | directives | `tsNocheckThenTsCheck` | With `@ts-nocheck` and `@ts-check` both leading, the last one wins | TS2322 | — |
 | inference | `arrowConstGuardOptionalParameters` | A generic arrow-`const` type guard with an optional and a defaulted parameter: arity, `null`, narrowing | TS2322 TS2554 | — |
+| inference | `arrowRestParameterArityAndContext` | An arrow's or a function expression's rest parameter takes any count, through the value and an object member; against a contextual list its element is compared with each formal, and two rest lists compare their arrays | TS2322 TS2345 TS2555 | — |
 | inference | `autoTypedNullOrUndefinedInitializer` | Under `noImplicitAny`, `let e = null` / `var e = undefined` is declared `any` and evolves; a read before assignment is still `null`, and `void 0`, `const` and `let e: null` are not auto-typed | TS18047 TS2322 | — |
 | inference | `awaitDistributesOverUnion` | `await` on `T \| Promise<T>` awaits each member, so destructuring the result reads `T`'s members | TS2322 | — |
 | inference | `boundViolationsShadowingAndNumericTemplates` | Bound violations through array arguments, shadowing closure parameters, and `${bigint}` / `${number}` / `infer X extends number` on edge-case strings | TS2322 TS2353 | `templateLiteralTypes4` |

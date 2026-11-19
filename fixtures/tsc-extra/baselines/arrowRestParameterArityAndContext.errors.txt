@@ -1,0 +1,48 @@
+arrowRestParameterArityAndContext.ts(20,69): error TS2345: Argument of type 'string' is not assignable to parameter of type 'Uint8Array<ArrayBufferLike>'.
+arrowRestParameterArityAndContext.ts(21,43): error TS2555: Expected at least 1 arguments, but got 0.
+arrowRestParameterArityAndContext.ts(22,48): error TS2345: Argument of type '(...xs: string[]) => number' is not assignable to parameter of type '(...a: number[]) => number'.
+  Types of parameters 'xs' and 'a' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+arrowRestParameterArityAndContext.ts(23,43): error TS2322: Type '(...a: string[]) => number' is not assignable to type 'Pair'.
+  Types of parameters 'a' and 'a' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+
+
+==== arrowRestParameterArityAndContext.ts (4 errors) ====
+    // An arrow's or a function expression's rest parameter takes any number of
+    // arguments, through the value as well as by name. Against a contextual
+    // parameter list, the rest parameter's ELEMENT type is compared with each
+    // formal from its position on; two rest lists compare their arrays.
+    
+    const concat = (...bufs: Uint8Array[]): number => bufs.length;
+    const joined = function (...xs: string[]) { return xs.join(); };
+    const head = (a: string, ...xs: number[]) => xs.length + a.length;
+    const take: (f: (...a: number[]) => number) => number = (f) => f(1, 2);
+    type Pair = (a: number, b: number) => number;
+    const regex = { and: (...rs: RegExp[]) => rs.length };
+    
+    export function okTwoBuffers() { return concat(new Uint8Array(1), new Uint8Array(2)); }
+    export function okNoBuffers() { return concat(); }
+    export function okTwoStrings() { return joined("a", "b"); }
+    export function okRestThroughObject() { return regex.and(/a/, /b/); }
+    export function okHeadAndRest() { return head("a", 1, 2); }
+    export function okRestForRest() { return take((...xs: number[]) => xs.length); }
+    export function okRestForFixed() { const f: Pair = (...a: number[]) => a[0]; return f; }
+    export function badRestElement() { return concat(new Uint8Array(1), "x"); }
+                                                                        ~~~
+!!! error TS2345: Argument of type 'string' is not assignable to parameter of type 'Uint8Array<ArrayBufferLike>'.
+    export function badMissingHead() { return head(); }
+                                              ~~~~
+!!! error TS2555: Expected at least 1 arguments, but got 0.
+!!! related TS6210 arrowRestParameterArityAndContext.ts:8:15: An argument for 'a' was not provided.
+    export function badRestForRest() { return take((...xs: string[]) => xs.length); }
+                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2345: Argument of type '(...xs: string[]) => number' is not assignable to parameter of type '(...a: number[]) => number'.
+!!! error TS2345:   Types of parameters 'xs' and 'a' are incompatible.
+!!! error TS2345:     Type 'number' is not assignable to type 'string'.
+    export function badRestForFixed() { const f: Pair = (...a: string[]) => 1; return f; }
+                                              ~
+!!! error TS2322: Type '(...a: string[]) => number' is not assignable to type 'Pair'.
+!!! error TS2322:   Types of parameters 'a' and 'a' are incompatible.
+!!! error TS2322:     Type 'number' is not assignable to type 'string'.
+    
