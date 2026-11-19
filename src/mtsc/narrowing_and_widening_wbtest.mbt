@@ -1274,3 +1274,299 @@ test "a variadic tuple pattern's rest element keeps the tuple's slice" {
     "function badCallback > binding `x` init: expected `number[]` but got `string[]`",
   ])
 }
+
+///|
+/// Assigning a never-nullish value to a property path removes the nullish
+/// members of the field's declared type, also when that type is an alias:
+/// `Nullable<number>` read as admitting no nullish value, so
+/// `this._next = 3` narrowed nothing (univer's `LineBreaker._nextClass`).
+/// And an unannotated instance method is read from its body for that
+/// question, at the path and at a binding, as a static factory already was
+/// (probed: tsc reports exactly the four `bad` lines).
+test "an assignment narrows a nullable-alias path, and reads an unannotated method's body" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|function mapClass(c: number) { return c + 1; }
+    #|export class L {
+    #|  private _next: Nullable<number> = null;
+    #|  private _nextChar() { const k = 1; return mapClass(k); }
+    #|  private _maybe() { if (Math.random() > 0.5) { return 1; } return undefined; }
+    #|  private _anyRet(): any { return 1; }
+    #|  private _empty() { }
+    #|  okPath() { this._next = this._nextChar(); return mapClass(this._next); }
+    #|  okBinding() { let o: Nullable<number> = null; o = this._nextChar(); return mapClass(o); }
+    #|  okLiteralOnAlias() { this._next = 3; return mapClass(this._next); }
+    #|  badPathMaybe() { this._next = this._maybe(); return mapClass(this._next); }
+    #|  badAnyRet() { this._next = this._anyRet(); return mapClass(this._next); }
+    #|  badEmpty() { this._next = this._empty(); return mapClass(this._next); }
+    #|  badUnassigned() { return mapClass(this._next); }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function L.badPathMaybe > call `mapClass` arg[0]: type `number | null | undefined | void` is not assignable to type `number`",
+    "function L.badAnyRet > call `mapClass` arg[0]: type `number | null | undefined | void` is not assignable to type `number`",
+    "function L.badEmpty > call `mapClass` arg[0]: type `number | null | undefined | void` is not assignable to type `number`",
+    "function L.badUnassigned > call `mapClass` arg[0]: type `number | null | undefined | void` is not assignable to type `number`",
+  ])
+}
+
+///|
+/// An enum member is assignable where its enum, or the member itself, is expected: it
+/// read as its folded value, which an object literal's member and a property
+/// write widened to `string` / `number` (univer's `DateSystem`, `Direction`;
+/// probed: tsc reports exactly the three `bad` lines).
+test "an enum member fits a target that expects its enum or the member (strenum)" {
+  let src =
+    #|export enum DateSystem { AUTO = "auto", D1900 = "1900" }
+    #|export interface Cfg { dateSystem?: DateSystem }
+    #|export const ok1: Cfg = { dateSystem: DateSystem.AUTO };
+    #|export function ok2(c: Cfg) { c.dateSystem = DateSystem.D1900; return c; }
+    #|export function ok3(f: (d?: DateSystem) => void) { f(DateSystem.AUTO); }
+    #|export function ok4(): Cfg { return { dateSystem: DateSystem.AUTO }; }
+    #|export enum Direction { UP, DOWN, LEFT, RIGHT }
+    #|export interface Ins { direction: Direction.LEFT | Direction.RIGHT }
+    #|export const ok5: Ins = { direction: Direction.LEFT };
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// An enum member is assignable where its enum, or the member itself, is expected: it
+/// read as its folded value, which an object literal's member and a property
+/// write widened to `string` / `number` (univer's `DateSystem`, `Direction`;
+/// probed: tsc reports exactly the three `bad` lines).
+test "an enum member fits a target that expects its enum or the member (strenum2)" {
+  let src =
+    #|export enum DateSystem { AUTO = "auto", D1900 = "1900" }
+    #|export enum Other { AUTO = "auto" }
+    #|export interface Cfg { dateSystem?: DateSystem }
+    #|export enum Direction { UP, DOWN, LEFT, RIGHT }
+    #|export interface Ins { direction: Direction.LEFT | Direction.RIGHT }
+    #|export const badOtherEnum: Cfg = { dateSystem: Other.AUTO };
+    #|export const badMemberOutsideUnion: Ins = { direction: Direction.UP };
+    #|export const badPlainLiteral: Cfg = { dateSystem: "auto" };
+    #|export function okShadowedName(DateSystem: { AUTO: DateSystem }) { const c: Cfg = { dateSystem: DateSystem.AUTO }; return c; }
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badOtherEnum` init.dateSystem: expected `DateSystem | undefined` but got `string`",
+    "top-level > binding `badMemberOutsideUnion` init.direction: expected `Direction.LEFT | Direction.RIGHT` but got `number`",
+    "top-level > binding `badPlainLiteral` init.dateSystem: expected `DateSystem | undefined` but got `string`",
+  ])
+}
+
+///|
+/// A numeric enum accepts any `number` as the member of an object value that
+/// is not a literal, as it already did at the top level (univer's
+/// `Rectangle.union`; probed: tsc reports exactly the `bad` lines).
+test "a numeric enum member of an object value accepts a number (numenum)" {
+  let src =
+    #|export enum E { A, B }
+    #|declare const n: number;
+    #|export const ok1: E = n;
+    #|export const ok2: { r?: E } = { r: n };
+    #|const x = { r: n };
+    #|export const ok3: { r?: E } = x;
+    #|const y = { r: n };
+    #|export const ok4: { r: E } = y;
+    #|export interface I { r?: E }
+    #|const z = { r: E.B };
+    #|export const ok5: I = z;
+    #|export const ok6: I = { r: E.A };
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// A numeric enum accepts any `number` as the member of an object value that
+/// is not a literal, as it already did at the top level (univer's
+/// `Rectangle.union`; probed: tsc reports exactly the `bad` lines).
+test "a numeric enum member of an object value accepts a number (numenum2)" {
+  let src =
+    #|export enum E { A, B }
+    #|export enum S { X = "x", Y = "y" }
+    #|declare const n: number;
+    #|const sv = { r: "x" };
+    #|export const badStringIntoNumericEnum: { r?: E } = sv;
+    #|const nv = { k: n };
+    #|export const badNumberIntoStringEnum: { k?: S } = nv;
+    #|const bv = { r: true };
+    #|export const badBooleanIntoNumericEnum: { r?: E } = bv;
+    #|const okv = { r: n };
+    #|export const okNumberIntoNumericEnum: { r?: E } = okv;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badStringIntoNumericEnum` init: expected `{ r: E | undefined }` but got `{ r: string }`",
+    "top-level > binding `badNumberIntoStringEnum` init: expected `{ k: S | undefined }` but got `{ k: number }`",
+    "top-level > binding `badBooleanIntoNumericEnum` init: expected `{ r: E | undefined }` but got `{ r: boolean }`",
+  ])
+}
+
+///|
+/// A numeric enum accepts any `number` as the member of an object value that
+/// is not a literal, as it already did at the top level (univer's
+/// `Rectangle.union`; probed: tsc reports exactly the `bad` lines).
+test "a numeric enum member of an object value accepts a number (reduceenum)" {
+  let src =
+    #|export enum RANGE_TYPE { NORMAL, ROW, COLUMN }
+    #|export interface IRange { startRow: number; endRow: number; rangeType?: RANGE_TYPE }
+    #|export function okUnion(...ranges: IRange[]): IRange {
+    #|  return ranges.reduce((acc, current) => ({ startRow: Math.min(acc.startRow, current.startRow), endRow: Math.max(acc.endRow, current.endRow), rangeType: RANGE_TYPE.NORMAL }), ranges[0]);
+    #|}
+    #|export function okDirect(): IRange { return { startRow: 1, endRow: 2, rangeType: RANGE_TYPE.ROW }; }
+    #|const lit = { startRow: 1, endRow: 2, rangeType: RANGE_TYPE.ROW };
+    #|export const okWidened: IRange = lit;
+    #|export enum S { A = "a", B = "b" }
+    #|export interface IS { k?: S }
+    #|export const badStr: IS = { k: "a" as string };
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badStr` init.k: expected `S | undefined` but got `string`",
+  ])
+}
+
+///|
+/// An unannotated field, a `let` and an assignment given an enum member hold
+/// the enum, not the member's folded value (univer's `BaseReferenceObject`,
+/// `AutoFillService`; probed: tsc reports exactly `badField` and `badMaybe`;
+/// `badField` is a MISS, since an enum-typed value abstains).
+test "an enum member gives a field, a let and an assigned binding its enum (fieldenum)" {
+  let src =
+    #|export enum DS { D1900 = "1900", D1904 = "1904" }
+    #|export enum N { A, B }
+    #|export class C {
+    #|  private _d = DS.D1900;
+    #|  private _n = N.A;
+    #|  take(d?: DS) { return d; }
+    #|  takeN(n: N) { return n; }
+    #|  okField() { return this.take(this._d); }
+    #|  okFieldN() { return this.takeN(this._n); }
+    #|  okReassign() { this._d = DS.D1904; this._n = N.B; }
+    #|  badField(): number { return this._d; }
+    #|}
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// An unannotated field, a `let` and an assignment given an enum member hold
+/// the enum, not the member's folded value (univer's `BaseReferenceObject`,
+/// `AutoFillService`; probed: tsc reports exactly `badField` and `badMaybe`;
+/// `badField` is a MISS, since an enum-typed value abstains).
+test "an enum member gives a field, a let and an assigned binding its enum (dirnarrow2)" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|export enum Direction { UP, DOWN }
+    #|declare function take(d: Direction): void;
+    #|export function okOne() { let d: Nullable<Direction> = null; d = Direction.UP; take(d); }
+    #|export function okBranches(a: number) { let d: Nullable<Direction> = null; if (a < 0) { d = Direction.UP; } else { d = Direction.DOWN; } take(d); }
+    #|export function okPlainUnion(a: number) { let d: Direction | null = null; if (a < 0) { d = Direction.UP; } else { d = Direction.DOWN; } take(d); }
+    #|export function okReturnElse(a: number) { let d: Direction | null = null; if (a < 0) { d = Direction.UP; } else { return; } take(d); }
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// An unannotated field, a `let` and an assignment given an enum member hold
+/// the enum, not the member's folded value (univer's `BaseReferenceObject`,
+/// `AutoFillService`; probed: tsc reports exactly `badField` and `badMaybe`;
+/// `badField` is a MISS, since an enum-typed value abstains).
+test "an enum member gives a field, a let and an assigned binding its enum (dirnarrow)" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|export enum Direction { UP, DOWN, LEFT, RIGHT }
+    #|export class Svc {
+    #|  private _d: Direction = Direction.DOWN;
+    #|  set direction(d: Direction) { this._d = d; }
+    #|  get direction() { return this._d; }
+    #|  okNarrow(a: number) {
+    #|    let direction: Nullable<Direction> = null;
+    #|    if (a < 0) { direction = Direction.UP; } else if (a > 0) { direction = Direction.DOWN; } else { return false; }
+    #|    this.direction = direction;
+    #|    return true;
+    #|  }
+    #|  badMaybe(a: number) {
+    #|    let direction: Nullable<Direction> = null;
+    #|    if (a < 0) { direction = Direction.UP; }
+    #|    this.direction = direction;
+    #|  }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function Svc.badMaybe > assign `.direction`: type `Direction | null | undefined | void` is not assignable to type `Direction`",
+  ])
+}
+
+///|
+/// When one branch of an `if` always exits, the other branch's assignments
+/// reach the code after the `if`, and a tuple-alias binding keeps its alias
+/// (excalidraw's `calculateBounds`; probed: tsc reports exactly the `bad`
+/// lines).
+test "an if whose sibling branch exits carries the other branch's assignments (ifjoin)" {
+  let src =
+    #|declare function takeS(s: string): void;
+    #|export function okString(a: number) { let s: string | null = null; if (a < 0) { s = "x"; } else { return; } takeS(s); }
+    #|export function okStringElseIf(a: number) { let s: string | null = null; if (a < 0) { s = "x"; } else if (a > 0) { s = "y"; } else { return; } takeS(s); }
+    #|export enum Direction { UP, DOWN }
+    #|declare function take(d: Direction): void;
+    #|export function okEnumVar(a: number, v: Direction) { let d: Direction | null = null; if (a < 0) { d = v; } else { return; } take(d); }
+    #|export function okEnumMember(a: number) { let d: Direction | null = null; if (a < 0) { d = Direction.UP; } else { return; } take(d); }
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// When one branch of an `if` always exits, the other branch's assignments
+/// reach the code after the `if`, and a tuple-alias binding keeps its alias
+/// (excalidraw's `calculateBounds`; probed: tsc reports exactly the `bad`
+/// lines).
+test "an if whose sibling branch exits carries the other branch's assignments (ifjoin2)" {
+  let src =
+    #|declare function takeS(s: string): void;
+    #|export function okThenAssigns(a: number) { let s: string | null = null; if (a < 0) { s = "x"; } else { return; } takeS(s); }
+    #|export function okElseAssigns(a: number) { let s: string | null = null; if (a < 0) { return; } else { s = "y"; } takeS(s); }
+    #|export function okElseIfChain(a: number) { let s: string | null = null; if (a < 0) { s = "x"; } else if (a > 0) { s = "y"; } else { return; } takeS(s); }
+    #|export function badAssignsNull(a: number) { let s: string | null = "z"; if (a < 0) { s = null; } else { return; } takeS(s); }
+    #|export function badNestedMaybe(a: number, b: boolean) { let s: string | null = null; if (a < 0) { if (b) { s = "x"; } } else { return; } takeS(s); }
+    #|export function badShadowInBranch(a: number) { let s: string | null = null; if (a < 0) { let s = "inner"; takeS(s); } else { return; } takeS(s); }
+    #|export function okExitsThrow(a: number) { let s: string | null = null; if (a < 0) { s = "x"; } else { throw new Error("e"); } takeS(s); }
+  assert_eq(issue_lines(src), [
+    "function badAssignsNull > call `takeS` arg[0]: expected `string` but got `null`",
+    "function badNestedMaybe > call `takeS` arg[0]: type `\"x\" (string) | string | null` is not assignable to type `string`",
+    "function badShadowInBranch > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// When one branch of an `if` always exits, the other branch's assignments
+/// reach the code after the `if`, and a tuple-alias binding keeps its alias
+/// (excalidraw's `calculateBounds`; probed: tsc reports exactly the `bad`
+/// lines).
+test "an if whose sibling branch exits carries the other branch's assignments (tuplealias)" {
+  let src =
+    #|type Bounds = [number, number, number, number];
+    #|export function okBoth(c: boolean): Bounds { let b: Bounds; if (c) { b = [1, 2, 3, 4]; } else { b = [5, 6, 7, 8]; } return b; }
+    #|export function okExitFirst(c: number): Bounds { let b: Bounds; if (c < 0) { return [0, 0, 0, 0]; } else if (c > 0) { b = [1, 2, 3, 4]; } else { b = [5, 6, 7, 8]; } return b; }
+    #|export function okDirectTuple(c: boolean): [number, number] { let b: [number, number]; if (c) { b = [1, 2]; } else { b = [3, 4]; } return b; }
+    #|export function badWrongLength(c: boolean): Bounds { let b: Bounds; if (c) { b = [1, 2, 3]; } else { b = [5, 6, 7, 8]; } return b; }
+  assert_eq(issue_lines(src), [
+    "function badWrongLength > assign `b`: expected tuple of 4 element(s), got 3",
+  ])
+}
+
+///|
+/// An alias to a lib interface this checker has no member table for abstains
+/// on member existence, as the bare name does (excalidraw's
+/// `event.nativeEvent`, through `@types/react`'s `NativeKeyboardEvent`).
+test "an alias to an untabulated lib interface abstains like the bare name (libalias)" {
+  let src =
+    #|type NativeKE = KeyboardEvent;
+    #|declare const e: NativeKE;
+    #|export function ok() { e.stopImmediatePropagation(); return e.isComposing; }
+    #|declare const d: KeyboardEvent;
+    #|export function okDirect() { d.stopImmediatePropagation(); return d.isComposing; }
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// An alias to a lib interface this checker has no member table for abstains
+/// on member existence, as the bare name does (excalidraw's
+/// `event.nativeEvent`, through `@types/react`'s `NativeKeyboardEvent`).
+test "an alias to an untabulated lib interface abstains like the bare name (nsshadow3)" {
+  let src =
+    #|type NativeKE = KeyboardEvent;
+    #|declare namespace R { interface KeyboardEvent { key: string; nativeEvent: NativeKE } }
+    #|declare const k: KeyboardEvent;
+    #|export function ok() { k.stopImmediatePropagation(); return k.isComposing; }
+    #|export function okKey(e: R.KeyboardEvent) { return e.key; }
+  assert_eq(issue_lines(src), [])
+}

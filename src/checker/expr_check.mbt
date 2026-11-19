@@ -5734,6 +5734,16 @@ fn inferred_primitive_field_type(
           }
           guard inits.get(field) is Some(i) else { return None }
           let env = ExprEnv::new()
+          // An enum member initializer gives the field the ENUM, as tsc
+          // widens an enum literal in a mutable position: `private _d =
+          // DateSystem.Date1900` is a `DateSystem`. Its folded value widened
+          // to `string`, so `this.take(this._d)` against `take(d?:
+          // DateSystem)` was reported (univer's `BaseReferenceObject`).
+          match
+            enum_member_receiver(env, resolver, cls.instance_field_inits[i].1) {
+            Some(e) => return Some(@ast.TsType::Named(e))
+            None => ()
+          }
           let t = widen_literal(
             resolver.unwrap(
               infer_expr(env, resolver, cls.instance_field_inits[i].1),
@@ -19062,6 +19072,25 @@ fn check_expr_against_shape(
   sub_path : String,
   arg_callee_non_generic~ : Bool,
 ) -> Unit {
+  // An enum member `E.M` where `E`, or that member's own type, is expected
+  // is that member, whatever its value: tsc gives it the enum literal type
+  // `E.M`, assignable to `E`. Here it reads as its folded value, which an
+  // object literal's member and a property write then widened to `string`
+  // or `number`, so `{ dateSystem: DateSystem.AUTO }` against `dateSystem?:
+  // DateSystem` and `{ direction: Direction.LEFT }` against `direction:
+  // Direction.LEFT | Direction.RIGHT` were both reported (univer, probed:
+  // tsc accepts them). A member that is not among the expected ones falls
+  // through to the check below, which still reports it.
+  match expr {
+    PropAccess(Var(e), m) if enum_member_fits_expected(
+        env,
+        ctx.resolver,
+        e,
+        m,
+        expected,
+      ) => return
+    _ => ()
+  }
   // `new Promise((resolve) => …)` where a `Promise<X>` is expected: the
   // executor is contextually typed by `Promise<X>`'s constructor, so
   // `resolve` takes `X | PromiseLike<X>` (`resolve(null)` against
@@ -21686,6 +21715,17 @@ fn struct_field_assignable(
     is_assignable_to(enum_members_as_enums(resolver, h), w) {
     return true
   }
+  // A numeric enum accepts any `number`, the rule `check_expr_against`
+  // already applies at the top level, and the resolver-free relation never
+  // consults the enum table. So `const x = { r: n }; const o: { r?: E } =
+  // x` was reported member by member, while the literal spelling passed
+  // (univer's `Rectangle.union`, whose `reduce` returns `{ rangeType:
+  // RANGE_TYPE.NORMAL }` read as `number`; probed: tsc accepts both).
+  match w {
+    Named(n) if is_number_valued_type(h) && enum_may_hold_number(resolver, n) =>
+      return true
+    _ => ()
+  }
   match h {
     Union(hs) =>
       return hs
@@ -22459,6 +22499,16 @@ fn member_recv_unmodeled_with(
           match a.type_ {
             Named(m) | Applied(m, _) if is_lib_global_type(m) &&
               resolver.qualified_names.contains(m) => return true
+            // The same alias over a lib global this checker has no member
+            // table for abstains as the bare name does: `type N =
+            // KeyboardEvent; e.stopImmediatePropagation()` with `e: N` was
+            // reported while `e: KeyboardEvent` was not (excalidraw's
+            // `event.nativeEvent`, typed by `@types/react`'s
+            // `NativeKeyboardEvent`; probed: tsc accepts both).
+            Named(m) | Applied(m, _) if is_lib_global_type(m) &&
+              !resolver.interfaces.contains(m) &&
+              !resolver.classes.contains(m) &&
+              !lib_interface_members_modeled(m) => return true
             _ => ()
           }
         _ => ()
@@ -22900,11 +22950,19 @@ fn binding_init_type(
     // The receiver must BE the enum: a parameter or local named like one
     // (`function f(E: { A: "local" })`) keeps its own member's type
     // (#311's review). The enum's own value infers as `any`, which a
-    // shadowing binding does not.
+    // shadowing binding does not; an IMPORTED enum's value is bound as
+    // `Named(E)`, its own name, which no shadowing binding is either
+    // (univer's `let italic = FontStyleType.ITALIC`, then `italic =
+    // FontStyleType.NORMAL`).
     Literal(_) | NumberLiteral(_) if mutable_ &&
       (match init {
         PropAccess(Var(e), _) =>
-          resolver.enums.contains(e) && infer(Var(e)) is Any
+          resolver.enums.contains(e) &&
+          (match infer(Var(e)) {
+            Any => true
+            Named(n) => n == e
+            _ => false
+          })
         _ => false
       }) =>
       match init {
@@ -35599,6 +35657,184 @@ fn collect_binding_names(b : @ast.TsBinding, out : Array[String]) -> Unit {
 }
 
 ///|
+/// Whether a method call assigned to a binding or a property path cannot be
+/// nullish by its method's DECLARATION, for the assignment narrowing that
+/// removes nullish members. Both assignment narrowings ask this one
+/// question: the property-path one had no static arm, so `this.v =
+/// N.create(0)` narrowed nothing where `v = N.create(0)` did.
+fn method_call_never_nullish(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  call : @ast.TsExpr,
+) -> Bool {
+  match call {
+    // A STATIC factory called through its class (`NumberValueObject.create(0)`)
+    // is never nullish when the method's declared return admits neither
+    // nullish value. A class used as a value is `any` here, so the call
+    // infers as `any` and narrowed nothing: univer's `if (v == null ||
+    // v.isNull()) { v = NumberValueObject.create(0) }` left `v` possibly
+    // undefined after the `if`. Only this NARROWING reads the declaration.
+    // Typing the call itself was tried, and it exposed four unrelated
+    // downstream gaps in univer and excalidraw (an object-literal union
+    // against an interface, a `declare class` implementing one, a generator
+    // object, `Array.prototype.at`), so the call stays `any` until those are
+    // fixed. Removing nullish members cannot add a mismatch.
+    MethodCall(Var(cn), meth, _) if env.lookup(cn) is None =>
+      match ctx.resolver.single_static_method(cn, meth) {
+        // Every member of the resolved return must be positively
+        // non-nullish: `string | void` is not, and `target_admits_nullish`
+        // does not see the `void`.
+        // An unannotated static reads its return from the body, as a
+        // getter does: `static create(v) { return new N(v) }` is an `N`.
+        // The parser records it only when no annotation was written, so an
+        // explicit `: any` stays `any`.
+        Some(m) => {
+          let ret = if is_checkable(m.return_type) {
+            m.return_type
+          } else if ctx.resolver.unannotated_static_return_members.get(cn)
+            is Some(names) &&
+            names.contains(meth) {
+            // A factory that builds its instance in a local first (`const
+            // instance = new N(v); …; return instance`) is read the way a
+            // function declaration's body is, with `undefined` added when
+            // the end is reachable (univer's `NumberValueObject.create`).
+            match method_sole_return_type(m, ctx.resolver) {
+              Some(t) => t
+              None =>
+                static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+            }
+          } else {
+            m.return_type
+          }
+          m.type_params.length() == 0 &&
+          is_checkable(ret) &&
+          union_components(
+            deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
+          )
+          .iter()
+          .all(fn(t) {
+            !(ctx.resolver.unwrap(t)
+            is (Void | Null | Undefined | Any | Unknown | Never))
+          })
+        }
+        None => false
+      }
+    // An unannotated INSTANCE method is read from its body the same way:
+    // `this._nextClass = this._nextCharClass()` on a `Nullable<number>`
+    // field, where the method returns `mapClass(…)`, left the path
+    // possibly `undefined` (univer's `LineBreaker`, probed: tsc accepts
+    // it). Only a single, non-generic, bodied method of a non-generic
+    // class is read, so an overload set, a class type parameter in the
+    // return, and an inherited method all abstain.
+    MethodCall(recv, meth, _) =>
+      instance_method_return_never_nullish(env, ctx, recv, meth)
+    _ => false
+  }
+}
+
+///|
+/// Whether an unannotated instance method `meth`, called on `recv`, returns
+/// a value that is never nullish, read from its body. The parser's
+/// `<unannotated-return:NAME>` sentinel is required, so an explicit `: any`
+/// stays `any`.
+fn instance_method_return_never_nullish(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  meth : String,
+) -> Bool {
+  let cname = match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv)) {
+    Named(n) | Struct(n, _) => n
+    _ => return false
+  }
+  guard ctx.resolver.classes.get(cname) is Some(cls) else { return false }
+  if cls.type_params.length() > 0 {
+    return false
+  }
+  guard ctx.resolver.unannotated_return_members.get(cname) is Some(names) &&
+    names.contains(meth) else {
+    return false
+  }
+  let ms = cls.methods.filter(fn(m) { !m.is_static && m.name == meth })
+  guard ms is [m] && m.accessor == "" && m.type_params.length() == 0 else {
+    return false
+  }
+  let ret = match method_sole_return_type(m, ctx.resolver) {
+    Some(t) => t
+    None => static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+  }
+  is_checkable(ret) &&
+  union_components(deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)))
+  .iter()
+  .all(fn(t) {
+    !(ctx.resolver.unwrap(t)
+    is (Void | Null | Undefined | Any | Unknown | Never))
+  })
+}
+
+///|
+/// The enum `E` when `expr` is a member `E.M` read off the enum ITSELF:
+/// `E` is a declared enum with a member `M`, and the receiver is not a
+/// binding that shadows the name. A local enum's own value infers as `any`;
+/// an IMPORTED one is bound as `Named(E)`, its own name or its per-module
+/// key. Anything else —
+/// a parameter `E: { A: string }`, a namespace — is `None`, and keeps the
+/// type its own member has.
+fn enum_member_receiver(
+  env : ExprEnv,
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+) -> String? {
+  guard expr is PropAccess(Var(e), m) else { return None }
+  guard resolver.enums.get(e) is Some(decl) else { return None }
+  if !decl.members.iter().any(fn(x) { x.name == m }) {
+    return None
+  }
+  match infer_expr(env, resolver, @ast.TsExpr::Var(e)) {
+    Any => Some(e)
+    // A per-module key (`Direction@path`, when two reachable modules
+    // declare the name) is still the enum.
+    Named(n) if n == e || n.has_prefix(e + "@") => Some(e)
+    _ => None
+  }
+}
+
+///|
+/// Whether `E.M` — `e` the enum's name as written, `m` the member — fits
+/// `expected`: some member of the expected type, aliases and unions
+/// expanded, is the enum `E` itself or the member type `E.M`. The receiver
+/// must BE the enum, so a binding shadowing its name keeps its own type, and
+/// a per-module key (`E@path`) is read by its declared name.
+fn enum_member_fits_expected(
+  env : ExprEnv,
+  resolver : Resolver,
+  e : String,
+  m : String,
+  expected : @ast.TsType,
+) -> Bool {
+  if enum_member_receiver(env, resolver, @ast.TsExpr::PropAccess(Var(e), m))
+    is None {
+    return false
+  }
+  fn declared(n : String) -> String {
+    match n.find("@") {
+      Some(i) if i > 0 => n[:i].to_owned()
+      _ => n
+    }
+  }
+
+  let member_ = e + "." + m
+  union_components(deep_union_members(resolver, resolver.unwrap(expected)))
+  .iter()
+  .any(fn(t) {
+    match t {
+      Named(n) => declared(n) == e || n == member_
+      _ => false
+    }
+  })
+}
+
+///|
 /// After `recv.prop = value`, the PROPERTY PATH narrows by assignment the
 /// way a binding does: `this._cached = { shape, keys }; return
 /// this._cached` is legal in tsc and was reported as returning `T | null`,
@@ -35628,7 +35864,15 @@ fn narrow_after_prop_assignment(
   let key = member_narrowing_key(recv_key, prop)
   let recv_ty = infer_expr(env, ctx.resolver, recv)
   guard ctx.resolver.lookup_field(recv_ty, prop) is Some(decl) else { return }
-  if !is_checkable(decl) || !(type_has_undefined(decl) || type_has_null(decl)) {
+  // The declaration is resolved before asking whether it admits a nullish
+  // value, as the binding narrowing does: a field declared `Nullable<number>`
+  // (`number | null | undefined | void`) read as admitting none, so the path
+  // was never narrowed (univer's `LineBreaker._nextClass`).
+  if !is_checkable(decl) ||
+    !(type_has_undefined(decl) ||
+    type_has_null(decl) ||
+    target_admits_nullish(ctx.resolver, decl, false, 0) ||
+    target_admits_nullish(ctx.resolver, decl, true, 0)) {
     return
   }
   let shape = match value {
@@ -35645,12 +35889,22 @@ fn narrow_after_prop_assignment(
     | NativeClassExpr(_, _) => true
     _ => {
       let vt = infer_expr(env, ctx.resolver, value)
-      !is_in_scope_type_param(ctx, vt) &&
-      type_definitely_non_nullish(ctx.resolver, vt)
+      (
+        !is_in_scope_type_param(ctx, vt) &&
+        type_definitely_non_nullish(ctx.resolver, vt)
+      ) ||
+      (
+        shape is MethodCall(_, _, _) &&
+        method_call_never_nullish(env, ctx, shape)
+      )
     }
   }
   if never_nullish {
-    match non_nullable(decl) {
+    // `void` goes with `null` and `undefined`, as under `x!`.
+    match
+      narrow_remove(non_nullable_resolved(ctx.resolver, decl), fn(t) {
+        ctx.resolver.unwrap(t) is (Void | Null | Undefined)
+      }) {
       Never => ()
       t => env.narrow(key, t)
     }
@@ -35797,6 +36051,15 @@ fn narrow_after_assignment(
       env.narrow(name, d)
       return
     }
+    // The same for a tuple spelled through an alias (`type Bounds =
+    // [number, number, number, number]`): `let b: Bounds; b = [x, y, w, h]`
+    // read back as `number[]`, so `return b` against `Bounds` was reported
+    // (excalidraw's `ElementBounds.calculateBounds`; probed: tsc accepts
+    // it). A literal of the wrong length is still judged at the assignment.
+    Some(d) if ctx.resolver.unwrap(d) is Tuple(_) => {
+      env.narrow(name, d)
+      return
+    }
     _ => ()
   }
   // `new C<T>()` arrives wrapped in `TypeArgs`, which says nothing about
@@ -35813,57 +36076,10 @@ fn narrow_after_assignment(
     | ArrowFunc(_, _, _, _)
     | FuncExpr(_)
     | NativeClassExpr(_, _) => true
-    // A STATIC factory called through its class (`NumberValueObject.create(0)`)
-    // is never nullish when the method's declared return admits neither
-    // nullish value. A class used as a value is `any` here, so the call
-    // infers as `any` and narrowed nothing: univer's `if (v == null ||
-    // v.isNull()) { v = NumberValueObject.create(0) }` left `v` possibly
-    // undefined after the `if`. Only this NARROWING reads the declaration.
-    // Typing the call itself was tried, and it exposed four unrelated
-    // downstream gaps in univer and excalidraw (an object-literal union
-    // against an interface, a `declare class` implementing one, a generator
-    // object, `Array.prototype.at`), so the call stays `any` until those are
-    // fixed. Removing nullish members cannot add a mismatch.
-    MethodCall(Var(cn), meth, _) if env.lookup(cn) is None =>
-      match ctx.resolver.single_static_method(cn, meth) {
-        // Every member of the resolved return must be positively
-        // non-nullish: `string | void` is not, and `target_admits_nullish`
-        // does not see the `void`.
-        // An unannotated static reads its return from the body, as a
-        // getter does: `static create(v) { return new N(v) }` is an `N`.
-        // The parser records it only when no annotation was written, so an
-        // explicit `: any` stays `any`.
-        Some(m) => {
-          let ret = if is_checkable(m.return_type) {
-            m.return_type
-          } else if ctx.resolver.unannotated_static_return_members.get(cn)
-            is Some(names) &&
-            names.contains(meth) {
-            // A factory that builds its instance in a local first (`const
-            // instance = new N(v); …; return instance`) is read the way a
-            // function declaration's body is, with `undefined` added when
-            // the end is reachable (univer's `NumberValueObject.create`).
-            match method_sole_return_type(m, ctx.resolver) {
-              Some(t) => t
-              None =>
-                static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
-            }
-          } else {
-            m.return_type
-          }
-          m.type_params.length() == 0 &&
-          is_checkable(ret) &&
-          union_components(
-            deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
-          )
-          .iter()
-          .all(fn(t) {
-            !(ctx.resolver.unwrap(t)
-            is (Void | Null | Undefined | Any | Unknown | Never))
-          })
-        }
-        None => false
-      }
+    // A method call whose declaration says it cannot be nullish, read by
+    // `method_call_never_nullish` (a static factory, or an unannotated
+    // instance method whose body decides it).
+    MethodCall(_, _, _) => method_call_never_nullish(env, ctx, shape)
     _ => false
   }
   // A declaration with a SINGLE non-nullish member narrows to exactly that
@@ -35896,7 +36112,15 @@ fn narrow_after_assignment(
     env.narrow(name, one)
     return
   }
-  let new_ty = infer_expr(env, ctx.resolver, value)
+  // An enum member narrows the binding to its ENUM, not to its folded
+  // value: `let direction: Nullable<Direction> = null` followed by
+  // `direction = Direction.UP` in each branch read back as `number`, so
+  // `this.direction = direction` against a `Direction` setter was
+  // reported (univer's `AutoFillService`; probed: tsc accepts it).
+  let new_ty = match enum_member_receiver(env, ctx.resolver, value) {
+    Some(e) => @ast.TsType::Named(e)
+    None => infer_expr(env, ctx.resolver, value)
+  }
   // tsc's `getAssignmentReducedType`: a UNION declaration of object shapes
   // narrows to the members the assigned value is assignable to, not to the
   // value's own type. After `a1 = { a: 1 }` on a normalized
@@ -36459,16 +36683,31 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // the surrounding scope continues with the opposite branch's effect
       // applied — so `if (x === null) return; ... /* x is non-null */`
       // works out of the box.
+      // What the continuing branch ASSIGNED reaches the code after the `if`
+      // too, not only the condition's narrowing: `let d: Direction | null =
+      // null; if (c) { d = Direction.UP } else { return } take(d)` read `d`
+      // as `Direction | null` (univer's `AutoFillService`, probed: tsc
+      // accepts it). The branch is read as a block that ran straight
+      // through, so a name it declares itself (`let s = "inner"`) stays its
+      // own and the outer binding keeps its type.
+      let carry = fn(block : @ast.TsBlock?, exit : Map[String, @ast.TsType]) {
+        guard block is Some(b) else { return }
+        let shadow : Map[String, Unit] = Map([])
+        block_declared_names(b, shadow)
+        apply_sequential_exit(env, pre_map, exit, shadow)
+      }
       if then_exits && !else_exits {
         drop_forgotten(else_exit)
         for b in effect.else_binds {
           env.bind(b.0, b.1)
         }
+        carry(else_block, else_exit)
       } else if else_exits && !then_exits {
         drop_forgotten(then_exit)
         for b in effect.then_binds {
           env.bind(b.0, b.1)
         }
+        carry(Some(then_block), then_exit)
       } else if !then_exits && !else_exits {
         drop_forgotten(then_exit)
         drop_forgotten(else_exit)
