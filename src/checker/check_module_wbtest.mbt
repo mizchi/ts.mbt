@@ -165,6 +165,7 @@ test "check_module: detects duplicate class instance properties" {
     constructor_params: None,
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_param_bindings: [],
     ambient_constructor_overloads: [],
     constructor_body: None,
     properties: [
@@ -224,6 +225,7 @@ test "check_module: instance and static with same name is OK" {
     constructor_params: None,
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_param_bindings: [],
     ambient_constructor_overloads: [],
     constructor_body: None,
     properties: [

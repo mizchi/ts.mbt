@@ -56048,9 +56048,18 @@ fn check_module_function_bodies_layered(
       }
       let is_rest = i < cls.constructor_param_is_rest.length() &&
         cls.constructor_param_is_rest[i]
+      // A pattern parameter binds every name it declares, as a method's
+      // does (`bind_callable_param`). With only the pair's name, `a` of
+      // `constructor({ a, b }: T)` was bound to the whole `T` and `b` was
+      // "cannot find name" (excalidraw's `FileManager`, `RequestError`).
+      let binding = if i < cls.constructor_param_bindings.length() {
+        cls.constructor_param_bindings[i]
+      } else {
+        None
+      }
       params.push({
         name: p.0,
-        binding: None,
+        binding,
         is_rest,
         is_optional: false,
         type_: p.1,

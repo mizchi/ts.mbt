@@ -797,6 +797,7 @@ fn build_runtime_class_decl(
   let computed_field_keys : Array[@ast.TsExpr] = []
   let constructor_param_is_rest : Array[Bool] = []
   let constructor_param_defaults : Array[@ast.TsExpr?] = []
+  let constructor_param_bindings : Array[@ast.TsBinding?] = []
   let constructor_params = match ctor_opt {
     Some(ctor) => {
       let params : Array[(String, @ast.TsType)] = []
@@ -804,6 +805,13 @@ fn build_runtime_class_decl(
         params.push((runtime_class_param_name(param, index), param.type_))
         constructor_param_is_rest.push(param.is_rest)
         constructor_param_defaults.push(param.default)
+        constructor_param_bindings.push(
+          match param.binding {
+            Some(@ast.TsBinding::Object(_)) | Some(@ast.TsBinding::Array(_)) =>
+              param.binding
+            _ => None
+          },
+        )
       }
       Some(params)
     }
@@ -1155,6 +1163,7 @@ fn build_runtime_class_decl(
     constructor_params,
     constructor_param_is_rest,
     constructor_param_defaults,
+    constructor_param_bindings,
     ambient_constructor_overloads: [],
     constructor_body,
     properties,
@@ -4341,6 +4350,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     constructor_params: runtime_decl.constructor_params,
     constructor_param_is_rest: runtime_decl.constructor_param_is_rest,
     constructor_param_defaults: runtime_decl.constructor_param_defaults,
+    constructor_param_bindings: runtime_decl.constructor_param_bindings,
     ambient_constructor_overloads: runtime_decl.ambient_constructor_overloads,
     constructor_body: runtime_decl.constructor_body,
     properties: runtime_decl.properties,

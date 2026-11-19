@@ -137,6 +137,7 @@ pub(all) struct TsClassDecl {
   constructor_params : Array[(String, TsType)]?
   constructor_param_is_rest : Array[Bool]
   constructor_param_defaults : Array[TsExpr?]
+  constructor_param_bindings : Array[TsBinding?]
   ambient_constructor_overloads : Array[(Array[(String, TsType)], Array[Bool])]
   constructor_body : TsBlock?
   properties : Array[TsClassPropertyDecl]

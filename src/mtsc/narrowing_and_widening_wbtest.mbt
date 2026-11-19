@@ -1103,3 +1103,23 @@ test "a multi-declarator let or const binds every name in its scope" {
     "function g3 > binding `badT` init: expected `string` but got `number`", "top-level > binding `badA` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// A constructor's pattern parameter binds every name it declares, as a
+/// method's does. The class kept one `(name, type)` pair per parameter, the
+/// pattern's first name, so `a` was bound to the whole parameter type and
+/// `b` was "cannot find name" (excalidraw's `FileManager` and
+/// `RequestError`, probed: tsc reports only `bad`).
+test "a constructor's pattern parameter binds every name" {
+  let src =
+    #|export class A {
+    #|  x: number; y: string; z: string[];
+    #|  constructor({ a, b }: { a: number; b: string }, [c, ...d]: string[]) { this.x = a; this.y = b; this.z = d; const s: string = c; }
+    #|}
+    #|export class B {
+    #|  constructor({ a, b }: { a: number; b: string } = { a: 1, b: "" }) { const bad: string = a; const ok: string = b; }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function B.constructor > binding `bad` init: expected `string` but got `number`",
+  ])
+}
