@@ -1,0 +1,68 @@
+enumLiteralMembersInWrittenObjects.ts(35,14): error TS2322: Type '{ tag: S.X; }[]' is not assignable to type '{ tag: S.Y; }[]'.
+  Type '{ tag: S.X; }' is not assignable to type '{ tag: S.Y; }'.
+    Types of property 'tag' are incompatible.
+      Type 'S.X' is not assignable to type 'S.Y'.
+enumLiteralMembersInWrittenObjects.ts(36,14): error TS2322: Type '{ kind: E.A; }[]' is not assignable to type '{ kind: 1; }[]'.
+  Type '{ kind: E.A; }' is not assignable to type '{ kind: 1; }'.
+    Types of property 'kind' are incompatible.
+      Type 'E.A' is not assignable to type '1'.
+enumLiteralMembersInWrittenObjects.ts(37,14): error TS2322: Type '{ tag: S.X; }[]' is not assignable to type '{ tag: "y"; }[]'.
+  Type '{ tag: S.X; }' is not assignable to type '{ tag: "y"; }'.
+    Types of property 'tag' are incompatible.
+      Type 'S.X' is not assignable to type '"y"'.
+
+
+==== enumLiteralMembersInWrittenObjects.ts (3 errors) ====
+    // An enum member written as an object-literal property keeps its
+    // enum-LITERAL type `E.M` where a callback returns the object under a
+    // contextual type: it fits the member itself, a union of members, a union
+    // discriminated by it, and the enum. An enum-literal type is also
+    // assignable to its member's VALUE type (`S.X` to `"x"` and `string`,
+    // auto-numbered `E.A` to `0` and `number`), while another member, another
+    // value and a plain literal of a different value are not.
+    
+    enum E { A, B }
+    enum S { X = "x", Y = "y" }
+    interface I { kind: E; n: number }
+    interface J { tag: S; n: number }
+    interface IA { kind: E.A }
+    interface JX { tag: S.X }
+    interface Cx { tag: S.X; a: number }
+    interface Cy { tag: S.Y; b: number }
+    declare const xs: number[];
+    
+    export const okNumericToEnum: I[] = xs.map((n) => ({ kind: E.A, n }));
+    export const okStringToEnum: J[] = xs.map((n) => ({ tag: S.X, n }));
+    export const okEitherBranch: J[] = xs.map((n) => { if (n) { return { tag: S.X, n }; } return { tag: S.Y, n }; });
+    export const okNumericMember: IA[] = xs.map(() => ({ kind: E.A }));
+    export const okStringMember: JX[] = xs.map(() => ({ tag: S.X }));
+    export const okUnionOfMembers: { tag: S.X | S.Y }[] = xs.map(() => ({ tag: S.X }));
+    export const okDiscriminatedUnion: (Cx | Cy)[] = xs.map(() => ({ tag: S.X, a: 1 }));
+    export const okMemberToNumber: { kind: number }[] = xs.map(() => ({ kind: E.A }));
+    export const okMemberToString: { tag: string }[] = xs.map(() => ({ tag: S.X }));
+    export const okAutoNumberedToItsValue: { kind: 0 }[] = xs.map(() => ({ kind: E.A }));
+    export const okStringMemberToItsValue: { tag: "x" }[] = xs.map(() => ({ tag: S.X }));
+    const widenedNumeric = { kind: E.A };
+    export const okWidenedToNumber: { kind: number } = widenedNumeric;
+    const widenedString = { tag: S.X };
+    export const okWidenedToString: { tag: string } = widenedString;
+    export const okWidenedToStringOrNumber: { tag: string | number } = widenedString;
+    export const badOtherMember: { tag: S.Y }[] = xs.map(() => ({ tag: S.X }));
+                 ~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S.X; }[]' is not assignable to type '{ tag: S.Y; }[]'.
+!!! error TS2322:   Type '{ tag: S.X; }' is not assignable to type '{ tag: S.Y; }'.
+!!! error TS2322:     Types of property 'tag' are incompatible.
+!!! error TS2322:       Type 'S.X' is not assignable to type 'S.Y'.
+    export const badOtherValue: { kind: 1 }[] = xs.map(() => ({ kind: E.A }));
+                 ~~~~~~~~~~~~~
+!!! error TS2322: Type '{ kind: E.A; }[]' is not assignable to type '{ kind: 1; }[]'.
+!!! error TS2322:   Type '{ kind: E.A; }' is not assignable to type '{ kind: 1; }'.
+!!! error TS2322:     Types of property 'kind' are incompatible.
+!!! error TS2322:       Type 'E.A' is not assignable to type '1'.
+    export const badOtherLiteral: { tag: "y" }[] = xs.map(() => ({ tag: S.X }));
+                 ~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S.X; }[]' is not assignable to type '{ tag: "y"; }[]'.
+!!! error TS2322:   Type '{ tag: S.X; }' is not assignable to type '{ tag: "y"; }'.
+!!! error TS2322:     Types of property 'tag' are incompatible.
+!!! error TS2322:       Type 'S.X' is not assignable to type '"y"'.
+    

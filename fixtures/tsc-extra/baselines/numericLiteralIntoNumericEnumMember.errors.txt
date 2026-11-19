@@ -1,0 +1,40 @@
+numericLiteralIntoNumericEnumMember.ts(10,14): error TS2322: Type '{ r: 123; }' is not assignable to type '{ r: E; }'.
+  Types of property 'r' are incompatible.
+    Type '123' is not assignable to type 'E'.
+numericLiteralIntoNumericEnumMember.ts(20,14): error TS2322: Type '{ r: 0 | 2; }' is not assignable to type '{ r: E; }'.
+  Types of property 'r' are incompatible.
+    Type '0 | 2' is not assignable to type 'E'.
+      Type '2' is not assignable to type 'E'.
+
+
+==== numericLiteralIntoNumericEnumMember.ts (2 errors) ====
+    // A numeric literal type is assignable to a numeric enum only when some
+    // member holds that value (TypeScript 5.0). `number` itself still is, and
+    // so is any literal when a member's value is computed and so not known.
+    
+    enum E { A = 0, B = 1 }
+    enum C { A = 0, B = f() }
+    declare function f(): number;
+    
+    declare const o1: { r: 123 };
+    export const badLiteralNoMember: { r: E } = o1;
+                 ~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ r: 123; }' is not assignable to type '{ r: E; }'.
+!!! error TS2322:   Types of property 'r' are incompatible.
+!!! error TS2322:     Type '123' is not assignable to type 'E'.
+    declare const o2: { r: 1 };
+    export const okLiteralMember: { r: E } = o2;
+    declare const o3: { r: number };
+    export const okBroadNumber: { r: E } = o3;
+    declare const o4: { r: 7 };
+    export const okComputedMemberMayHold: { r: C } = o4;
+    declare const o5: { r: 0 | 1 };
+    export const okUnionOfMembers: { r: E } = o5;
+    declare const o6: { r: 0 | 2 };
+    export const badUnionWithANonMember: { r: E } = o6;
+                 ~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ r: 0 | 2; }' is not assignable to type '{ r: E; }'.
+!!! error TS2322:   Types of property 'r' are incompatible.
+!!! error TS2322:     Type '0 | 2' is not assignable to type 'E'.
+!!! error TS2322:       Type '2' is not assignable to type 'E'.
+    

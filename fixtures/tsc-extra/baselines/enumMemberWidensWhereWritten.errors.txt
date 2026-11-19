@@ -1,0 +1,89 @@
+enumMemberWidensWhereWritten.ts(26,14): error TS2322: Type '{ tag: S; }[]' is not assignable to type '{ tag: S.X; }[]'.
+  Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+    Types of property 'tag' are incompatible.
+      Type 'S' is not assignable to type 'S.X'.
+enumMemberWidensWhereWritten.ts(28,14): error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+  Types of property 'tag' are incompatible.
+    Type 'S' is not assignable to type 'S.X'.
+enumMemberWidensWhereWritten.ts(30,14): error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+  Types of property 'tag' are incompatible.
+    Type 'S' is not assignable to type 'S.X'.
+enumMemberWidensWhereWritten.ts(31,14): error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+  Types of property 'tag' are incompatible.
+    Type 'S' is not assignable to type 'S.X'.
+enumMemberWidensWhereWritten.ts(36,23): error TS2783: 'tag' is specified more than once, so this usage will be overwritten.
+enumMemberWidensWhereWritten.ts(39,14): error TS2322: Type '{ tag: S; }[]' is not assignable to type '{ tag: S.X; }[]'.
+  Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+    Types of property 'tag' are incompatible.
+      Type 'S' is not assignable to type 'S.X'.
+
+
+==== enumMemberWidensWhereWritten.ts (6 errors) ====
+    // A binding widens an enum member to its enum only where the member was
+    // written: an object literal, a call taking an inline callback, and an
+    // unannotated function's inferred return all widen, so a later write of
+    // another member is legal. A parameter typed with a member and held in
+    // `{ t }`, and a declared function returning `{ tag: S.X }`, keep the
+    // declared member type.
+    
+    enum S { X = "x", Y = "y" }
+    declare const xs: number[];
+    
+    const mapped = xs.map(() => ({ tag: S.X, n: 1 }));
+    export function okPushAnotherMember() { mapped.push({ tag: S.Y, n: 2 }); }
+    export function okWriteAnotherMember() { mapped[0].tag = S.Y; }
+    export function okInferredReturn() { return { tag: S.X }; }
+    export function okWriteThroughInferredReturn() { const r = okInferredReturn(); r.tag = S.Y; }
+    const nested = { inner: xs.map(() => ({ tag: S.X })) };
+    export function okPushIntoNestedArray() { nested.inner.push({ tag: S.Y }); }
+    export function okParameterKeepsMember(t: S.X) { const x = { t }; const y: { t: S.X } = x; return y; }
+    declare function declaredArray(): { tag: S.X }[];
+    const fromDeclaredArray = declaredArray();
+    export const okDeclaredArrayKeepsMember: { tag: S.X }[] = fromDeclaredArray;
+    declare function declaredObject(): { tag: S.X };
+    const fromDeclaredObject = declaredObject();
+    export const okDeclaredObjectKeepsMember: { tag: S.X } = fromDeclaredObject;
+    const widened = xs.map(() => ({ tag: S.X }));
+    export const badWidenedToEnum: { tag: S.X }[] = widened;
+                 ~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S; }[]' is not assignable to type '{ tag: S.X; }[]'.
+!!! error TS2322:   Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+!!! error TS2322:     Types of property 'tag' are incompatible.
+!!! error TS2322:       Type 'S' is not assignable to type 'S.X'.
+    const literal = { tag: S.X };
+    export const badLiteralWidenedToEnum: { tag: S.X } = literal;
+                 ~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+!!! error TS2322:   Types of property 'tag' are incompatible.
+!!! error TS2322:     Type 'S' is not assignable to type 'S.X'.
+    const returned = okInferredReturn();
+    export const badInferredReturnWidened: { tag: S.X } = returned;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+!!! error TS2322:   Types of property 'tag' are incompatible.
+!!! error TS2322:     Type 'S' is not assignable to type 'S.X'.
+    export const badInferredReturnCall: { tag: S.X } = okInferredReturn();
+                 ~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+!!! error TS2322:   Types of property 'tag' are incompatible.
+!!! error TS2322:     Type 'S' is not assignable to type 'S.X'.
+    declare function load(cb: () => void): { tag: S.X }[];
+    const loaded = load(() => {});
+    export const okDeclaredResultWithCallbackKept: { tag: S.X }[] = loaded;
+    declare const raw: { tag: "raw" };
+    const spreadLast = [{ tag: S.X, ...raw }];
+                          ~~~~~~~~
+!!! error TS2783: 'tag' is specified more than once, so this usage will be overwritten.
+!!! related TS2785 enumMemberWidensWhereWritten.ts:36:33: This spread always overwrites this property.
+    export const okLaterSpreadWins: { tag: "raw" }[] = spreadLast;
+    const enumLast = [{ ...raw, tag: S.X }];
+    export const badLaterEnumWidened: { tag: S.X }[] = enumLast;
+                 ~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S; }[]' is not assignable to type '{ tag: S.X; }[]'.
+!!! error TS2322:   Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+!!! error TS2322:     Types of property 'tag' are incompatible.
+!!! error TS2322:       Type 'S' is not assignable to type 'S.X'.
+    declare function load2(cb: () => { tag: S }): { tag: S.X }[];
+    const loadedBesideAWrite = load2(() => ({ tag: S.Y }));
+    export const okDeclaredKeptBesideACallbackWrite: { tag: S.X }[] = loadedBesideAWrite;
+    

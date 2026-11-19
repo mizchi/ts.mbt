@@ -1842,13 +1842,36 @@ fn Resolver::ingest_type_module(
   }
   for name, enum_ in types.enums {
     match renames.get(name) {
-      Some(key) => r.enums[key] = enum_
+      // A renamed enum's members travel under its key too, so a member read
+      // through the keyed name resolves as the bare one does (#315's
+      // review).
+      Some(key) => {
+        r.enums[key] = enum_
+        for m in enum_.members {
+          match types.globals.get(name + "." + m.name) {
+            Some(t) => r.globals[key + "." + m.name] = t
+            None => ()
+          }
+        }
+      }
       None => ()
     }
     if !claim(name) {
       continue
     }
     r.enums[name] = enum_
+    // Its members travel with it. `ingest_module` exposes each one as the
+    // global `E.M`, which is how `E.M` is typed, and only the enum table was
+    // copied out of the throwaway resolver: an imported `Kind.PARAGRAPH`
+    // read as `any`, so `x?.kind === Kind.PARAGRAPH` never ruled out
+    // `undefined` (univer's `_applyContextualParagraphSpacing`).
+    for m in enum_.members {
+      let key = name + "." + m.name
+      match types.globals.get(key) {
+        Some(t) if !r.globals.contains(key) => r.globals[key] = t
+        _ => ()
+      }
+    }
   }
 }
 
@@ -5734,6 +5757,16 @@ fn inferred_primitive_field_type(
           }
           guard inits.get(field) is Some(i) else { return None }
           let env = ExprEnv::new()
+          // An enum member initializer gives the field the ENUM, as tsc
+          // widens an enum literal in a mutable position: `private _d =
+          // DateSystem.Date1900` is a `DateSystem`. Its folded value widened
+          // to `string`, so `this.take(this._d)` against `take(d?:
+          // DateSystem)` was reported (univer's `BaseReferenceObject`).
+          match
+            enum_member_receiver(env, resolver, cls.instance_field_inits[i].1) {
+            Some(e) => return Some(@ast.TsType::Named(e))
+            None => ()
+          }
           let t = widen_literal(
             resolver.unwrap(
               infer_expr(env, resolver, cls.instance_field_inits[i].1),
@@ -12809,6 +12842,106 @@ fn enum_may_hold_number(resolver : Resolver, name : String) -> Bool {
 }
 
 ///|
+/// The type of the values an enum type (`S`, the union of its members'
+/// values) or an enum-literal type (`S.X`, its member's value) holds.
+/// Auto-numbering is reproduced as `record_closed_key_names` reproduces it
+/// (`enum E { A, B }` writes no value, and `E.A` is `0`); a computed member,
+/// or one after a member numbering cannot continue from, is `number`, which
+/// is wider than its value and so only ever accepts less. `None` for
+/// anything else, a member the enum does not declare included.
+fn enum_value_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? {
+  guard ty is Named(n) else { return None }
+  let (e, member_) = if resolver.enums.contains(n) {
+    (n, None)
+  } else {
+    match n.rev_find(".") {
+      Some(i) if i > 0 => (n[:i].to_owned(), Some(n[i + 1:].to_owned()))
+      _ => return None
+    }
+  }
+  guard resolver.enums.get(e) is Some(decl) else { return None }
+  let parts : Array[@ast.TsType] = []
+  let mut next_auto : Int32? = Some(0)
+  for m in decl.members {
+    let v : @ast.TsType = if m.is_computed {
+      next_auto = None
+      Number
+    } else {
+      match m.value {
+        Some(Number(s)) => {
+          next_auto = match decimal_int_value(s) {
+            Some(x) => Some(x + 1)
+            None => None
+          }
+          NumberLiteral(s)
+        }
+        Some(String(s)) => {
+          next_auto = None
+          Literal(s)
+        }
+        Some(_) => return None
+        None =>
+          match next_auto {
+            Some(x) => {
+              next_auto = Some(x + 1)
+              NumberLiteral(x.to_string())
+            }
+            None => Number
+          }
+      }
+    }
+    match member_ {
+      Some(name) => if m.name == name { return Some(v) }
+      None => if !parts.contains(v) { parts.push(v) }
+    }
+  }
+  match (member_, parts.length()) {
+    (Some(_), _) | (None, 0) => None
+    (None, 1) => Some(parts[0])
+    _ => Some(Union(parts))
+  }
+}
+
+///|
+/// Whether every numeric LITERAL in `h` (`h` a number-valued type) is a
+/// value some member of enum `n` holds. `number` itself, and an enum with a
+/// member whose value this cannot read, accept any.
+fn numeric_literals_held_by_enum(
+  resolver : Resolver,
+  h : @ast.TsType,
+  n : String,
+) -> Bool {
+  let values = match enum_value_type(resolver, Named(n)) {
+    Some(v) => union_components(v)
+    None => return true
+  }
+  if values.iter().any(fn(v) { v is Number }) {
+    return true
+  }
+  union_components(h)
+  .iter()
+  .all(fn(c) {
+    match c {
+      NumberLiteral(x) =>
+        values
+        .iter()
+        .any(fn(v) {
+          match v {
+            NumberLiteral(y) =>
+              y == x ||
+              (
+                decimal_int_value(y) is Some(a) &&
+                decimal_int_value(x) == Some(a)
+              )
+            _ => false
+          }
+        })
+      _ => true
+    }
+  })
+}
+
+///|
 /// `number`, a numeric literal, or a union of them.
 fn is_number_valued_type(ty : @ast.TsType) -> Bool {
   match ty {
@@ -14704,6 +14837,22 @@ fn infer_expr_inner(
           }) =>
           match resolver.globals.get(class_name + "." + name) {
             Some(t) => return t
+            // An enum imported under another name (`import { E as RE }`) is
+            // bound as the enum it names, under its per-module key when two
+            // modules declare it, and its members are globals there (#315's
+            // review). No typed local reaches this arm, so the binding is
+            // the import's.
+            None if (match resolver.globals.get(class_name) {
+                Some(Named(n)) =>
+                  n != class_name &&
+                  resolver.enums.contains(n) &&
+                  resolver.globals.contains(n + "." + name)
+                _ => false
+              }) =>
+              match resolver.globals.get(class_name) {
+                Some(Named(n)) => return resolver.globals[n + "." + name]
+                _ => ()
+              }
             None =>
               match resolver.classes.get(class_name) {
                 Some(cls) => {
@@ -14907,7 +15056,17 @@ fn infer_expr_inner(
             opaque_spread = true
           }
         } else {
-          let val_ty = infer_expr(env, resolver, entry.1)
+          // An enum member read off the enum itself is the enum-LITERAL
+          // type `E.M`, as in tsc, and not the type of its value: a
+          // callback's `({ tag: S.X })` against `{ tag: S.X | S.Y }[]` or a
+          // union discriminated by `tag` read `"x"`, which is neither
+          // (probed: tsc accepts both). A binding widens it to `E`, as it
+          // widens a literal (`binding_init_type`).
+          let val_ty = match
+            (entry.1, enum_member_receiver(env, resolver, entry.1)) {
+            (PropAccess(_, m), Some(e)) => @ast.TsType::Named(e + "." + m)
+            _ => infer_expr(env, resolver, entry.1)
+          }
           for alt in alts {
             object_lit_set_field(alt, entry.0, val_ty)
           }
@@ -19062,6 +19221,45 @@ fn check_expr_against_shape(
   sub_path : String,
   arg_callee_non_generic~ : Bool,
 ) -> Unit {
+  // An enum member `E.M` where `E`, or that member's own type, is expected
+  // is that member, whatever its value: tsc gives it the enum literal type
+  // `E.M`, assignable to `E`. Here it reads as its folded value, which an
+  // object literal's member and a property write then widened to `string`
+  // or `number`, so `{ dateSystem: DateSystem.AUTO }` against `dateSystem?:
+  // DateSystem` and `{ direction: Direction.LEFT }` against `direction:
+  // Direction.LEFT | Direction.RIGHT` were both reported (univer, probed:
+  // tsc accepts them). A member that is not among the expected ones falls
+  // through to the check below, which still reports it.
+  match expr {
+    PropAccess(Var(e), m) if enum_member_fits_expected(
+        env,
+        ctx.resolver,
+        e,
+        m,
+        expected,
+      ) => return
+    _ => ()
+  }
+  // A value of one enum where a DIFFERENT declaration of the same name is
+  // expected — the checked module's `S` against a second module's `S`,
+  // kept under its per-module key — fits only when the two are related
+  // (TS 5.4, probed). The relations below compare the two names modulo the
+  // key, so the mismatch is decided here, and only when an enum is what is
+  // expected.
+  match ctx.resolver.unwrap(expected) {
+    Named(n) as ex if enum_type_parts(ctx.resolver, n) is Some(_) => {
+      let src = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+      if unrelated_same_named_enums(ctx.resolver, src, ex) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(ex)}` but got `\{type_display(src)}`, a different declaration of the enum whose members differ",
+        )
+        return
+      }
+    }
+    _ => ()
+  }
   // `new Promise((resolve) => …)` where a `Promise<X>` is expected: the
   // executor is contextually typed by `Promise<X>`'s constructor, so
   // `resolve` takes `X | PromiseLike<X>` (`resolve(null)` against
@@ -19488,8 +19686,17 @@ fn check_expr_against_shape(
       ) ||
       // Parameter registration substitutes in-scope type params with their
       // bounds, leaving shapes like `IndexedAccess(Any, Keyof(Named("T")))`
-      // — the `keyof` key marks it as the same opaque generic access.
-      key_t is Keyof(_) ||
+      // — the `keyof` key marks it as the same opaque generic access. Only
+      // when the `keyof` names one of them: `typeof KEYS[keyof typeof KEYS]`
+      // over an `as const` object is a concrete union of its values, and
+      // `has(KEYS.A)` against it is legal (excalidraw's `EditorLocalStorage`,
+      // probed). That shape stays unjudged here.
+      (
+        key_t is Keyof(inner) &&
+        ctx.in_scope_type_params
+        .iter()
+        .any(fn(tp) { type_param_occurs(tp, inner) })
+      ) ||
       (key_t is Named(key) && ctx.in_scope_type_params.contains(key)) => {
       record_unfiltered(
         ctx,
@@ -21673,9 +21880,58 @@ fn struct_field_assignable(
   if is_named_decl(h, resolver) && is_named_decl(w, resolver) {
     return struct_assignable_named_rec(h, w, resolver, visited)
   }
+  if unrelated_same_named_enums(resolver, h, w) {
+    return false
+  }
   if is_assignable_to(h, w) ||
     is_assignable_to(enum_members_as_enums(resolver, h), w) {
     return true
+  }
+  // An enum or an enum-literal type is assignable to what its VALUES are:
+  // `S` to `string`, `S.X` to `"x"`, a numeric member to its number (tsc's
+  // `isSimpleTypeRelatedTo`, probed). The resolver-free relation knows
+  // neither the members nor their values, so `{ tag: S }` against `{ tag:
+  // string }` was reported once a binding widened `S.X` to `S`.
+  match enum_value_type(resolver, h) {
+    Some(v) if is_assignable_to(v, w) => return true
+    _ => ()
+  }
+  // A numeric enum accepts any `number`, the rule `check_expr_against`
+  // already applies at the top level, and the resolver-free relation never
+  // consults the enum table. So `const x = { r: n }; const o: { r?: E } =
+  // x` was reported member by member, while the literal spelling passed
+  // (univer's `Rectangle.union`, whose `reduce` returns `{ rangeType:
+  // RANGE_TYPE.NORMAL }` read as `number`; probed: tsc accepts both).
+  // A numeric LITERAL only when a member holds that value (TS 5.0,
+  // probed): `{ r: 123 }` against `{ r: E }` with `enum E { A = 0 }` is an
+  // error, `{ r: 0 }` is not. A member value this cannot read keeps the
+  // literal acceptable.
+  match w {
+    Named(n) if is_number_valued_type(h) &&
+      enum_may_hold_number(resolver, n) &&
+      numeric_literals_held_by_enum(resolver, h, n) => return true
+    _ => ()
+  }
+  // An array member is covariant in its element, and the element goes
+  // through this same relation: `const f = { xs: [{ a: 1 }] }` assigned to
+  // `{ xs: A[] }`, `A` an interface, was reported, because the
+  // resolver-free relation cannot expand the named element and nothing
+  // else here asked about arrays (univer's `IPermissionPoint.actions`;
+  // probed: tsc accepts). `structural_oneway_assignable_rec` relates arrays
+  // the same way at the top level. A `readonly` source does not assign to a
+  // mutable target.
+  let array_elem = fn(t : @ast.TsType) -> (@ast.TsType, Bool)? {
+    match t {
+      Array(e) | Applied("Array", [e]) => Some((e, false))
+      Applied("ReadonlyArray", [e]) => Some((e, true))
+      _ => None
+    }
+  }
+  match (array_elem(h), array_elem(w)) {
+    (Some((he, h_ro)), Some((we, w_ro))) =>
+      return (!h_ro || w_ro) &&
+        struct_field_assignable(he, we, resolver, visited, depth=depth + 1)
+    _ => ()
   }
   match h {
     Union(hs) =>
@@ -22450,6 +22706,16 @@ fn member_recv_unmodeled_with(
           match a.type_ {
             Named(m) | Applied(m, _) if is_lib_global_type(m) &&
               resolver.qualified_names.contains(m) => return true
+            // The same alias over a lib global this checker has no member
+            // table for abstains as the bare name does: `type N =
+            // KeyboardEvent; e.stopImmediatePropagation()` with `e: N` was
+            // reported while `e: KeyboardEvent` was not (excalidraw's
+            // `event.nativeEvent`, typed by `@types/react`'s
+            // `NativeKeyboardEvent`; probed: tsc accepts both).
+            Named(m) | Applied(m, _) if is_lib_global_type(m) &&
+              !resolver.interfaces.contains(m) &&
+              !resolver.classes.contains(m) &&
+              !lib_interface_members_modeled(m) => return true
             _ => ()
           }
         _ => ()
@@ -22882,7 +23148,24 @@ fn binding_init_type(
     Object(_) => widen_object_literal_type(inferred, init, resolver, infer)
     Union(_) if init is ObjectLit(_) =>
       widen_object_literal_type(inferred, init, resolver, infer)
-    Struct(_, _) | Array(_) | Tuple(_) => widen_literal_deep(inferred)
+    // An array of object literals widens each member the way a single
+    // literal does, and the element type no longer carries the expressions
+    // that say which members were enum members. So a key that EVERY item
+    // writing it sets to a member of one enum is that enum across the
+    // element (`[{ t: T.INSERT, … }]` is `{ t: T; … }[]`, as in tsc).
+    Array(elem) if init is ArrayLit(items) && items.length() > 0 =>
+      match array_literal_key_plans(items, resolver, infer) {
+        Some(plans) => {
+          let writes : Map[String, Unit] = Map([])
+          fresh_enum_writes(init, writes, 0)
+          @ast.TsType::Array(widen_enum_keys(resolver, elem, plans, writes))
+        }
+        None => widen_fresh_deep_from(resolver, inferred, init)
+      }
+    // An expanded interface's members are declared, not fresh, so only the
+    // literal widening that predates enum-literal members applies to it.
+    Struct(_, _) => widen_literal_deep(inferred)
+    Array(_) | Tuple(_) => widen_fresh_deep_from(resolver, inferred, init)
     // An enum member's literal type widens to its ENUM in a mutable
     // binding: `let prev = LinkCharType.Other` is a `LinkCharType`, so a
     // later `prev = other` and `prev !== LinkCharType.Open` are legal
@@ -22891,11 +23174,19 @@ fn binding_init_type(
     // The receiver must BE the enum: a parameter or local named like one
     // (`function f(E: { A: "local" })`) keeps its own member's type
     // (#311's review). The enum's own value infers as `any`, which a
-    // shadowing binding does not.
+    // shadowing binding does not; an IMPORTED enum's value is bound as
+    // `Named(E)`, its own name, which no shadowing binding is either
+    // (univer's `let italic = FontStyleType.ITALIC`, then `italic =
+    // FontStyleType.NORMAL`).
     Literal(_) | NumberLiteral(_) if mutable_ &&
       (match init {
         PropAccess(Var(e), _) =>
-          resolver.enums.contains(e) && infer(Var(e)) is Any
+          resolver.enums.contains(e) &&
+          (match infer(Var(e)) {
+            Any => true
+            Named(n) => n == e
+            _ => false
+          })
         _ => false
       }) =>
       match init {
@@ -23100,6 +23391,8 @@ fn widen_object_literal_type(
   match (ty, init) {
     (Object(fields), ObjectLit(entries)) => {
       let has_spread = entries.iter().any(fn(e) { e.0.has_prefix("@@spread:") })
+      let writes : Map[String, Unit] = Map([])
+      fresh_enum_writes(init, writes, 0)
       let origins : Map[String, ObjectMemberOrigin] = Map([])
       object_literal_member_origins(entries, resolver, infer, origins, 0)
       Object(
@@ -23109,7 +23402,8 @@ fn widen_object_literal_type(
               match origins.get(k) {
                 Some(Fresh(Some(v))) =>
                   (f.0, widen_object_literal_type(f.1, v, resolver, infer))
-                Some(Fresh(None)) => (f.0, widen_literal_deep(f.1))
+                Some(Fresh(None)) =>
+                  (f.0, widen_written_enums(resolver, f.1, writes))
                 Some(FreshPart(t)) => {
                   let fresh = union_components(t)
                   let parts : Array[@ast.TsType] = []
@@ -23134,9 +23428,9 @@ fn widen_object_literal_type(
                 }
                 Some(Declared) => f
                 None if has_spread => f
-                None => (f.0, widen_literal_deep(f.1))
+                None => (f.0, widen_written_enums(resolver, f.1, writes))
               }
-            _ => (f.0, widen_literal_deep(f.1))
+            _ => (f.0, widen_written_enums(resolver, f.1, writes))
           }
         }),
       )
@@ -23190,7 +23484,304 @@ fn widen_object_literal_type(
         Union(parts)
       }
     }
-    _ => widen_literal_deep(ty)
+    // An enum member widens to its ENUM, not to the base of its value:
+    // `{ t: T.RETAIN, len: 1 }` is `{ t: T; len: number }` in tsc, `const`
+    // or not, so a later relation against a union discriminated by `t`
+    // splits over `T`'s members. Widening to `string` lost the enum and
+    // made every such object a mismatch (univer's text-x actions).
+    (_, PropAccess(Var(e), m)) if resolver.enums.contains(e) &&
+      enum_member_receiver_typed(resolver, e, m, infer(@ast.TsExpr::Var(e))) =>
+      Named(e)
+    _ => widen_fresh_deep_from(resolver, ty, init)
+  }
+}
+
+///|
+/// `widen_literal_deep`, with each enum-literal member type (`E.M`) that
+/// `init` itself WROTE widening to its enum `E`, the way a fresh literal
+/// widens to its base. tsc widens `E.M` only where the member was written:
+/// `const arr = xs.map(() => ({ tag: S.X }))` is `{ tag: S }[]`, so a later
+/// `arr.push({ tag: S.Y })` is legal, while a parameter `t: T.A | T.B` held
+/// in `{ t }` and a call to a declared `load(cb): { tag: E.A }[]` keep the
+/// member, a callback argument or not (probed; #315's review).
+fn widen_fresh_deep_from(
+  resolver : Resolver,
+  t : @ast.TsType,
+  init : @ast.TsExpr,
+) -> @ast.TsType {
+  let writes : Map[String, Unit] = Map([])
+  fresh_enum_writes(init, writes, 0)
+  widen_written_enums(resolver, t, writes)
+}
+
+///|
+/// `widen_literal_deep` with the enum-literal members named in `writes`
+/// widened to their enums.
+fn widen_written_enums(
+  resolver : Resolver,
+  t : @ast.TsType,
+  writes : Map[String, Unit],
+) -> @ast.TsType {
+  let w = widen_literal_deep(t)
+  if writes.is_empty() {
+    w
+  } else {
+    enum_members_as_enums_deep(resolver, w, writes)
+  }
+}
+
+///|
+/// The enum members `expr` writes FRESH, as `E.M` with the enum spelled as
+/// written: an object-literal value read off an enum (including a nested
+/// object or array literal and a spread of a literal written in place), both
+/// branches of a conditional, and what an inline callback argument returns,
+/// through a method-call chain's receiver too. A member read anywhere else,
+/// or asserted with `as`, is not fresh.
+fn fresh_enum_writes(
+  expr : @ast.TsExpr,
+  out : Map[String, Unit],
+  depth : Int32,
+) -> Unit {
+  if depth > 16 {
+    return
+  }
+  let returns_of = fn(stmts : Array[@ast.TsStmt]) -> Array[@ast.TsExpr] {
+    let found : Array[@ast.TsExpr] = []
+    fn walk(stmts : Array[@ast.TsStmt], found : Array[@ast.TsExpr]) -> Unit {
+      for st in stmts {
+        match st {
+          Return(Some(e)) => found.push(e)
+          If(_, t, e) => {
+            walk(t.stmts, found)
+            match e {
+              Some(b) => walk(b.stmts, found)
+              None => ()
+            }
+          }
+          While(_, b)
+          | DoWhile(_, b)
+          | Block(b)
+          | For(_, _, _, b)
+          | ForOf(_, _, _, _, b)
+          | ForIn(_, _, _, _, b) => walk(b.stmts, found)
+          Try(t, _, c, f) => {
+            walk(t.stmts, found)
+            match c {
+              Some(b) => walk(b.stmts, found)
+              None => ()
+            }
+            match f {
+              Some(b) => walk(b.stmts, found)
+              None => ()
+            }
+          }
+          Switch(_, cases) =>
+            for c in cases {
+              walk(c.body.stmts, found)
+            }
+          _ => ()
+        }
+      }
+    }
+
+    walk(stmts, found)
+    found
+  }
+  let callback = fn(arg : @ast.TsExpr) {
+    match arg {
+      ArrowFunc(_, _, ArrowExpr(e), _) => fresh_enum_writes(e, out, depth + 1)
+      ArrowFunc(_, _, ArrowBlock(b), _) =>
+        for e in returns_of(b.stmts) {
+          fresh_enum_writes(e, out, depth + 1)
+        }
+      FuncExpr(f) =>
+        for e in returns_of(f.body.stmts) {
+          fresh_enum_writes(e, out, depth + 1)
+        }
+      _ => ()
+    }
+  }
+  match expr {
+    ObjectLit(entries) =>
+      for e in entries {
+        match e.1 {
+          PropAccess(Var(x), m) if !e.0.has_prefix("@@spread:") =>
+            out[x + "." + m] = ()
+          As(_, _) => ()
+          v => fresh_enum_writes(v, out, depth + 1)
+        }
+      }
+    ArrayLit(items) =>
+      for i in items {
+        fresh_enum_writes(i, out, depth + 1)
+      }
+    Cond(_, a, b) => {
+      fresh_enum_writes(a, out, depth + 1)
+      fresh_enum_writes(b, out, depth + 1)
+    }
+    Spread(v) => fresh_enum_writes(v, out, depth + 1)
+    Call(_, args) | CallExpr(_, args) | New(_, args) | NewExpr(_, args) =>
+      for a in args {
+        callback(a)
+      }
+    MethodCall(recv, _, args) => {
+      fresh_enum_writes(recv, out, depth + 1)
+      for a in args {
+        callback(a)
+      }
+    }
+    TypeArgs(_, inner) | PureCall(inner) | OptionalChain(inner) =>
+      fresh_enum_writes(inner, out, depth + 1)
+    _ => ()
+  }
+}
+
+///|
+/// `enum_members_as_enums` for the members named in `only`, through the
+/// object, array, tuple and union layers a fresh literal type can hold. A
+/// union is deduplicated after the mapping (`E.A | E.B` is `E`).
+fn enum_members_as_enums_deep(
+  resolver : Resolver,
+  t : @ast.TsType,
+  only : Map[String, Unit],
+) -> @ast.TsType {
+  match t {
+    Named(n) if only.contains(n) => enum_members_as_enums(resolver, t)
+    Array(e) => Array(enum_members_as_enums_deep(resolver, e, only))
+    Tuple(items) =>
+      Tuple(items.map(fn(i) { enum_members_as_enums_deep(resolver, i, only) }))
+    Union(members) => {
+      let out : Array[@ast.TsType] = []
+      for m in members {
+        let w = enum_members_as_enums_deep(resolver, m, only)
+        if !out.iter().any(fn(x) { equivalent(x, w) }) {
+          out.push(w)
+        }
+      }
+      if out.length() == 1 {
+        out[0]
+      } else {
+        Union(out)
+      }
+    }
+    Object(fields) =>
+      Object(
+        fields.map(fn(f) {
+          (f.0, enum_members_as_enums_deep(resolver, f.1, only))
+        }),
+      )
+    _ => t
+  }
+}
+
+///|
+/// How `binding_init_type` widens one member key of an array literal's
+/// element: to an enum (every item's final writer of the key is a member of
+/// that enum), or not at all (some item's final writer is a spread of a
+/// declared value, whose type does not widen).
+priv enum ArrayKeyPlan {
+  ToEnum(String)
+  KeepDeclared
+}
+
+///|
+/// For an array literal whose items are all object literals, the plan for
+/// each key whose final writer decides its widening, read per item through
+/// `object_literal_member_origins`, the analysis a single literal uses. A
+/// later spread replaces an earlier enum write, so `[{ tag: E.A, ...raw }]`
+/// keeps `raw`'s `tag` and `[{ ...raw, tag: E.A }]` widens to `E` (#315's
+/// review; probed). `None` when an item is not an object literal or no key
+/// has a plan.
+fn array_literal_key_plans(
+  items : Array[@ast.TsExpr],
+  resolver : Resolver,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+) -> Map[String, ArrayKeyPlan]? {
+  let enum_of : Map[String, String] = Map([])
+  let spoiled : Map[String, Unit] = Map([])
+  let declared : Map[String, Unit] = Map([])
+  for item in items {
+    guard item is ObjectLit(entries) else { return None }
+    let origins : Map[String, ObjectMemberOrigin] = Map([])
+    object_literal_member_origins(entries, resolver, infer, origins, 0)
+    for k, o in origins {
+      if k.has_prefix("@@") {
+        continue
+      }
+      match o {
+        Fresh(Some(PropAccess(Var(e), m))) if enum_member_receiver_typed(
+            resolver,
+            e,
+            m,
+            infer(@ast.TsExpr::Var(e)),
+          ) =>
+          match enum_of.get(k) {
+            None => enum_of[k] = e
+            Some(prev) if prev == e => ()
+            _ => spoiled[k] = ()
+          }
+        Declared | FreshPart(_) => declared[k] = ()
+        _ => spoiled[k] = ()
+      }
+    }
+  }
+  let plans : Map[String, ArrayKeyPlan] = Map([])
+  for k, _ in declared {
+    plans[k] = KeepDeclared
+  }
+  for k, e in enum_of {
+    if !spoiled.contains(k) && !declared.contains(k) {
+      plans[k] = ToEnum(e)
+    }
+  }
+  if plans.is_empty() {
+    None
+  } else {
+    Some(plans)
+  }
+}
+
+///|
+/// `elem` widened as `widen_written_enums` widens it, except per `plans`: a
+/// key planned `ToEnum(e)` takes `e` in place of each part it holds but the
+/// `undefined` a normalized item adds, and a `KeepDeclared` key keeps its
+/// type.
+fn widen_enum_keys(
+  resolver : Resolver,
+  elem : @ast.TsType,
+  plans : Map[String, ArrayKeyPlan],
+  writes : Map[String, Unit],
+) -> @ast.TsType {
+  match elem {
+    Union(parts) =>
+      union_of(parts.map(fn(p) { widen_enum_keys(resolver, p, plans, writes) }))
+    Object(fields) =>
+      Object(
+        fields.map(fn(f) {
+          match f.0 {
+            Literal(k) =>
+              match plans.get(k) {
+                Some(ToEnum(e)) => {
+                  let parts : Array[@ast.TsType] = []
+                  for c in union_components(f.1) {
+                    let w = match c {
+                      Undefined => c
+                      _ => @ast.TsType::Named(e)
+                    }
+                    if !parts.contains(w) {
+                      parts.push(w)
+                    }
+                  }
+                  (f.0, union_of(parts))
+                }
+                Some(KeepDeclared) => f
+                None => (f.0, widen_written_enums(resolver, f.1, writes))
+              }
+            _ => (f.0, widen_written_enums(resolver, f.1, writes))
+          }
+        }),
+      )
+    other => widen_written_enums(resolver, other, writes)
   }
 }
 
@@ -23409,9 +24000,146 @@ fn structural_oneway_assignable_rec(
           return true
         }
       }
-      false
+      // tsc relates a source to a discriminated union by splitting a
+      // discriminant of union type into its members (TS 3.5+): `{ t: T;
+      // len: number }`, `T` an enum, fits `Retain | Insert | Del` when the
+      // object with each member of `T` in place of `t` fits some arm. No
+      // single arm takes `t: T`, so without the split every object built
+      // from an enum member and widened to the enum was a mismatch.
+      discriminant_split_fits(source, members, resolver, depth)
     }
     _ => is_structurally_assignable_named(source, target, resolver)
+  }
+}
+
+///|
+/// The discriminant split `structural_oneway_assignable_rec` tries when no
+/// single union arm takes `source`. A member of an object source splits when
+/// its type is an enum, or a union of enum members and literals; every
+/// combination (at most 25, tsc's cap) must then fit some arm of `members`.
+fn discriminant_split_fits(
+  source : @ast.TsType,
+  members : Array[@ast.TsType],
+  resolver : Resolver,
+  depth : Int32,
+) -> Bool {
+  guard resolver.unwrap(source) is Object(fields) else { return false }
+  // Only a DISCRIMINANT of the target splits: a key some arm types with a
+  // unit type (a literal, an enum member, `null` / `undefined`). tsc splits
+  // over the target's discriminant properties, so five fields of type `E`
+  // where only `tag` tells the arms apart split one field, not five, and
+  // stay under the 25-combination limit (#315's review; probed).
+  let disc : Map[String, Unit] = Map([])
+  for m in members {
+    for f in collect_declared_fields(m, resolver) {
+      if is_unit_type(resolver, f.1) {
+        disc[f.0] = ()
+      }
+    }
+  }
+  let splits : Array[(Int32, Array[@ast.TsType])] = []
+  for idx, f in fields {
+    guard f.0 is Literal(k) && disc.contains(k) else { continue }
+    match split_discriminant_parts(f.1, resolver) {
+      Some(parts) => splits.push((idx, parts))
+      None => ()
+    }
+  }
+  if splits.is_empty() {
+    return false
+  }
+  let mut combos = 1
+  for sp in splits {
+    combos = combos * sp.1.length()
+    if combos > 25 {
+      return false
+    }
+  }
+  for n in 0..<combos {
+    let candidate = fields.copy()
+    let mut rest = n
+    for sp in splits {
+      let k = sp.1.length()
+      candidate[sp.0] = (candidate[sp.0].0, sp.1[rest % k])
+      rest = rest / k
+    }
+    let fits = members.any(fn(m) {
+      structural_oneway_assignable_rec(
+        Object(candidate),
+        m,
+        resolver,
+        depth + 1,
+      )
+    })
+    if !fits {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// A type with a single value, or a union of them: a literal, an enum
+/// member (`E.M`), `null` and `undefined`. These are the member types that
+/// make a property a discriminant of a union.
+fn is_unit_type(resolver : Resolver, t : @ast.TsType) -> Bool {
+  match resolver.unwrap(t) {
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | Null | Undefined => true
+    Named(n) =>
+      match enum_type_parts(resolver, n) {
+        Some((_, Some(_))) => true
+        _ => false
+      }
+    Union(parts) =>
+      parts.length() > 0 &&
+      parts.iter().all(fn(p) { is_unit_type(resolver, p) })
+    _ => false
+  }
+}
+
+///|
+/// The members a discriminant of type `t` splits into: an enum's members
+/// (`T` is `T.A | T.B`, by the member-type names an interface writes), or
+/// the parts of a union of enum members and literals. `None` for anything
+/// else, and for an enum with a computed member, whose values are not a
+/// closed set.
+fn split_discriminant_parts(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  fn is_enum_member(resolver : Resolver, n : String) -> Bool {
+    match n.rev_find(".") {
+      Some(i) =>
+        match resolver.enums.get(n[:i].to_owned()) {
+          Some(decl) => {
+            let m = n[i + 1:].to_owned()
+            decl.members.iter().any(fn(x) { x.name == m })
+          }
+          None => false
+        }
+      None => false
+    }
+  }
+
+  match resolver.unwrap(t) {
+    Named(e) =>
+      match resolver.enums.get(e) {
+        Some(decl) if decl.members.length() > 1 &&
+          !decl.members.iter().any(fn(x) { x.is_computed }) =>
+          Some(decl.members.map(fn(x) { @ast.TsType::Named(e + "." + x.name) }))
+        _ => None
+      }
+    Union(parts) if parts.length() > 1 &&
+      parts
+      .iter()
+      .all(fn(p) {
+        match p {
+          Literal(_) | NumberLiteral(_) | BooleanLiteral(_) => true
+          Named(n) => is_enum_member(resolver, n)
+          _ => false
+        }
+      }) => Some(parts)
+    _ => None
   }
 }
 
@@ -24406,6 +25134,33 @@ fn method_sole_return_type(
     None
   } else {
     Some(t)
+  }
+}
+
+///|
+/// The return type of an unannotated method's whole body, read as
+/// `infer_body_return_type` reads a function declaration's: every `return`
+/// short of a nested function, the body's top-level locals bound, and
+/// `undefined` when the end is reachable. `None` for an async or generator
+/// method and for a body that cannot be decided. Used only where a static
+/// factory's result narrows an assignment, which can remove nullish members
+/// and nothing else, and only for a method the parser's
+/// `<unannotated-return:NAME>` sentinel names.
+fn static_factory_body_return_type(
+  m : @ast.TsClassMethodDecl,
+  resolver : Resolver,
+) -> @ast.TsType? {
+  if m.is_async || m.is_generator {
+    return None
+  }
+  guard m.body is Some(b) else { return None }
+  let env = ExprEnv::new()
+  for p in m.params {
+    env.bind(p.0, p.1)
+  }
+  match infer_body_return_type(env, resolver, b) {
+    Some(t) if !(t is Any || t is Unknown) => Some(t)
+    _ => None
   }
 }
 
@@ -26838,46 +27593,103 @@ fn infer_body_return_type(
   resolver : Resolver,
   body : @ast.TsBlock,
 ) -> @ast.TsType? {
-  let returns : Array[@ast.TsExpr?] = []
-  fn walk(stmts : Array[@ast.TsStmt], out : Array[@ast.TsExpr?]) -> Unit {
+  // Each `return` with the names the nested scopes around it declare — a
+  // block's `let` / `const` / `var` (the whole block is their scope), a
+  // loop head, a `catch` binding. Below, a return that reads such a name
+  // where the outer env also binds it declines, since this walk binds only
+  // the top level: `if (flag) { const value = null; return value }` read
+  // the parameter `value: string`. A return outside that scope keeps the
+  // parameter (#315's review).
+  let scoped : Array[(@ast.TsExpr?, Array[String])] = []
+  fn block_decls(stmts : Array[@ast.TsStmt], into : Array[String]) -> Unit {
     for st in stmts {
       match st {
-        Return(e) => out.push(e)
-        If(_, t, e) => {
-          walk(t.stmts, out)
-          match e {
-            Some(b) => walk(b.stmts, out)
-            None => ()
-          }
-        }
-        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
-          walk(b.stmts, out)
-        For(_, _, _, b)
-        | ForOf(_, _, _, _, b)
-        | ForAwaitOf(_, _, _, _, b)
-        | ForIn(_, _, _, _, b) => walk(b.stmts, out)
-        Try(t, _, c, f) => {
-          walk(t.stmts, out)
-          match c {
-            Some(b) => walk(b.stmts, out)
-            None => ()
-          }
-          match f {
-            Some(b) => walk(b.stmts, out)
-            None => ()
-          }
-        }
-        Switch(_, cases) =>
-          for c in cases {
-            walk(c.body.stmts, out)
-          }
-        Label(_, inner) => walk([inner], out)
+        Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
+          collect_binding_names(b, into)
         _ => ()
       }
     }
   }
 
-  walk(body.stmts, returns)
+  fn walk(
+    stmts : Array[@ast.TsStmt],
+    scope : Array[String],
+    out : Array[(@ast.TsExpr?, Array[String])],
+  ) -> Unit {
+    let nested = fn(b : Array[@ast.TsStmt], extra : Array[String]) {
+      let inner = scope.copy()
+      for n in extra {
+        inner.push(n)
+      }
+      block_decls(b, inner)
+      walk(b, inner, out)
+    }
+    for st in stmts {
+      match st {
+        Return(e) => out.push((e, scope))
+        If(_, t, e) => {
+          nested(t.stmts, [])
+          match e {
+            Some(b) => nested(b.stmts, [])
+            None => ()
+          }
+        }
+        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+          nested(b.stmts, [])
+        For(init, _, _, b) => {
+          let head : Array[String] = []
+          match init {
+            Some(Var(bind, _, _))
+            | Some(Let(bind, _, _))
+            | Some(Const(bind, _, _)) => collect_binding_names(bind, head)
+            _ => ()
+          }
+          nested(b.stmts, head)
+        }
+        ForOf(_, bind, _, _, b)
+        | ForAwaitOf(_, bind, _, _, b)
+        | ForIn(_, bind, _, _, b) => {
+          let head : Array[String] = []
+          collect_binding_names(bind, head)
+          nested(b.stmts, head)
+        }
+        Try(t, param, c, f) => {
+          nested(t.stmts, [])
+          match c {
+            Some(b) => {
+              let head : Array[String] = []
+              match param {
+                Some(p) => collect_binding_names(p, head)
+                None => ()
+              }
+              nested(b.stmts, head)
+            }
+            None => ()
+          }
+          match f {
+            Some(b) => nested(b.stmts, [])
+            None => ()
+          }
+        }
+        // A `switch` body is ONE block scope: a declaration in any case is
+        // in scope in every case.
+        Switch(_, cases) => {
+          let inner = scope.copy()
+          for c in cases {
+            block_decls(c.body.stmts, inner)
+          }
+          for c in cases {
+            walk(c.body.stmts, inner, out)
+          }
+        }
+        Label(_, inner) => walk([inner], scope, out)
+        _ => ()
+      }
+    }
+  }
+
+  walk(body.stmts, [], scoped)
+  let returns : Array[@ast.TsExpr?] = scoped.map(fn(r) { r.0 })
   if returns.length() == 0 {
     return None
   }
@@ -26913,9 +27725,25 @@ fn infer_body_return_type(
   }
   let parts : Array[@ast.TsType] = []
   let mut ok = true
-  for r in returns {
+  for sr in scoped {
+    let r = sr.0
+    match r {
+      Some(e) if sr.1
+        .iter()
+        .any(fn(n) {
+          (env.lookup(n) is Some(_) || resolver.globals.contains(n)) &&
+          expr_mentions_name(e, n)
+        }) => {
+        ok = false
+        break
+      }
+      _ => ()
+    }
     let t = match r {
-      Some(e) => widen_literal_deep(infer_expr(env, resolver, e))
+      // An enum member widens to its enum as a literal does: `function f()
+      // { return { tag: S.X } }` returns `{ tag: S }` in tsc.
+      Some(e) =>
+        widen_fresh_deep_from(resolver, infer_expr(env, resolver, e), e)
       None => @ast.TsType::Undefined
     }
     if !return_type_trustworthy(resolver, t, 0) {
@@ -34825,13 +35653,35 @@ fn apply_sequential_exit(
     if shadow.contains(sequential_exit_root(k)) {
       continue
     }
+    // Against the CURRENT binding, not only the one before the block: a
+    // continuing `if` branch runs under its condition's narrowing, which
+    // is already in `env`, so `if (x !== null) { x = y } else { return }`
+    // with `y: string | null` left `x` as `string` when the exit type
+    // equalled the declared one (#315's review; probed: tsc reports the
+    // later `takeS(x)`).
     match exit.get(k) {
-      Some(t) => if t != v { env.narrow(k, t) }
+      Some(t) => if t != v || env.lookup(k) != Some(t) { env.narrow(k, t) }
       None => if is_path { gone.push(k) }
     }
   }
   for k in gone {
     let _ = env.vars.remove(k)
+  }
+  // A property path the block NARROWED that held no narrowing before it
+  // reaches the code after it too: `if (flag) { o.p = "" } else { return }`
+  // leaves `o.p` a `string` (#315's review; main reported the later read).
+  // Markers and a root the block declares stay out, as above.
+  for k, t in exit {
+    if pre_map.contains(k) || k.has_prefix("<") {
+      continue
+    }
+    if !(k.contains(".") || k.contains("[")) {
+      continue
+    }
+    if shadow.contains(sequential_exit_root(k)) {
+      continue
+    }
+    env.narrow(k, t)
   }
 }
 
@@ -35563,6 +36413,304 @@ fn collect_binding_names(b : @ast.TsBinding, out : Array[String]) -> Unit {
 }
 
 ///|
+/// Whether a method call assigned to a binding or a property path cannot be
+/// nullish by its method's DECLARATION, for the assignment narrowing that
+/// removes nullish members. Both assignment narrowings ask this one
+/// question: the property-path one had no static arm, so `this.v =
+/// N.create(0)` narrowed nothing where `v = N.create(0)` did.
+fn method_call_never_nullish(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  call : @ast.TsExpr,
+) -> Bool {
+  match call {
+    // A STATIC factory called through its class (`NumberValueObject.create(0)`)
+    // is never nullish when the method's declared return admits neither
+    // nullish value. A class used as a value is `any` here, so the call
+    // infers as `any` and narrowed nothing: univer's `if (v == null ||
+    // v.isNull()) { v = NumberValueObject.create(0) }` left `v` possibly
+    // undefined after the `if`. Only this NARROWING reads the declaration.
+    // Typing the call itself was tried, and it exposed four unrelated
+    // downstream gaps in univer and excalidraw (an object-literal union
+    // against an interface, a `declare class` implementing one, a generator
+    // object, `Array.prototype.at`), so the call stays `any` until those are
+    // fixed. Removing nullish members cannot add a mismatch.
+    MethodCall(Var(cn), meth, _) if env.lookup(cn) is None =>
+      match ctx.resolver.single_static_method(cn, meth) {
+        // Every member of the resolved return must be positively
+        // non-nullish: `string | void` is not, and `target_admits_nullish`
+        // does not see the `void`.
+        // An unannotated static reads its return from the body, as a
+        // getter does: `static create(v) { return new N(v) }` is an `N`.
+        // The parser records it only when no annotation was written, so an
+        // explicit `: any` stays `any`.
+        Some(m) => {
+          let ret = if is_checkable(m.return_type) {
+            m.return_type
+          } else if ctx.resolver.unannotated_static_return_members.get(cn)
+            is Some(names) &&
+            names.contains(meth) {
+            // A factory that builds its instance in a local first (`const
+            // instance = new N(v); …; return instance`) is read the way a
+            // function declaration's body is, with `undefined` added when
+            // the end is reachable (univer's `NumberValueObject.create`).
+            match method_sole_return_type(m, ctx.resolver) {
+              Some(t) => t
+              None =>
+                static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+            }
+          } else {
+            m.return_type
+          }
+          m.type_params.length() == 0 &&
+          is_checkable(ret) &&
+          union_components(
+            deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
+          )
+          .iter()
+          .all(fn(t) {
+            !(ctx.resolver.unwrap(t)
+            is (Void | Null | Undefined | Any | Unknown | Never))
+          })
+        }
+        None => false
+      }
+    // An unannotated INSTANCE method is read from its body the same way:
+    // `this._next = this._nextChar()` on a `Nullable<number>` field, where
+    // the method returns `mapClass(k)`, left the path possibly `undefined`
+    // (probed: tsc accepts it). univer's `LineBreaker` has this shape and is
+    // still reported, because its `mapClass` returns imported constants and
+    // so infers as `any` on the graph path. Only a single, non-generic,
+    // bodied method of a non-generic class is read, so an overload set, a
+    // class type parameter in the return, and an inherited method all
+    // abstain.
+    MethodCall(recv, meth, _) =>
+      instance_method_return_never_nullish(env, ctx, recv, meth)
+    _ => false
+  }
+}
+
+///|
+/// Whether an unannotated instance method `meth`, called on `recv`, returns
+/// a value that is never nullish, read from its body. The parser's
+/// `<unannotated-return:NAME>` sentinel is required, so an explicit `: any`
+/// stays `any`.
+fn instance_method_return_never_nullish(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  meth : String,
+) -> Bool {
+  let cname = match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv)) {
+    Named(n) | Struct(n, _) => n
+    _ => return false
+  }
+  guard ctx.resolver.classes.get(cname) is Some(cls) else { return false }
+  if cls.type_params.length() > 0 {
+    return false
+  }
+  guard ctx.resolver.unannotated_return_members.get(cname) is Some(names) &&
+    names.contains(meth) else {
+    return false
+  }
+  let ms = cls.methods.filter(fn(m) { !m.is_static && m.name == meth })
+  guard ms is [m] && m.accessor == "" && m.type_params.length() == 0 else {
+    return false
+  }
+  let ret = match method_sole_return_type(m, ctx.resolver) {
+    Some(t) => t
+    None => static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+  }
+  is_checkable(ret) &&
+  union_components(deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)))
+  .iter()
+  .all(fn(t) {
+    !(ctx.resolver.unwrap(t)
+    is (Void | Null | Undefined | Any | Unknown | Never))
+  })
+}
+
+///|
+/// The enum `E` when `expr` is a member `E.M` read off the enum ITSELF:
+/// `E` is a declared enum with a member `M`, and the receiver is not a
+/// binding that shadows the name. A local enum's own value infers as `any`;
+/// an IMPORTED one is bound as `Named(E)`, its own name or its per-module
+/// key. Anything else —
+/// a parameter `E: { A: string }`, a namespace — is `None`, and keeps the
+/// type its own member has.
+fn enum_member_receiver(
+  env : ExprEnv,
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+) -> String? {
+  guard expr is PropAccess(Var(e), m) else { return None }
+  if !resolver.enums.contains(e) {
+    return None
+  }
+  if enum_member_receiver_typed(
+      resolver,
+      e,
+      m,
+      infer_expr(env, resolver, @ast.TsExpr::Var(e)),
+    ) {
+    Some(e)
+  } else {
+    None
+  }
+}
+
+///|
+/// `enum_member_receiver`'s test with the receiver's inferred type already
+/// in hand (`receiver`), for a caller that has an inference callback rather
+/// than an env.
+fn enum_member_receiver_typed(
+  resolver : Resolver,
+  e : String,
+  m : String,
+  receiver : @ast.TsType,
+) -> Bool {
+  guard resolver.enums.get(e) is Some(decl) else { return false }
+  if !decl.members.iter().any(fn(x) { x.name == m }) {
+    return false
+  }
+  match receiver {
+    Any => true
+    // A per-module key (`Direction@path`, when two reachable modules
+    // declare the name) is still the enum.
+    Named(n) => n == e || n.has_prefix(e + "@")
+    _ => false
+  }
+}
+
+///|
+/// Whether `E.M` — `e` the enum's name as written, `m` the member — fits
+/// `expected`: some member of the expected type, aliases and unions
+/// expanded, is the enum `E` itself or the member type `E.M`. The receiver
+/// must BE the enum, so a binding shadowing its name keeps its own type, and
+/// a per-module key (`E@path`) is read by its declared name.
+fn enum_member_fits_expected(
+  env : ExprEnv,
+  resolver : Resolver,
+  e : String,
+  m : String,
+  expected : @ast.TsType,
+) -> Bool {
+  if enum_member_receiver(env, resolver, @ast.TsExpr::PropAccess(Var(e), m))
+    is None {
+    return false
+  }
+  fn declared(n : String) -> String {
+    match n.find("@") {
+      Some(i) if i > 0 => n[:i].to_owned()
+      _ => n
+    }
+  }
+
+  let member_ = e + "." + m
+  union_components(deep_union_members(resolver, resolver.unwrap(expected)))
+  .iter()
+  .any(fn(t) {
+    match t {
+      Named(n) if n == e || n == member_ => true
+      // Another declaration of the same NAME — a second module's `E`, kept
+      // under its per-module key — takes the member only when the two
+      // enums are related (TS 5.4, probed): the same members with the same
+      // values. Its member type `E@path.M` likewise.
+      Named(n) =>
+        match enum_type_parts(resolver, n) {
+          Some((te, tm)) =>
+            declared(te) == e &&
+            (tm is None || tm == Some(m)) &&
+            enum_decls_related(resolver, e, te)
+          None => false
+        }
+      _ => false
+    }
+  })
+}
+
+///|
+/// `(enum, member?)` for an enum type `E` or an enum-literal type `E.M`,
+/// either spelled with its per-module key; `None` for anything else.
+fn enum_type_parts(resolver : Resolver, n : String) -> (String, String?)? {
+  if resolver.enums.contains(n) {
+    return Some((n, None))
+  }
+  match n.rev_find(".") {
+    Some(i) if i > 0 => {
+      let e = n[:i].to_owned()
+      let m = n[i + 1:].to_owned()
+      match resolver.enums.get(e) {
+        Some(decl) if decl.members.iter().any(fn(x) { x.name == m }) =>
+          Some((e, Some(m)))
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Whether two declarations of an enum NAME are related, as tsc relates
+/// same-named enums from different declarations (TS 5.4): every member of
+/// `src` is a member of `tgt`, with the same value wherever both values are
+/// known. One declaration is always related to itself. A member value this
+/// cannot read (`number`, from a computed member) does not decide.
+fn enum_decls_related(resolver : Resolver, src : String, tgt : String) -> Bool {
+  if src == tgt {
+    return true
+  }
+  guard resolver.enums.get(src) is Some(s_decl) else { return true }
+  guard resolver.enums.get(tgt) is Some(t_decl) else { return true }
+  s_decl.members
+  .iter()
+  .all(fn(m) {
+    if !t_decl.members.iter().any(fn(x) { x.name == m.name }) {
+      return false
+    }
+    match
+      (
+        enum_value_type(resolver, Named(src + "." + m.name)),
+        enum_value_type(resolver, Named(tgt + "." + m.name)),
+      ) {
+      (Some(NumberLiteral(a)), Some(NumberLiteral(b))) => a == b
+      (Some(Literal(a)), Some(Literal(b))) => a == b
+      // A string member relates only to a string member of the same value,
+      // so a computed (numeric) member against one does not either.
+      (Some(Literal(_)), Some(NumberLiteral(_) | Number))
+      | (Some(NumberLiteral(_) | Number), Some(Literal(_))) => false
+      _ => true
+    }
+  })
+}
+
+///|
+/// Whether `have` and `want` name two DIFFERENT declarations of one enum
+/// name that are not related: `E` against a second module's `E@path`, or
+/// either's member type. The resolver-free relation compares such names
+/// modulo the key, which accepted a member whose value the target enum does
+/// not hold.
+fn unrelated_same_named_enums(
+  resolver : Resolver,
+  have : @ast.TsType,
+  want : @ast.TsType,
+) -> Bool {
+  guard have is Named(h) && want is Named(w) else { return false }
+  guard enum_type_parts(resolver, h) is Some((he, _)) else { return false }
+  guard enum_type_parts(resolver, w) is Some((we, _)) else { return false }
+  fn declared(n : String) -> String {
+    match n.find("@") {
+      Some(i) if i > 0 => n[:i].to_owned()
+      _ => n
+    }
+  }
+
+  he != we &&
+  declared(he) == declared(we) &&
+  !enum_decls_related(resolver, he, we)
+}
+
+///|
 /// After `recv.prop = value`, the PROPERTY PATH narrows by assignment the
 /// way a binding does: `this._cached = { shape, keys }; return
 /// this._cached` is legal in tsc and was reported as returning `T | null`,
@@ -35592,7 +36740,15 @@ fn narrow_after_prop_assignment(
   let key = member_narrowing_key(recv_key, prop)
   let recv_ty = infer_expr(env, ctx.resolver, recv)
   guard ctx.resolver.lookup_field(recv_ty, prop) is Some(decl) else { return }
-  if !is_checkable(decl) || !(type_has_undefined(decl) || type_has_null(decl)) {
+  // The declaration is resolved before asking whether it admits a nullish
+  // value, as the binding narrowing does: a field declared `Nullable<number>`
+  // (`number | null | undefined | void`) read as admitting none, so the path
+  // was never narrowed (univer's `DocumentSkeleton._externalLayoutProgress`).
+  if !is_checkable(decl) ||
+    !(type_has_undefined(decl) ||
+    type_has_null(decl) ||
+    target_admits_nullish(ctx.resolver, decl, false, 0) ||
+    target_admits_nullish(ctx.resolver, decl, true, 0)) {
     return
   }
   let shape = match value {
@@ -35609,12 +36765,22 @@ fn narrow_after_prop_assignment(
     | NativeClassExpr(_, _) => true
     _ => {
       let vt = infer_expr(env, ctx.resolver, value)
-      !is_in_scope_type_param(ctx, vt) &&
-      type_definitely_non_nullish(ctx.resolver, vt)
+      (
+        !is_in_scope_type_param(ctx, vt) &&
+        type_definitely_non_nullish(ctx.resolver, vt)
+      ) ||
+      (
+        shape is MethodCall(_, _, _) &&
+        method_call_never_nullish(env, ctx, shape)
+      )
     }
   }
   if never_nullish {
-    match non_nullable(decl) {
+    // `void` goes with `null` and `undefined`, as under `x!`.
+    match
+      narrow_remove(non_nullable_resolved(ctx.resolver, decl), fn(t) {
+        ctx.resolver.unwrap(t) is (Void | Null | Undefined)
+      }) {
       Never => ()
       t => env.narrow(key, t)
     }
@@ -35761,6 +36927,15 @@ fn narrow_after_assignment(
       env.narrow(name, d)
       return
     }
+    // The same for a tuple spelled through an alias (`type Bounds =
+    // [number, number, number, number]`): `let b: Bounds; b = [x, y, w, h]`
+    // read back as `number[]`, so `return b` against `Bounds` was reported
+    // (excalidraw's `ElementBounds.calculateBounds`; probed: tsc accepts
+    // it). A literal of the wrong length is still judged at the assignment.
+    Some(d) if ctx.resolver.unwrap(d) is Tuple(_) => {
+      env.narrow(name, d)
+      return
+    }
     _ => ()
   }
   // `new C<T>()` arrives wrapped in `TypeArgs`, which says nothing about
@@ -35777,49 +36952,10 @@ fn narrow_after_assignment(
     | ArrowFunc(_, _, _, _)
     | FuncExpr(_)
     | NativeClassExpr(_, _) => true
-    // A STATIC factory called through its class (`NumberValueObject.create(0)`)
-    // is never nullish when the method's declared return admits neither
-    // nullish value. A class used as a value is `any` here, so the call
-    // infers as `any` and narrowed nothing: univer's `if (v == null ||
-    // v.isNull()) { v = NumberValueObject.create(0) }` left `v` possibly
-    // undefined after the `if`. Only this NARROWING reads the declaration.
-    // Typing the call itself was tried, and it exposed four unrelated
-    // downstream gaps in univer and excalidraw (an object-literal union
-    // against an interface, a `declare class` implementing one, a generator
-    // object, `Array.prototype.at`), so the call stays `any` until those are
-    // fixed. Removing nullish members cannot add a mismatch.
-    MethodCall(Var(cn), meth, _) if env.lookup(cn) is None =>
-      match ctx.resolver.single_static_method(cn, meth) {
-        // Every member of the resolved return must be positively
-        // non-nullish: `string | void` is not, and `target_admits_nullish`
-        // does not see the `void`.
-        // An unannotated static reads its return from the body, as a
-        // getter does: `static create(v) { return new N(v) }` is an `N`.
-        // The parser records it only when no annotation was written, so an
-        // explicit `: any` stays `any`.
-        Some(m) => {
-          let ret = if is_checkable(m.return_type) {
-            m.return_type
-          } else if ctx.resolver.unannotated_static_return_members.get(cn)
-            is Some(names) &&
-            names.contains(meth) {
-            method_sole_return_type(m, ctx.resolver).unwrap_or(Any)
-          } else {
-            m.return_type
-          }
-          m.type_params.length() == 0 &&
-          is_checkable(ret) &&
-          union_components(
-            deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
-          )
-          .iter()
-          .all(fn(t) {
-            !(ctx.resolver.unwrap(t)
-            is (Void | Null | Undefined | Any | Unknown | Never))
-          })
-        }
-        None => false
-      }
+    // A method call whose declaration says it cannot be nullish, read by
+    // `method_call_never_nullish` (a static factory, or an unannotated
+    // instance method whose body decides it).
+    MethodCall(_, _, _) => method_call_never_nullish(env, ctx, shape)
     _ => false
   }
   // A declaration with a SINGLE non-nullish member narrows to exactly that
@@ -35852,7 +36988,15 @@ fn narrow_after_assignment(
     env.narrow(name, one)
     return
   }
-  let new_ty = infer_expr(env, ctx.resolver, value)
+  // An enum member narrows the binding to its ENUM, not to its folded
+  // value: `let direction: Nullable<Direction> = null` followed by
+  // `direction = Direction.UP` in each branch read back as `number`, so
+  // `this.direction = direction` against a `Direction` setter was
+  // reported (univer's `AutoFillService`; probed: tsc accepts it).
+  let new_ty = match enum_member_receiver(env, ctx.resolver, value) {
+    Some(e) => @ast.TsType::Named(e)
+    None => infer_expr(env, ctx.resolver, value)
+  }
   // tsc's `getAssignmentReducedType`: a UNION declaration of object shapes
   // narrows to the members the assigned value is assignable to, not to the
   // value's own type. After `a1 = { a: 1 }` on a normalized
@@ -36415,16 +37559,44 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // the surrounding scope continues with the opposite branch's effect
       // applied — so `if (x === null) return; ... /* x is non-null */`
       // works out of the box.
+      // What the continuing branch ASSIGNED reaches the code after the `if`
+      // too, not only the condition's narrowing: `let d: Direction | null =
+      // null; if (c) { d = Direction.UP } else { return } take(d)` read `d`
+      // as `Direction | null` (univer's `AutoFillService`, probed: tsc
+      // accepts it). The branch is read as a block that ran straight
+      // through, so a name it declares itself (`let s = "inner"`) stays its
+      // own and the outer binding keeps its type.
+      let carry = fn(block : @ast.TsBlock?, exit : Map[String, @ast.TsType]) {
+        guard block is Some(b) else { return }
+        let shadow : Map[String, Unit] = Map([])
+        block_declared_names(b, shadow)
+        apply_sequential_exit(env, pre_map, exit, shadow)
+      }
+      // A condition narrowing on a property PATH is restored only while
+      // the continuing branch still holds it: `if (o.p !== null) { o =
+      // replacement } else { return }` forgot `o.p` with the write to `o`,
+      // and restoring it read `o.p` as non-null afterwards (#315's review;
+      // probed: tsc reports the later `takeString(o.p)`). A branch that
+      // only reads the path keeps it.
+      let restore = fn(
+        binds : Array[(String, @ast.TsType)],
+        exit : Map[String, @ast.TsType],
+      ) {
+        for b in binds {
+          if (b.0.contains(".") || b.0.contains("[")) && !exit.contains(b.0) {
+            continue
+          }
+          env.bind(b.0, b.1)
+        }
+      }
       if then_exits && !else_exits {
         drop_forgotten(else_exit)
-        for b in effect.else_binds {
-          env.bind(b.0, b.1)
-        }
+        restore(effect.else_binds, else_exit)
+        carry(else_block, else_exit)
       } else if else_exits && !then_exits {
         drop_forgotten(then_exit)
-        for b in effect.then_binds {
-          env.bind(b.0, b.1)
-        }
+        restore(effect.then_binds, then_exit)
+        carry(Some(then_block), then_exit)
       } else if !then_exits && !else_exits {
         drop_forgotten(then_exit)
         drop_forgotten(else_exit)

@@ -1974,3 +1974,123 @@ test "mtsc graph checker moves a reserved name inside an ambient namespace" {
     [],
   )
 }
+
+///|
+/// An imported enum's members travel with it. Only the enum table was
+/// copied into the importer, so `Kind.PARAGRAPH` read as `any` there: a
+/// `n?.kind === Kind.PARAGRAPH` guard never ruled out `undefined` (univer's
+/// `_applyContextualParagraphSpacing`), and a member against the wrong type
+/// or the wrong arm of a discriminated union passed (probed: tsc reports
+/// exactly the two `bad` lines).
+test "mtsc graph checker types an imported enum's members (enumimport)" {
+  let lib =
+    #|export enum Kind { PARAGRAPH = "p", TABLE = "t" }
+    #|export enum Level { LOW, HIGH }
+    #|export interface Node { kind: Kind; text: string }
+    #|export interface Para { kind: Kind.PARAGRAPH; text: string }
+    #|export interface Table { kind: Kind.TABLE; rows: number }
+    #|export interface Item { level: Level; label: string }
+  let entry =
+    #|import { Kind, Level, Node, Para, Table, Item } from "./lib";
+    #|declare const n: Node | undefined;
+    #|declare const xs: number[];
+    #|export function okNarrow(): string { if (n?.kind === Kind.PARAGRAPH) { return n.text; } return ""; }
+    #|export const badNumber: number = Kind.PARAGRAPH;
+    #|export const okBlocks: (Para | Table)[] = xs.map(() => ({ kind: Kind.PARAGRAPH, text: "" }));
+    #|export const okItems: Item[] = xs.map((i) => ({ level: Level.HIGH, label: String(i) }));
+    #|export const badBlocks: Para[] = xs.map(() => ({ kind: Kind.TABLE, text: "" }));
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `badNumber` init :: expected `number` but got `string`",
+      "top-level > binding `badBlocks` init :: expected `Para[]` but got `{ kind: Kind.TABLE; text: \"\" (string) }[]`",
+    ],
+  )
+}
+
+///|
+/// Two declarations of one enum NAME — the checked module's `S` and a
+/// second module's, kept under its per-module key — are related only when
+/// every member of the source is a member of the target with the same
+/// value (TS 5.4). The name-only comparison accepted the checked module's
+/// `S` wherever the other one was expected (#315's review; probed: tsc
+/// reports exactly the two `bad` lines and accepts the identical enum).
+test "mtsc graph checker keeps two same-named enums apart unless related (enumident)" {
+  let lib =
+    #|export enum S { X = "x", Y = "y" }
+    #|export enum Same { X = "x" }
+    #|export interface Holder { s: S }
+    #|export interface HolderSame { s: Same }
+  let entry =
+    #|import { Holder, HolderSame } from "./lib";
+    #|enum S { X = "q" }
+    #|enum Same { X = "x" }
+    #|declare const e: S;
+    #|declare const same: Same;
+    #|const o = { s: e };
+    #|export const badViaBinding: Holder = o;
+    #|export const badDirect: Holder = { s: e };
+    #|const os = { s: same };
+    #|export const okSameViaBinding: HolderSame = os;
+    #|export const okSameDirect: HolderSame = { s: same };
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `badViaBinding` init :: expected `Holder` but got `{ s: S }`",
+      "top-level > binding `badDirect` init.s :: expected `S` but got `S`, a different declaration of the enum whose members differ",
+    ],
+  )
+}
+
+///|
+/// A computed (numeric) member does not relate to a string member of the
+/// same name in another declaration of the enum (#315's review; probed:
+/// tsc reports `bad`).
+test "mtsc graph checker keeps a computed member apart from a string one (enumident2)" {
+  let lib =
+    #|export enum S { A = "a" }
+    #|export interface H { s: S }
+  let entry =
+    #|import { H } from "./lib";
+    #|declare function f(): number;
+    #|enum S { A = f() }
+    #|declare const e: S;
+    #|export const bad: H = { s: e };
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `bad` init.s :: expected `S` but got `S`, a different declaration of the enum whose members differ",
+    ],
+  )
+}
+
+///|
+/// An enum imported under another name, while the importer declares its
+/// own enum of the original name, reads its members through the alias: a
+/// `n?.kind === RE.A` guard narrows `n`, and `RE.A` against `number` is
+/// reported (#315's review; probed: tsc reports `badMember` only).
+test "mtsc graph checker reads members through an enum import alias (enumalias)" {
+  let lib =
+    #|export enum E { A = "a", B = "b" }
+    #|export interface N { kind: E }
+  let entry =
+    #|import { E as RE, N } from "./lib";
+    #|enum E { Z = "z" }
+    #|declare const n: N | undefined;
+    #|export function okNarrow(): string { if (n?.kind === RE.A) { return n.kind; } return ""; }
+    #|export const badMember: number = RE.A;
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `badMember` init :: expected `number` but got `string`",
+    ],
+  )
+}

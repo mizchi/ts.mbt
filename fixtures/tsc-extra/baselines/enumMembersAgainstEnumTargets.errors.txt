@@ -1,0 +1,75 @@
+enumMembersAgainstEnumTargets.ts(22,36): error TS2322: Type 'Other' is not assignable to type 'DateSystem | undefined'.
+enumMembersAgainstEnumTargets.ts(23,45): error TS2322: Type 'Direction.UP' is not assignable to type 'Direction.LEFT | Direction.RIGHT'.
+enumMembersAgainstEnumTargets.ts(24,39): error TS2322: Type '"auto"' is not assignable to type 'DateSystem | undefined'.
+enumMembersAgainstEnumTargets.ts(34,14): error TS2322: Type '{ r: string; }' is not assignable to type '{ r?: E | undefined; }'.
+  Types of property 'r' are incompatible.
+    Type 'string' is not assignable to type 'E | undefined'.
+enumMembersAgainstEnumTargets.ts(36,14): error TS2322: Type '{ r: boolean; }' is not assignable to type '{ r?: E | undefined; }'.
+  Types of property 'r' are incompatible.
+    Type 'boolean' is not assignable to type 'E | undefined'.
+enumMembersAgainstEnumTargets.ts(38,14): error TS2322: Type '{ k: number; }' is not assignable to type '{ k?: DateSystem | undefined; }'.
+  Types of property 'k' are incompatible.
+    Type 'number' is not assignable to type 'DateSystem | undefined'.
+
+
+==== enumMembersAgainstEnumTargets.ts (6 errors) ====
+    // An enum member `E.M` is assignable wherever `E` or `E.M` is expected, in
+    // an object literal's member, a property write, a return and a call
+    // argument, for a string enum as for a numeric one. A numeric enum accepts
+    // any `number`, also as the member of an object value that is not a
+    // literal. A plain string literal, a member of another enum and a member
+    // outside an expected member union are not assignable.
+    
+    export enum DateSystem { AUTO = "auto", D1900 = "1900" }
+    export enum Other { AUTO = "auto" }
+    export interface Cfg { dateSystem?: DateSystem }
+    export enum Direction { UP, DOWN, LEFT, RIGHT }
+    export interface Ins { direction: Direction.LEFT | Direction.RIGHT }
+    export enum E { A, B }
+    declare const n: number;
+    
+    export const okLiteralMember: Cfg = { dateSystem: DateSystem.AUTO };
+    export function okPropertyWrite(c: Cfg) { c.dateSystem = DateSystem.D1900; return c; }
+    export function okCallArgument(f: (d?: DateSystem) => void) { f(DateSystem.AUTO); }
+    export function okReturnedMember(): Cfg { return { dateSystem: DateSystem.AUTO }; }
+    export const okMemberUnion: Ins = { direction: Direction.LEFT };
+    export function okShadowedName(DateSystem: { AUTO: DateSystem }) { const c: Cfg = { dateSystem: DateSystem.AUTO }; return c; }
+    export const badOtherEnum: Cfg = { dateSystem: Other.AUTO };
+                                       ~~~~~~~~~~
+!!! error TS2322: Type 'Other' is not assignable to type 'DateSystem | undefined'.
+!!! related TS6500 enumMembersAgainstEnumTargets.ts:10:24: The expected type comes from property 'dateSystem' which is declared here on type 'Cfg'
+    export const badMemberOutsideUnion: Ins = { direction: Direction.UP };
+                                                ~~~~~~~~~
+!!! error TS2322: Type 'Direction.UP' is not assignable to type 'Direction.LEFT | Direction.RIGHT'.
+!!! related TS6500 enumMembersAgainstEnumTargets.ts:12:24: The expected type comes from property 'direction' which is declared here on type 'Ins'
+    export const badPlainLiteral: Cfg = { dateSystem: "auto" };
+                                          ~~~~~~~~~~
+!!! error TS2322: Type '"auto"' is not assignable to type 'DateSystem | undefined'.
+!!! related TS6500 enumMembersAgainstEnumTargets.ts:10:24: The expected type comes from property 'dateSystem' which is declared here on type 'Cfg'
+    
+    const numberMember = { r: n };
+    export const okNumberIntoNumericEnum: { r?: E } = numberMember;
+    const numberRequired = { r: n };
+    export const okNumberIntoRequiredEnum: { r: E } = numberRequired;
+    export interface I { r?: E }
+    const enumMember = { r: E.B };
+    export const okEnumMemberValue: I = enumMember;
+    const stringMember = { r: "x" };
+    export const badStringIntoNumericEnum: { r?: E } = stringMember;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ r: string; }' is not assignable to type '{ r?: E | undefined; }'.
+!!! error TS2322:   Types of property 'r' are incompatible.
+!!! error TS2322:     Type 'string' is not assignable to type 'E | undefined'.
+    const booleanMember = { r: true };
+    export const badBooleanIntoNumericEnum: { r?: E } = booleanMember;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ r: boolean; }' is not assignable to type '{ r?: E | undefined; }'.
+!!! error TS2322:   Types of property 'r' are incompatible.
+!!! error TS2322:     Type 'boolean' is not assignable to type 'E | undefined'.
+    const numberIntoString = { k: n };
+    export const badNumberIntoStringEnum: { k?: DateSystem } = numberIntoString;
+                 ~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ k: number; }' is not assignable to type '{ k?: DateSystem | undefined; }'.
+!!! error TS2322:   Types of property 'k' are incompatible.
+!!! error TS2322:     Type 'number' is not assignable to type 'DateSystem | undefined'.
+    

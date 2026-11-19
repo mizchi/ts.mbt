@@ -7187,6 +7187,156 @@ product surfaces now.
     at or before the tuple's rest it is the tail as written. From past it,
     it is an array of every element type from the rest on. The element
     position and the remainder share one helper for that union.
+  Batch HD takes the next excalidraw and univer categories at an
+  unchanged oracle, and its useful finding is about the enum members it
+  could not finish.
+  - **A nullable alias was invisible to member-path narrowing.**
+    `narrow_after_prop_assignment` asked whether the field's declaration
+    admits a nullish value without resolving the alias, so `Nullable<number>`
+    (`number | null | undefined | void`) read as admitting none and
+    `this._next = 3` narrowed nothing. The binding narrowing has resolved it
+    for several batches. And the member path had its own copy of the
+    never-nullish test, without the static-factory arm the binding path
+    had, so the method-call judgement is one helper now. That was univer's
+    `DocumentSkeleton._externalLayoutProgress`. The helper also reads an
+    unannotated INSTANCE method's body, which univer's `LineBreaker` needs
+    and does not get yet: its method returns `mapClass(…)`, which returns
+    imported constants and so infers as `any` on the graph path.
+  - **An alias to an untabulated lib interface abstains like the bare
+    name.** `type N = KeyboardEvent` reported `e.stopImmediatePropagation()`
+    while `e: KeyboardEvent` did not. React's `NativeKeyboardEvent` is that
+    alias, which was five excalidraw reports. Probed first, the namespace
+    beside it was irrelevant.
+  - **An enum member is read as its folded value, and that produced a
+    family of false positives main has in a SINGLE file.** `{ dateSystem:
+    DateSystem.AUTO }` against `dateSystem?: DateSystem` was "got
+    `string`", `{ r: n }` against `{ r?: E }` failed in the whole-object
+    relation, and `private _d = DS.A` gave the field `string`. tsc gives
+    `E.M` the enum literal type, which widens to `E` in a mutable place.
+    The fixes take that rule at each place the value is judged: a target
+    holding `E` or `E.M`, a numeric enum member of an object value, an
+    unannotated field, a `let`, and an assignment. One helper,
+    `enum_member_receiver`, decides that an expression is a member of the
+    enum ITSELF, since an imported enum's value is bound as `Named(E)` and
+    a local one as `any`.
+  - **When one branch of an `if` exits, the other branch's assignments
+    were dropped.** Only the condition's narrowing reached the code after
+    the `if`, so `if (c) { d = X } else { return } take(d)` read `d` as its
+    type from before the `if`. main has it for every type. The branch is
+    applied through `apply_sequential_exit`, which already keeps a name the
+    block declares itself as its own, and my first version, which did not,
+    leaked an inner `let s` to the outside. That exposed one more gap: a
+    binding declared with a tuple alias (`let b: Bounds`) narrowed to
+    `number[]` on assignment, where a tuple written out keeps its type.
+
+  The finding worth keeping is what typing IMPORTED enum members cost.
+  On the graph path an imported `Kind.PARAGRAPH` is `any`, because the
+  type-only ingestion copies the enum table and not the member globals
+  `ingest_module` exposes. Copying them fixed the `x?.kind ===
+  Kind.PARAGRAPH` guards it was meant for, and its first measurement was
+  univer −14 / +63 distinct sites. The single-file fixes above are what
+  those 63 turned out to be, and they took it to −14 / +5.
+  The five left need two things this checker does not have. One is
+  widening an enum literal to its enum inside an object literal. The
+  other is splitting a discriminant over an enum's members, which tsc does
+  since 3.5: `const actions = [{ t: T.INSERT, … }]; apply(actions)` is
+  accepted against a union discriminated by `t`, and is a false positive
+  in a single file on main too. So the copy was taken out and filed with
+  those two blockers, and the single-file fixes ship on their own. The
+  general lesson is the one batch HA recorded for static factories, from
+  the other side. Giving a value its real type is not free when the
+  checker had been abstaining on it, because every place the value was
+  invisible to becomes a place it is judged.
+  Batch HE takes the two blockers batch HD filed, and the copy it took out
+  ships with them, at an unchanged oracle and with no real-code site added.
+  - **An enum member written in an object literal is the enum-LITERAL
+    type `E.M`.** It had been read as its value, so a callback's `({ tag:
+    S.X })` against `{ tag: S.X | S.Y }[]`, against a union discriminated
+    by `tag`, or against `{ kind: E.A }[]` was reported. main reports seven
+    legal cells of that shape, against one file. The widening tsc applies
+    then has to be placed, and FRESHNESS decides where. `E.M` widens to
+    `E` where it was written — an object or array literal, a call taking
+    an inline callback (`xs.map(() => ({ … }))`), and an unannotated
+    function's inferred return — so `arr.push({ tag: S.Y })` stays legal.
+    A parameter typed `T.A | T.B` held in `{ t }`, and a declared
+    `(): { tag: S.X }`, keep the member. Widening every composite at a
+    binding, the first version, reported both of those, the same over-
+    widening main already does for a DECLARED string literal field
+    (`okLit`, filed).
+  - **An enum is assignable to what its members' values are.** `S` to
+    `string`, `S.X` to `"x"`, an auto-numbered `E.A` to `0`, which
+    `enum_value_type` reproduces as `record_closed_key_names` already did.
+    Without it the widening above reported `{ tag: S }` against `{ tag:
+    string }` — a false positive the change itself introduced, caught by
+    the probe file before any real code ran.
+  - **A discriminant of union or enum type splits over a discriminated
+    union target (TS 3.5)**, at most 25 combinations, every one fitting
+    some arm. `[{ t: T.RETAIN, len: 1 }]` against `Retain | Insert | Del`
+    is an ERROR, which my own first test labelled `ok`: the split includes
+    `T.INSERT`, whose arm needs `body`. tsc said so; the label was mine.
+  - **An array member of an object relates element-wise.** `const f = {
+    xs: [{ a: 1 }] }` against `{ xs: A[] }`, `A` an interface, was
+    reported on main, and that was one of the four univer sites the copy
+    added: a field relation that asked about unions and named types and
+    never about arrays.
+
+  The four sites were found by BISECTION on the real file, after a
+  minimal reproduction of the first came back clean twice: the cause was
+  in the field I had simplified away (`actions`, an array of
+  `IActionInfo`). One leftover probe of mine was also sitting in the univer
+  tree, a `zz_min.spec.ts`; it reported nothing in either baseline, so the
+  numbers stood, and it is deleted.
+
+  The review of [#315](https://github.com/mizchi/ts.mbt/pull/315) found
+  one Major and five Minors, each probed against the nightly.
+  - **Two declarations of one enum name.** A second module's `S` is keyed
+    `S@path`, and the member test compared the names modulo the key. tsc
+    relates same-named enums only when every source member is a member of
+    the target with the same value (TS 5.4), and accepts identical ones.
+    The direct spelling `{ s: e }` and the relation through a binding are
+    two routes, and the first fix covered only the second. A numeric enum
+    still cannot show it: the number-to-numeric-enum rule accepts the
+    member's value either way, and the general enum abstention #315 lists
+    hides the rest.
+  - **A numeric literal fits a numeric enum only when a member holds it**
+    (TS 5.0).
+  - **The `if`-join carry compared the exit type with the binding BEFORE
+    the `if`.** The continuing branch runs under its condition's
+    narrowing, so `if (x !== null) { x = y } else { return }` kept `x` a
+    `string`. It reproduces with parameters and not with a `let` initialized
+    to a literal, which is why my first probe said it did not. And a
+    property path the branch narrowed was dropped, a false positive main
+    has too.
+  - **A factory's inferred return read a nested `const value = null`
+    through the parameter `value`.** This one was new in #315, since main
+    did not infer the body at all: a return that mentions a nested-scope
+    name already bound outside now declines.
+  - The local-alias exclusion did not reproduce: `unwrap` resolves a local
+    alias before the arm it named can see it.
+  The second round found four Majors and three Minors, and the two worth
+  keeping are both about this batch's own first answers.
+  - **"A call with an inline callback" was a proxy for freshness, and the
+    wrong one.** `load(cb): { tag: E.A }[]` called with `() => {}` widened
+    a DECLARED member because a callback was present. The fact is which
+    members the initializer WROTE — an object-literal value, a nested
+    literal, what an inline callback returns — so `fresh_enum_writes`
+    collects exactly those and the widening touches nothing else. The
+    first test of it could not fail: with no write at all the helper
+    returns early, so the filter was never consulted until a cell had a
+    callback writing a DIFFERENT member.
+  - **The shadow decline from the first round was too wide.** A flat list
+    of nested names declined `if (flag) { const value = null } return
+    value`, whose return reads the parameter, and that lost a narrowing
+    fp14j had. Each return now carries the names its own enclosing scopes
+    declare (a block, a loop head, a `catch`, a whole `switch` body).
+  - The others: an array literal's key follows each item's final writer
+    through `object_literal_member_origins` (a later spread keeps its
+    declared type); a condition narrowing on a path the continuing branch
+    forgot is not restored; only a target DISCRIMINANT splits, so fields
+    every arm accepts as `E` stay out of the 25-combination limit; a
+    computed member does not relate to a string one; and a renamed
+    enum's members are globals under its key, read through an import
+    alias (`import { E as RE }` beside a local `enum E`).
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
