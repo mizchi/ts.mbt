@@ -569,7 +569,32 @@ test "an alias to a nullable union is narrowed by its initializer" {
     #|type MaybeStr = string | undefined;
     #|export function okStr() { const s: MaybeStr = "x"; return s.length; }
   assert_eq(issue_lines(src), [
-    "function badReassigned > call `push`: object is possibly `null`",
-    "function badNullableInit > call `push`: object is possibly `null`",
+    "function badReassigned > call `push`: object is possibly `null`", "function badNullableInit > call `push`: object is possibly `null`",
+  ])
+}
+
+///|
+/// Every Promise callback is optional, as in `lib.es5.d.ts`, and
+/// `then(ok, ng)` is a promise of both returns: univer's
+/// `Promise.all(pending).then(…, (error) => …)` was "expected 1
+/// argument(s), got 2", and `p.finally()` "got 0".
+test "promise callbacks are optional" {
+  let src =
+    #|declare const p: Promise<number>;
+    #|export const a = p.then((v) => v + 1, (e) => 0);
+    #|export const b = p.then(undefined, (e) => "x");
+    #|export const c = p.then();
+    #|export const d = p.catch();
+    #|export const e = p.finally();
+    #|export const okBoth: Promise<number | string> = p.then((v) => v, () => "e");
+    #|export const okUnd: Promise<number | string> = p.then(undefined, () => "e");
+    #|export const bad = p.then((v: string) => v);
+    #|export const badArity = p.then(() => 1, () => 2, 3);
+    #|export const okUnion = p.then(() => "a", () => 1).then((x) => { const n: number | string = x; return n; });
+    #|export const badUnion = p.then(() => "a", () => 1).then((x) => { const n: number = x; return n; });
+  assert_eq(issue_lines(src), [
+    "top-level > call `then` arg[0] param `v`: expected `number` but got `string`",
+    "top-level > call `then`: expected 0-2 argument(s), got 3",
+    "top-level > binding `n` init: expected `number` but got `\"a\" (string) | number`",
   ])
 }

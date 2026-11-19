@@ -6635,23 +6635,52 @@ fn promise_prototype_member(
   match field {
     // Chain methods — return promise-typed; the call-site path
     // substitutes the callback's return.
+    // Every callback is optional, as in `lib.es5.d.ts`: `p.then(ok, ng)`
+    // and `p.finally()` were "expected 1 argument(s)" (univer's
+    // `Promise.all(pending).then(…, (error) => …)`).
     "then" =>
       Some(
         @ast.TsType::Func(
-          [@ast.TsType::Func([inner], @ast.TsType::Any)],
+          [
+            @ast.TsType::Union([
+              @ast.TsType::Func([inner], @ast.TsType::Any),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+            @ast.TsType::Union([
+              @ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+          ],
           promise_t,
         ),
       )
     "catch" =>
       Some(
         @ast.TsType::Func(
-          [@ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any)],
+          [
+            @ast.TsType::Union([
+              @ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+          ],
           promise_t,
         ),
       )
     "finally" =>
       Some(
-        @ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t),
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Union([
+              @ast.TsType::Func([], @ast.TsType::Void),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+          ],
+          promise_t,
+        ),
       )
     _ => None
   }
@@ -14330,15 +14359,40 @@ fn infer_expr_inner(
         Applied("Promise", [t]) | Applied("PromiseLike", [t]) => Some(t)
         _ => None
       }
-      match (promise_inner_opt, meth, args) {
-        (Some(inner), "then", [cb]) => {
-          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [inner])
-          let flattened = match cb_ret {
-            Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
-            other => other
-          }
-          return @ast.TsType::Applied("Promise", [flattened])
+      // A callback spelled `undefined` / `null` is absent, which leaves the
+      // fulfilled value as it was; a rejection handler adds what it returns,
+      // so `p.then(ok, ng)` is `Promise<A | B>`, as tsc's `TResult1 |
+      // TResult2`.
+      let callback_result = fn(
+        cb : @ast.TsExpr,
+        param : @ast.TsType,
+      ) -> @ast.TsType? {
+        match cb {
+          Var("undefined") | NullLit => None
+          _ =>
+            Some(
+              match infer_arrow_body_with_params(env, resolver, cb, [param]) {
+                Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+                other => other
+              },
+            )
         }
+      }
+      match (promise_inner_opt, meth, args) {
+        (Some(inner), "then", [cb]) =>
+          return @ast.TsType::Applied("Promise", [
+            callback_result(cb, inner).unwrap_or(inner),
+          ])
+        (Some(inner), "then", [cb, eb]) => {
+          let ok = callback_result(cb, inner).unwrap_or(inner)
+          let out = match callback_result(eb, Any) {
+            Some(ng) if ng != ok => narrow_union(ok, ng)
+            _ => ok
+          }
+          return @ast.TsType::Applied("Promise", [out])
+        }
+        (Some(inner), "then" | "catch" | "finally", []) =>
+          return @ast.TsType::Applied("Promise", [inner])
         (Some(inner), "catch", [_]) =>
           return @ast.TsType::Applied("Promise", [inner])
         (Some(inner), "finally", [_]) =>
