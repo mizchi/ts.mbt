@@ -10837,12 +10837,6 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 /// Like `record`, but bypasses the permissive-mode suppression filter. Used
 /// for diagnostics the caller has already established are reliable in
 /// permissive mode (e.g. constructor / direct-function-call arity).
-/// True when `expr` is a literal form that always evaluates to a truthy
-/// value: a function / arrow / class expression, an object literal, or an
-/// array literal. Used to flag `<always-truthy> && rhs` (TS2872, "This kind
-/// of expression is always truthy"). Only syntactic literal forms qualify --
-/// a bare identifier or call result is never matched, so no inference is
-/// needed and the check is false-positive-free.
 
 ///|
 /// True when `expr` is a syntactic literal whose value can never be
@@ -10861,7 +10855,7 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 ///  - `null` is nullish, and tsc gives it a different code (TS2871,
 ///    "This expression is always nullish");
 ///  - `undefined` parses as a bare identifier that can be shadowed, the
-///    same reason `is_syntactically_always_falsy` leaves it out;
+///    same reason `condition_literal_truthiness` leaves it out;
 ///  - `void <expr>` is `undefined`, so its right operand is ALWAYS
 ///    reached — tsc reports TS2869 there anyway, and following it would
 ///    mean encoding a compiler quirk as a rule. Left as a MISS.
@@ -10883,61 +10877,48 @@ fn is_syntactically_never_nullish(expr : @ast.TsExpr) -> Bool {
 }
 
 ///|
-fn is_syntactically_always_truthy(expr : @ast.TsExpr) -> Bool {
+/// TS2872 / TS2873: `Some(true)` when `expr` is a literal that is always
+/// truthy wherever it is tested, `Some(false)` when it is always falsy, and
+/// `None` otherwise. This is tsc's `getSyntacticTruthySemantics`, and one
+/// rule serves every position it tests: a `&&` / `||` left operand, a
+/// ternary condition and a `!` operand. Probed cell by cell:
+///  - `0`, `1`, `true` and `false` are exempt everywhere, so `while (1)`,
+///    `0 && x` and `false || x` are accepted. The `&&` / `||` check used
+///    to treat them as literals and report all four, while the condition
+///    check exempted them. The exemption is by numeric value, so `1.0`,
+///    `0x0` and `1e0` are exempt too.
+///  - A negative number is a prefix expression, and tsc reads it as
+///    "sometimes", so only a value above 1 is truthy here.
+///  - An empty template literal is falsy, like `""`. A template with a
+///    substitution can be either.
+///  - A ternary is always truthy or always falsy when both branches are.
+///  - `0n` is falsy, and tsc reports it as always TRUTHY
+///    (microsoft/TypeScript#60320, open). Encoding that would put a false
+///    sentence on legal-looking code, so `0n` abstains and is a MISS. A
+///    non-zero bigint is truthy, as tsc says.
+///  - `undefined` parses as a bare identifier that can be shadowed, so it
+///    abstains here, where tsc reports it when it resolves to the global.
+fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
   match expr {
     ArrowFunc(_, _, _, _)
     | FuncExpr(_)
     | NativeClassExpr(_, _)
     | ObjectLit(_)
-    | ArrayLit(_) => true
-    // Literal scalars whose value is statically truthy: a non-empty string, a
-    // non-zero number / bigint, or `true`. Mirrors the always-falsy set, so a
-    // bare identifier or call result is still never matched.
-    BoolLit(b) => b
-    StringLit(s) => s != ""
-    IntLit(n) => n != 0
-    NumberLit(n) => n != 0.0
-    BigIntLit(s) => s != "0" && s != "0n"
-    _ => false
-  }
-}
-
-///|
-/// True when `expr` is a literal form that always evaluates to a falsy value:
-/// `null`, `false`, `0`, `0n`, `""`, or `void <expr>` (always `undefined`).
-/// Used to flag `<always-falsy> || rhs` (TS2873, "This kind of expression is
-/// always falsy"). `undefined` is intentionally excluded -- it parses as a
-/// bare identifier that can be shadowed -- so the check stays sound.
-fn is_syntactically_always_falsy(expr : @ast.TsExpr) -> Bool {
-  match expr {
-    NullLit | BoolLit(false) | StringLit("") | IntLit(0) => true
-    NumberLit(n) => n == 0.0
-    BigIntLit(s) => s == "0" || s == "0n"
-    UnaryOp(Void, _) => true
-    _ => false
-  }
-}
-
-///|
-/// TS2872 / TS2873 for *condition* positions (`cond ? a : b`, `!cond`).
-/// Same literal classification as the `&&` / `||` operand check, except
-/// that tsc exempts `0`, `1`, `true`, and `false` here -- `while (1)`,
-/// `if (0)`, and `1 ? a : b` are idiomatic debug / generated-code shapes
-/// (conditionalOperatorConditionIsNumberType flags `10000 ?` but not
-/// `1 ?` / `0 ?`). Returns `Some(truthy)` when the condition is a
-/// non-exempt literal, `None` otherwise.
-fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
-  match expr {
-    IntLit(0) | IntLit(1) | BoolLit(_) => None
-    NumberLit(n) if n == 0.0 || n == 1.0 => None
-    _ =>
-      if is_syntactically_always_truthy(expr) {
-        Some(true)
-      } else if is_syntactically_always_falsy(expr) {
-        Some(false)
-      } else {
-        None
+    | ArrayLit(_)
+    | JsxElement(_, _, _) => Some(true)
+    BoolLit(_) => None
+    IntLit(n) => if n > 1 { Some(true) } else { None }
+    NumberLit(n) => if n > 0.0 && n != 1.0 { Some(true) } else { None }
+    BigIntLit(s) => if s == "0" || s == "0n" { None } else { Some(true) }
+    StringLit(s) => Some(s != "")
+    TemplateLiteral(quasis, []) => Some(quasis.iter().any(fn(q) { q != "" }))
+    NullLit | UnaryOp(Void, _) => Some(false)
+    Cond(_, a, b) =>
+      match (condition_literal_truthiness(a), condition_literal_truthiness(b)) {
+        (Some(x), Some(y)) if x == y => Some(x)
+        _ => None
       }
+    _ => None
   }
 }
 
@@ -39291,15 +39272,17 @@ fn check_call_args_in_expr_at(
       // TS2872 / TS2873: the left operand of a `&&` / `||` whose value is a
       // statically truthy / falsy literal makes the short-circuit redundant.
       // TS reports on the operand's truthiness regardless of which logical
-      // operator it gates (`{} && x`, `{} || x` -> always truthy; `0 && x`,
-      // `null || x` -> always falsy). Only syntactic literal forms are matched,
-      // so the check needs no inference and never false-positives.
+      // operator it gates (`{} && x`, `{} || x` -> always truthy; `"" && x`,
+      // `null || x` -> always falsy), with the exemptions a condition has
+      // (`0 && x` and `false || x` are accepted). Only syntactic literal
+      // forms are matched, so the check needs no inference.
       if op is (And | Or) {
-        if is_syntactically_always_truthy(l) {
+        let literal = condition_literal_truthiness(l)
+        if literal == Some(true) {
           record_unfiltered(
             ctx, "logical operand", "this kind of expression is always truthy",
           )
-        } else if is_syntactically_always_falsy(l) {
+        } else if literal == Some(false) {
           record_unfiltered(
             ctx, "logical operand", "this kind of expression is always falsy",
           )
