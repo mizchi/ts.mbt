@@ -1,8 +1,10 @@
 factoryReturnThroughShadowingNestedScope.ts(9,117): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
   Type 'null' is not assignable to type 'string'.
+factoryReturnThroughShadowingNestedScope.ts(15,104): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
 
 
-==== factoryReturnThroughShadowingNestedScope.ts (1 errors) ====
+==== factoryReturnThroughShadowingNestedScope.ts (2 errors) ====
     // A static factory's inferred return reads each `return` in its own scope:
     // a nested `const value = null` shadows the parameter `value`, so the
     // factory can return `null` and a field assigned from it stays nullable.
@@ -17,4 +19,11 @@ factoryReturnThroughShadowingNestedScope.ts(9,117): error TS2345: Argument of ty
 !!! error TS2345:   Type 'null' is not assignable to type 'string'.
     export class K2 { static make(value: string) { if (value) { const other = 1; return value + other; } return value; } }
     export class OkUnrelatedNestedName { p: string | null = null; set(v: string) { this.p = K2.make(v); takeS(this.p); } }
+    export class K3 { static make(value: string, flag: boolean) { if (flag) { const value = null; } return value; } }
+    export class OkTopLevelReturnReadsParameter { p: string | null = null; set(v: string) { this.p = K3.make(v, true); takeS(this.p); } }
+    export class K4 { static make(value: string) { for (const value of [null]) { return value; } return value; } }
+    export class BadLoopHeadShadows { p: string | null = null; set(v: string) { this.p = K4.make(v); takeS(this.p); } }
+                                                                                                           ~~~~~~
+!!! error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+!!! error TS2345:   Type 'null' is not assignable to type 'string'.
     

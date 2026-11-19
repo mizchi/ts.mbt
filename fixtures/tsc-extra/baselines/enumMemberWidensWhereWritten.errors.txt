@@ -11,9 +11,14 @@ enumMemberWidensWhereWritten.ts(30,14): error TS2322: Type '{ tag: S; }' is not 
 enumMemberWidensWhereWritten.ts(31,14): error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
   Types of property 'tag' are incompatible.
     Type 'S' is not assignable to type 'S.X'.
+enumMemberWidensWhereWritten.ts(36,23): error TS2783: 'tag' is specified more than once, so this usage will be overwritten.
+enumMemberWidensWhereWritten.ts(39,14): error TS2322: Type '{ tag: S; }[]' is not assignable to type '{ tag: S.X; }[]'.
+  Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+    Types of property 'tag' are incompatible.
+      Type 'S' is not assignable to type 'S.X'.
 
 
-==== enumMemberWidensWhereWritten.ts (4 errors) ====
+==== enumMemberWidensWhereWritten.ts (6 errors) ====
     // A binding widens an enum member to its enum only where the member was
     // written: an object literal, a call taking an inline callback, and an
     // unannotated function's inferred return all widen, so a later write of
@@ -62,4 +67,23 @@ enumMemberWidensWhereWritten.ts(31,14): error TS2322: Type '{ tag: S; }' is not 
 !!! error TS2322: Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
 !!! error TS2322:   Types of property 'tag' are incompatible.
 !!! error TS2322:     Type 'S' is not assignable to type 'S.X'.
+    declare function load(cb: () => void): { tag: S.X }[];
+    const loaded = load(() => {});
+    export const okDeclaredResultWithCallbackKept: { tag: S.X }[] = loaded;
+    declare const raw: { tag: "raw" };
+    const spreadLast = [{ tag: S.X, ...raw }];
+                          ~~~~~~~~
+!!! error TS2783: 'tag' is specified more than once, so this usage will be overwritten.
+!!! related TS2785 enumMemberWidensWhereWritten.ts:36:33: This spread always overwrites this property.
+    export const okLaterSpreadWins: { tag: "raw" }[] = spreadLast;
+    const enumLast = [{ ...raw, tag: S.X }];
+    export const badLaterEnumWidened: { tag: S.X }[] = enumLast;
+                 ~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ tag: S; }[]' is not assignable to type '{ tag: S.X; }[]'.
+!!! error TS2322:   Type '{ tag: S; }' is not assignable to type '{ tag: S.X; }'.
+!!! error TS2322:     Types of property 'tag' are incompatible.
+!!! error TS2322:       Type 'S' is not assignable to type 'S.X'.
+    declare function load2(cb: () => { tag: S }): { tag: S.X }[];
+    const loadedBesideAWrite = load2(() => ({ tag: S.Y }));
+    export const okDeclaredKeptBesideACallbackWrite: { tag: S.X }[] = loadedBesideAWrite;
     

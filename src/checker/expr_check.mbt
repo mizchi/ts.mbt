@@ -1842,7 +1842,18 @@ fn Resolver::ingest_type_module(
   }
   for name, enum_ in types.enums {
     match renames.get(name) {
-      Some(key) => r.enums[key] = enum_
+      // A renamed enum's members travel under its key too, so a member read
+      // through the keyed name resolves as the bare one does (#315's
+      // review).
+      Some(key) => {
+        r.enums[key] = enum_
+        for m in enum_.members {
+          match types.globals.get(name + "." + m.name) {
+            Some(t) => r.globals[key + "." + m.name] = t
+            None => ()
+          }
+        }
+      }
       None => ()
     }
     if !claim(name) {
@@ -14826,6 +14837,22 @@ fn infer_expr_inner(
           }) =>
           match resolver.globals.get(class_name + "." + name) {
             Some(t) => return t
+            // An enum imported under another name (`import { E as RE }`) is
+            // bound as the enum it names, under its per-module key when two
+            // modules declare it, and its members are globals there (#315's
+            // review). No typed local reaches this arm, so the binding is
+            // the import's.
+            None if (match resolver.globals.get(class_name) {
+                Some(Named(n)) =>
+                  n != class_name &&
+                  resolver.enums.contains(n) &&
+                  resolver.globals.contains(n + "." + name)
+                _ => false
+              }) =>
+              match resolver.globals.get(class_name) {
+                Some(Named(n)) => return resolver.globals[n + "." + name]
+                _ => ()
+              }
             None =>
               match resolver.classes.get(class_name) {
                 Some(cls) => {
@@ -23127,9 +23154,13 @@ fn binding_init_type(
     // writing it sets to a member of one enum is that enum across the
     // element (`[{ t: T.INSERT, … }]` is `{ t: T; … }[]`, as in tsc).
     Array(elem) if init is ArrayLit(items) && items.length() > 0 =>
-      match array_literal_enum_keys(items, resolver, infer) {
-        Some(keys) => @ast.TsType::Array(widen_enum_keys(resolver, elem, keys))
-        None => widen_fresh_deep(resolver, inferred)
+      match array_literal_key_plans(items, resolver, infer) {
+        Some(plans) => {
+          let writes : Map[String, Unit] = Map([])
+          fresh_enum_writes(init, writes, 0)
+          @ast.TsType::Array(widen_enum_keys(resolver, elem, plans, writes))
+        }
+        None => widen_fresh_deep_from(resolver, inferred, init)
       }
     // An expanded interface's members are declared, not fresh, so only the
     // literal widening that predates enum-literal members applies to it.
@@ -23360,6 +23391,8 @@ fn widen_object_literal_type(
   match (ty, init) {
     (Object(fields), ObjectLit(entries)) => {
       let has_spread = entries.iter().any(fn(e) { e.0.has_prefix("@@spread:") })
+      let writes : Map[String, Unit] = Map([])
+      fresh_enum_writes(init, writes, 0)
       let origins : Map[String, ObjectMemberOrigin] = Map([])
       object_literal_member_origins(entries, resolver, infer, origins, 0)
       Object(
@@ -23369,7 +23402,8 @@ fn widen_object_literal_type(
               match origins.get(k) {
                 Some(Fresh(Some(v))) =>
                   (f.0, widen_object_literal_type(f.1, v, resolver, infer))
-                Some(Fresh(None)) => (f.0, widen_fresh_deep(resolver, f.1))
+                Some(Fresh(None)) =>
+                  (f.0, widen_written_enums(resolver, f.1, writes))
                 Some(FreshPart(t)) => {
                   let fresh = union_components(t)
                   let parts : Array[@ast.TsType] = []
@@ -23394,9 +23428,9 @@ fn widen_object_literal_type(
                 }
                 Some(Declared) => f
                 None if has_spread => f
-                None => (f.0, widen_fresh_deep(resolver, f.1))
+                None => (f.0, widen_written_enums(resolver, f.1, writes))
               }
-            _ => (f.0, widen_fresh_deep(resolver, f.1))
+            _ => (f.0, widen_written_enums(resolver, f.1, writes))
           }
         }),
       )
@@ -23463,70 +23497,163 @@ fn widen_object_literal_type(
 }
 
 ///|
-/// `widen_fresh_deep` when `init` can have produced a FRESH enum-literal
-/// member, and `widen_literal_deep` otherwise. tsc widens `E.M` to `E`
-/// only where the member was written: a call taking an inline callback
-/// (`xs.map(() => ({ tag: S.X }))`) returns what the callback's literal
-/// widened to, while a parameter `t: T.A | T.B` held in `{ t }` and a call
-/// to `k(): { tag: S.X }` keep the declared type (probed). An unannotated
-/// function's return is widened where it is inferred
-/// (`infer_body_return_type`), so a plain call needs nothing here.
+/// `widen_literal_deep`, with each enum-literal member type (`E.M`) that
+/// `init` itself WROTE widening to its enum `E`, the way a fresh literal
+/// widens to its base. tsc widens `E.M` only where the member was written:
+/// `const arr = xs.map(() => ({ tag: S.X }))` is `{ tag: S }[]`, so a later
+/// `arr.push({ tag: S.Y })` is legal, while a parameter `t: T.A | T.B` held
+/// in `{ t }` and a call to a declared `load(cb): { tag: E.A }[]` keep the
+/// member, a callback argument or not (probed; #315's review).
 fn widen_fresh_deep_from(
   resolver : Resolver,
   t : @ast.TsType,
   init : @ast.TsExpr,
 ) -> @ast.TsType {
-  if init_passes_inline_callback(init) {
-    widen_fresh_deep(resolver, t)
+  let writes : Map[String, Unit] = Map([])
+  fresh_enum_writes(init, writes, 0)
+  widen_written_enums(resolver, t, writes)
+}
+
+///|
+/// `widen_literal_deep` with the enum-literal members named in `writes`
+/// widened to their enums.
+fn widen_written_enums(
+  resolver : Resolver,
+  t : @ast.TsType,
+  writes : Map[String, Unit],
+) -> @ast.TsType {
+  let w = widen_literal_deep(t)
+  if writes.is_empty() {
+    w
   } else {
-    widen_literal_deep(t)
+    enum_members_as_enums_deep(resolver, w, writes)
   }
 }
 
 ///|
-/// Whether `init` is a call, method call or `new` with a function
-/// expression among its arguments, through the wrappers a call can carry.
-fn init_passes_inline_callback(init : @ast.TsExpr) -> Bool {
-  match init {
-    Call(_, args)
-    | CallExpr(_, args)
-    | MethodCall(_, _, args)
-    | New(_, args)
-    | NewExpr(_, args) =>
-      args.iter().any(fn(a) { a is (ArrowFunc(_, _, _, _) | FuncExpr(_)) })
+/// The enum members `expr` writes FRESH, as `E.M` with the enum spelled as
+/// written: an object-literal value read off an enum (including a nested
+/// object or array literal and a spread of a literal written in place), both
+/// branches of a conditional, and what an inline callback argument returns,
+/// through a method-call chain's receiver too. A member read anywhere else,
+/// or asserted with `as`, is not fresh.
+fn fresh_enum_writes(
+  expr : @ast.TsExpr,
+  out : Map[String, Unit],
+  depth : Int32,
+) -> Unit {
+  if depth > 16 {
+    return
+  }
+  let returns_of = fn(stmts : Array[@ast.TsStmt]) -> Array[@ast.TsExpr] {
+    let found : Array[@ast.TsExpr] = []
+    fn walk(stmts : Array[@ast.TsStmt], found : Array[@ast.TsExpr]) -> Unit {
+      for st in stmts {
+        match st {
+          Return(Some(e)) => found.push(e)
+          If(_, t, e) => {
+            walk(t.stmts, found)
+            match e {
+              Some(b) => walk(b.stmts, found)
+              None => ()
+            }
+          }
+          While(_, b)
+          | DoWhile(_, b)
+          | Block(b)
+          | For(_, _, _, b)
+          | ForOf(_, _, _, _, b)
+          | ForIn(_, _, _, _, b) => walk(b.stmts, found)
+          Try(t, _, c, f) => {
+            walk(t.stmts, found)
+            match c {
+              Some(b) => walk(b.stmts, found)
+              None => ()
+            }
+            match f {
+              Some(b) => walk(b.stmts, found)
+              None => ()
+            }
+          }
+          Switch(_, cases) =>
+            for c in cases {
+              walk(c.body.stmts, found)
+            }
+          _ => ()
+        }
+      }
+    }
+
+    walk(stmts, found)
+    found
+  }
+  let callback = fn(arg : @ast.TsExpr) {
+    match arg {
+      ArrowFunc(_, _, ArrowExpr(e), _) => fresh_enum_writes(e, out, depth + 1)
+      ArrowFunc(_, _, ArrowBlock(b), _) =>
+        for e in returns_of(b.stmts) {
+          fresh_enum_writes(e, out, depth + 1)
+        }
+      FuncExpr(f) =>
+        for e in returns_of(f.body.stmts) {
+          fresh_enum_writes(e, out, depth + 1)
+        }
+      _ => ()
+    }
+  }
+  match expr {
+    ObjectLit(entries) =>
+      for e in entries {
+        match e.1 {
+          PropAccess(Var(x), m) if !e.0.has_prefix("@@spread:") =>
+            out[x + "." + m] = ()
+          As(_, _) => ()
+          v => fresh_enum_writes(v, out, depth + 1)
+        }
+      }
+    ArrayLit(items) =>
+      for i in items {
+        fresh_enum_writes(i, out, depth + 1)
+      }
+    Cond(_, a, b) => {
+      fresh_enum_writes(a, out, depth + 1)
+      fresh_enum_writes(b, out, depth + 1)
+    }
+    Spread(v) => fresh_enum_writes(v, out, depth + 1)
+    Call(_, args) | CallExpr(_, args) | New(_, args) | NewExpr(_, args) =>
+      for a in args {
+        callback(a)
+      }
+    MethodCall(recv, _, args) => {
+      fresh_enum_writes(recv, out, depth + 1)
+      for a in args {
+        callback(a)
+      }
+    }
     TypeArgs(_, inner) | PureCall(inner) | OptionalChain(inner) =>
-      init_passes_inline_callback(inner)
-    _ => false
+      fresh_enum_writes(inner, out, depth + 1)
+    _ => ()
   }
 }
 
 ///|
-/// `widen_literal_deep`, with an enum-literal member type (`E.M`) widening
-/// to its enum `E` the way a fresh literal widens to its base: `const arr =
-/// xs.map(() => ({ tag: S.X }))` is `{ tag: S }[]` in tsc, so a later
-/// `arr.push({ tag: S.Y })` is legal. An expanded interface (`Struct`) and
-/// a named type are declared rather than fresh and are left as they are.
-fn widen_fresh_deep(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
-  enum_members_as_enums_deep(resolver, widen_literal_deep(t))
-}
-
-///|
-/// `enum_members_as_enums` through the object, array, tuple and union
-/// layers a fresh literal type can hold. A union is deduplicated after the
-/// mapping (`E.A | E.B` is `E`).
+/// `enum_members_as_enums` for the members named in `only`, through the
+/// object, array, tuple and union layers a fresh literal type can hold. A
+/// union is deduplicated after the mapping (`E.A | E.B` is `E`).
 fn enum_members_as_enums_deep(
   resolver : Resolver,
   t : @ast.TsType,
+  only : Map[String, Unit],
 ) -> @ast.TsType {
   match t {
-    Named(_) => enum_members_as_enums(resolver, t)
-    Array(e) => Array(enum_members_as_enums_deep(resolver, e))
+    Named(n) if only.contains(n) => enum_members_as_enums(resolver, t)
+    Array(e) => Array(enum_members_as_enums_deep(resolver, e, only))
     Tuple(items) =>
-      Tuple(items.map(fn(i) { enum_members_as_enums_deep(resolver, i) }))
+      Tuple(items.map(fn(i) { enum_members_as_enums_deep(resolver, i, only) }))
     Union(members) => {
       let out : Array[@ast.TsType] = []
       for m in members {
-        let w = enum_members_as_enums_deep(resolver, m)
+        let w = enum_members_as_enums_deep(resolver, m, only)
         if !out.iter().any(fn(x) { equivalent(x, w) }) {
           out.push(w)
         }
@@ -23539,79 +23666,103 @@ fn enum_members_as_enums_deep(
     }
     Object(fields) =>
       Object(
-        fields.map(fn(f) { (f.0, enum_members_as_enums_deep(resolver, f.1)) }),
+        fields.map(fn(f) {
+          (f.0, enum_members_as_enums_deep(resolver, f.1, only))
+        }),
       )
     _ => t
   }
 }
 
 ///|
-/// For an array literal whose items are all object literals, the keys
-/// whose every written value is a member of one enum, mapped to that enum.
-/// `None` when an item is not an object literal or no key qualifies; a
-/// spread, a computed key or a key written with anything else drops out.
-fn array_literal_enum_keys(
+/// How `binding_init_type` widens one member key of an array literal's
+/// element: to an enum (every item's final writer of the key is a member of
+/// that enum), or not at all (some item's final writer is a spread of a
+/// declared value, whose type does not widen).
+priv enum ArrayKeyPlan {
+  ToEnum(String)
+  KeepDeclared
+}
+
+///|
+/// For an array literal whose items are all object literals, the plan for
+/// each key whose final writer decides its widening, read per item through
+/// `object_literal_member_origins`, the analysis a single literal uses. A
+/// later spread replaces an earlier enum write, so `[{ tag: E.A, ...raw }]`
+/// keeps `raw`'s `tag` and `[{ ...raw, tag: E.A }]` widens to `E` (#315's
+/// review; probed). `None` when an item is not an object literal or no key
+/// has a plan.
+fn array_literal_key_plans(
   items : Array[@ast.TsExpr],
   resolver : Resolver,
   infer : (@ast.TsExpr) -> @ast.TsType,
-) -> Map[String, String]? {
-  let found : Map[String, String] = Map([])
+) -> Map[String, ArrayKeyPlan]? {
+  let enum_of : Map[String, String] = Map([])
   let spoiled : Map[String, Unit] = Map([])
+  let declared : Map[String, Unit] = Map([])
   for item in items {
     guard item is ObjectLit(entries) else { return None }
-    for entry in entries {
-      let (k, v) = entry
-      if k.has_prefix("@@") || spoiled.contains(k) {
+    let origins : Map[String, ObjectMemberOrigin] = Map([])
+    object_literal_member_origins(entries, resolver, infer, origins, 0)
+    for k, o in origins {
+      if k.has_prefix("@@") {
         continue
       }
-      let e = match v {
-        PropAccess(Var(e), m) if enum_member_receiver_typed(
+      match o {
+        Fresh(Some(PropAccess(Var(e), m))) if enum_member_receiver_typed(
             resolver,
             e,
             m,
             infer(@ast.TsExpr::Var(e)),
-          ) => Some(e)
-        _ => None
-      }
-      match (e, found.get(k)) {
-        (Some(e), None) => found[k] = e
-        (Some(e), Some(prev)) if prev == e => ()
-        _ => {
-          spoiled[k] = ()
-          let _ = found.remove(k)
-        }
+          ) =>
+          match enum_of.get(k) {
+            None => enum_of[k] = e
+            Some(prev) if prev == e => ()
+            _ => spoiled[k] = ()
+          }
+        Declared | FreshPart(_) => declared[k] = ()
+        _ => spoiled[k] = ()
       }
     }
   }
-  if found.is_empty() {
+  let plans : Map[String, ArrayKeyPlan] = Map([])
+  for k, _ in declared {
+    plans[k] = KeepDeclared
+  }
+  for k, e in enum_of {
+    if !spoiled.contains(k) && !declared.contains(k) {
+      plans[k] = ToEnum(e)
+    }
+  }
+  if plans.is_empty() {
     None
   } else {
-    Some(found)
+    Some(plans)
   }
 }
 
 ///|
-/// `elem` widened as `widen_literal_deep` widens it, except that a member
-/// named in `keys` takes its enum in place of each literal it holds.
-/// `undefined` (a normalized member an item did not write) is kept.
+/// `elem` widened as `widen_written_enums` widens it, except per `plans`: a
+/// key planned `ToEnum(e)` takes `e` in place of each part it holds but the
+/// `undefined` a normalized item adds, and a `KeepDeclared` key keeps its
+/// type.
 fn widen_enum_keys(
   resolver : Resolver,
   elem : @ast.TsType,
-  keys : Map[String, String],
+  plans : Map[String, ArrayKeyPlan],
+  writes : Map[String, Unit],
 ) -> @ast.TsType {
   match elem {
     Union(parts) =>
-      union_of(parts.map(fn(p) { widen_enum_keys(resolver, p, keys) }))
+      union_of(parts.map(fn(p) { widen_enum_keys(resolver, p, plans, writes) }))
     Object(fields) =>
       Object(
         fields.map(fn(f) {
           match f.0 {
             Literal(k) =>
-              match keys.get(k) {
-                Some(e) => {
+              match plans.get(k) {
+                Some(ToEnum(e)) => {
                   let parts : Array[@ast.TsType] = []
-                  // Every written value of the key is a member of `e`, so
-                  // each part but the `undefined` normalization adds is.
                   for c in union_components(f.1) {
                     let w = match c {
                       Undefined => c
@@ -23623,13 +23774,14 @@ fn widen_enum_keys(
                   }
                   (f.0, union_of(parts))
                 }
-                None => (f.0, widen_fresh_deep(resolver, f.1))
+                Some(KeepDeclared) => f
+                None => (f.0, widen_written_enums(resolver, f.1, writes))
               }
-            _ => (f.0, widen_fresh_deep(resolver, f.1))
+            _ => (f.0, widen_written_enums(resolver, f.1, writes))
           }
         }),
       )
-    other => widen_fresh_deep(resolver, other)
+    other => widen_written_enums(resolver, other, writes)
   }
 }
 
@@ -23872,8 +24024,22 @@ fn discriminant_split_fits(
   depth : Int32,
 ) -> Bool {
   guard resolver.unwrap(source) is Object(fields) else { return false }
+  // Only a DISCRIMINANT of the target splits: a key some arm types with a
+  // unit type (a literal, an enum member, `null` / `undefined`). tsc splits
+  // over the target's discriminant properties, so five fields of type `E`
+  // where only `tag` tells the arms apart split one field, not five, and
+  // stay under the 25-combination limit (#315's review; probed).
+  let disc : Map[String, Unit] = Map([])
+  for m in members {
+    for f in collect_declared_fields(m, resolver) {
+      if is_unit_type(resolver, f.1) {
+        disc[f.0] = ()
+      }
+    }
+  }
   let splits : Array[(Int32, Array[@ast.TsType])] = []
   for idx, f in fields {
+    guard f.0 is Literal(k) && disc.contains(k) else { continue }
     match split_discriminant_parts(f.1, resolver) {
       Some(parts) => splits.push((idx, parts))
       None => ()
@@ -23910,6 +24076,25 @@ fn discriminant_split_fits(
     }
   }
   true
+}
+
+///|
+/// A type with a single value, or a union of them: a literal, an enum
+/// member (`E.M`), `null` and `undefined`. These are the member types that
+/// make a property a discriminant of a union.
+fn is_unit_type(resolver : Resolver, t : @ast.TsType) -> Bool {
+  match resolver.unwrap(t) {
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) | Null | Undefined => true
+    Named(n) =>
+      match enum_type_parts(resolver, n) {
+        Some((_, Some(_))) => true
+        _ => false
+      }
+    Union(parts) =>
+      parts.length() > 0 &&
+      parts.iter().all(fn(p) { is_unit_type(resolver, p) })
+    _ => false
+  }
 }
 
 ///|
@@ -27408,46 +27593,103 @@ fn infer_body_return_type(
   resolver : Resolver,
   body : @ast.TsBlock,
 ) -> @ast.TsType? {
-  let returns : Array[@ast.TsExpr?] = []
-  fn walk(stmts : Array[@ast.TsStmt], out : Array[@ast.TsExpr?]) -> Unit {
+  // Each `return` with the names the nested scopes around it declare — a
+  // block's `let` / `const` / `var` (the whole block is their scope), a
+  // loop head, a `catch` binding. Below, a return that reads such a name
+  // where the outer env also binds it declines, since this walk binds only
+  // the top level: `if (flag) { const value = null; return value }` read
+  // the parameter `value: string`. A return outside that scope keeps the
+  // parameter (#315's review).
+  let scoped : Array[(@ast.TsExpr?, Array[String])] = []
+  fn block_decls(stmts : Array[@ast.TsStmt], into : Array[String]) -> Unit {
     for st in stmts {
       match st {
-        Return(e) => out.push(e)
-        If(_, t, e) => {
-          walk(t.stmts, out)
-          match e {
-            Some(b) => walk(b.stmts, out)
-            None => ()
-          }
-        }
-        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
-          walk(b.stmts, out)
-        For(_, _, _, b)
-        | ForOf(_, _, _, _, b)
-        | ForAwaitOf(_, _, _, _, b)
-        | ForIn(_, _, _, _, b) => walk(b.stmts, out)
-        Try(t, _, c, f) => {
-          walk(t.stmts, out)
-          match c {
-            Some(b) => walk(b.stmts, out)
-            None => ()
-          }
-          match f {
-            Some(b) => walk(b.stmts, out)
-            None => ()
-          }
-        }
-        Switch(_, cases) =>
-          for c in cases {
-            walk(c.body.stmts, out)
-          }
-        Label(_, inner) => walk([inner], out)
+        Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
+          collect_binding_names(b, into)
         _ => ()
       }
     }
   }
 
-  walk(body.stmts, returns)
+  fn walk(
+    stmts : Array[@ast.TsStmt],
+    scope : Array[String],
+    out : Array[(@ast.TsExpr?, Array[String])],
+  ) -> Unit {
+    let nested = fn(b : Array[@ast.TsStmt], extra : Array[String]) {
+      let inner = scope.copy()
+      for n in extra {
+        inner.push(n)
+      }
+      block_decls(b, inner)
+      walk(b, inner, out)
+    }
+    for st in stmts {
+      match st {
+        Return(e) => out.push((e, scope))
+        If(_, t, e) => {
+          nested(t.stmts, [])
+          match e {
+            Some(b) => nested(b.stmts, [])
+            None => ()
+          }
+        }
+        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+          nested(b.stmts, [])
+        For(init, _, _, b) => {
+          let head : Array[String] = []
+          match init {
+            Some(Var(bind, _, _))
+            | Some(Let(bind, _, _))
+            | Some(Const(bind, _, _)) => collect_binding_names(bind, head)
+            _ => ()
+          }
+          nested(b.stmts, head)
+        }
+        ForOf(_, bind, _, _, b)
+        | ForAwaitOf(_, bind, _, _, b)
+        | ForIn(_, bind, _, _, b) => {
+          let head : Array[String] = []
+          collect_binding_names(bind, head)
+          nested(b.stmts, head)
+        }
+        Try(t, param, c, f) => {
+          nested(t.stmts, [])
+          match c {
+            Some(b) => {
+              let head : Array[String] = []
+              match param {
+                Some(p) => collect_binding_names(p, head)
+                None => ()
+              }
+              nested(b.stmts, head)
+            }
+            None => ()
+          }
+          match f {
+            Some(b) => nested(b.stmts, [])
+            None => ()
+          }
+        }
+        // A `switch` body is ONE block scope: a declaration in any case is
+        // in scope in every case.
+        Switch(_, cases) => {
+          let inner = scope.copy()
+          for c in cases {
+            block_decls(c.body.stmts, inner)
+          }
+          for c in cases {
+            walk(c.body.stmts, inner, out)
+          }
+        }
+        Label(_, inner) => walk([inner], scope, out)
+        _ => ()
+      }
+    }
+  }
+
+  walk(body.stmts, [], scoped)
+  let returns : Array[@ast.TsExpr?] = scoped.map(fn(r) { r.0 })
   if returns.length() == 0 {
     return None
   }
@@ -27481,80 +27723,17 @@ fn infer_body_return_type(
       _ => ()
     }
   }
-  // A name a NESTED scope declares — a block's `let` / `const` / `var`, a
-  // loop head, a `catch` binding — is not the binding the outer env holds
-  // for it, and this walk does not bind it: `if (flag) { const value =
-  // null; return value }` read the parameter `value: string`, and a static
-  // factory lost its `null` (#315's review; probed). So a return that
-  // mentions a nested name already bound outside declines.
-  let nested : Array[String] = []
-  fn nested_decls(
-    stmts : Array[@ast.TsStmt],
-    top : Bool,
-    out : Array[String],
-  ) -> Unit {
-    for st in stmts {
-      match st {
-        Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
-          if !top {
-            collect_binding_names(b, out)
-          }
-        If(_, t, e) => {
-          nested_decls(t.stmts, false, out)
-          match e {
-            Some(b) => nested_decls(b.stmts, false, out)
-            None => ()
-          }
-        }
-        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
-          nested_decls(b.stmts, false, out)
-        For(init, _, _, b) => {
-          match init {
-            Some(i) => nested_decls([i], false, out)
-            None => ()
-          }
-          nested_decls(b.stmts, false, out)
-        }
-        ForOf(_, bind, _, _, b)
-        | ForAwaitOf(_, bind, _, _, b)
-        | ForIn(_, bind, _, _, b) => {
-          collect_binding_names(bind, out)
-          nested_decls(b.stmts, false, out)
-        }
-        Try(t, param, c, f) => {
-          nested_decls(t.stmts, false, out)
-          match param {
-            Some(p) => collect_binding_names(p, out)
-            None => ()
-          }
-          match c {
-            Some(b) => nested_decls(b.stmts, false, out)
-            None => ()
-          }
-          match f {
-            Some(b) => nested_decls(b.stmts, false, out)
-            None => ()
-          }
-        }
-        Switch(_, cases) =>
-          for c in cases {
-            nested_decls(c.body.stmts, false, out)
-          }
-        Label(_, inner) => nested_decls([inner], top, out)
-        _ => ()
-      }
-    }
-  }
-
-  nested_decls(body.stmts, true, nested)
-  let shadowed = nested.filter(fn(n) {
-    env.lookup(n) is Some(_) || resolver.globals.contains(n)
-  })
   let parts : Array[@ast.TsType] = []
   let mut ok = true
-  for r in returns {
+  for sr in scoped {
+    let r = sr.0
     match r {
-      Some(e) if shadowed.iter().any(fn(n) { expr_mentions_name(e, n) }) => {
+      Some(e) if sr.1
+        .iter()
+        .any(fn(n) {
+          (env.lookup(n) is Some(_) || resolver.globals.contains(n)) &&
+          expr_mentions_name(e, n)
+        }) => {
         ok = false
         break
       }
@@ -27563,7 +27742,8 @@ fn infer_body_return_type(
     let t = match r {
       // An enum member widens to its enum as a literal does: `function f()
       // { return { tag: S.X } }` returns `{ tag: S }` in tsc.
-      Some(e) => widen_fresh_deep(resolver, infer_expr(env, resolver, e))
+      Some(e) =>
+        widen_fresh_deep_from(resolver, infer_expr(env, resolver, e), e)
       None => @ast.TsType::Undefined
     }
     if !return_type_trustworthy(resolver, t, 0) {
@@ -36495,8 +36675,10 @@ fn enum_decls_related(resolver : Resolver, src : String, tgt : String) -> Bool {
       ) {
       (Some(NumberLiteral(a)), Some(NumberLiteral(b))) => a == b
       (Some(Literal(a)), Some(Literal(b))) => a == b
-      (Some(Literal(_)), Some(NumberLiteral(_)))
-      | (Some(NumberLiteral(_)), Some(Literal(_))) => false
+      // A string member relates only to a string member of the same value,
+      // so a computed (numeric) member against one does not either.
+      (Some(Literal(_)), Some(NumberLiteral(_) | Number))
+      | (Some(NumberLiteral(_) | Number), Some(Literal(_))) => false
       _ => true
     }
   })
@@ -37390,17 +37572,30 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         block_declared_names(b, shadow)
         apply_sequential_exit(env, pre_map, exit, shadow)
       }
-      if then_exits && !else_exits {
-        drop_forgotten(else_exit)
-        for b in effect.else_binds {
+      // A condition narrowing on a property PATH is restored only while
+      // the continuing branch still holds it: `if (o.p !== null) { o =
+      // replacement } else { return }` forgot `o.p` with the write to `o`,
+      // and restoring it read `o.p` as non-null afterwards (#315's review;
+      // probed: tsc reports the later `takeString(o.p)`). A branch that
+      // only reads the path keeps it.
+      let restore = fn(
+        binds : Array[(String, @ast.TsType)],
+        exit : Map[String, @ast.TsType],
+      ) {
+        for b in binds {
+          if (b.0.contains(".") || b.0.contains("[")) && !exit.contains(b.0) {
+            continue
+          }
           env.bind(b.0, b.1)
         }
+      }
+      if then_exits && !else_exits {
+        drop_forgotten(else_exit)
+        restore(effect.else_binds, else_exit)
         carry(else_block, else_exit)
       } else if else_exits && !then_exits {
         drop_forgotten(then_exit)
-        for b in effect.then_binds {
-          env.bind(b.0, b.1)
-        }
+        restore(effect.then_binds, then_exit)
         carry(Some(then_block), then_exit)
       } else if !then_exits && !else_exits {
         drop_forgotten(then_exit)

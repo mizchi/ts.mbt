@@ -7313,6 +7313,30 @@ product surfaces now.
     name already bound outside now declines.
   - The local-alias exclusion did not reproduce: `unwrap` resolves a local
     alias before the arm it named can see it.
+  The second round found four Majors and three Minors, and the two worth
+  keeping are both about this batch's own first answers.
+  - **"A call with an inline callback" was a proxy for freshness, and the
+    wrong one.** `load(cb): { tag: E.A }[]` called with `() => {}` widened
+    a DECLARED member because a callback was present. The fact is which
+    members the initializer WROTE — an object-literal value, a nested
+    literal, what an inline callback returns — so `fresh_enum_writes`
+    collects exactly those and the widening touches nothing else. The
+    first test of it could not fail: with no write at all the helper
+    returns early, so the filter was never consulted until a cell had a
+    callback writing a DIFFERENT member.
+  - **The shadow decline from the first round was too wide.** A flat list
+    of nested names declined `if (flag) { const value = null } return
+    value`, whose return reads the parameter, and that lost a narrowing
+    fp14j had. Each return now carries the names its own enclosing scopes
+    declare (a block, a loop head, a `catch`, a whole `switch` body).
+  - The others: an array literal's key follows each item's final writer
+    through `object_literal_member_origins` (a later spread keeps its
+    declared type); a condition narrowing on a path the continuing branch
+    forgot is not restored; only a target DISCRIMINANT splits, so fields
+    every arm accepts as `E` stay out of the 25-combination limit; a
+    computed member does not relate to a string one; and a renamed
+    enum's members are globals under its key, read through an import
+    alias (`import { E as RE }` beside a local `enum E`).
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

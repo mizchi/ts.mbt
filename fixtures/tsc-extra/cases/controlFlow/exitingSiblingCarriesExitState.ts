@@ -12,3 +12,6 @@ export function badReassignedAfterGuard(x: string | null, y: string | null) { if
 export function badReassignedAfterTruthiness(x: string | null, y: string | null) { if (x) { x = y; } else { return; } takeS(x); }
 export function okPathNarrowedInBranch(flag: boolean) { const o: { p: string | null } = { p: null }; if (flag) { o.p = ""; } else { return; } takeS(o.p); }
 export function okReassignedNonNull(x: string | null, y: string) { if (x !== null) { x = y; } else { return; } takeS(x); }
+interface O2 { p: string | null }
+export function badPathForgottenByReassignment(o: O2, replacement: O2) { if (o.p !== null) { o = replacement; } else { return; } takeS(o.p); }
+export function okPathOnlyRead(o: O2) { if (o.p !== null) { const q = o.p; } else { return; } takeS(o.p); }

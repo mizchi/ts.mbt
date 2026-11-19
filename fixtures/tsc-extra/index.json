@@ -1082,7 +1082,19 @@
           "name": "okReassignedNonNull",
           "kind": "ok",
           "fromLine": 11,
-          "toLine": 12
+          "toLine": 11
+        },
+        {
+          "name": "badPathForgottenByReassignment",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okPathOnlyRead",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 15
         }
       ]
     },
@@ -3583,7 +3595,8 @@
       },
       "accepted": false,
       "codes": [
-        2322
+        2322,
+        2783
       ],
       "baseline": "baselines/enumMemberWidensWhereWritten.errors.txt",
       "claims": [
@@ -3657,7 +3670,31 @@
           "name": "badInferredReturnCall",
           "kind": "bad",
           "fromLine": 31,
-          "toLine": 32
+          "toLine": 31
+        },
+        {
+          "name": "okDeclaredResultWithCallbackKept",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "okLaterSpreadWins",
+          "kind": "ok",
+          "fromLine": 37,
+          "toLine": 37
+        },
+        {
+          "name": "badLaterEnumWidened",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "okDeclaredKeptBesideACallbackWrite",
+          "kind": "ok",
+          "fromLine": 42,
+          "toLine": 43
         }
       ]
     },
@@ -3685,7 +3722,19 @@
           "name": "OkUnrelatedNestedName",
           "kind": "ok",
           "fromLine": 11,
-          "toLine": 12
+          "toLine": 11
+        },
+        {
+          "name": "OkTopLevelReturnReadsParameter",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "BadLoopHeadShadows",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 16
         }
       ]
     },
@@ -6031,7 +6080,19 @@
           "name": "badNumericEnumWrongShape",
           "kind": "bad",
           "fromLine": 29,
-          "toLine": 30
+          "toLine": 29
+        },
+        {
+          "name": "okOnlyTheDiscriminantSplits",
+          "kind": "ok",
+          "fromLine": 35,
+          "toLine": 35
+        },
+        {
+          "name": "badTwoDiscriminantsCrossed",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 40
         }
       ]
     },

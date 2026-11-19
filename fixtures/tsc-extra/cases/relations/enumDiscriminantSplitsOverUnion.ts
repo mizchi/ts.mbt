@@ -30,3 +30,13 @@ export function badEnumTypedTooWide(t: T) { const x = { t, len: 1 }; small(x); }
 export function badLetWidensToEnum() { let a = { t: T.RETAIN, len: 1 }; small(a); }
 export function badWrongPropertyType() { const actions = [{ t: T.RETAIN, len: "1" }]; apply(actions); }
 export function badNumericEnumWrongShape() { const x = { k: K.A, b: 1 }; kk(x); }
+interface X5 { tag: K.A; a: K; b: K; c: K; d: K }
+interface Y5 { tag: K.B; a: K; b: K; c: K; d: K }
+declare function f5(v: X5 | Y5): void;
+declare const kt: K;
+declare const kv: K;
+export function okOnlyTheDiscriminantSplits() { const o = { tag: kt, a: kv, b: kv, c: kv, d: kv }; f5(o); }
+interface P2 { tag: K.A; a: K.A }
+interface Q2 { tag: K.B; a: K.B }
+declare function g2(v: P2 | Q2): void;
+export function badTwoDiscriminantsCrossed() { const o = { tag: kt, a: kv }; g2(o); }

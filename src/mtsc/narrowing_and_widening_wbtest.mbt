@@ -1785,3 +1785,99 @@ test "a shadowing nested declaration declines a factory's inferred return (shado
     "function H.set > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
   ])
 }
+
+///|
+/// A binding widens only the enum members its initializer WROTE: a call
+/// to a declared `load(cb): { tag: E.A }[]` keeps `E.A` although it takes
+/// a callback, while what an inline `map` callback returns widens (#315's
+/// review; probed: tsc accepts both `ok` lines).
+test "a declared enum member in a call result keeps its member type (enumfresh2)" {
+  let src =
+    #|enum E { A = "a", B = "b" }
+    #|declare function load(cb: () => void): { tag: E.A }[];
+    #|const rows = load(() => {});
+    #|export const okDeclaredKept: { tag: E.A }[] = rows;
+    #|declare const xs: number[];
+    #|const mapped = xs.map(() => ({ tag: E.A }));
+    #|export function okPushOther() { mapped.push({ tag: E.B }); }
+    #|export function okReturnedLoad() { return load(() => {}); }
+    #|export const okReturnedKept: { tag: E.A }[] = okReturnedLoad();
+    #|declare function load2(cb: () => { tag: E }): { tag: E.A }[];
+    #|const rows2 = load2(() => ({ tag: E.B }));
+    #|export const okDeclaredKeptBesideAWrite: { tag: E.A }[] = rows2;
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// An array literal's key follows each item's FINAL writer: a spread after
+/// an enum write replaces it and keeps the declared type, an enum write
+/// after a spread widens to the enum (#315's review; probed: tsc reports
+/// the duplicate key on line 3 and `badEnumWinsWidened` only).
+test "an array literal's enum key follows the item's final writer (enumspread)" {
+  let src =
+    #|enum E { A = "a", B = "b" }
+    #|declare const raw: { tag: "raw" };
+    #|const xs = [{ tag: E.A, ...raw }];
+    #|export const okSpreadWins: { tag: "raw" }[] = xs;
+    #|const ys = [{ ...raw, tag: E.A }];
+    #|export const badEnumWinsWidened: { tag: E.A }[] = ys;
+  assert_eq(issue_lines(src), [
+    "top-level > object literal `tag`: `tag` is specified more than once, so this usage will be overwritten by the spread",
+    "top-level > binding `badEnumWinsWidened` init: expected `{ tag: E.A }[]` but got `{ tag: E }[]`",
+  ])
+}
+
+///|
+/// A condition narrowing on a property path is not restored after an `if`
+/// whose continuing branch forgot it: `o = replacement` drops `o.p`. A
+/// branch that only reads the path keeps it (#315's review; probed: tsc
+/// reports `badDropped` only).
+test "an exiting sibling does not restore a path the branch forgot (ifjoin4)" {
+  let src =
+    #|declare function takeString(s: string): void;
+    #|interface O { p: string | null }
+    #|export function badDropped(o: O, replacement: O) { if (o.p !== null) { o = replacement; } else { return; } takeString(o.p); }
+    #|export function okRead(o: O) { if (o.p !== null) { const q = o.p; } else { return; } takeString(o.p); }
+  assert_eq(issue_lines(src), [
+    "function badDropped > call `takeString` arg[0]: type `string | null` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// Only a discriminant of the target splits: five fields of a two-member
+/// enum where only `tag` tells the arms apart split one field, which keeps
+/// the combinations under the limit (#315's review; probed: tsc accepts).
+test "only a target discriminant splits (splitdisc)" {
+  let src =
+    #|enum E { A, B }
+    #|interface X { tag: E.A; a: E; b: E; c: E; d: E }
+    #|interface Y { tag: E.B; a: E; b: E; c: E; d: E }
+    #|declare function f(v: X | Y): void;
+    #|declare const t: E;
+    #|declare const v: E;
+    #|export function okOnlyTagSplits() { const o = { tag: t, a: v, b: v, c: v, d: v }; f(o); }
+    #|interface P { tag: E.A; a: E.A }
+    #|interface Q { tag: E.B; a: E.B }
+    #|declare function g(v: P | Q): void;
+    #|export function badBothSplitMismatch() { const o = { tag: t, a: v }; g(o); }
+  assert_eq(issue_lines(src), [
+    "function badBothSplitMismatch > call `g` arg[0]: expected `P | Q` but got `{ tag: E; a: E }`",
+  ])
+}
+
+///|
+/// A nested declaration shadows a name only inside its own scope: a
+/// top-level `return value` after `if (flag) { const value = null }` reads
+/// the parameter, so the factory still returns `string` (#315's review;
+/// probed: tsc accepts `H2.set`).
+test "a nested declaration shadows only inside its scope (shadowret2)" {
+  let src =
+    #|declare function takeS(s: string): void;
+    #|export class K { static make(value: string, flag: boolean) { if (flag) { const value = null; } return value; } }
+    #|export class H2 { p: string | null = null; set(v: string) { this.p = K.make(v, true); takeS(this.p); } }
+    #|export class K3 { static make(value: string) { for (const value of [null]) { return value; } return value; } }
+    #|export class H3 { p: string | null = null; set(v: string) { this.p = K3.make(v); takeS(this.p); } }
+  assert_eq(issue_lines(src), [
+    "function H3.set > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
+  ])
+}

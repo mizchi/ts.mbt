@@ -2045,3 +2045,52 @@ test "mtsc graph checker keeps two same-named enums apart unless related (enumid
     ],
   )
 }
+
+///|
+/// A computed (numeric) member does not relate to a string member of the
+/// same name in another declaration of the enum (#315's review; probed:
+/// tsc reports `bad`).
+test "mtsc graph checker keeps a computed member apart from a string one (enumident2)" {
+  let lib =
+    #|export enum S { A = "a" }
+    #|export interface H { s: S }
+  let entry =
+    #|import { H } from "./lib";
+    #|declare function f(): number;
+    #|enum S { A = f() }
+    #|declare const e: S;
+    #|export const bad: H = { s: e };
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `bad` init.s :: expected `S` but got `S`, a different declaration of the enum whose members differ",
+    ],
+  )
+}
+
+///|
+/// An enum imported under another name, while the importer declares its
+/// own enum of the original name, reads its members through the alias: a
+/// `n?.kind === RE.A` guard narrows `n`, and `RE.A` against `number` is
+/// reported (#315's review; probed: tsc reports `badMember` only).
+test "mtsc graph checker reads members through an enum import alias (enumalias)" {
+  let lib =
+    #|export enum E { A = "a", B = "b" }
+    #|export interface N { kind: E }
+  let entry =
+    #|import { E as RE, N } from "./lib";
+    #|enum E { Z = "z" }
+    #|declare const n: N | undefined;
+    #|export function okNarrow(): string { if (n?.kind === RE.A) { return n.kind; } return ""; }
+    #|export const badMember: number = RE.A;
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `badMember` init :: expected `number` but got `string`",
+    ],
+  )
+}
