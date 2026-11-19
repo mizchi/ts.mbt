@@ -1333,13 +1333,7 @@ pub fn source_has_ts_nocheck(src : String) -> Bool {
   let mut nocheck = false
   while i < n {
     let c = src[i].to_int()
-    if is_pragma_line_break(c) ||
-      c == ' '.to_int() ||
-      c == '\t'.to_int() ||
-      c == 0x0B ||
-      c == 0x0C ||
-      c == 0xA0 ||
-      c == 0xFEFF {
+    if is_pragma_line_break(c) || is_trivia_space(c) {
       i = i + 1
       continue
     }
@@ -1437,6 +1431,18 @@ fn is_pragma_space(c : Int32) -> Bool {
   c == 0x205F ||
   c == 0x3000 ||
   c == 0xFEFF
+}
+
+///|
+/// The scanner's single-line whitespace between leading comments: every
+/// `is_pragma_space` character plus U+0085 and U+200B, which tsc's
+/// `isWhiteSpaceSingleLine` also skips and JavaScript's `\s` does not
+/// (probed: `// @ts-nocheck` then `\u{200B}// @ts-check` is checked). Only
+/// the ASCII ones were skipped, so a Unicode space before a later
+/// `// @ts-check` ended the trivia and left the file opted out (#312's
+/// review).
+fn is_trivia_space(c : Int32) -> Bool {
+  is_pragma_space(c) || c == 0x85 || c == 0x200B
 }
 
 ///|
