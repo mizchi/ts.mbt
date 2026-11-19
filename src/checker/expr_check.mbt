@@ -30354,15 +30354,25 @@ fn bind_object_pattern(
   // unknown (no declared fields, e.g. `any` / an opaque generic) keep `rest`
   // permissive as `Any` rather than synthesising an empty object that would
   // make every `rest.x` access a false "property does not exist".
+  //
+  // A UNION source gives a union of rests, one per member, as tsc
+  // distributes the rest over it: `{ size, ...props }: Button | Toggle`
+  // keeps each member's discriminant, so `props.type === "toggle"`
+  // narrows `props`. It had been the fields common to every member, with
+  // the first member's discriminant, so `props.checked` and `props.type
+  // === "icon"` were both reported (excalidraw's `IconButton`). A nullish
+  // member cannot be destructured and is skipped. A member this cannot
+  // enumerate makes the whole rest `any`.
   match ob.rest {
     Some(rest_name) => {
-      let declared = collect_declared_fields(source, ctx.resolver)
-      if declared.length() == 0 {
-        env.bind(rest_name, @ast.TsType::Any)
-      } else {
-        let taken : Map[String, Unit] = Map([])
-        for prop in ob.props {
-          taken[prop.key] = ()
+      let taken : Map[String, Unit] = Map([])
+      for prop in ob.props {
+        taken[prop.key] = ()
+      }
+      let rest_of = fn(t : @ast.TsType) -> @ast.TsType? {
+        let declared = collect_declared_fields(t, ctx.resolver)
+        if declared.length() == 0 {
+          return None
         }
         let rest_fields : Array[(@ast.TsType, @ast.TsType)] = []
         for f in declared {
@@ -30370,8 +30380,36 @@ fn bind_object_pattern(
             rest_fields.push((@ast.TsType::Literal(f.0), f.1))
           }
         }
-        env.bind(rest_name, @ast.TsType::Object(rest_fields))
+        Some(@ast.TsType::Object(rest_fields))
       }
+      let members = match ctx.resolver.unwrap(source) {
+        Union(_) as u =>
+          union_components(
+            flatten_union_parts(expand_union_alias_members(ctx.resolver, u)),
+          ).filter(fn(m) { !(m is (Null | Undefined | Void)) })
+        _ => []
+      }
+      let rest_ty = if members.length() > 1 {
+        let parts : Array[@ast.TsType] = []
+        let mut all = true
+        for m in members {
+          match rest_of(m) {
+            Some(r) => if !parts.contains(r) { parts.push(r) }
+            None => all = false
+          }
+        }
+        if all {
+          union_of(parts)
+        } else {
+          @ast.TsType::Any
+        }
+      } else {
+        match rest_of(source) {
+          Some(r) => r
+          None => @ast.TsType::Any
+        }
+      }
+      env.bind(rest_name, rest_ty)
     }
     None => ()
   }

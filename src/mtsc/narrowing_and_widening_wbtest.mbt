@@ -979,3 +979,22 @@ test "const guards on indexed types and paths, boolean literals, logical sides" 
     "function n2 > PropAccess `.length`: object is possibly `null`",
   ])
 }
+
+///|
+/// An object rest over a union is a union of the members' rests, as tsc
+/// distributes it, so the rest keeps each member's discriminant and narrows
+/// by it (probed). It had been the fields common to every member, with the
+/// first member's discriminant.
+test "an object rest over a union keeps each member" {
+  let src =
+    #|type Base = { size?: string; hidden?: boolean };
+    #|type P = (Base & { type: "button"; onClick?(): void }) | (Base & { type: "toggle"; checked: boolean });
+    #|export function f({ size = "m", ...props }: P) { if (props.type === "button") return props.onClick; return props.checked; }
+    #|type Q = { type: "a"; x: number; k: string } | { type: "b"; y: string; k: string };
+    #|export function t1({ k, ...rest }: Q) { const z: "z" = rest.type; return z; }
+    #|export function t2({ k, ...rest }: Q) { if (rest.type === "a") { const s: string = rest.x; return s; } return ""; }
+  assert_eq(issue_lines(src), [
+    "function t1 > binding `z` init: expected `\"z\" (string)` but got `\"a\" (string) | \"b\" (string)`",
+    "function t2 > binding `s` init: expected `string` but got `number`",
+  ])
+}
