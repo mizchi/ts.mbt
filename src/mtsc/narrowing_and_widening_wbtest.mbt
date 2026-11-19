@@ -685,7 +685,6 @@ test "an any-typed parameter shadowing an enum is any" {
     #|namespace M { export const k = 1; }
     #|export const merged: number = M.A;
   assert_eq(issue_lines(src), [
-    "function real > binding `s` init: expected `number` but got `string`",
-    "top-level > binding `merged` init: expected `number` but got `string`",
+    "function real > binding `s` init: expected `number` but got `string`", "top-level > binding `merged` init: expected `number` but got `string`",
   ])
 }

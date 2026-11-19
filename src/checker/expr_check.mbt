@@ -54553,6 +54553,14 @@ fn parser_channel_issues(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// ancestors are ingested first at bare names so inner code can reference
 /// outer-scope types unqualified (the way TypeScript scoping works), then
 /// this module is ingested to shadow on top.
+
+///|
+/// The module's file opts out of type checking with `// @ts-nocheck`.
+pub fn module_is_ts_nocheck(module_ : @ast.TsModule) -> Bool {
+  module_.grammar_misuses.contains("<ts-nocheck>")
+}
+
+///|
 fn check_module_function_bodies_layered(
   module_ : @ast.TsModule,
   outer_modules : Array[@ast.TsModule],
@@ -54567,6 +54575,13 @@ fn check_module_function_bodies_layered(
   if outer_modules.length() == 0 {
     walked_arrow_bodies.clear()
     walked_func_bodies.clear()
+    // `// @ts-nocheck` opts the whole FILE out of checking, grammar rules
+    // included (see `@parser.source_has_ts_nocheck` for the probed cells).
+    // Only the root carries the marker: a namespace body is re-parsed by a
+    // child parser, and its layer is reached from here or not at all.
+    if module_is_ts_nocheck(module_) {
+      return []
+    }
   }
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
@@ -56257,6 +56272,11 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: the source is a declaration file, consumed
       // by the bodiless-declaration exemptions (TS2390 / TS2564 / TS2378).
       if gm == "<declaration-file>" {
+        continue
+      }
+      // Marker, not an error: the file opts out with `// @ts-nocheck`,
+      // consumed at the top of `check_module_function_bodies_layered`.
+      if gm == "<ts-nocheck>" {
         continue
       }
       // Markers, not errors: lib-set / target directive evidence and

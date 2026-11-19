@@ -168,7 +168,8 @@ async fn mtsc_run_check(argv : Array[String], start : Int32) -> Unit {
       }
       // TS1046 applies only to declaration files -- keyed off the file
       // extension, which the general check pipeline can't see.
-      if mtsc_is_declaration_path(path) {
+      if mtsc_is_declaration_path(path) &&
+        !@checker.module_is_ts_nocheck(module_) {
         for iss in @checker.check_dts_top_level_modifiers(module_) {
           issues.push(iss)
         }
