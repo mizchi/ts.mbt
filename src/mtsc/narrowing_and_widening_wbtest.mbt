@@ -1279,7 +1279,8 @@ test "a variadic tuple pattern's rest element keeps the tuple's slice" {
 /// Assigning a never-nullish value to a property path removes the nullish
 /// members of the field's declared type, also when that type is an alias:
 /// `Nullable<number>` read as admitting no nullish value, so
-/// `this._next = 3` narrowed nothing (univer's `LineBreaker._nextClass`).
+/// `this._next = 3` narrowed nothing (univer's
+/// `DocumentSkeleton._externalLayoutProgress`).
 /// And an unannotated instance method is read from its body for that
 /// question, at the path and at a binding, as a static factory already was
 /// (probed: tsc reports exactly the four `bad` lines).

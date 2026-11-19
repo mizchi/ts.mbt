@@ -35720,12 +35720,14 @@ fn method_call_never_nullish(
         None => false
       }
     // An unannotated INSTANCE method is read from its body the same way:
-    // `this._nextClass = this._nextCharClass()` on a `Nullable<number>`
-    // field, where the method returns `mapClass(…)`, left the path
-    // possibly `undefined` (univer's `LineBreaker`, probed: tsc accepts
-    // it). Only a single, non-generic, bodied method of a non-generic
-    // class is read, so an overload set, a class type parameter in the
-    // return, and an inherited method all abstain.
+    // `this._next = this._nextChar()` on a `Nullable<number>` field, where
+    // the method returns `mapClass(k)`, left the path possibly `undefined`
+    // (probed: tsc accepts it). univer's `LineBreaker` has this shape and is
+    // still reported, because its `mapClass` returns imported constants and
+    // so infers as `any` on the graph path. Only a single, non-generic,
+    // bodied method of a non-generic class is read, so an overload set, a
+    // class type parameter in the return, and an inherited method all
+    // abstain.
     MethodCall(recv, meth, _) =>
       instance_method_return_never_nullish(env, ctx, recv, meth)
     _ => false
@@ -35867,7 +35869,7 @@ fn narrow_after_prop_assignment(
   // The declaration is resolved before asking whether it admits a nullish
   // value, as the binding narrowing does: a field declared `Nullable<number>`
   // (`number | null | undefined | void`) read as admitting none, so the path
-  // was never narrowed (univer's `LineBreaker._nextClass`).
+  // was never narrowed (univer's `DocumentSkeleton._externalLayoutProgress`).
   if !is_checkable(decl) ||
     !(type_has_undefined(decl) ||
     type_has_null(decl) ||

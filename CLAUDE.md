@@ -7187,6 +7187,66 @@ product surfaces now.
     at or before the tuple's rest it is the tail as written. From past it,
     it is an array of every element type from the rest on. The element
     position and the remainder share one helper for that union.
+  Batch HD takes the next excalidraw and univer categories at an
+  unchanged oracle, and its useful finding is about the enum members it
+  could not finish.
+  - **A nullable alias was invisible to member-path narrowing.**
+    `narrow_after_prop_assignment` asked whether the field's declaration
+    admits a nullish value without resolving the alias, so `Nullable<number>`
+    (`number | null | undefined | void`) read as admitting none and
+    `this._next = 3` narrowed nothing. The binding narrowing has resolved it
+    for several batches. And the member path had its own copy of the
+    never-nullish test, without the static-factory arm the binding path
+    had, so the method-call judgement is one helper now. That was univer's
+    `DocumentSkeleton._externalLayoutProgress`. The helper also reads an
+    unannotated INSTANCE method's body, which univer's `LineBreaker` needs
+    and does not get yet: its method returns `mapClass(…)`, which returns
+    imported constants and so infers as `any` on the graph path.
+  - **An alias to an untabulated lib interface abstains like the bare
+    name.** `type N = KeyboardEvent` reported `e.stopImmediatePropagation()`
+    while `e: KeyboardEvent` did not. React's `NativeKeyboardEvent` is that
+    alias, which was five excalidraw reports. Probed first, the namespace
+    beside it was irrelevant.
+  - **An enum member is read as its folded value, and that produced a
+    family of false positives main has in a SINGLE file.** `{ dateSystem:
+    DateSystem.AUTO }` against `dateSystem?: DateSystem` was "got
+    `string`", `{ r: n }` against `{ r?: E }` failed in the whole-object
+    relation, and `private _d = DS.A` gave the field `string`. tsc gives
+    `E.M` the enum literal type, which widens to `E` in a mutable place.
+    The fixes take that rule at each place the value is judged: a target
+    holding `E` or `E.M`, a numeric enum member of an object value, an
+    unannotated field, a `let`, and an assignment. One helper,
+    `enum_member_receiver`, decides that an expression is a member of the
+    enum ITSELF, since an imported enum's value is bound as `Named(E)` and
+    a local one as `any`.
+  - **When one branch of an `if` exits, the other branch's assignments
+    were dropped.** Only the condition's narrowing reached the code after
+    the `if`, so `if (c) { d = X } else { return } take(d)` read `d` as its
+    type from before the `if`. main has it for every type. The branch is
+    applied through `apply_sequential_exit`, which already keeps a name the
+    block declares itself as its own, and my first version, which did not,
+    leaked an inner `let s` to the outside. That exposed one more gap: a
+    binding declared with a tuple alias (`let b: Bounds`) narrowed to
+    `number[]` on assignment, where a tuple written out keeps its type.
+
+  The finding worth keeping is what typing IMPORTED enum members cost.
+  On the graph path an imported `Kind.PARAGRAPH` is `any`, because the
+  type-only ingestion copies the enum table and not the member globals
+  `ingest_module` exposes. Copying them fixed the `x?.kind ===
+  Kind.PARAGRAPH` guards it was meant for, and its first measurement was
+  univer −14 / +63 distinct sites. The single-file fixes above are what
+  those 63 turned out to be, and they took it to −14 / +5.
+  The five left need two things this checker does not have. One is
+  widening an enum literal to its enum inside an object literal. The
+  other is splitting a discriminant over an enum's members, which tsc does
+  since 3.5: `const actions = [{ t: T.INSERT, … }]; apply(actions)` is
+  accepted against a union discriminated by `t`, and is a false positive
+  in a single file on main too. So the copy was taken out and filed with
+  those two blockers, and the single-file fixes ship on their own. The
+  general lesson is the one batch HA recorded for static factories, from
+  the other side. Giving a value its real type is not free when the
+  checker had been abstaining on it, because every place the value was
+  invisible to becomes a place it is judged.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
