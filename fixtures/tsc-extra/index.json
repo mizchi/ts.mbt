@@ -2974,6 +2974,76 @@
       ]
     },
     {
+      "case": "inference/contextualRestParametersAndVariadicPatterns.ts",
+      "area": "inference",
+      "name": "contextualRestParametersAndVariadicPatterns",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/contextualRestParametersAndVariadicPatterns.errors.txt",
+      "claims": [
+        {
+          "name": "okRestFromRest",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badRestFromRest",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okPlainFromRest",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badPlainFromRest",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okRestFromPair",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badRestFromPair",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okTupleRest",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badTupleRest",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okTupleRestTail",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 19
+        }
+      ]
+    },
+    {
       "case": "inference/contextuallyTypedFunctionValueThroughGuard.ts",
       "area": "inference",
       "name": "contextuallyTypedFunctionValueThroughGuard",

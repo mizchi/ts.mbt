@@ -26782,13 +26782,7 @@ fn infer_arrow_body_with_params(
       let mut i = 0
       while i < arrow_params.length() {
         let p = arrow_params[i]
-        let ty = if is_checkable(p.type_) {
-          p.type_
-        } else if i < formal_param_types.length() {
-          formal_param_types[i]
-        } else {
-          p.type_
-        }
+        let ty = contextual_param_type(p, i, formal_param_types)
         bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
@@ -26810,13 +26804,7 @@ fn infer_arrow_body_with_params(
       let mut i = 0
       while i < f.params.length() {
         let p = f.params[i]
-        let ty = if is_checkable(p.type_) {
-          p.type_
-        } else if i < formal_param_types.length() {
-          formal_param_types[i]
-        } else {
-          p.type_
-        }
+        let ty = contextual_param_type(p, i, formal_param_types)
         bind_param_for_inference(env, resolver, p, ty)
         i = i + 1
       }
@@ -27419,6 +27407,46 @@ fn collect_literal_function_values(
 }
 
 ///|
+/// The type an arrow's or a function expression's parameter `p` at position
+/// `i` takes from a contextual parameter list `formals`. An annotation wins.
+/// A REST parameter collects every formal from its position on: the rest
+/// array itself when the formal there is the contextual rest, or a tuple of
+/// the fixed formals, and `any` for a mix. A plain parameter that lands on
+/// the contextual rest takes its element type. Binding the formal unchanged
+/// put the `Rest(_)` marker itself on the parameter, so `(...a) => { const
+/// v: string[] = a }` against `(...a: string[]) => void` was reported
+/// (#314's review, probed: tsc accepts it).
+fn contextual_param_type(
+  p : @ast.TsParam,
+  i : Int32,
+  formals : Array[@ast.TsType],
+) -> @ast.TsType {
+  if is_checkable(p.type_) || i >= formals.length() {
+    return p.type_
+  }
+  if p.is_rest {
+    match formals[i] {
+      Rest(inner) if i == formals.length() - 1 => inner
+      _ =>
+        if formals[i:].iter().any(fn(t) { t is Rest(_) }) {
+          @ast.TsType::Any
+        } else {
+          @ast.TsType::Tuple(formals[i:].to_owned())
+        }
+    }
+  } else {
+    match formals[i] {
+      Rest(inner) =>
+        match rest_param_element_type(inner) {
+          Some(e) => e
+          None => @ast.TsType::Any
+        }
+      t => t
+    }
+  }
+}
+
+///|
 /// The element type of a rest parameter's written array type (`T[]`,
 /// `Array<T>`, `ReadonlyArray<T>`). `None` for a tuple or anything else,
 /// whose positions are not one element type.
@@ -27455,13 +27483,7 @@ fn check_arrow_with_context(
     let p = arrow_params[i]
     // Honor an explicit annotation on the arrow's param; otherwise fall
     // back to the formal parameter type.
-    let ty = if is_checkable(p.type_) {
-      p.type_
-    } else if i < formal_params.length() {
-      formal_params[i]
-    } else {
-      p.type_
-    }
+    let ty = contextual_param_type(p, i, formal_params)
     // When the arrow param carries an *explicit* annotation, it must be
     // compatible with the contextual (formal) parameter type. Parameters are
     // compared bivariantly (matching `strictFunctionTypes: false`, the corpus
@@ -27785,13 +27807,7 @@ fn check_funcexpr_with_context(
   let mut i = 0
   while i < f.params.length() {
     let p = f.params[i]
-    let ty = if is_checkable(p.type_) {
-      p.type_
-    } else if i < formal_params.length() {
-      formal_params[i]
-    } else {
-      p.type_
-    }
+    let ty = contextual_param_type(p, i, formal_params)
     bind_callable_param(env, ctx, p, ty, param_names)
     i = i + 1
   }
@@ -30091,6 +30107,37 @@ fn bind_array_pattern(
     match ab.items[i] {
       Some(elem) => {
         let elem_ty = match unwrapped {
+          // A variadic tuple's positions from its rest element on hold the
+          // rest's ELEMENT type (with any fixed tail beside it): `[a, b]:
+          // [number, ...string[]]` binds `b` as `string`. Binding the raw
+          // `Rest(_)` marker made `const s: string = b` a report (#314's
+          // review, probed: tsc accepts it).
+          Tuple(items) if items.iter().any(fn(t) { t is Rest(_) }) => {
+            let mut r = 0
+            while !(items[r] is Rest(_)) {
+              r = r + 1
+            }
+            if i < r {
+              items[i]
+            } else {
+              let parts : Array[@ast.TsType] = []
+              let rest_elem = match items[r] {
+                Rest(inner) =>
+                  match rest_param_element_type(inner) {
+                    Some(e) => e
+                    None => @ast.TsType::Any
+                  }
+                _ => @ast.TsType::Any
+              }
+              parts.push(rest_elem)
+              for j in (r + 1)..<items.length() {
+                if !parts.contains(items[j]) {
+                  parts.push(items[j])
+                }
+              }
+              union_of(parts)
+            }
+          }
           Tuple(items) =>
             if i < items.length() {
               items[i]
@@ -41206,13 +41253,7 @@ fn check_call_args_in_expr_at(
           let mut i = 0
           while i < aps.length() {
             let p = aps[i]
-            let ty = if is_checkable(p.type_) {
-              p.type_
-            } else if i < fps.length() {
-              fps[i]
-            } else {
-              p.type_
-            }
+            let ty = contextual_param_type(p, i, fps)
             bind_callable_param(inner_env, ctx, p, ty, names)
             ptys.push(ty)
             i = i + 1

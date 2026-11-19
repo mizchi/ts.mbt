@@ -1175,3 +1175,32 @@ test "an arrow's rest parameter takes any count and compares its element" {
     "top-level > binding `bad6` init param `a`: expected `number` but got `string`",
   ])
 }
+
+///|
+/// An unannotated callback parameter takes its type from the contextual
+/// list with the rest position read: a rest parameter collects the formals
+/// from its position on, and a plain one on the contextual rest takes its
+/// element. A variadic tuple pattern binds its rest positions to the rest's
+/// element. Each had bound the raw `Rest(_)` marker (#314's review, probed:
+/// tsc reports exactly the four `bad` lines; main reported the four `ok`
+/// ones too).
+test "a contextual rest parameter and a variadic tuple pattern bind element types" {
+  let src =
+    #|declare function takeRest(cb: (...xs: number[]) => void): void;
+    #|declare function takePair(cb: (x: string, y: number) => void): void;
+    #|export function okRestFromRest() { takeRest((...a) => { const v: number[] = a; return v; }); }
+    #|export function badRestFromRest() { takeRest((...a) => { const v: string[] = a; return v; }); }
+    #|export function okPlainFromRest() { takeRest((a, b) => { const n: number = a + b; return n; }); }
+    #|export function badPlainFromRest() { takeRest((a) => { const s: string = a; return s; }); }
+    #|export function okRestFromPair() { takePair((...a) => { const v: [string, number] = a; return v; }); }
+    #|export function badRestFromPair() { takePair((...a) => { const v: [number, number] = a; return v; }); }
+    #|export function okTupleRest([a, b]: [number, ...string[]]) { const s: string = b; return [a, s]; }
+    #|export function badTupleRest([a, b]: [number, ...string[]]) { const n: number = b; return [a, n]; }
+    #|export function okTupleRestTail([a, b, c]: [number, ...string[]]) { const s: string = c; return [a, b, s]; }
+  assert_eq(issue_lines(src), [
+    "function badRestFromRest > binding `v` init: expected `string[]` but got `number[]`",
+    "function badPlainFromRest > binding `s` init: expected `string` but got `number`",
+    "function badRestFromPair > binding `v` init: expected `[number, number]` but got `[string, number]`",
+    "function badTupleRest > binding `n` init: expected `number` but got `string`",
+  ])
+}
