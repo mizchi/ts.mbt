@@ -4661,6 +4661,13 @@ fn Parser::parse_module_with_seeded_const_values(
   self : Parser,
   seeded_const_values : Map[String, @ast.TsExpr],
 ) -> @ast.TsModule raise ParseError {
+  // A FILE's pragma, so it is read here, at the two root entries, and not
+  // in the internal parse every namespace body and ambient module body
+  // re-enters with a fresh parser over its own slice — a body whose first
+  // line is `// @ts-nocheck` is not a file that opts out.
+  if source_has_ts_nocheck(self.src) {
+    self.grammar_misuses.push("<ts-nocheck>")
+  }
   self.parse_module_with_seeded_const_values_internal(
     seeded_const_values, false,
   )

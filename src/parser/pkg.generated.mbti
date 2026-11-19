@@ -69,6 +69,8 @@ pub async fn resolve_type_module_specifier(String, String) -> String?
 
 pub fn[H : ModuleResolutionHost] resolve_type_module_specifier_with(H, String, String) -> String?
 
+pub fn source_has_ts_nocheck(String) -> Bool
+
 pub fn triple_slash_references(String) -> Array[(String, String)]
 
 pub async fn tsconfig_compiler_option(String, String) -> String?
@@ -247,6 +249,7 @@ pub struct Parser {
   mut current_class_name : String
   readonly_literal_members : Array[String]
   unannotated_return_members : Array[String]
+  unannotated_static_return_members : Array[String]
   accessor_member_visibility : Array[String]
   protocol_return_names : Array[String]
   protocol_returns_by_class : Map[String, Array[String]]

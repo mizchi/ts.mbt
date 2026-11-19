@@ -1065,3 +1065,46 @@ test "a tuple spread binds a lone generic method element by element" {
     ["function badSpread > return: expected `number` but got `string`"],
   )
 }
+
+///|
+/// `// @ts-nocheck` in the leading comments opts the file out of every
+/// check, grammar rules included, and each cell below was probed against
+/// the TS7 nightly. The pragma counts after block comments, under `///`,
+/// in any case and with a `: reason` tail; the LAST of `@ts-check` /
+/// `@ts-nocheck` wins.
+test "a leading ts-nocheck pragma opts the file out" {
+  for
+    src in [
+      "// @ts-nocheck\nconst a: number = \"s\";", "/* eslint-disable */\n// @ts-nocheck\nconst a: number = \"s\";",
+      "#!/usr/bin/env node\n// @ts-nocheck\nconst a: number = \"s\";", "/// @ts-nocheck\nconst a: number = \"s\";",
+      "// @TS-NOCHECK\nconst a: number = \"s\";", "// @ts-nocheck: generated\nconst a: number = \"s\";",
+      "// @ts-nocheck generated\nconst a: number = \"s\";", "//@ts-nocheck\nconst a: number = \"s\";",
+      "// @ts-check\n// @ts-nocheck\nconst a: number = \"s\";", "\n\n  // @ts-nocheck\nconst a: number = \"s\";",
+      "// @ts-nocheck\nlet x = 1; let x = 2;", "// @ts-nocheck\nfunction f(a?, b) {}",
+      "// @ts-nocheck\nnamespace N { export const a: number = \"s\"; }", "// @ts-nocheck\u{2003}reason\nconst a: number = \"s\";",
+      "// @ts-nocheck\u{3000}\nconst a: number = \"s\";",
+    ] {
+    assert_eq(issue_lines(src), [], msg=src)
+  }
+}
+
+///|
+/// The legal neighbours: the same text anywhere else is an ordinary
+/// comment. After a statement, inside a `/** … */` block, as part of a
+/// longer name, after other words, or followed by a later `@ts-check`, the
+/// file is checked. A namespace body whose first line is the pragma is not
+/// a file, so it opts nothing out either.
+test "a ts-nocheck that is not the file's pragma checks the file" {
+  for
+    src in [
+      "const z = 1;\n// @ts-nocheck\nconst a: number = \"s\";", "/** @ts-nocheck */\nconst a: number = \"s\";",
+      "// @ts-nocheckx\nconst a: number = \"s\";", "// foo @ts-nocheck\nconst a: number = \"s\";",
+      "// @ts-nocheck\n// @ts-check\nconst a: number = \"s\";", "namespace N {\n// @ts-nocheck\nexport const a: number = \"s\"; }",
+      // A Unicode space before the later `@ts-check` is trivia, as tsc's
+      // scanner skips it (probed, #312's review).
+       "// @ts-nocheck reason\n\u{2003}// @ts-check\nconst a: number = \"s\";", "// @ts-nocheck\n\u{3000}// @ts-check\nconst a: number = \"s\";",
+      "// @ts-nocheck\n\u{200B}// @ts-check\nconst a: number = \"s\";", "// @ts-nocheck\n\u{85}// @ts-check\nconst a: number = \"s\";",
+    ] {
+    assert_true(issue_lines(src).length() > 0, msg=src)
+  }
+}

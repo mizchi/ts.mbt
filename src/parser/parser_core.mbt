@@ -358,6 +358,11 @@ pub struct Parser {
   // false positive for the second. Drained per class into
   // `<unannotated-return:...>` sentinels.
   unannotated_return_members : Array[String]
+  // The same fact for a bodied STATIC method, in a channel of its own: a
+  // quoted instance method may be named anything, `"static:make"` included,
+  // so no prefix on the instance list could keep the two apart (#312's
+  // review). Drained into `<unannotated-static-return:...>` sentinels.
+  unannotated_static_return_members : Array[String]
   // `KIND:VISIBILITY:NAME` for each named accessor of the class body being
   // parsed, KIND `get` or `set`. `protected_members` / `private_members`
   // hold a NAME whichever half carried the modifier, and a read reaches
@@ -576,6 +581,7 @@ pub fn Parser::new_with_strict_and_jsx(
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
+    unannotated_static_return_members: [],
     accessor_member_visibility: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
@@ -957,6 +963,7 @@ pub fn Parser::from_source_with_jsx(
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
+    unannotated_static_return_members: [],
     accessor_member_visibility: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
@@ -1283,6 +1290,159 @@ fn Parser::rollback_recordings(
   while self.param_optional_initializer_misuses.length() > lens.3 {
     let _ = self.param_optional_initializer_misuses.pop()
   }
+}
+
+///|
+/// Whether the file opts out of type checking with `// @ts-nocheck` —
+/// tsc's `checkJsDirective`, read the way its pragma scanner reads it.
+///
+/// Every cell here was probed against the TS7 nightly rather than taken
+/// from the handbook, because three of them read the other way round:
+///
+/// - Only the LEADING comments count, from offset 0 past a BOM and a
+///   shebang; a pragma after the first statement is an ordinary comment.
+/// - Only a LINE comment counts (`//` or `///`): the same text inside a
+///   `/** … */` block does not, since `ts-nocheck` is a single-line pragma.
+///   Block comments before it are skipped, not a stop.
+/// - The name is case-insensitive (`// @TS-NOCHECK`) and ends at
+///   whitespace or `:`, so `// @ts-nocheck: reason` and `// @ts-nocheck
+///   reason` count while `// @ts-nocheckx` and `// foo @ts-nocheck` do not.
+/// - `@ts-check` and `@ts-nocheck` together: the LAST one wins, in either
+///   order.
+///
+/// What it suppresses is the checker's half — semantic and grammar
+/// diagnostics, TS1016 included — while a SCANNER error such as TS1177
+/// is still reported. `grammar_misuses` holds both kinds without saying
+/// which, so the consumer drops all of it and keeps only a raised
+/// `ParseError`: a lexer error in an opted-out file is a MISS here, the
+/// affordable direction.
+pub fn source_has_ts_nocheck(src : String) -> Bool {
+  let n = src.length()
+  let mut i = 0
+  if i < n && src[i].to_int() == 0xFEFF {
+    i = i + 1
+  }
+  // A shebang is part of the leading trivia (`#!` at offset 0 only).
+  if i + 1 < n &&
+    src[i].to_int() == '#'.to_int() &&
+    src[i + 1].to_int() == '!'.to_int() {
+    while i < n && !is_pragma_line_break(src[i].to_int()) {
+      i = i + 1
+    }
+  }
+  let mut nocheck = false
+  while i < n {
+    let c = src[i].to_int()
+    if is_pragma_line_break(c) || is_trivia_space(c) {
+      i = i + 1
+      continue
+    }
+    if c != '/'.to_int() || i + 1 >= n {
+      break
+    }
+    let d = src[i + 1].to_int()
+    if d == '*'.to_int() {
+      // A block comment is skipped; an unterminated one ends the trivia.
+      let mut j = i + 2
+      let mut closed = false
+      while j + 1 < n {
+        if src[j].to_int() == '*'.to_int() &&
+          src[j + 1].to_int() == '/'.to_int() {
+          closed = true
+          break
+        }
+        j = j + 1
+      }
+      if !closed {
+        break
+      }
+      i = j + 2
+      continue
+    }
+    if d != '/'.to_int() {
+      break
+    }
+    let mut end = i + 2
+    while end < n && !is_pragma_line_break(src[end].to_int()) {
+      end = end + 1
+    }
+    match line_comment_check_pragma(src, i + 2, end) {
+      Some(v) => nocheck = v
+      None => ()
+    }
+    i = end
+  }
+  nocheck
+}
+
+///|
+fn is_pragma_line_break(c : Int32) -> Bool {
+  c == '\n'.to_int() || c == '\r'.to_int() || c == 0x2028 || c == 0x2029
+}
+
+///|
+/// The pragma a line comment's text `src[start:end]` (after the `//`)
+/// spells: `Some(true)` for `@ts-nocheck`, `Some(false)` for `@ts-check`,
+/// `None` for anything else. tsc's single-line pragma pattern is
+/// `^///?\s*@([^\s:]+)((?:[^\S\r\n]|:).*)?$` with the name lowercased.
+fn line_comment_check_pragma(src : String, start : Int32, end : Int32) -> Bool? {
+  let mut i = start
+  if i < end && src[i].to_int() == '/'.to_int() {
+    i = i + 1
+  }
+  while i < end && is_pragma_space(src[i].to_int()) {
+    i = i + 1
+  }
+  if i >= end || src[i].to_int() != '@'.to_int() {
+    return None
+  }
+  i = i + 1
+  let name_start = i
+  while i < end &&
+        !is_pragma_space(src[i].to_int()) &&
+        src[i].to_int() != ':'.to_int() {
+    i = i + 1
+  }
+  let name_len = i - name_start
+  if name_len == "ts-nocheck".length() &&
+    matches_ascii_ci_at(src, name_start, "ts-nocheck") {
+    Some(true)
+  } else if name_len == "ts-check".length() &&
+    matches_ascii_ci_at(src, name_start, "ts-check") {
+    Some(false)
+  } else {
+    None
+  }
+}
+
+///|
+fn is_pragma_space(c : Int32) -> Bool {
+  // JavaScript's `\s` short of the line terminators, which end the comment:
+  // `// @ts-nocheck\u{2003}reason` opts out (probed), so every Unicode space
+  // separator counts, not only the ASCII ones (#312's review).
+  c == ' '.to_int() ||
+  c == '\t'.to_int() ||
+  c == 0x0B ||
+  c == 0x0C ||
+  c == 0xA0 ||
+  c == 0x1680 ||
+  (c >= 0x2000 && c <= 0x200A) ||
+  c == 0x202F ||
+  c == 0x205F ||
+  c == 0x3000 ||
+  c == 0xFEFF
+}
+
+///|
+/// The scanner's single-line whitespace between leading comments: every
+/// `is_pragma_space` character plus U+0085 and U+200B, which tsc's
+/// `isWhiteSpaceSingleLine` also skips and JavaScript's `\s` does not
+/// (probed: `// @ts-nocheck` then `\u{200B}// @ts-check` is checked). Only
+/// the ASCII ones were skipped, so a Unicode space before a later
+/// `// @ts-check` ended the trivia and left the file opted out (#312's
+/// review).
+fn is_trivia_space(c : Int32) -> Bool {
+  is_pragma_space(c) || c == 0x85 || c == 0x200B
 }
 
 ///|

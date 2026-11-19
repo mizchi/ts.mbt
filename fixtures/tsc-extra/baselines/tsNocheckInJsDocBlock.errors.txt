@@ -1,0 +1,13 @@
+tsNocheckInJsDocBlock.ts(6,14): error TS2322: Type 'string' is not assignable to type 'number'.
+
+
+==== tsNocheckInJsDocBlock.ts (1 errors) ====
+    /** @ts-nocheck */
+    
+    // `ts-nocheck` is a single-line pragma: the same text inside a block comment,
+    // JSDoc included, does not opt the file out.
+    
+    export const badStillChecked: number = "s";
+                 ~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    

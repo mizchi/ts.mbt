@@ -639,3 +639,36 @@ test "language service: a relative node_modules declaration is context only" {
     ),
   )
 }
+
+///|
+/// An opted-out module (`// @ts-nocheck`) reports nothing of its own,
+/// a missing relative import included, as tsc accepts it — and it still
+/// DECLARES what it declares, so a checked importer is judged against its
+/// written types.
+test "a ts-nocheck module is not checked and still declares its exports" {
+  let host = MtscMemoryHost::over({
+    "entry.ts": "import { n } from \"./loose\";\nexport const s: string = n;",
+    "loose.ts": "// @ts-nocheck\nimport { gone } from \"./nonexistent\";\nexport const n: number = \"s\";",
+  })
+  let messages = wbtest_messages(get_program_diagnostics(host))
+  assert_true(
+    messages.iter().all(fn(m) { m.has_prefix("entry.ts") }),
+    msg=messages.join("\n"),
+  )
+  assert_true(
+    wbtest_any_contains(
+      get_program_diagnostics(host),
+      "expected `string` but got `number`",
+    ),
+  )
+}
+
+///|
+/// A syntax error is a PARSE diagnostic, which `// @ts-nocheck` does not
+/// suppress in tsc either.
+test "a ts-nocheck module still reports a syntax error" {
+  let host = MtscMemoryHost::over({ "entry.ts": "// @ts-nocheck\nconst a = ;" })
+  let diagnostics = get_program_diagnostics(host)
+  assert_true(wbtest_any_contains(diagnostics, "parse error"))
+  assert_true(diagnostics[0].source == "syntactic")
+}

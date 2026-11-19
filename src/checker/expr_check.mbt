@@ -159,6 +159,9 @@ priv struct Resolver {
   // the second. An absent entry means "annotated, or not recorded", so a
   // missing sentinel costs a MISS.
   unannotated_return_members : Map[String, Array[String]]
+  // The same for bodied STATIC methods, from `<unannotated-static-return:>`
+  // sentinels: read where a static call's return comes from the body.
+  unannotated_static_return_members : Map[String, Array[String]]
   // Qualified-access support (TS2339 on `A.y` where `y` is declared but
   // not exported): per namespace name (prefixed for nesting), the value
   // names its body declares and the subset the parser marked
@@ -607,6 +610,7 @@ fn Resolver::empty() -> Resolver {
     private_brand_decls: {},
     private_brand_parent: {},
     unannotated_return_members: {},
+    unannotated_static_return_members: {},
     namespace_value_decls: {},
     namespace_exports: {},
     namespace_instantiated: {},
@@ -6635,23 +6639,52 @@ fn promise_prototype_member(
   match field {
     // Chain methods — return promise-typed; the call-site path
     // substitutes the callback's return.
+    // Every callback is optional, as in `lib.es5.d.ts`: `p.then(ok, ng)`
+    // and `p.finally()` were "expected 1 argument(s)" (univer's
+    // `Promise.all(pending).then(…, (error) => …)`).
     "then" =>
       Some(
         @ast.TsType::Func(
-          [@ast.TsType::Func([inner], @ast.TsType::Any)],
+          [
+            @ast.TsType::Union([
+              @ast.TsType::Func([inner], @ast.TsType::Any),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+            @ast.TsType::Union([
+              @ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+          ],
           promise_t,
         ),
       )
     "catch" =>
       Some(
         @ast.TsType::Func(
-          [@ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any)],
+          [
+            @ast.TsType::Union([
+              @ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+          ],
           promise_t,
         ),
       )
     "finally" =>
       Some(
-        @ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t),
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Union([
+              @ast.TsType::Func([], @ast.TsType::Void),
+              @ast.TsType::Undefined,
+              @ast.TsType::Null,
+            ]),
+          ],
+          promise_t,
+        ),
       )
     _ => None
   }
@@ -9219,6 +9252,29 @@ priv struct ExprEnv {
   paths_below : Map[String, Map[String, Unit]]
   alias_cond_keys : Map[String, Unit]
   pruned : Map[String, Unit]
+  // Every `declared` slot an explicit `declare_type` OVERWROTE, with the
+  // value it held, in write order. A snapshot records the log's length and
+  // `restore_from` undoes back to it, so a block-local `let x = 5` that
+  // shadows an outer `let x: string | null` gives the outer one its
+  // declaration back when the block ends. The snapshot used to cover `vars`
+  // only, which put a name introduced INSIDE a scope right but left a
+  // shadowed one holding the inner declaration: `{ let x = 5 } x = "a"` was
+  // "expected `number` but got `string`", and so was a `for (let x = 0; …)`
+  // head and an `if` branch's own `let x` (probed; tsc accepts all three).
+  declared_undo : Array[(String, @ast.TsType)]
+}
+
+///|
+/// A scope's entry state: the `vars` bindings, and how far
+/// `ExprEnv::declared_undo` had grown. Iterates as the bindings.
+priv struct EnvSnapshot {
+  entries : Array[(String, @ast.TsType)]
+  undo_len : Int32
+}
+
+///|
+fn EnvSnapshot::iter(self : EnvSnapshot) -> Iter[(String, @ast.TsType)] {
+  self.entries.iter()
 }
 
 ///|
@@ -9231,6 +9287,7 @@ fn ExprEnv::new() -> ExprEnv {
     paths_below: {},
     alias_cond_keys: {},
     pruned: {},
+    declared_undo: [],
   }
 }
 
@@ -9299,6 +9356,10 @@ fn ExprEnv::declare_type(
   name : String,
   ty : @ast.TsType,
 ) -> Unit {
+  match self.declared.get(name) {
+    Some(old) if old != ty => self.declared_undo.push((name, old))
+    _ => ()
+  }
   self.declared[name] = ty
 }
 
@@ -9342,19 +9403,24 @@ fn ExprEnv::lookup_declared(self : ExprEnv, name : String) -> @ast.TsType? {
 /// for both lexical scope and narrowing. The snapshot covers `vars`
 /// only; the matching `declared` entries are walked in step on
 /// restore so a nested `let x: T;` doesn't leak its declared slot.
-fn ExprEnv::full_snapshot(self : ExprEnv) -> Array[(String, @ast.TsType)] {
+fn ExprEnv::full_snapshot(self : ExprEnv) -> EnvSnapshot {
   let entries : Array[(String, @ast.TsType)] = []
   for entry in self.vars {
     entries.push((entry.0, entry.1))
   }
-  entries
+  { entries, undo_len: self.declared_undo.length(), }
 }
 
 ///|
-fn ExprEnv::restore_from(
-  self : ExprEnv,
-  snap : Array[(String, @ast.TsType)],
-) -> Unit {
+fn ExprEnv::restore_from(self : ExprEnv, snap : EnvSnapshot) -> Unit {
+  // Undo the declared slots this scope overwrote, newest first, before the
+  // removals below drop the slots of names the scope introduced.
+  while self.declared_undo.length() > snap.undo_len {
+    match self.declared_undo.pop() {
+      Some((n, old)) => self.declared[n] = old
+      None => break
+    }
+  }
   let kept : Map[String, @ast.TsType] = Map([])
   for entry in snap {
     kept[entry.0] = entry.1
@@ -14334,15 +14400,57 @@ fn infer_expr_inner(
         Applied("Promise", [t]) | Applied("PromiseLike", [t]) => Some(t)
         _ => None
       }
-      match (promise_inner_opt, meth, args) {
-        (Some(inner), "then", [cb]) => {
-          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [inner])
-          let flattened = match cb_ret {
+      // A callback spelled `undefined` / `null` is absent, which leaves the
+      // fulfilled value as it was; a rejection handler adds what it returns,
+      // so `p.then(ok, ng)` is `Promise<A | B>`, as tsc's `TResult1 |
+      // TResult2`.
+      let callback_result = fn(
+        cb : @ast.TsExpr,
+        param : @ast.TsType,
+      ) -> @ast.TsType? {
+        let settled = fn(t : @ast.TsType) -> @ast.TsType {
+          match t {
             Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
             other => other
           }
-          return @ast.TsType::Applied("Promise", [flattened])
         }
+        match cb {
+          Var("undefined") | NullLit => None
+          ArrowFunc(_, _, _, _) | FuncExpr(_) =>
+            Some(
+              settled(infer_arrow_body_with_params(env, resolver, cb, [param])),
+            )
+          // A NAMED handler contributes what it returns, read off its
+          // callable type: the body walk above answers with the callable
+          // itself for anything that is not a function literal, so
+          // `p.then(ok)` was a promise of `ok`, and `p.then(undefined,
+          // recover)` one of `string | recover` (#312's review). A generic
+          // or overloaded handler, whose return names binders this does
+          // not solve, is `any`.
+          _ =>
+            Some(
+              match resolver.unwrap(infer_expr(env, resolver, cb)) {
+                Func(_, ret) => settled(ret)
+                _ => @ast.TsType::Any
+              },
+            )
+        }
+      }
+      match (promise_inner_opt, meth, args) {
+        (Some(inner), "then", [cb]) =>
+          return @ast.TsType::Applied("Promise", [
+            callback_result(cb, inner).unwrap_or(inner),
+          ])
+        (Some(inner), "then", [cb, eb]) => {
+          let ok = callback_result(cb, inner).unwrap_or(inner)
+          let out = match callback_result(eb, Any) {
+            Some(ng) if ng != ok => narrow_union(ok, ng)
+            _ => ok
+          }
+          return @ast.TsType::Applied("Promise", [out])
+        }
+        (Some(inner), "then" | "catch" | "finally", []) =>
+          return @ast.TsType::Applied("Promise", [inner])
         (Some(inner), "catch", [_]) =>
           return @ast.TsType::Applied("Promise", [inner])
         (Some(inner), "finally", [_]) =>
@@ -14548,8 +14656,17 @@ fn infer_expr_inner(
       // parameter `E: { A: string }` beside `enum E`) is what the name
       // means here, so its own type answers instead (#311's review).
       match receiver {
+        // An enum is never bound in the env, so ANY binding of an enum's
+        // name shadows it (`function f(E: any)`); a namespace is, as its
+        // lowered `var`, so only a typed binding shadows one, and an enum
+        // merged with a namespace keeps that namespace's rule.
         Var(class_name) if !(match env.lookup(class_name) {
-            Some(t) => is_checkable(t) && !(t is Any)
+            Some(t) =>
+              (is_checkable(t) && !(t is Any)) ||
+              (
+                resolver.enums.contains(class_name) &&
+                !resolver.namespace_instantiated.contains(class_name)
+              )
             None => false
           }) =>
           match resolver.globals.get(class_name + "." + name) {
@@ -18372,6 +18489,48 @@ fn falsy_subset(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// Every value of `t` is falsy: `false`, `null`, `undefined`, `void`, `""`
+/// and `0`, alone or as a union of them.
+fn always_falsy(resolver : Resolver, t : @ast.TsType) -> Bool {
+  match resolver.unwrap(t) {
+    BooleanLiteral(false) | Null | Undefined | Void => true
+    Literal(s) => s == ""
+    NumberLiteral(n) => n == "0"
+    Union(ms) =>
+      ms.length() > 0 && ms.iter().all(fn(m) { always_falsy(resolver, m) })
+    _ => false
+  }
+}
+
+///|
+/// `falsy_subset` with a `boolean` member read as `false` and a `true`
+/// member dropped, which is the falsy part of the LEFT operand of `&&`:
+/// `flag && obj` is `false | Obj`, so `if (p)` on it leaves `Obj`. Keeping
+/// the whole `boolean` left `true` beside it after the truthy narrowing,
+/// and every `p.x` read was "does not exist on `true`" (excalidraw's
+/// `insertAtParentCenter && this.getTextWysiwygSnappedToCenterPosition(…)`).
+/// `falsy_subset` itself keeps `boolean`: the `filter` predicate inference
+/// reads it for `x => !!x`, and tsc infers no `x is true` over `boolean[]`
+/// (probed).
+fn boolean_falsy_as_false(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Boolean => @ast.TsType::BooleanLiteral(false)
+    BooleanLiteral(true) => @ast.TsType::Never
+    Union(ms) => {
+      let kept : Array[@ast.TsType] = []
+      for m in ms {
+        let f = boolean_falsy_as_false(m)
+        if !(f is Never) && !kept.contains(f) {
+          kept.push(f)
+        }
+      }
+      union_of(kept)
+    }
+    _ => t
+  }
+}
+
+///|
 fn bigint_union_collapsed(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
   if is_bigint_operand(resolver, t, 0) {
     @ast.TsType::BigInt
@@ -18499,7 +18658,20 @@ fn infer_binop(
     // `a && b` — when `a` is truthy the result is `b`; otherwise the falsy
     // subset of `a`. An always-truthy object/class operand contributes
     // nothing, so `(x: Beast) && cond` is `boolean`, not `Beast | boolean`.
-    And => narrow_union(falsy_subset(resolver, l), r)
+    //
+    // An `any` right operand makes the whole expression `any`, as in tsc:
+    // `false | any` is `any`. The union below dropped it as "equivalent" to
+    // the left's falsy part, so `flag && anyValue` read as `boolean`.
+    // A left operand that is always falsy is the whole result, which is
+    // what tsc gives `false && anyValue` (#312's review).
+    And =>
+      if always_falsy(resolver, l) {
+        l
+      } else if r is Any {
+        @ast.TsType::Any
+      } else {
+        narrow_union(boolean_falsy_as_false(falsy_subset(resolver, l)), r)
+      }
     // `a || b` — when `a` is truthy the result is `a`; otherwise `b`. TS
     // narrows the truthy branch by stripping always-falsy variants from
     // `l` (null / undefined are the practically-relevant ones here, since
@@ -24168,7 +24340,16 @@ fn method_sole_return_type(
   }
   guard b.stmts.length() == 1 else { return None }
   guard b.stmts[0] is Return(Some(e)) else { return None }
-  let t = widen_literal(infer_expr(ExprEnv::new(), resolver, e))
+  // The method's own parameters are in scope for its body: an empty env
+  // read `static create(value: string | null) { return value }` through a
+  // module-level `value: string`, so the factory looked never-nullish
+  // (#312's review). A parameter's written type is its type, and an
+  // unannotated one is `any`.
+  let env = ExprEnv::new()
+  for p in m.params {
+    env.bind(p.0, p.1)
+  }
+  let t = widen_literal(infer_expr(env, resolver, e))
   if t is Any || t is Unknown {
     None
   } else {
@@ -28351,8 +28532,146 @@ fn loop_backedge_bindings_where(
   body : @ast.TsBlock,
   admit : (String) -> Bool,
 ) -> Array[(String, @ast.TsType)] {
+  backedge_bindings_for_writes(env, ctx, collect_backedge_writes(body), admit)
+}
+
+///|
+/// The writes a `try` block can have made by the time control leaves it
+/// for its `catch` or its `finally`: any of its statements may throw, so a
+/// write that a later statement overwrites, or one followed by a `throw`,
+/// still reaches them. A nested list that ends in a `return` is still
+/// skipped, which only narrows.
+///
+/// With `throw_caught=false` a nested list that ends in a `throw` is
+/// skipped too. That is the set of writes that can reach the END of the
+/// block, which is what the code after a `finally` sees: `finally { if
+/// (flag) { x = null; throw 0 } }` leaves `x` as it was on the one path
+/// that completes (#312's review).
+fn collect_try_writes(
+  stmts : Array[@ast.TsStmt],
+  throw_caught~ : Bool = true,
+) -> BackedgeWrites {
+  let w : BackedgeWrites = { assigns: [], other: Map([]), }
+  // A write to a name some NESTED scope declares may target that scope's
+  // own binding, and the walk records writes by name: `{ let x = "a"; x =
+  // null }` inside the try block would otherwise widen the outer `x` for
+  // the catch block (#312's review). So each top-level statement is walked
+  // on its own, and a write it makes to a name declared in a scope nested
+  // INSIDE it is dropped. `{ let x = 0 } x = null` keeps the second write,
+  // which is a separate statement. A write to the outer binding inside the
+  // same compound statement is still dropped, and that only narrows.
+  //
+  // Walking one statement at a time is the walk the whole list gets: inside
+  // a `try` with a `catch` (`throw_caught`) no write is dropped as
+  // overwritten, and the trailing `Empty` keeps the list from reading as
+  // one that ends in an exit, which the walker would skip whole.
+  for st in stmts {
+    let one : BackedgeWrites = { assigns: [], other: Map([]), }
+    backedge_walk_list([st, @ast.TsStmt::Empty], one, true, throw_caught, [])
+    let nested : Map[String, Unit] = Map([])
+    nested_scope_declared_names(st, nested)
+    for a in one.assigns {
+      if !nested.contains(a.0) {
+        w.assigns.push(a)
+      }
+    }
+    for k, _ in one.other {
+      if !nested.contains(k) {
+        w.other[k] = ()
+      }
+    }
+  }
+  w
+}
+
+///|
+/// The names declared in a scope NESTED inside `st` (a block, a branch, a
+/// loop body or head, a nested `try`'s blocks and catch binding, a `switch`
+/// case). A declaration at `st`'s own level is not collected.
+fn nested_scope_declared_names(
+  st : @ast.TsStmt,
+  out : Map[String, Unit],
+) -> Unit {
+  let block = fn(b : @ast.TsBlock) {
+    let names : Map[String, Unit] = Map([])
+    block_declared_names(b, names)
+    for k, _ in names {
+      out[k] = ()
+    }
+    for inner in b.stmts {
+      nested_scope_declared_names(inner, out)
+    }
+  }
+  let binding = fn(b : @ast.TsBinding) {
+    let names : Array[String] = []
+    collect_binding_names(b, names)
+    for n in names {
+      out[n] = ()
+    }
+  }
+  match st {
+    Block(b) if b.stmt_positions != [@ast.DECL_GROUP_POSITION] => block(b)
+    If(_, t, e) => {
+      block(t)
+      match e {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    While(_, b) | DoWhile(_, b) | With(_, b) => block(b)
+    For(init, _, _, b) => {
+      match init {
+        Some(Var(bd, _, _) | Let(bd, _, _) | Const(bd, _, _)) => binding(bd)
+        _ => ()
+      }
+      block(b)
+    }
+    // Only a `let` / `const` head declares a binding of the loop's own.
+    // An assignment head (`for (x of …)`) writes the outer `x`, and a `var`
+    // head is the function's binding (#312's review).
+    ForOf(kind, bd, _, _, b)
+    | ForAwaitOf(kind, bd, _, _, b)
+    | ForIn(kind, bd, _, _, b) => {
+      if kind is (Let | Const) {
+        binding(bd)
+      }
+      block(b)
+    }
+    Try(t, cb, c, f) => {
+      block(t)
+      match cb {
+        Some(bd) => binding(bd)
+        None => ()
+      }
+      match c {
+        Some(b) => block(b)
+        None => ()
+      }
+      match f {
+        Some(b) => block(b)
+        None => ()
+      }
+    }
+    Switch(_, cases) =>
+      for c in cases {
+        block(c.body)
+      }
+    Label(_, inner) => nested_scope_declared_names(inner, out)
+    _ => ()
+  }
+}
+
+///|
+/// Each written name's join of its current type with every value `bw`
+/// writes to it (see `loop_backedge_bindings_where`), for the names
+/// `admit` accepts and whose joined type differs from the current one.
+fn backedge_bindings_for_writes(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  bw : BackedgeWrites,
+  admit : (String) -> Bool,
+) -> Array[(String, @ast.TsType)] {
   let out : Array[(String, @ast.TsType)] = []
-  let bw = collect_backedge_writes(body)
   let written : Map[String, Unit] = Map([])
   for name, _ in bw.other {
     written[name] = ()
@@ -30512,8 +30831,18 @@ fn narrow_declared_nullish_by_init(
   if init is Var("__ts_no_init__") {
     return
   }
-  let members = union_components(declared)
-  let kept = members.filter(fn(m) { !(m is (Undefined | Null | Void)) })
+  // A declared ALIAS to a union is one member until it is unwrapped:
+  // `type Op = null | OpList` (ot-json1's `JSONOp`) with `const raw: Op =
+  // []` kept the `null`, and every `raw.push(…)` was "possibly `null`"
+  // (univer's `addDrawing`).
+  let members = match ctx.resolver.unwrap(declared) {
+    Union(_) as u =>
+      union_components(expand_union_alias_members(ctx.resolver, u))
+    _ => union_components(declared)
+  }
+  let kept = members.filter(fn(m) {
+    !(ctx.resolver.unwrap(m) is (Undefined | Null | Void))
+  })
   if kept.length() == members.length() || kept.length() == 0 {
     return
   }
@@ -33659,6 +33988,7 @@ fn record_aliased_condition(
     BinOp(BinEq | BinNe | AbstractEq | AbstractNe | Instanceof | In, _, _) =>
       true
     UnaryOp(Not, _) => true
+    BinOp(And | Or, _, _) => true
     _ => false
   }
   if !shaped {
@@ -34039,6 +34369,12 @@ fn join_branch_types_resolved(
   // The pieces an `unknown` is narrowed into (`{}`, `null`, `undefined`)
   // join back to `unknown` once all three are present again.
   let all_parts = [..ca, ..cb]
+  // A union with `any` is `any` in tsc. `let d = null; try { d = (await
+  // g()) || null } catch { d = { … } }` left `any | { appState }`, and every
+  // `d?.elements` after it was reported (excalidraw's `initializeScene`).
+  if all_parts.iter().any(fn(x) { x is Any }) {
+    return @ast.TsType::Any
+  }
   if all_parts.contains(@ast.TsType::Object([])) &&
     all_parts.contains(@ast.TsType::Null) &&
     all_parts.contains(@ast.TsType::Undefined) &&
@@ -34078,6 +34414,91 @@ fn check_block_narrowing_exit(
   }
   env.restore_from(pre)
   exit
+}
+
+///|
+/// After a block that ran straight through (a bare `{ … }`, a `try` that
+/// completed), each OUTER binding takes its type at the block's exit. Only
+/// a plain name that held a binding before the block participates: a name
+/// the block declares (`shadow`) is its own binding, which the exit map
+/// cannot tell from the outer one, and a marker (`<…>`) belongs to its
+/// writer. A property path the block FORGOT — its receiver was rebound or
+/// the path written — is dropped, as the `if` join drops one, so a stale
+/// `o.p` narrowing does not outlive `o = other`.
+fn apply_sequential_exit(
+  env : ExprEnv,
+  pre_map : Map[String, @ast.TsType],
+  exit : Map[String, @ast.TsType],
+  shadow : Map[String, Unit],
+) -> Unit {
+  let gone : Array[String] = []
+  for k, v in pre_map {
+    // An aliased condition the block CANCELLED (an assignment to a name it
+    // narrows) stays cancelled after it: the block exit restored the
+    // marker, and a later `if (ok)` then narrowed through a stale alias
+    // (#312's review). Every other marker belongs to its writer.
+    if k.has_prefix("<alias-cond>") {
+      match exit.get(k) {
+        Some(Tuple([]) as t) if t != v => env.narrow(k, t)
+        _ => ()
+      }
+      continue
+    }
+    if k.has_prefix("<") {
+      continue
+    }
+    let is_path = k.contains(".") || k.contains("[")
+    if shadow.contains(sequential_exit_root(k)) {
+      continue
+    }
+    match exit.get(k) {
+      Some(t) => if t != v { env.narrow(k, t) }
+      None => if is_path { gone.push(k) }
+    }
+  }
+  for k in gone {
+    let _ = env.vars.remove(k)
+  }
+}
+
+///|
+/// The binding a narrowing key belongs to: the name itself, or a path
+/// key's root (`o` for `o.p` and `o[0]`).
+fn sequential_exit_root(k : String) -> String {
+  for i in 0..<k.length() {
+    let c = k[i].to_int()
+    if c == 46 || c == 91 {
+      return k[:i].to_owned()
+    }
+  }
+  k
+}
+
+///|
+/// The names a block's own statements declare (`let` / `const` / `var`,
+/// a class), including a parser-merged declarator group. A NESTED block is
+/// a scope of its own, which has restored the outer binding by the time
+/// the enclosing block goes on, so its declarations are not collected
+/// (#312's review): `try { { let x = 1 } x = null }` writes the outer `x`.
+fn block_declared_names(b : @ast.TsBlock, out : Map[String, Unit]) -> Unit {
+  for st in b.stmts {
+    match st {
+      Var(bind, _, _) | Let(bind, _, _) | Const(bind, _, _) => {
+        let names : Array[String] = []
+        collect_binding_names(bind, names)
+        for n in names {
+          out[n] = ()
+        }
+      }
+      NativeClassStmt(decl, _) => out[decl.name] = ()
+      // The parser marks a merged declarator group (`let a = 1, b = 2`)
+      // with `DECL_GROUP_POSITION`; a nested block holding only
+      // declarations has real positions.
+      Block(inner) if inner.stmt_positions == [@ast.DECL_GROUP_POSITION] =>
+        block_declared_names(inner, out)
+      _ => ()
+    }
+  }
 }
 
 ///|
@@ -34188,7 +34609,9 @@ fn check_ident_binding_decl(
         env.narrow(name, l)
       _ => narrow_declared_nullish_by_init(env, ctx, name, declared, init)
     }
-  } else if declared is Union(_) {
+  } else if declared is Union(_) || ctx.resolver.unwrap(declared) is Union(_) {
+    // An ALIAS to a union takes the nullish half too: `const raw: Op = []`
+    // with `type Op = null | OpList` (see `narrow_declared_nullish_by_init`).
     narrow_declared_nullish_by_init(env, ctx, name, declared, init)
   }
   if !mutable_ && block_scoped {
@@ -34996,17 +35419,31 @@ fn narrow_after_assignment(
         // Every member of the resolved return must be positively
         // non-nullish: `string | void` is not, and `target_admits_nullish`
         // does not see the `void`.
-        Some(m) =>
+        // An unannotated static reads its return from the body, as a
+        // getter does: `static create(v) { return new N(v) }` is an `N`.
+        // The parser records it only when no annotation was written, so an
+        // explicit `: any` stays `any`.
+        Some(m) => {
+          let ret = if is_checkable(m.return_type) {
+            m.return_type
+          } else if ctx.resolver.unannotated_static_return_members.get(cn)
+            is Some(names) &&
+            names.contains(meth) {
+            method_sole_return_type(m, ctx.resolver).unwrap_or(Any)
+          } else {
+            m.return_type
+          }
           m.type_params.length() == 0 &&
-          is_checkable(m.return_type) &&
+          is_checkable(ret) &&
           union_components(
-            deep_union_members(ctx.resolver, ctx.resolver.unwrap(m.return_type)),
+            deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
           )
           .iter()
           .all(fn(t) {
             !(ctx.resolver.unwrap(t)
             is (Void | Null | Undefined | Any | Unknown | Never))
           })
+        }
         None => false
       }
     _ => false
@@ -35066,6 +35503,19 @@ fn narrow_after_assignment(
   }
   if is_checkable(new_ty) {
     env.narrow(name, new_ty)
+    return
+  }
+  // A binding whose DECLARED slot is `any` — an auto-typed `let data =
+  // null` under noImplicitAny, or a written `: any` — holds whatever it is
+  // assigned, and a value this cannot type is `any` there: excalidraw's
+  // `let data = null; try { data = JSON.parse(event.data) } catch {}`
+  // stayed `null`, so the `if (!data) return` after it left `never` and
+  // every `data.info` was reported. tsc accepts all of it. A DECLARED type
+  // keeps today's answer: there an uninferable value is as likely to be our
+  // inference failing as a real `any`, and tsc's narrowing to the
+  // declaration would report reads this cannot prove nullable.
+  if new_ty is Any && env.lookup_declared(name) is Some(Any) {
+    env.narrow(name, @ast.TsType::Any)
     return
   }
   if never_nullish {
@@ -36328,10 +36778,81 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     With(_, body) => check_block(env, body, ctx)
     Try(try_block, catch_binding, catch_block, finally_block) => {
-      check_block(env, try_block, ctx)
+      // The state after the statement is the try block's exit joined with
+      // the catch block's (see `apply_sequential_exit`): an assignment in
+      // either one reaches the code below. Both used to be checked inside a
+      // snapshot that put every outer binding back, so `let data = null;
+      // try { data = JSON.parse(s) } catch {}` left `data` as `null` and a
+      // following `if (!data) return` made it `never` — excalidraw's
+      // `onWindowMessage`.
+      //
+      // The catch block and the finally block are entered from a state the
+      // try block may have left at ANY statement, since any of them can
+      // throw: each binding the try block writes may hold its pre-try value
+      // or a value written before the throw (and, for `finally`, one the
+      // catch block wrote, or one written before a `return`). Entering them
+      // from the pre-try state alone missed `try { x = null; throw 0 }
+      // catch {} x.length` (#312's review).
+      let try_pre = env.full_snapshot()
+      let pre_map : Map[String, @ast.TsType] = Map([])
+      for e in try_pre {
+        pre_map[e.0] = e.1
+      }
+      // Each side's own declarations: the catch binding is a binding of
+      // the catch block alone, so it must not hide the try block's write
+      // to an outer name of the same spelling.
+      let try_shadow : Map[String, Unit] = Map([])
+      block_declared_names(try_block, try_shadow)
+      let catch_shadow : Map[String, Unit] = Map([])
       match catch_block {
         Some(cb) => {
+          block_declared_names(cb, catch_shadow)
+          match catch_binding {
+            Some(b) => {
+              let names : Array[String] = []
+              collect_binding_names(b, names)
+              for n in names {
+                catch_shadow[n] = ()
+              }
+            }
+            None => ()
+          }
+        }
+        None => ()
+      }
+      let catch_entry = backedge_bindings_for_writes(
+        env,
+        ctx,
+        collect_try_writes(try_block.stmts),
+        fn(n) { !try_shadow.contains(n) && !catch_shadow.contains(n) },
+      )
+      let finally_entry = match finally_block {
+        Some(_) => {
+          let stmts = match catch_block {
+            Some(cb) => [..try_block.stmts, ..cb.stmts]
+            None => try_block.stmts
+          }
+          backedge_bindings_for_writes(env, ctx, collect_try_writes(stmts), fn(
+            n,
+          ) {
+            !try_shadow.contains(n) && !catch_shadow.contains(n)
+          })
+        }
+        None => []
+      }
+      let try_exit = check_block_narrowing_exit(env, try_block, ctx, [])
+      let try_exits = block_always_exits(try_block)
+      let mut catch_exit : Map[String, @ast.TsType]? = None
+      let mut catch_exits = false
+      match catch_block {
+        Some(cb) => {
+          catch_exits = block_always_exits(cb)
           let pre = env.full_snapshot()
+          // Flattened: the join nests (`("ok" | null) | "a"`), and the
+          // possibly-`null` member check splits a union one level.
+          for j in catch_entry {
+            env.narrow(j.0, flatten_union_parts(j.1))
+          }
           // TS 4.0+ defaults catch bindings to `unknown`. We don't model
           // `unknown` separately (it folds into `Any` here), but binding to
           // `Any` matches the prior semantics — the caller still has to
@@ -36355,17 +36876,122 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             }
             _ => ()
           }
-          check_block(env, cb, ctx)
+          catch_exit = Some(check_block_narrowing_exit(env, cb, ctx, []))
           env.restore_from(pre)
         }
         None => ()
       }
+      match catch_exit {
+        None =>
+          if !try_exits {
+            apply_sequential_exit(env, pre_map, try_exit, try_shadow)
+          }
+        Some(ce) =>
+          if try_exits && !catch_exits {
+            apply_sequential_exit(env, pre_map, ce, catch_shadow)
+          } else if catch_exits && !try_exits {
+            apply_sequential_exit(env, pre_map, try_exit, try_shadow)
+          } else if !try_exits && !catch_exits {
+            // Each side's exit, with a name that side declares read as the
+            // outer binding it left untouched.
+            let side = fn(
+              exit : Map[String, @ast.TsType],
+              shadow : Map[String, Unit],
+              k : String,
+              v : @ast.TsType,
+            ) -> @ast.TsType? {
+              if shadow.contains(sequential_exit_root(k)) {
+                Some(v)
+              } else {
+                exit.get(k)
+              }
+            }
+            let joined : Map[String, @ast.TsType] = Map([])
+            for k, v in pre_map {
+              match
+                (side(try_exit, try_shadow, k, v), side(ce, catch_shadow, k, v)) {
+                // An aliased condition either side cancelled is cancelled.
+                (Some(Tuple([])), _) | (_, Some(Tuple([]))) if k.has_prefix(
+                    "<alias-cond>",
+                  ) => joined[k] = @ast.TsType::Tuple([])
+                (Some(a), Some(b)) =>
+                  joined[k] = if a == b {
+                    a
+                  } else {
+                    join_branch_types_resolved(ctx.resolver, a, b)
+                  }
+                // A path either side forgot is forgotten after the join.
+                _ => if !(k.contains(".") || k.contains("[")) { joined[k] = v }
+              }
+            }
+            apply_sequential_exit(env, pre_map, joined, Map([]))
+          }
+      }
       match finally_block {
-        Some(fb) => check_block(env, fb, ctx)
+        Some(fb) => {
+          let pre = env.full_snapshot()
+          let post : Map[String, @ast.TsType] = Map([])
+          for e in pre {
+            post[e.0] = e.1
+          }
+          // What the finally block writes reaches the code after the
+          // statement too, since it runs after a normal try exit (#312's
+          // review): `try { x = null } finally { x = "ok" } x.length` is
+          // legal. Each is computed from the post-try state, not from the
+          // widened entry the block is checked in.
+          let fin_shadow : Map[String, Unit] = Map([])
+          block_declared_names(fb, fin_shadow)
+          let fin_joins = backedge_bindings_for_writes(
+            env,
+            ctx,
+            collect_try_writes(fb.stmts, throw_caught=false),
+            fn(n) { !fin_shadow.contains(n) },
+          )
+          for j in finally_entry {
+            let t = match env.lookup(j.0) {
+              Some(cur) if cur != j.1 =>
+                join_branch_types_resolved(
+                  ctx.resolver,
+                  cur,
+                  flatten_union_parts(j.1),
+                )
+              _ => flatten_union_parts(j.1)
+            }
+            env.narrow(j.0, t)
+          }
+          let fin_exit = check_block_narrowing_exit(env, fb, ctx, [])
+          env.restore_from(pre)
+          if !block_always_exits(fb) {
+            // A name the block writes at its own top level holds the exit
+            // value whatever the entry was; any other write may or may not
+            // have happened, so it joins the post-try value.
+            let definite : Map[String, Unit] = Map([])
+            for st in fb.stmts {
+              match st {
+                Assign(n, _) | Expr(AssignExpr(n, _)) => definite[n] = ()
+                _ => ()
+              }
+            }
+            for j in fin_joins {
+              if !definite.contains(j.0) {
+                env.narrow(j.0, flatten_union_parts(j.1))
+              }
+            }
+            for n, _ in definite {
+              if !fin_shadow.contains(n) && post.contains(n) {
+                match fin_exit.get(n) {
+                  Some(t) => env.narrow(n, t)
+                  None => ()
+                }
+              }
+            }
+          }
+        }
         None => ()
       }
     }
     Block(b) => {
+
       // A parser-merged declarator group (`var a: string, b: number;`
       // becomes `Block[Var, Var]`) must leak its bindings into the
       // enclosing scope -- snapshot/restore would erase them for every
@@ -36384,7 +37010,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           check_stmt(env, st, ctx)
         }
       } else {
-        check_block(env, b, ctx)
+        // A block runs straight through, so what it assigns to an OUTER
+        // binding is that binding's state after it (`{ x = 1 }`); its own
+        // declarations go out of scope (see `apply_sequential_exit`).
+        let pre = env.full_snapshot()
+        let exit = check_block_narrowing_exit(env, b, ctx, [])
+        if !block_always_exits(b) {
+          let pre_map : Map[String, @ast.TsType] = Map([])
+          for e in pre {
+            pre_map[e.0] = e.1
+          }
+          let shadow : Map[String, Unit] = Map([])
+          block_declared_names(b, shadow)
+          apply_sequential_exit(env, pre_map, exit, shadow)
+        }
       }
     }
     Label(_, inner) => check_stmt(env, inner, ctx)
@@ -51667,6 +52306,10 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // Marker, not an error: an accessor half's own visibility.
         // Consumed by `accessor_half_visibility`.
         ()
+      } else if name.has_prefix("<unannotated-static-return:") {
+        // Marker, not an error: a bodied STATIC method with no return
+        // annotation, consumed by the static-factory assignment narrowing.
+        ()
       } else if name.has_prefix("<unannotated-return:") {
         // Marker, not an error: a bodied instance method with no return
         // annotation. Consumed by the TS2416 method comparison and by
@@ -54464,6 +55107,14 @@ fn parser_channel_issues(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// ancestors are ingested first at bare names so inner code can reference
 /// outer-scope types unqualified (the way TypeScript scoping works), then
 /// this module is ingested to shadow on top.
+
+///|
+/// The module's file opts out of type checking with `// @ts-nocheck`.
+pub fn module_is_ts_nocheck(module_ : @ast.TsModule) -> Bool {
+  module_.grammar_misuses.contains("<ts-nocheck>")
+}
+
+///|
 fn check_module_function_bodies_layered(
   module_ : @ast.TsModule,
   outer_modules : Array[@ast.TsModule],
@@ -54478,6 +55129,13 @@ fn check_module_function_bodies_layered(
   if outer_modules.length() == 0 {
     walked_arrow_bodies.clear()
     walked_func_bodies.clear()
+    // `// @ts-nocheck` opts the whole FILE out of checking, grammar rules
+    // included (see `@parser.source_has_ts_nocheck` for the probed cells).
+    // Only the root carries the marker: a namespace body is re-parsed by a
+    // child parser, and its layer is reached from here or not at all.
+    if module_is_ts_nocheck(module_) {
+      return []
+    }
   }
   // A class declared in a function body, a block or an `if` branch lands
   // in `local_classes` rather than `classes` (see `TsModule.local_classes`
@@ -55054,6 +55712,12 @@ fn check_module_function_bodies_layered(
           match resolver.unannotated_return_members.get(entry.0) {
             Some(arr) => arr.push(m)
             None => resolver.unannotated_return_members[entry.0] = [m]
+          }
+        } else if name.has_prefix("<unannotated-static-return:") {
+          let m = name["<unannotated-static-return:".length():name.length() - 1].to_owned()
+          match resolver.unannotated_static_return_members.get(entry.0) {
+            Some(arr) => arr.push(m)
+            None => resolver.unannotated_static_return_members[entry.0] = [m]
           }
         }
       }
@@ -56168,6 +56832,11 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: the source is a declaration file, consumed
       // by the bodiless-declaration exemptions (TS2390 / TS2564 / TS2378).
       if gm == "<declaration-file>" {
+        continue
+      }
+      // Marker, not an error: the file opts out with `// @ts-nocheck`,
+      // consumed at the top of `check_module_function_bodies_layered`.
+      if gm == "<ts-nocheck>" {
         continue
       }
       // Markers, not errors: lib-set / target directive evidence and

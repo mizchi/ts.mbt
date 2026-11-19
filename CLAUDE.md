@@ -6836,6 +6836,172 @@ product surfaces now.
     does not. The real-app check still catches 8 of 11 with no false
     positive, and the mutation differential is unchanged at 105 caught /
     155 missed (40%), with no undeclared false positive.
+
+  Batch HA continues with the next univer and excalidraw categories and
+  takes the last Minor from [#311](https://github.com/mizchi/ts.mbt/pull/311)'s
+  review. Each cell was probed against the nightly, and each mechanism
+  was shown necessary by reverting it.
+  - **An alias to a nullable union is narrowed by its initializer.** A
+    non-nullish initializer removes the nullish members of a declared
+    union. The check only asked whether the declaration was WRITTEN as a
+    union, so `const raw: Op = []` with `type Op = null | OpList` kept
+    `null`, and every `raw.push(…)` in univer's `addDrawing` was
+    "possibly `null`". The alias is now expanded first.
+  - **Promise callbacks are optional.** The curated `Promise.prototype`
+    table had every callback as a required parameter. So on the graph
+    path `p.then(ok, ng)` was "expected 1 argument(s)" and `p.finally()`
+    "got 0". `then(ok, ng)` is now a promise of both callbacks' returns.
+  - **An unannotated static factory narrows an assignment.** univer
+    writes its factories as `static create(v) { return new N(v) }`. The
+    parser now records such a method as `static:NAME`, so the narrowing
+    can read its return from the body, and an instance member of the
+    same name cannot be mistaken for it.
+  - **An `any`-typed parameter shadows an enum** (#311's review). An enum
+    is never bound in the env, so any binding of its name is a shadow. A
+    namespace is bound as its lowered `var`, so it keeps the typed-binding
+    rule, and so does an enum merged with one.
+  - **A leading `// @ts-nocheck` opts the file out.** excalidraw's
+    `woff2-bindings.ts` had 28 reports for it. The rule follows the
+    nightly's pragma scanner, and three of its cells read the other way
+    round from what one would guess:
+    - Block comments before the pragma are skipped. The same text inside
+      a `/** … */` block does not count.
+    - The name is case-insensitive and ends at whitespace or `:`.
+    - When `@ts-check` and `@ts-nocheck` are both written, the last one
+      wins.
+
+    The pragma suppresses grammar rules too (TS1016), and not a scanner
+    error (TS1177) or a parser syntax error (TS1005). The parser's grammar
+    list does not say which entry is which, so the whole list is dropped,
+    and a scanner or parser syntax error recorded there rather than raised
+    is a MISS in an opted-out file. The marker is read at the root parse
+    only, because a namespace body's first line is not a file pragma.
+  - **Scopes leave their state behind correctly.** These are four flow
+    defects, and the first is a false positive older than all of them.
+    - A declaration that shadows an outer binding overwrote the outer
+      binding's DECLARED slot for good. A snapshot copied `vars` and
+      not `declared`, so `{ let x = 5 } x = "a"` on `let x: string |
+      null` was "expected `number`". The `if`-branch and `for`-head
+      forms did the same, and main reports all three. `declare_type`
+      now logs each slot it overwrites, and `restore_from` undoes back
+      to the snapshot's mark.
+    - An assignment in a bare block or a `try` never reached the code
+      after it, because `check_block` restores every outer binding.
+      After a block, each outer binding has its exit type. After `try`,
+      it is the join of the try and catch exits, with a side that always
+      exits dropped. Names the block declares are left out, since the
+      exit map cannot tell them from the outer binding.
+    - A binding declared `any`, such as an auto-typed `let data = null`,
+      kept `null` when it was assigned a value this cannot type, so
+      `if (!data) return` after it left `never`. A written union keeps
+      its declaration. There an uninferable value is as likely to be our
+      inference failing as a real `any`.
+    - `const ok = hit && n < 3` is a TS 4.4 aliased condition like the
+      `===` and call shapes. So is an `||`. excalidraw's
+      `handleIframeLikeCenterClick` has `if (!shouldActivate) return`.
+  - **The falsy part of a `boolean` left operand of `&&` is `false`.**
+    `flag && obj` was `boolean | Obj`, so `if (p)` left `true` beside
+    `Obj`, and every `p.x` was "does not exist on `true`". That was 43 of
+    excalidraw's reports, all from `insertAtParentCenter &&
+    this.getTextWysiwygSnappedToCenterPosition(…)` and its siblings. An
+    `any` right operand makes the whole `&&` `any`, where it had read as
+    `boolean`. The `false` reading is local to `&&`. `falsy_subset` keeps
+    `boolean`, because the `filter` predicate inference reads it for
+    `x => !!x`, and tsc infers no `x is true` over `boolean[]`. Changing
+    the shared function would have turned that into a new MISS.
+  - **One tsc-extra cell is now a declared MISS.** After a `while` loop,
+    a binding returns to its ENTRY type, so `p = p.getParent()` in the
+    body never reaches `p.v` below it. `badAfterWhile` was reported only
+    while the alias initializer did not narrow `p`. The plain union
+    spelling was silent on main already. Applying the loop's exit state
+    is filed, not done, because it has two false-positive faces:
+    - The join keeps an RHS it cannot type at its entry type, so the
+      condition's else-narrowing can leave `never`.
+    - A write the join cannot type takes the whole declared type.
+  - **Six tsc-extra cases** pin cells upstream does not test.
+    `assignmentsReachPastBlockAndTry` and
+    `blockShadowKeepsOuterDeclaration` cover the scope items above. Four
+    `directives/` cases cover where `@ts-nocheck` counts. Upstream's
+    `tsNoCheckForTypescript*` cases cover only the plain leading spelling.
+    There are 95 cases now.
+  - **The review of [#312](https://github.com/mizchi/ts.mbt/pull/312)
+    found ten things, and probing settled each one.**
+    - A NAMED Promise handler contributed itself rather than its return,
+      so `p.then(ok)` was a promise of `ok`. main had that for one
+      callback, and the two-callback arm added `p.then(undefined,
+      recover)`. A generic or overloaded handler is `any`.
+    - `catch` and `finally` were entered from the pre-try state, which
+      lost a write before a `throw`, one a later statement overwrote, and
+      one before a `return`. Both are now entered from the join of the
+      pre-try state with every write the try block makes, and `finally`
+      with the catch block's too. The join nests, so it is flattened
+      before the possibly-`null` check reads it.
+    - Shadows were shared between the two sides, so a `catch (x)`
+      binding hid the try block's write to an outer `x`. A nested block
+      counted as a shadow too, and only a merged declarator group
+      (`DECL_GROUP_POSITION`) should.
+    - An aliased condition an assignment cancelled inside a block was
+      restored at the block exit.
+    - An unannotated static method had been recorded as `static:NAME` in
+      the instance list, which a quoted instance method can be named.
+      It has a channel of its own now.
+    - An always-falsy left operand of `&&` is the result beside an `any`
+      right operand.
+
+    The second round found two false positives that the first round's
+    fixes had introduced, and two smaller gaps.
+    - The try writes are collected by NAME, so a nested block's own `{
+      let x; x = null }` widened the outer `x` for `catch` and `finally`.
+      A name some nested scope declares is now dropped from the
+      collection. That loses a write to the outer binding of the same
+      spelling, and only narrows.
+    - The `finally` block was checked inside a snapshot that dropped its
+      writes, so `try { x = null } finally { x = "ok" } x.length` was
+      reported. A name the block writes at its own top level takes the
+      block's exit value. Any other write joins the post-try value, and a
+      `finally`-local binding is excluded.
+    - A static factory's body was inferred in an empty env, so `return
+      value` read a module-level `value`. Its parameters are bound now.
+    - The pragma's separators are JavaScript's `\s`, including U+2003 and
+      U+3000, as tsc reads them (probed).
+
+    One more came from the field data rather than the review. A flow
+    join kept `any` as a union member. After `let d = null; try { d =
+    (await g()) || null } catch { d = { … } }`, excalidraw's
+    `d?.elements` was reported three times, and main reported the same
+    three sites as "does not exist on `null`". A union with `any` is
+    `any`, as in tsc, and the `if` join gets the same rule.
+
+    The third round found three more MISSes and one false positive that
+    the second round had introduced, each probed against the nightly:
+    - A nested scope's declaration shielded every write to that name in
+      the whole try block, so `{ let x = 0 } x = null; throw 0` lost the
+      second write. Each top-level statement is now walked on its own,
+      and only the scopes nested inside it shield its writes.
+    - An assignment or `var` loop head (`for (x of …)`) counted as a
+      declaration of the loop's own.
+    - The leading-trivia scan skipped only ASCII spaces between comments,
+      so a Unicode space before a later `// @ts-check` left the file
+      opted out. It now skips what tsc's scanner skips, which is the
+      pragma's separators plus U+0085 and U+200B.
+    - The false positive: a `finally` write followed by a `throw`
+      reached the code after the statement, so `finally { if (flag) { x =
+      null; throw 0 } } x.length` was reported. Only the writes that can
+      reach the end of the block join the continuation now.
+  - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
+    FP 0). tsc-extra stays at FP 0, now with 95 cases and one more
+    declared MISS. effect goes from 78 to 75 and zod stays at 7. Against batch
+    GZ, univer goes:
+    - core 37→30
+    - docs-hyper-link 21→14
+    - data-validation 197→151
+    - sheets-numfmt 199→153
+    - ui 159→113
+
+    excalidraw goes from 296 to 194. None of them reports at a site
+    main does not. The real-app check still catches 8 of 11 with no
+    false positive. The mutation differential is unchanged at 105
+    caught / 155 missed (40%), with no undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

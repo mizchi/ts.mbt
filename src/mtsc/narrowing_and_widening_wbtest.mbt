@@ -553,6 +553,74 @@ test "loose null equality keeps the declared nullish members" {
 }
 
 ///|
+/// A declared ALIAS to a union loses its nullish members to a non-nullish
+/// initializer, as a written union does: `const raw: Op = []` with `type Op
+/// = null | OpList` (ot-json1's `JSONOp`, univer's `addDrawing`). A later
+/// `null` assignment and a nullable initializer still report.
+test "an alias to a nullable union is narrowed by its initializer" {
+  let src =
+    #|type L = (number | L)[];
+    #|type Op = null | L;
+    #|export function okConst() { const raw: Op = []; raw.push(1); return raw; }
+    #|export function okLet() { let raw: Op = []; raw.push(1); return raw; }
+    #|export function badReassigned(c: boolean) { let raw: Op = []; if (c) { raw = null; } raw.push(1); }
+    #|declare const v: Op;
+    #|export function badNullableInit() { const raw: Op = v; raw.push(1); }
+    #|type MaybeStr = string | undefined;
+    #|export function okStr() { const s: MaybeStr = "x"; return s.length; }
+  assert_eq(issue_lines(src), [
+    "function badReassigned > call `push`: object is possibly `null`", "function badNullableInit > call `push`: object is possibly `null`",
+  ])
+}
+
+///|
+/// Every Promise callback is optional, as in `lib.es5.d.ts`, and
+/// `then(ok, ng)` is a promise of both returns: univer's
+/// `Promise.all(pending).then(…, (error) => …)` was "expected 1
+/// argument(s), got 2", and `p.finally()` "got 0".
+test "promise callbacks are optional" {
+  let src =
+    #|declare const p: Promise<number>;
+    #|export const a = p.then((v) => v + 1, (e) => 0);
+    #|export const b = p.then(undefined, (e) => "x");
+    #|export const c = p.then();
+    #|export const d = p.catch();
+    #|export const e = p.finally();
+    #|export const okBoth: Promise<number | string> = p.then((v) => v, () => "e");
+    #|export const okUnd: Promise<number | string> = p.then(undefined, () => "e");
+    #|export const bad = p.then((v: string) => v);
+    #|export const badArity = p.then(() => 1, () => 2, 3);
+    #|export const okUnion = p.then(() => "a", () => 1).then((x) => { const n: number | string = x; return n; });
+    #|export const badUnion = p.then(() => "a", () => 1).then((x) => { const n: number = x; return n; });
+  assert_eq(issue_lines(src), [
+    "top-level > call `then` arg[0] param `v`: expected `number` but got `string`",
+    "top-level > call `then`: expected 0-2 argument(s), got 3", "top-level > binding `n` init: expected `number` but got `\"a\" (string) | number`",
+  ])
+}
+
+///|
+/// An unannotated STATIC factory reads its return from the body when an
+/// assignment narrows by it: univer's `v = NumberValueObject.create(0)`
+/// inside `if (v == null)` left `v` possibly undefined after the `if`. An
+/// explicit `: any` and a nullable body still report.
+test "an unannotated static factory narrows an assignment" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|class B { isBoolean() { return false; } }
+    #|class N extends B {
+    #|  static create(v: number) { return new N(); }
+    #|  static loose(v: number): any { return new N(); }
+    #|  static maybe(v: number) { return v > 0 ? new N() : undefined; }
+    #|}
+    #|export function ok(valueObject: Nullable<B>) { let v = valueObject; if (v == null) { v = N.create(0); } return v.isBoolean(); }
+    #|export function badAny(valueObject: Nullable<B>) { let v = valueObject; if (v == null) { v = N.loose(0); } return v.isBoolean(); }
+    #|export function badMaybe(valueObject: Nullable<B>) { let v = valueObject; if (v == null) { v = N.maybe(0); } return v.isBoolean(); }
+  assert_eq(issue_lines(src), [
+    "function badAny > call `isBoolean`: object is possibly `undefined`", "function badMaybe > call `isBoolean`: object is possibly `undefined`",
+  ])
+}
+
+///|
 /// A destructured discriminant belongs to its binding: an inner `const
 /// kind` or a parameter named `kind` is a different binding and does not
 /// narrow the source (#311's review). The direct use still does.
@@ -601,5 +669,283 @@ test "a parameter shadowing an enum is read through its own type" {
   assert_eq(issue_lines(src), [
     "function local > assign `value`: expected `\"local\" (string)` but got `\"other\" (string)`",
     "function read > binding `n` init: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// An `any`-typed parameter named like an enum shadows it too (#311's
+/// review): `E.A` is then `any`. The enum itself, and an enum merged with
+/// a namespace, still read the member.
+test "an any-typed parameter shadowing an enum is any" {
+  let src =
+    #|enum E { A = "global" }
+    #|export function shadow(E: any) { const n: number = E.A; return n; }
+    #|export function real() { const s: number = E.A; return s; }
+    #|enum M { A = "m" }
+    #|namespace M { export const k = 1; }
+    #|export const merged: number = M.A;
+  assert_eq(issue_lines(src), [
+    "function real > binding `s` init: expected `number` but got `string`", "top-level > binding `merged` init: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// A block-local declaration that shadows an outer binding gives the
+/// outer one its declaration back when the block ends: `{ let x = 5 }`
+/// then `x = "a"` on a `let x: string | null` is legal (probed), and so
+/// are the `if`-branch and `for`-head spellings. Inside the block the
+/// inner declaration still decides.
+test "a shadowing block declaration gives the outer binding its declaration back" {
+  let src =
+    #|declare const c: boolean;
+    #|export function s2() { let x: string | null = null; if (c) { let x = 5; x = 6; } else { x = "a"; } return x; }
+    #|export function s3() { let x: string | null = null; { let x = 5; x = 6; } x = "a"; return x; }
+    #|export function s4() { let x: string | null = null; if (c) { let x = 5; } x = "a"; return x; }
+    #|export function s5() { let x: string | null = null; for (let x = 0; x < 3; x++) { } x = "a"; return x; }
+    #|export function inner() { let x: string | null = null; { let x = 5; x = "a"; } return x; }
+  assert_eq(issue_lines(src), [
+    "function inner > assign `x`: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// TS 4.4 aliased conditions through `&&` / `||`: `const ok = hit && n < 3`
+/// narrows `hit` wherever `ok` is known truthy, `if (ok)` and the exit of
+/// `if (!ok) return` alike, and `const bad = !hit || …` the same way round.
+/// The falsy side of an `&&` (and the truthy side of an `||`) proves
+/// nothing, and an assignment between the alias and its use cancels it.
+test "an and-or initializer is an aliased condition" {
+  let src =
+    #|interface El { id: string }
+    #|declare function get(): El | null;
+    #|declare const n: number;
+    #|export function a1(): string { const hit = get(); const ok = hit && n < 3; if (!ok) { return ""; } return hit.id; }
+    #|export function a4(): string { const hit = get(); const ok = hit && n < 3; if (ok) { return hit.id; } return ""; }
+    #|export function b2(): string { const hit = get(); const bad = !hit || n > 3; if (bad) { return ""; } return hit.id; }
+    #|export function c1(): string { const hit = get(); const ok = hit && n < 3; if (!ok) { return hit.id; } return ""; }
+    #|export function c2(): string { const hit = get(); const ok = n < 3 || hit; if (!ok) { return ""; } return hit.id; }
+    #|export function c3(): string { let hit = get(); const ok = hit && n < 3; hit = get(); if (!ok) { return ""; } return hit.id; }
+  assert_eq(issue_lines(src), [
+    "function c1 > PropAccess `.id`: object is possibly `null`", "function c2 > PropAccess `.id`: object is possibly `null`",
+    "function c3 > PropAccess `.id`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A binding DECLARED `any` (here the auto-typed `let data = null`) takes
+/// a value this cannot type as `any`, which is what tsc gives it: after
+/// `data = JSON.parse(raw)` the `if (!data) return` guard leaves `any`, not
+/// `never`. A written union keeps its declaration, so the read is still
+/// judged there (`x` is possibly `undefined` in tsc too).
+test "an any-declared binding takes an uninferable value as any" {
+  let src =
+    #|declare const raw: string;
+    #|declare const c: boolean;
+    #|export function u1() { let data = null; data = JSON.parse(raw); if (!data) { return; } return data.info; }
+    #|export function u2() { let data = null; if (c) { data = JSON.parse(raw); } if (!data) { return; } return data.info; }
+    #|export function v1() { let x: string | undefined = undefined; x = JSON.parse(raw); return x.length; }
+  assert_eq(issue_lines(src), [
+    "function v1 > PropAccess `.length`: object is possibly `undefined`",
+  ])
+}
+
+///|
+/// What a bare block or a `try` assigns to an outer binding reaches the
+/// code after it. After `try`/`catch` the binding is the join of the two
+/// exits, so a catch that leaves it `null` keeps the report, a catch that
+/// returns does not, and a `try` that always returns leaves the catch's
+/// state. A declaration inside the block is its own binding.
+test "an assignment in a block or a try reaches the code after it" {
+  let src =
+    #|declare const raw: string;
+    #|declare function risky(): void;
+    #|export function w1() { let x = null; { x = JSON.parse(raw); } if (!x) { return; } return x.info; }
+    #|export function w2() { let x = null; try { x = JSON.parse(raw); } catch {} if (!x) { return; } return x.info; }
+    #|export function n1() { let x: { info: number } | null = null; try { x = { info: 1 }; } catch {} return x.info; }
+    #|export function n2() { let x: { info: number } | null = null; try { x = { info: 1 }; } catch { return 0; } return x.info; }
+    #|export function n4() { let x: string | null = null; { x = "a"; } return x.length; }
+    #|export function n5() { let x: string | null = null; { let x = "a"; x.length; } return x.length; }
+    #|export function n6() { let x: string | null = null; try { risky(); } catch { x = "a"; } return x.length; }
+    #|export function n7() { let x: string | null = null; try { return 0; } catch { x = "a"; } return x.length; }
+    #|export function n8() { let x: string | null = null; try { x = "a"; } finally { risky(); } return x.length; }
+  assert_eq(issue_lines(src), [
+    "function n1 > PropAccess `.info`: object is possibly `null`", "function n5 > PropAccess `.length`: object is possibly `null`",
+    "function n6 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// The falsy part of a `boolean` left operand of `&&` is `false`, so
+/// `flag && obj` is `false | Obj` and `if (p)` on it leaves `Obj`
+/// (excalidraw's `insertAtParentCenter && this.snap(…)`). An `any` right
+/// operand makes the whole expression `any`. `boolean[]`'s `x => !!x`
+/// still infers no `x is true`, as in tsc.
+test "a boolean and an object joined by and narrow to the object" {
+  let src =
+    #|declare const flag: boolean;
+    #|declare const av: any;
+    #|interface P { ex: number }
+    #|declare function snap(x: number): P | undefined;
+    #|declare const bools: boolean[];
+    #|export function run(x: number) { const p = flag && snap(x); if (p) { return p.ex; } return 0; }
+    #|export function anyRight() { const p = flag && av; const n: string = p; return n; }
+    #|export function falsePart(x: number) { const p = flag && snap(x); const q: P = p; return q; }
+    #|export const kept: true[] = bools.filter((x) => !!x);
+  assert_eq(issue_lines(src), [
+    "function falsePart > binding `q` init: type `false | P | undefined` is not assignable to type `P`",
+    "top-level > binding `kept` init: expected `true[]` but got `boolean[]`",
+  ])
+}
+
+///|
+/// A NAMED Promise handler contributes what it returns, not itself
+/// (#312's review): `p.then(ok)` is a promise of `ok`'s return, and
+/// `p.then(undefined, recover)` of the fulfilled value or `recover`'s.
+test "a named promise handler contributes its return" {
+  let src =
+    #|declare const p: Promise<string>;
+    #|function recover(e: unknown): string { return "x"; }
+    #|function ok(s: string): number { return s.length; }
+    #|export async function pa() { const r = await p.then(undefined, recover); const s: string = r; return s; }
+    #|export async function pb() { const r = await p.then(ok); const n: number = r; return n; }
+    #|export async function pe() { const r = await p.then(ok); const s: string = r; return s; }
+  assert_eq(issue_lines(src), [
+    "function pe > binding `s` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// The catch and finally blocks are entered from a state the try block may
+/// have left at any statement (#312's review): a write before a `throw`, a
+/// write a later statement overwrites, and a write before a `return` (for
+/// `finally`) all reach them. A try block that writes nothing leaves the
+/// pre-try state.
+test "catch and finally see what the try block wrote before leaving" {
+  let src =
+    #|declare function risky(): void;
+    #|export function c1() { let x: string | null = "ok"; try { x = null; throw 0; } catch {} return x.length; }
+    #|export function c2() { let x: string | null = "ok"; try { x = null; risky(); x = "a"; } catch { return x.length; } return 0; }
+    #|export function f1() { let x: string | null = "ok"; try { x = null; return; } finally { x.length; } }
+    #|export function okc() { let x: string | null = "ok"; try { risky(); } catch { return x.length; } return 0; }
+    #|export function okf() { let x: string | null = "ok"; try { risky(); } finally { x.length; } return 0; }
+  assert_eq(issue_lines(src), [
+    "function c1 > PropAccess `.length`: object is possibly `null`", "function c2 > PropAccess `.length`: object is possibly `null`",
+    "function f1 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A catch binding is the catch block's own, and a nested block's
+/// declaration has gone out of scope by the time the enclosing block goes
+/// on, so neither hides the try block's write to the outer name (#312's
+/// review). An assignment inside a block cancels an aliased condition on
+/// the name it assigns.
+test "catch bindings, nested blocks and alias cancellation across a block" {
+  let src =
+    #|export function s1() { let x: string | null = "ok"; try { x = null; } catch (x) {} return x.length; }
+    #|export function n1() { let x: string | null = "ok"; try { { let x = 1; } x = null; } finally {} return x.length; }
+    #|export function a1(y: string | null) { let x: string | null = y; const ok = x !== null; { x = y; } if (ok) { return x.length; } return 0; }
+    #|export function a2(y: string | null) { let x: string | null = y; const ok = x !== null; { y = null; } if (ok) { return x.length; } return 0; }
+  assert_eq(issue_lines(src), [
+    "function s1 > PropAccess `.length`: object is possibly `null`", "function n1 > PropAccess `.length`: cannot access `.length` — receiver may be null or undefined",
+    "function a1 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A static method's unannotated return is recorded apart from the
+/// instance methods, so a quoted instance method spelled `"static:make"`
+/// keeps its written `: any` (#312's review).
+test "a static unannotated return does not collide with a quoted instance name" {
+  let src =
+    #|interface I { "static:make"(): number }
+    #|export class C implements I {
+    #|  static make() { return 0; }
+    #|  "static:make"(): any { return ""; }
+    #|}
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// An always-falsy left operand of `&&` is the result even beside an
+/// `any` right operand (#312's review): `undefined && anyValue` is
+/// `undefined`, not `any`.
+test "an always-falsy left operand of and is the result" {
+  let src =
+    #|declare const anyv: any;
+    #|export function n2() { const r = undefined && anyv; const s: string = r; return s; }
+  assert_eq(issue_lines(src), [
+    "function n2 > binding `s` init: expected `string` but got `undefined`",
+  ])
+}
+
+///|
+/// Round two of #312's review, each cell probed against the nightly: a
+/// write to a nested block's OWN binding does not widen the outer one for
+/// `catch` / `finally`; what `finally` writes reaches the code after the
+/// statement, and a `finally`-local binding does not; and a static
+/// factory's return is read with its parameters in scope.
+test "finally writes, nested-block bindings and static factory parameters" {
+  let src =
+    #|declare function risky(): void;
+    #|export function A3() { let x: string | null = "s"; try { { let x: string | null = "a"; x = null; } risky(); } catch { return x.length; } return 0; }
+    #|export function A4() { let x: string | null = "s"; try { { let x: string | null = "a"; x = null; } risky(); } finally { x.length; } return 0; }
+    #|export function A5() { let x: string | null = "s"; try { { x = null; } risky(); } catch { return x.length; } return 0; }
+    #|export function B1() { let x: string | null = "ok"; try { x = null; } finally { x = "ok"; } return x.length; }
+    #|export function B2() { let x: string | null = "ok"; try { x = "a"; } finally { x = null; } return x.length; }
+    #|export function B3() { let x: string | null = "ok"; try { x = null; } finally { let x = 1; x = 2; } return x.length; }
+    #|class Factory { static create(value: string | null) { return value; } }
+    #|declare const value: string;
+    #|export function C1() { let result: string | null = null; result = Factory.create(null); return result.length; }
+  assert_eq(issue_lines(src), [
+    "function A5 > PropAccess `.length`: object is possibly `null`", "function B2 > PropAccess `.length`: cannot access `.length` — receiver may be null or undefined",
+    "function B3 > PropAccess `.length`: cannot access `.length` — receiver may be null or undefined",
+    "function C1 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A join with an `any` side is `any`, as a union with `any` is in tsc.
+/// The try/catch join kept `any | { appState }`, so excalidraw's
+/// `initializeScene` reported `initialData?.elements`; main reported the
+/// same sites as "does not exist on `null`", and the `if` form too.
+/// Probed against the nightly: the `string` neighbours are TS2339.
+test "a join with an any side is any" {
+  let src =
+    #|declare const anyv: any;
+    #|declare const c: boolean;
+    #|declare function g(): any;
+    #|export async function okTry() { let d = null; try { d = (await g()) || null; } catch (e: any) { d = { appState: { m: e.message } }; } return d?.elements; }
+    #|export function okIf() { let d = null; if (c) { d = anyv; } else { d = { a: 1 }; } return d?.b; }
+    #|export function badIf() { let d = null; if (c) { d = "s"; } else { d = { a: 1 }; } return d.b; }
+    #|export function badTry() { let d = null; try { d = "s"; } catch { d = { a: 1 }; } return d.b; }
+  assert_eq(issue_lines(src), [
+    "function badIf > PropAccess `.b`: property `b` does not exist on `\"s\" (string) | { a: number }`",
+    "function badTry > PropAccess `.b`: property `b` does not exist on `\"s\" (string) | { a: number }`",
+  ])
+}
+
+///|
+/// Round three of #312's review, each cell probed against the nightly. A
+/// nested scope's declaration only shields the writes made inside the
+/// statement that holds it: `{ let x = 0 } x = null` still writes the outer
+/// `x` before the throw. An assignment-form or `var` loop head writes the
+/// outer binding; only a `let` / `const` head declares one of its own. A
+/// `finally` write followed by a `throw` or a `return` does not reach the
+/// code after the statement.
+test "a nested declaration shields only its own statement's writes" {
+  let src =
+    #|export function e1() { let x: string | null = "ok"; try { { let x = 0; x = 1; } x = null; throw 0; } catch { x.length; } }
+    #|export function e2() { let x: string | null = "ok"; try { for (x of [null]) { throw 0; } } catch { x.length; } }
+    #|export function e3() { let x: string | null = "ok"; try { for (const y of [1]) { x = null; } throw 0; } catch { x.length; } }
+    #|export function ok1() { let x: string | null = "ok"; try { { let x: string | null = "a"; x = null; } throw 0; } catch { x.length; } }
+    #|export function ok2() { let x: string | null = "ok"; try { for (let x of [null]) { throw 0; } } catch { x.length; } }
+    #|declare const flag: boolean;
+    #|export function f1() { let x: string | null = "ok"; try { } finally { if (flag) { x = null; throw 0; } } return x.length; }
+    #|export function f2() { let x: string | null = "ok"; try { } finally { if (flag) { x = null; } } return x.length; }
+    #|export function f3() { let x: string | null = "ok"; try { } finally { if (flag) { x = null; return 0; } } return x.length; }
+  assert_eq(issue_lines(src), [
+    "function e1 > PropAccess `.length`: object is possibly `null`", "function e2 > PropAccess `.length`: object is possibly `null`",
+    "function e3 > PropAccess `.length`: object is possibly `null`", "function f2 > PropAccess `.length`: object is possibly `null`",
   ])
 }

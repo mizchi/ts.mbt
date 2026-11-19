@@ -511,6 +511,76 @@
       ]
     },
     {
+      "case": "controlFlow/assignmentsReachPastBlockAndTry.ts",
+      "area": "controlFlow",
+      "name": "assignmentsReachPastBlockAndTry",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18047
+      ],
+      "baseline": "baselines/assignmentsReachPastBlockAndTry.errors.txt",
+      "claims": [
+        {
+          "name": "okBareBlockAssignment",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okTryAssignsAny",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okBlockAssignsAny",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okCatchReturns",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okTryReturnsCatchAssigns",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okTryFinally",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 17
+        },
+        {
+          "name": "badCatchKeepsOldValue",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badShadowInBlock",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badOnlyCatchAssigns",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 21
+        }
+      ]
+    },
+    {
       "case": "controlFlow/bindingPatternDefaultsWithConstTuplesAndComputedKeys.ts",
       "area": "controlFlow",
       "name": "bindingPatternDefaultsWithConstTuplesAndComputedKeys",
@@ -565,6 +635,58 @@
           "kind": "ok",
           "fromLine": 10,
           "toLine": 11
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/blockShadowKeepsOuterDeclaration.ts",
+      "area": "controlFlow",
+      "name": "blockShadowKeepsOuterDeclaration",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/blockShadowKeepsOuterDeclaration.errors.txt",
+      "claims": [
+        {
+          "name": "okIfBranchShadow",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okBareBlockShadow",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okShadowThenAssign",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okForHeadShadow",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 13
+        },
+        {
+          "name": "badInnerDeclarationDecides",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badOuterDeclarationDecides",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 16
         }
       ]
     },
@@ -1680,6 +1802,86 @@
       ],
       "baseline": "baselines/namespaceLocalInterfaceShadowsLibPromise.errors.txt",
       "claims": []
+    },
+    {
+      "case": "directives/tsNocheckAfterBlockComment.ts",
+      "area": "directives",
+      "name": "tsNocheckAfterBlockComment",
+      "options": {},
+      "accepted": true,
+      "codes": [],
+      "baseline": null,
+      "claims": [
+        {
+          "name": "okNotChecked",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 9
+        }
+      ]
+    },
+    {
+      "case": "directives/tsNocheckAfterStatement.ts",
+      "area": "directives",
+      "name": "tsNocheckAfterStatement",
+      "options": {},
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/tsNocheckAfterStatement.errors.txt",
+      "claims": [
+        {
+          "name": "okFirstStatement",
+          "kind": "ok",
+          "fromLine": 1,
+          "toLine": 5
+        },
+        {
+          "name": "badAfterStatement",
+          "kind": "bad",
+          "fromLine": 6,
+          "toLine": 7
+        }
+      ]
+    },
+    {
+      "case": "directives/tsNocheckInJsDocBlock.ts",
+      "area": "directives",
+      "name": "tsNocheckInJsDocBlock",
+      "options": {},
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/tsNocheckInJsDocBlock.errors.txt",
+      "claims": [
+        {
+          "name": "badStillChecked",
+          "kind": "bad",
+          "fromLine": 6,
+          "toLine": 7
+        }
+      ]
+    },
+    {
+      "case": "directives/tsNocheckThenTsCheck.ts",
+      "area": "directives",
+      "name": "tsNocheckThenTsCheck",
+      "options": {},
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/tsNocheckThenTsCheck.errors.txt",
+      "claims": [
+        {
+          "name": "badLastPragmaWins",
+          "kind": "bad",
+          "fromLine": 7,
+          "toLine": 8
+        }
+      ]
     },
     {
       "case": "feedback/declareFieldReadInDerivedInitializer.ts",

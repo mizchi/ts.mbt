@@ -3089,6 +3089,13 @@ fn collect_parsed_graph_issues(
     if context_only.contains(module_.source.path) {
       continue
     }
+    // `// @ts-nocheck` opts the file out of every check, its imports'
+    // "has no export" / "cannot find module" included — tsc accepts
+    // `import x from "./nonexistent"` under it. Like a context-only file it
+    // still declares what it declares for the modules that reach it.
+    if @checker.module_is_ts_nocheck(module_.module_) {
+      continue
+    }
     let (globals, import_diagnostics) = graph_import_globals(
       module_, parsed_modules, edges, skipped_imports, namespace_cache,
     )
