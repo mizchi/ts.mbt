@@ -7076,6 +7076,69 @@ product surfaces now.
     The real-app check still catches 8 of 11 with no false positive.
     The mutation differential is unchanged at 105 caught / 155 missed
     (40%), with no undeclared false positive.
+
+  Batch HC takes the next excalidraw categories and the three Minors from
+  [#313](https://github.com/mizchi/ts.mbt/pull/313)'s review. Each cell
+  was probed against the nightly, and each mechanism was shown necessary
+  by reverting it.
+  - **A `let` or `const` list binds every declarator in its scope.** The
+    parser lowers `const a = 1, b = "x"` to a block marked
+    `DECL_GROUP_POSITION`. `check_stmt` read only an all-`var` block as a
+    group, under a comment written before the marker existed, so every
+    later read of a declarator was unchecked. The marker decides now.
+  - **A literal logical operand follows tsc's truthiness rule.** The `&&`
+    / `||` check reported `0`, `1`, `true` and `false`, which tsc exempts
+    there as in a condition. One helper, modelled on tsc's
+    `getSyntacticTruthySemantics`, now serves the operand, the ternary
+    condition and the `!` operand. The exemption is by numeric value, an
+    empty template is falsy, and a ternary is decided when both branches
+    agree. Three tests had asserted the false positives, the 27th to
+    29th found pinning a bug.
+    `0n` abstains on purpose. tsc reports `0n && x` as always TRUTHY,
+    which is wrong (microsoft/TypeScript#60320, open), so it is a MISS
+    here and a new `feedback/` case in tsc-extra.
+  - **A constructor's pattern parameter binds every name.** A class kept
+    one `(name, type)` pair per constructor parameter, the pattern's
+    first name. So `constructor({ a, b }: T)` bound `a` to the whole `T`
+    and left `b` unbound (excalidraw's `FileManager` and `RequestError`).
+    `TsClassDecl.constructor_param_bindings` keeps each pattern beside
+    the pairs. MoonBit's required record fields listed all nine
+    construction sites, and the bridge reads none of them.
+  - **The false side of `in` keeps an index-signature member.** It
+    removed every member that answers for the key, so `"includes" in c`
+    on `readonly T[] | Record<T, any>` left `never` (excalidraw's
+    `isMemberOf`). tsc removes only a member that DECLARES the key
+    (`isTypePresencePossible`).
+  - **An arrow's rest parameter is `Rest(_)`.** `callable_param_types`
+    left it as its bare array type. So wherever an arrow's type came
+    from its value, as on the graph path or through an object member,
+    `const concat = (...b: B[]) => …` took exactly one argument
+    (excalidraw's `concatBuffers(a, b)` and `Regex.and(a, b)`). The
+    method builder had been fixed for the same thing in batch GG, which
+    makes this the applied-in-some-places family again. Two relations
+    read the rest position now. An annotated rest parameter against a
+    contextual list compares its ELEMENT with each formal, and two rest
+    lists compare their arrays.
+  - **#313's three Minors.**
+    - A class is left out of the intersection merge, because its declared
+      fields are its properties without its methods. This was new in
+      batch HB.
+    - NBSP ends an identifier. This predates batch HB.
+    - One test's input was invalid TypeScript and is fixed.
+  - **Six tsc-extra cases**, 109 in all.
+  - **What it measures.**
+    - The oracle is unchanged (TP 2726 / MISS 0 / FP 0).
+    - tsc-extra stays at FP 0, with 109 cases and 20 declared MISSes.
+    - effect goes from 72 to 65. The seven reports removed are the
+      rest-parameter arity reports (`raceAll`, `zipLatestAll`, `color`,
+      `logEffect`).
+    - zod stays at 7, and univer is unchanged.
+    - excalidraw goes from 110 to 85.
+
+    None of them reports at a site main does not. The real-app check
+    still catches 8 of 11 with no false positive. The mutation
+    differential is unchanged at 105 caught / 155 missed (40%), with no
+    undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
