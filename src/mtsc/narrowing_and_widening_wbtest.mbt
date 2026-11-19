@@ -1726,3 +1726,62 @@ test "an array member of an object relates element-wise (nestedarr)" {
     "top-level > binding `badElem` init: expected `{ xs: A[] }` but got `{ xs: { a: string }[] }`",
   ])
 }
+
+///|
+/// A numeric literal is assignable to a numeric enum only when a member
+/// holds that value (TS 5.0); `number` itself, and an enum with a member
+/// whose value is not known statically, accept any (#315's review; probed:
+/// tsc reports only `bad`).
+test "a numeric literal fits a numeric enum only when a member holds it (enumlit2)" {
+  let src =
+    #|enum E { A = 0, B = 1 }
+    #|enum C { A = 0, B = f() }
+    #|declare function f(): number;
+    #|declare const o1: { r: 123 };
+    #|export const badLiteralNoMember: { r: E } = o1;
+    #|declare const o2: { r: 1 };
+    #|export const okLiteralMember: { r: E } = o2;
+    #|declare const o3: { r: number };
+    #|export const okBroadNumber: { r: E } = o3;
+    #|declare const o4: { r: 7 };
+    #|export const okComputedMemberMayHold: { r: C } = o4;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badLiteralNoMember` init: expected `{ r: E }` but got `{ r: 123 }`",
+  ])
+}
+
+///|
+/// After an `if` whose other branch exits, a binding takes the continuing
+/// branch's exit type even when it equals the one before the `if` — the
+/// condition's narrowing is still installed — and a property path that
+/// branch narrowed reaches the code after it (#315's review; probed: tsc
+/// reports the two `bad` lines and accepts `okPathCarried`).
+test "an exiting sibling carries the continuing branch's exit state (ifjoin3)" {
+  let src =
+    #|declare function takeS(s: string): void;
+    #|export function badParams(x: string | null, y: string | null) { if (x !== null) { x = y; } else { return; } takeS(x); }
+    #|export function badParamsTruthy(x: string | null, y: string | null) { if (x) { x = y; } else { return; } takeS(x); }
+    #|export function okPathCarried(flag: boolean) { const o: { p: string | null } = { p: null }; if (flag) { o.p = ""; } else { return; } takeS(o.p); }
+  assert_eq(issue_lines(src), [
+    "function badParams > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
+    "function badParamsTruthy > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// A return inside a nested scope that re-declares a name is not read
+/// through the outer binding of that name: a static factory whose nested
+/// `const value = null; return value` shadows the parameter keeps `null`,
+/// so a field it is assigned to stays nullable (#315's review; probed: tsc
+/// reports `H.set`).
+test "a shadowing nested declaration declines a factory's inferred return (shadowret)" {
+  let src =
+    #|declare function takeS(s: string): void;
+    #|export class K { static make(value: string, flag: boolean) { if (flag) { const value = null; return value; } return value; } }
+    #|export class H { p: string | null = null; set(v: string) { this.p = K.make(v, true); takeS(this.p); } }
+    #|export class K2 { static make(value: string) { if (value) { const other = 1; return value + other; } return value; } }
+    #|export class H2 { p: string | null = null; set(v: string) { this.p = K2.make(v); takeS(this.p); } }
+  assert_eq(issue_lines(src), [
+    "function H.set > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
+  ])
+}

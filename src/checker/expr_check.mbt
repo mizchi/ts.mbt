@@ -12892,6 +12892,45 @@ fn enum_value_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+/// Whether every numeric LITERAL in `h` (`h` a number-valued type) is a
+/// value some member of enum `n` holds. `number` itself, and an enum with a
+/// member whose value this cannot read, accept any.
+fn numeric_literals_held_by_enum(
+  resolver : Resolver,
+  h : @ast.TsType,
+  n : String,
+) -> Bool {
+  let values = match enum_value_type(resolver, Named(n)) {
+    Some(v) => union_components(v)
+    None => return true
+  }
+  if values.iter().any(fn(v) { v is Number }) {
+    return true
+  }
+  union_components(h)
+  .iter()
+  .all(fn(c) {
+    match c {
+      NumberLiteral(x) =>
+        values
+        .iter()
+        .any(fn(v) {
+          match v {
+            NumberLiteral(y) =>
+              y == x ||
+              (
+                decimal_int_value(y) is Some(a) &&
+                decimal_int_value(x) == Some(a)
+              )
+            _ => false
+          }
+        })
+      _ => true
+    }
+  })
+}
+
+///|
 /// `number`, a numeric literal, or a union of them.
 fn is_number_valued_type(ty : @ast.TsType) -> Bool {
   match ty {
@@ -19174,6 +19213,26 @@ fn check_expr_against_shape(
       ) => return
     _ => ()
   }
+  // A value of one enum where a DIFFERENT declaration of the same name is
+  // expected — the checked module's `S` against a second module's `S`,
+  // kept under its per-module key — fits only when the two are related
+  // (TS 5.4, probed). The relations below compare the two names modulo the
+  // key, so the mismatch is decided here, and only when an enum is what is
+  // expected.
+  match ctx.resolver.unwrap(expected) {
+    Named(n) as ex if enum_type_parts(ctx.resolver, n) is Some(_) => {
+      let src = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+      if unrelated_same_named_enums(ctx.resolver, src, ex) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(ex)}` but got `\{type_display(src)}`, a different declaration of the enum whose members differ",
+        )
+        return
+      }
+    }
+    _ => ()
+  }
   // `new Promise((resolve) => …)` where a `Promise<X>` is expected: the
   // executor is contextually typed by `Promise<X>`'s constructor, so
   // `resolve` takes `X | PromiseLike<X>` (`resolve(null)` against
@@ -21794,6 +21853,9 @@ fn struct_field_assignable(
   if is_named_decl(h, resolver) && is_named_decl(w, resolver) {
     return struct_assignable_named_rec(h, w, resolver, visited)
   }
+  if unrelated_same_named_enums(resolver, h, w) {
+    return false
+  }
   if is_assignable_to(h, w) ||
     is_assignable_to(enum_members_as_enums(resolver, h), w) {
     return true
@@ -21813,9 +21875,14 @@ fn struct_field_assignable(
   // x` was reported member by member, while the literal spelling passed
   // (univer's `Rectangle.union`, whose `reduce` returns `{ rangeType:
   // RANGE_TYPE.NORMAL }` read as `number`; probed: tsc accepts both).
+  // A numeric LITERAL only when a member holds that value (TS 5.0,
+  // probed): `{ r: 123 }` against `{ r: E }` with `enum E { A = 0 }` is an
+  // error, `{ r: 0 }` is not. A member value this cannot read keeps the
+  // literal acceptable.
   match w {
-    Named(n) if is_number_valued_type(h) && enum_may_hold_number(resolver, n) =>
-      return true
+    Named(n) if is_number_valued_type(h) &&
+      enum_may_hold_number(resolver, n) &&
+      numeric_literals_held_by_enum(resolver, h, n) => return true
     _ => ()
   }
   // An array member is covariant in its element, and the element goes
@@ -27414,9 +27481,85 @@ fn infer_body_return_type(
       _ => ()
     }
   }
+  // A name a NESTED scope declares — a block's `let` / `const` / `var`, a
+  // loop head, a `catch` binding — is not the binding the outer env holds
+  // for it, and this walk does not bind it: `if (flag) { const value =
+  // null; return value }` read the parameter `value: string`, and a static
+  // factory lost its `null` (#315's review; probed). So a return that
+  // mentions a nested name already bound outside declines.
+  let nested : Array[String] = []
+  fn nested_decls(
+    stmts : Array[@ast.TsStmt],
+    top : Bool,
+    out : Array[String],
+  ) -> Unit {
+    for st in stmts {
+      match st {
+        Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
+          if !top {
+            collect_binding_names(b, out)
+          }
+        If(_, t, e) => {
+          nested_decls(t.stmts, false, out)
+          match e {
+            Some(b) => nested_decls(b.stmts, false, out)
+            None => ()
+          }
+        }
+        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+          nested_decls(b.stmts, false, out)
+        For(init, _, _, b) => {
+          match init {
+            Some(i) => nested_decls([i], false, out)
+            None => ()
+          }
+          nested_decls(b.stmts, false, out)
+        }
+        ForOf(_, bind, _, _, b)
+        | ForAwaitOf(_, bind, _, _, b)
+        | ForIn(_, bind, _, _, b) => {
+          collect_binding_names(bind, out)
+          nested_decls(b.stmts, false, out)
+        }
+        Try(t, param, c, f) => {
+          nested_decls(t.stmts, false, out)
+          match param {
+            Some(p) => collect_binding_names(p, out)
+            None => ()
+          }
+          match c {
+            Some(b) => nested_decls(b.stmts, false, out)
+            None => ()
+          }
+          match f {
+            Some(b) => nested_decls(b.stmts, false, out)
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            nested_decls(c.body.stmts, false, out)
+          }
+        Label(_, inner) => nested_decls([inner], top, out)
+        _ => ()
+      }
+    }
+  }
+
+  nested_decls(body.stmts, true, nested)
+  let shadowed = nested.filter(fn(n) {
+    env.lookup(n) is Some(_) || resolver.globals.contains(n)
+  })
   let parts : Array[@ast.TsType] = []
   let mut ok = true
   for r in returns {
+    match r {
+      Some(e) if shadowed.iter().any(fn(n) { expr_mentions_name(e, n) }) => {
+        ok = false
+        break
+      }
+      _ => ()
+    }
     let t = match r {
       // An enum member widens to its enum as a literal does: `function f()
       // { return { tag: S.X } }` returns `{ tag: S }` in tsc.
@@ -35330,13 +35473,35 @@ fn apply_sequential_exit(
     if shadow.contains(sequential_exit_root(k)) {
       continue
     }
+    // Against the CURRENT binding, not only the one before the block: a
+    // continuing `if` branch runs under its condition's narrowing, which
+    // is already in `env`, so `if (x !== null) { x = y } else { return }`
+    // with `y: string | null` left `x` as `string` when the exit type
+    // equalled the declared one (#315's review; probed: tsc reports the
+    // later `takeS(x)`).
     match exit.get(k) {
-      Some(t) => if t != v { env.narrow(k, t) }
+      Some(t) => if t != v || env.lookup(k) != Some(t) { env.narrow(k, t) }
       None => if is_path { gone.push(k) }
     }
   }
   for k in gone {
     let _ = env.vars.remove(k)
+  }
+  // A property path the block NARROWED that held no narrowing before it
+  // reaches the code after it too: `if (flag) { o.p = "" } else { return }`
+  // leaves `o.p` a `string` (#315's review; main reported the later read).
+  // Markers and a root the block declares stay out, as above.
+  for k, t in exit {
+    if pre_map.contains(k) || k.has_prefix("<") {
+      continue
+    }
+    if !(k.contains(".") || k.contains("[")) {
+      continue
+    }
+    if shadow.contains(sequential_exit_root(k)) {
+      continue
+    }
+    env.narrow(k, t)
   }
 }
 
@@ -36266,10 +36431,101 @@ fn enum_member_fits_expected(
   .iter()
   .any(fn(t) {
     match t {
-      Named(n) => declared(n) == e || n == member_
+      Named(n) if n == e || n == member_ => true
+      // Another declaration of the same NAME — a second module's `E`, kept
+      // under its per-module key — takes the member only when the two
+      // enums are related (TS 5.4, probed): the same members with the same
+      // values. Its member type `E@path.M` likewise.
+      Named(n) =>
+        match enum_type_parts(resolver, n) {
+          Some((te, tm)) =>
+            declared(te) == e &&
+            (tm is None || tm == Some(m)) &&
+            enum_decls_related(resolver, e, te)
+          None => false
+        }
       _ => false
     }
   })
+}
+
+///|
+/// `(enum, member?)` for an enum type `E` or an enum-literal type `E.M`,
+/// either spelled with its per-module key; `None` for anything else.
+fn enum_type_parts(resolver : Resolver, n : String) -> (String, String?)? {
+  if resolver.enums.contains(n) {
+    return Some((n, None))
+  }
+  match n.rev_find(".") {
+    Some(i) if i > 0 => {
+      let e = n[:i].to_owned()
+      let m = n[i + 1:].to_owned()
+      match resolver.enums.get(e) {
+        Some(decl) if decl.members.iter().any(fn(x) { x.name == m }) =>
+          Some((e, Some(m)))
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Whether two declarations of an enum NAME are related, as tsc relates
+/// same-named enums from different declarations (TS 5.4): every member of
+/// `src` is a member of `tgt`, with the same value wherever both values are
+/// known. One declaration is always related to itself. A member value this
+/// cannot read (`number`, from a computed member) does not decide.
+fn enum_decls_related(resolver : Resolver, src : String, tgt : String) -> Bool {
+  if src == tgt {
+    return true
+  }
+  guard resolver.enums.get(src) is Some(s_decl) else { return true }
+  guard resolver.enums.get(tgt) is Some(t_decl) else { return true }
+  s_decl.members
+  .iter()
+  .all(fn(m) {
+    if !t_decl.members.iter().any(fn(x) { x.name == m.name }) {
+      return false
+    }
+    match
+      (
+        enum_value_type(resolver, Named(src + "." + m.name)),
+        enum_value_type(resolver, Named(tgt + "." + m.name)),
+      ) {
+      (Some(NumberLiteral(a)), Some(NumberLiteral(b))) => a == b
+      (Some(Literal(a)), Some(Literal(b))) => a == b
+      (Some(Literal(_)), Some(NumberLiteral(_)))
+      | (Some(NumberLiteral(_)), Some(Literal(_))) => false
+      _ => true
+    }
+  })
+}
+
+///|
+/// Whether `have` and `want` name two DIFFERENT declarations of one enum
+/// name that are not related: `E` against a second module's `E@path`, or
+/// either's member type. The resolver-free relation compares such names
+/// modulo the key, which accepted a member whose value the target enum does
+/// not hold.
+fn unrelated_same_named_enums(
+  resolver : Resolver,
+  have : @ast.TsType,
+  want : @ast.TsType,
+) -> Bool {
+  guard have is Named(h) && want is Named(w) else { return false }
+  guard enum_type_parts(resolver, h) is Some((he, _)) else { return false }
+  guard enum_type_parts(resolver, w) is Some((we, _)) else { return false }
+  fn declared(n : String) -> String {
+    match n.find("@") {
+      Some(i) if i > 0 => n[:i].to_owned()
+      _ => n
+    }
+  }
+
+  he != we &&
+  declared(he) == declared(we) &&
+  !enum_decls_related(resolver, he, we)
 }
 
 ///|

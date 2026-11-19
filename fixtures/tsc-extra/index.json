@@ -1047,6 +1047,46 @@
       ]
     },
     {
+      "case": "controlFlow/exitingSiblingCarriesExitState.ts",
+      "area": "controlFlow",
+      "name": "exitingSiblingCarriesExitState",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/exitingSiblingCarriesExitState.errors.txt",
+      "claims": [
+        {
+          "name": "badReassignedAfterGuard",
+          "kind": "bad",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "badReassignedAfterTruthiness",
+          "kind": "bad",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okPathNarrowedInBranch",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okReassignedNonNull",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
       "case": "controlFlow/forOfDestructuringAnyAndReadonlyMap.ts",
       "area": "controlFlow",
       "name": "forOfDestructuringAnyAndReadonlyMap",
@@ -3618,6 +3658,34 @@
           "kind": "bad",
           "fromLine": 31,
           "toLine": 32
+        }
+      ]
+    },
+    {
+      "case": "inference/factoryReturnThroughShadowingNestedScope.ts",
+      "area": "inference",
+      "name": "factoryReturnThroughShadowingNestedScope",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/factoryReturnThroughShadowingNestedScope.errors.txt",
+      "claims": [
+        {
+          "name": "BadShadowedReturnKeepsNull",
+          "kind": "bad",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "OkUnrelatedNestedName",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 12
         }
       ]
     },
@@ -6334,6 +6402,58 @@
           "kind": "bad",
           "fromLine": 14,
           "toLine": 15
+        }
+      ]
+    },
+    {
+      "case": "relations/numericLiteralIntoNumericEnumMember.ts",
+      "area": "relations",
+      "name": "numericLiteralIntoNumericEnumMember",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/numericLiteralIntoNumericEnumMember.errors.txt",
+      "claims": [
+        {
+          "name": "badLiteralNoMember",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okLiteralMember",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okBroadNumber",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okComputedMemberMayHold",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okUnionOfMembers",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badUnionWithANonMember",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 21
         }
       ]
     },

@@ -7247,6 +7247,72 @@ product surfaces now.
   the other side. Giving a value its real type is not free when the
   checker had been abstaining on it, because every place the value was
   invisible to becomes a place it is judged.
+  Batch HE takes the two blockers batch HD filed, and the copy it took out
+  ships with them, at an unchanged oracle and with no real-code site added.
+  - **An enum member written in an object literal is the enum-LITERAL
+    type `E.M`.** It had been read as its value, so a callback's `({ tag:
+    S.X })` against `{ tag: S.X | S.Y }[]`, against a union discriminated
+    by `tag`, or against `{ kind: E.A }[]` was reported. main reports seven
+    legal cells of that shape, against one file. The widening tsc applies
+    then has to be placed, and FRESHNESS decides where. `E.M` widens to
+    `E` where it was written — an object or array literal, a call taking
+    an inline callback (`xs.map(() => ({ … }))`), and an unannotated
+    function's inferred return — so `arr.push({ tag: S.Y })` stays legal.
+    A parameter typed `T.A | T.B` held in `{ t }`, and a declared
+    `(): { tag: S.X }`, keep the member. Widening every composite at a
+    binding, the first version, reported both of those, the same over-
+    widening main already does for a DECLARED string literal field
+    (`okLit`, filed).
+  - **An enum is assignable to what its members' values are.** `S` to
+    `string`, `S.X` to `"x"`, an auto-numbered `E.A` to `0`, which
+    `enum_value_type` reproduces as `record_closed_key_names` already did.
+    Without it the widening above reported `{ tag: S }` against `{ tag:
+    string }` — a false positive the change itself introduced, caught by
+    the probe file before any real code ran.
+  - **A discriminant of union or enum type splits over a discriminated
+    union target (TS 3.5)**, at most 25 combinations, every one fitting
+    some arm. `[{ t: T.RETAIN, len: 1 }]` against `Retain | Insert | Del`
+    is an ERROR, which my own first test labelled `ok`: the split includes
+    `T.INSERT`, whose arm needs `body`. tsc said so; the label was mine.
+  - **An array member of an object relates element-wise.** `const f = {
+    xs: [{ a: 1 }] }` against `{ xs: A[] }`, `A` an interface, was
+    reported on main, and that was one of the four univer sites the copy
+    added: a field relation that asked about unions and named types and
+    never about arrays.
+
+  The four sites were found by BISECTION on the real file, after a
+  minimal reproduction of the first came back clean twice: the cause was
+  in the field I had simplified away (`actions`, an array of
+  `IActionInfo`). One leftover probe of mine was also sitting in the univer
+  tree, a `zz_min.spec.ts`; it reported nothing in either baseline, so the
+  numbers stood, and it is deleted.
+
+  The review of [#315](https://github.com/mizchi/ts.mbt/pull/315) found
+  one Major and five Minors, each probed against the nightly.
+  - **Two declarations of one enum name.** A second module's `S` is keyed
+    `S@path`, and the member test compared the names modulo the key. tsc
+    relates same-named enums only when every source member is a member of
+    the target with the same value (TS 5.4), and accepts identical ones.
+    The direct spelling `{ s: e }` and the relation through a binding are
+    two routes, and the first fix covered only the second. A numeric enum
+    still cannot show it: the number-to-numeric-enum rule accepts the
+    member's value either way, and the general enum abstention #315 lists
+    hides the rest.
+  - **A numeric literal fits a numeric enum only when a member holds it**
+    (TS 5.0).
+  - **The `if`-join carry compared the exit type with the binding BEFORE
+    the `if`.** The continuing branch runs under its condition's
+    narrowing, so `if (x !== null) { x = y } else { return }` kept `x` a
+    `string`. It reproduces with parameters and not with a `let` initialized
+    to a literal, which is why my first probe said it did not. And a
+    property path the branch narrowed was dropped, a false positive main
+    has too.
+  - **A factory's inferred return read a nested `const value = null`
+    through the parameter `value`.** This one was new in #315, since main
+    did not infer the body at all: a return that mentions a nested-scope
+    name already bound outside now declines.
+  - The local-alias exclusion did not reproduce: `unwrap` resolves a local
+    alias before the arm it named can see it.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

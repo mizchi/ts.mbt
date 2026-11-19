@@ -2009,3 +2009,39 @@ test "mtsc graph checker types an imported enum's members (enumimport)" {
     ],
   )
 }
+
+///|
+/// Two declarations of one enum NAME — the checked module's `S` and a
+/// second module's, kept under its per-module key — are related only when
+/// every member of the source is a member of the target with the same
+/// value (TS 5.4). The name-only comparison accepted the checked module's
+/// `S` wherever the other one was expected (#315's review; probed: tsc
+/// reports exactly the two `bad` lines and accepts the identical enum).
+test "mtsc graph checker keeps two same-named enums apart unless related (enumident)" {
+  let lib =
+    #|export enum S { X = "x", Y = "y" }
+    #|export enum Same { X = "x" }
+    #|export interface Holder { s: S }
+    #|export interface HolderSame { s: Same }
+  let entry =
+    #|import { Holder, HolderSame } from "./lib";
+    #|enum S { X = "q" }
+    #|enum Same { X = "x" }
+    #|declare const e: S;
+    #|declare const same: Same;
+    #|const o = { s: e };
+    #|export const badViaBinding: Holder = o;
+    #|export const badDirect: Holder = { s: e };
+    #|const os = { s: same };
+    #|export const okSameViaBinding: HolderSame = os;
+    #|export const okSameDirect: HolderSame = { s: same };
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `badViaBinding` init :: expected `Holder` but got `{ s: S }`",
+      "top-level > binding `badDirect` init.s :: expected `S` but got `S`, a different declaration of the enum whose members differ",
+    ],
+  )
+}
