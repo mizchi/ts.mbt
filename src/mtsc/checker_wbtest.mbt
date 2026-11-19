@@ -1974,3 +1974,38 @@ test "mtsc graph checker moves a reserved name inside an ambient namespace" {
     [],
   )
 }
+
+///|
+/// An imported enum's members travel with it. Only the enum table was
+/// copied into the importer, so `Kind.PARAGRAPH` read as `any` there: a
+/// `n?.kind === Kind.PARAGRAPH` guard never ruled out `undefined` (univer's
+/// `_applyContextualParagraphSpacing`), and a member against the wrong type
+/// or the wrong arm of a discriminated union passed (probed: tsc reports
+/// exactly the two `bad` lines).
+test "mtsc graph checker types an imported enum's members (enumimport)" {
+  let lib =
+    #|export enum Kind { PARAGRAPH = "p", TABLE = "t" }
+    #|export enum Level { LOW, HIGH }
+    #|export interface Node { kind: Kind; text: string }
+    #|export interface Para { kind: Kind.PARAGRAPH; text: string }
+    #|export interface Table { kind: Kind.TABLE; rows: number }
+    #|export interface Item { level: Level; label: string }
+  let entry =
+    #|import { Kind, Level, Node, Para, Table, Item } from "./lib";
+    #|declare const n: Node | undefined;
+    #|declare const xs: number[];
+    #|export function okNarrow(): string { if (n?.kind === Kind.PARAGRAPH) { return n.text; } return ""; }
+    #|export const badNumber: number = Kind.PARAGRAPH;
+    #|export const okBlocks: (Para | Table)[] = xs.map(() => ({ kind: Kind.PARAGRAPH, text: "" }));
+    #|export const okItems: Item[] = xs.map((i) => ({ level: Level.HIGH, label: String(i) }));
+    #|export const badBlocks: Para[] = xs.map(() => ({ kind: Kind.TABLE, text: "" }));
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `badNumber` init :: expected `number` but got `string`",
+      "top-level > binding `badBlocks` init :: expected `Para[]` but got `{ kind: Kind.TABLE; text: \"\" (string) }[]`",
+    ],
+  )
+}

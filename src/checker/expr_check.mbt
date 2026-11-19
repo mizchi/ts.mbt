@@ -1849,6 +1849,18 @@ fn Resolver::ingest_type_module(
       continue
     }
     r.enums[name] = enum_
+    // Its members travel with it. `ingest_module` exposes each one as the
+    // global `E.M`, which is how `E.M` is typed, and only the enum table was
+    // copied out of the throwaway resolver: an imported `Kind.PARAGRAPH`
+    // read as `any`, so `x?.kind === Kind.PARAGRAPH` never ruled out
+    // `undefined` (univer's `_applyContextualParagraphSpacing`).
+    for m in enum_.members {
+      let key = name + "." + m.name
+      match types.globals.get(key) {
+        Some(t) if !r.globals.contains(key) => r.globals[key] = t
+        _ => ()
+      }
+    }
   }
 }
 
@@ -12819,6 +12831,67 @@ fn enum_may_hold_number(resolver : Resolver, name : String) -> Bool {
 }
 
 ///|
+/// The type of the values an enum type (`S`, the union of its members'
+/// values) or an enum-literal type (`S.X`, its member's value) holds.
+/// Auto-numbering is reproduced as `record_closed_key_names` reproduces it
+/// (`enum E { A, B }` writes no value, and `E.A` is `0`); a computed member,
+/// or one after a member numbering cannot continue from, is `number`, which
+/// is wider than its value and so only ever accepts less. `None` for
+/// anything else, a member the enum does not declare included.
+fn enum_value_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? {
+  guard ty is Named(n) else { return None }
+  let (e, member_) = if resolver.enums.contains(n) {
+    (n, None)
+  } else {
+    match n.rev_find(".") {
+      Some(i) if i > 0 => (n[:i].to_owned(), Some(n[i + 1:].to_owned()))
+      _ => return None
+    }
+  }
+  guard resolver.enums.get(e) is Some(decl) else { return None }
+  let parts : Array[@ast.TsType] = []
+  let mut next_auto : Int32? = Some(0)
+  for m in decl.members {
+    let v : @ast.TsType = if m.is_computed {
+      next_auto = None
+      Number
+    } else {
+      match m.value {
+        Some(Number(s)) => {
+          next_auto = match decimal_int_value(s) {
+            Some(x) => Some(x + 1)
+            None => None
+          }
+          NumberLiteral(s)
+        }
+        Some(String(s)) => {
+          next_auto = None
+          Literal(s)
+        }
+        Some(_) => return None
+        None =>
+          match next_auto {
+            Some(x) => {
+              next_auto = Some(x + 1)
+              NumberLiteral(x.to_string())
+            }
+            None => Number
+          }
+      }
+    }
+    match member_ {
+      Some(name) => if m.name == name { return Some(v) }
+      None => if !parts.contains(v) { parts.push(v) }
+    }
+  }
+  match (member_, parts.length()) {
+    (Some(_), _) | (None, 0) => None
+    (None, 1) => Some(parts[0])
+    _ => Some(Union(parts))
+  }
+}
+
+///|
 /// `number`, a numeric literal, or a union of them.
 fn is_number_valued_type(ty : @ast.TsType) -> Bool {
   match ty {
@@ -14917,7 +14990,17 @@ fn infer_expr_inner(
             opaque_spread = true
           }
         } else {
-          let val_ty = infer_expr(env, resolver, entry.1)
+          // An enum member read off the enum itself is the enum-LITERAL
+          // type `E.M`, as in tsc, and not the type of its value: a
+          // callback's `({ tag: S.X })` against `{ tag: S.X | S.Y }[]` or a
+          // union discriminated by `tag` read `"x"`, which is neither
+          // (probed: tsc accepts both). A binding widens it to `E`, as it
+          // widens a literal (`binding_init_type`).
+          let val_ty = match
+            (entry.1, enum_member_receiver(env, resolver, entry.1)) {
+            (PropAccess(_, m), Some(e)) => @ast.TsType::Named(e + "." + m)
+            _ => infer_expr(env, resolver, entry.1)
+          }
           for alt in alts {
             object_lit_set_field(alt, entry.0, val_ty)
           }
@@ -21715,6 +21798,15 @@ fn struct_field_assignable(
     is_assignable_to(enum_members_as_enums(resolver, h), w) {
     return true
   }
+  // An enum or an enum-literal type is assignable to what its VALUES are:
+  // `S` to `string`, `S.X` to `"x"`, a numeric member to its number (tsc's
+  // `isSimpleTypeRelatedTo`, probed). The resolver-free relation knows
+  // neither the members nor their values, so `{ tag: S }` against `{ tag:
+  // string }` was reported once a binding widened `S.X` to `S`.
+  match enum_value_type(resolver, h) {
+    Some(v) if is_assignable_to(v, w) => return true
+    _ => ()
+  }
   // A numeric enum accepts any `number`, the rule `check_expr_against`
   // already applies at the top level, and the resolver-free relation never
   // consults the enum table. So `const x = { r: n }; const o: { r?: E } =
@@ -21724,6 +21816,27 @@ fn struct_field_assignable(
   match w {
     Named(n) if is_number_valued_type(h) && enum_may_hold_number(resolver, n) =>
       return true
+    _ => ()
+  }
+  // An array member is covariant in its element, and the element goes
+  // through this same relation: `const f = { xs: [{ a: 1 }] }` assigned to
+  // `{ xs: A[] }`, `A` an interface, was reported, because the
+  // resolver-free relation cannot expand the named element and nothing
+  // else here asked about arrays (univer's `IPermissionPoint.actions`;
+  // probed: tsc accepts). `structural_oneway_assignable_rec` relates arrays
+  // the same way at the top level. A `readonly` source does not assign to a
+  // mutable target.
+  let array_elem = fn(t : @ast.TsType) -> (@ast.TsType, Bool)? {
+    match t {
+      Array(e) | Applied("Array", [e]) => Some((e, false))
+      Applied("ReadonlyArray", [e]) => Some((e, true))
+      _ => None
+    }
+  }
+  match (array_elem(h), array_elem(w)) {
+    (Some((he, h_ro)), Some((we, w_ro))) =>
+      return (!h_ro || w_ro) &&
+        struct_field_assignable(he, we, resolver, visited, depth=depth + 1)
     _ => ()
   }
   match h {
@@ -22941,7 +23054,20 @@ fn binding_init_type(
     Object(_) => widen_object_literal_type(inferred, init, resolver, infer)
     Union(_) if init is ObjectLit(_) =>
       widen_object_literal_type(inferred, init, resolver, infer)
-    Struct(_, _) | Array(_) | Tuple(_) => widen_literal_deep(inferred)
+    // An array of object literals widens each member the way a single
+    // literal does, and the element type no longer carries the expressions
+    // that say which members were enum members. So a key that EVERY item
+    // writing it sets to a member of one enum is that enum across the
+    // element (`[{ t: T.INSERT, … }]` is `{ t: T; … }[]`, as in tsc).
+    Array(elem) if init is ArrayLit(items) && items.length() > 0 =>
+      match array_literal_enum_keys(items, resolver, infer) {
+        Some(keys) => @ast.TsType::Array(widen_enum_keys(resolver, elem, keys))
+        None => widen_fresh_deep(resolver, inferred)
+      }
+    // An expanded interface's members are declared, not fresh, so only the
+    // literal widening that predates enum-literal members applies to it.
+    Struct(_, _) => widen_literal_deep(inferred)
+    Array(_) | Tuple(_) => widen_fresh_deep_from(resolver, inferred, init)
     // An enum member's literal type widens to its ENUM in a mutable
     // binding: `let prev = LinkCharType.Other` is a `LinkCharType`, so a
     // later `prev = other` and `prev !== LinkCharType.Open` are legal
@@ -23176,7 +23302,7 @@ fn widen_object_literal_type(
               match origins.get(k) {
                 Some(Fresh(Some(v))) =>
                   (f.0, widen_object_literal_type(f.1, v, resolver, infer))
-                Some(Fresh(None)) => (f.0, widen_literal_deep(f.1))
+                Some(Fresh(None)) => (f.0, widen_fresh_deep(resolver, f.1))
                 Some(FreshPart(t)) => {
                   let fresh = union_components(t)
                   let parts : Array[@ast.TsType] = []
@@ -23201,9 +23327,9 @@ fn widen_object_literal_type(
                 }
                 Some(Declared) => f
                 None if has_spread => f
-                None => (f.0, widen_literal_deep(f.1))
+                None => (f.0, widen_fresh_deep(resolver, f.1))
               }
-            _ => (f.0, widen_literal_deep(f.1))
+            _ => (f.0, widen_fresh_deep(resolver, f.1))
           }
         }),
       )
@@ -23257,7 +23383,186 @@ fn widen_object_literal_type(
         Union(parts)
       }
     }
-    _ => widen_literal_deep(ty)
+    // An enum member widens to its ENUM, not to the base of its value:
+    // `{ t: T.RETAIN, len: 1 }` is `{ t: T; len: number }` in tsc, `const`
+    // or not, so a later relation against a union discriminated by `t`
+    // splits over `T`'s members. Widening to `string` lost the enum and
+    // made every such object a mismatch (univer's text-x actions).
+    (_, PropAccess(Var(e), m)) if resolver.enums.contains(e) &&
+      enum_member_receiver_typed(resolver, e, m, infer(@ast.TsExpr::Var(e))) =>
+      Named(e)
+    _ => widen_fresh_deep_from(resolver, ty, init)
+  }
+}
+
+///|
+/// `widen_fresh_deep` when `init` can have produced a FRESH enum-literal
+/// member, and `widen_literal_deep` otherwise. tsc widens `E.M` to `E`
+/// only where the member was written: a call taking an inline callback
+/// (`xs.map(() => ({ tag: S.X }))`) returns what the callback's literal
+/// widened to, while a parameter `t: T.A | T.B` held in `{ t }` and a call
+/// to `k(): { tag: S.X }` keep the declared type (probed). An unannotated
+/// function's return is widened where it is inferred
+/// (`infer_body_return_type`), so a plain call needs nothing here.
+fn widen_fresh_deep_from(
+  resolver : Resolver,
+  t : @ast.TsType,
+  init : @ast.TsExpr,
+) -> @ast.TsType {
+  if init_passes_inline_callback(init) {
+    widen_fresh_deep(resolver, t)
+  } else {
+    widen_literal_deep(t)
+  }
+}
+
+///|
+/// Whether `init` is a call, method call or `new` with a function
+/// expression among its arguments, through the wrappers a call can carry.
+fn init_passes_inline_callback(init : @ast.TsExpr) -> Bool {
+  match init {
+    Call(_, args)
+    | CallExpr(_, args)
+    | MethodCall(_, _, args)
+    | New(_, args)
+    | NewExpr(_, args) =>
+      args.iter().any(fn(a) { a is (ArrowFunc(_, _, _, _) | FuncExpr(_)) })
+    TypeArgs(_, inner) | PureCall(inner) | OptionalChain(inner) =>
+      init_passes_inline_callback(inner)
+    _ => false
+  }
+}
+
+///|
+/// `widen_literal_deep`, with an enum-literal member type (`E.M`) widening
+/// to its enum `E` the way a fresh literal widens to its base: `const arr =
+/// xs.map(() => ({ tag: S.X }))` is `{ tag: S }[]` in tsc, so a later
+/// `arr.push({ tag: S.Y })` is legal. An expanded interface (`Struct`) and
+/// a named type are declared rather than fresh and are left as they are.
+fn widen_fresh_deep(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
+  enum_members_as_enums_deep(resolver, widen_literal_deep(t))
+}
+
+///|
+/// `enum_members_as_enums` through the object, array, tuple and union
+/// layers a fresh literal type can hold. A union is deduplicated after the
+/// mapping (`E.A | E.B` is `E`).
+fn enum_members_as_enums_deep(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType {
+  match t {
+    Named(_) => enum_members_as_enums(resolver, t)
+    Array(e) => Array(enum_members_as_enums_deep(resolver, e))
+    Tuple(items) =>
+      Tuple(items.map(fn(i) { enum_members_as_enums_deep(resolver, i) }))
+    Union(members) => {
+      let out : Array[@ast.TsType] = []
+      for m in members {
+        let w = enum_members_as_enums_deep(resolver, m)
+        if !out.iter().any(fn(x) { equivalent(x, w) }) {
+          out.push(w)
+        }
+      }
+      if out.length() == 1 {
+        out[0]
+      } else {
+        Union(out)
+      }
+    }
+    Object(fields) =>
+      Object(
+        fields.map(fn(f) { (f.0, enum_members_as_enums_deep(resolver, f.1)) }),
+      )
+    _ => t
+  }
+}
+
+///|
+/// For an array literal whose items are all object literals, the keys
+/// whose every written value is a member of one enum, mapped to that enum.
+/// `None` when an item is not an object literal or no key qualifies; a
+/// spread, a computed key or a key written with anything else drops out.
+fn array_literal_enum_keys(
+  items : Array[@ast.TsExpr],
+  resolver : Resolver,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+) -> Map[String, String]? {
+  let found : Map[String, String] = Map([])
+  let spoiled : Map[String, Unit] = Map([])
+  for item in items {
+    guard item is ObjectLit(entries) else { return None }
+    for entry in entries {
+      let (k, v) = entry
+      if k.has_prefix("@@") || spoiled.contains(k) {
+        continue
+      }
+      let e = match v {
+        PropAccess(Var(e), m) if enum_member_receiver_typed(
+            resolver,
+            e,
+            m,
+            infer(@ast.TsExpr::Var(e)),
+          ) => Some(e)
+        _ => None
+      }
+      match (e, found.get(k)) {
+        (Some(e), None) => found[k] = e
+        (Some(e), Some(prev)) if prev == e => ()
+        _ => {
+          spoiled[k] = ()
+          let _ = found.remove(k)
+        }
+      }
+    }
+  }
+  if found.is_empty() {
+    None
+  } else {
+    Some(found)
+  }
+}
+
+///|
+/// `elem` widened as `widen_literal_deep` widens it, except that a member
+/// named in `keys` takes its enum in place of each literal it holds.
+/// `undefined` (a normalized member an item did not write) is kept.
+fn widen_enum_keys(
+  resolver : Resolver,
+  elem : @ast.TsType,
+  keys : Map[String, String],
+) -> @ast.TsType {
+  match elem {
+    Union(parts) =>
+      union_of(parts.map(fn(p) { widen_enum_keys(resolver, p, keys) }))
+    Object(fields) =>
+      Object(
+        fields.map(fn(f) {
+          match f.0 {
+            Literal(k) =>
+              match keys.get(k) {
+                Some(e) => {
+                  let parts : Array[@ast.TsType] = []
+                  // Every written value of the key is a member of `e`, so
+                  // each part but the `undefined` normalization adds is.
+                  for c in union_components(f.1) {
+                    let w = match c {
+                      Undefined => c
+                      _ => @ast.TsType::Named(e)
+                    }
+                    if !parts.contains(w) {
+                      parts.push(w)
+                    }
+                  }
+                  (f.0, union_of(parts))
+                }
+                None => (f.0, widen_fresh_deep(resolver, f.1))
+              }
+            _ => (f.0, widen_fresh_deep(resolver, f.1))
+          }
+        }),
+      )
+    other => widen_fresh_deep(resolver, other)
   }
 }
 
@@ -23476,9 +23781,113 @@ fn structural_oneway_assignable_rec(
           return true
         }
       }
-      false
+      // tsc relates a source to a discriminated union by splitting a
+      // discriminant of union type into its members (TS 3.5+): `{ t: T;
+      // len: number }`, `T` an enum, fits `Retain | Insert | Del` when the
+      // object with each member of `T` in place of `t` fits some arm. No
+      // single arm takes `t: T`, so without the split every object built
+      // from an enum member and widened to the enum was a mismatch.
+      discriminant_split_fits(source, members, resolver, depth)
     }
     _ => is_structurally_assignable_named(source, target, resolver)
+  }
+}
+
+///|
+/// The discriminant split `structural_oneway_assignable_rec` tries when no
+/// single union arm takes `source`. A member of an object source splits when
+/// its type is an enum, or a union of enum members and literals; every
+/// combination (at most 25, tsc's cap) must then fit some arm of `members`.
+fn discriminant_split_fits(
+  source : @ast.TsType,
+  members : Array[@ast.TsType],
+  resolver : Resolver,
+  depth : Int32,
+) -> Bool {
+  guard resolver.unwrap(source) is Object(fields) else { return false }
+  let splits : Array[(Int32, Array[@ast.TsType])] = []
+  for idx, f in fields {
+    match split_discriminant_parts(f.1, resolver) {
+      Some(parts) => splits.push((idx, parts))
+      None => ()
+    }
+  }
+  if splits.is_empty() {
+    return false
+  }
+  let mut combos = 1
+  for sp in splits {
+    combos = combos * sp.1.length()
+    if combos > 25 {
+      return false
+    }
+  }
+  for n in 0..<combos {
+    let candidate = fields.copy()
+    let mut rest = n
+    for sp in splits {
+      let k = sp.1.length()
+      candidate[sp.0] = (candidate[sp.0].0, sp.1[rest % k])
+      rest = rest / k
+    }
+    let fits = members.any(fn(m) {
+      structural_oneway_assignable_rec(
+        Object(candidate),
+        m,
+        resolver,
+        depth + 1,
+      )
+    })
+    if !fits {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// The members a discriminant of type `t` splits into: an enum's members
+/// (`T` is `T.A | T.B`, by the member-type names an interface writes), or
+/// the parts of a union of enum members and literals. `None` for anything
+/// else, and for an enum with a computed member, whose values are not a
+/// closed set.
+fn split_discriminant_parts(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  fn is_enum_member(resolver : Resolver, n : String) -> Bool {
+    match n.rev_find(".") {
+      Some(i) =>
+        match resolver.enums.get(n[:i].to_owned()) {
+          Some(decl) => {
+            let m = n[i + 1:].to_owned()
+            decl.members.iter().any(fn(x) { x.name == m })
+          }
+          None => false
+        }
+      None => false
+    }
+  }
+
+  match resolver.unwrap(t) {
+    Named(e) =>
+      match resolver.enums.get(e) {
+        Some(decl) if decl.members.length() > 1 &&
+          !decl.members.iter().any(fn(x) { x.is_computed }) =>
+          Some(decl.members.map(fn(x) { @ast.TsType::Named(e + "." + x.name) }))
+        _ => None
+      }
+    Union(parts) if parts.length() > 1 &&
+      parts
+      .iter()
+      .all(fn(p) {
+        match p {
+          Literal(_) | NumberLiteral(_) | BooleanLiteral(_) => true
+          Named(n) => is_enum_member(resolver, n)
+          _ => false
+        }
+      }) => Some(parts)
+    _ => None
   }
 }
 
@@ -27009,7 +27418,9 @@ fn infer_body_return_type(
   let mut ok = true
   for r in returns {
     let t = match r {
-      Some(e) => widen_literal_deep(infer_expr(env, resolver, e))
+      // An enum member widens to its enum as a literal does: `function f()
+      // { return { tag: S.X } }` returns `{ tag: S }` in tsc.
+      Some(e) => widen_fresh_deep(resolver, infer_expr(env, resolver, e))
       None => @ast.TsType::Undefined
     }
     if !return_type_trustworthy(resolver, t, 0) {
@@ -35788,16 +36199,41 @@ fn enum_member_receiver(
   expr : @ast.TsExpr,
 ) -> String? {
   guard expr is PropAccess(Var(e), m) else { return None }
-  guard resolver.enums.get(e) is Some(decl) else { return None }
-  if !decl.members.iter().any(fn(x) { x.name == m }) {
+  if !resolver.enums.contains(e) {
     return None
   }
-  match infer_expr(env, resolver, @ast.TsExpr::Var(e)) {
-    Any => Some(e)
+  if enum_member_receiver_typed(
+      resolver,
+      e,
+      m,
+      infer_expr(env, resolver, @ast.TsExpr::Var(e)),
+    ) {
+    Some(e)
+  } else {
+    None
+  }
+}
+
+///|
+/// `enum_member_receiver`'s test with the receiver's inferred type already
+/// in hand (`receiver`), for a caller that has an inference callback rather
+/// than an env.
+fn enum_member_receiver_typed(
+  resolver : Resolver,
+  e : String,
+  m : String,
+  receiver : @ast.TsType,
+) -> Bool {
+  guard resolver.enums.get(e) is Some(decl) else { return false }
+  if !decl.members.iter().any(fn(x) { x.name == m }) {
+    return false
+  }
+  match receiver {
+    Any => true
     // A per-module key (`Direction@path`, when two reachable modules
     // declare the name) is still the enum.
-    Named(n) if n == e || n.has_prefix(e + "@") => Some(e)
-    _ => None
+    Named(n) => n == e || n.has_prefix(e + "@")
+    _ => false
   }
 }
 

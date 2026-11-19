@@ -1,0 +1,52 @@
+arrayMemberOfObjectRelatesElementwise.ts(21,14): error TS2322: Type '{ xs: { a: string; }[]; }' is not assignable to type '{ xs: A[]; }'.
+  Types of property 'xs' are incompatible.
+    Type '{ a: string; }[]' is not assignable to type 'A[]'.
+      Type '{ a: string; }' is not assignable to type 'A'.
+        Types of property 'a' are incompatible.
+          Type 'string' is not assignable to type 'number'.
+arrayMemberOfObjectRelatesElementwise.ts(23,14): error TS2322: Type '{ xs: readonly A[]; }' is not assignable to type '{ xs: A[]; }'.
+  Types of property 'xs' are incompatible.
+    The type 'readonly A[]' is 'readonly' and cannot be assigned to the mutable type 'A[]'.
+arrayMemberOfObjectRelatesElementwise.ts(25,14): error TS4104: The type 'readonly A[]' is 'readonly' and cannot be assigned to the mutable type 'A[]'.
+
+
+==== arrayMemberOfObjectRelatesElementwise.ts (3 errors) ====
+    // An object member holding an array relates element-wise: `{ xs: [{ a: 1
+    // }] }` is assignable to `{ xs: A[] }` with `A` an interface or an alias,
+    // and to an interface with such a member, and an element with optional
+    // members accepts one that has them. A wrong element type is not, and a
+    // `readonly` array is not assignable to a mutable one, inside an object as
+    // at the top level.
+    
+    interface A { a: number }
+    type TA = { a: number }
+    interface K { action?: number | undefined; allowed?: boolean | undefined }
+    interface H { xs: A[] }
+    
+    const f = { xs: [{ a: 1 }] };
+    export const okInterfaceElement: { xs: A[] } = f;
+    export const okAliasElement: { xs: TA[] } = f;
+    export const okInterfaceWithArrayMember: H = f;
+    const e5: { action: number; allowed: boolean }[] = [];
+    const b5 = { actions: e5 };
+    export const okOptionalElementMembers: { actions: K[] } = b5;
+    const g = { xs: [{ a: "1" }] };
+    export const badElementType: { xs: A[] } = g;
+                 ~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ xs: { a: string; }[]; }' is not assignable to type '{ xs: A[]; }'.
+!!! error TS2322:   Types of property 'xs' are incompatible.
+!!! error TS2322:     Type '{ a: string; }[]' is not assignable to type 'A[]'.
+!!! error TS2322:       Type '{ a: string; }' is not assignable to type 'A'.
+!!! error TS2322:         Types of property 'a' are incompatible.
+!!! error TS2322:           Type 'string' is not assignable to type 'number'.
+    const ro: { xs: readonly A[] } = { xs: [] };
+    export const badReadonlyMember: { xs: A[] } = ro;
+                 ~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ xs: readonly A[]; }' is not assignable to type '{ xs: A[]; }'.
+!!! error TS2322:   Types of property 'xs' are incompatible.
+!!! error TS2322:     The type 'readonly A[]' is 'readonly' and cannot be assigned to the mutable type 'A[]'.
+    declare const r2: readonly A[];
+    export const badReadonlyTopLevel: A[] = r2;
+                 ~~~~~~~~~~~~~~~~~~~
+!!! error TS4104: The type 'readonly A[]' is 'readonly' and cannot be assigned to the mutable type 'A[]'.
+    

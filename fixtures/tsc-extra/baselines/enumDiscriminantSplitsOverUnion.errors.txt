@@ -1,0 +1,90 @@
+enumDiscriminantSplitsOverUnion.ts(24,95): error TS2345: Argument of type '{ t: T; len: number; }[]' is not assignable to parameter of type 'Action[]'.
+  Type '{ t: T; len: number; }' is not assignable to type 'Action'.
+    Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+      Types of property 't' are incompatible.
+        Type 'T' is not assignable to type 'T.RETAIN'.
+enumDiscriminantSplitsOverUnion.ts(25,125): error TS2345: Argument of type '{ t: T; len: number; }[]' is not assignable to parameter of type 'Action[]'.
+  Type '{ t: T; len: number; }' is not assignable to type 'Action'.
+    Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+      Types of property 't' are incompatible.
+        Type 'T' is not assignable to type 'T.RETAIN'.
+enumDiscriminantSplitsOverUnion.ts(26,76): error TS2345: Argument of type '{ t: T; len: number; }' is not assignable to parameter of type 'Small'.
+  Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+    Types of property 't' are incompatible.
+      Type 'T' is not assignable to type 'T.RETAIN'.
+enumDiscriminantSplitsOverUnion.ts(27,79): error TS2345: Argument of type '{ t: T; len: number; }' is not assignable to parameter of type 'Small'.
+  Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+    Types of property 't' are incompatible.
+      Type 'T' is not assignable to type 'T.RETAIN'.
+enumDiscriminantSplitsOverUnion.ts(28,93): error TS2345: Argument of type '{ t: T; len: string; }[]' is not assignable to parameter of type 'Action[]'.
+  Type '{ t: T; len: string; }' is not assignable to type 'Action'.
+    Type '{ t: T; len: string; }' is not assignable to type 'Retain'.
+      Types of property 't' are incompatible.
+        Type 'T' is not assignable to type 'T.RETAIN'.
+enumDiscriminantSplitsOverUnion.ts(29,77): error TS2345: Argument of type '{ k: K; b: number; }' is not assignable to parameter of type 'KA | KB'.
+  Property 'a' is missing in type '{ k: K; b: number; }' but required in type 'KB'.
+
+
+==== enumDiscriminantSplitsOverUnion.ts (6 errors) ====
+    // TypeScript 3.5 relates an object to a discriminated union by splitting a
+    // discriminant of union or enum type into its members: `{ t: T; len:
+    // number }` fits `Retain | Insert | Del` when the object with each member
+    // of `T` in place of `t` fits some arm. Every combination has to fit, so
+    // an enum with a member no arm takes, or a member whose arm needs another
+    // property, does not.
+    
+    export enum T { RETAIN = "r", INSERT = "i", DELETE = "d" }
+    interface Retain { t: T.RETAIN; len: number }
+    interface Insert { t: T.INSERT; len: number; body: { dataStream: string } }
+    interface Del { t: T.DELETE; len: number }
+    type Action = Retain | Insert | Del;
+    type Small = Retain | Del;
+    declare function apply(a: Action[]): void;
+    declare function small(x: Small): void;
+    
+    export function okArrayWithBody() { const actions = [{ t: T.INSERT, len: 1, body: { dataStream: "h" } }]; apply(actions); }
+    export function okUnionTypedDiscriminant(t: T.RETAIN | T.DELETE) { const x = { t, len: 1 }; small(x); }
+    export enum K { A, B }
+    export interface KA { k: K.A; a: number }
+    export interface KB { k: K.B; a: number }
+    declare function kk(x: KA | KB): void;
+    export function okNumericEnumSplits() { const x = { k: K.A, a: 1 }; kk(x); }
+    export function badArrayMissesInsertBody() { const actions = [{ t: T.RETAIN, len: 1 }]; apply(actions); }
+                                                                                                  ~~~~~~~
+!!! error TS2345: Argument of type '{ t: T; len: number; }[]' is not assignable to parameter of type 'Action[]'.
+!!! error TS2345:   Type '{ t: T; len: number; }' is not assignable to type 'Action'.
+!!! error TS2345:     Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+!!! error TS2345:       Types of property 't' are incompatible.
+!!! error TS2345:         Type 'T' is not assignable to type 'T.RETAIN'.
+    export function badArrayMixedMissesInsertBody() { const actions = [{ t: T.RETAIN, len: 1 }, { t: T.DELETE, len: 2 }]; apply(actions); }
+                                                                                                                                ~~~~~~~
+!!! error TS2345: Argument of type '{ t: T; len: number; }[]' is not assignable to parameter of type 'Action[]'.
+!!! error TS2345:   Type '{ t: T; len: number; }' is not assignable to type 'Action'.
+!!! error TS2345:     Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+!!! error TS2345:       Types of property 't' are incompatible.
+!!! error TS2345:         Type 'T' is not assignable to type 'T.RETAIN'.
+    export function badEnumTypedTooWide(t: T) { const x = { t, len: 1 }; small(x); }
+                                                                               ~
+!!! error TS2345: Argument of type '{ t: T; len: number; }' is not assignable to parameter of type 'Small'.
+!!! error TS2345:   Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+!!! error TS2345:     Types of property 't' are incompatible.
+!!! error TS2345:       Type 'T' is not assignable to type 'T.RETAIN'.
+    export function badLetWidensToEnum() { let a = { t: T.RETAIN, len: 1 }; small(a); }
+                                                                                  ~
+!!! error TS2345: Argument of type '{ t: T; len: number; }' is not assignable to parameter of type 'Small'.
+!!! error TS2345:   Type '{ t: T; len: number; }' is not assignable to type 'Retain'.
+!!! error TS2345:     Types of property 't' are incompatible.
+!!! error TS2345:       Type 'T' is not assignable to type 'T.RETAIN'.
+    export function badWrongPropertyType() { const actions = [{ t: T.RETAIN, len: "1" }]; apply(actions); }
+                                                                                                ~~~~~~~
+!!! error TS2345: Argument of type '{ t: T; len: string; }[]' is not assignable to parameter of type 'Action[]'.
+!!! error TS2345:   Type '{ t: T; len: string; }' is not assignable to type 'Action'.
+!!! error TS2345:     Type '{ t: T; len: string; }' is not assignable to type 'Retain'.
+!!! error TS2345:       Types of property 't' are incompatible.
+!!! error TS2345:         Type 'T' is not assignable to type 'T.RETAIN'.
+    export function badNumericEnumWrongShape() { const x = { k: K.A, b: 1 }; kk(x); }
+                                                                                ~
+!!! error TS2345: Argument of type '{ k: K; b: number; }' is not assignable to parameter of type 'KA | KB'.
+!!! error TS2345:   Property 'a' is missing in type '{ k: K; b: number; }' but required in type 'KB'.
+!!! related TS2728 enumDiscriminantSplitsOverUnion.ts:21:31: 'a' is declared here.
+    

@@ -33,3 +33,6 @@ memberPathAssignmentNarrowsThroughAliasAndMethodReturn:BadStaticPathMaybe  a mem
 contextualRestThroughTypeofAndAlias:badTypeofLocalArrow  `typeof` of an arrow `const` in a type position does not resolve, so the rest parameter takes no contextual type
 contextualRestThroughTypeofAndAlias:badTypeofTopArrow    `typeof` of a module-level arrow `const` does not resolve either: its type is not among the module-level value types a type position reads
 aliasOfLibInterfaceKeepsMembers:badAliasMissingMember  member existence on an alias to a lib interface this checker has no member table for (`KeyboardEvent`) abstains, as it does on the bare name
+enumDiscriminantSplitsOverUnion:badArrayMixedMissesInsertBody  an array literal of two DIFFERENT object literals is not judged against an array target at all (`const z: number = [{ t: T.RETAIN, len: 1 }, { t: T.DELETE, len: 2 }]` is silent too), so the split never runs
+arrayMemberOfObjectRelatesElementwise:badReadonlyMember  a `readonly` array type is not told apart from a mutable one, inside an object or at the top level
+arrayMemberOfObjectRelatesElementwise:badReadonlyTopLevel  a `readonly` array type is not told apart from a mutable one (TS4104)

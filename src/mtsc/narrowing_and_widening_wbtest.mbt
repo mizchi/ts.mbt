@@ -1571,3 +1571,158 @@ test "an alias to an untabulated lib interface abstains like the bare name (nssh
     #|export function okKey(e: R.KeyboardEvent) { return e.key; }
   assert_eq(issue_lines(src), [])
 }
+
+///|
+/// An enum member written in an object literal has the enum-LITERAL type
+/// `E.M`, so a callback's `({ tag: S.X })` fits a target that names the
+/// member, a union of members, or a union discriminated by it (probed: tsc
+/// accepts every `ok` line and reports exactly the `bad` ones). It used to
+/// read as the member's VALUE, `"x"` or `number`, which is neither.
+test "an enum member in a written object literal is its enum-literal type (enumlit)" {
+  let src =
+    #|enum E { A, B }
+    #|enum S { X = "x", Y = "y" }
+    #|interface I { kind: E; n: number }
+    #|interface J { tag: S; n: number }
+    #|interface IA { kind: E.A }
+    #|interface JX { tag: S.X }
+    #|interface Cx { tag: S.X; a: number }
+    #|interface Cy { tag: S.Y; b: number }
+    #|declare const xs: number[];
+    #|export const ok1: I[] = xs.map((n) => ({ kind: E.A, n }));
+    #|export const ok2: J[] = xs.map((n) => ({ tag: S.X, n }));
+    #|export const ok4: J[] = xs.map((n) => { if (n) { return { tag: S.X, n }; } return { tag: S.Y, n }; });
+    #|export const ok5: IA[] = xs.map(() => ({ kind: E.A }));
+    #|export const ok6: JX[] = xs.map(() => ({ tag: S.X }));
+    #|export const okUnion: { tag: S.X | S.Y }[] = xs.map(() => ({ tag: S.X }));
+    #|export const okDu: (Cx | Cy)[] = xs.map(() => ({ tag: S.X, a: 1 }));
+    #|export const badOther: { tag: S.Y }[] = xs.map(() => ({ tag: S.X }));
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badOther` init: expected `{ tag: S.Y }[]` but got `{ tag: S.X }[]`",
+  ])
+}
+
+///|
+/// An enum and an enum-literal type are assignable to what their VALUES
+/// are: `S` to `string`, `S.X` to `"x"`, `E.A` to `0` (auto-numbered) and
+/// to `number` (tsc's `isSimpleTypeRelatedTo`; probed). Once a binding
+/// widened `S.X` to `S`, `{ tag: S }` against `{ tag: string }` was
+/// reported.
+test "an enum relates to the values its members hold (enumvalue)" {
+  let src =
+    #|enum E { A, B }
+    #|enum S { X = "x", Y = "y" }
+    #|declare const xs: number[];
+    #|const o1 = { kind: E.A };
+    #|export const okNum: { kind: number } = o1;
+    #|const o2 = { tag: S.X };
+    #|export const okStr: { tag: string } = o2;
+    #|export const okStrU: { tag: string | number } = o2;
+    #|export const okCbNum: { kind: number }[] = xs.map(() => ({ kind: E.A }));
+    #|export const okCbStr: { tag: string }[] = xs.map(() => ({ tag: S.X }));
+    #|export const okCbZero: { kind: 0 }[] = xs.map(() => ({ kind: E.A }));
+    #|export const okCbLitX: { tag: "x" }[] = xs.map(() => ({ tag: S.X }));
+    #|export const badCbOne: { kind: 1 }[] = xs.map(() => ({ kind: E.A }));
+    #|export const badCbLitY: { tag: "y" }[] = xs.map(() => ({ tag: S.X }));
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badCbOne` init: expected `{ kind: 1 }[]` but got `{ kind: E.A }[]`",
+    "top-level > binding `badCbLitY` init: expected `{ tag: \"y\" (string) }[]` but got `{ tag: S.X }[]`",
+  ])
+}
+
+///|
+/// A binding widens an enum member to its enum only where the member was
+/// WRITTEN: an object or array literal, a call taking an inline callback,
+/// or an unannotated function's inferred return. A parameter `t: T.A | T.B`
+/// held in `{ t }` and a declared `k(): { tag: S.X }` keep the declared
+/// type (probed: tsc accepts every `ok` line and reports `bad`).
+test "an enum member widens only where it was written (freshenum)" {
+  let src =
+    #|enum S { X = "x", Y = "y" }
+    #|declare const xs: number[];
+    #|const arr = xs.map(() => ({ tag: S.X, n: 1 }));
+    #|arr.push({ tag: S.Y, n: 2 });
+    #|export function okMutate() { arr[0].tag = S.Y; }
+    #|export function okRet() { return { tag: S.X }; }
+    #|export function okRetMutate() { const r = okRet(); r.tag = S.Y; }
+    #|const nested = { inner: xs.map(() => ({ tag: S.X })) };
+    #|nested.inner.push({ tag: S.Y });
+    #|export function okParam(t: S.X) { const x = { t }; const y: { t: S.X } = x; return y; }
+    #|declare function h(): { tag: S.X }[];
+    #|const b = h();
+    #|export const okDeclaredArr: { tag: S.X }[] = b;
+    #|declare function k(): { tag: S.X };
+    #|const c = k();
+    #|export const okDeclaredObj: { tag: S.X } = c;
+    #|const arr8 = xs.map(() => ({ tag: S.X }));
+    #|export const badWidened: { tag: S.X }[] = arr8;
+    #|const r9 = okRet();
+    #|export const badInferredReturnWidened: { tag: S.X } = r9;
+    #|export const badInferredReturnCall: { tag: S.X } = okRet();
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badWidened` init: expected `{ tag: S.X }[]` but got `{ tag: S }[]`",
+    "top-level > binding `badInferredReturnWidened` init: expected `{ tag: S.X }` but got `{ tag: S }`",
+    "top-level > binding `badInferredReturnCall` init: expected `{ tag: S.X }` but got `{ tag: S }`",
+  ])
+}
+
+///|
+/// tsc relates an object to a discriminated union by splitting a
+/// discriminant of union or enum type into its members (TS 3.5): `{ t: T;
+/// len: number }` fits `Retain | Insert | Del` when each member of `T` in
+/// place of `t` fits some arm — so `{ t: T.RETAIN, len: 1 }` alone does
+/// NOT, the `T.INSERT` arm requiring `body` (univer's text-x actions;
+/// probed: tsc accepts the `ok` lines and reports the `bad` ones).
+test "an enum discriminant splits over a discriminated union (split)" {
+  let src =
+    #|export enum T { RETAIN = "r", INSERT = "i", DELETE = "d" }
+    #|interface Retain { t: T.RETAIN; len: number }
+    #|interface Insert { t: T.INSERT; len: number; body: { dataStream: string } }
+    #|interface Del { t: T.DELETE; len: number }
+    #|type Action = Retain | Insert | Del;
+    #|type Small = Retain | Del;
+    #|declare function apply(a: Action[]): void;
+    #|declare function small(x: Small): void;
+    #|export function okArrayWithBody() { const actions = [{ t: T.INSERT, len: 1, body: { dataStream: "h" } }]; apply(actions); }
+    #|export function badArrayMissesInsertBody() { const actions = [{ t: T.RETAIN, len: 1 }]; apply(actions); }
+    #|export function okUnionTyped(t: T.RETAIN | T.DELETE) { const x = { t, len: 1 }; small(x); }
+    #|export function badTooWide(t: T) { const x = { t, len: 1 }; small(x); }
+    #|export function badLetEnum() { let a = { t: T.RETAIN, len: 1 }; small(a); }
+    #|export function badWrongLen() { const actions = [{ t: T.RETAIN, len: "1" }]; apply(actions); }
+    #|export enum K { A, B }
+    #|export interface KA { k: K.A; a: number }
+    #|export interface KB { k: K.B; a: number }
+    #|declare function kk(x: KA | KB): void;
+    #|export function okNumeric() { const x = { k: K.A, a: 1 }; kk(x); }
+  assert_eq(issue_lines(src), [
+    "function badArrayMissesInsertBody > call `apply` arg[0]: expected `Action[]` but got `{ t: T; len: number }[]`",
+    "function badTooWide > call `small` arg[0]: expected `Small` but got `{ t: T; len: number }`",
+    "function badLetEnum > call `small` arg[0]: expected `Small` but got `{ t: T; len: number }`",
+    "function badWrongLen > call `apply` arg[0]: expected `Action[]` but got `{ t: T; len: string }[]`",
+  ])
+}
+
+///|
+/// An array member relates element-wise inside an object: `const f = { xs:
+/// [{ a: 1 }] }` assigned to `{ xs: A[] }`, `A` an interface, was reported
+/// because nothing in the member relation asked about arrays (univer's
+/// `IPermissionPoint.actions`; probed: tsc accepts all but `bad`).
+test "an array member of an object relates element-wise (nestedarr)" {
+  let src =
+    #|interface A { a: number }
+    #|type TA = { a: number }
+    #|interface K { action?: number | undefined; allowed?: boolean | undefined }
+    #|interface H { xs: A[] }
+    #|const f = { xs: [{ a: 1 }] };
+    #|export const okIface: { xs: A[] } = f;
+    #|export const okAlias: { xs: TA[] } = f;
+    #|export const okNamed: H = f;
+    #|const e5: { action: number; allowed: boolean }[] = [];
+    #|const b5 = { actions: e5 };
+    #|export const okOptional: { actions: K[] } = b5;
+    #|const g = { xs: [{ a: "1" }] };
+    #|export const badElem: { xs: A[] } = g;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badElem` init: expected `{ xs: A[] }` but got `{ xs: { a: string }[] }`",
+  ])
+}

@@ -3534,6 +3534,94 @@
       ]
     },
     {
+      "case": "inference/enumMemberWidensWhereWritten.ts",
+      "area": "inference",
+      "name": "enumMemberWidensWhereWritten",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/enumMemberWidensWhereWritten.errors.txt",
+      "claims": [
+        {
+          "name": "okPushAnotherMember",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okWriteAnotherMember",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okInferredReturn",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okWriteThroughInferredReturn",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okPushIntoNestedArray",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okParameterKeepsMember",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okDeclaredArrayKeepsMember",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okDeclaredObjectKeepsMember",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badWidenedToEnum",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badLiteralWidenedToEnum",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "badInferredReturnWidened",
+          "kind": "bad",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badInferredReturnCall",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 32
+        }
+      ]
+    },
+    {
       "case": "inference/freshLiteralWideningAndNonNullableIntersections.ts",
       "area": "inference",
       "name": "freshLiteralWideningAndNonNullableIntersections",
@@ -5680,6 +5768,65 @@
       ]
     },
     {
+      "case": "relations/arrayMemberOfObjectRelatesElementwise.ts",
+      "area": "relations",
+      "name": "arrayMemberOfObjectRelatesElementwise",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        4104
+      ],
+      "baseline": "baselines/arrayMemberOfObjectRelatesElementwise.errors.txt",
+      "claims": [
+        {
+          "name": "okInterfaceElement",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okAliasElement",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okInterfaceWithArrayMember",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okOptionalElementMembers",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badElementType",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badReadonlyMember",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badReadonlyTopLevel",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 26
+        }
+      ]
+    },
+    {
       "case": "relations/defaultedParameterAcceptsUndefined.ts",
       "area": "relations",
       "name": "defaultedParameterAcceptsUndefined",
@@ -5747,6 +5894,194 @@
           "kind": "bad",
           "fromLine": 25,
           "toLine": 26
+        }
+      ]
+    },
+    {
+      "case": "relations/enumDiscriminantSplitsOverUnion.ts",
+      "area": "relations",
+      "name": "enumDiscriminantSplitsOverUnion",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/enumDiscriminantSplitsOverUnion.errors.txt",
+      "claims": [
+        {
+          "name": "okArrayWithBody",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okUnionTypedDiscriminant",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okNumericEnumSplits",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badArrayMissesInsertBody",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badArrayMixedMissesInsertBody",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "badEnumTypedTooWide",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badLetWidensToEnum",
+          "kind": "bad",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "badWrongPropertyType",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "badNumericEnumWrongShape",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 30
+        }
+      ]
+    },
+    {
+      "case": "relations/enumLiteralMembersInWrittenObjects.ts",
+      "area": "relations",
+      "name": "enumLiteralMembersInWrittenObjects",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/enumLiteralMembersInWrittenObjects.errors.txt",
+      "claims": [
+        {
+          "name": "okNumericToEnum",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okStringToEnum",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okEitherBranch",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okNumericMember",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "okStringMember",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okUnionOfMembers",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "okDiscriminatedUnion",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okMemberToNumber",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "okMemberToString",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "okAutoNumberedToItsValue",
+          "kind": "ok",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "okStringMemberToItsValue",
+          "kind": "ok",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "okWidenedToNumber",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "okWidenedToString",
+          "kind": "ok",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "okWidenedToStringOrNumber",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badOtherMember",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 35
+        },
+        {
+          "name": "badOtherValue",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "badOtherLiteral",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 38
         }
       ]
     },
