@@ -14602,8 +14602,17 @@ fn infer_expr_inner(
       // parameter `E: { A: string }` beside `enum E`) is what the name
       // means here, so its own type answers instead (#311's review).
       match receiver {
+        // An enum is never bound in the env, so ANY binding of an enum's
+        // name shadows it (`function f(E: any)`); a namespace is, as its
+        // lowered `var`, so only a typed binding shadows one, and an enum
+        // merged with a namespace keeps that namespace's rule.
         Var(class_name) if !(match env.lookup(class_name) {
-            Some(t) => is_checkable(t) && !(t is Any)
+            Some(t) =>
+              (is_checkable(t) && !(t is Any)) ||
+              (
+                resolver.enums.contains(class_name) &&
+                !resolver.namespace_instantiated.contains(class_name)
+              )
             None => false
           }) =>
           match resolver.globals.get(class_name + "." + name) {

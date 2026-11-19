@@ -671,3 +671,21 @@ test "a parameter shadowing an enum is read through its own type" {
     "function read > binding `n` init: expected `number` but got `string`",
   ])
 }
+
+///|
+/// An `any`-typed parameter named like an enum shadows it too (#311's
+/// review): `E.A` is then `any`. The enum itself, and an enum merged with
+/// a namespace, still read the member.
+test "an any-typed parameter shadowing an enum is any" {
+  let src =
+    #|enum E { A = "global" }
+    #|export function shadow(E: any) { const n: number = E.A; return n; }
+    #|export function real() { const s: number = E.A; return s; }
+    #|enum M { A = "m" }
+    #|namespace M { export const k = 1; }
+    #|export const merged: number = M.A;
+  assert_eq(issue_lines(src), [
+    "function real > binding `s` init: expected `number` but got `string`",
+    "top-level > binding `merged` init: expected `number` but got `string`",
+  ])
+}
