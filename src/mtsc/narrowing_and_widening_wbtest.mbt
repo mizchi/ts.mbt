@@ -930,7 +930,9 @@ test "a join with an any side is any" {
 /// nested scope's declaration only shields the writes made inside the
 /// statement that holds it: `{ let x = 0 } x = null` still writes the outer
 /// `x` before the throw. An assignment-form or `var` loop head writes the
-/// outer binding; only a `let` / `const` head declares one of its own.
+/// outer binding; only a `let` / `const` head declares one of its own. A
+/// `finally` write followed by a `throw` or a `return` does not reach the
+/// code after the statement.
 test "a nested declaration shields only its own statement's writes" {
   let src =
     #|export function e1() { let x: string | null = "ok"; try { { let x = 0; x = 1; } x = null; throw 0; } catch { x.length; } }
@@ -938,8 +940,12 @@ test "a nested declaration shields only its own statement's writes" {
     #|export function e3() { let x: string | null = "ok"; try { for (const y of [1]) { x = null; } throw 0; } catch { x.length; } }
     #|export function ok1() { let x: string | null = "ok"; try { { let x: string | null = "a"; x = null; } throw 0; } catch { x.length; } }
     #|export function ok2() { let x: string | null = "ok"; try { for (let x of [null]) { throw 0; } } catch { x.length; } }
+    #|declare const flag: boolean;
+    #|export function f1() { let x: string | null = "ok"; try { } finally { if (flag) { x = null; throw 0; } } return x.length; }
+    #|export function f2() { let x: string | null = "ok"; try { } finally { if (flag) { x = null; } } return x.length; }
+    #|export function f3() { let x: string | null = "ok"; try { } finally { if (flag) { x = null; return 0; } } return x.length; }
   assert_eq(issue_lines(src), [
     "function e1 > PropAccess `.length`: object is possibly `null`", "function e2 > PropAccess `.length`: object is possibly `null`",
-    "function e3 > PropAccess `.length`: object is possibly `null`",
+    "function e3 > PropAccess `.length`: object is possibly `null`", "function f2 > PropAccess `.length`: object is possibly `null`",
   ])
 }

@@ -6972,8 +6972,8 @@ product surfaces now.
     three sites as "does not exist on `null`". A union with `any` is
     `any`, as in tsc, and the `if` join gets the same rule.
 
-    The third round found three more MISSes, each probed against the
-    nightly:
+    The third round found three more MISSes and one false positive that
+    the second round had introduced, each probed against the nightly:
     - A nested scope's declaration shielded every write to that name in
       the whole try block, so `{ let x = 0 } x = null; throw 0` lost the
       second write. Each top-level statement is now walked on its own,
@@ -6984,6 +6984,10 @@ product surfaces now.
       so a Unicode space before a later `// @ts-check` left the file
       opted out. It now skips what tsc's scanner skips, which is the
       pragma's separators plus U+0085 and U+200B.
+    - The false positive: a `finally` write followed by a `throw`
+      reached the code after the statement, so `finally { if (flag) { x =
+      null; throw 0 } } x.length` was reported. Only the writes that can
+      reach the end of the block join the continuation now.
   - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
     FP 0). tsc-extra stays at FP 0, now with 95 cases and one more
     declared MISS. effect goes from 78 to 75 and zod stays at 7. Against batch

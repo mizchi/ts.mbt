@@ -28541,7 +28541,16 @@ fn loop_backedge_bindings_where(
 /// write that a later statement overwrites, or one followed by a `throw`,
 /// still reaches them. A nested list that ends in a `return` is still
 /// skipped, which only narrows.
-fn collect_try_writes(stmts : Array[@ast.TsStmt]) -> BackedgeWrites {
+///
+/// With `throw_caught=false` a nested list that ends in a `throw` is
+/// skipped too. That is the set of writes that can reach the END of the
+/// block, which is what the code after a `finally` sees: `finally { if
+/// (flag) { x = null; throw 0 } }` leaves `x` as it was on the one path
+/// that completes (#312's review).
+fn collect_try_writes(
+  stmts : Array[@ast.TsStmt],
+  throw_caught~ : Bool = true,
+) -> BackedgeWrites {
   let w : BackedgeWrites = { assigns: [], other: Map([]), }
   // A write to a name some NESTED scope declares may target that scope's
   // own binding, and the walk records writes by name: `{ let x = "a"; x =
@@ -28558,7 +28567,7 @@ fn collect_try_writes(stmts : Array[@ast.TsStmt]) -> BackedgeWrites {
   // one that ends in an exit, which the walker would skip whole.
   for st in stmts {
     let one : BackedgeWrites = { assigns: [], other: Map([]), }
-    backedge_walk_list([st, @ast.TsStmt::Empty], one, true, true, [])
+    backedge_walk_list([st, @ast.TsStmt::Empty], one, true, throw_caught, [])
     let nested : Map[String, Unit] = Map([])
     nested_scope_declared_names(st, nested)
     for a in one.assigns {
@@ -36935,7 +36944,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           let fin_joins = backedge_bindings_for_writes(
             env,
             ctx,
-            collect_try_writes(fb.stmts),
+            collect_try_writes(fb.stmts, throw_caught=false),
             fn(n) { !fin_shadow.contains(n) },
           )
           for j in finally_entry {
