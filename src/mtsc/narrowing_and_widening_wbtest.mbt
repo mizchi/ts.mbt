@@ -796,3 +796,85 @@ test "a boolean and an object joined by and narrow to the object" {
     "top-level > binding `kept` init: expected `true[]` but got `boolean[]`",
   ])
 }
+
+///|
+/// A NAMED Promise handler contributes what it returns, not itself
+/// (#312's review): `p.then(ok)` is a promise of `ok`'s return, and
+/// `p.then(undefined, recover)` of the fulfilled value or `recover`'s.
+test "a named promise handler contributes its return" {
+  let src =
+    #|declare const p: Promise<string>;
+    #|function recover(e: unknown): string { return "x"; }
+    #|function ok(s: string): number { return s.length; }
+    #|export async function pa() { const r = await p.then(undefined, recover); const s: string = r; return s; }
+    #|export async function pb() { const r = await p.then(ok); const n: number = r; return n; }
+    #|export async function pe() { const r = await p.then(ok); const s: string = r; return s; }
+  assert_eq(issue_lines(src), [
+    "function pe > binding `s` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// The catch and finally blocks are entered from a state the try block may
+/// have left at any statement (#312's review): a write before a `throw`, a
+/// write a later statement overwrites, and a write before a `return` (for
+/// `finally`) all reach them. A try block that writes nothing leaves the
+/// pre-try state.
+test "catch and finally see what the try block wrote before leaving" {
+  let src =
+    #|declare function risky(): void;
+    #|export function c1() { let x: string | null = "ok"; try { x = null; throw 0; } catch {} return x.length; }
+    #|export function c2() { let x: string | null = "ok"; try { x = null; risky(); x = "a"; } catch { return x.length; } return 0; }
+    #|export function f1() { let x: string | null = "ok"; try { x = null; return; } finally { x.length; } }
+    #|export function okc() { let x: string | null = "ok"; try { risky(); } catch { return x.length; } return 0; }
+    #|export function okf() { let x: string | null = "ok"; try { risky(); } finally { x.length; } return 0; }
+  assert_eq(issue_lines(src), [
+    "function c1 > PropAccess `.length`: object is possibly `null`", "function c2 > PropAccess `.length`: object is possibly `null`",
+    "function f1 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A catch binding is the catch block's own, and a nested block's
+/// declaration has gone out of scope by the time the enclosing block goes
+/// on, so neither hides the try block's write to the outer name (#312's
+/// review). An assignment inside a block cancels an aliased condition on
+/// the name it assigns.
+test "catch bindings, nested blocks and alias cancellation across a block" {
+  let src =
+    #|export function s1() { let x: string | null = "ok"; try { x = null; } catch (x) {} return x.length; }
+    #|export function n1() { let x: string | null = "ok"; try { { let x = 1; } x = null; } finally {} return x.length; }
+    #|export function a1(y: string | null) { let x: string | null = y; const ok = x !== null; { x = y; } if (ok) { return x.length; } return 0; }
+    #|export function a2(y: string | null) { let x: string | null = y; const ok = x !== null; { y = null; } if (ok) { return x.length; } return 0; }
+  assert_eq(issue_lines(src), [
+    "function s1 > PropAccess `.length`: object is possibly `null`", "function n1 > PropAccess `.length`: cannot access `.length` — receiver may be null or undefined",
+    "function a1 > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// A static method's unannotated return is recorded apart from the
+/// instance methods, so a quoted instance method spelled `"static:make"`
+/// keeps its written `: any` (#312's review).
+test "a static unannotated return does not collide with a quoted instance name" {
+  let src =
+    #|interface I { "static:make"(): number }
+    #|export class C implements I {
+    #|  static make() { return 0; }
+    #|  "static:make"(): any { return ""; }
+    #|}
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// An always-falsy left operand of `&&` is the result even beside an
+/// `any` right operand (#312's review): `undefined && anyValue` is
+/// `undefined`, not `any`.
+test "an always-falsy left operand of and is the result" {
+  let src =
+    #|declare const anyv: any;
+    #|export function n2() { const r = undefined && anyv; const s: string = r; return s; }
+  assert_eq(issue_lines(src), [
+    "function n2 > binding `s` init: expected `string` but got `undefined`",
+  ])
+}

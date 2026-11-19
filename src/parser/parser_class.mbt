@@ -3580,8 +3580,8 @@ fn Parser::parse_class_body(
         method_name != "" {
         self.unannotated_return_members.push(method_name)
       }
-      // A STATIC method is recorded under `static:NAME`, so it cannot be
-      // read as an instance member of the same name. The checker infers
+      // A STATIC method is recorded in a channel of its own, so it cannot
+      // be read as an instance member of the same name. The checker infers
       // its return from the body where a call reads it: univer's
       // `static create(v) { return new NumberValueObject(v) }` was `any`,
       // so `x = NumberValueObject.create(0)` narrowed nothing.
@@ -3590,7 +3590,7 @@ fn Parser::parse_class_body(
         accessor_kind is None &&
         !had_return_annotation &&
         method_name != "" {
-        self.unannotated_return_members.push("static:" + method_name)
+        self.unannotated_static_return_members.push(method_name)
       }
       // TS7022, the INDIRECT form. A `for (var v of new C)` head takes
       // its element type from C's iteration protocol, so an un-annotated
@@ -3989,6 +3989,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let optional_names_start = self.optional_member_names.length()
   let readonly_literal_start = self.readonly_literal_members.length()
   let unann_return_start = self.unannotated_return_members.length()
+  let unann_static_start = self.unannotated_static_return_members.length()
   let accessor_vis_start = self.accessor_member_visibility.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
@@ -4056,6 +4057,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   while self.unannotated_return_members.length() > unann_return_start {
     match self.unannotated_return_members.pop() {
       Some(n) => expr_class_sentinels.push("<unannotated-return:" + n + ">")
+      None => ()
+    }
+  }
+  while self.unannotated_static_return_members.length() > unann_static_start {
+    match self.unannotated_static_return_members.pop() {
+      Some(n) =>
+        expr_class_sentinels.push("<unannotated-static-return:" + n + ">")
       None => ()
     }
   }
@@ -4859,6 +4867,7 @@ fn Parser::parse_class_decl_with_abstract(
   let optional_names_start = self.optional_member_names.length()
   let readonly_literal_start = self.readonly_literal_members.length()
   let unann_return_start = self.unannotated_return_members.length()
+  let unann_static_start = self.unannotated_static_return_members.length()
   let accessor_vis_start = self.accessor_member_visibility.length()
   let protocol_returns_start = self.protocol_return_names.length()
   let override_names_start = self.override_member_names.length()
@@ -4922,6 +4931,15 @@ fn Parser::parse_class_decl_with_abstract(
       Some(n) =>
         runtime_decl.duplicate_member_names.push(
           "<unannotated-return:" + n + ">",
+        )
+      None => ()
+    }
+  }
+  while self.unannotated_static_return_members.length() > unann_static_start {
+    match self.unannotated_static_return_members.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push(
+          "<unannotated-static-return:" + n + ">",
         )
       None => ()
     }

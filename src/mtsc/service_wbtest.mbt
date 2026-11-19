@@ -668,5 +668,7 @@ test "a ts-nocheck module is not checked and still declares its exports" {
 /// suppress in tsc either.
 test "a ts-nocheck module still reports a syntax error" {
   let host = MtscMemoryHost::over({ "entry.ts": "// @ts-nocheck\nconst a = ;" })
-  assert_true(get_program_diagnostics(host).length() > 0)
+  let diagnostics = get_program_diagnostics(host)
+  assert_true(wbtest_any_contains(diagnostics, "parse error"))
+  assert_true(diagnostics[0].source == "syntactic")
 }

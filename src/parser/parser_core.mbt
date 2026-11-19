@@ -358,6 +358,11 @@ pub struct Parser {
   // false positive for the second. Drained per class into
   // `<unannotated-return:...>` sentinels.
   unannotated_return_members : Array[String]
+  // The same fact for a bodied STATIC method, in a channel of its own: a
+  // quoted instance method may be named anything, `"static:make"` included,
+  // so no prefix on the instance list could keep the two apart (#312's
+  // review). Drained into `<unannotated-static-return:...>` sentinels.
+  unannotated_static_return_members : Array[String]
   // `KIND:VISIBILITY:NAME` for each named accessor of the class body being
   // parsed, KIND `get` or `set`. `protected_members` / `private_members`
   // hold a NAME whichever half carried the modifier, and a read reaches
@@ -576,6 +581,7 @@ pub fn Parser::new_with_strict_and_jsx(
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
+    unannotated_static_return_members: [],
     accessor_member_visibility: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},
@@ -957,6 +963,7 @@ pub fn Parser::from_source_with_jsx(
     current_class_name: "",
     readonly_literal_members: [],
     unannotated_return_members: [],
+    unannotated_static_return_members: [],
     accessor_member_visibility: [],
     protocol_return_names: [],
     protocol_returns_by_class: {},

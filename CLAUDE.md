@@ -6871,10 +6871,11 @@ product surfaces now.
       wins.
 
     The pragma suppresses grammar rules too (TS1016), and not a scanner
-    error (TS1177). The parser's grammar list does not say which entry is
-    which, so the whole list is dropped. A lexer error in an opted-out
-    file is a MISS. The marker is read at the root parse only, because a
-    namespace body's first line is not a file pragma.
+    error (TS1177) or a parser syntax error (TS1005). The parser's grammar
+    list does not say which entry is which, so the whole list is dropped,
+    and a scanner or parser syntax error recorded there rather than raised
+    is a MISS in an opted-out file. The marker is read at the root parse
+    only, because a namespace body's first line is not a file pragma.
   - **Scopes leave their state behind correctly.** These are four flow
     defects, and the first is a false positive older than all of them.
     - A declaration that shadows an outer binding overwrote the outer
@@ -6923,6 +6924,29 @@ product surfaces now.
     `directives/` cases cover where `@ts-nocheck` counts. Upstream's
     `tsNoCheckForTypescript*` cases cover only the plain leading spelling.
     There are 95 cases now.
+  - **The review of [#312](https://github.com/mizchi/ts.mbt/pull/312)
+    found ten things, and probing settled each one.**
+    - A NAMED Promise handler contributed itself rather than its return,
+      so `p.then(ok)` was a promise of `ok`. main had that for one
+      callback, and the two-callback arm added `p.then(undefined,
+      recover)`. A generic or overloaded handler is `any`.
+    - `catch` and `finally` were entered from the pre-try state, which
+      lost a write before a `throw`, one a later statement overwrote, and
+      one before a `return`. Both are now entered from the join of the
+      pre-try state with every write the try block makes, and `finally`
+      with the catch block's too. The join nests, so it is flattened
+      before the possibly-`null` check reads it.
+    - Shadows were shared between the two sides, so a `catch (x)`
+      binding hid the try block's write to an outer `x`. A nested block
+      counted as a shadow too, and only a merged declarator group
+      (`DECL_GROUP_POSITION`) should.
+    - An aliased condition an assignment cancelled inside a block was
+      restored at the block exit.
+    - An unannotated static method had been recorded as `static:NAME` in
+      the instance list, which a quoted instance method can be named.
+      It has a channel of its own now.
+    - An always-falsy left operand of `&&` is the result beside an `any`
+      right operand.
   - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
     FP 0). tsc-extra stays at FP 0, now with 95 cases and one more
     declared MISS. effect goes from 78 to 75 and zod stays at 7. Against batch

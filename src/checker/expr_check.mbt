@@ -159,6 +159,9 @@ priv struct Resolver {
   // the second. An absent entry means "annotated, or not recorded", so a
   // missing sentinel costs a MISS.
   unannotated_return_members : Map[String, Array[String]]
+  // The same for bodied STATIC methods, from `<unannotated-static-return:>`
+  // sentinels: read where a static call's return comes from the body.
+  unannotated_static_return_members : Map[String, Array[String]]
   // Qualified-access support (TS2339 on `A.y` where `y` is declared but
   // not exported): per namespace name (prefixed for nesting), the value
   // names its body declares and the subset the parser marked
@@ -607,6 +610,7 @@ fn Resolver::empty() -> Resolver {
     private_brand_decls: {},
     private_brand_parent: {},
     unannotated_return_members: {},
+    unannotated_static_return_members: {},
     namespace_value_decls: {},
     namespace_exports: {},
     namespace_instantiated: {},
@@ -14404,13 +14408,30 @@ fn infer_expr_inner(
         cb : @ast.TsExpr,
         param : @ast.TsType,
       ) -> @ast.TsType? {
+        let settled = fn(t : @ast.TsType) -> @ast.TsType {
+          match t {
+            Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+            other => other
+          }
+        }
         match cb {
           Var("undefined") | NullLit => None
+          ArrowFunc(_, _, _, _) | FuncExpr(_) =>
+            Some(
+              settled(infer_arrow_body_with_params(env, resolver, cb, [param])),
+            )
+          // A NAMED handler contributes what it returns, read off its
+          // callable type: the body walk above answers with the callable
+          // itself for anything that is not a function literal, so
+          // `p.then(ok)` was a promise of `ok`, and `p.then(undefined,
+          // recover)` one of `string | recover` (#312's review). A generic
+          // or overloaded handler, whose return names binders this does
+          // not solve, is `any`.
           _ =>
             Some(
-              match infer_arrow_body_with_params(env, resolver, cb, [param]) {
-                Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
-                other => other
+              match resolver.unwrap(infer_expr(env, resolver, cb)) {
+                Func(_, ret) => settled(ret)
+                _ => @ast.TsType::Any
               },
             )
         }
@@ -18468,6 +18489,20 @@ fn falsy_subset(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// Every value of `t` is falsy: `false`, `null`, `undefined`, `void`, `""`
+/// and `0`, alone or as a union of them.
+fn always_falsy(resolver : Resolver, t : @ast.TsType) -> Bool {
+  match resolver.unwrap(t) {
+    BooleanLiteral(false) | Null | Undefined | Void => true
+    Literal(s) => s == ""
+    NumberLiteral(n) => n == "0"
+    Union(ms) =>
+      ms.length() > 0 && ms.iter().all(fn(m) { always_falsy(resolver, m) })
+    _ => false
+  }
+}
+
+///|
 /// `falsy_subset` with a `boolean` member read as `false` and a `true`
 /// member dropped, which is the falsy part of the LEFT operand of `&&`:
 /// `flag && obj` is `false | Obj`, so `if (p)` on it leaves `Obj`. Keeping
@@ -18627,8 +18662,12 @@ fn infer_binop(
     // An `any` right operand makes the whole expression `any`, as in tsc:
     // `false | any` is `any`. The union below dropped it as "equivalent" to
     // the left's falsy part, so `flag && anyValue` read as `boolean`.
+    // A left operand that is always falsy is the whole result, which is
+    // what tsc gives `false && anyValue` (#312's review).
     And =>
-      if r is Any {
+      if always_falsy(resolver, l) {
+        l
+      } else if r is Any {
         @ast.TsType::Any
       } else {
         narrow_union(boolean_falsy_as_false(falsy_subset(resolver, l)), r)
@@ -28484,8 +28523,34 @@ fn loop_backedge_bindings_where(
   body : @ast.TsBlock,
   admit : (String) -> Bool,
 ) -> Array[(String, @ast.TsType)] {
+  backedge_bindings_for_writes(env, ctx, collect_backedge_writes(body), admit)
+}
+
+///|
+/// The writes a `try` block can have made by the time control leaves it
+/// for its `catch` or its `finally`: any of its statements may throw, so a
+/// write that a later statement overwrites, or one followed by a `throw`,
+/// still reaches them. A nested list that ends in a `return` is still
+/// skipped, which only narrows.
+fn collect_try_writes(stmts : Array[@ast.TsStmt]) -> BackedgeWrites {
+  let w : BackedgeWrites = { assigns: [], other: Map([]), }
+  // The trailing `Empty` keeps the top-level list from reading as one that
+  // ends in an exit, which the walker would skip whole.
+  backedge_walk_list([..stmts, @ast.TsStmt::Empty], w, true, true, [])
+  w
+}
+
+///|
+/// Each written name's join of its current type with every value `bw`
+/// writes to it (see `loop_backedge_bindings_where`), for the names
+/// `admit` accepts and whose joined type differs from the current one.
+fn backedge_bindings_for_writes(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  bw : BackedgeWrites,
+  admit : (String) -> Bool,
+) -> Array[(String, @ast.TsType)] {
   let out : Array[(String, @ast.TsType)] = []
-  let bw = collect_backedge_writes(body)
   let written : Map[String, Unit] = Map([])
   for name, _ in bw.other {
     written[name] = ()
@@ -34241,24 +34306,22 @@ fn apply_sequential_exit(
 ) -> Unit {
   let gone : Array[String] = []
   for k, v in pre_map {
+    // An aliased condition the block CANCELLED (an assignment to a name it
+    // narrows) stays cancelled after it: the block exit restored the
+    // marker, and a later `if (ok)` then narrowed through a stale alias
+    // (#312's review). Every other marker belongs to its writer.
+    if k.has_prefix("<alias-cond>") {
+      match exit.get(k) {
+        Some(Tuple([]) as t) if t != v => env.narrow(k, t)
+        _ => ()
+      }
+      continue
+    }
     if k.has_prefix("<") {
       continue
     }
     let is_path = k.contains(".") || k.contains("[")
-    let root = if is_path {
-      let mut end = k.length()
-      for i in 0..<k.length() {
-        let c = k[i].to_int()
-        if c == 46 || c == 91 {
-          end = i
-          break
-        }
-      }
-      k[:end].to_owned()
-    } else {
-      k
-    }
-    if shadow.contains(root) {
+    if shadow.contains(sequential_exit_root(k)) {
       continue
     }
     match exit.get(k) {
@@ -34272,9 +34335,24 @@ fn apply_sequential_exit(
 }
 
 ///|
+/// The binding a narrowing key belongs to: the name itself, or a path
+/// key's root (`o` for `o.p` and `o[0]`).
+fn sequential_exit_root(k : String) -> String {
+  for i in 0..<k.length() {
+    let c = k[i].to_int()
+    if c == 46 || c == 91 {
+      return k[:i].to_owned()
+    }
+  }
+  k
+}
+
+///|
 /// The names a block's own statements declare (`let` / `const` / `var`,
-/// a class), including a parser-merged declarator group. Nested blocks are
-/// included too, which only ever excludes more names.
+/// a class), including a parser-merged declarator group. A NESTED block is
+/// a scope of its own, which has restored the outer binding by the time
+/// the enclosing block goes on, so its declarations are not collected
+/// (#312's review): `try { { let x = 1 } x = null }` writes the outer `x`.
 fn block_declared_names(b : @ast.TsBlock, out : Map[String, Unit]) -> Unit {
   for st in b.stmts {
     match st {
@@ -34286,7 +34364,11 @@ fn block_declared_names(b : @ast.TsBlock, out : Map[String, Unit]) -> Unit {
         }
       }
       NativeClassStmt(decl, _) => out[decl.name] = ()
-      Block(inner) => block_declared_names(inner, out)
+      // The parser marks a merged declarator group (`let a = 1, b = 2`)
+      // with `DECL_GROUP_POSITION`; a nested block holding only
+      // declarations has real positions.
+      Block(inner) if inner.stmt_positions == [@ast.DECL_GROUP_POSITION] =>
+        block_declared_names(inner, out)
       _ => ()
     }
   }
@@ -35212,14 +35294,14 @@ fn narrow_after_assignment(
         // does not see the `void`.
         // An unannotated static reads its return from the body, as a
         // getter does: `static create(v) { return new N(v) }` is an `N`.
-        // The parser marks it `static:NAME` only when no annotation was
-        // written, so an explicit `: any` stays `any`.
+        // The parser records it only when no annotation was written, so an
+        // explicit `: any` stays `any`.
         Some(m) => {
           let ret = if is_checkable(m.return_type) {
             m.return_type
-          } else if ctx.resolver.unannotated_return_members.get(cn)
+          } else if ctx.resolver.unannotated_static_return_members.get(cn)
             is Some(names) &&
-            names.contains("static:" + meth) {
+            names.contains(meth) {
             method_sole_return_type(m, ctx.resolver).unwrap_or(Any)
           } else {
             m.return_type
@@ -36575,31 +36657,75 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // snapshot that put every outer binding back, so `let data = null;
       // try { data = JSON.parse(s) } catch {}` left `data` as `null` and a
       // following `if (!data) return` made it `never` — excalidraw's
-      // `onWindowMessage`. The catch block is entered from the PRE-try
-      // state, which loses a value the try block assigned before it threw;
-      // that only narrows, and it is how the catch was checked before.
+      // `onWindowMessage`.
+      //
+      // The catch block and the finally block are entered from a state the
+      // try block may have left at ANY statement, since any of them can
+      // throw: each binding the try block writes may hold its pre-try value
+      // or a value written before the throw (and, for `finally`, one the
+      // catch block wrote, or one written before a `return`). Entering them
+      // from the pre-try state alone missed `try { x = null; throw 0 }
+      // catch {} x.length` (#312's review).
       let try_pre = env.full_snapshot()
-      let try_exit = check_block_narrowing_exit(env, try_block, ctx, [])
-      let try_exits = block_always_exits(try_block)
-      let shadow : Map[String, Unit] = Map([])
-      block_declared_names(try_block, shadow)
-      let mut catch_exit : Map[String, @ast.TsType]? = None
-      let mut catch_exits = false
+      let pre_map : Map[String, @ast.TsType] = Map([])
+      for e in try_pre {
+        pre_map[e.0] = e.1
+      }
+      // Each side's own declarations: the catch binding is a binding of
+      // the catch block alone, so it must not hide the try block's write
+      // to an outer name of the same spelling.
+      let try_shadow : Map[String, Unit] = Map([])
+      block_declared_names(try_block, try_shadow)
+      let catch_shadow : Map[String, Unit] = Map([])
       match catch_block {
         Some(cb) => {
-          block_declared_names(cb, shadow)
+          block_declared_names(cb, catch_shadow)
           match catch_binding {
             Some(b) => {
               let names : Array[String] = []
               collect_binding_names(b, names)
               for n in names {
-                shadow[n] = ()
+                catch_shadow[n] = ()
               }
             }
             None => ()
           }
+        }
+        None => ()
+      }
+      let catch_entry = backedge_bindings_for_writes(
+        env,
+        ctx,
+        collect_try_writes(try_block.stmts),
+        fn(n) { !try_shadow.contains(n) && !catch_shadow.contains(n) },
+      )
+      let finally_entry = match finally_block {
+        Some(_) => {
+          let stmts = match catch_block {
+            Some(cb) => [..try_block.stmts, ..cb.stmts]
+            None => try_block.stmts
+          }
+          backedge_bindings_for_writes(env, ctx, collect_try_writes(stmts), fn(
+            n,
+          ) {
+            !try_shadow.contains(n) && !catch_shadow.contains(n)
+          })
+        }
+        None => []
+      }
+      let try_exit = check_block_narrowing_exit(env, try_block, ctx, [])
+      let try_exits = block_always_exits(try_block)
+      let mut catch_exit : Map[String, @ast.TsType]? = None
+      let mut catch_exits = false
+      match catch_block {
+        Some(cb) => {
           catch_exits = block_always_exits(cb)
           let pre = env.full_snapshot()
+          // Flattened: the join nests (`("ok" | null) | "a"`), and the
+          // possibly-`null` member check splits a union one level.
+          for j in catch_entry {
+            env.narrow(j.0, flatten_union_parts(j.1))
+          }
           // TS 4.0+ defaults catch bindings to `unknown`. We don't model
           // `unknown` separately (it folds into `Any` here), but binding to
           // `Any` matches the prior semantics — the caller still has to
@@ -36628,26 +36754,39 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
         None => ()
       }
-      let pre_map : Map[String, @ast.TsType] = Map([])
-      for e in try_pre {
-        pre_map[e.0] = e.1
-      }
       match catch_exit {
         None =>
           if !try_exits {
-            apply_sequential_exit(env, pre_map, try_exit, shadow)
+            apply_sequential_exit(env, pre_map, try_exit, try_shadow)
           }
         Some(ce) =>
           if try_exits && !catch_exits {
-            apply_sequential_exit(env, pre_map, ce, shadow)
+            apply_sequential_exit(env, pre_map, ce, catch_shadow)
           } else if catch_exits && !try_exits {
-            apply_sequential_exit(env, pre_map, try_exit, shadow)
+            apply_sequential_exit(env, pre_map, try_exit, try_shadow)
           } else if !try_exits && !catch_exits {
+            // Each side's exit, with a name that side declares read as the
+            // outer binding it left untouched.
+            let side = fn(
+              exit : Map[String, @ast.TsType],
+              shadow : Map[String, Unit],
+              k : String,
+              v : @ast.TsType,
+            ) -> @ast.TsType? {
+              if shadow.contains(sequential_exit_root(k)) {
+                Some(v)
+              } else {
+                exit.get(k)
+              }
+            }
             let joined : Map[String, @ast.TsType] = Map([])
             for k, v in pre_map {
-              let a = try_exit.get(k)
-              let b = ce.get(k)
-              match (a, b) {
+              match
+                (side(try_exit, try_shadow, k, v), side(ce, catch_shadow, k, v)) {
+                // An aliased condition either side cancelled is cancelled.
+                (Some(Tuple([])), _) | (_, Some(Tuple([]))) if k.has_prefix(
+                    "<alias-cond>",
+                  ) => joined[k] = @ast.TsType::Tuple([])
                 (Some(a), Some(b)) =>
                   joined[k] = if a == b {
                     a
@@ -36658,11 +36797,27 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
                 _ => if !(k.contains(".") || k.contains("[")) { joined[k] = v }
               }
             }
-            apply_sequential_exit(env, pre_map, joined, shadow)
+            apply_sequential_exit(env, pre_map, joined, Map([]))
           }
       }
       match finally_block {
-        Some(fb) => check_block(env, fb, ctx)
+        Some(fb) => {
+          let pre = env.full_snapshot()
+          for j in finally_entry {
+            let t = match env.lookup(j.0) {
+              Some(cur) if cur != j.1 =>
+                join_branch_types_resolved(
+                  ctx.resolver,
+                  cur,
+                  flatten_union_parts(j.1),
+                )
+              _ => flatten_union_parts(j.1)
+            }
+            env.narrow(j.0, t)
+          }
+          check_block(env, fb, ctx)
+          env.restore_from(pre)
+        }
         None => ()
       }
     }
@@ -51981,6 +52136,10 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // Marker, not an error: an accessor half's own visibility.
         // Consumed by `accessor_half_visibility`.
         ()
+      } else if name.has_prefix("<unannotated-static-return:") {
+        // Marker, not an error: a bodied STATIC method with no return
+        // annotation, consumed by the static-factory assignment narrowing.
+        ()
       } else if name.has_prefix("<unannotated-return:") {
         // Marker, not an error: a bodied instance method with no return
         // annotation. Consumed by the TS2416 method comparison and by
@@ -55383,6 +55542,12 @@ fn check_module_function_bodies_layered(
           match resolver.unannotated_return_members.get(entry.0) {
             Some(arr) => arr.push(m)
             None => resolver.unannotated_return_members[entry.0] = [m]
+          }
+        } else if name.has_prefix("<unannotated-static-return:") {
+          let m = name["<unannotated-static-return:".length():name.length() - 1].to_owned()
+          match resolver.unannotated_static_return_members.get(entry.0) {
+            Some(arr) => arr.push(m)
+            None => resolver.unannotated_static_return_members[entry.0] = [m]
           }
         }
       }
