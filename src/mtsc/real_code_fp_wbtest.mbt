@@ -1132,3 +1132,21 @@ test "a unicode space is whitespace in trivia and in code" {
     assert_eq(issue_lines(src), [], msg=src)
   }
 }
+
+///|
+/// TS18046's token scan ignores a property NAME spelled like the catch
+/// binding: `console.error("…", error)` passes `error` and does not call
+/// it, while `error.message` and `error()` are uses (probed).
+test "a catch binding spelled as a property name is not a use" {
+  let src =
+    #|export function okLogged() { try { JSON.parse("x"); } catch (error) { console.error("x", error); } }
+    #|export function okOptionalLogged(log?: { error(m: string, e: unknown): void }) { try { JSON.parse("x"); } catch (error) { log?.error("x", error); } }
+  assert_eq(issue_lines(src), [])
+  let bad =
+    #|export function badMember() { try { JSON.parse("x"); } catch (error) { return error.message; } }
+  assert_true(
+    issue_lines(bad).contains(
+      "grammar: `error` is of type `unknown` — narrow it before use",
+    ),
+  )
+}
