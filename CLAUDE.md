@@ -6701,6 +6701,141 @@ product surfaces now.
     does not. The real-app check still catches 8 of 11 with no false
     positive, and the mutation differential is unchanged at 105 caught /
     155 missed (40%), with no undeclared false positive.
+
+  [#310](https://github.com/mizchi/ts.mbt/pull/310)'s review also
+  found three defects in batch GY itself, all fixed before it merged:
+  - Widening a fresh literal could leave its bound: `box<T extends "a" |
+    "b">(x: T): T[]` made `box("a")` a `string[]`. The widened binding
+    goes back to the solved one when it fails its bound, repeated until
+    nothing changes, because a bound can name another binder
+    (`pair<U extends T, T extends "a" | "b">`).
+  - The raw return solve inferred each argument a second time, so a
+    call nested 12 to 16 deep was 7 to 10 times slower than on main. The
+    arguments are inferred once and passed to both solves.
+  - One generic at two argument counts compares only the shared prefix,
+    which is an abstention and not a proof. A conditional that depends
+    on such a pair stays undecided, through every shape the relation
+    compares and past the depth bound. No report came from it, so this
+    one is defensive.
+
+  Batch GZ is the next univer categories, each probed cell by cell
+  against the nightly and each mechanism shown necessary by reverting
+  it. Two fixes the first draft carried were reverted that way: the same
+  alias expansion at `typeof` and at `Array.isArray`, which changed
+  nothing.
+  - **TS 4.4 destructured discriminants.** `const { type } = item` and
+    then `if (type === "a")` narrows `item`. It works in an `else if`
+    chain, a reversed or loose comparison, a truthiness test, a `switch`
+    (with its `default` and its fall-through groups) and a property-path
+    source (`props.item`, `this.item`). A `let` binding and a defaulted
+    one do not narrow the source in tsc, and do not here. The binding is
+    recorded as `<destr-disc>NAME` with the source's type at the
+    destructuring. A source that later holds a member it did not hold
+    then has been assigned, and stops being narrowed. univer's
+    `DropdownMenu` had nine reports from it. `controlFlowAliasing` pins
+    the plain spellings, and the cells beside them are the new tsc-extra
+    case `destructuredDiscriminantBoundaries`.
+  - **A truthy boolean discriminant narrows its receiver.** `if (r.ok)
+    r.value` was missing for the direct spelling too, and `done?: false`
+    reads as falsy. Only members whose field is made of literals, `null`,
+    `undefined` and `void` take part.
+  - **A union member that is an alias to a union is expanded** before
+    `!= null` and `instanceof` remove members. `cond ? nullableField :
+    null` kept `Nullable<X>` as one opaque member, so `!= null` left its
+    `null | undefined | void` behind. univer's `OrInput = string | Or |
+    CharsetInput` kept `CharsetInput` past `instanceof Or`.
+  - **Smaller items:**
+    - An array literal method receiver widens its literal elements:
+      `["__proto__", "prototype"].includes(key)` takes a `string`.
+    - The empty object type takes no excess-property check.
+    - A binding declared `{}` or as a tuple is not narrowed by an
+      assignment, since tsc narrows by assignment only a union
+      declaration.
+    - A receiver that reduces to `any` has every member. One case is
+      `ReturnType<C["m"]>[number]` over an unannotated method.
+  - **A write to a class accessor takes the setter's parameter type**,
+    which since TS 4.3 may be wider than the getter's. `lookup_field`
+    answers with the getter's, which is the read side.
+  - **`any | undefined` is `any` as a source too.** An optional `any`
+    parameter is spelled that way, and the strictNullChecks leak rule read
+    `Number.parseFloat(value)` as an error.
+  - **A memberless subclass is its base.** `class UniverRenderingContext
+    extends UniverRenderingContext2D { }` takes a base instance, private
+    members and all, since it inherits them from the same declaration.
+  - **Function types are compared through the interface chain.** The
+    resolver-free relation is nominal for interfaces, so a handler taking
+    a base event read as unrelated to a slot typed by the derived one.
+    That happened at the function-type comparison and at an annotated
+    arrow parameter.
+  - **A `string` compared equal to a literal is that literal.** tsc
+    replaces a `string` member with the literal on the equal side
+    (`replacePrimitivesWithLiterals`) and drops the members that cannot
+    equal a string, so `v === "-" || v === "/" ? v : null` fits a
+    `"-" | "/" | null` return (univer's `getSeparator`). The other side
+    keeps `string`.
+  - **`typeof x === "object"` splits a union on both sides.** The equal
+    side is the classes, non-callable interfaces, object types, arrays,
+    tuples and `null`, and the other side the primitives and the
+    functions. Before, the class stayed in the else branch, so `start!`
+    over `start?: number | ParagraphStyleBuilder` read as the union. A
+    member this cannot classify keeps the old answer.
+  - **An object type meets an index-signature interface.** An object
+    type has an implicit index signature, so `const e = {}` is
+    assignable to univer's `interface IDateTrie { [token: string]:
+    IDateTrie | number | undefined }`. An interface's own type has none.
+  - **From [#310](https://github.com/mizchi/ts.mbt/pull/310)'s review:**
+    - A rest tuple with an unsolved binder keeps its known elements, so
+      `...values: [number, T]` still checks its first argument when the
+      binder's argument is `any`.
+    - Written type arguments decide a bounded generic's return.
+      `id<"a" | "b">("a")` is `"a" | "b"`, and `pair<"a" | "b", 1 |
+      2>("a", 1)` no longer reads as `[string, number]`.
+    - `||=` drops a falsy member by what it resolves to, so `type Off =
+      false` goes like a written `false`.
+
+  The gates on those commits found one conformance false positive and
+  one report at a new univer location, and one of the fixes for them
+  removed an older report:
+  - With strictNullChecks off, an unannotated getter returning `null` is
+    `any`, so its unannotated setter takes anything. The setter-type
+    write path above read it as `null`, and `classPropertyIsPublicByDefault`
+    became a false positive.
+  - `+` concatenates when either operand is a union of strings. The
+    string-literal narrowing made `token` a `"M" | "D"`, and `path +
+    token`, with `path` the union `data.path || ""` gives, fell through
+    to `number`.
+  - The equal side of `x == null` keeps the nullish members `x` has.
+    Over `null | P[][]` it was `null | undefined`. That report was on
+    main too, with a longer message, at the same site.
+
+  Two of that review's findings did not lead to a change, for reasons
+  that were measured:
+  - Publishing a class's method headers under its collision key is
+    unreachable. Graph checking never keys a class, because class
+    lookups go through the bare name (batch FR). The repro for it found
+    a different, older false positive instead. When two reachable
+    modules each export a `class Svc`, the bare name goes to whichever
+    module claims it first. So `import { Svc } from "./a"` can read b's
+    class, and `s.take(…)` is "does not exist". This is the
+    class-keying limit batch GF records. univer has 22 modules
+    exporting `ComponentsController`, but no univer report comes from
+    it, so it is filed rather than fixed.
+  - `equivalent` and `simplify_union` still relate `Box<number>` and
+    `Box<number, number>`. The only effect is a MISS: the AST keeps no
+    default type argument, so `u.b` cannot be typed either way.
+  - **What it measures.** The oracle is unchanged (TP 2726 / MISS 0 /
+    FP 0), and tsc-extra stays at FP 0 with 89 cases. effect goes from 82
+    to 78 and zod stays at 7. univer goes, against batch GY:
+    - core 51→37
+    - docs-hyper-link 35→21
+    - data-validation 245→197
+    - sheets-numfmt 247→199
+    - ui 231→159
+
+    excalidraw goes from 328 to 296. None of them reports at a site main
+    does not. The real-app check still catches 8 of 11 with no false
+    positive, and the mutation differential is unchanged at 105 caught /
+    155 missed (40%), with no undeclared false positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -8173,15 +8173,38 @@ fn raw_class_method_call_params(
         }
       })
     if mentioned.iter().any(fn(tp) { unknown_tps.contains(tp) }) {
-      // A bare `any` reads as REQUIRED to the arity check, so an optional
-      // parameter keeps its `| undefined` spelled out.
-      out.push(
-        if type_accepts_undefined(params[i]) {
-          @ast.TsType::Union([Any, Undefined])
-        } else {
-          @ast.TsType::Any
-        },
-      )
+      match params[i] {
+        // A rest parameter keeps its element list with the unknown binder
+        // read as `any`: `...values: [number, T]` checks its first
+        // argument against `number` whatever `T` is.
+        Rest(_) => {
+          let any_for_unknown : Map[String, @ast.TsType] = Map([])
+          for tp in mentioned {
+            any_for_unknown[tp] = if unknown_tps.contains(tp) {
+              @ast.TsType::Any
+            } else {
+              match bindings.get(tp) {
+                Some(b) => b
+                None => @ast.TsType::Any
+              }
+            }
+          }
+          match resolver.unwrap(substitute_params(rp, any_for_unknown)) {
+            Array(_) | Tuple(_) as list => out.push(@ast.TsType::Rest(list))
+            _ => out.push(params[i])
+          }
+        }
+        // A bare `any` reads as REQUIRED to the arity check, so an
+        // optional parameter keeps its `| undefined` spelled out.
+        _ =>
+          out.push(
+            if type_accepts_undefined(params[i]) {
+              @ast.TsType::Union([Any, Undefined])
+            } else {
+              @ast.TsType::Any
+            },
+          )
+      }
     } else if mentioned.length() > 0 && solved {
       // The header keeps parameter TYPES only, so an optional parameter's
       // `?` is in the inlined parameter (as `| undefined`) and not here.
@@ -9294,8 +9317,12 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 /// exit.
 fn ExprEnv::forget_freshness(self : ExprEnv, name : String) -> Unit {
   let _ = self.vars.remove("<fresh>" + name)
-  // The same holds for the `<exact>` marker of `bind_object_pattern`.
+  // The same holds for the `<exact>` marker of `bind_object_pattern`, and
+  // for a destructured discriminant's `<destr-disc>` marker: an inner
+  // `const kind = …` is not the `kind` destructured from `x`, so it must
+  // not narrow `x` (#311's review).
   let _ = self.vars.remove("<exact>" + name)
+  let _ = self.vars.remove("<destr-disc>" + name)
 }
 
 ///|
@@ -10233,8 +10260,13 @@ fn nominal_private_blocks(
   match s_class {
     Some(sn) =>
       if class_has_private_member(resolver, sn) {
+        // A subclass that adds no member IS its base, whose private
+        // members it inherits from the same declaration (univer's
+        // `UniverRenderingContext extends UniverRenderingContext2D {}`).
         let related = match t_class {
-          Some(tn) => class_extends(resolver, sn, tn)
+          Some(tn) =>
+            class_extends(resolver, sn, tn) ||
+            class_extends_without_members(resolver, tn, sn, 0)
           None => false
         }
         if !related && target_declares_restricted_member(resolver, sn, target) {
@@ -12904,6 +12936,14 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
     | (_, Conditional(_, _, _, _))
     | (MappedType(_, _, _, _), _)
     | (_, MappedType(_, _, _, _)) => true
+    // A template literal type is a set of strings, so it overlaps `string`,
+    // a string literal (which it may or may not match; `true` is the
+    // cautious answer) and another template. univer's `r.name ===
+    // hook.pluginName` with `pluginName: \`${Biz}_${string}_PLUGIN\`` read as
+    // always false. A non-string side still reports.
+    (TemplateLiteralType(_, _), String_ | Literal(_) | TemplateLiteralType(_, _)
+    )
+    | (String_ | Literal(_), TemplateLiteralType(_, _)) => true
     // Same primitive families overlap with each other and their literals.
     (Number, Number)
     | (Number, NumberLiteral(_))
@@ -13525,20 +13565,24 @@ fn infer_expr_inner(
         // argument said. A return that IS a parameter's union bound is read
         // as that parameter, and the written argument answers for it.
         (Call(name, _), _) if env.lookup(name) is None =>
-          match
-            explicit_arg_for_inlined_bound(resolver, name, targs, inner_ty) {
+          match raw_return_for_written_args(resolver, name, targs) {
             Some(t) => t
-            // An OVERLOAD SET with written type arguments whose bounds are
-            // not on record (an imported function: excalidraw's
-            // `pointFrom<GlobalPoint>(x, y)` from `@excalidraw/math`): the
-            // answer would be some overload's inlined bound, which the
-            // written argument narrows, so the call abstains.
             None =>
-              match resolver.globals.get(name) {
-                Some(t) if targs.length() > 0 &&
-                  resolver.unwrap(t) is Union(ms) &&
-                  ms.length() > 1 => @ast.TsType::Any
-                _ => inner_ty
+              match
+                explicit_arg_for_inlined_bound(resolver, name, targs, inner_ty) {
+                Some(t) => t
+                // An OVERLOAD SET with written type arguments whose bounds are
+                // not on record (an imported function: excalidraw's
+                // `pointFrom<GlobalPoint>(x, y)` from `@excalidraw/math`): the
+                // answer would be some overload's inlined bound, which the
+                // written argument narrows, so the call abstains.
+                None =>
+                  match resolver.globals.get(name) {
+                    Some(t) if targs.length() > 0 &&
+                      resolver.unwrap(t) is Union(ms) &&
+                      ms.length() > 1 => @ast.TsType::Any
+                    _ => inner_ty
+                  }
               }
           }
         _ => inner_ty
@@ -14425,7 +14469,7 @@ fn infer_expr_inner(
               // number }` is `{ n: number }` (probed; #309's review), where
               // keeping the `false` failed a return check tsc accepts.
               if op is OrAssign {
-                left = match without_falsy_literals(left) {
+                left = match without_falsy_literals(resolver, left) {
                   Some(t) => t
                   None => @ast.TsType::Undefined
                 }
@@ -14500,9 +14544,14 @@ fn infer_expr_inner(
       // globals (because `namespace Name` registered the member as
       // `Name.member`, or `class Name` has a static method), prefer
       // that lookup. The instance-side `lookup_field` would otherwise
-      // miss static members entirely.
+      // miss static members entirely. A LOCAL binding of the same name (a
+      // parameter `E: { A: string }` beside `enum E`) is what the name
+      // means here, so its own type answers instead (#311's review).
       match receiver {
-        Var(class_name) =>
+        Var(class_name) if !(match env.lookup(class_name) {
+            Some(t) => is_checkable(t) && !(t is Any)
+            None => false
+          }) =>
           match resolver.globals.get(class_name + "." + name) {
             Some(t) => return t
             None =>
@@ -16622,6 +16671,43 @@ fn raw_signature_known_bounds(
 }
 
 ///|
+/// The return of a call to a bounded generic FUNCTION with written type
+/// arguments: the un-inlined return with the written arguments substituted.
+/// `id<"a" | "b">("a")` with `id<T extends string>(x: T): T` is
+/// `"a" | "b"` whatever the argument is, and solving `T` from the argument
+/// instead made it `"a"`, so a `let` holding it rejected `"b"` (probed;
+/// #310's review). Only a single signature with exactly as many type
+/// parameters as written arguments, each argument checkable and resolved;
+/// `None` otherwise, which leaves the call's inferred type as it was.
+fn raw_return_for_written_args(
+  resolver : Resolver,
+  name : String,
+  targs : Array[@ast.TsType],
+) -> @ast.TsType? {
+  guard targs.length() > 0 else { return None }
+  guard resolver.globals.get("@raw-sig:" + name) is Some(Func(_, raw_ret)) else {
+    return None
+  }
+  guard resolver.globals.get(name) is Some(callee) &&
+    resolver.unwrap(callee) is Func(_, _) else {
+    return None
+  }
+  guard resolver.func_type_params.get(name) is Some(tps) &&
+    tps.length() == targs.length() else {
+    return None
+  }
+  let bindings : Map[String, @ast.TsType] = Map([])
+  for i, tp in tps {
+    let t = targs[i]
+    if !is_checkable(t) || type_contains_unresolved_named(t, resolver) {
+      return None
+    }
+    bindings[tp] = t
+  }
+  Some(substitute_params(raw_ret, bindings))
+}
+
+///|
 /// The return of a call to a BOUNDED generic function, instantiated from
 /// its un-inlined signature. The parser inlines a bounded type parameter
 /// to its bound in the return as in the parameters, so `findBy<T extends
@@ -18328,6 +18414,26 @@ fn is_bigint_operand(
 }
 
 ///|
+/// True when every member of `t` is a string, a string literal or a
+/// template literal type, which is what makes `+` a concatenation.
+fn string_like_operand(
+  resolver : Resolver,
+  t : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  match resolver.unwrap(t) {
+    String_ | Literal(_) | TemplateLiteralType(_, _) => true
+    Union(parts) =>
+      parts.length() > 0 &&
+      parts.iter().all(fn(p) { string_like_operand(resolver, p, depth + 1) })
+    _ => false
+  }
+}
+
+///|
 fn infer_binop(
   op : @ast.TsBinOp,
   l : @ast.TsType,
@@ -18345,6 +18451,12 @@ fn infer_binop(
         // String concat — either side is a string-shaped type.
         (String_, _) | (_, String_) | (Literal(_), _) | (_, Literal(_)) =>
           @ast.TsType::String_
+        // A union of strings is a string operand too: `(data.path || "") +
+        // token` with `token` narrowed to `"M" | "D"` is a string, where
+        // both operands being unions fell through to `number` (univer's
+        // `nextToken`).
+        _ if string_like_operand(resolver, l, 0) ||
+          string_like_operand(resolver, r, 0) => @ast.TsType::String_
         // `bigint + bigint` stays bigint (mixing with number is a type error,
         // surfaced separately by the operand check).
         (BigInt, BigInt)
@@ -20584,7 +20696,12 @@ fn check_expr_against_shape(
   // excluded, as is a target that itself carries the same nullish member.
   if ctx.strict_null_checks &&
     type_has_non_nullish(inferred_u) &&
-    (type_has_undefined(inferred_u) || type_has_null(inferred_u)) {
+    (type_has_undefined(inferred_u) || type_has_null(inferred_u)) &&
+    // A SOURCE union holding `any` is `any` too: an optional `any`
+    // parameter (`value?: any`) is spelled `any | undefined`, and univer's
+    // `Number.parseFloat(value)` read it as leaking `undefined`. The target
+    // side already reads that spelling as open, just below.
+    !(inferred_u is Union(src_parts) && src_parts.contains(Any)) {
     let target_open = match expected_u {
       Any | Unknown | Void | Never => true
       Named(tn) => ctx.in_scope_type_params.contains(tn)
@@ -20819,7 +20936,11 @@ fn check_expr_against_shape(
     !func_type_mentions_type_param(expected_u, ctx) &&
     !type_contains_unresolved_named(expected_u, ctx.resolver) &&
     !type_contains_unresolved_named(inferred_u, ctx.resolver) {
-    if !is_assignable_to_bivariant(inferred_u, expected_u) {
+    // The resolver-free relation is nominal for interfaces, so a handler
+    // taking a BASE interface read as unrelated to a slot typed by a
+    // derived one; the chain-aware walk settles that.
+    if !is_assignable_to_bivariant(inferred_u, expected_u) &&
+      !assignable_through_class_chain(inferred_u, expected_u, ctx.resolver) {
       record(
         ctx,
         sub_path,
@@ -21419,11 +21540,103 @@ fn assignable_through_class_chain(
     (Named(s_name), Applied(t_name, _))
     | (Applied(s_name, _), Applied(t_name, _)) =>
       class_or_interface_inherits(s_name, t_name, resolver, [])
+    // Two function types, with each parameter and the return compared
+    // through the class and interface chains the resolver-free relation
+    // cannot see. `this._onClick = h` with `h: (e: IMouseEvent) => void`
+    // over a method taking `IPointerEvent extends IMouseEvent` is legal
+    // (univer's `InputManager.dispose`), and `B0 ≤ A0` is a nominal
+    // mismatch to `is_assignable_to`. Parameters are compared both ways, a
+    // method's being bivariant; a rest parameter on either side keeps the
+    // resolver-free answer.
+    (Func(sp, sr), Func(tp, tr)) => {
+      if sp.length() > tp.length() ||
+        sp.iter().any(fn(p) { p is Rest(_) }) ||
+        tp.iter().any(fn(p) { p is Rest(_) }) {
+        return is_assignable_to(src, tgt)
+      }
+      for i, a in sp {
+        let b = tp[i]
+        if !(is_assignable_to_bivariant(a, b) ||
+          is_assignable_to_bivariant(b, a) ||
+          chain_relates_names(b, a, resolver) ||
+          chain_relates_names(a, b, resolver)) {
+          return false
+        }
+      }
+      tr is (Void | Any) ||
+      sr is Any ||
+      is_assignable_to(sr, tr) ||
+      chain_relates_names(sr, tr, resolver)
+    }
     // Same-shape primitive / `null` / `undefined` matches so a union
     // walk like `Foo | null → Object | null` succeeds (the class chain
     // handles Foo→Object; this branch handles Null→Null).
     _ => is_assignable_to(src, tgt)
   }
+}
+
+///|
+/// `assignable_through_class_chain` for the function-type arm, minus the
+/// one case the chain walk cannot judge: two instantiations of the SAME
+/// generic (`Effect<unknown, number>` against `Effect<any, string>`),
+/// which it relates by name alone. Those are the resolver-free relation's
+/// to decide, argument by argument.
+/// A union on either side is taken apart here rather than by the chain
+/// walk, so the same-generic case is refused at every member and not only
+/// at the top: `() => Box<number> | undefined` against `() => Box<string>
+/// | undefined` reached `Box<number>` against `Box<string>` inside the
+/// walk's own union arms, which relate them by name (#311's review).
+fn chain_relates_names(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match (resolver.unwrap(source), resolver.unwrap(target)) {
+    (Union(ms), _) =>
+      ms
+      .iter()
+      .all(fn(m) {
+        is_assignable_to(m, target) || chain_relates_names(m, target, resolver)
+      })
+    (s, Union(ms)) =>
+      ms
+      .iter()
+      .any(fn(m) {
+        is_assignable_to(s, m) || chain_relates_names(s, m, resolver)
+      })
+    (Applied(a, _), Applied(b, _)) if a == b => false
+    _ => assignable_through_class_chain(source, target, resolver)
+  }
+}
+
+///|
+/// True when the class `derived` reaches `base` through a chain of classes
+/// that declare no instance member of their own. Classes are structural, so
+/// such a class IS its base's instance type and a base instance is
+/// assignable to it: univer's `class UniverRenderingContext extends
+/// UniverRenderingContext2D { }` takes every `UniverRenderingContext2D`.
+/// A generic class, a class with an index signature, and one that adds a
+/// field, a method or an accessor are not walked.
+fn class_extends_without_members(
+  resolver : Resolver,
+  derived : String,
+  base : String,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  guard resolver.classes.get(derived) is Some(cls) else { return false }
+  if !cls.type_params.is_empty() ||
+    cls.base_names.length() != 1 ||
+    !cls.index_signatures.is_empty() ||
+    cls.properties.iter().any(fn(p) { !p.is_static }) ||
+    cls.methods.iter().any(fn(m) { !m.is_static && m.name != "constructor" }) {
+    return false
+  }
+  let parent = cls.base_names[0]
+  parent == base ||
+  class_extends_without_members(resolver, parent, base, depth + 1)
 }
 
 ///|
@@ -22084,6 +22297,12 @@ fn member_recv_unmodeled_with(
   }
   match resolver.unwrap(ty) {
     Intersection(_) | TypeOf(_) => true
+    // A receiver that REDUCES to `any` has every member, whatever it is
+    // spelled as: `ReturnType<C["m"]>[number]` over an unannotated method
+    // (`() => any` here) and `(typeof anyValue)[number]` were both reported
+    // on every member read, because the spelled type is not `Any` and the
+    // reduced one is not an unmodeled shape (univer's `DocumentSkeleton`).
+    Any => true
     Named(n) | Applied(n, _) =>
       resolver.classes.get(n) is Some(_) &&
       class_chain_has_unresolved_base(n, resolver)
@@ -22440,6 +22659,25 @@ fn binding_init_type(
     Union(_) if init is ObjectLit(_) =>
       widen_object_literal_type(inferred, init, resolver, infer)
     Struct(_, _) | Array(_) | Tuple(_) => widen_literal_deep(inferred)
+    // An enum member's literal type widens to its ENUM in a mutable
+    // binding: `let prev = LinkCharType.Other` is a `LinkCharType`, so a
+    // later `prev = other` and `prev !== LinkCharType.Open` are legal
+    // (univer's `linebreakLink`). The member reads as its folded value
+    // here, which is what made both report.
+    // The receiver must BE the enum: a parameter or local named like one
+    // (`function f(E: { A: "local" })`) keeps its own member's type
+    // (#311's review). The enum's own value infers as `any`, which a
+    // shadowing binding does not.
+    Literal(_) | NumberLiteral(_) if mutable_ &&
+      (match init {
+        PropAccess(Var(e), _) =>
+          resolver.enums.contains(e) && infer(Var(e)) is Any
+        _ => false
+      }) =>
+      match init {
+        PropAccess(Var(e), _) => Named(e)
+        _ => inferred
+      }
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       if mutable_ && fresh {
         widen_literal(inferred)
@@ -22903,6 +23141,41 @@ fn structural_oneway_assignable_rec(
           is_assignable_to(m, target) ||
           structural_oneway_assignable_rec(m, target, resolver, depth + 1)
         })
+    _ => ()
+  }
+  // An object type has an implicit index signature, so it is assignable to
+  // an interface that declares nothing but string index signatures when
+  // every member fits the index value: `const e = {}` into univer's
+  // `interface IDateTrie { [token: string]: IDateTrie | number | undefined
+  // }`, and `{ a: 1 }` into `{ [k: string]: number }`. An interface's own
+  // type has no such signature, and a computed or accessor key decides
+  // nothing here.
+  match (resolver.unwrap(source), resolver.unwrap(target)) {
+    (Object(fields), Named(n)) =>
+      match resolver.interfaces.get(n) {
+        Some(i) if i.fields.is_empty() &&
+          i.extends_names.is_empty() &&
+          i.type_params.is_empty() &&
+          !i.index_signatures.is_empty() &&
+          i.index_signatures.iter().all(fn(sig) { sig.0 is String_ }) &&
+          fields.iter().all(fn(f) { f.0 is Literal(k) && !k.has_prefix("@@") }) =>
+          return fields
+            .iter()
+            .all(fn(f) {
+              i.index_signatures
+              .iter()
+              .all(fn(sig) {
+                is_assignable_to(f.1, sig.1) ||
+                structural_oneway_assignable_rec(
+                  f.1,
+                  sig.1,
+                  resolver,
+                  depth + 1,
+                )
+              })
+            })
+        _ => ()
+      }
     _ => ()
   }
   match resolver.unwrap(target) {
@@ -24571,6 +24844,13 @@ fn check_object_lit_against_target(
   if resolver.unwrap(target) is NonPrimitiveObject {
     return
   }
+  // Nor does the EMPTY object type: tsc's excess-property check skips an
+  // empty target (`let o = {}; o = { a: 1 }` and `let o: {} = { a: 1 }` are
+  // both legal, probed), since `{}` is what any non-nullish value is
+  // assignable to. univer's `handleBorder` fills `let obj = {}` that way.
+  if resolver.unwrap(target) is Object([]) {
+    return
+  }
   // Mapped / conditional / `keyof` / generic-alias targets (`Boxified<any>`,
   // `keyof {}` from an unresolved generic, …) can't be enumerated, so every
   // supplied key would look like an excess property and every declared field
@@ -25227,7 +25507,15 @@ fn accessor_member_value_type(
           None => false
         }
         if unannotated {
-          from_getter = method_sole_return_type(m, resolver)
+          // With strictNullChecks off an inferred `null` / `undefined`
+          // return widens to `any`, so `get y() { return null }` beside
+          // `set y(x) {}` takes `c.y = 1` (classPropertyIsPublicByDefault).
+          from_getter = match method_sole_return_type(m, resolver) {
+            Some(Null | Undefined) if resolver.globals.contains(
+                "@no-strict-null-checks",
+              ) => Some(@ast.TsType::Any)
+            other => other
+          }
         }
       }
     }
@@ -25245,6 +25533,27 @@ fn accessor_member_value_type(
         // `lookup_field` and compare against the getter's SIGNATURE.
         None => Some(@ast.TsType::Any)
       }
+  }
+}
+
+///|
+/// The type a WRITE to `recv.name` must supply. For a class accessor that is
+/// the setter's parameter type, which since TS 4.3 may be wider than the
+/// getter's (`get width(): number` beside `set width(v: number | string)`,
+/// univer's `BaseObject`); `lookup_field` answers with the getter's, which
+/// is the read side. Any other member is what `lookup_field` says.
+fn property_write_type(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  name : String,
+) -> @ast.TsType? {
+  match resolver.lookup_field(recv, name) {
+    Some(read) =>
+      match accessor_member_value_type(resolver, recv, name) {
+        Some(write) => Some(write)
+        None => Some(read)
+      }
+    None => None
   }
 }
 
@@ -26922,7 +27231,12 @@ fn check_arrow_with_context(
       reliable_func_param_operand(p.type_, ctx) &&
       reliable_func_param_operand(formal_params[i], ctx) &&
       !(is_assignable_to_bivariant(p.type_, formal_params[i]) ||
-      is_assignable_to_bivariant(formal_params[i], p.type_)) {
+      is_assignable_to_bivariant(formal_params[i], p.type_)) &&
+      // The resolver-free relation is nominal for interfaces, so an
+      // annotated `(e: A0) => {}` against `(e: B0) => void` with `B0
+      // extends A0` read as unrelated. It is the legal direction.
+      !assignable_through_class_chain(formal_params[i], p.type_, ctx.resolver) &&
+      !assignable_through_class_chain(p.type_, formal_params[i], ctx.resolver) {
       record(
         ctx,
         "\{sub_path} param `\{p.name}`",
@@ -30658,6 +30972,16 @@ fn collect_narrowing(
     }
     None => ()
   }
+  // A destructured discriminant narrows the object it came from, as the
+  // property it was read from would; the binding itself still narrows
+  // below.
+  match destructured_discriminant_rewrite(env, resolver, cond) {
+    Some(rewritten) =>
+      collect_narrowing(
+        env, resolver, rewritten, then_binds, else_binds, then_sense,
+      )
+    None => ()
+  }
   match cond {
     BinOp(And, l, r) =>
       if then_sense {
@@ -30813,7 +31137,15 @@ fn collect_narrowing(
           }
           match (lhs_key, class_name_opt) {
             (Some(key), Some(class_name)) => {
-              let cur = narrowing_current_type(env, resolver, key)
+              // A union member that is an alias to a union is expanded, or
+              // the else side kept it whole: univer's `OrInput = string |
+              // Or | CharsetInput` kept `CharsetInput`, class members and
+              // all, after `instanceof Or`, so a later `instanceof Charset`
+              // had nothing to remove.
+              let cur = expand_union_alias_members(
+                resolver,
+                narrowing_current_type(env, resolver, key),
+              )
               let class_ty = @ast.TsType::Named(class_name)
               // `v instanceof C` keeps every union member whose class
               // chain reaches `C` — so `instanceof Object` keeps `Date`
@@ -31077,8 +31409,80 @@ fn collect_narrowing(
         Some(key) => push(key)
         None => ()
       }
+      // A truthiness test of a DISCRIMINANT narrows the object it is read
+      // from: `if (r.ok)` keeps the members whose `ok` can be truthy and
+      // the else side the ones whose `ok` can be falsy, as tsc's
+      // `narrowTypeByTruthiness` does through `narrowTypeByDiscriminant`.
+      // Only for a plain chain, so a `?.`-guarded receiver keeps the
+      // non-nullish narrowing pushed above.
+      match plain {
+        PropAccess(recv_e, field) if guarded.length() == 0 =>
+          match narrowing_key_for_expr(recv_e) {
+            Some(rk) => {
+              let cur = narrowing_current_type(env, resolver, rk)
+              let pos = if then_sense { then_binds } else { else_binds }
+              let neg = if then_sense { else_binds } else { then_binds }
+              match narrow_by_truthy_discriminant(resolver, cur, field, true) {
+                Some(t) => pos.push((rk, t))
+                None => ()
+              }
+              match narrow_by_truthy_discriminant(resolver, cur, field, false) {
+                Some(t) => neg.push((rk, t))
+                None => ()
+              }
+            }
+            None => ()
+          }
+        _ => ()
+      }
     }
   }
+}
+
+///|
+/// The members of a union receiver whose `field` can be truthy (`truthy`)
+/// or falsy (`!truthy`). Every member has to declare the field with a type
+/// made only of literals, `null`, `undefined` and `void`, the shapes whose
+/// truthiness is known; anything else answers `None`, as does a test that
+/// keeps every member. An optional `done?: false` is `false | undefined`,
+/// both falsy.
+fn narrow_by_truthy_discriminant(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  field : String,
+  truthy : Bool,
+) -> @ast.TsType? {
+  let variants = union_components(
+    deep_union_members(resolver, resolver.unwrap(recv)),
+  )
+  if variants.length() < 2 {
+    return None
+  }
+  let kept : Array[@ast.TsType] = []
+  for v in variants {
+    guard resolver.lookup_field(v, field) is Some(ft) else { return None }
+    let parts = union_components(resolver.unwrap(ft))
+    let mut survives = false
+    for p in parts {
+      let falsy = match p {
+        BooleanLiteral(b) => !b
+        Literal(s) => s == ""
+        NumberLiteral(n) => n == "0" || n == "-0"
+        Null | Undefined | Void => true
+        _ => return None
+      }
+      if falsy != truthy {
+        survives = true
+      }
+    }
+    if survives {
+      kept.push(v)
+    }
+  }
+  if kept.length() == variants.length() {
+    return None
+  }
+  Some(union_of(kept))
 }
 
 ///|
@@ -31210,22 +31614,56 @@ fn optional_chain_equality_narrowing(
 /// `0n`), with `boolean` read as `true`; `None` when nothing is left. The
 /// literal falsiness `falsy_subset` leaves alone, for a position whose
 /// result is the operand only when it was truthy.
-fn without_falsy_literals(t : @ast.TsType) -> @ast.TsType? {
+fn without_falsy_literals(resolver : Resolver, t : @ast.TsType) -> @ast.TsType? {
   let out : Array[@ast.TsType] = []
-  for p in union_components(t) {
-    match p {
+  // A member is matched by what it RESOLVES to, so `type Off = false` is
+  // dropped like a written `false`; the kept member keeps its spelling.
+  for p in union_components(expand_union_alias_members(resolver, t)) {
+    match resolver.unwrap(p) {
       BooleanLiteral(false) => ()
       Literal("") => ()
       NumberLiteral("0") | NumberLiteral("-0") => ()
       BigIntLiteral("0") | BigIntLiteral("0n") => ()
       Boolean => out.push(BooleanLiteral(true))
-      other => out.push(other)
+      _ => out.push(p)
     }
   }
   match out.length() {
     0 => None
     1 => Some(out[0])
     _ => Some(Union(out))
+  }
+}
+
+///|
+/// `t` with every union MEMBER that is an alias to a union replaced by that
+/// union's members. `cond ? nullableField : null` is `Nullable<X> | null`,
+/// and `x ??= f()` with `f(): Nullable<X>` joins `X | Nullable<X>`: the
+/// alias stayed one opaque member, so `!= null` removed the outer `null`
+/// and kept the alias's `null | undefined | void` (univer's
+/// `DocumentSkeleton`). The nullish test expands them, which serves both.
+/// A type with no such member is returned unchanged.
+fn expand_union_alias_members(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType {
+  match resolver.unwrap(t) {
+    Union(_) as u => {
+      let d = deep_union_members(resolver, u)
+      if d == u && !(t is Union(_)) {
+        return t
+      }
+      // The same member can arrive from two aliases (`string` in both
+      // `OrInput` and `CharsetRawInput`); keep one.
+      let out : Array[@ast.TsType] = []
+      for p in union_components(d) {
+        if !out.contains(p) {
+          out.push(p)
+        }
+      }
+      union_of(out)
+    }
+    _ => t
   }
 }
 
@@ -32666,6 +33104,13 @@ fn analyze_equality(
             )
             is Some(t) {
             t
+          } else if ts == "object" &&
+            typeof_object_split(
+              resolver,
+              narrowing_current_type(env, resolver, name),
+            )
+            is Some((objects, _)) {
+            objects
           } else {
             narrowed
           }
@@ -32691,6 +33136,9 @@ fn analyze_equality(
                 _ => false
               }
             })
+          } else if ts == "object" &&
+            typeof_object_split(resolver, cur0) is Some((_, rest)) {
+            rest
           } else {
             // `typeof x === "undefined"` is also true of `void`, whose only
             // value is `undefined`, so the else side drops it too (probed).
@@ -32749,10 +33197,13 @@ fn analyze_equality(
       // null` removed nothing and every later `use(s)` reported the whole
       // alias. Only a union is taken, as the `typeof` arm below does.
       let cur0 = narrowing_current_type(env, resolver, key)
-      let cur = match resolver.unwrap(cur0) {
-        Union(_) as u => u
-        _ => cur0
-      }
+      let cur = expand_union_alias_members(
+        resolver,
+        match resolver.unwrap(cur0) {
+          Union(_) as u => u
+          _ => cur0
+        },
+      )
       // Loose `== null` / `== undefined` matches *both* `null` and
       // `undefined` (in JS `null == undefined`), so the equal side is the
       // nullish pair and the not-equal side strips both. Strict `===` keeps
@@ -32792,8 +33243,26 @@ fn analyze_equality(
         // "possibly undefined". It is left as it was: `never` would be
         // exact, but this site cannot see `strictNullChecks`, and with it
         // off every type admits `undefined`.
+        // The equal side keeps the nullish members the type HAS: `x ==
+        // null` over `null | P[][]` is `null`, not `null | undefined`
+        // (tsc filters the declared members; univer's
+        // `_handleCustomResult`). A type with no nullish member to keep,
+        // and every type with strictNullChecks off, keeps the pair.
         if !type_definitely_non_nullish(resolver, cur) {
-          true_side.push((key, @ast.TsType::Union([Null, Undefined])))
+          let flat = flatten_union_parts(cur)
+          let has_nullish_member = cur is Union(_) &&
+            union_components(flat).iter().any(is_nullish)
+          true_side.push(
+            (
+              key,
+              if has_nullish_member &&
+                !resolver.globals.contains("@no-strict-null-checks") {
+                narrow_keep(flat, is_nullish)
+              } else {
+                @ast.TsType::Union([Null, Undefined])
+              },
+            ),
+          )
         }
         false_side.push((key, narrow_remove(cur, is_nullish)))
       } else {
@@ -32917,6 +33386,16 @@ fn analyze_equality(
   match lit_match {
     Some((name, lit)) => {
       let cur = narrowing_current_type(env, resolver, name)
+      // A `string` member compared EQUAL to a literal is that literal
+      // (tsc's `replacePrimitivesWithLiterals`), and a member that cannot
+      // equal a string (`undefined`, an array, a number) is gone. So
+      // `v === "-" || v === "/" ? v : null` over `v: string | string[] |
+      // undefined` returns `"-" | "/" | null` (univer's `getSeparator`).
+      // Only the equal side changes; the other keeps `string`.
+      match string_equal_to_literal(resolver, cur, lit) {
+        Some(t) => true_side.push((name, t))
+        None => ()
+      }
       match cur {
         Union(_) => {
           let kept = narrow_keep(cur, fn(v) {
@@ -32944,6 +33423,54 @@ fn analyze_equality(
     }
     None => ()
   }
+}
+
+///|
+/// The equal side of `x === "lit"` where `x`'s type holds `string`: each
+/// `string` member becomes the literal, the same literal stays, and members
+/// that cannot equal a string are dropped. `None` when no `string` member
+/// is there (the literal-union arm below decides those) or when a member
+/// is one this cannot classify, which keeps the type as it was.
+fn string_equal_to_literal(
+  resolver : Resolver,
+  cur : @ast.TsType,
+  lit : String,
+) -> @ast.TsType? {
+  let parts = union_components(expand_union_alias_members(resolver, cur))
+  let out : Array[@ast.TsType] = []
+  let mut saw_string = false
+  for p in parts {
+    match resolver.unwrap(p) {
+      String_ => {
+        saw_string = true
+        if !out.contains(Literal(lit)) {
+          out.push(Literal(lit))
+        }
+      }
+      Literal(s) =>
+        if s == lit && !out.contains(Literal(lit)) {
+          out.push(Literal(lit))
+        }
+      Null
+      | Undefined
+      | Void
+      | Number
+      | Int
+      | NumberLiteral(_)
+      | Boolean
+      | BooleanLiteral(_)
+      | BigInt
+      | BigIntLiteral(_)
+      | Symbol
+      | Array(_)
+      | Tuple(_) => ()
+      _ => return None
+    }
+  }
+  if !saw_string || out.length() == 0 {
+    return None
+  }
+  Some(union_of(out))
 }
 
 // ---------------------------------------------------------------------------
@@ -33161,6 +33688,109 @@ fn record_aliased_condition(
 }
 
 ///|
+/// TS 4.4 destructured discriminants: `const { type } = item` and then
+/// `if (type === "a")` narrows `item` as `if (item.type === "a")` would,
+/// univer's `DropdownMenu` `renderMenuItem` and every reducer written as
+/// `const { kind } = action; switch (kind)`. Each destructured name is
+/// recorded under `<destr-disc>NAME` as `Tuple([Literal(source key),
+/// Literal(property), type_at_destructuring])`. Only a `const` with no
+/// default and no computed key participates: a `let` binding and a
+/// defaulted one do not narrow the source in tsc (probed), because the
+/// binding no longer has to equal the property. The source is a binding
+/// or a plain property path (`props.item`, `this.item`), both of which
+/// tsc narrows.
+fn record_destructured_discriminants(
+  env : ExprEnv,
+  resolver : Resolver,
+  ob : @ast.TsObjectBinding,
+  init : @ast.TsExpr,
+) -> Unit {
+  guard narrowing_key_for_expr(init) is Some(src) else { return }
+  if src.contains("[") {
+    return
+  }
+  let before = narrowing_current_type(env, resolver, src)
+  if destructured_discriminant_parts(resolver, before).length() < 2 {
+    return
+  }
+  for prop in ob.props {
+    match (prop.binding, prop.key_expr, prop.default) {
+      (Ident(n), None, None) =>
+        env.bind(
+          "<destr-disc>" + n,
+          @ast.TsType::Tuple([Literal(src), Literal(prop.key), before]),
+        )
+      _ => ()
+    }
+  }
+}
+
+///|
+fn destructured_discriminant_parts(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> Array[@ast.TsType] {
+  union_components(resolver.unwrap(t))
+}
+
+///|
+/// The source a destructured discriminant still stands for: `None` once the
+/// source holds a member it did not hold at the destructuring, which only
+/// an assignment can do (tsc does not narrow through an assigned
+/// parameter). Narrowing the source in between only removes members, so an
+/// `else if (type === "b")` after `if (type === "a")` still narrows.
+fn destructured_discriminant_source(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+) -> @ast.TsExpr? {
+  guard env.lookup("<destr-disc>" + name)
+    is Some(Tuple([Literal(src), Literal(key), before])) else {
+    return None
+  }
+  let cur = narrowing_current_type(env, resolver, src)
+  if cur != before {
+    let had = destructured_discriminant_parts(resolver, before)
+    for c in destructured_discriminant_parts(resolver, cur) {
+      if !had.contains(c) {
+        return None
+      }
+    }
+  }
+  let segs = src.split(".").map(fn(s) { s.to_owned() }).collect()
+  let mut e = @ast.TsExpr::Var(segs[0])
+  for i in 1..<segs.length() {
+    e = PropAccess(e, segs[i])
+  }
+  Some(PropAccess(e, key))
+}
+
+///|
+/// `cond` with a destructured discriminant replaced by the property it was
+/// read from, for the comparison and truthiness shapes tsc narrows a
+/// discriminant by. `None` when `cond` has no such operand.
+fn destructured_discriminant_rewrite(
+  env : ExprEnv,
+  resolver : Resolver,
+  cond : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match cond {
+    BinOp(BinEq | BinNe | AbstractEq | AbstractNe as op, Var(n), r) =>
+      match destructured_discriminant_source(env, resolver, n) {
+        Some(e) => Some(BinOp(op, e, r))
+        None => None
+      }
+    BinOp(BinEq | BinNe | AbstractEq | AbstractNe as op, l, Var(n)) =>
+      match destructured_discriminant_source(env, resolver, n) {
+        Some(e) => Some(BinOp(op, l, e))
+        None => None
+      }
+    Var(n) => destructured_discriminant_source(env, resolver, n)
+    _ => None
+  }
+}
+
+///|
 /// The lib's `Intl` constructors, by their declared arity: `new
 /// Intl.Locale(tag, options?)` and `new Intl.DisplayNames(locales,
 /// options)` (TS2554), and `useGrouping` being `boolean` only below the
@@ -33279,6 +33909,76 @@ fn aliased_condition_binds(
     }
   }
   Some(out)
+}
+
+///|
+/// `typeof x === "object"` over a union whose every member is decidable:
+/// `(objects, rest)`, where the objects are the classes, non-callable
+/// interfaces, object types, arrays and tuples, plus `null` (`typeof null
+/// === "object"`), and the rest is the primitives and the functions. The
+/// test used to replace the equal side with `object` and remove only an
+/// exact `object` from the other, so `typeof start === "object"` over
+/// `number | ParagraphStyleBuilder` left the class in the else branch
+/// (univer's `RichTextBuilder.insertParagraph`). `None` when a member is
+/// one this cannot classify (`any`, a type parameter, an unresolved name),
+/// or when the test separates nothing.
+fn typeof_object_split(
+  resolver : Resolver,
+  cur : @ast.TsType,
+) -> (@ast.TsType, @ast.TsType)? {
+  let parts = union_components(expand_union_alias_members(resolver, cur))
+  if parts.length() < 2 {
+    return None
+  }
+  let objects : Array[@ast.TsType] = []
+  let rest : Array[@ast.TsType] = []
+  for p in parts {
+    let is_object = match resolver.unwrap(p) {
+      Null
+      | NonPrimitiveObject
+      | Object(_)
+      | Array(_)
+      | Tuple(_)
+      | Struct(_, _)
+      | Applied("Array" | "ReadonlyArray" | "Map" | "Set" | "Promise", _) =>
+        true
+      String_
+      | Number
+      | Int
+      | Boolean
+      | BigInt
+      | Symbol
+      | UniqueSymbol(_)
+      | Literal(_)
+      | NumberLiteral(_)
+      | BooleanLiteral(_)
+      | BigIntLiteral(_)
+      | Undefined
+      | Void
+      | Func(_, _)
+      | GenericFunc(_, _, _)
+      | CallableMeta(_, _) => false
+      Named(n) =>
+        if resolver.classes.contains(n) {
+          true
+        } else if resolver.interfaces.contains(n) &&
+          !shape_is_callable(p, resolver) {
+          true
+        } else {
+          return None
+        }
+      _ => return None
+    }
+    if is_object {
+      objects.push(p)
+    } else {
+      rest.push(p)
+    }
+  }
+  if objects.length() == 0 || rest.length() == 0 {
+    return None
+  }
+  Some((union_of(objects), union_of(rest)))
 }
 
 ///|
@@ -33448,6 +34148,7 @@ fn check_ident_binding_decl(
   // is what keeps a SHADOWING binding this site never sees (a parameter,
   // a destructured name) from inheriting an outer `const`'s freshness.
   if !mutable_ && !is_checkable(declared) && is_fresh_literal_in_env(env, init) {
+    let _ = env.vars.remove("<destr-disc>" + name)
     env.bind("<fresh>" + name, bound_type)
   } else {
     env.forget_freshness(name)
@@ -34252,6 +34953,17 @@ fn narrow_after_assignment(
       env.narrow(name, d)
       return
     }
+    // And for the empty object type and a tuple, the two non-union
+    // declarations an array or object literal is commonly assigned over:
+    // `let obj = {}; obj = { t: … }` leaves `obj` as `{}`, so `return obj`
+    // against an all-optional interface is legal and `obj.t` is TS2339
+    // (univer's `handleBorder`), and `let r: [number, number]; r = [a, 1]`
+    // keeps the tuple an array literal would otherwise widen to `number[]`
+    // (univer's `dec2frac`).
+    Some(Object([]) | Tuple(_) as d) => {
+      env.narrow(name, d)
+      return
+    }
     _ => ()
   }
   // `new C<T>()` arrives wrapped in `TypeArgs`, which says nothing about
@@ -34559,6 +35271,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           narrowing_key_for_expr(init)
         },
       )
+      if stmt is Const(_, _, _) && !is_checkable(declared) {
+        record_destructured_discriminants(env, ctx.resolver, ob, init)
+      }
     }
     Var(@ast.TsBinding::Target(_), _, init)
     | Let(@ast.TsBinding::Target(_), _, init)
@@ -34678,7 +35393,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           "cannot assign to `\{prop}` because it is read-only",
         )
       }
-      match ctx.resolver.lookup_field(recv_ty, prop) {
+      match property_write_type(ctx.resolver, recv_ty, prop) {
         Some(target_ty) => {
           // When the field carries no annotation (`x = 1`) its declared type is
           // `Any`; recover the widened primitive from the initializer so a
@@ -35375,6 +36090,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             Some(key) => Some((key, prop))
             None => None
           }
+        // `const { kind } = action; switch (kind)` narrows `action` too.
+        Var(n) =>
+          match destructured_discriminant_source(env, ctx.resolver, n) {
+            Some(PropAccess(parent, prop)) =>
+              match narrowing_key_for_expr(parent) {
+                Some(key) => Some((key, prop))
+                None => None
+              }
+            _ => None
+          }
         _ => None
       }
       let typeof_scrutinee_key = match scrutinee {
@@ -35470,10 +36195,23 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             break
           }
         }
-        let narrow_target = match (scrutinee_name, scrutinee_disc) {
-          (Some(name), _) => Some(name)
-          (_, Some((obj_name, _))) => Some(obj_name)
-          _ => typeof_scrutinee_key
+        // Every binding a label narrows: the scrutinee, and the object a
+        // discriminant scrutinee was read from (both, for a destructured
+        // discriminant).
+        let narrow_targets : Array[String] = []
+        match scrutinee_name {
+          Some(name) => narrow_targets.push(name)
+          None => ()
+        }
+        match scrutinee_disc {
+          Some((obj_name, _)) => narrow_targets.push(obj_name)
+          None => ()
+        }
+        if narrow_targets.length() == 0 {
+          match typeof_scrutinee_key {
+            Some(k) => narrow_targets.push(k)
+            None => ()
+          }
         }
         let apply_label = fn(t : @ast.TsExpr) {
           // `switch (typeof x) { case "bigint": … }` narrows `x` exactly as
@@ -35503,24 +36241,25 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           if group.length() == 1 {
             apply_label(group[0])
           } else {
-            match narrow_target {
-              Some(target) => {
-                let parts : Array[@ast.TsType] = []
-                let mut all = true
-                for t in group {
-                  env.restore_from(pre)
-                  apply_label(t)
-                  match env.lookup(target) {
-                    Some(ty) => parts.push(ty)
-                    None => all = false
-                  }
-                }
-                env.restore_from(pre)
-                if all && parts.length() > 0 {
-                  env.narrow(target, flatten_union_exact(parts))
+            let parts : Array[Array[@ast.TsType]] = narrow_targets.map(fn(_) {
+              []
+            })
+            let all : Array[Bool] = narrow_targets.map(fn(_) { true })
+            for t in group {
+              env.restore_from(pre)
+              apply_label(t)
+              for i, target in narrow_targets {
+                match env.lookup(target) {
+                  Some(ty) => parts[i].push(ty)
+                  None => all[i] = false
                 }
               }
-              None => ()
+            }
+            env.restore_from(pre)
+            for i, target in narrow_targets {
+              if all[i] && parts[i].length() > 0 {
+                env.narrow(target, flatten_union_exact(parts[i]))
+              }
             }
           }
         }
@@ -37253,6 +37992,15 @@ fn check_call_args_in_expr_at(
           let recv_ty = any_union_as_any(
             infer_expr(env, ctx.resolver, receiver),
           )
+          // An array literal RECEIVER has no contextual type, so its
+          // literal elements widen: `["__proto__", "prototype"].includes(key)`
+          // takes a `string` (univer's `validatePropertyPaths`), while the
+          // same array `as const` keeps `"__proto__" | "prototype"`.
+          let recv_ty = if receiver is ArrayLit(_) {
+            widen_literal_deep(recv_ty)
+          } else {
+            recv_ty
+          }
           // TS2684: a method declaring a `this` parameter, called on a
           // union receiver whose members are definitely disjoint.
           check_union_receiver_this_context(
@@ -39251,7 +39999,7 @@ fn check_call_args_in_expr_at(
           "cannot assign to `\{prop}` because it is read-only",
         )
       }
-      match ctx.resolver.lookup_field(recv_ty, prop) {
+      match property_write_type(ctx.resolver, recv_ty, prop) {
         Some(target_ty) => {
           let target_ty = if is_checkable(target_ty) {
             target_ty
