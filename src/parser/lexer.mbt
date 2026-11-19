@@ -461,10 +461,18 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
       Some(' ') | Some('\t') => {
         let _ = self.advance()
       }
-      Some(c) if is_unicode_single_line_space(c.to_int()) => {
+      // The same single-line spaces the loop above skips. After a comment
+      // this loop is the only one that runs, and it had no arm for VT, FF
+      // or NBSP: VT and FF were "invalid character", and NBSP reached
+      // `scan_ident`, which stops at it, so `const d = /**/<NBSP>1` lexed
+      // an EMPTY identifier and emitted `const d = ;` (#314's review).
+      Some(c) if c.to_int() == 0x0B ||
+        c.to_int() == 0x0C ||
+        c.to_int() == 0xA0 ||
+        is_unicode_single_line_space(c.to_int()) => {
         let _ = self.advance()
       }
-      Some('\n') | Some('\r') => {
+      Some('\n') | Some('\r') | Some('\u2028') | Some('\u2029') => {
         self.newline_before_next = true
         let _ = self.advance()
       }

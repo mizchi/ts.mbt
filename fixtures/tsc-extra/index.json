@@ -4470,32 +4470,50 @@
         {
           "name": "okIdeographicSpaceAfterKeyword",
           "kind": "ok",
-          "fromLine": 7,
-          "toLine": 7
-        },
-        {
-          "name": "okNoBreakSpaceBeforeColon",
-          "kind": "ok",
           "fromLine": 8,
           "toLine": 8
         },
         {
-          "name": "okNoBreakSpaceEndsTheName",
+          "name": "okNoBreakSpaceBeforeColon",
           "kind": "ok",
           "fromLine": 9,
           "toLine": 9
         },
         {
-          "name": "badEmSpaceDoesNotHideMismatch",
-          "kind": "bad",
+          "name": "okNoBreakSpaceEndsTheName",
+          "kind": "ok",
           "fromLine": 10,
           "toLine": 10
         },
         {
+          "name": "badEmSpaceDoesNotHideMismatch",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
           "name": "okCaf",
           "kind": "ok",
-          "fromLine": 11,
+          "fromLine": 12,
           "toLine": 12
+        },
+        {
+          "name": "okNoBreakSpaceAfterBlockComment",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okVerticalTabAfterBlockComment",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okFormFeedAfterLineComment",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 17
         }
       ]
     },
