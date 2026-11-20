@@ -6763,58 +6763,64 @@
           "toLine": 30
         },
         {
-          "name": "okCondOfParams",
+          "name": "okPrimitiveIntoObjectElement",
           "kind": "ok",
           "fromLine": 31,
-          "toLine": 31
+          "toLine": 34
+        },
+        {
+          "name": "okCondOfParams",
+          "kind": "ok",
+          "fromLine": 35,
+          "toLine": 35
         },
         {
           "name": "badArrayIndexedByNumericParam",
           "kind": "bad",
-          "fromLine": 32,
-          "toLine": 35
+          "fromLine": 36,
+          "toLine": 39
         },
         {
           "name": "badCondLiteralBranch",
           "kind": "bad",
-          "fromLine": 36,
-          "toLine": 36
-        },
-        {
-          "name": "badBoundIntoTemplate",
-          "kind": "bad",
-          "fromLine": 37,
+          "fromLine": 40,
           "toLine": 40
         },
         {
-          "name": "badBoundIntoParam",
+          "name": "badBoundIntoTemplate",
           "kind": "bad",
           "fromLine": 41,
           "toLine": 44
         },
         {
-          "name": "badLiteralIntoNumericParam",
+          "name": "badBoundIntoParam",
           "kind": "bad",
           "fromLine": 45,
-          "toLine": 45
+          "toLine": 48
+        },
+        {
+          "name": "badLiteralIntoNumericParam",
+          "kind": "bad",
+          "fromLine": 49,
+          "toLine": 49
         },
         {
           "name": "badLiteralArrayIntoNumericParam",
           "kind": "bad",
-          "fromLine": 46,
-          "toLine": 46
+          "fromLine": 50,
+          "toLine": 50
         },
         {
           "name": "badBoundMemberIntoParamArray",
           "kind": "bad",
-          "fromLine": 47,
-          "toLine": 47
+          "fromLine": 51,
+          "toLine": 51
         },
         {
           "name": "badBoundMemberIntoParam",
           "kind": "bad",
-          "fromLine": 48,
-          "toLine": 49
+          "fromLine": 52,
+          "toLine": 53
         }
       ]
     },

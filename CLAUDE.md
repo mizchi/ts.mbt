@@ -7769,6 +7769,19 @@ product surfaces now.
       `k: number` in tsc, and the recorded `number | undefined` cannot say
       so, so that key reads as `any`. A barrel's `import type { N }; export
       type { N }` passes a type-only namespace on too.
+    - The review's second round found that the spread fold had widened
+      what it folded. A member of an `as const` object is its literal, and
+      the recorded shape is built for the bridge, where `as const` is
+      erased, so it says `ex: string`. Folding a spread of such an object
+      made `const ok: "application/x" = MIME.ex` a report on code tsc
+      accepts, where the old `any` had been silent. An importer's read of
+      the source object itself (`SMIME.ex`) was the same false positive on
+      main. Each member of an `as const` object is now read off its
+      expression: a literal stays itself, and anything else is `any`. The
+      same round moved two cells to the combined target: an array literal
+      against array targets is checked against `Array<intersection of the
+      elements>`, and `"abc"` into `Array<{ length: number }>[K]` fits the
+      element through its own members.
   - **Filed:**
     - Contextual return-type inference. `pointFrom<P extends …>(x, y): P`
       has a binder only in its return type, which tsc infers from the

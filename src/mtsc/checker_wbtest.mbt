@@ -2297,8 +2297,9 @@ test "mtsc graph checker accepts an import of a type-only namespace" {
 /// const object is folded in now; a result holding a computed key still
 /// reads as `any`, since it is not enumerable. An optional property spread
 /// over a required one keeps the required type in tsc, which the recorded
-/// `T | undefined` cannot show, so that key reads as `any` (#322's review;
-/// probed: tsc reports `n`, `nope` and `Y.j`'s binding only).
+/// `T | undefined` cannot show, so that key reads as `any`. A member of an
+/// `as const` object is its literal, spread or not (#322's review; probed:
+/// tsc reports `n`, `nope` and `Y.j`'s binding only).
 test "mtsc graph checker folds a same-module const spread into an imported value" {
   assert_eq(
     graph_messages(
@@ -2307,14 +2308,14 @@ test "mtsc graph checker folds a same-module const spread into an imported value
           "/src/c.ts", "export const SMIME = { ex: \"application/x\", text: \"text/plain\" } as const;\nexport const MIME = { ...SMIME, bin: \"b\" } as const;\nexport const K = \"k\";\nexport const CK = { [K]: 1 };\nexport const CM = { ...CK, z: 2 };\nexport const BASE: { k?: number } = {};\nexport const X = { k: 0, ...BASE };\nexport const BASE2: { j?: number } = {};\nexport const Y = { ...BASE2 };",
         ),
         (
-          "/src/root.ts", "import { MIME, CM, X, Y } from \"./c\";\ndeclare function get(): { keyword: string; text: string } | null;\nexport function okSpreadMember() { const m = get(); if (m?.keyword === MIME.ex) { return m.text; } return \"\"; }\nexport function probeSpread() { const n: number = MIME.ex; return n; }\nexport function badSpreadMemberMissing() { return MIME.nope; }\nexport function okComputedSpread() { return CM.k; }\nexport function okOptionalSpreadOverRequired() { const n: number = X.k; return n; }\nexport function badOptionalSpreadAlone() { const n: number = Y.j; return n; }",
+          "/src/root.ts", "import { MIME, SMIME, CM, X, Y } from \"./c\";\ndeclare function get(): { keyword: string; text: string } | null;\nexport function okSpreadMember() { const m = get(); if (m?.keyword === MIME.ex) { return m.text; } return \"\"; }\nexport function probeSpread() { const n: number = MIME.ex; return n; }\nexport function badSpreadMemberMissing() { return MIME.nope; }\nexport function okComputedSpread() { return CM.k; }\nexport function okOptionalSpreadOverRequired() { const n: number = X.k; return n; }\nexport function badOptionalSpreadAlone() { const n: number = Y.j; return n; }\nexport function okConstMemberLiteral() { const ex: \"application/x\" = MIME.ex; return ex; }\nexport function okConstSourceLiteral() { const t: \"text/plain\" = SMIME.text; return t; }",
         ),
       ],
       [("/src/root.ts", "./c", "/src/c.ts")],
     ),
     [
       "function probeSpread > binding `n` init :: expected `number` but got `string`",
-      "function badSpreadMemberMissing > PropAccess `.nope` :: property `nope` does not exist on `{ ex: string; text: string; bin: string }`",
+      "function badSpreadMemberMissing > PropAccess `.nope` :: property `nope` does not exist on `{ ex: \"application/x\" (string); text: \"text/plain\" (string); bin: \"b\" (string) }`",
       "function badOptionalSpreadAlone > binding `n` init :: type `number | undefined` is not assignable to type `number`",
     ],
   )

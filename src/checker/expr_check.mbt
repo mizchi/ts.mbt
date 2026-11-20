@@ -19861,7 +19861,23 @@ fn check_index_write(
   ctx : CheckCtx,
 ) -> Unit {
   if targets.length() > 1 && may_hold_fresh_object_literal(value) {
-    check_expr_against(env, value, Intersection(targets), ctx, "assign `[…]`")
+    // Array targets combine ELEMENT-wise: `A[] & B[]` is not judged element
+    // by element, so `o[k] = [{ x: 1 }]` against `{ x: number }[]` and
+    // `{ y: number }[]` was silent, while `(A & B)[]` reports the missing
+    // `y` and still accepts `[{ x: 1, y: 2 }]` (#322's review; probed).
+    let elems : Array[@ast.TsType] = []
+    for t in targets {
+      match t {
+        Array(e) | Applied("Array" | "ReadonlyArray", [e]) => elems.push(e)
+        _ => break
+      }
+    }
+    let combined : @ast.TsType = if elems.length() == targets.length() {
+      Array(Intersection(elems))
+    } else {
+      Intersection(targets)
+    }
+    check_expr_against(env, value, combined, ctx, "assign `[…]`")
     return
   }
   let before = ctx.issues.length()
@@ -20468,7 +20484,12 @@ fn check_expr_against_shape(
       | Symbol) &&
       array_index_by_numeric_param(ctx, base_t, key) => {
       let elem = ctx.resolver.unwrap(e)
-      if is_checkable(elem) && !is_assignable_to(src_shape, elem) {
+      // A primitive satisfies an object element through its own members
+      // (`"abc"` against `{ length: number }`), which the resolver-free
+      // relation has no table for (#322's review; probed).
+      if is_checkable(elem) &&
+        !is_assignable_to(src_shape, elem) &&
+        !intrinsic_source_satisfies_object(src_shape, elem, ctx.resolver) {
         record_unfiltered(
           ctx,
           sub_path,
@@ -23947,7 +23968,7 @@ fn check_array_lit_against_tuple(
 // `string`, which makes assignability against a literal-union target
 // (`const x: 0 | 1 | 2 = 1`) spuriously fail. Returns `None` for non-literal
 // expressions.
-fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
+pub fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
   match e {
     IntLit(i) => Some(@ast.TsType::NumberLiteral(i.to_string()))
     NumberLit(d) => Some(@ast.TsType::NumberLiteral(d.to_string()))

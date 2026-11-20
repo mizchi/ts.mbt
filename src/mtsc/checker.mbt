@@ -2728,24 +2728,62 @@ fn fold_value_spreads(
   ty : @ast.TsType,
   depth : Int32,
 ) -> @ast.TsType {
-  guard ty is Object(fields) &&
-    fields.iter().any(fn(f) { f.0 is Literal(k) && k.has_prefix("@@spread:") }) else {
-    return spread_objects_as_any(ty)
-  }
-  if depth > 4 {
-    return Any
-  }
   let mut entries : Array[(String, @ast.TsExpr)]? = None
+  let mut as_const = false
   for stmt in module_.top_level_stmts {
     match stmt {
       Const(Ident(n), _, init) if n == name =>
         match init {
-          ObjectLit(es) | As(ObjectLit(es), Named("const")) =>
+          ObjectLit(es) => entries = Some(es)
+          As(ObjectLit(es), Named("const")) => {
             entries = Some(es)
+            as_const = true
+          }
           _ => ()
         }
       _ => ()
     }
+  }
+  // A member of an `as const` object is its literal, and the recorded
+  // shape cannot say so: it is built for the bridge, where `as const` is
+  // erased, so `{ ex: "application/x" } as const` is recorded as `{ ex:
+  // string }`. An importer's `const ok: "application/x" = MIME.ex` was
+  // reported, and folding a spread of such an object spread the widened
+  // members too (#322's review; probed: tsc accepts both). So each member
+  // is read off its expression: a literal stays itself, and anything else
+  // (a nested object, a call, a name) is `any`, since what `as const` makes
+  // of it is not decided here.
+  let member_type = fn(e : @ast.TsExpr, recorded : @ast.TsType) -> @ast.TsType {
+    if as_const {
+      match @checker.precise_literal_type(e) {
+        Some(t) => t
+        None => Any
+      }
+    } else {
+      spread_objects_as_any(recorded)
+    }
+  }
+  guard ty is Object(fields) &&
+    fields.iter().any(fn(f) { f.0 is Literal(k) && k.has_prefix("@@spread:") }) else {
+    match (ty, entries) {
+      (Object(fields), Some(es)) if as_const &&
+        !es.iter().any(fn(e) { e.0.has_prefix("@@") || e.0.has_prefix("<") }) =>
+        return Object(
+          es.map(fn(e) {
+            let recorded = match
+              fields.iter().find_first(fn(f) { f.0 == Literal(e.0) }) {
+              Some(f) => f.1
+              None => Any
+            }
+            (@ast.TsType::Literal(e.0), member_type(e.1, recorded))
+          }),
+        )
+      _ => ()
+    }
+    return spread_objects_as_any(ty)
+  }
+  if depth > 4 {
+    return Any
   }
   guard entries is Some(es) else { return Any }
   let out : Array[(@ast.TsType, @ast.TsType)] = []
@@ -2786,7 +2824,7 @@ fn fold_value_spreads(
       }
     } else {
       match fields.iter().find_first(fn(f) { f.0 == Literal(e.0) }) {
-        Some(f) => put(f.0, spread_objects_as_any(f.1))
+        Some(f) => put(f.0, member_type(e.1, f.1))
         None => return Any
       }
     }

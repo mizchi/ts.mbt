@@ -2448,6 +2448,10 @@ test "a value read off a bounded parameter fits the body's own annotation (bound
     #|  let x: Array<string>[K] = "abc";
     #|  return x;
     #|}
+    #|export function okPrimitiveIntoObjectElement<K extends number>() {
+    #|  let x: Array<{ length: number }>[K] = "abc";
+    #|  return x;
+    #|}
     #|export function badArrayIndexedByNumericParam<K extends number>() {
     #|  let x: Array<string>[K] = 123;
     #|  return x;
@@ -2495,6 +2499,9 @@ test "an element write through a literal-typed key is checked (keywrite)" {
     #|export function badLiteralMissesOne(k: "a" | "b") { o[k] = { x: 1 }; }
     #|export function badLiteralExcess(k: "a" | "b") { o[k] = { x: 1, y: 2, z: 3 }; }
     #|export function badValueMissesOne(k: "a" | "b") { const v = { x: 1 }; o[k] = v; }
+    #|declare const arrs: { a: { x: number }[]; b: { y: number }[] };
+    #|export function okArrayOfLiteralsFitsBoth(k: "a" | "b") { arrs[k] = [{ x: 1, y: 2 }]; }
+    #|export function badArrayOfLiteralsMissesOne(k: "a" | "b") { arrs[k] = [{ x: 1 }]; }
   assert_eq(issue_lines(src), [
     "function badLiteralKeyParam > assign `[…]`: expected `number` but got `string`",
     "function badBracketLiteral > assign `[…]`: expected `number` but got `string`",
@@ -2503,6 +2510,7 @@ test "an element write through a literal-typed key is checked (keywrite)" {
     "function badLiteralMissesOne > assign `[…]`.y: property `y` is required by `{ x: number; y: number }`",
     "function badLiteralExcess > assign `[…]`.z: property `z` does not exist on target type",
     "function badValueMissesOne > assign `[…]`: property `y` is missing in `{ x: number }` but required in `{ y: number }`",
+    "function badArrayOfLiteralsMissesOne > assign `[…]`[0].y: property `y` is required by `{ x: number; y: number }`",
   ])
 }
 

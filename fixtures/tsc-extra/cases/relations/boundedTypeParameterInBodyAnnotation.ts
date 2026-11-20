@@ -31,6 +31,10 @@ export function okArrayIndexedByNumericParam<K extends number>() {
   let x: Array<string>[K] = "abc";
   return x;
 }
+export function okPrimitiveIntoObjectElement<K extends number>() {
+  let x: Array<{ length: number }>[K] = "abc";
+  return x;
+}
 export function okCondOfParams<K extends number>(c: boolean, k: K, j: K) { const v: K = c ? k : j; return v; }
 export function badArrayIndexedByNumericParam<K extends number>() {
   let x: Array<string>[K] = 123;
