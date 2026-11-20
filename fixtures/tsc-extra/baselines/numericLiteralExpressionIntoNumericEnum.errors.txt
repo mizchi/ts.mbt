@@ -1,22 +1,25 @@
-numericLiteralExpressionIntoNumericEnum.ts(24,35): error TS2322: Type '9' is not assignable to type 'H'.
-numericLiteralExpressionIntoNumericEnum.ts(25,39): error TS2322: Type '-1' is not assignable to type 'H'.
-numericLiteralExpressionIntoNumericEnum.ts(26,38): error TS2322: Type '9' is not assignable to type 'H | null | undefined'.
-numericLiteralExpressionIntoNumericEnum.ts(27,43): error TS2322: Type '9' is not assignable to type 'Nullable<H>'.
-numericLiteralExpressionIntoNumericEnum.ts(28,38): error TS2322: Type '9' is not assignable to type 'H'.
-numericLiteralExpressionIntoNumericEnum.ts(29,59): error TS2322: Type '9' is not assignable to type 'H'.
-numericLiteralExpressionIntoNumericEnum.ts(30,40): error TS2322: Type '12' is not assignable to type 'F'.
-numericLiteralExpressionIntoNumericEnum.ts(31,36): error TS2322: Type '2' is not assignable to type 'M'.
-numericLiteralExpressionIntoNumericEnum.ts(32,33): error TS2345: Argument of type '7' is not assignable to parameter of type 'H'.
+numericLiteralExpressionIntoNumericEnum.ts(25,35): error TS2322: Type '9' is not assignable to type 'H'.
+numericLiteralExpressionIntoNumericEnum.ts(26,39): error TS2322: Type '-1' is not assignable to type 'H'.
+numericLiteralExpressionIntoNumericEnum.ts(27,38): error TS2322: Type '9' is not assignable to type 'H | null | undefined'.
+numericLiteralExpressionIntoNumericEnum.ts(28,43): error TS2322: Type '9' is not assignable to type 'Nullable<H>'.
+numericLiteralExpressionIntoNumericEnum.ts(29,38): error TS2322: Type '9' is not assignable to type 'H'.
+numericLiteralExpressionIntoNumericEnum.ts(30,59): error TS2322: Type '9' is not assignable to type 'H'.
+numericLiteralExpressionIntoNumericEnum.ts(31,40): error TS2322: Type '12' is not assignable to type 'F'.
+numericLiteralExpressionIntoNumericEnum.ts(32,36): error TS2322: Type '2' is not assignable to type 'M'.
+numericLiteralExpressionIntoNumericEnum.ts(33,33): error TS2345: Argument of type '7' is not assignable to parameter of type 'H'.
+numericLiteralExpressionIntoNumericEnum.ts(35,63): error TS2322: Type '1 | 9' is not assignable to type 'H'.
+  Type '9' is not assignable to type 'H'.
 
 
-==== numericLiteralExpressionIntoNumericEnum.ts (9 errors) ====
+==== numericLiteralExpressionIntoNumericEnum.ts (10 errors) ====
     // A numeric literal written where a numeric enum is expected fits only
     // when a member holds its value (TypeScript 5.0), in every position: a
     // binding, a property write, an object-literal member, an argument, and a
     // union holding the enum, including one spelled through an alias such as
     // `Nullable<E> | undefined`. Members are auto-numbered, a member after an
     // explicit value continues from it, and a mixed enum holds its numeric
-    // members' values. `number` itself and a computed member accept any.
+    // members' values. `number` itself and a computed member accept any. In
+    // `x || 9`, the fallback relates only when `x` can be falsy.
     
     type Nullable<T> = T | null | undefined | void;
     enum H { U, L, C }
@@ -51,7 +54,7 @@ numericLiteralExpressionIntoNumericEnum.ts(32,33): error TS2345: Argument of typ
     export function badObjectMember() { const o: { e: H } = { e: 9 }; return o; }
                                                               ~
 !!! error TS2322: Type '9' is not assignable to type 'H'.
-!!! related TS6500 numericLiteralExpressionIntoNumericEnum.ts:29:48: The expected type comes from property 'e' which is declared here on type '{ e: H; }'
+!!! related TS6500 numericLiteralExpressionIntoNumericEnum.ts:30:48: The expected type comes from property 'e' which is declared here on type '{ e: H; }'
     export function badContinued() { const f: F = 12; return f; }
                                            ~
 !!! error TS2322: Type '12' is not assignable to type 'F'.
@@ -61,4 +64,9 @@ numericLiteralExpressionIntoNumericEnum.ts(32,33): error TS2345: Argument of typ
     export function badArg() { take(7); }
                                     ~
 !!! error TS2345: Argument of type '7' is not assignable to parameter of type 'H'.
+    export function okTruthyLeftDecides(x: 1) { const e: H = x || 9; return e; }
+    export function badFalsyLeftReachesFallback(x: 0 | 1) { const e: H = x || 9; return e; }
+                                                                  ~
+!!! error TS2322: Type '1 | 9' is not assignable to type 'H'.
+!!! error TS2322:   Type '9' is not assignable to type 'H'.
     

@@ -7,7 +7,8 @@
 // union holding the enum, including one spelled through an alias such as
 // `Nullable<E> | undefined`. Members are auto-numbered, a member after an
 // explicit value continues from it, and a mixed enum holds its numeric
-// members' values. `number` itself and a computed member accept any.
+// members' values. `number` itself and a computed member accept any. In
+// `x || 9`, the fallback relates only when `x` can be falsy.
 
 type Nullable<T> = T | null | undefined | void;
 enum H { U, L, C }
@@ -33,3 +34,5 @@ export function badObjectMember() { const o: { e: H } = { e: 9 }; return o; }
 export function badContinued() { const f: F = 12; return f; }
 export function badMixed() { const m: M = 2; return m; }
 export function badArg() { take(7); }
+export function okTruthyLeftDecides(x: 1) { const e: H = x || 9; return e; }
+export function badFalsyLeftReachesFallback(x: 0 | 1) { const e: H = x || 9; return e; }

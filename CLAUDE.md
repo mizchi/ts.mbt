@@ -7461,6 +7461,25 @@ product surfaces now.
   - **Filed:** univer's `viewport` reaches `Tools.clamp`, a static method
     of an imported class, which is `any` here. That is the deeper gap an
     earlier batch's comment records as exposing other gaps when typed.
+  - **The review of #317 found one Major and three Minors, all probed.**
+    The Major is the one worth keeping: the import path took
+    `infer_block_return`, which reads only a body's TOP-LEVEL returns. So
+    `if (flag) return opaque; return 1` exported `number` where tsc says
+    `any`, and an importer's legal `const s: string = f(true)` was
+    reported.
+    - The local path had carried the same shortcut for longer, and it is a
+      false positive on main.
+    - The import path now reads the complete body only. The local path
+      keeps the shortcut only where the complete-body inference agrees or
+      the body has no nested return.
+    - The Minors are three things the new code missed:
+      - The imported-return resolver did not inherit the declaring
+        module's `strictNullChecks`, so `x ?? "fallback"` over `x: number`
+        exported a union.
+      - A bounded generic's raw signature dropped the inferred return.
+      - In `x || 9` with `x: 1`, a truthy LITERAL on the left did not
+        decide the result, so the TS 5.0 enum check judged an unreachable
+        `9`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -5152,26 +5152,32 @@
         {
           "name": "okWrittenAny",
           "kind": "ok",
-          "fromLine": 8,
-          "toLine": 8
+          "fromLine": 12,
+          "toLine": 12
         },
         {
           "name": "okInferredLet",
           "kind": "ok",
-          "fromLine": 9,
-          "toLine": 9
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okNestedAny",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
         },
         {
           "name": "badInferred",
           "kind": "bad",
-          "fromLine": 10,
-          "toLine": 10
+          "fromLine": 15,
+          "toLine": 15
         },
         {
           "name": "badInferredLet",
           "kind": "bad",
-          "fromLine": 11,
-          "toLine": 12
+          "fromLine": 16,
+          "toLine": 17
         }
       ]
     },
@@ -6854,98 +6860,110 @@
         {
           "name": "okBare",
           "kind": "ok",
-          "fromLine": 17,
-          "toLine": 17
-        },
-        {
-          "name": "okAliasUnion",
-          "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "okContinued",
+          "name": "okAliasUnion",
           "kind": "ok",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "okComputed",
+          "name": "okContinued",
           "kind": "ok",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "okMixed",
+          "name": "okComputed",
           "kind": "ok",
           "fromLine": 21,
           "toLine": 21
         },
         {
-          "name": "okNumberMember",
+          "name": "okMixed",
           "kind": "ok",
           "fromLine": 22,
           "toLine": 22
         },
         {
-          "name": "okArg",
+          "name": "okNumberMember",
           "kind": "ok",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "badBare",
-          "kind": "bad",
+          "name": "okArg",
+          "kind": "ok",
           "fromLine": 24,
           "toLine": 24
         },
         {
-          "name": "badNegative",
+          "name": "badBare",
           "kind": "bad",
           "fromLine": 25,
           "toLine": 25
         },
         {
-          "name": "badUnion",
+          "name": "badNegative",
           "kind": "bad",
           "fromLine": 26,
           "toLine": 26
         },
         {
-          "name": "badAliasUnion",
+          "name": "badUnion",
           "kind": "bad",
           "fromLine": 27,
           "toLine": 27
         },
         {
-          "name": "badField",
+          "name": "badAliasUnion",
           "kind": "bad",
           "fromLine": 28,
           "toLine": 28
         },
         {
-          "name": "badObjectMember",
+          "name": "badField",
           "kind": "bad",
           "fromLine": 29,
           "toLine": 29
         },
         {
-          "name": "badContinued",
+          "name": "badObjectMember",
           "kind": "bad",
           "fromLine": 30,
           "toLine": 30
         },
         {
-          "name": "badMixed",
+          "name": "badContinued",
           "kind": "bad",
           "fromLine": 31,
           "toLine": 31
         },
         {
-          "name": "badArg",
+          "name": "badMixed",
           "kind": "bad",
           "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "badArg",
+          "kind": "bad",
+          "fromLine": 33,
           "toLine": 33
+        },
+        {
+          "name": "okTruthyLeftDecides",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badFalsyLeftReachesFallback",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 36
         }
       ]
     },

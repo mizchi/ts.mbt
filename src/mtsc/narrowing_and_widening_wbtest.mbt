@@ -2123,21 +2123,29 @@ test "a numeric literal fits a numeric enum only through a member (enumliteral)"
     #|export function badAliasUnion(s: Style) { s.b = 9; }
     #|export function badObjectMember() { const o: { e: H } = { e: 9 }; return o; }
     #|export function badContinued() { const f: F = 12; return f; }
+    #|export function okTruthyLeft(x: 1) { const e: H = x || 9; return e; }
+    #|export function badFalsyLeft(x: 0 | 1) { const e: H = x || 9; return e; }
   assert_eq(issue_lines(src), [
     "function badBare > binding `e` init: expected `H` but got `9`", "function badAliasUnion > assign `.b`: expected `Nullable<H> | undefined` but got `9`",
     "function badObjectMember > binding `o` init.e: expected `H` but got `9`", "function badContinued > binding `f` init: expected `F` but got `12`",
+    "function badFalsyLeft > binding `e` init (logical): expected `H` but got `9`",
   ])
 }
 
 ///|
 /// A written `: any` return is `any`, and only an absent one is read from
 /// the body: both are `Any` in `TsFunc.return_type`, so the parser records
-/// `<written-any-return:NAME>` (probed: tsc reports `badInferred` only).
+/// `<written-any-return:NAME>`. A nested `return` the top-level shortcut
+/// cannot see may be `any`, which makes the whole return `any` (#317's
+/// review; probed: tsc reports `badInferred` only).
 test "a written any return is not inferred from the body (writtenany)" {
   let src =
     #|function written(): any { return 1; }
     #|function inferred() { return 1; }
+    #|declare const opaque: any;
+    #|function nested(flag: boolean) { if (flag) return opaque; return 1; }
     #|export const okWrittenAny: string = written();
+    #|export const okNestedAny: string = nested(true);
     #|export const badInferred: string = inferred();
   assert_eq(issue_lines(src), [
     "top-level > binding `badInferred` init: expected `string` but got `number`",

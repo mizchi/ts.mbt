@@ -2966,14 +2966,22 @@ fn Resolver::ingest_module(
       for p in effective_params {
         fenv.bind(p.name, p.type_)
       }
+      // The shortcut reads only the body's TOP-LEVEL returns, so a nested
+      // one it cannot see may be `any`: `if (flag) return opaque; return 1`
+      // is `any` to tsc, and reading it as `number` reported
+      // `const s: string = f(true)` (#317's review; probed). A body with a
+      // nested return keeps the shortcut only when the complete-body
+      // inference, which declines on an `any` return, also answers.
+      let whole = infer_body_return_type(fenv, r, f.body)
+      let nested_unknown = whole is None && block_has_nested_return(f.body)
       match widen_literal(infer_block_return(fenv, r, f.body)) {
-        Number => @ast.TsType::Number
-        Int => @ast.TsType::Int
-        String_ => @ast.TsType::String_
-        Boolean => @ast.TsType::Boolean
-        BigInt => @ast.TsType::BigInt
+        Number if !nested_unknown => @ast.TsType::Number
+        Int if !nested_unknown => @ast.TsType::Int
+        String_ if !nested_unknown => @ast.TsType::String_
+        Boolean if !nested_unknown => @ast.TsType::Boolean
+        BigInt if !nested_unknown => @ast.TsType::BigInt
         _ =>
-          match infer_body_return_type(fenv, r, f.body) {
+          match whole {
             Some(t) => t
             None => @ast.TsType::Any
           }
@@ -8040,18 +8048,19 @@ pub fn unannotated_function_return_from_body(
     module_.grammar_misuses.contains("<written-any-return:\{func.name}>") {
     return None
   }
+  // The declaring module's `strictNullChecks` decides `??` (#317's review):
+  // with it, `x ?? "fallback"` over `x: number` is `number`.
   let r = Resolver::empty()
+  r.strict_null_checks = module_.strict_null_checks
   let fenv = ExprEnv::new()
   for p in func.params {
     fenv.bind(p.name, p.type_)
   }
-  let t = match widen_literal(infer_block_return(fenv, r, func.body)) {
-    Number | Int | String_ | Boolean | BigInt as t => t
-    _ =>
-      match infer_body_return_type(fenv, r, func.body) {
-        Some(t) => t
-        None => return None
-      }
+  // The COMPLETE body only: `infer_block_return` reads top-level returns,
+  // and a nested `return opaque` it cannot see is `any` (#317's review).
+  let t = match infer_body_return_type(fenv, r, func.body) {
+    Some(t) => t
+    None => return None
   }
   fn primitive_only(t : @ast.TsType) -> Bool {
     match t {
@@ -18890,7 +18899,16 @@ fn left_operand_decides(
     }
   }
 
-  always_truthy(ctx.resolver, lt, 4)
+  // A literal that cannot be falsy decides it too: `x || 9` with `x: 1` is
+  // `1` (#317's review; probed).
+  always_truthy(ctx.resolver, lt, 4) ||
+  union_components(ctx.resolver.unwrap(lt))
+  .iter()
+  .all(fn(m) {
+    m
+    is (Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(true)) &&
+    !may_be_falsy(ctx.resolver, m)
+  })
 }
 
 ///|
@@ -36395,6 +36413,43 @@ fn block_declared_names(b : @ast.TsBlock, out : Map[String, Unit]) -> Unit {
       _ => ()
     }
   }
+}
+
+///|
+/// Whether `b` has a `return` below its top level, short of a nested
+/// function (a function body is an expression, which this never enters).
+fn block_has_nested_return(b : @ast.TsBlock) -> Bool {
+  b.stmts.iter().any(stmt_has_nested_return)
+}
+
+///|
+/// Whether a `return` sits anywhere inside `st`'s nested blocks.
+fn stmt_has_nested_return(st : @ast.TsStmt) -> Bool {
+  match st {
+    If(_, t, e) =>
+      block_returns_anywhere(t) || (e is Some(eb) && block_returns_anywhere(eb))
+    Block(inner)
+    | While(_, inner)
+    | DoWhile(_, inner)
+    | With(_, inner)
+    | ForOf(_, _, _, _, inner)
+    | ForAwaitOf(_, _, _, _, inner)
+    | ForIn(_, _, _, _, inner)
+    | For(_, _, _, inner) => block_returns_anywhere(inner)
+    Try(t, _, c, f) =>
+      block_returns_anywhere(t) ||
+      (c is Some(cb) && block_returns_anywhere(cb)) ||
+      (f is Some(fb) && block_returns_anywhere(fb))
+    Switch(_, cases) =>
+      cases.iter().any(fn(c) { block_returns_anywhere(c.body) })
+    Label(_, inner) => inner is Return(_) || stmt_has_nested_return(inner)
+    _ => false
+  }
+}
+
+///|
+fn block_returns_anywhere(b : @ast.TsBlock) -> Bool {
+  b.stmts.iter().any(fn(st) { st is Return(_) || stmt_has_nested_return(st) })
 }
 
 ///|
