@@ -7807,7 +7807,7 @@ product surfaces now.
   oracle is unchanged. Each cell was reproduced against the nightly first.
   univer's data-validation and sheets-numfmt go 75 -> 57, ui 59 -> 42 and
   core 21 -> 20; excalidraw 49 -> 47, zod 6 -> 5, effect 61. No report
-  appears at a new site: the five lines a diff calls "added" are existing
+  appears at a new site: the seven lines a diff calls "added" are existing
   sites whose message now prints a key as `[x: string]` or `[computed]`.
   - **A function's unannotated return type lost a `switch` and every
     module constant.** univer's line breaker returns from every clause of a
