@@ -15628,7 +15628,15 @@ fn infer_expr_inner(
     // A computed entry's VALUE has a type even when its key is not
     // decided: `{ [unitId]: { a: 1 } }` against a string index signature is
     // judged by that value, and reading it as `any` passed every value.
-    ComputedProp(_, value) => infer_expr(env, resolver, value)
+    // A SYMBOL key lies outside every string and number index signature,
+    // so its value is not judged against one (`{ [sym]: 1 }` fits
+    // `{ [k: string]: string }`).
+    ComputedProp(key, value) =>
+      if computed_key_is_symbol(env, resolver, key) {
+        Any
+      } else {
+        infer_expr(env, resolver, value)
+      }
     ArrowFunc(params, declared_ret, body, is_async) => {
       let param_types = callable_param_types(params)
       // Prefer the explicit return-type annotation when one was supplied;
@@ -20957,6 +20965,13 @@ fn check_expr_against_shape(
                         continue
                       }
                       let val_expr = match e.1 {
+                        // A symbol key is outside the string index
+                        // signature (see `infer_expr`'s `ComputedProp`).
+                        ComputedProp(key, _) if computed_key_is_symbol(
+                            env,
+                            ctx.resolver,
+                            key,
+                          ) => continue
                         ComputedProp(_, value) => value
                         other => other
                       }
@@ -56965,26 +56980,53 @@ fn register_primitive_top_level_consts(
 }
 
 ///|
+/// Whether a computed key's expression has a `symbol` type (`[sym]` with
+/// `const sym = Symbol()`, or a `unique symbol` binding).
+fn computed_key_is_symbol(
+  env : ExprEnv,
+  resolver : Resolver,
+  key : @ast.TsExpr,
+) -> Bool {
+  resolver.unwrap(infer_expr(env, resolver, key)) is (Symbol | UniqueSymbol(_))
+}
+
+///|
 /// The module's top-level `const NAME = init` declarations with no
 /// annotation, as (name, initializer). A declarator group `const a = 1, b =
-/// 2` is lowered to a top-level `Block` of `Const` statements, so a block
-/// holding nothing but two or more `const` declarations is read through as
-/// well: univer's line breaker declares its class constants that way, and
-/// `register_primitive_top_level_consts` saw none of them. A written block
-/// of consts is the same node, and its names are not visible outside it; a
-/// function that reads one is TS2304 in tsc whatever this says about it.
+/// 2` is lowered to a top-level `Block` of `Const` statements marked
+/// `DECL_GROUP_POSITION`, so such a group is read through as well: univer's
+/// line breaker declares its class constants that way, and
+/// `register_primitive_top_level_consts` saw none of them. A WRITTEN block
+/// of consts is not: its names are block-scoped, and reading them would let
+/// `{ const VALUE = "inner" }` replace a module `const VALUE = 1`.
+///
+/// A written `: any` is the same `Any` here as an absent annotation, so the
+/// parser's `<written-any-decl:NAME>` marker is what excludes it: `const
+/// VALUE: any = 1` is `any`, and returning it must not read as `number`.
 fn unannotated_top_level_consts(
   module_ : @ast.TsModule,
 ) -> Array[(String, @ast.TsExpr)] {
+  let written_any : Map[String, Unit] = Map([])
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<written-any-decl:") && gm.has_suffix(">") {
+      written_any[gm["<written-any-decl:".length():gm.length() - 1].to_owned()] = ()
+    }
+  }
   let out : Array[(String, @ast.TsExpr)] = []
+  let push = fn(name : String, init : @ast.TsExpr) {
+    if !written_any.contains(name) {
+      out.push((name, init))
+    }
+  }
   for stmt in module_.top_level_stmts {
     match stmt {
-      Const(Ident(name), Any, init) => out.push((name, init))
-      Block(b) if b.stmts.length() >= 2 &&
+      Const(Ident(name), Any, init) => push(name, init)
+      Block(b) if b.stmt_positions == [@ast.DECL_GROUP_POSITION] &&
+        b.stmts.length() >= 2 &&
         b.stmts.iter().all(fn(st) { st is Const(Ident(_), _, _) }) =>
         for st in b.stmts {
           match st {
-            Const(Ident(name), Any, init) => out.push((name, init))
+            Const(Ident(name), Any, init) => push(name, init)
             _ => ()
           }
         }

@@ -2544,6 +2544,11 @@ test "a computed-key object fits a string index signature by its values (compute
     #|export function badComputedInline(k: string) { load({ [k]: { greeting: 1 } }); }
     #|export function okNumericKeyToStringSignature(n: number) { load({ [n]: { greeting: "a" } }); }
     #|export function badNumericKeyToStringSignature(n: number) { load({ [n]: { greeting: 1 } }); }
+    #|const sym = Symbol("s");
+    #|interface Strs { [k: string]: string }
+    #|declare function take(s: Strs): void;
+    #|export function okSymbolKeyInline() { take({ [sym]: 1 }); }
+    #|export function okSymbolKeyBound() { const o = { [sym]: 1 }; take(o); }
   assert_eq(issue_lines(src), [
     "function badComputedVar > call `load` arg[0]: expected `Lang` but got `{ [computed]: { greeting: number } }`",
     "function badNumberInPack > call `loadAll` arg[0]: expected `ILocales` but got `{ [computed]: { greeting: number } }`",
@@ -2668,5 +2673,25 @@ test "an interface extending an untabled lib interface has its members (libbase)
     "function badDeclaredChainTypo > PropAccess `.nope`: property `nope` does not exist on `Derived`",
     "function badAliasBaseTypo > PropAccess `.nope`: property `nope` does not exist on `OverAlias`",
     "function badUtilityBaseTypo > PropAccess `.nope`: property `nope` does not exist on `OverUtility`",
+  ])
+}
+
+///|
+/// Return inference binds the module's literal `const`s, and two shapes
+/// must not reach it: a written `: any` is `any` (tsc gives `f` the return
+/// type `any`), and a WRITTEN block of consts is block-scoped, so its
+/// `VALUE` does not replace the module's. Probed: tsc accepts both `ok…`.
+test "module literal consts skip a written any and a written block (moduleconsts)" {
+  let src =
+    #|const ANY_VALUE: any = 1;
+    #|function returnsAny() { return ANY_VALUE; }
+    #|export const okWrittenAny: string = returnsAny();
+    #|const VALUE = 1;
+    #|{ const VALUE = "inner"; const OTHER = 2; }
+    #|function returnsOuter() { return VALUE; }
+    #|export const okOuterConst: number = returnsOuter();
+    #|export const badOuterConst: string = returnsOuter();
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badOuterConst` init: expected `string` but got `number`",
   ])
 }

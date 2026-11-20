@@ -41,3 +41,15 @@ export function badConstReturnWidens() { const lit: "s" = returnsStringConst(); 
 export function badLastClauseFallsOff() { const n: number = lastClauseFallsOff(1); return n; }
 export function badNoDefault() { const n: number = noDefault(1); return n; }
 export function badGroupConstRead() { const s: string = NS; return s; }
+
+// A `const` written `: any` is `any`, so a function returning it returns
+// `any`; and a written block of `const`s is block-scoped, so its `VALUE`
+// does not replace the module's.
+const ANY_VALUE: any = 1;
+function returnsAny() { return ANY_VALUE; }
+export const okWrittenAnyConst: string = returnsAny();
+const VALUE = 1;
+{ const VALUE = "inner"; const OTHER = 2; }
+function returnsOuter() { return VALUE; }
+export const okOuterConstNotBlockOne: number = returnsOuter();
+export const badOuterConstNotBlockOne: string = returnsOuter();

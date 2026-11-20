@@ -69,3 +69,11 @@ computedKeyObjectAgainstIndexSignature.ts(23,66): error TS2345: Argument of type
 !!! error TS2345:       Types of property 'greeting' are incompatible.
 !!! error TS2345:         Type 'number' is not assignable to type 'string'.
     
+    // A symbol key lies outside every string and number index signature, so its
+    // value is not judged against one.
+    const sym = Symbol("s");
+    interface Strs { [k: string]: string }
+    declare function take(s: Strs): void;
+    export function okSymbolKeyInline() { take({ [sym]: 1 }); }
+    export function okSymbolKeyBound() { const o = { [sym]: 1 }; take(o); }
+    

@@ -5,9 +5,10 @@ unannotatedReturnThroughSwitchAndModuleConsts.ts(38,49): error TS2322: Type 'num
 unannotatedReturnThroughSwitchAndModuleConsts.ts(39,40): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
   Type 'undefined' is not assignable to type 'number'.
 unannotatedReturnThroughSwitchAndModuleConsts.ts(40,45): error TS2322: Type 'number' is not assignable to type 'string'.
+unannotatedReturnThroughSwitchAndModuleConsts.ts(52,14): error TS2322: Type 'number' is not assignable to type 'string'.
 
 
-==== unannotatedReturnThroughSwitchAndModuleConsts.ts (5 errors) ====
+==== unannotatedReturnThroughSwitchAndModuleConsts.ts (6 errors) ====
     // A function with no return annotation takes its return type from its
     // body. A `switch` with a `default` clause, whose every clause returns,
     // cannot fall off the end, so it adds no `undefined`; one whose last clause
@@ -59,5 +60,19 @@ unannotatedReturnThroughSwitchAndModuleConsts.ts(40,45): error TS2322: Type 'num
 !!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
     export function badGroupConstRead() { const s: string = NS; return s; }
                                                 ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    
+    // A `const` written `: any` is `any`, so a function returning it returns
+    // `any`; and a written block of `const`s is block-scoped, so its `VALUE`
+    // does not replace the module's.
+    const ANY_VALUE: any = 1;
+    function returnsAny() { return ANY_VALUE; }
+    export const okWrittenAnyConst: string = returnsAny();
+    const VALUE = 1;
+    { const VALUE = "inner"; const OTHER = 2; }
+    function returnsOuter() { return VALUE; }
+    export const okOuterConstNotBlockOne: number = returnsOuter();
+    export const badOuterConstNotBlockOne: string = returnsOuter();
+                 ~~~~~~~~~~~~~~~~~~~~~~~~
 !!! error TS2322: Type 'number' is not assignable to type 'string'.
     

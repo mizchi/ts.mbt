@@ -24,3 +24,11 @@ export function badNumberInPack() { const locales = { [LocaleType.ZH]: { greetin
 export function badComputedInline(k: string) { load({ [k]: { greeting: 1 } }); }
 export function okNumericKeyToStringSignature(n: number) { load({ [n]: { greeting: "a" } }); }
 export function badNumericKeyToStringSignature(n: number) { load({ [n]: { greeting: 1 } }); }
+
+// A symbol key lies outside every string and number index signature, so its
+// value is not judged against one.
+const sym = Symbol("s");
+interface Strs { [k: string]: string }
+declare function take(s: Strs): void;
+export function okSymbolKeyInline() { take({ [sym]: 1 }); }
+export function okSymbolKeyBound() { const o = { [sym]: 1 }; take(o); }

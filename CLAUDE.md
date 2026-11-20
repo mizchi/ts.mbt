@@ -7864,6 +7864,25 @@ product surfaces now.
       string's numeric slots. `string` into `{ [n: number]: number }` is
       TS2322 now, and a primitive never satisfies a STRING index signature.
     - `export *` re-exported `default`, which it does not (TS2305).
+  - **#323's review found two false positives the batch introduced and
+    one older.** Each was reproduced against the nightly first.
+    - The module-constant binding read a written `const V: any = 1` as
+      `number`, because an annotation of `any` and no annotation are the
+      same `Any` in the AST; the parser's `<written-any-decl:>` marker now
+      excludes it. And it read a WRITTEN block of `const`s as a declarator
+      group, so `{ const VALUE = "inner" }` replaced the module's `VALUE`.
+      The function's own doc comment had said that case could not matter.
+      A group carries `DECL_GROUP_POSITION`, and only that is read now.
+    - A symbol-keyed computed property was judged against a string index
+      signature, so `{ [sym]: 1 }` against `{ [k: string]: string }` was
+      reported. That predates the batch at the inline site. A symbol key
+      is skipped at both sites.
+    - Two findings did not reproduce. An interface over the module's own
+      type alias already reports a typo. `default` through `export *`
+      resolving as a TYPE changes no report: mtsc checks no missing type
+      export at all (`import type { Nope }` is silent too), so the guard
+      was written, survived its mutation and was removed. The missing
+      type-export check (TS2305 for `import type`) is filed.
   - **Filed:**
     - The sheet-interceptor family (univer): a value narrowed from a
       generic arrow call whose body is an `as` expression. Narrowing to

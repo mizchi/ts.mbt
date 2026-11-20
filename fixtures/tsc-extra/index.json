@@ -5227,7 +5227,25 @@
           "name": "badGroupConstRead",
           "kind": "bad",
           "fromLine": 40,
-          "toLine": 41
+          "toLine": 44
+        },
+        {
+          "name": "okWrittenAnyConst",
+          "kind": "ok",
+          "fromLine": 47,
+          "toLine": 47
+        },
+        {
+          "name": "okOuterConstNotBlockOne",
+          "kind": "ok",
+          "fromLine": 51,
+          "toLine": 51
+        },
+        {
+          "name": "badOuterConstNotBlockOne",
+          "kind": "bad",
+          "fromLine": 52,
+          "toLine": 53
         }
       ]
     },
@@ -7108,7 +7126,19 @@
           "name": "badNumericKeyToStringSignature",
           "kind": "bad",
           "fromLine": 23,
-          "toLine": 24
+          "toLine": 26
+        },
+        {
+          "name": "okSymbolKeyInline",
+          "kind": "ok",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "okSymbolKeyBound",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 32
         }
       ]
     },
