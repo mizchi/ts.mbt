@@ -19865,17 +19865,29 @@ fn check_index_write(
     // by element, so `o[k] = [{ x: 1 }]` against `{ x: number }[]` and
     // `{ y: number }[]` was silent, while `(A & B)[]` reports the missing
     // `y` and still accepts `[{ x: 1, y: 2 }]` (#322's review; probed).
+    // Identical element types are one: `{ length: number }[]` twice is
+    // `{ length: number }[]`, which `["abc", { length: 1 }]` fits through
+    // the string's own `length` (#322's review; probed).
     let elems : Array[@ast.TsType] = []
+    let mut all_arrays = true
     for t in targets {
       match t {
-        Array(e) | Applied("Array" | "ReadonlyArray", [e]) => elems.push(e)
-        _ => break
+        Array(e) | Applied("Array" | "ReadonlyArray", [e]) =>
+          if !elems.contains(e) {
+            elems.push(e)
+          }
+        _ => {
+          all_arrays = false
+          break
+        }
       }
     }
-    let combined : @ast.TsType = if elems.length() == targets.length() {
-      Array(Intersection(elems))
-    } else {
+    let combined : @ast.TsType = if !all_arrays {
       Intersection(targets)
+    } else if elems.length() == 1 {
+      Array(elems[0])
+    } else {
+      Array(Intersection(elems))
     }
     check_expr_against(env, value, combined, ctx, "assign `[…]`")
     return
@@ -60322,8 +60334,16 @@ fn intersection_target_mismatch(
     if !object_like {
       continue
     }
+    // A primitive fits an object part through its own members (`"abc"`
+    // against `{ length: number }`), which `is_assignable_to` has no table
+    // for: an array literal written through a union key is checked against
+    // `Array<A & B>`, and `["abc", { length: 1 }]` against two `{ length:
+    // number }[]` targets was reported (#322's review; probed).
     if source_concrete {
-      return true
+      if !intrinsic_source_satisfies_object(source, p, resolver) {
+        return true
+      }
+      continue
     }
     if !is_assignable_to(source, p) &&
       !is_structurally_assignable_named(source, p, resolver) {

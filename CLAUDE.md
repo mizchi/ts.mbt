@@ -7782,6 +7782,17 @@ product surfaces now.
       against array targets is checked against `Array<intersection of the
       elements>`, and `"abc"` into `Array<{ length: number }>[K]` fits the
       element through its own members.
+    - The third round narrowed both. A literal rebuild of an `as const`
+      object replaced an ANNOTATED declaration's type too, so `X: { k:
+      string; j?: number } = { k: "a" } as const` lost `j` and narrowed
+      `k`; only an unannotated declaration reads its members off the
+      literal now. Identical element types combine to themselves, so two
+      `{ length: number }[]` targets take `["abc", { length: 1 }]`. And the
+      intersection-target check rejected any primitive against an object
+      part before asking whether the primitive has that part's members,
+      which main already did for `string` into `{ length: number } & { x?:
+      number }`. A string into `{ length } & { length }` is still reported,
+      from a site this round did not find; that is filed.
   - **Filed:**
     - Contextual return-type inference. `pointFrom<P extends …>(x, y): P`
       has a binder only in its return type, which tsc infers from the

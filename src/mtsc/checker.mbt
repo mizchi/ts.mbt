@@ -2732,12 +2732,16 @@ fn fold_value_spreads(
   let mut as_const = false
   for stmt in module_.top_level_stmts {
     match stmt {
-      Const(Ident(n), _, init) if n == name =>
+      Const(Ident(n), declared, init) if n == name =>
         match init {
           ObjectLit(es) => entries = Some(es)
+          // An annotation is the declaration's type whatever the initializer
+          // says: `X: { k: string; j?: number } = { k: "a" } as const` has
+          // an optional `j` and a `string` `k` (#322's review; probed). Only
+          // an unannotated declaration reads its members off the literal.
           As(ObjectLit(es), Named("const")) => {
             entries = Some(es)
-            as_const = true
+            as_const = declared is Any
           }
           _ => ()
         }

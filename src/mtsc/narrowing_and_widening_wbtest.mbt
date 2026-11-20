@@ -2502,6 +2502,8 @@ test "an element write through a literal-typed key is checked (keywrite)" {
     #|declare const arrs: { a: { x: number }[]; b: { y: number }[] };
     #|export function okArrayOfLiteralsFitsBoth(k: "a" | "b") { arrs[k] = [{ x: 1, y: 2 }]; }
     #|export function badArrayOfLiteralsMissesOne(k: "a" | "b") { arrs[k] = [{ x: 1 }]; }
+    #|declare const lens: { a: { length: number }[]; b: { length: number }[] };
+    #|export function okPrimitiveBesideLiteral(k: "a" | "b") { lens[k] = ["abc", { length: 1 }]; }
   assert_eq(issue_lines(src), [
     "function badLiteralKeyParam > assign `[…]`: expected `number` but got `string`",
     "function badBracketLiteral > assign `[…]`: expected `number` but got `string`",
@@ -2532,5 +2534,22 @@ test "a spread argument relates through nested aliases (spreadalias)" {
     #|export function badSpreadTuple(next: [boolean, boolean][]) { take(...next); }
   assert_eq(issue_lines(src), [
     "function badSpreadTuple > call `take` spread arg: spread element type `[boolean, boolean]` is not assignable to `Input`",
+  ])
+}
+
+///|
+/// A primitive fits an object type through its own members, and so it fits
+/// an intersection of object types when it fits every part: `string` and
+/// `"abc"` into `{ length: number } & { x?: number }` are legal, and the
+/// intersection-target check rejected any primitive against an object part
+/// before asking (#322's review; probed: tsc reports the bad cell only).
+test "a primitive fits an intersection of object types (intrinsicintersection)" {
+  let src =
+    #|declare const s: string;
+    #|export const okStringIntoMixedIntersection: { length: number } & { x?: number } = s;
+    #|export const okLiteralIntoMixedIntersection: { length: number } & { x?: number } = "abc";
+    #|export const badNumberIntoMixedIntersection: { length: number } & { x?: number } = 5;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badNumberIntoMixedIntersection` init: expected `{ length: number } & { x: number | undefined }` but got `5`",
   ])
 }

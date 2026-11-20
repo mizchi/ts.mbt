@@ -3,10 +3,10 @@ elementWriteThroughLiteralKey.ts(15,39): error TS2322: Type 'string' is not assi
 elementWriteThroughLiteralKey.ts(16,55): error TS2322: Type 'string' is not assignable to type 'number'.
 elementWriteThroughLiteralKey.ts(17,46): error TS2322: Type '2' is not assignable to type '0 | 1'.
 elementWriteThroughLiteralKey.ts(18,64): error TS2322: Type '1' is not assignable to type 'never'.
-elementWriteThroughLiteralKey.ts(26,58): error TS2322: Type '{ x: number; }' is not assignable to type '{ x: number; } & { y: number; }'.
+elementWriteThroughLiteralKey.ts(27,58): error TS2322: Type '{ x: number; }' is not assignable to type '{ x: number; } & { y: number; }'.
   Property 'y' is missing in type '{ x: number; }' but required in type '{ y: number; }'.
-elementWriteThroughLiteralKey.ts(27,76): error TS2353: Object literal may only specify known properties, and 'z' does not exist in type '{ x: number; } & { y: number; }'.
-elementWriteThroughLiteralKey.ts(28,76): error TS2322: Type '{ x: number; }' is not assignable to type '{ x: number; } & { y: number; }'.
+elementWriteThroughLiteralKey.ts(28,76): error TS2353: Object literal may only specify known properties, and 'z' does not exist in type '{ x: number; } & { y: number; }'.
+elementWriteThroughLiteralKey.ts(29,76): error TS2322: Type '{ x: number; }' is not assignable to type '{ x: number; } & { y: number; }'.
   Property 'y' is missing in type '{ x: number; }' but required in type '{ y: number; }'.
 
 
@@ -46,6 +46,7 @@ elementWriteThroughLiteralKey.ts(28,76): error TS2322: Type '{ x: number; }' is 
     export function okFreshLiteralFitsBoth(k: "a" | "b") { o[k] = { x: 1, y: 2 }; }
     export function okFreshLiteralInBranches(k: "a" | "b", c: boolean) { o[k] = c ? { x: 1, y: 2 } : { x: 2, y: 3 }; }
     export function okFreshLiteralInArray(k: "a" | "b") { arrs[k] = [{ x: 1, y: 2 }]; }
+    export function okPrimitiveBesideFreshLiteral(o2: { a: { length: number }[]; b: { length: number }[] }, k: "a" | "b") { o2[k] = ["abc", { length: 1 }]; }
     export function badFreshLiteralMissesOne(k: "a" | "b") { o[k] = { x: 1 }; }
                                                              ~~~~
 !!! error TS2322: Type '{ x: number; }' is not assignable to type '{ x: number; } & { y: number; }'.

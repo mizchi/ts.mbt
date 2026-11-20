@@ -1,0 +1,26 @@
+primitiveIntoIntersectionOfObjects.ts(11,14): error TS2322: Type 'number' is not assignable to type '{ length: number; } & { x?: number | undefined; }'.
+  Type 'number' is not assignable to type '{ length: number; }'.
+primitiveIntoIntersectionOfObjects.ts(12,14): error TS2322: Type 'string' is not assignable to type '{ length: number; } & { size: number; }'.
+  Type 'string' is not assignable to type '{ size: number; }'.
+
+
+==== primitiveIntoIntersectionOfObjects.ts (2 errors) ====
+    // A primitive is assignable to an object type whose members it has
+    // (`"abc"` has `length`), and so to an intersection of object types when it
+    // fits every part, an optional member included. A primitive that lacks a
+    // required member fits none.
+    
+    declare const s: string;
+    
+    export const okStringIntoMixedIntersection: { length: number } & { x?: number } = s;
+    export const okLiteralIntoMixedIntersection: { length: number } & { x?: number } = "abc";
+    export const okStringIntoObject: { length: number } = s;
+    export const badNumberIntoMixedIntersection: { length: number } & { x?: number } = 5;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'number' is not assignable to type '{ length: number; } & { x?: number | undefined; }'.
+!!! error TS2322:   Type 'number' is not assignable to type '{ length: number; }'.
+    export const badStringMissingMember: { length: number } & { size: number } = s;
+                 ~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type '{ length: number; } & { size: number; }'.
+!!! error TS2322:   Type 'string' is not assignable to type '{ size: number; }'.
+    

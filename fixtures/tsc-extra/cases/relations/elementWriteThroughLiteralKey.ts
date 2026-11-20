@@ -26,6 +26,7 @@ declare const arrs: { a: { x: number }[]; b: { y: number }[] };
 export function okFreshLiteralFitsBoth(k: "a" | "b") { o[k] = { x: 1, y: 2 }; }
 export function okFreshLiteralInBranches(k: "a" | "b", c: boolean) { o[k] = c ? { x: 1, y: 2 } : { x: 2, y: 3 }; }
 export function okFreshLiteralInArray(k: "a" | "b") { arrs[k] = [{ x: 1, y: 2 }]; }
+export function okPrimitiveBesideFreshLiteral(o2: { a: { length: number }[]; b: { length: number }[] }, k: "a" | "b") { o2[k] = ["abc", { length: 1 }]; }
 export function badFreshLiteralMissesOne(k: "a" | "b") { o[k] = { x: 1 }; }
 export function badFreshLiteralExcess(k: "a" | "b") { o[k] = { x: 1, y: 2, z: 3 }; }
 export function badFreshLiteralInArrayMissesOne(k: "a" | "b") { arrs[k] = [{ x: 1 }]; }

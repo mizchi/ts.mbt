@@ -7113,22 +7113,28 @@
           "toLine": 25
         },
         {
-          "name": "badFreshLiteralMissesOne",
-          "kind": "bad",
+          "name": "okPrimitiveBesideFreshLiteral",
+          "kind": "ok",
           "fromLine": 26,
           "toLine": 26
         },
         {
-          "name": "badFreshLiteralExcess",
+          "name": "badFreshLiteralMissesOne",
           "kind": "bad",
           "fromLine": 27,
           "toLine": 27
         },
         {
-          "name": "badFreshLiteralInArrayMissesOne",
+          "name": "badFreshLiteralExcess",
           "kind": "bad",
           "fromLine": 28,
-          "toLine": 29
+          "toLine": 28
+        },
+        {
+          "name": "badFreshLiteralInArrayMissesOne",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 30
         }
       ]
     },
@@ -7949,6 +7955,52 @@
           "kind": "bad",
           "fromLine": 45,
           "toLine": 46
+        }
+      ]
+    },
+    {
+      "case": "relations/primitiveIntoIntersectionOfObjects.ts",
+      "area": "relations",
+      "name": "primitiveIntoIntersectionOfObjects",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/primitiveIntoIntersectionOfObjects.errors.txt",
+      "claims": [
+        {
+          "name": "okStringIntoMixedIntersection",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okLiteralIntoMixedIntersection",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okStringIntoObject",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badNumberIntoMixedIntersection",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badStringMissingMember",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 13
         }
       ]
     },
