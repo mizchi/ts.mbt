@@ -2377,6 +2377,10 @@ fn Parser::parse_jsx_embed(
         sub.grammar_misuses.contains("unterminated string literal") {
         self.grammar_misuses.push("unterminated string literal")
       }
+      // A statement inside the payload (an arrow's block body) that a
+      // directive in the payload covers. The sub-parser decided that over
+      // its own line table, which is the only one that fits its positions.
+      self.adopt_suppressed_stmts(sub)
       e
     }
     Err(e) => raise e
@@ -2953,6 +2957,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
             self.inherit_source_flags(sub_parser)
             sub_parser.current_class_brand = self.current_class_brand
             let sub_expr = sub_parser.parse_expr()
+            self.adopt_suppressed_stmts(sub_parser)
             exprs.push(sub_expr)
           }
           // Create tagged template expression
@@ -3339,6 +3344,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         self.inherit_source_flags(sub_parser)
         sub_parser.current_class_brand = self.current_class_brand
         let expr = sub_parser.parse_expr()
+        self.adopt_suppressed_stmts(sub_parser)
         exprs.push(expr)
       }
       // For untagged template literals, convert to TemplateLiteral AST node

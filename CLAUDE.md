@@ -7937,6 +7937,38 @@ product surfaces now.
     of `unique symbol`s (`typeof a | typeof b`) is a symbol key too, so its
     value is not judged against a string index signature. A union with
     any non-symbol member still is, as tsc gives.
+  Batch HO is two univer families and #324's seven review items. univer's
+  data-validation goes 54 -> 50, sheets-numfmt 53 -> 49 and ui 40 -> 38,
+  with no report at a new site and the oracle unchanged.
+  - **A callback over an unsolved binder.** `solve_generic_bindings`
+    starts every binder at `any`, so in `new Observable<void>((observer)
+    => observer.next())` the callback was typed against `Sub<any>`, whose
+    `next(value: any)` needs an argument. A binder no non-callback argument
+    mentions now leaves the callback's PARAMETERS that mention it as
+    `any`. The first version erased the whole formal, and `--max-miss`
+    caught it: it lost `genericCallWithOverloadedFunctionTypedArguments2`,
+    whose `(x, y) => ''` against call signatures supplying one argument
+    is an arity error no matter what `T` is. The formal keeps its shape
+    now, an optional callback parameter (`subscribe?: …`, a union) and a
+    `CallableMeta` wrapper included.
+  - **`.map` returning tuples.** `xs.map(r => [r.a, r.b])` against
+    `Array<[number, number]>` is typed by the tuple, as tsc does
+    contextually; inferred alone it is `number[][]`.
+  - **#324's review, and what probing changed in it.** An `as` type's
+    duplicate member wrote the issue list directly and ignored the flag.
+    A declarator group, a `for` head's init and update, the `if` of an
+    `else if`, a block-level `using` (the rebuilt declaration and the
+    disposal generated for it), a `for (using …)` head, and the statements
+    a JSX payload's or a template substitution's fresh sub-parser reads
+    are each recorded now. The `for` head was not in the review; probing
+    the group cell found it. CR, LS and PS end a line for the pairing,
+    but a line holding only an LS or PS, or a no-break space, is NOT blank
+    to the nightly and stops the walk. Treating LS and PS as blank was the
+    first version, and probing rejected it. Counting CRLF once was
+    implemented and removed: as two breaks it leaves an empty line the
+    pairing skips, so no answer depended on it and its mutation survived.
+    A run of directive lines is paired by one backward pass: 40,000 of
+    them took 1.43 s and take 0.043 s.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

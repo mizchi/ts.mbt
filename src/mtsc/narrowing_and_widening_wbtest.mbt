@@ -2851,3 +2851,234 @@ test "a comment directive covers statements in sub-parsed bodies (tsdirective)" 
     "top-level > binding `x` init: expected `string` but got `number`", "namespace NS > top-level > binding `badInNamespace` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// The places a directive's statement is read OUTSIDE `parse_stmt`, each
+/// probed against the nightly, which reports exactly the `bad…` cells:
+/// each declarator of `let a = 1, b = 2` (the checker visits them one by
+/// one, and each used to clear the flag the group set), a C-style `for`'s
+/// init and update, the `if` of an `else if`, a block-level `using` (the
+/// rebuilt declaration and the disposal generated for it, whose
+/// `cannot index` is the declaration's error seen from the `finally`),
+/// a `for (using …)` head, an `as` type's duplicate member, and the arrow
+/// bodies a template substitution's fresh sub-parser reads.
+test "a comment directive covers declarator groups, loop heads and else-if (tsdirective)" {
+  let src =
+    #|declare const x: unknown;
+    #|type D = { [Symbol.dispose](): void };
+    #|declare const d: D;
+    #|// @ts-ignore
+    #|export const okAsDup = x as { a: string; a: string };
+    #|export const badAsDup = x as { b: string; b: string };
+    #|// @ts-ignore
+    #|export let okGroupA: string = 1, okGroupB: string = 2;
+    #|export let badGroupA: string = 1, okGroupC = 2;
+    #|export let okGroupLaterA = 1,
+    #|  // @ts-ignore
+    #|  okGroupLaterB: string = 2;
+    #|export let badGroupLaterA = 1,
+    #|  badGroupLaterB: string = 2;
+    #|export function okElseIf(c: boolean) {
+    #|  if (c) {
+    #|    return 0;
+    #|  } else
+    #|  // @ts-ignore
+    #|  if (1 === "x") {
+    #|    const badInElseIfBody: string = 1;
+    #|    return badInElseIfBody;
+    #|  }
+    #|  return 2;
+    #|}
+    #|export function okForHead() {
+    #|  // @ts-ignore
+    #|  for (let a: string = 1, b: string = 2; ;) { break; }
+    #|}
+    #|export function badForBody() {
+    #|  // @ts-ignore
+    #|  for (let a: string = 1; ;) {
+    #|    const badBodyLine: string = 2;
+    #|    break;
+    #|  }
+    #|}
+    #|export function okUsing() {
+    #|  // @ts-ignore
+    #|  using u: D = 1;
+    #|}
+    #|export function okUsingGroup() {
+    #|  // @ts-ignore
+    #|  using u1: D = d, u2: D = 2;
+    #|}
+    #|export function badUsing() {
+    #|  using v: D = 3;
+    #|}
+    #|export function okForUsing() {
+    #|  // @ts-ignore
+    #|  for (using w: D = 4; ;) { break; }
+    #|}
+    #|declare function tag(s: TemplateStringsArray, ...v: unknown[]): string;
+    #|export const okTemplate = `${(() => {
+    #|  // @ts-ignore
+    #|  const okInTemplate: string = 3;
+    #|  const badInTemplate: string = 4;
+    #|  return okInTemplate + badInTemplate;
+    #|})()}`;
+    #|export const okTagged = tag`${(() => {
+    #|  // @ts-ignore
+    #|  const okInTagged: string = 5;
+    #|  const badInTagged: string = 6;
+    #|  return okInTagged + badInTagged;
+    #|})()}`;
+  assert_eq(issue_lines(src), [
+    "function okElseIf > binding `badInElseIfBody` init: expected `string` but got `number`",
+    "function badForBody > binding `badBodyLine` init: expected `string` but got `number`",
+    "function badUsing > binding `v` init: expected `D` but got `number`", "function badUsing > index access: cannot index into `number`",
+    "top-level: duplicate identifier `b`", "top-level > binding `badGroupA` init: expected `string` but got `number`",
+    "top-level > binding `badGroupLaterB` init: expected `string` but got `number`",
+    "top-level > binding `badInTemplate` init: expected `string` but got `number`",
+    "top-level > binding `badInTagged` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// The same through a JSX payload, which a fresh sub-parser reads over the
+/// payload's own text and line table.
+test "a comment directive covers a statement in a JSX payload (tsdirective)" {
+  let src =
+    #|export const okJsx = <div>{(() => {
+    #|  // @ts-ignore
+    #|  const okInPayload: string = 1;
+    #|  const badInPayload: string = 2;
+    #|  return okInPayload + badInPayload;
+    #|})()}</div>;
+  assert_eq(
+    check_source(src, true).split("\n").map(fn(l) { l.to_owned() }).collect(),
+    [
+      "top-level > binding `badInPayload` init: expected `string` but got `number`",
+    ],
+  )
+}
+
+///|
+/// A line ends at LF, CR, LS or PS (probed: in each spelling the directive
+/// covers the next line and only `…Real` reports), so a block comment's
+/// last line is found after a CR too. A line holding only a no-break space,
+/// or nothing but an LS or PS, is not blank to the pairing: the directive
+/// covers nothing there, and both declarations report.
+test "a comment directive pairs across every line terminator (tsdirective)" {
+  let cells = [
+    ("cr", "\r"),
+    ("crlf", "\r\n"),
+    ("ls", "\u{2028}"),
+    ("ps", "\u{2029}"),
+  ]
+  for cell in cells {
+    let (name, eol) = cell
+    let src = "export const ok1 = 1;" +
+      eol +
+      "// @ts-ignore" +
+      eol +
+      "export const \{name}Bad: string = 1;" +
+      eol +
+      "export const \{name}Real: string = 2;" +
+      eol
+    assert_eq(issue_lines(src), [
+      "top-level > binding `\{name}Real` init: expected `string` but got `number`",
+    ])
+  }
+  let block = "export const ok1 = 1;\r/* a\r  @ts-ignore */\rexport const blBad: string = 1;\rexport const blReal: string = 2;\r"
+  assert_eq(issue_lines(block), [
+    "top-level > binding `blReal` init: expected `string` but got `number`",
+  ])
+  let block_ends = "export const ok1 = 1;\r/* @ts-ignore\r*/ export const badCrBlockEnds: string = 1;\r"
+  assert_eq(issue_lines(block_ends), [
+    "top-level > binding `badCrBlockEnds` init: expected `string` but got `number`",
+  ])
+  let nbsp = "// @ts-ignore\n\u{00A0}\nexport const nbspBad: string = 1;\n"
+  assert_eq(issue_lines(nbsp), [
+    "top-level > binding `nbspBad` init: expected `string` but got `number`",
+  ])
+  let ls_blank = "export const ok1 = 1;\u{2028}// @ts-ignore\u{2028}\u{2028}export const lsBlankBad: string = 1;\u{2028}export const lsReal: string = 2;\n"
+  assert_eq(issue_lines(ls_blank), [
+    "top-level > binding `lsBlankBad` init: expected `string` but got `number`",
+    "top-level > binding `lsReal` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// A run of directive lines pairs every one of them with the same code
+/// line, found by one backward pass over the lines.
+test "a run of comment directives covers the line after it (tsdirective)" {
+  let src = "// @ts-ignore\n".repeat(50) +
+    "export const okRun: string = 1;\nexport const badRun: string = 2;\n"
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badRun` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// A binder no argument gives a candidate for stays `any` after solving,
+/// and a callback checked against a formal built from it read `s` as
+/// `Sub<any>`, whose `next(value: any)` needs an argument. The written type
+/// argument (`new Obs<void>`, `take<void>`) and the declared type the call
+/// is assigned to (`const c: Obs<void>`) say `Sub<void>`, whose `next`
+/// does not (probed: tsc accepts every `ok…`, univer's `new
+/// Observable<void>((observer) => observer.next())`). The written type
+/// arguments are still checked: `<number>` reports the missing argument.
+/// With no type argument and no context tsc infers `unknown` and reports,
+/// and so would a declared `Obs<number>`; both are MISSes here. Only the
+/// formal's PARAMETERS are erased: the first version erased the whole
+/// formal and lost the arity of `(x, y) => ""` against a call signature
+/// that supplies one argument (`genericCallWithOverloadedFunctionTypedArguments2`).
+test "a callback over an unsolved binder is not typed with any (unsolvedcallback)" {
+  let src =
+    #|declare class Sub<T> { next(value: T): void; }
+    #|declare class Obs<T> { constructor(subscribe?: (s: Sub<T>) => void); }
+    #|declare function take<T>(cb: (s: Sub<T>) => void): T;
+    #|declare function takeWith<T>(x: T, cb: (s: Sub<T>) => void): T;
+    #|export function okExplicitVoid() { return new Obs<void>((s) => { s.next(); }); }
+    #|export function badExplicitNumber() { return new Obs<number>((s) => { s.next(); }); }
+    #|export function okContextual() { const c: Obs<void> = new Obs((s) => { s.next(); }); return c; }
+    #|export function okCallExplicitVoid() { return take<void>((s) => { s.next(); }); }
+    #|export function badCallExplicitNumber() { return take<number>((s) => { s.next(); }); }
+    #|export function badSolvedFromArgument() { return takeWith(1, (s) => { s.next(); }); }
+    #|declare const av: any;
+    #|export function badRealAny() { return takeWith(av, (s) => { s.next(); }); }
+    #|declare function over<T>(cb: { (x: T): string; (x: T, y?: T): string }): T;
+    #|export function badOverloadArity() { return over((x, y) => ""); }
+    #|export function okOverloadArity() { return over((x) => ""); }
+    #|declare function single<T>(cb: (x: T) => string): T;
+    #|export function badSingleArity() { return single((x, y) => ""); }
+    #|declare function takeOpt<T>(cb: (s: Sub<T>, extra?: number) => void): T;
+    #|export function okMetaVoid() { return takeOpt<void>((s) => { s.next(); }); }
+    #|export function badMetaNumber() { return takeOpt<number>((s) => { s.next(); }); }
+  assert_eq(issue_lines(src), [
+    "function badExplicitNumber > call `next`: expected 1 argument(s), got 0", "function badCallExplicitNumber > call `next`: expected 1 argument(s), got 0",
+    "function badSolvedFromArgument > call `next`: expected 1 argument(s), got 0",
+    "function badRealAny > call `next`: expected 1 argument(s), got 0", "function badOverloadArity > call `over` arg[0]: expected `{ <call>: (any) => string; <call>: (any, any | undefined) => string }` but the function value requires 2 argument(s); a target call signature accepts only 1",
+    "function badSingleArity > call `single` arg[0]: expected `(any) => string` but the function value requires 2 argument(s); a target call signature accepts only 1",
+    "function badMetaNumber > call `next`: expected 1 argument(s), got 0",
+  ])
+}
+
+///|
+/// `xs.map(cb)` against an array of tuples: tsc types the callback's
+/// returns by the tuple element, so `[r.a, r.b]` is `[number, number]`.
+/// Inferred with no expected type it is `number[]`, and every univer
+/// `const removed: [number, number][] = ranges.map((r) => [r.startRow,
+/// r.endRow])` was reported. A literal of the wrong length or element type
+/// still reports (probed: tsc gives TS2322 on exactly the `bad…` cells).
+test "a map callback's array literal is typed by the tuple it fills (maptuple)" {
+  let src =
+    #|interface R { a: number; b: number }
+    #|declare const rs: R[];
+    #|declare const flag: boolean;
+    #|export const okMapTuple: [number, number][] = rs.map((r) => [r.a, r.b]);
+    #|export const okMapTupleCond: [number, number][] = rs.map((r) => (flag ? [r.a, r.b] : [r.b, r.a]));
+    #|export const okMapTupleBlock: [number, number][] = rs.map((r) => { return [r.a, r.b]; });
+    #|export const badMapTupleArity: [number, number][] = rs.map((r) => [r.a]);
+    #|export const badMapTupleType: [number, string][] = rs.map((r) => [r.a, r.b]);
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badMapTupleArity` init: expected `[number, number][]` but got `number[][]`",
+    "top-level > binding `badMapTupleType` init: expected `[number, string][]` but got `number[][]`",
+  ])
+}
