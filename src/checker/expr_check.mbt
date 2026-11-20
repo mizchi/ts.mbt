@@ -13611,6 +13611,26 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 }
 
 ///|
+/// `xs` with each `...[A, B]` spread of a TUPLE spliced in as its elements,
+/// which is what a tuple spread denotes: `[...[string]]` is `[string]`, and
+/// against `number[]` or `[number]` it is TS2367 (#321's review; probed).
+/// A rest of anything else stays a rest.
+fn flatten_tuple_rests(xs : Array[@ast.TsType]) -> Array[@ast.TsType] {
+  guard xs.iter().any(fn(x) { x is Rest(Tuple(_)) }) else { return xs }
+  let out : Array[@ast.TsType] = []
+  for x in xs {
+    match x {
+      Rest(Tuple(items)) =>
+        for it in flatten_tuple_rests(items) {
+          out.push(it)
+        }
+      _ => out.push(x)
+    }
+  }
+  out
+}
+
+///|
 /// Whether a tuple with elements `xs` shares a value with an array of `y`,
 /// for `types_can_overlap`: some element must overlap `y`, or the tuple is
 /// empty. A rest slot's element is the element of its array; any other
@@ -13619,6 +13639,7 @@ fn tuple_overlaps_array_element(
   xs : Array[@ast.TsType],
   y : @ast.TsType,
 ) -> Bool {
+  let xs = flatten_tuple_rests(xs)
   xs.length() == 0 ||
   xs
   .iter()
@@ -13643,6 +13664,8 @@ fn tuple_overlaps_array_element(
 /// overlapping, while `[number, string]` against `[number]` is TS2367
 /// (probed).
 fn tuples_can_overlap(xs : Array[@ast.TsType], ys : Array[@ast.TsType]) -> Bool {
+  let xs = flatten_tuple_rests(xs)
+  let ys = flatten_tuple_rests(ys)
   if xs is [Rest(Array(e))] {
     return tuple_overlaps_array_element(ys, e)
   }
@@ -19788,6 +19811,224 @@ fn check_expr_against(
 }
 
 ///|
+/// The property types a write `recv[k] = v` must satisfy when the KEY's
+/// type is a string literal or a union of them: every one, since the write
+/// could land on any (tsc's write type for `obj[k]` is the intersection).
+/// `infer_index` answers the READ, which for a literal-typed key variable
+/// was nothing and for a union key was the union, so `obj[k0] = 'x'` with
+/// `k0: 'a'` and `obj[k1] = 2` with `k1: 'a' | 'b'` against `b: 0 | 1`
+/// were silent (keyofAndIndexedAccess2's `f1`; probed). `None` — the old
+/// path — for any key that is not all literals, any receiver that is not a
+/// single known shape, and any key the receiver does not declare.
+fn index_write_targets(
+  ctx : CheckCtx,
+  recv_ty : @ast.TsType,
+  idx_ty : @ast.TsType,
+) -> Array[@ast.TsType]? {
+  let keys : Array[String] = []
+  if !collect_string_literals(idx_ty, keys) || keys.is_empty() {
+    return None
+  }
+  let recv = ctx.resolver.unwrap(recv_ty)
+  if !is_checkable(recv) || recv is (Union(_) | Intersection(_) | Any | Unknown) {
+    return None
+  }
+  let out : Array[@ast.TsType] = []
+  for k in keys {
+    match ctx.resolver.lookup_field(recv, k) {
+      Some(t) if is_checkable(t) => out.push(t)
+      _ => return None
+    }
+  }
+  Some(out)
+}
+
+///|
+/// Checks a write against the targets `index_write_targets` found, with one
+/// report per write, as tsc gives one for their intersection. A value that
+/// is not a fresh literal fits the intersection exactly when it fits every
+/// member, so those are checked one at a time, which keeps the primitive
+/// members (`b: 0 | 1`) the intersection node would not decide. A fresh
+/// object literal is checked once against the intersection itself: its
+/// excess-property check is against the COMBINED target, so
+/// `o[k] = { x: 1, y: 2 }` with `a: { x: number }` and `b: { y: number }`
+/// is legal, and checking it against `{ x: number }` alone reported `y`
+/// (probed, in an array literal and a conditional's branches too).
+fn check_index_write(
+  env : ExprEnv,
+  value : @ast.TsExpr,
+  targets : Array[@ast.TsType],
+  ctx : CheckCtx,
+) -> Unit {
+  if targets.length() > 1 && may_hold_fresh_object_literal(value) {
+    // Array targets combine ELEMENT-wise: `A[] & B[]` is not judged element
+    // by element, so `o[k] = [{ x: 1 }]` against `{ x: number }[]` and
+    // `{ y: number }[]` was silent, while `(A & B)[]` reports the missing
+    // `y` and still accepts `[{ x: 1, y: 2 }]` (#322's review; probed).
+    // Identical element types are one: `{ length: number }[]` twice is
+    // `{ length: number }[]`, which `["abc", { length: 1 }]` fits through
+    // the string's own `length` (#322's review; probed).
+    let elems : Array[@ast.TsType] = []
+    let mut all_arrays = true
+    for t in targets {
+      match t {
+        Array(e) | Applied("Array" | "ReadonlyArray", [e]) =>
+          if !elems.contains(e) {
+            elems.push(e)
+          }
+        _ => {
+          all_arrays = false
+          break
+        }
+      }
+    }
+    let combined : @ast.TsType = if !all_arrays {
+      Intersection(targets)
+    } else if elems.length() == 1 {
+      Array(elems[0])
+    } else {
+      Array(Intersection(elems))
+    }
+    check_expr_against(env, value, combined, ctx, "assign `[…]`")
+    return
+  }
+  let before = ctx.issues.length()
+  for t in targets {
+    check_expr_against(env, value, t, ctx, "assign `[…]`")
+    if ctx.issues.length() > before {
+      break
+    }
+  }
+}
+
+///|
+/// Whether a value may BE, or carry at a position its contextual type
+/// reaches, a fresh object literal. Over-approximated on purpose: a shape
+/// read as holding one is checked against the combined target, where the
+/// worst case is a MISS, while one read as not holding one keeps the
+/// per-member check, which reports an excess property tsc accepts.
+fn may_hold_fresh_object_literal(e : @ast.TsExpr) -> Bool {
+  match e {
+    ObjectLit(_) => true
+    ArrayLit(items) => items.iter().any(may_hold_fresh_object_literal)
+    Cond(_, a, b) | BinOp(_, a, b) =>
+      may_hold_fresh_object_literal(a) || may_hold_fresh_object_literal(b)
+    Seq(_, x)
+    | Spread(x)
+    | TypeArgs(_, x)
+    | PureCall(x)
+    | As(x, _)
+    | Satisfies(x, _)
+    | NonNull(x)
+    | AssignExpr(_, x)
+    | PropAssignExpr(_, _, x)
+    | IndexAssignExpr(_, _, x)
+    | CompoundAssignExpr(_, _, x) => may_hold_fresh_object_literal(x)
+    _ => false
+  }
+}
+
+///|
+/// Whether `base[key]` is an ARRAY indexed by a type parameter bounded by
+/// `number`. tsc writes to `S[K]` through `S`'s value at every key `K` can
+/// be, so a concrete array's element type is the whole answer:
+/// `let x: Array<string>[K] = 'abc'` with `K extends number` is legal,
+/// while `Type[K]` with `K extends keyof Type` stays the generic access it
+/// was (keyofAndIndexedAccess2's `fn4` and `get123`; probed).
+fn array_index_by_numeric_param(
+  ctx : CheckCtx,
+  base : @ast.TsType,
+  key : String,
+) -> Bool {
+  let numeric_bound = ctx.type_param_bounds
+    .iter()
+    .any(fn(b) { b.0 == key && b.1 is (Number | Int) })
+  let concrete_array = match base {
+    Array(e) | Applied("Array" | "ReadonlyArray", [e]) =>
+      !ctx.in_scope_type_params.iter().any(fn(tp) { type_param_occurs(tp, e) })
+    _ => false
+  }
+  numeric_bound && concrete_array
+}
+
+///|
+/// A function declaration's bounded type parameter is inlined to its bound
+/// in the SIGNATURE and kept in the BODY, so a value read off a parameter
+/// typed `P` arrives as the bound while a body annotation still says `P`:
+/// `const copy: P[] = [...points]` with `points: readonly P[]` compared
+/// `(A | B)[]` against `P[]` (excalidraw's `convexHull`; probed: tsc
+/// accepts it). Inlining the body too was tried and is wrong, since a body
+/// annotation is where `Array<string>[K]` and `${T3}` keep the parameter's
+/// identity (keyofAndIndexedAccess2, templateLiteralTypes5). So this
+/// abstains when the source carries a bound EXACTLY, the trace an inlined
+/// parameter leaves, and fits the expected type with each bound put back;
+/// a source holding no bound still reports.
+fn inlined_bound_residue(
+  env : ExprEnv,
+  expr : @ast.TsExpr,
+  expected : @ast.TsType,
+  ctx : CheckCtx,
+) -> Bool {
+  // A literal is never a `P`, and an array or object LITERAL is judged
+  // element by element below, where a `...points` spread abstains on its
+  // own while `[1]` against `K[]` still reports its `1`. A conditional is
+  // judged branch by branch for the same reason: `c ? k : 1` against `K`
+  // must still report its `1`, while each branch that reads a `P` off a
+  // parameter abstains on its own.
+  if ctx.type_param_bounds.is_empty() ||
+    precise_literal_type(expr) is Some(_) ||
+    expr is (ArrayLit(_) | ObjectLit(_) | Cond(_, _, _)) {
+    return false
+  }
+  let bounds : Map[String, @ast.TsType] = Map([])
+  for b in ctx.type_param_bounds {
+    if ctx.in_scope_type_params.contains(b.0) &&
+      type_param_occurs(b.0, expected) {
+      bounds[b.0] = b.1
+    }
+  }
+  if bounds.is_empty() {
+    return false
+  }
+  let src = infer_expr(env, ctx.resolver, expr)
+  let mut carries_bound = false
+  for _, bound in bounds {
+    if type_contains_exact(src, bound, 0) {
+      carries_bound = true
+    }
+  }
+  carries_bound &&
+  is_assignable_to(
+    ctx.resolver.unwrap_containers(src),
+    ctx.resolver.unwrap_containers(substitute_params(expected, bounds)),
+  )
+}
+
+///|
+/// Whether `needle` occurs in `ty` as a whole node, through the containers a
+/// value read off a parameter keeps it in.
+fn type_contains_exact(
+  ty : @ast.TsType,
+  needle : @ast.TsType,
+  depth : Int32,
+) -> Bool {
+  if ty == needle {
+    return true
+  }
+  if depth > 8 {
+    return false
+  }
+  match ty {
+    Array(e) | Rest(e) => type_contains_exact(e, needle, depth + 1)
+    Tuple(items) | Union(items) | Intersection(items) =>
+      items.iter().any(fn(it) { type_contains_exact(it, needle, depth + 1) })
+    Applied(_, args) =>
+      args.iter().any(fn(a) { type_contains_exact(a, needle, depth + 1) })
+    _ => false
+  }
+}
+
+///|
 fn check_expr_against_shape(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -19805,6 +20046,9 @@ fn check_expr_against_shape(
   // Direction.LEFT | Direction.RIGHT` were both reported (univer, probed:
   // tsc accepts them). A member that is not among the expected ones falls
   // through to the check below, which still reports it.
+  if inlined_bound_residue(env, expr, expected, ctx) {
+    return
+  }
   match expr {
     PropAccess(Var(e), m) if enum_member_fits_expected(
         env,
@@ -20230,6 +20474,44 @@ fn check_expr_against_shape(
   // (nonPrimitiveConstraintOfIndexAccessType). The resolver substitutes
   // resolvable bounds before this point, so anything still shaped
   // `IndexedAccess(Named(param), _)` here is genuinely opaque.
+  // A concrete array indexed by a `number`-bounded parameter is written
+  // through its element type (see `array_index_by_numeric_param`), which the
+  // resolver erases with the rest of `S[K]`: `'abc'` into
+  // `Array<string>[K]` is legal and `123` is TS2322 (probed).
+  match expected {
+    IndexedAccess(
+      Array(e)
+      | Applied("Array" | "ReadonlyArray", [e]) as base_t,
+      Named(key),
+    ) if src_shape
+      is (String_
+      | Literal(_)
+      | Number
+      | Int
+      | NumberLiteral(_)
+      | Boolean
+      | BooleanLiteral(_)
+      | BigInt
+      | BigIntLiteral(_)
+      | Symbol) &&
+      array_index_by_numeric_param(ctx, base_t, key) => {
+      let elem = ctx.resolver.unwrap(e)
+      // A primitive satisfies an object element through its own members
+      // (`"abc"` against `{ length: number }`), which the resolver-free
+      // relation has no table for (#322's review; probed).
+      if is_checkable(elem) &&
+        !is_assignable_to(src_shape, elem) &&
+        !intrinsic_source_satisfies_object(src_shape, elem, ctx.resolver) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "expected `\{type_display(elem)}` but got `\{type_display(src_shape)}`",
+        )
+        return
+      }
+    }
+    _ => ()
+  }
   // The resolver erases an unresolvable `T[P]` to `Any` (permissive
   // default), so match the RAW declared annotation here: when the base is
   // an in-scope type parameter the erasure was pure information loss.
@@ -20272,7 +20554,11 @@ fn check_expr_against_shape(
         .iter()
         .any(fn(tp) { type_param_occurs(tp, inner) })
       ) ||
-      (key_t is Named(key) && ctx.in_scope_type_params.contains(key)) => {
+      (
+        key_t is Named(key) &&
+        ctx.in_scope_type_params.contains(key) &&
+        !array_index_by_numeric_param(ctx, base_t, key)
+      ) => {
       record_unfiltered(
         ctx,
         sub_path,
@@ -23694,7 +23980,7 @@ fn check_array_lit_against_tuple(
 // `string`, which makes assignability against a literal-union target
 // (`const x: 0 | 1 | 2 = 1`) spuriously fail. Returns `None` for non-literal
 // expressions.
-fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
+pub fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
   match e {
     IntLit(i) => Some(@ast.TsType::NumberLiteral(i.to_string()))
     NumberLit(d) => Some(@ast.TsType::NumberLiteral(d.to_string()))
@@ -38550,9 +38836,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           // `is_checkable` declines — so an unreadable key abstains rather
           // than guessing.
           let idx_ty = infer_expr(env, ctx.resolver, idx)
-          let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
-          if is_checkable(target_ty) && is_checkable(recv_ty) {
-            check_expr_against(env, value, target_ty, ctx, "assign `[…]`")
+          match index_write_targets(ctx, recv_ty, idx_ty) {
+            Some(targets) => check_index_write(env, value, targets, ctx)
+            None => {
+              let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
+              if is_checkable(target_ty) && is_checkable(recv_ty) {
+                check_expr_against(env, value, target_ty, ctx, "assign `[…]`")
+              }
+            }
           }
         }
       }
@@ -43412,9 +43703,14 @@ fn check_call_args_in_expr_at(
         // `globalThis`.
         _ => {
           let idx_ty = infer_expr(env, ctx.resolver, idx)
-          let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
-          if is_checkable(target_ty) && is_checkable(recv_ty) {
-            check_expr_against(env, v, target_ty, ctx, "assign `[…]`")
+          match index_write_targets(ctx, recv_ty, idx_ty) {
+            Some(targets) => check_index_write(env, v, targets, ctx)
+            None => {
+              let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
+              if is_checkable(target_ty) && is_checkable(recv_ty) {
+                check_expr_against(env, v, target_ty, ctx, "assign `[…]`")
+              }
+            }
           }
         }
       }
@@ -60038,8 +60334,16 @@ fn intersection_target_mismatch(
     if !object_like {
       continue
     }
+    // A primitive fits an object part through its own members (`"abc"`
+    // against `{ length: number }`), which `is_assignable_to` has no table
+    // for: an array literal written through a union key is checked against
+    // `Array<A & B>`, and `["abc", { length: 1 }]` against two `{ length:
+    // number }[]` targets was reported (#322's review; probed).
     if source_concrete {
-      return true
+      if !intrinsic_source_satisfies_object(source, p, resolver) {
+        return true
+      }
+      continue
     }
     if !is_assignable_to(source, p) &&
       !is_structurally_assignable_named(source, p, resolver) {

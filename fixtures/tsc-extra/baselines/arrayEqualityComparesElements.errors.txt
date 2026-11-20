@@ -1,15 +1,17 @@
-arrayEqualityComparesElements.ts(23,72): error TS2367: This comparison appears to be unintentional because the types 'number[]' and 'string[]' have no overlap.
-arrayEqualityComparesElements.ts(24,70): error TS2367: This comparison appears to be unintentional because the types '[number]' and '[string]' have no overlap.
-arrayEqualityComparesElements.ts(25,76): error TS2367: This comparison appears to be unintentional because the types '[number]' and '[number, number]' have no overlap.
-arrayEqualityComparesElements.ts(26,57): error TS2367: This comparison appears to be unintentional because the types 'number[]' and 'string' have no overlap.
-arrayEqualityComparesElements.ts(31,78): error TS2367: This comparison appears to be unintentional because the types '[string]' and 'number[]' have no overlap.
-arrayEqualityComparesElements.ts(32,75): error TS2367: This comparison appears to be unintentional because the types 'number[]' and 'boolean[]' have no overlap.
-arrayEqualityComparesElements.ts(33,81): error TS2367: This comparison appears to be unintentional because the types 'number[]' and '[string]' have no overlap.
-arrayEqualityComparesElements.ts(34,79): error TS2367: This comparison appears to be unintentional because the types '[string]' and 'number[]' have no overlap.
-arrayEqualityComparesElements.ts(35,94): error TS2367: This comparison appears to be unintentional because the types 'readonly [string, number]' and 'number[]' have no overlap.
+arrayEqualityComparesElements.ts(24,72): error TS2367: This comparison appears to be unintentional because the types 'number[]' and 'string[]' have no overlap.
+arrayEqualityComparesElements.ts(25,70): error TS2367: This comparison appears to be unintentional because the types '[number]' and '[string]' have no overlap.
+arrayEqualityComparesElements.ts(26,76): error TS2367: This comparison appears to be unintentional because the types '[number]' and '[number, number]' have no overlap.
+arrayEqualityComparesElements.ts(27,57): error TS2367: This comparison appears to be unintentional because the types 'number[]' and 'string' have no overlap.
+arrayEqualityComparesElements.ts(32,78): error TS2367: This comparison appears to be unintentional because the types '[string]' and 'number[]' have no overlap.
+arrayEqualityComparesElements.ts(33,75): error TS2367: This comparison appears to be unintentional because the types 'number[]' and 'boolean[]' have no overlap.
+arrayEqualityComparesElements.ts(34,81): error TS2367: This comparison appears to be unintentional because the types 'number[]' and '[string]' have no overlap.
+arrayEqualityComparesElements.ts(35,79): error TS2367: This comparison appears to be unintentional because the types '[string]' and 'number[]' have no overlap.
+arrayEqualityComparesElements.ts(36,94): error TS2367: This comparison appears to be unintentional because the types 'readonly [string, number]' and 'number[]' have no overlap.
+arrayEqualityComparesElements.ts(38,70): error TS2367: This comparison appears to be unintentional because the types '[string]' and 'number[]' have no overlap.
+arrayEqualityComparesElements.ts(40,77): error TS2367: This comparison appears to be unintentional because the types '[string]' and '[number]' have no overlap.
 
 
-==== arrayEqualityComparesElements.ts (9 errors) ====
+==== arrayEqualityComparesElements.ts (11 errors) ====
     // Two arrays are comparable with `===` when their element types are, and two
     // tuples when they have the same length and are comparable position by
     // position. So comparing two references to the same element type (React's
@@ -22,7 +24,8 @@ arrayEqualityComparesElements.ts(35,94): error TS2367: This comparison appears t
     // `number[]` and `[string]` does not, and the empty tuple overlaps any
     // array. A tuple that is nothing but `[...T[]]` is the array `T[]`. A
     // readonly tuple is not comparable with a mutable array of a type it does
-    // not share a value with either way.
+    // not share a value with either way. A rest of a TUPLE is its elements, so
+    // `[...[string]]` is `[string]`.
     
     type El = { id: string };
     export function okSameElement(a: number[], b: number[]) { return a === b; }
@@ -63,4 +66,13 @@ arrayEqualityComparesElements.ts(35,94): error TS2367: This comparison appears t
     export function badReadonlyTupleAndArray(a: readonly [string, number], b: number[]) { return a === b; }
                                                                                                  ~~~~~~~
 !!! error TS2367: This comparison appears to be unintentional because the types 'readonly [string, number]' and 'number[]' have no overlap.
+    
+    export function badTupleRest(a: [...[string]], b: number[]) { return a === b; }
+                                                                         ~~~~~~~
+!!! error TS2367: This comparison appears to be unintentional because the types '[string]' and 'number[]' have no overlap.
+    export function okTupleRest(a: [...[string, number]], b: number[]) { return a === b; }
+    export function badTupleRestVsTuple(a: [...[string]], b: [number]) { return a === b; }
+                                                                                ~~~~~~~
+!!! error TS2367: This comparison appears to be unintentional because the types '[string]' and '[number]' have no overlap.
+    export function okTupleRestVsTuple(a: [...[string]], b: [string]) { return a === b; }
     

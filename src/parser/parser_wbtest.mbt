@@ -7728,7 +7728,7 @@ test "parser: an operator no type contains ends a type-arg list" {
   // As an operator, before an operand, it still ends the speculation.
   for
     src in [
-      "const r = a < (delete o.p) || a > (b);", "const r = a < (x instanceof C) || a > (b);",
+      "const r = a < (delete o.p) | a > (b);", "const r = a < (x instanceof C) | a > (b);",
     ] {
     let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
       e => fail("expected `\{src}` to parse: \{e}")

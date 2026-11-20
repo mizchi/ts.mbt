@@ -101,6 +101,8 @@ pub fn normalize_literal_type(@ast.TsType) -> @ast.TsType
 
 pub fn normalize_promise_like_union_return(@ast.TsType) -> @ast.TsType
 
+pub fn precise_literal_type(@ast.TsExpr) -> @ast.TsType?
+
 pub fn reduce_uniform_union(@ast.TsType) -> @ast.TsType
 
 pub fn rename_type_refs(@ast.TsType, Map[String, String]) -> @ast.TsType

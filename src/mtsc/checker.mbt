@@ -281,6 +281,15 @@ fn declare_function_value_type(import_ : @ast.TsImport) -> @ast.TsType {
 
 ///|
 fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
+  local_value_type_at(module_, name, 0)
+}
+
+///|
+fn local_value_type_at(
+  module_ : @ast.TsModule,
+  name : String,
+  depth : Int32,
+) -> @ast.TsType? {
   // A namespace is lowered to `var N = N || {}`, so `values` holds it as
   // `any` and has to be passed over. A class of the same name is a
   // declaration merge whose value is that class. A FUNCTION of the same
@@ -321,7 +330,7 @@ fn local_value_type(module_ : @ast.TsModule, name : String) -> @ast.TsType? {
           }
         _ => ()
       }
-      return Some(spread_objects_as_any(value.type_))
+      return Some(fold_value_spreads(module_, name, value.type_, depth))
     }
   }
   match arrow_const_predicate_type(module_, name) {
@@ -758,8 +767,21 @@ fn graph_import_binding(
   module_ : ParsedMtscModule,
   local_name : String,
 ) -> (String, String?)? {
+  graph_import_binding_with(module_, local_name, false)
+}
+
+///|
+/// `graph_import_binding`, with type-only imports too when `type_only_too`:
+/// a namespace that holds only types passes through a barrel as readily by
+/// `import type { N } from "./a"; export type { N }` (#322's review; probed:
+/// tsc accepts `N.A` from such a barrel).
+fn graph_import_binding_with(
+  module_ : ParsedMtscModule,
+  local_name : String,
+  type_only_too : Bool,
+) -> (String, String?)? {
   for import_ in module_.module_block.imports {
-    if import_.type_only {
+    if import_.type_only && !type_only_too {
       continue
     }
     if import_.default_binding == Some(local_name) {
@@ -771,7 +793,7 @@ fn graph_import_binding(
     for index, binding in import_.named_bindings {
       let type_only = index < import_.named_type_only.length() &&
         import_.named_type_only[index]
-      if binding.1 == local_name && !type_only {
+      if binding.1 == local_name && (!type_only || type_only_too) {
         return Some((import_.module_spec, Some(binding.0)))
       }
     }
@@ -2134,6 +2156,13 @@ fn export_equals_namespaces(
 ///|
 /// True when `module_` exports, as `name`, a namespace it declares at its
 /// top level.
+///
+/// The export table also holds the declarations of every `declare module
+/// "m" { … }` body in the file, exported or not, and lists a namespace
+/// twice, and an entry carries no scope. So an unexported top-level
+/// `namespace N` beside a body declaring `N` reads as exported here, and in
+/// `exported_value_site` before it (a MISS: tsc gives TS2459). Counting
+/// entries cannot separate the two, measured on that shape (#321's review).
 fn module_exports_namespace(module_ : ParsedMtscModule, name : String) -> Bool {
   module_.module_block.exports
   .iter()
@@ -2141,6 +2170,67 @@ fn module_exports_namespace(module_ : ParsedMtscModule, name : String) -> Bool {
     ex.export_name == name &&
     module_.module_.namespaces.iter().any(fn(ns) { ns.name == ex.local_name })
   })
+}
+
+///|
+/// `module_exports_namespace` through the ways a barrel passes a namespace
+/// on: `export { N } from "./a"`, `export * from "./a"`, and `import { N }
+/// from "./a"; export { N }`, with a type-only import too (#321's and
+/// #322's reviews; probed: tsc accepts each for a namespace that holds only
+/// types).
+fn graph_exports_namespace(
+  module_ : ParsedMtscModule,
+  name : String,
+  modules : Array[ParsedMtscModule],
+  edges : Array[MtscModuleEdge],
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  if module_exports_namespace(module_, name) {
+    return true
+  }
+  let path = module_.source.path
+  let follow = fn(spec : String, imported : String) -> Bool {
+    match find_graph_target(edges, path, spec) {
+      Some(target_path) =>
+        match find_graph_module(modules, target_path) {
+          Some(t) =>
+            graph_exports_namespace(t, imported, modules, edges, depth + 1)
+          None => false
+        }
+      None => false
+    }
+  }
+  for ex in module_.module_block.exports {
+    if ex.export_name == name {
+      match graph_import_binding_with(module_, ex.local_name, true) {
+        Some((spec, Some(imported))) =>
+          if follow(spec, imported) {
+            return true
+          }
+        _ => ()
+      }
+    }
+  }
+  // A type-only re-export passes a type-only namespace on as well.
+  for re in module_.module_block.reexports {
+    match re.kind {
+      @ast.TsReExportKind::Named(items) =>
+        for item in items {
+          if item.1 == name && follow(re.module_spec, item.0) {
+            return true
+          }
+        }
+      @ast.TsReExportKind::All =>
+        if follow(re.module_spec, name) {
+          return true
+        }
+      _ => ()
+    }
+  }
+  false
 }
 
 ///|
@@ -2531,7 +2621,9 @@ fn graph_import_globals(
             // it): there is no value to bind, and a use of `I` as a value
             // is a different error this site does not decide.
             ()
-          } else if module_exports_namespace(target, imported_name) {
+          } else if graph_exports_namespace(
+              target, imported_name, modules, edges, 0,
+            ) {
             // `import { N } from "./a"` of `export namespace N { export type
             // A = … }`: a namespace that holds only types has no value, and
             // importing it for `N.A` is legal (probed: tsc accepts it).
@@ -2618,6 +2710,141 @@ fn module_value_bindings(
     out.push((enum_.name, @ast.TsType::Named(enum_.name)))
   }
   out
+}
+
+///|
+/// `ty`, a value's recorded shape, with each top-level `...NAME` spread of
+/// a `const` object THIS module declares folded in, later keys replacing
+/// earlier ones as a spread does. excalidraw's `MIME_TYPES = {
+/// ...STRING_MIME_TYPES, …, ...IMAGE_MIME_TYPES } as const` spreads two
+/// consts of its own module, and reading it as `any` left every importer's
+/// `metadata?.keyword === MIME_TYPES.excalidraw` unable to narrow
+/// `metadata` (probed: tsc narrows it). A spread of anything else — an
+/// import, a call, a computed value — keeps the old answer, `any`, and so
+/// does a result holding a computed key.
+fn fold_value_spreads(
+  module_ : @ast.TsModule,
+  name : String,
+  ty : @ast.TsType,
+  depth : Int32,
+) -> @ast.TsType {
+  let mut entries : Array[(String, @ast.TsExpr)]? = None
+  let mut as_const = false
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Const(Ident(n), declared, init) if n == name =>
+        match init {
+          ObjectLit(es) => entries = Some(es)
+          // An annotation is the declaration's type whatever the initializer
+          // says: `X: { k: string; j?: number } = { k: "a" } as const` has
+          // an optional `j` and a `string` `k` (#322's review; probed). Only
+          // an unannotated declaration reads its members off the literal.
+          As(ObjectLit(es), Named("const")) => {
+            entries = Some(es)
+            as_const = declared is Any
+          }
+          _ => ()
+        }
+      _ => ()
+    }
+  }
+  // A member of an `as const` object is its literal, and the recorded
+  // shape cannot say so: it is built for the bridge, where `as const` is
+  // erased, so `{ ex: "application/x" } as const` is recorded as `{ ex:
+  // string }`. An importer's `const ok: "application/x" = MIME.ex` was
+  // reported, and folding a spread of such an object spread the widened
+  // members too (#322's review; probed: tsc accepts both). So each member
+  // is read off its expression: a literal stays itself, and anything else
+  // (a nested object, a call, a name) is `any`, since what `as const` makes
+  // of it is not decided here.
+  let member_type = fn(e : @ast.TsExpr, recorded : @ast.TsType) -> @ast.TsType {
+    if as_const {
+      match @checker.precise_literal_type(e) {
+        Some(t) => t
+        None => Any
+      }
+    } else {
+      spread_objects_as_any(recorded)
+    }
+  }
+  guard ty is Object(fields) &&
+    fields.iter().any(fn(f) { f.0 is Literal(k) && k.has_prefix("@@spread:") }) else {
+    match (ty, entries) {
+      (Object(fields), Some(es)) if as_const &&
+        !es.iter().any(fn(e) { e.0.has_prefix("@@") || e.0.has_prefix("<") }) =>
+        return Object(
+          es.map(fn(e) {
+            let recorded = match
+              fields.iter().find_first(fn(f) { f.0 == Literal(e.0) }) {
+              Some(f) => f.1
+              None => Any
+            }
+            (@ast.TsType::Literal(e.0), member_type(e.1, recorded))
+          }),
+        )
+      _ => ()
+    }
+    return spread_objects_as_any(ty)
+  }
+  if depth > 4 {
+    return Any
+  }
+  guard entries is Some(es) else { return Any }
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  let put = fn(key : @ast.TsType, value : @ast.TsType) {
+    for i, f in out {
+      if f.0 == key {
+        out.remove(i) |> ignore
+        break
+      }
+    }
+    out.push((key, value))
+  }
+  for e in es {
+    if e.0.has_prefix("@@spread:") {
+      let src = match e.1 {
+        Var(v) | As(Var(v), Named("const")) => v
+        _ => return Any
+      }
+      match local_value_type_at(module_, src, depth + 1) {
+        Some(Object(src_fields)) =>
+          for f in src_fields {
+            // An optional property is recorded as `T | undefined`, the same
+            // node as a required one holding `undefined`, and the two
+            // spread differently over a key already present: an omitted
+            // `k` keeps it, so `{ k: 0, ...BASE }` with `BASE: { k?: number }`
+            // is `k: number` (probed). Neither answer is safe, so the key
+            // becomes `any` there; over no earlier key the type is right
+            // either way.
+            let admits_undefined = f.1 is Undefined ||
+              (f.1 is Union(ms) && ms.contains(Undefined))
+            if admits_undefined && out.iter().any(fn(o) { o.0 == f.0 }) {
+              put(f.0, Any)
+            } else {
+              put(f.0, f.1)
+            }
+          }
+        _ => return Any
+      }
+    } else {
+      match fields.iter().find_first(fn(f) { f.0 == Literal(e.0) }) {
+        Some(f) => put(f.0, member_type(e.1, f.1))
+        None => return Any
+      }
+    }
+  }
+  // A computed key (`[CJK_HAND_DRAWN_FALLBACK_FONT]: 100`, recorded as
+  // `@@computed:N`) is a member this shape cannot name, so a folded object
+  // holding one is not enumerable: excalidraw's `FONT_FAMILY_FALLBACKS`
+  // read as lacking `Xiaolai`, and `keyof typeof` it became a finite set.
+  if out
+    .iter()
+    .any(fn(f) {
+      f.0 is Literal(k) && (k.has_prefix("@@computed") || k.has_prefix("<"))
+    }) {
+    return Any
+  }
+  Object(out)
 }
 
 ///|
