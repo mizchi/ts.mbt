@@ -1,0 +1,84 @@
+boundedTypeParameterInBodyAnnotation.ts(30,9): error TS2322: Type '`${T}`' is not assignable to type 'T'.
+  '`${T}`' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '"a" | "b"'.
+    Type '"a" | "b"' is not assignable to type 'T'.
+      '"a" | "b"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '"a" | "b"'.
+        Type '"a"' is not assignable to type 'T'.
+          '"a"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '"a" | "b"'.
+boundedTypeParameterInBodyAnnotation.ts(35,16): error TS2322: Type 'A' is not assignable to type 'P'.
+  'A' is assignable to the constraint of type 'P', but 'P' could be instantiated with a different subtype of constraint 'A | B'.
+boundedTypeParameterInBodyAnnotation.ts(37,72): error TS2322: Type 'number' is not assignable to type 'K'.
+  'number' is assignable to the constraint of type 'K', but 'K' could be instantiated with a different subtype of constraint 'number'.
+boundedTypeParameterInBodyAnnotation.ts(38,88): error TS2322: Type 'number' is not assignable to type 'K'.
+  'number' is assignable to the constraint of type 'K', but 'K' could be instantiated with a different subtype of constraint 'number'.
+boundedTypeParameterInBodyAnnotation.ts(39,80): error TS2322: Type 'A[]' is not assignable to type 'P[]'.
+  Type 'A' is not assignable to type 'P'.
+    'A' is assignable to the constraint of type 'P', but 'P' could be instantiated with a different subtype of constraint 'A | B'.
+boundedTypeParameterInBodyAnnotation.ts(40,72): error TS2322: Type 'A' is not assignable to type 'P'.
+  'A' is assignable to the constraint of type 'P', but 'P' could be instantiated with a different subtype of constraint 'A | B'.
+
+
+==== boundedTypeParameterInBodyAnnotation.ts (6 errors) ====
+    // Inside a generic function, a value read off a parameter typed with a
+    // bounded type parameter `P` has the type `P`, so it fits a body annotation
+    // that says `P` again: copying `points: readonly P[]` into `const copy: P[]`
+    // or passing it to a local `(pts: P[]) => …` is legal. A value of the bound
+    // alone does not fit `P` (it could be a narrower instantiation), and neither
+    // does a template-literal form over `P`. An array indexed by a type
+    // parameter bounded by `number` is its element type.
+    
+    type A = [number, number] & { _a: 1 };
+    type B = [number, number] & { _b: 1 };
+    
+    export function okSpreadOfParam<P extends A | B>(points: readonly P[]): P[] {
+      const sorted = [...points];
+      const half = (pts: P[]) => pts;
+      return half(sorted);
+    }
+    export function okDirectParam<P extends A | B>(points: P[]): P[] {
+      const half = (pts: P[]) => pts;
+      return half(points);
+    }
+    export function okLocalAnnotated<P extends A | B>(points: readonly P[]): P[] {
+      const copy: P[] = [...points];
+      return copy;
+    }
+    export function okArrayIndexedByNumericParam<K extends number>() {
+      let x: Array<string>[K] = "abc";
+      return x;
+    }
+    export function badBoundIntoTemplate<T extends "a" | "b">(x: T) {
+      const t: T = "" as `${T}`;
+            ~
+!!! error TS2322: Type '`${T}`' is not assignable to type 'T'.
+!!! error TS2322:   '`${T}`' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '"a" | "b"'.
+!!! error TS2322:     Type '"a" | "b"' is not assignable to type 'T'.
+!!! error TS2322:       '"a" | "b"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '"a" | "b"'.
+!!! error TS2322:         Type '"a"' is not assignable to type 'T'.
+!!! error TS2322:           '"a"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '"a" | "b"'.
+      return [x, t];
+    }
+    export function badBoundIntoParam<P extends A | B>(a: A): P[] {
+      const half = (pts: P[]) => pts;
+      return half([a]);
+                   ~
+!!! error TS2322: Type 'A' is not assignable to type 'P'.
+!!! error TS2322:   'A' is assignable to the constraint of type 'P', but 'P' could be instantiated with a different subtype of constraint 'A | B'.
+    }
+    export function badLiteralIntoNumericParam<K extends number>() { const k: K = 1; return k; }
+                                                                           ~
+!!! error TS2322: Type 'number' is not assignable to type 'K'.
+!!! error TS2322:   'number' is assignable to the constraint of type 'K', but 'K' could be instantiated with a different subtype of constraint 'number'.
+    export function badLiteralArrayIntoNumericParam<K extends number>() { const ks: K[] = [1]; return ks; }
+                                                                                           ~
+!!! error TS2322: Type 'number' is not assignable to type 'K'.
+!!! error TS2322:   'number' is assignable to the constraint of type 'K', but 'K' could be instantiated with a different subtype of constraint 'number'.
+    export function badBoundMemberIntoParamArray<P extends A | B>(as: A[]) { const ps: P[] = as; return ps; }
+                                                                                   ~~
+!!! error TS2322: Type 'A[]' is not assignable to type 'P[]'.
+!!! error TS2322:   Type 'A' is not assignable to type 'P'.
+!!! error TS2322:     'A' is assignable to the constraint of type 'P', but 'P' could be instantiated with a different subtype of constraint 'A | B'.
+    export function badBoundMemberIntoParam<P extends A | B>(a: A) { const p: P = a; return p; }
+                                                                           ~
+!!! error TS2322: Type 'A' is not assignable to type 'P'.
+!!! error TS2322:   'A' is assignable to the constraint of type 'P', but 'P' could be instantiated with a different subtype of constraint 'A | B'.
+    

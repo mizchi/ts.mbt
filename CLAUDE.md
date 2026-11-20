@@ -7683,6 +7683,78 @@ product surfaces now.
     without `export` still reports, and tsc gives TS2459 there.
   - **Filed:** a call through a value typed `typeof g`, where `g` is a
     generic function, is not judged, with or without type arguments.
+  Batch HL takes excalidraw from 54 to 49 and carries #321's review. The
+  oracle is unchanged, but one of its TPs changed reason, which is the
+  finding worth reading first.
+  - **`keyofAndIndexedAccess2` had been a TP for the wrong reason.** We
+    flagged it only at `fn4`'s `let x: Array<string>[K] = 'abc'`, which tsc
+    ACCEPTS: a write to `S[K]` with a concrete `S` goes through `S`'s value
+    at every key `K` can be, and a concrete array's element type is the
+    whole answer. Its real errors, in `f1`, were all MISSes.
+    - The "generic indexed access" rule now abstains for a concrete array
+      indexed by a `number`-bounded parameter. `Type[K]` with `K extends
+      keyof Type` stays the generic access it was.
+    - `f1`'s errors are writes through a key TYPED as a literal (`obj[k0] =
+      'x'` with `k0: 'a'`) or a union of literals. The write path asked
+      `infer_index`, which answers the READ: nothing for a literal-typed
+      key variable, and the union for a union key, where a write needs the
+      intersection. A write through such a key is now checked against
+      every property the key can name, with one report per write as tsc
+      gives. The file is flagged on the six lines tsc reports.
+    - Neither gate could see the first half. The corpus counts a file as
+      a TP if we flag it at all, and the line was found only because a
+      rejected experiment below made the file go quiet.
+  - **A bounded type parameter is inlined in the signature and kept in the
+    body.** So a value read off `points: readonly P[]` arrived as the
+    bound, while a body annotation still said `P`, and `const copy: P[] =
+    [...points]` was reported (excalidraw's `convexHull`).
+    - Inlining the body too was tried and REJECTED: MISS went from 1 to 3.
+      A body annotation is where `Array<string>[K]` and `` `${T3}` `` keep
+      the parameter's identity (keyofAndIndexedAccess2, templateLiteralTypes5).
+      A class method's bounds do cover its body, which is why only the
+      function declaration showed the asymmetry.
+    - The check now abstains when the source carries a bound EXACTLY (the
+      trace an inlined parameter leaves) and fits the target with each
+      bound put back. A literal, and an array or object literal, are judged
+      element by element instead: the first version abstained on `[1]`
+      against `K[]` (`number[]` holds the bound `number`) and lost a report
+      main has. A value of ONE member of the bound still reports.
+  - **An imported const object built with a spread was `any` to every
+    importer.** The parser records `...STRING_MIME_TYPES` as a member named
+    `@@spread:N` of type `any`, and `spread_objects_as_any`'s comment named
+    excalidraw's `MIME_TYPES` as its example. So `metadata?.keyword ===
+    MIME_TYPES.excalidraw` could not narrow `metadata`.
+    - A spread of a `const` object the same module declares is folded in
+      now, with later keys replacing earlier ones. That is decided on the
+      checker side, because the parser's value types are what the bridge
+      reads.
+    - The first version exposed four reports. `FONT_FAMILY_FALLBACKS`
+      spreads an object with COMPUTED keys (`[CJK_HAND_DRAWN_FALLBACK_FONT]:
+      100`), so the folded shape could not name `Xiaolai`, and `keyof
+      typeof` it became a finite set. A result holding a computed key keeps
+      the old `any`.
+  - **#321's review.**
+    - A rest of a TUPLE (`[...[string]]`) is its elements, in both overlap
+      helpers.
+    - A barrel passes a type-only namespace on through `export { N } from`,
+      `export *`, `export type { N } from`, and an import it exports again.
+      All four read as "has no value export".
+    - The third item is declared rather than fixed, with its measurement.
+      The module block's export table holds every declaration of a
+      `declare module` body in the file, exported or not, lists a namespace
+      twice, and carries no scope. So an unexported top-level `namespace N`
+      beside a body declaring `N` reads as exported, in the namespace
+      helper and in `exported_value_site` before it. Counting entries
+      cannot separate the two. It is a MISS (tsc gives TS2459).
+  - **Filed:**
+    - Contextual return-type inference. `pointFrom<P extends …>(x, y): P`
+      has a binder only in its return type, which tsc infers from the
+      expected type, through a `.map` callback too. That is excalidraw's
+      remaining branded-point family.
+    - A module-level `const` object reads as `any` inside a function body
+      in the single-file check.
+    - A non-literal source against a bare bounded type parameter abstains
+      (`const p: P = a` with `a: A`).
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

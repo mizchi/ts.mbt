@@ -2389,7 +2389,9 @@ test "arrays and tuples compare by their elements (arrayeq)" {
 /// and a union is comparable when ANY member is: `[string, number]` overlaps
 /// `number[]`, `[string]` does not, and `[]` overlaps everything. A tuple
 /// that is nothing but a rest slot is that array, so `[...number[]]` against
-/// `boolean[]` or `[string]` is TS2367 (probed cell by cell).
+/// `boolean[]` or `[string]` is TS2367, and a rest of a TUPLE is its
+/// elements, so `[...[string]]` is `[string]` (#321's review; probed cell by
+/// cell).
 test "a tuple meets an array through the union of its elements (review320)" {
   let src =
     #|export function okSomeElementOverlaps(a: [string, number], b: number[]) { return a === b; }
@@ -2401,12 +2403,86 @@ test "a tuple meets an array through the union of its elements (review320)" {
     #|export function badRestOnlyAgainstTuple(a: [...number[]], b: [string]) { return a === b; }
     #|export function badRestOnlyOnTheRight(a: [string], b: [...number[]]) { return a === b; }
     #|export function badPrefixAndRest(a: [string, ...boolean[]], b: number[]) { return a === b; }
+    #|export function badTupleRest(a: [...[string]], b: number[]) { return a === b; }
+    #|export function okTupleRest(a: [...[string, number]], b: number[]) { return a === b; }
+    #|export function badTupleRestVsTuple(a: [...[string]], b: [number]) { return a === b; }
+    #|export function okTupleRestVsTuple(a: [...[string]], b: [string]) { return a === b; }
   assert_eq(issue_lines(src), [
     "function badNoElementOverlaps > strict equality: comparing `[string]` and `number[]` with === will always be false",
     "function badRestOnly > strict equality: comparing `[type]` and `boolean[]` with === will always be false",
     "function badRestOnlyAgainstTuple > strict equality: comparing `[type]` and `[string]` with === will always be false",
     "function badRestOnlyOnTheRight > strict equality: comparing `[string]` and `[type]` with === will always be false",
     "function badPrefixAndRest > strict equality: comparing `[string, type]` and `number[]` with === will always be false",
+    "function badTupleRest > strict equality: comparing `[type]` and `number[]` with === will always be false",
+    "function badTupleRestVsTuple > strict equality: comparing `[type]` and `[number]` with === will always be false",
+  ])
+}
+
+///|
+/// A function declaration's bounded type parameter is inlined to its bound
+/// in the signature and kept in the body, so a value read off a `P`-typed
+/// parameter arrived as the bound against a body annotation still saying
+/// `P` (excalidraw's `convexHull`). A source carrying the bound exactly
+/// abstains; a literal, a template and a value of ONE member of the bound
+/// still report, and an array indexed by a `number`-bounded parameter is its
+/// element type (probed: tsc reports the bad cells only).
+test "a value read off a bounded parameter fits the body's own annotation (boundresidue)" {
+  let src =
+    #|type A = [number, number] & { _a: 1 };
+    #|type B = [number, number] & { _b: 1 };
+    #|export function okSpreadOfParam<P extends A | B>(points: readonly P[]): P[] {
+    #|  const sorted = [...points];
+    #|  const half = (pts: P[]) => pts;
+    #|  return half(sorted);
+    #|}
+    #|export function okDirectParam<P extends A | B>(points: P[]): P[] {
+    #|  const half = (pts: P[]) => pts;
+    #|  return half(points);
+    #|}
+    #|export function okLocalAnnotated<P extends A | B>(points: readonly P[]): P[] {
+    #|  const copy: P[] = [...points];
+    #|  return copy;
+    #|}
+    #|export function okArrayIndexedByNumericParam<K extends number>() {
+    #|  let x: Array<string>[K] = "abc";
+    #|  return x;
+    #|}
+    #|export function badBoundIntoTemplate<T extends "a" | "b">(x: T) {
+    #|  const t: T = "" as `${T}`;
+    #|  return [x, t];
+    #|}
+    #|export function badLiteralIntoNumericParam<K extends number>() { const k: K = 1; return k; }
+    #|export function badLiteralArrayIntoNumericParam<K extends number>() { const ks: K[] = [1]; return ks; }
+    #|export function badBoundMemberIntoParamArray<P extends A | B>(as: A[]) { const ps: P[] = as; return ps; }
+  assert_eq(issue_lines(src), [
+    "function badBoundIntoTemplate > binding `t` init: the template-literal form `${T}` is not assignable to type `T`",
+    "function badLiteralIntoNumericParam > binding `k` init: type `1` is not assignable to type parameter `K`",
+    "function badLiteralArrayIntoNumericParam > binding `ks` init[0]: type `1` is not assignable to type parameter `K`",
+    "function badBoundMemberIntoParamArray > binding `ps` init: expected `P[]` but got `([number, number] & { _a: 1 })[]`",
+  ])
+}
+
+///|
+/// A write `obj[k] = v` through a key TYPED as a literal, or a union of
+/// them, must fit every property the key can name. `infer_index` answers
+/// the read, which for such a key was nothing (a literal-typed variable)
+/// or the union (a union key) (keyofAndIndexedAccess2's `f1`; probed: tsc
+/// reports the bad cells only, once each).
+test "an element write through a literal-typed key is checked (keywrite)" {
+  let src =
+    #|declare const obj: { a: number; b: 0 | 1; c: string };
+    #|export function badLiteralKeyParam(k0: "a") { obj[k0] = "x"; }
+    #|export function okLiteralKeyParam(k0: "a") { obj[k0] = 2; }
+    #|export function badBracketLiteral() { obj["a"] = "x"; }
+    #|export function badLiteralKeyConst() { const k = "a"; obj[k] = "x"; }
+    #|export function badUnionKey(k1: "a" | "b") { obj[k1] = 2; }
+    #|export function okUnionKey(k1: "a" | "b") { obj[k1] = 1; }
+    #|export function badUnionKeyOnce(k2: "a" | "b" | "c") { obj[k2] = "x"; }
+  assert_eq(issue_lines(src), [
+    "function badLiteralKeyParam > assign `[…]`: expected `number` but got `string`",
+    "function badBracketLiteral > assign `[…]`: expected `number` but got `string`",
+    "function badLiteralKeyConst > assign `[…]`: expected `number` but got `string`",
+    "function badUnionKey > assign `[…]`: expected `0 | 1` but got `2`", "function badUnionKeyOnce > assign `[…]`: expected `number` but got `string`",
   ])
 }
 

@@ -6464,122 +6464,146 @@
         {
           "name": "okSameElement",
           "kind": "ok",
-          "fromLine": 16,
-          "toLine": 16
-        },
-        {
-          "name": "okReadonly",
-          "kind": "ok",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "okTupleAndArray",
+          "name": "okReadonly",
           "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "okTupleAndTuple",
+          "name": "okTupleAndArray",
           "kind": "ok",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "okSubtypeElement",
+          "name": "okTupleAndTuple",
           "kind": "ok",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "okUnionElement",
+          "name": "okSubtypeElement",
           "kind": "ok",
           "fromLine": 21,
           "toLine": 21
         },
         {
-          "name": "okOptionalElement",
+          "name": "okUnionElement",
           "kind": "ok",
           "fromLine": 22,
           "toLine": 22
         },
         {
-          "name": "badDisjointElements",
-          "kind": "bad",
+          "name": "okOptionalElement",
+          "kind": "ok",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "badDisjointTuples",
+          "name": "badDisjointElements",
           "kind": "bad",
           "fromLine": 24,
           "toLine": 24
         },
         {
-          "name": "badTupleLengths",
+          "name": "badDisjointTuples",
           "kind": "bad",
           "fromLine": 25,
           "toLine": 25
         },
         {
-          "name": "badArrayAndString",
+          "name": "badTupleLengths",
           "kind": "bad",
           "fromLine": 26,
           "toLine": 26
         },
         {
-          "name": "okSomeTupleElementOverlaps",
-          "kind": "ok",
+          "name": "badArrayAndString",
+          "kind": "bad",
           "fromLine": 27,
           "toLine": 27
         },
         {
-          "name": "okEmptyTupleAndArray",
+          "name": "okSomeTupleElementOverlaps",
           "kind": "ok",
           "fromLine": 28,
           "toLine": 28
         },
         {
-          "name": "okRestInTheMiddle",
+          "name": "okEmptyTupleAndArray",
           "kind": "ok",
           "fromLine": 29,
           "toLine": 29
         },
         {
-          "name": "okPrefixThenRest",
+          "name": "okRestInTheMiddle",
           "kind": "ok",
           "fromLine": 30,
           "toLine": 30
         },
         {
-          "name": "badNoTupleElementOverlaps",
-          "kind": "bad",
+          "name": "okPrefixThenRest",
+          "kind": "ok",
           "fromLine": 31,
           "toLine": 31
         },
         {
-          "name": "badRestOnlyTuple",
+          "name": "badNoTupleElementOverlaps",
           "kind": "bad",
           "fromLine": 32,
           "toLine": 32
         },
         {
-          "name": "badRestOnlyAgainstTuple",
+          "name": "badRestOnlyTuple",
           "kind": "bad",
           "fromLine": 33,
           "toLine": 33
         },
         {
-          "name": "badRestOnlyOnTheRight",
+          "name": "badRestOnlyAgainstTuple",
           "kind": "bad",
           "fromLine": 34,
           "toLine": 34
         },
         {
-          "name": "badReadonlyTupleAndArray",
+          "name": "badRestOnlyOnTheRight",
           "kind": "bad",
           "fromLine": 35,
-          "toLine": 36
+          "toLine": 35
+        },
+        {
+          "name": "badReadonlyTupleAndArray",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 37
+        },
+        {
+          "name": "badTupleRest",
+          "kind": "bad",
+          "fromLine": 38,
+          "toLine": 38
+        },
+        {
+          "name": "okTupleRest",
+          "kind": "ok",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "badTupleRestVsTuple",
+          "kind": "bad",
+          "fromLine": 40,
+          "toLine": 40
+        },
+        {
+          "name": "okTupleRestVsTuple",
+          "kind": "ok",
+          "fromLine": 41,
+          "toLine": 42
         }
       ]
     },
@@ -6697,6 +6721,82 @@
           "kind": "bad",
           "fromLine": 25,
           "toLine": 26
+        }
+      ]
+    },
+    {
+      "case": "relations/boundedTypeParameterInBodyAnnotation.ts",
+      "area": "relations",
+      "name": "boundedTypeParameterInBodyAnnotation",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/boundedTypeParameterInBodyAnnotation.errors.txt",
+      "claims": [
+        {
+          "name": "okSpreadOfParam",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 16
+        },
+        {
+          "name": "okDirectParam",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 20
+        },
+        {
+          "name": "okLocalAnnotated",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 24
+        },
+        {
+          "name": "okArrayIndexedByNumericParam",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 28
+        },
+        {
+          "name": "badBoundIntoTemplate",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 32
+        },
+        {
+          "name": "badBoundIntoParam",
+          "kind": "bad",
+          "fromLine": 33,
+          "toLine": 36
+        },
+        {
+          "name": "badLiteralIntoNumericParam",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 37
+        },
+        {
+          "name": "badLiteralArrayIntoNumericParam",
+          "kind": "bad",
+          "fromLine": 38,
+          "toLine": 38
+        },
+        {
+          "name": "badBoundMemberIntoParamArray",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "badBoundMemberIntoParam",
+          "kind": "bad",
+          "fromLine": 40,
+          "toLine": 41
         }
       ]
     },
@@ -6910,6 +7010,64 @@
           "kind": "bad",
           "fromLine": 21,
           "toLine": 22
+        }
+      ]
+    },
+    {
+      "case": "relations/elementWriteThroughLiteralKey.ts",
+      "area": "relations",
+      "name": "elementWriteThroughLiteralKey",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/elementWriteThroughLiteralKey.errors.txt",
+      "claims": [
+        {
+          "name": "okLiteralKeyParam",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okUnionKey",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "badLiteralKeyParam",
+          "kind": "bad",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badBracketLiteral",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badLiteralKeyConst",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badUnionKey",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badUnionKeyThreeMembers",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 15
         }
       ]
     },

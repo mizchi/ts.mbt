@@ -2291,6 +2291,70 @@ test "mtsc graph checker accepts an import of a type-only namespace" {
 }
 
 ///|
+/// An imported `const` object built with a SPREAD of another `const` of
+/// its module was `any` to every importer, so `m?.keyword === MIME.ex` did
+/// not narrow `m` (excalidraw's `MIME_TYPES`). A spread of the module's own
+/// const object is folded in now; a result holding a computed key still
+/// reads as `any`, since it is not enumerable (probed: tsc reports `n` and
+/// `nope` only).
+test "mtsc graph checker folds a same-module const spread into an imported value" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/c.ts", "export const SMIME = { ex: \"application/x\", text: \"text/plain\" } as const;\nexport const MIME = { ...SMIME, bin: \"b\" } as const;\nexport const K = \"k\";\nexport const CK = { [K]: 1 };\nexport const CM = { ...CK, z: 2 };",
+        ),
+        (
+          "/src/root.ts", "import { MIME, CM } from \"./c\";\ndeclare function get(): { keyword: string; text: string } | null;\nexport function okSpreadMember() { const m = get(); if (m?.keyword === MIME.ex) { return m.text; } return \"\"; }\nexport function probeSpread() { const n: number = MIME.ex; return n; }\nexport function badSpreadMemberMissing() { return MIME.nope; }\nexport function okComputedSpread() { return CM.k; }",
+        ),
+      ],
+      [("/src/root.ts", "./c", "/src/c.ts")],
+    ),
+    [
+      "function probeSpread > binding `n` init :: expected `number` but got `string`",
+      "function badSpreadMemberMissing > PropAccess `.nope` :: property `nope` does not exist on `{ ex: string; text: string; bin: string }`",
+    ],
+  )
+}
+
+///|
+/// A barrel passes a type-only namespace on as `export { N } from`, as
+/// `export *`, as `export type { N } from`, and as an import it exports
+/// again; each read as "has no value export" (#321's review; probed: tsc
+/// accepts all four). A name the barrel does not export still reports.
+test "mtsc graph checker follows a barrel to a type-only namespace" {
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/a.ts", "export namespace N { export type A = { v: string }; }"),
+        ("/src/barrel.ts", "export { N } from \"./a\";"),
+        ("/src/star.ts", "export * from \"./a\";"),
+        ("/src/tbarrel.ts", "export type { N } from \"./a\";"),
+        ("/src/reexp.ts", "import { N } from \"./a\";\nexport { N };"),
+        (
+          "/src/amb.ts", "namespace M { export type A = { v: string }; }\nexport type Keep = number;",
+        ),
+        (
+          "/src/root.ts", "import { N } from \"./barrel\";\nimport { N as N2 } from \"./star\";\nimport { N as N3 } from \"./tbarrel\";\nimport { N as N4 } from \"./reexp\";\nimport { M } from \"./amb\";\ndeclare const x: N.A;\nexport const s: string = x.v;",
+        ),
+      ],
+      [
+        ("/src/barrel.ts", "./a", "/src/a.ts"),
+        ("/src/star.ts", "./a", "/src/a.ts"),
+        ("/src/tbarrel.ts", "./a", "/src/a.ts"),
+        ("/src/reexp.ts", "./a", "/src/a.ts"),
+        ("/src/root.ts", "./barrel", "/src/barrel.ts"),
+        ("/src/root.ts", "./star", "/src/star.ts"),
+        ("/src/root.ts", "./tbarrel", "/src/tbarrel.ts"),
+        ("/src/root.ts", "./reexp", "/src/reexp.ts"),
+        ("/src/root.ts", "./amb", "/src/amb.ts"),
+      ],
+    ),
+    ["import :: module `./amb` has no value export `M`"],
+  )
+}
+
+///|
 /// An ambient `.d.ts` has no per-module key, so a name the checked module
 /// renames into moves to `Item@<unkeyed>` there, and its references move
 /// with it. A default is one of them: `Box<T = Item>` has to keep reading

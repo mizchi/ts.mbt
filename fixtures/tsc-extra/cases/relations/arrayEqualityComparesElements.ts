@@ -13,7 +13,8 @@
 // `number[]` and `[string]` does not, and the empty tuple overlaps any
 // array. A tuple that is nothing but `[...T[]]` is the array `T[]`. A
 // readonly tuple is not comparable with a mutable array of a type it does
-// not share a value with either way.
+// not share a value with either way. A rest of a TUPLE is its elements, so
+// `[...[string]]` is `[string]`.
 
 type El = { id: string };
 export function okSameElement(a: number[], b: number[]) { return a === b; }
@@ -36,3 +37,8 @@ export function badRestOnlyTuple(a: [...number[]], b: boolean[]) { return a === 
 export function badRestOnlyAgainstTuple(a: [...number[]], b: [string]) { return a === b; }
 export function badRestOnlyOnTheRight(a: [string], b: [...number[]]) { return a === b; }
 export function badReadonlyTupleAndArray(a: readonly [string, number], b: number[]) { return a === b; }
+
+export function badTupleRest(a: [...[string]], b: number[]) { return a === b; }
+export function okTupleRest(a: [...[string, number]], b: number[]) { return a === b; }
+export function badTupleRestVsTuple(a: [...[string]], b: [number]) { return a === b; }
+export function okTupleRestVsTuple(a: [...[string]], b: [string]) { return a === b; }
