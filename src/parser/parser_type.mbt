@@ -2940,6 +2940,84 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       | Var
       | Let
       | Debugger => return false
+      // Operators that can never appear in a type. Reaching one means the
+      // `<` was a comparison. `row < (a - 1) || row > (b + 1)` balanced
+      // `<`…`>` across the `- 1) ||`, the caller saw the following `(` and
+      // committed to `row<…>(b + 1)`, a generic CALL: the checker reported
+      // "`number` is not callable", and the emit printed `row(b + 1)`,
+      // dropping both comparisons, under plain `mtsc` with `--noCheck`
+      // (univer's `_clearCacheOutOfVisibleRange`). tsc parses the list as
+      // types and gives up the moment one does not parse, which this
+      // token scan approximates by refusing what no type contains. `>=`,
+      // `>>=` and `>>>=` are NOT on the list: a type argument list followed
+      // by `=` lexes that way (`var v: Foo<Bar<T>>= 1`,
+      // parserGenericsInVariableDeclaration1), and refusing them made a
+      // legal declaration a parse error.
+      Star
+      | StarStar
+      | Slash
+      | Percent
+      | Caret
+      | EqEq
+      | EqEqEq
+      | BangEq
+      | BangEqEq
+      | Instanceof
+      | Le
+      | AmpAmp
+      | PipePipe
+      | AmpAmpEq
+      | PipePipeEq
+      | Bang
+      | Tilde
+      | QuestionQuestion
+      | QuestionQuestionEq
+      | PlusPlus
+      | MinusMinus
+      | PlusEq
+      | MinusEq
+      | StarEq
+      | StarStarEq
+      | SlashEq
+      | PercentEq
+      | AmpEq
+      | PipeEq
+      | CaretEq
+      | LtLtEq
+      | Delete => return false
+      // `+` / `-` appear in a type only as a negative numeric literal
+      // (`typeof f<- 1>`; the lexer reads `-1` as one token, so only the
+      // spaced spelling reaches here) or as a mapped-type modifier
+      // (`{ -readonly [K in T]-?: V }`), which sits inside braces. A sign
+      // that follows something ending a value is a BINARY operator, so
+      // `a < (b - 1) | c > (d)` is two comparisons even though a literal
+      // follows the `-`.
+      Plus | Minus => {
+        let after_value = self.pos > 0 &&
+          self.tokens[self.pos - 1].kind
+          is (Ident(_)
+          | PrivateIdent(_)
+          | Number(_)
+          | Int(_)
+          | LegacyOctal(_)
+          | BigInt(_)
+          | Str(_)
+          | Bool(_)
+          | Null
+          | Template(_, _, _)
+          | RParen
+          | RBracket
+          | RBrace)
+        if braces > 0 ||
+          (
+            !after_value &&
+            self.peek_at(1).kind is (Number(_) | Int(_) | BigInt(_))
+          ) {
+          let _ = self.advance()
+        } else {
+          return false
+        }
+      }
       _ => {
         let _ = self.advance()
       }

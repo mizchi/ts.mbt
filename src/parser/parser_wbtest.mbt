@@ -7664,6 +7664,57 @@ test "parser: a `>` inside an unclosed bracket does not close a type-arg list" {
 }
 
 ///|
+test "parser: an operator no type contains ends a type-arg list" {
+  // `row < (a - 1) || row > (b + 1)` balanced `<`…`>` across `- 1) ||`,
+  // and the caller saw the following `(` and committed to `row<…>(b + 1)`,
+  // a generic CALL: the emit printed `row(b + 1)` and dropped both
+  // comparisons (univer's `_clearCacheOutOfVisibleRange`). An operator
+  // that no type contains now ends the speculation.
+  for
+    src in [
+      "const r = row < (a - 1) || row > (b + 1);", "const r = row < (a) && row > (b);",
+      "const r = row < (a * 2) || row > (b);", "const r = a < (b - 1) | c > (d);",
+    ] {
+    let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    match stmt {
+      Const(_, _, BinOp(_, _, _)) => ()
+      _ => fail("expected `\{src}` to parse as comparisons")
+    }
+  }
+  // The two places `-` does appear in type arguments still commit. The
+  // lexer reads `-1` as one numeric token, so `- 1` is the spelling that
+  // reaches the `-` arm.
+  for
+    src in [
+      "const r = lit<-1>();", "const r = lit<- 1>();", "const r = g<{ -readonly [K in keyof T]-?: number }>(1);",
+    ] {
+    let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    match stmt {
+      Const(_, _, BinOp(_, _, _)) =>
+        fail("expected `\{src}` to parse as a generic call")
+      _ => ()
+    }
+  }
+  // The same scan skips type arguments in TYPE positions, where a spaced
+  // negative literal reaches the `-` arm; refusing it there would make
+  // legal code a parse error (probed: tsc accepts both).
+  let src = "declare function h<T>(): T;\ntype R = typeof h<- 1>;\n"
+  let _ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected `\{src}` to parse: \{e}")
+  }
+  // A type argument list followed by `=` lexes as `>=` / `>>=` / `>>>=`,
+  // which close the list rather than being an operator inside it.
+  let src = "var v : Foo<T>= 1;\nvar v : Foo<Bar<T>>= 1;\nvar v : Foo<Bar<Quux<T>>>= 1;\n"
+  let _ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected `\{src}` to parse: \{e}")
+  }
+}
+
+///|
 test "parser: a genuinely balanced type-arg list still commits" {
   // The other half: the added condition must not reject the real
   // generic-call forms, each of which legally nests one bracket kind.

@@ -7907,9 +7907,14 @@ fn object_values_element(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? 
         // without one tsc picks the `{}` overload, `any` (#318's review;
         // probed).
         None if t is Object(_) => number_v
+        // `ArrayLike<T>` asks that `length` be assignable to `number`, so a
+        // numeric literal type (`length: 1`) qualifies as `number` does
+        // (#319's review; probed). An optional `length` is `number |
+        // undefined`, which does not.
         None =>
           match resolver.lookup_field(t, "length") {
-            Some(l) if resolver.unwrap(l) is (Number | Int) => number_v
+            Some(l) if is_checkable(l) &&
+              is_assignable_to(resolver.unwrap(l), Number) => number_v
             _ => None
           }
       }
@@ -13547,6 +13552,19 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
     | (BigInt, BigIntLiteral(_))
     | (BigIntLiteral(_), BigInt) => true
     (Null, Null) | (Undefined, Undefined) => true
+    // Arrays and tuples are comparable when their ELEMENTS are, as tsc's
+    // comparability relation decides them: `number[]` with `number[]`, a
+    // tuple with an array whose element every tuple member overlaps, and
+    // two tuples of one length position by position. There was no arm, so
+    // every pair fell to the final `false` and `prevProps.elements !==
+    // nextProps.elements` (excalidraw's canvases, univer's renderers) read
+    // as always true (probed: tsc reports only element types with no
+    // overlap, and tuples of different lengths). A tuple with a rest slot
+    // has no fixed length and is called overlapping.
+    (Array(x), Array(y)) => types_can_overlap(x, y)
+    (Tuple(xs), Array(y)) | (Array(y), Tuple(xs)) =>
+      xs.iter().all(fn(x) { x is Rest(_) || types_can_overlap(x, y) })
+    (Tuple(xs), Tuple(ys)) => tuples_can_overlap(xs, ys)
     // Function types are comparable with each other whatever their
     // signatures (`inst._zod.run === base`, zod's memoizer) — tsc reports
     // `===` on two callables only through a much finer comparability
@@ -13567,6 +13585,39 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 }
 
 ///|
+
+///|
+/// Whether two tuple types share a value, for `types_can_overlap`. A rest
+/// slot makes the length open, which overlaps. Otherwise the shared prefix
+/// must overlap position by position, and the longer tuple's extra elements
+/// must all admit `undefined`: an OPTIONAL element (`[number, string?]`) is
+/// stored as `string | undefined`, the same node as a required one, so
+/// `[number, string?]` against `[number]` is legal and has to be called
+/// overlapping, while `[number, string]` against `[number]` is TS2367
+/// (probed).
+fn tuples_can_overlap(xs : Array[@ast.TsType], ys : Array[@ast.TsType]) -> Bool {
+  if xs.iter().any(fn(x) { x is Rest(_) }) ||
+    ys.iter().any(fn(y) { y is Rest(_) }) {
+    return true
+  }
+  let (short, long) = if xs.length() <= ys.length() {
+    (xs, ys)
+  } else {
+    (ys, xs)
+  }
+  for i in 0..<short.length() {
+    if !types_can_overlap(short[i], long[i]) {
+      return false
+    }
+  }
+  for i in short.length()..<long.length() {
+    if !(long[i] is Undefined ||
+      (long[i] is Union(ms) && ms.iter().any(fn(m) { m is Undefined }))) {
+      return false
+    }
+  }
+  true
+}
 
 ///|
 /// Flatten `ty` into the set of string-literal values it denotes, descending
@@ -30203,9 +30254,17 @@ fn check_arguments_with_sig(
             !type_contains_unresolved_named(rest_elem_type, ctx.resolver) &&
             !type_deeply_contains_unmodeled(elem, ctx.resolver) &&
             !type_deeply_contains_unmodeled(rest_elem_type, ctx.resolver) &&
+            // `unwrap_containers` rather than `unwrap`: the rest element is
+            // routinely a union whose members are aliases themselves, and
+            // `unwrap` expands only the outer layer, so the resolver-free
+            // relation met `Named("Raw")` where `[number, number]` was one
+            // alias further in. univer's `new Charset(...next)` spreads
+            // `[number, number]` tuples into `...inputs: CharsetInput[]`,
+            // `CharsetInput = Charset | CharsetRawInput`; the same argument
+            // passed plainly was always accepted (probed).
             !is_assignable_to(
-              ctx.resolver.unwrap(widen_literal(elem)),
-              ctx.resolver.unwrap(rest_elem_type),
+              ctx.resolver.unwrap_containers(widen_literal(elem)),
+              ctx.resolver.unwrap_containers(rest_elem_type),
             ) &&
             !is_structurally_assignable_named(
               elem,
