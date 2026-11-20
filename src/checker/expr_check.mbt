@@ -2983,6 +2983,7 @@ fn Resolver::ingest_module(
       f.body.stmts.length() > 0 &&
       !module_.grammar_misuses.contains("<written-any-return:\{f.name}>") {
       let fenv = ExprEnv::new()
+      bind_module_literal_consts(fenv, module_, f.body)
       for p in effective_params {
         fenv.bind(p.name, p.type_)
       }
@@ -8201,6 +8202,43 @@ fn Resolver::method_type_params_of(
 }
 
 ///|
+/// Binds, for the inference of a function's return type, each module-level
+/// `const` whose initializer is a literal (`const AL = 1`). The return
+/// inference runs while the module is being ingested, before
+/// `register_primitive_top_level_consts` has run, so `return AL` read as
+/// `any` and the whole return type with it: univer's `mapClass(c: number)`
+/// returns from a `switch` whose cases return such consts, and every
+/// `this._next = mapClass(…)` kept its declared `Nullable<number>`
+/// (probed: tsc gives `number`, the widened literal). The initializer is
+/// read syntactically, so no declaration the module has not registered yet
+/// can stand in for it, and a name the body declares at its own top level
+/// is left out, so a shadowed shadow keeps its own type. A name declared in a
+/// nested block makes the inference decline on its own.
+fn bind_module_literal_consts(
+  env : ExprEnv,
+  module_ : @ast.TsModule,
+  body : @ast.TsBlock,
+) -> Unit {
+  let shadowed : Array[String] = []
+  for st in body.stmts {
+    match st {
+      Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
+        collect_binding_names(b, shadowed)
+      _ => ()
+    }
+  }
+  for decl in unannotated_top_level_consts(module_) {
+    let (name, init) = decl
+    if !shadowed.contains(name) {
+      match precise_literal_type(init) {
+        Some(t) => env.bind(name, t)
+        None => ()
+      }
+    }
+  }
+}
+
+///|
 /// The return type an UNANNOTATED function declaration's body gives, for a
 /// caller in another module. The graph path types an imported function
 /// from its declaration, where an absent annotation is `any`, so univer's
@@ -8230,6 +8268,7 @@ pub fn unannotated_function_return_from_body(
   let r = Resolver::empty()
   r.strict_null_checks = module_.strict_null_checks
   let fenv = ExprEnv::new()
+  bind_module_literal_consts(fenv, module_, func.body)
   for p in func.params {
     fenv.bind(p.name, p.type_)
   }
@@ -15586,7 +15625,18 @@ fn infer_expr_inner(
         union_of(out)
       }
     }
-    ComputedProp(_, _) => @ast.TsType::Any
+    // A computed entry's VALUE has a type even when its key is not
+    // decided: `{ [unitId]: { a: 1 } }` against a string index signature is
+    // judged by that value, and reading it as `any` passed every value.
+    // A SYMBOL key lies outside every string and number index signature,
+    // so its value is not judged against one (`{ [sym]: 1 }` fits
+    // `{ [k: string]: string }`).
+    ComputedProp(key, value) =>
+      if computed_key_is_symbol(env, resolver, key) {
+        Any
+      } else {
+        infer_expr(env, resolver, value)
+      }
     ArrowFunc(params, declared_ret, body, is_async) => {
       let param_types = callable_param_types(params)
       // Prefer the explicit return-type annotation when one was supplied;
@@ -20915,6 +20965,13 @@ fn check_expr_against_shape(
                         continue
                       }
                       let val_expr = match e.1 {
+                        // A symbol key is outside the string index
+                        // signature (see `infer_expr`'s `ComputedProp`).
+                        ComputedProp(key, _) if computed_key_is_symbol(
+                            env,
+                            ctx.resolver,
+                            key,
+                          ) => continue
                         ComputedProp(_, value) => value
                         other => other
                       }
@@ -23689,10 +23746,58 @@ fn member_recv_unmodeled_with(
     // reduced one is not an unmodeled shape (univer's `DocumentSkeleton`).
     Any => true
     Named(n) | Applied(n, _) =>
-      resolver.classes.get(n) is Some(_) &&
-      class_chain_has_unresolved_base(n, resolver)
+      (
+        resolver.classes.get(n) is Some(_) &&
+        class_chain_has_unresolved_base(n, resolver)
+      ) ||
+      (
+        resolver.interfaces.get(n) is Some(_) &&
+        interface_chain_has_unmodeled_base(n, resolver)
+      )
     _ => false
   }
+}
+
+///|
+/// Whether an interface's `extends` chain reaches a base this checker has
+/// no members for: a name declared nowhere it can see, which is how a lib
+/// interface without a member table arrives (`interface IEvent extends
+/// Event`). Its members are the base's too, so "does not exist" on it is a
+/// statement about the declared part alone: univer's `IPointerEvent`, three
+/// levels above `Event`, read `evt.timeStamp`, `e.type` and
+/// `preventDefault` as missing (probed: tsc accepts them). A lib interface
+/// whose members ARE tabled keeps its checks, as a class with a known base
+/// does.
+fn interface_chain_has_unmodeled_base(
+  name : String,
+  resolver : Resolver,
+) -> Bool {
+  let seen : Map[String, Unit] = Map([])
+  let queue = [name]
+  while queue.pop() is Some(current) {
+    if seen.contains(current) || seen.length() > 64 {
+      continue
+    }
+    seen[current] = ()
+    match resolver.interfaces.get(current) {
+      Some(decl) =>
+        for base in decl.extends_names {
+          if resolver.interfaces.contains(base) ||
+            resolver.classes.contains(base) {
+            queue.push(base)
+          } else if !shared_standard_aliases.contains(base) &&
+            !lib_interface_members_modeled(base) {
+            // A standard utility base (`extends Omit<L, "k">`) is projected
+            // by `collect_declared_fields`, so its members are known. A
+            // module's own alias base (`type B = { … }`) never reaches this
+            // branch: testing for it here survived its mutation.
+            return true
+          }
+        }
+      None => ()
+    }
+  }
+  false
 }
 
 ///|
@@ -25039,8 +25144,15 @@ fn structural_oneway_assignable_rec(
   // every member fits the index value: `const e = {}` into univer's
   // `interface IDateTrie { [token: string]: IDateTrie | number | undefined
   // }`, and `{ a: 1 }` into `{ [k: string]: number }`. An interface's own
-  // type has no such signature, and a computed or accessor key decides
-  // nothing here.
+  // type has no such signature, and an accessor key decides nothing here.
+  //
+  // A COMPUTED key (`{ [unitId]: … }`, kept as `@@computed:N`) is a string,
+  // number or symbol key, and against a string index signature its value
+  // is all that has to fit: a number key is a string key here, and a
+  // symbol key is outside the signature and allowed on a non-literal
+  // source. univer's `const config = { [params.unitId]: … }` handed to
+  // `batchRemove(map: IDirtyUnitOtherFormulaMap)` was reported, while the
+  // same literal passed inline was not (probed: tsc accepts both).
   match (resolver.unwrap(source), resolver.unwrap(target)) {
     (Object(fields), Named(n)) =>
       match resolver.interfaces.get(n) {
@@ -25049,7 +25161,12 @@ fn structural_oneway_assignable_rec(
           i.type_params.is_empty() &&
           !i.index_signatures.is_empty() &&
           i.index_signatures.iter().all(fn(sig) { sig.0 is String_ }) &&
-          fields.iter().all(fn(f) { f.0 is Literal(k) && !k.has_prefix("@@") }) =>
+          fields
+          .iter()
+          .all(fn(f) {
+            f.0 is Literal(k) &&
+            (!k.has_prefix("@@") || k.has_prefix("@@computed:"))
+          }) =>
           return fields
             .iter()
             .all(fn(f) {
@@ -25071,8 +25188,14 @@ fn structural_oneway_assignable_rec(
   }
   match resolver.unwrap(target) {
     Union(members) => {
+      // A member is tried with the plain relation too: the recursion's own
+      // base case is the NAMED comparison, which says nothing about a
+      // primitive, so `"你好"` against `string | string[] | ILanguagePack`
+      // (univer's `LanguageValue`, the value of `ILanguagePack`'s index
+      // signature) fitted no member.
       for m in members {
-        if structural_oneway_assignable_rec(source, m, resolver, depth + 1) {
+        if is_assignable_to(source, m) ||
+          structural_oneway_assignable_rec(source, m, resolver, depth + 1) {
           return true
         }
       }
@@ -25282,6 +25405,49 @@ fn intrinsic_source_satisfies_object(
     return false
   }
   let t = resolver.unwrap(target)
+  // An index signature on the target is a member too, and the named-member
+  // walk below never sees one. A string's numeric slots are `string`, an
+  // array's are its element, and a primitive has no string index at all:
+  // `"abc"` into `{ length: number; [n: number]: number }` is TS2322 while
+  // `[n: number]: string` is legal (#322's review; probed). An array
+  // against a string index keeps the old answer, since that is a question
+  // about implicit index signatures this does not decide.
+  match t {
+    Object(fields) =>
+      for f in fields {
+        let primitive = s
+          is (String_
+          | Number
+          | Int
+          | Boolean
+          | BigInt
+          | Symbol
+          | Literal(_)
+          | NumberLiteral(_)
+          | BigIntLiteral(_)
+          | BooleanLiteral(_))
+        match f.0 {
+          Number | Int => {
+            let slot : @ast.TsType? = match s {
+              String_ | Literal(_) => Some(String_)
+              Array(e) => Some(e)
+              Tuple(items) => Some(union_of(items))
+              _ => None
+            }
+            match slot {
+              Some(v) =>
+                if !is_assignable_to(v, resolver.unwrap(f.1)) {
+                  return false
+                }
+              None => return false
+            }
+          }
+          String_ if primitive => return false
+          _ => ()
+        }
+      }
+    _ => ()
+  }
   let target_fields = match t {
     Object(_) | Struct(_, _) => collect_declared_fields(t, resolver)
     _ => return false
@@ -27083,30 +27249,47 @@ fn check_object_lit_against_target(
     // interface declares a number index signature, the VALUE must satisfy
     // the index value type (`var o: I = { [+"foo"]: "" }` where
     // `[s: number]: boolean` — computedPropertyNamesContextualType10).
+    //
+    // A STRING key and a string index signature are the same rule, and a
+    // numeric key falls back to the string signature, which covers numeric
+    // keys too: `load({ [k]: { greeting: 1 } })` with `k: string` against
+    // `[key: string]: { greeting: string }` is TS2345 (probed). Checking
+    // against the index signature is never stricter than tsc, since every
+    // declared property's type must fit the string signature as well.
     if key.has_prefix("@@computed:") {
       match value {
         ComputedProp(kexpr, vexpr) => {
-          let num_value_ty : @ast.TsType? = match resolver.unwrap(target) {
+          let mut num_sig : @ast.TsType? = None
+          let mut str_sig : @ast.TsType? = None
+          match resolver.unwrap(target) {
             Named(n) =>
               match resolver.interfaces.get(n) {
-                Some(iface) => {
-                  let mut found : @ast.TsType? = None
+                Some(iface) =>
                   for sig in iface.index_signatures {
-                    if sig.0 is (Number | Int) && found is None {
-                      found = Some(sig.1)
+                    if sig.0 is (Number | Int) && num_sig is None {
+                      num_sig = Some(sig.1)
+                    }
+                    if sig.0 is String_ && str_sig is None {
+                      str_sig = Some(sig.1)
                     }
                   }
-                  found
-                }
-                None => None
+                None => ()
               }
+            _ => ()
+          }
+          let key_ty = resolver.unwrap(infer_expr(env, resolver, kexpr))
+          let value_ty = match key_ty {
+            Number | NumberLiteral(_) | Int =>
+              match num_sig {
+                Some(t) => Some(t)
+                None => str_sig
+              }
+            String_ | Literal(_) => str_sig
             _ => None
           }
-          match num_value_ty {
+          match value_ty {
             Some(vt) =>
-              if is_checkable(vt) &&
-                resolver.unwrap(infer_expr(env, resolver, kexpr))
-                is (Number | NumberLiteral(_) | Int) {
+              if is_checkable(vt) {
                 check_expr_against(env, vexpr, vt, ctx, "\{sub_path}[computed]")
               }
             None => ()
@@ -28984,6 +29167,23 @@ fn end_reachable(stmts : Array[@ast.TsStmt]) -> Bool? {
         _ => None
       }
     Some(Block(b)) => end_reachable(b.stmts)
+    // A `switch` with a `default` clause and no `break` leaves only through
+    // its last clause, since every other clause falls into the next one: the
+    // end is reached exactly when that clause's end is. Without a `default`
+    // the switch may match nothing, but tsc also reads a switch over a
+    // closed union as exhaustive, so that case stays `None`, and so does any
+    // `break`, whatever it targets. univer's `mapClass(c: number)` returns
+    // from every case plus `default`, and its call read as `any`.
+    Some(Switch(_, cases)) =>
+      if cases.iter().any(fn(c) { c.test_expr is None }) &&
+        !cases.iter().any(fn(c) { stmts_contain_break(c.body.stmts) }) {
+        match cases.last() {
+          Some(c) => end_reachable(c.body.stmts)
+          None => None
+        }
+      } else {
+        None
+      }
     Some(Expr(_))
     | Some(Var(_, _, _))
     | Some(Let(_, _, _))
@@ -28994,6 +29194,49 @@ fn end_reachable(stmts : Array[@ast.TsStmt]) -> Bool? {
     | Some(PropAssign(_, _, _))
     | Some(Empty) => Some(true)
     _ => None
+  }
+}
+
+///|
+/// Whether a `break`, labelled or not, appears among `stmts` at any depth
+/// short of a nested function (a function body is an expression, which
+/// this walk never enters).
+fn stmts_contain_break(stmts : Array[@ast.TsStmt]) -> Bool {
+  stmts.iter().any(fn(st) { stmt_contains_break(st) })
+}
+
+///|
+fn stmt_contains_break(st : @ast.TsStmt) -> Bool {
+  match st {
+    Break(_) => true
+    If(_, t, e) =>
+      stmts_contain_break(t.stmts) ||
+      (match e {
+        Some(b) => stmts_contain_break(b.stmts)
+        None => false
+      })
+    While(_, b)
+    | DoWhile(_, b)
+    | With(_, b)
+    | Block(b)
+    | For(_, _, _, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b) => stmts_contain_break(b.stmts)
+    Try(t, _, c, f) =>
+      stmts_contain_break(t.stmts) ||
+      (match c {
+        Some(b) => stmts_contain_break(b.stmts)
+        None => false
+      }) ||
+      (match f {
+        Some(b) => stmts_contain_break(b.stmts)
+        None => false
+      })
+    Switch(_, cases) =>
+      cases.iter().any(fn(c) { stmts_contain_break(c.body.stmts) })
+    Label(_, inner) => stmt_contains_break(inner)
+    _ => false
   }
 }
 
@@ -31899,9 +32142,14 @@ fn type_display(ty : @ast.TsType) -> String {
             parts.push("... \{fields.length() - shown_limit} more ...")
             break
           }
+          // An index signature is a field keyed by its key TYPE, and a
+          // computed key the parser could not name is `@@computed:N`.
+          // Printed bare, the first read as a property named `number` and
+          // the second named a placeholder nobody wrote.
           let key = match f.0 {
+            Literal(k) if k.has_prefix("@@computed:") => "[computed]"
             Literal(k) => k
-            _ => type_display(f.0)
+            _ => "[x: " + type_display(f.0) + "]"
           }
           parts.push(key + ": " + type_display(f.1))
         }
@@ -56711,27 +56959,81 @@ fn register_primitive_top_level_consts(
   resolver : Resolver,
 ) -> Unit {
   let env = ExprEnv::new()
+  for decl in unannotated_top_level_consts(module_) {
+    let (name, init) = decl
+    if resolver.globals.get(name) is None {
+      let t = infer_expr(env, resolver, init)
+      match t {
+        Number
+        | String_
+        | Boolean
+        | BigInt
+        | Symbol
+        | Literal(_)
+        | NumberLiteral(_)
+        | BooleanLiteral(_)
+        | BigIntLiteral(_) => resolver.globals[name] = t
+        _ => ()
+      }
+    }
+  }
+}
+
+///|
+/// Whether a computed key's expression has a `symbol` type (`[sym]` with
+/// `const sym = Symbol()`, or a `unique symbol` binding).
+fn computed_key_is_symbol(
+  env : ExprEnv,
+  resolver : Resolver,
+  key : @ast.TsExpr,
+) -> Bool {
+  resolver.unwrap(infer_expr(env, resolver, key)) is (Symbol | UniqueSymbol(_))
+}
+
+///|
+/// The module's top-level `const NAME = init` declarations with no
+/// annotation, as (name, initializer). A declarator group `const a = 1, b =
+/// 2` is lowered to a top-level `Block` of `Const` statements marked
+/// `DECL_GROUP_POSITION`, so such a group is read through as well: univer's
+/// line breaker declares its class constants that way, and
+/// `register_primitive_top_level_consts` saw none of them. A WRITTEN block
+/// of consts is not: its names are block-scoped, and reading them would let
+/// `{ const VALUE = "inner" }` replace a module `const VALUE = 1`.
+///
+/// A written `: any` is the same `Any` here as an absent annotation, so the
+/// parser's `<written-any-decl:NAME>` marker is what excludes it: `const
+/// VALUE: any = 1` is `any`, and returning it must not read as `number`.
+fn unannotated_top_level_consts(
+  module_ : @ast.TsModule,
+) -> Array[(String, @ast.TsExpr)] {
+  let written_any : Map[String, Unit] = Map([])
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<written-any-decl:") && gm.has_suffix(">") {
+      written_any[gm["<written-any-decl:".length():gm.length() - 1].to_owned()] = ()
+    }
+  }
+  let out : Array[(String, @ast.TsExpr)] = []
+  let push = fn(name : String, init : @ast.TsExpr) {
+    if !written_any.contains(name) {
+      out.push((name, init))
+    }
+  }
   for stmt in module_.top_level_stmts {
     match stmt {
-      Const(Ident(name), Any, init) =>
-        if resolver.globals.get(name) is None {
-          let t = infer_expr(env, resolver, init)
-          match t {
-            Number
-            | String_
-            | Boolean
-            | BigInt
-            | Symbol
-            | Literal(_)
-            | NumberLiteral(_)
-            | BooleanLiteral(_)
-            | BigIntLiteral(_) => resolver.globals[name] = t
+      Const(Ident(name), Any, init) => push(name, init)
+      Block(b) if b.stmt_positions == [@ast.DECL_GROUP_POSITION] &&
+        b.stmts.length() >= 2 &&
+        b.stmts.iter().all(fn(st) { st is Const(Ident(_), _, _) }) =>
+        for st in b.stmts {
+          match st {
+            Const(Ident(name), Any, init) => push(name, init)
             _ => ()
           }
         }
       _ => ()
     }
   }
+  out
 }
 
 ///|
@@ -58506,6 +58808,35 @@ fn check_module_function_bodies_layered(
     resolver.globals["@ts-suppression-present"] = Any
   }
   if outer_modules.length() == 0 {
+    // An imported value is installed below, after ingestion, and ingestion
+    // is where an unannotated function's return type is read off its body:
+    // univer's line breaker imports `AL` and `NS` from `./classes`, and
+    // `mapClass(c: number) { switch (c) { case AI: return AL; … } }` read
+    // as `any` while the same names read as `number` in every body (probed:
+    // tsc gives `number`). So an import binding whose type is a primitive
+    // is installed first as well; a module cannot also declare a name it
+    // imports, so ingestion has nothing of its own to collide with it, and
+    // the install below writes the same entry again.
+    let imported : Map[String, Unit] = Map([])
+    for name in module_.imported_binding_names {
+      imported[name] = ()
+    }
+    for global in extra_globals {
+      if imported.contains(global.0) &&
+        global.1
+        is (Number
+        | Int
+        | String_
+        | Boolean
+        | BigInt
+        | Literal(_)
+        | NumberLiteral(_)
+        | BooleanLiteral(_)
+        | BigIntLiteral(_)) &&
+        resolver.globals.get(global.0) is None {
+        resolver.globals[global.0] = global.1
+      }
+    }
     Resolver::ingest_module(resolver, module_, "")
     collect_module_value_names(module_, resolver.declared_value_names)
     collect_any_uninitialized_values(module_, resolver.any_uninitialized_values)

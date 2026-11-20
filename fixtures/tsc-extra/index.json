@@ -5168,6 +5168,88 @@
       ]
     },
     {
+      "case": "inference/unannotatedReturnThroughSwitchAndModuleConsts.ts",
+      "area": "inference",
+      "name": "unannotatedReturnThroughSwitchAndModuleConsts",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/unannotatedReturnThroughSwitchAndModuleConsts.errors.txt",
+      "claims": [
+        {
+          "name": "okSwitchReturnNarrowsAssignment",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 29
+        },
+        {
+          "name": "okGroupConstReturn",
+          "kind": "ok",
+          "fromLine": 30,
+          "toLine": 34
+        },
+        {
+          "name": "okConstReturnIsBaseType",
+          "kind": "ok",
+          "fromLine": 35,
+          "toLine": 35
+        },
+        {
+          "name": "badSwitchReturnIsNumber",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "badConstReturnWidens",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 37
+        },
+        {
+          "name": "badLastClauseFallsOff",
+          "kind": "bad",
+          "fromLine": 38,
+          "toLine": 38
+        },
+        {
+          "name": "badNoDefault",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "badGroupConstRead",
+          "kind": "bad",
+          "fromLine": 40,
+          "toLine": 44
+        },
+        {
+          "name": "okWrittenAnyConst",
+          "kind": "ok",
+          "fromLine": 47,
+          "toLine": 47
+        },
+        {
+          "name": "okOuterConstNotBlockOne",
+          "kind": "ok",
+          "fromLine": 51,
+          "toLine": 51
+        },
+        {
+          "name": "badOuterConstNotBlockOne",
+          "kind": "bad",
+          "fromLine": 52,
+          "toLine": 53
+        }
+      ]
+    },
+    {
       "case": "inference/variadicTuplePatternRemainder.ts",
       "area": "inference",
       "name": "variadicTuplePatternRemainder",
@@ -5386,6 +5468,71 @@
           "kind": "bad",
           "fromLine": 11,
           "toLine": 12
+        }
+      ]
+    },
+    {
+      "case": "lib/interfaceExtendingLibInterfaceHasItsMembers.ts",
+      "area": "lib",
+      "name": "interfaceExtendingLibInterfaceHasItsMembers",
+      "options": {
+        "strict": "true",
+        "target": "esnext",
+        "lib": "esnext, dom"
+      },
+      "accepted": false,
+      "codes": [
+        2339
+      ],
+      "baseline": "baselines/interfaceExtendingLibInterfaceHasItsMembers.errors.txt",
+      "claims": [
+        {
+          "name": "okLibMember",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okDeepLibMember",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okLibMethod",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okOwnMember",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badMissingMember",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 17
+        },
+        {
+          "name": "okAliasMembers",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badAliasBaseTypo",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badUtilityBaseTypo",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 25
         }
       ]
     },
@@ -6914,6 +7061,88 @@
       ]
     },
     {
+      "case": "relations/computedKeyObjectAgainstIndexSignature.ts",
+      "area": "relations",
+      "name": "computedKeyObjectAgainstIndexSignature",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/computedKeyObjectAgainstIndexSignature.errors.txt",
+      "claims": [
+        {
+          "name": "okComputedVar",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okComputedInline",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okComputedDeclared",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okNestedPack",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badComputedVar",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badNumberInPack",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badComputedInline",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okNumericKeyToStringSignature",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badNumericKeyToStringSignature",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 26
+        },
+        {
+          "name": "okSymbolKeyInline",
+          "kind": "ok",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "okSymbolKeyBound",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 32
+        }
+      ]
+    },
+    {
       "case": "relations/defaultedParameterAcceptsUndefined.ts",
       "area": "relations",
       "name": "defaultedParameterAcceptsUndefined",
@@ -7975,32 +8204,50 @@
         {
           "name": "okStringIntoMixedIntersection",
           "kind": "ok",
-          "fromLine": 8,
-          "toLine": 8
-        },
-        {
-          "name": "okLiteralIntoMixedIntersection",
-          "kind": "ok",
           "fromLine": 9,
           "toLine": 9
         },
         {
-          "name": "okStringIntoObject",
+          "name": "okLiteralIntoMixedIntersection",
           "kind": "ok",
           "fromLine": 10,
           "toLine": 10
         },
         {
-          "name": "badNumberIntoMixedIntersection",
-          "kind": "bad",
+          "name": "okStringIntoObject",
+          "kind": "ok",
           "fromLine": 11,
           "toLine": 11
         },
         {
-          "name": "badStringMissingMember",
+          "name": "badNumberIntoMixedIntersection",
           "kind": "bad",
           "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badStringMissingMember",
+          "kind": "bad",
+          "fromLine": 13,
           "toLine": 13
+        },
+        {
+          "name": "okStringNumericSlots",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badStringNumericSlots",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badStringIndexOnPrimitive",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 17
         }
       ]
     },

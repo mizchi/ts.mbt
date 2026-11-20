@@ -2517,6 +2517,47 @@ test "an element write through a literal-typed key is checked (keywrite)" {
 }
 
 ///|
+/// An object with a COMPUTED key, held in a variable, against an interface
+/// that declares nothing but string index signatures: the computed entry's
+/// value is what must fit. It was read as `any` and then refused outright
+/// (univer's `load(testLocales)` and `batchRemove(config)`), while the same
+/// literal passed inline was accepted. A union index value is tried member
+/// by member with the plain relation too, so `"a"` fits `string | …`. An
+/// inline literal's string-typed computed key is judged against the string
+/// signature, and a numeric one falls back to it (probed: tsc reports the
+/// bad cells only).
+test "a computed-key object fits a string index signature by its values (computedindex)" {
+  let src =
+    #|type LanguageValue = string | string[] | ILanguagePack | ILanguagePack[] | boolean;
+    #|interface ILanguagePack { [key: string]: LanguageValue }
+    #|interface ILocales { [key: string]: ILanguagePack }
+    #|interface Lang { [key: string]: { greeting: string } }
+    #|declare function load(l: Lang): void;
+    #|declare function loadAll(l: ILocales): void;
+    #|enum LocaleType { ZH = "zh", EN = "en" }
+    #|export function okComputedVar() { const K = "zh"; const locales = { [K]: { greeting: "a" } }; load(locales); }
+    #|export function okComputedInline() { const K = "zh"; load({ [K]: { greeting: "a" } }); }
+    #|export function okComputedDeclared(k: string) { const locales = { [k]: { greeting: "a" } }; load(locales); }
+    #|export function okNestedPack() { const locales = { [LocaleType.ZH]: { greeting: "a", nested: { welcome: "b" }, list: ["x"], on: true } }; loadAll(locales); }
+    #|export function badComputedVar() { const K = "zh"; const locales = { [K]: { greeting: 1 } }; load(locales); }
+    #|export function badNumberInPack() { const locales = { [LocaleType.ZH]: { greeting: 1 } }; loadAll(locales); }
+    #|export function badComputedInline(k: string) { load({ [k]: { greeting: 1 } }); }
+    #|export function okNumericKeyToStringSignature(n: number) { load({ [n]: { greeting: "a" } }); }
+    #|export function badNumericKeyToStringSignature(n: number) { load({ [n]: { greeting: 1 } }); }
+    #|const sym = Symbol("s");
+    #|interface Strs { [k: string]: string }
+    #|declare function take(s: Strs): void;
+    #|export function okSymbolKeyInline() { take({ [sym]: 1 }); }
+    #|export function okSymbolKeyBound() { const o = { [sym]: 1 }; take(o); }
+  assert_eq(issue_lines(src), [
+    "function badComputedVar > call `load` arg[0]: expected `Lang` but got `{ [computed]: { greeting: number } }`",
+    "function badNumberInPack > call `loadAll` arg[0]: expected `ILocales` but got `{ [computed]: { greeting: number } }`",
+    "function badComputedInline > call `load` arg[0][computed].greeting: expected `string` but got `number`",
+    "function badNumericKeyToStringSignature > call `load` arg[0][computed].greeting: expected `string` but got `number`",
+  ])
+}
+
+///|
 /// A spread argument's element relates to the rest parameter's element
 /// through every alias the target union's members name. `unwrap` expanded
 /// only the outer layer, so `[number, number]` against `Charset | Raw` met
@@ -2542,14 +2583,115 @@ test "a spread argument relates through nested aliases (spreadalias)" {
 /// an intersection of object types when it fits every part: `string` and
 /// `"abc"` into `{ length: number } & { x?: number }` are legal, and the
 /// intersection-target check rejected any primitive against an object part
-/// before asking (#322's review; probed: tsc reports the bad cell only).
+/// before asking. An index signature is a member too: a string's numeric
+/// slots are `string`, and a primitive has no string index (#322's reviews;
+/// probed: tsc reports the bad cells only).
 test "a primitive fits an intersection of object types (intrinsicintersection)" {
   let src =
     #|declare const s: string;
     #|export const okStringIntoMixedIntersection: { length: number } & { x?: number } = s;
     #|export const okLiteralIntoMixedIntersection: { length: number } & { x?: number } = "abc";
     #|export const badNumberIntoMixedIntersection: { length: number } & { x?: number } = 5;
+    #|export const okStringNumericSlots: { length: number; [n: number]: string } & { charAt: any } = "abc";
+    #|export const badStringNumericSlots: { length: number; [n: number]: number } & { charAt: any } = "abc";
+    #|export const badStringIndexOnPrimitive: { length: number; [k: string]: any } & { charAt: any } = s;
   assert_eq(issue_lines(src), [
     "top-level > binding `badNumberIntoMixedIntersection` init: expected `{ length: number } & { x: number | undefined }` but got `5`",
+    "top-level > binding `badStringNumericSlots` init: expected `{ length: number; [x: number]: number } & { charAt: any }` but got `\"abc\" (string)`",
+    "top-level > binding `badStringIndexOnPrimitive` init: expected `{ length: number; [x: string]: any } & { charAt: any }` but got `string`",
+  ])
+}
+
+///|
+/// An unannotated function's return type comes from its body. A `switch`
+/// with a `default` clause and no `break` leaves only through its last
+/// clause, so when that clause returns the function adds no `undefined`;
+/// univer's `mapClass(c: number)` returned `any` instead, and every
+/// `this._next = mapClass(…)` kept its declared `Nullable<number>`. A
+/// module-level `const` holding a literal is that literal's base type once
+/// returned, and a declarator group declares each of its names (probed: tsc
+/// reports the bad cells only; `badNoDefault` is a MISS).
+test "a switch and module literal consts give a function its return type (switchreturn)" {
+  let src =
+    #|const AL = 1;
+    #|const NS = 2, AI = 3;
+    #|const S1 = "s";
+    #|declare function side(): void;
+    #|function take(n: number) { return n; }
+    #|function mapClass(c: number) { switch (c) { case AI: return AL; case 9: return NS; default: return c; } }
+    #|function lastClauseFallsOff(c: number) { switch (c) { case 1: return AL; default: side(); } }
+    #|function noDefault(c: number) { switch (c) { case 1: return 2; case 2: return 3; } }
+    #|function withBreak(c: number) { switch (c) { case 1: break; default: return c; } return 7; }
+    #|function breakFallsOut(c: number) { switch (c) { case 1: side(); break; default: return 2; } }
+    #|function returnsGroupConst() { return NS; }
+    #|function returnsStringConst() { return S1; }
+    #|function shadowed() { const S1 = 5; return S1; }
+    #|export function okSwitchReturnNarrows() { let n: number | undefined = undefined; n = mapClass(1); return take(n); }
+    #|export function okGroupConstReturn() { let n: number | undefined = undefined; n = returnsGroupConst(); return take(n); }
+    #|export function okBreakReturn() { const n: number = withBreak(1); return n; }
+    #|export function okShadowedLocal() { const n: number = shadowed(); return n; }
+    #|export function badSwitchReturnIsNumber() { const s: string = mapClass(1); return s; }
+    #|export function badConstReturnWidens() { const lit: "s" = returnsStringConst(); return lit; }
+    #|export function badLastClauseFallsOff() { const n: number = lastClauseFallsOff(1); return n; }
+    #|export function badNoDefault() { const n: number = noDefault(1); return n; }
+    #|export function badGroupConstRead() { const s: string = NS; return s; }
+    #|export function badBreakFallsOut() { let n: number | undefined = undefined; n = breakFallsOut(1); return take(n); }
+  assert_eq(issue_lines(src), [
+    "function badSwitchReturnIsNumber > binding `s` init: expected `string` but got `number`",
+    "function badConstReturnWidens > binding `lit` init: expected `\"s\" (string)` but got `string`",
+    "function badLastClauseFallsOff > binding `n` init: type `number | undefined` is not assignable to type `number`",
+    "function badGroupConstRead > binding `s` init: expected `string` but got `number`",
+    "function badBreakFallsOut > call `take` arg[0]: type `number | undefined` is not assignable to type `number`",
+  ])
+}
+
+///|
+/// An interface extending a lib interface this checker has no member table
+/// for (`Event`) has that interface's members too, so member existence
+/// abstains on it, as it already did on a class with an unresolved base:
+/// univer's `IPointerEvent` read `timeStamp`, `type` and `preventDefault`
+/// as missing (probed: tsc accepts them). A typo through such a chain is a
+/// MISS; a chain of declared interfaces still reports one.
+test "an interface extending an untabled lib interface has its members (libbase)" {
+  let src =
+    #|export interface IEvent extends Event { deviceType: number; }
+    #|export interface IUIEvent extends IEvent, UIEvent {}
+    #|export interface IMouseEvent extends IUIEvent, MouseEvent { altKey: boolean; }
+    #|export interface IPointerEvent extends IMouseEvent { pointerId: number; }
+    #|interface Base { a: number }
+    #|interface Derived extends Base { b: number }
+    #|export function okLibMember(e: IEvent) { return e.type; }
+    #|export function okDeepLibMember(e: IPointerEvent) { return e.timeStamp; }
+    #|export function okLibMethod(e: IPointerEvent) { e.preventDefault(); }
+    #|export function badDeclaredChainTypo(d: Derived) { return d.nope; }
+    #|type Shape = { a: number };
+    #|interface OverAlias extends Shape { b: number }
+    #|interface OverUtility extends Pick<Base, "a"> { c: number }
+    #|export function badAliasBaseTypo(o: OverAlias) { return o.nope; }
+    #|export function badUtilityBaseTypo(o: OverUtility) { return o.nope; }
+  assert_eq(issue_lines(src), [
+    "function badDeclaredChainTypo > PropAccess `.nope`: property `nope` does not exist on `Derived`",
+    "function badAliasBaseTypo > PropAccess `.nope`: property `nope` does not exist on `OverAlias`",
+    "function badUtilityBaseTypo > PropAccess `.nope`: property `nope` does not exist on `OverUtility`",
+  ])
+}
+
+///|
+/// Return inference binds the module's literal `const`s, and two shapes
+/// must not reach it: a written `: any` is `any` (tsc gives `f` the return
+/// type `any`), and a WRITTEN block of consts is block-scoped, so its
+/// `VALUE` does not replace the module's. Probed: tsc accepts both `ok…`.
+test "module literal consts skip a written any and a written block (moduleconsts)" {
+  let src =
+    #|const ANY_VALUE: any = 1;
+    #|function returnsAny() { return ANY_VALUE; }
+    #|export const okWrittenAny: string = returnsAny();
+    #|const VALUE = 1;
+    #|{ const VALUE = "inner"; const OTHER = 2; }
+    #|function returnsOuter() { return VALUE; }
+    #|export const okOuterConst: number = returnsOuter();
+    #|export const badOuterConst: string = returnsOuter();
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badOuterConst` init: expected `string` but got `number`",
   ])
 }

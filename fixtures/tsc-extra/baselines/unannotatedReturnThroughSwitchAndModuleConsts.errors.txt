@@ -1,0 +1,78 @@
+unannotatedReturnThroughSwitchAndModuleConsts.ts(36,51): error TS2322: Type 'number' is not assignable to type 'string'.
+unannotatedReturnThroughSwitchAndModuleConsts.ts(37,48): error TS2322: Type 'string' is not assignable to type '"s"'.
+unannotatedReturnThroughSwitchAndModuleConsts.ts(38,49): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+unannotatedReturnThroughSwitchAndModuleConsts.ts(39,40): error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+unannotatedReturnThroughSwitchAndModuleConsts.ts(40,45): error TS2322: Type 'number' is not assignable to type 'string'.
+unannotatedReturnThroughSwitchAndModuleConsts.ts(52,14): error TS2322: Type 'number' is not assignable to type 'string'.
+
+
+==== unannotatedReturnThroughSwitchAndModuleConsts.ts (6 errors) ====
+    // A function with no return annotation takes its return type from its
+    // body. A `switch` with a `default` clause, whose every clause returns,
+    // cannot fall off the end, so it adds no `undefined`; one whose last clause
+    // can, or one with no `default`, does. A module-level `const` holding a
+    // literal is that literal's base type once returned, as a literal is, and a
+    // declarator group (`const a = 1, b = 2`) declares each name the same way.
+    
+    const AL = 1;
+    const NS = 2, AI = 3;
+    const S1 = "s";
+    declare function side(): void;
+    function take(n: number) { return n; }
+    function mapClass(c: number) {
+      switch (c) {
+        case AI: return AL;
+        case 9: return NS;
+        default: return c;
+      }
+    }
+    function lastClauseFallsOff(c: number) { switch (c) { case 1: return AL; default: side(); } }
+    function noDefault(c: number) { switch (c) { case 1: return 2; case 2: return 3; } }
+    function returnsGroupConst() { return NS; }
+    function returnsStringConst() { return S1; }
+    
+    export function okSwitchReturnNarrowsAssignment() {
+      let n: number | undefined = undefined;
+      n = mapClass(1);
+      return take(n);
+    }
+    export function okGroupConstReturn() {
+      let n: number | undefined = undefined;
+      n = returnsGroupConst();
+      return take(n);
+    }
+    export function okConstReturnIsBaseType() { let s = returnsStringConst(); s = "t"; return s; }
+    export function badSwitchReturnIsNumber() { const s: string = mapClass(1); return s; }
+                                                      ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    export function badConstReturnWidens() { const lit: "s" = returnsStringConst(); return lit; }
+                                                   ~~~
+!!! error TS2322: Type 'string' is not assignable to type '"s"'.
+    export function badLastClauseFallsOff() { const n: number = lastClauseFallsOff(1); return n; }
+                                                    ~
+!!! error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
+    export function badNoDefault() { const n: number = noDefault(1); return n; }
+                                           ~
+!!! error TS2322: Type 'number | undefined' is not assignable to type 'number'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
+    export function badGroupConstRead() { const s: string = NS; return s; }
+                                                ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    
+    // A `const` written `: any` is `any`, so a function returning it returns
+    // `any`; and a written block of `const`s is block-scoped, so its `VALUE`
+    // does not replace the module's.
+    const ANY_VALUE: any = 1;
+    function returnsAny() { return ANY_VALUE; }
+    export const okWrittenAnyConst: string = returnsAny();
+    const VALUE = 1;
+    { const VALUE = "inner"; const OTHER = 2; }
+    function returnsOuter() { return VALUE; }
+    export const okOuterConstNotBlockOne: number = returnsOuter();
+    export const badOuterConstNotBlockOne: string = returnsOuter();
+                 ~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    

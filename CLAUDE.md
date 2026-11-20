@@ -7802,6 +7802,96 @@ product surfaces now.
       in the single-file check.
     - A non-literal source against a bare bounded type parameter abstains
       (`const p: P = a` with `a: A`).
+  Batch HM is univer's line-breaker and lib-event families, a computed-key
+  object against an index signature, and #322's last review round. The
+  oracle is unchanged. Each cell was reproduced against the nightly first.
+  univer's data-validation and sheets-numfmt go 75 -> 57, ui 59 -> 42 and
+  core 21 -> 20; excalidraw 49 -> 47, zod 6 -> 5, effect 61. No report
+  appears at a new site: the seven lines a diff calls "added" are existing
+  sites whose message now prints a key as `[x: string]` or `[computed]`.
+  - **A function's unannotated return type lost a `switch` and every
+    module constant.** univer's line breaker returns from every clause of a
+    `switch` with a `default`, and returns module-level constants
+    (`const BK = 1`). We read the switch as possibly falling off its end,
+    so the return type gained `undefined`, and the constants as `any`.
+    - A `switch` with a `default` clause, and no `break` in any clause,
+      reaches its end exactly when its last clause does. Any `break`
+      abstains, whatever its target, since one inside a nested loop is
+      not told apart. A `switch` with no `default` stays "cannot tell":
+      tsc reads a switch over a closed union as exhaustive, which needs
+      the scrutinee's type. That is a declared MISS.
+    - Return inference runs inside `ingest_module`, BEFORE
+      `register_primitive_top_level_consts` and before an importer's
+      globals are installed. So both the module's own constants and an
+      imported `const` were unknown there. The module's literal `const`s
+      are now bound syntactically for that inference, unless the body
+      declares the same name. A declarator group (`const a = 1, b = 2`,
+      a top-level `Block` of `Const`) counts too, and the registration
+      reads groups as well, so the two cannot disagree. An imported
+      binding whose type is a primitive or a literal is installed before
+      ingestion.
+  - **An interface extending a lib interface we hold no member table for
+    reads as having none of its members.** univer's `IPointerEvent` sits
+    three levels above `Event`, and `evt.timeStamp`, `e.type` and
+    `preventDefault()` were reported as missing. A class with an
+    unresolved base already abstained on member existence; an interface
+    did not. It does now, when its `extends` chain reaches a name that is
+    not a declared interface or class, not a standard utility such as
+    `Omit`, and not one of the lib interfaces whose members we do
+    tabulate.
+    - The first version abstained on `interface LP extends Omit<L, "k">`
+      too, and an existing test caught it: a utility base is projected by
+      `collect_declared_fields`, so its members are known. A test for the
+      module's own alias bases was added with it, and it survived its
+      mutation, since such a base never reaches that branch. It was
+      removed as dead code.
+    - A typo through such a chain is now a declared MISS. A chain of
+      declared interfaces, and one ending in an alias, still reports.
+  - **A computed-key object was not related to an index signature.**
+    `{ [LocaleType.ZH]: { … } }` against `{ [key: string]: ILanguagePack }`
+    was judged as if the computed key were a named property, and the
+    `@@computed:N` placeholder matched nothing. It is checked against the
+    string index signature by its value now. A numeric computed key falls
+    back to the string signature when no numeric one exists. A union of
+    targets also tries plain assignability before the structural walk.
+  - **Two message shapes named nothing a user wrote.** An index signature
+    is a field keyed by its key TYPE, so `{ [n: number]: T }` printed as
+    `{ number: T }`, which reads as a property called `number`, and an
+    unnamed computed key printed its placeholder `@@computed:0`. They print
+    as `[x: number]` and `[computed]` now.
+  - **#322's fourth review round** found two MISSes and no false positive.
+    - A numeric index signature on the target was not compared with a
+      string's numeric slots. `string` into `{ [n: number]: number }` is
+      TS2322 now, and a primitive never satisfies a STRING index signature.
+    - `export *` re-exported `default`, which it does not (TS2305).
+  - **#323's review found two false positives the batch introduced and
+    one older.** Each was reproduced against the nightly first.
+    - The module-constant binding read a written `const V: any = 1` as
+      `number`, because an annotation of `any` and no annotation are the
+      same `Any` in the AST; the parser's `<written-any-decl:>` marker now
+      excludes it. And it read a WRITTEN block of `const`s as a declarator
+      group, so `{ const VALUE = "inner" }` replaced the module's `VALUE`.
+      The function's own doc comment had said that case could not matter.
+      A group carries `DECL_GROUP_POSITION`, and only that is read now.
+    - A symbol-keyed computed property was judged against a string index
+      signature, so `{ [sym]: 1 }` against `{ [k: string]: string }` was
+      reported. That predates the batch at the inline site. A symbol key
+      is skipped at both sites.
+    - Two findings did not reproduce. An interface over the module's own
+      type alias already reports a typo. `default` through `export *`
+      resolving as a TYPE changes no report: mtsc checks no missing type
+      export at all (`import type { Nope }` is silent too), so the guard
+      was written, survived its mutation and was removed. The missing
+      type-export check (TS2305 for `import type`) is filed.
+  - **Filed:**
+    - The sheet-interceptor family (univer): a value narrowed from a
+      generic arrow call whose body is an `as` expression. Narrowing to
+      `any` was tried and REJECTED: a real `any` assigned to a binding
+      declared nullable keeps the declared type in tsc, so that would
+      lose reports tsc gives. It needs the call's return inferred.
+    - A string into `{ length: number } & { length: number }` is still
+      reported, from a site not yet found.
+    - An array against a numeric index target is a MISS.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

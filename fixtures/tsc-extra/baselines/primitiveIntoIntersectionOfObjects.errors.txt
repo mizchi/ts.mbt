@@ -1,14 +1,19 @@
-primitiveIntoIntersectionOfObjects.ts(11,14): error TS2322: Type 'number' is not assignable to type '{ length: number; } & { x?: number | undefined; }'.
+primitiveIntoIntersectionOfObjects.ts(12,14): error TS2322: Type 'number' is not assignable to type '{ length: number; } & { x?: number | undefined; }'.
   Type 'number' is not assignable to type '{ length: number; }'.
-primitiveIntoIntersectionOfObjects.ts(12,14): error TS2322: Type 'string' is not assignable to type '{ length: number; } & { size: number; }'.
+primitiveIntoIntersectionOfObjects.ts(13,14): error TS2322: Type 'string' is not assignable to type '{ length: number; } & { size: number; }'.
   Type 'string' is not assignable to type '{ size: number; }'.
+primitiveIntoIntersectionOfObjects.ts(15,14): error TS2322: Type 'string' is not assignable to type '{ [n: number]: number; length: number; } & { charAt: any; }'.
+  Type 'string' is not assignable to type '{ [n: number]: number; length: number; }'.
+primitiveIntoIntersectionOfObjects.ts(16,14): error TS2322: Type 'string' is not assignable to type '{ [k: string]: any; length: number; } & { charAt: any; }'.
+  Type 'string' is not assignable to type '{ [k: string]: any; length: number; }'.
 
 
-==== primitiveIntoIntersectionOfObjects.ts (2 errors) ====
+==== primitiveIntoIntersectionOfObjects.ts (4 errors) ====
     // A primitive is assignable to an object type whose members it has
     // (`"abc"` has `length`), and so to an intersection of object types when it
     // fits every part, an optional member included. A primitive that lacks a
-    // required member fits none.
+    // required member fits none. An index signature is a member too: a
+    // string's numeric slots are `string`, and a primitive has no string index.
     
     declare const s: string;
     
@@ -23,4 +28,13 @@ primitiveIntoIntersectionOfObjects.ts(12,14): error TS2322: Type 'string' is not
                  ~~~~~~~~~~~~~~~~~~~~~~
 !!! error TS2322: Type 'string' is not assignable to type '{ length: number; } & { size: number; }'.
 !!! error TS2322:   Type 'string' is not assignable to type '{ size: number; }'.
+    export const okStringNumericSlots: { length: number; [n: number]: string } & { charAt: any } = "abc";
+    export const badStringNumericSlots: { length: number; [n: number]: number } & { charAt: any } = "abc";
+                 ~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type '{ [n: number]: number; length: number; } & { charAt: any; }'.
+!!! error TS2322:   Type 'string' is not assignable to type '{ [n: number]: number; length: number; }'.
+    export const badStringIndexOnPrimitive: { length: number; [k: string]: any } & { charAt: any } = s;
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type '{ [k: string]: any; length: number; } & { charAt: any; }'.
+!!! error TS2322:   Type 'string' is not assignable to type '{ [k: string]: any; length: number; }'.
     
