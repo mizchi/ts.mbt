@@ -1,18 +1,20 @@
-mutableBindingWidensFreshLiteralUnion.ts(17,71): error TS2322: Type '"a" | "b"' is not assignable to type '"c"'.
+mutableBindingWidensFreshLiteralUnion.ts(18,71): error TS2322: Type '"a" | "b"' is not assignable to type '"c"'.
   Type '"a"' is not assignable to type '"c"'.
-mutableBindingWidensFreshLiteralUnion.ts(18,76): error TS2322: Type 'string' is not assignable to type '"a" | "b"'.
-mutableBindingWidensFreshLiteralUnion.ts(19,63): error TS2322: Type '"z"' is not assignable to type '"x"'.
-mutableBindingWidensFreshLiteralUnion.ts(20,54): error TS2322: Type '"z"' is not assignable to type '"x"'.
+mutableBindingWidensFreshLiteralUnion.ts(19,76): error TS2322: Type 'string' is not assignable to type '"a" | "b"'.
+mutableBindingWidensFreshLiteralUnion.ts(20,63): error TS2322: Type '"y"' is not assignable to type '"x"'.
+mutableBindingWidensFreshLiteralUnion.ts(21,54): error TS2322: Type '"y"' is not assignable to type '"x"'.
+mutableBindingWidensFreshLiteralUnion.ts(23,84): error TS2322: Type '"x"' is not assignable to type '"a" | "b"'.
 
 
-==== mutableBindingWidensFreshLiteralUnion.ts (4 errors) ====
+==== mutableBindingWidensFreshLiteralUnion.ts (5 errors) ====
     // A `let` widens each FRESH literal its initializer can evaluate to, and
     // `"a" | string` is `string`. So a conditional of two string literals is a
     // `string` binding and takes any string later. A `const` keeps the union.
     // An operand's literal counts only when the operator's result can be that
     // operand: the right of `||` when the left can be falsy, the right of `??`
     // when the left can be nullish. A declared literal on the left of either
-    // keeps the binding that literal.
+    // keeps the binding that literal, and the right operand is not in its
+    // type at all. An always-falsy left operand is never the result.
     
     declare const nx: "x" | undefined;
     declare const mx: "x";
@@ -29,10 +31,14 @@ mutableBindingWidensFreshLiteralUnion.ts(20,54): error TS2322: Type '"z"' is not
     export function badLetToLiteral(c: boolean) { let r = c ? "a" : "b"; const z: "a" | "b" = r; return z; }
                                                                                ~
 !!! error TS2322: Type 'string' is not assignable to type '"a" | "b"'.
-    export function badCoalesceNonNullable() { let b = mx ?? "y"; b = "z"; return b; }
+    export function badCoalesceNonNullable() { let b = mx ?? "y"; b = "y"; return b; }
                                                                   ~
-!!! error TS2322: Type '"z"' is not assignable to type '"x"'.
-    export function badOrNonFalsy() { let b = mx || "y"; b = "z"; return b; }
+!!! error TS2322: Type '"y"' is not assignable to type '"x"'.
+    export function badOrNonFalsy() { let b = mx || "y"; b = "y"; return b; }
                                                          ~
-!!! error TS2322: Type '"z"' is not assignable to type '"x"'.
+!!! error TS2322: Type '"y"' is not assignable to type '"x"'.
+    declare const tag: "a" | "b";
+    export function badAlwaysFalsyLeft() { const empty = ""; let value = empty || tag; value = "x"; return value; }
+                                                                                       ~~~~~
+!!! error TS2322: Type '"x"' is not assignable to type '"a" | "b"'.
     

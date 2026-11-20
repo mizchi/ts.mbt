@@ -5,7 +5,8 @@
 // when `a` cannot be falsy, so the right operand is never related to the
 // expected type. Every object type except an empty one is never falsy,
 // whatever its members' optionality, a class with only methods included.
-// A `string` can be `""`, so `s || 1` still yields `string | 1`.
+// A `string` can be `""`, so `s || 1` still yields `string | 1`. The
+// deciding left operand is the result, so it is what relates.
 
 interface D { a: number; b: number }
 declare function f(d: D): void;
@@ -22,3 +23,5 @@ export function okOrWeakType(w: W) { fw(w || 1); }
 export function okStrCoalesce(s: string) { g(s ?? 1); }
 export function badNullable(u: D | undefined) { f(u ?? {}); }
 export function badOrStr(s: string) { g(s || 1); }
+export function badLeftDecidesCoalesce(s: string): number { return s ?? false; }
+export function badLeftDecidesOr(d: D): string { return d || "z"; }

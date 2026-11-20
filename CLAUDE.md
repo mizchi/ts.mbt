@@ -7408,6 +7408,59 @@ product surfaces now.
     related to one returning `Nullable<T>` there. One-file and two-file
     reproductions are both silent, so the cause is in what the real file
     adds.
+
+  Batch HG carries #316's five Minors and takes the next univer
+  categories. The oracle is unchanged, and no real-code site was added.
+  - **A numeric literal fits a numeric enum only through a member.** TS
+    5.0 made `const e: H = 9` an error when no member of `H` holds `9`.
+    - Batch HE applied that rule to declared literal TYPES. A literal
+      EXPRESSION never reached it, because `infer_expr` erases `9` to
+      `number`, which every numeric enum accepts.
+    - So the bare binding, a property write, an object-literal member, an
+      argument and a union holding the enum were all MISSes. The literal
+      is now read off the expression.
+    - The rule applies only where the whole target is numeric enums and
+      nullish members. A `number`, a string enum, an enum-member type or
+      an unresolvable name abstains.
+  - **The union beside it read one level deep.** `ht?:
+    Nullable<HorizontalAlign>` is `Nullable<H> | undefined`, whose alias
+    expands in place to a NESTED union. The test for "a member is a
+    numeric enum" never saw the enum, so univer's `styleList.ht = 1` was
+    reported for every literal, a legal one included. The members are
+    flattened first.
+  - **An imported function with no return annotation was `any`.** The
+    graph path typed it from its declaration, while the same function
+    declared in the importer's file was read from its body. So univer's
+    `lineWidth = getLineWidth(style)` narrowed nothing.
+    - The body is now read for an importer, with an EMPTY resolver. A name
+      declared elsewhere in that module infers as `any` there, so only a
+      result built from primitives and their literals is adopted.
+    - That narrowness is the point: the foreign module's declarations are
+      not available at that site, and guessing them would be how a false
+      positive gets in.
+  - **A written `: any` return is not inferred.** This is the
+    absent-versus-`: any` blocker again, and it was a false positive on
+    main: `function f(): any { return 1 }` made `const s: string = f()` a
+    report, which tsc accepts. The parser now records
+    `<written-any-return:NAME>`. The channel is flat and scope-blind,
+    which is safe in this direction: it can only make a same-named
+    function keep `any`.
+  - **#316's Minors**, each probed against the nightly first.
+    - The deciding left operand of `??` / `||` IS the result, so it is now
+      what relates to the target. `return s ?? false` in a function
+      returning `number` had become a MISS.
+    - `infer_binop` returns the deciding left operand alone. For `??`
+      that holds under strictNullChecks only, through a new resolver flag.
+      For `||` it goes through the literal-aware falsiness test, since
+      `falsy_subset` keeps every literal.
+    - The left's definitely falsy members drop out of `||`, as tsc's
+      `removeDefinitelyFalsyTypes` does, and an always-falsy left adds no
+      fresh literal.
+    - A `var` in a branch is not a shadow at the join: it is the
+      function's own binding.
+  - **Filed:** univer's `viewport` reaches `Tools.clamp`, a static method
+    of an imported class, which is `any` here. That is the deeper gap an
+    earlier batch's comment records as exposing other gaps when typed.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

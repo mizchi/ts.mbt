@@ -1103,6 +1103,17 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     }
   }
   self.last_function_bodiless = false
+  // A WRITTEN `: any` return and an absent one are the same `Any` in
+  // `TsFunc.return_type`, and only the absent one takes its type from the
+  // body: `function f(): any { return 1 }` is `any` to tsc, so
+  // `const s: string = f()` is legal (probed). The checker infers an
+  // unannotated function's return from its body, locally and for an
+  // importer, so it has to be told which is which. The channel is flat and
+  // scope-blind, which is safe in this direction: the marker can only make
+  // a same-named function keep `any`, never invent a finding.
+  if had_return_annotation && return_type is Any {
+    self.grammar_misuses.push("<written-any-return:\{name}>")
+  }
   self.record_implementation_optional_pattern_params(params)
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator

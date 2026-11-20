@@ -1,15 +1,18 @@
-coalesceLeftOperandDecidesResult.ts(20,51): error TS2345: Argument of type 'D | {}' is not assignable to parameter of type 'D'.
+coalesceLeftOperandDecidesResult.ts(21,51): error TS2345: Argument of type 'D | {}' is not assignable to parameter of type 'D'.
   Type '{}' is missing the following properties from type 'D': a, b
-coalesceLeftOperandDecidesResult.ts(21,41): error TS2345: Argument of type 'string | 1' is not assignable to parameter of type 'string'.
+coalesceLeftOperandDecidesResult.ts(22,41): error TS2345: Argument of type 'string | 1' is not assignable to parameter of type 'string'.
   Type 'number' is not assignable to type 'string'.
+coalesceLeftOperandDecidesResult.ts(23,61): error TS2322: Type 'string' is not assignable to type 'number'.
+coalesceLeftOperandDecidesResult.ts(24,50): error TS2322: Type 'D' is not assignable to type 'string'.
 
 
-==== coalesceLeftOperandDecidesResult.ts (2 errors) ====
+==== coalesceLeftOperandDecidesResult.ts (4 errors) ====
     // `a ?? b` has `a`'s type alone when `a` cannot be nullish, and `a || b`
     // when `a` cannot be falsy, so the right operand is never related to the
     // expected type. Every object type except an empty one is never falsy,
     // whatever its members' optionality, a class with only methods included.
-    // A `string` can be `""`, so `s || 1` still yields `string | 1`.
+    // A `string` can be `""`, so `s || 1` still yields `string | 1`. The
+    // deciding left operand is the result, so it is what relates.
     
     interface D { a: number; b: number }
     declare function f(d: D): void;
@@ -32,4 +35,10 @@ coalesceLeftOperandDecidesResult.ts(21,41): error TS2345: Argument of type 'stri
                                             ~~~~~~
 !!! error TS2345: Argument of type 'string | 1' is not assignable to parameter of type 'string'.
 !!! error TS2345:   Type 'number' is not assignable to type 'string'.
+    export function badLeftDecidesCoalesce(s: string): number { return s ?? false; }
+                                                                ~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export function badLeftDecidesOr(d: D): string { return d || "z"; }
+                                                     ~~~~~~
+!!! error TS2322: Type 'D' is not assignable to type 'string'.
     

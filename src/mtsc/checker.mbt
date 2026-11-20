@@ -404,6 +404,14 @@ fn local_function_value_type(
       !has_signature_only || func.body.stmts.length() == 0
     }
     if callable {
+      // An unannotated return is read from the body, as a function
+      // declared in the importer's own file is (see
+      // `unannotated_function_return_from_body`).
+      let func = match
+        @checker.unannotated_function_return_from_body(module_, func) {
+        Some(t) => { ..func, return_type: t, }
+        None => func
+      }
       sigs.push(generic_function_value_type(func))
     }
   }
