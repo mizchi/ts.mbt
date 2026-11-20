@@ -7540,6 +7540,10 @@ product surfaces now.
       parameter with `any`. Fixing only `unwrap` measured as a no-op for a
       member read; a print showed the receiver arriving as `U<any>`.
     - Interfaces keep the old behaviour: their defaults are not recorded.
+    - It also retired the mutation differential's one declared false
+      positive, date-fns' `format(…, ({ locale } satisfies unknown))`. The
+      defaults change alone was enough, measured binary by binary, and
+      the harness reported the entry STALE, so it is removed.
   - **Binding defaults exposed a discriminant-split false positive that
     main already had.** zod's bare `SyncParseReturnType` now resolves to
     `OK<any> | DIRTY<any> | INVALID`, and `return { status: status.value,
