@@ -1572,6 +1572,11 @@ fn Parser::parse_parenthesized_expr(
       self.allow_jsx,
     ),
     src: self.src,
+    // Same tokens, same positions: a directive covers a statement inside
+    // the parenthesized expression (an arrow body) as it would outside.
+    ts_directive_lines: self.ts_directive_lines,
+    line_starts: self.line_starts,
+    suppressed_stmts: self.suppressed_stmts,
     // Compiler-option context must survive into the sub-parse too — the
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,
@@ -1653,6 +1658,11 @@ fn Parser::parse_expr_until_top_level(
       self.allow_jsx,
     ),
     src: self.src,
+    // Same tokens, same positions: a directive covers a statement inside
+    // the parenthesized expression (an arrow body) as it would outside.
+    ts_directive_lines: self.ts_directive_lines,
+    line_starts: self.line_starts,
+    suppressed_stmts: self.suppressed_stmts,
     // Compiler-option context must survive into the sub-parse too — the
     // comma-operand implicit-any rule is gated on it.
     no_implicit_any: self.no_implicit_any,

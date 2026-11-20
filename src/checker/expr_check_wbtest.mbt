@@ -343,6 +343,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         interface_member_modifier_misuses: [],
         class_dup_diagnostics: [],
         top_level_stmts: [],
+        suppressed_stmts: [],
       }
   } noraise {
     m => m

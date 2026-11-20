@@ -446,6 +446,7 @@ pub(all) struct TsModule {
   module_augmentations : Array[(String, TsModule)]
   ambient_module_sources : Array[(String, String)]
   top_level_stmts : Array[TsStmt]
+  suppressed_stmts : Array[TsStmt]
   strict_property_initialization : Bool
   no_implicit_any : Bool
   strict_null_checks : Bool

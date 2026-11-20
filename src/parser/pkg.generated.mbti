@@ -217,6 +217,9 @@ pub struct Parser {
   grammar_misuses : Array[String]
   option_header : String
   jsx_unterminated_strings : Array[Int32]
+  ts_directive_lines : Array[Int32]
+  line_starts : Array[Int32]
+  suppressed_stmts : Array[@ast.TsStmt]
   destructuring_start_memo : Map[Int32, Bool]
   bracket_close : Array[Int32]
   imported_binding_names : Array[String]

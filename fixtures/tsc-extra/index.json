@@ -2838,6 +2838,135 @@
       ]
     },
     {
+      "case": "directives/tsIgnoreCoversNextCodeLine.ts",
+      "area": "directives",
+      "name": "tsIgnoreCoversNextCodeLine",
+      "options": {},
+      "accepted": false,
+      "codes": [
+        2322,
+        2366,
+        2540
+      ],
+      "baseline": "baselines/tsIgnoreCoversNextCodeLine.errors.txt",
+      "claims": [
+        {
+          "name": "okNoSpace",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 16
+        },
+        {
+          "name": "okExpectError",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 23
+        },
+        {
+          "name": "badNoDirective",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 30
+        },
+        {
+          "name": "okTopLevel",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 33
+        },
+        {
+          "name": "okBlankLine",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 36
+        },
+        {
+          "name": "okCommentLineBetween",
+          "kind": "ok",
+          "fromLine": 37,
+          "toLine": 37
+        },
+        {
+          "name": "okAfterTrailing",
+          "kind": "ok",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "okBlockComment",
+          "kind": "ok",
+          "fromLine": 41,
+          "toLine": 41
+        },
+        {
+          "name": "badBlockFirstLine",
+          "kind": "bad",
+          "fromLine": 44,
+          "toLine": 44
+        },
+        {
+          "name": "okAfterNestedBody",
+          "kind": "ok",
+          "fromLine": 48,
+          "toLine": 48
+        },
+        {
+          "name": "okInsideStatement",
+          "kind": "ok",
+          "fromLine": 49,
+          "toLine": 56
+        },
+        {
+          "name": "badDirectiveAfterError",
+          "kind": "bad",
+          "fromLine": 57,
+          "toLine": 62
+        },
+        {
+          "name": "badInsideCompound",
+          "kind": "bad",
+          "fromLine": 63,
+          "toLine": 70
+        },
+        {
+          "name": "okCompoundHead",
+          "kind": "ok",
+          "fromLine": 71,
+          "toLine": 78
+        },
+        {
+          "name": "badLaterLineOfStatement",
+          "kind": "bad",
+          "fromLine": 79,
+          "toLine": 81
+        },
+        {
+          "name": "okParenArrowInCondition",
+          "kind": "ok",
+          "fromLine": 82,
+          "toLine": 91
+        },
+        {
+          "name": "badMissingReturnAfterCovered",
+          "kind": "bad",
+          "fromLine": 92,
+          "toLine": 98
+        },
+        {
+          "name": "okLoopHeadAfterBody",
+          "kind": "ok",
+          "fromLine": 99,
+          "toLine": 106
+        },
+        {
+          "name": "badDefaultAfterCovered",
+          "kind": "bad",
+          "fromLine": 111,
+          "toLine": 114
+        }
+      ]
+    },
+    {
       "case": "directives/tsNocheckAfterBlockComment.ts",
       "area": "directives",
       "name": "tsNocheckAfterBlockComment",

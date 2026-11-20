@@ -2695,3 +2695,152 @@ test "module literal consts skip a written any and a written block (moduleconsts
     "top-level > binding `badOuterConst` init: expected `string` but got `number`",
   ])
 }
+
+///|
+/// A `@ts-ignore` / `@ts-expect-error` comment directive suppresses what
+/// tsc reports on the first line after it that is neither blank nor a
+/// `//` comment. Our issues carry no line, so a statement STARTING there
+/// drops what it reports itself, and a directive inside a simple statement
+/// drops the whole statement (probed: tsc reports exactly the `bad…` cells,
+/// and `badDirectiveAfterError`, whose error sits on the line BEFORE the
+/// directive, is the price of that). univer writes `//@ts-ignore` with no
+/// space before `this.x = null` in `dispose()`.
+test "a comment directive suppresses the statement it covers (tsdirective)" {
+  let src =
+    #|declare const n: number;
+    #|class C {
+    #|  constructor(readonly w: number) {}
+    #|  okNoSpace() {
+    #|    //@ts-ignore
+    #|    this.w = 1;
+    #|  }
+    #|  okExpectError() {
+    #|    // @ts-expect-error
+    #|    this.w = 2;
+    #|  }
+    #|  badNoDirective() {
+    #|    this.w = 3;
+    #|  }
+    #|}
+    #|// @ts-ignore
+    #|const okTopLevel: string = n;
+    #|// @ts-ignore
+    #|
+    #|const okBlankLine: string = n;
+    #|// @ts-ignore
+    #|// a comment line in between
+    #|const okCommentLineBetween: string = n;
+    #|const trailing = 1; // @ts-ignore
+    #|const okAfterTrailing: string = n;
+    #|/* @ts-ignore */
+    #|const okBlockComment: string = n;
+    #|/* @ts-ignore
+    #| */
+    #|const badBlockFirstLine: string = n;
+    #|// @ts-ignore
+    #|export const okAfterNestedBody: string = ((() => { return 1; })(), n);
+    #|export function okLoopHeadAfterBody(c: number) {
+    #|  let i = 0;
+    #|  // @ts-ignore
+    #|  while (c.nope && i < 3) {
+    #|    i++;
+    #|  }
+    #|  // @ts-ignore
+    #|  for (const v of [c.nope]) {
+    #|    i += v;
+    #|  }
+    #|  return i;
+    #|}
+    #|export function badMissingReturnAfterCovered(c: boolean): number {
+    #|  if (c) {
+    #|    return 1;
+    #|  }
+    #|  // @ts-ignore
+    #|  const z: string = n;
+    #|}
+    #|export function coveredLast() {
+    #|  // @ts-ignore
+    #|  const z: string = n;
+    #|}
+    #|export function badDefaultAfterCovered(x: string = n) {
+    #|  return x;
+    #|}
+    #|export function okAfterNestedBodyInFunction() {
+    #|  // @ts-ignore
+    #|  const q: string = ((() => { return 1; })(), n);
+    #|  return q;
+    #|}
+    #|/* @ts-ignore
+    #|*/ export const badBlockEndsBeforeCode: string = n;
+    #|export function okInsideSimple() {
+    #|  const s: number = Math.max(
+    #|    // @ts-ignore
+    #|    "a",
+    #|    1,
+    #|  );
+    #|  return s;
+    #|}
+    #|export function badDirectiveAfterError() {
+    #|  const s: string =
+    #|    // @ts-ignore
+    #|    n;
+    #|  return s;
+    #|}
+    #|export function badInsideCompound(c: boolean) {
+    #|  // @ts-ignore
+    #|  if (c) {
+    #|    const inner: string = n;
+    #|    return inner;
+    #|  }
+    #|  return "";
+    #|}
+    #|export function okCompoundHead(c: number) {
+    #|  // @ts-ignore
+    #|  if (c.nope) {
+    #|    return 1;
+    #|  }
+    #|  return 0;
+    #|}
+    #|export { C, okTopLevel, okBlankLine, okCommentLineBetween, trailing, okAfterTrailing, okBlockComment, badBlockFirstLine };
+  assert_eq(issue_lines(src), [
+    "function badMissingReturnAfterCovered: not all paths return a `number`", "function badDefaultAfterCovered > param `x` default: expected `string` but got `number`",
+    "function badInsideCompound > binding `inner` init: expected `string` but got `number`",
+    "function C.badNoDirective > assign `.w`: cannot assign to `w` because it is read-only",
+    "top-level > binding `badBlockFirstLine` init: expected `string` but got `number`",
+    "top-level > binding `badBlockEndsBeforeCode` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// The directive reaches statements a SUB-parser reads: an arrow body in
+/// parentheses (a parser over the same tokens, which shares the table) and
+/// a namespace body (a fresh parse of the body's own text). The arrow sits
+/// in an `if` condition: inside a simple statement, the statement around
+/// it would be covered whole and the inner one would not matter.
+test "a comment directive covers statements in sub-parsed bodies (tsdirective)" {
+  let src =
+    #|declare const n: number;
+    #|export function okParenArrowInCondition() {
+    #|  if ((() => {
+    #|    // @ts-ignore
+    #|    const x: string = n;
+    #|    return true;
+    #|  })()) {
+    #|    return 1;
+    #|  }
+    #|  return 0;
+    #|}
+    #|export const badParenArrow = (() => {
+    #|  const x: string = n;
+    #|  return x;
+    #|})();
+    #|namespace NS {
+    #|  // @ts-ignore
+    #|  export const okInNamespace: string = n;
+    #|  export const badInNamespace: string = n;
+    #|}
+    #|export { NS };
+  assert_eq(issue_lines(src), [
+    "top-level > binding `x` init: expected `string` but got `number`", "namespace NS > top-level > binding `badInNamespace` init: expected `string` but got `number`",
+  ])
+}
