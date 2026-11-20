@@ -7969,6 +7969,14 @@ product surfaces now.
     pairing skips, so no answer depended on it and its mutation survived.
     A run of directive lines is paired by one backward pass: 40,000 of
     them took 1.43 s and take 0.043 s.
+  - **#325's review.** A rest parameter over the binder (`(...xs: T[]) =>
+    void`) was erased to a single `any` parameter, so `(a, b) => {}` read as
+    an arity error tsc does not give; it stays a rest parameter now. And the
+    tuple-returning `.map` read a block body's returns with a collector that
+    misses a `return;` inside a loop, and inferred a block-local `const` as
+    `any`: both turned a real TS2322 into silence. A block is read only as
+    `const`s and expression statements followed by one `return`, with the
+    `const`s bound first, and any other shape is left to the plain check.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

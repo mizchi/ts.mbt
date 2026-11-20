@@ -32,3 +32,8 @@ export function badSingleArity() { return single((x, y) => ""); }
 declare function takeOpt<T>(cb: (s: Sub<T>, extra?: number) => void): T;
 export function okMetaVoid() { return takeOpt<void>((s) => { s.next(); }); }
 export function badMetaNumber() { return takeOpt<number>((s) => { s.next(); }); }
+// A rest parameter over the binder accepts a callback of any arity.
+declare function accept<T>(cb: (...xs: T[]) => void): T;
+export function okRestCallback() { return accept((a, b) => {}); }
+declare function acceptFixed<T>(cb: (x: T, ...rest: T[]) => void): T;
+export function okFixedThenRest() { return acceptFixed((a, b, c) => {}); }

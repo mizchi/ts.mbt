@@ -16799,10 +16799,15 @@ fn erase_unsolved_callback_formals(
       (Func(rps, _), Func(tps, tr)) if rps.length() == tps.length() =>
         @ast.TsType::Func(
           tps.mapi(fn(j, tp) {
-            if mentions_unsolved(rps[j]) {
-              Any
-            } else {
+            if !mentions_unsolved(rps[j]) {
               tp
+            } else if rps[j] is Rest(_) {
+              // A rest parameter stays one: `(...xs: T[]) => void` accepts a
+              // callback of any arity, and a bare `any` in its place made
+              // `(a, b) => {}` a one-parameter mismatch.
+              @ast.TsType::Rest(Array(Any))
+            } else {
+              Any
             }
           }),
           tr,
@@ -20007,13 +20012,36 @@ fn contextual_map_tuple_result(
       contextual_param_type(p, i, formals),
     )
   }
+  // A block body is read only in the shape whose returns are all in view:
+  // local `const`s and expression statements, then one `return`. Any other
+  // statement may hide a `return` (`while (n < 0) { return }` inside a
+  // loop) or bind a name the returned tuple reads, and the helper
+  // abstains, leaving the assignment to the ordinary shape check. The
+  // `const`s are bound first, so `const text = "bad"; return [n, text]`
+  // types `text` rather than reading it as `any`.
   let returns : Array[@ast.TsExpr?] = []
   match body {
     ArrowExpr(e) => returns.push(Some(e))
-    ArrowBlock(b) => checker_collect_returns(b, returns)
-  }
-  if returns.is_empty() {
-    return None
+    ArrowBlock(b) => {
+      let n = b.stmts.length()
+      guard n > 0 && b.stmts[n - 1] is Return(Some(last)) else { return None }
+      for i in 0..<(n - 1) {
+        match b.stmts[i] {
+          Const(Ident(name), declared, init) =>
+            inner.bind(
+              name,
+              if is_checkable(declared) {
+                declared
+              } else {
+                infer_expr(inner, resolver, init)
+              },
+            )
+          Expr(_) => ()
+          _ => return None
+        }
+      }
+      returns.push(Some(last))
+    }
   }
   fn retype(e : @ast.TsExpr) -> @ast.TsType {
     match e {

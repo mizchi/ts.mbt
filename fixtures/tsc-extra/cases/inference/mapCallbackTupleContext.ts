@@ -16,3 +16,10 @@ export const okMapTupleCond: [number, number][] = rs.map((r) => (flag ? [r.a, r.
 export const okMapTupleBlock: [number, number][] = rs.map((r) => { return [r.a, r.b]; });
 export const badMapTupleArity: [number, number][] = rs.map((r) => [r.a]);
 export const badMapTupleType: [number, string][] = rs.map((r) => [r.a, r.b]);
+
+// A block body's locals are typed before the tuple is, and a `return`
+// inside a loop is a return like any other: here it returns `undefined`.
+declare const ns: number[];
+export const okLocalConst: [number, number][] = ns.map((n) => { const m = n + 1; return [n, m]; });
+export const badLocalConst: [number, number][] = ns.map((n) => { const text = "bad"; return [n, text]; });
+export const badLoopReturn: [number, number][] = ns.map((n) => { while (n < 0) { return; } return [n, n]; });

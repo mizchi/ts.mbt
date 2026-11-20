@@ -3051,6 +3051,10 @@ test "a callback over an unsolved binder is not typed with any (unsolvedcallback
     #|declare function takeOpt<T>(cb: (s: Sub<T>, extra?: number) => void): T;
     #|export function okMetaVoid() { return takeOpt<void>((s) => { s.next(); }); }
     #|export function badMetaNumber() { return takeOpt<number>((s) => { s.next(); }); }
+    #|declare function accept<T>(cb: (...xs: T[]) => void): T;
+    #|export function okRestCallback() { return accept((a, b) => {}); }
+    #|declare function acceptFixed<T>(cb: (x: T, ...rest: T[]) => void): T;
+    #|export function okFixedThenRest() { return acceptFixed((a, b, c) => {}); }
   assert_eq(issue_lines(src), [
     "function badExplicitNumber > call `next`: expected 1 argument(s), got 0", "function badCallExplicitNumber > call `next`: expected 1 argument(s), got 0",
     "function badSolvedFromArgument > call `next`: expected 1 argument(s), got 0",
@@ -3066,7 +3070,9 @@ test "a callback over an unsolved binder is not typed with any (unsolvedcallback
 /// Inferred with no expected type it is `number[]`, and every univer
 /// `const removed: [number, number][] = ranges.map((r) => [r.startRow,
 /// r.endRow])` was reported. A literal of the wrong length or element type
-/// still reports (probed: tsc gives TS2322 on exactly the `bad…` cells).
+/// still reports (probed: tsc gives TS2322 on exactly the `bad…` cells). A
+/// block body's `const`s are typed first, and a block holding any other
+/// statement (a loop may hide a `return;`) is left to the plain check.
 test "a map callback's array literal is typed by the tuple it fills (maptuple)" {
   let src =
     #|interface R { a: number; b: number }
@@ -3077,8 +3083,14 @@ test "a map callback's array literal is typed by the tuple it fills (maptuple)" 
     #|export const okMapTupleBlock: [number, number][] = rs.map((r) => { return [r.a, r.b]; });
     #|export const badMapTupleArity: [number, number][] = rs.map((r) => [r.a]);
     #|export const badMapTupleType: [number, string][] = rs.map((r) => [r.a, r.b]);
+    #|declare const ns: number[];
+    #|export const okLocalConst: [number, number][] = ns.map((n) => { const m = n + 1; return [n, m]; });
+    #|export const badLocalConst: [number, number][] = ns.map((n) => { const text = "bad"; return [n, text]; });
+    #|export const badLoopReturn: [number, number][] = ns.map((n) => { while (n < 0) { return; } return [n, n]; });
   assert_eq(issue_lines(src), [
     "top-level > binding `badMapTupleArity` init: expected `[number, number][]` but got `number[][]`",
     "top-level > binding `badMapTupleType` init: expected `[number, string][]` but got `number[][]`",
+    "top-level > binding `badLocalConst` init: expected `[number, number][]` but got `(number | \"bad\" (string))[][]`",
+    "top-level > binding `badLoopReturn` init: expected `[number, number][]` but got `number[][]`",
   ])
 }

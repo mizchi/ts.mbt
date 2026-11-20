@@ -3802,6 +3802,18 @@
           "kind": "bad",
           "fromLine": 31,
           "toLine": 32
+        },
+        {
+          "name": "okRestCallback",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "okFixedThenRest",
+          "kind": "ok",
+          "fromLine": 36,
+          "toLine": 37
         }
       ]
     },
@@ -4759,7 +4771,25 @@
           "name": "badMapTupleType",
           "kind": "bad",
           "fromLine": 15,
-          "toLine": 16
+          "toLine": 18
+        },
+        {
+          "name": "okLocalConst",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badLocalConst",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badLoopReturn",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
         }
       ]
     },

@@ -76,4 +76,9 @@ callbackOverUnsolvedBinder.ts(31,69): error TS2554: Expected 1 arguments, but go
                                                                         ~~~~
 !!! error TS2554: Expected 1 arguments, but got 0.
 !!! related TS6210 callbackOverUnsolvedBinder.ts:6:29: An argument for 'value' was not provided.
+    // A rest parameter over the binder accepts a callback of any arity.
+    declare function accept<T>(cb: (...xs: T[]) => void): T;
+    export function okRestCallback() { return accept((a, b) => {}); }
+    declare function acceptFixed<T>(cb: (x: T, ...rest: T[]) => void): T;
+    export function okFixedThenRest() { return acceptFixed((a, b, c) => {}); }
     
