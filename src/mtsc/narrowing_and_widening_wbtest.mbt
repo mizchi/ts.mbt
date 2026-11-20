@@ -2307,6 +2307,9 @@ test "Object.values class arguments and static factory binders (review318)" {
     #|class Dict<V> { [k: string]: V; }
     #|interface N { [k: number]: number; label: string }
     #|interface NL { [k: number]: number; length: number }
+    #|interface NL1 { [k: number]: number; length: 1 }
+    #|declare const nl1: NL1;
+    #|export function badLiteralLength() { const xs: string[] = Object.values(nl1); return xs; }
     #|type T = string;
     #|type Identity<X> = X;
     #|class Box { b = 1 }
@@ -2324,9 +2327,55 @@ test "Object.values class arguments and static factory binders (review318)" {
     #|export function badBinderShadowsAlias(c: boolean) { let v: string | null = null; if (c) { v = F.pick(null); } else { v = "x"; } return v.length; }
     #|export function badBinderThroughAlias(c: boolean) { let v: Box | null = null; if (c) { v = F.ident(null); } else { v = new Box(); } return v.b; }
   assert_eq(issue_lines(src), [
+    "function badLiteralLength > binding `xs` init: expected `string[]` but got `number[]`",
     "function badClassArg > binding `xs` init: expected `boolean[]` but got `number[]`",
     "function badArrayLikeInterface > binding `xs` init: expected `string[]` but got `number[]`",
     "function badBinderShadowsAlias > PropAccess `.length`: object is possibly `null`",
     "function badBinderThroughAlias > PropAccess `.b`: object is possibly `null`",
+  ])
+}
+
+///|
+/// Arrays and tuples are comparable with `===` when their elements are.
+/// `types_can_overlap` had no arm for either, so every pair fell to its
+/// final `false` and `prevProps.elements !== nextProps.elements` read as
+/// always true (excalidraw's canvases). An optional tuple element is stored
+/// as `T | undefined`, so a longer tuple whose extra elements admit
+/// `undefined` overlaps (probed: tsc reports the bad cells only).
+test "arrays and tuples compare by their elements (arrayeq)" {
+  let src =
+    #|type El = { id: string };
+    #|export function okSameElement(a: number[], b: number[]) { return a === b; }
+    #|export function okReadonly(a: readonly El[], b: readonly El[]) { return a !== b; }
+    #|export function okTupleAndArray(a: [number, number], b: number[]) { return a === b; }
+    #|export function okOptionalElement(a: [number, string?], b: [number]) { return a === b; }
+    #|export function badDisjointElements(a: number[], b: string[]) { return a === b; }
+    #|export function badDisjointTuples(a: [number], b: [string]) { return a === b; }
+    #|export function badTupleLengths(a: [number], b: [number, number]) { return a === b; }
+  assert_eq(issue_lines(src), [
+    "function badDisjointElements > strict equality: comparing `number[]` and `string[]` with === will always be false",
+    "function badDisjointTuples > strict equality: comparing `[number]` and `[string]` with === will always be false",
+    "function badTupleLengths > strict equality: comparing `[number]` and `[number, number]` with === will always be false",
+  ])
+}
+
+///|
+/// A spread argument's element relates to the rest parameter's element
+/// through every alias the target union's members name. `unwrap` expanded
+/// only the outer layer, so `[number, number]` against `Charset | Raw` met
+/// the bare name `Raw` (univer's `new Charset(...next)`; probed: tsc
+/// reports the bad cells only).
+test "a spread argument relates through nested aliases (spreadalias)" {
+  let src =
+    #|type Unit = [number, number];
+    #|type Raw = string | number | [string, string] | [number, number];
+    #|class Charset { data: Unit[] = []; constructor(...inputs: Input[]) {} }
+    #|type Input = Charset | Raw;
+    #|declare function take(...inputs: Input[]): void;
+    #|export function okSpreadCall(next: Unit[]) { take(...next); }
+    #|export function okSpreadNew(next: Unit[]) { return new Charset(...next); }
+    #|export function badSpreadTuple(next: [boolean, boolean][]) { take(...next); }
+  assert_eq(issue_lines(src), [
+    "function badSpreadTuple > call `take` spread arg: spread element type `[boolean, boolean]` is not assignable to `Input`",
   ])
 }

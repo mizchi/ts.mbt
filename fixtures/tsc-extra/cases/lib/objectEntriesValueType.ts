@@ -16,6 +16,7 @@ type V = string;
 class Dict<V> { [k: string]: V; }
 interface N { [k: number]: number; label: string }
 interface NL { [k: number]: number; length: number }
+interface NL1 { [k: number]: number; length: 1 }
 interface I { a: number; b: string }
 type L = { a: number; b: string };
 interface D { x: number }
@@ -47,3 +48,4 @@ export function okClassArgument(d: Dict<number>) { const xs: number[] = Object.v
 export function badClassArgument(d: Dict<number>) { const xs: boolean[] = Object.values(d); return xs; }
 export function okNumericIndexInterface(n: N) { const xs: string[] = Object.values(n); return xs; }
 export function badArrayLikeInterface(n: NL) { const xs: string[] = Object.values(n); return xs; }
+export function badArrayLikeLiteralLength(n: NL1) { const xs: string[] = Object.values(n); return xs; }

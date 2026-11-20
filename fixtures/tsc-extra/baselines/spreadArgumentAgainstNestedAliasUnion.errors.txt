@@ -1,0 +1,35 @@
+spreadArgumentAgainstNestedAliasUnion.ts(16,58): error TS2345: Argument of type 'boolean' is not assignable to parameter of type 'Input'.
+spreadArgumentAgainstNestedAliasUnion.ts(17,67): error TS2345: Argument of type '[boolean, boolean]' is not assignable to parameter of type 'Input'.
+  Type '[boolean, boolean]' is not assignable to type 'Charset | [string, string] | [number, number]'.
+    Type '[boolean, boolean]' is not assignable to type '[string, string]'.
+      Type at position 0 in source is not compatible with type at position 0 in target.
+        Type 'boolean' is not assignable to type 'string'.
+
+
+==== spreadArgumentAgainstNestedAliasUnion.ts (2 errors) ====
+    // A spread argument's element is related to the rest parameter's element the
+    // way a plain argument is, through every alias the target's union members
+    // name. univer's `new Charset(...next)` spreads `[number, number]` tuples
+    // into `...inputs: CharsetInput[]`, where `CharsetInput = Charset |
+    // CharsetRawInput` and the tuple sits one alias further in.
+    
+    type Unit = [number, number];
+    type Raw = string | number | [string, string] | [number, number];
+    class Charset { data: Unit[] = []; constructor(...inputs: Input[]) {} }
+    type Input = Charset | Raw;
+    declare function take(...inputs: Input[]): void;
+    
+    export function okSpreadCall(next: Unit[]) { take(...next); }
+    export function okSpreadNew(next: Unit[]) { return new Charset(...next); }
+    export function okDirect(u: Unit) { take(u); }
+    export function badSpreadElement(next: boolean[]) { take(...next); }
+                                                             ~~~~~~~
+!!! error TS2345: Argument of type 'boolean' is not assignable to parameter of type 'Input'.
+    export function badSpreadTuple(next: [boolean, boolean][]) { take(...next); }
+                                                                      ~~~~~~~
+!!! error TS2345: Argument of type '[boolean, boolean]' is not assignable to parameter of type 'Input'.
+!!! error TS2345:   Type '[boolean, boolean]' is not assignable to type 'Charset | [string, string] | [number, number]'.
+!!! error TS2345:     Type '[boolean, boolean]' is not assignable to type '[string, string]'.
+!!! error TS2345:       Type at position 0 in source is not compatible with type at position 0 in target.
+!!! error TS2345:         Type 'boolean' is not assignable to type 'string'.
+    

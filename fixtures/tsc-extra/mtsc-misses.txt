@@ -43,3 +43,4 @@ objectEntriesValueType:badTypeLiteralUnion  a type literal's implicit index sign
 objectEntriesValueType:badValuesTypeLiteral  same as `badTypeLiteralUnion`, through `Object.values`
 typeAliasParameterDefaults:badIntersectionDefaultMember  a member missing from an intersection receiver is not reported at all (`q.nope` with `q: { x: number } & { y: string }` is silent too), so the default resolves and the access is still a MISS
 discriminantSplitRelatesEachCombination:badMissingValue  a member typed `any` reads as optional in the object-literal-against-union check (`type_accepts_undefined` answers yes for `any`), so a missing `value: any` is not reported
+comparisonNotReadAsTypeArguments:badComparisonStillChecked  a relational operator over `number` and `string` (TS2365) is not reported at all (`row < s` is silent too); before this case the line was reported for the wrong reason, as a call of `row`

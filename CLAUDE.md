@@ -7567,6 +7567,49 @@ product surfaces now.
       `unwrap` has no scope check, so a `T` binder beside `type T = string`
       expanded to `string`, and `Identity<T> | Box` reached the test as the
       applied alias. Both lost tsc's TS18047.
+  Batch HJ is three defects main has had all along, and the first one
+  reached the EMIT. The oracle is unchanged, and no real-code site was
+  added.
+  - **`a < (b - 1) || a > (c + 1)` was a generic call.** The type-argument
+    speculation in `try_skip_type_args` is a token scan that balances
+    `<`…`>` and brackets. So it accepted `<(b - 1) || a>` as a type
+    argument list, saw the following `(`, and committed to `a<…>(c + 1)`.
+    - The checker reported "`number` is not callable". The emit printed
+      `a(c + 1)` and dropped both comparisons, under plain `mtsc` with
+      `--noCheck` (univer's `_clearCacheOutOfVisibleRange`).
+    - tsc parses the list as TYPES and gives up when one does not parse.
+      The scan now refuses every operator no type contains.
+    - `+` / `-` are the exception, in two places. Inside braces they are
+      mapped-type modifiers. Before a numeric literal they form a negative
+      literal type, but only when the previous token does not end a value,
+      so the `- 1` in `b - 1` is still binary.
+    - The negative-literal half was found by mutation, twice. The lexer
+      reads `-1` as one token, and `try_parse_simple_type_args` handles
+      call-site type arguments before this scan runs. So only a TYPE
+      position (`typeof h<- 1>`) reaches that branch, and a test written
+      at a call site could not fail.
+  - **Two arrays were never comparable.** `types_can_overlap` had no
+    `Array` or `Tuple` arm, so `number[] === number[]` fell to its final
+    `false` and read as always false. That covered every
+    `prevProps.elements !== nextProps.elements` in excalidraw's canvases
+    and univer's renderers.
+    - Arrays now overlap when their elements do, and a tuple overlaps an
+      array when every tuple element overlaps the array's element.
+    - Two tuples overlap position by position. When the lengths differ,
+      the longer tuple's extra elements must admit `undefined`, because an
+      optional element is stored as `T | undefined`, the same node as a
+      required one.
+  - **A spread argument related through one alias level.** The rest
+    element `CharsetInput = Charset | CharsetRawInput` kept
+    `CharsetRawInput` as a name. So univer's `new Charset(...next)`, which
+    spreads `[number, number]` tuples, was not assignable, while the same
+    tuple passed plainly was. The check now expands nested aliases with
+    `unwrap_containers`.
+  - **#319's Minor.** `ArrayLike<T>` asks that `length` be assignable to
+    `number`, so `length: 1` qualifies.
+  - **Filed:** `number < string` (TS2365) is not reported at all. One new
+    cell is a declared MISS for that reason; it had been reported before,
+    as a call.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
