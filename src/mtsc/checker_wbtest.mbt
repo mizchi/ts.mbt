@@ -2221,3 +2221,102 @@ test "mtsc graph checker binds an omitted alias argument to its default (aliasde
     ["top-level > binding `y` init :: expected `number` but got `boolean`"],
   )
 }
+
+///|
+/// #319's review. An imported alias's default is written in the EXPORTING
+/// module, so `A<T = Item>` from `./a` reads `a.ts`'s `Item` even where the
+/// importer declares its own: the per-module rename reaches the defaults.
+test "mtsc graph checker reads an imported alias's default in its own module (nsdefault)" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/a.ts", "export type Item = string;\nexport type A<T = Item> = { v: T };",
+        ),
+        (
+          "/src/root.ts", "import type { A } from \"./a\";\ntype Item = number;\ndeclare const a: A;\nexport const s: string = a.v;\nexport const n: number = a.v;\nexport const u: Item = 1;",
+        ),
+      ],
+      [("/src/root.ts", "./a", "/src/a.ts")],
+    ),
+    ["top-level > binding `n` init :: expected `number` but got `string`"],
+  )
+}
+
+///|
+/// The same default inside a NAMESPACE of the exporting module: a keyed
+/// module's namespace bodies are rewritten by `rename_namespace_body_refs`,
+/// which has to reach the defaults too, or `N.A`'s `Item` reads the
+/// importer's (probed: tsc reports `n` only).
+test "mtsc graph checker reads a namespace alias's default in its own module (nsdefault)" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/a.ts", "export type Item = string;\nexport namespace N { export type A<T = Item> = { v: T }; }",
+        ),
+        (
+          "/src/root.ts", "import { N } from \"./a\";\ntype Item = number;\ndeclare const a: N.A;\nexport const s: string = a.v;\nexport const n: number = a.v;\nexport const u: Item = 1;",
+        ),
+      ],
+      [("/src/root.ts", "./a", "/src/a.ts")],
+    ),
+    ["top-level > binding `n` init :: expected `number` but got `string`"],
+  )
+}
+
+///|
+/// `import { N }` of a namespace that holds only types binds no value and is
+/// legal; it read as "has no value export". A namespace the module does not
+/// export still reports (probed: tsc gives TS2459 for that one).
+test "mtsc graph checker accepts an import of a type-only namespace" {
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/a.ts", "export namespace N { export type A = { v: string }; }"),
+        (
+          "/src/b.ts", "namespace M { export type A = { v: string }; }\nexport type Keep = number;",
+        ),
+        (
+          "/src/root.ts", "import { N } from \"./a\";\nimport { M } from \"./b\";\ndeclare const x: N.A;\nexport const s: string = x.v;",
+        ),
+      ],
+      [
+        ("/src/root.ts", "./a", "/src/a.ts"),
+        ("/src/root.ts", "./b", "/src/b.ts"),
+      ],
+    ),
+    ["import :: module `./b` has no value export `M`"],
+  )
+}
+
+///|
+/// An ambient `.d.ts` has no per-module key, so a name the checked module
+/// renames into moves to `Item@<unkeyed>` there, and its references move
+/// with it. A default is one of them: `Box<T = Item>` has to keep reading
+/// the ambient `Item`, not the checked module's renamed import, at the top
+/// level and inside a `declare namespace` (probed: tsc reports `bad` and
+/// `bad2` only).
+test "mtsc graph checker keeps an ambient alias's default beside a renamed import" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import type { Other as Item } from \"./x\";\nexport const m: Item = { z: 1 };\nexport const k: number = box.v.n;\nexport const bad: string = box.v.n;\nexport const k2: number = box2.v.n;\nexport const bad2: string = box2.v.n;",
+      ),
+      module_("/src/x.ts", "export interface Other { z: number }"),
+      module_(
+        "/src/env.d.ts", "interface Item { n: number }\ntype Box<T = Item> = { v: T };\ndeclare const box: Box;\ndeclare namespace NS { type Box2<T = Item> = { v: T }; }\ndeclare const box2: NS.Box2;",
+      ),
+    ],
+    edges: [edge("/src/root.ts", "./x", "/src/x.ts")],
+  })
+  assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
+    "top-level > binding `bad` init :: expected `string` but got `number`", "top-level > binding `bad2` init :: expected `string` but got `number`",
+  ])
+}

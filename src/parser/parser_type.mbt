@@ -2962,7 +2962,6 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       | EqEqEq
       | BangEq
       | BangEqEq
-      | Instanceof
       | Le
       | AmpAmp
       | PipePipe
@@ -2983,8 +2982,24 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       | AmpEq
       | PipeEq
       | CaretEq
-      | LtLtEq
-      | Delete => return false
+      | LtLtEq => return false
+      // `delete` and `instanceof` are operators no type contains, and also
+      // keywords a MEMBER may be named: after a `.` (`typeof o.delete`) and
+      // inside an object type (`typeof f<{ delete: number }>`). Refusing
+      // them outright made both legal spellings a parse error (#320's
+      // review; probed: tsc accepts both). Inside braces they pass as `+` /
+      // `-` do. Telling a member name from an operator there by its
+      // follower was tried and could not be observed: a call site's braces
+      // reach `try_parse_simple_type_args` before this scan, and in a type
+      // position a keyword before an operand is illegal either way.
+      Delete | Instanceof => {
+        let after_dot = self.pos > 0 && self.tokens[self.pos - 1].kind is Dot
+        if after_dot || braces > 0 {
+          let _ = self.advance()
+        } else {
+          return false
+        }
+      }
       // `+` / `-` appear in a type only as a negative numeric literal
       // (`typeof f<- 1>`; the lexer reads `-1` as one token, so only the
       // spaced spelling reaches here) or as a mapped-type modifier

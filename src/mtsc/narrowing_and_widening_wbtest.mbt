@@ -2270,6 +2270,31 @@ test "an omitted alias argument takes its default (aliasdefault)" {
 }
 
 ///|
+/// #319's review. A default is written in the scope the ALIAS is declared
+/// in, so a namespace alias's `T = Item` reads the namespace's `Item`, not a
+/// file-level one: the namespace-local rename has to reach the defaults as
+/// well as the body. So does the cross-body one, where `Elem` is declared
+/// by ANOTHER body of the same namespace (probed: tsc reports the bad cells
+/// only).
+test "a namespace alias's default reads the namespace's names (nsdefault)" {
+  let src =
+    #|type Item = number;
+    #|namespace N { export type Item = string; export type A<T = Item> = { v: T }; }
+    #|declare const a: N.A;
+    #|export function okNamespaceDefault() { const s: string = a.v; return s; }
+    #|export function badNamespaceDefault() { const n: number = a.v; return n; }
+    #|namespace P { export type Elem = string; }
+    #|namespace P { export type B<T = Elem> = { v: T }; }
+    #|declare const pb: P.B;
+    #|export function okCrossBodyDefault() { const s: string = pb.v; return s; }
+    #|export function badCrossBodyDefault() { const n: number = pb.v; return n; }
+  assert_eq(issue_lines(src), [
+    "function badNamespaceDefault > binding `n` init: expected `number` but got `string`",
+    "function badCrossBodyDefault > binding `n` init: expected `number` but got `string`",
+  ])
+}
+
+///|
 /// A discriminant that is a union of literals is related one combination at
 /// a time, STRUCTURALLY: the excess check has already run on the whole
 /// literal, and with no single member picked it only asks whether some
@@ -2356,6 +2381,32 @@ test "arrays and tuples compare by their elements (arrayeq)" {
     "function badDisjointElements > strict equality: comparing `number[]` and `string[]` with === will always be false",
     "function badDisjointTuples > strict equality: comparing `[number]` and `[string]` with === will always be false",
     "function badTupleLengths > strict equality: comparing `[number]` and `[number, number]` with === will always be false",
+  ])
+}
+
+///|
+/// #320's review. A tuple meets an array as `Array<union of its elements>`,
+/// and a union is comparable when ANY member is: `[string, number]` overlaps
+/// `number[]`, `[string]` does not, and `[]` overlaps everything. A tuple
+/// that is nothing but a rest slot is that array, so `[...number[]]` against
+/// `boolean[]` or `[string]` is TS2367 (probed cell by cell).
+test "a tuple meets an array through the union of its elements (review320)" {
+  let src =
+    #|export function okSomeElementOverlaps(a: [string, number], b: number[]) { return a === b; }
+    #|export function okMiddleRest(a: [number, ...string[], boolean], b: boolean[]) { return a === b; }
+    #|export function okEmptyTuple(a: [], b: number[]) { return a === b; }
+    #|export function okPrefixThenRest(a: [string, ...number[]], b: number[]) { return a === b; }
+    #|export function badNoElementOverlaps(a: [string], b: number[]) { return a === b; }
+    #|export function badRestOnly(a: [...number[]], b: boolean[]) { return a === b; }
+    #|export function badRestOnlyAgainstTuple(a: [...number[]], b: [string]) { return a === b; }
+    #|export function badRestOnlyOnTheRight(a: [string], b: [...number[]]) { return a === b; }
+    #|export function badPrefixAndRest(a: [string, ...boolean[]], b: number[]) { return a === b; }
+  assert_eq(issue_lines(src), [
+    "function badNoElementOverlaps > strict equality: comparing `[string]` and `number[]` with === will always be false",
+    "function badRestOnly > strict equality: comparing `[type]` and `boolean[]` with === will always be false",
+    "function badRestOnlyAgainstTuple > strict equality: comparing `[type]` and `[string]` with === will always be false",
+    "function badRestOnlyOnTheRight > strict equality: comparing `[string]` and `[type]` with === will always be false",
+    "function badPrefixAndRest > strict equality: comparing `[string, type]` and `number[]` with === will always be false",
   ])
 }
 

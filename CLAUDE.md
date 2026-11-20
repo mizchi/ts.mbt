@@ -7618,6 +7618,71 @@ product surfaces now.
   - **Filed:** `number < string` (TS2365) is not reported at all. One new
     cell is a declared MISS for that reason; it had been reported before,
     as a call.
+  Batch HK fixes what two reviews found in batches HI and HJ. Every cell
+  was probed against the nightly first.
+  - **HJ introduced a parse error.** Its operator deny list included
+    `delete` and `instanceof`, which are also keywords a member may be
+    named. So `typeof f<{ delete: number }>` and `typeof f<typeof
+    o.delete>`, both legal, stopped parsing, and no gate could see it
+    because neither spelling is in the corpus.
+    - The two keywords now pass the scan right after a `.`, and inside
+      braces as `+` / `-` do. As an operator before an operand they still
+      end the speculation.
+    - Telling a member name from an operator inside braces by the token
+      that follows it was written first, and its mutation survived. A call
+      site's braces reach `try_parse_simple_type_args` before the scan
+      does, and in a type position a keyword before an operand is illegal
+      either way. So that check was removed as dead code.
+    - That probe also found an older misparse, filed rather than fixed.
+      The simple parse accepts an object type holding an expression, so
+      `a < ({ x: f() }) > (b)` emits `a(b)` on main too. tsc reads it as
+      two comparisons.
+  - **HJ's tuple rule used the wrong quantifier.** It called a tuple
+    comparable with an array when EVERY element overlapped the array's
+    element.
+    - tsc relates a tuple to an array as `Array<union of its elements>`,
+      and a union is comparable when ANY member is. So `[string, number]`
+      overlaps `number[]`, `[]` overlaps everything, and `[string]` does
+      not.
+    - A rest slot contributes the element of its array. A tuple that is
+      only `[...T[]]` is `T[]`, on either side of a tuple comparison:
+      `[...number[]]` against `[string]` is TS2367.
+    - `readonly [string, number]` against `number[]` becomes a MISS,
+      because the AST drops `readonly` from a tuple.
+  - **HI's alias defaults kept their outer names in five copies.** Five
+    places copy an alias under a rename map:
+    - the namespace-local qualification;
+    - the cross-body one, for a name another body of the same namespace
+      declares;
+    - the graph's per-module rename, which also covers a keyed module's
+      namespaces;
+    - the unkeyed move of an ambient `.d.ts`;
+    - that move's walk into the ambient file's `declare namespace` bodies.
+
+    All five rewrote `type_` and left `type_param_defaults` as written.
+    So `namespace N { export type Item = string; export type A<T = Item>
+    = … }` read its default as a file-level `type Item = number`, and an
+    imported alias's default read the importer's `Item`. One helper serves
+    all five now.
+    - A record spread copies every field it is not told about. That is how
+      a new field gets past a site that rewrites the others: the
+      compiler-driven census that made the field safe to add covers
+      construction sites, and a spread is not one.
+    - The fifth site was missed by a grep for the spelling the other four
+      share, because it also renames `name`. The mutation proof is what
+      counted the sites.
+    - Four of the five were false positives on legal code. The cross-body
+      one was a MISS, because the outer name was undeclared and the read
+      abstained. The mutation proof was also what showed that the ambient
+      `declare namespace` walk had no test until one was written for it.
+  - **The namespace test found an older false positive in the library
+    API.** `import { N }` of a namespace that holds only types read as
+    "has no value export". The CLI drops every import diagnostic, so only
+    `collect_module_graph_issues` callers (the language service, the Vite
+    plugin) saw it. An exported namespace is accepted now. One declared
+    without `export` still reports, and tsc gives TS2459 there.
+  - **Filed:** a call through a value typed `typeof g`, where `g` is a
+    generic function, is not judged, with or without type arguments.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

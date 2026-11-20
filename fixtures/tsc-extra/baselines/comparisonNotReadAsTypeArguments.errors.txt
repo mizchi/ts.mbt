@@ -1,18 +1,22 @@
-comparisonNotReadAsTypeArguments.ts(17,76): error TS2365: Operator '<' cannot be applied to types 'number' and 'string'.
-comparisonNotReadAsTypeArguments.ts(18,66): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+comparisonNotReadAsTypeArguments.ts(20,76): error TS2365: Operator '<' cannot be applied to types 'number' and 'string'.
+comparisonNotReadAsTypeArguments.ts(21,66): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+comparisonNotReadAsTypeArguments.ts(24,111): error TS2322: Type 'number' is not assignable to type 'string'.
 
 
-==== comparisonNotReadAsTypeArguments.ts (2 errors) ====
+==== comparisonNotReadAsTypeArguments.ts (3 errors) ====
     // `a < (b - 1) || a > (c + 1)` is two comparisons, not a call with type
     // arguments: a type argument list cannot contain `-`, `||` or any other
     // operator no type has, so tsc's speculative parse of `<(b - 1) || a>` fails
     // and the `<` is a comparison. A negative literal and a mapped-type modifier
     // are the two places `-` does appear inside type arguments, and real type
-    // arguments still apply. The comparisons are still type-checked.
+    // arguments still apply. The comparisons are still type-checked. `delete`
+    // and `instanceof` are operators no type has, and still name a member after
+    // a `.` or inside an object type in a type argument list.
     
     const CACHE = 1;
     declare function lit<T extends number>(): T;
     declare function g<T>(x: T): T;
+    declare const kw: { delete: number; instanceof: string };
     
     export function okParenthesizedSubtraction(row: number, a: number, b: number) { return row < (a - CACHE) || row > (b + CACHE); }
     export function okParenthesizedOperands(row: number, a: number, b: number) { return row < (a) && row > (b); }
@@ -25,4 +29,9 @@ comparisonNotReadAsTypeArguments.ts(18,66): error TS2345: Argument of type 'numb
     export function badTypeArgumentStillApplies() { return g<string>(1); }
                                                                      ~
 !!! error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+    export function okKeywordMemberInObjectTypeArgument() { type R = typeof g<{ delete: number; instanceof?: string }>; const f: R = g; return f; }
+    export function okKeywordMemberAfterDot() { type R = typeof g<typeof kw.delete>; const f: R = g; return f; }
+    export function badKeywordMemberTypeArgument() { type R = typeof g<{ delete: number }>; const f: R = g; const s: string = f({ delete: 1 }).delete; return s; }
+                                                                                                                  ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
     
