@@ -152,6 +152,15 @@ pub struct Parser {
   // not tell. Shared by every `{ ..self }` copy, so a speculative parser
   // that consumes a JSX element forgives them for all of them.
   jsx_unterminated_strings : Array[Int32]
+  // The lines a `@ts-ignore` / `@ts-expect-error` comment directive
+  // suppresses (sorted, see `ts_directive_target_lines`), the line-start
+  // offsets they are measured against, and the statements found to start
+  // on one, which `parse_module` hands to `TsModule.suppressed_stmts`.
+  // All three are empty for a source with no directive, and a sub-parser
+  // over the same tokens shares them, since its positions are the same.
+  ts_directive_lines : Array[Int32]
+  line_starts : Array[Int32]
+  suppressed_stmts : Array[@ast.TsStmt]
   // `is_destructuring_assignment_start`'s answer per start token, keyed by
   // `pos * 4 + generator / async bits`. The speculation it caches parses a
   // whole literal as a pattern, and before the `=` gate in front of it
@@ -554,6 +563,9 @@ pub fn Parser::new_with_strict_and_jsx(
     grammar_misuses: [],
     option_header: "",
     jsx_unterminated_strings: [],
+    ts_directive_lines: [],
+    line_starts: [],
+    suppressed_stmts: [],
     destructuring_start_memo: Map([]),
     bracket_close: [],
     imported_binding_names: [],
@@ -738,6 +750,16 @@ pub fn Parser::from_source_with_jsx(
   // TS2465/TS1166 family) abstain for the whole file when set.
   if has_ts_suppression {
     grammar_misuses.push("<ts-suppression-present>")
+  }
+  let directive_line_starts : Array[Int32] = if has_ts_suppression {
+    source_line_starts(src)
+  } else {
+    []
+  }
+  let directive_lines = if has_ts_suppression {
+    ts_directive_target_lines(src, directive_line_starts)
+  } else {
+    []
   }
   // TS2683 opt-out: `@noImplicitThis: false` disables the implicit-any
   // `this` diagnostics for the file.
@@ -939,6 +961,9 @@ pub fn Parser::from_source_with_jsx(
     } else {
       []
     },
+    ts_directive_lines: directive_lines,
+    line_starts: directive_line_starts,
+    suppressed_stmts: [],
     imported_binding_names: [],
     import_module_specs: [],
     multi_file_source: has_filename_directive,
@@ -1533,6 +1558,140 @@ fn scan_source_directive_flags(src : String) -> (Bool, Bool, Bool) {
     }
   }
   (suppression, noimplicitthis_off, filename)
+}
+
+///|
+/// The offset each line of `src` starts at; `[0]` for a single line.
+fn source_line_starts(src : String) -> Array[Int32] {
+  let out : Array[Int32] = [0]
+  for i in 0..<src.length() {
+    if src[i] == '\n' {
+      out.push(i + 1)
+    }
+  }
+  out
+}
+
+///|
+/// The 0-based line holding offset `pos`.
+fn line_of_offset(line_starts : Array[Int32], pos : Int32) -> Int32 {
+  let mut lo = 0
+  let mut hi = line_starts.length() - 1
+  while lo < hi {
+    let mid = (lo + hi + 1) / 2
+    if line_starts[mid] <= pos {
+      lo = mid
+    } else {
+      hi = mid - 1
+    }
+  }
+  lo
+}
+
+///|
+/// Whether the `@ts-ignore` / `@ts-expect-error` at `i` (on the line
+/// starting at `ls`) is a comment DIRECTIVE, as tsc's scanner reads one
+/// (probed against the nightly):
+///
+/// - a line comment whose text is `//` or `///`, whitespace, then the
+///   directive, after code or not (`x = 1; // @ts-ignore` covers the NEXT
+///   line);
+/// - a block comment that ends on this line, where tsc reads only its last
+///   line: `/* @ts-ignore */`, or a last line such as `   @ts-ignore */`.
+///   `/* @ts-ignore` on a first line with `*/` further down is not one, nor
+///   is ` * @ts-ignore */` (the leading space comes before the `*`).
+///
+/// Anything after the name (`: reason`, `-foo`) still counts. A directive
+/// spelled inside a string literal reads as one too, which only suppresses.
+fn is_ts_comment_directive_at(src : String, i : Int32, ls : Int32) -> Bool {
+  let mut j = i
+  while j > ls && (src[j - 1] == ' ' || src[j - 1] == '\t') {
+    j -= 1
+  }
+  let mut k = j
+  while k > ls && (src[k - 1] == '/' || src[k - 1] == '*') {
+    k -= 1
+  }
+  let closes_on_line = fn() {
+    let mut q = i
+    while q + 1 < src.length() && src[q] != '\n' {
+      if src[q] == '*' && src[q + 1] == '/' {
+        return true
+      }
+      q += 1
+    }
+    false
+  }
+  if k == j {
+    // No `/` or `*` before it: the last line of a block comment, with
+    // nothing but whitespace from the line start.
+    return j == ls && closes_on_line()
+  }
+  let run = src[k:j].to_owned()
+  if run == "//" || run == "///" {
+    return true
+  }
+  if run.has_prefix("/*") {
+    return closes_on_line()
+  }
+  // A run that opens no comment (`*`, `**/`…) is a block comment's last
+  // line only when it starts the line.
+  k == ls && closes_on_line()
+}
+
+///|
+/// The lines `@ts-ignore` / `@ts-expect-error` comment directives in `src`
+/// suppress: for each directive, the first line after its own that is
+/// neither blank nor a `//` comment. That is how tsc walks back from a
+/// diagnostic to its directive (probed: a blank line and a `// …` line
+/// between them both keep the pairing). Sorted and without duplicates.
+fn ts_directive_target_lines(
+  src : String,
+  line_starts : Array[Int32],
+) -> Array[Int32] {
+  let out : Array[Int32] = []
+  let m = src.length()
+  let line_is_skipped = fn(line : Int32) {
+    let start = line_starts[line]
+    let end = if line + 1 < line_starts.length() {
+      line_starts[line + 1]
+    } else {
+      m
+    }
+    for q in start..<end {
+      let c = src[q]
+      if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+        continue
+      }
+      // The first non-blank character: a `//` comment line is walked past.
+      return c == '/' && q + 1 < end && src[q + 1] == '/'
+    }
+    true
+  }
+  for i in 0..<m {
+    if src[i] != '@' {
+      continue
+    }
+    if !matches_at(src, i, "@ts-ignore") &&
+      !matches_at(src, i, "@ts-expect-error") {
+      continue
+    }
+    let line = line_of_offset(line_starts, i)
+    if !is_ts_comment_directive_at(src, i, line_starts[line]) {
+      continue
+    }
+    let mut target = line + 1
+    while target < line_starts.length() && line_is_skipped(target) {
+      target += 1
+    }
+    if target >= line_starts.length() {
+      continue
+    }
+    if out.length() == 0 || out[out.length() - 1] < target {
+      out.push(target)
+    }
+  }
+  out
 }
 
 ///|

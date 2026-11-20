@@ -32,3 +32,9 @@ interface Strs { [k: string]: string }
 declare function take(s: Strs): void;
 export function okSymbolKeyInline() { take({ [sym]: 1 }); }
 export function okSymbolKeyBound() { const o = { [sym]: 1 }; take(o); }
+declare const usa: unique symbol;
+declare const usb: unique symbol;
+declare const unionKey: typeof usa | typeof usb;
+declare const mixedKey: typeof usa | string;
+export function okUnionSymbolKey() { take({ [unionKey]: 1 }); }
+export function badMixedSymbolKey() { take({ [mixedKey]: 1 }); }

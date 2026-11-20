@@ -7892,6 +7892,51 @@ product surfaces now.
     - A string into `{ length: number } & { length: number }` is still
       reported, from a site not yet found.
     - An array against a numeric index target is a MISS.
+  Batch HN makes `@ts-ignore` / `@ts-expect-error` suppress what it covers.
+  It did not before: our issues carry no line, so the directive was
+  honoured only by a few rules abstaining for the whole file. univer
+  writes `//@ts-ignore` before `this.worksheet = null` in four
+  `dispose()` methods, and each was reported as a read-only write.
+  univer's data-validation goes 57 -> 54, sheets-numfmt 57 -> 53, ui
+  42 -> 40, core 20 -> 19 and docs-hyper-link 8 -> 7; excalidraw 47 -> 45
+  and effect 61 -> 60, with no report at a new site and the oracle
+  unchanged.
+  - **tsc's placement rules, probed one cell at a time.** A directive
+    covers the first line after it that is neither blank nor a `//`
+    comment; it may follow code on its own line (`x = 1; // @ts-ignore`
+    covers the NEXT line), may have no space after `//`, and may be a
+    one-line block comment; a multi-line block comment counts only on its
+    own last line, and `@ts-ignore: reason` and `@ts-ignore-foo` both
+    count. Two first readings were wrong. A comment line between the
+    directive and the code was thought to break the pairing, and does
+    not. A report on the line of a `const` name, with the directive on
+    the line of its initializer, looked suppressed, and is not.
+  - **The mechanism.** The parser builds the directive target lines once
+    per source, only when the source contains a directive, and records
+    each statement that starts on a target line (`TsModule
+    .suppressed_stmts`, by identity). A directive inside a SIMPLE
+    statement covers the whole statement. `check_stmt` sets a flag the
+    two recorders read, and a nested statement sets it for itself and
+    restores it on the way out. So a covered `if` drops only what its
+    head reports, and its body decides statement by statement.
+  - **What it cannot do, declared as MISSes.** A covered statement drops
+    everything it reports itself, including a report on another of its
+    lines: a report before the directive inside one statement, and one on
+    a later line of a statement the directive starts. An unused
+    `@ts-expect-error` (TS2578) is not reported. A class field or member
+    signature under a directive is not a statement and stays reported.
+  - **Two mechanics the mutations found.** The restore matters only when
+    a body's LAST statement is covered: without it the flag stays set
+    into the next `record` made outside any statement, which is the next
+    function's parameter default. A test on a body ending in an uncovered
+    `return` cannot see it. And a sub-parser over the same tokens (an
+    arrow in parentheses) has to share the table. That is observable only
+    where the statement around it is compound, because a simple one is
+    covered whole and the inner statement's own entry is never read.
+  - **#323's last Minor, carried here.** A computed key typed as a union
+    of `unique symbol`s (`typeof a | typeof b`) is a symbol key too, so its
+    value is not judged against a string index signature. A union with
+    any non-symbol member still is, as tsc gives.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -257,6 +257,14 @@ priv struct Resolver {
   // edge recorded twice with different arguments (a block-local class of
   // the same name), which the lookup treats as unknown rather than guess.
   class_base_args : Map[String, Array[@ast.TsType]?]
+  // Statements a `@ts-ignore` / `@ts-expect-error` directive covers
+  // (`TsModule.suppressed_stmts`, every ingested module's), compared by
+  // identity in `check_stmt`, and whether the statement being checked is
+  // one. `record` drops an issue while it is set; a nested statement sets
+  // it for itself and restores it on the way out. A `Ref`, so every
+  // `CheckCtx` copy reads the one value.
+  suppressed_stmts : Array[@ast.TsStmt]
+  suppressing : Ref[Bool]
 }
 
 ///|
@@ -632,6 +640,8 @@ fn Resolver::empty() -> Resolver {
     no_property_access_from_index_signature: false,
     target_reaches_es2016: false,
     has_const_assertion: false,
+    suppressed_stmts: [],
+    suppressing: { val: false, },
   }
 }
 
@@ -2728,6 +2738,9 @@ fn Resolver::ingest_module(
 ) -> Unit {
   Resolver::record_augmented_interface_names(r, module_)
   Resolver::record_assigned_names(r, module_)
+  for stmt in module_.suppressed_stmts {
+    r.suppressed_stmts.push(stmt)
+  }
   // TS declaration merging: `interface Foo { a }` + `interface Foo { b }`
   // produces a single `Foo` whose members are the union of both bodies.
   // Field-key collisions take the later declaration.
@@ -11242,6 +11255,9 @@ fn check_super_field_access(
 
 ///|
 fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
+  if ctx.resolver.suppressing.val {
+    return
+  }
   // T9: in permissive mode, drop the diagnostic families whose
   // residual FPs are dominated by features we don't model. Strict
   // mode (the unit-test path) keeps every emission.
@@ -11462,6 +11478,9 @@ fn record_unfiltered(
   sub_path : String,
   message : String,
 ) -> Unit {
+  if ctx.resolver.suppressing.val {
+    return
+  }
   let path = if sub_path == "" {
     ctx.path_prefix
   } else if ctx.path_prefix == "" {
@@ -38774,6 +38793,28 @@ fn narrow_after_prop_nullish_assign(
 
 ///|
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
+  let covered = ctx.resolver.suppressed_stmts
+  if covered.is_empty() {
+    check_stmt_unsuppressed(env, stmt, ctx)
+    return
+  }
+  // A statement a `@ts-ignore` / `@ts-expect-error` directive covers keeps
+  // every effect on the environment (declarations, narrowing) and drops
+  // only what it reports itself (see `TsModule.suppressed_stmts`).
+  let saved = ctx.resolver.suppressing.val
+  ctx.resolver.suppressing.val = covered
+    .iter()
+    .any(fn(s) { physical_equal(s, stmt) })
+  check_stmt_unsuppressed(env, stmt, ctx)
+  ctx.resolver.suppressing.val = saved
+}
+
+///|
+fn check_stmt_unsuppressed(
+  env : ExprEnv,
+  stmt : @ast.TsStmt,
+  ctx : CheckCtx,
+) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
       check_ident_binding_decl(env, ctx, name, declared, init, false, true)
@@ -56981,13 +57022,22 @@ fn register_primitive_top_level_consts(
 
 ///|
 /// Whether a computed key's expression has a `symbol` type (`[sym]` with
-/// `const sym = Symbol()`, or a `unique symbol` binding).
+/// `const sym = Symbol()`, or a `unique symbol` binding). A union counts
+/// when every member is one (`typeof a | typeof b` over two `unique symbol`
+/// declarations); a union with any other member is not a symbol key.
 fn computed_key_is_symbol(
   env : ExprEnv,
   resolver : Resolver,
   key : @ast.TsExpr,
 ) -> Bool {
-  resolver.unwrap(infer_expr(env, resolver, key)) is (Symbol | UniqueSymbol(_))
+  match resolver.unwrap(infer_expr(env, resolver, key)) {
+    Union(parts) =>
+      parts.length() > 0 &&
+      parts
+      .iter()
+      .all(fn(p) { resolver.unwrap(p) is (Symbol | UniqueSymbol(_)) })
+    t => t is (Symbol | UniqueSymbol(_))
+  }
 }
 
 ///|

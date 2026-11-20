@@ -210,6 +210,7 @@ guide to whether the behaviour will change.
 | declarations | `namespaceLocalInterfaceShadowsLibPromise` | A namespace-local `interface Promise<T>` shadows the lib type | TS2345 | — |
 | declarations | `objectRestOverIntersectionWithUnion` | An object rest over an intersection holding one union part distributes over that union, so an `in` test narrows it; a member no part has, and one only some parts have, are still errors | TS2339 | — |
 | declarations | `objectRestOverUnionKeepsEachMember` | An object rest over a union is a union of the members' rests, keeping each discriminant and narrowing by it | TS2322 | — |
+| directives | `tsIgnoreCoversNextCodeLine` | `@ts-ignore` / `@ts-expect-error` covers the first line after it that is neither blank nor a `//` comment: after code on its own line, with no space after `//` (`//@ts-ignore`), or as a one-line block comment; a block comment counts only on its last line, and a report before the directive or on a later line of the covered statement stands | TS2322 TS2540 | — |
 | directives | `tsNocheckAfterBlockComment` | `@ts-nocheck` after a block comment, in any case, with a `: reason` tail, opts the file out | accepted | `tsNoCheckForTypescriptComments2` (no block comment) |
 | directives | `tsNocheckAfterStatement` | A `// @ts-nocheck` after the first statement is an ordinary comment | TS2322 | — |
 | directives | `tsNocheckInJsDocBlock` | `/** @ts-nocheck */` does not opt out: the pragma is single-line | TS2322 | — |

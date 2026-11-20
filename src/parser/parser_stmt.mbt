@@ -344,6 +344,77 @@ fn Parser::note_function_declaration(
 ///|
 // / statement
 pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
+  if self.ts_directive_lines.is_empty() {
+    return self.parse_stmt_unmarked()
+  }
+  let start_pos = self.peek().pos
+  let stmt = self.parse_stmt_unmarked()
+  let end_pos = if self.pos > 0 && self.pos - 1 < self.tokens.length() {
+    self.tokens[self.pos - 1].pos
+  } else {
+    start_pos
+  }
+  self.note_directive_cover(stmt, start_pos, end_pos)
+  stmt
+}
+
+///|
+/// Record `stmt` in `suppressed_stmts` when a `@ts-ignore` /
+/// `@ts-expect-error` directive covers it. A statement that STARTS on a
+/// directive's target line is covered, whatever its kind; for a compound
+/// one (`if`, a loop, a block) that drops only what it reports itself,
+/// its head, since each nested statement decides for itself. A target line
+/// INSIDE a simple statement (`foo(\n // @ts-ignore\n bad)`) covers the
+/// whole statement: tsc would keep a report on its other lines, and
+/// dropping it too can only lose a finding.
+fn Parser::note_directive_cover(
+  self : Parser,
+  stmt : @ast.TsStmt,
+  start_pos : Int32,
+  end_pos : Int32,
+) -> Unit {
+  let targets = self.ts_directive_lines
+  let start_line = line_of_offset(self.line_starts, start_pos)
+  let end_line = line_of_offset(self.line_starts, end_pos)
+  // The first target at or after the statement's first line.
+  let mut lo = 0
+  let mut hi = targets.length()
+  while lo < hi {
+    let mid = (lo + hi) / 2
+    if targets[mid] < start_line {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  if lo >= targets.length() {
+    return
+  }
+  let target = targets[lo]
+  let covered = target == start_line ||
+    (
+      target <= end_line &&
+      (match stmt {
+        Var(_, _, _)
+        | Let(_, _, _)
+        | Const(_, _, _)
+        | Assign(_, _)
+        | CompoundAssign(_, _, _)
+        | IndexAssign(_, _, _)
+        | PropAssign(_, _, _)
+        | Expr(_)
+        | Return(_)
+        | Throw(_) => true
+        _ => false
+      })
+    )
+  if covered {
+    self.suppressed_stmts.push(stmt)
+  }
+}
+
+///|
+fn Parser::parse_stmt_unmarked(self : Parser) -> @ast.TsStmt raise ParseError {
   let tok = self.peek()
   match tok.kind {
     Slash => {

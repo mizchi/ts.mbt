@@ -273,6 +273,7 @@ fn mtsc_empty_module() -> @ast.TsModule {
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],
     top_level_stmts: [],
+    suppressed_stmts: [],
   }
 }
 
@@ -1705,6 +1706,7 @@ async fn mtsc_compile_entry(
           interface_member_modifier_misuses: [],
           class_dup_diagnostics: [],
           top_level_stmts: [],
+          suppressed_stmts: [],
         })
         let local_names : Array[String] = []
         for ex in block.exports {
@@ -1903,6 +1905,7 @@ async fn mtsc_compile_entry(
             interface_member_modifier_misuses: [],
             class_dup_diagnostics: [],
             top_level_stmts: [],
+            suppressed_stmts: [],
           })
           // Filter exports through the entry's `@internal` set so
           // anything tagged `/** @internal */` is invisible to

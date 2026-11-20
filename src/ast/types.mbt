@@ -1141,6 +1141,14 @@ pub(all) struct TsModule {
   // Top-level executable statements (const/let/var with type annotations,
   // class expressions, etc.) from non-ambient modules. Empty for .d.ts files.
   top_level_stmts : Array[TsStmt]
+  // The statements a `// @ts-ignore` / `// @ts-expect-error` comment
+  // directive covers, anywhere in the module (function bodies included),
+  // compared by identity. tsc suppresses a diagnostic on the first non-blank
+  // line after the directive; issues here carry no line, so the checker
+  // drops the issues a covered statement reports itself (a statement nested
+  // inside it decides for itself). A directive inside a simple statement
+  // covers the whole statement, which can only lose a finding.
+  suppressed_stmts : Array[TsStmt]
   // True when the source should be checked under
   // `strictPropertyInitialization`. The conformance test corpus uses
   // `// @strict: false` / `// @strict: true` header directives to opt

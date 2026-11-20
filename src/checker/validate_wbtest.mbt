@@ -29,6 +29,7 @@ fn empty_module() -> @ast.TsModule {
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],
     top_level_stmts: [],
+    suppressed_stmts: [],
   }
 }
 
