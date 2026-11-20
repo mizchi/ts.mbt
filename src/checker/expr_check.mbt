@@ -7761,7 +7761,67 @@ fn global_static_method_special(
       }
       Some(@ast.TsType::Applied("Promise", [unwrapped]))
     }
+    // `Object.entries(o)` / `Object.values(o)`. The lib's first overload is
+    // `entries<T>(o: { [s: string]: T } | ArrayLike<T>): [string, T][]`, so
+    // a source with an index signature, a `Record`, or an array gives `T`
+    // its value type. Without this the value was `any`, and assigning
+    // `any` to a declared `D | null` keeps the `null` — excalidraw's
+    // `for (const [id, delta] of Object.entries(deltas))` then read every
+    // `latestDelta.deleted` as possibly null.
+    //
+    // Everything else abstains: an INTERFACE without an index signature
+    // falls to the `entries(o: {}): [string, any][]` overload in tsc (it
+    // has no implicit index signature), and so does a `Map`. A type
+    // literal has one and would give the union of its property types, but
+    // reading that union is left out here.
+    ("Object", "entries" | "values" as which, [o]) if env.lookup(ns) is None => {
+      let v = match
+        object_values_element(resolver, infer_expr(env, resolver, o)) {
+        Some(v) => v
+        None => return None
+      }
+      Some(
+        if which == "entries" {
+          @ast.TsType::Array(@ast.TsType::Tuple([@ast.TsType::String_, v]))
+        } else {
+          @ast.TsType::Array(v)
+        },
+      )
+    }
     // `JSON.parse(...)` returns `any` already by convention.
+    _ => None
+  }
+}
+
+///|
+/// The `T` that `Object.entries` / `Object.values` infer from `ty`, when
+/// the lib's generic overload applies: an array's element, a lib
+/// `Record`'s value, or the value of a declared index signature (the
+/// string one when both are declared, since a numeric signature's value
+/// has to be assignable to it). `None` when the non-generic `{}` overload
+/// is the one tsc picks, or when this checker cannot tell.
+fn object_values_element(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? {
+  match resolver.unwrap(ty) {
+    Array(e) | Applied("Array" | "ReadonlyArray", [e]) => Some(e)
+    Applied("Record", [_, v]) if resolver.type_aliases.get("Record") is None &&
+      resolver.interfaces.get("Record") is None => Some(v)
+    Applied(_, _) | Named(_) | Object(_) | Struct(_, _) as t => {
+      let sigs : Array[(@ast.TsType, @ast.TsType)] = []
+      collect_index_sigs(resolver, t, sigs, Map([]))
+      let mut string_v : @ast.TsType? = None
+      let mut number_v : @ast.TsType? = None
+      for sig in sigs {
+        match resolver.unwrap(sig.0) {
+          String_ => if string_v is None { string_v = Some(sig.1) }
+          Number | Int => if number_v is None { number_v = Some(sig.1) }
+          _ => ()
+        }
+      }
+      match string_v {
+        Some(v) => Some(v)
+        None => number_v
+      }
+    }
     _ => None
   }
 }
@@ -11118,7 +11178,7 @@ fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
     BoolLit(_) => None
     IntLit(n) => if n > 1 { Some(true) } else { None }
     NumberLit(n) => if n > 0.0 && n != 1.0 { Some(true) } else { None }
-    BigIntLit(s) => if s == "0" || s == "0n" { None } else { Some(true) }
+    BigIntLit(s) => if is_bigint_zero(s) { None } else { Some(true) }
     StringLit(s) => Some(s != "")
     TemplateLiteral(quasis, []) => Some(quasis.iter().any(fn(q) { q != "" }))
     NullLit | UnaryOp(Void, _) => Some(false)
@@ -19009,12 +19069,7 @@ fn boolean_falsy_as_false(t : @ast.TsType) -> @ast.TsType {
         @ast.TsType::Never
       }
     Literal(v) => if v == "" { t } else { @ast.TsType::Never }
-    BigIntLiteral(v) =>
-      if v == "0" || v == "0n" {
-        t
-      } else {
-        @ast.TsType::Never
-      }
+    BigIntLiteral(v) => if is_bigint_zero(v) { t } else { @ast.TsType::Never }
     Union(ms) => {
       let kept : Array[@ast.TsType] = []
       for m in ms {
@@ -25728,7 +25783,7 @@ fn static_factory_body_return_type(
   for p in m.params {
     env.bind(p.0, p.1)
   }
-  match infer_body_return_type(env, resolver, b) {
+  match infer_body_return_type(env, resolver, b, nullishness_only=true) {
     Some(t) if !(t is Any || t is Unknown) => Some(t)
     _ => None
   }
@@ -28162,6 +28217,7 @@ fn infer_body_return_type(
   env : ExprEnv,
   resolver : Resolver,
   body : @ast.TsBlock,
+  nullishness_only~ : Bool = false,
 ) -> @ast.TsType? {
   // Each `return` with the names the nested scopes around it declare — a
   // block's `let` / `const` / `var` (the whole block is their scope), a
@@ -28375,7 +28431,7 @@ fn infer_body_return_type(
         widen_fresh_deep_from(resolver, infer_expr(env, resolver, e), e)
       None => @ast.TsType::Undefined
     }
-    if !return_type_trustworthy(resolver, t, 0) {
+    if !return_type_trustworthy(resolver, t, 0, nullishness_only~) {
       ok = false
       break
     }
@@ -28443,6 +28499,7 @@ fn return_type_trustworthy(
   resolver : Resolver,
   t : @ast.TsType,
   depth : Int32,
+  nullishness_only~ : Bool = false,
 ) -> Bool {
   if depth > 6 {
     return false
@@ -28463,7 +28520,17 @@ fn return_type_trustworthy(
     Union(items) =>
       items
       .iter()
-      .all(fn(x) { return_type_trustworthy(resolver, x, depth + 1) })
+      .all(fn(x) {
+        return_type_trustworthy(resolver, x, depth + 1, nullishness_only~)
+      })
+    // An instance of a generic class is never nullish whatever its type
+    // arguments are, and the arguments are what this walk cannot vouch for
+    // (`new Delta(modifiedDeleted, i)` in a generic static carries the
+    // method's own `T`). So it is trusted only for a caller that asks
+    // whether the result can be nullish, and asks nothing else: excalidraw's
+    // `Delta.create` builds its result from two `const` locals, which sends
+    // it here rather than to the single-return shortcut.
+    Applied(n, _) if nullishness_only => resolver.classes.contains(n)
     Object(fields) =>
       fields.length() > 0 &&
       fields
@@ -32041,14 +32108,45 @@ fn bind_object_pattern(
         }
         Some(@ast.TsType::Object(rest_fields))
       }
+      let non_nullish_members = fn(u : @ast.TsType) -> Array[@ast.TsType] {
+        union_components(
+          flatten_union_parts(expand_union_alias_members(ctx.resolver, u)),
+        ).filter(fn(m) { !(m is (Null | Undefined | Void)) })
+      }
+      // An INTERSECTION holding a union distributes the same way: the rest
+      // of `{ tab } & (A | B)` is the rest of `{ tab } & A` or of
+      // `{ tab } & B`, so `!("__fallback" in rest)` can narrow it
+      // (excalidraw's `TTDDialogBase`, probed). It had been the fields of
+      // the non-union parts alone, `{}`. Two union parts would need their
+      // cross product, and keep the rest `any` instead.
+      let mut opaque_intersection = false
       let members = match ctx.resolver.unwrap(source) {
-        Union(_) as u =>
-          union_components(
-            flatten_union_parts(expand_union_alias_members(ctx.resolver, u)),
-          ).filter(fn(m) { !(m is (Null | Undefined | Void)) })
+        Union(_) as u => non_nullish_members(u)
+        Intersection(parts) => {
+          let union_at = parts
+            .mapi(fn(i, p) { (i, ctx.resolver.unwrap(p)) })
+            .filter(fn(e) { e.1 is Union(_) })
+          match union_at.length() {
+            0 => []
+            1 => {
+              let (at, u) = union_at[0]
+              non_nullish_members(u).map(fn(m) {
+                @ast.TsType::Intersection(
+                  parts.mapi(fn(i, p) { if i == at { m } else { p } }),
+                )
+              })
+            }
+            _ => {
+              opaque_intersection = true
+              []
+            }
+          }
+        }
         _ => []
       }
-      let rest_ty = if members.length() > 1 {
+      let rest_ty = if opaque_intersection {
+        @ast.TsType::Any
+      } else if members.length() > 1 {
         let parts : Array[@ast.TsType] = []
         let mut all = true
         for m in members {
@@ -33724,7 +33822,7 @@ fn without_falsy_literals(resolver : Resolver, t : @ast.TsType) -> @ast.TsType? 
       BooleanLiteral(false) => ()
       Literal("") => ()
       NumberLiteral("0") | NumberLiteral("-0") => ()
-      BigIntLiteral("0") | BigIntLiteral("0n") => ()
+      BigIntLiteral(v) if is_bigint_zero(v) => ()
       Boolean => out.push(BooleanLiteral(true))
       _ => out.push(p)
     }
@@ -33789,6 +33887,14 @@ fn truthy_non_nullish(resolver : Resolver, cur : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// Whether a bigint literal's spelling is zero, which is falsy: `0`, `0n`,
+/// and the negated `-0` / `-0n` the parser keeps for a `-0n` literal type
+/// (`x: -0n` is falsy, probed; #317's review).
+fn is_bigint_zero(v : String) -> Bool {
+  v == "0" || v == "0n" || v == "-0" || v == "-0n"
+}
+
+///|
 /// Whether a value of `t` can be falsy: a falsy literal, `false`, a
 /// nullish type, a primitive that holds one (`string` holds `""`), or a
 /// union with such a member. An object type cannot (`falsy_subset` says
@@ -33801,7 +33907,7 @@ fn may_be_falsy(resolver : Resolver, t : @ast.TsType) -> Bool {
     match resolver.unwrap(t) {
       Literal(v) => v == ""
       NumberLiteral(v) => v == "0" || v == "-0" || v == "NaN"
-      BigIntLiteral(v) => v == "0" || v == "0n"
+      BigIntLiteral(v) => is_bigint_zero(v)
       BooleanLiteral(b) => !b
       Union(ms) => ms.iter().any(fn(m) { go(resolver, m, depth + 1) })
       u => !(falsy_subset(resolver, u) is Never)
@@ -33819,7 +33925,8 @@ fn may_be_falsy(resolver : Resolver, t : @ast.TsType) -> Bool {
 fn without_falsy_scalar_literals(t : @ast.TsType) -> @ast.TsType {
   guard t is Union(ms) else { return t }
   let kept = ms.filter(fn(m) {
-    !(m is (Literal("") | NumberLiteral("0" | "-0") | BigIntLiteral("0" | "0n")))
+    !(m is (Literal("") | NumberLiteral("0" | "-0")) ||
+    (m is BigIntLiteral(v) && is_bigint_zero(v)))
   })
   if kept.is_empty() || kept.length() == ms.length() {
     t
@@ -37217,13 +37324,19 @@ fn method_call_never_nullish(
           } else {
             m.return_type
           }
-          m.type_params.length() == 0 &&
+          // A GENERIC factory narrows too, unless a member of its return is
+          // one of the method's own type parameters, which an argument can
+          // make nullish: `static create<T>(d) { return new Delta(d) }`
+          // is a `Delta<T>` whatever `T` is (excalidraw's
+          // `ElementsDelta.applyLatestChanges`, probed), while
+          // `static pick<T>(x: T) { return x }` stays unknowable.
           is_checkable(ret) &&
           union_components(
             deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
           )
           .iter()
           .all(fn(t) {
+            !(t is Named(tp) && m.type_params.contains(tp)) &&
             !(ctx.resolver.unwrap(t)
             is (Void | Null | Undefined | Any | Unknown | Never))
           })

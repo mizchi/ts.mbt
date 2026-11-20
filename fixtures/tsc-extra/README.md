@@ -208,6 +208,7 @@ guide to whether the behaviour will change.
 | declarations | `moduleLocalNonNullableShadowsLibUtility` | A module's own `type NonNullable<T> = T` is not the lib utility | TS2322 | — |
 | declarations | `multiDeclaratorBindingsReachLaterStatements` | Every declarator of `const a = 1, b = "x"` (and of a `let` list, with a pattern or uninitialized) binds in the enclosing scope, for a later statement and a closure; a real block's own declaration does not | TS2322 | — |
 | declarations | `namespaceLocalInterfaceShadowsLibPromise` | A namespace-local `interface Promise<T>` shadows the lib type | TS2345 | — |
+| declarations | `objectRestOverIntersectionWithUnion` | An object rest over an intersection holding one union part distributes over that union, so an `in` test narrows it; a member no part has, and one only some parts have, are still errors | TS2339 | — |
 | declarations | `objectRestOverUnionKeepsEachMember` | An object rest over a union is a union of the members' rests, keeping each discriminant and narrowing by it | TS2322 | — |
 | directives | `tsNocheckAfterBlockComment` | `@ts-nocheck` after a block comment, in any case, with a `: reason` tail, opts the file out | accepted | `tsNoCheckForTypescriptComments2` (no block comment) |
 | directives | `tsNocheckAfterStatement` | A `// @ts-nocheck` after the first statement is an ordinary comment | TS2322 | — |
@@ -228,6 +229,7 @@ guide to whether the behaviour will change.
 | inference | `freshLiteralWideningAndNonNullableIntersections` | Fresh-literal widening at a generic call (`useState("")`), `NonNullable<T>` vs `T & {}`, intersections, nested `Extract` | TS2322 TS2345 TS2353 | — |
 | inference | `genericCallableValueArgumentCount` | A value typed by a generic call signature takes the count the signature says: optional, rest and `void` parameters may be omitted, a parameter typed by a bare binder may not, even with an explicit `<void>` | TS2554 TS2555 | — |
 | inference | `genericMethodReturningNestedGenericFunction` | A method's binding flows into the bound of the generic function it returns | TS2345 | `wrappedAndRecursiveConstraints4` |
+| inference | `genericStaticFactoryNarrowsAssignment` | A generic static factory's result is an instance of its class whatever its type arguments, so assigning it narrows a nullable binding, also when the instance is built from `const` locals; a factory returning its bare type parameter narrows nothing | TS18047 | — |
 | inference | `intraExpressionInferenceFromMethodReturn` | `setup()`'s return types a sibling method's parameter (reduced, with an illegal neighbour) | TS2339 | `intraExpressionInferences` |
 | inference | `arrayMethodNamedCallbackAndPredicateFit` | `map` / `flatMap` take their result from what the callback returns, inline or passed by name; `filter` narrows through a predicate only when its target fits the element type | TS2322 | — |
 | inference | `methodOverloadSelectionByParameterShape` | A tuple-typed rest parameter is that many parameters in method overload selection: optional slots may be omitted, a rest element takes any count, a nested tuple rest is flattened, and positions before a middle rest are fixed; an alias-typed argument fits a parameter of the alias or of what it resolves to; a lone generic method with a tuple rest binds its type parameter from a spread or positional arguments | TS2322 | — |
@@ -242,6 +244,7 @@ guide to whether the behaviour will change.
 | inference | `writtenAnyReturnIsNotInferred` | A function with no return annotation takes its return type from its body, and one that writes `: any` returns `any` whatever its body returns | TS2322 | — |
 | lib | `aliasOfLibInterfaceKeepsMembers` | An alias to a lib interface (`type NativeKE = KeyboardEvent`) has its members, also beside a namespace that declares an interface of the same name | TS2339 | — |
 | lib | `errorIsErrorAndAugmentedRawJSON` | ES2026 `Error.isError` narrows, and a `RawJSON` augmentation merges | TS2322 TS2339 | — |
+| lib | `objectEntriesValueType` | `Object.entries` / `Object.values` give `T` the value type of a `Record`, a declared index signature (string or number) or an array; an interface with no index signature and a `Map` fall to the `{}` overload, which is `any`; a type literal's implicit index signature gives the union of its property types; the value then narrows a declared `D \| null` by assignment | TS2322 | — |
 | parser | `contextualKeywordDeclareAsInterfaceName` | `interface declare<T>` | accepted | — |
 | parser | `emptyTypeArgumentListInInstantiationExpression` | `fx<>` is TS1099, `fx<string>` is legal | TS1099 | `instantiationExpressions` |
 | parser | `heritageCallWithTypeArguments` | `extends TaggedError("E")<{ … }>` | accepted | — |

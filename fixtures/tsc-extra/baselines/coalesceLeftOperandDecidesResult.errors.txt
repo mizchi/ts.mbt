@@ -1,18 +1,21 @@
-coalesceLeftOperandDecidesResult.ts(21,51): error TS2345: Argument of type 'D | {}' is not assignable to parameter of type 'D'.
+coalesceLeftOperandDecidesResult.ts(22,51): error TS2345: Argument of type 'D | {}' is not assignable to parameter of type 'D'.
   Type '{}' is missing the following properties from type 'D': a, b
-coalesceLeftOperandDecidesResult.ts(22,41): error TS2345: Argument of type 'string | 1' is not assignable to parameter of type 'string'.
+coalesceLeftOperandDecidesResult.ts(23,41): error TS2345: Argument of type 'string | 1' is not assignable to parameter of type 'string'.
   Type 'number' is not assignable to type 'string'.
-coalesceLeftOperandDecidesResult.ts(23,61): error TS2322: Type 'string' is not assignable to type 'number'.
-coalesceLeftOperandDecidesResult.ts(24,50): error TS2322: Type 'D' is not assignable to type 'string'.
+coalesceLeftOperandDecidesResult.ts(24,61): error TS2322: Type 'string' is not assignable to type 'number'.
+coalesceLeftOperandDecidesResult.ts(25,50): error TS2322: Type 'D' is not assignable to type 'string'.
+coalesceLeftOperandDecidesResult.ts(27,47): error TS2322: Type 'string' is not assignable to type 'bigint'.
+coalesceLeftOperandDecidesResult.ts(28,51): error TS2322: Type 'string' is not assignable to type 'bigint'.
 
 
-==== coalesceLeftOperandDecidesResult.ts (4 errors) ====
+==== coalesceLeftOperandDecidesResult.ts (6 errors) ====
     // `a ?? b` has `a`'s type alone when `a` cannot be nullish, and `a || b`
     // when `a` cannot be falsy, so the right operand is never related to the
     // expected type. Every object type except an empty one is never falsy,
     // whatever its members' optionality, a class with only methods included.
     // A `string` can be `""`, so `s || 1` still yields `string | 1`. The
-    // deciding left operand is the result, so it is what relates.
+    // deciding left operand is the result, so it is what relates. A bigint
+    // zero is falsy in both spellings, `0n` and `-0n`.
     
     interface D { a: number; b: number }
     declare function f(d: D): void;
@@ -41,4 +44,11 @@ coalesceLeftOperandDecidesResult.ts(24,50): error TS2322: Type 'D' is not assign
     export function badLeftDecidesOr(d: D): string { return d || "z"; }
                                                      ~~~~~~
 !!! error TS2322: Type 'D' is not assignable to type 'string'.
+    export function okBigOneLeft(x: 1n) { const y: bigint = x || "bad"; return y; }
+    export function badBigZeroLeft(x: 0n) { const y: bigint = x || "bad"; return y; }
+                                                  ~
+!!! error TS2322: Type 'string' is not assignable to type 'bigint'.
+    export function badBigNegZeroLeft(x: -0n) { const y: bigint = x || "bad"; return y; }
+                                                      ~
+!!! error TS2322: Type 'string' is not assignable to type 'bigint'.
     

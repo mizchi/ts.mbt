@@ -7480,6 +7480,44 @@ product surfaces now.
       - In `x || 9` with `x: 1`, a truthy LITERAL on the left did not
         decide the result, so the TS 5.0 enum check judged an unreachable
         `9`.
+  Batch HH carries #317's `-0n` Minor and takes excalidraw's next
+  categories (76 -> 68 reports). The oracle is unchanged, and no real-code
+  site was added.
+  - **`Object.entries` and `Object.values` were `[string, any][]` for every
+    source.** The lib's first overload is
+    `entries<T>(o: { [s: string]: T } | ArrayLike<T>)`, so a `Record`, a
+    declared index signature and an array give `T` the value type. With
+    `any`, excalidraw's `for (const [id, delta] of Object.entries(deltas))`
+    assigned `any` to `let latestDelta: Delta<…> | null`, and assigning
+    `any` keeps the declared type. So every later `latestDelta.deleted` was
+    possibly null.
+    - An interface with no index signature falls to the `{}` overload in
+      tsc, since only a type literal has an implicit index signature. So
+      the interface stays `any` here. A `Map` does too.
+    - The type literal's union of property types is a declared MISS.
+  - **The same site had a second cause, which is why the first fix measured
+    as a no-op.** The other branch assigned `Delta.create(…)`, a GENERIC
+    static factory. Two gates refused it.
+    - Any static method with type parameters was skipped. Now only a return
+      that is one of the method's own type parameters abstains, because an
+      argument can make it nullish.
+    - `Delta.create` builds its result from two `const` locals, which sends
+      it to the body-return inference. That inference trusts no `Applied`
+      type, because the arguments carry the method's own `T`. A caller that
+      asks only about nullishness now trusts an instance of a class
+      whatever its arguments.
+    - Fixing either cause alone left the join `Delta | null`. Only probing
+      each branch separately found that there were two.
+  - **An object rest over an intersection holding ONE union part**
+    distributes over that union, as a rest over a bare union does. Before,
+    it was the fields of the non-union parts, `{}` for excalidraw's
+    `TTDDialog`. Two union parts would need their cross product, so the
+    rest stays `any` there.
+  - **`-0n` is falsy** at all five sites that ask whether a bigint literal
+    is zero. They are one helper now.
+  - **Filed:** a member that only some members of a union declare is not
+    reported on a union receiver at all. `u.onSubmit(1)` with `u: A | B` is
+    silent, so one new tsc-extra cell is a declared MISS for that reason.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

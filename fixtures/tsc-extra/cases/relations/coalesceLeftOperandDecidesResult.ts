@@ -6,7 +6,8 @@
 // expected type. Every object type except an empty one is never falsy,
 // whatever its members' optionality, a class with only methods included.
 // A `string` can be `""`, so `s || 1` still yields `string | 1`. The
-// deciding left operand is the result, so it is what relates.
+// deciding left operand is the result, so it is what relates. A bigint
+// zero is falsy in both spellings, `0n` and `-0n`.
 
 interface D { a: number; b: number }
 declare function f(d: D): void;
@@ -25,3 +26,6 @@ export function badNullable(u: D | undefined) { f(u ?? {}); }
 export function badOrStr(s: string) { g(s || 1); }
 export function badLeftDecidesCoalesce(s: string): number { return s ?? false; }
 export function badLeftDecidesOr(d: D): string { return d || "z"; }
+export function okBigOneLeft(x: 1n) { const y: bigint = x || "bad"; return y; }
+export function badBigZeroLeft(x: 0n) { const y: bigint = x || "bad"; return y; }
+export function badBigNegZeroLeft(x: -0n) { const y: bigint = x || "bad"; return y; }

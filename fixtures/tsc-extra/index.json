@@ -2764,6 +2764,46 @@
       "claims": []
     },
     {
+      "case": "declarations/objectRestOverIntersectionWithUnion.ts",
+      "area": "declarations",
+      "name": "objectRestOverIntersectionWithUnion",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2339
+      ],
+      "baseline": "baselines/objectRestOverIntersectionWithUnion.errors.txt",
+      "claims": [
+        {
+          "name": "okRestOfIntersectionUnion",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 13
+        },
+        {
+          "name": "okRestOfIntersection",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badRestMissing",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badRestKeepsUnion",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 17
+        }
+      ]
+    },
+    {
       "case": "declarations/objectRestOverUnionKeepsEachMember.ts",
       "area": "declarations",
       "name": "objectRestOverUnionKeepsEachMember",
@@ -4213,6 +4253,46 @@
       ]
     },
     {
+      "case": "inference/genericStaticFactoryNarrowsAssignment.ts",
+      "area": "inference",
+      "name": "genericStaticFactoryNarrowsAssignment",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18047
+      ],
+      "baseline": "baselines/genericStaticFactoryNarrowsAssignment.errors.txt",
+      "claims": [
+        {
+          "name": "okExplicitTypeArgument",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okInferredTypeArgument",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okBuiltFromLocals",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badBareTypeParameter",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
+        }
+      ]
+    },
+    {
       "case": "inference/intraExpressionInferenceFromMethodReturn.ts",
       "area": "inference",
       "name": "intraExpressionInferenceFromMethodReturn",
@@ -5276,6 +5356,100 @@
       ]
     },
     {
+      "case": "lib/objectEntriesValueType.ts",
+      "area": "lib",
+      "name": "objectEntriesValueType",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/objectEntriesValueType.errors.txt",
+      "claims": [
+        {
+          "name": "badRecordValue",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badRecordLiteralKeys",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badIndexSignature",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badNumberIndexSignature",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badArrayValue",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okInterfaceIsAny",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okMapIsAny",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badTypeLiteralUnion",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badKeyIsString",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badValuesRecord",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "okValuesInterface",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badValuesTypeLiteral",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 27
+        },
+        {
+          "name": "okValueNarrowsDeclaredNullable",
+          "kind": "ok",
+          "fromLine": 28,
+          "toLine": 35
+        }
+      ]
+    },
+    {
       "case": "parser/contextualKeywordDeclareAsInterfaceName.ts",
       "area": "parser",
       "name": "contextualKeywordDeclareAsInterfaceName",
@@ -6266,56 +6440,74 @@
         {
           "name": "okNonNullish",
           "kind": "ok",
-          "fromLine": 16,
-          "toLine": 16
-        },
-        {
-          "name": "okOrObject",
-          "kind": "ok",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "okOrMethodsOnly",
+          "name": "okOrObject",
           "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "okOrWeakType",
+          "name": "okOrMethodsOnly",
           "kind": "ok",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "okStrCoalesce",
+          "name": "okOrWeakType",
           "kind": "ok",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "badNullable",
-          "kind": "bad",
+          "name": "okStrCoalesce",
+          "kind": "ok",
           "fromLine": 21,
           "toLine": 21
         },
         {
-          "name": "badOrStr",
+          "name": "badNullable",
           "kind": "bad",
           "fromLine": 22,
           "toLine": 22
         },
         {
-          "name": "badLeftDecidesCoalesce",
+          "name": "badOrStr",
           "kind": "bad",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "badLeftDecidesOr",
+          "name": "badLeftDecidesCoalesce",
           "kind": "bad",
           "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badLeftDecidesOr",
+          "kind": "bad",
+          "fromLine": 25,
           "toLine": 25
+        },
+        {
+          "name": "okBigOneLeft",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badBigZeroLeft",
+          "kind": "bad",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "badBigNegZeroLeft",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 29
         }
       ]
     },
