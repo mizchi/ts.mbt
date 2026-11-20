@@ -2948,7 +2948,11 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       // dropping both comparisons, under plain `mtsc` with `--noCheck`
       // (univer's `_clearCacheOutOfVisibleRange`). tsc parses the list as
       // types and gives up the moment one does not parse, which this
-      // token scan approximates by refusing what no type contains.
+      // token scan approximates by refusing what no type contains. `>=`,
+      // `>>=` and `>>>=` are NOT on the list: a type argument list followed
+      // by `=` lexes that way (`var v: Foo<Bar<T>>= 1`,
+      // parserGenericsInVariableDeclaration1), and refusing them made a
+      // legal declaration a parse error.
       Star
       | StarStar
       | Slash
@@ -2960,7 +2964,6 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       | BangEqEq
       | Instanceof
       | Le
-      | Ge
       | AmpAmp
       | PipePipe
       | AmpAmpEq
@@ -2981,8 +2984,6 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       | PipeEq
       | CaretEq
       | LtLtEq
-      | GtGtEq
-      | GtGtGtEq
       | Delete => return false
       // `+` / `-` appear in a type only as a negative numeric literal
       // (`typeof f<- 1>`; the lexer reads `-1` as one token, so only the

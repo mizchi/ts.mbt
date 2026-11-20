@@ -7588,6 +7588,14 @@ product surfaces now.
       call-site type arguments before this scan runs. So only a TYPE
       position (`typeof h<- 1>`) reaches that branch, and a test written
       at a call site could not fail.
+    - The first version also refused `>=`, `>>=` and `>>>=`, which is
+      how a type argument list followed by `=` lexes (`var v: Foo<Bar<T>>=
+      1`). That made a legal declaration a parse error, and the gate
+      stayed green: the conformance file errors anyway, so it remained a
+      TP. Only the "via parse rejection" sub-count moved, from 386 to 387,
+      and diffing each file's parse status against the previous binary
+      named the file. A sub-count that moves is a finding even when the
+      verdict does not.
   - **Two arrays were never comparable.** `types_can_overlap` had no
     `Array` or `Tuple` arm, so `number[] === number[]` fell to its final
     `false` and read as always false. That covered every

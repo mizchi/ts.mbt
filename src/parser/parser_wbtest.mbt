@@ -7706,6 +7706,12 @@ test "parser: an operator no type contains ends a type-arg list" {
   let _ = Parser::from_source(src).parse_module() catch {
     e => fail("expected `\{src}` to parse: \{e}")
   }
+  // A type argument list followed by `=` lexes as `>=` / `>>=` / `>>>=`,
+  // which close the list rather than being an operator inside it.
+  let src = "var v : Foo<T>= 1;\nvar v : Foo<Bar<T>>= 1;\nvar v : Foo<Bar<Quux<T>>>= 1;\n"
+  let _ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected `\{src}` to parse: \{e}")
+  }
 }
 
 ///|
