@@ -1957,8 +1957,9 @@ test "a shadowing local's rebinding leaves the outer path narrowed (ifjoin5)" {
 /// (univer's `__getSplitWidthNoAngle(…, tableSource.dist ?? {})`). An empty
 /// object type admits `""` and `0`, so it is not always truthy, and a
 /// string left operand can be `""`. The deciding left operand IS the result,
-/// so it is what relates to the target (#316's review; probed: tsc reports
-/// the bad cells only).
+/// so it is what relates to the target (#316's review). A bigint zero is
+/// falsy in both spellings, `0n` and `-0n` (#317's review; probed: tsc
+/// reports the bad cells only).
 test "a left operand that decides `??` / `||` skips the right (coalesce)" {
   let src =
     #|interface D { a: number; b: number }
@@ -1974,12 +1975,17 @@ test "a left operand that decides `??` / `||` skips the right (coalesce)" {
     #|export function badOrStr(s: string) { g(s || 1); }
     #|export function badLeftDecidesCoalesce(s: string): number { return s ?? false; }
     #|export function badLeftDecidesOr(d: D): string { return d || "z"; }
+    #|export function okBigOneLeft(x: 1n) { const y: bigint = x || "bad"; return y; }
+    #|export function badBigZeroLeft(x: 0n) { const y: bigint = x || "bad"; return y; }
+    #|export function badBigNegZeroLeft(x: -0n) { const y: bigint = x || "bad"; return y; }
   assert_eq(issue_lines(src), [
     "function badNullable > call `f` arg[0] (logical).a: property `a` is required by `D`",
     "function badNullable > call `f` arg[0] (logical).b: property `b` is required by `D`",
     "function badOrStr > call `g` arg[0] (logical): expected `string` but got `number`",
     "function badLeftDecidesCoalesce > return (logical): expected `number` but got `string`",
     "function badLeftDecidesOr > return (logical): expected `string` but got `D`",
+    "function badBigZeroLeft > binding `y` init (logical): expected `bigint` but got `string`",
+    "function badBigNegZeroLeft > binding `y` init (logical): expected `bigint` but got `string`",
   ])
 }
 
@@ -2164,5 +2170,74 @@ test "a var in a branch is not a shadow at the join (varjoin)" {
     #|export function badVarRedeclare(c: boolean, o: O, other: O) { o.p = ""; if (c) { var o: O; o = other; } const s: string = o.p; return s; }
   assert_eq(issue_lines(src), [
     "function badVarRedeclare > binding `s` init: type `string | undefined` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// `Object.entries` / `Object.values` take `T` from the lib's generic
+/// overload: a `Record`, a declared index signature or an array gives the
+/// value type, and an interface with no index signature or a `Map` falls to
+/// the `{}` overload, which is `any`. The value narrows a declared
+/// `D | null` by assignment, where `any` keeps the `null` (excalidraw's
+/// `applyLatestChanges`; probed: tsc reports the bad cells only).
+test "Object.entries reads the value type of an indexable source (entries)" {
+  let src =
+    #|interface I { a: number; b: string }
+    #|interface D { x: number }
+    #|export function badRecord(r: Record<string, number>) { for (const [, v] of Object.entries(r)) { const s: string = v; } }
+    #|export function badIndex(r: { [k: number]: number }) { for (const [, v] of Object.entries(r)) { const s: string = v; } }
+    #|export function badArray(r: number[]) { const xs: string[] = Object.values(r); }
+    #|export function okInterface(i: I) { for (const [, v] of Object.entries(i)) { const s: boolean = v; } }
+    #|export function okMap(m: Map<string, number>) { for (const [, v] of Object.entries(m)) { const s: string = v; } }
+    #|export function okNarrows(r: Record<string, D>) { for (const [, d] of Object.entries(r)) { let l: D | null = null; l = d; console.log(l.x); } }
+  assert_eq(issue_lines(src), [
+    "function badRecord > binding `s` init: expected `string` but got `number`",
+    "function badIndex > binding `s` init: expected `string` but got `number`", "function badArray > binding `xs` init: expected `string[]` but got `number[]`",
+  ])
+}
+
+///|
+/// A GENERIC static factory narrows an assignment when its result is an
+/// instance of a class, whatever the class's type arguments: it was skipped
+/// for any method with type parameters, and a body that builds the result
+/// from `const` locals was skipped again because those arguments carry the
+/// method's own `T`. A factory returning a bare type parameter still
+/// abstains, since an argument can make it nullish (excalidraw's
+/// `Delta.create`; probed: tsc reports `badBareTypeParam` only).
+test "a generic static factory narrows an assignment (genericfactory)" {
+  let src =
+    #|class Delta<T> {
+    #|  private constructor(public readonly deleted: Partial<T>) {}
+    #|  static create<T>(d: Partial<T>) { return new Delta(d); }
+    #|  static viaLocal<T>(d: Partial<T>, m?: (x: Partial<T>) => Partial<T>) { const md = m ? m(d) : d; return new Delta(md); }
+    #|  static pick<T>(x: T) { return x; }
+    #|}
+    #|type EP = { a: number };
+    #|export function okGeneric(c: boolean, d: Delta<EP>) { let l: Delta<EP> | null = null; if (c) { l = Delta.create<EP>({}); } else { l = d; } return l.deleted; }
+    #|export function okViaLocal(c: boolean, d: Delta<EP>) { let l: Delta<EP> | null = null; if (c) { l = Delta.viaLocal(d.deleted); } else { l = d; } return l.deleted; }
+    #|export function badBareTypeParam(c: boolean, n: string | null) { let v: string | null = null; if (c) { v = Delta.pick(n); } else { v = "x"; } return v.length; }
+  assert_eq(issue_lines(src), [
+    "function badBareTypeParam > PropAccess `.length`: object is possibly `null`",
+  ])
+}
+
+///|
+/// An object rest over an intersection holding ONE union part distributes
+/// over that union, as it does over a bare union: `{ tab, ...rest }` of
+/// `{ tab: string } & (A | B)` is `A | B` minus `tab`, which an `in` test
+/// then narrows (excalidraw's `TTDDialog`; probed: tsc reports
+/// `badRestMissing` only).
+test "an object rest distributes over an intersection's union part (restinter)" {
+  let src =
+    #|type A = { onSubmit(x: number): void; label?: string };
+    #|type B = { __fallback: true };
+    #|export const okRestOfIntersectionUnion = ({ tab, ...rest }: { tab: string } & (A | B)) => {
+    #|  if (!("__fallback" in rest)) { rest.onSubmit(1); return rest.label; }
+    #|  return tab;
+    #|};
+    #|export const okRestOfIntersection = ({ tab, ...rest }: { tab: string } & A) => { rest.onSubmit(1); return tab; };
+    #|export const badRestMissing = ({ tab, ...rest }: { tab: string } & A) => { rest.nope; return tab; };
+  assert_eq(issue_lines(src), [
+    "top-level > PropAccess `.nope`: property `nope` does not exist on `{ onSubmit: (number) => void; label: string | undefined }`",
   ])
 }

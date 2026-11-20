@@ -38,3 +38,6 @@ arrayMemberOfObjectRelatesElementwise:badReadonlyMember  a `readonly` array type
 arrayMemberOfObjectRelatesElementwise:badReadonlyTopLevel  a `readonly` array type is not told apart from a mutable one (TS4104)
 andFalsyLiteralsOfPrimitives:badStringLiteral  `"" | "a"` against `"a"` is a literal-union mismatch, which the assignability check suppresses as possible flow-narrowing residue
 andFalsyLiteralsOfPrimitives:badNumberLiteral  a numeric literal is erased to `number` where it is written, so `n && 5` is `number` here, and a `number` source against a numeric literal target is suppressed for the same reason
+objectRestOverIntersectionWithUnion:badRestKeepsUnion  a member that some members of a union lack is not reported on a union receiver at all (`u.onSubmit(1)` with `u: A | B` is silent too), so the rest's union is right and the access is still a MISS
+objectEntriesValueType:badTypeLiteralUnion  a type literal's implicit index signature is not modelled, so `Object.entries` of one stays `[string, any][]` where tsc gives the union of its property types
+objectEntriesValueType:badValuesTypeLiteral  same as `badTypeLiteralUnion`, through `Object.values`
