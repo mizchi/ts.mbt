@@ -2094,3 +2094,54 @@ test "mtsc graph checker reads members through an enum import alias (enumalias)"
     ],
   )
 }
+
+///|
+/// A local binding of an enum import alias's name is what the name means:
+/// a parameter `RE: any` and a local object both shadow `import { E as RE
+/// }`, while the unshadowed `RE.A` still reads the enum (#315's review;
+/// probed: tsc reports `badUnshadowed` only).
+test "mtsc graph checker lets a local shadow an enum import alias (enumalias2)" {
+  let lib =
+    #|export enum E { A = "a", B = "b" }
+  let entry =
+    #|import { E as RE } from "./lib";
+    #|export function okShadowedByAny(RE: any) { const n: number = RE.A; return n; }
+    #|export function okShadowedByLocal() { const RE = { A: 1 }; const n: number = RE.A; return n; }
+    #|export const badUnshadowed: number = RE.A;
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "top-level > binding `badUnshadowed` init :: expected `number` but got `string`",
+    ],
+  )
+}
+
+///|
+/// An imported class's unannotated statics carry the parser's
+/// `<unannotated-static-return:>` sentinel through the graph, so a factory
+/// whose body is `return new Num(v)` narrows an assignment after
+/// `if (x == null)` as it does in one file (univer's
+/// `NumberValueObject.create(0)` in `mina`). A factory that can return
+/// `null` keeps the binding nullable (probed: tsc reports `badMaybe` only).
+test "mtsc graph checker reads an imported static factory's body (staticimport)" {
+  let lib =
+    #|export class Base { isBoolean(): boolean { return false; } }
+    #|export class Num extends Base {
+    #|  private constructor(public v: number) { super(); }
+    #|  static create(value: number, pattern: string = "") { return new Num(value); }
+    #|  static maybe(value: number) { return value > 0 ? new Num(value) : null; }
+    #|}
+  let entry =
+    #|import type { Base } from "./lib";
+    #|import { Num } from "./lib";
+    #|export function okJoin(v: Base | null | undefined) { let x = v; if (x == null) { x = Num.create(0); } return x.isBoolean(); }
+    #|export function badMaybe(v: Base | null | undefined) { let x = v; if (x == null) { x = Num.maybe(0); } return x.isBoolean(); }
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    ["function badMaybe > call `isBoolean` :: object is possibly `undefined`"],
+  )
+}
