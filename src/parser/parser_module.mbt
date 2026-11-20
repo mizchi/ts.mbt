@@ -3907,6 +3907,7 @@ fn Parser::parse_export_stmt(
       name,
       type_params: [],
       type_param_bounds: [],
+      type_param_defaults: [],
       type_: @ast.TsType::Any,
     })
     // An import-equals alias is NOT recorded as a value here, and the

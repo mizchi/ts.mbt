@@ -106,6 +106,11 @@ pub struct Parser {
   // defaulted parameters to be trailing, so this is the minimum legal
   // type-argument count). `Iterable<T, TReturn = any, TNext = any>` -> 1.
   mut last_type_params_min_required : Int32
+  // The `(name, default)` pairs of the type-parameter list parsed last, for
+  // a type alias to record (`TsTypeAlias.type_param_defaults`). Set once at
+  // the end of the list, so a nested generic in a bound or a default cannot
+  // clobber the outer list's answer.
+  mut last_type_param_defaults : Array[(String, @ast.TsType)]
   local_type_param_bounds : Array[(String, @ast.TsType)]
   // Decorator expressions parsed at the statement level that should be
   // attached to the next class declaration. The class parsers drain
@@ -539,6 +544,7 @@ pub fn Parser::new_with_strict_and_jsx(
     pending_class_base_expr: None,
     last_type_params_had_default: false,
     last_type_params_min_required: 0,
+    last_type_param_defaults: [],
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
@@ -917,6 +923,7 @@ pub fn Parser::from_source_with_jsx(
     pending_class_base_expr: None,
     last_type_params_had_default: false,
     last_type_params_min_required: 0,
+    last_type_param_defaults: [],
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],

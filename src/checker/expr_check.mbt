@@ -4679,7 +4679,17 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               // `OK<any> | DIRTY<any> | INVALID` and exposed the
               // discriminant split on object literals to it.
               let b : Map[String, @ast.TsType] = Map([])
+              // A written default is the parameter's type, as tsc reads it.
+              bind_type_param_defaults(
+                aliased.type_params,
+                aliased.type_param_defaults,
+                0,
+                b,
+              )
               for tp in aliased.type_params {
+                if b.contains(tp) {
+                  continue
+                }
                 if self.interfaces.contains(tp) ||
                   self.classes.contains(tp) ||
                   self.type_aliases.contains(tp) ||
@@ -4752,10 +4762,19 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           // Both arrive here as (type_params, body); the module side
           // wins on a name conflict, which is what lets a module
           // override a stdlib utility shape.
-          let binding : (Array[String], @ast.TsType)? = match
-            self.type_aliases.get(n) {
+          let binding : (
+            Array[String],
+            @ast.TsType,
+            Array[(String, @ast.TsType)],
+          )? = match self.type_aliases.get(n) {
             Some(aliased) if aliased.type_params.length() > 0 =>
-              Some((aliased.type_params, aliased.type_))
+              Some(
+                (
+                  aliased.type_params,
+                  aliased.type_,
+                  aliased.type_param_defaults,
+                ),
+              )
             Some(_) => None
             None =>
               // Only the CONDITIONAL-bodied entries of the standard
@@ -4782,12 +4801,12 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               match self.standard_aliases.get(n) {
                 Some(std) if std.type_params.length() > 0 &&
                   std.body is Conditional(_, _, _, _) =>
-                  Some((std.type_params, std.body))
+                  Some((std.type_params, std.body, []))
                 _ => None
               }
           }
           match binding {
-            Some((type_params, body)) => {
+            Some((type_params, body, defaults)) => {
               seen = unwrap_seen_add(seen, n)
               let bindings : Map[String, @ast.TsType] = Map([])
               let limit = if args.length() < type_params.length() {
@@ -4800,6 +4819,15 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                 bindings[type_params[i]] = args[i]
                 i = i + 1
               }
+              // A parameter the use omits takes its DEFAULT, with the
+              // parameters before it already bound, so `B = C` reads the
+              // `C` this use supplied. Without it the parameter stayed an
+              // unbound name: testing-library's `RenderResult<typeof
+              // queries>` left `container: Container`, and in graph mode
+              // that name is react-dom's unrelated `Container` (excalidraw's
+              // `container.querySelector`, probed). A parameter with no
+              // default stays unbound, as before.
+              bind_type_param_defaults(type_params, defaults, limit, bindings)
               cur = match distribute_conditional_alias(self, body, bindings) {
                 Some(t) => t
                 None => substitute_params(body, bindings)
@@ -5490,8 +5518,27 @@ fn Resolver::lookup_field(
         recv
       } else {
         match self.interfaces.get(n) {
-          Some(iface) if iface.type_params.length() > 0 =>
-            @ast.TsType::Applied(n, iface.type_params.map(fn(_) { Any }))
+          // An object-bodied type ALIAS is registered here too, and its
+          // written defaults are the parameters' types: `type U<T = number>
+          // = { v: T }` read bare is `{ v: number }`, as `unwrap` reads it.
+          // A parameter with no default stays `any`.
+          Some(iface) if iface.type_params.length() > 0 => {
+            let defaults : Map[String, @ast.TsType] = Map([])
+            match self.type_aliases.get(n) {
+              Some(a) if a.type_params == iface.type_params =>
+                bind_type_param_defaults(
+                  a.type_params,
+                  a.type_param_defaults,
+                  0,
+                  defaults,
+                )
+              _ => ()
+            }
+            @ast.TsType::Applied(
+              n,
+              iface.type_params.map(fn(tp) { defaults.get(tp).unwrap_or(Any) }),
+            )
+          }
           _ => recv
         }
       }
@@ -6659,12 +6706,24 @@ fn collect_index_sigs(
             j = j + 1
           }
         }
+        // A generic CLASS substitutes its arguments the way the interface
+        // arm above does. The raw `V` of `class Dict<V> { [k: string]: V }`
+        // otherwise resolved to whatever else the module spells `V`
+        // (`type V = string`), so `Object.values(d)` with `d: Dict<number>`
+        // read as `string[]` (#318's review; probed).
         None =>
           match resolver.classes.get(n) {
-            Some(cls) =>
-              for sig in cls.index_signatures {
-                out.push(sig)
+            Some(cls) => {
+              let bindings : Map[String, @ast.TsType] = Map([])
+              for i, tp in cls.type_params {
+                if i < args.length() {
+                  bindings[tp] = args[i]
+                }
               }
+              for sig in cls.index_signatures {
+                out.push((sig.0, substitute_params(sig.1, bindings)))
+              }
+            }
             None => ()
           }
       }
@@ -7794,6 +7853,28 @@ fn global_static_method_special(
 }
 
 ///|
+/// Binds each of `type_params` from position `from` on to its written
+/// default, in order, substituting the bindings already made so a default
+/// that names an earlier parameter (`B = C`) reads that parameter's binding.
+/// A parameter with no default is left unbound.
+fn bind_type_param_defaults(
+  type_params : Array[String],
+  defaults : Array[(String, @ast.TsType)],
+  from : Int32,
+  bindings : Map[String, @ast.TsType],
+) -> Unit {
+  for k in from..<type_params.length() {
+    let tp = type_params[k]
+    for d in defaults {
+      if d.0 == tp {
+        bindings[tp] = substitute_params(d.1, bindings)
+        break
+      }
+    }
+  }
+}
+
+///|
 /// The `T` that `Object.entries` / `Object.values` infer from `ty`, when
 /// the lib's generic overload applies: an array's element, a lib
 /// `Record`'s value, or the value of a declared index signature (the
@@ -7819,7 +7900,18 @@ fn object_values_element(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? 
       }
       match string_v {
         Some(v) => Some(v)
-        None => number_v
+        // A numeric signature alone serves `{ [s: string]: T }` only for a
+        // TYPE LITERAL, which has an implicit string index signature. An
+        // interface or a class has none, so it reaches the generic overload
+        // only as an `ArrayLike<T>`, which needs a numeric `length`;
+        // without one tsc picks the `{}` overload, `any` (#318's review;
+        // probed).
+        None if t is Object(_) => number_v
+        None =>
+          match resolver.lookup_field(t, "length") {
+            Some(l) if resolver.unwrap(l) is (Number | Int) => number_v
+            _ => None
+          }
       }
     }
     _ => None
@@ -26286,7 +26378,19 @@ fn object_lit_never_satisfies_union(
     }
     entry_types.push((entry.0, t))
   }
-  fn some_member_fits(entry_types : Array[(String, @ast.TsType)]) -> Bool {
+  // `split` says the literal is being related one discriminant combination
+  // at a time, the way tsc's `typeRelatedToDiscriminatedType` relates it:
+  // STRUCTURALLY, after the excess-property check has already run on the
+  // whole literal. A discriminant that is a union of literals picks no
+  // single member, so that check only asks whether SOME member declares
+  // the property, and a combination may carry a property its own member
+  // lacks. zod's `return { status: status.value, value: arrayValue }`
+  // against `OK<any> | DIRTY<any> | INVALID` is legal, and `value` is not
+  // in `INVALID` (probed).
+  fn some_member_fits(
+    entry_types : Array[(String, @ast.TsType)],
+    split : Bool,
+  ) -> Bool {
     for shape in member_shapes {
       let field_by_name : Map[String, @ast.TsType] = Map([])
       for f in shape {
@@ -26322,7 +26426,7 @@ fn object_lit_never_satisfies_union(
               satisfied = false
             }
           }
-          None => satisfied = false
+          None => if !split { satisfied = false }
         }
       }
       if satisfied {
@@ -26332,7 +26436,7 @@ fn object_lit_never_satisfies_union(
     false
   }
 
-  if some_member_fits(entry_types) {
+  if some_member_fits(entry_types, false) {
     return false
   }
   // A discriminant written as a UNION of literals is split the way tsc
@@ -26355,6 +26459,15 @@ fn object_lit_never_satisfies_union(
   if splits.is_empty() {
     return true
   }
+  // The excess check the split relies on: a property NO member declares is
+  // still excess (TS2353), whatever the discriminant.
+  for e in entry_types {
+    if !member_shapes
+      .iter()
+      .any(fn(shape) { shape.iter().any(fn(f) { f.0 == e.0 }) }) {
+      return true
+    }
+  }
   let mut combos = 1
   for sp in splits {
     combos = combos * sp.1.length()
@@ -26370,7 +26483,7 @@ fn object_lit_never_satisfies_union(
       candidate[sp.0] = (candidate[sp.0].0, sp.1[rest % k])
       rest = rest / k
     }
-    if !some_member_fits(candidate) {
+    if !some_member_fits(candidate, true) {
       return true
     }
   }
@@ -37330,13 +37443,34 @@ fn method_call_never_nullish(
           // is a `Delta<T>` whatever `T` is (excalidraw's
           // `ElementsDelta.applyLatestChanges`, probed), while
           // `static pick<T>(x: T) { return x }` stays unknowable.
+          // The method's binders are renamed to names no declaration can
+          // have before anything is expanded. `unwrap` has no scope check,
+          // so with `type T = string` in the module a bare `T` binder
+          // expanded to `string` before the test saw it, and `Identity<T> |
+          // Box` reached the test as the applied alias rather than the `T`
+          // it is (#318's review; probed: both lost tsc's TS18047). A member
+          // is a binder as written or once expanded; `Box<T>` stays
+          // eligible.
+          let fresh : Map[String, @ast.TsType] = Map([])
+          for tp in m.type_params {
+            fresh[tp] = Named("@binder:" + tp)
+          }
+          let ret = if fresh.is_empty() {
+            ret
+          } else {
+            substitute_params(ret, fresh)
+          }
+          let is_binder = fn(t : @ast.TsType) {
+            t is Named(n) && n.has_prefix("@binder:")
+          }
           is_checkable(ret) &&
           union_components(
             deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)),
           )
           .iter()
           .all(fn(t) {
-            !(t is Named(tp) && m.type_params.contains(tp)) &&
+            !is_binder(t) &&
+            !is_binder(ctx.resolver.unwrap(t)) &&
             !(ctx.resolver.unwrap(t)
             is (Void | Null | Undefined | Any | Unknown | Never))
           })

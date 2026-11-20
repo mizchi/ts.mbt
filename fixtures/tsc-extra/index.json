@@ -4998,6 +4998,40 @@
       ]
     },
     {
+      "case": "inference/staticFactoryBinderBeforeAliasExpansion.ts",
+      "area": "inference",
+      "name": "staticFactoryBinderBeforeAliasExpansion",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18047
+      ],
+      "baseline": "baselines/staticFactoryBinderBeforeAliasExpansion.errors.txt",
+      "claims": [
+        {
+          "name": "okAppliedToBinder",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badBinderShadowsAlias",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badBinderThroughAlias",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 20
+        }
+      ]
+    },
+    {
       "case": "inference/staticFactoryCallThroughClass.ts",
       "area": "inference",
       "name": "staticFactoryCallThroughClass",
@@ -5372,80 +5406,104 @@
         {
           "name": "badRecordValue",
           "kind": "bad",
-          "fromLine": 13,
-          "toLine": 13
-        },
-        {
-          "name": "badRecordLiteralKeys",
-          "kind": "bad",
-          "fromLine": 14,
-          "toLine": 14
-        },
-        {
-          "name": "badIndexSignature",
-          "kind": "bad",
-          "fromLine": 15,
-          "toLine": 15
-        },
-        {
-          "name": "badNumberIndexSignature",
-          "kind": "bad",
-          "fromLine": 16,
-          "toLine": 16
-        },
-        {
-          "name": "badArrayValue",
-          "kind": "bad",
-          "fromLine": 17,
-          "toLine": 17
-        },
-        {
-          "name": "okInterfaceIsAny",
-          "kind": "ok",
-          "fromLine": 18,
-          "toLine": 18
-        },
-        {
-          "name": "okMapIsAny",
-          "kind": "ok",
-          "fromLine": 19,
-          "toLine": 19
-        },
-        {
-          "name": "badTypeLiteralUnion",
-          "kind": "bad",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "badKeyIsString",
+          "name": "badRecordLiteralKeys",
           "kind": "bad",
           "fromLine": 21,
           "toLine": 21
         },
         {
-          "name": "badValuesRecord",
+          "name": "badIndexSignature",
           "kind": "bad",
           "fromLine": 22,
           "toLine": 22
         },
         {
-          "name": "okValuesInterface",
-          "kind": "ok",
+          "name": "badNumberIndexSignature",
+          "kind": "bad",
           "fromLine": 23,
           "toLine": 23
         },
         {
-          "name": "badValuesTypeLiteral",
+          "name": "badArrayValue",
           "kind": "bad",
           "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "okInterfaceIsAny",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okMapIsAny",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badTypeLiteralUnion",
+          "kind": "bad",
+          "fromLine": 27,
           "toLine": 27
+        },
+        {
+          "name": "badKeyIsString",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "badValuesRecord",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "okValuesInterface",
+          "kind": "ok",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badValuesTypeLiteral",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 34
         },
         {
           "name": "okValueNarrowsDeclaredNullable",
           "kind": "ok",
-          "fromLine": 28,
-          "toLine": 35
+          "fromLine": 35,
+          "toLine": 42
+        },
+        {
+          "name": "okClassArgument",
+          "kind": "ok",
+          "fromLine": 43,
+          "toLine": 43
+        },
+        {
+          "name": "badClassArgument",
+          "kind": "bad",
+          "fromLine": 44,
+          "toLine": 44
+        },
+        {
+          "name": "okNumericIndexInterface",
+          "kind": "ok",
+          "fromLine": 45,
+          "toLine": 45
+        },
+        {
+          "name": "badArrayLikeInterface",
+          "kind": "bad",
+          "fromLine": 46,
+          "toLine": 47
         }
       ]
     },
@@ -6579,6 +6637,59 @@
           "kind": "bad",
           "fromLine": 25,
           "toLine": 26
+        }
+      ]
+    },
+    {
+      "case": "relations/discriminantSplitRelatesEachCombination.ts",
+      "area": "relations",
+      "name": "discriminantSplitRelatesEachCombination",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2353
+      ],
+      "baseline": "baselines/discriminantSplitRelatesEachCombination.errors.txt",
+      "claims": [
+        {
+          "name": "okBareAlias",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okExplicitArgument",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badValueMismatch",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badNoMemberHasIt",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badMissingValue",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badSingleDiscriminantExcess",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
         }
       ]
     },
@@ -8176,6 +8287,71 @@
           "kind": "ok",
           "fromLine": 12,
           "toLine": 13
+        }
+      ]
+    },
+    {
+      "case": "types/typeAliasParameterDefaults.ts",
+      "area": "types",
+      "name": "typeAliasParameterDefaults",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2339
+      ],
+      "baseline": "baselines/typeAliasParameterDefaults.errors.txt",
+      "claims": [
+        {
+          "name": "okRefersEarlier",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okBareAlias",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okIntersectionDefault",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okExplicitOverridesDefault",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badDefault",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badRefersEarlier",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badBareAlias",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badIntersectionDefaultMember",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 24
         }
       ]
     }

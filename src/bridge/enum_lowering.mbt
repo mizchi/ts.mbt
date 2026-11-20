@@ -514,6 +514,7 @@ fn enum_lowering_anonymous_literal_enum_decl(
             name,
             type_params: [],
             type_param_bounds: [],
+            type_param_defaults: [],
             type_: core,
           }
           enum_lowering_type_alias_enum_decl(type_alias)

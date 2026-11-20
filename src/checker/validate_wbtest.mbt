@@ -55,7 +55,13 @@ fn iface(
 
 ///|
 fn ta_(name : String, body : @ast.TsType) -> @ast.TsTypeAlias {
-  { name, type_params: [], type_param_bounds: [], type_: body, }
+  {
+    name,
+    type_params: [],
+    type_param_bounds: [],
+    type_param_defaults: [],
+    type_: body,
+  }
 }
 
 ///|

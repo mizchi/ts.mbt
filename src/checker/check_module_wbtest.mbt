@@ -59,7 +59,13 @@ fn alias_for_check(
   type_params : Array[String],
   body : @ast.TsType,
 ) -> @ast.TsTypeAlias {
-  { name, type_params, type_param_bounds: [], type_: body, }
+  {
+    name,
+    type_params,
+    type_param_bounds: [],
+    type_param_defaults: [],
+    type_: body,
+  }
 }
 
 ///|
@@ -465,7 +471,13 @@ fn alias_with_bounds_for_check(
   bounds : Array[(String, @ast.TsType)],
   body : @ast.TsType,
 ) -> @ast.TsTypeAlias {
-  { name, type_params, type_param_bounds: bounds, type_: body, }
+  {
+    name,
+    type_params,
+    type_param_bounds: bounds,
+    type_param_defaults: [],
+    type_: body,
+  }
 }
 
 ///|

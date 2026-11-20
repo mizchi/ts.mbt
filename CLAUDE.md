@@ -7518,6 +7518,55 @@ product surfaces now.
   - **Filed:** a member that only some members of a union declare is not
     reported on a union receiver at all. `u.onSubmit(1)` with `u: A | B` is
     silent, so one new tsc-extra cell is a declared MISS for that reason.
+  Batch HI takes excalidraw's largest remaining category and carries
+  #318's four Minors. excalidraw goes from 68 reports to 57. The oracle is
+  unchanged, and no real-code site was added.
+  - **The parser dropped a type parameter's DEFAULT.** So a use that wrote
+    fewer type arguments than the alias declares left the rest as unbound
+    names. testing-library's `RenderResult<typeof customQueries>` left
+    `container: Container`, and in graph mode that name is react-dom's
+    unrelated `Container`. That made every `container.querySelector(…)` in
+    excalidraw's tests "does not exist".
+    - `TsTypeAlias` now carries `type_param_defaults`. The field was added
+      the way `TsFunc.name_is_member_key` was: the compiler named all 26
+      construction sites. Two are in the parser, five in bridge sources
+      and 19 in tests. Every site but the alias parser passes `[]`, except
+      the bridge oracle, which copies an existing alias's.
+    - `unwrap` binds an omitted argument to its default, in order, so
+      `B = A[]` reads the `A` this use supplied.
+    - A bare generic alias takes every default, at both places that read
+      one. `unwrap` has a `Named` arm, and `lookup_field` reads an
+      object-bodied alias through the INTERFACE table, which filled every
+      parameter with `any`. Fixing only `unwrap` measured as a no-op for a
+      member read; a print showed the receiver arriving as `U<any>`.
+    - Interfaces keep the old behaviour: their defaults are not recorded.
+    - It also retired the mutation differential's one declared false
+      positive, date-fns' `format(…, ({ locale } satisfies unknown))`. The
+      defaults change alone was enough, measured binary by binary, and
+      the harness reported the entry STALE, so it is removed.
+  - **Binding defaults exposed a discriminant-split false positive that
+    main already had.** zod's bare `SyncParseReturnType` now resolves to
+    `OK<any> | DIRTY<any> | INVALID`, and `return { status: status.value,
+    value }` was reported. The written `SyncParseReturnType<any>` spelling
+    reports on main too, so the bug predates this batch.
+    - tsc relates each split combination STRUCTURALLY. The excess check
+      runs once, on the whole literal. A discriminant that picks no single
+      member asks only whether SOME member declares the property, so
+      `value` beside `INVALID` is legal.
+    - The split checked excess per member. It now ignores a property one
+      member lacks, and still reports one that no member declares.
+  - **#318's Minors**, each probed against the nightly.
+    - A generic class's index signature now substitutes the class's
+      arguments. The raw `V` of `class Dict<V>` resolved to a module
+      `type V = string`.
+    - An interface whose only index signature is numeric reaches
+      `Object.values`' generic overload only as an `ArrayLike<T>`, which
+      needs a numeric `length`. Without one it is `any`. A type literal
+      keeps its implicit string index signature.
+    - A static factory's own binder is renamed before anything expands.
+      `unwrap` has no scope check, so a `T` binder beside `type T = string`
+      expanded to `string`, and `Identity<T> | Box` reached the test as the
+      applied alias. Both lost tsc's TS18047.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

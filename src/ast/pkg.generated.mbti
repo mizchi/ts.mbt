@@ -669,6 +669,7 @@ pub(all) struct TsTypeAlias {
   name : String
   type_params : Array[String]
   type_param_bounds : Array[(String, TsType)]
+  type_param_defaults : Array[(String, TsType)]
   type_ : TsType
 }
 pub fn TsTypeAlias::output(Self, &Logger) -> Unit

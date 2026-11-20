@@ -250,6 +250,7 @@ pub fn apply_oracle_resolutions(
           name,
           type_params: existing.type_params,
           type_param_bounds: existing.type_param_bounds,
+          type_param_defaults: existing.type_param_defaults,
           type_,
         }
         found = true
@@ -261,6 +262,7 @@ pub fn apply_oracle_resolutions(
         name,
         type_params: [],
         type_param_bounds: [],
+        type_param_defaults: [],
         type_,
       })
     }

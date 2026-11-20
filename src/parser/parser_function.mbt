@@ -1910,6 +1910,8 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
   let bounds : Array[(String, @ast.TsType)] = []
   self.last_type_params_had_default = false
   self.last_type_params_min_required = 0
+  self.last_type_param_defaults = []
+  let defaults : Array[(String, @ast.TsType)] = []
   // Tracked in a local (not the parser field) because parsing a parameter's
   // bound can recursively invoke this function for a nested generic function
   // type and clobber the field; the field is assigned once at the end from
@@ -2012,7 +2014,23 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
       if min_required < 0 {
         min_required = names.length() - 1
       }
-      self.skip_type_param_tail_until_delim()
+      // The default is parsed as a bound is, and skipped the same way when
+      // it does not parse, which records no default and leaves the
+      // parameter unbound at a use that omits it, as before.
+      let saved_pos = self.pos
+      let saved_pending_gt = self.pending_gt
+      let saved_pending_gt_pos = self.pending_gt_pos
+      try {
+        let default = self.parse_type()
+        defaults.push((name, default))
+      } catch {
+        _ => {
+          self.pos = saved_pos
+          self.pending_gt = saved_pending_gt
+          self.pending_gt_pos = saved_pending_gt_pos
+          self.skip_type_param_tail_until_delim()
+        }
+      }
     }
     if self.check(Comma) {
       let _ = self.advance()
@@ -2024,6 +2042,7 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
     }
   }
   self.last_type_params_had_default = had_default
+  self.last_type_param_defaults = defaults
   self.last_type_params_min_required = if min_required < 0 {
     names.length()
   } else {
@@ -3343,6 +3362,9 @@ fn Parser::parse_type_alias_after_type_keyword(
   // erasing the generic shape (e.g. `DateArg<DateType>` would become
   // `Date | ...` and lose precision).
   let (type_params, const_flags, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
+  // Read at once: the alias body can hold a nested generic whose own list
+  // resets the field.
+  let type_param_defaults = self.last_type_param_defaults
   // TS2314: a generic type alias with no defaulted type parameter requires all
   // of its type arguments; a bare reference (`A` without `<...>`) is an error.
   // Read before the alias body is parsed (which could clobber the flag via a
@@ -3367,7 +3389,13 @@ fn Parser::parse_type_alias_after_type_keyword(
   let _ = self.expect(Eq)
   let alias_type = self.parse_type()
   self.consume_semicolon()
-  { name, type_params, type_param_bounds, type_: alias_type, }
+  {
+    name,
+    type_params,
+    type_param_bounds,
+    type_param_defaults,
+    type_: alias_type,
+  }
 }
 
 ///|

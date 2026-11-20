@@ -7,8 +7,15 @@
 // value type. An interface with no index signature has no implicit one, so
 // it falls to `entries(o: {}): [string, any][]`, and so does a `Map`. A type
 // literal does have an implicit index signature, so its values are the union
-// of its property types. The key is always `string`.
+// of its property types. The key is always `string`. A generic class's
+// signature takes the class's type arguments. An interface or a class whose
+// only index signature is numeric matches the generic overload only as an
+// `ArrayLike<T>`, which needs a numeric `length`; without one it is `any`.
 
+type V = string;
+class Dict<V> { [k: string]: V; }
+interface N { [k: number]: number; label: string }
+interface NL { [k: number]: number; length: number }
 interface I { a: number; b: string }
 type L = { a: number; b: string };
 interface D { x: number }
@@ -35,3 +42,8 @@ export function okValueNarrowsDeclaredNullable(r: Record<string, D>) {
     console.log(latest.x);
   }
 }
+
+export function okClassArgument(d: Dict<number>) { const xs: number[] = Object.values(d); return xs; }
+export function badClassArgument(d: Dict<number>) { const xs: boolean[] = Object.values(d); return xs; }
+export function okNumericIndexInterface(n: N) { const xs: string[] = Object.values(n); return xs; }
+export function badArrayLikeInterface(n: NL) { const xs: string[] = Object.values(n); return xs; }

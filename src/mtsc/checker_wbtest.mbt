@@ -2193,3 +2193,31 @@ test "mtsc graph checker types an imported unannotated return (importedreturn)" 
     ],
   )
 }
+
+///|
+/// A type-alias parameter the use omits takes its DEFAULT. It stayed an
+/// unbound name, and in graph mode that name resolves to whatever else the
+/// program spells that way: testing-library's `RenderResult<typeof
+/// queries>` left `container: Container`, which read react-dom's
+/// unrelated `Container` (excalidraw's `container.querySelector`; probed:
+/// tsc reports the `y` line only).
+test "mtsc graph checker binds an omitted alias argument to its default (aliasdefault)" {
+  assert_eq(
+    graph_messages(
+      [
+        ("/src/rd.ts", "export interface Container { nope(): void }"),
+        (
+          "/src/lib.ts", "import * as RD from \"./rd\";\ntype RC = RD.Container;\nexport type R<Q = string, Container extends RC | Element = HTMLElement> = { container: Container; q: Q };",
+        ),
+        (
+          "/src/root.ts", "import type { R } from \"./lib\";\ndeclare const r: R<boolean>;\nexport const x = r.container.querySelector(\"a\");\nexport const y: number = r.q;",
+        ),
+      ],
+      [
+        ("/src/lib.ts", "./rd", "/src/rd.ts"),
+        ("/src/root.ts", "./lib", "/src/lib.ts"),
+      ],
+    ),
+    ["top-level > binding `y` init :: expected `number` but got `boolean`"],
+  )
+}
