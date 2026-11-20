@@ -7746,6 +7746,29 @@ product surfaces now.
       beside a body declaring `N` reads as exported, in the namespace
       helper and in `exported_value_site` before it. Counting entries
       cannot separate the two. It is a MISS (tsc gives TS2459).
+  - **#322's own review found that three of the batch's rules were
+    narrower or wider than tsc's.** Each was reproduced against the nightly
+    first.
+    - The literal-key write checked the value against each property one at
+      a time. That is exact for an ordinary value, but a FRESH object
+      literal is related to all of them at once. Its excess-property check
+      is against their intersection, so `o[k] = { x: 1, y: 2 }` with `a: {
+      x: number }` and `b: { y: number }` is legal, and it was reported. A
+      value that may hold one (an object literal, an array of them, a
+      conditional's branches) is now checked once against the intersection.
+      Anything else keeps the per-member check, which also keeps the
+      primitive members (`b: 0 | 1`) that the intersection node does not
+      decide.
+    - The concrete-array abstention abstained on every source, so
+      `Array<string>[K] = 123` was silent. It is now checked against the
+      element type.
+    - `inlined_bound_residue` short-circuited a conditional as a whole, so
+      `c ? k : 1` against `K` lost its `1`. A conditional is judged branch
+      by branch now, like an array or object literal.
+    - Two smaller ones: `{ k: 0, ...BASE }` with `BASE: { k?: number }` is
+      `k: number` in tsc, and the recorded `number | undefined` cannot say
+      so, so that key reads as `any`. A barrel's `import type { N }; export
+      type { N }` passes a type-only namespace on too.
   - **Filed:**
     - Contextual return-type inference. `pointFrom<P extends …>(x, y): P`
       has a binder only in its return type, which tsc infers from the

@@ -19844,6 +19844,63 @@ fn index_write_targets(
 }
 
 ///|
+/// Checks a write against the targets `index_write_targets` found, with one
+/// report per write, as tsc gives one for their intersection. A value that
+/// is not a fresh literal fits the intersection exactly when it fits every
+/// member, so those are checked one at a time, which keeps the primitive
+/// members (`b: 0 | 1`) the intersection node would not decide. A fresh
+/// object literal is checked once against the intersection itself: its
+/// excess-property check is against the COMBINED target, so
+/// `o[k] = { x: 1, y: 2 }` with `a: { x: number }` and `b: { y: number }`
+/// is legal, and checking it against `{ x: number }` alone reported `y`
+/// (probed, in an array literal and a conditional's branches too).
+fn check_index_write(
+  env : ExprEnv,
+  value : @ast.TsExpr,
+  targets : Array[@ast.TsType],
+  ctx : CheckCtx,
+) -> Unit {
+  if targets.length() > 1 && may_hold_fresh_object_literal(value) {
+    check_expr_against(env, value, Intersection(targets), ctx, "assign `[…]`")
+    return
+  }
+  let before = ctx.issues.length()
+  for t in targets {
+    check_expr_against(env, value, t, ctx, "assign `[…]`")
+    if ctx.issues.length() > before {
+      break
+    }
+  }
+}
+
+///|
+/// Whether a value may BE, or carry at a position its contextual type
+/// reaches, a fresh object literal. Over-approximated on purpose: a shape
+/// read as holding one is checked against the combined target, where the
+/// worst case is a MISS, while one read as not holding one keeps the
+/// per-member check, which reports an excess property tsc accepts.
+fn may_hold_fresh_object_literal(e : @ast.TsExpr) -> Bool {
+  match e {
+    ObjectLit(_) => true
+    ArrayLit(items) => items.iter().any(may_hold_fresh_object_literal)
+    Cond(_, a, b) | BinOp(_, a, b) =>
+      may_hold_fresh_object_literal(a) || may_hold_fresh_object_literal(b)
+    Seq(_, x)
+    | Spread(x)
+    | TypeArgs(_, x)
+    | PureCall(x)
+    | As(x, _)
+    | Satisfies(x, _)
+    | NonNull(x)
+    | AssignExpr(_, x)
+    | PropAssignExpr(_, _, x)
+    | IndexAssignExpr(_, _, x)
+    | CompoundAssignExpr(_, _, x) => may_hold_fresh_object_literal(x)
+    _ => false
+  }
+}
+
+///|
 /// Whether `base[key]` is an ARRAY indexed by a type parameter bounded by
 /// `number`. tsc writes to `S[K]` through `S`'s value at every key `K` can
 /// be, so a concrete array's element type is the whole answer:
@@ -19886,10 +19943,13 @@ fn inlined_bound_residue(
 ) -> Bool {
   // A literal is never a `P`, and an array or object LITERAL is judged
   // element by element below, where a `...points` spread abstains on its
-  // own while `[1]` against `K[]` still reports its `1`.
+  // own while `[1]` against `K[]` still reports its `1`. A conditional is
+  // judged branch by branch for the same reason: `c ? k : 1` against `K`
+  // must still report its `1`, while each branch that reads a `P` off a
+  // parameter abstains on its own.
   if ctx.type_param_bounds.is_empty() ||
     precise_literal_type(expr) is Some(_) ||
-    expr is (ArrayLit(_) | ObjectLit(_)) {
+    expr is (ArrayLit(_) | ObjectLit(_) | Cond(_, _, _)) {
     return false
   }
   let bounds : Map[String, @ast.TsType] = Map([])
@@ -20386,6 +20446,39 @@ fn check_expr_against_shape(
   // (nonPrimitiveConstraintOfIndexAccessType). The resolver substitutes
   // resolvable bounds before this point, so anything still shaped
   // `IndexedAccess(Named(param), _)` here is genuinely opaque.
+  // A concrete array indexed by a `number`-bounded parameter is written
+  // through its element type (see `array_index_by_numeric_param`), which the
+  // resolver erases with the rest of `S[K]`: `'abc'` into
+  // `Array<string>[K]` is legal and `123` is TS2322 (probed).
+  match expected {
+    IndexedAccess(
+      Array(e)
+      | Applied("Array" | "ReadonlyArray", [e]) as base_t,
+      Named(key),
+    ) if src_shape
+      is (String_
+      | Literal(_)
+      | Number
+      | Int
+      | NumberLiteral(_)
+      | Boolean
+      | BooleanLiteral(_)
+      | BigInt
+      | BigIntLiteral(_)
+      | Symbol) &&
+      array_index_by_numeric_param(ctx, base_t, key) => {
+      let elem = ctx.resolver.unwrap(e)
+      if is_checkable(elem) && !is_assignable_to(src_shape, elem) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "expected `\{type_display(elem)}` but got `\{type_display(src_shape)}`",
+        )
+        return
+      }
+    }
+    _ => ()
+  }
   // The resolver erases an unresolvable `T[P]` to `Any` (permissive
   // default), so match the RAW declared annotation here: when the base is
   // an in-scope type parameter the erasure was pure information loss.
@@ -38711,17 +38804,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           // than guessing.
           let idx_ty = infer_expr(env, ctx.resolver, idx)
           match index_write_targets(ctx, recv_ty, idx_ty) {
-            // One report per write, as tsc gives one for the
-            // intersection: the first property the value does not fit.
-            Some(targets) => {
-              let before = ctx.issues.length()
-              for t in targets {
-                check_expr_against(env, value, t, ctx, "assign `[…]`")
-                if ctx.issues.length() > before {
-                  break
-                }
-              }
-            }
+            Some(targets) => check_index_write(env, value, targets, ctx)
             None => {
               let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
               if is_checkable(target_ty) && is_checkable(recv_ty) {
@@ -43588,17 +43671,7 @@ fn check_call_args_in_expr_at(
         _ => {
           let idx_ty = infer_expr(env, ctx.resolver, idx)
           match index_write_targets(ctx, recv_ty, idx_ty) {
-            // One report per write, as tsc gives one for the
-            // intersection: the first property the value does not fit.
-            Some(targets) => {
-              let before = ctx.issues.length()
-              for t in targets {
-                check_expr_against(env, v, t, ctx, "assign `[…]`")
-                if ctx.issues.length() > before {
-                  break
-                }
-              }
-            }
+            Some(targets) => check_index_write(env, v, targets, ctx)
             None => {
               let target_ty = infer_index(ctx.resolver, recv_ty, idx_ty, idx)
               if is_checkable(target_ty) && is_checkable(recv_ty) {

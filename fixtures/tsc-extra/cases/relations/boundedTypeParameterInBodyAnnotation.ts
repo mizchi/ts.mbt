@@ -7,7 +7,9 @@
 // or passing it to a local `(pts: P[]) => …` is legal. A value of the bound
 // alone does not fit `P` (it could be a narrower instantiation), and neither
 // does a template-literal form over `P`. An array indexed by a type
-// parameter bounded by `number` is its element type.
+// parameter bounded by `number` is its element type, so a value that does
+// not fit the element is still reported. A conditional is judged branch by
+// branch: a `P` in one branch does not excuse a literal in the other.
 
 type A = [number, number] & { _a: 1 };
 type B = [number, number] & { _b: 1 };
@@ -29,6 +31,12 @@ export function okArrayIndexedByNumericParam<K extends number>() {
   let x: Array<string>[K] = "abc";
   return x;
 }
+export function okCondOfParams<K extends number>(c: boolean, k: K, j: K) { const v: K = c ? k : j; return v; }
+export function badArrayIndexedByNumericParam<K extends number>() {
+  let x: Array<string>[K] = 123;
+  return x;
+}
+export function badCondLiteralBranch<K extends number>(c: boolean, k: K) { const v: K = c ? k : 1; return v; }
 export function badBoundIntoTemplate<T extends "a" | "b">(x: T) {
   const t: T = "" as `${T}`;
   return [x, t];

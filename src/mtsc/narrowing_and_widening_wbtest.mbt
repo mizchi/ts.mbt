@@ -2424,8 +2424,9 @@ test "a tuple meets an array through the union of its elements (review320)" {
 /// parameter arrived as the bound against a body annotation still saying
 /// `P` (excalidraw's `convexHull`). A source carrying the bound exactly
 /// abstains; a literal, a template and a value of ONE member of the bound
-/// still report, and an array indexed by a `number`-bounded parameter is its
-/// element type (probed: tsc reports the bad cells only).
+/// still report, a conditional is judged branch by branch, and an array
+/// indexed by a `number`-bounded parameter is its element type (#322's
+/// review; probed: tsc reports the bad cells only).
 test "a value read off a bounded parameter fits the body's own annotation (boundresidue)" {
   let src =
     #|type A = [number, number] & { _a: 1 };
@@ -2447,6 +2448,12 @@ test "a value read off a bounded parameter fits the body's own annotation (bound
     #|  let x: Array<string>[K] = "abc";
     #|  return x;
     #|}
+    #|export function badArrayIndexedByNumericParam<K extends number>() {
+    #|  let x: Array<string>[K] = 123;
+    #|  return x;
+    #|}
+    #|export function okCondOfParams<K extends number>(c: boolean, k: K, j: K) { const v: K = c ? k : j; return v; }
+    #|export function badCondLiteralBranch<K extends number>(c: boolean, k: K) { const v: K = c ? k : 1; return v; }
     #|export function badBoundIntoTemplate<T extends "a" | "b">(x: T) {
     #|  const t: T = "" as `${T}`;
     #|  return [x, t];
@@ -2455,6 +2462,8 @@ test "a value read off a bounded parameter fits the body's own annotation (bound
     #|export function badLiteralArrayIntoNumericParam<K extends number>() { const ks: K[] = [1]; return ks; }
     #|export function badBoundMemberIntoParamArray<P extends A | B>(as: A[]) { const ps: P[] = as; return ps; }
   assert_eq(issue_lines(src), [
+    "function badArrayIndexedByNumericParam > binding `x` init: expected `string` but got `number`",
+    "function badCondLiteralBranch > binding `v` init (else): type `1` is not assignable to type parameter `K`",
     "function badBoundIntoTemplate > binding `t` init: the template-literal form `${T}` is not assignable to type `T`",
     "function badLiteralIntoNumericParam > binding `k` init: type `1` is not assignable to type parameter `K`",
     "function badLiteralArrayIntoNumericParam > binding `ks` init[0]: type `1` is not assignable to type parameter `K`",
@@ -2466,8 +2475,10 @@ test "a value read off a bounded parameter fits the body's own annotation (bound
 /// A write `obj[k] = v` through a key TYPED as a literal, or a union of
 /// them, must fit every property the key can name. `infer_index` answers
 /// the read, which for such a key was nothing (a literal-typed variable)
-/// or the union (a union key) (keyofAndIndexedAccess2's `f1`; probed: tsc
-/// reports the bad cells only, once each).
+/// or the union (a union key) (keyofAndIndexedAccess2's `f1`). A fresh
+/// object literal is checked against the targets' intersection, whose
+/// excess-property check is against the combined shape (#322's review;
+/// probed: tsc reports the bad cells only, once each).
 test "an element write through a literal-typed key is checked (keywrite)" {
   let src =
     #|declare const obj: { a: number; b: 0 | 1; c: string };
@@ -2478,11 +2489,20 @@ test "an element write through a literal-typed key is checked (keywrite)" {
     #|export function badUnionKey(k1: "a" | "b") { obj[k1] = 2; }
     #|export function okUnionKey(k1: "a" | "b") { obj[k1] = 1; }
     #|export function badUnionKeyOnce(k2: "a" | "b" | "c") { obj[k2] = "x"; }
+    #|declare const o: { a: { x: number }; b: { y: number } };
+    #|export function okLiteralFitsBoth(k: "a" | "b") { o[k] = { x: 1, y: 2 }; }
+    #|export function okLiteralFitsBothNested(k: "a" | "b", c: boolean) { o[k] = c ? { x: 1, y: 2 } : { x: 2, y: 3 }; }
+    #|export function badLiteralMissesOne(k: "a" | "b") { o[k] = { x: 1 }; }
+    #|export function badLiteralExcess(k: "a" | "b") { o[k] = { x: 1, y: 2, z: 3 }; }
+    #|export function badValueMissesOne(k: "a" | "b") { const v = { x: 1 }; o[k] = v; }
   assert_eq(issue_lines(src), [
     "function badLiteralKeyParam > assign `[…]`: expected `number` but got `string`",
     "function badBracketLiteral > assign `[…]`: expected `number` but got `string`",
     "function badLiteralKeyConst > assign `[…]`: expected `number` but got `string`",
     "function badUnionKey > assign `[…]`: expected `0 | 1` but got `2`", "function badUnionKeyOnce > assign `[…]`: expected `number` but got `string`",
+    "function badLiteralMissesOne > assign `[…]`.y: property `y` is required by `{ x: number; y: number }`",
+    "function badLiteralExcess > assign `[…]`.z: property `z` does not exist on target type",
+    "function badValueMissesOne > assign `[…]`: property `y` is missing in `{ x: number }` but required in `{ y: number }`",
   ])
 }
 

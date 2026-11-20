@@ -767,8 +767,21 @@ fn graph_import_binding(
   module_ : ParsedMtscModule,
   local_name : String,
 ) -> (String, String?)? {
+  graph_import_binding_with(module_, local_name, false)
+}
+
+///|
+/// `graph_import_binding`, with type-only imports too when `type_only_too`:
+/// a namespace that holds only types passes through a barrel as readily by
+/// `import type { N } from "./a"; export type { N }` (#322's review; probed:
+/// tsc accepts `N.A` from such a barrel).
+fn graph_import_binding_with(
+  module_ : ParsedMtscModule,
+  local_name : String,
+  type_only_too : Bool,
+) -> (String, String?)? {
   for import_ in module_.module_block.imports {
-    if import_.type_only {
+    if import_.type_only && !type_only_too {
       continue
     }
     if import_.default_binding == Some(local_name) {
@@ -780,7 +793,7 @@ fn graph_import_binding(
     for index, binding in import_.named_bindings {
       let type_only = index < import_.named_type_only.length() &&
         import_.named_type_only[index]
-      if binding.1 == local_name && !type_only {
+      if binding.1 == local_name && (!type_only || type_only_too) {
         return Some((import_.module_spec, Some(binding.0)))
       }
     }
@@ -2162,8 +2175,9 @@ fn module_exports_namespace(module_ : ParsedMtscModule, name : String) -> Bool {
 ///|
 /// `module_exports_namespace` through the ways a barrel passes a namespace
 /// on: `export { N } from "./a"`, `export * from "./a"`, and `import { N }
-/// from "./a"; export { N }` (#321's review; probed: tsc accepts all three
-/// for a namespace that holds only types).
+/// from "./a"; export { N }`, with a type-only import too (#321's and
+/// #322's reviews; probed: tsc accepts each for a namespace that holds only
+/// types).
 fn graph_exports_namespace(
   module_ : ParsedMtscModule,
   name : String,
@@ -2191,7 +2205,7 @@ fn graph_exports_namespace(
   }
   for ex in module_.module_block.exports {
     if ex.export_name == name {
-      match graph_import_binding(module_, ex.local_name) {
+      match graph_import_binding_with(module_, ex.local_name, true) {
         Some((spec, Some(imported))) =>
           if follow(spec, imported) {
             return true
@@ -2753,7 +2767,20 @@ fn fold_value_spreads(
       match local_value_type_at(module_, src, depth + 1) {
         Some(Object(src_fields)) =>
           for f in src_fields {
-            put(f.0, f.1)
+            // An optional property is recorded as `T | undefined`, the same
+            // node as a required one holding `undefined`, and the two
+            // spread differently over a key already present: an omitted
+            // `k` keeps it, so `{ k: 0, ...BASE }` with `BASE: { k?: number }`
+            // is `k: number` (probed). Neither answer is safe, so the key
+            // becomes `any` there; over no earlier key the type is right
+            // either way.
+            let admits_undefined = f.1 is Undefined ||
+              (f.1 is Union(ms) && ms.contains(Undefined))
+            if admits_undefined && out.iter().any(fn(o) { o.0 == f.0 }) {
+              put(f.0, Any)
+            } else {
+              put(f.0, f.1)
+            }
           }
         _ => return Any
       }

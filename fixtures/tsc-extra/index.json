@@ -6741,62 +6741,80 @@
         {
           "name": "okSpreadOfParam",
           "kind": "ok",
-          "fromLine": 12,
-          "toLine": 16
+          "fromLine": 14,
+          "toLine": 18
         },
         {
           "name": "okDirectParam",
           "kind": "ok",
-          "fromLine": 17,
-          "toLine": 20
+          "fromLine": 19,
+          "toLine": 22
         },
         {
           "name": "okLocalAnnotated",
           "kind": "ok",
-          "fromLine": 21,
-          "toLine": 24
+          "fromLine": 23,
+          "toLine": 26
         },
         {
           "name": "okArrayIndexedByNumericParam",
           "kind": "ok",
-          "fromLine": 25,
-          "toLine": 28
+          "fromLine": 27,
+          "toLine": 30
+        },
+        {
+          "name": "okCondOfParams",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "badArrayIndexedByNumericParam",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 35
+        },
+        {
+          "name": "badCondLiteralBranch",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 36
         },
         {
           "name": "badBoundIntoTemplate",
           "kind": "bad",
-          "fromLine": 29,
-          "toLine": 32
+          "fromLine": 37,
+          "toLine": 40
         },
         {
           "name": "badBoundIntoParam",
           "kind": "bad",
-          "fromLine": 33,
-          "toLine": 36
+          "fromLine": 41,
+          "toLine": 44
         },
         {
           "name": "badLiteralIntoNumericParam",
           "kind": "bad",
-          "fromLine": 37,
-          "toLine": 37
+          "fromLine": 45,
+          "toLine": 45
         },
         {
           "name": "badLiteralArrayIntoNumericParam",
           "kind": "bad",
-          "fromLine": 38,
-          "toLine": 38
+          "fromLine": 46,
+          "toLine": 46
         },
         {
           "name": "badBoundMemberIntoParamArray",
           "kind": "bad",
-          "fromLine": 39,
-          "toLine": 39
+          "fromLine": 47,
+          "toLine": 47
         },
         {
           "name": "badBoundMemberIntoParam",
           "kind": "bad",
-          "fromLine": 40,
-          "toLine": 41
+          "fromLine": 48,
+          "toLine": 49
         }
       ]
     },
@@ -7023,51 +7041,88 @@
       },
       "accepted": false,
       "codes": [
-        2322
+        2322,
+        2353
       ],
       "baseline": "baselines/elementWriteThroughLiteralKey.errors.txt",
       "claims": [
         {
           "name": "okLiteralKeyParam",
           "kind": "ok",
-          "fromLine": 8,
-          "toLine": 8
-        },
-        {
-          "name": "okUnionKey",
-          "kind": "ok",
-          "fromLine": 9,
-          "toLine": 9
-        },
-        {
-          "name": "badLiteralKeyParam",
-          "kind": "bad",
-          "fromLine": 10,
-          "toLine": 10
-        },
-        {
-          "name": "badBracketLiteral",
-          "kind": "bad",
-          "fromLine": 11,
-          "toLine": 11
-        },
-        {
-          "name": "badLiteralKeyConst",
-          "kind": "bad",
           "fromLine": 12,
           "toLine": 12
         },
         {
-          "name": "badUnionKey",
-          "kind": "bad",
+          "name": "okUnionKey",
+          "kind": "ok",
           "fromLine": 13,
           "toLine": 13
         },
         {
-          "name": "badUnionKeyThreeMembers",
+          "name": "badLiteralKeyParam",
           "kind": "bad",
           "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badBracketLiteral",
+          "kind": "bad",
+          "fromLine": 15,
           "toLine": 15
+        },
+        {
+          "name": "badLiteralKeyConst",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badUnionKey",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badUnionKeyThreeMembers",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 19
+        },
+        {
+          "name": "okFreshLiteralFitsBoth",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okFreshLiteralInBranches",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "okFreshLiteralInArray",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "badFreshLiteralMissesOne",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badFreshLiteralExcess",
+          "kind": "bad",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "badFreshLiteralInArrayMissesOne",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 29
         }
       ]
     },
