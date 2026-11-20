@@ -1,27 +1,38 @@
-objectEntriesValueType.ts(13,108): error TS2322: Type 'number' is not assignable to type 'string'.
-objectEntriesValueType.ts(14,117): error TS2322: Type 'number' is not assignable to type 'string'.
-objectEntriesValueType.ts(15,112): error TS2322: Type 'number' is not assignable to type 'string'.
-objectEntriesValueType.ts(16,118): error TS2322: Type 'number' is not assignable to type 'string'.
-objectEntriesValueType.ts(17,93): error TS2322: Type 'number' is not assignable to type 'string'.
-objectEntriesValueType.ts(20,92): error TS2322: Type 'string | number' is not assignable to type 'boolean'.
+objectEntriesValueType.ts(20,108): error TS2322: Type 'number' is not assignable to type 'string'.
+objectEntriesValueType.ts(21,117): error TS2322: Type 'number' is not assignable to type 'string'.
+objectEntriesValueType.ts(22,112): error TS2322: Type 'number' is not assignable to type 'string'.
+objectEntriesValueType.ts(23,118): error TS2322: Type 'number' is not assignable to type 'string'.
+objectEntriesValueType.ts(24,93): error TS2322: Type 'number' is not assignable to type 'string'.
+objectEntriesValueType.ts(27,92): error TS2322: Type 'string | number' is not assignable to type 'boolean'.
   Type 'string' is not assignable to type 'boolean'.
-objectEntriesValueType.ts(21,106): error TS2322: Type 'string' is not assignable to type 'number'.
-objectEntriesValueType.ts(22,68): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+objectEntriesValueType.ts(28,106): error TS2322: Type 'string' is not assignable to type 'number'.
+objectEntriesValueType.ts(29,68): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
   Type 'number' is not assignable to type 'string'.
-objectEntriesValueType.ts(24,52): error TS2322: Type '(string | number)[]' is not assignable to type 'string[]'.
+objectEntriesValueType.ts(31,52): error TS2322: Type '(string | number)[]' is not assignable to type 'string[]'.
   Type 'string | number' is not assignable to type 'string'.
     Type 'number' is not assignable to type 'string'.
+objectEntriesValueType.ts(44,59): error TS2322: Type 'number[]' is not assignable to type 'boolean[]'.
+  Type 'number' is not assignable to type 'boolean'.
+objectEntriesValueType.ts(46,54): error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+  Type 'number' is not assignable to type 'string'.
 
 
-==== objectEntriesValueType.ts (9 errors) ====
+==== objectEntriesValueType.ts (11 errors) ====
     // `Object.entries` and `Object.values` are generic only through their first
     // overload, `entries<T>(o: { [s: string]: T } | ArrayLike<T>)`. A `Record`,
     // a declared index signature (string or number) and an array give `T` its
     // value type. An interface with no index signature has no implicit one, so
     // it falls to `entries(o: {}): [string, any][]`, and so does a `Map`. A type
     // literal does have an implicit index signature, so its values are the union
-    // of its property types. The key is always `string`.
+    // of its property types. The key is always `string`. A generic class's
+    // signature takes the class's type arguments. An interface or a class whose
+    // only index signature is numeric matches the generic overload only as an
+    // `ArrayLike<T>`, which needs a numeric `length`; without one it is `any`.
     
+    type V = string;
+    class Dict<V> { [k: string]: V; }
+    interface N { [k: number]: number; label: string }
+    interface NL { [k: number]: number; length: number }
     interface I { a: number; b: string }
     type L = { a: number; b: string };
     interface D { x: number }
@@ -70,4 +81,15 @@ objectEntriesValueType.ts(24,52): error TS2322: Type '(string | number)[]' is no
         console.log(latest.x);
       }
     }
+    
+    export function okClassArgument(d: Dict<number>) { const xs: number[] = Object.values(d); return xs; }
+    export function badClassArgument(d: Dict<number>) { const xs: boolean[] = Object.values(d); return xs; }
+                                                              ~~
+!!! error TS2322: Type 'number[]' is not assignable to type 'boolean[]'.
+!!! error TS2322:   Type 'number' is not assignable to type 'boolean'.
+    export function okNumericIndexInterface(n: N) { const xs: string[] = Object.values(n); return xs; }
+    export function badArrayLikeInterface(n: NL) { const xs: string[] = Object.values(n); return xs; }
+                                                         ~~
+!!! error TS2322: Type 'number[]' is not assignable to type 'string[]'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
     

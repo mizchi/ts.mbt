@@ -737,6 +737,13 @@ pub(all) struct TsTypeAlias {
   // `Record<P, ...>` key classification) without eagerly substituting the
   // bound into the alias body and erasing the generic shape.
   type_param_bounds : Array[(String, TsType)]
+  // `type T<P = Default>` records `(P, Default)` pairs. A use that writes
+  // fewer type arguments than the alias declares takes the rest from here
+  // (`RenderResult<typeof queries>` with `Container = HTMLElement`); without
+  // them the missing parameter stayed an unbound NAME, which resolves to
+  // whatever else in the program is spelled that way. Only the checker
+  // reads it.
+  type_param_defaults : Array[(String, TsType)]
   type_ : TsType
 }
 

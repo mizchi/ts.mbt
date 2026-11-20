@@ -2241,3 +2241,92 @@ test "an object rest distributes over an intersection's union part (restinter)" 
     "top-level > PropAccess `.nope`: property `nope` does not exist on `{ onSubmit: (number) => void; label: string | undefined }`",
   ])
 }
+
+///|
+/// A type argument the use omits is the parameter's DEFAULT, and a default
+/// may name an earlier parameter, which then reads that parameter's
+/// argument. A bare generic alias takes every default (probed: tsc reports
+/// the bad cells only).
+test "an omitted alias argument takes its default (aliasdefault)" {
+  let src =
+    #|type I<Q = string, C = number> = { c: C; q: Q };
+    #|type P<A, B = A[]> = { a: A; b: B };
+    #|type U<T = number> = { v: T };
+    #|declare const i: I<boolean>;
+    #|declare const p: P<number>;
+    #|declare const u: U;
+    #|export function okRefersEarlier() { const xs: number[] = p.b; return xs; }
+    #|export function okBareAlias() { const n: number = u.v; return n; }
+    #|export function badDefault() { const s: string = i.c; return s; }
+    #|export function badRefersEarlier() { const xs: string[] = p.b; return xs; }
+    #|export function badBareAlias() { const s: string = u.v; return s; }
+    #|export function badBareWhole() { const s: string = u; return s; }
+  assert_eq(issue_lines(src), [
+    "function badDefault > binding `s` init: expected `string` but got `number`",
+    "function badRefersEarlier > binding `xs` init: expected `string[]` but got `number[]`",
+    "function badBareAlias > binding `s` init: expected `string` but got `number`",
+    "function badBareWhole > binding `s` init: expected `string` but got `{ v: number }`",
+  ])
+}
+
+///|
+/// A discriminant that is a union of literals is related one combination at
+/// a time, STRUCTURALLY: the excess check has already run on the whole
+/// literal, and with no single member picked it only asks whether some
+/// member declares the property. zod's `{ status: status.value, value }`
+/// fits `OK<any> | DIRTY<any> | INVALID` although `INVALID` lacks `value`
+/// (probed: tsc reports the bad cells only).
+test "a discriminant split relates each combination structurally (splitexcess)" {
+  let src =
+    #|type INVALID = { status: "aborted" };
+    #|type DIRTY<T> = { status: "dirty"; value: T };
+    #|type OK<T> = { status: "valid"; value: T };
+    #|type SRT<T = any> = OK<T> | DIRTY<T> | INVALID;
+    #|declare const st: { value: "aborted" | "dirty" | "valid" };
+    #|export function okSplit(): SRT<any> { const arr: any[] = []; return { status: st.value, value: arr }; }
+    #|export function badNoMemberHasIt(): SRT<any> { return { status: st.value, value: 1, extra: 1 }; }
+    #|export function badSingleDiscriminantExcess(): SRT<any> { return { status: "aborted", value: 1 }; }
+  assert_eq(issue_lines(src), [
+    "function badNoMemberHasIt > return: type of the object literal is not assignable to type `OK<any> | DIRTY<any> | INVALID`",
+    "function badSingleDiscriminantExcess > return: type of the object literal is not assignable to type `OK<any> | DIRTY<any> | INVALID`",
+  ])
+}
+
+///|
+/// #318's review. A generic CLASS's index signature substitutes the class's
+/// arguments, so `Object.values` of `Dict<number>` is `number[]` even with a
+/// module alias spelled like the parameter. An interface whose only index
+/// signature is numeric reaches the generic overload only as an
+/// `ArrayLike<T>`, with a numeric `length`. And a static factory's own
+/// binder is recognised before any alias expands it, as written (`T` beside
+/// `type T = string`) or through an alias (`Identity<T>`) (probed: tsc
+/// reports the bad cells only).
+test "Object.values class arguments and static factory binders (review318)" {
+  let src =
+    #|type V = string;
+    #|class Dict<V> { [k: string]: V; }
+    #|interface N { [k: number]: number; label: string }
+    #|interface NL { [k: number]: number; length: number }
+    #|type T = string;
+    #|type Identity<X> = X;
+    #|class Box { b = 1 }
+    #|class F {
+    #|  static pick<T>(x: T): T { return x; }
+    #|  static ident<T>(x: T): Identity<T> | Box { return x as Identity<T>; }
+    #|}
+    #|declare const d: Dict<number>;
+    #|declare const n: N;
+    #|declare const nl: NL;
+    #|export function okClassArg() { const xs: number[] = Object.values(d); return xs; }
+    #|export function okNumericIndexInterface() { const xs: string[] = Object.values(n); return xs; }
+    #|export function badClassArg() { const xs: boolean[] = Object.values(d); return xs; }
+    #|export function badArrayLikeInterface() { const xs: string[] = Object.values(nl); return xs; }
+    #|export function badBinderShadowsAlias(c: boolean) { let v: string | null = null; if (c) { v = F.pick(null); } else { v = "x"; } return v.length; }
+    #|export function badBinderThroughAlias(c: boolean) { let v: Box | null = null; if (c) { v = F.ident(null); } else { v = new Box(); } return v.b; }
+  assert_eq(issue_lines(src), [
+    "function badClassArg > binding `xs` init: expected `boolean[]` but got `number[]`",
+    "function badArrayLikeInterface > binding `xs` init: expected `string[]` but got `number[]`",
+    "function badBinderShadowsAlias > PropAccess `.length`: object is possibly `null`",
+    "function badBinderThroughAlias > PropAccess `.b`: object is possibly `null`",
+  ])
+}

@@ -4,6 +4,7 @@ test "bridge: enum lowering builds enum declarations from literal aliases" {
     name: "ButtonVariant",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::Literal("primary"),
       @ast.TsType::Literal("secondary"),
@@ -24,6 +25,7 @@ test "bridge: enum lowering builds enum declarations from literal aliases" {
     name: "StatusCode",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::NumberLiteral("200"),
       @ast.TsType::NumberLiteral("404"),

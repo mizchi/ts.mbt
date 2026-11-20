@@ -186,6 +186,7 @@ test "tagged union alias: type Input = number | string | Date lowers" {
     name: "Input",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::Number,
       @ast.TsType::String_,
@@ -208,6 +209,7 @@ test "tagged union alias: generic alias is rejected" {
     name: "Wrap",
     type_params: ["T"],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([@ast.TsType::Named("T"), @ast.TsType::String_]),
   }
   match tagged_union_type_alias_decl(type_alias) {
@@ -222,6 +224,7 @@ test "tagged union alias: non-union body is rejected" {
     name: "JustString",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::String_,
   }
   match tagged_union_type_alias_decl(type_alias) {
@@ -236,6 +239,7 @@ test "tagged union diagnostic: primitive overlap with literal" {
     name: "Bad",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Literal("x")]),
   }
   match tagged_union_widen_reason_for_alias(type_alias) {
@@ -250,6 +254,7 @@ test "tagged union diagnostic: duplicate constructor names" {
     name: "DupNames",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([@ast.TsType::Number, @ast.TsType::Number]),
   }
   match tagged_union_widen_reason_for_alias(type_alias) {
@@ -264,6 +269,7 @@ test "tagged union diagnostic: non-PascalCase member" {
     name: "Mixed",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::Number,
       @ast.TsType::Named("camelCaseType"),
@@ -281,6 +287,7 @@ test "tagged union diagnostic: pure literal returns no reason (handled by enum_l
     name: "Pure",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::Literal("a"),
       @ast.TsType::Literal("b"),
@@ -298,6 +305,7 @@ test "tagged union diagnostic: accepted alias returns no reason" {
     name: "OK",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::Number,
       @ast.TsType::String_,
@@ -316,6 +324,7 @@ test "tagged union alias: literal-only union is rejected" {
     name: "Variant",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::Literal("a"),
       @ast.TsType::Literal("b"),
@@ -335,6 +344,7 @@ test "tagged union alias: type Hires = boolean | \"boundary\" lowers" {
     name: "Hires",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::Boolean,
       @ast.TsType::Literal("boundary"),
@@ -359,6 +369,7 @@ test "tagged union alias: numeric literal mixed with string lowers" {
     name: "PathOrZero",
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: @ast.TsType::Union([
       @ast.TsType::String_,
       @ast.TsType::NumberLiteral("0"),

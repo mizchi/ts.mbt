@@ -1,0 +1,40 @@
+discriminantSplitRelatesEachCombination.ts(18,78): error TS2322: Type 'number' is not assignable to type 'string'.
+discriminantSplitRelatesEachCombination.ts(19,85): error TS2353: Object literal may only specify known properties, and 'extra' does not exist in type 'SRT<any>'.
+discriminantSplitRelatesEachCombination.ts(20,59): error TS2322: Type '{ status: "dirty" | "valid"; }' is not assignable to type 'DIRTY<any> | OK<any>'.
+  Property 'value' is missing in type '{ status: "dirty" | "valid"; }' but required in type 'OK<any>'.
+discriminantSplitRelatesEachCombination.ts(21,87): error TS2353: Object literal may only specify known properties, and 'value' does not exist in type 'INVALID'.
+
+
+==== discriminantSplitRelatesEachCombination.ts (4 errors) ====
+    // An object literal whose discriminant is a union of literals is related to
+    // a discriminated union one combination at a time, and each combination is
+    // related STRUCTURALLY: the excess-property check runs once, on the whole
+    // literal, and with a discriminant that picks no single member it only asks
+    // whether some member declares the property. So zod's `return { status:
+    // status.value, value }` fits `OK<any> | DIRTY<any> | INVALID` although
+    // `INVALID` has no `value`. A property no member declares is still excess,
+    // and so is one the member a single-literal discriminant picks lacks.
+    
+    type INVALID = { status: "aborted" };
+    type DIRTY<T> = { status: "dirty"; value: T };
+    type OK<T> = { status: "valid"; value: T };
+    type SRT<T = any> = OK<T> | DIRTY<T> | INVALID;
+    declare const st: { value: "aborted" | "dirty" | "valid" };
+    
+    export function okBareAlias(): SRT { const arr: any[] = []; return { status: st.value, value: arr }; }
+    export function okExplicitArgument(): SRT<any> { const arr: any[] = []; return { status: st.value, value: arr }; }
+    export function badValueMismatch(): SRT<string> { return { status: st.value, value: 1 }; }
+                                                                                 ~~~~~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    export function badNoMemberHasIt(): SRT<any> { return { status: st.value, value: 1, extra: 1 }; }
+                                                                                        ~~~~~
+!!! error TS2353: Object literal may only specify known properties, and 'extra' does not exist in type 'SRT<any>'.
+    export function badMissingValue(): OK<any> | DIRTY<any> { return { status: st.value as "dirty" | "valid" }; }
+                                                              ~~~~~~
+!!! error TS2322: Type '{ status: "dirty" | "valid"; }' is not assignable to type 'DIRTY<any> | OK<any>'.
+!!! error TS2322:   Property 'value' is missing in type '{ status: "dirty" | "valid"; }' but required in type 'OK<any>'.
+!!! related TS2728 discriminantSplitRelatesEachCombination.ts:12:33: 'value' is declared here.
+    export function badSingleDiscriminantExcess(): SRT<any> { return { status: "aborted", value: 1 }; }
+                                                                                          ~~~~~
+!!! error TS2353: Object literal may only specify known properties, and 'value' does not exist in type 'INVALID'.
+    

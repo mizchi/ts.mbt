@@ -316,6 +316,7 @@ test "type env: a type alias resolves the same way" {
       name: "Cfg",
       type_params: [],
       type_param_bounds: [],
+      type_param_defaults: [],
       type_: @ast.TsType::Struct("Cfg", [("retries", @ast.TsType::Number)]),
     },
   ])

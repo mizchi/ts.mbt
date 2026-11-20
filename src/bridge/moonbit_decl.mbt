@@ -8028,6 +8028,7 @@ fn decl_instantiated_union_alias_name(
     name: synth_name,
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: lowered_body,
   }
   match tagged_union_type_alias_decl(synthetic) {
@@ -9304,6 +9305,7 @@ fn clone_exported_type_alias(
     name: exported.export_name,
     type_params: [],
     type_param_bounds: [],
+    type_param_defaults: [],
     type_: lower_react_utility_type(
       info,
       rewrite_type_refs_in_scope(

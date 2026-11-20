@@ -41,3 +41,5 @@ andFalsyLiteralsOfPrimitives:badNumberLiteral  a numeric literal is erased to `n
 objectRestOverIntersectionWithUnion:badRestKeepsUnion  a member that some members of a union lack is not reported on a union receiver at all (`u.onSubmit(1)` with `u: A | B` is silent too), so the rest's union is right and the access is still a MISS
 objectEntriesValueType:badTypeLiteralUnion  a type literal's implicit index signature is not modelled, so `Object.entries` of one stays `[string, any][]` where tsc gives the union of its property types
 objectEntriesValueType:badValuesTypeLiteral  same as `badTypeLiteralUnion`, through `Object.values`
+typeAliasParameterDefaults:badIntersectionDefaultMember  a member missing from an intersection receiver is not reported at all (`q.nope` with `q: { x: number } & { y: string }` is silent too), so the default resolves and the access is still a MISS
+discriminantSplitRelatesEachCombination:badMissingValue  a member typed `any` reads as optional in the object-literal-against-union check (`type_accepts_undefined` answers yes for `any`), so a missing `value: any` is not reported

@@ -1,0 +1,29 @@
+staticFactoryBinderBeforeAliasExpansion.ts(18,136): error TS18047: 'v' is possibly 'null'.
+staticFactoryBinderBeforeAliasExpansion.ts(19,140): error TS18047: 'v' is possibly 'null'.
+
+
+==== staticFactoryBinderBeforeAliasExpansion.ts (2 errors) ====
+    // A static factory whose return is its own type parameter narrows nothing,
+    // because the argument can make it nullish. That holds when a module type
+    // alias shares the parameter's name (`type T = string` beside
+    // `pick<T>(x: T): T`), and when the return reaches the parameter through an
+    // alias (`Identity<T> | Box`). A return built from the parameter without
+    // being it (`Box<T>`) still narrows.
+    
+    type T = string;
+    type Identity<X> = X;
+    class Box<Q = unknown> { b = 1; q?: Q }
+    class F {
+      static pick<T>(x: T): T { return x; }
+      static ident<T>(x: T): Identity<T> | Box { return x as Identity<T>; }
+      static boxed<T>(x: T): Box<T> { return new Box<T>(); }
+    }
+    
+    export function okAppliedToBinder(c: boolean) { let v: Box<null> | null = null; if (c) { v = F.boxed(null); } else { v = new Box<null>(); } return v.b; }
+    export function badBinderShadowsAlias(c: boolean) { let v: string | null = null; if (c) { v = F.pick(null); } else { v = "x"; } return v.length; }
+                                                                                                                                           ~
+!!! error TS18047: 'v' is possibly 'null'.
+    export function badBinderThroughAlias(c: boolean) { let v: Box | null = null; if (c) { v = F.ident(null); } else { v = new Box(); } return v.b; }
+                                                                                                                                               ~
+!!! error TS18047: 'v' is possibly 'null'.
+    
