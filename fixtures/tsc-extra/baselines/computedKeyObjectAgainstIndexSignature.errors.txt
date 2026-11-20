@@ -18,9 +18,12 @@ computedKeyObjectAgainstIndexSignature.ts(23,66): error TS2345: Argument of type
     Type '{ greeting: number; }' is not assignable to type '{ greeting: string; }'.
       Types of property 'greeting' are incompatible.
         Type 'number' is not assignable to type 'string'.
+computedKeyObjectAgainstIndexSignature.ts(37,44): error TS2345: Argument of type '{ [mixedKey]: number; }' is not assignable to parameter of type 'Strs'.
+  'string' index signatures are incompatible.
+    Type 'number' is not assignable to type 'string'.
 
 
-==== computedKeyObjectAgainstIndexSignature.ts (4 errors) ====
+==== computedKeyObjectAgainstIndexSignature.ts (5 errors) ====
     // An object type with a computed key has an index signature for that key,
     // so an object built with `{ [k]: v }` and held in a variable is assignable
     // to an interface that declares nothing but string index signatures when
@@ -76,4 +79,14 @@ computedKeyObjectAgainstIndexSignature.ts(23,66): error TS2345: Argument of type
     declare function take(s: Strs): void;
     export function okSymbolKeyInline() { take({ [sym]: 1 }); }
     export function okSymbolKeyBound() { const o = { [sym]: 1 }; take(o); }
+    declare const usa: unique symbol;
+    declare const usb: unique symbol;
+    declare const unionKey: typeof usa | typeof usb;
+    declare const mixedKey: typeof usa | string;
+    export function okUnionSymbolKey() { take({ [unionKey]: 1 }); }
+    export function badMixedSymbolKey() { take({ [mixedKey]: 1 }); }
+                                               ~~~~~~~~~~~~~~~~~
+!!! error TS2345: Argument of type '{ [mixedKey]: number; }' is not assignable to parameter of type 'Strs'.
+!!! error TS2345:   'string' index signatures are incompatible.
+!!! error TS2345:     Type 'number' is not assignable to type 'string'.
     

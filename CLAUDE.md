@@ -7933,6 +7933,10 @@ product surfaces now.
     arrow in parentheses) has to share the table. That is observable only
     where the statement around it is compound, because a simple one is
     covered whole and the inner statement's own entry is never read.
+  - **#323's last Minor, carried here.** A computed key typed as a union
+    of `unique symbol`s (`typeof a | typeof b`) is a symbol key too, so its
+    value is not judged against a string index signature. A union with
+    any non-symbol member still is, as tsc gives.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

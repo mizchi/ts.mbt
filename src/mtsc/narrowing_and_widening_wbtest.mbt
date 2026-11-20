@@ -2549,11 +2549,18 @@ test "a computed-key object fits a string index signature by its values (compute
     #|declare function take(s: Strs): void;
     #|export function okSymbolKeyInline() { take({ [sym]: 1 }); }
     #|export function okSymbolKeyBound() { const o = { [sym]: 1 }; take(o); }
+    #|declare const usa: unique symbol;
+    #|declare const usb: unique symbol;
+    #|declare const unionKey: typeof usa | typeof usb;
+    #|declare const mixedKey: typeof usa | string;
+    #|export function okUnionSymbolKey() { take({ [unionKey]: 1 }); }
+    #|export function badMixedSymbolKey() { take({ [mixedKey]: 1 }); }
   assert_eq(issue_lines(src), [
     "function badComputedVar > call `load` arg[0]: expected `Lang` but got `{ [computed]: { greeting: number } }`",
     "function badNumberInPack > call `loadAll` arg[0]: expected `ILocales` but got `{ [computed]: { greeting: number } }`",
     "function badComputedInline > call `load` arg[0][computed].greeting: expected `string` but got `number`",
     "function badNumericKeyToStringSignature > call `load` arg[0][computed].greeting: expected `string` but got `number`",
+    "function badMixedSymbolKey > call `take` arg[0]: type `number` is not assignable to the `string` index type `string`",
   ])
 }
 

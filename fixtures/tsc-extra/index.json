@@ -7267,7 +7267,19 @@
           "name": "okSymbolKeyBound",
           "kind": "ok",
           "fromLine": 31,
-          "toLine": 32
+          "toLine": 31
+        },
+        {
+          "name": "okUnionSymbolKey",
+          "kind": "ok",
+          "fromLine": 36,
+          "toLine": 36
+        },
+        {
+          "name": "badMixedSymbolKey",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 38
         }
       ]
     },

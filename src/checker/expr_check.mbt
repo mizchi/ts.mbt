@@ -57022,13 +57022,22 @@ fn register_primitive_top_level_consts(
 
 ///|
 /// Whether a computed key's expression has a `symbol` type (`[sym]` with
-/// `const sym = Symbol()`, or a `unique symbol` binding).
+/// `const sym = Symbol()`, or a `unique symbol` binding). A union counts
+/// when every member is one (`typeof a | typeof b` over two `unique symbol`
+/// declarations); a union with any other member is not a symbol key.
 fn computed_key_is_symbol(
   env : ExprEnv,
   resolver : Resolver,
   key : @ast.TsExpr,
 ) -> Bool {
-  resolver.unwrap(infer_expr(env, resolver, key)) is (Symbol | UniqueSymbol(_))
+  match resolver.unwrap(infer_expr(env, resolver, key)) {
+    Union(parts) =>
+      parts.length() > 0 &&
+      parts
+      .iter()
+      .all(fn(p) { resolver.unwrap(p) is (Symbol | UniqueSymbol(_)) })
+    t => t is (Symbol | UniqueSymbol(_))
+  }
 }
 
 ///|
