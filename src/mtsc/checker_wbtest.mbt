@@ -2327,7 +2327,8 @@ test "mtsc graph checker folds a same-module const spread into an imported value
 /// `export *`, as `export type { N } from`, and as an import it exports
 /// again, including a type-only import exported as a type; each read as
 /// "has no value export" (#321's and #322's reviews; probed: tsc accepts
-/// all five). A name the barrel does not export still reports.
+/// all five). A name the barrel does not export still reports, and so does
+/// `default` through `export *`, which does not re-export it (TS2305).
 test "mtsc graph checker follows a barrel to a type-only namespace" {
   assert_eq(
     graph_messages(
@@ -2341,10 +2342,14 @@ test "mtsc graph checker follows a barrel to a type-only namespace" {
           "/src/treexp.ts", "import type { N } from \"./a\";\nexport type { N };",
         ),
         (
+          "/src/dsrc.ts", "namespace D { export type A = { v: string }; }\nexport default D;",
+        ),
+        ("/src/dstar.ts", "export * from \"./dsrc\";"),
+        (
           "/src/amb.ts", "namespace M { export type A = { v: string }; }\nexport type Keep = number;",
         ),
         (
-          "/src/root.ts", "import { N } from \"./barrel\";\nimport { N as N2 } from \"./star\";\nimport { N as N3 } from \"./tbarrel\";\nimport { N as N4 } from \"./reexp\";\nimport { N as N5 } from \"./treexp\";\nimport { M } from \"./amb\";\ndeclare const x: N.A;\nexport const s: string = x.v;",
+          "/src/root.ts", "import { N } from \"./barrel\";\nimport { N as N2 } from \"./star\";\nimport { N as N3 } from \"./tbarrel\";\nimport { N as N4 } from \"./reexp\";\nimport { N as N5 } from \"./treexp\";\nimport { default as N6 } from \"./dstar\";\nimport { M } from \"./amb\";\ndeclare const x: N.A;\nexport const s: string = x.v;",
         ),
       ],
       [
@@ -2353,15 +2358,19 @@ test "mtsc graph checker follows a barrel to a type-only namespace" {
         ("/src/tbarrel.ts", "./a", "/src/a.ts"),
         ("/src/reexp.ts", "./a", "/src/a.ts"),
         ("/src/treexp.ts", "./a", "/src/a.ts"),
+        ("/src/dstar.ts", "./dsrc", "/src/dsrc.ts"),
         ("/src/root.ts", "./barrel", "/src/barrel.ts"),
         ("/src/root.ts", "./star", "/src/star.ts"),
         ("/src/root.ts", "./tbarrel", "/src/tbarrel.ts"),
         ("/src/root.ts", "./reexp", "/src/reexp.ts"),
         ("/src/root.ts", "./treexp", "/src/treexp.ts"),
+        ("/src/root.ts", "./dstar", "/src/dstar.ts"),
         ("/src/root.ts", "./amb", "/src/amb.ts"),
       ],
     ),
-    ["import :: module `./amb` has no value export `M`"],
+    [
+      "import :: module `./dstar` has no value export `default`", "import :: module `./amb` has no value export `M`",
+    ],
   )
 }
 
@@ -2394,4 +2403,31 @@ test "mtsc graph checker keeps an ambient alias's default beside a renamed impor
   assert_eq(issues.map(fn(i) { i.path + " :: " + i.message }), [
     "top-level > binding `bad` init :: expected `string` but got `number`", "top-level > binding `bad2` init :: expected `string` but got `number`",
   ])
+}
+
+///|
+/// An unannotated function's return type is read off its body while the
+/// module is ingested, and an imported value was installed only after that,
+/// so `function g() { return AL }` with `AL` imported from another module
+/// returned `any` while `AL` itself read as `number` (univer's line
+/// breaker). A primitive import is installed before ingestion as well
+/// (probed: tsc reports `bad` and `badReturn` only).
+test "mtsc graph checker reads an imported primitive const in an unannotated return" {
+  assert_eq(
+    graph_messages(
+      [
+        (
+          "/src/classes.ts", "export const AL = 1;\nexport const AI = 3;\nconst K = 1;\nexport function returnsOwnConst() { return K; }",
+        ),
+        (
+          "/src/root.ts", "import { AI, AL, returnsOwnConst } from \"./classes\";\nfunction mapClass(c: number) { switch (c) { case AI: return AL; default: return c; } }\nfunction g() { return AL; }\nfunction take(n: number) { return n; }\nexport function okNarrows() { let n: number | undefined = undefined; n = mapClass(1); return take(n); }\nexport function bad() { const s: string = mapClass(1); return s; }\nexport function badReturn() { const s: string = g(); return s; }\nexport function badImportedReturn() { const s: string = returnsOwnConst(); return s; }",
+        ),
+      ],
+      [("/src/root.ts", "./classes", "/src/classes.ts")],
+    ),
+    [
+      "function bad > binding `s` init :: expected `string` but got `number`", "function badReturn > binding `s` init :: expected `string` but got `number`",
+      "function badImportedReturn > binding `s` init :: expected `string` but got `number`",
+    ],
+  )
 }

@@ -2223,8 +2223,10 @@ fn graph_exports_namespace(
             return true
           }
         }
+      // `export *` does not re-export `default`, so an import of `default`
+      // through one is TS2305 (#322's review; probed).
       @ast.TsReExportKind::All =>
-        if follow(re.module_spec, name) {
+        if name != "default" && follow(re.module_spec, name) {
           return true
         }
       _ => ()
