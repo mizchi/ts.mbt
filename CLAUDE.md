@@ -7337,6 +7337,77 @@ product surfaces now.
     computed member does not relate to a string one; and a renamed
     enum's members are globals under its key, read through an import
     alias (`import { E as RE }` beside a local `enum E`).
+
+  Batch HF carries #315's five round-3 Minors and takes the next univer
+  categories. The oracle is unchanged, and no real-code site was added.
+  - **A left operand that decides `??` or `||` leaves the right
+    unrelated.** tsc types `a ?? b` as `a` alone when `a` cannot be
+    nullish, and `a || b` when `a` cannot be falsy. So univer's
+    `f(tableSource.dist ?? {})` with a required `dist` is legal.
+    - It applies only under strictNullChecks. Without it every type
+      admits `null`, and tsc relates the right operand (probed).
+    - Every object type but an empty one is never falsy. That includes a
+      weak type and a class with only methods. `{}` and `interface E {}`
+      admit `""` and `0`.
+  - **The falsy part of `x && y` is a literal.** A `number`, `string` or
+    `bigint` operand contributes `0`, `""` or `0n` (tsc's
+    `extractDefinitelyFalsyTypes`), and a truthy test removes them. So
+    univer's `t.value && t.value.stack`, guarded by `if (!s) return`, is
+    the array. The removal applies only to a name the env declares, for
+    the reason the boolean refinement beside it gives.
+  - **A `let` widens each fresh literal in a union.** This false positive
+    is on main too: `let r = c ? "a" : "b"; r = "z"` was reported. The
+    union arm of `binding_init_type` kept every literal. Now each member
+    whose base has a fresh literal somewhere in the initializer widens to
+    that base, which is what `"a" | string` reduces to.
+    - "Somewhere in the initializer" was the first version, and batch FB's
+      own test caught it. With `let a: "foo" = "foo"; let b = a || "foo"`,
+      tsc's result is `a` alone, because `a` cannot be falsy. So the
+      right operand's fresh `"foo"` never reaches `b`.
+    - An operand counts only where the operator's result can be that
+      operand. The right of `||` counts when the left can be falsy, the
+      right of `??` when the left can be nullish, and the right of `&&`
+      when the left can be truthy. Seven cells were probed.
+  - **In a static method `this` is the class.** univer's
+    `NullValueObject.create` is a singleton returning `this._instance`.
+    It read `this` as unbound, so the factory never narrowed an
+    assignment.
+  - **An optional-chain `const` used as a condition narrows the chain's
+    receiver.** TS 4.4 inlines any unannotated `const` condition: with
+    `const column = line?.parent; if (!column) return`, `line` is defined
+    (univer's `findPositionByGlyph`). Only an optional-chain initializer
+    is recorded, because reading every `const p = o.x` would cost a
+    narrowing pass per declaration.
+  - **An imported class keeps its unannotated-return sentinels.** The
+    graph copy carried the class and not the parser's
+    `<unannotated-static-return:>` list. So univer's
+    `NumberValueObject.create(0)` narrowed in one file and not through an
+    import.
+    - Two minimal reproductions came back clean. Printing the types in a
+      copy of the real file found the cause in one run: the static call
+      was `any`.
+  - **An explicit type argument keeps a default's `undefined`.**
+    `new M<string>(m)` with `m: P<string> | undefined` fits
+    `constructor(matrix: P<T> = {})`. The explicit-argument check
+    instantiated the bare parameter type and dropped the optionality.
+  - **The round-3 Minors.**
+    - An array key widens only the members its own values wrote.
+    - Only a non-uniform unit-typed key is a discriminant (tsc's
+      HasNonUniformType).
+    - A field the value cannot hold fresh keeps its declared type.
+    - A nested `var` is in scope at every return of the body it belongs
+      to.
+    - A shadowing local's rebinding no longer drops the outer path's
+      narrowing at the join.
+    - The fifth, an enum import alias shadowed by a local, did not
+      reproduce: the receiver's `any` is answered before the arm it
+      named. Its mutation survived, so the guard was dead code and is
+      reverted. The test of the shadowed and unshadowed cells is kept.
+  - **univer's `sheet-interceptor` cluster is filed rather than fixed.** A
+    function type returning `Nullable<T> | null | undefined | void` is not
+    related to one returning `Nullable<T>` there. One-file and two-file
+    reproductions are both silent, so the cause is in what the real file
+    adds.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

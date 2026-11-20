@@ -1,0 +1,25 @@
+explicitTypeArgumentKeepsDefaultUndefined.ts(14,57): error TS2322: Type 'string' is not assignable to type 'number'.
+explicitTypeArgumentKeepsDefaultUndefined.ts(15,52): error TS2322: Type 'string' is not assignable to type 'number'.
+
+
+==== explicitTypeArgumentKeepsDefaultUndefined.ts (2 errors) ====
+    // A defaulted or optional parameter accepts `undefined`, and it still does
+    // when the call writes its type arguments: `new M<string>(m)` with
+    // `m: P<string> | undefined` fits `constructor(matrix: P<T> = {})`. A wrong
+    // element type is still an error.
+    
+    interface P<T> { [row: number]: { [col: number]: T } }
+    export class M<T> { constructor(matrix: P<T> = {}) { } }
+    export class K<T> { constructor(x: T[] = []) { } }
+    export function g<T>(x: T[] = []): T | undefined { return x[0]; }
+    
+    export function okExplicitTypeArg(m: P<string> | undefined) { return new M<string>(m); }
+    export function okArrayDefault(ks: number[] | undefined) { return new K<number>(ks); }
+    export function okCallDefault(arr: number[] | undefined) { return g<number>(arr); }
+    export function badArrayWrong() { return new K<number>(["s"]); }
+                                                            ~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    export function badCallWrong() { return g<number>(["s"]); }
+                                                       ~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    

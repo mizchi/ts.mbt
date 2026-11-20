@@ -1788,6 +1788,54 @@ fn Resolver::ingest_type_module(
       None => r.interfaces[name] = interface_
     }
   }
+  // Which of a class's bodied methods carry no return annotation, from the
+  // parser's sentinels in the module that declares it. The checked module
+  // reads its own at the check entry; an IMPORTED class's travel with it,
+  // so `NumberValueObject.create(0)` from another module reads its body
+  // the way a same-module call does (univer's `Mina.calculate`, where `v =
+  // NumberValueObject.create(0)` under `if (v == null)` left `v` nullable).
+  // The answer only removes nullish members from an assignment, so a name
+  // the body resolves differently here can cost a finding and nothing else.
+  let unannotated : Map[String, (Array[String], Array[String])] = Map([])
+  for entry in module_.class_dup_diagnostics {
+    for sentinel in entry.1 {
+      let (field, tag) = if sentinel.has_prefix("<unannotated-return:") {
+        (0, "<unannotated-return:")
+      } else if sentinel.has_prefix("<unannotated-static-return:") {
+        (1, "<unannotated-static-return:")
+      } else {
+        continue
+      }
+      let m = sentinel[tag.length():sentinel.length() - 1].to_owned()
+      let pair = match unannotated.get(entry.0) {
+        Some(p) => p
+        None => {
+          let p = ([], [])
+          unannotated[entry.0] = p
+          p
+        }
+      }
+      if field == 0 {
+        pair.0.push(m)
+      } else {
+        pair.1.push(m)
+      }
+    }
+  }
+  let carry_unannotated = fn(name : String, key : String) {
+    match unannotated.get(name) {
+      Some((inst, stat)) => {
+        if inst.length() > 0 && !r.unannotated_return_members.contains(key) {
+          r.unannotated_return_members[key] = inst.copy()
+        }
+        if stat.length() > 0 &&
+          !r.unannotated_static_return_members.contains(key) {
+          r.unannotated_static_return_members[key] = stat.copy()
+        }
+      }
+      None => ()
+    }
+  }
   for name, class_ in types.classes {
     let class_ = match renamed {
       Some((_, _, classes)) => classes.get(name).unwrap_or(class_)
@@ -1796,6 +1844,7 @@ fn Resolver::ingest_type_module(
     match renames.get(name) {
       Some(key) => {
         Resolver::put_class(r, key, class_)
+        carry_unannotated(name, key)
         r.colliding_type_names[name] = ()
       }
       None => ()
@@ -1807,6 +1856,7 @@ fn Resolver::ingest_type_module(
       continue
     }
     Resolver::put_class(r, name, class_)
+    carry_unannotated(name, name)
     // A class method's un-inlined header (`@raw-sig:<method>C#m`) travels
     // with the class, so a call from ANOTHER module solves the method's
     // bounded type parameters as a same-module call does: univer's
@@ -3323,6 +3373,28 @@ fn method_callable_param_types(
     }
   }
   out
+}
+
+///|
+/// `formals` with each parameter `sig` marks optional or defaulted widened
+/// to `T | undefined`, as the caller may pass `undefined` there. The
+/// explicit-type-argument check compared an argument against the bare
+/// `T`, so `new ObjectMatrix<IRange>(m?.[k])` against `constructor(matrix:
+/// P<T> = {})` was reported while the same call without `<IRange>` was not
+/// (univer's `FormulaDataModel`; probed: tsc accepts both).
+fn optional_widened_formals(
+  formals : Array[@ast.TsType],
+  sig : Array[@ast.TsParam],
+) -> Array[@ast.TsType] {
+  formals.mapi(fn(i, t) {
+    if i < sig.length() &&
+      (sig[i].is_optional || sig[i].default is Some(_)) &&
+      !type_accepts_undefined_param(t) {
+      @ast.TsType::Union([t, Undefined])
+    } else {
+      t
+    }
+  })
 }
 
 ///|
@@ -7935,6 +8007,27 @@ fn Resolver::method_type_params_of(
     None => ()
   }
   []
+}
+
+///|
+/// What `this` is inside a static method of class `cn`, for reading a
+/// static factory's body: an object of the class's static FIELDS with a
+/// written type. `None` when the class declares none, which leaves `this`
+/// unbound (and `any`) as before. Static methods and inherited statics are
+/// not modelled, so a body reading them still abstains.
+fn static_this_type(resolver : Resolver, cn : String) -> @ast.TsType? {
+  guard resolver.classes.get(cn) is Some(cls) else { return None }
+  let fields : Array[(@ast.TsType, @ast.TsType)] = []
+  for p in cls.properties {
+    if p.is_static && is_checkable(p.type_) && !(p.type_ is Any) {
+      fields.push((Literal(p.name), p.type_))
+    }
+  }
+  if fields.is_empty() {
+    None
+  } else {
+    Some(Object(fields))
+  }
 }
 
 ///|
@@ -18628,6 +18721,67 @@ fn boolean_truthiness(t : @ast.TsType, truthy : Bool) -> @ast.TsType {
 }
 
 ///|
+/// Whether the left operand of `a ?? b` (`nullish`) or `a || b` decides the
+/// result type alone: it can never be nullish, or never falsy. Only under
+/// strictNullChecks — without it every type admits `null`, and tsc relates
+/// the right operand (probed). A type this checker cannot resolve, `any`,
+/// and an empty object shape (which admits `""` and `0`) answer false.
+fn left_operand_decides(
+  env : ExprEnv,
+  l : @ast.TsExpr,
+  ctx : CheckCtx,
+  nullish : Bool,
+) -> Bool {
+  if !ctx.strict_null_checks {
+    return false
+  }
+  let lt = infer_expr(env, ctx.resolver, l)
+  if !is_checkable(lt) || lt is Any {
+    return false
+  }
+  if nullish {
+    return type_definitely_non_nullish(ctx.resolver, lt)
+  }
+  fn always_truthy(
+    resolver : Resolver,
+    t : @ast.TsType,
+    depth : Int32,
+  ) -> Bool {
+    if depth == 0 {
+      return false
+    }
+    // tsc gives every object type but an EMPTY one (`{}`, `interface E {}`)
+    // the truthy-only facts, whatever its members' optionality.
+    let u = resolver.unwrap(t)
+    match u {
+      Object(fields) => !fields.is_empty()
+      Struct(_, fields) => !fields.is_empty()
+      Array(_) | Tuple(_) | Func(_, _) | Constructor(_, _, _) => true
+      Named(n) | Applied(n, _) =>
+        is_named_decl(u, resolver) &&
+        (
+          !collect_declared_fields(u, resolver).is_empty() ||
+          (
+            resolver.classes.get(n) is Some(c) &&
+            (
+              c.methods.length() > 0 ||
+              c.properties.length() > 0 ||
+              c.private_members.length() > 0 ||
+              c.protected_members.length() > 0 ||
+              c.instance_field_inits.length() > 0
+            )
+          )
+        )
+      Union(ms) =>
+        ms.iter().all(fn(m) { always_truthy(resolver, m, depth - 1) })
+      _ => false
+    }
+  }
+
+  always_truthy(ctx.resolver, lt, 4)
+}
+
+///|
 /// The falsy narrowing of `t` when it differs from `t` only in its boolean
 /// members (`number | boolean` -> `number | false`), else `None`: the
 /// falsy side is not otherwise modelled, and a `None` keeps the binding.
@@ -18704,10 +18858,33 @@ fn always_falsy(resolver : Resolver, t : @ast.TsType) -> Bool {
 /// `falsy_subset` itself keeps `boolean`: the `filter` predicate inference
 /// reads it for `x => !!x`, and tsc infers no `x is true` over `boolean[]`
 /// (probed).
+///
+/// `number`, `string` and `bigint` reduce the same way, to `0`, `""` and
+/// `0n` (tsc's `extractDefinitelyFalsyTypes`), and a non-zero literal drops
+/// out. So `t.value && t.value.stack` with `value?: number | string | T` is
+/// `0 | "" | undefined | T[]`, and `if (!s) return` leaves `T[]` — univer's
+/// `regexp-check.ts` read `T[] | number | string` there and reported the
+/// `for (const x of s)` after it.
 fn boolean_falsy_as_false(t : @ast.TsType) -> @ast.TsType {
   match t {
     Boolean => @ast.TsType::BooleanLiteral(false)
     BooleanLiteral(true) => @ast.TsType::Never
+    Number => @ast.TsType::NumberLiteral("0")
+    String_ => @ast.TsType::Literal("")
+    BigInt => @ast.TsType::BigIntLiteral("0")
+    NumberLiteral(v) =>
+      if v == "0" || v == "-0" || v == "NaN" {
+        t
+      } else {
+        @ast.TsType::Never
+      }
+    Literal(v) => if v == "" { t } else { @ast.TsType::Never }
+    BigIntLiteral(v) =>
+      if v == "0" || v == "0n" {
+        t
+      } else {
+        @ast.TsType::Never
+      }
     Union(ms) => {
       let kept : Array[@ast.TsType] = []
       for m in ms {
@@ -20293,6 +20470,12 @@ fn check_expr_against_shape(
     // guarded (`const xs: string[] = maybe || []` has `maybe: string[] |
     // undefined`), and for `&&` it is the boolean-ish guard.
     (BinOp(And, l, r), _) | (BinOp(Or, l, r), _) => {
+      // `a || b` is `a`'s type alone when `a` cannot be falsy, so `b` is not
+      // related to the expected type (tsc still type-checks `b` internally,
+      // which this skip loses — a MISS, never a report).
+      if expr is BinOp(Or, _, _) && left_operand_decides(env, l, ctx, false) {
+        return
+      }
       // The RHS of `&&` runs only when the LHS is truthy, and the RHS of
       // `||` only when the LHS is falsy — apply that flow narrowing before
       // checking `r` so a `Var` the LHS guards (`x && x.foo`, `!x || x.foo`)
@@ -20310,7 +20493,12 @@ fn check_expr_against_shape(
       env.restore_from(snap)
       return
     }
-    (BinOp(Coalesce, _, r), _) => {
+    (BinOp(Coalesce, l, r), _) => {
+      // `a ?? b` is `a`'s type alone when `a` cannot be nullish: tsc relates
+      // only `a`, so `f(d ?? {})` with `d: D` is legal.
+      if left_operand_decides(env, l, ctx, true) {
+        return
+      }
       check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
       return
     }
@@ -23194,13 +23382,129 @@ fn binding_init_type(
         _ => inferred
       }
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
-      if mutable_ && fresh {
+      if mutable_ &&
+        (
+          fresh ||
+          fresh_literal_bases(init, infer, resolver).contains(
+            widen_literal(inferred),
+          )
+        ) {
         widen_literal(inferred)
       } else {
         inferred
       }
+    // A union widens member by member: tsc widens each FRESH literal, and
+    // `"a" | string` is `string`, so every member whose base type has a
+    // fresh literal somewhere in the initializer becomes that base.
+    // `let r = c ? "a" : "b"` is `string`, and so is `let r = s && "a"`,
+    // whose `""` is the (declared, not fresh) falsy part of `s`.
+    Union(ms) if mutable_ => {
+      let bases = fresh_literal_bases(init, infer, resolver)
+      if bases.is_empty() {
+        return inferred
+      }
+      let kept : Array[@ast.TsType] = []
+      for m in ms {
+        let w = if m
+          is (Literal(_)
+          | NumberLiteral(_)
+          | BigIntLiteral(_)
+          | BooleanLiteral(_)) &&
+          bases.contains(widen_literal(m)) {
+          widen_literal(m)
+        } else {
+          m
+        }
+        if !kept.contains(w) {
+          kept.push(w)
+        }
+      }
+      union_of(kept)
+    }
     _ => inferred
   }
+}
+
+///|
+/// The base types (`string`, `number`, `bigint`, `boolean`) of the FRESH
+/// literals an initializer can evaluate to: a literal written in a branch
+/// of `?:` or in an operand of `&&` / `||` / `??` that reaches the result,
+/// or a `const` holding a fresh one (`<fresh>NAME`). A literal reached any
+/// other way — a declared literal type, a call's return — is not fresh and
+/// is not collected.
+///
+/// An operand reaches the result the way tsc types the operator: the right
+/// of `a || b` only when `a` can be falsy, of `a ?? b` only when `a` can be
+/// nullish, and of `a && b` only when `a` can be truthy, whose own falsy
+/// part is never fresh. So `let a: "foo" = "foo"; let b = a || "foo"`
+/// keeps `"foo"` (batch FB's freshness cell), while `s || "foo"` with `s:
+/// string` widens (probed cell by cell).
+fn fresh_literal_bases(
+  init : @ast.TsExpr,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  fn add(t : @ast.TsType) {
+    if !out.contains(t) {
+      out.push(t)
+    }
+  }
+
+  fn go(e : @ast.TsExpr, depth : Int32) -> Unit {
+    if depth > 16 {
+      return
+    }
+    if e is TemplateLiteral(_, _) {
+      add(String_)
+      return
+    }
+    match precise_literal_type(e) {
+      Some(t) => {
+        let w = widen_literal(t)
+        if w is (String_ | Number | BigInt | Boolean) {
+          add(w)
+        }
+        return
+      }
+      None => ()
+    }
+    match e {
+      Cond(_, a, b) => {
+        go(a, depth + 1)
+        go(b, depth + 1)
+      }
+      BinOp(Or, a, b) => {
+        go(a, depth + 1)
+        if may_be_falsy(resolver, infer(a)) {
+          go(b, depth + 1)
+        }
+      }
+      BinOp(Coalesce, a, b) => {
+        go(a, depth + 1)
+        if !type_definitely_non_nullish(resolver, infer(a)) {
+          go(b, depth + 1)
+        }
+      }
+      BinOp(And, a, b) =>
+        if !always_falsy(resolver, infer(a)) {
+          go(b, depth + 1)
+        }
+      Var(n) => {
+        let marker = infer(Var("<fresh>" + n))
+        if is_checkable(marker) && !(marker is Any) && marker == infer(e) {
+          let w = widen_literal(marker)
+          if w is (String_ | Number | BigInt | Boolean) {
+            add(w)
+          }
+        }
+      }
+      _ => ()
+    }
+  }
+
+  go(init, 0)
+  out
 }
 
 ///|
@@ -23492,7 +23796,48 @@ fn widen_object_literal_type(
     (_, PropAccess(Var(e), m)) if resolver.enums.contains(e) &&
       enum_member_receiver_typed(resolver, e, m, infer(@ast.TsExpr::Var(e))) =>
       Named(e)
+    // A value that cannot hold a FRESH literal keeps the type it was
+    // declared with: `{ tag }` with a parameter `tag: "a" | "b"`, or `{ k:
+    // o.k }`, is `{ tag: "a" | "b" }` in tsc, which widens only a fresh
+    // literal type (#315's review; probed). Widening it to `string` hid a
+    // discriminant from every later relation.
+    _ if !value_may_hold_fresh_literal(init, infer) => ty
     _ => widen_fresh_deep_from(resolver, ty, init)
+  }
+}
+
+///|
+/// Whether `e` can produce a FRESH literal type, the kind tsc widens: a
+/// literal written in place, a name an unannotated `const` bound to one
+/// (`<fresh>NAME`), a conditional or logical operator over such operands,
+/// an object or array literal, and a call taking an inline callback, whose
+/// result is what the callback's literals widened to. A parameter, a
+/// property read and a call to a declared function hold a declared type.
+fn value_may_hold_fresh_literal(
+  e : @ast.TsExpr,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+) -> Bool {
+  if is_fresh_literal_expr(e) {
+    return true
+  }
+  match e {
+    Var(n) => {
+      let marker = infer(@ast.TsExpr::Var("<fresh>" + n))
+      is_checkable(marker) && !(marker is Any) && marker == infer(e)
+    }
+    Cond(_, a, b) | BinOp(And | Or | Coalesce, a, b) =>
+      value_may_hold_fresh_literal(a, infer) ||
+      value_may_hold_fresh_literal(b, infer)
+    ObjectLit(_) | ArrayLit(_) => true
+    Call(_, args)
+    | CallExpr(_, args)
+    | MethodCall(_, _, args)
+    | New(_, args)
+    | NewExpr(_, args) =>
+      args.iter().any(fn(a) { a is (ArrowFunc(_, _, _, _) | FuncExpr(_)) })
+    TypeArgs(_, inner) | PureCall(inner) | OptionalChain(inner) =>
+      value_may_hold_fresh_literal(inner, infer)
+    _ => false
   }
 }
 
@@ -23682,6 +24027,7 @@ fn enum_members_as_enums_deep(
 priv enum ArrayKeyPlan {
   ToEnum(String)
   KeepDeclared
+  WidenWritten(Map[String, Unit])
 }
 
 ///|
@@ -23700,6 +24046,10 @@ fn array_literal_key_plans(
   let enum_of : Map[String, String] = Map([])
   let spoiled : Map[String, Unit] = Map([])
   let declared : Map[String, Unit] = Map([])
+  // The enum members each key's OWN values wrote, for a key that takes no
+  // other plan: `[{ written: E.A, fixed }]` with `fixed: E.A` widens
+  // `written` and keeps `fixed`'s declared member (#315's review; probed).
+  let key_writes : Map[String, Map[String, Unit]] = Map([])
   for item in items {
     guard item is ObjectLit(entries) else { return None }
     let origins : Map[String, ObjectMemberOrigin] = Map([])
@@ -23723,9 +24073,26 @@ fn array_literal_key_plans(
         Declared | FreshPart(_) => declared[k] = ()
         _ => spoiled[k] = ()
       }
+      match o {
+        Fresh(Some(v)) => {
+          let w = match key_writes.get(k) {
+            Some(w) => w
+            None => {
+              let w : Map[String, Unit] = Map([])
+              key_writes[k] = w
+              w
+            }
+          }
+          fresh_enum_writes(v, w, 0)
+        }
+        _ => ()
+      }
     }
   }
   let plans : Map[String, ArrayKeyPlan] = Map([])
+  for k, w in key_writes {
+    plans[k] = WidenWritten(w)
+  }
   for k, _ in declared {
     plans[k] = KeepDeclared
   }
@@ -23734,11 +24101,7 @@ fn array_literal_key_plans(
       plans[k] = ToEnum(e)
     }
   }
-  if plans.is_empty() {
-    None
-  } else {
-    Some(plans)
-  }
+  Some(plans)
 }
 
 ///|
@@ -23775,7 +24138,9 @@ fn widen_enum_keys(
                   (f.0, union_of(parts))
                 }
                 Some(KeepDeclared) => f
-                None => (f.0, widen_written_enums(resolver, f.1, writes))
+                Some(WidenWritten(w)) =>
+                  (f.0, widen_written_enums(resolver, f.1, w))
+                None => (f.0, widen_literal_deep(f.1))
               }
             _ => (f.0, widen_written_enums(resolver, f.1, writes))
           }
@@ -24029,12 +24394,35 @@ fn discriminant_split_fits(
   // over the target's discriminant properties, so five fields of type `E`
   // where only `tag` tells the arms apart split one field, not five, and
   // stay under the 25-combination limit (#315's review; probed).
-  let disc : Map[String, Unit] = Map([])
+  // A key every arm types the same way tells none of them apart, so it
+  // is not a discriminant either (tsc's `HasNonUniformType`): four `"x" |
+  // "y"` fields beside `tag` must not use up the limit (#315's review).
+  let per_arm : Array[Map[String, @ast.TsType]] = []
+  let unit_keys : Map[String, Unit] = Map([])
   for m in members {
+    let fs : Map[String, @ast.TsType] = Map([])
     for f in collect_declared_fields(m, resolver) {
+      fs[f.0] = f.1
       if is_unit_type(resolver, f.1) {
-        disc[f.0] = ()
+        unit_keys[f.0] = ()
       }
+    }
+    per_arm.push(fs)
+  }
+  let disc : Map[String, Unit] = Map([])
+  for k, _ in unit_keys {
+    let first = per_arm[0].get(k)
+    let uniform = first is Some(t0) &&
+      per_arm
+      .iter()
+      .all(fn(fs) {
+        match fs.get(k) {
+          Some(t) => equivalent(resolver.unwrap(t), resolver.unwrap(t0))
+          None => false
+        }
+      })
+    if !uniform {
+      disc[k] = ()
     }
   }
   let splits : Array[(Int32, Array[@ast.TsType])] = []
@@ -25110,6 +25498,7 @@ fn member_override_incompatible(
 fn method_sole_return_type(
   m : @ast.TsClassMethodDecl,
   resolver : Resolver,
+  this_type~ : @ast.TsType? = None,
 ) -> @ast.TsType? {
   if m.is_async || m.is_generator {
     return None
@@ -25126,6 +25515,9 @@ fn method_sole_return_type(
   // (#312's review). A parameter's written type is its type, and an
   // unannotated one is `any`.
   let env = ExprEnv::new()
+  if this_type is Some(t) {
+    env.bind("this", t)
+  }
   for p in m.params {
     env.bind(p.0, p.1)
   }
@@ -25149,12 +25541,16 @@ fn method_sole_return_type(
 fn static_factory_body_return_type(
   m : @ast.TsClassMethodDecl,
   resolver : Resolver,
+  this_type~ : @ast.TsType? = None,
 ) -> @ast.TsType? {
   if m.is_async || m.is_generator {
     return None
   }
   guard m.body is Some(b) else { return None }
   let env = ExprEnv::new()
+  if this_type is Some(t) {
+    env.bind("this", t)
+  }
   for p in m.params {
     env.bind(p.0, p.1)
   }
@@ -27688,7 +28084,66 @@ fn infer_body_return_type(
     }
   }
 
-  walk(body.stmts, [], scoped)
+  // A `var` in a NESTED block is function-scoped, so it is in scope at
+  // every return, the top-level ones included: `{ var value = null }
+  // return value` reads that `var`, not an outer `value` (#315's review;
+  // probed). Every return starts with those names.
+  let fn_vars : Array[String] = []
+  fn nested_vars(
+    stmts : Array[@ast.TsStmt],
+    top : Bool,
+    out : Array[String],
+  ) -> Unit {
+    for st in stmts {
+      match st {
+        Var(b, _, _) => if !top { collect_binding_names(b, out) }
+        If(_, t, e) => {
+          nested_vars(t.stmts, false, out)
+          match e {
+            Some(b) => nested_vars(b.stmts, false, out)
+            None => ()
+          }
+        }
+        While(_, b) | DoWhile(_, b) | With(_, b) | Block(b) =>
+          nested_vars(b.stmts, false, out)
+        For(init, _, _, b) => {
+          match init {
+            Some(Var(bind, _, _)) => collect_binding_names(bind, out)
+            _ => ()
+          }
+          nested_vars(b.stmts, false, out)
+        }
+        ForOf(kind, bind, _, _, b)
+        | ForAwaitOf(kind, bind, _, _, b)
+        | ForIn(kind, bind, _, _, b) => {
+          if kind is Var {
+            collect_binding_names(bind, out)
+          }
+          nested_vars(b.stmts, false, out)
+        }
+        Try(t, _, c, f) => {
+          nested_vars(t.stmts, false, out)
+          match c {
+            Some(b) => nested_vars(b.stmts, false, out)
+            None => ()
+          }
+          match f {
+            Some(b) => nested_vars(b.stmts, false, out)
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            nested_vars(c.body.stmts, false, out)
+          }
+        Label(_, inner) => nested_vars([inner], top, out)
+        _ => ()
+      }
+    }
+  }
+
+  nested_vars(body.stmts, true, fn_vars)
+  walk(body.stmts, fn_vars, scoped)
   let returns : Array[@ast.TsExpr?] = scoped.map(fn(r) { r.0 })
   if returns.length() == 0 {
     return None
@@ -32843,7 +33298,10 @@ fn collect_narrowing(
         let truthy = if cur is Unknown {
           @ast.TsType::Object([])
         } else if refine_bool {
-          boolean_truthiness(truthy_non_nullish(resolver, cur), true)
+          boolean_truthiness(
+            without_falsy_scalar_literals(truthy_non_nullish(resolver, cur)),
+            true,
+          )
         } else {
           truthy_non_nullish(resolver, cur)
         }
@@ -33154,6 +33612,46 @@ fn truthy_non_nullish(resolver : Resolver, cur : @ast.TsType) -> @ast.TsType {
     _ => cur
   }
   narrow_remove(non_nullable_resolved(resolver, ty), fn(v) { v is Void })
+}
+
+///|
+/// Whether a value of `t` can be falsy: a falsy literal, `false`, a
+/// nullish type, a primitive that holds one (`string` holds `""`), or a
+/// union with such a member. An object type cannot (`falsy_subset` says
+/// which), and a type this cannot decide answers yes.
+fn may_be_falsy(resolver : Resolver, t : @ast.TsType) -> Bool {
+  fn go(resolver : Resolver, t : @ast.TsType, depth : Int32) -> Bool {
+    if depth > 8 {
+      return true
+    }
+    match resolver.unwrap(t) {
+      Literal(v) => v == ""
+      NumberLiteral(v) => v == "0" || v == "-0" || v == "NaN"
+      BigIntLiteral(v) => v == "0" || v == "0n"
+      BooleanLiteral(b) => !b
+      Union(ms) => ms.iter().any(fn(m) { go(resolver, m, depth + 1) })
+      u => !(falsy_subset(resolver, u) is Never)
+    }
+  }
+
+  go(resolver, t, 0)
+}
+
+///|
+/// A union without its `""`, `0`, `-0` and `0n` members, which a truthy
+/// test removes (`t.value && t.value.stack` is `0 | "" | T[] | undefined`,
+/// and `if (!s) return` leaves `T[]`). A union of nothing else is kept
+/// whole, and a non-union is returned unchanged.
+fn without_falsy_scalar_literals(t : @ast.TsType) -> @ast.TsType {
+  guard t is Union(ms) else { return t }
+  let kept = ms.filter(fn(m) {
+    !(m is (Literal("") | NumberLiteral("0" | "-0") | BigIntLiteral("0" | "0n")))
+  })
+  if kept.is_empty() || kept.length() == ms.length() {
+    t
+  } else {
+    union_of(kept)
+  }
 }
 
 ///|
@@ -35171,6 +35669,18 @@ fn lib_static_guard_target(recv : String, meth : String) -> @ast.TsType? {
 }
 
 ///|
+/// `e` is a member chain with an optional link in it: `a?.b`, `a?.b.c`,
+/// `a.b?.[k]`.
+fn through_optional_chain(e : @ast.TsExpr) -> Bool {
+  match e {
+    OptionalChain(_) => true
+    PropAccess(inner, _) | IndexAccess(inner, _) =>
+      through_optional_chain(inner)
+    _ => false
+  }
+}
+
+///|
 /// TS 4.4 aliased conditions: `const isArr = Array.isArray(v)` then
 /// `isArr ? v.length : …` narrows `v` as the inline guard would. The
 /// condition's narrowing is computed HERE and stored in the env under
@@ -35191,7 +35701,13 @@ fn record_aliased_condition(
       true
     UnaryOp(Not, _) => true
     BinOp(And | Or, _, _) => true
-    _ => false
+    // tsc inlines ANY unannotated const used as a condition, so
+    // `const column = line?.parent; if (!column) return` narrows `line`
+    // through the chain (univer's `findPositionByGlyph`, probed). Only an
+    // optional chain is taken here: it is the shape whose truthiness
+    // narrows something other than the alias itself, and reading every
+    // `const p = o.x` would cost a narrowing pass per declaration.
+    _ => through_optional_chain(init)
   }
   if !shaped {
     return
@@ -36454,10 +36970,16 @@ fn method_call_never_nullish(
             // instance = new N(v); …; return instance`) is read the way a
             // function declaration's body is, with `undefined` added when
             // the end is reachable (univer's `NumberValueObject.create`).
-            match method_sole_return_type(m, ctx.resolver) {
+            // In a STATIC method `this` is the class, so `return
+            // this._instance` reads the static field's declared type
+            // (univer's `NullValueObject.create`, a singleton).
+            let this_type = static_this_type(ctx.resolver, cn)
+            match method_sole_return_type(m, ctx.resolver, this_type~) {
               Some(t) => t
               None =>
-                static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+                static_factory_body_return_type(m, ctx.resolver, this_type~).unwrap_or(
+                  Any,
+                )
             }
           } else {
             m.return_type
@@ -37542,12 +38064,29 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // CHANGED, so a dropped key kept its pre-`if` narrowing: `o.p = "";
       // if (c) { o = other } const s: string = o.p` was accepted, and tsc
       // rejects it (probed).
-      let drop_forgotten = fn(exit : Map[String, @ast.TsType]) {
+      // A path whose ROOT the branch declares itself (`let o = …`) was
+      // forgotten for that local, not for the outer binding, which the
+      // branch never touched (#315's review; probed: tsc keeps the outer
+      // `o.p` narrowing).
+      let shadow_of = fn(block : @ast.TsBlock?) -> Map[String, Unit] {
+        let shadow : Map[String, Unit] = Map([])
+        match block {
+          Some(b) => block_declared_names(b, shadow)
+          None => ()
+        }
+        shadow
+      }
+      let drop_forgotten = fn(
+        exit : Map[String, @ast.TsType],
+        block : @ast.TsBlock?,
+      ) {
+        let shadow = shadow_of(block)
         let gone : Array[String] = []
         for k, _ in pre_map {
           if !k.has_prefix("<") &&
             (k.contains(".") || k.contains("[")) &&
-            exit.get(k) is None {
+            exit.get(k) is None &&
+            !shadow.contains(sequential_exit_root(k)) {
             gone.push(k)
           }
         }
@@ -37581,25 +38120,29 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let restore = fn(
         binds : Array[(String, @ast.TsType)],
         exit : Map[String, @ast.TsType],
+        block : @ast.TsBlock?,
       ) {
+        let shadow = shadow_of(block)
         for b in binds {
-          if (b.0.contains(".") || b.0.contains("[")) && !exit.contains(b.0) {
+          if (b.0.contains(".") || b.0.contains("[")) &&
+            !exit.contains(b.0) &&
+            !shadow.contains(sequential_exit_root(b.0)) {
             continue
           }
           env.bind(b.0, b.1)
         }
       }
       if then_exits && !else_exits {
-        drop_forgotten(else_exit)
-        restore(effect.else_binds, else_exit)
+        drop_forgotten(else_exit, else_block)
+        restore(effect.else_binds, else_exit, else_block)
         carry(else_block, else_exit)
       } else if else_exits && !then_exits {
-        drop_forgotten(then_exit)
-        restore(effect.then_binds, then_exit)
+        drop_forgotten(then_exit, Some(then_block))
+        restore(effect.then_binds, then_exit, Some(then_block))
         carry(Some(then_block), then_exit)
       } else if !then_exits && !else_exits {
-        drop_forgotten(then_exit)
-        drop_forgotten(else_exit)
+        drop_forgotten(then_exit, Some(then_block))
+        drop_forgotten(else_exit, else_block)
         // Merge-point join: a variable's type after the `if` is the union of
         // its type at the end of each branch (covering both the condition's
         // narrowing and in-branch reassignment). This makes
@@ -39111,7 +39654,7 @@ fn check_explicit_type_args(
           Some(sig) =>
             if !sig.iter().any(fn(p) { p.is_rest }) {
               check_against(
-                sig.map(fn(p) { p.type_ }),
+                optional_widened_formals(sig.map(fn(p) { p.type_ }), sig),
                 call_args,
                 "call `\{name}`",
               )
@@ -39122,7 +39665,11 @@ fn check_explicit_type_args(
         match ctx.resolver.lookup_constructor_sig(name) {
           Some((formal_types, sig)) =>
             if !sig.iter().any(fn(p) { p.is_rest }) {
-              check_against(formal_types, call_args, "new `\{name}`")
+              check_against(
+                optional_widened_formals(formal_types, sig),
+                call_args,
+                "new `\{name}`",
+              )
             }
           None => ()
         }

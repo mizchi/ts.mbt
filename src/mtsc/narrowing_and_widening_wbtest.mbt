@@ -1881,3 +1881,212 @@ test "a nested declaration shadows only inside its scope (shadowret2)" {
     "function H3.set > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
   ])
 }
+
+///|
+/// An array literal widens an enum member only in the key whose own value
+/// wrote it: `fixed` holds a declared `E.A` and keeps it beside a `written:
+/// E.A` that widens (#315's review; probed: tsc accepts the `ok` lines).
+test "an array key widens only the members its own values wrote (enumkeys2)" {
+  let src =
+    #|enum E { A = "a", B = "b" }
+    #|declare const fixed: E.A;
+    #|const rows = [{ written: E.A, fixed }];
+    #|export const okFixedKeepsMember: { written: E; fixed: E.A }[] = rows;
+    #|export function okWriteWritten() { rows[0].written = E.B; }
+    #|const nested = [{ fixed, inner: { t: E.A } }];
+    #|export const okNestedWriteLeavesFixed: { fixed: E.A; inner: { t: E } }[] = nested;
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// A property value that reads a declared binding keeps its declared
+/// literal type, and only a key whose type differs across the target's
+/// arms is a discriminant: `{ tag, a: v, … }` with `tag: "a" | "b"` and
+/// four `"x" | "y"` fields fits a union discriminated by `tag` (#315's
+/// review; probed: tsc reports only `badUncoveredTag`).
+test "a declared literal union stays a discriminant in an object literal (litdisc)" {
+  let src =
+    #|type XY = "x" | "y";
+    #|type T = { tag: "a"; a: XY; b: XY; c: XY; d: XY } | { tag: "b"; a: XY; b: XY; c: XY; d: XY };
+    #|declare function f(v: T): void;
+    #|export function okOnlyTagDiscriminates(tag: "a" | "b", v: XY) { const o = { tag, a: v, b: v, c: v, d: v }; f(o); }
+    #|export function badUncoveredTag(tag: "a" | "c", v: XY) { const o = { tag, a: v, b: v, c: v, d: v }; f(o); }
+    #|interface Box { kind: "a" | "b" }
+    #|declare const box: Box;
+    #|export function okPropertyReadKept() { const o = { kind: box.kind }; const k: "a" | "b" = o.kind; return k; }
+    #|export function okConstLiteralWidens() { const c = "a"; const o = { c }; o.c = "z"; return o; }
+  assert_eq(issue_lines(src), [
+    "function badUncoveredTag > call `f` arg[0]: expected `T` but got `{ tag: \"a\" (string) | \"c\" (string); a: XY; b: XY; c: XY; d: XY }`",
+  ])
+}
+
+///|
+/// A `var` in a nested block is function-scoped, so a top-level return
+/// reads it rather than an outer binding of the name; a nested `let` is
+/// not (#315's review; probed: tsc reports `BadVarHoisted.set` only).
+test "a nested var is in scope at every return (shadowvar)" {
+  let src =
+    #|declare function takeS(s: string): void;
+    #|declare const value: string;
+    #|export class K { static make() { { var value: string | null = null; } return value; } }
+    #|export class BadVarHoisted { p: string | null = null; set() { this.p = K.make(); takeS(this.p); } }
+    #|export class K2 { static make() { { let value: string | null = null; } return value; } }
+    #|export class OkLetBlockScoped { p: string | null = null; set() { this.p = K2.make(); takeS(this.p); } }
+  assert_eq(issue_lines(src), [
+    "function BadVarHoisted.set > call `takeS` arg[0]: type `string | null` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// A path narrowing survives a branch that rebinds only a SHADOWING local
+/// of its root; rebinding the outer root still drops it (#315's review;
+/// probed: tsc reports `badOuterRebound` only).
+test "a shadowing local's rebinding leaves the outer path narrowed (ifjoin5)" {
+  let src =
+    #|interface O { p: string | null }
+    #|export function okShadowRebound(o: O, replacement: O) { if (o.p !== null) { let o = replacement; o = replacement; } else { return; } const s: string = o.p; return s; }
+    #|export function badOuterRebound(o: O, replacement: O) { if (o.p !== null) { o = replacement; } else { return; } const s: string = o.p; return s; }
+  assert_eq(issue_lines(src), [
+    "function badOuterRebound > binding `s` init: type `string | null` is not assignable to type `string`",
+  ])
+}
+
+///|
+/// `a ?? b` is `a`'s type alone when `a` cannot be nullish, and `a || b`
+/// when `a` cannot be falsy, so `b` is not related to the expected type
+/// (univer's `__getSplitWidthNoAngle(…, tableSource.dist ?? {})`). An empty
+/// object type admits `""` and `0`, so it is not always truthy, and a
+/// string left operand can be `""` (probed: tsc reports the bad cells only).
+test "a left operand that decides `??` / `||` skips the right (coalesce)" {
+  let src =
+    #|interface D { a: number; b: number }
+    #|declare function f(d: D): void;
+    #|declare function g(x: string): void;
+    #|class K { m() {} }
+    #|declare function fk(x: K): void;
+    #|export function okNonNullish(d: D) { f(d ?? {}); }
+    #|export function okOrObject(d: D) { f(d || {}); }
+    #|export function okOrMethodsOnly(k: K) { fk(k || 1); }
+    #|export function okStrCoalesce(s: string) { g(s ?? 1); }
+    #|export function badNullable(u: D | undefined) { f(u ?? {}); }
+    #|export function badOrStr(s: string) { g(s || 1); }
+  assert_eq(issue_lines(src), [
+    "function badNullable > call `f` arg[0] (logical).a: property `a` is required by `D`",
+    "function badNullable > call `f` arg[0] (logical).b: property `b` is required by `D`",
+    "function badOrStr > call `g` arg[0] (logical): expected `string` but got `number`",
+  ])
+}
+
+///|
+/// The falsy part of `n && x` is `0` for a `number`, `""` for a `string`
+/// and `0n` for a `bigint` (tsc's `extractDefinitelyFalsyTypes`), and a
+/// truthy test removes them, so `t.value && t.value.stack` guarded by
+/// `if (!s) return` is the array (univer's `regexp-check.ts`). A mutable
+/// binding widens the fresh `"a"`, which absorbs the `""`. Without the
+/// truthy test, `0` and `""` stay, and tsc's TS2488 names the same type
+/// (probed: tsc reports `badNoGuard` only). `const q: "a" = s && "a"` is
+/// TS2322 in tsc and still a MISS here: the literal-union mismatch is
+/// suppressed as flow-narrowing residue.
+test "`&&` keeps the falsy literal of a primitive operand (andfalsy)" {
+  let src =
+    #|interface T { stack?: T[]; value?: number | string | T }
+    #|export function okNarrow(t: T) { const s = t.stack || (t.value && (t.value as T).stack); if (!s) return; for (const x of s) { x.stack; } }
+    #|export function okLet(s: string) { let r = s && "a"; r = "b"; return r; }
+    #|export function badNoGuard(t: T) { const s = t.value && (t.value as T).stack; if (s === undefined) return; for (const x of s) { x.stack; } }
+  assert_eq(issue_lines(src), [
+    "function badNoGuard > for-of iterable: type `0 | \"\" (string) | T[]` must have a `[Symbol.iterator]()` method that returns an iterator",
+  ])
+}
+
+///|
+/// A mutable binding widens every FRESH literal in a union, so
+/// `let r = c ? "a" : "b"` is `string` and takes `"z"` later (a false
+/// positive on main too). A `const` keeps the union. An operand's fresh
+/// literal counts only when it reaches the result: the right of `||` when
+/// the left can be falsy, of `??` when the left can be nullish, so a
+/// declared `"x"` on the left keeps the binding `"x"` (probed: tsc reports
+/// the three bad cells, the last two at the reassignment).
+test "a mutable binding widens a union of fresh literals (letwiden)" {
+  let src =
+    #|declare const nx: "x" | undefined;
+    #|declare const mx: "x";
+    #|export function okCondLet(c: boolean) { let r = c ? "a" : "b"; r = "z"; return r; }
+    #|export function okCondNum(c: boolean) { let r = c ? 1 : 2; r = 3; return r; }
+    #|export function okOrLeftDeclared() { let a: "foo" = "foo"; let b = a || "foo"; let c2: "foo" = b; return c2; }
+    #|export function okOrString(s: string) { let b = s || "foo"; b = "z"; return b; }
+    #|export function okCoalesceNullable() { let b = nx ?? "y"; b = "z"; return b; }
+    #|export function badConst(c: boolean) { const r = c ? "a" : "b"; const z: "c" = r; return z; }
+    #|export function badCoalesceNonNullable() { let b = mx ?? "y"; b = "z"; return b; }
+    #|export function badOrNonFalsy() { let b = mx || "y"; b = "z"; return b; }
+  assert_eq(issue_lines(src), [
+    "function badConst > binding `z` init: expected `\"c\" (string)` but got `\"a\" (string) | \"b\" (string)`",
+    "function badCoalesceNonNullable > assign `b`: expected `\"x\" (string) | \"y\" (string)` but got `\"z\" (string)`",
+    "function badOrNonFalsy > assign `b`: expected `\"x\" (string) | \"y\" (string)` but got `\"z\" (string)`",
+  ])
+}
+
+///|
+/// In a STATIC method `this` is the class, so a singleton factory's
+/// `return this._instance` reads the static field's declared type and the
+/// assignment after `if (cell == null)` is never nullish (univer's
+/// `NullValueObject.create`). A static field that admits `undefined` keeps
+/// the assignment nullable (probed: tsc reports `badMaybe` only).
+test "a static factory body reads `this` as its class (staticthis)" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|class Base { k = 1 }
+    #|class NullV extends Base {
+    #|  private static _instance: NullV;
+    #|  private static _maybe: NullV | undefined;
+    #|  static create() { this._instance = this._instance || new NullV(); return this._instance; }
+    #|  static maybe() { const m = this._maybe; return m; }
+    #|}
+    #|export function okSingleton(def: Nullable<Base>) { const out: Base[] = []; let cell = def; if (cell == null) { cell = NullV.create(); } out[0] = cell; }
+    #|export function badMaybe(def: Nullable<Base>) { const out: Base[] = []; let cell = def; if (cell == null) { cell = NullV.maybe(); } out[0] = cell; }
+  assert_eq(issue_lines(src), [
+    "function badMaybe > assign array element: type `null | undefined | void | Base` is not assignable to type `Base`",
+  ])
+}
+
+///|
+/// TS 4.4 inlines an unannotated `const` used as a condition, so
+/// `const column = line?.parent; if (!column) return` narrows `line`
+/// through the chain (univer's `findPositionByGlyph`). Narrowing a
+/// different binding does not (probed: tsc reports `bad` only).
+test "an optional-chain const narrows its receiver as a condition (chainalias)" {
+  let src =
+    #|interface Col { lines: Line[] }
+    #|interface Line { divides: Div[]; parent?: Col }
+    #|interface Div { parent?: Line }
+    #|interface Glyph { parent?: Div }
+    #|export function ok(glyph: Glyph) { const divide = glyph.parent; const line = divide?.parent; const column = line?.parent; if (!divide || !column) return; const i: number = line.divides.indexOf(divide); return i + column.lines.indexOf(line); }
+    #|export function bad(glyph: Glyph) { const divide = glyph.parent; const line = divide?.parent; if (!divide) return; return line.divides; }
+  assert_eq(issue_lines(src), [
+    "function bad > PropAccess `.divides`: object is possibly `undefined`",
+  ])
+}
+
+///|
+/// An explicit type argument instantiates a defaulted or optional parameter
+/// as `T | undefined`, so `new M<string>(m)` with `m: P<string> | undefined`
+/// is legal against `constructor(matrix: P<T> = {})` (univer's
+/// `formula-data.model.ts`), while a wrong element is still reported
+/// (probed: tsc reports the two bad cells only).
+test "an explicit type argument keeps a default's undefined (typeargdefault)" {
+  let src =
+    #|interface P<T> { [row: number]: { [col: number]: T } }
+    #|export class M<T> { constructor(matrix: P<T> = {}) { } }
+    #|declare const m: P<string> | undefined;
+    #|export const okExplicitTypeArg = new M<string>(m);
+    #|export class K<T> { constructor(x: T[] = []) { } }
+    #|declare const ks: number[] | undefined;
+    #|export const okArrayDefault = new K<number>(ks);
+    #|export const badArrayWrong = new K<number>(["s"]);
+    #|export function g<T>(x: T[] = []): T | undefined { return x[0]; }
+    #|declare const arr: number[] | undefined;
+    #|export const okCallDefault = g<number>(arr);
+    #|export const badCallWrong = g<number>(["s"]);
+  assert_eq(issue_lines(src), [
+    "top-level > new `K` arg[0][0]: expected `number` but got `string`", "top-level > call `g` arg[0][0]: expected `number` but got `string`",
+  ])
+}
