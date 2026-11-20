@@ -918,6 +918,26 @@ fn module_local_display_name(n : String) -> String {
 }
 
 ///|
+/// `a` with every type reference it holds rewritten through `renames`: the
+/// body and each type-parameter DEFAULT. Copying an alias with only its body
+/// renamed left a default spelled in the declaring scope resolving in the
+/// reader's, so `namespace N { export type Item = string; export type A<T =
+/// Item> = { v: T } }` read `N.A`'s default as a file-level `type Item =
+/// number` (#319's review; probed: tsc reads the namespace's `Item`).
+fn rename_alias_refs(
+  a : @ast.TsTypeAlias,
+  renames : Map[String, String],
+) -> @ast.TsTypeAlias {
+  {
+    ..a,
+    type_: rename_type_refs(a.type_, renames),
+    type_param_defaults: a.type_param_defaults.map(fn(d) {
+      (d.0, rename_type_refs(d.1, renames))
+    }),
+  }
+}
+
+///|
 /// Rewrite every type REFERENCE whose name is in `renames` — `Named(n)` and
 /// the name of `Applied(n, …)`, which `substitute_params` leaves alone —
 /// skipping binders that shadow it (a mapped type's key, a generic
@@ -1371,7 +1391,7 @@ fn cross_body_renamed_alias(
     Some((input, id, out)) if id == renames_id && physical_equal(input, a) =>
       out
     _ => {
-      let out = { ..a, type_: rename_type_refs(a.type_, own), }
+      let out = rename_alias_refs(a, own)
       cross_body_alias_cache[key] = (a, renames_id, out)
       out
     }
@@ -1406,7 +1426,7 @@ fn qualify_namespace_local_refs(
         own[k] = v
       }
     }
-    { ..a, type_: rename_type_refs(a.type_, own), }
+    rename_alias_refs(a, own)
   })
   {
     ..m,
@@ -1439,7 +1459,7 @@ fn move_unkeyed_reserved_type_names(
         own[k] = v
       }
     }
-    { ..a, name: moved(a.name), type_: rename_type_refs(a.type_, own), }
+    { ..rename_alias_refs(a, own), name: moved(a.name), }
   })
   {
     ..m,
@@ -1490,7 +1510,7 @@ fn rename_namespace_body_refs(
           scoped[k] = v
         }
       }
-      { ..a, type_: rename_type_refs(a.type_, scoped), }
+      rename_alias_refs(a, scoped)
     }),
     classes: body.classes.map(fn(c) {
       { ..rename_class_refs(c, own), name: c.name, }
@@ -1754,7 +1774,7 @@ fn Resolver::ingest_type_module(
               own[k] = v
             }
           }
-          aliases[name] = { ..a, type_: rename_type_refs(a.type_, own), }
+          aliases[name] = rename_alias_refs(a, own)
         }
         // A class member written with a renamed name (`item!: Item` beside
         // this module's keyed `interface Item`) reads the key too. Left
@@ -13554,16 +13574,22 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
     (Null, Null) | (Undefined, Undefined) => true
     // Arrays and tuples are comparable when their ELEMENTS are, as tsc's
     // comparability relation decides them: `number[]` with `number[]`, a
-    // tuple with an array whose element every tuple member overlaps, and
-    // two tuples of one length position by position. There was no arm, so
-    // every pair fell to the final `false` and `prevProps.elements !==
-    // nextProps.elements` (excalidraw's canvases, univer's renderers) read
-    // as always true (probed: tsc reports only element types with no
-    // overlap, and tuples of different lengths). A tuple with a rest slot
-    // has no fixed length and is called overlapping.
+    // tuple with an array, and two tuples of one length position by
+    // position. There was no arm, so every pair fell to the final `false`
+    // and `prevProps.elements !== nextProps.elements` (excalidraw's
+    // canvases, univer's renderers) read as always true (probed: tsc
+    // reports only element types with no overlap, and tuples of different
+    // lengths).
+    //
+    // A tuple meets an array as `Array<union of its elements>`, and a
+    // union is comparable when ANY member is, so `[string, number]`
+    // overlaps `number[]` and `[string]` does not; `[]` is `Array<never>`
+    // and overlaps everything. A rest slot contributes its element, so
+    // `[...number[]]` against `boolean[]` is TS2367 like `number[]` is
+    // (#320's review; probed cell by cell).
     (Array(x), Array(y)) => types_can_overlap(x, y)
     (Tuple(xs), Array(y)) | (Array(y), Tuple(xs)) =>
-      xs.iter().all(fn(x) { x is Rest(_) || types_can_overlap(x, y) })
+      tuple_overlaps_array_element(xs, y)
     (Tuple(xs), Tuple(ys)) => tuples_can_overlap(xs, ys)
     // Function types are comparable with each other whatever their
     // signatures (`inst._zod.run === base`, zod's memoizer) — tsc reports
@@ -13585,10 +13611,31 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Whether a tuple with elements `xs` shares a value with an array of `y`,
+/// for `types_can_overlap`: some element must overlap `y`, or the tuple is
+/// empty. A rest slot's element is the element of its array; any other
+/// rest payload (a type parameter, an alias) is unknown and overlaps.
+fn tuple_overlaps_array_element(
+  xs : Array[@ast.TsType],
+  y : @ast.TsType,
+) -> Bool {
+  xs.length() == 0 ||
+  xs
+  .iter()
+  .any(fn(x) {
+    match x {
+      Rest(Array(e)) => types_can_overlap(e, y)
+      Rest(_) => true
+      _ => types_can_overlap(x, y)
+    }
+  })
+}
 
 ///|
-/// Whether two tuple types share a value, for `types_can_overlap`. A rest
-/// slot makes the length open, which overlaps. Otherwise the shared prefix
+/// Whether two tuple types share a value, for `types_can_overlap`. A tuple
+/// that is nothing but `[...T[]]` is the array `T[]`, and is compared as
+/// one. Any other rest slot makes the length open, which overlaps.
+/// Otherwise the shared prefix
 /// must overlap position by position, and the longer tuple's extra elements
 /// must all admit `undefined`: an OPTIONAL element (`[number, string?]`) is
 /// stored as `string | undefined`, the same node as a required one, so
@@ -13596,6 +13643,12 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 /// overlapping, while `[number, string]` against `[number]` is TS2367
 /// (probed).
 fn tuples_can_overlap(xs : Array[@ast.TsType], ys : Array[@ast.TsType]) -> Bool {
+  if xs is [Rest(Array(e))] {
+    return tuple_overlaps_array_element(ys, e)
+  }
+  if ys is [Rest(Array(e))] {
+    return tuple_overlaps_array_element(xs, e)
+  }
   if xs.iter().any(fn(x) { x is Rest(_) }) ||
     ys.iter().any(fn(y) { y is Rest(_) }) {
     return true

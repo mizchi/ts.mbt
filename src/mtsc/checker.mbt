@@ -2132,6 +2132,18 @@ fn export_equals_namespaces(
 }
 
 ///|
+/// True when `module_` exports, as `name`, a namespace it declares at its
+/// top level.
+fn module_exports_namespace(module_ : ParsedMtscModule, name : String) -> Bool {
+  module_.module_block.exports
+  .iter()
+  .any(fn(ex) {
+    ex.export_name == name &&
+    module_.module_.namespaces.iter().any(fn(ns) { ns.name == ex.local_name })
+  })
+}
+
+///|
 /// True when `module_` declares `name` at its top level as a type: an
 /// interface, a type alias, an enum or a class.
 fn module_declares_top_level_type(
@@ -2518,6 +2530,11 @@ fn graph_import_globals(
             // legal without `type` (only `verbatimModuleSyntax` asks for
             // it): there is no value to bind, and a use of `I` as a value
             // is a different error this site does not decide.
+            ()
+          } else if module_exports_namespace(target, imported_name) {
+            // `import { N } from "./a"` of `export namespace N { export type
+            // A = … }`: a namespace that holds only types has no value, and
+            // importing it for `N.A` is legal (probed: tsc accepts it).
             ()
           } else {
             diagnostics.push(

@@ -7712,6 +7712,32 @@ test "parser: an operator no type contains ends a type-arg list" {
   let _ = Parser::from_source(src).parse_module() catch {
     e => fail("expected `\{src}` to parse: \{e}")
   }
+  // `delete` and `instanceof` are operators no type contains, and also
+  // names a member may carry: after a `.` and as a member of an object
+  // type, in every member form (#320's review; probed: tsc accepts all).
+  let src =
+    #|declare function f<T>(x: T): T;
+    #|declare const o: { delete: number; instanceof: string };
+    #|type A = typeof f<{ delete: number }>;
+    #|type B = typeof f<{ instanceof?: string; delete(): void; delete<U>(u: U): U }>;
+    #|type C = typeof f<typeof o.delete>;
+    #|type D = typeof f<typeof o.instanceof>;
+  let _ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected `\{src}` to parse: \{e}")
+  }
+  // As an operator, before an operand, it still ends the speculation.
+  for
+    src in [
+      "const r = a < (delete o.p) || a > (b);", "const r = a < (x instanceof C) || a > (b);",
+    ] {
+    let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    match stmt {
+      Const(_, _, BinOp(_, _, _)) => ()
+      _ => fail("expected `\{src}` to parse as comparisons")
+    }
+  }
 }
 
 ///|
