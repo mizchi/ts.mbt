@@ -404,6 +404,14 @@ fn local_function_value_type(
       !has_signature_only || func.body.stmts.length() == 0
     }
     if callable {
+      // An unannotated return is read from the body, as a function
+      // declared in the importer's own file is (see
+      // `unannotated_function_return_from_body`).
+      let func = match
+        @checker.unannotated_function_return_from_body(module_, func) {
+        Some(t) => { ..func, return_type: t, }
+        None => func
+      }
       sigs.push(generic_function_value_type(func))
     }
   }
@@ -451,6 +459,18 @@ fn local_function_value_type(
           // The declared bounds ride along: a primitive-constrained
           // parameter keeps a fresh literal at the call (see the
           // `@import-generic:` arm of `infer_expr`).
+          // An absent return annotation is `any` in the raw copy too, so
+          // the body-read return carries into this branch as it does into
+          // the plain one (#317's review).
+          let raw_ret = match raw_ret {
+            Any =>
+              match
+                @checker.unannotated_function_return_from_body(module_, func) {
+                Some(t) => t
+                None => raw_ret
+              }
+            _ => raw_ret
+          }
           return Some(
             @ast.TsType::GenericFunc(
               func.type_params,

@@ -1956,7 +1956,9 @@ test "a shadowing local's rebinding leaves the outer path narrowed (ifjoin5)" {
 /// when `a` cannot be falsy, so `b` is not related to the expected type
 /// (univer's `__getSplitWidthNoAngle(…, tableSource.dist ?? {})`). An empty
 /// object type admits `""` and `0`, so it is not always truthy, and a
-/// string left operand can be `""` (probed: tsc reports the bad cells only).
+/// string left operand can be `""`. The deciding left operand IS the result,
+/// so it is what relates to the target (#316's review; probed: tsc reports
+/// the bad cells only).
 test "a left operand that decides `??` / `||` skips the right (coalesce)" {
   let src =
     #|interface D { a: number; b: number }
@@ -1970,10 +1972,14 @@ test "a left operand that decides `??` / `||` skips the right (coalesce)" {
     #|export function okStrCoalesce(s: string) { g(s ?? 1); }
     #|export function badNullable(u: D | undefined) { f(u ?? {}); }
     #|export function badOrStr(s: string) { g(s || 1); }
+    #|export function badLeftDecidesCoalesce(s: string): number { return s ?? false; }
+    #|export function badLeftDecidesOr(d: D): string { return d || "z"; }
   assert_eq(issue_lines(src), [
     "function badNullable > call `f` arg[0] (logical).a: property `a` is required by `D`",
     "function badNullable > call `f` arg[0] (logical).b: property `b` is required by `D`",
     "function badOrStr > call `g` arg[0] (logical): expected `string` but got `number`",
+    "function badLeftDecidesCoalesce > return (logical): expected `number` but got `string`",
+    "function badLeftDecidesOr > return (logical): expected `string` but got `D`",
   ])
 }
 
@@ -2004,8 +2010,9 @@ test "`&&` keeps the falsy literal of a primitive operand (andfalsy)" {
 /// positive on main too). A `const` keeps the union. An operand's fresh
 /// literal counts only when it reaches the result: the right of `||` when
 /// the left can be falsy, of `??` when the left can be nullish, so a
-/// declared `"x"` on the left keeps the binding `"x"` (probed: tsc reports
-/// the three bad cells, the last two at the reassignment).
+/// declared `"x"` on the left keeps the binding `"x"`, and the right
+/// operand is not in its type at all (#316's review; probed: tsc reports
+/// the three bad cells, the last two at the reassignment of `"y"`).
 test "a mutable binding widens a union of fresh literals (letwiden)" {
   let src =
     #|declare const nx: "x" | undefined;
@@ -2016,12 +2023,15 @@ test "a mutable binding widens a union of fresh literals (letwiden)" {
     #|export function okOrString(s: string) { let b = s || "foo"; b = "z"; return b; }
     #|export function okCoalesceNullable() { let b = nx ?? "y"; b = "z"; return b; }
     #|export function badConst(c: boolean) { const r = c ? "a" : "b"; const z: "c" = r; return z; }
-    #|export function badCoalesceNonNullable() { let b = mx ?? "y"; b = "z"; return b; }
-    #|export function badOrNonFalsy() { let b = mx || "y"; b = "z"; return b; }
+    #|export function badCoalesceNonNullable() { let b = mx ?? "y"; b = "y"; return b; }
+    #|export function badOrNonFalsy() { let b = mx || "y"; b = "y"; return b; }
+    #|declare const tag: "a" | "b";
+    #|export function badAlwaysFalsyLeft() { const empty = ""; let value = empty || tag; value = "x"; return value; }
   assert_eq(issue_lines(src), [
     "function badConst > binding `z` init: expected `\"c\" (string)` but got `\"a\" (string) | \"b\" (string)`",
-    "function badCoalesceNonNullable > assign `b`: expected `\"x\" (string) | \"y\" (string)` but got `\"z\" (string)`",
-    "function badOrNonFalsy > assign `b`: expected `\"x\" (string) | \"y\" (string)` but got `\"z\" (string)`",
+    "function badCoalesceNonNullable > assign `b`: expected `\"x\" (string)` but got `\"y\" (string)`",
+    "function badOrNonFalsy > assign `b`: expected `\"x\" (string)` but got `\"y\" (string)`",
+    "function badAlwaysFalsyLeft > assign `value`: expected `\"a\" (string) | \"b\" (string)` but got `\"x\" (string)`",
   ])
 }
 
@@ -2088,5 +2098,71 @@ test "an explicit type argument keeps a default's undefined (typeargdefault)" {
     #|export const badCallWrong = g<number>(["s"]);
   assert_eq(issue_lines(src), [
     "top-level > new `K` arg[0][0]: expected `number` but got `string`", "top-level > call `g` arg[0][0]: expected `number` but got `string`",
+  ])
+}
+
+///|
+/// A numeric literal written against a numeric enum fits only when a member
+/// holds its value (TS 5.0). `infer_expr` erases `9` to `number`, which
+/// every numeric enum accepts, so the literal is read off the expression.
+/// A union holding the enum is read flattened, so `b?: Nullable<H>`
+/// (`Nullable<H> | undefined`) takes `2`, which main reported for any
+/// literal (univer's `styleList.ht = 1`; probed: tsc reports the bad cells
+/// only).
+test "a numeric literal fits a numeric enum only through a member (enumliteral)" {
+  let src =
+    #|type Nullable<T> = T | null | undefined | void;
+    #|enum H { U, L, C }
+    #|enum F { A = 10, B }
+    #|interface Style { b?: Nullable<H>; e: H }
+    #|export function okBare() { const e: H = 2; return e; }
+    #|export function okAliasUnion(s: Style) { s.b = 2; }
+    #|export function okContinued() { const f: F = 11; return f; }
+    #|export function okNumberMember() { const x: H | number = 9; return x; }
+    #|export function badBare() { const e: H = 9; return e; }
+    #|export function badAliasUnion(s: Style) { s.b = 9; }
+    #|export function badObjectMember() { const o: { e: H } = { e: 9 }; return o; }
+    #|export function badContinued() { const f: F = 12; return f; }
+    #|export function okTruthyLeft(x: 1) { const e: H = x || 9; return e; }
+    #|export function badFalsyLeft(x: 0 | 1) { const e: H = x || 9; return e; }
+  assert_eq(issue_lines(src), [
+    "function badBare > binding `e` init: expected `H` but got `9`", "function badAliasUnion > assign `.b`: expected `Nullable<H> | undefined` but got `9`",
+    "function badObjectMember > binding `o` init.e: expected `H` but got `9`", "function badContinued > binding `f` init: expected `F` but got `12`",
+    "function badFalsyLeft > binding `e` init (logical): expected `H` but got `9`",
+  ])
+}
+
+///|
+/// A written `: any` return is `any`, and only an absent one is read from
+/// the body: both are `Any` in `TsFunc.return_type`, so the parser records
+/// `<written-any-return:NAME>`. A nested `return` the top-level shortcut
+/// cannot see may be `any`, which makes the whole return `any` (#317's
+/// review; probed: tsc reports `badInferred` only).
+test "a written any return is not inferred from the body (writtenany)" {
+  let src =
+    #|function written(): any { return 1; }
+    #|function inferred() { return 1; }
+    #|declare const opaque: any;
+    #|function nested(flag: boolean) { if (flag) return opaque; return 1; }
+    #|export const okWrittenAny: string = written();
+    #|export const okNestedAny: string = nested(true);
+    #|export const badInferred: string = inferred();
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badInferred` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+/// A `var` in a branch is the enclosing function's binding, so writing it
+/// there drops the outer path's narrowing at the join as any write does,
+/// while a `let` is the branch's own (#316's review; probed: tsc reports
+/// `badVarRedeclare` only).
+test "a var in a branch is not a shadow at the join (varjoin)" {
+  let src =
+    #|interface O { p: string | undefined }
+    #|export function okLetShadow(c: boolean, o: O, other: O) { o.p = ""; if (c) { let o = other; o = other; } const s: string = o.p; return s; }
+    #|export function badVarRedeclare(c: boolean, o: O, other: O) { o.p = ""; if (c) { var o: O; o = other; } const s: string = o.p; return s; }
+  assert_eq(issue_lines(src), [
+    "function badVarRedeclare > binding `s` init: type `string | undefined` is not assignable to type `string`",
   ])
 }

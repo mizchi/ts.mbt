@@ -2145,3 +2145,51 @@ test "mtsc graph checker reads an imported static factory's body (staticimport)"
     ["function badMaybe > call `isBoolean` :: object is possibly `undefined`"],
   )
 }
+
+///|
+/// An imported function with no return annotation is typed from its body,
+/// as one declared in the importer's file is: the graph path read the
+/// declaration, where the absent annotation is `any`, so univer's
+/// `lineWidth = getLineWidth(style)` narrowed nothing. Only a primitive
+/// result of the COMPLETE body is adopted, so a nested `return opaque`
+/// keeps `any`; the declaring module's `strictNullChecks` decides `??`; a
+/// bounded generic carries the result too; and a written `: any` stays
+/// `any` (#317's review; probed: tsc reports the two bad cells only).
+test "mtsc graph checker types an imported unannotated return (importedreturn)" {
+  let lib =
+    #|export enum Style { THIN, MEDIUM, THICK }
+    #|export function getLineWidth(style: Style) {
+    #|  let lineWidth = 1;
+    #|  if (style === Style.MEDIUM) { lineWidth = 2; } else if (style === Style.THICK) { lineWidth = 3; }
+    #|  return lineWidth;
+    #|}
+    #|export function getName(style: Style) { return style === Style.THIN ? "thin" : "other"; }
+    #|export function written(): any { return 1; }
+    #|declare const opaque: any;
+    #|export function nested(flag: boolean) { if (flag) return opaque; return 1; }
+    #|export function coalesce(x: number) { return x ?? "fallback"; }
+    #|export function gen<T extends number>(t: T) { return 1; }
+  let entry =
+    #|import { getLineWidth, getName, written, nested, coalesce, gen, Style } from "./lib";
+    #|declare function use(n: number): void;
+    #|interface Ctx { lineWidth?: number; lineStyle?: Style }
+    #|export function ok(c: Ctx, style: Style) {
+    #|  let lineWidth = c.lineWidth;
+    #|  if (c.lineStyle !== style || lineWidth === undefined) { lineWidth = getLineWidth(style); use(lineWidth); }
+    #|  return (lineWidth - 1) / 2;
+    #|}
+    #|export function okWrittenAny() { const s: string = written(); return s; }
+    #|export function okNestedAny() { const s: string = nested(true); return s; }
+    #|export function okStrictCoalesce() { const n: number = coalesce(0); return n; }
+    #|export function badName(style: Style) { const n: number = getName(style); return n; }
+    #|export function badGeneric() { const s: string = gen(1); return s; }
+  assert_eq(
+    graph_messages([("/src/lib.ts", lib), ("/src/entry.ts", entry)], [
+      ("/src/entry.ts", "./lib", "/src/lib.ts"),
+    ]),
+    [
+      "function badName > binding `n` init :: expected `number` but got `string`",
+      "function badGeneric > binding `s` init :: expected `string` but got `number`",
+    ],
+  )
+}

@@ -2349,6 +2349,34 @@
       ]
     },
     {
+      "case": "controlFlow/varInBranchIsTheSameBinding.ts",
+      "area": "controlFlow",
+      "name": "varInBranchIsTheSameBinding",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/varInBranchIsTheSameBinding.errors.txt",
+      "claims": [
+        {
+          "name": "okLetShadow",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 13
+        },
+        {
+          "name": "badVarRedeclare",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 20
+        }
+      ]
+    },
+    {
       "case": "declarations/constructorPatternParametersBindEveryName.ts",
       "area": "declarations",
       "name": "constructorPatternParametersBindEveryName",
@@ -4491,56 +4519,62 @@
         {
           "name": "okCondLet",
           "kind": "ok",
-          "fromLine": 12,
-          "toLine": 12
-        },
-        {
-          "name": "okCondNum",
-          "kind": "ok",
           "fromLine": 13,
           "toLine": 13
         },
         {
-          "name": "okOrLet",
+          "name": "okCondNum",
           "kind": "ok",
           "fromLine": 14,
           "toLine": 14
         },
         {
-          "name": "okOrLeftDeclared",
+          "name": "okOrLet",
           "kind": "ok",
           "fromLine": 15,
           "toLine": 15
         },
         {
-          "name": "okCoalesceNullable",
+          "name": "okOrLeftDeclared",
           "kind": "ok",
           "fromLine": 16,
           "toLine": 16
         },
         {
-          "name": "badConst",
-          "kind": "bad",
+          "name": "okCoalesceNullable",
+          "kind": "ok",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "badLetToLiteral",
+          "name": "badConst",
           "kind": "bad",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "badCoalesceNonNullable",
+          "name": "badLetToLiteral",
           "kind": "bad",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "badOrNonFalsy",
+          "name": "badCoalesceNonNullable",
           "kind": "bad",
           "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badOrNonFalsy",
+          "kind": "bad",
+          "fromLine": 21,
           "toLine": 21
+        },
+        {
+          "name": "badAlwaysFalsyLeft",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 24
         }
       ]
     },
@@ -5098,6 +5132,52 @@
           "kind": "ok",
           "fromLine": 19,
           "toLine": 20
+        }
+      ]
+    },
+    {
+      "case": "inference/writtenAnyReturnIsNotInferred.ts",
+      "area": "inference",
+      "name": "writtenAnyReturnIsNotInferred",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/writtenAnyReturnIsNotInferred.errors.txt",
+      "claims": [
+        {
+          "name": "okWrittenAny",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okInferredLet",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okNestedAny",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badInferred",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badInferredLet",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 17
         }
       ]
     },
@@ -6178,6 +6258,7 @@
       },
       "accepted": false,
       "codes": [
+        2322,
         2345
       ],
       "baseline": "baselines/coalesceLeftOperandDecidesResult.errors.txt",
@@ -6185,44 +6266,56 @@
         {
           "name": "okNonNullish",
           "kind": "ok",
-          "fromLine": 15,
-          "toLine": 15
-        },
-        {
-          "name": "okOrObject",
-          "kind": "ok",
           "fromLine": 16,
           "toLine": 16
         },
         {
-          "name": "okOrMethodsOnly",
+          "name": "okOrObject",
           "kind": "ok",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "okOrWeakType",
+          "name": "okOrMethodsOnly",
           "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "okStrCoalesce",
+          "name": "okOrWeakType",
           "kind": "ok",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "badNullable",
-          "kind": "bad",
+          "name": "okStrCoalesce",
+          "kind": "ok",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "badOrStr",
+          "name": "badNullable",
           "kind": "bad",
           "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badOrStr",
+          "kind": "bad",
+          "fromLine": 22,
           "toLine": 22
+        },
+        {
+          "name": "badLeftDecidesCoalesce",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badLeftDecidesOr",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 25
         }
       ]
     },
@@ -6746,6 +6839,131 @@
           "kind": "bad",
           "fromLine": 14,
           "toLine": 15
+        }
+      ]
+    },
+    {
+      "case": "relations/numericLiteralExpressionIntoNumericEnum.ts",
+      "area": "relations",
+      "name": "numericLiteralExpressionIntoNumericEnum",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2345
+      ],
+      "baseline": "baselines/numericLiteralExpressionIntoNumericEnum.errors.txt",
+      "claims": [
+        {
+          "name": "okBare",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okAliasUnion",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okContinued",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okComputed",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okMixed",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "okNumberMember",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okArg",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badBare",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "badNegative",
+          "kind": "bad",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badUnion",
+          "kind": "bad",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "badAliasUnion",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "badField",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 29
+        },
+        {
+          "name": "badObjectMember",
+          "kind": "bad",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badContinued",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "badMixed",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "badArg",
+          "kind": "bad",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "okTruthyLeftDecides",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badFalsyLeftReachesFallback",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 36
         }
       ]
     },

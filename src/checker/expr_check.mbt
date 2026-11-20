@@ -208,6 +208,10 @@ priv struct Resolver {
   // threaded through the resolver so expression-level rules (TS7053)
   // can gate without widening `CheckCtx`.
   mut no_implicit_any : Bool
+  // The module's effective `strictNullChecks`, set where `no_implicit_any`
+  // is. `false` until then, which keeps the answers that do not depend on
+  // it (`a ?? b` unions its right operand in).
+  mut strict_null_checks : Bool
   // Lib-era evidence from `@lib:` / `@target:` directives (parser
   // markers): the es2017 object surface (`Object.values`) or the es2024
   // shared-memory surface (`Atomics.waitAsync`) is missing (TS2550).
@@ -622,6 +626,7 @@ fn Resolver::empty() -> Resolver {
     class_base_args: {},
     class_index: ClassIndex::empty(),
     no_implicit_any: false,
+    strict_null_checks: false,
     lib_lacks_es2017: false,
     lib_lacks_es2024: false,
     no_property_access_from_index_signature: false,
@@ -2955,19 +2960,28 @@ fn Resolver::ingest_module(
     let effective_ret = if f.return_type is Any &&
       !r.types_only &&
       !f.is_generator &&
-      f.body.stmts.length() > 0 {
+      f.body.stmts.length() > 0 &&
+      !module_.grammar_misuses.contains("<written-any-return:\{f.name}>") {
       let fenv = ExprEnv::new()
       for p in effective_params {
         fenv.bind(p.name, p.type_)
       }
+      // The shortcut reads only the body's TOP-LEVEL returns, so a nested
+      // one it cannot see may be `any`: `if (flag) return opaque; return 1`
+      // is `any` to tsc, and reading it as `number` reported
+      // `const s: string = f(true)` (#317's review; probed). A body with a
+      // nested return keeps the shortcut only when the complete-body
+      // inference, which declines on an `any` return, also answers.
+      let whole = infer_body_return_type(fenv, r, f.body)
+      let nested_unknown = whole is None && block_has_nested_return(f.body)
       match widen_literal(infer_block_return(fenv, r, f.body)) {
-        Number => @ast.TsType::Number
-        Int => @ast.TsType::Int
-        String_ => @ast.TsType::String_
-        Boolean => @ast.TsType::Boolean
-        BigInt => @ast.TsType::BigInt
+        Number if !nested_unknown => @ast.TsType::Number
+        Int if !nested_unknown => @ast.TsType::Int
+        String_ if !nested_unknown => @ast.TsType::String_
+        Boolean if !nested_unknown => @ast.TsType::Boolean
+        BigInt if !nested_unknown => @ast.TsType::BigInt
         _ =>
-          match infer_body_return_type(fenv, r, f.body) {
+          match whole {
             Some(t) => t
             None => @ast.TsType::Any
           }
@@ -8010,6 +8024,71 @@ fn Resolver::method_type_params_of(
 }
 
 ///|
+/// The return type an UNANNOTATED function declaration's body gives, for a
+/// caller in another module. The graph path types an imported function
+/// from its declaration, where an absent annotation is `any`, so univer's
+/// `lineWidth = getLineWidth(style)` (whose body is `let lineWidth = 1;
+/// …; return lineWidth`) was `any` and narrowed nothing, while the same
+/// function declared in the file was a `number`.
+///
+/// The body is read with an EMPTY resolver: a name the module declares
+/// elsewhere infers as `any` here, so only a type built from primitives,
+/// their literals and nullish members is answered, and anything that would
+/// need the module's own declarations abstains. A written `: any` (the
+/// parser's `<written-any-return:>` marker), an `async` function and a
+/// generator keep the declaration's type.
+pub fn unannotated_function_return_from_body(
+  module_ : @ast.TsModule,
+  func : @ast.TsFunc,
+) -> @ast.TsType? {
+  if !(func.return_type is Any) ||
+    func.is_generator ||
+    func.is_async ||
+    func.body.stmts.length() == 0 ||
+    module_.grammar_misuses.contains("<written-any-return:\{func.name}>") {
+    return None
+  }
+  // The declaring module's `strictNullChecks` decides `??` (#317's review):
+  // with it, `x ?? "fallback"` over `x: number` is `number`.
+  let r = Resolver::empty()
+  r.strict_null_checks = module_.strict_null_checks
+  let fenv = ExprEnv::new()
+  for p in func.params {
+    fenv.bind(p.name, p.type_)
+  }
+  // The COMPLETE body only: `infer_block_return` reads top-level returns,
+  // and a nested `return opaque` it cannot see is `any` (#317's review).
+  let t = match infer_body_return_type(fenv, r, func.body) {
+    Some(t) => t
+    None => return None
+  }
+  fn primitive_only(t : @ast.TsType) -> Bool {
+    match t {
+      Number
+      | Int
+      | String_
+      | Boolean
+      | BigInt
+      | NumberLiteral(_)
+      | Literal(_)
+      | BooleanLiteral(_)
+      | BigIntLiteral(_)
+      | Null
+      | Undefined
+      | Void => true
+      Union(ms) => ms.iter().all(primitive_only)
+      _ => false
+    }
+  }
+
+  if primitive_only(t) {
+    Some(t)
+  } else {
+    None
+  }
+}
+
+///|
 /// What `this` is inside a static method of class `cn`, for reading a
 /// static factory's body: an object of the class's static FIELDS with a
 /// written type. `None` when the class declares none, which leaves `this`
@@ -13032,6 +13111,48 @@ fn numeric_literals_held_by_enum(
       _ => true
     }
   })
+}
+
+///|
+/// The literal type of `expr` when it is a numeric literal written against
+/// a target made only of numeric enums and nullish members, none of whose
+/// members holds that value (TS 5.0: `const e: E = 9` is an error with
+/// `enum E { A, B, C }`, probed). The members are flattened, so
+/// `Nullable<E> | undefined` is read as its parts. Any other member — a
+/// `number`, a string enum, an object type, an enum MEMBER type, a name
+/// this cannot resolve — abstains, and so does an enum whose values cannot
+/// all be read (`numeric_literals_held_by_enum` answers yes for those).
+fn numeric_literal_outside_enum_target(
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+  expected : @ast.TsType,
+) -> @ast.TsType? {
+  guard precise_literal_type(expr) is Some(NumberLiteral(_) as lit) else {
+    return None
+  }
+  let parts = match resolver.unwrap_containers(expected) {
+    Union(ps) => union_components(flatten_union_exact(ps))
+    t => [t]
+  }
+  let mut saw_enum = false
+  for p in parts {
+    match resolver.unwrap(p) {
+      Null | Undefined | Void => ()
+      Named(n) if resolver.enums.contains(n) &&
+        enum_may_hold_number(resolver, n) => {
+        if numeric_literals_held_by_enum(resolver, lit, n) {
+          return None
+        }
+        saw_enum = true
+      }
+      _ => return None
+    }
+  }
+  if saw_enum {
+    Some(lit)
+  } else {
+    None
+  }
 }
 
 ///|
@@ -18778,7 +18899,16 @@ fn left_operand_decides(
     }
   }
 
-  always_truthy(ctx.resolver, lt, 4)
+  // A literal that cannot be falsy decides it too: `x || 9` with `x: 1` is
+  // `1` (#317's review; probed).
+  always_truthy(ctx.resolver, lt, 4) ||
+  union_components(ctx.resolver.unwrap(lt))
+  .iter()
+  .all(fn(m) {
+    m
+    is (Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(true)) &&
+    !may_be_falsy(ctx.resolver, m)
+  })
 }
 
 ///|
@@ -19053,11 +19183,18 @@ fn infer_binop(
     // exactly that question. zod writes `const effect = this._def.effect
     // || null` over a required object-typed `effect` and reads
     // `effect.type` next; unioning `null` in reported that read.
+    // A literal that cannot be falsy decides it as an object does: `mx ||
+    // "y"` with `mx: "x"` is `"x"` (#316's review; probed).
     Or =>
-      if falsy_subset(resolver, l) is Never {
+      if falsy_subset(resolver, l) is Never || !may_be_falsy(resolver, l) {
         non_nullable(l)
       } else {
-        narrow_union(nullish_stripped(resolver, l), r)
+        // The left's DEFINITELY falsy members never are the result (tsc's
+        // `removeDefinitelyFalsyTypes`): `"" || tag` is `tag`'s type.
+        match without_falsy_literals(resolver, nullish_stripped(resolver, l)) {
+          Some(t) => narrow_union(t, r)
+          None => r
+        }
       }
     // `a ?? b` — `b` is only evaluated when `a` is null/undefined, so the
     // result strips nullish from `a` and unions with `b`'s type. The union
@@ -19065,7 +19202,17 @@ fn infer_binop(
     // `!= null` guard, which removes members one level deep, left the
     // inner `undefined` behind (univer's `priorityPageAnchor -= delta`
     // under `if (priorityPageAnchor != null)`, on main too).
+    // Under strictNullChecks a left operand that cannot be nullish is the
+    // whole result: `mx ?? "y"` with `mx: "x"` is `"x"` (#316's review;
+    // probed). Without the flag every type admits `null`, and the right
+    // operand contributes.
     Coalesce => {
+      if resolver.strict_null_checks &&
+        is_checkable(l) &&
+        !(l is Any) &&
+        type_definitely_non_nullish(resolver, l) {
+        return l
+      }
       let a = nullish_stripped(resolver, l)
       if equivalent(a, r) {
         a
@@ -20474,6 +20621,10 @@ fn check_expr_against_shape(
       // related to the expected type (tsc still type-checks `b` internally,
       // which this skip loses — a MISS, never a report).
       if expr is BinOp(Or, _, _) && left_operand_decides(env, l, ctx, false) {
+        // …and the left operand IS the result, so it is what relates
+        // (`o || "z"` with `o: { a: number }` against `string` is TS2322,
+        // #316's review).
+        check_expr_against(env, l, expected, ctx, sub_path + " (logical)")
         return
       }
       // The RHS of `&&` runs only when the LHS is truthy, and the RHS of
@@ -20497,6 +20648,7 @@ fn check_expr_against_shape(
       // `a ?? b` is `a`'s type alone when `a` cannot be nullish: tsc relates
       // only `a`, so `f(d ?? {})` with `d: D` is legal.
       if left_operand_decides(env, l, ctx, true) {
+        check_expr_against(env, l, expected, ctx, sub_path + " (logical)")
         return
       }
       check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
@@ -21372,6 +21524,20 @@ fn check_expr_against_shape(
       }
     _ => ()
   }
+  // A numeric LITERAL fits a numeric enum only when a member holds its
+  // value (TS 5.0). `infer_expr` erases `9` to `number`, which every
+  // numeric enum accepts, so the literal is read off the expression.
+  match numeric_literal_outside_enum_target(ctx.resolver, expr, expected) {
+    Some(lit) => {
+      record(
+        ctx,
+        sub_path,
+        "expected `\{type_display(expected)}` but got `\{type_display(lit)}`",
+      )
+      return
+    }
+    None => ()
+  }
   // Enum nominality: a numeric enum target accepts numeric values, the same
   // enum, `any` / `unknown`, and `null` / `undefined` (all handled above or
   // not matched below). A concrete non-numeric primitive / literal or a plain
@@ -21770,8 +21936,12 @@ fn check_expr_against_shape(
       // table, so a union target holding one (`keepLines?: BooleanNumber`,
       // which is `BooleanNumber | undefined`) read `number` as a mismatch
       // while the bare enum target abstained at the unresolved-name bail.
+      // The members are FLATTENED first: `ht?: Nullable<HorizontalAlign>`
+      // is `Nullable<H> | undefined`, whose alias expands in place to a
+      // nested union, so the enum sat one level down and univer's
+      // `styleList.ht = 1` was reported (probed: tsc accepts it).
       if is_number_valued_type(inferred_u) &&
-        parts
+        union_components(flatten_union_exact(parts))
         .iter()
         .any(fn(p) { p is Named(n) && enum_may_hold_number(ctx.resolver, n) }) {
         return
@@ -23475,8 +23645,12 @@ fn fresh_literal_bases(
         go(b, depth + 1)
       }
       BinOp(Or, a, b) => {
-        go(a, depth + 1)
-        if may_be_falsy(resolver, infer(a)) {
+        // An always-falsy left operand never IS the result (#316's review).
+        let lt = infer(a)
+        if !always_falsy(resolver, lt) {
+          go(a, depth + 1)
+        }
+        if may_be_falsy(resolver, lt) {
           go(b, depth + 1)
         }
       }
@@ -36242,6 +36416,65 @@ fn block_declared_names(b : @ast.TsBlock, out : Map[String, Unit]) -> Unit {
 }
 
 ///|
+/// Whether `b` has a `return` below its top level, short of a nested
+/// function (a function body is an expression, which this never enters).
+fn block_has_nested_return(b : @ast.TsBlock) -> Bool {
+  b.stmts.iter().any(stmt_has_nested_return)
+}
+
+///|
+/// Whether a `return` sits anywhere inside `st`'s nested blocks.
+fn stmt_has_nested_return(st : @ast.TsStmt) -> Bool {
+  match st {
+    If(_, t, e) =>
+      block_returns_anywhere(t) || (e is Some(eb) && block_returns_anywhere(eb))
+    Block(inner)
+    | While(_, inner)
+    | DoWhile(_, inner)
+    | With(_, inner)
+    | ForOf(_, _, _, _, inner)
+    | ForAwaitOf(_, _, _, _, inner)
+    | ForIn(_, _, _, _, inner)
+    | For(_, _, _, inner) => block_returns_anywhere(inner)
+    Try(t, _, c, f) =>
+      block_returns_anywhere(t) ||
+      (c is Some(cb) && block_returns_anywhere(cb)) ||
+      (f is Some(fb) && block_returns_anywhere(fb))
+    Switch(_, cases) =>
+      cases.iter().any(fn(c) { block_returns_anywhere(c.body) })
+    Label(_, inner) => inner is Return(_) || stmt_has_nested_return(inner)
+    _ => false
+  }
+}
+
+///|
+fn block_returns_anywhere(b : @ast.TsBlock) -> Bool {
+  b.stmts.iter().any(fn(st) { st is Return(_) || stmt_has_nested_return(st) })
+}
+
+///|
+/// `block_declared_names` without `var`: the names a block binds for
+/// ITSELF. A `var` is function-scoped, so the same name in the enclosing
+/// body is the same binding, and a join must not treat it as a shadow.
+fn block_lexical_names(b : @ast.TsBlock, out : Map[String, Unit]) -> Unit {
+  for st in b.stmts {
+    match st {
+      Let(bind, _, _) | Const(bind, _, _) => {
+        let names : Array[String] = []
+        collect_binding_names(bind, names)
+        for n in names {
+          out[n] = ()
+        }
+      }
+      NativeClassStmt(decl, _) => out[decl.name] = ()
+      Block(inner) if inner.stmt_positions == [@ast.DECL_GROUP_POSITION] =>
+        block_lexical_names(inner, out)
+      _ => ()
+    }
+  }
+}
+
+///|
 /// Bind a `var` / `let` / `const` identifier declaration and check its
 /// initializer against the annotation. `track_unassigned` is true only for
 /// block-scoped `let` / `const`, where a missing initializer (`let x: T;`)
@@ -38068,10 +38301,13 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // forgotten for that local, not for the outer binding, which the
       // branch never touched (#315's review; probed: tsc keeps the outer
       // `o.p` narrowing).
+      // A `var` is not one: it is function-scoped, so `if (c) { var o: O;
+      // o = other }` writes the OUTER `o` (#316's review; probed: tsc
+      // reports the later `o.p` read).
       let shadow_of = fn(block : @ast.TsBlock?) -> Map[String, Unit] {
         let shadow : Map[String, Unit] = Map([])
         match block {
-          Some(b) => block_declared_names(b, shadow)
+          Some(b) => block_lexical_names(b, shadow)
           None => ()
         }
         shadow
@@ -38108,7 +38344,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let carry = fn(block : @ast.TsBlock?, exit : Map[String, @ast.TsType]) {
         guard block is Some(b) else { return }
         let shadow : Map[String, Unit] = Map([])
-        block_declared_names(b, shadow)
+        block_lexical_names(b, shadow)
         apply_sequential_exit(env, pre_map, exit, shadow)
       }
       // A condition narrowing on a property PATH is restored only while
@@ -57774,6 +58010,7 @@ fn check_module_function_bodies_layered(
     resolver.declared_value_names[global.0] = true
   }
   resolver.no_implicit_any = strict_root.no_implicit_any
+  resolver.strict_null_checks = strict_root.strict_null_checks
   for gm in strict_root.grammar_misuses {
     if gm == "<lib-lacks-es2017>" {
       resolver.lib_lacks_es2017 = true
