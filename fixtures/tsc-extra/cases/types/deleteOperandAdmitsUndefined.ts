@@ -43,3 +43,10 @@ interface J { u: Unk; a: An }
 declare const j: J;
 export function okUnknownAlias() { delete j.u; }
 export function okAnyAlias() { delete j.a; }
+
+// A union with an `unknown` member is `unknown`, written out or aliased.
+type UnkAlias = unknown;
+interface K { u: UnkAlias | number; w: unknown | number }
+declare const k: K;
+export function okUnknownUnionAlias() { delete k.u; }
+export function okUnknownUnion() { delete k.w; }

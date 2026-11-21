@@ -2587,6 +2587,13 @@ fn Parser::report_jsx_type_arg_lexer_diags(
 }
 
 ///|
+/// Whether the `>` at `pos` is the second half of a function-type arrow
+/// (`=>`), which does not close a type-argument list: `<Box<() => 0x>>`.
+fn Parser::is_arrow_gt(self : Parser, pos : Int32) -> Bool {
+  pos > 0 && self.src[pos - 1].to_int().unsafe_to_char() == '='
+}
+
+///|
 /// The source span of the type arguments written on the JSX element whose
 /// `<` is at `open` (`<Box<string>>`), or `None` when it has none.
 fn Parser::jsx_type_args_span(self : Parser, open : Int32) -> (Int32, Int32)? {
@@ -2616,7 +2623,7 @@ fn Parser::jsx_type_args_span(self : Parser, open : Int32) -> (Int32, Int32)? {
     let cc = self.src[j].to_int().unsafe_to_char()
     if cc == '<' {
       depth += 1
-    } else if cc == '>' {
+    } else if cc == '>' && !self.is_arrow_gt(j) {
       depth -= 1
       if depth == 0 {
         return Some((i, j + 1))
@@ -2688,7 +2695,7 @@ fn Parser::parse_jsx_opening_header(
       let cc = self.src[j].to_int().unsafe_to_char()
       if cc == '<' {
         depth += 1
-      } else if cc == '>' {
+      } else if cc == '>' && !self.is_arrow_gt(j) {
         depth -= 1
         if depth == 0 {
           j += 1

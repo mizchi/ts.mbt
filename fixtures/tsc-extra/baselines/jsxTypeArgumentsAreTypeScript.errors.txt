@@ -1,15 +1,17 @@
 jsxTypeArgumentsAreTypeScript.tsx(15,42): error TS1125: Hexadecimal digit expected.
 jsxTypeArgumentsAreTypeScript.tsx(17,56): error TS1125: Hexadecimal digit expected.
-jsxTypeArgumentsAreTypeScript.tsx(19,46): error TS2695: Left side of comma operator is unused and has no side effects.
-jsxTypeArgumentsAreTypeScript.tsx(19,60): error TS1125: Hexadecimal digit expected.
-jsxTypeArgumentsAreTypeScript.tsx(19,66): error TS1109: Expression expected.
-jsxTypeArgumentsAreTypeScript.tsx(20,62): error TS2695: Left side of comma operator is unused and has no side effects.
-jsxTypeArgumentsAreTypeScript.tsx(20,68): error TS1125: Hexadecimal digit expected.
-jsxTypeArgumentsAreTypeScript.tsx(20,75): error TS1109: Expression expected.
-jsxTypeArgumentsAreTypeScript.tsx(21,47): error TS1010: '*/' expected.
+jsxTypeArgumentsAreTypeScript.tsx(19,53): error TS1125: Hexadecimal digit expected.
+jsxTypeArgumentsAreTypeScript.tsx(20,67): error TS1125: Hexadecimal digit expected.
+jsxTypeArgumentsAreTypeScript.tsx(22,46): error TS2695: Left side of comma operator is unused and has no side effects.
+jsxTypeArgumentsAreTypeScript.tsx(22,60): error TS1125: Hexadecimal digit expected.
+jsxTypeArgumentsAreTypeScript.tsx(22,66): error TS1109: Expression expected.
+jsxTypeArgumentsAreTypeScript.tsx(23,62): error TS2695: Left side of comma operator is unused and has no side effects.
+jsxTypeArgumentsAreTypeScript.tsx(23,68): error TS1125: Hexadecimal digit expected.
+jsxTypeArgumentsAreTypeScript.tsx(23,75): error TS1109: Expression expected.
+jsxTypeArgumentsAreTypeScript.tsx(24,47): error TS1010: '*/' expected.
 
 
-==== jsxTypeArgumentsAreTypeScript.tsx (9 errors) ====
+==== jsxTypeArgumentsAreTypeScript.tsx (11 errors) ====
     // A JSX element's type arguments are TypeScript, not JSX text, so a
     // malformed numeric literal there is an error; the element's text is still
     // text. A payload inside a parenthesized expression that does not parse is
@@ -32,6 +34,13 @@ jsxTypeArgumentsAreTypeScript.tsx(21,47): error TS1010: '*/' expected.
                                                            
 !!! error TS1125: Hexadecimal digit expected.
     export const okParenthesizedTypeArgumentText = (<Box<string>>08 px</Box>);
+    export const badArrowTypeArgumentHex = <Box<() => 0x> />;
+                                                        
+!!! error TS1125: Hexadecimal digit expected.
+    export const badParenthesizedArrowTypeArgumentHex = (<Box<() => 0x>></Box>);
+                                                                      
+!!! error TS1125: Hexadecimal digit expected.
+    export const okArrowTypeArgumentText = <Box<() => string>>08 px</Box>;
     export const badPayloadInFailedParens = <p>{(true && <b>{0x}</b>,)}</p>;
                                                  ~~~~~~~~~~~~~~~~~~~
 !!! error TS2695: Left side of comma operator is unused and has no side effects.
